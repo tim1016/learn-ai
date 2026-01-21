@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(podman inspect:*)",
+      "Bash(podman logs:*)",
+      "Bash(nc:*)",
+      "Bash(podman-compose down:*)",
+      "Bash(podman-compose up:*)",
+      "Bash(podman ps:*)",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(podman stop:*)",
+      "Bash(podman rm:*)",
+      "Bash(podman-compose build:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git reset:*)"
+    ]
+  }
+}
