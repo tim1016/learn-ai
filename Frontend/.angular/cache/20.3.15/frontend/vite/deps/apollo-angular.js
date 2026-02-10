@@ -1,4 +1,8 @@
 import {
+  ApolloClient,
+  gql
+} from "./chunk-M4JOHYKZ.js";
+import {
   Inject,
   Injectable,
   InjectionToken,
@@ -9,10 +13,6 @@ import {
   ɵɵinject
 } from "./chunk-ZAFN4FGN.js";
 import "./chunk-BWIFR55H.js";
-import {
-  ApolloClient,
-  gql
-} from "./chunk-M4JOHYKZ.js";
 import {
   queueScheduler
 } from "./chunk-RXKYQXTI.js";

@@ -1,67 +1,67 @@
 {
-  "hash": "0a2dba6f",
-  "configHash": "c5e7c75d",
-  "lockfileHash": "be9b10f5",
-  "browserHash": "a487d8fc",
+  "hash": "de6f1e8b",
+  "configHash": "55280502",
+  "lockfileHash": "bb9a3945",
+  "browserHash": "192fa84c",
   "optimized": {
     "@angular/common": {
       "src": "../../../../../../node_modules/@angular/common/fesm2022/common.mjs",
       "file": "@angular_common.js",
-      "fileHash": "5244154e",
+      "fileHash": "82994347",
       "needsInterop": false
     },
     "@angular/common/http": {
       "src": "../../../../../../node_modules/@angular/common/fesm2022/http.mjs",
       "file": "@angular_common_http.js",
-      "fileHash": "725564ff",
+      "fileHash": "ae6ee3c7",
       "needsInterop": false
     },
     "@angular/core": {
       "src": "../../../../../../node_modules/@angular/core/fesm2022/core.mjs",
       "file": "@angular_core.js",
-      "fileHash": "4bab312e",
+      "fileHash": "37822c63",
       "needsInterop": false
     },
     "@angular/platform-browser": {
       "src": "../../../../../../node_modules/@angular/platform-browser/fesm2022/platform-browser.mjs",
       "file": "@angular_platform-browser.js",
-      "fileHash": "dc9158f6",
+      "fileHash": "a94fa0db",
       "needsInterop": false
     },
     "@angular/router": {
       "src": "../../../../../../node_modules/@angular/router/fesm2022/router.mjs",
       "file": "@angular_router.js",
-      "fileHash": "f3051301",
+      "fileHash": "96dffaa2",
       "needsInterop": false
     },
     "@apollo/client/core": {
       "src": "../../../../../../node_modules/@apollo/client/core/index.js",
       "file": "@apollo_client_core.js",
-      "fileHash": "45fced35",
+      "fileHash": "da6833fb",
       "needsInterop": false
     },
     "apollo-angular": {
       "src": "../../../../../../node_modules/apollo-angular/fesm2022/apollo-angular.mjs",
       "file": "apollo-angular.js",
-      "fileHash": "e4116895",
+      "fileHash": "b144e904",
       "needsInterop": false
     },
     "apollo-angular/http": {
       "src": "../../../../../../node_modules/apollo-angular/fesm2022/apollo-angular-http.mjs",
       "file": "apollo-angular_http.js",
-      "fileHash": "1e5179de",
+      "fileHash": "ce64e772",
       "needsInterop": false
     },
     "rxjs/operators": {
       "src": "../../../../../../node_modules/rxjs/dist/esm5/operators/index.js",
       "file": "rxjs_operators.js",
-      "fileHash": "fadfbde2",
+      "fileHash": "fbd5063c",
       "needsInterop": false
     },
     "zone.js": {
       "src": "../../../../../../node_modules/zone.js/fesm2015/zone.js",
       "file": "zone__js.js",
-      "fileHash": "e0e6eb1e",
+      "fileHash": "6ae445fd",
       "needsInterop": true
     }
   },
@@ -78,14 +78,14 @@
     "chunk-R6U7IGMG": {
       "file": "chunk-R6U7IGMG.js"
     },
+    "chunk-M4JOHYKZ": {
+      "file": "chunk-M4JOHYKZ.js"
+    },
     "chunk-ZAFN4FGN": {
       "file": "chunk-ZAFN4FGN.js"
     },
     "chunk-BWIFR55H": {
       "file": "chunk-BWIFR55H.js"
-    },
-    "chunk-M4JOHYKZ": {
-      "file": "chunk-M4JOHYKZ.js"
     },
     "chunk-RXKYQXTI": {
       "file": "chunk-RXKYQXTI.js"
