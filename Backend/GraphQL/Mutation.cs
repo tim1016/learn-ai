@@ -1,10 +1,14 @@
 using Backend.Data;
+using Backend.GraphQL.Types;
 using Backend.Models;
+using Backend.Services.Interfaces;
+using HotChocolate;
 
 namespace Backend.GraphQL;
 
 public class Mutation
 {
+    #region Demo Mutations (Books/Authors)
     public async Task<Author> AddAuthor(
         AppDbContext context,
         string name,
@@ -65,4 +69,53 @@ public class Mutation
         await context.SaveChangesAsync();
         return true;
     }
+
+    #endregion
+
+    #region Market Data Mutations
+
+    /// <summary>
+    /// Fetch stock aggregate data (OHLCV bars) from Polygon.io
+    /// Testable: IMarketDataService injected via [Service] attribute
+    /// </summary>
+    /// <param name="marketDataService">Injected service (mockable in tests)</param>
+    /// <param name="ticker">Stock symbol (e.g., AAPL, MSFT)</param>
+    /// <param name="fromDate">Start date (YYYY-MM-DD)</param>
+    /// <param name="toDate">End date (YYYY-MM-DD)</param>
+    /// <param name="timespan">Time window: minute, hour, day, week, month</param>
+    /// <param name="multiplier">Timespan multiplier (e.g., 5 for 5-minute bars)</param>
+    public async Task<FetchAggregatesResult> FetchStockAggregates(
+        [Service] IMarketDataService marketDataService,
+        string ticker,
+        string fromDate,
+        string toDate,
+        string timespan = "day",
+        int multiplier = 1)
+    {
+        try
+        {
+            var aggregates = await marketDataService.FetchAndStoreAggregatesAsync(
+                ticker, multiplier, timespan, fromDate, toDate);
+
+            return new FetchAggregatesResult
+            {
+                Success = true,
+                Ticker = ticker,
+                Count = aggregates.Count,
+                Message = $"Successfully fetched and stored {aggregates.Count} aggregates for {ticker}"
+            };
+        }
+        catch (Exception ex)
+        {
+            return new FetchAggregatesResult
+            {
+                Success = false,
+                Ticker = ticker,
+                Count = 0,
+                Message = $"Error: {ex.Message}"
+            };
+        }
+    }
+
+    #endregion
 }

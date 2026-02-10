@@ -1,6 +1,11 @@
+using Backend.Configuration;
 using Backend.Data;
 using Backend.GraphQL;
+using Backend.Services.Implementation;
+using Backend.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Polly;
+using Polly.Extensions.Http;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,6 +23,27 @@ builder.Services.AddCors(options =>
 // Add DbContext
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// Configure PolygonService options (testable via IOptions)
+builder.Services.Configure<PolygonServiceOptions>(
+    builder.Configuration.GetSection(PolygonServiceOptions.SectionName));
+
+// Add HttpClient with Polly for resilience (testable with mocked HttpClient)
+builder.Services.AddHttpClient<IPolygonService, PolygonService>(client =>
+{
+    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(120);
+})
+.AddPolicyHandler(HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
+.AddPolicyHandler(HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+
+// Register business services (testable via interfaces)
+builder.Services.AddScoped<IMarketDataService, MarketDataService>();
 
 // Add GraphQL services
 builder.Services

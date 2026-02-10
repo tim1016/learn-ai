@@ -1,0 +1,18 @@
+// Development environment configuration TEMPLATE
+// Copy this file to environment.development.ts and add your API key
+// environment.development.ts is in .gitignore to prevent committing secrets
+
+export const environment = {
+  production: false,
+
+  // Option 1: Add your Polygon.io API key here for direct API calls (development only)
+  // Get your key from: https://polygon.io/dashboard/api-keys
+  polygonApiKey: 'YOUR_API_KEY_HERE',
+
+  // Option 2: Use backend proxy (more secure)
+  // Set this to true to route all requests through your C# backend
+  useBackendProxy: false,
+
+  backendUrl: 'http://localhost:5000/graphql',
+  polygonProxyUrl: 'http://localhost:5000/api/polygon'
+};

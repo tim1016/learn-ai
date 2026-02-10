@@ -1,0 +1,91 @@
+    <div class="market-data-container">
+      <h2>Stock Market Data</h2>
+
+      <!-- Input Form -->
+      <div class="search-form">
+        <input
+          [(ngModel)]="ticker"
+          placeholder="Enter ticker (e.g., AAPL)"
+          (keyup.enter)="fetchData()"
+        />
+        <input
+          [(ngModel)]="fromDate"
+          type="date"
+          placeholder="From Date"
+        />
+        <input
+          [(ngModel)]="toDate"
+          type="date"
+          placeholder="To Date"
+        />
+        <button (click)="fetchData()" [disabled]="loading">
+          {{ loading ? 'Loading...' : 'Fetch Data' }}
+        </button>
+      </div>
+
+      <!-- Error Display -->
+      <div *ngIf="error" class="error-message">
+        {{ error }}
+      </div>
+
+      <!-- Loading Indicator -->
+      <div *ngIf="loading" class="loading">
+        Fetching data for {{ ticker }}...
+      </div>
+
+      <!-- Results Display -->
+      <div *ngIf="results && !loading" class="results">
+        <h3>{{ ticker }} - {{ results.resultsCount }} bars</h3>
+
+        <div class="stats" *ngIf="results.results && results.results.length > 0">
+          <div class="stat">
+            <span class="label">Latest Close:</span>
+            <span class="value">{{ results.results[results.results.length - 1].c | number:'1.2-2' }}</span>
+          </div>
+          <div class="stat">
+            <span class="label">Volume:</span>
+            <span class="value">{{ results.results[results.results.length - 1].v | number }}</span>
+          </div>
+          <div class="stat">
+            <span class="label">VWAP:</span>
+            <span class="value">{{ results.results[results.results.length - 1].vw | number:'1.2-2' }}</span>
+          </div>
+        </div>
+
+        <table *ngIf="results.results && results.results.length > 0">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Open</th>
+              <th>High</th>
+              <th>Low</th>
+              <th>Close</th>
+              <th>Volume</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let bar of results.results">
+              <td>{{ formatDate(bar.t) }}</td>
+              <td>{{ bar.o | number:'1.2-2' }}</td>
+              <td>{{ bar.h | number:'1.2-2' }}</td>
+              <td>{{ bar.l | number:'1.2-2' }}</td>
+              <td>{{ bar.c | number:'1.2-2' }}</td>
+              <td>{{ bar.v | number }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="quick-actions">
+        <h4>Quick Examples:</h4>
+        <button (click)="fetchSnapshot()">Get AAPL Snapshot</button>
+        <button (click)="fetchLastTrade()">Get Last Trade</button>
+        <button (click)="fetchGainers()">Top Gainers</button>
+      </div>
+
+      <div *ngIf="snapshotData" class="snapshot">
+        <h4>Snapshot Data:</h4>
+        <pre>{{ snapshotData | json }}</pre>
+      </div>
+    </div>

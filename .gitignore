@@ -5,3 +5,24 @@ obj/
 *.user
 *.suo
 appsettings.Development.json
+
+# Environment variables (contains API keys)
+.env
+
+# Angular environment files (may contain API keys for development)
+**/environments/environment.development.ts
+**/environments/.env*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/

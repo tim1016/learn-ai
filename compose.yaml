@@ -14,6 +14,28 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - app-network
+
+  python-service:
+    build: ./PythonDataService
+    container_name: polygon-data-service
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - HOST=0.0.0.0
+      - PORT=8000
+      - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - app-network
 
   backend:
     build: ./Backend
@@ -23,9 +45,18 @@ services:
       - "5000:8080"
     environment:
       - ConnectionStrings__DefaultConnection=Host=db;Database=postgres;Username=postgres;Password=mysecretpassword
+      - PolygonService__BaseUrl=http://python-service:8000
     depends_on:
       db:
         condition: service_healthy
+      python-service:
+        condition: service_healthy
+    networks:
+      - app-network
 
 volumes:
   pgdata:
+
+networks:
+  app-network:
+    driver: bridge

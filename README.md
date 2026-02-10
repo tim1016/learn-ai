@@ -18,7 +18,7 @@ The backend is a .NET 8 GraphQL API using Hot Chocolate with a PostgreSQL databa
 # From the project root directory
 docker compose up -d
 # or with Podman
-podman compose up -d
+
 ```
 
 The backend will be available at:

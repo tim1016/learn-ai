@@ -21,7 +21,11 @@
       "Bash(docker ps:*)",
       "Bash(xargs:*)",
       "Bash(docker port:*)",
-      "Bash(jq:*)"
+      "Bash(jq:*)",
+      "Bash(podman build:*)",
+      "Bash(dotnet restore:*)",
+      "Bash(podman-compose:*)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

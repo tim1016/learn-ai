@@ -1,0 +1,65 @@
+"""FastAPI application entry point"""
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+import logging
+
+from app.config import settings
+from app.routers import aggregates
+from app.utils.error_handlers import polygon_exception_handler
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown events"""
+    logger.info(f"Starting Polygon Data Service on {settings.HOST}:{settings.PORT}")
+    logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
+    yield
+    logger.info("Shutting down Polygon Data Service")
+
+
+app = FastAPI(
+    title="Polygon Data Service",
+    description="Data fetching and sanitization service for Polygon.io market data",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS middleware for C# backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.get_allowed_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include routers
+app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
+
+# Exception handler
+app.add_exception_handler(Exception, polygon_exception_handler)
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Docker"""
+    return {"status": "healthy", "service": "polygon-data-service"}
+
+
+@app.get("/")
+async def root():
+    """Root endpoint with API info"""
+    return {
+        "service": "Polygon Data Service",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health"
+    }
