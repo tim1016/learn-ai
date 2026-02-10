@@ -1,7 +1,10 @@
 
 using Backend.Data;
+using Backend.GraphQL.Types;
 using Backend.Models;
 using Backend.Models.MarketData;
+using Backend.Services.Interfaces;
+using HotChocolate;
 
 namespace Backend.GraphQL;
 
@@ -89,6 +92,48 @@ public class Query
     [UseProjection]
     public IQueryable<Ticker?> GetTickerBySymbol(AppDbContext context, string symbol)
         => context.Tickers.Where(t => t.Symbol == symbol);
+
+    /// <summary>
+    /// Smart query: returns cached data if available, fetches from Polygon if not.
+    /// Computes summary statistics server-side.
+    /// </summary>
+    public async Task<SmartAggregatesResult> GetOrFetchStockAggregates(
+        [Service] IMarketDataService marketDataService,
+        string ticker,
+        string fromDate,
+        string toDate,
+        string timespan = "day",
+        int multiplier = 1)
+    {
+        var aggregates = await marketDataService.GetOrFetchAggregatesAsync(
+            ticker, multiplier, timespan, fromDate, toDate);
+
+        var result = new SmartAggregatesResult { Ticker = ticker.ToUpper(), Aggregates = aggregates };
+
+        if (aggregates.Count > 0)
+        {
+            result.Summary = new AggregatesSummary
+            {
+                PeriodHigh = aggregates.Max(a => a.High),
+                PeriodLow = aggregates.Min(a => a.Low),
+                AverageVolume = aggregates.Average(a => a.Volume),
+                AverageVwap = aggregates
+                    .Where(a => a.VolumeWeightedAveragePrice.HasValue)
+                    .Select(a => a.VolumeWeightedAveragePrice!.Value)
+                    .DefaultIfEmpty(0)
+                    .Average(),
+                OpenPrice = aggregates.First().Open,
+                ClosePrice = aggregates.Last().Close,
+                PriceChange = aggregates.Last().Close - aggregates.First().Open,
+                PriceChangePercent = aggregates.First().Open != 0
+                    ? (aggregates.Last().Close - aggregates.First().Open) / aggregates.First().Open * 100
+                    : 0,
+                TotalBars = aggregates.Count
+            };
+        }
+
+        return result;
+    }
 
     #endregion
 }

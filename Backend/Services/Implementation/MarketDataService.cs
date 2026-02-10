@@ -69,6 +69,50 @@ public class MarketDataService : IMarketDataService
         }
     }
 
+    public async Task<List<StockAggregate>> GetOrFetchAggregatesAsync(
+        string ticker,
+        int multiplier,
+        string timespan,
+        string fromDate,
+        string toDate,
+        CancellationToken cancellationToken = default)
+    {
+        var from = DateTime.Parse(fromDate).ToUniversalTime();
+        var to = DateTime.Parse(toDate).ToUniversalTime();
+        var symbol = ticker.ToUpper();
+
+        var tickerEntity = await _context.Tickers
+            .FirstOrDefaultAsync(t => t.Symbol == symbol && t.Market == "stocks", cancellationToken);
+
+        if (tickerEntity != null)
+        {
+            var existing = await _context.StockAggregates
+                .Where(a => a.TickerId == tickerEntity.Id
+                         && a.Timespan == timespan
+                         && a.Multiplier == multiplier
+                         && a.Timestamp >= from
+                         && a.Timestamp <= to)
+                .OrderBy(a => a.Timestamp)
+                .ToListAsync(cancellationToken);
+
+            if (existing.Count > 0)
+            {
+                _logger.LogInformation(
+                    "Cache hit: {Count} aggregates for {Ticker} from {From} to {To}",
+                    existing.Count, symbol, fromDate, toDate);
+                return existing;
+            }
+        }
+
+        // Cache miss — fetch from Polygon and store
+        _logger.LogInformation(
+            "Cache miss for {Ticker} from {From} to {To}, fetching from Polygon",
+            symbol, fromDate, toDate);
+
+        return await FetchAndStoreAggregatesAsync(
+            ticker, multiplier, timespan, fromDate, toDate, cancellationToken);
+    }
+
     public async Task<Ticker> GetOrCreateTickerAsync(
         string symbol,
         string market,

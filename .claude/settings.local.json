@@ -25,7 +25,14 @@
       "Bash(podman build:*)",
       "Bash(dotnet restore:*)",
       "Bash(podman-compose:*)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(export PATH=\"$PATH:/c/Program Files/dotnet\")",
+      "Bash(dotnet:*)",
+      "Bash(if grep -q \"Program Files/dotnet\" ~/.bashrc)",
+      "Bash(then echo \"Already in .bashrc\")",
+      "Bash(else echo 'export PATH=\"\"$PATH:/c/Program Files/dotnet\"\"')",
+      "Bash(~/.bashrc)",
+      "Bash(fi)"
     ]
   }
 }

@@ -1,85 +1,91 @@
 {
-  "hash": "653550a7",
-  "configHash": "8fb70a09",
-  "lockfileHash": "1da7b2d7",
-  "browserHash": "5b93eed7",
+  "hash": "49ce6921",
+  "configHash": "4395c577",
+  "lockfileHash": "9e2c6938",
+  "browserHash": "551ec86d",
   "optimized": {
     "@angular/common": {
       "src": "../../../../../../node_modules/@angular/common/fesm2022/common.mjs",
       "file": "@angular_common.js",
-      "fileHash": "7d8dffb8",
+      "fileHash": "13d58487",
       "needsInterop": false
     },
     "@angular/common/http": {
       "src": "../../../../../../node_modules/@angular/common/fesm2022/http.mjs",
       "file": "@angular_common_http.js",
-      "fileHash": "16717f8a",
+      "fileHash": "53a1e364",
       "needsInterop": false
     },
     "@angular/core": {
       "src": "../../../../../../node_modules/@angular/core/fesm2022/core.mjs",
       "file": "@angular_core.js",
-      "fileHash": "0261f38c",
+      "fileHash": "941c832f",
       "needsInterop": false
     },
     "@angular/platform-browser": {
       "src": "../../../../../../node_modules/@angular/platform-browser/fesm2022/platform-browser.mjs",
       "file": "@angular_platform-browser.js",
-      "fileHash": "cd24a2d0",
+      "fileHash": "fbeb6109",
       "needsInterop": false
     },
     "@angular/router": {
       "src": "../../../../../../node_modules/@angular/router/fesm2022/router.mjs",
       "file": "@angular_router.js",
-      "fileHash": "11f13b8b",
+      "fileHash": "6984d2cd",
       "needsInterop": false
     },
     "@apollo/client/core": {
       "src": "../../../../../../node_modules/@apollo/client/core/index.js",
       "file": "@apollo_client_core.js",
-      "fileHash": "72d41b32",
+      "fileHash": "635dd1b1",
       "needsInterop": false
     },
     "apollo-angular": {
       "src": "../../../../../../node_modules/apollo-angular/fesm2022/apollo-angular.mjs",
       "file": "apollo-angular.js",
-      "fileHash": "3e722ad7",
+      "fileHash": "6449172a",
       "needsInterop": false
     },
     "apollo-angular/http": {
       "src": "../../../../../../node_modules/apollo-angular/fesm2022/apollo-angular-http.mjs",
       "file": "apollo-angular_http.js",
-      "fileHash": "0dba90d6",
+      "fileHash": "26aa06c5",
       "needsInterop": false
     },
     "rxjs/operators": {
       "src": "../../../../../../node_modules/rxjs/dist/esm5/operators/index.js",
       "file": "rxjs_operators.js",
-      "fileHash": "12102f2d",
+      "fileHash": "6f7ac82f",
       "needsInterop": false
     },
     "zone.js": {
       "src": "../../../../../../node_modules/zone.js/fesm2015/zone.js",
       "file": "zone__js.js",
-      "fileHash": "3bc33522",
+      "fileHash": "98e39607",
       "needsInterop": true
     },
     "tslib": {
       "src": "../../../../../../node_modules/tslib/tslib.es6.mjs",
       "file": "tslib.js",
-      "fileHash": "65944765",
+      "fileHash": "c66b9117",
       "needsInterop": false
     },
     "@angular/forms": {
       "src": "../../../../../../node_modules/@angular/forms/fesm2022/forms.mjs",
       "file": "@angular_forms.js",
-      "fileHash": "a43cbcde",
+      "fileHash": "d53176d8",
       "needsInterop": false
     },
     "@polygon.io/client-js": {
       "src": "../../../../../../node_modules/@polygon.io/client-js/dist/main.js",
       "file": "@polygon__io_client-js.js",
-      "fileHash": "daf13f17",
+      "fileHash": "f62cf807",
+      "needsInterop": false
+    },
+    "lightweight-charts": {
+      "src": "../../../../../../node_modules/lightweight-charts/dist/lightweight-charts.development.mjs",
+      "file": "lightweight-charts.js",
+      "fileHash": "0159efd1",
       "needsInterop": false
     }
   },

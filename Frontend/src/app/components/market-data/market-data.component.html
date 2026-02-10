@@ -1,58 +1,66 @@
-    <div class="market-data-container">
-      <h2>Stock Market Data</h2>
+<div class="market-data-dashboard">
+  <h2>Stock Market Dashboard</h2>
 
-      <!-- Input Form -->
-      <div class="search-form">
-        <input
-          [(ngModel)]="ticker"
-          placeholder="Enter ticker (e.g., AAPL)"
-          (keyup.enter)="fetchData()"
-        />
-        <input
-          [(ngModel)]="fromDate"
-          type="date"
-          placeholder="From Date"
-        />
-        <input
-          [(ngModel)]="toDate"
-          type="date"
-          placeholder="To Date"
-        />
-        <button (click)="fetchData()" [disabled]="loading">
-          {{ loading ? 'Loading...' : 'Fetch Data' }}
-        </button>
+  <!-- Search Controls -->
+  <div class="search-form">
+    <input
+      [(ngModel)]="ticker"
+      placeholder="Ticker (e.g., AAPL)"
+      (keyup.enter)="fetchData()"
+    />
+    <input [(ngModel)]="fromDate" type="date" />
+    <input [(ngModel)]="toDate" type="date" />
+    <select [(ngModel)]="timespan">
+      <option value="day">Daily</option>
+      <option value="hour">Hourly</option>
+      <option value="week">Weekly</option>
+      <option value="month">Monthly</option>
+    </select>
+    <button (click)="fetchData()" [disabled]="loading">
+      {{ loading ? 'Loading...' : 'Fetch Data' }}
+    </button>
+  </div>
+
+  <!-- Error -->
+  @if (error) {
+    <div class="error-message">{{ error }}</div>
+  }
+
+  <!-- Loading -->
+  @if (loading) {
+    <div class="loading">Fetching data for {{ ticker }}...</div>
+  }
+
+  <!-- Dashboard Content -->
+  @if (aggregates.length > 0 && !loading) {
+    <div class="dashboard-content">
+      <h3>{{ ticker }} &mdash; {{ aggregates.length }} bars</h3>
+
+      <!-- Summary Stats -->
+      <app-summary-stats [summary]="summary"></app-summary-stats>
+
+      <!-- Candlestick Chart -->
+      <div class="chart-section">
+        <h4>Candlestick Chart (OHLC)</h4>
+        <app-candlestick-chart [data]="aggregates" [ticker]="ticker"></app-candlestick-chart>
       </div>
 
-      <!-- Error Display -->
-      <div *ngIf="error" class="error-message">
-        {{ error }}
+      <!-- Volume Chart -->
+      <div class="chart-section">
+        <h4>Volume</h4>
+        <app-volume-chart [data]="aggregates"></app-volume-chart>
       </div>
 
-      <!-- Loading Indicator -->
-      <div *ngIf="loading" class="loading">
-        Fetching data for {{ ticker }}...
+      <!-- Line Chart -->
+      <div class="chart-section">
+        <h4>Closing Prices</h4>
+        <app-line-chart [data]="aggregates" [ticker]="ticker"></app-line-chart>
       </div>
 
-      <!-- Results Display -->
-      <div *ngIf="results && !loading" class="results">
-        <h3>{{ ticker }} - {{ results.resultsCount }} bars</h3>
-
-        <div class="stats" *ngIf="results.results && results.results.length > 0">
-          <div class="stat">
-            <span class="label">Latest Close:</span>
-            <span class="value">{{ results.results[results.results.length - 1].c | number:'1.2-2' }}</span>
-          </div>
-          <div class="stat">
-            <span class="label">Volume:</span>
-            <span class="value">{{ results.results[results.results.length - 1].v | number }}</span>
-          </div>
-          <div class="stat">
-            <span class="label">VWAP:</span>
-            <span class="value">{{ results.results[results.results.length - 1].vw | number:'1.2-2' }}</span>
-          </div>
-        </div>
-
-        <table *ngIf="results.results && results.results.length > 0">
+      <!-- Data Table (collapsed by default) -->
+      <details class="data-table-section">
+        <summary>View Raw Data Table ({{ aggregates.length }} rows)</summary>
+        <table>
           <thead>
             <tr>
               <th>Date</th>
@@ -61,31 +69,24 @@
               <th>Low</th>
               <th>Close</th>
               <th>Volume</th>
+              <th>VWAP</th>
             </tr>
           </thead>
           <tbody>
-            <tr *ngFor="let bar of results.results">
-              <td>{{ formatDate(bar.t) }}</td>
-              <td>{{ bar.o | number:'1.2-2' }}</td>
-              <td>{{ bar.h | number:'1.2-2' }}</td>
-              <td>{{ bar.l | number:'1.2-2' }}</td>
-              <td>{{ bar.c | number:'1.2-2' }}</td>
-              <td>{{ bar.v | number }}</td>
-            </tr>
+            @for (bar of aggregates; track bar.id) {
+              <tr>
+                <td>{{ bar.timestamp | date:'yyyy-MM-dd' }}</td>
+                <td>{{ bar.open | number:'1.2-2' }}</td>
+                <td>{{ bar.high | number:'1.2-2' }}</td>
+                <td>{{ bar.low | number:'1.2-2' }}</td>
+                <td>{{ bar.close | number:'1.2-2' }}</td>
+                <td>{{ bar.volume | number:'1.0-0' }}</td>
+                <td>{{ bar.volumeWeightedAveragePrice | number:'1.2-2' }}</td>
+              </tr>
+            }
           </tbody>
         </table>
-      </div>
-
-      <!-- Quick Actions -->
-      <div class="quick-actions">
-        <h4>Quick Examples:</h4>
-        <button (click)="fetchSnapshot()">Get AAPL Snapshot</button>
-        <button (click)="fetchLastTrade()">Get Last Trade</button>
-        <button (click)="fetchGainers()">Top Gainers</button>
-      </div>
-
-      <div *ngIf="snapshotData" class="snapshot">
-        <h4>Snapshot Data:</h4>
-        <pre>{{ snapshotData | json }}</pre>
-      </div>
+      </details>
     </div>
+  }
+</div>

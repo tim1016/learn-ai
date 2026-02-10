@@ -52,7 +52,8 @@ builder.Services
     .AddMutationType<Mutation>()
     .AddProjections()
     .AddFiltering()
-    .AddSorting();
+    .AddSorting()
+    .ModifyRequestOptions(opt => opt.IncludeExceptionDetails = true);
 
 var app = builder.Build();
 

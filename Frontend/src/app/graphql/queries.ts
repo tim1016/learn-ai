@@ -28,3 +28,47 @@ export const GET_AUTHORS = gql`
     }
   }
 `;
+
+export const GET_OR_FETCH_STOCK_AGGREGATES = gql`
+  query GetOrFetchStockAggregates(
+    $ticker: String!
+    $fromDate: String!
+    $toDate: String!
+    $timespan: String! = "day"
+    $multiplier: Int! = 1
+  ) {
+    getOrFetchStockAggregates(
+      ticker: $ticker
+      fromDate: $fromDate
+      toDate: $toDate
+      timespan: $timespan
+      multiplier: $multiplier
+    ) {
+      ticker
+      aggregates {
+        id
+        open
+        high
+        low
+        close
+        volume
+        volumeWeightedAveragePrice
+        timestamp
+        timespan
+        multiplier
+        transactionCount
+      }
+      summary {
+        periodHigh
+        periodLow
+        averageVolume
+        averageVwap
+        openPrice
+        closePrice
+        priceChange
+        priceChangePercent
+        totalBars
+      }
+    }
+  }
+`;

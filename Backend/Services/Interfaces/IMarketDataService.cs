@@ -21,6 +21,18 @@ public interface IMarketDataService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Smart cache: check DB for existing aggregates, fetch from Polygon if missing.
+    /// Returns all aggregates for the requested range.
+    /// </summary>
+    Task<List<StockAggregate>> GetOrFetchAggregatesAsync(
+        string ticker,
+        int multiplier,
+        string timespan,
+        string fromDate,
+        string toDate,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Get existing ticker or create new one (upsert)
     /// Separated for testability
     /// </summary>
