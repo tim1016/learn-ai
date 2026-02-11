@@ -52,6 +52,14 @@ export class MarketDataComponent implements OnInit {
     this.aggregates = [];
     this.summary = null;
 
+    console.log('[STEP 1 - Component] fetchData called:', {
+      ticker: this.ticker.toUpperCase(),
+      from: this.fromDate,
+      to: this.toDate,
+      timespan: this.timespan,
+      multiplier: this.multiplier
+    });
+
     this.marketDataService.getOrFetchStockAggregates(
       this.ticker.toUpperCase(),
       this.fromDate,
@@ -60,11 +68,24 @@ export class MarketDataComponent implements OnInit {
       this.multiplier
     ).subscribe({
       next: (result) => {
+        console.log('[STEP 2 - Component] GraphQL response received:', {
+          ticker: result?.ticker,
+          aggregatesCount: result?.aggregates?.length ?? 0,
+          hasSummary: !!result?.summary,
+          firstBar: result?.aggregates?.[0],
+          summary: result?.summary
+        });
         this.aggregates = result.aggregates;
         this.summary = result.summary;
         this.loading = false;
       },
       error: (err) => {
+        console.error('[STEP 2 - Component] GraphQL ERROR:', {
+          message: err?.message,
+          networkError: err?.networkError,
+          graphQLErrors: err?.graphQLErrors,
+          fullError: err
+        });
         this.error = err?.message || 'Failed to fetch data';
         this.loading = false;
       }

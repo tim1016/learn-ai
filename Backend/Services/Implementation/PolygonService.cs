@@ -55,15 +55,27 @@ public class PolygonService : IPolygonService
                 limit = 50000
             };
 
+            _logger.LogInformation(
+                "[STEP 6 - PolygonService] Sending POST to Python: /api/aggregates/fetch, body={@Request}",
+                request);
+
             var response = await _httpClient.PostAsJsonAsync(
                 "/api/aggregates/fetch",
                 request,
                 cancellationToken);
 
+            _logger.LogInformation(
+                "[STEP 7 - PolygonService] Python response status: {StatusCode}",
+                response.StatusCode);
+
+            var rawBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogInformation(
+                "[STEP 7.5 - PolygonService] Python raw response (first 500 chars): {Body}",
+                rawBody.Length > 500 ? rawBody[..500] : rawBody);
+
             response.EnsureSuccessStatusCode();
 
-            var result = await response.Content.ReadFromJsonAsync<AggregateResponse>(
-                _jsonOptions, cancellationToken);
+            var result = JsonSerializer.Deserialize<AggregateResponse>(rawBody, _jsonOptions);
 
             if (result == null)
             {
@@ -76,8 +88,8 @@ public class PolygonService : IPolygonService
             }
 
             _logger.LogInformation(
-                "Successfully fetched {Count} aggregates for {Ticker}",
-                result.Summary?.CleanedCount ?? 0, ticker);
+                "[STEP 8 - PolygonService] Deserialized: success={Success}, dataCount={Count}, summary={@Summary}",
+                result.Success, result.Data?.Count ?? 0, result.Summary);
 
             return result;
         }

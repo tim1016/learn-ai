@@ -30,6 +30,10 @@ async def fetch_aggregates(request: AggregateRequest):
     Returns sanitized OHLCV data with summary statistics
     """
     try:
+        logger.info(f"[STEP 10 - Python] Request received: ticker={request.ticker}, "
+                     f"from={request.from_date}, to={request.to_date}, "
+                     f"timespan={request.timespan}, multiplier={request.multiplier}")
+
         # Fetch raw data from Polygon
         raw_data = polygon_client.fetch_aggregates(
             ticker=request.ticker,
@@ -40,8 +44,18 @@ async def fetch_aggregates(request: AggregateRequest):
             limit=request.limit
         )
 
+        logger.info(f"[STEP 11 - Python] Polygon API returned: "
+                     f"type={type(raw_data).__name__}, "
+                     f"results_count={raw_data.get('resultsCount', 'N/A') if isinstance(raw_data, dict) else 'not-dict'}, "
+                     f"status={raw_data.get('status', 'N/A') if isinstance(raw_data, dict) else 'not-dict'}")
+
         # Sanitize with pandas
         sanitized_result = sanitizer.sanitize_aggregates(raw_data)
+
+        data_count = len(sanitized_result.get('data', []))
+        logger.info(f"[STEP 12 - Python] Sanitized result: "
+                     f"data_count={data_count}, "
+                     f"summary={sanitized_result.get('summary', {})}")
 
         return SanitizedDataResponse(
             success=True,
@@ -52,7 +66,7 @@ async def fetch_aggregates(request: AggregateRequest):
         )
 
     except Exception as e:
-        logger.error(f"Error in fetch_aggregates: {str(e)}")
+        logger.error(f"[STEP ERROR - Python] Error in fetch_aggregates: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch aggregates: {str(e)}"

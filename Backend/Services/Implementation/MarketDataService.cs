@@ -42,9 +42,13 @@ public class MarketDataService : IMarketDataService
             var response = await _polygonService.FetchAggregatesAsync(
                 ticker, multiplier, timespan, fromDate, toDate, cancellationToken);
 
+            _logger.LogInformation(
+                "[STEP 9 - MarketDataService] FetchAndStore: Python response success={Success}, dataCount={Count}",
+                response.Success, response.Data?.Count ?? 0);
+
             if (response.Data == null || response.Data.Count == 0)
             {
-                _logger.LogWarning("No data returned for {Ticker}", ticker);
+                _logger.LogWarning("[STEP 9 - MarketDataService] DATA LOST HERE — No data returned for {Ticker}", ticker);
                 return [];
             }
 
@@ -84,6 +88,10 @@ public class MarketDataService : IMarketDataService
         var tickerEntity = await _context.Tickers
             .FirstOrDefaultAsync(t => t.Symbol == symbol && t.Market == "stocks", cancellationToken);
 
+        _logger.LogInformation(
+            "[STEP 4.5 - MarketDataService] GetOrFetch: ticker={Ticker}, from={From}, to={To}, tickerExists={Exists}",
+            symbol, from, to, tickerEntity != null);
+
         if (tickerEntity != null)
         {
             var existing = await _context.StockAggregates
@@ -95,10 +103,14 @@ public class MarketDataService : IMarketDataService
                 .OrderBy(a => a.Timestamp)
                 .ToListAsync(cancellationToken);
 
+            _logger.LogInformation(
+                "[STEP 4.7 - MarketDataService] DB query returned {Count} cached aggregates for {Ticker}",
+                existing.Count, symbol);
+
             if (existing.Count > 0)
             {
                 _logger.LogInformation(
-                    "Cache hit: {Count} aggregates for {Ticker} from {From} to {To}",
+                    "[STEP 4.7 - MarketDataService] CACHE HIT: {Count} aggregates for {Ticker} from {From} to {To}",
                     existing.Count, symbol, fromDate, toDate);
                 return existing;
             }
@@ -106,7 +118,7 @@ public class MarketDataService : IMarketDataService
 
         // Cache miss — fetch from Polygon and store
         _logger.LogInformation(
-            "Cache miss for {Ticker} from {From} to {To}, fetching from Polygon",
+            "[STEP 5.5 - MarketDataService] CACHE MISS for {Ticker} from {From} to {To}, fetching from Polygon",
             symbol, fromDate, toDate);
 
         return await FetchAndStoreAggregatesAsync(

@@ -100,14 +100,23 @@ public class Query
     [GraphQLName("getOrFetchStockAggregates")]
     public async Task<SmartAggregatesResult> GetOrFetchStockAggregates(
         [Service] IMarketDataService marketDataService,
+        [Service] ILogger<Query> logger,
         string ticker,
         string fromDate,
         string toDate,
         string timespan = "day",
         int multiplier = 1)
     {
+        logger.LogInformation(
+            "[STEP 3 - GraphQL] Query received: ticker={Ticker}, from={From}, to={To}, timespan={Timespan}, multiplier={Multiplier}",
+            ticker, fromDate, toDate, timespan, multiplier);
+
         var aggregates = await marketDataService.GetOrFetchAggregatesAsync(
             ticker, multiplier, timespan, fromDate, toDate);
+
+        logger.LogInformation(
+            "[STEP 4 - GraphQL] MarketDataService returned {Count} aggregates for {Ticker}",
+            aggregates.Count, ticker);
 
         var bars = aggregates.Select(a => new AggregateBar
         {
@@ -147,6 +156,10 @@ public class Query
                 TotalBars = bars.Count
             };
         }
+
+        logger.LogInformation(
+            "[STEP 5 - GraphQL] Returning result: ticker={Ticker}, bars={Bars}, hasSummary={HasSummary}",
+            result.Ticker, result.Aggregates.Count, result.Summary != null);
 
         return result;
     }
