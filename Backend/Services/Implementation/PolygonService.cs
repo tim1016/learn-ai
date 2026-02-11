@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using Backend.Configuration;
 using Backend.Models.DTOs.PolygonResponses;
 using Backend.Services.Interfaces;
@@ -15,6 +16,10 @@ public class PolygonService : IPolygonService
     private readonly HttpClient _httpClient;
     private readonly ILogger<PolygonService> _logger;
     private readonly PolygonServiceOptions _options;
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+    };
 
     public PolygonService(
         HttpClient httpClient,
@@ -58,7 +63,7 @@ public class PolygonService : IPolygonService
             response.EnsureSuccessStatusCode();
 
             var result = await response.Content.ReadFromJsonAsync<AggregateResponse>(
-                cancellationToken: cancellationToken);
+                _jsonOptions, cancellationToken);
 
             if (result == null)
             {
@@ -108,7 +113,7 @@ public class PolygonService : IPolygonService
             response.EnsureSuccessStatusCode();
 
             var result = await response.Content.ReadFromJsonAsync<TradeResponse>(
-                cancellationToken: cancellationToken);
+                _jsonOptions, cancellationToken);
 
             if (result == null)
             {

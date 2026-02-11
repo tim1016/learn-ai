@@ -78,7 +78,7 @@ public class MarketDataService : IMarketDataService
         CancellationToken cancellationToken = default)
     {
         var from = DateTime.Parse(fromDate).ToUniversalTime();
-        var to = DateTime.Parse(toDate).ToUniversalTime();
+        var to = DateTime.Parse(toDate).ToUniversalTime().Date.AddDays(1).AddTicks(-1);
         var symbol = ticker.ToUpper();
 
         var tickerEntity = await _context.Tickers

@@ -32,7 +32,10 @@
       "Bash(then echo \"Already in .bashrc\")",
       "Bash(else echo 'export PATH=\"\"$PATH:/c/Program Files/dotnet\"\"')",
       "Bash(~/.bashrc)",
-      "Bash(fi)"
+      "Bash(fi)",
+      "Bash(podman compose up:*)",
+      "Bash(podman images:*)",
+      "Bash(findstr:*)"
     ]
   }
 }

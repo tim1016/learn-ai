@@ -97,6 +97,7 @@ public class Query
     /// Smart query: returns cached data if available, fetches from Polygon if not.
     /// Computes summary statistics server-side.
     /// </summary>
+    [GraphQLName("getOrFetchStockAggregates")]
     public async Task<SmartAggregatesResult> GetOrFetchStockAggregates(
         [Service] IMarketDataService marketDataService,
         string ticker,
@@ -108,27 +109,42 @@ public class Query
         var aggregates = await marketDataService.GetOrFetchAggregatesAsync(
             ticker, multiplier, timespan, fromDate, toDate);
 
-        var result = new SmartAggregatesResult { Ticker = ticker.ToUpper(), Aggregates = aggregates };
+        var bars = aggregates.Select(a => new AggregateBar
+        {
+            Id = a.Id,
+            Open = a.Open,
+            High = a.High,
+            Low = a.Low,
+            Close = a.Close,
+            Volume = a.Volume,
+            VolumeWeightedAveragePrice = a.VolumeWeightedAveragePrice,
+            Timestamp = a.Timestamp,
+            Timespan = a.Timespan,
+            Multiplier = a.Multiplier,
+            TransactionCount = a.TransactionCount
+        }).ToList();
 
-        if (aggregates.Count > 0)
+        var result = new SmartAggregatesResult { Ticker = ticker.ToUpper(), Aggregates = bars };
+
+        if (bars.Count > 0)
         {
             result.Summary = new AggregatesSummary
             {
-                PeriodHigh = aggregates.Max(a => a.High),
-                PeriodLow = aggregates.Min(a => a.Low),
-                AverageVolume = aggregates.Average(a => a.Volume),
-                AverageVwap = aggregates
+                PeriodHigh = bars.Max(a => a.High),
+                PeriodLow = bars.Min(a => a.Low),
+                AverageVolume = bars.Average(a => a.Volume),
+                AverageVwap = bars
                     .Where(a => a.VolumeWeightedAveragePrice.HasValue)
                     .Select(a => a.VolumeWeightedAveragePrice!.Value)
                     .DefaultIfEmpty(0)
                     .Average(),
-                OpenPrice = aggregates.First().Open,
-                ClosePrice = aggregates.Last().Close,
-                PriceChange = aggregates.Last().Close - aggregates.First().Open,
-                PriceChangePercent = aggregates.First().Open != 0
-                    ? (aggregates.Last().Close - aggregates.First().Open) / aggregates.First().Open * 100
+                OpenPrice = bars.First().Open,
+                ClosePrice = bars.Last().Close,
+                PriceChange = bars.Last().Close - bars.First().Open,
+                PriceChangePercent = bars.First().Open != 0
+                    ? (bars.Last().Close - bars.First().Open) / bars.First().Open * 100
                     : 0,
-                TotalBars = aggregates.Count
+                TotalBars = bars.Count
             };
         }
 
