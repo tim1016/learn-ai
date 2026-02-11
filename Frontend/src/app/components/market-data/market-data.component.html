@@ -57,36 +57,49 @@
         <app-line-chart [data]="aggregates" [ticker]="ticker"></app-line-chart>
       </div>
 
-      <!-- Data Table (collapsed by default) -->
-      <details class="data-table-section">
-        <summary>View Raw Data Table ({{ aggregates.length }} rows)</summary>
-        <table>
-          <thead>
+      <!-- Data Preview Table -->
+      <div class="data-table-section">
+        <p-table
+          [value]="aggregates"
+          [paginator]="true"
+          [rows]="15"
+          [rowsPerPageOptions]="[10, 15, 25, 50]"
+          [sortField]="'timestamp'"
+          [sortOrder]="-1"
+          [scrollable]="true"
+          scrollHeight="500px"
+          styleClass="p-datatable-striped p-datatable-sm"
+          [tableStyle]="{ 'min-width': '50rem' }"
+        >
+          <ng-template #caption>
+            <div class="table-caption">
+              Data Preview &mdash; {{ aggregates.length }} rows
+            </div>
+          </ng-template>
+          <ng-template #header>
             <tr>
-              <th>Date</th>
-              <th>Open</th>
-              <th>High</th>
-              <th>Low</th>
-              <th>Close</th>
-              <th>Volume</th>
-              <th>VWAP</th>
+              <th pSortableColumn="timestamp">Date <p-sortIcon field="timestamp" /></th>
+              <th pSortableColumn="open">Open <p-sortIcon field="open" /></th>
+              <th pSortableColumn="high">High <p-sortIcon field="high" /></th>
+              <th pSortableColumn="low">Low <p-sortIcon field="low" /></th>
+              <th pSortableColumn="close">Close <p-sortIcon field="close" /></th>
+              <th pSortableColumn="volume">Volume <p-sortIcon field="volume" /></th>
+              <th pSortableColumn="volumeWeightedAveragePrice">VWAP <p-sortIcon field="volumeWeightedAveragePrice" /></th>
             </tr>
-          </thead>
-          <tbody>
-            @for (bar of aggregates; track bar.id) {
-              <tr>
-                <td>{{ bar.timestamp | date:'yyyy-MM-dd' }}</td>
-                <td>{{ bar.open | number:'1.2-2' }}</td>
-                <td>{{ bar.high | number:'1.2-2' }}</td>
-                <td>{{ bar.low | number:'1.2-2' }}</td>
-                <td>{{ bar.close | number:'1.2-2' }}</td>
-                <td>{{ bar.volume | number:'1.0-0' }}</td>
-                <td>{{ bar.volumeWeightedAveragePrice | number:'1.2-2' }}</td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      </details>
+          </ng-template>
+          <ng-template #body let-bar>
+            <tr>
+              <td>{{ bar.timestamp | date:'yyyy-MM-dd' }}</td>
+              <td>{{ bar.open | number:'1.2-2' }}</td>
+              <td>{{ bar.high | number:'1.2-2' }}</td>
+              <td>{{ bar.low | number:'1.2-2' }}</td>
+              <td>{{ bar.close | number:'1.2-2' }}</td>
+              <td>{{ bar.volume | number:'1.0-0' }}</td>
+              <td>{{ bar.volumeWeightedAveragePrice | number:'1.2-2' }}</td>
+            </tr>
+          </ng-template>
+        </p-table>
+      </div>
     </div>
   }
 </div>

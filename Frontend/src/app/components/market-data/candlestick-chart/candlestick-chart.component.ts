@@ -75,13 +75,15 @@ export class CandlestickChartComponent implements AfterViewInit, OnChanges, OnDe
   private updateData(): void {
     if (!this.series || !this.data.length) return;
 
-    const candlestickData: CandlestickData[] = this.data.map(agg => ({
-      time: (new Date(agg.timestamp).getTime() / 1000) as UTCTimestamp,
-      open: agg.open,
-      high: agg.high,
-      low: agg.low,
-      close: agg.close
-    }));
+    const candlestickData: CandlestickData[] = this.data
+      .map(agg => ({
+        time: (new Date(agg.timestamp).getTime() / 1000) as UTCTimestamp,
+        open: agg.open,
+        high: agg.high,
+        low: agg.low,
+        close: agg.close
+      }))
+      .sort((a, b) => (a.time as number) - (b.time as number));
 
     this.series.setData(candlestickData);
     this.chart?.timeScale().fitContent();

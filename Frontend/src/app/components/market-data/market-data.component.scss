@@ -84,43 +84,12 @@
 
 .data-table-section {
   margin-top: 24px;
-
-  summary {
-    cursor: pointer;
-    padding: 12px 16px;
-    background: #f8f9fa;
-    border: 1px solid #e9ecef;
-    border-radius: 4px;
-    font-weight: 500;
-    color: #555;
-
-    &:hover {
-      background: #e9ecef;
-    }
-  }
 }
 
-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 12px;
-}
-
-th, td {
-  padding: 10px 12px;
-  text-align: right;
-  border-bottom: 1px solid #eee;
-}
-
-th {
-  background-color: #f8f9fa;
+.table-caption {
   font-weight: 600;
-  font-size: 12px;
+  font-size: 14px;
+  color: #555;
   text-transform: uppercase;
-  color: #666;
-}
-
-th:first-child,
-td:first-child {
-  text-align: left;
+  letter-spacing: 0.5px;
 }

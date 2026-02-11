@@ -1,15 +1,50 @@
 import { Injectable, inject } from '@angular/core';
-import { Apollo } from 'apollo-angular';
-import { filter, map, tap } from 'rxjs/operators';
+import { HttpClient } from '@angular/common/http';
+import { map, tap } from 'rxjs/operators';
 import { Observable } from 'rxjs';
-import { GET_OR_FETCH_STOCK_AGGREGATES } from '../graphql/queries';
-import { GetOrFetchStockAggregatesResponse, SmartAggregatesResult } from '../graphql/types';
+import { SmartAggregatesResult } from '../graphql/types';
+
+const GRAPHQL_URL = 'http://localhost:5000/graphql';
+
+const QUERY = `
+  query GetOrFetchStockAggregates(
+    $ticker: String!
+    $fromDate: String!
+    $toDate: String!
+    $timespan: String! = "day"
+    $multiplier: Int! = 1
+  ) {
+    getOrFetchStockAggregates(
+      ticker: $ticker
+      fromDate: $fromDate
+      toDate: $toDate
+      timespan: $timespan
+      multiplier: $multiplier
+    ) {
+      ticker
+      aggregates {
+        id open high low close volume
+        volumeWeightedAveragePrice timestamp
+        timespan multiplier transactionCount
+      }
+      summary {
+        periodHigh periodLow averageVolume averageVwap
+        openPrice closePrice priceChange priceChangePercent totalBars
+      }
+    }
+  }
+`;
+
+interface GraphQLResponse {
+  data: { getOrFetchStockAggregates: SmartAggregatesResult };
+  errors?: { message: string }[];
+}
 
 @Injectable({
   providedIn: 'root'
 })
 export class MarketDataService {
-  private apollo = inject(Apollo);
+  private http = inject(HttpClient);
 
   getOrFetchStockAggregates(
     ticker: string,
@@ -22,23 +57,23 @@ export class MarketDataService {
       ticker, fromDate, toDate, timespan, multiplier
     });
 
-    return this.apollo
-      .watchQuery<GetOrFetchStockAggregatesResponse>({
-        query: GET_OR_FETCH_STOCK_AGGREGATES,
-        variables: { ticker, fromDate, toDate, timespan, multiplier },
-        fetchPolicy: 'network-only'
+    return this.http
+      .post<GraphQLResponse>(GRAPHQL_URL, {
+        query: QUERY,
+        variables: { ticker, fromDate, toDate, timespan, multiplier }
       })
-      .valueChanges.pipe(
-        tap(result => {
-          console.log('[STEP 1.7 - Service] Raw Apollo response:', {
-            loading: result.loading,
-            hasData: !!result.data,
-            error: result.error,
-            rawResult: result.data?.getOrFetchStockAggregates
+      .pipe(
+        tap(response => {
+          console.log('[STEP 1.7 - Service] GraphQL response:', {
+            hasData: !!response.data,
+            errors: response.errors,
+            result: response.data?.getOrFetchStockAggregates
           });
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
         }),
-        filter(result => !result.loading && !!result.data),
-        map(result => result.data!.getOrFetchStockAggregates as SmartAggregatesResult)
+        map(response => response.data.getOrFetchStockAggregates)
       );
   }
 }

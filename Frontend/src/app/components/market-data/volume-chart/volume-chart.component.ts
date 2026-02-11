@@ -68,11 +68,13 @@ export class VolumeChartComponent implements AfterViewInit, OnChanges, OnDestroy
   private updateData(): void {
     if (!this.series || !this.data.length) return;
 
-    const histogramData: HistogramData[] = this.data.map(agg => ({
-      time: (new Date(agg.timestamp).getTime() / 1000) as UTCTimestamp,
-      value: agg.volume,
-      color: agg.close >= agg.open ? '#26a69a' : '#ef5350'
-    }));
+    const histogramData: HistogramData[] = this.data
+      .map(agg => ({
+        time: (new Date(agg.timestamp).getTime() / 1000) as UTCTimestamp,
+        value: agg.volume,
+        color: agg.close >= agg.open ? '#26a69a' : '#ef5350'
+      }))
+      .sort((a, b) => (a.time as number) - (b.time as number));
 
     this.series.setData(histogramData);
     this.chart?.timeScale().fitContent();

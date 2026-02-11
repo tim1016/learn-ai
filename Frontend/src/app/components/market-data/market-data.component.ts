@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MarketDataService } from '../../services/market-data.service';
@@ -7,6 +7,7 @@ import { CandlestickChartComponent } from './candlestick-chart/candlestick-chart
 import { LineChartComponent } from './line-chart/line-chart.component';
 import { VolumeChartComponent } from './volume-chart/volume-chart.component';
 import { SummaryStatsComponent } from './summary-stats/summary-stats.component';
+import { TableModule } from 'primeng/table';
 
 @Component({
   selector: 'app-market-data',
@@ -14,7 +15,8 @@ import { SummaryStatsComponent } from './summary-stats/summary-stats.component';
   imports: [
     CommonModule, FormsModule,
     CandlestickChartComponent, LineChartComponent,
-    VolumeChartComponent, SummaryStatsComponent
+    VolumeChartComponent, SummaryStatsComponent,
+    TableModule
   ],
   templateUrl: './market-data.component.html',
   styleUrls: ['./market-data.component.scss']
@@ -30,6 +32,8 @@ export class MarketDataComponent implements OnInit {
   error: string | null = null;
   aggregates: StockAggregate[] = [];
   summary: AggregatesSummary | null = null;
+
+  private cdr = inject(ChangeDetectorRef);
 
   constructor(private marketDataService: MarketDataService) {}
 
@@ -75,9 +79,12 @@ export class MarketDataComponent implements OnInit {
           firstBar: result?.aggregates?.[0],
           summary: result?.summary
         });
-        this.aggregates = result.aggregates;
+        this.aggregates = [...result.aggregates].sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
         this.summary = result.summary;
         this.loading = false;
+        this.cdr.detectChanges();
       },
       error: (err) => {
         console.error('[STEP 2 - Component] GraphQL ERROR:', {
@@ -88,6 +95,7 @@ export class MarketDataComponent implements OnInit {
         });
         this.error = err?.message || 'Failed to fetch data';
         this.loading = false;
+        this.cdr.detectChanges();
       }
     });
   }

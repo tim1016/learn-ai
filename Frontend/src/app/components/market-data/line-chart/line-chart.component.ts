@@ -70,10 +70,12 @@ export class LineChartComponent implements AfterViewInit, OnChanges, OnDestroy {
   private updateData(): void {
     if (!this.series || !this.data.length) return;
 
-    const lineData: LineData[] = this.data.map(agg => ({
-      time: (new Date(agg.timestamp).getTime() / 1000) as UTCTimestamp,
-      value: agg.close
-    }));
+    const lineData: LineData[] = this.data
+      .map(agg => ({
+        time: (new Date(agg.timestamp).getTime() / 1000) as UTCTimestamp,
+        value: agg.close
+      }))
+      .sort((a, b) => (a.time as number) - (b.time as number));
 
     this.series.setData(lineData);
     this.chart?.timeScale().fitContent();
