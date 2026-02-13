@@ -1,6 +1,7 @@
 using Backend.Data;
 using Backend.GraphQL.Types;
 using Backend.Models;
+using Backend.Models.DTOs;
 using Backend.Services.Interfaces;
 using HotChocolate;
 
@@ -112,6 +113,41 @@ public class Mutation
                 Success = false,
                 Ticker = ticker,
                 Count = 0,
+                Message = $"Error: {ex.Message}"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Sanitize raw market data using the Python pandas-dq service.
+    /// Removes outliers, fills missing values, and enforces data types.
+    /// </summary>
+    public async Task<SanitizeMarketDataResult> SanitizeMarketData(
+        [Service] ISanitizationService sanitizationService,
+        List<MarketDataRecord> data,
+        double quantile = 0.99)
+    {
+        try
+        {
+            var cleaned = await sanitizationService.SanitizeAsync(data, quantile);
+
+            return new SanitizeMarketDataResult
+            {
+                Success = true,
+                Data = cleaned,
+                OriginalCount = data.Count,
+                CleanedCount = cleaned.Count,
+                Message = $"Sanitized {data.Count} records → {cleaned.Count} retained"
+            };
+        }
+        catch (Exception ex)
+        {
+            return new SanitizeMarketDataResult
+            {
+                Success = false,
+                Data = [],
+                OriginalCount = data.Count,
+                CleanedCount = 0,
                 Message = $"Error: {ex.Message}"
             };
         }

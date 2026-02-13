@@ -5,6 +5,7 @@ public class SmartAggregatesResult
     public required string Ticker { get; set; }
     public List<AggregateBar> Aggregates { get; set; } = [];
     public AggregatesSummary? Summary { get; set; }
+    public string? SanitizationSummary { get; set; }
 }
 
 /// <summary>

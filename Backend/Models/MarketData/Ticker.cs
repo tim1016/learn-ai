@@ -28,6 +28,12 @@ public class Ticker
 
     public DateTime? UpdatedAt { get; set; }
 
+    /// <summary>
+    /// Short summary from the last pandas-dq sanitization run.
+    /// e.g. "73 records: 75 → 73 (2 removed, 2.67%). Fix_DQ: outliers clipped at 0.99 quantile."
+    /// </summary>
+    public string? SanitizationSummary { get; set; }
+
     // Navigation properties
     public List<StockAggregate> Aggregates { get; set; } = [];
     public List<Trade> Trades { get; set; } = [];

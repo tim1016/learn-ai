@@ -57,3 +57,22 @@ export interface SmartAggregatesResult {
 export interface GetOrFetchStockAggregatesResponse {
   getOrFetchStockAggregates: SmartAggregatesResult;
 }
+
+export interface Ticker {
+  id: number;
+  symbol: string;
+  name: string;
+  market: string;
+  locale: string | null;
+  primaryExchange: string | null;
+  type: string | null;
+  active: boolean;
+  currencySymbol: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  sanitizationSummary: string | null;
+}
+
+export interface GetTickersResponse {
+  tickers: Ticker[];
+}

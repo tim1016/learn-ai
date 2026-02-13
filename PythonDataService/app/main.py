@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from app.config import settings
-from app.routers import aggregates
+from app.routers import aggregates, sanitize
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -43,6 +43,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
+app.include_router(sanitize.router, prefix="/api", tags=["sanitize"])
 
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)

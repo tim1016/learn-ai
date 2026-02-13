@@ -5,6 +5,7 @@ using Backend.Models;
 using Backend.Models.MarketData;
 using Backend.Services.Interfaces;
 using HotChocolate;
+using Microsoft.EntityFrameworkCore;
 
 namespace Backend.GraphQL;
 
@@ -101,6 +102,7 @@ public class Query
     public async Task<SmartAggregatesResult> GetOrFetchStockAggregates(
         [Service] IMarketDataService marketDataService,
         [Service] ILogger<Query> logger,
+        AppDbContext context,
         string ticker,
         string fromDate,
         string toDate,
@@ -118,6 +120,10 @@ public class Query
             "[STEP 4 - GraphQL] MarketDataService returned {Count} aggregates for {Ticker}",
             aggregates.Count, ticker);
 
+        // Fetch sanitization summary from the ticker entity
+        var tickerEntity = await context.Tickers
+            .FirstOrDefaultAsync(t => t.Symbol == ticker.ToUpper() && t.Market == "stocks");
+
         var bars = aggregates.Select(a => new AggregateBar
         {
             Id = a.Id,
@@ -133,7 +139,12 @@ public class Query
             TransactionCount = a.TransactionCount
         }).ToList();
 
-        var result = new SmartAggregatesResult { Ticker = ticker.ToUpper(), Aggregates = bars };
+        var result = new SmartAggregatesResult
+        {
+            Ticker = ticker.ToUpper(),
+            Aggregates = bars,
+            SanitizationSummary = tickerEntity?.SanitizationSummary
+        };
 
         if (bars.Count > 0)
         {

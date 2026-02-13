@@ -1,6 +1,6 @@
 """Pydantic request schemas with validation"""
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 
 class AggregateRequest(BaseModel):
@@ -43,3 +43,9 @@ class IndicatorRequest(BaseModel):
         if v.lower() not in valid:
             raise ValueError(f'indicator_type must be one of {valid}')
         return v.lower()
+
+
+class SanitizeRequest(BaseModel):
+    """Request schema for the standalone /api/sanitize endpoint"""
+    data: List[Dict[str, Any]] = Field(..., description="List of market data records to sanitize")
+    quantile: float = Field(0.99, ge=0.0, le=1.0, description="Quantile threshold for outlier removal")

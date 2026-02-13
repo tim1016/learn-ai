@@ -52,6 +52,16 @@ public class MarketDataService : IMarketDataService
                 return [];
             }
 
+            // Save sanitization summary on the ticker
+            if (response.Summary is { } summary)
+            {
+                tickerEntity.SanitizationSummary =
+                    $"{summary.CleanedCount} records: {summary.OriginalCount} → {summary.CleanedCount} " +
+                    $"({summary.RemovedCount} removed, {summary.RemovalPercentage ?? 0}%). " +
+                    $"Fix_DQ: outliers clipped at 0.99 quantile.";
+                tickerEntity.UpdatedAt = DateTime.UtcNow;
+            }
+
             // Convert DTOs to entities (mapping logic testable)
             var aggregates = response.Data.Select(d => MapToEntity(d, tickerEntity.Id, timespan, multiplier)).ToList();
 

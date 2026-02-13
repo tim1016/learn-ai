@@ -6,3 +6,4 @@ pydantic==2.5.0
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 polygon-api-client==1.12.5
+pandas-dq>=1.30

@@ -28,3 +28,6 @@ dist/
 build/
 
 Frontend/.angular/
+
+# Windows reserved device names (can be accidentally created)
+nul
