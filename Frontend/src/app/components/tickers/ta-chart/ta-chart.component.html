@@ -3,9 +3,9 @@
       <h4>Price with Indicators</h4>
       <div #priceChartContainer class="chart-container"></div>
     </div>
-    @if (hasRsi) {
+    @if (hasRsi()) {
       <div class="chart-section">
-        <h4>RSI ({{ rsiWindow }})</h4>
+        <h4>RSI ({{ rsiIndicator()?.window }})</h4>
         <div #rsiChartContainer class="rsi-container"></div>
       </div>
     }
