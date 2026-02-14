@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { TickerService } from '../../services/ticker.service';
 import { Ticker } from '../../graphql/types';
+import { TradingViewWidgetComponent } from './tradingview-widget/tradingview-widget.component';
 
 interface TickerWithStats extends Ticker {
   aggregateCount?: number;
@@ -14,7 +15,7 @@ interface TickerWithStats extends Ticker {
 @Component({
   selector: 'app-tickers',
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, RouterLink, TradingViewWidgetComponent],
   template: `
     <div class="tickers-page">
       <h1>Tickers</h1>
@@ -45,6 +46,13 @@ interface TickerWithStats extends Ticker {
                 <span class="status-badge" [class.active]="t.active" [class.inactive]="!t.active">
                   {{ t.active ? 'Active' : 'Inactive' }}
                 </span>
+              </div>
+
+              <div class="widget-area">
+                <app-tradingview-widget
+                  [symbol]="t.symbol"
+                  [exchange]="getExchange(t)">
+                </app-tradingview-widget>
               </div>
 
               <div class="ticker-body">
@@ -230,6 +238,10 @@ interface TickerWithStats extends Ticker {
       color: #555;
       line-height: 1.5;
     }
+
+    .widget-area {
+      border-bottom: 1px solid #e9ecef;
+    }
   `]
 })
 export class TickersComponent implements OnInit {
@@ -239,6 +251,19 @@ export class TickersComponent implements OnInit {
   tickers: TickerWithStats[] = [];
   loading = false;
   error: string | null = null;
+
+  private readonly EXCHANGE_MAP: Record<string, string> = {
+    XNAS: 'NASDAQ',
+    XNYS: 'NYSE',
+    XASE: 'AMEX',
+  };
+
+  getExchange(t: TickerWithStats): string {
+    if (t.primaryExchange && this.EXCHANGE_MAP[t.primaryExchange]) {
+      return this.EXCHANGE_MAP[t.primaryExchange];
+    }
+    return 'NASDAQ';
+  }
 
   ngOnInit(): void {
     this.loading = true;
