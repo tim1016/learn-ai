@@ -11,8 +11,8 @@ import { StockAggregate } from '../../../graphql/types';
 @Component({
   selector: 'app-line-chart',
   standalone: true,
-  template: `<div #chartContainer class="chart-container"></div>`,
-  styles: [`.chart-container { width: 100%; height: 300px; }`]
+  templateUrl: 'line-chart.component.html',
+  styleUrls: ['line-chart.component.scss']
 })
 export class LineChartComponent implements AfterViewInit, OnChanges, OnDestroy {
   @Input() data: StockAggregate[] = [];

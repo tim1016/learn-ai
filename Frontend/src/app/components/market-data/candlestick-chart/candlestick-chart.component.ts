@@ -1,6 +1,7 @@
 import {
   Component, Input, ElementRef, ViewChild,
-  AfterViewInit, OnChanges, OnDestroy, SimpleChanges
+  AfterViewInit, OnChanges, OnDestroy, SimpleChanges,
+  ChangeDetectionStrategy
 } from '@angular/core';
 import {
   createChart, IChartApi, ISeriesApi,
@@ -12,7 +13,9 @@ import { StockAggregate } from '../../../graphql/types';
   selector: 'app-candlestick-chart',
   standalone: true,
   template: `<div #chartContainer class="chart-container"></div>`,
-  styles: [`.chart-container { width: 100%; height: 400px; }`]
+  styles: [`.chart-container { width: 100%; height: 400px; }`,
+  ],
+  changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class CandlestickChartComponent implements AfterViewInit, OnChanges, OnDestroy {
   @Input() data: StockAggregate[] = [];

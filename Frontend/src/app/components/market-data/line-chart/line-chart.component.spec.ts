@@ -1,0 +1,54 @@
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { LineChartComponent } from './line-chart.component';
+import { createMockAggregates } from '../../../../testing/factories/market-data.factory';
+import { createChart } from 'lightweight-charts';
+
+describe('LineChartComponent', () => {
+  let component: LineChartComponent;
+  let fixture: ComponentFixture<LineChartComponent>;
+
+  beforeEach(async () => {
+    TestBed.resetTestingModule();
+    (createChart as jest.Mock).mockClear();
+
+    await TestBed.configureTestingModule({
+      imports: [LineChartComponent],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(LineChartComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('should create', () => {
+    expect(component).toBeTruthy();
+  });
+
+  it('should call createChart on AfterViewInit', () => {
+    component.data = createMockAggregates(3);
+    fixture.detectChanges();
+    expect(createChart).toHaveBeenCalledTimes(1);
+  });
+
+  it('should pass close prices as line data values', () => {
+    const aggregates = createMockAggregates(3);
+    component.data = aggregates;
+    fixture.detectChanges();
+
+    const chartInstance = (createChart as jest.Mock).mock.results[0].value;
+    const series = chartInstance.addSeries.mock.results[0].value;
+    const passedData = series.setData.mock.calls[0][0];
+
+    expect(passedData.length).toBe(3);
+    expect(passedData[0]).toHaveProperty('value');
+    expect(passedData[0]).toHaveProperty('time');
+  });
+
+  it('should clean up chart on destroy', () => {
+    component.data = createMockAggregates(3);
+    fixture.detectChanges();
+
+    const chartInstance = (createChart as jest.Mock).mock.results[0].value;
+    fixture.destroy();
+    expect(chartInstance.remove).toHaveBeenCalled();
+  });
+});
