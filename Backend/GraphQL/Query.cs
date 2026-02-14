@@ -2,6 +2,7 @@
 using Backend.Data;
 using Backend.GraphQL.Types;
 using Backend.Models;
+using Backend.Models.DTOs;
 using Backend.Models.MarketData;
 using Backend.Services.Interfaces;
 using HotChocolate;
@@ -175,5 +176,113 @@ public class Query
         return result;
     }
 
+    /// <summary>
+    /// Calculate technical indicators for a ticker's existing aggregate data.
+    /// Reads OHLCV from DB, sends to Python pandas-ta service.
+    /// </summary>
+    [GraphQLName("calculateIndicators")]
+    public async Task<CalculateIndicatorsResult> CalculateIndicators(
+        [Service] ITechnicalAnalysisService taService,
+        [Service] ILogger<Query> logger,
+        AppDbContext context,
+        string ticker,
+        string fromDate,
+        string toDate,
+        List<IndicatorConfigInput> indicators,
+        string timespan = "day",
+        int multiplier = 1)
+    {
+        try
+        {
+            var from = DateTime.Parse(fromDate).ToUniversalTime();
+            var to = DateTime.Parse(toDate).ToUniversalTime().Date.AddDays(1).AddTicks(-1);
+            var symbol = ticker.ToUpper();
+
+            var tickerEntity = await context.Tickers
+                .FirstOrDefaultAsync(t => t.Symbol == symbol && t.Market == "stocks");
+
+            if (tickerEntity == null)
+            {
+                return new CalculateIndicatorsResult
+                {
+                    Success = false,
+                    Ticker = symbol,
+                    Message = $"No data found for {symbol}. Fetch market data first."
+                };
+            }
+
+            var aggregates = await context.StockAggregates
+                .Where(a => a.TickerId == tickerEntity.Id
+                         && a.Timespan == timespan
+                         && a.Multiplier == multiplier
+                         && a.Timestamp >= from
+                         && a.Timestamp <= to)
+                .OrderBy(a => a.Timestamp)
+                .ToListAsync();
+
+            if (aggregates.Count == 0)
+            {
+                return new CalculateIndicatorsResult
+                {
+                    Success = false,
+                    Ticker = symbol,
+                    Message = $"No aggregate data in DB for {symbol}. Fetch market data first."
+                };
+            }
+
+            logger.LogInformation(
+                "[TA] Calculating indicators for {Ticker}: {Count} bars, {Indicators} indicators",
+                symbol, aggregates.Count, indicators.Count);
+
+            var bars = aggregates.Select(a => new OhlcvBarDto(
+                new DateTimeOffset(a.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+                a.Open, a.High, a.Low, a.Close, a.Volume
+            )).ToList();
+
+            var indicatorConfigs = indicators.Select(i =>
+                new IndicatorConfigDto(i.Name, i.Window)).ToList();
+
+            var response = await taService.CalculateIndicatorsAsync(
+                symbol, bars, indicatorConfigs);
+
+            return new CalculateIndicatorsResult
+            {
+                Success = true,
+                Ticker = symbol,
+                Indicators = response.Indicators.Select(ind => new IndicatorSeriesResult
+                {
+                    Name = ind.Name,
+                    Window = ind.Window,
+                    Data = ind.Data.Select(d => new IndicatorPoint
+                    {
+                        Timestamp = d.Timestamp,
+                        Value = d.Value,
+                        Signal = d.Signal,
+                        Histogram = d.Histogram,
+                        Upper = d.Upper,
+                        Lower = d.Lower
+                    }).ToList()
+                }).ToList(),
+                Message = $"Calculated {response.Indicators.Count} indicators from {aggregates.Count} bars"
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[TA] Error calculating indicators for {Ticker}", ticker);
+            return new CalculateIndicatorsResult
+            {
+                Success = false,
+                Ticker = ticker.ToUpper(),
+                Message = $"Error: {ex.Message}"
+            };
+        }
+    }
+
     #endregion
+}
+
+public class IndicatorConfigInput
+{
+    public required string Name { get; set; }
+    public int Window { get; set; } = 14;
 }

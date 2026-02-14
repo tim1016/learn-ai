@@ -49,3 +49,34 @@ class SanitizeRequest(BaseModel):
     """Request schema for the standalone /api/sanitize endpoint"""
     data: List[Dict[str, Any]] = Field(..., description="List of market data records to sanitize")
     quantile: float = Field(0.99, ge=0.0, le=1.0, description="Quantile threshold for outlier removal")
+
+
+class OhlcvBar(BaseModel):
+    """Single OHLCV bar for indicator calculation"""
+    timestamp: int = Field(..., description="Unix milliseconds")
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+class IndicatorConfig(BaseModel):
+    """Configuration for a single indicator"""
+    name: str = Field(..., description="Indicator name: sma, ema, rsi, macd, bbands")
+    window: int = Field(14, ge=1, description="Lookback period")
+
+    @field_validator('name')
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        valid = ['sma', 'ema', 'rsi', 'macd', 'bbands']
+        if v.lower() not in valid:
+            raise ValueError(f'indicator name must be one of {valid}')
+        return v.lower()
+
+
+class CalculateIndicatorsRequest(BaseModel):
+    """Request to calculate technical indicators from OHLCV data"""
+    ticker: str = Field(..., min_length=1, max_length=20)
+    bars: List[OhlcvBar] = Field(..., min_length=1)
+    indicators: List[IndicatorConfig] = Field(..., min_length=1)

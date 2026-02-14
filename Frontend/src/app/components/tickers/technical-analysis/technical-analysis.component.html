@@ -1,0 +1,82 @@
+<div class="ta-dashboard">
+      <h1>Technical Analysis</h1>
+      <p class="subtitle">Calculate and visualize indicators using pandas-ta</p>
+
+      <div class="search-form">
+        <input
+          [(ngModel)]="ticker"
+          placeholder="Ticker (e.g., AAPL)"
+          (keyup.enter)="fetchAndCalculate()"
+        />
+        <input [(ngModel)]="fromDate" type="date" />
+        <input [(ngModel)]="toDate" type="date" />
+        <select [(ngModel)]="timespan">
+          <option value="day">Daily</option>
+          <option value="hour">Hourly</option>
+          <option value="week">Weekly</option>
+        </select>
+        <button (click)="fetchAndCalculate()" [disabled]="loading">
+          {{ loading ? 'Calculating...' : 'Analyze' }}
+        </button>
+      </div>
+
+      <div class="indicator-controls">
+        <div class="indicator-toggle">
+          <label>
+            <input type="checkbox" [(ngModel)]="showSma" />
+            SMA
+          </label>
+          <input
+            type="number" [(ngModel)]="smaWindow"
+            min="1" max="200" class="window-input"
+            [disabled]="!showSma"
+          />
+        </div>
+        <div class="indicator-toggle">
+          <label>
+            <input type="checkbox" [(ngModel)]="showEma" />
+            EMA
+          </label>
+          <input
+            type="number" [(ngModel)]="emaWindow"
+            min="1" max="200" class="window-input"
+            [disabled]="!showEma"
+          />
+        </div>
+        <div class="indicator-toggle">
+          <label>
+            <input type="checkbox" [(ngModel)]="showRsi" />
+            RSI
+          </label>
+          <input
+            type="number" [(ngModel)]="rsiWindow"
+            min="1" max="200" class="window-input"
+            [disabled]="!showRsi"
+          />
+        </div>
+      </div>
+
+      @if (error) {
+        <div class="error-message">{{ error }}</div>
+      }
+
+      @if (loading) {
+        <div class="loading">Calculating indicators for {{ ticker }}...</div>
+      }
+
+      @if (message && !loading && !error) {
+        <div class="info-message">{{ message }}</div>
+      }
+
+      @if (aggregates.length > 0 && !loading) {
+        <div class="chart-area">
+          <h3>{{ ticker }} — {{ aggregates.length }} bars</h3>
+          <app-ta-chart
+            [aggregates]="aggregates"
+            [indicators]="indicators"
+            [ticker]="ticker">
+          </app-ta-chart>
+        </div>
+      }
+    </div>
+  

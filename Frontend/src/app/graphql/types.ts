@@ -76,3 +76,25 @@ export interface Ticker {
 export interface GetTickersResponse {
   tickers: Ticker[];
 }
+
+export interface IndicatorPoint {
+  timestamp: number;
+  value: number | null;
+  signal: number | null;
+  histogram: number | null;
+  upper: number | null;
+  lower: number | null;
+}
+
+export interface IndicatorSeries {
+  name: string;
+  window: number;
+  data: IndicatorPoint[];
+}
+
+export interface CalculateIndicatorsResult {
+  success: boolean;
+  ticker: string;
+  indicators: IndicatorSeries[];
+  message: string | null;
+}

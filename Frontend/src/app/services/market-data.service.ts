@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { map, tap } from 'rxjs/operators';
 import { Observable } from 'rxjs';
-import { SmartAggregatesResult } from '../graphql/types';
+import { SmartAggregatesResult, CalculateIndicatorsResult } from '../graphql/types';
 
 const GRAPHQL_URL = 'http://localhost:5000/graphql';
 
@@ -40,6 +40,42 @@ interface GraphQLResponse {
   errors?: { message: string }[];
 }
 
+const CALCULATE_INDICATORS_QUERY = `
+  query CalculateIndicators(
+    $ticker: String!
+    $fromDate: String!
+    $toDate: String!
+    $indicators: [IndicatorConfigInput!]!
+    $timespan: String! = "day"
+    $multiplier: Int! = 1
+  ) {
+    calculateIndicators(
+      ticker: $ticker
+      fromDate: $fromDate
+      toDate: $toDate
+      indicators: $indicators
+      timespan: $timespan
+      multiplier: $multiplier
+    ) {
+      success
+      ticker
+      indicators {
+        name
+        window
+        data {
+          timestamp value signal histogram upper lower
+        }
+      }
+      message
+    }
+  }
+`;
+
+interface CalculateIndicatorsResponse {
+  data: { calculateIndicators: CalculateIndicatorsResult };
+  errors?: { message: string }[];
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -74,6 +110,29 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.getOrFetchStockAggregates)
+      );
+  }
+
+  calculateIndicators(
+    ticker: string,
+    fromDate: string,
+    toDate: string,
+    indicators: { name: string; window: number }[],
+    timespan: string = 'day',
+    multiplier: number = 1
+  ): Observable<CalculateIndicatorsResult> {
+    return this.http
+      .post<CalculateIndicatorsResponse>(GRAPHQL_URL, {
+        query: CALCULATE_INDICATORS_QUERY,
+        variables: { ticker, fromDate, toDate, indicators, timespan, multiplier }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.calculateIndicators)
       );
   }
 }
