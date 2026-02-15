@@ -1,108 +1,74 @@
-.chunk-queue {
-  margin-bottom: 24px;
-
-  h4 {
-    margin: 0 0 12px 0;
-    color: #555;
-    font-size: 14px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
+.table-caption {
+  font-size: 14px;
+  font-weight: 600;
+  color: #555;
 }
 
-.chunk-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 8px;
-}
-
-.chunk-card {
-  padding: 10px 12px;
-  border-radius: 6px;
-  border: 1px solid #e9ecef;
-  font-size: 13px;
-  transition: background-color 0.3s, border-color 0.3s;
-}
-
-.chunk-pending {
-  background: #f8f9fa;
-  color: #999;
-}
-
-.chunk-cached {
-  background: #fff8e1;
-  border-color: #ffb300;
-  color: #f57f17;
-}
-
-.chunk-fetching {
-  background: #e3f2fd;
-  border-color: #2196f3;
-  color: #1565c0;
-}
-
-.chunk-complete {
-  background: #e8f5e9;
-  border-color: #26a69a;
-  color: #2e7d32;
-}
-
-.clickable {
+.row-clickable {
   cursor: pointer;
 
   &:hover {
-    filter: brightness(0.95);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+    background: rgba(38, 166, 154, 0.06) !important;
   }
 }
 
-.chunk-error {
-  background: #fde8e8;
-  border-color: #ef5350;
-  color: #c0392b;
-}
-
-.chunk-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 4px;
-}
-
-.chunk-index {
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
   font-weight: 600;
 }
 
-.chunk-status-badge {
-  font-weight: 500;
-  font-size: 12px;
+.status-pending {
+  background: #f0f0f0;
+  color: #999;
 }
 
-.chunk-dates {
+.status-cached {
+  background: #fff8e1;
+  color: #f57f17;
+}
+
+.status-fetching {
+  background: #e3f2fd;
+  color: #1565c0;
+}
+
+.status-complete {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.status-error {
+  background: #fde8e8;
+  color: #c0392b;
+}
+
+.error-msg {
+  display: block;
   font-size: 11px;
-  opacity: 0.8;
+  color: #c0392b;
+  margin-top: 2px;
 }
 
-.chunk-stats {
-  font-size: 12px;
-  margin-top: 4px;
-  font-weight: 500;
-}
+.refresh-chunk-btn {
+  background: none;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  color: #555;
+  transition: all 0.15s;
 
-.chunk-spinner {
-  font-size: 12px;
-  margin-top: 4px;
-  font-style: italic;
-}
+  &:hover:not(:disabled) {
+    background: #e3f2fd;
+    border-color: #2196f3;
+    color: #1565c0;
+  }
 
-.chunk-cached-label {
-  font-size: 12px;
-  margin-top: 4px;
-  font-weight: 500;
-}
-
-.chunk-error-msg {
-  font-size: 11px;
-  margin-top: 4px;
-  word-break: break-word;
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
 }

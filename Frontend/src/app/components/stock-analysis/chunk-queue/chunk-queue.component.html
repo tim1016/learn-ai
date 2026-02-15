@@ -1,35 +1,64 @@
-<div class="chunk-queue">
-  <h4>Fetch Queue</h4>
-  <div class="chunk-grid">
-    @for (chunk of chunks(); track chunk.index) {
-      <div
-        class="chunk-card"
-        [class]="'chunk-' + chunk.status"
-        [class.clickable]="chunk.status === 'complete'"
-        (click)="onChunkClick(chunk)"
-      >
-        <div class="chunk-header">
-          <span class="chunk-index">#{{ chunk.index + 1 }}</span>
-          <span class="chunk-status-badge">{{ chunk.status | titlecase }}</span>
-        </div>
-        <div class="chunk-dates">
-          {{ chunk.fromDate }} &rarr; {{ chunk.toDate }}
-        </div>
-        @if (chunk.status === 'cached') {
-          <div class="chunk-cached-label">In DB</div>
-        }
-        @if (chunk.status === 'complete') {
-          <div class="chunk-stats">
-            {{ chunk.barCount | number }} bars &middot; {{ formatDuration(chunk.durationMs) }}
-          </div>
-        }
-        @if (chunk.status === 'fetching') {
-          <div class="chunk-spinner">Fetching&hellip;</div>
-        }
+<p-table
+  [value]="chunks()"
+  [scrollable]="true"
+  scrollHeight="400px"
+  styleClass="p-datatable-striped p-datatable-sm"
+  [tableStyle]="{ 'min-width': '40rem' }"
+  dataKey="index"
+>
+  <ng-template #caption>
+    <div class="table-caption">
+      Fetch Queue &mdash; {{ completedCount() }} / {{ chunks().length }} chunks &middot;
+      {{ totalBars() | number }} bars
+    </div>
+  </ng-template>
+
+  <ng-template #header>
+    <tr>
+      <th style="width: 4rem">#</th>
+      <th>Status</th>
+      <th>From</th>
+      <th>To</th>
+      <th style="text-align: right">Bars</th>
+      <th style="text-align: right">Duration</th>
+      <th style="width: 5rem; text-align: center">Actions</th>
+    </tr>
+  </ng-template>
+
+  <ng-template #body let-chunk>
+    <tr
+      [class.row-clickable]="chunk.status === 'complete'"
+      (click)="onRowClick(chunk)"
+    >
+      <td>{{ chunk.index + 1 }}</td>
+      <td>
+        <span class="status-badge" [ngClass]="'status-' + chunk.status">
+          {{ chunk.status | titlecase }}
+        </span>
         @if (chunk.status === 'error' && chunk.errorMessage) {
-          <div class="chunk-error-msg">{{ chunk.errorMessage }}</div>
+          <span class="error-msg">{{ chunk.errorMessage }}</span>
         }
-      </div>
-    }
-  </div>
-</div>
+      </td>
+      <td>{{ chunk.fromDate }}</td>
+      <td>{{ chunk.toDate }}</td>
+      <td style="text-align: right">
+        @if (chunk.barCount > 0) {
+          {{ chunk.barCount | number }}
+        } @else {
+          —
+        }
+      </td>
+      <td style="text-align: right">{{ formatDuration(chunk.durationMs) }}</td>
+      <td style="text-align: center">
+        <button
+          class="refresh-chunk-btn"
+          title="Re-fetch this chunk from Polygon.io"
+          [disabled]="chunk.status === 'fetching'"
+          (click)="onRefreshClick($event, chunk)"
+        >
+          <i class="pi pi-refresh"></i>
+        </button>
+      </td>
+    </tr>
+  </ng-template>
+</p-table>

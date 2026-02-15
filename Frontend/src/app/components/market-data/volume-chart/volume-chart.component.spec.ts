@@ -24,15 +24,15 @@ describe('VolumeChartComponent', () => {
   });
 
   it('should call createChart on AfterViewInit', () => {
-    component.data = [createMockAggregate()];
+    fixture.componentRef.setInput('data', [createMockAggregate()]);
     fixture.detectChanges();
     expect(createChart).toHaveBeenCalledTimes(1);
   });
 
   it('should color green when close >= open', () => {
-    component.data = [
+    fixture.componentRef.setInput('data', [
       createMockAggregate({ open: 150, close: 155, timestamp: '2026-01-01T00:00:00Z' }),
-    ];
+    ]);
     fixture.detectChanges();
 
     const chartInstance = (createChart as jest.Mock).mock.results[0].value;
@@ -43,9 +43,9 @@ describe('VolumeChartComponent', () => {
   });
 
   it('should color red when close < open', () => {
-    component.data = [
+    fixture.componentRef.setInput('data', [
       createMockAggregate({ open: 155, close: 150, timestamp: '2026-01-01T00:00:00Z' }),
-    ];
+    ]);
     fixture.detectChanges();
 
     const chartInstance = (createChart as jest.Mock).mock.results[0].value;
@@ -56,7 +56,7 @@ describe('VolumeChartComponent', () => {
   });
 
   it('should clean up chart on destroy', () => {
-    component.data = [createMockAggregate()];
+    fixture.componentRef.setInput('data', [createMockAggregate()]);
     fixture.detectChanges();
 
     const chartInstance = (createChart as jest.Mock).mock.results[0].value;

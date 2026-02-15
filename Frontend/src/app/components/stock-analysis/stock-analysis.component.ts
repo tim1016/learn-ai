@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
 import { MarketDataService } from '../../services/market-data.service';
 import { StockAggregate } from '../../graphql/types';
-import { CandlestickChartComponent } from '../market-data/candlestick-chart/candlestick-chart.component';
+import { LineChartComponent } from '../market-data/line-chart/line-chart.component';
 import { VolumeChartComponent } from '../market-data/volume-chart/volume-chart.component';
 import { ChunkQueueComponent } from './chunk-queue/chunk-queue.component';
 import { FetchChunk, ProgressStats } from './models';
@@ -15,7 +15,7 @@ const CACHE_THRESHOLD_MS = 2000;
 @Component({
   selector: 'app-stock-analysis',
   standalone: true,
-  imports: [CommonModule, FormsModule, CandlestickChartComponent, VolumeChartComponent, ChunkQueueComponent],
+  imports: [CommonModule, FormsModule, LineChartComponent, VolumeChartComponent, ChunkQueueComponent],
   templateUrl: './stock-analysis.component.html',
   styleUrls: ['./stock-analysis.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -110,6 +110,42 @@ export class StockAnalysisComponent {
 
   clearSelection(): void {
     this.selectedChunk.set(null);
+  }
+
+  async onChunkRefresh(chunk: FetchChunk): Promise<void> {
+    const t = this.ticker().trim().toUpperCase();
+    if (!t) return;
+
+    this.updateChunk(chunk.index, { status: 'fetching', errorMessage: undefined });
+    const startMs = performance.now();
+
+    try {
+      const result = await firstValueFrom(
+        this.marketDataService.getOrFetchStockAggregates(
+          t, chunk.fromDate, chunk.toDate, 'minute', 1, true
+        )
+      );
+
+      const durationMs = Math.round(performance.now() - startMs);
+      const barCount = result.aggregates.length;
+
+      this.updateChunk(chunk.index, { status: 'complete', barCount, durationMs });
+
+      // Replace old bars for this chunk's time range, then append new ones
+      const from = new Date(chunk.fromDate).getTime();
+      const to = new Date(chunk.toDate + 'T23:59:59').getTime();
+      this.allAggregates.update(existing =>
+        existing.filter(a => {
+          const ts = new Date(a.timestamp).getTime();
+          return ts < from || ts > to;
+        }).concat(result.aggregates)
+      );
+      this.storeChunkAggregates(chunk.index, result.aggregates);
+    } catch (err) {
+      const durationMs = Math.round(performance.now() - startMs);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      this.updateChunk(chunk.index, { status: 'error', durationMs, errorMessage });
+    }
   }
 
   private async beginFetch(): Promise<void> {

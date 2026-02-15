@@ -24,14 +24,14 @@ describe('LineChartComponent', () => {
   });
 
   it('should call createChart on AfterViewInit', () => {
-    component.data = createMockAggregates(3);
+    fixture.componentRef.setInput('data', createMockAggregates(3));
     fixture.detectChanges();
     expect(createChart).toHaveBeenCalledTimes(1);
   });
 
   it('should pass close prices as line data values', () => {
     const aggregates = createMockAggregates(3);
-    component.data = aggregates;
+    fixture.componentRef.setInput('data', aggregates);
     fixture.detectChanges();
 
     const chartInstance = (createChart as jest.Mock).mock.results[0].value;
@@ -44,7 +44,7 @@ describe('LineChartComponent', () => {
   });
 
   it('should clean up chart on destroy', () => {
-    component.data = createMockAggregates(3);
+    fixture.componentRef.setInput('data', createMockAggregates(3));
     fixture.detectChanges();
 
     const chartInstance = (createChart as jest.Mock).mock.results[0].value;

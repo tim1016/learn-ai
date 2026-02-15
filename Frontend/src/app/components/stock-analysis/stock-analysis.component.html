@@ -98,7 +98,11 @@
     </div>
 
     <!-- Chunk Queue -->
-    <app-chunk-queue [chunks]="chunks()" (chunkSelected)="onChunkSelected($event)" />
+    <app-chunk-queue
+      [chunks]="chunks()"
+      (chunkSelected)="onChunkSelected($event)"
+      (chunkRefresh)="onChunkRefresh($event)"
+    />
   }
 
   <!-- Chart -->
@@ -118,8 +122,8 @@
       </h3>
 
       <div class="chart-section">
-        <h4>Price</h4>
-        <app-candlestick-chart
+        <h4>Price (Close)</h4>
+        <app-line-chart
           [data]="displayedAggregates()"
           [ticker]="ticker()"
           [timeVisible]="true"
