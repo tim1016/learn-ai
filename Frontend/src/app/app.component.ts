@@ -12,6 +12,7 @@ import { RouterLink, RouterOutlet } from "@angular/router";
       <a routerLink="/market-data">Market Data</a>
       <a routerLink="/tickers">Tickers</a>
       <a routerLink="/technical-analysis">Technical Analysis</a>
+      <a routerLink="/stock-analysis">Stock Analysis</a>
     </nav>
     <div class="container">
       <router-outlet />

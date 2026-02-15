@@ -89,11 +89,22 @@ public class MarketDataService : IMarketDataService
         string timespan,
         string fromDate,
         string toDate,
+        bool forceRefresh = false,
         CancellationToken cancellationToken = default)
     {
         var from = DateTime.Parse(fromDate).ToUniversalTime();
         var to = DateTime.Parse(toDate).ToUniversalTime().Date.AddDays(1).AddTicks(-1);
         var symbol = ticker.ToUpper();
+
+        if (forceRefresh)
+        {
+            _logger.LogInformation(
+                "[MarketDataService] FORCE REFRESH for {Ticker} from {From} to {To}, bypassing cache",
+                symbol, fromDate, toDate);
+
+            return await FetchAndStoreAggregatesAsync(
+                ticker, multiplier, timespan, fromDate, toDate, cancellationToken);
+        }
 
         var tickerEntity = await _context.Tickers
             .FirstOrDefaultAsync(t => t.Symbol == symbol && t.Market == "stocks", cancellationToken);

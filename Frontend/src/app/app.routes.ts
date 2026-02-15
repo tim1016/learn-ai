@@ -4,6 +4,7 @@ import { AuthorsComponent } from "./components/authors/authors.component";
 import { MarketDataComponent } from "./components/market-data/market-data.component";
 import { TickersComponent } from "./components/tickers/tickers.component";
 import { TechnicalAnalysisComponent } from "./components/tickers/technical-analysis/technical-analysis.component";
+import { StockAnalysisComponent } from "./components/stock-analysis/stock-analysis.component";
 
 export const routes: Routes = [
   { path: "", redirectTo: "/books", pathMatch: "full" },
@@ -12,4 +13,5 @@ export const routes: Routes = [
   { path: "market-data", component: MarketDataComponent },
   { path: "tickers", component: TickersComponent },
   { path: "technical-analysis", component: TechnicalAnalysisComponent },
+  { path: "stock-analysis", component: StockAnalysisComponent },
 ];

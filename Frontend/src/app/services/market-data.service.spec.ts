@@ -38,6 +38,7 @@ describe('MarketDataService', () => {
         toDate: '2026-06-30',
         timespan: 'hour',
         multiplier: 4,
+        forceRefresh: false,
       });
       req.flush({ data: { getOrFetchStockAggregates: { ticker: 'MSFT', aggregates: [], summary: null } } });
     });

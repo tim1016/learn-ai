@@ -1,0 +1,138 @@
+<div class="stock-analysis-dashboard">
+  <h1>Stock Analysis</h1>
+  <p class="subtitle">Fetch minute-level data from Polygon.io in monthly chunks</p>
+
+  <!-- Form -->
+  <div class="search-form">
+    <div class="form-field">
+      <label for="ticker">Ticker</label>
+      <input
+        id="ticker"
+        type="text"
+        [ngModel]="ticker()"
+        (ngModelChange)="ticker.set($event)"
+        placeholder="e.g. GLD"
+        (keyup.enter)="startAnalysis()"
+      />
+    </div>
+
+    <div class="form-field">
+      <label for="fromDate">From</label>
+      <input
+        id="fromDate"
+        type="date"
+        [ngModel]="fromDate()"
+        (ngModelChange)="fromDate.set($event)"
+      />
+    </div>
+
+    <div class="form-field">
+      <label for="toDate">To</label>
+      <input
+        id="toDate"
+        type="date"
+        [ngModel]="toDate()"
+        (ngModelChange)="toDate.set($event)"
+      />
+    </div>
+
+    <div class="form-field delay-field">
+      <label for="delay">Delay (sec)</label>
+      <input
+        id="delay"
+        type="number"
+        min="0"
+        max="60"
+        [ngModel]="chunkDelayMs() / 1000"
+        (ngModelChange)="chunkDelayMs.set($event * 1000)"
+        class="delay-input"
+      />
+    </div>
+
+    <div class="form-actions">
+      <button (click)="startAnalysis()" [disabled]="!canStart()" class="analyze-btn">
+        Analyze
+      </button>
+      <button (click)="refreshAnalysis()" [disabled]="!canStart()" class="refresh-btn">
+        Refresh Data
+      </button>
+      @if (isRunning()) {
+        <button (click)="stopAnalysis()" class="stop-btn">
+          Stop
+        </button>
+      }
+    </div>
+  </div>
+
+  <p class="info-note">
+    Timespan: minute | Multiplier: 1 | Extended hours (pre-market + after-hours) included
+    <br/>
+    Cached chunks load instantly &mdash; use <strong>Refresh Data</strong> to re-fetch from Polygon.io
+  </p>
+
+  <!-- Progress -->
+  @if (chunks().length > 0) {
+    <div class="progress-section">
+      <div class="progress-header">
+        <span>
+          Progress: {{ progressStats().completedChunks }} / {{ progressStats().totalChunks }} chunks
+          @if (progressStats().cachedChunks > 0) {
+            <span class="cached-count">({{ progressStats().cachedChunks }} cached)</span>
+          }
+          @if (progressStats().errorChunks > 0) {
+            <span class="error-count">({{ progressStats().errorChunks }} errors)</span>
+          }
+        </span>
+        <span class="bar-count">{{ progressStats().totalBars | number }} bars fetched</span>
+      </div>
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" [style.width.%]="progressPercent()"></div>
+      </div>
+      @if (progressStats().earliestDate && progressStats().latestDate) {
+        <div class="progress-dates">
+          {{ progressStats().earliestDate | date:'mediumDate' }}
+          &mdash;
+          {{ progressStats().latestDate | date:'mediumDate' }}
+        </div>
+      }
+    </div>
+
+    <!-- Chunk Queue -->
+    <app-chunk-queue [chunks]="chunks()" (chunkSelected)="onChunkSelected($event)" />
+  }
+
+  <!-- Chart -->
+  @if (displayedAggregates().length > 0) {
+    <div class="chart-area">
+      <h3>
+        {{ ticker().toUpperCase() }} &mdash; {{ displayedAggregates().length | number }} minute bars
+        @if (selectedChunk(); as chunk) {
+          <span class="chunk-filter-label">
+            Chunk #{{ chunk.index + 1 }} ({{ chunk.fromDate }} &rarr; {{ chunk.toDate }})
+          </span>
+          <button class="show-all-btn" (click)="clearSelection()">Show All</button>
+        }
+        @if (isRunning()) {
+          <span class="live-badge">LOADING...</span>
+        }
+      </h3>
+
+      <div class="chart-section">
+        <h4>Price</h4>
+        <app-candlestick-chart
+          [data]="displayedAggregates()"
+          [ticker]="ticker()"
+          [timeVisible]="true"
+        />
+      </div>
+
+      <div class="chart-section">
+        <h4>Volume</h4>
+        <app-volume-chart
+          [data]="displayedAggregates()"
+          [timeVisible]="true"
+        />
+      </div>
+    </div>
+  }
+</div>

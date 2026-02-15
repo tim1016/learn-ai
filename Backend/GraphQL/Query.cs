@@ -108,14 +108,15 @@ public class Query
         string fromDate,
         string toDate,
         string timespan = "day",
-        int multiplier = 1)
+        int multiplier = 1,
+        bool forceRefresh = false)
     {
         logger.LogInformation(
-            "[STEP 3 - GraphQL] Query received: ticker={Ticker}, from={From}, to={To}, timespan={Timespan}, multiplier={Multiplier}",
-            ticker, fromDate, toDate, timespan, multiplier);
+            "[STEP 3 - GraphQL] Query received: ticker={Ticker}, from={From}, to={To}, timespan={Timespan}, multiplier={Multiplier}, forceRefresh={ForceRefresh}",
+            ticker, fromDate, toDate, timespan, multiplier, forceRefresh);
 
         var aggregates = await marketDataService.GetOrFetchAggregatesAsync(
-            ticker, multiplier, timespan, fromDate, toDate);
+            ticker, multiplier, timespan, fromDate, toDate, forceRefresh);
 
         logger.LogInformation(
             "[STEP 4 - GraphQL] MarketDataService returned {Count} aggregates for {Ticker}",
@@ -278,7 +279,65 @@ public class Query
         }
     }
 
+    /// <summary>
+    /// Check which date ranges already have cached data in the database.
+    /// Used by the frontend to show cached vs. uncached chunks before fetching.
+    /// </summary>
+    [GraphQLName("checkCachedRanges")]
+    public async Task<List<CachedRangeResult>> CheckCachedRanges(
+        AppDbContext context,
+        string ticker,
+        List<DateRangeInput> ranges,
+        string timespan = "day",
+        int multiplier = 1)
+    {
+        var symbol = ticker.ToUpper();
+        var tickerEntity = await context.Tickers
+            .FirstOrDefaultAsync(t => t.Symbol == symbol && t.Market == "stocks");
+
+        var results = new List<CachedRangeResult>();
+
+        foreach (var range in ranges)
+        {
+            var isCached = false;
+            if (tickerEntity != null)
+            {
+                var from = DateTime.Parse(range.FromDate).ToUniversalTime();
+                var to = DateTime.Parse(range.ToDate).ToUniversalTime().Date.AddDays(1).AddTicks(-1);
+
+                isCached = await context.StockAggregates.AnyAsync(
+                    a => a.TickerId == tickerEntity.Id
+                      && a.Timespan == timespan
+                      && a.Multiplier == multiplier
+                      && a.Timestamp >= from
+                      && a.Timestamp <= to);
+            }
+
+            results.Add(new CachedRangeResult
+            {
+                FromDate = range.FromDate,
+                ToDate = range.ToDate,
+                IsCached = isCached,
+            });
+        }
+
+        return results;
+    }
+
     #endregion
+}
+
+public class DateRangeInput
+{
+    public required string FromDate { get; set; }
+    public required string ToDate { get; set; }
+}
+
+public class CachedRangeResult
+{
+    public required string FromDate { get; set; }
+    public required string ToDate { get; set; }
+    public bool IsCached { get; set; }
 }
 
 public class IndicatorConfigInput

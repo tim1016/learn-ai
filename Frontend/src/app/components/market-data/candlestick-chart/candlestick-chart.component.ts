@@ -8,6 +8,7 @@ import {
   CandlestickSeries, CandlestickData, UTCTimestamp
 } from 'lightweight-charts';
 import { StockAggregate } from '../../../graphql/types';
+import { formatTickMark } from '../chart-utils';
 
 @Component({
   selector: 'app-candlestick-chart',
@@ -20,6 +21,7 @@ import { StockAggregate } from '../../../graphql/types';
 export class CandlestickChartComponent implements AfterViewInit, OnChanges, OnDestroy {
   @Input() data: StockAggregate[] = [];
   @Input() ticker = '';
+  @Input() timeVisible = false;
   @ViewChild('chartContainer') chartContainer!: ElementRef<HTMLDivElement>;
 
   private chart: IChartApi | null = null;
@@ -31,8 +33,13 @@ export class CandlestickChartComponent implements AfterViewInit, OnChanges, OnDe
   }
 
   ngOnChanges(changes: SimpleChanges): void {
-    if (changes['data'] && this.chart) {
-      this.updateData();
+    if (this.chart) {
+      if (changes['timeVisible']) {
+        this.chart.timeScale().applyOptions({ timeVisible: this.timeVisible });
+      }
+      if (changes['data']) {
+        this.updateData();
+      }
     }
   }
 
@@ -51,7 +58,13 @@ export class CandlestickChartComponent implements AfterViewInit, OnChanges, OnDe
         vertLines: { color: '#f0f0f0' },
         horzLines: { color: '#f0f0f0' }
       },
-      timeScale: { timeVisible: false, borderColor: '#ddd' },
+      timeScale: {
+        timeVisible: this.timeVisible,
+        secondsVisible: false,
+        borderColor: '#ddd',
+        minBarSpacing: 0.1,
+        tickMarkFormatter: formatTickMark,
+      },
       crosshair: { mode: 0 }
     });
 

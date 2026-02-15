@@ -1,0 +1,108 @@
+.chunk-queue {
+  margin-bottom: 24px;
+
+  h4 {
+    margin: 0 0 12px 0;
+    color: #555;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+}
+
+.chunk-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+}
+
+.chunk-card {
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #e9ecef;
+  font-size: 13px;
+  transition: background-color 0.3s, border-color 0.3s;
+}
+
+.chunk-pending {
+  background: #f8f9fa;
+  color: #999;
+}
+
+.chunk-cached {
+  background: #fff8e1;
+  border-color: #ffb300;
+  color: #f57f17;
+}
+
+.chunk-fetching {
+  background: #e3f2fd;
+  border-color: #2196f3;
+  color: #1565c0;
+}
+
+.chunk-complete {
+  background: #e8f5e9;
+  border-color: #26a69a;
+  color: #2e7d32;
+}
+
+.clickable {
+  cursor: pointer;
+
+  &:hover {
+    filter: brightness(0.95);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+  }
+}
+
+.chunk-error {
+  background: #fde8e8;
+  border-color: #ef5350;
+  color: #c0392b;
+}
+
+.chunk-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.chunk-index {
+  font-weight: 600;
+}
+
+.chunk-status-badge {
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.chunk-dates {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.chunk-stats {
+  font-size: 12px;
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+.chunk-spinner {
+  font-size: 12px;
+  margin-top: 4px;
+  font-style: italic;
+}
+
+.chunk-cached-label {
+  font-size: 12px;
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+.chunk-error-msg {
+  font-size: 11px;
+  margin-top: 4px;
+  word-break: break-word;
+}

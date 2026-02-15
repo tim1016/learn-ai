@@ -22,6 +22,7 @@ public interface IMarketDataService
 
     /// <summary>
     /// Smart cache: check DB for existing aggregates, fetch from Polygon if missing.
+    /// When forceRefresh is true, bypasses cache and always fetches from Polygon.
     /// Returns all aggregates for the requested range.
     /// </summary>
     Task<List<StockAggregate>> GetOrFetchAggregatesAsync(
@@ -30,6 +31,7 @@ public interface IMarketDataService
         string timespan,
         string fromDate,
         string toDate,
+        bool forceRefresh = false,
         CancellationToken cancellationToken = default);
 
     /// <summary>

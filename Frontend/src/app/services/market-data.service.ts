@@ -13,6 +13,7 @@ const QUERY = `
     $toDate: String!
     $timespan: String! = "day"
     $multiplier: Int! = 1
+    $forceRefresh: Boolean! = false
   ) {
     getOrFetchStockAggregates(
       ticker: $ticker
@@ -20,6 +21,7 @@ const QUERY = `
       toDate: $toDate
       timespan: $timespan
       multiplier: $multiplier
+      forceRefresh: $forceRefresh
     ) {
       ticker
       aggregates {
@@ -71,6 +73,35 @@ const CALCULATE_INDICATORS_QUERY = `
   }
 `;
 
+const CHECK_CACHED_RANGES_QUERY = `
+  query CheckCachedRanges(
+    $ticker: String!
+    $ranges: [DateRangeInput!]!
+    $timespan: String! = "day"
+    $multiplier: Int! = 1
+  ) {
+    checkCachedRanges(
+      ticker: $ticker
+      ranges: $ranges
+      timespan: $timespan
+      multiplier: $multiplier
+    ) {
+      fromDate toDate isCached
+    }
+  }
+`;
+
+interface CheckCachedRangesResponse {
+  data: { checkCachedRanges: CachedRangeResult[] };
+  errors?: { message: string }[];
+}
+
+export interface CachedRangeResult {
+  fromDate: string;
+  toDate: string;
+  isCached: boolean;
+}
+
 interface CalculateIndicatorsResponse {
   data: { calculateIndicators: CalculateIndicatorsResult };
   errors?: { message: string }[];
@@ -87,16 +118,17 @@ export class MarketDataService {
     fromDate: string,
     toDate: string,
     timespan: string = 'day',
-    multiplier: number = 1
+    multiplier: number = 1,
+    forceRefresh: boolean = false
   ): Observable<SmartAggregatesResult> {
     console.log('[STEP 1.5 - Service] Sending GraphQL query:', {
-      ticker, fromDate, toDate, timespan, multiplier
+      ticker, fromDate, toDate, timespan, multiplier, forceRefresh
     });
 
     return this.http
       .post<GraphQLResponse>(GRAPHQL_URL, {
         query: QUERY,
-        variables: { ticker, fromDate, toDate, timespan, multiplier }
+        variables: { ticker, fromDate, toDate, timespan, multiplier, forceRefresh }
       })
       .pipe(
         tap(response => {
@@ -110,6 +142,27 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.getOrFetchStockAggregates)
+      );
+  }
+
+  checkCachedRanges(
+    ticker: string,
+    ranges: { fromDate: string; toDate: string }[],
+    timespan: string = 'day',
+    multiplier: number = 1
+  ): Observable<CachedRangeResult[]> {
+    return this.http
+      .post<CheckCachedRangesResponse>(GRAPHQL_URL, {
+        query: CHECK_CACHED_RANGES_QUERY,
+        variables: { ticker, ranges, timespan, multiplier }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.checkCachedRanges)
       );
   }
 

@@ -1,0 +1,35 @@
+<div class="chunk-queue">
+  <h4>Fetch Queue</h4>
+  <div class="chunk-grid">
+    @for (chunk of chunks(); track chunk.index) {
+      <div
+        class="chunk-card"
+        [class]="'chunk-' + chunk.status"
+        [class.clickable]="chunk.status === 'complete'"
+        (click)="onChunkClick(chunk)"
+      >
+        <div class="chunk-header">
+          <span class="chunk-index">#{{ chunk.index + 1 }}</span>
+          <span class="chunk-status-badge">{{ chunk.status | titlecase }}</span>
+        </div>
+        <div class="chunk-dates">
+          {{ chunk.fromDate }} &rarr; {{ chunk.toDate }}
+        </div>
+        @if (chunk.status === 'cached') {
+          <div class="chunk-cached-label">In DB</div>
+        }
+        @if (chunk.status === 'complete') {
+          <div class="chunk-stats">
+            {{ chunk.barCount | number }} bars &middot; {{ formatDuration(chunk.durationMs) }}
+          </div>
+        }
+        @if (chunk.status === 'fetching') {
+          <div class="chunk-spinner">Fetching&hellip;</div>
+        }
+        @if (chunk.status === 'error' && chunk.errorMessage) {
+          <div class="chunk-error-msg">{{ chunk.errorMessage }}</div>
+        }
+      </div>
+    }
+  </div>
+</div>
