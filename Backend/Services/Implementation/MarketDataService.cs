@@ -208,34 +208,45 @@ public class MarketDataService : IMarketDataService
     }
 
     /// <summary>
-    /// Upsert aggregates (testable business logic)
-    /// Checks for existing records, updates or inserts
+    /// Upsert aggregates using batch operations (fixes N+1 query problem)
+    /// Fetches existing records once, then applies updates in batch
     /// </summary>
     private async Task<List<StockAggregate>> UpsertAggregatesAsync(
         List<StockAggregate> aggregates,
         CancellationToken cancellationToken)
     {
+        if (aggregates.Count == 0)
+            return [];
+
+        // Get all unique identifiers to fetch existing records in ONE query
+        var aggregateKeys = aggregates
+            .Select(a => new { a.TickerId, a.Timestamp, a.Timespan, a.Multiplier })
+            .Distinct()
+            .ToList();
+
+        // Fetch all existing records matching these keys in a single query
+        var existingRecords = await _context.StockAggregates
+            .Where(a => aggregateKeys.Any(k =>
+                k.TickerId == a.TickerId &&
+                k.Timestamp == a.Timestamp &&
+                k.Timespan == a.Timespan &&
+                k.Multiplier == a.Multiplier))
+            .ToListAsync(cancellationToken);
+
+        // Build lookup for O(1) access
+        var existingLookup = existingRecords
+            .ToDictionary(a => (a.TickerId, a.Timestamp, a.Timespan, a.Multiplier));
+
         var result = new List<StockAggregate>();
 
+        // Process each aggregate, updating or inserting as needed
         foreach (var agg in aggregates)
         {
-            var existing = await _context.StockAggregates
-                .FirstOrDefaultAsync(
-                    a => a.TickerId == agg.TickerId &&
-                         a.Timestamp == agg.Timestamp &&
-                         a.Timespan == agg.Timespan &&
-                         a.Multiplier == agg.Multiplier,
-                    cancellationToken);
+            var key = (agg.TickerId, agg.Timestamp, agg.Timespan, agg.Multiplier);
 
-            if (existing == null)
+            if (existingLookup.TryGetValue(key, out var existing))
             {
-                // Insert new
-                _context.StockAggregates.Add(agg);
-                result.Add(agg);
-            }
-            else
-            {
-                // Update existing
+                // Update existing record
                 existing.Open = agg.Open;
                 existing.High = agg.High;
                 existing.Low = agg.Low;
@@ -244,6 +255,12 @@ public class MarketDataService : IMarketDataService
                 existing.VolumeWeightedAveragePrice = agg.VolumeWeightedAveragePrice;
                 existing.TransactionCount = agg.TransactionCount;
                 result.Add(existing);
+            }
+            else
+            {
+                // Insert new record
+                _context.StockAggregates.Add(agg);
+                result.Add(agg);
             }
         }
 

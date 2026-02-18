@@ -3,6 +3,8 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { catchError, of } from 'rxjs';
 import { MarketDataService } from '../../services/market-data.service';
 import { StockAggregate } from '../../graphql/types';
 import { LineChartComponent } from '../market-data/line-chart/line-chart.component';
@@ -114,6 +116,12 @@ export class StockAnalysisComponent {
       const result = await firstValueFrom(
         this.marketDataService.getOrFetchStockAggregates(
           t, chunk.fromDate, chunk.toDate, 'minute', 1, true
+        ).pipe(
+          takeUntilDestroyed(),
+          catchError((err) => {
+            console.error('Error refreshing chunk:', err);
+            throw err;
+          })
         )
       );
 
@@ -169,13 +177,16 @@ export class StockAnalysisComponent {
     try {
       const ranges = chunks.map(c => ({ fromDate: c.fromDate, toDate: c.toDate }));
       const results = await firstValueFrom(
-        this.marketDataService.checkCachedRanges(t, ranges, 'minute', 1)
+        this.marketDataService.checkCachedRanges(t, ranges, 'minute', 1).pipe(
+          takeUntilDestroyed()
+        )
       );
       this.chunks.update(current =>
         current.map((c, i) => results[i]?.isCached ? { ...c, status: 'cached' as const } : c)
       );
-    } catch {
-      // Cache check failed — proceed with all as pending (no-op)
+    } catch (err) {
+      // Cache check failed — proceed with all as pending
+      console.warn('Cache check failed:', err);
     }
 
     this.executeChunks();
@@ -202,6 +213,12 @@ export class StockAnalysisComponent {
             'minute',
             1,
             refresh
+          ).pipe(
+            takeUntilDestroyed(),
+            catchError((err) => {
+              console.error('Error executing chunk:', err);
+              throw err;
+            })
           )
         );
 
@@ -293,7 +310,13 @@ export class StockAnalysisComponent {
             strikePriceLte: Math.ceil(atmPrice + buffer),
             expirationDate: dayDate, // 0DTE: expires same day
             limit: 200,
-          })
+          }).pipe(
+            takeUntilDestroyed(),
+            catchError((err) => {
+              console.error('Error fetching options contracts:', err);
+              throw err;
+            })
+          )
         );
 
         if (!result.success || result.contracts.length === 0) {
@@ -326,14 +349,21 @@ export class StockAnalysisComponent {
             await firstValueFrom(
               this.marketDataService.getOrFetchStockAggregates(
                 contract.ticker, dayDate, dayDate, 'minute', 1, refresh
+              ).pipe(
+                takeUntilDestroyed(),
+                catchError((err) => {
+                  console.error('Error fetching contract aggregates:', err);
+                  throw err;
+                })
               )
             );
             dayFetched++;
             totalFetched++;
             this.updateTradingDay(chunkIndex, dayIdx, { optionsFetchedCount: dayFetched });
             this.updateChunk(chunkIndex, { optionsFetchedCount: totalFetched });
-          } catch {
+          } catch (err) {
             // Individual contract failure — continue with others
+            console.warn('Failed to fetch contract aggregates:', err);
           }
 
           // Delay between options contract fetches
@@ -343,7 +373,9 @@ export class StockAnalysisComponent {
         }
 
         this.updateTradingDay(chunkIndex, dayIdx, { optionsStatus: 'complete' });
-      } catch {
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        console.error('Error fetching options for trading day:', { dayDate, error: errorMessage });
         this.updateTradingDay(chunkIndex, dayIdx, { optionsStatus: 'error' });
       }
     }
