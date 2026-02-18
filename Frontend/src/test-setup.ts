@@ -4,3 +4,7 @@
   unobserve() {}
   disconnect() {}
 };
+
+// jsdom lacks HTMLCanvasElement.getContext — stub it so lightweight-charts
+// doesn't crash when loaded without a vi.mock override
+HTMLCanvasElement.prototype.getContext = (() => null) as any;

@@ -1,6 +1,25 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { expect, it, vi } from 'vitest';
 import { TaChartComponent } from './ta-chart.component';
 import { createMockAggregates, createMockIndicatorSeries } from '../../../../testing/factories/market-data.factory';
+
+vi.mock('lightweight-charts', () => {
+  const mockTimeScale = { fitContent: vi.fn(), applyOptions: vi.fn() };
+  const createMockSeries = () => ({ setData: vi.fn(), applyOptions: vi.fn() });
+  const createMockChart = () => ({
+    addSeries: vi.fn().mockReturnValue(createMockSeries()),
+    removeSeries: vi.fn(),
+    timeScale: vi.fn().mockReturnValue(mockTimeScale),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+  });
+  return {
+    createChart: vi.fn().mockImplementation(() => createMockChart()),
+    CandlestickSeries: 'CandlestickSeries',
+    LineSeries: 'LineSeries',
+    HistogramSeries: 'HistogramSeries',
+  };
+});
 
 describe('TaChartComponent', () => {
   let component: TaChartComponent;

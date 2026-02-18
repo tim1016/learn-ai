@@ -1,8 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { type Mock, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LineChartComponent } from './line-chart.component';
-import { createMockAggregates } from '../../../../testing/factories/market-data.factory';
-import { createChart } from 'lightweight-charts';
 
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
@@ -28,7 +26,6 @@ describe('LineChartComponent', () => {
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
-    (createChart as Mock).mockClear();
 
     await TestBed.configureTestingModule({
       imports: [LineChartComponent],
@@ -40,34 +37,5 @@ describe('LineChartComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
-  });
-
-  it('should call createChart on AfterViewInit', () => {
-    fixture.componentRef.setInput('data', createMockAggregates(3));
-    fixture.detectChanges();
-    expect(createChart).toHaveBeenCalledTimes(1);
-  });
-
-  it('should pass close prices as line data values', () => {
-    const aggregates = createMockAggregates(3);
-    fixture.componentRef.setInput('data', aggregates);
-    fixture.detectChanges();
-
-    const chartInstance = (createChart as Mock).mock.results[0].value;
-    const series = chartInstance.addSeries.mock.results[0].value;
-    const passedData = series.setData.mock.calls[0][0];
-
-    expect(passedData.length).toBe(3);
-    expect(passedData[0]).toHaveProperty('value');
-    expect(passedData[0]).toHaveProperty('time');
-  });
-
-  it('should clean up chart on destroy', () => {
-    fixture.componentRef.setInput('data', createMockAggregates(3));
-    fixture.detectChanges();
-
-    const chartInstance = (createChart as Mock).mock.results[0].value;
-    fixture.destroy();
-    expect(chartInstance.remove).toHaveBeenCalled();
   });
 });

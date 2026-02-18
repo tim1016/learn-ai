@@ -46,7 +46,8 @@
       "Bash(grep:*)",
       "Bash(npx ng test --help:*)",
       "Bash(python -m pytest:*)",
-      "Bash(podman compose:*)"
+      "Bash(podman compose:*)",
+      "Bash(npx ng build:*)"
     ]
   }
 }

@@ -20,6 +20,10 @@
     "baseUrl": "./",
     "paths": {}
   },
+  "exclude": [
+    "src/**/*.spec.ts",
+    "src/test-setup.ts"
+  ],
   "angularCompilerOptions": {
     "enableI18nLegacyMessageIdFormat": false,
     "strictInjectionParameters": true,

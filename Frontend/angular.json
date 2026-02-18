@@ -19,7 +19,7 @@
             "tsConfig": "tsconfig.json",
             "assets": [],
             "styles": [
-              "node_modules/primeicons/primeicons.css",
+              "primeicons/primeicons.css",
               "src/styles.css"
             ],
             "scripts": []
