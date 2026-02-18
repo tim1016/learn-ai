@@ -30,25 +30,33 @@
     </div>
   </details>
 
-  <!-- Search Controls -->
-  <div class="search-form">
-    <input
-      [(ngModel)]="ticker"
-      placeholder="Ticker (e.g., AAPL)"
-      (keyup.enter)="fetchData()"
+  <!-- Search Controls + Calendar -->
+  <div class="controls-row">
+    <div class="search-form">
+      <input
+        [(ngModel)]="ticker"
+        placeholder="Ticker (e.g., AAPL)"
+        (keyup.enter)="fetchData()"
+      />
+      <input [(ngModel)]="fromDate" type="date" [min]="minDate" />
+      <input [(ngModel)]="toDate" type="date" [min]="minDate" />
+      <select [(ngModel)]="timespan">
+        <option value="minute">Minute</option>
+        <option value="hour">Hourly</option>
+        <option value="day">Daily</option>
+        <option value="week">Weekly</option>
+        <option value="month">Monthly</option>
+      </select>
+      <button (click)="fetchData()" [disabled]="loading">
+        {{ loading ? 'Loading...' : 'Fetch Data' }}
+      </button>
+    </div>
+
+    <app-market-calendar
+      [holidays]="holidays"
+      [loading]="holidaysLoading"
+      (dateSelect)="onCalendarDateSelect($event)"
     />
-    <input [(ngModel)]="fromDate" type="date" [min]="minDate" />
-    <input [(ngModel)]="toDate" type="date" [min]="minDate" />
-    <select [(ngModel)]="timespan">
-      <option value="minute">Minute</option>
-      <option value="hour">Hourly</option>
-      <option value="day">Daily</option>
-      <option value="week">Weekly</option>
-      <option value="month">Monthly</option>
-    </select>
-    <button (click)="fetchData()" [disabled]="loading">
-      {{ loading ? 'Loading...' : 'Fetch Data' }}
-    </button>
   </div>
 
   <!-- Error -->

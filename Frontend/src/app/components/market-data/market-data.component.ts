@@ -3,12 +3,15 @@ import { ActivatedRoute } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MarketDataService } from '../../services/market-data.service';
+import { MarketMonitorService } from '../../services/market-monitor.service';
 import { StockAggregate, AggregatesSummary } from '../../graphql/types';
+import { MarketHolidayEvent } from '../../models/market-monitor';
 import { validateDateRange, getMinAllowedDate } from '../../utils/date-validation';
 import { CandlestickChartComponent } from './candlestick-chart/candlestick-chart.component';
 import { LineChartComponent } from './line-chart/line-chart.component';
 import { VolumeChartComponent } from './volume-chart/volume-chart.component';
 import { SummaryStatsComponent } from './summary-stats/summary-stats.component';
+import { MarketCalendarComponent } from '../market-calendar/market-calendar.component';
 import { TableModule } from 'primeng/table';
 
 @Component({
@@ -18,6 +21,7 @@ import { TableModule } from 'primeng/table';
     CommonModule, FormsModule,
     CandlestickChartComponent, LineChartComponent,
     VolumeChartComponent, SummaryStatsComponent,
+    MarketCalendarComponent,
     TableModule
   ],
   templateUrl: './market-data.component.html',
@@ -36,8 +40,12 @@ export class MarketDataComponent implements OnInit {
   aggregates: StockAggregate[] = [];
   summary: AggregatesSummary | null = null;
 
+  holidays: MarketHolidayEvent[] = [];
+  holidaysLoading = false;
+
   private cdr = inject(ChangeDetectorRef);
   private route = inject(ActivatedRoute);
+  private marketMonitor = inject(MarketMonitorService);
 
   constructor(private marketDataService: MarketDataService) {}
 
@@ -57,10 +65,28 @@ export class MarketDataComponent implements OnInit {
       this.timespan = params['timespan'];
     }
 
+    // Fetch market holidays for the calendar widget
+    this.holidaysLoading = true;
+    this.marketMonitor.getHolidays(20).subscribe({
+      next: (events) => {
+        this.holidays = events;
+        this.holidaysLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.holidaysLoading = false;
+        this.cdr.detectChanges();
+      }
+    });
+
     // Auto-fetch if ticker was provided via query params
     if (params['ticker']) {
       this.fetchData();
     }
+  }
+
+  onCalendarDateSelect(date: Date): void {
+    this.toDate = date.toISOString().split('T')[0];
   }
 
   fetchData(): void {

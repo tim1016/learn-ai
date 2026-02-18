@@ -1,0 +1,50 @@
+<div class="market-calendar-widget">
+  <h4>Market Calendar</h4>
+
+  @if (loading()) {
+    <div class="calendar-loading">Loading holidays...</div>
+  }
+
+  <p-datepicker
+    [(ngModel)]="internalDate"
+    [inline]="true"
+    [showOtherMonths]="true"
+    [disabledDays]="disabledDays"
+    [disabledDates]="disabledDates()"
+    [minDate]="minDate"
+    [maxDate]="maxDate"
+    [showButtonBar]="true"
+    [firstDayOfWeek]="1"
+    (onSelect)="onDateSelect($event)"
+  >
+    <ng-template pTemplate="date" let-dateMeta>
+      @let holiday = getHolidayForDate(dateMeta.day, dateMeta.month, dateMeta.year);
+      @if (holiday) {
+        <span
+          class="holiday-date"
+          [class.early-close]="holiday.status === 'Early Close'"
+          [class.closed]="holiday.status === 'Closed'"
+          [pTooltip]="getHolidayTooltip(holiday)"
+          tooltipPosition="top"
+        >
+          {{ dateMeta.day }}
+        </span>
+      } @else {
+        <span>{{ dateMeta.day }}</span>
+      }
+    </ng-template>
+
+    <ng-template pTemplate="footer">
+      @if (holidays().length > 0) {
+        <div class="holiday-legend">
+          <span class="legend-item">
+            <span class="legend-dot closed"></span> Closed
+          </span>
+          <span class="legend-item">
+            <span class="legend-dot early-close"></span> Early Close
+          </span>
+        </div>
+      }
+    </ng-template>
+  </p-datepicker>
+</div>

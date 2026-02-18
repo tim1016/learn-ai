@@ -1,0 +1,76 @@
+.market-calendar-widget {
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+
+  h4 {
+    margin: 0 0 12px 0;
+    color: #555;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+}
+
+.calendar-loading {
+  text-align: center;
+  padding: 20px;
+  color: #999;
+  font-size: 13px;
+}
+
+// Holiday date cell styling
+:host ::ng-deep {
+  .holiday-date {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    font-weight: 600;
+    cursor: help;
+
+    &.closed {
+      background-color: #ffebee;
+      color: #c62828;
+    }
+
+    &.early-close {
+      background-color: #fff8e1;
+      color: #f57f17;
+    }
+  }
+}
+
+// Legend
+.holiday-legend {
+  display: flex;
+  gap: 16px;
+  padding: 8px 4px 4px;
+  font-size: 12px;
+  color: #666;
+  justify-content: center;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+
+  &.closed {
+    background-color: #c62828;
+  }
+
+  &.early-close {
+    background-color: #f57f17;
+  }
+}

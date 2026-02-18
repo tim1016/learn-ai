@@ -25,9 +25,19 @@ describe('MarketDataComponent', () => {
     component = fixture.componentInstance;
     httpMock = TestBed.inject(HttpTestingController);
     fixture.detectChanges();
+
+    // Flush the holidays request triggered by ngOnInit
+    flushHolidaysRequest();
   });
 
   afterEach(() => httpMock.verify());
+
+  function flushHolidaysRequest() {
+    const req = httpMock.match(
+      r => r.url.includes('/api/market/holidays')
+    );
+    req.forEach(r => r.flush({ success: true, events: [], count: 0, error: null }));
+  }
 
   it('should create', () => {
     expect(component).toBeTruthy();

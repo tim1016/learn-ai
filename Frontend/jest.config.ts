@@ -1,6 +1,6 @@
 import type { Config } from 'jest';
 
-const config: Config = {
+const config: Config & { customExportConditions?: string[] } = {
   preset: 'jest-preset-angular',
   setupFiles: ['<rootDir>/setup-jest.ts'],
   testPathIgnorePatterns: ['<rootDir>/node_modules/', '<rootDir>/dist/'],
@@ -9,6 +9,7 @@ const config: Config = {
     '^lightweight-charts$': '<rootDir>/src/testing/mocks/lightweight-charts.mock.ts',
     '^@polygon\\.io/client-js$': '<rootDir>/src/testing/mocks/polygon-client.mock.ts',
   },
+  customExportConditions: ['import', 'default'],
   collectCoverageFrom: [
     'src/app/**/*.ts',
     '!src/app/**/*.routes.ts',

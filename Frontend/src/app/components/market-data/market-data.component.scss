@@ -4,12 +4,20 @@
   margin: 0 auto;
 }
 
+.controls-row {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
 .search-form {
   display: flex;
   gap: 10px;
-  margin-bottom: 20px;
   flex-wrap: wrap;
   align-items: center;
+  flex: 1;
 }
 
 .search-form input,
