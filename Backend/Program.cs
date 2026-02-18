@@ -72,6 +72,7 @@ builder.Services.AddHttpClient<ITechnicalAnalysisService, TechnicalAnalysisServi
 
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
+builder.Services.AddScoped<IBacktestService, BacktestService>();
 
 // Add GraphQL services
 builder.Services
@@ -81,7 +82,11 @@ builder.Services
     .AddProjections()
     .AddFiltering()
     .AddSorting()
-    .ModifyRequestOptions(opt => opt.IncludeExceptionDetails = true);
+    .ModifyRequestOptions(opt =>
+    {
+        opt.IncludeExceptionDetails = true;
+        opt.ExecutionTimeout = TimeSpan.FromMinutes(2);
+    });
 
 var app = builder.Build();
 

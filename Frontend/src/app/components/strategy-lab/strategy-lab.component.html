@@ -1,0 +1,242 @@
+<div class="strategy-lab">
+  <h1>Strategy Lab</h1>
+  <p class="subtitle">Run algorithmic backtests on historical market data</p>
+
+  <details class="page-guide">
+    <summary>How to use this page</summary>
+    <div class="guide-content">
+      <h4>Quick start</h4>
+      <ol>
+        <li>Type a <strong>ticker</strong> (e.g. <code>AAPL</code>) and set a <strong>date range</strong>.</li>
+        <li>Pick a <strong>timespan</strong>: Minute for intraday signals, Day for swing/position trades.</li>
+        <li>Choose a <strong>strategy</strong> and adjust its parameters (see below).</li>
+        <li>Click <strong>Run Backtest</strong>. Results appear in ~seconds for small ranges, longer for minute data across months.</li>
+      </ol>
+      <h4>Prerequisite</h4>
+      <p>Data must already be in the database for the ticker + date range you choose. Use the <strong>Market Data</strong> or <strong>Stock Analysis</strong> page to fetch data first. If no data exists, the backtest will return 0 trades.</p>
+      <h4>Strategies</h4>
+      <ul>
+        <li><strong>SMA Crossover</strong> &mdash; Buys on golden cross (short SMA crosses above long SMA), sells on death cross. Recommended starting params: Short=10, Long=30 for minute data; Short=50, Long=200 for daily.</li>
+        <li><strong>RSI Mean Reversion</strong> &mdash; Buys when RSI drops below Oversold, sells when RSI rises above Overbought. Default params (Window=14, Oversold=30, Overbought=70) work well for most tickers.</li>
+      </ul>
+      <h4>Reading the results</h4>
+      <ul>
+        <li><strong>Total P&amp;L</strong> &mdash; Net profit/loss. Green = profitable, Red = losing.</li>
+        <li><strong>Win Rate</strong> &mdash; % of trades that were profitable. Above 50% is decent for trend-following.</li>
+        <li><strong>Sharpe Ratio</strong> &mdash; Risk-adjusted return. Above 1.0 = good, above 2.0 = excellent.</li>
+        <li><strong>Max Drawdown</strong> &mdash; Largest peak-to-trough drop. Lower is better.</li>
+        <li><strong>Equity Curve</strong> &mdash; Cumulative P&amp;L over time. Switch between chart types (Lightweight Charts, SVG, PrimeNG) using the buttons above the chart.</li>
+        <li><strong>Trade Log</strong> &mdash; Every trade with entry/exit timestamps, prices, P&amp;L, and the signal that triggered it.</li>
+      </ul>
+      <div class="guide-tip">
+        Note: All data is <strong>15-minute delayed</strong> and limited to the past <strong>2 years</strong> (Polygon Starter plan).
+      </div>
+    </div>
+  </details>
+
+  <!-- Configuration Form -->
+  <div class="config-form">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Ticker</label>
+        <input type="text" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="AAPL" />
+      </div>
+      <div class="form-group">
+        <label>From</label>
+        <input type="date" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" [min]="minDate" />
+      </div>
+      <div class="form-group">
+        <label>To</label>
+        <input type="date" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" [min]="minDate" />
+      </div>
+      <div class="form-group">
+        <label>Timespan</label>
+        <select [ngModel]="timespan()" (ngModelChange)="timespan.set($event)">
+          <option value="minute">Minute</option>
+          <option value="hour">Hour</option>
+          <option value="day">Day</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Multiplier</label>
+        <input type="number" [ngModel]="multiplier()" (ngModelChange)="multiplier.set($event)" min="1" />
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Strategy</label>
+        <select [ngModel]="strategyName()" (ngModelChange)="strategyName.set($event)">
+          <option value="sma_crossover">SMA Crossover</option>
+          <option value="rsi_mean_reversion">RSI Mean Reversion</option>
+        </select>
+      </div>
+
+      @if (strategyName() === 'sma_crossover') {
+        <div class="form-group">
+          <label>Short Window</label>
+          <input type="number" [ngModel]="shortWindow()" (ngModelChange)="shortWindow.set($event)" min="2" />
+        </div>
+        <div class="form-group">
+          <label>Long Window</label>
+          <input type="number" [ngModel]="longWindow()" (ngModelChange)="longWindow.set($event)" min="5" />
+        </div>
+      }
+
+      @if (strategyName() === 'rsi_mean_reversion') {
+        <div class="form-group">
+          <label>RSI Window</label>
+          <input type="number" [ngModel]="rsiWindow()" (ngModelChange)="rsiWindow.set($event)" min="2" />
+        </div>
+        <div class="form-group">
+          <label>Oversold</label>
+          <input type="number" [ngModel]="oversold()" (ngModelChange)="oversold.set($event)" min="1" max="50" />
+        </div>
+        <div class="form-group">
+          <label>Overbought</label>
+          <input type="number" [ngModel]="overbought()" (ngModelChange)="overbought.set($event)" min="50" max="99" />
+        </div>
+      }
+    </div>
+
+    <button class="run-btn" (click)="runBacktest()" [disabled]="loading()">
+      {{ loading() ? 'Running...' : 'Run Backtest' }}
+    </button>
+  </div>
+
+  @if (error()) {
+    <div class="error-message">{{ error() }}</div>
+  }
+
+  @if (loading()) {
+    <div class="loading">Running backtest... This may take a moment for large datasets.</div>
+  }
+
+  @if (result(); as r) {
+    <!-- Summary Stats -->
+    <div class="stats-grid">
+      <div class="stat-card" [class.positive]="r.totalPnL > 0" [class.negative]="r.totalPnL <= 0">
+        <span class="stat-label">Total P&L</span>
+        <span class="stat-value">${{ formatPrice(r.totalPnL) }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Win Rate</span>
+        <span class="stat-value">{{ winRate() }}%</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Total Trades</span>
+        <span class="stat-value">{{ r.totalTrades }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Max Drawdown</span>
+        <span class="stat-value">${{ formatPrice(r.maxDrawdown) }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Sharpe Ratio</span>
+        <span class="stat-value">{{ r.sharpeRatio.toFixed(4) }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Avg P&L/Trade</span>
+        <span class="stat-value">${{ formatPrice(avgPnl()) }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Duration</span>
+        <span class="stat-value">{{ r.durationMs }}ms</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">W / L</span>
+        <span class="stat-value">{{ r.winningTrades }} / {{ r.losingTrades }}</span>
+      </div>
+    </div>
+
+    <!-- Equity Curve -->
+    @if (equityCurve().length > 0 || r.trades.length > 0) {
+      <div class="chart-section">
+        <div class="chart-header">
+          <h2>Equity Curve</h2>
+          <div class="chart-type-selector">
+            <button
+              [class.active]="chartType() === 'lightweight'"
+              (click)="chartType.set('lightweight')"
+            >Lightweight Charts</button>
+            <button
+              [class.active]="chartType() === 'svg'"
+              (click)="chartType.set('svg')"
+            >SVG</button>
+            <button
+              [class.active]="chartType() === 'primeng'"
+              (click)="chartType.set('primeng')"
+            >PrimeNG (Chart.js)</button>
+          </div>
+        </div>
+
+        @switch (chartType()) {
+          @case ('lightweight') {
+            <app-line-chart
+              [data]="equityCurve()"
+              [ticker]="ticker()"
+              [timeVisible]="true"
+              [height]="300"
+              [lineColor]="r.totalPnL > 0 ? '#2e7d32' : '#c0392b'"
+            />
+          }
+          @case ('svg') {
+            <app-backtest-svg-chart
+              [trades]="r.trades"
+              [height]="300"
+            />
+          }
+          @case ('primeng') {
+            <app-backtest-primeng-chart
+              [trades]="r.trades"
+              [height]="300"
+            />
+          }
+        }
+      </div>
+    }
+
+    <!-- Trade Log -->
+    @if (r.trades.length > 0) {
+      <div class="trade-log">
+        <h2>Trade Log ({{ r.trades.length }} trades)</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Type</th>
+                <th>Entry Time</th>
+                <th>Exit Time</th>
+                <th>Entry Price</th>
+                <th>Exit Price</th>
+                <th>P&L</th>
+                <th>Cum. P&L</th>
+                <th>Signal</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (trade of r.trades; track $index) {
+                <tr [class.win]="trade.pnl > 0" [class.loss]="trade.pnl <= 0">
+                  <td>{{ $index + 1 }}</td>
+                  <td>{{ trade.tradeType }}</td>
+                  <td>{{ formatTimestamp(trade.entryTimestamp) }}</td>
+                  <td>{{ formatTimestamp(trade.exitTimestamp) }}</td>
+                  <td>{{ formatPrice(trade.entryPrice) }}</td>
+                  <td>{{ formatPrice(trade.exitPrice) }}</td>
+                  <td [class.positive]="trade.pnl > 0" [class.negative]="trade.pnl <= 0">
+                    {{ trade.pnl > 0 ? '+' : '' }}{{ formatPrice(trade.pnl) }}
+                  </td>
+                  <td [class.positive]="trade.cumulativePnl > 0" [class.negative]="trade.cumulativePnl <= 0">
+                    {{ formatPrice(trade.cumulativePnl) }}
+                  </td>
+                  <td class="signal-cell">{{ trade.signalReason }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    }
+  }
+</div>

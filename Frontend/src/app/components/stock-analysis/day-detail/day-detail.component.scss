@@ -1,0 +1,147 @@
+.day-detail-page {
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #1976d2;
+  text-decoration: none;
+  font-size: 14px;
+  margin-bottom: 16px;
+
+  &:hover {
+    text-decoration: underline;
+  }
+
+  i {
+    font-size: 12px;
+  }
+}
+
+h1 {
+  color: #2c3e50;
+  margin-bottom: 4px;
+}
+
+.subtitle {
+  color: #7f8c8d;
+  margin-bottom: 24px;
+  margin-top: 0;
+}
+
+.loading-state,
+.options-loading {
+  padding: 24px;
+  text-align: center;
+  color: #1565c0;
+  font-size: 14px;
+  background: #e3f2fd;
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.error-state {
+  padding: 24px;
+  text-align: center;
+  color: #c0392b;
+  font-size: 14px;
+  background: #fde8e8;
+  border-radius: 8px;
+}
+
+.chart-section {
+  margin-bottom: 32px;
+
+  h2 {
+    color: #2c3e50;
+    font-size: 18px;
+    margin: 0 0 4px 0;
+  }
+}
+
+.section-info {
+  font-size: 13px;
+  color: #888;
+  margin: 0 0 12px 0;
+}
+
+.options-section {
+  margin-bottom: 32px;
+
+  h2 {
+    color: #2c3e50;
+    font-size: 18px;
+    margin: 0 0 16px 0;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #e9ecef;
+  }
+}
+
+.option-chart {
+  margin-bottom: 24px;
+}
+
+.option-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  margin: 0 0 8px 0;
+}
+
+.contract-type {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+
+  &.call {
+    background: #e8f5e9;
+    color: #2e7d32;
+  }
+
+  &.put {
+    background: #fde8e8;
+    color: #c0392b;
+  }
+}
+
+.contract-ticker {
+  font-size: 11px;
+  color: #aaa;
+  font-family: monospace;
+}
+
+.bar-count {
+  font-size: 12px;
+  color: #999;
+  margin-left: auto;
+}
+
+.no-data {
+  padding: 40px;
+  text-align: center;
+  color: #bbb;
+  font-size: 13px;
+  background: #fafafa;
+  border-radius: 8px;
+}
+
+.no-options-msg {
+  padding: 24px;
+  text-align: center;
+  color: #999;
+  font-size: 14px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  margin-top: 20px;
+}

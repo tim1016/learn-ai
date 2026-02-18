@@ -89,6 +89,136 @@ class PolygonClientService:
             logger.error(f"Error fetching trades for {ticker}: {str(e)}")
             raise
 
+    def list_options_contracts(
+        self,
+        underlying_ticker: str,
+        as_of_date: Optional[str] = None,
+        contract_type: Optional[str] = None,
+        strike_price_gte: Optional[float] = None,
+        strike_price_lte: Optional[float] = None,
+        expiration_date: Optional[str] = None,
+        expiration_date_gte: Optional[str] = None,
+        expiration_date_lte: Optional[str] = None,
+        expired: Optional[bool] = None,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """List options contracts from Polygon for a given underlying ticker"""
+        try:
+            logger.info(f"Listing options contracts for {underlying_ticker}, as_of={as_of_date}")
+
+            contracts = []
+            for c in self.client.list_options_contracts(
+                underlying_ticker=underlying_ticker,
+                as_of=as_of_date,
+                contract_type=contract_type,
+                strike_price_gte=strike_price_gte,
+                strike_price_lte=strike_price_lte,
+                expiration_date=expiration_date,
+                expiration_date_gte=expiration_date_gte,
+                expiration_date_lte=expiration_date_lte,
+                expired=expired,
+                limit=limit,
+            ):
+                contracts.append({
+                    'ticker': c.ticker,
+                    'underlying_ticker': c.underlying_ticker,
+                    'contract_type': c.contract_type,
+                    'strike_price': c.strike_price,
+                    'expiration_date': c.expiration_date,
+                    'exercise_style': getattr(c, 'exercise_style', None),
+                    'shares_per_contract': getattr(c, 'shares_per_contract', None),
+                    'primary_exchange': getattr(c, 'primary_exchange', None),
+                })
+
+            logger.info(f"Found {len(contracts)} options contracts for {underlying_ticker}")
+            return contracts
+
+        except Exception as e:
+            logger.error(f"Error listing options contracts for {underlying_ticker}: {str(e)}")
+            raise
+
+    def list_snapshot_options_chain(
+        self,
+        underlying_asset: str,
+        expiration_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetch snapshot of options chain for an underlying asset.
+
+        Args:
+            underlying_asset: Ticker symbol (e.g., AAPL)
+            expiration_date: Filter to only this expiration date (YYYY-MM-DD).
+                             Defaults to today if not specified.
+        """
+        try:
+            # Default to today's date to avoid fetching thousands of contracts
+            if expiration_date is None:
+                expiration_date = datetime.now().strftime('%Y-%m-%d')
+
+            logger.info(f"Fetching options chain snapshot for {underlying_asset}, expiration={expiration_date}")
+
+            contracts = []
+            underlying_info = None
+
+            params: Dict[str, Any] = {}
+            if expiration_date:
+                params['expiration_date'] = expiration_date
+
+            for snapshot in self.client.list_snapshot_options_chain(
+                underlying_asset=underlying_asset,
+                params=params if params else None,
+            ):
+                # Capture underlying asset info from first result
+                if underlying_info is None and hasattr(snapshot, 'underlying_asset'):
+                    ua = snapshot.underlying_asset
+                    underlying_info = {
+                        'ticker': getattr(ua, 'ticker', None) or underlying_asset,
+                        'price': getattr(ua, 'price', None) or 0,
+                        'change': getattr(ua, 'change_to_break_even', None) or 0,
+                        'change_percent': getattr(ua, 'change_to_break_even', None) or 0,
+                    }
+
+                greeks = getattr(snapshot, 'greeks', None)
+                day = getattr(snapshot, 'day', None)
+                details = getattr(snapshot, 'details', None)
+
+                contract = {
+                    'ticker': getattr(details, 'ticker', None) if details else None,
+                    'contract_type': getattr(details, 'contract_type', None) if details else None,
+                    'strike_price': getattr(details, 'strike_price', None) if details else None,
+                    'expiration_date': getattr(details, 'expiration_date', None) if details else None,
+                    'break_even_price': getattr(snapshot, 'break_even_price', None),
+                    'implied_volatility': getattr(snapshot, 'implied_volatility', None),
+                    'open_interest': getattr(snapshot, 'open_interest', None),
+                    'greeks': {
+                        'delta': getattr(greeks, 'delta', None),
+                        'gamma': getattr(greeks, 'gamma', None),
+                        'theta': getattr(greeks, 'theta', None),
+                        'vega': getattr(greeks, 'vega', None),
+                    } if greeks else None,
+                    'day': {
+                        'open': getattr(day, 'open', None),
+                        'high': getattr(day, 'high', None),
+                        'low': getattr(day, 'low', None),
+                        'close': getattr(day, 'close', None),
+                        'volume': getattr(day, 'volume', None),
+                        'vwap': getattr(day, 'vwap', None),
+                    } if day else None,
+                }
+                contracts.append(contract)
+
+            if underlying_info is None:
+                underlying_info = {'ticker': underlying_asset, 'price': 0, 'change': 0, 'change_percent': 0}
+
+            logger.info(f"Fetched {len(contracts)} options chain snapshots for {underlying_asset}")
+            return {
+                'underlying': underlying_info,
+                'contracts': contracts,
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching options chain snapshot for {underlying_asset}: {str(e)}")
+            raise
+
     def fetch_technical_indicator(
         self,
         ticker: str,

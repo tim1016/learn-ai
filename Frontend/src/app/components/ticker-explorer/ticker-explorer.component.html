@@ -1,0 +1,158 @@
+<div class="ticker-explorer">
+  <h1>Ticker Explorer</h1>
+  <p class="subtitle">Live options chain with greeks, IV, and open interest</p>
+
+  <details class="page-guide">
+    <summary>How to use this page</summary>
+    <div class="guide-content">
+      <h4>Quick start</h4>
+      <ol>
+        <li>Type an <strong>underlying ticker</strong> (e.g. <code>AAPL</code>, <code>SPY</code>, <code>GLD</code>).</li>
+        <li>The <strong>Expiration</strong> date defaults to next Friday (standard weekly options expiration). Change it to any future date.</li>
+        <li>Click <strong>Fetch Chain</strong>. This pulls a live snapshot of all options contracts for that expiration from Polygon.</li>
+        <li>Use the <strong>Expiration dropdown</strong> (below the summary card) to switch between available expiration dates within the results.</li>
+      </ol>
+      <h4>Reading the options chain</h4>
+      <p>The table mirrors a traditional options chain: <strong>Calls</strong> on the left, <strong>Strike</strong> in the center, <strong>Puts</strong> on the right.</p>
+      <ul>
+        <li><span style="color:#e67e22"><strong>Orange row</strong></span> = ATM (at-the-money) strike, closest to the current stock price.</li>
+        <li><span style="color:#27ae60"><strong>Green-tinted rows</strong></span> = ITM calls (strike below stock price).</li>
+        <li><span style="color:#c0392b"><strong>Red-tinted rows</strong></span> = ITM puts (strike above stock price).</li>
+      </ul>
+      <h4>Column glossary</h4>
+      <ul>
+        <li><strong>Vol</strong> &mdash; Contracts traded today. Higher = more active.</li>
+        <li><strong>OI</strong> &mdash; Open Interest: total outstanding contracts. High OI = more liquidity, tighter spreads.</li>
+        <li><strong>IV</strong> &mdash; Implied Volatility: the market's expectation of future price movement. Higher IV = pricier premiums.</li>
+        <li><strong>&delta;</strong> &mdash; Price sensitivity: how much the option moves per $1 change in the stock. Calls: 0 to +1, Puts: -1 to 0.</li>
+        <li><strong>&theta;</strong> &mdash; Time decay: how much value the option loses per day. Always negative (options lose value over time).</li>
+        <li><strong>Last</strong> &mdash; Most recent trade price for the contract.</li>
+      </ul>
+      <h4>Tips</h4>
+      <ul>
+        <li>Look for <strong>high OI + high Vol</strong> strikes for the most liquid contracts.</li>
+        <li>IV typically spikes before earnings or major events &mdash; selling options into high IV can be profitable.</li>
+        <li>The snapshot API only returns <strong>live/unexpired</strong> contracts. Past expiration dates return 0 results.</li>
+      </ul>
+      <div class="guide-tip">
+        Note: All data is <strong>15-minute delayed</strong> and limited to the past <strong>2 years</strong> (Polygon Starter plan).
+      </div>
+    </div>
+  </details>
+
+  <!-- Search -->
+  <div class="search-form">
+    <input
+      [ngModel]="ticker()"
+      (ngModelChange)="ticker.set($event)"
+      placeholder="Ticker (e.g., AAPL)"
+      (keyup.enter)="fetchSnapshot()"
+    />
+    <input
+      type="date"
+      [ngModel]="expirationDate()"
+      (ngModelChange)="expirationDate.set($event)"
+      [min]="minDate"
+      title="Expiration date (defaults to next Friday)"
+    />
+    <button (click)="fetchSnapshot()" [disabled]="loading()">
+      {{ loading() ? 'Loading...' : 'Fetch Chain' }}
+    </button>
+  </div>
+
+  @if (error()) {
+    <div class="error-message">{{ error() }}</div>
+  }
+
+  @if (loading()) {
+    <div class="loading">Fetching options chain for {{ ticker() }}...</div>
+  }
+
+  @if (underlying(); as u) {
+    <!-- Underlying summary -->
+    <div class="underlying-card">
+      <span class="underlying-ticker">{{ u.ticker }}</span>
+      <span class="underlying-price">{{ u.price | number:'1.2-2' }}</span>
+      <span class="underlying-change" [class.positive]="u.changePercent >= 0" [class.negative]="u.changePercent < 0">
+        {{ u.changePercent >= 0 ? '+' : '' }}{{ u.changePercent | number:'1.2-2' }}%
+      </span>
+      <span class="contract-count">{{ allContracts().length | number }} contracts</span>
+    </div>
+
+    <!-- Expiration filter -->
+    @if (expirationDates().length > 0) {
+      <div class="filter-bar">
+        <label for="expFilter">Expiration:</label>
+        <select
+          id="expFilter"
+          [ngModel]="selectedExpiration()"
+          (ngModelChange)="selectedExpiration.set($event)"
+        >
+          <option value="all">All ({{ allContracts().length }})</option>
+          @for (exp of expirationDates(); track exp) {
+            <option [value]="exp">{{ exp }}</option>
+          }
+        </select>
+      </div>
+    }
+
+    <!-- Options Chain Table -->
+    @if (strikes().length > 0) {
+      <div class="chain-table-wrapper">
+        <table class="chain-table">
+          <thead>
+            <tr>
+              <th colspan="6" class="call-header">CALLS</th>
+              <th class="strike-header">Strike</th>
+              <th colspan="6" class="put-header">PUTS</th>
+            </tr>
+            <tr>
+              <th>Vol</th>
+              <th>OI</th>
+              <th>IV</th>
+              <th>&delta;</th>
+              <th>&theta;</th>
+              <th>Last</th>
+              <th></th>
+              <th>Last</th>
+              <th>&delta;</th>
+              <th>&theta;</th>
+              <th>IV</th>
+              <th>OI</th>
+              <th>Vol</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (strike of strikes(); track strike) {
+              <tr
+                [class.atm-row]="isAtm(strike)"
+                [class.itm-call]="isItm(strike, 'call')"
+                [class.itm-put]="isItm(strike, 'put')"
+              >
+                @let call = callByStrike().get(strike);
+                <td>{{ formatNumber(call?.day?.volume ?? null) }}</td>
+                <td>{{ formatNumber(call?.openInterest ?? null) }}</td>
+                <td>{{ formatIv(call?.impliedVolatility ?? null) }}</td>
+                <td>{{ formatGreek(call?.greeks?.delta ?? null) }}</td>
+                <td>{{ formatGreek(call?.greeks?.theta ?? null) }}</td>
+                <td class="price-cell">{{ formatPrice(call?.day?.close ?? null) }}</td>
+
+                <td class="strike-cell" [class.atm-strike]="isAtm(strike)">
+                  {{ strike | number:'1.2-2' }}
+                </td>
+
+                @let put = putByStrike().get(strike);
+                <td class="price-cell">{{ formatPrice(put?.day?.close ?? null) }}</td>
+                <td>{{ formatGreek(put?.greeks?.delta ?? null) }}</td>
+                <td>{{ formatGreek(put?.greeks?.theta ?? null) }}</td>
+                <td>{{ formatIv(put?.impliedVolatility ?? null) }}</td>
+                <td>{{ formatNumber(put?.openInterest ?? null) }}</td>
+                <td>{{ formatNumber(put?.day?.volume ?? null) }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  }
+</div>

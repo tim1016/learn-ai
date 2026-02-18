@@ -1,8 +1,10 @@
 import { Component, OnInit, ChangeDetectorRef, inject } from '@angular/core';
+import { ActivatedRoute } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MarketDataService } from '../../services/market-data.service';
 import { StockAggregate, AggregatesSummary } from '../../graphql/types';
+import { validateDateRange, getMinAllowedDate } from '../../utils/date-validation';
 import { CandlestickChartComponent } from './candlestick-chart/candlestick-chart.component';
 import { LineChartComponent } from './line-chart/line-chart.component';
 import { VolumeChartComponent } from './volume-chart/volume-chart.component';
@@ -27,6 +29,7 @@ export class MarketDataComponent implements OnInit {
   toDate = '';
   timespan = 'day';
   multiplier = 1;
+  minDate = getMinAllowedDate();
 
   loading = false;
   error: string | null = null;
@@ -34,20 +37,41 @@ export class MarketDataComponent implements OnInit {
   summary: AggregatesSummary | null = null;
 
   private cdr = inject(ChangeDetectorRef);
+  private route = inject(ActivatedRoute);
 
   constructor(private marketDataService: MarketDataService) {}
 
   ngOnInit(): void {
+    const params = this.route.snapshot.queryParams;
+
     const today = new Date();
     const threeMonthsAgo = new Date(today);
     threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-    this.toDate = today.toISOString().split('T')[0];
-    this.fromDate = threeMonthsAgo.toISOString().split('T')[0];
+    this.toDate = params['toDate'] || today.toISOString().split('T')[0];
+    this.fromDate = params['fromDate'] || threeMonthsAgo.toISOString().split('T')[0];
+
+    if (params['ticker']) {
+      this.ticker = params['ticker'];
+    }
+    if (params['timespan']) {
+      this.timespan = params['timespan'];
+    }
+
+    // Auto-fetch if ticker was provided via query params
+    if (params['ticker']) {
+      this.fetchData();
+    }
   }
 
   fetchData(): void {
     if (!this.ticker) {
       this.error = 'Please enter a ticker symbol';
+      return;
+    }
+
+    const dateError = validateDateRange(this.fromDate, this.toDate);
+    if (dateError) {
+      this.error = dateError;
       return;
     }
 

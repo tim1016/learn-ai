@@ -40,7 +40,13 @@
       "WebFetch(domain:massive.com)",
       "Bash(python -c \"import os; os.remove\\(r''\\\\?\\\\C:\\\\Users\\\\inkan\\\\learn-ai\\\\nul''\\)\")",
       "Bash(python -c \"import ctypes; result = ctypes.windll.kernel32.GetFileAttributesW\\(r''\\\\\\\\?\\\\C:\\\\Users\\\\inkan\\\\learn-ai\\\\nul''\\); print\\(f''Attributes: {result}''\\)\")",
-      "Bash(npx jest --verbose)"
+      "Bash(npx jest --verbose)",
+      "WebFetch(domain:polygon.io)",
+      "Bash(npx jest)",
+      "Bash(grep:*)",
+      "Bash(npx ng test --help:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(podman compose:*)"
     ]
   }
 }

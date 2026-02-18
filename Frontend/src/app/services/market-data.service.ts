@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { map, tap } from 'rxjs/operators';
 import { Observable } from 'rxjs';
-import { SmartAggregatesResult, CalculateIndicatorsResult } from '../graphql/types';
+import { SmartAggregatesResult, CalculateIndicatorsResult, OptionsContractsResult, OptionsChainSnapshotResult, BacktestResult } from '../graphql/types';
 
 const GRAPHQL_URL = 'http://localhost:5000/graphql';
 
@@ -107,6 +107,105 @@ interface CalculateIndicatorsResponse {
   errors?: { message: string }[];
 }
 
+const GET_OPTIONS_CONTRACTS_QUERY = `
+  query GetOptionsContracts(
+    $underlyingTicker: String!
+    $asOfDate: String
+    $contractType: String
+    $strikePriceGte: Decimal
+    $strikePriceLte: Decimal
+    $expirationDate: String
+    $expirationDateGte: String
+    $expirationDateLte: String
+    $limit: Int! = 100
+  ) {
+    getOptionsContracts(
+      underlyingTicker: $underlyingTicker
+      asOfDate: $asOfDate
+      contractType: $contractType
+      strikePriceGte: $strikePriceGte
+      strikePriceLte: $strikePriceLte
+      expirationDate: $expirationDate
+      expirationDateGte: $expirationDateGte
+      expirationDateLte: $expirationDateLte
+      limit: $limit
+    ) {
+      success
+      contracts {
+        ticker underlyingTicker contractType
+        strikePrice expirationDate exerciseStyle
+      }
+      count
+      error
+    }
+  }
+`;
+
+interface OptionsContractsResponse {
+  data: { getOptionsContracts: OptionsContractsResult };
+  errors?: { message: string }[];
+}
+
+const GET_OPTIONS_CHAIN_SNAPSHOT_QUERY = `
+  query GetOptionsChainSnapshot($underlyingTicker: String!, $expirationDate: String) {
+    getOptionsChainSnapshot(underlyingTicker: $underlyingTicker, expirationDate: $expirationDate) {
+      success
+      underlying {
+        ticker price change changePercent
+      }
+      contracts {
+        ticker contractType strikePrice expirationDate
+        breakEvenPrice impliedVolatility openInterest
+        greeks { delta gamma theta vega }
+        day { open high low close volume vwap }
+      }
+      count
+      error
+    }
+  }
+`;
+
+interface OptionsChainSnapshotResponse {
+  data: { getOptionsChainSnapshot: OptionsChainSnapshotResult };
+  errors?: { message: string }[];
+}
+
+const RUN_BACKTEST_MUTATION = `
+  mutation RunBacktest(
+    $ticker: String!
+    $strategyName: String!
+    $fromDate: String!
+    $toDate: String!
+    $timespan: String! = "minute"
+    $multiplier: Int! = 1
+    $parametersJson: String! = "{}"
+  ) {
+    runBacktest(
+      ticker: $ticker
+      strategyName: $strategyName
+      fromDate: $fromDate
+      toDate: $toDate
+      timespan: $timespan
+      multiplier: $multiplier
+      parametersJson: $parametersJson
+    ) {
+      success id strategyName parameters
+      totalTrades winningTrades losingTrades
+      totalPnL maxDrawdown sharpeRatio durationMs
+      trades {
+        tradeType entryTimestamp exitTimestamp
+        entryPrice exitPrice pnl cumulativePnl signalReason
+      }
+      error
+    }
+  }
+`;
+
+interface RunBacktestResponse {
+  data: { runBacktest: BacktestResult };
+  errors?: { message: string }[];
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -166,6 +265,34 @@ export class MarketDataService {
       );
   }
 
+  getOptionsContracts(
+    underlyingTicker: string,
+    options: {
+      asOfDate?: string;
+      contractType?: string;
+      strikePriceGte?: number;
+      strikePriceLte?: number;
+      expirationDate?: string;
+      expirationDateGte?: string;
+      expirationDateLte?: string;
+      limit?: number;
+    } = {}
+  ): Observable<OptionsContractsResult> {
+    return this.http
+      .post<OptionsContractsResponse>(GRAPHQL_URL, {
+        query: GET_OPTIONS_CONTRACTS_QUERY,
+        variables: { underlyingTicker, ...options }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.getOptionsContracts)
+      );
+  }
+
   calculateIndicators(
     ticker: string,
     fromDate: string,
@@ -186,6 +313,49 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.calculateIndicators)
+      );
+  }
+
+  getOptionsChainSnapshot(
+    underlyingTicker: string,
+    expirationDate?: string
+  ): Observable<OptionsChainSnapshotResult> {
+    return this.http
+      .post<OptionsChainSnapshotResponse>(GRAPHQL_URL, {
+        query: GET_OPTIONS_CHAIN_SNAPSHOT_QUERY,
+        variables: { underlyingTicker, expirationDate }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.getOptionsChainSnapshot)
+      );
+  }
+
+  runBacktest(
+    ticker: string,
+    strategyName: string,
+    fromDate: string,
+    toDate: string,
+    timespan: string = 'minute',
+    multiplier: number = 1,
+    parametersJson: string = '{}'
+  ): Observable<BacktestResult> {
+    return this.http
+      .post<RunBacktestResponse>(GRAPHQL_URL, {
+        query: RUN_BACKTEST_MUTATION,
+        variables: { ticker, strategyName, fromDate, toDate, timespan, multiplier, parametersJson }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.runBacktest)
       );
   }
 }

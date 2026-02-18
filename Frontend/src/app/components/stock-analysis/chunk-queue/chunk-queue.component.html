@@ -15,21 +15,19 @@
 
   <ng-template #header>
     <tr>
-      <th style="width: 4rem">#</th>
+      <th style="width: 3rem">#</th>
       <th>Status</th>
       <th>From</th>
       <th>To</th>
       <th style="text-align: right">Bars</th>
       <th style="text-align: right">Duration</th>
-      <th style="width: 5rem; text-align: center">Actions</th>
+      <th>Options</th>
+      <th style="width: 7rem; text-align: center">Actions</th>
     </tr>
   </ng-template>
 
   <ng-template #body let-chunk>
-    <tr
-      [class.row-clickable]="chunk.status === 'complete'"
-      (click)="onRowClick(chunk)"
-    >
+    <tr>
       <td>{{ chunk.index + 1 }}</td>
       <td>
         <span class="status-badge" [ngClass]="'status-' + chunk.status">
@@ -49,15 +47,40 @@
         }
       </td>
       <td style="text-align: right">{{ formatDuration(chunk.durationMs) }}</td>
+      <td>
+        @if (chunk.optionsStatus === 'fetching') {
+          <span class="status-badge status-fetching">
+            {{ chunk.optionsFetchedCount ?? 0 }}/{{ chunk.optionsContractCount ?? '?' }}
+          </span>
+        } @else if (chunk.optionsStatus === 'complete' && chunk.optionsContractCount) {
+          <span class="status-badge status-complete">
+            {{ chunk.optionsFetchedCount }}/{{ chunk.optionsContractCount }}
+          </span>
+        } @else if (chunk.optionsStatus === 'error') {
+          <span class="status-badge status-error">Error</span>
+        } @else {
+          —
+        }
+      </td>
       <td style="text-align: center">
-        <button
-          class="refresh-chunk-btn"
-          title="Re-fetch this chunk from Polygon.io"
-          [disabled]="chunk.status === 'fetching'"
-          (click)="onRefreshClick($event, chunk)"
-        >
-          <i class="pi pi-refresh"></i>
-        </button>
+        <div class="action-btns">
+          <button
+            class="view-chunk-btn"
+            title="View chunk details"
+            [disabled]="chunk.status !== 'complete'"
+            (click)="onViewClick($event, chunk)"
+          >
+            <i class="pi pi-eye"></i>
+          </button>
+          <button
+            class="refresh-chunk-btn"
+            title="Re-fetch this chunk from Polygon.io"
+            [disabled]="chunk.status === 'fetching'"
+            (click)="onRefreshClick($event, chunk)"
+          >
+            <i class="pi pi-refresh"></i>
+          </button>
+        </div>
       </td>
     </tr>
   </ng-template>

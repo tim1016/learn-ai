@@ -21,6 +21,30 @@ interface TickerWithStats extends Ticker {
       <h1>Tickers</h1>
       <p class="subtitle">Market instruments tracked in your database</p>
 
+      <details class="page-guide">
+        <summary>How to use this page</summary>
+        <div class="guide-content">
+          <h4>What is this page?</h4>
+          <p>This is your <strong>ticker inventory</strong> &mdash; every stock/ETF/option you've fetched data for. Tickers are added automatically when you fetch data from any other page.</p>
+          <h4>Reading the cards</h4>
+          <ul>
+            <li><strong>Mini-chart</strong> &mdash; Live TradingView widget showing recent price action (requires internet).</li>
+            <li><strong>Market</strong> &mdash; Asset type: stocks, options, crypto, etc.</li>
+            <li><strong>Data Points</strong> &mdash; How many OHLCV bars are cached locally for this ticker.</li>
+            <li><strong>Date Range</strong> &mdash; Earliest to latest date of cached data.</li>
+            <li><strong>Sanitization</strong> &mdash; If data cleaning was applied (outlier removal, gap filling), the summary appears at the bottom.</li>
+          </ul>
+          <h4>How to add tickers</h4>
+          <ol>
+            <li>Go to <strong>Market Data</strong> and fetch any ticker &mdash; it appears here automatically.</li>
+            <li>Or use <strong>Stock Analysis</strong> to bulk-fetch months of minute data.</li>
+          </ol>
+          <div class="guide-tip">
+            If a ticker shows 0 aggregates, it means the entry exists but no OHLCV bars have been fetched yet.
+          </div>
+        </div>
+      </details>
+
       @if (loading) {
         <div class="loading">Loading tickers...</div>
       }

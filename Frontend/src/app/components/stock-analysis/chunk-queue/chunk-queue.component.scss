@@ -4,14 +4,6 @@
   color: #555;
 }
 
-.row-clickable {
-  cursor: pointer;
-
-  &:hover {
-    background: rgba(38, 166, 154, 0.06) !important;
-  }
-}
-
 .status-badge {
   display: inline-block;
   padding: 2px 8px;
@@ -20,30 +12,11 @@
   font-weight: 600;
 }
 
-.status-pending {
-  background: #f0f0f0;
-  color: #999;
-}
-
-.status-cached {
-  background: #fff8e1;
-  color: #f57f17;
-}
-
-.status-fetching {
-  background: #e3f2fd;
-  color: #1565c0;
-}
-
-.status-complete {
-  background: #e8f5e9;
-  color: #2e7d32;
-}
-
-.status-error {
-  background: #fde8e8;
-  color: #c0392b;
-}
+.status-pending { background: #f0f0f0; color: #999; }
+.status-cached { background: #fff8e1; color: #f57f17; }
+.status-fetching { background: #e3f2fd; color: #1565c0; }
+.status-complete { background: #e8f5e9; color: #2e7d32; }
+.status-error { background: #fde8e8; color: #c0392b; }
 
 .error-msg {
   display: block;
@@ -52,6 +25,13 @@
   margin-top: 2px;
 }
 
+.action-btns {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+}
+
+.view-chunk-btn,
 .refresh-chunk-btn {
   background: none;
   border: 1px solid #ddd;

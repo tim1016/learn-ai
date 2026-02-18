@@ -25,6 +25,9 @@ public class MarketDataService : IMarketDataService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
+    private static string DetectMarket(string ticker) =>
+        ticker.StartsWith("O:", StringComparison.OrdinalIgnoreCase) ? "options" : "stocks";
+
     public async Task<List<StockAggregate>> FetchAndStoreAggregatesAsync(
         string ticker,
         int multiplier,
@@ -35,8 +38,9 @@ public class MarketDataService : IMarketDataService
     {
         try
         {
-            // Get or create ticker
-            var tickerEntity = await GetOrCreateTickerAsync(ticker, "stocks", cancellationToken);
+            // Get or create ticker — detect market from O: prefix
+            var market = DetectMarket(ticker);
+            var tickerEntity = await GetOrCreateTickerAsync(ticker, market, cancellationToken);
 
             // Fetch sanitized data from Python service
             var response = await _polygonService.FetchAggregatesAsync(
@@ -106,8 +110,9 @@ public class MarketDataService : IMarketDataService
                 ticker, multiplier, timespan, fromDate, toDate, cancellationToken);
         }
 
+        var market = DetectMarket(symbol);
         var tickerEntity = await _context.Tickers
-            .FirstOrDefaultAsync(t => t.Symbol == symbol && t.Market == "stocks", cancellationToken);
+            .FirstOrDefaultAsync(t => t.Symbol == symbol && t.Market == market, cancellationToken);
 
         _logger.LogInformation(
             "[STEP 4.5 - MarketDataService] GetOrFetch: ticker={Ticker}, from={From}, to={To}, tickerExists={Exists}",

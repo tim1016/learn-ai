@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 class AggregateRequest(BaseModel):
     """Request schema for fetching aggregate bars (OHLCV)"""
-    ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")
+    ticker: str = Field(..., min_length=1, max_length=50, description="Stock or options ticker symbol")
     multiplier: int = Field(1, ge=1, description="Timespan multiplier")
     timespan: str = Field("day", description="Timespan: minute, hour, day, week, month")
     from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
@@ -23,7 +23,7 @@ class AggregateRequest(BaseModel):
 
 class TradeRequest(BaseModel):
     """Request schema for fetching trade data"""
-    ticker: str = Field(..., min_length=1, max_length=20)
+    ticker: str = Field(..., min_length=1, max_length=50)
     timestamp: Optional[str] = Field(None, description="Timestamp filter (YYYY-MM-DD)")
     limit: int = Field(50000, ge=1, le=50000)
 
@@ -73,6 +73,33 @@ class IndicatorConfig(BaseModel):
         if v.lower() not in valid:
             raise ValueError(f'indicator name must be one of {valid}')
         return v.lower()
+
+
+class OptionsContractsRequest(BaseModel):
+    """Request schema for listing options contracts"""
+    underlying_ticker: str = Field(..., min_length=1, max_length=20, description="Underlying stock ticker")
+    as_of_date: Optional[str] = Field(None, description="As-of date (YYYY-MM-DD)")
+    contract_type: Optional[str] = Field(None, description="Filter: call or put")
+    strike_price_gte: Optional[float] = Field(None, description="Min strike price")
+    strike_price_lte: Optional[float] = Field(None, description="Max strike price")
+    expiration_date: Optional[str] = Field(None, description="Exact expiration date (YYYY-MM-DD)")
+    expiration_date_gte: Optional[str] = Field(None, description="Min expiration date")
+    expiration_date_lte: Optional[str] = Field(None, description="Max expiration date")
+    expired: Optional[bool] = Field(None, description="Include expired contracts")
+    limit: int = Field(100, ge=1, le=1000, description="Max results")
+
+    @field_validator('contract_type')
+    @classmethod
+    def validate_contract_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ['call', 'put']:
+            raise ValueError('contract_type must be "call" or "put"')
+        return v
+
+
+class OptionsChainSnapshotRequest(BaseModel):
+    """Request schema for fetching options chain snapshot"""
+    underlying_ticker: str = Field(..., min_length=1, max_length=20, description="Underlying stock ticker")
+    expiration_date: Optional[str] = Field(None, description="Filter to this expiration date (YYYY-MM-DD). Defaults to today.")
 
 
 class CalculateIndicatorsRequest(BaseModel):

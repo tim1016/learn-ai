@@ -1,0 +1,269 @@
+.strategy-lab {
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+h1 {
+  color: #2c3e50;
+  margin-bottom: 4px;
+}
+
+h2 {
+  color: #2c3e50;
+  margin-bottom: 12px;
+  font-size: 18px;
+}
+
+.subtitle {
+  color: #7f8c8d;
+  margin-top: 0;
+  margin-bottom: 20px;
+}
+
+.config-form {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  border: 1px solid #e9ecef;
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+
+  &:last-of-type {
+    margin-bottom: 16px;
+  }
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #555;
+    text-transform: uppercase;
+  }
+
+  input, select {
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    min-width: 100px;
+  }
+
+  input[type="number"] {
+    width: 90px;
+  }
+
+  input[type="text"] {
+    width: 100px;
+  }
+}
+
+.run-btn {
+  padding: 10px 28px;
+  background: #1976d2;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: #1565c0;
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.error-message {
+  padding: 12px;
+  background: #fde8e8;
+  color: #c0392b;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.loading {
+  padding: 12px;
+  background: #e3f2fd;
+  color: #1565c0;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14px 10px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+
+  &.positive {
+    background: #e8f5e9;
+    border-color: #c8e6c9;
+  }
+
+  &.negative {
+    background: #fde8e8;
+    border-color: #f5c6cb;
+  }
+}
+
+.stat-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #2c3e50;
+}
+
+.chart-section {
+  margin-bottom: 24px;
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+
+  h2 {
+    margin-bottom: 0;
+  }
+}
+
+.chart-type-selector {
+  display: flex;
+  gap: 4px;
+  background: #f0f0f0;
+  border-radius: 6px;
+  padding: 3px;
+
+  button {
+    padding: 5px 12px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    font-size: 12px;
+    font-weight: 500;
+    color: #666;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+
+    &:hover:not(.active) {
+      background: #e0e0e0;
+    }
+
+    &.active {
+      background: white;
+      color: #1976d2;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    }
+  }
+}
+
+.trade-log {
+  margin-bottom: 24px;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+
+  th, td {
+    padding: 8px 10px;
+    text-align: right;
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  th {
+    font-size: 11px;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    border-bottom: 2px solid #e0e0e0;
+    white-space: nowrap;
+  }
+
+  td:first-child, th:first-child {
+    text-align: center;
+    width: 40px;
+  }
+
+  td:nth-child(2), th:nth-child(2) {
+    text-align: left;
+  }
+
+  td:nth-child(3), td:nth-child(4),
+  th:nth-child(3), th:nth-child(4) {
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .signal-cell {
+    text-align: left;
+    font-size: 12px;
+    color: #666;
+    max-width: 250px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  tr.win {
+    background: rgba(46, 125, 50, 0.03);
+  }
+
+  tr.loss {
+    background: rgba(192, 57, 43, 0.03);
+  }
+
+  tbody tr:hover {
+    background: #e3f2fd;
+  }
+}
+
+.positive {
+  color: #2e7d32;
+  font-weight: 600;
+}
+
+.negative {
+  color: #c0392b;
+  font-weight: 600;
+}

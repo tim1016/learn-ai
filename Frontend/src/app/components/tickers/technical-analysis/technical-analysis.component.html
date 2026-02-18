@@ -2,6 +2,40 @@
   <h1>Technical Analysis</h1>
   <p class="subtitle">Calculate and visualize indicators using pandas-ta</p>
 
+  <details class="page-guide">
+    <summary>How to use this page</summary>
+    <div class="guide-content">
+      <h4>Quick start</h4>
+      <ol>
+        <li>Type a <strong>ticker</strong> that already has data in the database (fetch it from <strong>Market Data</strong> or <strong>Stock Analysis</strong> first).</li>
+        <li>Set the <strong>date range</strong> and <strong>timespan</strong> (minute, hourly, daily, or weekly).</li>
+        <li>Check the indicators you want: <strong>SMA</strong>, <strong>EMA</strong>, and/or <strong>RSI</strong>. Set the <strong>window</strong> (lookback period in bars) for each.</li>
+        <li>Click <strong>Analyze</strong>. Indicator lines are overlaid on the candlestick chart.</li>
+      </ol>
+      <h4>Indicators explained</h4>
+      <ul>
+        <li><strong>SMA</strong> (Simple Moving Average) &mdash; Average of the last N closes. Smooths noise; shows overall trend direction. Try 50 or 200 for daily charts.</li>
+        <li><strong>EMA</strong> (Exponential Moving Average) &mdash; Like SMA but weights recent prices more. Reacts faster to trend changes. Try 12 or 26.</li>
+        <li><strong>RSI</strong> (Relative Strength Index) &mdash; Momentum oscillator (0&ndash;100). Below 30 = oversold (buy signal), above 70 = overbought (sell signal). Standard window: 14.</li>
+      </ul>
+      <h4>Reading the chart</h4>
+      <ul>
+        <li>SMA/EMA lines are overlaid directly on the <strong>candlestick chart</strong>.</li>
+        <li>RSI appears on a <strong>separate panel</strong> below, with dashed reference lines at 30 and 70.</li>
+        <li>When SMA/EMA lines <strong>cross</strong>, it signals a potential trend reversal (golden cross = bullish, death cross = bearish).</li>
+      </ul>
+      <h4>Common setups</h4>
+      <ul>
+        <li><strong>Intraday scalping:</strong> Minute timespan, SMA 5 + SMA 20, RSI 14.</li>
+        <li><strong>Swing trading:</strong> Daily timespan, SMA 10 + SMA 30, RSI 14.</li>
+        <li><strong>Long-term trend:</strong> Daily timespan, SMA 50 + SMA 200 (golden/death cross).</li>
+      </ul>
+      <div class="guide-tip">
+        Note: All data is <strong>15-minute delayed</strong> and limited to the past <strong>2 years</strong> (Polygon Starter plan).
+      </div>
+    </div>
+  </details>
+
   <div class="search-form">
     <input
       [ngModel]="ticker()"
@@ -12,8 +46,9 @@
     <input [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" type="date" />
     <input [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" type="date" />
     <select [ngModel]="timespan()" (ngModelChange)="timespan.set($event)">
-      <option value="day">Daily</option>
+      <option value="minute">Minute</option>
       <option value="hour">Hourly</option>
+      <option value="day">Daily</option>
       <option value="week">Weekly</option>
     </select>
     <button (click)="fetchAndCalculate()" [disabled]="loading()">

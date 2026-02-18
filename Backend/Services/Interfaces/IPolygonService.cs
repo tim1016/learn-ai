@@ -27,4 +27,28 @@ public interface IPolygonService
         string? timestamp = null,
         int limit = 50000,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetch options chain snapshot (greeks, IV, OI) for an underlying ticker.
+    /// Filters to a specific expiration date (defaults to today in Python service).
+    /// </summary>
+    Task<OptionsChainSnapshotResponse> FetchOptionsChainSnapshotAsync(
+        string underlyingTicker,
+        string? expirationDate = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// List options contracts for an underlying ticker
+    /// </summary>
+    Task<OptionsContractsResponse> FetchOptionsContractsAsync(
+        string underlyingTicker,
+        string? asOfDate = null,
+        string? contractType = null,
+        decimal? strikePriceGte = null,
+        decimal? strikePriceLte = null,
+        string? expirationDate = null,
+        string? expirationDateGte = null,
+        string? expirationDateLte = null,
+        int limit = 100,
+        CancellationToken cancellationToken = default);
 }

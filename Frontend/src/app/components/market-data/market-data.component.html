@@ -1,6 +1,35 @@
 <div class="market-data-dashboard">
   <h2>Stock Market Dashboard</h2>
 
+  <details class="page-guide">
+    <summary>How to use this page</summary>
+    <div class="guide-content">
+      <h4>Quick start</h4>
+      <ol>
+        <li>Type a <strong>ticker</strong> (e.g. <code>AAPL</code>, <code>MSFT</code>, <code>GLD</code>) in the text box.</li>
+        <li>Pick <strong>From</strong> and <strong>To</strong> dates. Keep the range short for minute data (1&ndash;5 days) or longer for daily data.</li>
+        <li>Choose a <strong>timespan</strong> &mdash; Minute, Hourly, Daily, Weekly, or Monthly.</li>
+        <li>Click <strong>Fetch Data</strong>. Results are cached in the database so the next fetch for the same range is instant.</li>
+      </ol>
+      <h4>What you'll see</h4>
+      <ul>
+        <li><strong>Candlestick chart</strong> &mdash; Green bars = price went up, Red bars = price went down. Hover for exact OHLC values.</li>
+        <li><strong>Volume chart</strong> &mdash; Bars showing trade volume. Tall bars = high trading activity.</li>
+        <li><strong>Line chart</strong> &mdash; Closing prices over time.</li>
+        <li><strong>Data table</strong> &mdash; Click any column header to sort. VWAP = volume-weighted average price (institutional fair-value benchmark).</li>
+      </ul>
+      <h4>Where to go next</h4>
+      <ul>
+        <li><strong>Stock Analysis</strong> &mdash; Fetch months of minute data in automated monthly chunks.</li>
+        <li><strong>Technical Analysis</strong> &mdash; Overlay SMA, EMA, and RSI indicators on your data.</li>
+        <li><strong>Strategy Lab</strong> &mdash; Run backtests on the data you've fetched here.</li>
+      </ul>
+      <div class="guide-tip">
+        Note: All data is <strong>15-minute delayed</strong> and limited to the past <strong>2 years</strong> (Polygon Starter plan).
+      </div>
+    </div>
+  </details>
+
   <!-- Search Controls -->
   <div class="search-form">
     <input
@@ -8,11 +37,12 @@
       placeholder="Ticker (e.g., AAPL)"
       (keyup.enter)="fetchData()"
     />
-    <input [(ngModel)]="fromDate" type="date" />
-    <input [(ngModel)]="toDate" type="date" />
+    <input [(ngModel)]="fromDate" type="date" [min]="minDate" />
+    <input [(ngModel)]="toDate" type="date" [min]="minDate" />
     <select [(ngModel)]="timespan">
-      <option value="day">Daily</option>
+      <option value="minute">Minute</option>
       <option value="hour">Hourly</option>
+      <option value="day">Daily</option>
       <option value="week">Weekly</option>
       <option value="month">Monthly</option>
     </select>
@@ -89,7 +119,7 @@
           </ng-template>
           <ng-template #body let-bar>
             <tr>
-              <td>{{ bar.timestamp | date:'yyyy-MM-dd' }}</td>
+              <td>{{ bar.timestamp | date:(timespan === 'minute' || timespan === 'hour' ? 'yyyy-MM-dd HH:mm' : 'yyyy-MM-dd') }}</td>
               <td>{{ bar.open | number:'1.2-2' }}</td>
               <td>{{ bar.high | number:'1.2-2' }}</td>
               <td>{{ bar.low | number:'1.2-2' }}</td>

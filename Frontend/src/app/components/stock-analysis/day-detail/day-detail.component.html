@@ -1,0 +1,109 @@
+<div class="day-detail-page">
+  <a routerLink="/stock-analysis" class="back-link">
+    <i class="pi pi-arrow-left"></i> Back to Stock Analysis
+  </a>
+
+  <h1>{{ ticker() }} &mdash; {{ date() }}</h1>
+  <p class="subtitle">
+    Minute-level stock &amp; 0DTE options data
+    &middot; ATM Method: {{ atmMethod() === 'currentOpen' ? 'Current Open' : 'Previous Close' }}
+  </p>
+
+  @if (loading()) {
+    <div class="loading-state">Loading stock data...</div>
+  } @else if (error()) {
+    <div class="error-state">{{ error() }}</div>
+  } @else {
+    <!-- Stock Section -->
+    <section class="chart-section">
+      <h2>Stock Price</h2>
+      <p class="section-info">
+        {{ stockBars().length | number }} minute bars
+        @if (atmPrice() > 0) {
+          &middot; ATM: {{ formatStrike(atmPrice()) }}
+        }
+      </p>
+      <app-line-chart
+        [data]="stockBars()"
+        [ticker]="ticker()"
+        [timeVisible]="true"
+        [height]="400"
+      />
+    </section>
+
+    <section class="chart-section">
+      <h2>Volume</h2>
+      <app-volume-chart
+        [data]="stockBars()"
+        [timeVisible]="true"
+      />
+    </section>
+
+    <!-- Options Loading -->
+    @if (optionsLoading()) {
+      <div class="options-loading">
+        Loading options contracts... {{ optionsProgress().loaded }}/{{ optionsProgress().total }}
+      </div>
+    }
+
+    <!-- Calls Section -->
+    @if (callContracts().length > 0) {
+      <section class="options-section">
+        <h2>Calls ({{ callContracts().length }})</h2>
+        @for (item of callContracts(); track item.contract.ticker) {
+          <div class="option-chart">
+            <h3 class="option-label">
+              <span class="contract-type call">CALL</span>
+              {{ formatStrike(item.contract.strikePrice) }}
+              <span class="contract-ticker">{{ item.contract.ticker }}</span>
+              <span class="bar-count">{{ item.bars.length }} bars</span>
+            </h3>
+            @if (item.bars.length > 0) {
+              <app-line-chart
+                [data]="item.bars"
+                [ticker]="item.contract.ticker"
+                [timeVisible]="true"
+                [height]="280"
+                [lineColor]="'#4caf50'"
+              />
+            } @else {
+              <div class="no-data">No data available</div>
+            }
+          </div>
+        }
+      </section>
+    }
+
+    <!-- Puts Section -->
+    @if (putContracts().length > 0) {
+      <section class="options-section">
+        <h2>Puts ({{ putContracts().length }})</h2>
+        @for (item of putContracts(); track item.contract.ticker) {
+          <div class="option-chart">
+            <h3 class="option-label">
+              <span class="contract-type put">PUT</span>
+              {{ formatStrike(item.contract.strikePrice) }}
+              <span class="contract-ticker">{{ item.contract.ticker }}</span>
+              <span class="bar-count">{{ item.bars.length }} bars</span>
+            </h3>
+            @if (item.bars.length > 0) {
+              <app-line-chart
+                [data]="item.bars"
+                [ticker]="item.contract.ticker"
+                [timeVisible]="true"
+                [height]="280"
+                [lineColor]="'#ef5350'"
+              />
+            } @else {
+              <div class="no-data">No data available</div>
+            }
+          </div>
+        }
+      </section>
+    }
+
+    @if (!optionsLoading() && callContracts().length === 0 && putContracts().length === 0) {
+      <div class="no-options-msg">No 0DTE options contracts found for this date.</div>
+    }
+  }
+</div>

@@ -65,6 +65,36 @@ h1 {
   text-align: center;
 }
 
+.options-field {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 12px !important;
+
+  label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    text-transform: none;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+  }
+
+  .atm-select {
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    background: white;
+  }
+}
+
 .form-actions {
   display: flex;
   gap: 8px;

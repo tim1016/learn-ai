@@ -98,3 +98,91 @@ export interface CalculateIndicatorsResult {
   indicators: IndicatorSeries[];
   message: string | null;
 }
+
+// Options Chain Snapshot types
+export interface GreeksSnapshot {
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+}
+
+export interface DaySnapshot {
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+  vwap: number | null;
+}
+
+export interface SnapshotUnderlyingResult {
+  ticker: string;
+  price: number;
+  change: number;
+  changePercent: number;
+}
+
+export interface SnapshotContractResult {
+  ticker: string | null;
+  contractType: string | null;
+  strikePrice: number | null;
+  expirationDate: string | null;
+  breakEvenPrice: number | null;
+  impliedVolatility: number | null;
+  openInterest: number | null;
+  greeks: GreeksSnapshot | null;
+  day: DaySnapshot | null;
+}
+
+export interface OptionsChainSnapshotResult {
+  success: boolean;
+  underlying: SnapshotUnderlyingResult | null;
+  contracts: SnapshotContractResult[];
+  count: number;
+  error: string | null;
+}
+
+export interface OptionsContract {
+  ticker: string;
+  underlyingTicker: string | null;
+  contractType: string | null;
+  strikePrice: number | null;
+  expirationDate: string | null;
+  exerciseStyle: string | null;
+}
+
+export interface OptionsContractsResult {
+  success: boolean;
+  contracts: OptionsContract[];
+  count: number;
+  error: string | null;
+}
+
+// Backtest types
+export interface BacktestTrade {
+  tradeType: string;
+  entryTimestamp: string;
+  exitTimestamp: string;
+  entryPrice: number;
+  exitPrice: number;
+  pnl: number;
+  cumulativePnl: number;
+  signalReason: string;
+}
+
+export interface BacktestResult {
+  success: boolean;
+  id: number | null;
+  strategyName: string | null;
+  parameters: string | null;
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  totalPnL: number;
+  maxDrawdown: number;
+  sharpeRatio: number;
+  durationMs: number;
+  trades: BacktestTrade[];
+  error: string | null;
+}

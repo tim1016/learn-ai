@@ -1,0 +1,207 @@
+.chunk-detail-page {
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #1976d2;
+  text-decoration: none;
+  font-size: 14px;
+  margin-bottom: 16px;
+
+  &:hover {
+    text-decoration: underline;
+  }
+
+  i {
+    font-size: 12px;
+  }
+}
+
+h1 {
+  color: #2c3e50;
+  margin-bottom: 4px;
+}
+
+.subtitle {
+  color: #7f8c8d;
+  margin-bottom: 24px;
+  margin-top: 0;
+}
+
+.loading-state {
+  padding: 24px;
+  text-align: center;
+  color: #1565c0;
+  font-size: 14px;
+  background: #e3f2fd;
+  border-radius: 8px;
+}
+
+.error-state {
+  padding: 24px;
+  text-align: center;
+  color: #c0392b;
+  font-size: 14px;
+  background: #fde8e8;
+  border-radius: 8px;
+}
+
+.chart-section {
+  margin-bottom: 32px;
+
+  h2 {
+    color: #2c3e50;
+    font-size: 18px;
+    margin: 0;
+  }
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.resolution-toggle {
+  display: flex;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  overflow: hidden;
+
+  button {
+    padding: 4px 14px;
+    font-size: 13px;
+    border: none;
+    background: white;
+    cursor: pointer;
+    color: #555;
+    transition: all 0.15s;
+
+    &.active {
+      background: #1976d2;
+      color: white;
+    }
+
+    &:not(:last-child) {
+      border-right: 1px solid #ddd;
+    }
+  }
+}
+
+.days-section {
+  h2 {
+    color: #2c3e50;
+    font-size: 18px;
+    margin: 0 0 16px 0;
+  }
+}
+
+.days-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.day-card {
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: white;
+
+  &:hover {
+    border-color: #2196f3;
+    box-shadow: 0 2px 8px rgba(33, 150, 243, 0.12);
+  }
+}
+
+.day-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.day-date {
+  font-weight: 600;
+  font-size: 14px;
+  color: #2c3e50;
+}
+
+.day-change {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+
+  &.positive {
+    color: #2e7d32;
+    background: #e8f5e9;
+  }
+
+  &.negative {
+    color: #c0392b;
+    background: #fde8e8;
+  }
+}
+
+.day-stats {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.stat {
+  flex: 1;
+  text-align: center;
+}
+
+.stat-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  color: #aaa;
+  text-transform: uppercase;
+}
+
+.stat-value {
+  display: block;
+  font-size: 12px;
+  color: #555;
+}
+
+.day-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #999;
+  border-top: 1px solid #f0f0f0;
+  padding-top: 8px;
+}
+
+.day-bars {
+  // default
+}
+
+.day-volume {
+  // default
+}
+
+.day-arrow {
+  margin-left: auto;
+  font-size: 11px;
+  color: #ccc;
+  transition: color 0.15s;
+
+  .day-card:hover & {
+    color: #2196f3;
+  }
+}

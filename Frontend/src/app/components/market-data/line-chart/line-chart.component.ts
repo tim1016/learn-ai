@@ -13,14 +13,16 @@ import { formatTickMark } from '../chart-utils';
 @Component({
   selector: 'app-line-chart',
   standalone: true,
-  template: `<div #chartContainer class="chart-container"></div>`,
-  styles: [`.chart-container { width: 100%; height: 400px; }`],
+  template: `<div #chartContainer class="chart-container" [style.height.px]="height()"></div>`,
+  styles: [`.chart-container { width: 100%; }`],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class LineChartComponent implements AfterViewInit, OnDestroy {
   data = input<StockAggregate[]>([]);
   ticker = input('');
   timeVisible = input(false);
+  height = input(400);
+  lineColor = input('#2196F3');
   chartContainer = viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
 
   private chart: IChartApi | null = null;
@@ -50,7 +52,7 @@ export class LineChartComponent implements AfterViewInit, OnDestroy {
     const container = this.chartContainer().nativeElement;
     this.chart = createChart(container, {
       width: container.clientWidth,
-      height: 400,
+      height: this.height(),
       layout: { background: { color: '#ffffff' }, textColor: '#333' },
       grid: {
         vertLines: { color: '#f0f0f0' },
@@ -67,7 +69,7 @@ export class LineChartComponent implements AfterViewInit, OnDestroy {
     });
 
     this.series = this.chart.addSeries(LineSeries, {
-      color: '#2196F3',
+      color: this.lineColor(),
       lineWidth: 2,
       crosshairMarkerVisible: true,
       lastValueVisible: true,

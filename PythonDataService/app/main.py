@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from app.config import settings
-from app.routers import aggregates, sanitize, indicators
+from app.routers import aggregates, sanitize, indicators, options, snapshot, market_monitor
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -45,6 +45,9 @@ app.add_middleware(
 app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
 app.include_router(sanitize.router, prefix="/api", tags=["sanitize"])
 app.include_router(indicators.router, prefix="/api/indicators", tags=["indicators"])
+app.include_router(options.router, prefix="/api/options", tags=["options"])
+app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
+app.include_router(market_monitor.router, prefix="/api/market", tags=["market"])
 
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)

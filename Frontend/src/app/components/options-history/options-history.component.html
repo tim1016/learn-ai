@@ -1,0 +1,320 @@
+<div class="options-history">
+  <h1>Options History</h1>
+  <p class="subtitle">Investigate historical 0DTE options chains with OHLC data and minute-level drill-down</p>
+
+  <details class="page-guide">
+    <summary>How to use this page</summary>
+    <div class="guide-content">
+      <h4>Quick start</h4>
+      <ol>
+        <li>Enter an <strong>underlying ticker</strong> (e.g. <code>AAPL</code>, <code>SPY</code>, <code>TSLA</code>).</li>
+        <li>Pick an <strong>analysis date</strong> &mdash; must be a past trading day (weekday, not a holiday).</li>
+        <li>Choose the <strong>ATM method</strong>: "Open" uses the stock's opening price that day; "Prev Close" uses the prior day's closing price. The ATM price is rounded to the nearest dollar to determine the ATM strike.</li>
+        <li>Set <strong>Strikes</strong> to the number of strikes with data to show above and below ATM (default &plusmn;5). The page scans a wide range and keeps only strikes that actually have trading data.</li>
+        <li>Click <strong>Analyze</strong>. The page constructs option ticker symbols (OCC format), scans for strikes with data, then displays OHLC for each call and put.</li>
+      </ol>
+      <h4>How it works</h4>
+      <p>Instead of querying a contracts listing API, this page <strong>constructs option ticker symbols directly</strong> using the standard OCC format: <code>O:AAPL260213C00230000</code> = AAPL, expiring Feb 13 2026, Call, $230 strike. This means it works for <strong>any historical date</strong>, including expired 0DTE options.</p>
+      <h4>Reading the chain table</h4>
+      <p>The table shows <strong>Calls</strong> on the left, <strong>Strike</strong> in the center, and <strong>Puts</strong> on the right. Each side has:</p>
+      <ul>
+        <li><strong>Prev</strong> &mdash; Previous trading day's closing price for that option contract.</li>
+        <li><strong>Open / High / Low / Close</strong> &mdash; Standard OHLC for the analysis day.</li>
+        <li><strong>Vol</strong> &mdash; Volume of contracts traded that day.</li>
+        <li><strong>Chg%</strong> &mdash; Percentage change from previous close to analysis-day close.</li>
+      </ul>
+      <p>The <span style="color:#e67e22"><strong>orange row</strong></span> marks the ATM strike. Rows with <code>--</code> means no trading data was found for that contract (it may not have traded that day).</p>
+      <h4>Minute drill-down</h4>
+      <p>Click the <strong>Call</strong> or <strong>Put</strong> side of any row to fetch <strong>minute-by-minute</strong> price data for that specific option contract. A line chart appears below the table. Click the same side again to collapse it.</p>
+      <h4>Tips</h4>
+      <ul>
+        <li>0DTE options expire on the same day they trade. For SPY/QQQ/major indices, 0DTE options exist Mon/Wed/Fri. For most stocks, only Fridays.</li>
+        <li>If all rows show <code>--</code>, the date likely wasn't an expiration day for that ticker. Try a Friday.</li>
+        <li>Minute data may take a moment to load if it's not already cached in the backend.</li>
+      </ul>
+      <div class="guide-tip">
+        Data is <strong>15-minute delayed</strong> and limited to the past <strong>2 years</strong> (Polygon Starter plan).
+      </div>
+    </div>
+  </details>
+
+  <!-- Search Form -->
+  <div class="search-form">
+    <div class="form-group">
+      <label for="ticker">Ticker</label>
+      <input
+        id="ticker"
+        [ngModel]="ticker()"
+        (ngModelChange)="ticker.set($event)"
+        placeholder="AAPL"
+        (keyup.enter)="analyze()"
+      />
+    </div>
+
+    <div class="form-group">
+      <label for="analysisDate">Analysis Date</label>
+      <input
+        id="analysisDate"
+        type="date"
+        [ngModel]="analysisDate()"
+        (ngModelChange)="analysisDate.set($event)"
+        [min]="minDate"
+      />
+    </div>
+
+    <div class="form-group">
+      <label for="atmMethod">ATM Method</label>
+      <select
+        id="atmMethod"
+        [ngModel]="atmMethod()"
+        (ngModelChange)="atmMethod.set($event)"
+      >
+        <option value="open">Open</option>
+        <option value="prevClose">Prev Close</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="numStrikes">Strikes (&plusmn;)</label>
+      <input
+        id="numStrikes"
+        type="number"
+        [ngModel]="numStrikes()"
+        (ngModelChange)="numStrikes.set($event)"
+        min="1"
+        max="20"
+        style="width: 70px"
+      />
+    </div>
+
+    <div class="form-group form-group-button">
+      <button (click)="analyze()" [disabled]="loading()">
+        {{ loading() ? 'Analyzing...' : 'Analyze' }}
+      </button>
+    </div>
+  </div>
+
+  @if (error()) {
+    <div class="error-message">{{ error() }}</div>
+  }
+
+  @if (loading()) {
+    <div class="loading">{{ loadingMessage() || 'Loading...' }}</div>
+  }
+
+  <!-- Stock Summary -->
+  @if (atmPrice() !== null) {
+    <div class="stock-summary">
+      <span class="summary-ticker">{{ ticker().toUpperCase() }}</span>
+      <div class="summary-item">
+        <span class="summary-label">Open</span>
+        <span class="summary-value">{{ formatPrice(openPrice()) }}</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Prev Close</span>
+        <span class="summary-value">{{ formatPrice(prevDayClosePrice()) }}</span>
+      </div>
+      <div class="summary-item atm-highlight">
+        <span class="summary-label">ATM Strike</span>
+        <span class="summary-value">{{ atmStrikeValue() }}</span>
+        <span class="summary-note">(from {{ atmMethod() === 'open' ? 'Open' : 'Prev Close' }}, rounded)</span>
+      </div>
+      <span class="summary-count">{{ strikes().length }} strikes with data &middot; {{ contractRows().length }} contracts</span>
+    </div>
+
+    <!-- Stock Price Chart (always visible after analysis) -->
+    @if (stockMinuteBars().length > 0) {
+      <div class="stock-chart-section">
+        <div class="stock-chart-label">{{ ticker().toUpperCase() }} — Minute Price on {{ analysisDate() }}</div>
+        <app-line-chart
+          [data]="stockMinuteBars()"
+          [ticker]="ticker().toUpperCase()"
+          [timeVisible]="true"
+          [height]="250"
+          lineColor="#1976d2"
+        />
+      </div>
+    }
+  }
+
+  <!-- Options Chain Table -->
+  @if (strikes().length > 0) {
+    <div class="chain-table-wrapper">
+      <table class="chain-table">
+        <thead>
+          <tr>
+            <th colspan="7" class="call-header">CALLS</th>
+            <th class="strike-header">Strike</th>
+            <th colspan="7" class="put-header">PUTS</th>
+          </tr>
+          <tr>
+            <th>Prev</th>
+            <th>Open</th>
+            <th>High</th>
+            <th>Low</th>
+            <th>Close</th>
+            <th>Vol</th>
+            <th>Chg%</th>
+            <th></th>
+            <th>Prev</th>
+            <th>Open</th>
+            <th>High</th>
+            <th>Low</th>
+            <th>Close</th>
+            <th>Vol</th>
+            <th>Chg%</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (strike of strikes(); track strike) {
+            @let call = callByStrike().get(strike);
+            @let put = putByStrike().get(strike);
+            <tr [class.atm-row]="isAtm(strike)">
+              <!-- Call side (clickable) -->
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'call')">{{ formatPrice(call?.prevDayClose) }}</td>
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'call')">{{ formatPrice(call?.dailyBar?.open) }}</td>
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'call')">{{ formatPrice(call?.dailyBar?.high) }}</td>
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'call')">{{ formatPrice(call?.dailyBar?.low) }}</td>
+              <td class="clickable-cell price-cell" (click)="handleRowClick(strike, 'call')">{{ formatPrice(call?.dailyBar?.close) }}</td>
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'call')">{{ formatVolume(call?.dailyBar?.volume) }}</td>
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'call')"
+                  [class.positive]="(call?.changePercent ?? 0) > 0"
+                  [class.negative]="(call?.changePercent ?? 0) < 0">
+                {{ formatChangePct(call?.changePercent ?? null) }}
+              </td>
+
+              <!-- Strike (center) with history links -->
+              <td class="strike-cell" [class.atm-strike]="isAtm(strike)">
+                <div class="strike-number">{{ strike | number:'1.0-0' }}</div>
+                <div class="strike-links">
+                  @if (callByStrike().get(strike)?.dailyBar) {
+                    <a [routerLink]="['/market-data']"
+                       [queryParams]="getMarketDataLink(callByStrike().get(strike)!.optionTicker)"
+                       class="ticker-link call-link"
+                       [title]="callByStrike().get(strike)!.optionTicker">C</a>
+                  }
+                  @if (putByStrike().get(strike)?.dailyBar) {
+                    <a [routerLink]="['/market-data']"
+                       [queryParams]="getMarketDataLink(putByStrike().get(strike)!.optionTicker)"
+                       class="ticker-link put-link"
+                       [title]="putByStrike().get(strike)!.optionTicker">P</a>
+                  }
+                </div>
+              </td>
+
+              <!-- Put side (clickable) -->
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'put')">{{ formatPrice(put?.prevDayClose) }}</td>
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'put')">{{ formatPrice(put?.dailyBar?.open) }}</td>
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'put')">{{ formatPrice(put?.dailyBar?.high) }}</td>
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'put')">{{ formatPrice(put?.dailyBar?.low) }}</td>
+              <td class="clickable-cell price-cell" (click)="handleRowClick(strike, 'put')">{{ formatPrice(put?.dailyBar?.close) }}</td>
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'put')">{{ formatVolume(put?.dailyBar?.volume) }}</td>
+              <td class="clickable-cell" (click)="handleRowClick(strike, 'put')"
+                  [class.positive]="(put?.changePercent ?? 0) > 0"
+                  [class.negative]="(put?.changePercent ?? 0) < 0">
+                {{ formatChangePct(put?.changePercent ?? null) }}
+              </td>
+            </tr>
+
+            <!-- Expanded detail row -->
+            @if (expandedContract() && (call?.optionTicker === expandedContract() || put?.optionTicker === expandedContract())) {
+              <tr class="detail-row">
+                <td [attr.colspan]="15">
+                  <div class="detail-panel">
+                    <div class="detail-header">
+                      <span class="detail-ticker">{{ expandedContract() }}</span>
+                      <span class="detail-date">Minute data for {{ analysisDate() }}</span>
+                    </div>
+                    @if (detailLoading()) {
+                      <div class="detail-loading">Loading minute data...</div>
+                    } @else if (detailBars().length > 0) {
+                      <div class="detail-charts">
+                        <div class="chart-section">
+                          <div class="chart-label">{{ ticker().toUpperCase() }} Stock Price (minute)</div>
+                          @if (stockMinuteBars().length > 0) {
+                            <app-line-chart
+                              [data]="stockMinuteBars()"
+                              [ticker]="ticker().toUpperCase()"
+                              [timeVisible]="true"
+                              [height]="220"
+                              lineColor="#666"
+                            />
+                          } @else {
+                            <div class="detail-empty">No stock minute data available.</div>
+                          }
+                        </div>
+                        <div class="chart-section">
+                          <div class="chart-label">{{ expandedContract() }} Price (minute)</div>
+                          <app-line-chart
+                            [data]="detailBars()"
+                            [ticker]="expandedContract()!"
+                            [timeVisible]="true"
+                            [height]="220"
+                            lineColor="#1976d2"
+                          />
+                        </div>
+                        <div class="chart-section">
+                          <div class="chart-label">{{ expandedContract() }} Volume (minute)</div>
+                          <app-volume-chart
+                            [data]="detailBars()"
+                            [timeVisible]="true"
+                          />
+                        </div>
+                      </div>
+                      <div class="detail-stats">
+                        {{ detailBars().length }} option minute bars &middot; {{ stockMinuteBars().length }} stock minute bars
+                      </div>
+                    } @else {
+                      <div class="detail-empty">No minute data available for this contract.</div>
+                    }
+                  </div>
+                </td>
+              </tr>
+            }
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div class="click-hint">
+      Click the <strong>Call</strong> or <strong>Put</strong> side of a row to load minute-by-minute chart data
+    </div>
+  }
+
+  <!-- Scan Results (collapsible) -->
+  @if (scanResults().length > 0) {
+    <details class="scan-results">
+      <summary>Scan Results — {{ scanResults().length }} strikes with data found ({{ selectedScanCount() }} selected)</summary>
+      <div class="scan-table-wrapper">
+        <table class="scan-table">
+          <thead>
+            <tr>
+              <th>Strike</th>
+              <th>Call Ticker</th>
+              <th>Call Data</th>
+              <th>Put Ticker</th>
+              <th>Put Data</th>
+              <th>Selected</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (r of scanResults(); track r.strikePrice) {
+              <tr [class.scan-selected]="r.selected" [class.scan-atm]="r.strikePrice === atmStrikeValue()">
+                <td class="scan-strike">{{ r.strikePrice }}</td>
+                <td class="scan-ticker">{{ r.callTicker }}</td>
+                <td [class.scan-yes]="r.callHasData" [class.scan-no]="!r.callHasData">
+                  {{ r.callHasData ? 'Yes' : 'No' }}
+                </td>
+                <td class="scan-ticker">{{ r.putTicker }}</td>
+                <td [class.scan-yes]="r.putHasData" [class.scan-no]="!r.putHasData">
+                  {{ r.putHasData ? 'Yes' : 'No' }}
+                </td>
+                <td>{{ r.selected ? 'In chain' : '' }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </details>
+  }
+</div>

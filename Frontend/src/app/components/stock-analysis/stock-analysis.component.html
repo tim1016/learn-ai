@@ -2,6 +2,41 @@
   <h1>Stock Analysis</h1>
   <p class="subtitle">Fetch minute-level data from Polygon.io in monthly chunks</p>
 
+  <details class="page-guide">
+    <summary>How to use this page</summary>
+    <div class="guide-content">
+      <h4>Quick start</h4>
+      <ol>
+        <li>Type a <strong>ticker</strong> (e.g. <code>GLD</code>, <code>AAPL</code>).</li>
+        <li>Set a multi-month <strong>date range</strong>. The system splits it into monthly chunks and fetches them one-by-one.</li>
+        <li>Adjust <strong>Delay (sec)</strong> between API calls to stay within Polygon rate limits (default 12s is safe).</li>
+        <li>Click <strong>Analyze</strong> to start. Watch the chunk queue fill up with status indicators.</li>
+      </ol>
+      <h4>Optional: Include Options</h4>
+      <p>Check <strong>Include Options</strong> to also fetch 0DTE options contracts for each trading day. For each day, the system finds the ATM strike and selects nearby contracts. Choose the ATM pricing method:</p>
+      <ul>
+        <li><strong>Previous Close</strong> &mdash; Uses yesterday's last closing price as the ATM reference (recommended).</li>
+        <li><strong>Current Open</strong> &mdash; Uses today's opening price as the ATM reference.</li>
+      </ul>
+      <h4>Reading the chunk queue</h4>
+      <ul>
+        <li><span style="color:#26a69a"><strong>Cached</strong></span> &mdash; Data already in database, loaded instantly (no API call).</li>
+        <li><span style="color:#3498db"><strong>Fetching</strong></span> &mdash; Currently being downloaded from Polygon.</li>
+        <li><span style="color:#2e7d32"><strong>Complete</strong></span> &mdash; Successfully fetched and stored.</li>
+        <li><span style="color:#c0392b"><strong>Error</strong></span> &mdash; Failed. Click <strong>Refresh</strong> on that chunk to retry.</li>
+      </ul>
+      <p>Click <strong>View</strong> on any chunk to drill into a detail page with minute-level price/volume charts. From there, click a day to see the <strong>Day Detail</strong> page with intraday bars and options data.</p>
+      <h4>Tips</h4>
+      <ul>
+        <li>Use <strong>Refresh Data</strong> (instead of Analyze) to force re-fetch all chunks from Polygon.</li>
+        <li>Click <strong>Stop</strong> to abort mid-run &mdash; already-fetched data is preserved.</li>
+      </ul>
+      <div class="guide-tip">
+        Note: All data is <strong>15-minute delayed</strong> and limited to the past <strong>2 years</strong> (Polygon Starter plan).
+      </div>
+    </div>
+  </details>
+
   <!-- Form -->
   <div class="search-form">
     <div class="form-field">
@@ -23,6 +58,7 @@
         type="date"
         [ngModel]="fromDate()"
         (ngModelChange)="fromDate.set($event)"
+        [min]="minDate"
       />
     </div>
 
@@ -33,6 +69,7 @@
         type="date"
         [ngModel]="toDate()"
         (ngModelChange)="toDate.set($event)"
+        [min]="minDate"
       />
     </div>
 
@@ -47,6 +84,27 @@
         (ngModelChange)="chunkDelayMs.set($event * 1000)"
         class="delay-input"
       />
+    </div>
+
+    <div class="form-field options-field">
+      <label>
+        <input
+          type="checkbox"
+          [ngModel]="includeOptions()"
+          (ngModelChange)="includeOptions.set($event)"
+        />
+        Include Options
+      </label>
+      @if (includeOptions()) {
+        <select
+          [ngModel]="atmMethod()"
+          (ngModelChange)="atmMethod.set($event)"
+          class="atm-select"
+        >
+          <option value="previousClose">ATM: Previous Close</option>
+          <option value="currentOpen">ATM: Current Open</option>
+        </select>
+      }
     </div>
 
     <div class="form-actions">
@@ -100,22 +158,18 @@
     <!-- Chunk Queue -->
     <app-chunk-queue
       [chunks]="chunks()"
-      (chunkSelected)="onChunkSelected($event)"
       (chunkRefresh)="onChunkRefresh($event)"
+      (chunkView)="onChunkView($event)"
     />
   }
 
+
+
   <!-- Chart -->
-  @if (displayedAggregates().length > 0) {
+  @if (sortedAggregates().length > 0) {
     <div class="chart-area">
       <h3>
-        {{ ticker().toUpperCase() }} &mdash; {{ displayedAggregates().length | number }} minute bars
-        @if (selectedChunk(); as chunk) {
-          <span class="chunk-filter-label">
-            Chunk #{{ chunk.index + 1 }} ({{ chunk.fromDate }} &rarr; {{ chunk.toDate }})
-          </span>
-          <button class="show-all-btn" (click)="clearSelection()">Show All</button>
-        }
+        {{ ticker().toUpperCase() }} &mdash; {{ sortedAggregates().length | number }} minute bars
         @if (isRunning()) {
           <span class="live-badge">LOADING...</span>
         }
@@ -124,7 +178,7 @@
       <div class="chart-section">
         <h4>Price (Close)</h4>
         <app-line-chart
-          [data]="displayedAggregates()"
+          [data]="sortedAggregates()"
           [ticker]="ticker()"
           [timeVisible]="true"
         />
@@ -133,7 +187,7 @@
       <div class="chart-section">
         <h4>Volume</h4>
         <app-volume-chart
-          [data]="displayedAggregates()"
+          [data]="sortedAggregates()"
           [timeVisible]="true"
         />
       </div>

@@ -29,7 +29,6 @@ describe('StockAnalysisComponent', () => {
     expect(component.isRunning()).toBe(false);
     expect(component.abortRequested()).toBe(false);
     expect(component.forceRefresh()).toBe(false);
-    expect(component.selectedChunk()).toBeNull();
   });
 
   it('should set fromDate 2 years ago and toDate today', () => {

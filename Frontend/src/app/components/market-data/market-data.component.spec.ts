@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { ActivatedRoute } from '@angular/router';
 import { MarketDataComponent } from './market-data.component';
 import { createMockAggregate, createMockSummary } from '../../../testing/factories/market-data.factory';
 
@@ -13,12 +14,17 @@ describe('MarketDataComponent', () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
       imports: [MarketDataComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ActivatedRoute, useValue: { snapshot: { queryParams: {} } } },
+      ],
     }).compileComponents();
 
     fixture = TestBed.createComponent(MarketDataComponent);
     component = fixture.componentInstance;
     httpMock = TestBed.inject(HttpTestingController);
+    fixture.detectChanges();
   });
 
   afterEach(() => httpMock.verify());

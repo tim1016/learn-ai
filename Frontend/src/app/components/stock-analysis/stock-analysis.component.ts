@@ -1,13 +1,16 @@
 import { Component, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { MarketDataService } from '../../services/market-data.service';
 import { StockAggregate } from '../../graphql/types';
 import { LineChartComponent } from '../market-data/line-chart/line-chart.component';
 import { VolumeChartComponent } from '../market-data/volume-chart/volume-chart.component';
 import { ChunkQueueComponent } from './chunk-queue/chunk-queue.component';
-import { FetchChunk, ProgressStats } from './models';
+import { FetchChunk, ProgressStats, AtmMethod, TradingDay, SelectedContract, ChunkStatus } from './models';
+import { selectNearAtmContracts } from './utils';
+import { validateDateRange, getMinAllowedDate } from '../../utils/date-validation';
 
 /** Threshold in ms: if a chunk completes faster than this, it was served from cache */
 const CACHE_THRESHOLD_MS = 2000;
@@ -22,6 +25,10 @@ const CACHE_THRESHOLD_MS = 2000;
 })
 export class StockAnalysisComponent {
   private marketDataService = inject(MarketDataService);
+  private router = inject(Router);
+
+  // Date validation
+  minDate = getMinAllowedDate();
 
   // Form inputs
   ticker = signal('GLD');
@@ -29,16 +36,16 @@ export class StockAnalysisComponent {
   toDate = signal(defaultToDate());
   chunkDelayMs = signal(12000);
 
+  // Options inputs
+  includeOptions = signal(false);
+  atmMethod = signal<AtmMethod>('previousClose');
+
   // Fetch state
   chunks = signal<FetchChunk[]>([]);
   allAggregates = signal<StockAggregate[]>([]);
-  chunkAggregates = signal<Map<number, StockAggregate[]>>(new Map());
   isRunning = signal(false);
   abortRequested = signal(false);
   forceRefresh = signal(false);
-
-  // Chunk selection state
-  selectedChunk = signal<FetchChunk | null>(null);
 
   // Computed
   sortedAggregates = computed(() =>
@@ -46,17 +53,6 @@ export class StockAnalysisComponent {
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     )
   );
-
-  displayedAggregates = computed<StockAggregate[]>(() => {
-    const chunk = this.selectedChunk();
-    if (chunk) {
-      const chunkBars = this.chunkAggregates().get(chunk.index) ?? [];
-      return [...chunkBars].sort(
-        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      );
-    }
-    return this.sortedAggregates();
-  });
 
   progressStats = computed<ProgressStats>(() => {
     const ch = this.chunks();
@@ -99,17 +95,12 @@ export class StockAnalysisComponent {
     this.abortRequested.set(true);
   }
 
-  onChunkSelected(chunk: FetchChunk): void {
-    // Toggle: clicking the same chunk deselects it
-    if (this.selectedChunk()?.index === chunk.index) {
-      this.selectedChunk.set(null);
-    } else {
-      this.selectedChunk.set(chunk);
-    }
-  }
-
-  clearSelection(): void {
-    this.selectedChunk.set(null);
+  onChunkView(chunk: FetchChunk): void {
+    const t = this.ticker().trim().toUpperCase();
+    this.router.navigate(
+      ['/stock-analysis/chunk', t, chunk.fromDate, chunk.toDate],
+      { queryParams: { atm: this.atmMethod() } }
+    );
   }
 
   async onChunkRefresh(chunk: FetchChunk): Promise<void> {
@@ -140,7 +131,11 @@ export class StockAnalysisComponent {
           return ts < from || ts > to;
         }).concat(result.aggregates)
       );
-      this.storeChunkAggregates(chunk.index, result.aggregates);
+
+      // Re-fetch options if enabled
+      if (this.includeOptions() && result.aggregates.length > 0) {
+        await this.fetchOptionsForChunk(chunk.index, result.aggregates);
+      }
     } catch (err) {
       const durationMs = Math.round(performance.now() - startMs);
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -152,10 +147,21 @@ export class StockAnalysisComponent {
     const t = this.ticker().trim().toUpperCase();
     if (!t) return;
 
+    const dateError = validateDateRange(this.fromDate(), this.toDate());
+    if (dateError) {
+      this.chunks.set([]);
+      this.allAggregates.set([]);
+      // Surface the error via a single error chunk
+      this.chunks.set([{
+        index: 0, fromDate: this.fromDate(), toDate: this.toDate(),
+        status: 'error', barCount: 0, durationMs: 0, errorMessage: dateError,
+      }]);
+      return;
+    }
+
     const chunks = generateMonthlyChunks(this.fromDate(), this.toDate());
     this.chunks.set(chunks);
     this.allAggregates.set([]);
-    this.chunkAggregates.set(new Map());
     this.isRunning.set(true);
     this.abortRequested.set(false);
 
@@ -204,7 +210,11 @@ export class StockAnalysisComponent {
 
         this.updateChunk(i, { status: 'complete', barCount, durationMs });
         this.appendAggregates(result.aggregates);
-        this.storeChunkAggregates(i, result.aggregates);
+
+        // Fetch 0DTE options for each trading day in this chunk
+        if (this.includeOptions() && result.aggregates.length > 0) {
+          await this.fetchOptionsForChunk(i, result.aggregates);
+        }
       } catch (err) {
         const durationMs = Math.round(performance.now() - startMs);
         const errorMessage = err instanceof Error ? err.message : String(err);
@@ -224,9 +234,173 @@ export class StockAnalysisComponent {
     this.isRunning.set(false);
   }
 
+  private async fetchOptionsForChunk(chunkIndex: number, stockBars: StockAggregate[]): Promise<void> {
+    const t = this.ticker().trim().toUpperCase();
+    const refresh = this.forceRefresh();
+
+    // Extract unique trading days from the stock bars
+    const dayMap = new Map<string, StockAggregate[]>();
+    for (const bar of stockBars) {
+      const day = bar.timestamp.split('T')[0];
+      if (!dayMap.has(day)) dayMap.set(day, []);
+      dayMap.get(day)!.push(bar);
+    }
+
+    const sortedDays = [...dayMap.keys()].sort();
+    const tradingDays: TradingDay[] = sortedDays.map(date => ({
+      date,
+      stockBarCount: dayMap.get(date)!.length,
+      optionsStatus: 'pending' as ChunkStatus,
+      optionsFetchedCount: 0,
+      optionsContractCount: 0,
+      contracts: [],
+    }));
+
+    this.updateChunk(chunkIndex, {
+      optionsStatus: 'fetching',
+      tradingDays,
+      optionsContractCount: 0,
+      optionsFetchedCount: 0,
+    });
+
+    let totalContracts = 0;
+    let totalFetched = 0;
+
+    for (let dayIdx = 0; dayIdx < sortedDays.length; dayIdx++) {
+      if (this.abortRequested()) break;
+
+      const dayDate = sortedDays[dayIdx];
+      const dayBars = dayMap.get(dayDate)!;
+
+      this.updateTradingDay(chunkIndex, dayIdx, { optionsStatus: 'fetching' });
+
+      try {
+        // Calculate ATM price for this day
+        const prevDayBars = dayIdx > 0 ? dayMap.get(sortedDays[dayIdx - 1]) : undefined;
+        const atmPrice = this.calculateAtmPriceForDay(dayBars, prevDayBars);
+
+        if (atmPrice <= 0) {
+          this.updateTradingDay(chunkIndex, dayIdx, { optionsStatus: 'complete' });
+          continue;
+        }
+
+        // Query contracts expiring on THIS day (0DTE)
+        const buffer = Math.max(atmPrice * 0.05, 5);
+        const result = await firstValueFrom(
+          this.marketDataService.getOptionsContracts(t, {
+            asOfDate: dayDate,
+            strikePriceGte: Math.floor(atmPrice - buffer),
+            strikePriceLte: Math.ceil(atmPrice + buffer),
+            expirationDate: dayDate, // 0DTE: expires same day
+            limit: 200,
+          })
+        );
+
+        if (!result.success || result.contracts.length === 0) {
+          this.updateTradingDay(chunkIndex, dayIdx, { optionsStatus: 'complete' });
+          continue;
+        }
+
+        // Select ATM + 2 ITM + 2 OTM for calls and puts
+        const selected = selectNearAtmContracts(result.contracts, atmPrice, 2, 2);
+        const selectedContracts: SelectedContract[] = selected.map(c => ({
+          ticker: c.ticker,
+          contractType: c.contractType ?? '',
+          strikePrice: c.strikePrice ?? 0,
+          expirationDate: c.expirationDate ?? '',
+        }));
+
+        totalContracts += selected.length;
+        this.updateTradingDay(chunkIndex, dayIdx, {
+          optionsContractCount: selected.length,
+          contracts: selectedContracts,
+        });
+        this.updateChunk(chunkIndex, { optionsContractCount: totalContracts });
+
+        // Fetch aggregates for each selected contract
+        let dayFetched = 0;
+        for (const contract of selected) {
+          if (this.abortRequested()) break;
+
+          try {
+            await firstValueFrom(
+              this.marketDataService.getOrFetchStockAggregates(
+                contract.ticker, dayDate, dayDate, 'minute', 1, refresh
+              )
+            );
+            dayFetched++;
+            totalFetched++;
+            this.updateTradingDay(chunkIndex, dayIdx, { optionsFetchedCount: dayFetched });
+            this.updateChunk(chunkIndex, { optionsFetchedCount: totalFetched });
+          } catch {
+            // Individual contract failure — continue with others
+          }
+
+          // Delay between options contract fetches
+          if (!this.abortRequested()) {
+            await delay(this.chunkDelayMs());
+          }
+        }
+
+        this.updateTradingDay(chunkIndex, dayIdx, { optionsStatus: 'complete' });
+      } catch {
+        this.updateTradingDay(chunkIndex, dayIdx, { optionsStatus: 'error' });
+      }
+    }
+
+    this.updateChunk(chunkIndex, {
+      optionsStatus: this.abortRequested() ? 'error' : 'complete',
+    });
+  }
+
+  private calculateAtmPriceForDay(
+    currentDayBars: StockAggregate[],
+    previousDayBars: StockAggregate[] | undefined
+  ): number {
+    if (currentDayBars.length === 0) return 0;
+
+    const sortBars = (bars: StockAggregate[]) =>
+      [...bars].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    if (this.atmMethod() === 'currentOpen') {
+      return sortBars(currentDayBars)[0].open;
+    }
+
+    // previousClose: use the last bar's close of the previous day
+    if (previousDayBars && previousDayBars.length > 0) {
+      const sorted = sortBars(previousDayBars);
+      return sorted[sorted.length - 1].close;
+    }
+
+    // Fallback for first day in chunk: check accumulated data
+    const currentDate = currentDayBars[0].timestamp.split('T')[0];
+    const prevDayBars = this.allAggregates()
+      .filter(b => b.timestamp.split('T')[0] < currentDate)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    if (prevDayBars.length > 0) {
+      return prevDayBars[0].close;
+    }
+
+    // Last resort: use current day's first open
+    return sortBars(currentDayBars)[0].open;
+  }
+
   private updateChunk(index: number, partial: Partial<FetchChunk>): void {
     this.chunks.update(chunks =>
       chunks.map((c, i) => (i === index ? { ...c, ...partial } : c))
+    );
+  }
+
+  private updateTradingDay(chunkIndex: number, dayIndex: number, partial: Partial<TradingDay>): void {
+    this.chunks.update(chunks =>
+      chunks.map((c, i) => {
+        if (i !== chunkIndex || !c.tradingDays) return c;
+        const updatedDays = c.tradingDays.map((d, j) =>
+          j === dayIndex ? { ...d, ...partial } : d
+        );
+        return { ...c, tradingDays: updatedDays };
+      })
     );
   }
 
@@ -238,13 +412,6 @@ export class StockAnalysisComponent {
     });
   }
 
-  private storeChunkAggregates(index: number, bars: StockAggregate[]): void {
-    this.chunkAggregates.update(map => {
-      const updated = new Map(map);
-      updated.set(index, bars);
-      return updated;
-    });
-  }
 }
 
 function defaultFromDate(): string {

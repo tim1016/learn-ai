@@ -4,6 +4,7 @@ using Backend.GraphQL.Types;
 using Backend.Models;
 using Backend.Models.DTOs;
 using Backend.Models.MarketData;
+using Backend.Models.DTOs.PolygonResponses;
 using Backend.Services.Interfaces;
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
@@ -123,8 +124,9 @@ public class Query
             aggregates.Count, ticker);
 
         // Fetch sanitization summary from the ticker entity
+        var market = ticker.StartsWith("O:", StringComparison.OrdinalIgnoreCase) ? "options" : "stocks";
         var tickerEntity = await context.Tickers
-            .FirstOrDefaultAsync(t => t.Symbol == ticker.ToUpper() && t.Market == "stocks");
+            .FirstOrDefaultAsync(t => t.Symbol == ticker.ToUpper() && t.Market == market);
 
         var bars = aggregates.Select(a => new AggregateBar
         {
@@ -292,8 +294,9 @@ public class Query
         int multiplier = 1)
     {
         var symbol = ticker.ToUpper();
+        var cachedMarket = symbol.StartsWith("O:") ? "options" : "stocks";
         var tickerEntity = await context.Tickers
-            .FirstOrDefaultAsync(t => t.Symbol == symbol && t.Market == "stocks");
+            .FirstOrDefaultAsync(t => t.Symbol == symbol && t.Market == cachedMarket);
 
         var results = new List<CachedRangeResult>();
 
@@ -324,7 +327,207 @@ public class Query
         return results;
     }
 
+    /// <summary>
+    /// List options contracts from Polygon.io for a given underlying ticker.
+    /// Used by frontend to discover ATM ± N strike contracts.
+    /// </summary>
+    [GraphQLName("getOptionsContracts")]
+    public async Task<OptionsContractsResult> GetOptionsContracts(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        string underlyingTicker,
+        string? asOfDate = null,
+        string? contractType = null,
+        decimal? strikePriceGte = null,
+        decimal? strikePriceLte = null,
+        string? expirationDate = null,
+        string? expirationDateGte = null,
+        string? expirationDateLte = null,
+        int limit = 100)
+    {
+        try
+        {
+            logger.LogInformation(
+                "[Options] Query: underlying={Underlying}, asOf={AsOf}, type={Type}, strike=[{Gte},{Lte}]",
+                underlyingTicker, asOfDate, contractType, strikePriceGte, strikePriceLte);
+
+            var response = await polygonService.FetchOptionsContractsAsync(
+                underlyingTicker, asOfDate, contractType,
+                strikePriceGte, strikePriceLte,
+                expirationDate, expirationDateGte, expirationDateLte,
+                limit);
+
+            var contracts = response.Contracts.Select(c => new OptionsContractResult
+            {
+                Ticker = c.Ticker,
+                UnderlyingTicker = c.UnderlyingTicker,
+                ContractType = c.ContractType,
+                StrikePrice = c.StrikePrice,
+                ExpirationDate = c.ExpirationDate,
+                ExerciseStyle = c.ExerciseStyle,
+            }).ToList();
+
+            return new OptionsContractsResult
+            {
+                Success = true,
+                Contracts = contracts,
+                Count = contracts.Count,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Options] Error fetching contracts for {Underlying}", underlyingTicker);
+            return new OptionsContractsResult
+            {
+                Success = false,
+                Error = ex.Message,
+            };
+        }
+    }
+
+    /// <summary>
+    /// Fetch a live snapshot of the options chain for an underlying ticker.
+    /// Returns greeks, IV, open interest, day OHLCV, and underlying price.
+    /// </summary>
+    [GraphQLName("getOptionsChainSnapshot")]
+    public async Task<OptionsChainSnapshotResult> GetOptionsChainSnapshot(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        string underlyingTicker,
+        string? expirationDate = null)
+    {
+        try
+        {
+            logger.LogInformation(
+                "[Snapshot] Query: underlying={Underlying}, expiration={Expiration}",
+                underlyingTicker, expirationDate ?? "today");
+
+            var response = await polygonService.FetchOptionsChainSnapshotAsync(
+                underlyingTicker, expirationDate);
+
+            var underlying = response.Underlying != null
+                ? new SnapshotUnderlyingResult
+                {
+                    Ticker = response.Underlying.Ticker,
+                    Price = response.Underlying.Price,
+                    Change = response.Underlying.Change,
+                    ChangePercent = response.Underlying.ChangePercent,
+                }
+                : null;
+
+            var contracts = response.Contracts.Select(c => new SnapshotContractResult
+            {
+                Ticker = c.Ticker,
+                ContractType = c.ContractType,
+                StrikePrice = c.StrikePrice,
+                ExpirationDate = c.ExpirationDate,
+                BreakEvenPrice = c.BreakEvenPrice,
+                ImpliedVolatility = c.ImpliedVolatility,
+                OpenInterest = c.OpenInterest,
+                Greeks = c.Greeks != null ? new GreeksResult
+                {
+                    Delta = c.Greeks.Delta,
+                    Gamma = c.Greeks.Gamma,
+                    Theta = c.Greeks.Theta,
+                    Vega = c.Greeks.Vega,
+                } : null,
+                Day = c.Day != null ? new DayResult
+                {
+                    Open = c.Day.Open,
+                    High = c.Day.High,
+                    Low = c.Day.Low,
+                    Close = c.Day.Close,
+                    Volume = c.Day.Volume,
+                    Vwap = c.Day.Vwap,
+                } : null,
+            }).ToList();
+
+            return new OptionsChainSnapshotResult
+            {
+                Success = true,
+                Underlying = underlying,
+                Contracts = contracts,
+                Count = contracts.Count,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Snapshot] Error fetching chain for {Underlying}", underlyingTicker);
+            return new OptionsChainSnapshotResult
+            {
+                Success = false,
+                Error = ex.Message,
+            };
+        }
+    }
+
     #endregion
+}
+
+public class OptionsChainSnapshotResult
+{
+    public bool Success { get; set; }
+    public SnapshotUnderlyingResult? Underlying { get; set; }
+    public List<SnapshotContractResult> Contracts { get; set; } = [];
+    public int Count { get; set; }
+    public string? Error { get; set; }
+}
+
+public class SnapshotUnderlyingResult
+{
+    public string Ticker { get; set; } = "";
+    public decimal Price { get; set; }
+    public decimal Change { get; set; }
+    public decimal ChangePercent { get; set; }
+}
+
+public class SnapshotContractResult
+{
+    public string? Ticker { get; set; }
+    public string? ContractType { get; set; }
+    public decimal? StrikePrice { get; set; }
+    public string? ExpirationDate { get; set; }
+    public decimal? BreakEvenPrice { get; set; }
+    public decimal? ImpliedVolatility { get; set; }
+    public decimal? OpenInterest { get; set; }
+    public GreeksResult? Greeks { get; set; }
+    public DayResult? Day { get; set; }
+}
+
+public class GreeksResult
+{
+    public decimal? Delta { get; set; }
+    public decimal? Gamma { get; set; }
+    public decimal? Theta { get; set; }
+    public decimal? Vega { get; set; }
+}
+
+public class DayResult
+{
+    public decimal? Open { get; set; }
+    public decimal? High { get; set; }
+    public decimal? Low { get; set; }
+    public decimal? Close { get; set; }
+    public decimal? Volume { get; set; }
+    public decimal? Vwap { get; set; }
+}
+
+public class OptionsContractsResult
+{
+    public bool Success { get; set; }
+    public List<OptionsContractResult> Contracts { get; set; } = [];
+    public int Count { get; set; }
+    public string? Error { get; set; }
+}
+
+public class OptionsContractResult
+{
+    public required string Ticker { get; set; }
+    public string? UnderlyingTicker { get; set; }
+    public string? ContractType { get; set; }
+    public decimal? StrikePrice { get; set; }
+    public string? ExpirationDate { get; set; }
+    public string? ExerciseStyle { get; set; }
 }
 
 public class DateRangeInput

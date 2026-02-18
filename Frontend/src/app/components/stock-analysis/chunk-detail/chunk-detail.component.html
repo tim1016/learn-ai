@@ -1,0 +1,79 @@
+<div class="chunk-detail-page">
+  <a routerLink="/stock-analysis" class="back-link">
+    <i class="pi pi-arrow-left"></i> Back to Stock Analysis
+  </a>
+
+  <h1>{{ ticker() }} &mdash; {{ fromDate() }} to {{ toDate() }}</h1>
+  <p class="subtitle">
+    {{ sortedBars().length | number }} minute bars across {{ tradingDays().length }} trading days
+  </p>
+
+  @if (loading()) {
+    <div class="loading-state">Loading chunk data...</div>
+  } @else if (error()) {
+    <div class="error-state">{{ error() }}</div>
+  } @else {
+    <!-- Chunk overview chart -->
+    <section class="chart-section">
+      <div class="chart-header">
+        <h2>Price Overview</h2>
+        <div class="resolution-toggle">
+          <button
+            [class.active]="resolution() === 'minute'"
+            (click)="resolution.set('minute')"
+          >Minute</button>
+          <button
+            [class.active]="resolution() === 'day'"
+            (click)="resolution.set('day')"
+          >Day</button>
+        </div>
+      </div>
+      <app-line-chart
+        [data]="chartBars()"
+        [ticker]="ticker()"
+        [timeVisible]="true"
+        [height]="350"
+      />
+    </section>
+
+    <!-- Trading days list -->
+    <section class="days-section">
+      <h2>Trading Days</h2>
+      <div class="days-grid">
+        @for (day of tradingDays(); track day.date) {
+          <div class="day-card" (click)="navigateToDay(day.date)">
+            <div class="day-header">
+              <span class="day-date">{{ day.date }}</span>
+              <span class="day-change" [class.positive]="day.close >= day.open" [class.negative]="day.close < day.open">
+                {{ dayChangePercent(day) >= 0 ? '+' : '' }}{{ dayChangePercent(day) | number:'1.2-2' }}%
+              </span>
+            </div>
+            <div class="day-stats">
+              <div class="stat">
+                <span class="stat-label">O</span>
+                <span class="stat-value">{{ day.open | number:'1.2-2' }}</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">H</span>
+                <span class="stat-value">{{ day.high | number:'1.2-2' }}</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">L</span>
+                <span class="stat-value">{{ day.low | number:'1.2-2' }}</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">C</span>
+                <span class="stat-value">{{ day.close | number:'1.2-2' }}</span>
+              </div>
+            </div>
+            <div class="day-footer">
+              <span class="day-bars">{{ day.barCount }} bars</span>
+              <span class="day-volume">Vol: {{ day.totalVolume | number:'1.0-0' }}</span>
+              <i class="pi pi-arrow-right day-arrow"></i>
+            </div>
+          </div>
+        }
+      </div>
+    </section>
+  }
+</div>

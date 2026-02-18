@@ -100,6 +100,106 @@ public class PolygonService : IPolygonService
         }
     }
 
+    public async Task<OptionsChainSnapshotResponse> FetchOptionsChainSnapshotAsync(
+        string underlyingTicker,
+        string? expirationDate = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation(
+                "Fetching options chain snapshot for {Underlying}, expiration={Expiration}",
+                underlyingTicker, expirationDate ?? "today");
+
+            var request = new { underlying_ticker = underlyingTicker, expiration_date = expirationDate };
+
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/snapshot/options-chain",
+                request,
+                cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<OptionsChainSnapshotResponse>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+            {
+                throw new HttpRequestException("Received null response from Python service for options chain snapshot");
+            }
+
+            _logger.LogInformation(
+                "Fetched {Count} options chain snapshots for {Underlying}",
+                result.Count, underlyingTicker);
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching options chain snapshot for {Underlying}", underlyingTicker);
+            throw;
+        }
+    }
+
+    public async Task<OptionsContractsResponse> FetchOptionsContractsAsync(
+        string underlyingTicker,
+        string? asOfDate = null,
+        string? contractType = null,
+        decimal? strikePriceGte = null,
+        decimal? strikePriceLte = null,
+        string? expirationDate = null,
+        string? expirationDateGte = null,
+        string? expirationDateLte = null,
+        int limit = 100,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation(
+                "Fetching options contracts for {Underlying}, asOf={AsOf}, type={Type}, strike=[{Gte},{Lte}]",
+                underlyingTicker, asOfDate, contractType, strikePriceGte, strikePriceLte);
+
+            var request = new
+            {
+                underlying_ticker = underlyingTicker,
+                as_of_date = asOfDate,
+                contract_type = contractType,
+                strike_price_gte = strikePriceGte,
+                strike_price_lte = strikePriceLte,
+                expiration_date = expirationDate,
+                expiration_date_gte = expirationDateGte,
+                expiration_date_lte = expirationDateLte,
+                limit
+            };
+
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/options/contracts",
+                request,
+                cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<OptionsContractsResponse>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+            {
+                throw new HttpRequestException("Received null response from Python service for options contracts");
+            }
+
+            _logger.LogInformation(
+                "Fetched {Count} options contracts for {Underlying}",
+                result.Count, underlyingTicker);
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching options contracts for {Underlying}", underlyingTicker);
+            throw;
+        }
+    }
+
     public async Task<TradeResponse> FetchTradesAsync(
         string ticker,
         string? timestamp = null,

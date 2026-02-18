@@ -22,6 +22,10 @@ public class AppDbContext : DbContext
     public DbSet<TechnicalIndicator> TechnicalIndicators => Set<TechnicalIndicator>();
     public DbSet<ReferenceData> ReferenceData => Set<ReferenceData>();
 
+    // Backtesting models
+    public DbSet<StrategyExecution> StrategyExecutions => Set<StrategyExecution>();
+    public DbSet<BacktestTrade> BacktestTrades => Set<BacktestTrade>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Author>(entity =>
@@ -66,7 +70,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Ticker>(entity =>
         {
             entity.HasKey(t => t.Id);
-            entity.Property(t => t.Symbol).IsRequired().HasMaxLength(20);
+            entity.Property(t => t.Symbol).IsRequired().HasMaxLength(50);
             entity.Property(t => t.Name).IsRequired().HasMaxLength(500);
             entity.Property(t => t.Market).IsRequired().HasMaxLength(50);
             entity.HasIndex(t => new { t.Symbol, t.Market }).IsUnique();
@@ -145,6 +149,36 @@ public class AppDbContext : DbContext
                   .HasForeignKey(r => r.TickerId)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(r => new { r.TickerId, r.DataType, r.EventDate });
+        });
+
+        // StrategyExecution configuration
+        modelBuilder.Entity<StrategyExecution>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.TotalPnL).HasPrecision(18, 8);
+            entity.Property(e => e.MaxDrawdown).HasPrecision(18, 8);
+            entity.Property(e => e.SharpeRatio).HasPrecision(18, 8);
+            entity.HasOne(e => e.Ticker)
+                  .WithMany()
+                  .HasForeignKey(e => e.TickerId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(e => new { e.TickerId, e.StrategyName });
+        });
+
+        // BacktestTrade configuration
+        modelBuilder.Entity<BacktestTrade>(entity =>
+        {
+            entity.HasKey(t => t.Id);
+            entity.Property(t => t.EntryPrice).HasPrecision(18, 8);
+            entity.Property(t => t.ExitPrice).HasPrecision(18, 8);
+            entity.Property(t => t.Quantity).HasPrecision(18, 8);
+            entity.Property(t => t.PnL).HasPrecision(18, 8);
+            entity.Property(t => t.CumulativePnL).HasPrecision(18, 8);
+            entity.HasOne(t => t.StrategyExecution)
+                  .WithMany(e => e.Trades)
+                  .HasForeignKey(t => t.StrategyExecutionId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(t => t.StrategyExecutionId);
         });
     }
 }
