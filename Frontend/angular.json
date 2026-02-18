@@ -10,7 +10,7 @@
       "prefix": "app",
       "architect": {
         "build": {
-          "builder": "@angular-devkit/build-angular:application",
+          "builder": "@angular/build:application",
           "options": {
             "outputPath": "dist/frontend",
             "index": "src/index.html",
@@ -48,6 +48,14 @@
             }
           },
           "defaultConfiguration": "production"
+        },
+        "test": {
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "tsConfig": "tsconfig.spec.json",
+            "buildTarget": "frontend:build",
+            "setupFiles": ["src/test-setup.ts"]
+          }
         },
         "serve": {
           "builder": "@angular-devkit/build-angular:dev-server",

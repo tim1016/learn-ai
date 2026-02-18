@@ -2,8 +2,27 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ActivatedRoute } from '@angular/router';
+import { vi } from 'vitest';
 import { MarketDataComponent } from './market-data.component';
 import { createMockAggregate, createMockSummary } from '../../../testing/factories/market-data.factory';
+
+vi.mock('lightweight-charts', () => {
+  const mockTimeScale = { fitContent: vi.fn() };
+  const createMockSeries = () => ({ setData: vi.fn(), applyOptions: vi.fn() });
+  const createMockChart = () => ({
+    addSeries: vi.fn().mockReturnValue(createMockSeries()),
+    removeSeries: vi.fn(),
+    timeScale: vi.fn().mockReturnValue(mockTimeScale),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+  });
+  return {
+    createChart: vi.fn().mockImplementation(() => createMockChart()),
+    CandlestickSeries: 'CandlestickSeries',
+    LineSeries: 'LineSeries',
+    HistogramSeries: 'HistogramSeries',
+  };
+});
 
 describe('MarketDataComponent', () => {
   let component: MarketDataComponent;

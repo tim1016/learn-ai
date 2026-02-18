@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { firstValueFrom } from 'rxjs';
 import { TickerService } from './ticker.service';
 import { createMockTicker } from '../../testing/factories/market-data.factory';
 
@@ -20,33 +21,30 @@ describe('TickerService', () => {
   afterEach(() => httpMock.verify());
 
   describe('getTickers', () => {
-    it('should send GraphQL query and map response', (done) => {
+    it('should send GraphQL query and map response', async () => {
       const tickers = [createMockTicker({ symbol: 'AAPL' }), createMockTicker({ symbol: 'MSFT', id: 2 })];
 
-      service.getTickers().subscribe(result => {
-        expect(result.length).toBe(2);
-        expect(result[0].symbol).toBe('AAPL');
-        expect(result[1].symbol).toBe('MSFT');
-        done();
-      });
+      const promise = firstValueFrom(service.getTickers());
 
       httpMock.expectOne('http://localhost:5000/graphql').flush({
         data: { tickers },
       });
+
+      const result = await promise;
+      expect(result.length).toBe(2);
+      expect(result[0].symbol).toBe('AAPL');
+      expect(result[1].symbol).toBe('MSFT');
     });
 
-    it('should throw on GraphQL errors', (done) => {
-      service.getTickers().subscribe({
-        error: (err) => {
-          expect(err.message).toContain('Query failed');
-          done();
-        },
-      });
+    it('should throw on GraphQL errors', async () => {
+      const promise = firstValueFrom(service.getTickers());
 
       httpMock.expectOne('http://localhost:5000/graphql').flush({
         data: null,
         errors: [{ message: 'Query failed' }],
       });
+
+      await expect(promise).rejects.toThrow('Query failed');
     });
   });
 
@@ -59,13 +57,8 @@ describe('TickerService', () => {
       req.flush({ data: { stockAggregates: [] } });
     });
 
-    it('should return count and date range from response', (done) => {
-      service.getAggregateStats('AAPL').subscribe(stats => {
-        expect(stats.count).toBe(3);
-        expect(stats.earliest).toBe('2026-01-01T00:00:00Z');
-        expect(stats.latest).toBe('2026-01-03T00:00:00Z');
-        done();
-      });
+    it('should return count and date range from response', async () => {
+      const promise = firstValueFrom(service.getAggregateStats('AAPL'));
 
       httpMock.expectOne('http://localhost:5000/graphql').flush({
         data: {
@@ -76,19 +69,24 @@ describe('TickerService', () => {
           ],
         },
       });
+
+      const stats = await promise;
+      expect(stats.count).toBe(3);
+      expect(stats.earliest).toBe('2026-01-01T00:00:00Z');
+      expect(stats.latest).toBe('2026-01-03T00:00:00Z');
     });
 
-    it('should return nulls for empty response', (done) => {
-      service.getAggregateStats('UNKNOWN').subscribe(stats => {
-        expect(stats.count).toBe(0);
-        expect(stats.earliest).toBeNull();
-        expect(stats.latest).toBeNull();
-        done();
-      });
+    it('should return nulls for empty response', async () => {
+      const promise = firstValueFrom(service.getAggregateStats('UNKNOWN'));
 
       httpMock.expectOne('http://localhost:5000/graphql').flush({
         data: { stockAggregates: [] },
       });
+
+      const stats = await promise;
+      expect(stats.count).toBe(0);
+      expect(stats.earliest).toBeNull();
+      expect(stats.latest).toBeNull();
     });
   });
 });

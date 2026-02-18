@@ -3,6 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
+import { vi } from 'vitest';
 import { TickersComponent } from './tickers.component';
 import { TickerService } from '../../services/ticker.service';
 import { createMockTicker } from '../../../testing/factories/market-data.factory';
@@ -10,13 +11,16 @@ import { createMockTicker } from '../../../testing/factories/market-data.factory
 describe('TickersComponent', () => {
   let component: TickersComponent;
   let fixture: ComponentFixture<TickersComponent>;
-  let tickerServiceMock: jest.Mocked<Pick<TickerService, 'getTickers' | 'getAggregateStats'>>;
+  let tickerServiceMock: {
+    getTickers: ReturnType<typeof vi.fn>;
+    getAggregateStats: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
     tickerServiceMock = {
-      getTickers: jest.fn().mockReturnValue(of([])),
-      getAggregateStats: jest.fn().mockReturnValue(of({ count: 0, earliest: null, latest: null })),
+      getTickers: vi.fn().mockReturnValue(of([])),
+      getAggregateStats: vi.fn().mockReturnValue(of({ count: 0, earliest: null, latest: null })),
     };
 
     await TestBed.configureTestingModule({
@@ -39,7 +43,6 @@ describe('TickersComponent', () => {
 
   it('should set loading on init', () => {
     fixture.detectChanges();
-    // After init with empty response, loading becomes false
     expect(component.loading).toBe(false);
     expect(component.tickers).toEqual([]);
   });

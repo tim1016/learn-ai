@@ -1,7 +1,26 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { type Mock, vi } from 'vitest';
 import { CandlestickChartComponent } from './candlestick-chart.component';
 import { createMockAggregates } from '../../../../testing/factories/market-data.factory';
 import { createChart } from 'lightweight-charts';
+
+vi.mock('lightweight-charts', () => {
+  const mockTimeScale = { fitContent: vi.fn() };
+  const createMockSeries = () => ({ setData: vi.fn(), applyOptions: vi.fn() });
+  const createMockChart = () => ({
+    addSeries: vi.fn().mockReturnValue(createMockSeries()),
+    removeSeries: vi.fn(),
+    timeScale: vi.fn().mockReturnValue(mockTimeScale),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+  });
+  return {
+    createChart: vi.fn().mockImplementation(() => createMockChart()),
+    CandlestickSeries: 'CandlestickSeries',
+    LineSeries: 'LineSeries',
+    HistogramSeries: 'HistogramSeries',
+  };
+});
 
 describe('CandlestickChartComponent', () => {
   let component: CandlestickChartComponent;
@@ -9,7 +28,7 @@ describe('CandlestickChartComponent', () => {
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
-    (createChart as jest.Mock).mockClear();
+    (createChart as Mock).mockClear();
 
     await TestBed.configureTestingModule({
       imports: [CandlestickChartComponent],
@@ -33,7 +52,7 @@ describe('CandlestickChartComponent', () => {
     component.data = createMockAggregates(3);
     fixture.detectChanges();
 
-    const chartInstance = (createChart as jest.Mock).mock.results[0].value;
+    const chartInstance = (createChart as Mock).mock.results[0].value;
     const series = chartInstance.addSeries.mock.results[0].value;
     expect(series.setData).toHaveBeenCalled();
 
@@ -50,7 +69,7 @@ describe('CandlestickChartComponent', () => {
     component.data = createMockAggregates(5);
     fixture.detectChanges();
 
-    const chartInstance = (createChart as jest.Mock).mock.results[0].value;
+    const chartInstance = (createChart as Mock).mock.results[0].value;
     const series = chartInstance.addSeries.mock.results[0].value;
     const passedData = series.setData.mock.calls[0][0];
 
@@ -63,7 +82,7 @@ describe('CandlestickChartComponent', () => {
     component.data = createMockAggregates(5);
     fixture.detectChanges();
 
-    const chartInstance = (createChart as jest.Mock).mock.results[0].value;
+    const chartInstance = (createChart as Mock).mock.results[0].value;
     fixture.destroy();
     expect(chartInstance.remove).toHaveBeenCalled();
   });

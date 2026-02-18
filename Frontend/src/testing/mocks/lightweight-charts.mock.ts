@@ -1,21 +1,23 @@
+import { vi } from 'vitest';
+
 const mockTimeScale = {
-  fitContent: jest.fn(),
+  fitContent: vi.fn(),
 };
 
 const createMockSeries = () => ({
-  setData: jest.fn(),
-  applyOptions: jest.fn(),
+  setData: vi.fn(),
+  applyOptions: vi.fn(),
 });
 
 const createMockChart = () => ({
-  addSeries: jest.fn().mockReturnValue(createMockSeries()),
-  removeSeries: jest.fn(),
-  timeScale: jest.fn().mockReturnValue(mockTimeScale),
-  applyOptions: jest.fn(),
-  remove: jest.fn(),
+  addSeries: vi.fn().mockReturnValue(createMockSeries()),
+  removeSeries: vi.fn(),
+  timeScale: vi.fn().mockReturnValue(mockTimeScale),
+  applyOptions: vi.fn(),
+  remove: vi.fn(),
 });
 
-export const createChart = jest.fn().mockImplementation(() => createMockChart());
+export const createChart = vi.fn().mockImplementation(() => createMockChart());
 export const CandlestickSeries = 'CandlestickSeries';
 export const LineSeries = 'LineSeries';
 export const HistogramSeries = 'HistogramSeries';

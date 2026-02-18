@@ -1,8 +1,9 @@
 import { TestBed } from '@angular/core/testing';
+import { vi } from 'vitest';
 import { PolygonService } from './polygon.service';
 
 // Mock the environment to avoid requiring real API keys
-jest.mock('../../environments/environment', () => ({
+vi.mock('../../environments/environment', () => ({
   environment: {
     polygonApiKey: '',
     useBackendProxy: true,

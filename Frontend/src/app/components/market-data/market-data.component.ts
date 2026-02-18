@@ -1,4 +1,4 @@
-import { Component, OnInit, ChangeDetectionStrategy, computed, inject, signal } from '@angular/core';
+import { Component, OnInit, ChangeDetectionStrategy, DestroyRef, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -58,6 +58,7 @@ export class MarketDataComponent implements OnInit {
   private route = inject(ActivatedRoute);
   private marketMonitor = inject(MarketMonitorService);
   private marketDataService = inject(MarketDataService);
+  private destroyRef = inject(DestroyRef);
 
   constructor() {
     // Load holidays on component init
@@ -149,7 +150,7 @@ export class MarketDataComponent implements OnInit {
           this.loading.set(false);
           return of(null);
         }),
-        takeUntilDestroyed()
+        takeUntilDestroyed(this.destroyRef)
       )
       .subscribe();
   }
@@ -166,7 +167,7 @@ export class MarketDataComponent implements OnInit {
           this.holidaysLoading.set(false);
           return of([]);
         }),
-        takeUntilDestroyed()
+        takeUntilDestroyed(this.destroyRef)
       )
       .subscribe();
   }

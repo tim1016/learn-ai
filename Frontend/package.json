@@ -6,9 +6,9 @@
     "start": "ng serve",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test": "ng test",
+    "test:watch": "ng test --watch",
+    "test:coverage": "ng test --coverage"
   },
   "private": true,
   "dependencies": {
@@ -37,10 +37,8 @@
     "@angular/cli": "^21.0.0",
     "@angular/compiler-cli": "^21.0.0",
     "@angular/platform-browser-dynamic": "^21.0.0",
-    "@types/jest": "^30.0.0",
-    "jest": "^30.2.0",
-    "jest-environment-jsdom": "^30.2.0",
-    "jest-preset-angular": "^16.0.0",
-    "typescript": "~5.9.0"
+    "jsdom": "^26.1.0",
+    "typescript": "~5.9.0",
+    "vitest": "^4.0.8"
   }
 }

@@ -1,16 +1,17 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { of, throwError } from 'rxjs';
+import { vi } from 'vitest';
 import { AuthorsComponent } from './authors.component';
 import { AuthorService } from '../../services/author.service';
 
 describe('AuthorsComponent', () => {
   let component: AuthorsComponent;
   let fixture: ComponentFixture<AuthorsComponent>;
-  let authorServiceMock: jest.Mocked<Pick<AuthorService, 'getAuthors'>>;
+  let authorServiceMock: { getAuthors: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
-    authorServiceMock = { getAuthors: jest.fn() };
+    authorServiceMock = { getAuthors: vi.fn() };
 
     await TestBed.configureTestingModule({
       imports: [AuthorsComponent],

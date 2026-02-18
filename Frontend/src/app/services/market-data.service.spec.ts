@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { firstValueFrom } from 'rxjs';
 import { MarketDataService } from './market-data.service';
 import { createMockAggregate, createMockSummary, createMockIndicatorSeries } from '../../testing/factories/market-data.factory';
 
@@ -43,35 +44,36 @@ describe('MarketDataService', () => {
       req.flush({ data: { getOrFetchStockAggregates: { ticker: 'MSFT', aggregates: [], summary: null } } });
     });
 
-    it('should map response to SmartAggregatesResult', (done) => {
+    it('should map response to SmartAggregatesResult', async () => {
       const aggregate = createMockAggregate();
       const summary = createMockSummary();
 
-      service.getOrFetchStockAggregates('AAPL', '2026-01-01', '2026-01-31').subscribe(result => {
-        expect(result.ticker).toBe('AAPL');
-        expect(result.aggregates.length).toBe(1);
-        expect(result.aggregates[0].open).toBe(aggregate.open);
-        expect(result.summary).toEqual(summary);
-        done();
-      });
+      const promise = firstValueFrom(
+        service.getOrFetchStockAggregates('AAPL', '2026-01-01', '2026-01-31')
+      );
 
       httpMock.expectOne('http://localhost:5000/graphql').flush({
         data: { getOrFetchStockAggregates: { ticker: 'AAPL', aggregates: [aggregate], summary } },
       });
+
+      const result = await promise;
+      expect(result.ticker).toBe('AAPL');
+      expect(result.aggregates.length).toBe(1);
+      expect(result.aggregates[0].open).toBe(aggregate.open);
+      expect(result.summary).toEqual(summary);
     });
 
-    it('should throw on GraphQL errors', (done) => {
-      service.getOrFetchStockAggregates('BAD', '2026-01-01', '2026-01-31').subscribe({
-        error: (err) => {
-          expect(err.message).toContain('Ticker not found');
-          done();
-        },
-      });
+    it('should throw on GraphQL errors', async () => {
+      const promise = firstValueFrom(
+        service.getOrFetchStockAggregates('BAD', '2026-01-01', '2026-01-31')
+      );
 
       httpMock.expectOne('http://localhost:5000/graphql').flush({
         data: null,
         errors: [{ message: 'Ticker not found' }],
       });
+
+      await expect(promise).rejects.toThrow('Ticker not found');
     });
   });
 
@@ -93,13 +95,12 @@ describe('MarketDataService', () => {
       });
     });
 
-    it('should map indicator response correctly', (done) => {
+    it('should map indicator response correctly', async () => {
       const indicators = [{ name: 'sma', window: 20 }];
-      service.calculateIndicators('AAPL', '2026-01-01', '2026-01-31', indicators).subscribe(result => {
-        expect(result.success).toBe(true);
-        expect(result.indicators.length).toBe(1);
-        done();
-      });
+
+      const promise = firstValueFrom(
+        service.calculateIndicators('AAPL', '2026-01-01', '2026-01-31', indicators)
+      );
 
       httpMock.expectOne('http://localhost:5000/graphql').flush({
         data: {
@@ -109,6 +110,10 @@ describe('MarketDataService', () => {
           },
         },
       });
+
+      const result = await promise;
+      expect(result.success).toBe(true);
+      expect(result.indicators.length).toBe(1);
     });
   });
 });

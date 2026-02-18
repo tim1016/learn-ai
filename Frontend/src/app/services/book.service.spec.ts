@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { ApolloTestingModule, ApolloTestingController } from 'apollo-angular/testing';
-import { take } from 'rxjs/operators';
+import { firstValueFrom, filter } from 'rxjs';
 import { BookService } from './book.service';
 import { GET_BOOKS } from '../graphql/queries';
 
@@ -23,28 +23,27 @@ describe('BookService', () => {
     expect(service).toBeTruthy();
   });
 
-  it('should fetch books via Apollo', (done) => {
+  it('should fetch books via Apollo', async () => {
     const mockBooks = [
       { id: 1, title: '1984', publishedYear: 1949, authorId: 1, author: { id: 1, name: 'Orwell' } },
     ];
 
-    service.getBooks().subscribe(books => {
-      if (books.length === 0) return; // skip initial empty emission
-      expect(books.length).toBe(1);
-      expect(books[0].title).toBe('1984');
-      done();
-    });
+    const promise = firstValueFrom(service.getBooks().pipe(filter(b => b.length > 0)));
 
     const op = apolloController.expectOne(GET_BOOKS);
     op.flush({ data: { books: mockBooks } });
+
+    const books = await promise;
+    expect(books.length).toBe(1);
+    expect(books[0].title).toBe('1984');
   });
 
-  it('should return empty array when no books', (done) => {
-    service.getBooks().pipe(take(1)).subscribe(books => {
-      expect(books).toEqual([]);
-      done();
-    });
+  it('should return empty array when no books', async () => {
+    const promise = firstValueFrom(service.getBooks());
 
     apolloController.expectOne(GET_BOOKS).flush({ data: { books: [] } });
+
+    const books = await promise;
+    expect(books).toEqual([]);
   });
 });
