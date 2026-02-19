@@ -2,7 +2,11 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { map, tap } from 'rxjs/operators';
 import { Observable } from 'rxjs';
-import { SmartAggregatesResult, CalculateIndicatorsResult, OptionsContractsResult, OptionsChainSnapshotResult, BacktestResult } from '../graphql/types';
+import {
+  SmartAggregatesResult, CalculateIndicatorsResult, OptionsContractsResult,
+  OptionsChainSnapshotResult, BacktestResult, StockSnapshotResult,
+  StockSnapshotsResult, MarketMoversResult, UnifiedSnapshotResult,
+} from '../graphql/types';
 
 const GRAPHQL_URL = 'http://localhost:5000/graphql';
 
@@ -170,6 +174,83 @@ interface OptionsChainSnapshotResponse {
   errors?: { message: string }[];
 }
 
+const SNAPSHOT_FIELDS = `
+  ticker
+  day { open high low close volume vwap }
+  prevDay { open high low close volume vwap }
+  min { open high low close volume vwap accumulatedVolume timestamp }
+  todaysChange todaysChangePercent updated
+`;
+
+const GET_STOCK_SNAPSHOT_QUERY = `
+  query GetStockSnapshot($ticker: String!) {
+    getStockSnapshot(ticker: $ticker) {
+      success
+      snapshot { ${SNAPSHOT_FIELDS} }
+      error
+    }
+  }
+`;
+
+interface StockSnapshotResponse {
+  data: { getStockSnapshot: StockSnapshotResult };
+  errors?: { message: string }[];
+}
+
+const GET_STOCK_SNAPSHOTS_QUERY = `
+  query GetStockSnapshots($tickers: [String!]) {
+    getStockSnapshots(tickers: $tickers) {
+      success
+      snapshots { ${SNAPSHOT_FIELDS} }
+      count
+      error
+    }
+  }
+`;
+
+interface StockSnapshotsResponse {
+  data: { getStockSnapshots: StockSnapshotsResult };
+  errors?: { message: string }[];
+}
+
+const GET_MARKET_MOVERS_QUERY = `
+  query GetMarketMovers($direction: String!) {
+    getMarketMovers(direction: $direction) {
+      success
+      tickers { ${SNAPSHOT_FIELDS} }
+      count
+      error
+    }
+  }
+`;
+
+interface MarketMoversResponseGql {
+  data: { getMarketMovers: MarketMoversResult };
+  errors?: { message: string }[];
+}
+
+const GET_UNIFIED_SNAPSHOT_QUERY = `
+  query GetUnifiedSnapshot($tickers: [String!], $limit: Int! = 10) {
+    getUnifiedSnapshot(tickers: $tickers, limit: $limit) {
+      success
+      results {
+        ticker type marketStatus name
+        session {
+          price change changePercent
+          open close high low previousClose volume
+        }
+      }
+      count
+      error
+    }
+  }
+`;
+
+interface UnifiedSnapshotResponseGql {
+  data: { getUnifiedSnapshot: UnifiedSnapshotResult };
+  errors?: { message: string }[];
+}
+
 const RUN_BACKTEST_MUTATION = `
   mutation RunBacktest(
     $ticker: String!
@@ -332,6 +413,70 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.getOptionsChainSnapshot)
+      );
+  }
+
+  getStockSnapshot(ticker: string): Observable<StockSnapshotResult> {
+    return this.http
+      .post<StockSnapshotResponse>(GRAPHQL_URL, {
+        query: GET_STOCK_SNAPSHOT_QUERY,
+        variables: { ticker }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.getStockSnapshot)
+      );
+  }
+
+  getStockSnapshots(tickers?: string[]): Observable<StockSnapshotsResult> {
+    return this.http
+      .post<StockSnapshotsResponse>(GRAPHQL_URL, {
+        query: GET_STOCK_SNAPSHOTS_QUERY,
+        variables: { tickers }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.getStockSnapshots)
+      );
+  }
+
+  getMarketMovers(direction: string): Observable<MarketMoversResult> {
+    return this.http
+      .post<MarketMoversResponseGql>(GRAPHQL_URL, {
+        query: GET_MARKET_MOVERS_QUERY,
+        variables: { direction }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.getMarketMovers)
+      );
+  }
+
+  getUnifiedSnapshot(tickers?: string[], limit: number = 10): Observable<UnifiedSnapshotResult> {
+    return this.http
+      .post<UnifiedSnapshotResponseGql>(GRAPHQL_URL, {
+        query: GET_UNIFIED_SNAPSHOT_QUERY,
+        variables: { tickers, limit }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.getUnifiedSnapshot)
       );
   }
 

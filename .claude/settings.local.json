@@ -47,7 +47,10 @@
       "Bash(npx ng test --help:*)",
       "Bash(python -m pytest:*)",
       "Bash(podman compose:*)",
-      "Bash(npx ng build:*)"
+      "Bash(npx ng build:*)",
+      "Bash(python:*)",
+      "Read(//c/Users/inkan/client-python/**)",
+      "Bash(npx ng test --no-watch)"
     ]
   }
 }

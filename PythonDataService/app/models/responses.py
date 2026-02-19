@@ -115,6 +115,90 @@ class CalculateIndicatorsResponse(BaseModel):
 
 
 # ------------------------------------------------------------------
+# Stock Snapshot responses (v2 & v3)
+# ------------------------------------------------------------------
+
+class SnapshotBar(BaseModel):
+    """OHLCV bar from a snapshot (day or prev_day)"""
+    open: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
+    close: Optional[float] = None
+    volume: Optional[float] = None
+    vwap: Optional[float] = None
+
+
+class MinuteBar(SnapshotBar):
+    """Most recent minute bar with accumulated volume and timestamp"""
+    accumulated_volume: Optional[float] = None
+    timestamp: Optional[int] = None
+
+
+class StockTickerSnapshot(BaseModel):
+    """Snapshot data for a single stock ticker (v2 API)"""
+    ticker: Optional[str] = None
+    day: Optional[SnapshotBar] = None
+    prev_day: Optional[SnapshotBar] = None
+    min: Optional[MinuteBar] = None
+    todays_change: Optional[float] = None
+    todays_change_percent: Optional[float] = None
+    updated: Optional[int] = None
+
+
+class StockSnapshotResponse(BaseModel):
+    """Response for a single stock ticker snapshot"""
+    success: bool
+    snapshot: Optional[StockTickerSnapshot] = None
+    error: Optional[str] = None
+
+
+class StockSnapshotsResponse(BaseModel):
+    """Response for multiple stock ticker snapshots"""
+    success: bool
+    snapshots: List[StockTickerSnapshot] = []
+    count: int = 0
+    error: Optional[str] = None
+
+
+class MarketMoversResponse(BaseModel):
+    """Response for top market movers (gainers/losers)"""
+    success: bool
+    tickers: List[StockTickerSnapshot] = []
+    count: int = 0
+    error: Optional[str] = None
+
+
+class UnifiedSnapshotSession(BaseModel):
+    """Session data from unified v3 snapshot"""
+    price: Optional[float] = None
+    change: Optional[float] = None
+    change_percent: Optional[float] = None
+    open: Optional[float] = None
+    close: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
+    previous_close: Optional[float] = None
+    volume: Optional[float] = None
+
+
+class UnifiedSnapshotItem(BaseModel):
+    """A single item from the unified v3 snapshot"""
+    ticker: Optional[str] = None
+    type: Optional[str] = None
+    market_status: Optional[str] = None
+    name: Optional[str] = None
+    session: Optional[UnifiedSnapshotSession] = None
+
+
+class UnifiedSnapshotResponse(BaseModel):
+    """Response for unified v3 snapshots"""
+    success: bool
+    results: List[UnifiedSnapshotItem] = []
+    count: int = 0
+    error: Optional[str] = None
+
+
+# ------------------------------------------------------------------
 # Market Monitor responses
 # ------------------------------------------------------------------
 

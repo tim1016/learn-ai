@@ -219,6 +219,150 @@ class PolygonClientService:
             logger.error(f"Error fetching options chain snapshot for {underlying_asset}: {str(e)}")
             raise
 
+    def get_stock_snapshot(self, ticker: str) -> Dict[str, Any]:
+        """Fetch snapshot for a single stock ticker (v2 API)."""
+        try:
+            logger.info(f"Fetching stock snapshot for {ticker}")
+
+            snapshot = self.client.get_snapshot_ticker("stocks", ticker)
+
+            result = self._serialize_ticker_snapshot(snapshot)
+            logger.info(f"Fetched snapshot for {ticker}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error fetching stock snapshot for {ticker}: {str(e)}")
+            raise
+
+    def get_stock_snapshots(
+        self,
+        tickers: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch snapshots for multiple stock tickers (v2 API).
+
+        Args:
+            tickers: List of ticker symbols. If None, returns all tickers.
+        """
+        try:
+            ticker_str = ",".join(tickers) if tickers else None
+            logger.info(f"Fetching stock snapshots for {ticker_str or 'all tickers'}")
+
+            snapshots = self.client.get_snapshot_all("stocks", tickers=ticker_str)
+
+            results = [self._serialize_ticker_snapshot(s) for s in snapshots]
+            logger.info(f"Fetched {len(results)} stock snapshots")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error fetching stock snapshots: {str(e)}")
+            raise
+
+    def get_market_movers(self, direction: str) -> List[Dict[str, Any]]:
+        """Fetch top market movers — gainers or losers (v2 API).
+
+        Args:
+            direction: "gainers" or "losers"
+        """
+        try:
+            logger.info(f"Fetching market movers: {direction}")
+
+            snapshots = self.client.get_snapshot_direction("stocks", direction)
+
+            results = [self._serialize_ticker_snapshot(s) for s in snapshots]
+            logger.info(f"Fetched {len(results)} {direction}")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error fetching market movers ({direction}): {str(e)}")
+            raise
+
+    def get_unified_snapshots(
+        self,
+        tickers: Optional[List[str]] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Fetch unified snapshots via the v3 API.
+
+        Args:
+            tickers: Optional list of ticker symbols to filter.
+            limit: Max results per page (default 10, max 250).
+        """
+        try:
+            logger.info(f"Fetching unified snapshots: tickers={tickers}, limit={limit}")
+
+            results = []
+            for snapshot in self.client.list_universal_snapshots(
+                ticker_any_of=tickers,
+                limit=limit,
+            ):
+                session = getattr(snapshot, 'session', None)
+                results.append({
+                    'ticker': getattr(snapshot, 'ticker', None),
+                    'type': getattr(snapshot, 'type', None),
+                    'market_status': getattr(snapshot, 'market_status', None),
+                    'name': getattr(snapshot, 'name', None),
+                    'session': {
+                        'price': getattr(session, 'price', None),
+                        'change': getattr(session, 'change', None),
+                        'change_percent': getattr(session, 'change_percent', None),
+                        'open': getattr(session, 'open', None),
+                        'close': getattr(session, 'close', None),
+                        'high': getattr(session, 'high', None),
+                        'low': getattr(session, 'low', None),
+                        'previous_close': getattr(session, 'previous_close', None),
+                        'volume': getattr(session, 'volume', None),
+                    } if session else None,
+                })
+
+            logger.info(f"Fetched {len(results)} unified snapshots")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error fetching unified snapshots: {str(e)}")
+            raise
+
+    @staticmethod
+    def _serialize_bar(bar: Any) -> Optional[Dict[str, Any]]:
+        """Serialize an Agg or MinuteSnapshot bar to a dict."""
+        if bar is None:
+            return None
+        return {
+            'open': getattr(bar, 'open', None),
+            'high': getattr(bar, 'high', None),
+            'low': getattr(bar, 'low', None),
+            'close': getattr(bar, 'close', None),
+            'volume': getattr(bar, 'volume', None),
+            'vwap': getattr(bar, 'vwap', None),
+        }
+
+    @staticmethod
+    def _serialize_minute_bar(bar: Any) -> Optional[Dict[str, Any]]:
+        """Serialize a MinuteSnapshot bar with accumulated volume and timestamp."""
+        if bar is None:
+            return None
+        return {
+            'open': getattr(bar, 'open', None),
+            'high': getattr(bar, 'high', None),
+            'low': getattr(bar, 'low', None),
+            'close': getattr(bar, 'close', None),
+            'volume': getattr(bar, 'volume', None),
+            'vwap': getattr(bar, 'vwap', None),
+            'accumulated_volume': getattr(bar, 'accumulated_volume', None),
+            'timestamp': getattr(bar, 'timestamp', None),
+        }
+
+    def _serialize_ticker_snapshot(self, snapshot: Any) -> Dict[str, Any]:
+        """Convert a TickerSnapshot to a serializable dict."""
+        return {
+            'ticker': getattr(snapshot, 'ticker', None),
+            'day': self._serialize_bar(getattr(snapshot, 'day', None)),
+            'prev_day': self._serialize_bar(getattr(snapshot, 'prev_day', None)),
+            'min': self._serialize_minute_bar(getattr(snapshot, 'min', None)),
+            'todays_change': getattr(snapshot, 'todays_change', None),
+            'todays_change_percent': getattr(snapshot, 'todays_change_percent', None),
+            'updated': getattr(snapshot, 'updated', None),
+        }
+
     def fetch_technical_indicator(
         self,
         ticker: str,

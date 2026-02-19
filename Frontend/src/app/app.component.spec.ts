@@ -18,9 +18,9 @@ describe('AppComponent', () => {
     expect(fixture.componentInstance).toBeTruthy();
   });
 
-  it('should render 9 navigation links', () => {
+  it('should render 10 navigation links', () => {
     const links = fixture.nativeElement.querySelectorAll('nav a');
-    expect(links.length).toBe(9);
+    expect(links.length).toBe(10);
   });
 
   it('should have links to all routes', () => {
@@ -35,6 +35,7 @@ describe('AppComponent', () => {
     expect(hrefs).toContain('/ticker-explorer');
     expect(hrefs).toContain('/strategy-lab');
     expect(hrefs).toContain('/options-history');
+    expect(hrefs).toContain('/snapshots');
   });
 
   it('should contain a router-outlet', () => {

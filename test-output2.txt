@@ -1,0 +1,11 @@
+[33m❯[39m Building...
+[32m✔[39m Building...
+Application bundle generation failed. [5.000 seconds] - 2026-02-19T03:39:06.279Z
+
+[1m[31m[31mX [41;31m[[41;97mERROR[41;31m][0m [1mTS2339: Property 'setMarkers' does not exist on type 'ISeriesApi<"Candlestick", Time, CandlestickData<Time> | WhitespaceData<Time>, CandlestickSeriesOptions, DeepPartial<...>>'.[0m [1m[35m[plugin angular-compiler][0m
+
+    src/app/components/strategy-lab/replay-chart/replay-chart.component.ts:210:27:
+[37m      210 │     this.candlestickSeries.[32msetMarkers[37m(markers);
+          ╵                            [32m~~~~~~~~~~[0m
+
+[39m[22m

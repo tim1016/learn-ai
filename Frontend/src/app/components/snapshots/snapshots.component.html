@@ -1,0 +1,270 @@
+<h2>Stock Snapshots</h2>
+
+<details class="page-guide">
+  <summary>How to use this page</summary>
+  <div class="guide-content">
+    <h4>Quick start</h4>
+    <ol>
+      <li>Choose a <strong>tab</strong> for the type of snapshot you want.</li>
+      <li>Enter a <strong>ticker</strong> (or tickers, depending on the tab).</li>
+      <li>Click <strong>Fetch</strong> to load the latest snapshot data from Polygon.</li>
+    </ol>
+    <h4>Tabs explained</h4>
+    <ul>
+      <li><strong>Single Ticker</strong> &mdash; Fetch a snapshot for one stock. Shows today's OHLCV, previous day's OHLCV, and the last minute bar.</li>
+      <li><strong>Market Movers</strong> &mdash; View the top <strong>gainers</strong> or <strong>losers</strong> across the market. Sorted by change percentage.</li>
+      <li><strong>Multi-Ticker</strong> &mdash; Compare snapshots for several tickers side-by-side. Enter comma-separated symbols (e.g. <code>AAPL, MSFT, GOOGL</code>).</li>
+      <li><strong>Unified</strong> &mdash; Broad market snapshot with ticker name, type, and market status. Optionally filter by tickers or set a result limit.</li>
+    </ul>
+    <h4>Reading the data</h4>
+    <ul>
+      <li><strong>Price</strong> &mdash; Most recent closing price for the day.</li>
+      <li><strong>Change / Change %</strong> &mdash; Today's price change from previous close. <span style="color:#4caf50">Green</span> = up, <span style="color:#f44336">Red</span> = down.</li>
+      <li><strong>Volume</strong> &mdash; Number of shares traded today.</li>
+      <li><strong>VWAP</strong> &mdash; Volume-weighted average price (institutional fair-value benchmark).</li>
+    </ul>
+    <h4>Tips</h4>
+    <ul>
+      <li>Snapshots show <strong>delayed live data</strong>, not historical. For historical OHLCV, use the <strong>Market Data</strong> page.</li>
+      <li>Use <strong>Market Movers</strong> to quickly find stocks with unusual activity.</li>
+    </ul>
+    <div class="guide-tip">
+      Note: All data is <strong>15-minute delayed</strong> (Polygon Starter plan).
+    </div>
+  </div>
+</details>
+
+<div class="tabs">
+  <button [class.active]="activeTab() === 'single'" (click)="activeTab.set('single')">Single Ticker</button>
+  <button [class.active]="activeTab() === 'movers'" (click)="activeTab.set('movers')">Market Movers</button>
+  <button [class.active]="activeTab() === 'multi'" (click)="activeTab.set('multi')">Multi-Ticker</button>
+  <button [class.active]="activeTab() === 'unified'" (click)="activeTab.set('unified')">Unified</button>
+</div>
+
+<!-- ========== SINGLE TICKER ========== -->
+@if (activeTab() === 'single') {
+  <section class="tab-content">
+    <div class="input-row">
+      <input type="text" [ngModel]="singleTicker()" (ngModelChange)="singleTicker.set($event)"
+             placeholder="Ticker (e.g. AAPL)" (keyup.enter)="fetchSingleSnapshot()" />
+      <button (click)="fetchSingleSnapshot()" [disabled]="singleLoading()">
+        {{ singleLoading() ? 'Loading...' : 'Fetch' }}
+      </button>
+    </div>
+
+    @if (singleError()) {
+      <p class="error">{{ singleError() }}</p>
+    }
+
+    @if (singleSnapshot(); as snap) {
+      <div class="snapshot-card">
+        <h3>{{ snap.ticker }}</h3>
+        <div class="price-row">
+          <span class="price">{{ formatPrice(snap.day?.close ?? null) }}</span>
+          <span [class]="changeClass(snap.todaysChange)">
+            {{ formatChange(snap.todaysChange) }}
+            ({{ formatPercent(snap.todaysChangePercent) }})
+          </span>
+        </div>
+
+        <div class="bars-grid">
+          <div class="bar-section">
+            <h4>Today</h4>
+            @if (snap.day; as day) {
+              <table>
+                <tr><td>Open</td><td>{{ formatPrice(day.open) }}</td></tr>
+                <tr><td>High</td><td>{{ formatPrice(day.high) }}</td></tr>
+                <tr><td>Low</td><td>{{ formatPrice(day.low) }}</td></tr>
+                <tr><td>Close</td><td>{{ formatPrice(day.close) }}</td></tr>
+                <tr><td>Volume</td><td>{{ formatVolume(day.volume) }}</td></tr>
+                <tr><td>VWAP</td><td>{{ formatPrice(day.vwap) }}</td></tr>
+              </table>
+            }
+          </div>
+          <div class="bar-section">
+            <h4>Previous Day</h4>
+            @if (snap.prevDay; as prev) {
+              <table>
+                <tr><td>Open</td><td>{{ formatPrice(prev.open) }}</td></tr>
+                <tr><td>High</td><td>{{ formatPrice(prev.high) }}</td></tr>
+                <tr><td>Low</td><td>{{ formatPrice(prev.low) }}</td></tr>
+                <tr><td>Close</td><td>{{ formatPrice(prev.close) }}</td></tr>
+                <tr><td>Volume</td><td>{{ formatVolume(prev.volume) }}</td></tr>
+                <tr><td>VWAP</td><td>{{ formatPrice(prev.vwap) }}</td></tr>
+              </table>
+            }
+          </div>
+          <div class="bar-section">
+            <h4>Last Minute</h4>
+            @if (snap.min; as min) {
+              <table>
+                <tr><td>Open</td><td>{{ formatPrice(min.open) }}</td></tr>
+                <tr><td>High</td><td>{{ formatPrice(min.high) }}</td></tr>
+                <tr><td>Low</td><td>{{ formatPrice(min.low) }}</td></tr>
+                <tr><td>Close</td><td>{{ formatPrice(min.close) }}</td></tr>
+                <tr><td>Volume</td><td>{{ formatVolume(min.volume) }}</td></tr>
+              </table>
+            }
+          </div>
+        </div>
+      </div>
+    }
+  </section>
+}
+
+<!-- ========== MARKET MOVERS ========== -->
+@if (activeTab() === 'movers') {
+  <section class="tab-content">
+    <div class="input-row">
+      <select [ngModel]="moversDirection()" (ngModelChange)="moversDirection.set($event)">
+        <option value="gainers">Gainers</option>
+        <option value="losers">Losers</option>
+      </select>
+      <button (click)="fetchMovers()" [disabled]="moversLoading()">
+        {{ moversLoading() ? 'Loading...' : 'Fetch' }}
+      </button>
+    </div>
+
+    @if (moversError()) {
+      <p class="error">{{ moversError() }}</p>
+    }
+
+    @if (sortedMovers().length > 0) {
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Price</th>
+            <th>Change</th>
+            <th>Change %</th>
+            <th>Volume</th>
+            <th>High</th>
+            <th>Low</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (snap of sortedMovers(); track snap.ticker) {
+            <tr>
+              <td class="ticker">{{ snap.ticker }}</td>
+              <td>{{ formatPrice(snap.day?.close ?? null) }}</td>
+              <td [class]="changeClass(snap.todaysChange)">{{ formatChange(snap.todaysChange) }}</td>
+              <td [class]="changeClass(snap.todaysChangePercent)">{{ formatPercent(snap.todaysChangePercent) }}</td>
+              <td>{{ formatVolume(snap.day?.volume ?? null) }}</td>
+              <td>{{ formatPrice(snap.day?.high ?? null) }}</td>
+              <td>{{ formatPrice(snap.day?.low ?? null) }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </section>
+}
+
+<!-- ========== MULTI-TICKER ========== -->
+@if (activeTab() === 'multi') {
+  <section class="tab-content">
+    <div class="input-row">
+      <input type="text" [ngModel]="multiTickersInput()" (ngModelChange)="multiTickersInput.set($event)"
+             placeholder="AAPL, MSFT, GOOGL" (keyup.enter)="fetchMultiSnapshots()" />
+      <button (click)="fetchMultiSnapshots()" [disabled]="multiLoading()">
+        {{ multiLoading() ? 'Loading...' : 'Fetch' }}
+      </button>
+    </div>
+
+    @if (multiError()) {
+      <p class="error">{{ multiError() }}</p>
+    }
+
+    @if (multiSnapshots().length > 0) {
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Price</th>
+            <th>Change</th>
+            <th>Change %</th>
+            <th>Open</th>
+            <th>High</th>
+            <th>Low</th>
+            <th>Volume</th>
+            <th>VWAP</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (snap of multiSnapshots(); track snap.ticker) {
+            <tr>
+              <td class="ticker">{{ snap.ticker }}</td>
+              <td>{{ formatPrice(snap.day?.close ?? null) }}</td>
+              <td [class]="changeClass(snap.todaysChange)">{{ formatChange(snap.todaysChange) }}</td>
+              <td [class]="changeClass(snap.todaysChangePercent)">{{ formatPercent(snap.todaysChangePercent) }}</td>
+              <td>{{ formatPrice(snap.day?.open ?? null) }}</td>
+              <td>{{ formatPrice(snap.day?.high ?? null) }}</td>
+              <td>{{ formatPrice(snap.day?.low ?? null) }}</td>
+              <td>{{ formatVolume(snap.day?.volume ?? null) }}</td>
+              <td>{{ formatPrice(snap.day?.vwap ?? null) }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </section>
+}
+
+<!-- ========== UNIFIED ========== -->
+@if (activeTab() === 'unified') {
+  <section class="tab-content">
+    <div class="input-row">
+      <input type="text" [ngModel]="unifiedTickersInput()" (ngModelChange)="unifiedTickersInput.set($event)"
+             placeholder="AAPL, MSFT (optional)" (keyup.enter)="fetchUnified()" />
+      <label>
+        Limit:
+        <input type="number" [ngModel]="unifiedLimit()" (ngModelChange)="unifiedLimit.set($event)"
+               min="1" max="250" style="width: 60px" />
+      </label>
+      <button (click)="fetchUnified()" [disabled]="unifiedLoading()">
+        {{ unifiedLoading() ? 'Loading...' : 'Fetch' }}
+      </button>
+    </div>
+
+    @if (unifiedError()) {
+      <p class="error">{{ unifiedError() }}</p>
+    }
+
+    @if (unifiedResults().length > 0) {
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Price</th>
+            <th>Change</th>
+            <th>Change %</th>
+            <th>Open</th>
+            <th>High</th>
+            <th>Low</th>
+            <th>Volume</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (item of unifiedResults(); track item.ticker) {
+            <tr>
+              <td class="ticker">{{ item.ticker }}</td>
+              <td>{{ item.name ?? '--' }}</td>
+              <td>{{ item.type ?? '--' }}</td>
+              <td>{{ item.marketStatus ?? '--' }}</td>
+              <td>{{ formatPrice(item.session?.price ?? null) }}</td>
+              <td [class]="changeClass(item.session?.change ?? null)">{{ formatChange(item.session?.change ?? null) }}</td>
+              <td [class]="changeClass(item.session?.changePercent ?? null)">{{ formatPercent(item.session?.changePercent ?? null) }}</td>
+              <td>{{ formatPrice(item.session?.open ?? null) }}</td>
+              <td>{{ formatPrice(item.session?.high ?? null) }}</td>
+              <td>{{ formatPrice(item.session?.low ?? null) }}</td>
+              <td>{{ formatVolume(item.session?.volume ?? null) }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </section>
+}

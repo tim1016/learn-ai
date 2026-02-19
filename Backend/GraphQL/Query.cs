@@ -461,6 +461,175 @@ public class Query
         }
     }
 
+    /// <summary>
+    /// Fetch a snapshot for a single stock ticker.
+    /// Returns price, day/prevDay OHLCV, and today's change.
+    /// </summary>
+    [GraphQLName("getStockSnapshot")]
+    public async Task<StockSnapshotResult> GetStockSnapshot(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        string ticker)
+    {
+        try
+        {
+            logger.LogInformation("[Snapshot] Query: ticker={Ticker}", ticker);
+
+            var response = await polygonService.FetchStockSnapshotAsync(ticker);
+
+            return new StockSnapshotResult
+            {
+                Success = response.Success,
+                Snapshot = response.Snapshot != null
+                    ? MapTickerSnapshot(response.Snapshot)
+                    : null,
+                Error = response.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Snapshot] Error fetching stock snapshot for {Ticker}", ticker);
+            return new StockSnapshotResult { Success = false, Error = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// Fetch snapshots for multiple stock tickers.
+    /// If no tickers provided, returns all available snapshots.
+    /// </summary>
+    [GraphQLName("getStockSnapshots")]
+    public async Task<StockSnapshotsResult> GetStockSnapshots(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        List<string>? tickers = null)
+    {
+        try
+        {
+            logger.LogInformation("[Snapshot] Query: tickers={Tickers}",
+                tickers != null ? string.Join(",", tickers) : "all");
+
+            var response = await polygonService.FetchStockSnapshotsAsync(tickers);
+
+            return new StockSnapshotsResult
+            {
+                Success = response.Success,
+                Snapshots = response.Snapshots.Select(MapTickerSnapshot).ToList(),
+                Count = response.Count,
+                Error = response.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Snapshot] Error fetching stock snapshots");
+            return new StockSnapshotsResult { Success = false, Error = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// Fetch top market movers — gainers or losers.
+    /// </summary>
+    [GraphQLName("getMarketMovers")]
+    public async Task<MarketMoversResult> GetMarketMovers(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        string direction)
+    {
+        try
+        {
+            logger.LogInformation("[Snapshot] Query: movers direction={Direction}", direction);
+
+            var response = await polygonService.FetchMarketMoversAsync(direction);
+
+            return new MarketMoversResult
+            {
+                Success = response.Success,
+                Tickers = response.Tickers.Select(MapTickerSnapshot).ToList(),
+                Count = response.Count,
+                Error = response.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Snapshot] Error fetching market movers ({Direction})", direction);
+            return new MarketMoversResult { Success = false, Error = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// Fetch unified v3 snapshots with flexible filtering.
+    /// </summary>
+    [GraphQLName("getUnifiedSnapshot")]
+    public async Task<UnifiedSnapshotResult> GetUnifiedSnapshot(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        List<string>? tickers = null,
+        int limit = 10)
+    {
+        try
+        {
+            logger.LogInformation("[Snapshot] Query: unified tickers={Tickers}, limit={Limit}",
+                tickers != null ? string.Join(",", tickers) : "none", limit);
+
+            var response = await polygonService.FetchUnifiedSnapshotAsync(tickers, limit);
+
+            return new UnifiedSnapshotResult
+            {
+                Success = response.Success,
+                Results = response.Results.Select(r => new UnifiedSnapshotItemResult
+                {
+                    Ticker = r.Ticker,
+                    Type = r.Type,
+                    MarketStatus = r.MarketStatus,
+                    Name = r.Name,
+                    Session = r.Session != null ? new UnifiedSessionResult
+                    {
+                        Price = r.Session.Price,
+                        Change = r.Session.Change,
+                        ChangePercent = r.Session.ChangePercent,
+                        Open = r.Session.Open,
+                        Close = r.Session.Close,
+                        High = r.Session.High,
+                        Low = r.Session.Low,
+                        PreviousClose = r.Session.PreviousClose,
+                        Volume = r.Session.Volume,
+                    } : null,
+                }).ToList(),
+                Count = response.Count,
+                Error = response.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Snapshot] Error fetching unified snapshots");
+            return new UnifiedSnapshotResult { Success = false, Error = ex.Message };
+        }
+    }
+
+    private static StockTickerSnapshotResult MapTickerSnapshot(
+        Backend.Models.DTOs.PolygonResponses.StockTickerSnapshotDto dto) => new()
+    {
+        Ticker = dto.Ticker,
+        Day = dto.Day != null ? new SnapshotBarResult
+        {
+            Open = dto.Day.Open, High = dto.Day.High, Low = dto.Day.Low,
+            Close = dto.Day.Close, Volume = dto.Day.Volume, Vwap = dto.Day.Vwap,
+        } : null,
+        PrevDay = dto.PrevDay != null ? new SnapshotBarResult
+        {
+            Open = dto.PrevDay.Open, High = dto.PrevDay.High, Low = dto.PrevDay.Low,
+            Close = dto.PrevDay.Close, Volume = dto.PrevDay.Volume, Vwap = dto.PrevDay.Vwap,
+        } : null,
+        Min = dto.Min != null ? new MinuteBarResult
+        {
+            Open = dto.Min.Open, High = dto.Min.High, Low = dto.Min.Low,
+            Close = dto.Min.Close, Volume = dto.Min.Volume, Vwap = dto.Min.Vwap,
+            AccumulatedVolume = dto.Min.AccumulatedVolume, Timestamp = dto.Min.Timestamp,
+        } : null,
+        TodaysChange = dto.TodaysChange,
+        TodaysChangePercent = dto.TodaysChangePercent,
+        Updated = dto.Updated,
+    };
+
     #endregion
 }
 
@@ -547,4 +716,88 @@ public class IndicatorConfigInput
 {
     public required string Name { get; set; }
     public int Window { get; set; } = 14;
+}
+
+// ------------------------------------------------------------------
+// Stock Snapshot result types
+// ------------------------------------------------------------------
+
+public class SnapshotBarResult
+{
+    public decimal? Open { get; set; }
+    public decimal? High { get; set; }
+    public decimal? Low { get; set; }
+    public decimal? Close { get; set; }
+    public decimal? Volume { get; set; }
+    public decimal? Vwap { get; set; }
+}
+
+public class MinuteBarResult : SnapshotBarResult
+{
+    public decimal? AccumulatedVolume { get; set; }
+    public long? Timestamp { get; set; }
+}
+
+public class StockTickerSnapshotResult
+{
+    public string? Ticker { get; set; }
+    public SnapshotBarResult? Day { get; set; }
+    public SnapshotBarResult? PrevDay { get; set; }
+    public MinuteBarResult? Min { get; set; }
+    public decimal? TodaysChange { get; set; }
+    public decimal? TodaysChangePercent { get; set; }
+    public long? Updated { get; set; }
+}
+
+public class StockSnapshotResult
+{
+    public bool Success { get; set; }
+    public StockTickerSnapshotResult? Snapshot { get; set; }
+    public string? Error { get; set; }
+}
+
+public class StockSnapshotsResult
+{
+    public bool Success { get; set; }
+    public List<StockTickerSnapshotResult> Snapshots { get; set; } = [];
+    public int Count { get; set; }
+    public string? Error { get; set; }
+}
+
+public class MarketMoversResult
+{
+    public bool Success { get; set; }
+    public List<StockTickerSnapshotResult> Tickers { get; set; } = [];
+    public int Count { get; set; }
+    public string? Error { get; set; }
+}
+
+public class UnifiedSessionResult
+{
+    public decimal? Price { get; set; }
+    public decimal? Change { get; set; }
+    public decimal? ChangePercent { get; set; }
+    public decimal? Open { get; set; }
+    public decimal? Close { get; set; }
+    public decimal? High { get; set; }
+    public decimal? Low { get; set; }
+    public decimal? PreviousClose { get; set; }
+    public decimal? Volume { get; set; }
+}
+
+public class UnifiedSnapshotItemResult
+{
+    public string? Ticker { get; set; }
+    public string? Type { get; set; }
+    public string? MarketStatus { get; set; }
+    public string? Name { get; set; }
+    public UnifiedSessionResult? Session { get; set; }
+}
+
+public class UnifiedSnapshotResult
+{
+    public bool Success { get; set; }
+    public List<UnifiedSnapshotItemResult> Results { get; set; } = [];
+    public int Count { get; set; }
+    public string? Error { get; set; }
 }

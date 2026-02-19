@@ -38,6 +38,7 @@ interface TickerWithStats extends Ticker {
           <ol>
             <li>Go to <strong>Market Data</strong> and fetch any ticker &mdash; it appears here automatically.</li>
             <li>Or use <strong>Stock Analysis</strong> to bulk-fetch months of minute data.</li>
+            <li>Use <strong>Snapshots</strong> to check real-time prices and market movers.</li>
           </ol>
           <div class="guide-tip">
             If a ticker shows 0 aggregates, it means the entry exists but no OHLCV bars have been fetched yet.

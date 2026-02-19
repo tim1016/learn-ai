@@ -21,6 +21,38 @@ h2 {
   margin-bottom: 20px;
 }
 
+.mode-toggle {
+  display: flex;
+  gap: 2px;
+  background: #e9ecef;
+  border-radius: 8px;
+  padding: 3px;
+  margin-bottom: 20px;
+  width: fit-content;
+
+  button {
+    padding: 8px 24px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    font-size: 14px;
+    font-weight: 600;
+    color: #666;
+    cursor: pointer;
+    transition: all 0.15s;
+
+    &:hover:not(.active) {
+      background: #dee2e6;
+    }
+
+    &.active {
+      background: white;
+      color: #1976d2;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    }
+  }
+}
+
 .config-form {
   background: #f8f9fa;
   border-radius: 8px;
@@ -266,4 +298,26 @@ table {
 .negative {
   color: #c0392b;
   font-weight: 600;
+}
+
+.active-position {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #fff3e0;
+  border: 1px solid #ffcc80;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: #e65100;
+}
+
+.position-badge {
+  font-weight: 700;
+  background: #ff9800;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
 }

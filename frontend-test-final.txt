@@ -1,0 +1,472 @@
+[33m❯[39m Building...
+[32m✔[39m Building...
+[1mInitial chunk files[22m                                                             [2m | [22m[1mNames[22m                                                                        [2m | [22m [1mRaw size[22m
+[32mspec-app-components-strategy-lab-strategy-lab.component.js[39m                      [2m | [22m[2mspec-app-components-strategy-lab-strategy-lab.component[22m                      [2m | [22m[36m116.06 kB[39m[2m | [22m
+[32mspec-app-components-options-history-options-history.component.js[39m                [2m | [22m[2mspec-app-components-options-history-options-history.component[22m                [2m | [22m[36m102.41 kB[39m[2m | [22m
+[32mspec-app-components-stock-analysis-stock-analysis.component.js[39m                  [2m | [22m[2mspec-app-components-stock-analysis-stock-analysis.component[22m                  [2m | [22m [36m82.51 kB[39m[2m | [22m
+[32mspec-app-components-market-data-market-data.component.js[39m                        [2m | [22m[2mspec-app-components-market-data-market-data.component[22m                        [2m | [22m [36m55.70 kB[39m[2m | [22m
+[32mspec-app-components-ticker-explorer-ticker-explorer.component.js[39m                [2m | [22m[2mspec-app-components-ticker-explorer-ticker-explorer.component[22m                [2m | [22m [36m51.79 kB[39m[2m | [22m
+[32mspec-app-components-tickers-technical-analysis-technical-analysis.component.js[39m  [2m | [22m[2mspec-app-components-tickers-technical-analysis-technical-analysis.component[22m  [2m | [22m [36m35.32 kB[39m[2m | [22m
+[32mspec-app-components-tickers-tickers.component.js[39m                                [2m | [22m[2mspec-app-components-tickers-tickers.component[22m                                [2m | [22m [36m28.57 kB[39m[2m | [22m
+[32mstyles.css[39m                                                                      [2m | [22m[2mstyles[22m                                                                       [2m | [22m [36m18.77 kB[39m[2m | [22m
+[32mchunk-BVWJZFLN.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m [36m15.40 kB[39m[2m | [22m
+[32mspec-app-services-stock-aggregate-store.service.js[39m                              [2m | [22m[2mspec-app-services-stock-aggregate-store.service[22m                              [2m | [22m [36m12.00 kB[39m[2m | [22m
+[32mchunk-B5VXQVED.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m [36m11.65 kB[39m[2m | [22m
+[32mspec-app-services-replay-engine.service.js[39m                                      [2m | [22m[2mspec-app-services-replay-engine.service[22m                                      [2m | [22m [36m11.24 kB[39m[2m | [22m
+[32mchunk-ZUV3URXL.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m [36m10.27 kB[39m[2m | [22m
+[32mchunk-VMZLUIG4.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m9.49 kB[39m[2m | [22m
+[32mspec-app-components-authors-authors.component.js[39m                                [2m | [22m[2mspec-app-components-authors-authors.component[22m                                [2m | [22m  [36m9.12 kB[39m[2m | [22m
+[32mspec-app-components-books-books.component.js[39m                                    [2m | [22m[2mspec-app-components-books-books.component[22m                                    [2m | [22m  [36m7.69 kB[39m[2m | [22m
+[32mspec-app-services-market-monitor.service.js[39m                                     [2m | [22m[2mspec-app-services-market-monitor.service[22m                                     [2m | [22m  [36m6.91 kB[39m[2m | [22m
+[32mspec-app-services-replay-strategy.service.js[39m                                    [2m | [22m[2mspec-app-services-replay-strategy.service[22m                                    [2m | [22m  [36m6.78 kB[39m[2m | [22m
+[32mchunk-SIZEQAQF.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m5.86 kB[39m[2m | [22m
+[32mspec-app-app.component.js[39m                                                       [2m | [22m[2mspec-app-app.component[22m                                                       [2m | [22m  [36m5.76 kB[39m[2m | [22m
+[32mchunk-XNDA3IA4.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m5.67 kB[39m[2m | [22m
+[32mspec-app-services-polygon.service.js[39m                                            [2m | [22m[2mspec-app-services-polygon.service[22m                                            [2m | [22m  [36m5.47 kB[39m[2m | [22m
+[32mchunk-WME5RZHB.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m5.44 kB[39m[2m | [22m
+[32mchunk-2ICXW3NJ.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m5.39 kB[39m[2m | [22m
+[32mchunk-7W6TLCV3.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m5.15 kB[39m[2m | [22m
+[32mspec-app-services-market-data.service.js[39m                                        [2m | [22m[2mspec-app-services-market-data.service[22m                                        [2m | [22m  [36m5.12 kB[39m[2m | [22m
+[32mspec-app-services-replay-indicator.service.js[39m                                   [2m | [22m[2mspec-app-services-replay-indicator.service[22m                                   [2m | [22m  [36m4.67 kB[39m[2m | [22m
+[32mspec-app-components-strategy-lab-replay-controls-replay-controls.component.js[39m   [2m | [22m[2mspec-app-components-strategy-lab-replay-controls-replay-controls.component[22m   [2m | [22m  [36m4.64 kB[39m[2m | [22m
+[32mspec-app-components-tickers-ta-chart-ta-chart.component.js[39m                      [2m | [22m[2mspec-app-components-tickers-ta-chart-ta-chart.component[22m                      [2m | [22m  [36m4.59 kB[39m[2m | [22m
+[32mspec-app-components-market-calendar-market-calendar.component.js[39m                [2m | [22m[2mspec-app-components-market-calendar-market-calendar.component[22m                [2m | [22m  [36m4.37 kB[39m[2m | [22m
+[32mchunk-BTF5LNFD.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m4.28 kB[39m[2m | [22m
+[32mspec-app-services-ticker.service.js[39m                                             [2m | [22m[2mspec-app-services-ticker.service[22m                                             [2m | [22m  [36m3.82 kB[39m[2m | [22m
+[32mchunk-2VANC4SP.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m2.93 kB[39m[2m | [22m
+[32mchunk-UOJLERZ3.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m2.84 kB[39m[2m | [22m
+[32mspec-app-components-market-data-summary-stats-summary-stats.component.js[39m        [2m | [22m[2mspec-app-components-market-data-summary-stats-summary-stats.component[22m        [2m | [22m  [36m2.69 kB[39m[2m | [22m
+[32mchunk-AZM6U4DY.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m2.43 kB[39m[2m | [22m
+[32mchunk-DWRIUJOO.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m2.30 kB[39m[2m | [22m
+[32mspec-app-components-tickers-tradingview-widget-tradingview-widget.component.js[39m  [2m | [22m[2mspec-app-components-tickers-tradingview-widget-tradingview-widget.component[22m  [2m | [22m  [36m2.28 kB[39m[2m | [22m
+[32mchunk-LQ5URJYW.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m2.12 kB[39m[2m | [22m
+[32mspec-app-services-author.service.js[39m                                             [2m | [22m[2mspec-app-services-author.service[22m                                             [2m | [22m  [36m2.10 kB[39m[2m | [22m
+[32mspec-app-services-book.service.js[39m                                               [2m | [22m[2mspec-app-services-book.service[22m                                               [2m | [22m  [36m2.06 kB[39m[2m | [22m
+[32mchunk-47S4WCC6.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m1.95 kB[39m[2m | [22m
+[32mspec-app-components-market-data-candlestick-chart-candlestick-chart.component.js[39m[2m | [22m[2mspec-app-components-market-data-candlestick-chart-candlestick-chart.component[22m[2m | [22m  [36m1.94 kB[39m[2m | [22m
+[32mspec-app-components-market-data-volume-chart-volume-chart.component.js[39m          [2m | [22m[2mspec-app-components-market-data-volume-chart-volume-chart.component[22m          [2m | [22m  [36m1.89 kB[39m[2m | [22m
+[32mspec-app-components-market-data-line-chart-line-chart.component.js[39m              [2m | [22m[2mspec-app-components-market-data-line-chart-line-chart.component[22m              [2m | [22m  [36m1.87 kB[39m[2m | [22m
+[32mchunk-YZH7E4SC.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m1.50 kB[39m[2m | [22m
+[32mchunk-TCWKRIRV.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m1.35 kB[39m[2m | [22m
+[32mchunk-OYUANSD4.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m1.31 kB[39m[2m | [22m
+[32minit-testbed.js[39m                                                                 [2m | [22m[2minit-testbed[22m                                                                 [2m | [22m  [36m1.27 kB[39m[2m | [22m
+[32mchunk-RBHMXKPQ.js[39m                                                               [2m | [22m[2m-[22m                                                                            [2m | [22m  [36m1.09 kB[39m[2m | [22m
+[32mpolyfills.js[39m                                                                    [2m | [22m[2mpolyfills[22m                                                                    [2m | [22m[36m121 bytes[39m[2m | [22m
+
+[1m [22m                                                                               [2m | [22m[1mInitial total[22m                                                                [2m | [22m[1m697.95 kB[22m
+
+Application bundle generation complete. [4.339 seconds] - 2026-02-19T03:55:21.828Z
+
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90mC:/Users/inkan/learn-ai/Frontend[39m
+
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/strategy-lab/replay-controls/replay-controls.component.spec.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 541[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/tickers/tickers.component.spec.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 425[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/ticker-explorer/ticker-explorer.component.spec.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 665[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/services/replay-engine.service.spec.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 165[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/tickers/technical-analysis/technical-analysis.component.spec.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 807[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/tickers/ta-chart/ta-chart.component.spec.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 133[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/app.component.spec.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 126[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/market-data/summary-stats/summary-stats.component.spec.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 85[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/services/market-monitor.service.spec.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 70[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/strategy-lab/strategy-lab.component.spec.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 1293[2mms[22m[39m
+[90mstdout[2m | src/app/components/options-history/options-history.component.spec.ts[2m > [22m[2mOptionsHistoryComponent[2m > [22m[2mloadMinuteDetail[2m > [22m[2mshould expand and load data for new ticker
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'O:AAPL260220C00230000'[39m,
+  fromDate: [32m'2026-02-17'[39m,
+  toDate: [32m'2026-02-17'[39m,
+  timespan: [32m'minute'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: { ticker: [32m'O:AAPL260220C00230000'[39m, aggregates: [], summary: [1mnull[22m }
+}
+
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/options-history/options-history.component.spec.ts [2m([22m[2m30 tests[22m[2m)[22m[33m 1614[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/tickers/tradingview-widget/tradingview-widget.component.spec.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/services/replay-strategy.service.spec.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+[90mstdout[2m | src/app/services/stock-aggregate-store.service.spec.ts[2m > [22m[2mStockAggregateStore[2m > [22m[2mclearCache[2m > [22m[2mshould clear all cached entries
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: { ticker: [32m'AAPL'[39m, aggregates: [ [36m[Object][39m ], summary: [1mnull[22m }
+}
+
+[90mstdout[2m | src/app/services/stock-aggregate-store.service.spec.ts[2m > [22m[2mStockAggregateStore[2m > [22m[2minvalidateTicker[2m > [22m[2mshould remove only the specified ticker from cache
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: { ticker: [32m'AAPL'[39m, aggregates: [ [36m[Object][39m ], summary: [1mnull[22m }
+}
+
+[90mstdout[2m | src/app/services/stock-aggregate-store.service.spec.ts[2m > [22m[2mStockAggregateStore[2m > [22m[2minvalidateTicker[2m > [22m[2mshould remove only the specified ticker from cache
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'MSFT'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: { ticker: [32m'MSFT'[39m, aggregates: [ [36m[Object][39m ], summary: [1mnull[22m }
+}
+
+[90mstdout[2m | src/app/services/stock-aggregate-store.service.spec.ts[2m > [22m[2mStockAggregateStore[2m > [22m[2mgetOrFetch[2m > [22m[2mshould fetch from MarketDataService when cache is empty
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: { ticker: [32m'AAPL'[39m, aggregates: [ [36m[Object][39m ], summary: [1mnull[22m }
+}
+
+[90mstdout[2m | src/app/services/stock-aggregate-store.service.spec.ts[2m > [22m[2mStockAggregateStore[2m > [22m[2mgetOrFetch[2m > [22m[2mshould return cached data on second call
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: { ticker: [32m'AAPL'[39m, aggregates: [ [36m[Object][39m ], summary: [1mnull[22m }
+}
+
+[90mstdout[2m | src/app/services/stock-aggregate-store.service.spec.ts[2m > [22m[2mStockAggregateStore[2m > [22m[2mgetOrFetch[2m > [22m[2mshould force refresh when requested
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: { ticker: [32m'AAPL'[39m, aggregates: [ [36m[Object][39m ], summary: [1mnull[22m }
+}
+
+[90mstdout[2m | src/app/services/stock-aggregate-store.service.spec.ts[2m > [22m[2mStockAggregateStore[2m > [22m[2mgetOrFetch[2m > [22m[2mshould force refresh when requested
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mtrue[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: { ticker: [32m'AAPL'[39m, aggregates: [ [36m[Object][39m ], summary: [1mnull[22m }
+}
+
+[90mstdout[2m | src/app/services/stock-aggregate-store.service.spec.ts[2m > [22m[2mStockAggregateStore[2m > [22m[2mgetAggregatesByTicker[2m > [22m[2mshould return ticker data after fetching
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: { ticker: [32m'AAPL'[39m, aggregates: [ [36m[Object][39m ], summary: [1mnull[22m }
+}
+
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/services/stock-aggregate-store.service.spec.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/services/book.service.spec.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/services/author.service.spec.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/services/ticker.service.spec.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+[90mstdout[2m | src/app/services/market-data.service.spec.ts[2m > [22m[2mMarketDataService[2m > [22m[2mgetOrFetchStockAggregates[2m > [22m[2mshould send POST to GraphQL endpoint
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: { ticker: [32m'AAPL'[39m, aggregates: [], summary: [1mnull[22m }
+}
+
+[90mstdout[2m | src/app/services/market-data.service.spec.ts[2m > [22m[2mMarketDataService[2m > [22m[2mgetOrFetchStockAggregates[2m > [22m[2mshould send correct variables
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'MSFT'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-06-30'[39m,
+  timespan: [32m'hour'[39m,
+  multiplier: [33m4[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: { ticker: [32m'MSFT'[39m, aggregates: [], summary: [1mnull[22m }
+}
+
+[90mstdout[2m | src/app/services/market-data.service.spec.ts[2m > [22m[2mMarketDataService[2m > [22m[2mgetOrFetchStockAggregates[2m > [22m[2mshould map response to SmartAggregatesResult
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: {
+    ticker: [32m'AAPL'[39m,
+    aggregates: [ [36m[Object][39m ],
+    summary: {
+      periodHigh: [33m200[39m,
+      periodLow: [33m140[39m,
+      averageVolume: [33m500000[39m,
+      averageVwap: [33m170[39m,
+      openPrice: [33m150[39m,
+      closePrice: [33m190[39m,
+      priceChange: [33m40[39m,
+      priceChangePercent: [33m26.67[39m,
+      totalBars: [33m60[39m
+    }
+  }
+}
+
+[90mstdout[2m | src/app/services/market-data.service.spec.ts[2m > [22m[2mMarketDataService[2m > [22m[2mgetOrFetchStockAggregates[2m > [22m[2mshould throw on GraphQL errors
+[22m[39m[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'BAD'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mfalse[39m,
+  errors: [ { message: [32m'Ticker not found'[39m } ],
+  result: [90mundefined[39m
+}
+
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/services/replay-indicator.service.spec.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/services/market-data.service.spec.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/authors/authors.component.spec.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/market-calendar/market-calendar.component.spec.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/market-data/line-chart/line-chart.component.spec.ts [2m([22m[2m1 test[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/market-data/volume-chart/volume-chart.component.spec.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/market-data/candlestick-chart/candlestick-chart.component.spec.ts [2m([22m[2m1 test[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/services/polygon.service.spec.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/books/books.component.spec.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/stock-analysis/stock-analysis.component.spec.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 236[2mms[22m[39m
+[90mstdout[2m | src/app/components/market-data/market-data.component.spec.ts[2m > [22m[2mMarketDataComponent[2m > [22m[2mshould set loading and clear state when fetching
+[22m[39m[STEP 1 - Component] fetchData called: {
+  ticker: [32m'AAPL'[39m,
+  from: [32m'2025-11-19'[39m,
+  to: [32m'2026-02-19'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m
+}
+[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2025-11-19'[39m,
+  toDate: [32m'2026-02-19'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+
+[90mstdout[2m | src/app/components/market-data/market-data.component.spec.ts[2m > [22m[2mMarketDataComponent[2m > [22m[2mshould load all aggregates on successful fetch
+[22m[39m[STEP 1 - Component] fetchData called: {
+  ticker: [32m'AAPL'[39m,
+  from: [32m'2026-01-01'[39m,
+  to: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m
+}
+[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2026-01-01'[39m,
+  toDate: [32m'2026-01-31'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: {
+    ticker: [32m'AAPL'[39m,
+    aggregates: [ [36m[Object][39m, [36m[Object][39m, [36m[Object][39m ],
+    summary: {
+      periodHigh: [33m200[39m,
+      periodLow: [33m140[39m,
+      averageVolume: [33m500000[39m,
+      averageVwap: [33m170[39m,
+      openPrice: [33m150[39m,
+      closePrice: [33m190[39m,
+      priceChange: [33m40[39m,
+      priceChangePercent: [33m26.67[39m,
+      totalBars: [33m60[39m
+    }
+  }
+}
+[STEP 2 - Component] GraphQL response received: {
+  ticker: [32m'AAPL'[39m,
+  aggregatesCount: [33m3[39m,
+  hasSummary: [33mtrue[39m,
+  firstBar: {
+    id: [33m1[39m,
+    tickerId: [33m1[39m,
+    open: [33m150[39m,
+    high: [33m155[39m,
+    low: [33m148[39m,
+    close: [33m153[39m,
+    volume: [33m1000000[39m,
+    volumeWeightedAveragePrice: [33m152[39m,
+    timestamp: [32m'2026-01-15T00:00:00Z'[39m,
+    timespan: [32m'day'[39m,
+    multiplier: [33m1[39m,
+    transactionCount: [33m50000[39m
+  },
+  summary: {
+    periodHigh: [33m200[39m,
+    periodLow: [33m140[39m,
+    averageVolume: [33m500000[39m,
+    averageVwap: [33m170[39m,
+    openPrice: [33m150[39m,
+    closePrice: [33m190[39m,
+    priceChange: [33m40[39m,
+    priceChangePercent: [33m26.67[39m,
+    totalBars: [33m60[39m
+  }
+}
+
+[90mstdout[2m | src/app/components/market-data/market-data.component.spec.ts[2m > [22m[2mMarketDataComponent[2m > [22m[2mshould set summary from response
+[22m[39m[STEP 1 - Component] fetchData called: {
+  ticker: [32m'AAPL'[39m,
+  from: [32m'2025-11-19'[39m,
+  to: [32m'2026-02-19'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m
+}
+[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2025-11-19'[39m,
+  toDate: [32m'2026-02-19'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+[STEP 1.7 - Service] GraphQL response: {
+  hasData: [33mtrue[39m,
+  errors: [90mundefined[39m,
+  result: {
+    ticker: [32m'AAPL'[39m,
+    aggregates: [ [36m[Object][39m ],
+    summary: {
+      periodHigh: [33m250[39m,
+      periodLow: [33m140[39m,
+      averageVolume: [33m500000[39m,
+      averageVwap: [33m170[39m,
+      openPrice: [33m150[39m,
+      closePrice: [33m190[39m,
+      priceChange: [33m40[39m,
+      priceChangePercent: [33m26.67[39m,
+      totalBars: [33m60[39m
+    }
+  }
+}
+[STEP 2 - Component] GraphQL response received: {
+  ticker: [32m'AAPL'[39m,
+  aggregatesCount: [33m1[39m,
+  hasSummary: [33mtrue[39m,
+  firstBar: {
+    id: [33m1[39m,
+    tickerId: [33m1[39m,
+    open: [33m150[39m,
+    high: [33m155[39m,
+    low: [33m148[39m,
+    close: [33m153[39m,
+    volume: [33m1000000[39m,
+    volumeWeightedAveragePrice: [33m152[39m,
+    timestamp: [32m'2026-01-15T00:00:00.000Z'[39m,
+    timespan: [32m'day'[39m,
+    multiplier: [33m1[39m,
+    transactionCount: [33m50000[39m
+  },
+  summary: {
+    periodHigh: [33m250[39m,
+    periodLow: [33m140[39m,
+    averageVolume: [33m500000[39m,
+    averageVwap: [33m170[39m,
+    openPrice: [33m150[39m,
+    closePrice: [33m190[39m,
+    priceChange: [33m40[39m,
+    priceChangePercent: [33m26.67[39m,
+    totalBars: [33m60[39m
+  }
+}
+
+[90mstdout[2m | src/app/components/market-data/market-data.component.spec.ts[2m > [22m[2mMarketDataComponent[2m > [22m[2mshould handle errors
+[22m[39m[STEP 1 - Component] fetchData called: {
+  ticker: [32m'AAPL'[39m,
+  from: [32m'2025-11-19'[39m,
+  to: [32m'2026-02-19'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m
+}
+[STEP 1.5 - Service] Sending GraphQL query: {
+  ticker: [32m'AAPL'[39m,
+  fromDate: [32m'2025-11-19'[39m,
+  toDate: [32m'2026-02-19'[39m,
+  timespan: [32m'day'[39m,
+  multiplier: [33m1[39m,
+  forceRefresh: [33mfalse[39m
+}
+
+ [32m✓[39m [30m[43m frontend [49m[39m src/app/components/market-data/market-data.component.spec.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 1077[2mms[22m[39m
+     [33m[2m✓[22m[39m should create [33m 412[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m28 passed[39m[22m[90m (28)[39m
+[2m      Tests [22m [1m[32m243 passed[39m[22m[90m (243)[39m
+[2m   Start at [22m 21:55:22
+[2m   Duration [22m 7.38s[2m (transform 2.51s, setup 6.76s, import 14.87s, tests 7.68s, environment 44.06s)[22m
+

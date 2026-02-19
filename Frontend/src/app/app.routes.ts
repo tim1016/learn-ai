@@ -10,6 +10,7 @@ import { DayDetailComponent } from "./components/stock-analysis/day-detail/day-d
 import { TickerExplorerComponent } from "./components/ticker-explorer/ticker-explorer.component";
 import { StrategyLabComponent } from "./components/strategy-lab/strategy-lab.component";
 import { OptionsHistoryComponent } from "./components/options-history/options-history.component";
+import { SnapshotsComponent } from "./components/snapshots/snapshots.component";
 
 export const routes: Routes = [
   { path: "", redirectTo: "/books", pathMatch: "full" },
@@ -24,4 +25,5 @@ export const routes: Routes = [
   { path: "ticker-explorer", component: TickerExplorerComponent },
   { path: "strategy-lab", component: StrategyLabComponent },
   { path: "options-history", component: OptionsHistoryComponent },
+  { path: "snapshots", component: SnapshotsComponent },
 ];

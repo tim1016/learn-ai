@@ -102,6 +102,34 @@ class OptionsChainSnapshotRequest(BaseModel):
     expiration_date: Optional[str] = Field(None, description="Filter to this expiration date (YYYY-MM-DD). Defaults to today.")
 
 
+class StockSnapshotRequest(BaseModel):
+    """Request schema for single stock ticker snapshot"""
+    ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")
+
+
+class StockSnapshotsRequest(BaseModel):
+    """Request schema for multiple stock ticker snapshots"""
+    tickers: Optional[List[str]] = Field(None, description="List of tickers. If omitted, returns all.")
+
+
+class MarketMoversRequest(BaseModel):
+    """Request schema for top market movers"""
+    direction: str = Field(..., description="'gainers' or 'losers'")
+
+    @field_validator('direction')
+    @classmethod
+    def validate_direction(cls, v: str) -> str:
+        if v not in ('gainers', 'losers'):
+            raise ValueError("direction must be 'gainers' or 'losers'")
+        return v
+
+
+class UnifiedSnapshotRequest(BaseModel):
+    """Request schema for unified v3 snapshots"""
+    tickers: Optional[List[str]] = Field(None, description="Optional list of tickers to filter")
+    limit: int = Field(10, ge=1, le=250, description="Max results (default 10, max 250)")
+
+
 class CalculateIndicatorsRequest(BaseModel):
     """Request to calculate technical indicators from OHLCV data"""
     ticker: str = Field(..., min_length=1, max_length=20)

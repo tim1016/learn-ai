@@ -99,6 +99,79 @@ export interface CalculateIndicatorsResult {
   message: string | null;
 }
 
+// Stock Snapshot types (v2 API)
+export interface SnapshotBar {
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+  vwap: number | null;
+}
+
+export interface MinuteBar extends SnapshotBar {
+  accumulatedVolume: number | null;
+  timestamp: number | null;
+}
+
+export interface StockTickerSnapshot {
+  ticker: string | null;
+  day: SnapshotBar | null;
+  prevDay: SnapshotBar | null;
+  min: MinuteBar | null;
+  todaysChange: number | null;
+  todaysChangePercent: number | null;
+  updated: number | null;
+}
+
+export interface StockSnapshotResult {
+  success: boolean;
+  snapshot: StockTickerSnapshot | null;
+  error: string | null;
+}
+
+export interface StockSnapshotsResult {
+  success: boolean;
+  snapshots: StockTickerSnapshot[];
+  count: number;
+  error: string | null;
+}
+
+export interface MarketMoversResult {
+  success: boolean;
+  tickers: StockTickerSnapshot[];
+  count: number;
+  error: string | null;
+}
+
+// Unified Snapshot types (v3 API)
+export interface UnifiedSession {
+  price: number | null;
+  change: number | null;
+  changePercent: number | null;
+  open: number | null;
+  close: number | null;
+  high: number | null;
+  low: number | null;
+  previousClose: number | null;
+  volume: number | null;
+}
+
+export interface UnifiedSnapshotItem {
+  ticker: string | null;
+  type: string | null;
+  marketStatus: string | null;
+  name: string | null;
+  session: UnifiedSession | null;
+}
+
+export interface UnifiedSnapshotResult {
+  success: boolean;
+  results: UnifiedSnapshotItem[];
+  count: number;
+  error: string | null;
+}
+
 // Options Chain Snapshot types
 export interface GreeksSnapshot {
   delta: number | null;

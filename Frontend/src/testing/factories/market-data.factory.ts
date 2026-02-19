@@ -65,6 +65,29 @@ export function createMockTicker(overrides: Partial<Ticker> = {}): Ticker {
   };
 }
 
+export function createMockAggregatesTimeSeries(
+  count: number,
+  intervalMinutes: number,
+  startDate = new Date(2026, 0, 5, 9, 30, 0),
+): StockAggregate[] {
+  const intervalMs = intervalMinutes * 60 * 1000;
+  return Array.from({ length: count }, (_, i) => {
+    const timestamp = new Date(startDate.getTime() + i * intervalMs);
+    const basePrice = 150 + Math.sin(i * 0.05) * 10;
+    return createMockAggregate({
+      id: i + 1,
+      timestamp: timestamp.toISOString(),
+      open: basePrice,
+      high: basePrice + 2,
+      low: basePrice - 2,
+      close: basePrice + (i % 2 === 0 ? 1 : -1),
+      volume: 100000 + i * 10,
+      timespan: intervalMinutes < 60 ? 'minute' : 'day',
+      multiplier: intervalMinutes < 60 ? intervalMinutes : 1,
+    });
+  });
+}
+
 export function createMockIndicatorSeries(overrides: Partial<IndicatorSeries> = {}): IndicatorSeries {
   return {
     name: 'sma',

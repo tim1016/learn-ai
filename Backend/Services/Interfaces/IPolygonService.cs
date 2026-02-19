@@ -38,6 +38,35 @@ public interface IPolygonService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Fetch a snapshot for a single stock ticker
+    /// </summary>
+    Task<StockSnapshotResponse> FetchStockSnapshotAsync(
+        string ticker,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetch snapshots for multiple stock tickers
+    /// </summary>
+    Task<StockSnapshotsResponse> FetchStockSnapshotsAsync(
+        List<string>? tickers = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetch top market movers (gainers or losers)
+    /// </summary>
+    Task<MarketMoversResponse> FetchMarketMoversAsync(
+        string direction,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetch unified v3 snapshots with flexible filtering
+    /// </summary>
+    Task<UnifiedSnapshotResponse> FetchUnifiedSnapshotAsync(
+        List<string>? tickers = null,
+        int limit = 10,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// List options contracts for an underlying ticker
     /// </summary>
     Task<OptionsContractsResponse> FetchOptionsContractsAsync(

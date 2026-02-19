@@ -1,0 +1,84 @@
+<div class="replay-controls">
+  <div class="transport-buttons">
+    <button
+      class="transport-btn"
+      (click)="replayEngine.stop()"
+      [disabled]="replayEngine.isAtStart()"
+      title="Reset to start"
+    >
+      &#x23EE;
+    </button>
+
+    <button
+      class="transport-btn"
+      (click)="replayEngine.stepBackward()"
+      [disabled]="replayEngine.isAtStart()"
+      title="Step backward"
+    >
+      &#x23F4;
+    </button>
+
+    <button
+      class="transport-btn play-btn"
+      (click)="togglePlay()"
+      [disabled]="replayEngine.totalBars() === 0"
+      title="{{ isPlaying() ? 'Pause' : 'Play' }}"
+    >
+      {{ isPlaying() ? '\u23F8' : '\u25B6' }}
+    </button>
+
+    <button
+      class="transport-btn"
+      (click)="replayEngine.stepForward()"
+      [disabled]="replayEngine.isAtEnd()"
+      title="Step forward"
+    >
+      &#x23F5;
+    </button>
+
+    <button
+      class="transport-btn"
+      (click)="replayEngine.seekTo(replayEngine.totalBars() - 1)"
+      [disabled]="replayEngine.isAtEnd()"
+      title="Jump to end"
+    >
+      &#x23ED;
+    </button>
+  </div>
+
+  <div class="speed-selector">
+    @for (speed of speeds; track speed) {
+      <button
+        class="speed-btn"
+        [class.active]="replayEngine.playbackSpeed() === speed"
+        (click)="replayEngine.setSpeed(speed)"
+      >
+        {{ speed }}x
+      </button>
+    }
+  </div>
+
+  <div class="timeline">
+    <input
+      type="range"
+      class="timeline-slider"
+      min="0"
+      max="100"
+      step="0.1"
+      [value]="progressPercent()"
+      (input)="onSliderInput($event)"
+      [disabled]="replayEngine.totalBars() === 0"
+    />
+  </div>
+
+  <div class="bar-info">
+    @if (replayEngine.totalBars() > 0) {
+      <span class="bar-counter">
+        Bar {{ replayEngine.currentIndex() + 1 }} / {{ replayEngine.totalBars() }}
+      </span>
+      <span class="bar-timestamp">{{ currentTimestamp() }}</span>
+    } @else {
+      <span class="bar-counter">No data loaded</span>
+    }
+  </div>
+</div>

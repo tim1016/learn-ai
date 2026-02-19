@@ -141,6 +141,129 @@ public class PolygonService : IPolygonService
         }
     }
 
+    public async Task<StockSnapshotResponse> FetchStockSnapshotAsync(
+        string ticker,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation("[Snapshot] Fetching stock snapshot for {Ticker}", ticker);
+
+            var request = new { ticker };
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/snapshot/ticker", request, cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<StockSnapshotResponse>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+                throw new HttpRequestException("Received null response from Python service for stock snapshot");
+
+            _logger.LogInformation("[Snapshot] Fetched snapshot for {Ticker}", ticker);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Snapshot] Error fetching stock snapshot for {Ticker}", ticker);
+            throw;
+        }
+    }
+
+    public async Task<StockSnapshotsResponse> FetchStockSnapshotsAsync(
+        List<string>? tickers = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation("[Snapshot] Fetching stock snapshots for {Tickers}",
+                tickers != null ? string.Join(",", tickers) : "all");
+
+            var request = new { tickers };
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/snapshot/market", request, cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<StockSnapshotsResponse>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+                throw new HttpRequestException("Received null response from Python service for stock snapshots");
+
+            _logger.LogInformation("[Snapshot] Fetched {Count} stock snapshots", result.Count);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Snapshot] Error fetching stock snapshots");
+            throw;
+        }
+    }
+
+    public async Task<MarketMoversResponse> FetchMarketMoversAsync(
+        string direction,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation("[Snapshot] Fetching market movers: {Direction}", direction);
+
+            var request = new { direction };
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/snapshot/movers", request, cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<MarketMoversResponse>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+                throw new HttpRequestException("Received null response from Python service for market movers");
+
+            _logger.LogInformation("[Snapshot] Fetched {Count} {Direction}", result.Count, direction);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Snapshot] Error fetching market movers ({Direction})", direction);
+            throw;
+        }
+    }
+
+    public async Task<UnifiedSnapshotResponse> FetchUnifiedSnapshotAsync(
+        List<string>? tickers = null,
+        int limit = 10,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation("[Snapshot] Fetching unified snapshots: tickers={Tickers}, limit={Limit}",
+                tickers != null ? string.Join(",", tickers) : "none", limit);
+
+            var request = new { tickers, limit };
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/snapshot/unified", request, cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<UnifiedSnapshotResponse>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+                throw new HttpRequestException("Received null response from Python service for unified snapshots");
+
+            _logger.LogInformation("[Snapshot] Fetched {Count} unified snapshots", result.Count);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Snapshot] Error fetching unified snapshots");
+            throw;
+        }
+    }
+
     public async Task<OptionsContractsResponse> FetchOptionsContractsAsync(
         string underlyingTicker,
         string? asOfDate = null,
