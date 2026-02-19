@@ -1,0 +1,140 @@
+<div class="tracked-instruments">
+  <h2>Tracked Market Instruments</h2>
+  <p class="subtitle">Monitoring {{ tickerList().length }} instruments from Polygon.io</p>
+
+  @if (loading()) {
+    <div class="loading">Loading tickers...</div>
+  }
+
+  @if (error(); as err) {
+    <div class="error">{{ err }}</div>
+  }
+
+  @if (!loading() && tickerList().length > 0) {
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th class="col-ticker">Ticker</th>
+            <th class="col-name">Name</th>
+            <th class="col-type">Type</th>
+            <th class="col-exchange">Exchange</th>
+            <th class="col-status">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (t of tickerList(); track t.ticker) {
+            <tr
+              class="ticker-row"
+              [class.expanded]="isExpanded(t.ticker)"
+              (click)="toggleRow(t.ticker)"
+            >
+              <td class="col-ticker">
+                <span class="ticker-symbol">{{ t.ticker }}</span>
+              </td>
+              <td class="col-name">{{ t.name }}</td>
+              <td class="col-type">
+                <span class="badge type-badge">{{ t.type || '--' }}</span>
+              </td>
+              <td class="col-exchange">{{ t.primaryExchange || '--' }}</td>
+              <td class="col-status">
+                <span class="badge" [class.active]="t.active" [class.inactive]="!t.active">
+                  {{ t.active ? 'Active' : 'Inactive' }}
+                </span>
+              </td>
+            </tr>
+
+            @if (isExpanded(t.ticker)) {
+              <tr class="detail-row">
+                <td colspan="5">
+                  <div class="detail-panel">
+                    @if (detailLoading() && !currentDetail) {
+                      <div class="detail-loading">Loading details...</div>
+                    } @else {
+                      @let detail = currentDetail;
+                      @let related = currentRelated;
+
+                      <div class="detail-grid">
+                        <!-- Overview -->
+                        <div class="detail-section overview">
+                          <h4>Overview</h4>
+                          @if (detail) {
+                            @if (detail.description) {
+                              <p class="description">{{ detail.description }}</p>
+                            }
+                            <div class="detail-fields">
+                              <div class="field">
+                                <span class="label">Market Cap</span>
+                                <span class="value">{{ formatMarketCap(detail.marketCap) }}</span>
+                              </div>
+                              <div class="field">
+                                <span class="label">Employees</span>
+                                <span class="value">{{ formatEmployees(detail.totalEmployees) }}</span>
+                              </div>
+                              <div class="field">
+                                <span class="label">IPO Date</span>
+                                <span class="value">{{ detail.listDate || '--' }}</span>
+                              </div>
+                              <div class="field">
+                                <span class="label">Industry</span>
+                                <span class="value">{{ detail.sicDescription || '--' }}</span>
+                              </div>
+                              <div class="field">
+                                <span class="label">Exchange</span>
+                                <span class="value">{{ detail.primaryExchange || '--' }}</span>
+                              </div>
+                              <div class="field">
+                                <span class="label">Type</span>
+                                <span class="value">{{ detail.type || '--' }}</span>
+                              </div>
+                              <div class="field">
+                                <span class="label">Shares Outstanding</span>
+                                <span class="value">{{ formatShares(detail.weightedSharesOutstanding) }}</span>
+                              </div>
+                              @if (detail.homepageUrl) {
+                                <div class="field">
+                                  <span class="label">Website</span>
+                                  <a class="value link" [href]="detail.homepageUrl" target="_blank" rel="noopener" (click)="$event.stopPropagation()">
+                                    {{ detail.homepageUrl }}
+                                  </a>
+                                </div>
+                              }
+                              @if (detail.address) {
+                                <div class="field">
+                                  <span class="label">HQ</span>
+                                  <span class="value">
+                                    {{ detail.address.city }}{{ detail.address.state ? ', ' + detail.address.state : '' }}
+                                  </span>
+                                </div>
+                              }
+                            </div>
+                          } @else {
+                            <p class="no-data">No detail data available</p>
+                          }
+                        </div>
+
+                        <!-- Related Tickers -->
+                        <div class="detail-section related">
+                          <h4>Related Tickers</h4>
+                          @if (related && related.related.length > 0) {
+                            <div class="related-chips">
+                              @for (r of related.related; track r) {
+                                <span class="chip">{{ r }}</span>
+                              }
+                            </div>
+                          } @else {
+                            <p class="no-data">No related tickers found</p>
+                          }
+                        </div>
+                      </div>
+                    }
+                  </div>
+                </td>
+              </tr>
+            }
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</div>

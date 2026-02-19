@@ -264,6 +264,97 @@ public class PolygonService : IPolygonService
         }
     }
 
+    public async Task<TickerListResponse> FetchTickerListAsync(
+        List<string> tickers,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation("[Tickers] Fetching ticker list for {Count} tickers", tickers.Count);
+
+            var request = new { tickers };
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/tickers/list", request, cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<TickerListResponse>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+                throw new HttpRequestException("Received null response from Python service for ticker list");
+
+            _logger.LogInformation("[Tickers] Fetched {Count} tickers", result.Count);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tickers] Error fetching ticker list");
+            throw;
+        }
+    }
+
+    public async Task<TickerDetailResponse> FetchTickerDetailsAsync(
+        string ticker,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation("[Tickers] Fetching details for {Ticker}", ticker);
+
+            var request = new { ticker };
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/tickers/details", request, cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<TickerDetailResponse>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+                throw new HttpRequestException("Received null response from Python service for ticker details");
+
+            _logger.LogInformation("[Tickers] Fetched details for {Ticker}", ticker);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tickers] Error fetching details for {Ticker}", ticker);
+            throw;
+        }
+    }
+
+    public async Task<RelatedTickersResponse> FetchRelatedTickersAsync(
+        string ticker,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation("[Tickers] Fetching related companies for {Ticker}", ticker);
+
+            var request = new { ticker };
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/tickers/related", request, cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<RelatedTickersResponse>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+                throw new HttpRequestException("Received null response from Python service for related tickers");
+
+            _logger.LogInformation("[Tickers] Fetched {Count} related companies for {Ticker}",
+                result.Related.Count, ticker);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Tickers] Error fetching related companies for {Ticker}", ticker);
+            throw;
+        }
+    }
+
     public async Task<OptionsContractsResponse> FetchOptionsContractsAsync(
         string underlyingTicker,
         string? asOfDate = null,

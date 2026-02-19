@@ -1,5 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { RouterModule } from '@angular/router';
+import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
 import { AppComponent } from './app.component';
 
 describe('AppComponent', () => {
@@ -9,6 +10,7 @@ describe('AppComponent', () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
       imports: [AppComponent, RouterModule.forRoot([])],
+      providers: [provideAnimationsAsync()],
     }).compileComponents();
     fixture = TestBed.createComponent(AppComponent);
     fixture.detectChanges();
@@ -18,24 +20,27 @@ describe('AppComponent', () => {
     expect(fixture.componentInstance).toBeTruthy();
   });
 
-  it('should render 10 navigation links', () => {
-    const links = fixture.nativeElement.querySelectorAll('nav a');
-    expect(links.length).toBe(10);
+  it('should render PrimeNG menubar', () => {
+    const menubar = fixture.nativeElement.querySelector('p-menubar');
+    expect(menubar).toBeTruthy();
   });
 
-  it('should have links to all routes', () => {
-    const links: HTMLAnchorElement[] = Array.from(fixture.nativeElement.querySelectorAll('nav a'));
-    const hrefs = links.map(a => a.getAttribute('routerLink'));
-    expect(hrefs).toContain('/books');
-    expect(hrefs).toContain('/authors');
-    expect(hrefs).toContain('/market-data');
-    expect(hrefs).toContain('/tickers');
-    expect(hrefs).toContain('/technical-analysis');
-    expect(hrefs).toContain('/stock-analysis');
-    expect(hrefs).toContain('/ticker-explorer');
-    expect(hrefs).toContain('/strategy-lab');
-    expect(hrefs).toContain('/options-history');
-    expect(hrefs).toContain('/snapshots');
+  it('should have 3 top-level menu items (Stocks, Options, Tracked Instruments)', () => {
+    const items = fixture.componentInstance.items();
+    expect(items.length).toBe(3);
+    expect(items[0].label).toBe('Stocks');
+    expect(items[1].label).toBe('Options');
+    expect(items[2].label).toBe('Tracked Instruments');
+  });
+
+  it('should have 4 sub-items under Stocks', () => {
+    const stockItems = fixture.componentInstance.items()[0].items!;
+    expect(stockItems.length).toBe(5);
+  });
+
+  it('should have 4 sub-items under Options', () => {
+    const optionItems = fixture.componentInstance.items()[1].items!;
+    expect(optionItems.length).toBe(4);
   });
 
   it('should contain a router-outlet', () => {

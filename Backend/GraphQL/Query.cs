@@ -631,6 +631,126 @@ public class Query
     };
 
     #endregion
+
+    #region Ticker Reference Queries
+
+    /// <summary>
+    /// Fetch basic info for a batch of stock tickers from Polygon reference API.
+    /// </summary>
+    [GraphQLName("getTrackedTickers")]
+    public async Task<TrackedTickersResult> GetTrackedTickers(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        List<string> tickers)
+    {
+        try
+        {
+            logger.LogInformation("[Tickers] Query: {Count} tickers requested", tickers.Count);
+
+            var response = await polygonService.FetchTickerListAsync(tickers);
+
+            var items = response.Tickers.Select(t => new TickerInfoResult
+            {
+                Ticker = t.Ticker,
+                Name = t.Name,
+                Market = t.Market,
+                Type = t.Type,
+                Active = t.Active,
+                PrimaryExchange = t.PrimaryExchange,
+                CurrencyName = t.CurrencyName,
+            }).ToList();
+
+            return new TrackedTickersResult
+            {
+                Success = true,
+                Tickers = items,
+                Count = items.Count,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Tickers] Error fetching tracked tickers");
+            return new TrackedTickersResult { Success = false, Error = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// Fetch detailed overview for a single ticker from Polygon reference API.
+    /// </summary>
+    [GraphQLName("getTickerDetails")]
+    public async Task<TickerDetailResult> GetTickerDetails(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        string ticker)
+    {
+        try
+        {
+            logger.LogInformation("[Tickers] Details query: {Ticker}", ticker);
+
+            var response = await polygonService.FetchTickerDetailsAsync(ticker);
+
+            return new TickerDetailResult
+            {
+                Success = response.Success,
+                Ticker = response.Ticker,
+                Name = response.Name,
+                Description = response.Description,
+                MarketCap = response.MarketCap,
+                HomepageUrl = response.HomepageUrl,
+                TotalEmployees = response.TotalEmployees,
+                ListDate = response.ListDate,
+                SicDescription = response.SicDescription,
+                PrimaryExchange = response.PrimaryExchange,
+                Type = response.Type,
+                WeightedSharesOutstanding = response.WeightedSharesOutstanding,
+                Address = response.Address != null ? new TickerAddressResult
+                {
+                    Address1 = response.Address.Address1,
+                    City = response.Address.City,
+                    State = response.Address.State,
+                    PostalCode = response.Address.PostalCode,
+                } : null,
+                Error = response.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Tickers] Error fetching details for {Ticker}", ticker);
+            return new TickerDetailResult { Success = false, Ticker = ticker, Error = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// Fetch related company tickers for a given stock from Polygon.
+    /// </summary>
+    [GraphQLName("getRelatedTickers")]
+    public async Task<RelatedTickersResult> GetRelatedTickers(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        string ticker)
+    {
+        try
+        {
+            logger.LogInformation("[Tickers] Related query: {Ticker}", ticker);
+
+            var response = await polygonService.FetchRelatedTickersAsync(ticker);
+
+            return new RelatedTickersResult
+            {
+                Success = response.Success,
+                Ticker = response.Ticker,
+                Related = response.Related,
+                Error = response.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Tickers] Error fetching related tickers for {Ticker}", ticker);
+            return new RelatedTickersResult { Success = false, Ticker = ticker, Error = ex.Message };
+        }
+    }
+
+    #endregion
 }
 
 public class OptionsChainSnapshotResult
@@ -799,5 +919,62 @@ public class UnifiedSnapshotResult
     public bool Success { get; set; }
     public List<UnifiedSnapshotItemResult> Results { get; set; } = [];
     public int Count { get; set; }
+    public string? Error { get; set; }
+}
+
+// ------------------------------------------------------------------
+// Ticker Reference result types
+// ------------------------------------------------------------------
+
+public class TickerInfoResult
+{
+    public string Ticker { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Market { get; set; } = "";
+    public string Type { get; set; } = "";
+    public bool Active { get; set; }
+    public string? PrimaryExchange { get; set; }
+    public string? CurrencyName { get; set; }
+}
+
+public class TrackedTickersResult
+{
+    public bool Success { get; set; }
+    public List<TickerInfoResult> Tickers { get; set; } = [];
+    public int Count { get; set; }
+    public string? Error { get; set; }
+}
+
+public class TickerAddressResult
+{
+    public string? Address1 { get; set; }
+    public string? City { get; set; }
+    public string? State { get; set; }
+    public string? PostalCode { get; set; }
+}
+
+public class TickerDetailResult
+{
+    public bool Success { get; set; }
+    public string Ticker { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string? Description { get; set; }
+    public double? MarketCap { get; set; }
+    public string? HomepageUrl { get; set; }
+    public int? TotalEmployees { get; set; }
+    public string? ListDate { get; set; }
+    public string? SicDescription { get; set; }
+    public string? PrimaryExchange { get; set; }
+    public string? Type { get; set; }
+    public double? WeightedSharesOutstanding { get; set; }
+    public TickerAddressResult? Address { get; set; }
+    public string? Error { get; set; }
+}
+
+public class RelatedTickersResult
+{
+    public bool Success { get; set; }
+    public string Ticker { get; set; } = "";
+    public List<string> Related { get; set; } = [];
     public string? Error { get; set; }
 }

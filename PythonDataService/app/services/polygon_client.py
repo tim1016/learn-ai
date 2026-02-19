@@ -363,6 +363,96 @@ class PolygonClientService:
             'updated': getattr(snapshot, 'updated', None),
         }
 
+    def list_tickers(self, tickers: List[str]) -> List[Dict[str, Any]]:
+        """Fetch basic info for a list of stock tickers from Polygon reference API.
+
+        Uses GET /v3/reference/tickers with limit=1000, then filters to requested tickers.
+        """
+        try:
+            ticker_set = {t.upper() for t in tickers}
+            logger.info(f"[Tickers] Fetching basic info for {len(ticker_set)} tickers")
+
+            results = []
+            for t in self.client.list_tickers(market="stocks", active=True, limit=1000):
+                symbol = getattr(t, 'ticker', None)
+                if symbol and symbol in ticker_set:
+                    results.append({
+                        'ticker': symbol,
+                        'name': getattr(t, 'name', None) or '',
+                        'market': getattr(t, 'market', None) or '',
+                        'type': getattr(t, 'type', None) or '',
+                        'active': getattr(t, 'active', True),
+                        'primary_exchange': getattr(t, 'primary_exchange', None),
+                        'currency_name': getattr(t, 'currency_name', None),
+                    })
+
+            logger.info(f"[Tickers] Found {len(results)}/{len(ticker_set)} tickers")
+            return results
+
+        except Exception as e:
+            logger.error(f"[Tickers] Error fetching ticker list: {str(e)}")
+            raise
+
+    def get_ticker_details(self, ticker: str) -> Dict[str, Any]:
+        """Fetch detailed overview for a single ticker from Polygon.
+
+        Uses GET /v3/reference/tickers/{ticker}.
+        """
+        try:
+            logger.info(f"[Tickers] Fetching details for {ticker}")
+
+            details = self.client.get_ticker_details(ticker)
+
+            address = getattr(details, 'address', None)
+            result = {
+                'ticker': getattr(details, 'ticker', ticker),
+                'name': getattr(details, 'name', None) or '',
+                'description': getattr(details, 'description', None),
+                'market_cap': getattr(details, 'market_cap', None),
+                'homepage_url': getattr(details, 'homepage_url', None),
+                'total_employees': getattr(details, 'total_employees', None),
+                'list_date': getattr(details, 'list_date', None),
+                'sic_description': getattr(details, 'sic_description', None),
+                'primary_exchange': getattr(details, 'primary_exchange', None),
+                'type': getattr(details, 'type', None),
+                'weighted_shares_outstanding': getattr(details, 'weighted_shares_outstanding', None),
+                'address': {
+                    'address1': getattr(address, 'address1', None),
+                    'city': getattr(address, 'city', None),
+                    'state': getattr(address, 'state', None),
+                    'postal_code': getattr(address, 'postal_code', None),
+                } if address else None,
+            }
+
+            logger.info(f"[Tickers] Fetched details for {ticker}")
+            return result
+
+        except Exception as e:
+            logger.error(f"[Tickers] Error fetching details for {ticker}: {str(e)}")
+            raise
+
+    def get_related_companies(self, ticker: str) -> List[str]:
+        """Fetch related company tickers from Polygon.
+
+        Uses GET /v1/related-companies/{ticker}.
+        """
+        try:
+            logger.info(f"[Tickers] Fetching related companies for {ticker}")
+
+            response = self.client.get_related_companies(ticker)
+            related = [
+                getattr(r, 'ticker', None)
+                for r in (response or [])
+                if getattr(r, 'ticker', None)
+            ]
+
+            logger.info(f"[Tickers] Found {len(related)} related companies for {ticker}")
+            return related
+
+        except Exception as e:
+            logger.error(f"[Tickers] Error fetching related companies for {ticker}: {str(e)}")
+            raise
+
     def fetch_technical_indicator(
         self,
         ticker: str,

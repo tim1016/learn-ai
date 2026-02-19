@@ -135,3 +135,18 @@ class CalculateIndicatorsRequest(BaseModel):
     ticker: str = Field(..., min_length=1, max_length=20)
     bars: List[OhlcvBar] = Field(..., min_length=1)
     indicators: List[IndicatorConfig] = Field(..., min_length=1)
+
+
+class TickerListRequest(BaseModel):
+    """Request schema for fetching basic info for a list of tickers"""
+    tickers: List[str] = Field(..., min_length=1, description="List of ticker symbols")
+
+
+class TickerDetailRequest(BaseModel):
+    """Request schema for fetching detailed overview of a single ticker"""
+    ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")
+
+
+class RelatedTickersRequest(BaseModel):
+    """Request schema for fetching related companies for a ticker"""
+    ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")

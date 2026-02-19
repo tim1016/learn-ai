@@ -245,3 +245,60 @@ class MarketDashboardResponse(BaseModel):
     status: Optional[MarketStatusResponse] = None
     holidays: Optional[MarketHolidaysResponse] = None
     error: Optional[str] = None
+
+
+# ------------------------------------------------------------------
+# Ticker Reference responses
+# ------------------------------------------------------------------
+
+class TickerInfo(BaseModel):
+    """Basic ticker info from the reference API"""
+    ticker: str
+    name: str = ""
+    market: str = ""
+    type: str = ""
+    active: bool = True
+    primary_exchange: Optional[str] = None
+    currency_name: Optional[str] = None
+
+
+class TickerListResponse(BaseModel):
+    """Response for batch ticker info lookup"""
+    success: bool
+    tickers: List[TickerInfo] = []
+    count: int = 0
+    error: Optional[str] = None
+
+
+class TickerAddress(BaseModel):
+    """Company address from ticker details"""
+    address1: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+
+
+class TickerDetailResponse(BaseModel):
+    """Response for detailed ticker overview"""
+    success: bool
+    ticker: str = ""
+    name: str = ""
+    description: Optional[str] = None
+    market_cap: Optional[float] = None
+    homepage_url: Optional[str] = None
+    total_employees: Optional[int] = None
+    list_date: Optional[str] = None
+    sic_description: Optional[str] = None
+    primary_exchange: Optional[str] = None
+    type: Optional[str] = None
+    weighted_shares_outstanding: Optional[float] = None
+    address: Optional[TickerAddress] = None
+    error: Optional[str] = None
+
+
+class RelatedTickersResponse(BaseModel):
+    """Response for related companies lookup"""
+    success: bool
+    ticker: str = ""
+    related: List[str] = []
+    error: Optional[str] = None

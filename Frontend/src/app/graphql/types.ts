@@ -232,6 +232,55 @@ export interface OptionsContractsResult {
   error: string | null;
 }
 
+// Ticker Reference types
+export interface TickerInfo {
+  ticker: string;
+  name: string;
+  market: string;
+  type: string;
+  active: boolean;
+  primaryExchange: string | null;
+  currencyName: string | null;
+}
+
+export interface TrackedTickersResult {
+  success: boolean;
+  tickers: TickerInfo[];
+  count: number;
+  error: string | null;
+}
+
+export interface TickerAddress {
+  address1: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+}
+
+export interface TickerDetailResult {
+  success: boolean;
+  ticker: string;
+  name: string;
+  description: string | null;
+  marketCap: number | null;
+  homepageUrl: string | null;
+  totalEmployees: number | null;
+  listDate: string | null;
+  sicDescription: string | null;
+  primaryExchange: string | null;
+  type: string | null;
+  weightedSharesOutstanding: number | null;
+  address: TickerAddress | null;
+  error: string | null;
+}
+
+export interface RelatedTickersResult {
+  success: boolean;
+  ticker: string;
+  related: string[];
+  error: string | null;
+}
+
 // Backtest types
 export interface BacktestTrade {
   tradeType: string;

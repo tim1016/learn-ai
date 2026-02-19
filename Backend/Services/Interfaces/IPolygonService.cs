@@ -67,6 +67,27 @@ public interface IPolygonService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Fetch basic info for a batch of stock tickers
+    /// </summary>
+    Task<TickerListResponse> FetchTickerListAsync(
+        List<string> tickers,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetch detailed overview for a single ticker
+    /// </summary>
+    Task<TickerDetailResponse> FetchTickerDetailsAsync(
+        string ticker,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetch related company tickers for a given stock
+    /// </summary>
+    Task<RelatedTickersResponse> FetchRelatedTickersAsync(
+        string ticker,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// List options contracts for an underlying ticker
     /// </summary>
     Task<OptionsContractsResponse> FetchOptionsContractsAsync(

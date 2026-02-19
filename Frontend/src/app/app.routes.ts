@@ -1,6 +1,4 @@
 import { Routes } from "@angular/router";
-import { BooksComponent } from "./components/books/books.component";
-import { AuthorsComponent } from "./components/authors/authors.component";
 import { MarketDataComponent } from "./components/market-data/market-data.component";
 import { TickersComponent } from "./components/tickers/tickers.component";
 import { TechnicalAnalysisComponent } from "./components/tickers/technical-analysis/technical-analysis.component";
@@ -11,19 +9,19 @@ import { TickerExplorerComponent } from "./components/ticker-explorer/ticker-exp
 import { StrategyLabComponent } from "./components/strategy-lab/strategy-lab.component";
 import { OptionsHistoryComponent } from "./components/options-history/options-history.component";
 import { SnapshotsComponent } from "./components/snapshots/snapshots.component";
+import { TrackedInstrumentsComponent } from "./components/tracked-instruments/tracked-instruments.component";
 
 export const routes: Routes = [
-  { path: "", redirectTo: "/books", pathMatch: "full" },
-  { path: "books", component: BooksComponent },
-  { path: "authors", component: AuthorsComponent },
+  { path: "", redirectTo: "/market-data", pathMatch: "full" },
   { path: "market-data", component: MarketDataComponent },
   { path: "tickers", component: TickersComponent },
   { path: "technical-analysis", component: TechnicalAnalysisComponent },
   { path: "stock-analysis", component: StockAnalysisComponent },
   { path: "stock-analysis/chunk/:ticker/:fromDate/:toDate", component: ChunkDetailComponent },
   { path: "stock-analysis/day/:ticker/:date", component: DayDetailComponent },
-  { path: "ticker-explorer", component: TickerExplorerComponent },
+  { path: "options-chain", component: TickerExplorerComponent },
   { path: "strategy-lab", component: StrategyLabComponent },
   { path: "options-history", component: OptionsHistoryComponent },
   { path: "snapshots", component: SnapshotsComponent },
+  { path: "tracked-instruments", component: TrackedInstrumentsComponent },
 ];
