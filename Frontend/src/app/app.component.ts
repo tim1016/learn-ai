@@ -38,6 +38,16 @@ export class AppComponent {
       ],
     },
     {
+      label: "ML Predictions",
+      icon: "pi pi-microchip-ai",
+      items: [
+        { label: "Train Model", icon: "pi pi-play", routerLink: "/lstm/train" },
+        { label: "Validation", icon: "pi pi-check-circle", routerLink: "/lstm/validate" },
+        { label: "Predictions", icon: "pi pi-chart-line", routerLink: "/lstm/predictions" },
+        { label: "Model History", icon: "pi pi-history", routerLink: "/lstm/models" },
+      ],
+    },
+    {
       label: "Tracked Instruments",
       icon: "pi pi-eye",
       routerLink: "/tracked-instruments",

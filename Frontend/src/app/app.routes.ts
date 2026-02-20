@@ -10,6 +10,10 @@ import { StrategyLabComponent } from "./components/strategy-lab/strategy-lab.com
 import { OptionsHistoryComponent } from "./components/options-history/options-history.component";
 import { SnapshotsComponent } from "./components/snapshots/snapshots.component";
 import { TrackedInstrumentsComponent } from "./components/tracked-instruments/tracked-instruments.component";
+import { LstmTrainComponent } from "./components/lstm/train/lstm-train.component";
+import { LstmValidateComponent } from "./components/lstm/validate/lstm-validate.component";
+import { LstmPredictionsComponent } from "./components/lstm/predictions/lstm-predictions.component";
+import { LstmModelsComponent } from "./components/lstm/models/lstm-models.component";
 
 export const routes: Routes = [
   { path: "", redirectTo: "/market-data", pathMatch: "full" },
@@ -24,4 +28,8 @@ export const routes: Routes = [
   { path: "options-history", component: OptionsHistoryComponent },
   { path: "snapshots", component: SnapshotsComponent },
   { path: "tracked-instruments", component: TrackedInstrumentsComponent },
+  { path: "lstm/train", component: LstmTrainComponent },
+  { path: "lstm/validate", component: LstmValidateComponent },
+  { path: "lstm/predictions", component: LstmPredictionsComponent },
+  { path: "lstm/models", component: LstmModelsComponent },
 ];

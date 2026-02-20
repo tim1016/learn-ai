@@ -70,6 +70,20 @@ builder.Services.AddHttpClient<ITechnicalAnalysisService, TechnicalAnalysisServi
     .HandleTransientHttpError()
     .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
 
+// Add HttpClient for LstmService (same Python service, longer timeout for training)
+builder.Services.AddHttpClient<ILstmService, LstmService>(client =>
+{
+    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(300);
+})
+.AddPolicyHandler(HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
+.AddPolicyHandler(HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
 builder.Services.AddScoped<IBacktestService, BacktestService>();

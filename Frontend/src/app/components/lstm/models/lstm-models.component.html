@@ -1,0 +1,68 @@
+<div class="lstm-models-container">
+  <h2>Model History</h2>
+  <p class="subtitle">Browse and compare all trained LSTM models.</p>
+
+  <div class="toolbar">
+    <button class="refresh-button" (click)="loadModels()" [disabled]="loading()">
+      @if (loading()) {
+        Loading...
+      } @else {
+        Refresh
+      }
+    </button>
+  </div>
+
+  @if (error()) {
+    <div class="error-message">{{ error() }}</div>
+  }
+
+  @if (models().length > 0) {
+    <p-table
+      [value]="models()"
+      [paginator]="true"
+      [rows]="10"
+      [rowsPerPageOptions]="[5, 10, 25]"
+      sortField="createdAt"
+      [sortOrder]="-1"
+      [tableStyle]="{ 'min-width': '900px' }"
+      styleClass="p-datatable-sm p-datatable-striped"
+      [scrollable]="true"
+    >
+      <ng-template #header>
+        <tr>
+          <th pSortableColumn="ticker">Ticker <p-sortIcon field="ticker" /></th>
+          <th pSortableColumn="createdAt">Created <p-sortIcon field="createdAt" /></th>
+          <th pSortableColumn="valRmse">Val RMSE <p-sortIcon field="valRmse" /></th>
+          <th pSortableColumn="baselineRmse">Baseline <p-sortIcon field="baselineRmse" /></th>
+          <th pSortableColumn="improvement">Improvement <p-sortIcon field="improvement" /></th>
+          <th>Best Epoch</th>
+          <th>Seq Len</th>
+          <th>Features</th>
+          <th>Model ID</th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-m>
+        <tr>
+          <td><strong>{{ m.ticker }}</strong></td>
+          <td class="mono">{{ m.createdAt }}</td>
+          <td>{{ m.valRmse.toFixed(4) }}</td>
+          <td>{{ m.baselineRmse.toFixed(4) }}</td>
+          <td [class]="getImprovementClass(m.improvement)">
+            {{ m.improvement.toFixed(2) }}%
+          </td>
+          <td>{{ m.bestEpoch }} / {{ m.epochsCompleted }}</td>
+          <td>{{ m.sequenceLength }}</td>
+          <td class="mono">{{ m.features.join(', ') }}</td>
+          <td class="mono small">{{ m.modelId }}</td>
+        </tr>
+      </ng-template>
+    </p-table>
+  }
+
+  @if (!loading() && models().length === 0) {
+    <div class="empty-state">
+      No models found. Train a model from the
+      <a routerLink="/lstm/train">Train Model</a> page.
+    </div>
+  }
+</div>

@@ -632,6 +632,121 @@ public class Query
 
     #endregion
 
+    #region LSTM Prediction Queries
+
+    [GraphQLName("lstmJobStatus")]
+    public async Task<LstmJobStatus> GetLstmJobStatus(
+        [Service] ILstmService lstmService,
+        [Service] ILogger<Query> logger,
+        string jobId)
+    {
+        try
+        {
+            logger.LogInformation("[LSTM] Querying job status: {JobId}", jobId);
+
+            var dto = await lstmService.GetJobStatusAsync(jobId);
+
+            var result = new LstmJobStatus
+            {
+                JobId = dto.JobId,
+                Status = dto.Status,
+                Error = dto.Error,
+                CreatedAt = dto.CreatedAt,
+                CompletedAt = dto.CompletedAt,
+            };
+
+            if (dto.TrainResult is not null)
+            {
+                result.TrainResult = new LstmTrainResult
+                {
+                    Ticker = dto.TrainResult.Ticker,
+                    ValRmse = dto.TrainResult.ValRmse,
+                    TrainRmse = dto.TrainResult.TrainRmse,
+                    BaselineRmse = dto.TrainResult.BaselineRmse,
+                    Improvement = dto.TrainResult.Improvement,
+                    EpochsCompleted = dto.TrainResult.EpochsCompleted,
+                    BestEpoch = dto.TrainResult.BestEpoch,
+                    ModelId = dto.TrainResult.ModelId,
+                    ActualValues = dto.TrainResult.ActualValues,
+                    PredictedValues = dto.TrainResult.PredictedValues,
+                    HistoryLoss = dto.TrainResult.HistoryLoss,
+                    HistoryValLoss = dto.TrainResult.HistoryValLoss,
+                    Residuals = dto.TrainResult.Residuals,
+                };
+            }
+
+            if (dto.ValidateResult is not null)
+            {
+                result.ValidateResult = new LstmValidateResult
+                {
+                    Ticker = dto.ValidateResult.Ticker,
+                    NumFolds = dto.ValidateResult.NumFolds,
+                    AvgRmse = dto.ValidateResult.AvgRmse,
+                    AvgMae = dto.ValidateResult.AvgMae,
+                    AvgMape = dto.ValidateResult.AvgMape,
+                    AvgDirectionalAccuracy = dto.ValidateResult.AvgDirectionalAccuracy,
+                    FoldResults = dto.ValidateResult.FoldResults.Select(f => new LstmFoldResult
+                    {
+                        Fold = f.Fold,
+                        TrainSize = f.TrainSize,
+                        TestSize = f.TestSize,
+                        Rmse = f.Rmse,
+                        Mae = f.Mae,
+                        Mape = f.Mape,
+                        DirectionalAccuracy = f.DirectionalAccuracy,
+                    }).ToList(),
+                };
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[LSTM] Error querying job status: {JobId}", jobId);
+            return new LstmJobStatus
+            {
+                JobId = jobId,
+                Status = "error",
+                Error = ex.Message,
+            };
+        }
+    }
+
+    [GraphQLName("lstmModels")]
+    public async Task<List<LstmModelInfo>> GetLstmModels(
+        [Service] ILstmService lstmService,
+        [Service] ILogger<Query> logger)
+    {
+        try
+        {
+            logger.LogInformation("[LSTM] Querying model list");
+
+            var dtos = await lstmService.GetModelsAsync();
+
+            return dtos.Select(d => new LstmModelInfo
+            {
+                ModelId = d.ModelId,
+                Ticker = d.Ticker,
+                CreatedAt = d.CreatedAt,
+                ValRmse = d.ValRmse,
+                TrainRmse = d.TrainRmse,
+                BaselineRmse = d.BaselineRmse,
+                Improvement = d.Improvement,
+                EpochsCompleted = d.EpochsCompleted,
+                BestEpoch = d.BestEpoch,
+                SequenceLength = d.SequenceLength,
+                Features = d.Features,
+            }).ToList();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[LSTM] Error querying models");
+            return [];
+        }
+    }
+
+    #endregion
+
     #region Ticker Reference Queries
 
     /// <summary>

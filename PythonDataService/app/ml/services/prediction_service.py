@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from app.ml.evaluation.walk_forward import walk_forward_validate
+from app.ml.models.api_schemas import ModelInfo, TrainJobResult, ValidateJobResult, ValidateFoldResult
 from app.ml.models.schemas import TrainingConfig, TrainingResult, WalkForwardResult
 from app.ml.preprocessing.pipeline import DataPipeline
 from app.ml.protocols import MarketDataProvider
@@ -18,14 +21,15 @@ logger = logging.getLogger(__name__)
 class PredictionService:
     """High-level service orchestrating train/predict/validate.
 
-    This is the entry point that both the CLI and a future FastAPI router call.
+    This is the entry point that the CLI, FastAPI router, and future API call.
     """
 
     def __init__(
         self, provider: MarketDataProvider, model_dir: Path | None = None
     ) -> None:
         self._provider = provider
-        self._trainer = LSTMTrainer(model_dir=model_dir or Path("trained_models"))
+        self._model_dir = model_dir or Path("trained_models")
+        self._trainer = LSTMTrainer(model_dir=self._model_dir)
 
     def train(
         self, config: TrainingConfig
@@ -45,10 +49,47 @@ class PredictionService:
         scaler_path = Path(result.model_path).with_suffix(".scaler.json")
         scaler.save(scaler_path)
 
+        # Save model metadata JSON for list_models()
+        meta_path = Path(result.model_path).with_suffix(".meta.json")
+        meta = {
+            "ticker": result.ticker,
+            "val_rmse": result.val_rmse,
+            "train_rmse": result.train_rmse,
+            "baseline_rmse": result.baseline_rmse,
+            "improvement": result.improvement_over_baseline,
+            "epochs_completed": result.epochs_completed,
+            "best_epoch": result.best_epoch,
+            "sequence_length": config.sequence_length,
+            "features": config.features,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        meta_path.write_text(json.dumps(meta, indent=2))
+
         # Generate predictions for visualization
         test_pred = model.predict(X_test, verbose=0).flatten()
 
         return result, test_pred, y_test, history
+
+    def train_for_api(self, config: TrainingConfig) -> TrainJobResult:
+        """Run training and return chart-ready API response."""
+        result, test_pred, y_test, history = self.train(config)
+        residuals = (y_test - test_pred).tolist()
+
+        return TrainJobResult(
+            ticker=result.ticker,
+            val_rmse=result.val_rmse,
+            train_rmse=result.train_rmse,
+            baseline_rmse=result.baseline_rmse,
+            improvement=result.improvement_over_baseline,
+            epochs_completed=result.epochs_completed,
+            best_epoch=result.best_epoch,
+            model_id=Path(result.model_path).stem,
+            actual_values=y_test.tolist(),
+            predicted_values=test_pred.tolist(),
+            history_loss=[float(v) for v in history["loss"]],
+            history_val_loss=[float(v) for v in history["val_loss"]],
+            residuals=residuals,
+        )
 
     def validate(
         self, config: TrainingConfig, n_folds: int = 5
@@ -66,3 +107,42 @@ class PredictionService:
 
         data = df[config.features].values.astype(np.float64)
         return walk_forward_validate(data, config, n_folds)
+
+    def validate_for_api(self, config: TrainingConfig, n_folds: int = 5) -> ValidateJobResult:
+        """Run validation and return API-ready response."""
+        result = self.validate(config, n_folds)
+        return ValidateJobResult(
+            ticker=result.ticker,
+            num_folds=result.num_folds,
+            avg_rmse=result.avg_rmse,
+            avg_mae=result.avg_mae,
+            avg_mape=result.avg_mape,
+            avg_directional_accuracy=result.avg_directional_accuracy,
+            fold_results=[
+                ValidateFoldResult(**f) for f in result.fold_results
+            ],
+        )
+
+    def list_models(self) -> list[ModelInfo]:
+        """List all trained models with metadata."""
+        models: list[ModelInfo] = []
+        for meta_path in sorted(self._model_dir.glob("*.meta.json")):
+            try:
+                meta = json.loads(meta_path.read_text())
+                model_id = meta_path.stem.replace(".meta", "")
+                models.append(ModelInfo(
+                    model_id=model_id,
+                    ticker=meta["ticker"],
+                    created_at=meta.get("created_at", "unknown"),
+                    val_rmse=meta["val_rmse"],
+                    train_rmse=meta["train_rmse"],
+                    baseline_rmse=meta["baseline_rmse"],
+                    improvement=meta["improvement"],
+                    epochs_completed=meta["epochs_completed"],
+                    best_epoch=meta["best_epoch"],
+                    sequence_length=meta.get("sequence_length", 60),
+                    features=meta.get("features", ["close"]),
+                ))
+            except Exception as e:
+                logger.warning(f"[ML] Failed to read model metadata {meta_path}: {e}")
+        return models

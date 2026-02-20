@@ -248,6 +248,108 @@ public class Mutation
     }
 
     #endregion
+
+    #region LSTM Prediction Mutations
+
+    [GraphQLName("startLstmTraining")]
+    public async Task<LstmJobResult> StartLstmTraining(
+        [Service] ILstmService lstmService,
+        [Service] ILogger<Mutation> logger,
+        string ticker,
+        string fromDate,
+        string toDate,
+        int epochs = 50,
+        int sequenceLength = 60,
+        string features = "close",
+        bool mock = false)
+    {
+        try
+        {
+            logger.LogInformation(
+                "[LSTM] Starting training: {Ticker}, epochs={Epochs}, seq={SeqLen}, features={Features}",
+                ticker, epochs, sequenceLength, features);
+
+            var config = new LstmTrainingConfigDto
+            {
+                Ticker = ticker,
+                FromDate = fromDate,
+                ToDate = toDate,
+                Epochs = epochs,
+                SequenceLength = sequenceLength,
+                Features = features,
+                Mock = mock,
+            };
+
+            var response = await lstmService.StartTrainingAsync(config);
+
+            return new LstmJobResult
+            {
+                Success = true,
+                JobId = response.JobId,
+                Message = $"Training job submitted for {ticker}",
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[LSTM] Error starting training for {Ticker}", ticker);
+            return new LstmJobResult
+            {
+                Success = false,
+                Message = ex.Message,
+            };
+        }
+    }
+
+    [GraphQLName("startLstmValidation")]
+    public async Task<LstmJobResult> StartLstmValidation(
+        [Service] ILstmService lstmService,
+        [Service] ILogger<Mutation> logger,
+        string ticker,
+        string fromDate,
+        string toDate,
+        int folds = 5,
+        int epochs = 20,
+        int sequenceLength = 60,
+        bool mock = false)
+    {
+        try
+        {
+            logger.LogInformation(
+                "[LSTM] Starting validation: {Ticker}, folds={Folds}, epochs={Epochs}",
+                ticker, folds, epochs);
+
+            var config = new LstmValidationConfigDto
+            {
+                Ticker = ticker,
+                FromDate = fromDate,
+                ToDate = toDate,
+                Folds = folds,
+                Epochs = epochs,
+                SequenceLength = sequenceLength,
+                Mock = mock,
+            };
+
+            var response = await lstmService.StartValidationAsync(config);
+
+            return new LstmJobResult
+            {
+                Success = true,
+                JobId = response.JobId,
+                Message = $"Validation job submitted for {ticker}",
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[LSTM] Error starting validation for {Ticker}", ticker);
+            return new LstmJobResult
+            {
+                Success = false,
+                Message = ex.Message,
+            };
+        }
+    }
+
+    #endregion
 }
 
 public class BacktestResultType

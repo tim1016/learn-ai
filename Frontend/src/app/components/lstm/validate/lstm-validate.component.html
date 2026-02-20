@@ -1,0 +1,145 @@
+<div class="lstm-validate-container">
+  <h2>Walk-Forward Validation</h2>
+  <p class="subtitle">Evaluate model robustness using expanding-window temporal cross-validation.</p>
+
+  <!-- Config Form -->
+  <div class="config-form">
+    <div class="form-row">
+      <div class="form-group">
+        <label for="ticker">Ticker</label>
+        <input
+          id="ticker"
+          type="text"
+          [ngModel]="ticker()"
+          (ngModelChange)="ticker.set($event)"
+          placeholder="e.g. AAPL"
+        />
+      </div>
+      <div class="form-group">
+        <label for="fromDate">From Date</label>
+        <input id="fromDate" type="date" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" />
+      </div>
+      <div class="form-group">
+        <label for="toDate">To Date</label>
+        <input id="toDate" type="date" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" />
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="folds">Folds</label>
+        <input id="folds" type="number" [ngModel]="folds()" (ngModelChange)="folds.set($event)" min="2" max="10" />
+      </div>
+      <div class="form-group">
+        <label for="epochs">Epochs per Fold</label>
+        <input id="epochs" type="number" [ngModel]="epochs()" (ngModelChange)="epochs.set($event)" min="1" max="200" />
+      </div>
+      <div class="form-group">
+        <label for="seqLen">Sequence Length</label>
+        <input id="seqLen" type="number" [ngModel]="sequenceLength()" (ngModelChange)="sequenceLength.set($event)" min="10" max="200" />
+      </div>
+      <div class="form-group checkbox-group">
+        <label>
+          <input type="checkbox" [ngModel]="mock()" (ngModelChange)="mock.set($event)" />
+          Mock Data
+        </label>
+      </div>
+    </div>
+
+    <button class="action-button" (click)="startValidation()" [disabled]="loading()">
+      @if (loading()) {
+        <span class="spinner"></span> Validating...
+      } @else {
+        Run Validation
+      }
+    </button>
+  </div>
+
+  <!-- Status -->
+  @if (status()) {
+    <div class="status-section">
+      <span class="status-badge" [class]="'status-' + status()">{{ status() }}</span>
+      @if (jobId()) {
+        <span class="job-id">Job: {{ jobId() }}</span>
+      }
+    </div>
+  }
+
+  @if (error()) {
+    <div class="error-message">{{ error() }}</div>
+  }
+
+  <!-- Results -->
+  @if (result(); as r) {
+    <div class="results-section">
+      <h3>Validation Results — {{ r.ticker }}</h3>
+
+      <!-- Summary Metrics -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <span class="metric-label">Avg RMSE</span>
+          <span class="metric-value">{{ r.avgRmse.toFixed(4) }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Avg MAE</span>
+          <span class="metric-value">{{ r.avgMae.toFixed(4) }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Avg MAPE</span>
+          <span class="metric-value">{{ r.avgMape.toFixed(2) }}%</span>
+        </div>
+        <div class="metric-card" [class.positive]="r.avgDirectionalAccuracy > 0.5">
+          <span class="metric-label">Directional Accuracy</span>
+          <span class="metric-value">{{ (r.avgDirectionalAccuracy * 100).toFixed(1) }}%</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Folds</span>
+          <span class="metric-value">{{ r.numFolds }}</span>
+        </div>
+      </div>
+
+      <!-- RMSE per Fold Chart -->
+      <div class="chart-section">
+        <h4>RMSE per Fold</h4>
+        <app-fold-metrics-chart [foldResults]="r.foldResults" metric="rmse" />
+      </div>
+
+      <!-- Directional Accuracy per Fold Chart -->
+      <div class="chart-section">
+        <h4>Directional Accuracy per Fold</h4>
+        <app-fold-metrics-chart [foldResults]="r.foldResults" metric="directionalAccuracy" />
+      </div>
+
+      <!-- Fold Details Table -->
+      <div class="table-section">
+        <h4>Fold Details</h4>
+        <p-table [value]="r.foldResults" [tableStyle]="{ 'min-width': '600px' }" styleClass="p-datatable-sm p-datatable-striped">
+          <ng-template #header>
+            <tr>
+              <th>Fold</th>
+              <th>Train Size</th>
+              <th>Test Size</th>
+              <th>RMSE</th>
+              <th>MAE</th>
+              <th>MAPE</th>
+              <th>Dir. Accuracy</th>
+            </tr>
+          </ng-template>
+          <ng-template #body let-fold>
+            <tr>
+              <td>{{ fold.fold }}</td>
+              <td>{{ fold.trainSize }}</td>
+              <td>{{ fold.testSize }}</td>
+              <td>{{ fold.rmse.toFixed(4) }}</td>
+              <td>{{ fold.mae.toFixed(4) }}</td>
+              <td>{{ fold.mape.toFixed(2) }}%</td>
+              <td [class.positive-text]="fold.directionalAccuracy > 0.5">
+                {{ (fold.directionalAccuracy * 100).toFixed(1) }}%
+              </td>
+            </tr>
+          </ng-template>
+        </p-table>
+      </div>
+    </div>
+  }
+</div>

@@ -1,0 +1,171 @@
+<div class="lstm-train-container">
+  <h2>Train LSTM Model</h2>
+  <p class="subtitle">Configure and train an LSTM neural network for stock price prediction.</p>
+
+  <!-- Config Form -->
+  <div class="config-form">
+    <div class="form-row">
+      <div class="form-group">
+        <label for="ticker">Ticker</label>
+        <input
+          id="ticker"
+          type="text"
+          [ngModel]="ticker()"
+          (ngModelChange)="ticker.set($event)"
+          placeholder="e.g. AAPL"
+        />
+      </div>
+      <div class="form-group">
+        <label for="fromDate">From Date</label>
+        <input
+          id="fromDate"
+          type="date"
+          [ngModel]="fromDate()"
+          (ngModelChange)="fromDate.set($event)"
+        />
+      </div>
+      <div class="form-group">
+        <label for="toDate">To Date</label>
+        <input
+          id="toDate"
+          type="date"
+          [ngModel]="toDate()"
+          (ngModelChange)="toDate.set($event)"
+        />
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="epochs">Epochs</label>
+        <input
+          id="epochs"
+          type="number"
+          [ngModel]="epochs()"
+          (ngModelChange)="epochs.set($event)"
+          min="1"
+          max="500"
+        />
+      </div>
+      <div class="form-group">
+        <label for="seqLen">Sequence Length</label>
+        <input
+          id="seqLen"
+          type="number"
+          [ngModel]="sequenceLength()"
+          (ngModelChange)="sequenceLength.set($event)"
+          min="10"
+          max="200"
+        />
+      </div>
+      <div class="form-group">
+        <label for="features">Features</label>
+        <select
+          id="features"
+          [ngModel]="features()"
+          (ngModelChange)="features.set($event)"
+        >
+          @for (f of featureOptions; track f) {
+            <option [value]="f">{{ f }}</option>
+          }
+        </select>
+      </div>
+      <div class="form-group checkbox-group">
+        <label>
+          <input
+            type="checkbox"
+            [ngModel]="mock()"
+            (ngModelChange)="mock.set($event)"
+          />
+          Mock Data
+        </label>
+      </div>
+    </div>
+
+    <button
+      class="train-button"
+      (click)="startTraining()"
+      [disabled]="loading()"
+    >
+      @if (loading()) {
+        <span class="spinner"></span> Training...
+      } @else {
+        Start Training
+      }
+    </button>
+  </div>
+
+  <!-- Status -->
+  @if (status()) {
+    <div class="status-section">
+      <span class="status-badge" [class]="'status-' + status()">
+        {{ status() }}
+      </span>
+      @if (jobId()) {
+        <span class="job-id">Job: {{ jobId() }}</span>
+      }
+    </div>
+  }
+
+  <!-- Error -->
+  @if (error()) {
+    <div class="error-message">{{ error() }}</div>
+  }
+
+  <!-- Results -->
+  @if (result(); as r) {
+    <div class="results-section">
+      <h3>Training Results</h3>
+
+      <!-- Metrics Cards -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <span class="metric-label">Validation RMSE</span>
+          <span class="metric-value">{{ r.valRmse.toFixed(4) }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Baseline RMSE</span>
+          <span class="metric-value">{{ r.baselineRmse.toFixed(4) }}</span>
+        </div>
+        <div class="metric-card" [class.positive]="improvementPositive()" [class.negative]="!improvementPositive()">
+          <span class="metric-label">Improvement</span>
+          <span class="metric-value">{{ r.improvement.toFixed(2) }}%</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Train RMSE</span>
+          <span class="metric-value">{{ r.trainRmse.toFixed(4) }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Best Epoch</span>
+          <span class="metric-value">{{ r.bestEpoch }} / {{ r.epochsCompleted }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Model ID</span>
+          <span class="metric-value small">{{ r.modelId }}</span>
+        </div>
+      </div>
+
+      @if (!improvementPositive()) {
+        <div class="warning-banner">
+          Model did not outperform the naive baseline. Consider adjusting hyperparameters or adding more data.
+        </div>
+      }
+
+      <!-- Charts -->
+      <div class="chart-section">
+        <h4>Actual vs Predicted</h4>
+        <app-prediction-chart [actual]="r.actualValues" [predicted]="r.predictedValues" />
+      </div>
+
+      <div class="chart-section">
+        <h4>Training & Validation Loss</h4>
+        <app-training-history-chart [historyLoss]="r.historyLoss" [historyValLoss]="r.historyValLoss" />
+      </div>
+
+      <div class="chart-section">
+        <h4>Residuals Distribution</h4>
+        <app-residuals-chart [residuals]="r.residuals" />
+      </div>
+    </div>
+  }
+</div>

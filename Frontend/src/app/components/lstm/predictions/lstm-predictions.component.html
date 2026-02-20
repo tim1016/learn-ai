@@ -1,0 +1,85 @@
+<div class="lstm-predictions-container">
+  <h2>Predictions</h2>
+  <p class="subtitle">View trained model details and prediction results.</p>
+
+  @if (error()) {
+    <div class="error-message">{{ error() }}</div>
+  }
+
+  <div class="model-selector">
+    <label for="modelSelect">Select Model</label>
+    <select
+      id="modelSelect"
+      [ngModel]="selectedModelId()"
+      (ngModelChange)="selectModel($event)"
+    >
+      <option [ngValue]="null" disabled>-- Choose a model --</option>
+      @for (m of models(); track m.modelId) {
+        <option [value]="m.modelId">
+          {{ m.ticker }} — {{ m.modelId }} (RMSE: {{ m.valRmse.toFixed(4) }})
+        </option>
+      }
+    </select>
+    <button class="refresh-button" (click)="loadModels()" [disabled]="loading()">
+      Refresh
+    </button>
+  </div>
+
+  @if (loading()) {
+    <div class="loading-state">Loading models...</div>
+  }
+
+  @if (selectedModel(); as m) {
+    <div class="model-details">
+      <h3>{{ m.ticker }} — Model Details</h3>
+
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <span class="metric-label">Model ID</span>
+          <span class="metric-value small">{{ m.modelId }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Created</span>
+          <span class="metric-value small">{{ m.createdAt }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Validation RMSE</span>
+          <span class="metric-value">{{ m.valRmse.toFixed(4) }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Baseline RMSE</span>
+          <span class="metric-value">{{ m.baselineRmse.toFixed(4) }}</span>
+        </div>
+        <div class="metric-card" [class.positive]="m.improvement > 0" [class.negative]="m.improvement <= 0">
+          <span class="metric-label">Improvement</span>
+          <span class="metric-value">{{ m.improvement.toFixed(2) }}%</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Best Epoch</span>
+          <span class="metric-value">{{ m.bestEpoch }} / {{ m.epochsCompleted }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Sequence Length</span>
+          <span class="metric-value">{{ m.sequenceLength }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Features</span>
+          <span class="metric-value small">{{ m.features.join(', ') }}</span>
+        </div>
+      </div>
+
+      <div class="info-note">
+        To see prediction charts (actual vs predicted), run a new training job from the
+        <a routerLink="/lstm/train">Train Model</a> page. The charts are displayed inline after training completes.
+      </div>
+    </div>
+  }
+
+  @if (!loading() && models().length === 0) {
+    <div class="empty-state">
+      No trained models found. Go to
+      <a routerLink="/lstm/train">Train Model</a>
+      to train your first LSTM model.
+    </div>
+  }
+</div>
