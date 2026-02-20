@@ -1,6 +1,7 @@
 import {
   Component,
   signal,
+  computed,
   inject,
   DestroyRef,
   ChangeDetectionStrategy,
@@ -34,6 +35,14 @@ export class LstmValidateComponent {
   epochs = signal(20);
   sequenceLength = signal(60);
   mock = signal(false);
+  scalerType = signal('standard');
+  logReturns = signal(false);
+  winsorize = signal(false);
+  timespan = signal('day');
+  multiplier = signal(1);
+
+  // UI state
+  showHelp = signal(false);
 
   // State
   loading = signal(false);
@@ -41,6 +50,34 @@ export class LstmValidateComponent {
   status = signal<string | null>(null);
   error = signal<string | null>(null);
   result = signal<LstmValidateResult | null>(null);
+
+  dataPointEstimate = computed(() => {
+    const from = new Date(this.fromDate());
+    const to = new Date(this.toDate());
+    const days = Math.max(0, (to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24));
+    const tradingDays = Math.round(days * (252 / 365));
+    const ts = this.timespan();
+    const mult = this.multiplier();
+
+    if (ts === 'day') return Math.round(tradingDays / mult);
+    if (ts === 'hour') return Math.round((tradingDays * 6.5) / mult);
+    if (ts === 'minute') return Math.round((tradingDays * 390) / mult);
+    if (ts === 'week') return Math.round(tradingDays / (5 * mult));
+    return tradingDays;
+  });
+
+  scalerOptions = [
+    { value: 'standard', label: 'Standard (z-score)' },
+    { value: 'robust', label: 'Robust (median/IQR)' },
+    { value: 'minmax', label: 'MinMax [0,1]' },
+  ];
+
+  timespanOptions = [
+    { value: 'minute', label: 'Minute' },
+    { value: 'hour', label: 'Hour' },
+    { value: 'day', label: 'Day' },
+    { value: 'week', label: 'Week' },
+  ];
 
   startValidation(): void {
     this.loading.set(true);
@@ -57,6 +94,11 @@ export class LstmValidateComponent {
         epochs: this.epochs(),
         sequenceLength: this.sequenceLength(),
         mock: this.mock(),
+        scalerType: this.scalerType(),
+        logReturns: this.logReturns(),
+        winsorize: this.winsorize(),
+        timespan: this.timespan(),
+        multiplier: this.multiplier(),
       })
       .pipe(
         tap((jobResult) => {

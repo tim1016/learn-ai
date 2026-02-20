@@ -26,7 +26,7 @@ class TestLSTMTrainer:
         )
 
         pipeline = DataPipeline(provider)
-        X_train, X_test, y_train, y_test, scaler = pipeline.prepare(config)
+        X_train, X_test, y_train, y_test, scaler, _ = pipeline.prepare(config)
 
         trainer = LSTMTrainer(model_dir=tmp_path)
         result, model, history = trainer.train(config, X_train, X_test, y_train, y_test)
@@ -50,7 +50,7 @@ class TestLSTMTrainer:
         )
 
         pipeline = DataPipeline(provider)
-        X_train, X_test, y_train, y_test, scaler = pipeline.prepare(config)
+        X_train, X_test, y_train, y_test, scaler, _ = pipeline.prepare(config)
 
         trainer = LSTMTrainer(model_dir=tmp_path)
         result, model, history = trainer.train(config, X_train, X_test, y_train, y_test)

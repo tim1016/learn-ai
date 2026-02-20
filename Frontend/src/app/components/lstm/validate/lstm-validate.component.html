@@ -38,22 +38,106 @@
         <label for="seqLen">Sequence Length</label>
         <input id="seqLen" type="number" [ngModel]="sequenceLength()" (ngModelChange)="sequenceLength.set($event)" min="10" max="200" />
       </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="scalerType">Scaler</label>
+        <select id="scalerType" [ngModel]="scalerType()" (ngModelChange)="scalerType.set($event)">
+          @for (s of scalerOptions; track s.value) {
+            <option [value]="s.value">{{ s.label }}</option>
+          }
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="timespan">Timespan</label>
+        <select id="timespan" [ngModel]="timespan()" (ngModelChange)="timespan.set($event)">
+          @for (t of timespanOptions; track t.value) {
+            <option [value]="t.value">{{ t.label }}</option>
+          }
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="multiplier">Multiplier</label>
+        <input id="multiplier" type="number" [ngModel]="multiplier()" (ngModelChange)="multiplier.set($event)" min="1" max="60" />
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group checkbox-group">
+        <label>
+          <input type="checkbox" [ngModel]="logReturns()" (ngModelChange)="logReturns.set($event)" />
+          Log Returns
+        </label>
+      </div>
+      <div class="form-group checkbox-group">
+        <label>
+          <input type="checkbox" [ngModel]="winsorize()" (ngModelChange)="winsorize.set($event)" />
+          Winsorize
+        </label>
+      </div>
       <div class="form-group checkbox-group">
         <label>
           <input type="checkbox" [ngModel]="mock()" (ngModelChange)="mock.set($event)" />
           Mock Data
         </label>
       </div>
+      <div class="form-group data-estimate">
+        <span class="estimate-label">Est. data points:</span>
+        <span class="estimate-value">~{{ dataPointEstimate() | number }}</span>
+      </div>
     </div>
 
-    <button class="action-button" (click)="startValidation()" [disabled]="loading()">
-      @if (loading()) {
-        <span class="spinner"></span> Validating...
-      } @else {
-        Run Validation
-      }
-    </button>
+    <div class="form-actions">
+      <button class="action-button" (click)="startValidation()" [disabled]="loading()">
+        @if (loading()) {
+          <span class="spinner"></span> Validating...
+        } @else {
+          Run Validation
+        }
+      </button>
+      <button class="help-toggle" (click)="showHelp.set(!showHelp())">
+        {{ showHelp() ? 'Hide' : 'Show' }} setting guide
+      </button>
+    </div>
   </div>
+
+  <!-- Help Section -->
+  @if (showHelp()) {
+    <div class="help-section">
+      <h4>How Settings Affect Validation</h4>
+
+      <div class="help-item">
+        <strong>Duration (From/To Date)</strong>
+        <p>More data gives each fold more training samples. Your Polygon Starter plan provides up to 2 years of historical data.</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Timespan & Multiplier</strong>
+        <p>Controls data density. Day = ~252 bars/year. Hour = ~1,638/year. Minute = ~98,280/year. Higher density means more data per fold but longer validation time (multiplied by number of folds).</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Folds</strong>
+        <p>Number of expanding-window train/test splits. More folds gives a more robust estimate of model quality but takes proportionally longer. 3-5 folds is typical for financial data to balance reliability with runtime.</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Epochs per Fold</strong>
+        <p>Each fold trains a fresh model for this many epochs. Lower than single training since you're testing robustness, not getting the best model. 10-30 is typical for validation.</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Sequence Length</strong>
+        <p>Past bars the model examines per prediction. Must be less than 25% of the smallest fold's training data. Keep consistent with your training configuration.</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Scaler / Log Returns / Winsorize</strong>
+        <p>Use the same preprocessing settings as your training configuration for a fair comparison. Each fold independently fits the scaler on its training data (no leakage between folds).</p>
+      </div>
+    </div>
+  }
 
   <!-- Status -->
   @if (status()) {
@@ -98,6 +182,31 @@
         </div>
       </div>
 
+      <!-- Trading Metrics -->
+      @if (r.avgSharpeRatio !== null || r.avgMaxDrawdown !== null || r.avgProfitFactor !== null) {
+        <h4 class="section-title">Trading Metrics</h4>
+        <div class="metrics-grid">
+          @if (r.avgSharpeRatio !== null) {
+            <div class="metric-card" [class.positive]="r.avgSharpeRatio! > 0">
+              <span class="metric-label">Avg Sharpe Ratio</span>
+              <span class="metric-value">{{ r.avgSharpeRatio!.toFixed(3) }}</span>
+            </div>
+          }
+          @if (r.avgMaxDrawdown !== null) {
+            <div class="metric-card">
+              <span class="metric-label">Avg Max Drawdown</span>
+              <span class="metric-value">{{ (r.avgMaxDrawdown! * 100).toFixed(2) }}%</span>
+            </div>
+          }
+          @if (r.avgProfitFactor !== null) {
+            <div class="metric-card" [class.positive]="r.avgProfitFactor! > 1">
+              <span class="metric-label">Avg Profit Factor</span>
+              <span class="metric-value">{{ r.avgProfitFactor!.toFixed(3) }}</span>
+            </div>
+          }
+        </div>
+      }
+
       <!-- RMSE per Fold Chart -->
       <div class="chart-section">
         <h4>RMSE per Fold</h4>
@@ -113,7 +222,7 @@
       <!-- Fold Details Table -->
       <div class="table-section">
         <h4>Fold Details</h4>
-        <p-table [value]="r.foldResults" [tableStyle]="{ 'min-width': '600px' }" styleClass="p-datatable-sm p-datatable-striped">
+        <p-table [value]="r.foldResults" [tableStyle]="{ 'min-width': '800px' }" styleClass="p-datatable-sm p-datatable-striped">
           <ng-template #header>
             <tr>
               <th>Fold</th>
@@ -123,6 +232,9 @@
               <th>MAE</th>
               <th>MAPE</th>
               <th>Dir. Accuracy</th>
+              <th>Sharpe</th>
+              <th>Max DD</th>
+              <th>Profit Factor</th>
             </tr>
           </ng-template>
           <ng-template #body let-fold>
@@ -135,6 +247,15 @@
               <td>{{ fold.mape.toFixed(2) }}%</td>
               <td [class.positive-text]="fold.directionalAccuracy > 0.5">
                 {{ (fold.directionalAccuracy * 100).toFixed(1) }}%
+              </td>
+              <td [class.positive-text]="fold.sharpeRatio && fold.sharpeRatio > 0">
+                {{ fold.sharpeRatio !== null ? fold.sharpeRatio.toFixed(3) : '-' }}
+              </td>
+              <td>
+                {{ fold.maxDrawdown !== null ? (fold.maxDrawdown * 100).toFixed(2) + '%' : '-' }}
+              </td>
+              <td [class.positive-text]="fold.profitFactor && fold.profitFactor > 1">
+                {{ fold.profitFactor !== null ? fold.profitFactor.toFixed(3) : '-' }}
               </td>
             </tr>
           </ng-template>

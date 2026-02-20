@@ -672,6 +672,9 @@ public class Query
                     HistoryLoss = dto.TrainResult.HistoryLoss,
                     HistoryValLoss = dto.TrainResult.HistoryValLoss,
                     Residuals = dto.TrainResult.Residuals,
+                    StationarityAdfPvalue = dto.TrainResult.StationarityAdfPvalue,
+                    StationarityKpssPvalue = dto.TrainResult.StationarityKpssPvalue,
+                    StationarityIsStationary = dto.TrainResult.StationarityIsStationary,
                 };
             }
 
@@ -685,6 +688,9 @@ public class Query
                     AvgMae = dto.ValidateResult.AvgMae,
                     AvgMape = dto.ValidateResult.AvgMape,
                     AvgDirectionalAccuracy = dto.ValidateResult.AvgDirectionalAccuracy,
+                    AvgSharpeRatio = dto.ValidateResult.AvgSharpeRatio,
+                    AvgMaxDrawdown = dto.ValidateResult.AvgMaxDrawdown,
+                    AvgProfitFactor = dto.ValidateResult.AvgProfitFactor,
                     FoldResults = dto.ValidateResult.FoldResults.Select(f => new LstmFoldResult
                     {
                         Fold = f.Fold,
@@ -694,6 +700,9 @@ public class Query
                         Mae = f.Mae,
                         Mape = f.Mape,
                         DirectionalAccuracy = f.DirectionalAccuracy,
+                        SharpeRatio = f.SharpeRatio,
+                        MaxDrawdown = f.MaxDrawdown,
+                        ProfitFactor = f.ProfitFactor,
                     }).ToList(),
                 };
             }

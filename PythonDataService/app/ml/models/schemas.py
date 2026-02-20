@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -31,11 +31,29 @@ class TrainingConfig(BaseModel):
     features: List[str] = Field(
         default=["close"], description="Columns to use as features"
     )
+    scaler_type: Literal["minmax", "standard", "robust"] = Field(
+        "standard", description="Scaler type: minmax, standard (z-score), or robust (median/IQR)"
+    )
+    log_returns: bool = Field(
+        False, description="Use log returns instead of raw prices"
+    )
+    winsorize: bool = Field(
+        False, description="Clip extreme values at quantile bounds"
+    )
+    winsorize_limits: Tuple[float, float] = Field(
+        (0.01, 0.99), description="Lower and upper quantile bounds for winsorization"
+    )
+    timespan: str = Field(
+        "day", description="Aggregation timespan: minute, hour, day, week"
+    )
+    multiplier: int = Field(
+        1, ge=1, le=60, description="Timespan multiplier (e.g., 5 for 5-min bars)"
+    )
 
     @field_validator("features")
     @classmethod
     def validate_features(cls, v: List[str]) -> List[str]:
-        valid = {"open", "high", "low", "close", "volume", "vwap", "returns"}
+        valid = {"open", "high", "low", "close", "volume", "vwap", "returns", "log_return"}
         invalid = set(v) - valid
         if invalid:
             raise ValueError(f"Invalid features: {invalid}. Must be subset of {valid}")
@@ -56,6 +74,9 @@ class TrainingResult(BaseModel):
     epochs_completed: int
     best_epoch: int
     model_path: Optional[str] = None
+    stationarity_adf_pvalue: Optional[float] = None
+    stationarity_kpss_pvalue: Optional[float] = None
+    stationarity_is_stationary: Optional[bool] = None
 
 
 class PredictionRequest(BaseModel):
@@ -86,4 +107,7 @@ class WalkForwardResult(BaseModel):
     avg_mae: float
     avg_mape: float
     avg_directional_accuracy: float
+    avg_sharpe_ratio: Optional[float] = None
+    avg_max_drawdown: Optional[float] = None
+    avg_profit_factor: Optional[float] = None
     fold_results: List[dict]

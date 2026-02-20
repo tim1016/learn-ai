@@ -6,6 +6,11 @@ export interface LstmTrainingConfig {
   sequenceLength: number;
   features: string;
   mock: boolean;
+  scalerType: string;
+  logReturns: boolean;
+  winsorize: boolean;
+  timespan: string;
+  multiplier: number;
 }
 
 export interface LstmValidationConfig {
@@ -16,6 +21,11 @@ export interface LstmValidationConfig {
   epochs: number;
   sequenceLength: number;
   mock: boolean;
+  scalerType: string;
+  logReturns: boolean;
+  winsorize: boolean;
+  timespan: string;
+  multiplier: number;
 }
 
 export interface LstmJobResult {
@@ -48,6 +58,9 @@ export interface LstmTrainResult {
   historyLoss: number[];
   historyValLoss: number[];
   residuals: number[];
+  stationarityAdfPvalue: number | null;
+  stationarityKpssPvalue: number | null;
+  stationarityIsStationary: boolean | null;
 }
 
 export interface LstmValidateResult {
@@ -57,6 +70,9 @@ export interface LstmValidateResult {
   avgMae: number;
   avgMape: number;
   avgDirectionalAccuracy: number;
+  avgSharpeRatio: number | null;
+  avgMaxDrawdown: number | null;
+  avgProfitFactor: number | null;
   foldResults: LstmFoldResult[];
 }
 
@@ -68,6 +84,9 @@ export interface LstmFoldResult {
   mae: number;
   mape: number;
   directionalAccuracy: number;
+  sharpeRatio: number | null;
+  maxDrawdown: number | null;
+  profitFactor: number | null;
 }
 
 export interface LstmModelInfo {

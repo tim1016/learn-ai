@@ -70,6 +70,67 @@
           }
         </select>
       </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="scalerType">Scaler</label>
+        <select
+          id="scalerType"
+          [ngModel]="scalerType()"
+          (ngModelChange)="scalerType.set($event)"
+        >
+          @for (s of scalerOptions; track s.value) {
+            <option [value]="s.value">{{ s.label }}</option>
+          }
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="timespan">Timespan</label>
+        <select
+          id="timespan"
+          [ngModel]="timespan()"
+          (ngModelChange)="timespan.set($event)"
+        >
+          @for (t of timespanOptions; track t.value) {
+            <option [value]="t.value">{{ t.label }}</option>
+          }
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="multiplier">Multiplier</label>
+        <input
+          id="multiplier"
+          type="number"
+          [ngModel]="multiplier()"
+          (ngModelChange)="multiplier.set($event)"
+          min="1"
+          max="60"
+        />
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group checkbox-group">
+        <label>
+          <input
+            type="checkbox"
+            [ngModel]="logReturns()"
+            (ngModelChange)="logReturns.set($event)"
+          />
+          Log Returns
+        </label>
+      </div>
+      <div class="form-group checkbox-group">
+        <label>
+          <input
+            type="checkbox"
+            [ngModel]="winsorize()"
+            (ngModelChange)="winsorize.set($event)"
+          />
+          Winsorize
+        </label>
+      </div>
       <div class="form-group checkbox-group">
         <label>
           <input
@@ -80,20 +141,79 @@
           Mock Data
         </label>
       </div>
+      <div class="form-group data-estimate">
+        <span class="estimate-label">Est. data points:</span>
+        <span class="estimate-value">~{{ dataPointEstimate() | number }}</span>
+      </div>
     </div>
 
-    <button
-      class="train-button"
-      (click)="startTraining()"
-      [disabled]="loading()"
-    >
-      @if (loading()) {
-        <span class="spinner"></span> Training...
-      } @else {
-        Start Training
-      }
-    </button>
+    <div class="form-actions">
+      <button
+        class="train-button"
+        (click)="startTraining()"
+        [disabled]="loading()"
+      >
+        @if (loading()) {
+          <span class="spinner"></span> Training...
+        } @else {
+          Start Training
+        }
+      </button>
+      <button
+        class="help-toggle"
+        (click)="showHelp.set(!showHelp())"
+      >
+        {{ showHelp() ? 'Hide' : 'Show' }} setting guide
+      </button>
+    </div>
   </div>
+
+  <!-- Help Section -->
+  @if (showHelp()) {
+    <div class="help-section">
+      <h4>How Settings Affect Training</h4>
+
+      <div class="help-item">
+        <strong>Duration (From/To Date)</strong>
+        <p>More data gives the model more patterns to learn, but older data may not reflect current market conditions. Your Polygon Starter plan provides up to 2 years of historical data.</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Timespan & Multiplier</strong>
+        <p>Controls data density. Day = ~252 bars/year. Hour = ~1,638/year. Minute = ~98,280/year. Higher density reveals intraday patterns but significantly increases training time. Use multiplier for coarser bins (e.g., timespan "minute" + multiplier 5 = 5-minute bars).</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Epochs</strong>
+        <p>Number of complete passes through the training data. More epochs means better learning but risks overfitting. Watch for validation loss rising while training loss falls (visible in the loss chart). Early stopping is applied automatically. Typical range: 20-100.</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Sequence Length</strong>
+        <p>How many past bars the model examines to predict the next value. Should be less than 25% of total data points. For daily data over 2 years (~504 bars), 60 is a good default. For minute data (~98K bars), you can increase to 120+.</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Features</strong>
+        <p>More features provide more information but make the model harder to train. "close" alone is simplest. Adding "volume" helps detect price-volume divergences. "log_return" improves stationarity. Avoid adding features you don't understand.</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Scaler</strong>
+        <p>Standard (z-score) works best for normally distributed data. Robust uses median/IQR, making it better when outliers exist (earnings gaps, flash crashes). MinMax constrains to [0,1] but is sensitive to outliers.</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Log Returns</strong>
+        <p>Transforms raw prices into percentage changes: log(price_t / price_t-1). This makes the data more stationary, which is critical for LSTM learning. Recommended when using raw price features.</p>
+      </div>
+
+      <div class="help-item">
+        <strong>Winsorize</strong>
+        <p>Clips extreme values at the 1st and 99th percentile. Prevents outliers from dominating the scaler. Recommended when your data contains price spikes or gaps.</p>
+      </div>
+    </div>
+  }
 
   <!-- Status -->
   @if (status()) {
@@ -144,6 +264,22 @@
           <span class="metric-value small">{{ r.modelId }}</span>
         </div>
       </div>
+
+      <!-- Stationarity Card -->
+      @if (r.stationarityIsStationary !== null) {
+        <div class="stationarity-card" [class.stationary]="stationarityIsGood" [class.non-stationary]="!stationarityIsGood">
+          <div class="stationarity-header">
+            <strong>Stationarity: {{ stationarityStatus }}</strong>
+          </div>
+          <div class="stationarity-details">
+            <span>ADF p-value: {{ r.stationarityAdfPvalue?.toFixed(4) }}</span>
+            <span>KPSS p-value: {{ r.stationarityKpssPvalue?.toFixed(4) }}</span>
+          </div>
+          @if (!stationarityIsGood) {
+            <p class="stationarity-hint">Data appears non-stationary. Consider enabling Log Returns or using differenced features for better results.</p>
+          }
+        </div>
+      }
 
       @if (!improvementPositive()) {
         <div class="warning-banner">

@@ -33,6 +33,11 @@ def _run_training(
     sequence_length: int,
     features: str,
     mock: bool,
+    scaler_type: str = "standard",
+    log_returns: bool = False,
+    winsorize: bool = False,
+    timespan: str = "day",
+    multiplier: int = 1,
 ) -> dict:
     """Synchronous training function to run in background thread."""
     service = _get_service(mock)
@@ -43,6 +48,11 @@ def _run_training(
         epochs=epochs,
         sequence_length=sequence_length,
         features=features.split(","),
+        scaler_type=scaler_type,
+        log_returns=log_returns,
+        winsorize=winsorize,
+        timespan=timespan,
+        multiplier=multiplier,
     )
     result = service.train_for_api(config)
     return result.model_dump()
@@ -56,6 +66,11 @@ def _run_validation(
     epochs: int,
     sequence_length: int,
     mock: bool,
+    scaler_type: str = "standard",
+    log_returns: bool = False,
+    winsorize: bool = False,
+    timespan: str = "day",
+    multiplier: int = 1,
 ) -> dict:
     """Synchronous validation function to run in background thread."""
     service = _get_service(mock)
@@ -65,6 +80,11 @@ def _run_validation(
         to_date=to_date,
         epochs=epochs,
         sequence_length=sequence_length,
+        scaler_type=scaler_type,
+        log_returns=log_returns,
+        winsorize=winsorize,
+        timespan=timespan,
+        multiplier=multiplier,
     )
     result = service.validate_for_api(config, n_folds=folds)
     return result.model_dump()
@@ -84,6 +104,11 @@ async def start_training(request: TrainRequest) -> JobSubmitResponse:
         sequence_length=request.sequence_length,
         features=request.features,
         mock=request.mock,
+        scaler_type=request.scaler_type,
+        log_returns=request.log_returns,
+        winsorize=request.winsorize,
+        timespan=request.timespan,
+        multiplier=request.multiplier,
     )
 
     return JobSubmitResponse(job_id=job_id)
@@ -103,6 +128,11 @@ async def start_validation(request: ValidateRequest) -> JobSubmitResponse:
         epochs=request.epochs,
         sequence_length=request.sequence_length,
         mock=request.mock,
+        scaler_type=request.scaler_type,
+        log_returns=request.log_returns,
+        winsorize=request.winsorize,
+        timespan=request.timespan,
+        multiplier=request.multiplier,
     )
 
     return JobSubmitResponse(job_id=job_id)

@@ -67,6 +67,29 @@ h2 {
   }
 }
 
+.data-estimate {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+
+  .estimate-label {
+    font-size: 12px;
+    color: #888;
+  }
+
+  .estimate-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1976d2;
+  }
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .action-button {
   display: inline-flex;
   align-items: center;
@@ -91,6 +114,22 @@ h2 {
   }
 }
 
+.help-toggle {
+  background: none;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    background: #f0f0f0;
+    border-color: #aaa;
+  }
+}
+
 .spinner {
   display: inline-block;
   width: 16px;
@@ -105,6 +144,48 @@ h2 {
   to { transform: rotate(360deg); }
 }
 
+// Help Section
+.help-section {
+  background: #f0f7ff;
+  border: 1px solid #bbdefb;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+
+  h4 {
+    margin: 0 0 16px;
+    color: #1565c0;
+    font-size: 15px;
+  }
+}
+
+.help-item {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e3f2fd;
+
+  &:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  strong {
+    display: block;
+    font-size: 13px;
+    color: #333;
+    margin-bottom: 4px;
+  }
+
+  p {
+    margin: 0;
+    font-size: 13px;
+    color: #555;
+    line-height: 1.5;
+  }
+}
+
+// Status
 .status-section {
   display: flex;
   align-items: center;
@@ -142,6 +223,12 @@ h2 {
 
 .results-section {
   h3 { margin: 0 0 16px; color: #333; }
+}
+
+.section-title {
+  margin: 0 0 12px;
+  color: #555;
+  font-size: 14px;
 }
 
 .metrics-grid {

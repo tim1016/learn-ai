@@ -11,6 +11,11 @@ public class LstmTrainingConfigDto
     public int SequenceLength { get; set; } = 60;
     public string Features { get; set; } = "close";
     public bool Mock { get; set; } = false;
+    public string ScalerType { get; set; } = "standard";
+    public bool LogReturns { get; set; } = false;
+    public bool Winsorize { get; set; } = false;
+    public string Timespan { get; set; } = "day";
+    public int Multiplier { get; set; } = 1;
 }
 
 public class LstmValidationConfigDto
@@ -22,6 +27,11 @@ public class LstmValidationConfigDto
     public int Epochs { get; set; } = 20;
     public int SequenceLength { get; set; } = 60;
     public bool Mock { get; set; } = false;
+    public string ScalerType { get; set; } = "standard";
+    public bool LogReturns { get; set; } = false;
+    public bool Winsorize { get; set; } = false;
+    public string Timespan { get; set; } = "day";
+    public int Multiplier { get; set; } = 1;
 }
 
 #endregion
@@ -74,6 +84,9 @@ public class LstmTrainResultDto
     public List<double> HistoryLoss { get; set; } = [];
     public List<double> HistoryValLoss { get; set; } = [];
     public List<double> Residuals { get; set; } = [];
+    public double? StationarityAdfPvalue { get; set; }
+    public double? StationarityKpssPvalue { get; set; }
+    public bool? StationarityIsStationary { get; set; }
 }
 
 public class LstmValidateResultDto
@@ -84,6 +97,9 @@ public class LstmValidateResultDto
     public double AvgMae { get; set; }
     public double AvgMape { get; set; }
     public double AvgDirectionalAccuracy { get; set; }
+    public double? AvgSharpeRatio { get; set; }
+    public double? AvgMaxDrawdown { get; set; }
+    public double? AvgProfitFactor { get; set; }
     public List<LstmFoldResultDto> FoldResults { get; set; } = [];
 }
 
@@ -96,6 +112,9 @@ public class LstmFoldResultDto
     public double Mae { get; set; }
     public double Mape { get; set; }
     public double DirectionalAccuracy { get; set; }
+    public double? SharpeRatio { get; set; }
+    public double? MaxDrawdown { get; set; }
+    public double? ProfitFactor { get; set; }
 }
 
 public class LstmModelInfoDto

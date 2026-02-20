@@ -42,6 +42,14 @@ export class LstmTrainComponent {
   sequenceLength = signal(60);
   features = signal('close');
   mock = signal(false);
+  scalerType = signal('standard');
+  logReturns = signal(false);
+  winsorize = signal(false);
+  timespan = signal('day');
+  multiplier = signal(1);
+
+  // UI state
+  showHelp = signal(false);
 
   // State
   loading = signal(false);
@@ -56,7 +64,51 @@ export class LstmTrainComponent {
     return r ? r.improvement > 0 : false;
   });
 
-  featureOptions = ['close', 'close,volume', 'close,volume,high,low', 'open,high,low,close,volume'];
+  dataPointEstimate = computed(() => {
+    const from = new Date(this.fromDate());
+    const to = new Date(this.toDate());
+    const days = Math.max(0, (to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24));
+    const tradingDays = Math.round(days * (252 / 365));
+    const ts = this.timespan();
+    const mult = this.multiplier();
+
+    if (ts === 'day') return Math.round(tradingDays / mult);
+    if (ts === 'hour') return Math.round((tradingDays * 6.5) / mult);
+    if (ts === 'minute') return Math.round((tradingDays * 390) / mult);
+    if (ts === 'week') return Math.round(tradingDays / (5 * mult));
+    return tradingDays;
+  });
+
+  featureOptions = [
+    'close',
+    'close,volume',
+    'close,log_return',
+    'close,volume,high,low',
+    'open,high,low,close,volume',
+  ];
+
+  scalerOptions = [
+    { value: 'standard', label: 'Standard (z-score)' },
+    { value: 'robust', label: 'Robust (median/IQR)' },
+    { value: 'minmax', label: 'MinMax [0,1]' },
+  ];
+
+  timespanOptions = [
+    { value: 'minute', label: 'Minute' },
+    { value: 'hour', label: 'Hour' },
+    { value: 'day', label: 'Day' },
+    { value: 'week', label: 'Week' },
+  ];
+
+  get stationarityStatus(): string {
+    const r = this.result();
+    if (!r || r.stationarityIsStationary === null) return '';
+    return r.stationarityIsStationary ? 'Stationary' : 'Non-Stationary';
+  }
+
+  get stationarityIsGood(): boolean {
+    return this.result()?.stationarityIsStationary === true;
+  }
 
   startTraining(): void {
     this.loading.set(true);
@@ -73,6 +125,11 @@ export class LstmTrainComponent {
         sequenceLength: this.sequenceLength(),
         features: this.features(),
         mock: this.mock(),
+        scalerType: this.scalerType(),
+        logReturns: this.logReturns(),
+        winsorize: this.winsorize(),
+        timespan: this.timespan(),
+        multiplier: this.multiplier(),
       })
       .pipe(
         tap((jobResult) => {

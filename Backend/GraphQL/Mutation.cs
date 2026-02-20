@@ -261,13 +261,18 @@ public class Mutation
         int epochs = 50,
         int sequenceLength = 60,
         string features = "close",
-        bool mock = false)
+        bool mock = false,
+        string scalerType = "standard",
+        bool logReturns = false,
+        bool winsorize = false,
+        string timespan = "day",
+        int multiplier = 1)
     {
         try
         {
             logger.LogInformation(
-                "[LSTM] Starting training: {Ticker}, epochs={Epochs}, seq={SeqLen}, features={Features}",
-                ticker, epochs, sequenceLength, features);
+                "[LSTM] Starting training: {Ticker}, epochs={Epochs}, seq={SeqLen}, features={Features}, scaler={Scaler}, timespan={Timespan}",
+                ticker, epochs, sequenceLength, features, scalerType, timespan);
 
             var config = new LstmTrainingConfigDto
             {
@@ -278,6 +283,11 @@ public class Mutation
                 SequenceLength = sequenceLength,
                 Features = features,
                 Mock = mock,
+                ScalerType = scalerType,
+                LogReturns = logReturns,
+                Winsorize = winsorize,
+                Timespan = timespan,
+                Multiplier = multiplier,
             };
 
             var response = await lstmService.StartTrainingAsync(config);
@@ -310,13 +320,18 @@ public class Mutation
         int folds = 5,
         int epochs = 20,
         int sequenceLength = 60,
-        bool mock = false)
+        bool mock = false,
+        string scalerType = "standard",
+        bool logReturns = false,
+        bool winsorize = false,
+        string timespan = "day",
+        int multiplier = 1)
     {
         try
         {
             logger.LogInformation(
-                "[LSTM] Starting validation: {Ticker}, folds={Folds}, epochs={Epochs}",
-                ticker, folds, epochs);
+                "[LSTM] Starting validation: {Ticker}, folds={Folds}, epochs={Epochs}, scaler={Scaler}, timespan={Timespan}",
+                ticker, folds, epochs, scalerType, timespan);
 
             var config = new LstmValidationConfigDto
             {
@@ -327,6 +342,11 @@ public class Mutation
                 Epochs = epochs,
                 SequenceLength = sequenceLength,
                 Mock = mock,
+                ScalerType = scalerType,
+                LogReturns = logReturns,
+                Winsorize = winsorize,
+                Timespan = timespan,
+                Multiplier = multiplier,
             };
 
             var response = await lstmService.StartValidationAsync(config);

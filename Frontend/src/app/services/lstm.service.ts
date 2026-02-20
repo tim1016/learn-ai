@@ -27,6 +27,11 @@ const START_TRAINING = `
     $sequenceLength: Int! = 60
     $features: String! = "close"
     $mock: Boolean! = false
+    $scalerType: String! = "standard"
+    $logReturns: Boolean! = false
+    $winsorize: Boolean! = false
+    $timespan: String! = "day"
+    $multiplier: Int! = 1
   ) {
     startLstmTraining(
       ticker: $ticker
@@ -36,6 +41,11 @@ const START_TRAINING = `
       sequenceLength: $sequenceLength
       features: $features
       mock: $mock
+      scalerType: $scalerType
+      logReturns: $logReturns
+      winsorize: $winsorize
+      timespan: $timespan
+      multiplier: $multiplier
     ) {
       success
       jobId
@@ -53,6 +63,11 @@ const START_VALIDATION = `
     $epochs: Int! = 20
     $sequenceLength: Int! = 60
     $mock: Boolean! = false
+    $scalerType: String! = "standard"
+    $logReturns: Boolean! = false
+    $winsorize: Boolean! = false
+    $timespan: String! = "day"
+    $multiplier: Int! = 1
   ) {
     startLstmValidation(
       ticker: $ticker
@@ -62,6 +77,11 @@ const START_VALIDATION = `
       epochs: $epochs
       sequenceLength: $sequenceLength
       mock: $mock
+      scalerType: $scalerType
+      logReturns: $logReturns
+      winsorize: $winsorize
+      timespan: $timespan
+      multiplier: $multiplier
     ) {
       success
       jobId
@@ -92,6 +112,9 @@ const GET_JOB_STATUS = `
         historyLoss
         historyValLoss
         residuals
+        stationarityAdfPvalue
+        stationarityKpssPvalue
+        stationarityIsStationary
       }
       validateResult {
         ticker
@@ -100,6 +123,9 @@ const GET_JOB_STATUS = `
         avgMae
         avgMape
         avgDirectionalAccuracy
+        avgSharpeRatio
+        avgMaxDrawdown
+        avgProfitFactor
         foldResults {
           fold
           trainSize
@@ -108,6 +134,9 @@ const GET_JOB_STATUS = `
           mae
           mape
           directionalAccuracy
+          sharpeRatio
+          maxDrawdown
+          profitFactor
         }
       }
     }

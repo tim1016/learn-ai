@@ -9,7 +9,11 @@ from app.ml.evaluation.metrics import (
     calculate_directional_accuracy,
     calculate_mae,
     calculate_mape,
+    calculate_max_drawdown,
+    calculate_profit_factor,
     calculate_rmse,
+    calculate_sharpe_ratio,
+    calculate_trading_returns,
 )
 from app.ml.models.schemas import TrainingConfig, WalkForwardResult
 from app.ml.preprocessing.scaler import PriceScaler
@@ -62,7 +66,7 @@ def walk_forward_validate(
             continue
 
         # Scale separately per fold to avoid look-ahead bias
-        scaler = PriceScaler()
+        scaler = PriceScaler(scaler_type=config.scaler_type)
         scaled_train = scaler.fit_transform(train_data)
         scaled_test = scaler.transform(test_data)
 
@@ -82,6 +86,14 @@ def walk_forward_validate(
 
         predictions = model.predict(X_test, verbose=0).flatten()
 
+        # Compute trading-relevant metrics
+        trading_returns = calculate_trading_returns(y_test, predictions)
+        equity_curve = (
+            np.cumsum(trading_returns) + 1.0
+            if len(trading_returns) > 0
+            else np.array([1.0])
+        )
+
         fold_result = {
             "fold": fold_idx,
             "train_size": len(X_train),
@@ -92,15 +104,22 @@ def walk_forward_validate(
             "directional_accuracy": calculate_directional_accuracy(
                 y_test, predictions
             ),
+            "sharpe_ratio": calculate_sharpe_ratio(trading_returns),
+            "max_drawdown": calculate_max_drawdown(equity_curve),
+            "profit_factor": calculate_profit_factor(trading_returns),
         }
         fold_results.append(fold_result)
 
         logger.info(
-            f"[ML] Walk-forward fold {fold_idx}: RMSE={fold_result['rmse']:.6f}"
+            f"[ML] Walk-forward fold {fold_idx}: "
+            f"RMSE={fold_result['rmse']:.6f}, "
+            f"Sharpe={fold_result['sharpe_ratio']:.2f}, "
+            f"MaxDD={fold_result['max_drawdown']:.4f}"
         )
 
     def avg(key: str) -> float:
-        return float(np.mean([f[key] for f in fold_results])) if fold_results else 0.0
+        values = [f[key] for f in fold_results if np.isfinite(f[key])]
+        return float(np.mean(values)) if values else 0.0
 
     return WalkForwardResult(
         ticker=config.ticker,
@@ -109,5 +128,8 @@ def walk_forward_validate(
         avg_mae=round(avg("mae"), 6),
         avg_mape=round(avg("mape"), 2),
         avg_directional_accuracy=round(avg("directional_accuracy"), 2),
+        avg_sharpe_ratio=round(avg("sharpe_ratio"), 4),
+        avg_max_drawdown=round(avg("max_drawdown"), 4),
+        avg_profit_factor=round(avg("profit_factor"), 4),
         fold_results=fold_results,
     )

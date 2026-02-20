@@ -40,10 +40,16 @@ class PredictionService:
             Tuple of (TrainingResult, test predictions, test actuals, history dict).
         """
         pipeline = DataPipeline(self._provider)
-        X_train, X_test, y_train, y_test, scaler = pipeline.prepare(config)
+        X_train, X_test, y_train, y_test, scaler, stationarity = pipeline.prepare(config)
         result, model, history = self._trainer.train(
             config, X_train, X_test, y_train, y_test
         )
+
+        # Attach stationarity results to training result
+        if stationarity is not None:
+            result.stationarity_adf_pvalue = round(stationarity.adf_pvalue, 6)
+            result.stationarity_kpss_pvalue = round(stationarity.kpss_pvalue, 6)
+            result.stationarity_is_stationary = stationarity.is_stationary
 
         # Save scaler alongside model
         scaler_path = Path(result.model_path).with_suffix(".scaler.json")
@@ -61,6 +67,12 @@ class PredictionService:
             "best_epoch": result.best_epoch,
             "sequence_length": config.sequence_length,
             "features": config.features,
+            "scaler_type": config.scaler_type,
+            "log_returns": config.log_returns,
+            "winsorize": config.winsorize,
+            "stationarity_adf_pvalue": result.stationarity_adf_pvalue,
+            "stationarity_kpss_pvalue": result.stationarity_kpss_pvalue,
+            "stationarity_is_stationary": result.stationarity_is_stationary,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         meta_path.write_text(json.dumps(meta, indent=2))
@@ -89,6 +101,9 @@ class PredictionService:
             history_loss=[float(v) for v in history["loss"]],
             history_val_loss=[float(v) for v in history["val_loss"]],
             residuals=residuals,
+            stationarity_adf_pvalue=result.stationarity_adf_pvalue,
+            stationarity_kpss_pvalue=result.stationarity_kpss_pvalue,
+            stationarity_is_stationary=result.stationarity_is_stationary,
         )
 
     def validate(
@@ -99,13 +114,23 @@ class PredictionService:
             ticker=config.ticker,
             from_date=config.from_date,
             to_date=config.to_date,
+            timespan=config.timespan,
+            multiplier=config.multiplier,
         )
         df = pd.DataFrame(raw).sort_values("timestamp").reset_index(drop=True)
 
         if "returns" in config.features:
             df["returns"] = df["close"].pct_change().fillna(0)
 
-        data = df[config.features].values.astype(np.float64)
+        if "log_return" in config.features or config.log_returns:
+            df["log_return"] = np.log(df["close"] / df["close"].shift(1))
+
+        # Apply feature shifting to prevent look-ahead bias
+        feature_cols = list(config.features)
+        df[feature_cols] = df[feature_cols].shift(1)
+        df = df.dropna().reset_index(drop=True)
+
+        data = df[feature_cols].values.astype(np.float64)
         return walk_forward_validate(data, config, n_folds)
 
     def validate_for_api(self, config: TrainingConfig, n_folds: int = 5) -> ValidateJobResult:
@@ -118,6 +143,9 @@ class PredictionService:
             avg_mae=result.avg_mae,
             avg_mape=result.avg_mape,
             avg_directional_accuracy=result.avg_directional_accuracy,
+            avg_sharpe_ratio=result.avg_sharpe_ratio,
+            avg_max_drawdown=result.avg_max_drawdown,
+            avg_profit_factor=result.avg_profit_factor,
             fold_results=[
                 ValidateFoldResult(**f) for f in result.fold_results
             ],

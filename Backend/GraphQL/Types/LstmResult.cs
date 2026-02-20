@@ -33,6 +33,9 @@ public class LstmTrainResult
     public List<double> HistoryLoss { get; set; } = [];
     public List<double> HistoryValLoss { get; set; } = [];
     public List<double> Residuals { get; set; } = [];
+    public double? StationarityAdfPvalue { get; set; }
+    public double? StationarityKpssPvalue { get; set; }
+    public bool? StationarityIsStationary { get; set; }
 }
 
 public class LstmValidateResult
@@ -43,6 +46,9 @@ public class LstmValidateResult
     public double AvgMae { get; set; }
     public double AvgMape { get; set; }
     public double AvgDirectionalAccuracy { get; set; }
+    public double? AvgSharpeRatio { get; set; }
+    public double? AvgMaxDrawdown { get; set; }
+    public double? AvgProfitFactor { get; set; }
     public List<LstmFoldResult> FoldResults { get; set; } = [];
 }
 
@@ -55,6 +61,9 @@ public class LstmFoldResult
     public double Mae { get; set; }
     public double Mape { get; set; }
     public double DirectionalAccuracy { get; set; }
+    public double? SharpeRatio { get; set; }
+    public double? MaxDrawdown { get; set; }
+    public double? ProfitFactor { get; set; }
 }
 
 public class LstmModelInfo

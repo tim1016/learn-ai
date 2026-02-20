@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -15,6 +15,13 @@ class TrainRequest(BaseModel):
     sequence_length: int = Field(60, ge=10, le=252)
     features: str = Field("close", description="Comma-separated feature list")
     mock: bool = Field(False, description="Use mock data instead of Polygon")
+    scaler_type: Literal["minmax", "standard", "robust"] = Field(
+        "standard", description="Scaler type"
+    )
+    log_returns: bool = Field(False, description="Use log returns")
+    winsorize: bool = Field(False, description="Clip extreme values")
+    timespan: str = Field("day", description="Aggregation timespan: minute, hour, day")
+    multiplier: int = Field(1, ge=1, le=60, description="Timespan multiplier")
 
 
 class ValidateRequest(BaseModel):
@@ -27,6 +34,13 @@ class ValidateRequest(BaseModel):
     epochs: int = Field(20, ge=1, le=200)
     sequence_length: int = Field(60, ge=10, le=252)
     mock: bool = Field(False, description="Use mock data instead of Polygon")
+    scaler_type: Literal["minmax", "standard", "robust"] = Field(
+        "standard", description="Scaler type"
+    )
+    log_returns: bool = Field(False, description="Use log returns")
+    winsorize: bool = Field(False, description="Clip extreme values")
+    timespan: str = Field("day", description="Aggregation timespan: minute, hour, day")
+    multiplier: int = Field(1, ge=1, le=60, description="Timespan multiplier")
 
 
 class JobSubmitResponse(BaseModel):
@@ -52,6 +66,9 @@ class TrainJobResult(BaseModel):
     history_loss: List[float]
     history_val_loss: List[float]
     residuals: List[float]
+    stationarity_adf_pvalue: Optional[float] = None
+    stationarity_kpss_pvalue: Optional[float] = None
+    stationarity_is_stationary: Optional[bool] = None
 
 
 class ValidateFoldResult(BaseModel):
@@ -64,6 +81,9 @@ class ValidateFoldResult(BaseModel):
     mae: float
     mape: float
     directional_accuracy: float
+    sharpe_ratio: Optional[float] = None
+    max_drawdown: Optional[float] = None
+    profit_factor: Optional[float] = None
 
 
 class ValidateJobResult(BaseModel):
@@ -75,6 +95,9 @@ class ValidateJobResult(BaseModel):
     avg_mae: float
     avg_mape: float
     avg_directional_accuracy: float
+    avg_sharpe_ratio: Optional[float] = None
+    avg_max_drawdown: Optional[float] = None
+    avg_profit_factor: Optional[float] = None
     fold_results: List[ValidateFoldResult]
 
 
