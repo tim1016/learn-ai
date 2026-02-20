@@ -27,6 +27,12 @@ ENV/
 dist/
 build/
 
+# ML trained models
+trained_models/
+!trained_models/.gitkeep
+*.h5
+*.keras
+
 Frontend/.angular/
 
 # Windows reserved device names (can be accidentally created)

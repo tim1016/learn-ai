@@ -13,3 +13,10 @@ pandas-ta
 pytest
 pytest-asyncio
 httpx
+
+# ML / Deep Learning
+tensorflow>=2.16.0
+scikit-learn>=1.5.0
+matplotlib>=3.9.0
+click>=8.1.0
+jupyter>=1.0.0
