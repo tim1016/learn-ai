@@ -1,5 +1,7 @@
 # Options Chain Page — TradingView-Style Implementation Plan
 
+> **STATUS: IMPLEMENTED** — All phases complete. See `Frontend/src/app/components/options-chain-v2/` for the live component at `/options-chain`.
+
 ## Goal
 
 Build a new **Options Chain** page that mirrors the TradingView options chain UI (screenshot reference). This replaces or significantly upgrades the existing `TickerExplorerComponent` at `/options-chain` with a professional, dark-themed chain viewer featuring:
@@ -7,11 +9,15 @@ Build a new **Options Chain** page that mirrors the TradingView options chain UI
 - Scrollable **expiration date ribbon** with month headers (Feb, Mar, Apr... Jan '27)
 - Symmetrical chain table: **Calls** on the left, **Strike + IV%** in the center, **Puts** on the right
 - All Greeks displayed: **Vega, Theta, Gamma, Delta** (not just delta/theta like current)
-- **Price** column (day close / last trade)
+- **Price** column with smart resolution (day close → last trade → quote midpoint → bid/ask mid)
+- **Bid/Ask** sub-line below price with spread data
 - **Volume bars** — inline colored bar visualizations inside volume cells (blue for calls, red for puts)
-- **ATM indicator** — current underlying price tooltip near the ATM strike
+- **ATM indicator** with amber highlighting and "ATM" label
+- **ITM/OTM zone coloring** — emerald tint for ITM calls, red tint for ITM puts, dimmed OTM
 - **Sorted by strike** with ability to sort (click arrow on Strike column header)
-- **Historical drill-down** — click any contract cell to open an overlay showing historical OHLCV chart for that option contract
+- **Strike range control** — ±N strikes around ATM with "Show All" toggle
+- **Historical drill-down** — click any contract cell to open a drawer with candlestick/volume charts, Greeks, IV, OI, bid/ask, break-even, and summary stats
+- **Stock snapshot** — header shows real-time price, change, OHLV data from Polygon snapshot API
 
 ---
 

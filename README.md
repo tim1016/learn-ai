@@ -40,8 +40,19 @@ Bulk-fetch months of minute-level data in automated monthly chunks. Features a c
 ### Technical Analysis (`/technical-analysis`)
 Overlay SMA, EMA, and RSI indicators on previously fetched data. Powered by pandas-ta on the Python service. Supports intraday through weekly timespans with configurable lookback windows.
 
+### Options Chain (`/options-chain`)
+Professional dark-themed options chain viewer inspired by TradingView. Features include:
+- **Expiration ribbon** — horizontal scrollable date picker grouped by month
+- **Symmetrical chain table** — Calls (Vega, Theta, Gamma, Delta, Price, OI, Volume) | Strike + IV% | Puts (mirrored)
+- **Smart price resolution** — displays best available price: day close → last trade → quote midpoint → bid/ask midpoint, with bid/ask spread shown below
+- **Zone coloring** — ATM row highlighted in amber, ITM cells tinted (emerald for calls, red for puts), OTM cells dimmed
+- **Volume bars** — proportional colored bars inside volume cells (blue for calls, red for puts)
+- **Strike controls** — adjustable ±N strike range around ATM, "Show All" toggle, ascending/descending sort
+- **Historical drill-down** — click any cell to open a slide-out drawer with candlestick + volume charts, all Greeks (Delta, Gamma, Theta, Vega), IV, OI, bid/ask, break-even price, and historical summary stats
+- **Stock snapshot** — header displays real-time price, daily change %, and OHLV from Polygon snapshot API
+
 ### Ticker Explorer (`/ticker-explorer`)
-Live options chain viewer with Greeks (delta, theta), IV, open interest, and volume. Displays a traditional call/put chain layout with ATM highlighting and ITM/OTM tinting. Filters by expiration date (defaults to next Friday).
+Legacy options chain viewer with Greeks (delta, theta), IV, open interest, and volume. Kept as reference; the Options Chain page above is the primary options viewer.
 
 ### Strategy Lab (`/strategy-lab`)
 Run algorithmic backtests (SMA Crossover, RSI Mean Reversion) on cached data. Displays summary stats (P&L, win rate, Sharpe ratio, max drawdown), an equity curve with multiple chart type options (Lightweight Charts, SVG, PrimeNG/Chart.js), and a full trade log.
@@ -138,7 +149,9 @@ learn-ai/
         stock-analysis/             Chunk queue, chunk detail, day detail
         tickers/                    Ticker inventory + TradingView widgets
           technical-analysis/       SMA, EMA, RSI indicator overlays
-        ticker-explorer/            Options chain viewer
+        options-chain-v2/           TradingView-style options chain (dark theme)
+          expiration-ribbon/          Expiration date ribbon sub-component
+        ticker-explorer/            Legacy options chain viewer
         strategy-lab/               Backtesting engine + equity curve charts
       graphql/                      TypeScript types matching GraphQL schema
       services/                     Apollo-based data services

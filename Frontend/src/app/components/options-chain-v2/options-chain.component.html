@@ -2,6 +2,14 @@
   <!-- Row 1: Search bar -->
   <div class="flex items-center gap-3 mb-3">
     <h1 class="text-lg font-bold text-white shrink-0">Options Chain</h1>
+    <button
+      class="text-slate-400 hover:text-white transition-colors"
+      (click)="helpVisible.set(true)"
+      pTooltip="How to use this page"
+      tooltipPosition="bottom"
+    >
+      <i class="pi pi-question-circle text-base"></i>
+    </button>
     <input
       pInputText
       [ngModel]="ticker()"
@@ -482,5 +490,126 @@
         No historical data available for this contract.
       </div>
     }
+  </p-drawer>
+
+  <!-- Help Sidebar -->
+  <p-drawer
+    [visible]="helpVisible()"
+    (visibleChange)="helpVisible.set($event)"
+    position="left"
+    [modal]="true"
+    [style]="{ width: '420px' }"
+    styleClass="bg-slate-900"
+  >
+    <ng-template #header>
+      <span class="text-white font-bold text-base">How to Use the Options Chain</span>
+    </ng-template>
+
+    <div class="flex flex-col gap-5 px-2 text-sm text-slate-300 leading-relaxed">
+
+      <!-- Getting Started -->
+      <div>
+        <h3 class="text-white font-semibold text-sm mb-2 flex items-center gap-2">
+          <i class="pi pi-search text-blue-400"></i> Getting Started
+        </h3>
+        <ol class="list-decimal list-inside space-y-1 text-slate-400">
+          <li>Enter a ticker symbol (e.g. <span class="text-white font-mono">SPY</span>, <span class="text-white font-mono">AAPL</span>) and press <span class="bg-slate-700 text-slate-200 px-1.5 py-0.5 rounded text-xs">Enter</span> or click <span class="text-blue-400">Load</span></li>
+          <li>The expiration ribbon populates with available dates grouped by month</li>
+          <li>The nearest expiration is selected automatically and the chain loads</li>
+        </ol>
+      </div>
+
+      <!-- Expiration Ribbon -->
+      <div>
+        <h3 class="text-white font-semibold text-sm mb-2 flex items-center gap-2">
+          <i class="pi pi-calendar text-amber-400"></i> Expiration Ribbon
+        </h3>
+        <p class="text-slate-400">Click any date chip to load that expiration's chain. Dates are grouped by month. Scroll horizontally to see all available expirations.</p>
+      </div>
+
+      <!-- Reading the Chain -->
+      <div>
+        <h3 class="text-white font-semibold text-sm mb-2 flex items-center gap-2">
+          <i class="pi pi-table text-emerald-400"></i> Reading the Chain
+        </h3>
+        <div class="text-slate-400 space-y-2">
+          <p><span class="text-emerald-400 font-semibold">CALLS</span> are on the left, <span class="text-red-400 font-semibold">PUTS</span> are on the right, with <span class="text-white font-semibold">Strike</span> and <span class="text-white font-semibold">IV%</span> in the center.</p>
+          <p>Each side shows: <span class="text-slate-200">Vega, Theta, Gamma, Delta, Price, OI, Volume</span></p>
+          <p>The <span class="text-white font-semibold">Price</span> column shows the best available price (close &rarr; last trade &rarr; quote midpoint &rarr; bid/ask mid) with the bid/ask spread below.</p>
+        </div>
+      </div>
+
+      <!-- Zone Colors -->
+      <div>
+        <h3 class="text-white font-semibold text-sm mb-2 flex items-center gap-2">
+          <i class="pi pi-palette text-purple-400"></i> Zone Colors
+        </h3>
+        <div class="space-y-1.5 text-slate-400">
+          <div class="flex items-center gap-2">
+            <span class="w-4 h-3 rounded bg-amber-500/30 inline-block"></span>
+            <span><span class="text-amber-400 font-semibold">Amber row</span> &mdash; At-the-Money (ATM), closest strike to current price</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-4 h-3 rounded bg-emerald-900/50 inline-block"></span>
+            <span><span class="text-emerald-400 font-semibold">Green tint</span> &mdash; In-the-Money calls (strike &lt; price)</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-4 h-3 rounded bg-red-900/50 inline-block"></span>
+            <span><span class="text-red-400 font-semibold">Red tint</span> &mdash; In-the-Money puts (strike &gt; price)</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-4 h-3 rounded bg-slate-700/50 inline-block"></span>
+            <span><span class="text-slate-500 font-semibold">Dimmed</span> &mdash; Out-of-the-Money (OTM)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div>
+        <h3 class="text-white font-semibold text-sm mb-2 flex items-center gap-2">
+          <i class="pi pi-sliders-h text-cyan-400"></i> Controls
+        </h3>
+        <div class="text-slate-400 space-y-1.5">
+          <p><span class="text-slate-200 font-semibold">&plusmn;Strikes</span> &mdash; how many strikes to show above and below ATM</p>
+          <p><span class="text-slate-200 font-semibold">All</span> button &mdash; toggle to show every available strike</p>
+          <p><span class="text-slate-200 font-semibold">Strike &uarr;&darr;</span> &mdash; click the Strike header to toggle ascending/descending sort</p>
+        </div>
+      </div>
+
+      <!-- Historical Drill-Down -->
+      <div>
+        <h3 class="text-white font-semibold text-sm mb-2 flex items-center gap-2">
+          <i class="pi pi-chart-line text-blue-400"></i> Historical Drill-Down
+        </h3>
+        <div class="text-slate-400 space-y-1.5">
+          <p>Click any <span class="text-slate-200">call or put cell</span> to open a detail panel showing:</p>
+          <ul class="list-disc list-inside space-y-0.5 ml-2">
+            <li>Candlestick price history chart</li>
+            <li>Volume histogram chart</li>
+            <li>Current price, bid/ask spread, break-even price</li>
+            <li>All Greeks: Delta, Gamma, Theta, Vega</li>
+            <li>Implied Volatility and Open Interest</li>
+            <li>Last trade price and size</li>
+            <li>Historical summary (high, low, avg volume)</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Volume Bars -->
+      <div>
+        <h3 class="text-white font-semibold text-sm mb-2 flex items-center gap-2">
+          <i class="pi pi-chart-bar text-orange-400"></i> Volume Bars
+        </h3>
+        <p class="text-slate-400">The colored bars in the Volume column show relative volume. <span class="text-blue-400">Blue bars</span> for calls (right-aligned), <span class="text-red-400">red bars</span> for puts (left-aligned). Width is proportional to the highest volume in that column.</p>
+      </div>
+
+      <!-- Data Source -->
+      <div class="border-t border-slate-700 pt-4">
+        <h3 class="text-white font-semibold text-sm mb-2 flex items-center gap-2">
+          <i class="pi pi-database text-slate-400"></i> Data Source
+        </h3>
+        <p class="text-slate-400">Data is sourced from <span class="text-slate-200">Polygon.io</span> (Starter plan). Prices are <span class="text-amber-400">15-minute delayed</span>. Options snapshot data includes live Greeks, IV, open interest, and day OHLCV. Historical data goes back up to 2 years.</p>
+      </div>
+    </div>
   </p-drawer>
 </div>

@@ -105,6 +105,9 @@ export class OptionsChainComponent implements OnInit, OnDestroy {
   // Stock snapshot for real-time price info
   stockSnapshot = signal<StockTickerSnapshot | null>(null);
 
+  // Help sidebar
+  helpVisible = signal(false);
+
   // Strike controls
   strikeSortDirection = signal<'asc' | 'desc'>('asc');
   strikeRange = signal(15);
