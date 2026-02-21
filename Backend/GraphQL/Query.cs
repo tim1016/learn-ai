@@ -440,6 +440,22 @@ public class Query
                     Volume = c.Day.Volume,
                     Vwap = c.Day.Vwap,
                 } : null,
+                LastTrade = c.LastTrade != null ? new LastTradeResult
+                {
+                    Price = c.LastTrade.Price,
+                    Size = c.LastTrade.Size,
+                    Exchange = c.LastTrade.Exchange,
+                    Timeframe = c.LastTrade.Timeframe,
+                } : null,
+                LastQuote = c.LastQuote != null ? new LastQuoteResult
+                {
+                    Bid = c.LastQuote.Bid,
+                    Ask = c.LastQuote.Ask,
+                    BidSize = c.LastQuote.BidSize,
+                    AskSize = c.LastQuote.AskSize,
+                    Midpoint = c.LastQuote.Midpoint,
+                    Timeframe = c.LastQuote.Timeframe,
+                } : null,
             }).ToList();
 
             return new OptionsChainSnapshotResult
@@ -905,6 +921,8 @@ public class SnapshotContractResult
     public decimal? OpenInterest { get; set; }
     public GreeksResult? Greeks { get; set; }
     public DayResult? Day { get; set; }
+    public LastTradeResult? LastTrade { get; set; }
+    public LastQuoteResult? LastQuote { get; set; }
 }
 
 public class GreeksResult
@@ -923,6 +941,24 @@ public class DayResult
     public decimal? Close { get; set; }
     public decimal? Volume { get; set; }
     public decimal? Vwap { get; set; }
+}
+
+public class LastTradeResult
+{
+    public decimal? Price { get; set; }
+    public decimal? Size { get; set; }
+    public int? Exchange { get; set; }
+    public string? Timeframe { get; set; }
+}
+
+public class LastQuoteResult
+{
+    public decimal? Bid { get; set; }
+    public decimal? Ask { get; set; }
+    public decimal? BidSize { get; set; }
+    public decimal? AskSize { get; set; }
+    public decimal? Midpoint { get; set; }
+    public string? Timeframe { get; set; }
 }
 
 public class OptionsContractsResult

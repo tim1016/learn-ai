@@ -16,6 +16,8 @@ from app.models.responses import (
     UnderlyingSnapshot,
     GreeksSnapshot,
     DaySnapshot,
+    LastTradeSnapshot,
+    LastQuoteSnapshot,
     StockSnapshotResponse,
     StockSnapshotsResponse,
     StockTickerSnapshot,
@@ -57,6 +59,8 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
         for c in result['contracts']:
             greeks = GreeksSnapshot(**c['greeks']) if c.get('greeks') else None
             day = DaySnapshot(**c['day']) if c.get('day') else None
+            last_trade = LastTradeSnapshot(**c['last_trade']) if c.get('last_trade') else None
+            last_quote = LastQuoteSnapshot(**c['last_quote']) if c.get('last_quote') else None
             contracts.append(OptionsContractSnapshotItem(
                 ticker=c.get('ticker'),
                 contract_type=c.get('contract_type'),
@@ -67,6 +71,8 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
                 open_interest=c.get('open_interest'),
                 greeks=greeks,
                 day=day,
+                last_trade=last_trade,
+                last_quote=last_quote,
             ))
 
         logger.info(f"[Snapshot] Returning {len(contracts)} contracts for {request.underlying_ticker}")

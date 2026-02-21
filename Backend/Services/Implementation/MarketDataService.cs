@@ -218,19 +218,20 @@ public class MarketDataService : IMarketDataService
         if (aggregates.Count == 0)
             return [];
 
-        // Get all unique identifiers to fetch existing records in ONE query
-        var aggregateKeys = aggregates
-            .Select(a => new { a.TickerId, a.Timestamp, a.Timespan, a.Multiplier })
-            .Distinct()
-            .ToList();
+        // Extract filter values for a translatable SQL query
+        var tickerIds = aggregates.Select(a => a.TickerId).Distinct().ToList();
+        var timespans = aggregates.Select(a => a.Timespan).Distinct().ToList();
+        var multipliers = aggregates.Select(a => a.Multiplier).Distinct().ToList();
+        var minTimestamp = aggregates.Min(a => a.Timestamp);
+        var maxTimestamp = aggregates.Max(a => a.Timestamp);
 
-        // Fetch all existing records matching these keys in a single query
+        // Fetch candidate records using simple, translatable WHERE clauses
         var existingRecords = await _context.StockAggregates
-            .Where(a => aggregateKeys.Any(k =>
-                k.TickerId == a.TickerId &&
-                k.Timestamp == a.Timestamp &&
-                k.Timespan == a.Timespan &&
-                k.Multiplier == a.Multiplier))
+            .Where(a => tickerIds.Contains(a.TickerId)
+                && timespans.Contains(a.Timespan)
+                && multipliers.Contains(a.Multiplier)
+                && a.Timestamp >= minTimestamp
+                && a.Timestamp <= maxTimestamp)
             .ToListAsync(cancellationToken);
 
         // Build lookup for O(1) access

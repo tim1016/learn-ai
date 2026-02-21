@@ -1,0 +1,486 @@
+<div class="bg-slate-900 text-slate-200 min-h-screen px-2 py-3">
+  <!-- Row 1: Search bar -->
+  <div class="flex items-center gap-3 mb-3">
+    <h1 class="text-lg font-bold text-white shrink-0">Options Chain</h1>
+    <input
+      pInputText
+      [ngModel]="ticker()"
+      (ngModelChange)="ticker.set($event)"
+      placeholder="Ticker (e.g., SPY)"
+      class="w-28"
+      (keyup.enter)="fetchExpirations()"
+    />
+    <p-button
+      label="Load"
+      icon="pi pi-search"
+      [loading]="expirationsLoading()"
+      (onClick)="fetchExpirations()"
+      severity="info"
+      size="small"
+    />
+
+    <!-- Stock info inline (shows after fetch) -->
+    @if (stockSnapshot(); as snap) {
+      <div class="flex items-center gap-3 ml-3 border-l border-slate-700 pl-3">
+        <span class="text-white font-bold text-base">{{ snap.ticker }}</span>
+        @if (snap.day; as day) {
+          @if (day.close != null) {
+            <span class="text-slate-100 font-semibold">{{ day.close | number:'1.2-2' }}</span>
+          }
+          @if (snap.todaysChange != null) {
+            <span
+              class="text-xs font-semibold px-1.5 py-0.5 rounded"
+              [class]="snap.todaysChange >= 0
+                ? 'text-emerald-400 bg-emerald-400/10'
+                : 'text-red-400 bg-red-400/10'"
+            >
+              {{ snap.todaysChange >= 0 ? '+' : '' }}{{ snap.todaysChange | number:'1.2-2' }}
+              ({{ snap.todaysChangePercent | number:'1.2-2' }}%)
+            </span>
+          }
+          <div class="flex items-center gap-2 text-[11px] text-slate-400">
+            @if (day.open != null) { <span>O {{ day.open | number:'1.2-2' }}</span> }
+            @if (day.high != null) { <span>H {{ day.high | number:'1.2-2' }}</span> }
+            @if (day.low != null) { <span>L {{ day.low | number:'1.2-2' }}</span> }
+            @if (day.volume != null) { <span>Vol {{ day.volume | number:'1.0-0' }}</span> }
+          </div>
+        }
+      </div>
+    } @else if (underlying(); as u) {
+      <!-- Fallback: use underlying from options snapshot -->
+      <div class="flex items-center gap-3 ml-3 border-l border-slate-700 pl-3">
+        <span class="text-white font-bold text-base">{{ u.ticker }}</span>
+        <span class="text-slate-100 font-semibold">{{ u.price | number:'1.2-2' }}</span>
+        <span
+          class="text-xs font-semibold px-1.5 py-0.5 rounded"
+          [class]="u.changePercent >= 0
+            ? 'text-emerald-400 bg-emerald-400/10'
+            : 'text-red-400 bg-red-400/10'"
+        >
+          {{ u.changePercent >= 0 ? '+' : '' }}{{ u.changePercent | number:'1.2-2' }}%
+        </span>
+      </div>
+    }
+
+    <!-- Spacer -->
+    <div class="flex-1"></div>
+
+    <!-- Right side: contract count + expiration + strikes control -->
+    <div class="flex items-center gap-4 shrink-0">
+      @if (allContracts().length > 0) {
+        <span class="text-slate-400 text-xs">
+          {{ visibleRows().length }} of {{ allContracts().length }} contracts
+        </span>
+      }
+      @if (selectedExpiration()) {
+        <span class="text-slate-400 text-xs bg-slate-800 px-2 py-1 rounded">
+          Exp: {{ selectedExpiration() }}
+        </span>
+      }
+      <div class="flex items-center gap-1.5 border-l border-slate-700 pl-3">
+        <span class="text-slate-400 text-xs">±Strikes</span>
+        <select
+          class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600 focus:outline-none focus:border-blue-500"
+          [ngModel]="strikeRange()"
+          (ngModelChange)="strikeRange.set(+$event)"
+          [disabled]="showAllStrikes()"
+        >
+          @for (n of strikeRangeOptions; track n) {
+            <option [value]="n">{{ n }}</option>
+          }
+        </select>
+        <button
+          class="text-xs px-2 py-1 rounded border transition-colors"
+          [class]="showAllStrikes()
+            ? 'bg-blue-600 text-white border-blue-500'
+            : 'bg-slate-700 text-slate-300 border-slate-600 hover:bg-slate-600'"
+          (click)="toggleShowAll()"
+        >
+          All
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error -->
+  @if (error()) {
+    <div class="bg-red-900/50 text-red-300 px-4 py-2 rounded mb-3">
+      {{ error() }}
+    </div>
+  }
+
+  <!-- Expiration Ribbon -->
+  @if (availableExpirations().length > 0) {
+    <div class="mb-3 bg-slate-800 rounded-lg px-3 py-2">
+      <app-expiration-ribbon
+        [expirations]="availableExpirations()"
+        [selectedDate]="selectedExpiration()"
+        [loading]="expirationsLoading()"
+        (dateSelected)="onExpirationSelected($event)"
+      />
+    </div>
+  }
+
+  <!-- Chain Table Loading Skeleton -->
+  @if (chainLoading()) {
+    <div class="space-y-2">
+      @for (i of skeletonRows; track i) {
+        <div class="flex gap-2">
+          @for (j of skeletonCols; track j) {
+            <p-skeleton width="70px" height="24px" />
+          }
+        </div>
+      }
+    </div>
+  } @else if (visibleRows().length > 0) {
+    <!-- Chain Table -->
+    <div class="overflow-x-auto">
+      <table class="chain-table w-full border-collapse text-xs">
+        <colgroup>
+          <!-- CALLS: Vega, Theta, Gamma, Delta, Price, OI, Vol -->
+          <col class="col-greek" />
+          <col class="col-greek" />
+          <col class="col-greek" />
+          <col class="col-greek" />
+          <col class="col-price" />
+          <col class="col-oi" />
+          <col class="col-vol" />
+          <!-- CENTER: Strike, IV% -->
+          <col class="col-strike" />
+          <col class="col-iv" />
+          <!-- PUTS: Vol, OI, Price, Delta, Gamma, Theta, Vega -->
+          <col class="col-vol" />
+          <col class="col-oi" />
+          <col class="col-price" />
+          <col class="col-greek" />
+          <col class="col-greek" />
+          <col class="col-greek" />
+          <col class="col-greek" />
+        </colgroup>
+        <thead>
+          <tr class="border-b-2 border-slate-700">
+            <th colspan="7" class="text-center text-emerald-400 font-bold py-2 text-sm">CALLS</th>
+            <th colspan="2" class="bg-slate-800/80"></th>
+            <th colspan="7" class="text-center text-red-400 font-bold py-2 text-sm">PUTS</th>
+          </tr>
+          <tr class="border-b border-slate-700 text-slate-400 text-[10px] uppercase tracking-wider">
+            <th class="px-2 py-1 text-right">Vega</th>
+            <th class="px-2 py-1 text-right">Theta</th>
+            <th class="px-2 py-1 text-right">Gamma</th>
+            <th class="px-2 py-1 text-right">Delta</th>
+            <th class="px-2 py-1 text-right font-semibold" pTooltip="Close / Last / Mid" tooltipPosition="top">Price</th>
+            <th class="px-2 py-1 text-right">OI</th>
+            <th class="px-2 py-1 text-right">Vol</th>
+            <th
+              class="px-2 py-1 text-center bg-slate-800/80 border-x border-slate-700 cursor-pointer select-none hover:text-white transition-colors"
+              (click)="toggleStrikeSort()"
+            >
+              Strike
+              <span class="ml-1">{{ strikeSortDirection() === 'asc' ? '&#9650;' : '&#9660;' }}</span>
+            </th>
+            <th class="px-2 py-1 text-center bg-slate-800/80">IV%</th>
+            <th class="px-2 py-1 text-left">Vol</th>
+            <th class="px-2 py-1 text-left">OI</th>
+            <th class="px-2 py-1 text-left font-semibold" pTooltip="Close / Last / Mid" tooltipPosition="top">Price</th>
+            <th class="px-2 py-1 text-left">Delta</th>
+            <th class="px-2 py-1 text-left">Gamma</th>
+            <th class="px-2 py-1 text-left">Theta</th>
+            <th class="px-2 py-1 text-left">Vega</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of visibleRows(); track row.strike) {
+            <tr
+              class="border-b border-slate-800 hover:bg-slate-700/50 transition-colors"
+              [class.row-atm]="row.isAtm"
+              [class.row-itm-call]="row.itmCall"
+              [class.row-otm-call]="row.otmCall"
+              [class.row-itm-put]="row.itmPut"
+              [class.row-otm-put]="row.otmPut"
+              [attr.data-atm]="row.isAtm ? 'true' : null"
+            >
+              <!-- CALL: Vega -->
+              <td
+                class="col-call px-2 py-1.5 text-right text-slate-300 cursor-pointer"
+                (click)="openContractOverlay(row.call, 'call')"
+                pTooltip="Click for history"
+                tooltipPosition="top"
+              >{{ row.callVega }}</td>
+              <!-- CALL: Theta -->
+              <td
+                class="col-call px-2 py-1.5 text-right text-slate-300 cursor-pointer"
+                (click)="openContractOverlay(row.call, 'call')"
+              >{{ row.callTheta }}</td>
+              <!-- CALL: Gamma -->
+              <td
+                class="col-call px-2 py-1.5 text-right text-slate-300 cursor-pointer"
+                (click)="openContractOverlay(row.call, 'call')"
+              >{{ row.callGamma }}</td>
+              <!-- CALL: Delta -->
+              <td
+                class="col-call px-2 py-1.5 text-right text-slate-300 cursor-pointer"
+                (click)="openContractOverlay(row.call, 'call')"
+              >{{ row.callDelta }}</td>
+              <!-- CALL: Price + Bid/Ask -->
+              <td
+                class="col-call col-call-price px-2 py-1 text-right text-slate-100 font-semibold cursor-pointer"
+                (click)="openContractOverlay(row.call, 'call')"
+              >
+                <div>{{ row.callPrice }}</div>
+                @if (row.callBidAsk) {
+                  <div class="text-[9px] font-normal text-slate-500">{{ row.callBidAsk }}</div>
+                }
+              </td>
+              <!-- CALL: OI -->
+              <td
+                class="col-call px-2 py-1.5 text-right text-slate-300 cursor-pointer"
+                (click)="openContractOverlay(row.call, 'call')"
+              >{{ row.callOi }}</td>
+              <!-- CALL: Volume with bar -->
+              <td
+                class="col-call relative px-2 py-1.5 text-right cursor-pointer"
+                (click)="openContractOverlay(row.call, 'call')"
+              >
+                <div
+                  class="absolute inset-y-0 right-0 bg-blue-500/30 rounded-l"
+                  [style.width.%]="row.callVolumeBarWidth"
+                ></div>
+                <span class="relative">{{ row.callVolume }}</span>
+              </td>
+
+              <!-- CENTER: Strike -->
+              <td class="col-strike px-3 py-1.5 text-center font-bold text-white bg-slate-800/80 border-x border-slate-700">
+                {{ row.strikeFormatted }}
+                @if (row.isAtm) {
+                  <div class="text-[9px] font-normal">ATM</div>
+                }
+              </td>
+              <!-- CENTER: IV% -->
+              <td class="px-2 py-1.5 text-center text-slate-300 bg-slate-800/80">
+                {{ row.ivFormatted }}
+              </td>
+
+              <!-- PUT: Volume with bar -->
+              <td
+                class="col-put relative px-2 py-1.5 text-left cursor-pointer"
+                (click)="openContractOverlay(row.put, 'put')"
+              >
+                <div
+                  class="absolute inset-y-0 left-0 bg-red-500/30 rounded-r"
+                  [style.width.%]="row.putVolumeBarWidth"
+                ></div>
+                <span class="relative">{{ row.putVolume }}</span>
+              </td>
+              <!-- PUT: OI -->
+              <td
+                class="col-put px-2 py-1.5 text-left text-slate-300 cursor-pointer"
+                (click)="openContractOverlay(row.put, 'put')"
+              >{{ row.putOi }}</td>
+              <!-- PUT: Price + Bid/Ask -->
+              <td
+                class="col-put col-put-price px-2 py-1 text-left text-slate-100 font-semibold cursor-pointer"
+                (click)="openContractOverlay(row.put, 'put')"
+              >
+                <div>{{ row.putPrice }}</div>
+                @if (row.putBidAsk) {
+                  <div class="text-[9px] font-normal text-slate-500">{{ row.putBidAsk }}</div>
+                }
+              </td>
+              <!-- PUT: Delta -->
+              <td
+                class="col-put px-2 py-1.5 text-left text-slate-300 cursor-pointer"
+                (click)="openContractOverlay(row.put, 'put')"
+              >{{ row.putDelta }}</td>
+              <!-- PUT: Gamma -->
+              <td
+                class="col-put px-2 py-1.5 text-left text-slate-300 cursor-pointer"
+                (click)="openContractOverlay(row.put, 'put')"
+              >{{ row.putGamma }}</td>
+              <!-- PUT: Theta -->
+              <td
+                class="col-put px-2 py-1.5 text-left text-slate-300 cursor-pointer"
+                (click)="openContractOverlay(row.put, 'put')"
+              >{{ row.putTheta }}</td>
+              <!-- PUT: Vega -->
+              <td
+                class="col-put px-2 py-1.5 text-left text-slate-300 cursor-pointer"
+                (click)="openContractOverlay(row.put, 'put')"
+                pTooltip="Click for history"
+                tooltipPosition="top"
+              >{{ row.putVega }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  } @else if (!chainLoading() && !expirationsLoading() && availableExpirations().length > 0) {
+    <div class="text-slate-400 text-center py-12">
+      No contracts available for this expiration.
+    </div>
+  }
+
+  <!-- Historical Overlay Drawer -->
+  <p-drawer
+    [visible]="overlayVisible()"
+    (visibleChange)="overlayVisible.set($event)"
+    position="right"
+    [modal]="true"
+    [style]="{ width: '520px' }"
+    (onHide)="closeOverlay()"
+    styleClass="bg-slate-900"
+  >
+    <ng-template #header>
+      @if (parsedTicker(); as pt) {
+        <div class="flex flex-col gap-0.5">
+          <div class="flex items-center gap-2">
+            <span class="text-white font-bold text-base">{{ pt.underlying }}</span>
+            <span class="text-xs font-medium px-1.5 py-0.5 rounded"
+              [class]="selectedContract()?.contractType === 'call'
+                ? 'bg-emerald-500/20 text-emerald-400'
+                : 'bg-red-500/20 text-red-400'"
+            >{{ pt.type }}</span>
+            <span class="text-white font-semibold">{{ pt.strike }}</span>
+          </div>
+          <span class="text-slate-400 text-xs">Exp: {{ pt.expDate }}</span>
+        </div>
+      } @else if (selectedContract(); as sc) {
+        <span class="text-white font-semibold text-sm">{{ sc.ticker }}</span>
+      }
+    </ng-template>
+
+    @if (overlayLoading()) {
+      <div class="flex justify-center items-center py-20">
+        <p-progressSpinner [style]="{ width: '50px', height: '50px' }" />
+      </div>
+    } @else if (overlayError()) {
+      <div class="text-red-400 px-4 py-8">{{ overlayError() }}</div>
+    } @else if (overlayAggregates().length > 0) {
+      <div class="flex flex-col gap-6 px-3 py-2">
+
+        <!-- Charts -->
+        <div class="flex flex-col gap-4">
+          <app-candlestick-chart
+            [data]="overlayAggregates()"
+            [ticker]="selectedContract()?.ticker ?? ''"
+            [darkMode]="true"
+            [chartHeight]="300"
+          />
+          <app-volume-chart
+            [data]="overlayAggregates()"
+            [darkMode]="true"
+            [chartHeight]="120"
+          />
+        </div>
+
+        <!-- Pricing Section -->
+        @if (selectedContract(); as sc) {
+          <div class="flex flex-wrap gap-3">
+            <!-- Price -->
+            <div class="bg-slate-800 rounded-lg px-4 py-3 text-center flex-1 min-w-[120px]">
+              <div class="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Price</div>
+              <div class="text-white font-bold text-lg">{{ resolvePrice(sc.snapshot) }}</div>
+            </div>
+            <!-- Bid / Ask -->
+            <div class="bg-slate-800 rounded-lg px-4 py-3 text-center flex-1 min-w-[120px]">
+              <div class="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Bid / Ask</div>
+              @if (sc.snapshot.lastQuote; as q) {
+                <div class="text-slate-100 font-semibold text-sm">
+                  {{ formatPrice(q.bid) }} / {{ formatPrice(q.ask) }}
+                </div>
+                @if (q.midpoint != null) {
+                  <div class="text-slate-500 text-[10px] mt-0.5">Mid {{ formatPrice(q.midpoint) }}</div>
+                }
+              } @else {
+                <div class="text-slate-500 text-sm">&mdash;</div>
+              }
+            </div>
+            <!-- Break Even -->
+            <div class="bg-slate-800 rounded-lg px-4 py-3 text-center flex-1 min-w-[120px]">
+              <div class="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Break Even</div>
+              @if (breakEven(); as be) {
+                <div class="text-amber-400 font-semibold text-sm">{{ be | number:'1.2-2' }}</div>
+              } @else {
+                <div class="text-slate-500 text-sm">&mdash;</div>
+              }
+            </div>
+          </div>
+
+          <!-- Greeks -->
+          <div class="flex flex-wrap gap-3">
+            <div class="bg-slate-800 rounded-lg px-4 py-3 text-center flex-1 min-w-[90px]">
+              <div class="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Delta</div>
+              <div class="text-blue-400 font-semibold text-sm">{{ formatGreek(sc.snapshot.greeks?.delta ?? null) }}</div>
+            </div>
+            <div class="bg-slate-800 rounded-lg px-4 py-3 text-center flex-1 min-w-[90px]">
+              <div class="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Gamma</div>
+              <div class="text-purple-400 font-semibold text-sm">{{ formatGreek(sc.snapshot.greeks?.gamma ?? null) }}</div>
+            </div>
+            <div class="bg-slate-800 rounded-lg px-4 py-3 text-center flex-1 min-w-[90px]">
+              <div class="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Theta</div>
+              <div class="text-red-400 font-semibold text-sm">{{ formatGreek(sc.snapshot.greeks?.theta ?? null) }}</div>
+            </div>
+            <div class="bg-slate-800 rounded-lg px-4 py-3 text-center flex-1 min-w-[90px]">
+              <div class="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Vega</div>
+              <div class="text-emerald-400 font-semibold text-sm">{{ formatGreek(sc.snapshot.greeks?.vega ?? null) }}</div>
+            </div>
+          </div>
+
+          <!-- IV & OI -->
+          <div class="flex flex-wrap gap-3">
+            <div class="bg-slate-800 rounded-lg px-4 py-3 text-center flex-1 min-w-[140px]">
+              <div class="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Implied Volatility</div>
+              <div class="text-amber-400 font-semibold text-sm">{{ formatIv(sc.snapshot.impliedVolatility ?? null) }}</div>
+            </div>
+            <div class="bg-slate-800 rounded-lg px-4 py-3 text-center flex-1 min-w-[140px]">
+              <div class="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Open Interest</div>
+              <div class="text-slate-100 font-semibold text-sm">{{ formatNumber(sc.snapshot.openInterest ?? null) }}</div>
+            </div>
+          </div>
+
+          <!-- Last Trade -->
+          @if (sc.snapshot.lastTrade; as t) {
+            <div class="bg-slate-800 rounded-lg px-4 py-3 flex items-center justify-between">
+              <span class="text-slate-500 text-[10px] uppercase tracking-wider">Last Trade</span>
+              <div class="flex items-center gap-3 text-sm">
+                <span class="text-slate-100 font-semibold">{{ formatPrice(t.price) }}</span>
+                @if (t.size != null) {
+                  <span class="text-slate-400 text-xs">Size: {{ formatNumber(t.size) }}</span>
+                }
+              </div>
+            </div>
+          }
+        }
+
+        <!-- Historical Summary -->
+        @if (overlaySummary(); as s) {
+          <div class="border-t border-slate-700 pt-4">
+            <div class="text-slate-500 text-[10px] uppercase tracking-wider mb-2">Historical Summary</div>
+            <div class="flex flex-wrap gap-3">
+              <div class="bg-slate-800/60 rounded-lg px-4 py-2.5 text-center flex-1 min-w-[90px]">
+                <div class="text-slate-500 text-[10px]">High</div>
+                <div class="text-emerald-400 font-semibold text-xs mt-0.5">{{ s.high | number:'1.2-2' }}</div>
+              </div>
+              <div class="bg-slate-800/60 rounded-lg px-4 py-2.5 text-center flex-1 min-w-[90px]">
+                <div class="text-slate-500 text-[10px]">Low</div>
+                <div class="text-red-400 font-semibold text-xs mt-0.5">{{ s.low | number:'1.2-2' }}</div>
+              </div>
+              <div class="bg-slate-800/60 rounded-lg px-4 py-2.5 text-center flex-1 min-w-[90px]">
+                <div class="text-slate-500 text-[10px]">Avg Vol</div>
+                <div class="text-slate-200 font-semibold text-xs mt-0.5">{{ s.avgVolume | number }}</div>
+              </div>
+              <div class="bg-slate-800/60 rounded-lg px-4 py-2.5 text-center flex-1 min-w-[90px]">
+                <div class="text-slate-500 text-[10px]">Bars</div>
+                <div class="text-slate-200 font-semibold text-xs mt-0.5">{{ s.totalBars }}</div>
+              </div>
+            </div>
+          </div>
+        }
+
+      </div>
+    } @else {
+      <div class="text-slate-400 text-center py-12">
+        No historical data available for this contract.
+      </div>
+    }
+  </p-drawer>
+</div>

@@ -180,6 +180,8 @@ class PolygonClientService:
                 greeks = getattr(snapshot, 'greeks', None)
                 day = getattr(snapshot, 'day', None)
                 details = getattr(snapshot, 'details', None)
+                last_trade = getattr(snapshot, 'last_trade', None)
+                last_quote = getattr(snapshot, 'last_quote', None)
 
                 contract = {
                     'ticker': getattr(details, 'ticker', None) if details else None,
@@ -203,6 +205,23 @@ class PolygonClientService:
                         'volume': getattr(day, 'volume', None),
                         'vwap': getattr(day, 'vwap', None),
                     } if day else None,
+                    'last_trade': {
+                        'price': getattr(last_trade, 'price', None),
+                        'size': getattr(last_trade, 'size', None),
+                        'exchange': getattr(last_trade, 'exchange', None),
+                        'conditions': getattr(last_trade, 'conditions', None),
+                        'sip_timestamp': getattr(last_trade, 'sip_timestamp', None),
+                        'timeframe': getattr(last_trade, 'timeframe', None),
+                    } if last_trade else None,
+                    'last_quote': {
+                        'bid': getattr(last_quote, 'bid', None),
+                        'ask': getattr(last_quote, 'ask', None),
+                        'bid_size': getattr(last_quote, 'bid_size', None),
+                        'ask_size': getattr(last_quote, 'ask_size', None),
+                        'midpoint': getattr(last_quote, 'midpoint', None),
+                        'timeframe': getattr(last_quote, 'timeframe', None),
+                        'last_updated': getattr(last_quote, 'last_updated', None),
+                    } if last_quote else None,
                 }
                 contracts.append(contract)
 

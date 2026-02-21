@@ -13,15 +13,16 @@ import { formatTickMark } from '../chart-utils';
 @Component({
   selector: 'app-candlestick-chart',
   standalone: true,
-  template: `<div #chartContainer class="chart-container"></div>`,
-  styles: [`.chart-container { width: 100%; height: 400px; }`,
-  ],
+  template: `<div #chartContainer class="chart-container" [style.height.px]="chartHeight"></div>`,
+  styles: [`.chart-container { width: 100%; }`],
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class CandlestickChartComponent implements AfterViewInit, OnChanges, OnDestroy {
   @Input() data: StockAggregate[] = [];
   @Input() ticker = '';
   @Input() timeVisible = false;
+  @Input() darkMode = false;
+  @Input() chartHeight = 400;
   @ViewChild('chartContainer') chartContainer!: ElementRef<HTMLDivElement>;
 
   private chart: IChartApi | null = null;
@@ -52,11 +53,14 @@ export class CandlestickChartComponent implements AfterViewInit, OnChanges, OnDe
     const container = this.chartContainer.nativeElement;
     this.chart = createChart(container, {
       width: container.clientWidth,
-      height: 400,
-      layout: { background: { color: '#ffffff' }, textColor: '#333' },
+      height: this.chartHeight,
+      layout: {
+        background: { color: this.darkMode ? '#1e293b' : '#ffffff' },
+        textColor: this.darkMode ? '#94a3b8' : '#333',
+      },
       grid: {
-        vertLines: { color: '#f0f0f0' },
-        horzLines: { color: '#f0f0f0' }
+        vertLines: { color: this.darkMode ? '#334155' : '#f0f0f0' },
+        horzLines: { color: this.darkMode ? '#334155' : '#f0f0f0' },
       },
       timeScale: {
         timeVisible: this.timeVisible,

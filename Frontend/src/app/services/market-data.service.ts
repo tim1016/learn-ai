@@ -163,6 +163,8 @@ const GET_OPTIONS_CHAIN_SNAPSHOT_QUERY = `
         breakEvenPrice impliedVolatility openInterest
         greeks { delta gamma theta vega }
         day { open high low close volume vwap }
+        lastTrade { price size exchange timeframe }
+        lastQuote { bid ask bidSize askSize midpoint timeframe }
       }
       count
       error
@@ -424,6 +426,25 @@ export class MarketDataService {
         }),
         map(response => response.data.getOptionsContracts)
       );
+  }
+
+  getOptionsExpirations(underlyingTicker: string): Observable<string[]> {
+    const today = new Date().toISOString().slice(0, 10);
+    return this.getOptionsContracts(underlyingTicker, {
+      expirationDateGte: today,
+      limit: 250,
+    }).pipe(
+      map(result => {
+        if (!result.success) return [];
+        const dates = new Set<string>();
+        for (const contract of result.contracts) {
+          if (contract.expirationDate) {
+            dates.add(contract.expirationDate);
+          }
+        }
+        return [...dates].sort();
+      })
+    );
   }
 
   calculateIndicators(

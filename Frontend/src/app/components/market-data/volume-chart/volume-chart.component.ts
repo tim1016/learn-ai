@@ -13,13 +13,15 @@ import { formatTickMark } from '../chart-utils';
 @Component({
   selector: 'app-volume-chart',
   standalone: true,
-  template: `<div #chartContainer class="chart-container"></div>`,
-  styles: [`.chart-container { width: 100%; height: 200px; }`],
+  template: `<div #chartContainer class="chart-container" [style.height.px]="chartHeight()"></div>`,
+  styles: [`.chart-container { width: 100%; }`],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class VolumeChartComponent implements AfterViewInit, OnDestroy {
   data = input<StockAggregate[]>([]);
   timeVisible = input(false);
+  darkMode = input(false);
+  chartHeight = input(200);
   chartContainer = viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
 
   private chart: IChartApi | null = null;
@@ -47,13 +49,17 @@ export class VolumeChartComponent implements AfterViewInit, OnDestroy {
 
   private initChart(): void {
     const container = this.chartContainer().nativeElement;
+    const dark = this.darkMode();
     this.chart = createChart(container, {
       width: container.clientWidth,
-      height: 200,
-      layout: { background: { color: '#ffffff' }, textColor: '#333' },
+      height: this.chartHeight(),
+      layout: {
+        background: { color: dark ? '#1e293b' : '#ffffff' },
+        textColor: dark ? '#94a3b8' : '#333',
+      },
       grid: {
-        vertLines: { color: '#f0f0f0' },
-        horzLines: { color: '#f0f0f0' }
+        vertLines: { color: dark ? '#334155' : '#f0f0f0' },
+        horzLines: { color: dark ? '#334155' : '#f0f0f0' },
       },
       timeScale: {
         timeVisible: this.timeVisible(),

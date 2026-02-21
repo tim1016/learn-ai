@@ -76,6 +76,27 @@ class DaySnapshot(BaseModel):
     vwap: Optional[float] = None
 
 
+class LastTradeSnapshot(BaseModel):
+    """Last trade for an options contract snapshot"""
+    price: Optional[float] = None
+    size: Optional[float] = None
+    exchange: Optional[int] = None
+    conditions: Optional[list[int]] = None
+    sip_timestamp: Optional[int] = None
+    timeframe: Optional[str] = None
+
+
+class LastQuoteSnapshot(BaseModel):
+    """Last quote (bid/ask) for an options contract snapshot"""
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+    bid_size: Optional[float] = None
+    ask_size: Optional[float] = None
+    midpoint: Optional[float] = None
+    timeframe: Optional[str] = None
+    last_updated: Optional[int] = None
+
+
 class OptionsContractSnapshotItem(BaseModel):
     """A single options contract snapshot with greeks and day data"""
     ticker: Optional[str] = None
@@ -87,6 +108,8 @@ class OptionsContractSnapshotItem(BaseModel):
     open_interest: Optional[float] = None
     greeks: Optional[GreeksSnapshot] = None
     day: Optional[DaySnapshot] = None
+    last_trade: Optional[LastTradeSnapshot] = None
+    last_quote: Optional[LastQuoteSnapshot] = None
 
 
 class UnderlyingSnapshot(BaseModel):

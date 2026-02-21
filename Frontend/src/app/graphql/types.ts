@@ -196,6 +196,22 @@ export interface SnapshotUnderlyingResult {
   changePercent: number;
 }
 
+export interface LastTradeSnapshot {
+  price: number | null;
+  size: number | null;
+  exchange: number | null;
+  timeframe: string | null;
+}
+
+export interface LastQuoteSnapshot {
+  bid: number | null;
+  ask: number | null;
+  bidSize: number | null;
+  askSize: number | null;
+  midpoint: number | null;
+  timeframe: string | null;
+}
+
 export interface SnapshotContractResult {
   ticker: string | null;
   contractType: string | null;
@@ -206,6 +222,8 @@ export interface SnapshotContractResult {
   openInterest: number | null;
   greeks: GreeksSnapshot | null;
   day: DaySnapshot | null;
+  lastTrade: LastTradeSnapshot | null;
+  lastQuote: LastQuoteSnapshot | null;
 }
 
 export interface OptionsChainSnapshotResult {

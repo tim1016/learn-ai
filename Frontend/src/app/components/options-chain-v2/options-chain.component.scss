@@ -1,0 +1,91 @@
+:host {
+  display: block;
+  min-height: 100vh;
+}
+
+// Override the global .container max-width + padding for full-width layout
+:host-context(.container) {
+  max-width: none !important;
+  padding-left: 8px !important;
+  padding-right: 8px !important;
+}
+
+// Chain table column sizing
+.chain-table {
+  table-layout: fixed;
+
+  // Greek columns (Vega, Theta, Gamma, Delta) — need ~72px for "0.0601" or "-0.3655"
+  .col-greek { width: 72px; }
+
+  // Price column — needs ~90px for "179.56" + bid/ask sub-line
+  .col-price { width: 90px; }
+
+  // OI column — needs ~68px for "44,432"
+  .col-oi { width: 68px; }
+
+  // Volume column — needs ~72px for "2,546" + bar
+  .col-vol { width: 72px; }
+
+  // Strike column — needs ~90px for "650.00" + ATM label
+  .col-strike { width: 90px; }
+
+  // IV column — needs ~64px for "154.5%"
+  .col-iv { width: 64px; }
+}
+
+// ── Zone row styles ─────────────────────────────────────────────
+// ATM row — strong amber band
+.chain-table tr.row-atm {
+  background: rgba(245, 158, 11, 0.18); // amber-500 @ 18%
+  border-top: 2px solid rgba(245, 158, 11, 0.5);
+  border-bottom: 2px solid rgba(245, 158, 11, 0.5);
+
+  td { color: #fde68a; } // amber-200
+  td.col-strike { color: #fbbf24; } // amber-400
+  td.col-call-price,
+  td.col-put-price { color: #fef3c7; } // amber-100
+}
+
+// ITM call cells (strike < price) — emerald tint on call side
+.chain-table tr.row-itm-call {
+  td.col-call {
+    background: rgba(6, 78, 59, 0.25); // emerald-900 @ 25%
+    color: #d1fae5; // emerald-100
+  }
+  td.col-call-price { color: #6ee7b7; } // emerald-300
+}
+
+// ITM put cells (strike > price) — red tint on put side
+.chain-table tr.row-itm-put {
+  td.col-put {
+    background: rgba(127, 29, 29, 0.25); // red-900 @ 25%
+    color: #fecaca; // red-100
+  }
+  td.col-put-price { color: #fca5a5; } // red-300
+}
+
+// OTM call cells (strike > price) — dimmed
+.chain-table tr.row-otm-call {
+  td.col-call { color: #64748b; } // slate-500
+  td.col-call-price { color: #94a3b8; } // slate-400
+}
+
+// OTM put cells (strike < price) — dimmed
+.chain-table tr.row-otm-put {
+  td.col-put { color: #64748b; } // slate-500
+  td.col-put-price { color: #94a3b8; } // slate-400
+}
+
+// PrimeNG Drawer dark theme overrides
+::ng-deep .p-drawer {
+  .p-drawer-content {
+    background: #0f172a;
+    color: #e2e8f0;
+  }
+
+  .p-drawer-header {
+    background: #1e293b;
+    color: #f1f5f9;
+    border-bottom: 1px solid #334155;
+  }
+}

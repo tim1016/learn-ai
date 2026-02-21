@@ -8,10 +8,8 @@ import { MenuItem } from "primeng/api";
   standalone: true,
   imports: [RouterOutlet, Menubar],
   template: `
-    <p-menubar [model]="items()" />
-    <div class="container">
+    <p-menubar [model]="items()" />    
       <router-outlet />
-    </div>
   `,
 })
 export class AppComponent {

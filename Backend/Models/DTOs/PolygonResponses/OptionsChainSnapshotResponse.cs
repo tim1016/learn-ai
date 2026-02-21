@@ -28,6 +28,8 @@ public class OptionsContractSnapshotDto
     public decimal? OpenInterest { get; set; }
     public GreeksSnapshotDto? Greeks { get; set; }
     public DaySnapshotDto? Day { get; set; }
+    public LastTradeSnapshotDto? LastTrade { get; set; }
+    public LastQuoteSnapshotDto? LastQuote { get; set; }
 }
 
 public class GreeksSnapshotDto
@@ -46,4 +48,22 @@ public class DaySnapshotDto
     public decimal? Close { get; set; }
     public decimal? Volume { get; set; }
     public decimal? Vwap { get; set; }
+}
+
+public class LastTradeSnapshotDto
+{
+    public decimal? Price { get; set; }
+    public decimal? Size { get; set; }
+    public int? Exchange { get; set; }
+    public string? Timeframe { get; set; }
+}
+
+public class LastQuoteSnapshotDto
+{
+    public decimal? Bid { get; set; }
+    public decimal? Ask { get; set; }
+    public decimal? BidSize { get; set; }
+    public decimal? AskSize { get; set; }
+    public decimal? Midpoint { get; set; }
+    public string? Timeframe { get; set; }
 }
