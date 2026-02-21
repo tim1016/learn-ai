@@ -260,7 +260,9 @@
               <td class="col-strike px-3 py-1.5 text-center font-bold text-white bg-slate-800/80 border-x border-slate-700">
                 {{ row.strikeFormatted }}
                 @if (row.isAtm) {
-                  <div class="text-[9px] font-normal">ATM</div>
+                  <div class="atm-price-badge">
+                    {{ ticker().toUpperCase() }} {{ (underlying()?.price ?? 0) | number:'1.2-2' }}
+                  </div>
                 }
               </td>
               <!-- CENTER: IV% -->

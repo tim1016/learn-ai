@@ -14,66 +14,101 @@
 .chain-table {
   table-layout: fixed;
 
-  // Greek columns (Vega, Theta, Gamma, Delta) — need ~72px for "0.0601" or "-0.3655"
   .col-greek { width: 72px; }
-
-  // Price column — needs ~90px for "179.56" + bid/ask sub-line
   .col-price { width: 90px; }
-
-  // OI column — needs ~68px for "44,432"
   .col-oi { width: 68px; }
-
-  // Volume column — needs ~72px for "2,546" + bar
   .col-vol { width: 72px; }
-
-  // Strike column — needs ~90px for "650.00" + ATM label
   .col-strike { width: 90px; }
-
-  // IV column — needs ~64px for "154.5%"
   .col-iv { width: 64px; }
 }
 
+// ── Diagonal hatch pattern (reusable) ───────────────────────────
+@mixin hatch-pattern($color) {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 4px,
+    $color 4px,
+    $color 5px
+  );
+}
+
 // ── Zone row styles ─────────────────────────────────────────────
-// ATM row — strong amber band
-.chain-table tr.row-atm {
-  background: rgba(245, 158, 11, 0.18); // amber-500 @ 18%
-  border-top: 2px solid rgba(245, 158, 11, 0.5);
-  border-bottom: 2px solid rgba(245, 158, 11, 0.5);
+// Using double-class selectors (.chain-table.chain-table) to boost specificity
+// above Tailwind utility classes that Angular scopes to the same elements.
 
-  td { color: #fde68a; } // amber-200
-  td.col-strike { color: #fbbf24; } // amber-400
-  td.col-call-price,
-  td.col-put-price { color: #fef3c7; } // amber-100
+// ATM divider row — the visual "price line" separating ITM from OTM
+.chain-table.chain-table tr.row-atm {
+  position: relative;
+
+  td {
+    border-top: 2px solid rgba(245, 158, 11, 0.8) !important;
+    border-bottom: 2px solid rgba(245, 158, 11, 0.8) !important;
+    background-color: rgba(245, 158, 11, 0.15) !important;
+  }
+
+  td.col-strike {
+    position: relative;
+  }
 }
 
-// ITM call cells (strike < price) — emerald tint on call side
-.chain-table tr.row-itm-call {
+// Floating price badge — positioned over the ATM strike cell
+.atm-price-badge {
+  position: absolute;
+  left: 50%;
+  top: -14px;
+  transform: translateX(-50%);
+  z-index: 10;
+  white-space: nowrap;
+  background: #f59e0b;
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 10px;
+  letter-spacing: 0.3px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+// ITM call cells (strike < price) — strong emerald tint + diagonal hatch
+.chain-table.chain-table tr.row-itm-call {
   td.col-call {
-    background: rgba(6, 78, 59, 0.25); // emerald-900 @ 25%
-    color: #d1fae5; // emerald-100
+    background-color: rgba(6, 78, 59, 0.45) !important;
+    @include hatch-pattern(rgba(16, 185, 129, 0.12));
+    color: #d1fae5 !important;
   }
-  td.col-call-price { color: #6ee7b7; } // emerald-300
+  td.col-call-price {
+    background-color: rgba(6, 78, 59, 0.45) !important;
+    @include hatch-pattern(rgba(16, 185, 129, 0.12));
+    color: #6ee7b7 !important;
+  }
 }
 
-// ITM put cells (strike > price) — red tint on put side
-.chain-table tr.row-itm-put {
+// ITM put cells (strike > price) — strong red tint + diagonal hatch
+.chain-table.chain-table tr.row-itm-put {
   td.col-put {
-    background: rgba(127, 29, 29, 0.25); // red-900 @ 25%
-    color: #fecaca; // red-100
+    background-color: rgba(127, 29, 29, 0.45) !important;
+    @include hatch-pattern(rgba(239, 68, 68, 0.12));
+    color: #fecaca !important;
   }
-  td.col-put-price { color: #fca5a5; } // red-300
+  td.col-put-price {
+    background-color: rgba(127, 29, 29, 0.45) !important;
+    @include hatch-pattern(rgba(239, 68, 68, 0.12));
+    color: #fca5a5 !important;
+  }
 }
 
-// OTM call cells (strike > price) — dimmed
-.chain-table tr.row-otm-call {
-  td.col-call { color: #64748b; } // slate-500
-  td.col-call-price { color: #94a3b8; } // slate-400
+// OTM call cells (strike > price) — clean, no hatch, clearly dimmed
+.chain-table.chain-table tr.row-otm-call {
+  td.col-call { color: #475569 !important; }       // slate-600 (darker)
+  td.col-call-price { color: #64748b !important; }  // slate-500
 }
 
-// OTM put cells (strike < price) — dimmed
-.chain-table tr.row-otm-put {
-  td.col-put { color: #64748b; } // slate-500
-  td.col-put-price { color: #94a3b8; } // slate-400
+// OTM put cells (strike < price) — clean, no hatch, clearly dimmed
+.chain-table.chain-table tr.row-otm-put {
+  td.col-put { color: #475569 !important; }       // slate-600 (darker)
+  td.col-put-price { color: #64748b !important; }  // slate-500
 }
 
 // PrimeNG Drawer dark theme overrides
