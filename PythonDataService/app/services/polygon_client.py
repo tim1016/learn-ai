@@ -151,13 +151,70 @@ class PolygonClientService:
     ) -> List[str]:
         """Fetch unique expiration dates for an underlying ticker.
 
-        Breaks the date range into ~30-day windows and makes one direct
-        REST call per window (bypassing the auto-paginating client).
-        Each narrow-window call is fast even for high-volume tickers
-        like SPY.  Typically 6 API calls for a 6-month range.
+        Breaks the date range into ~30-day windows and fires all window
+        requests **concurrently** via ThreadPoolExecutor (bypassing the
+        auto-paginating client).  Each window retries up to 3 times with
+        exponential backoff on transient errors (502/503/504, timeouts).
+        A permanently-failing window is skipped so the remaining windows
+        still return data.
         """
         import requests as _requests
         from datetime import datetime, timedelta
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import time
+
+        MAX_RETRIES = 3
+        BASE_DELAY = 2.0  # seconds
+
+        def _fetch_window(w_start_str: str, w_end_str: str, effective_type: str) -> set[str]:
+            """Fetch expiration dates for a single 30-day window with retries."""
+            window_dates: set[str] = set()
+            for attempt in range(MAX_RETRIES):
+                try:
+                    params: Dict[str, Any] = {
+                        'underlying_ticker': underlying_ticker,
+                        'contract_type': effective_type,
+                        'expiration_date.gte': w_start_str,
+                        'expiration_date.lte': w_end_str,
+                        'limit': 1000,
+                        'apiKey': settings.POLYGON_API_KEY,
+                    }
+                    resp = _requests.get(
+                        'https://api.polygon.io/v3/reference/options/contracts',
+                        params=params,
+                        timeout=30,
+                    )
+                    if resp.status_code in (502, 503, 504):
+                        delay = BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            f"[Expirations] Window {w_start_str}..{w_end_str}: "
+                            f"HTTP {resp.status_code}, retry {attempt + 1}/{MAX_RETRIES} "
+                            f"in {delay:.1f}s"
+                        )
+                        time.sleep(delay)
+                        continue
+
+                    resp.raise_for_status()
+                    data = resp.json()
+                    for r in data.get('results', []):
+                        exp = r.get('expiration_date')
+                        if exp:
+                            window_dates.add(exp)
+                    return window_dates
+
+                except (_requests.exceptions.ReadTimeout, _requests.exceptions.ConnectionError) as exc:
+                    delay = BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        f"[Expirations] Window {w_start_str}..{w_end_str}: "
+                        f"{type(exc).__name__}, retry {attempt + 1}/{MAX_RETRIES} in {delay:.1f}s"
+                    )
+                    time.sleep(delay)
+
+            logger.error(
+                f"[Expirations] Window {w_start_str}..{w_end_str}: "
+                f"failed after {MAX_RETRIES} retries, skipping"
+            )
+            return window_dates
 
         try:
             logger.info(
@@ -172,52 +229,39 @@ class PolygonClientService:
                 '%Y-%m-%d',
             )
 
-            dates: set[str] = set()
-            api_calls = 0
+            effective_type = contract_type or 'call'
+
+            # Build list of (window_start, window_end) pairs
+            windows: list[tuple[str, str]] = []
             window_days = 30
             window_start = start
-
             while window_start <= end:
                 window_end = min(window_start + timedelta(days=window_days - 1), end)
-
-                # Default to 'call' when no type specified — we only need
-                # one side to discover which expiration dates exist.
-                effective_type = contract_type or 'call'
-
-                params: Dict[str, Any] = {
-                    'underlying_ticker': underlying_ticker,
-                    'contract_type': effective_type,
-                    'expiration_date.gte': window_start.strftime('%Y-%m-%d'),
-                    'expiration_date.lte': window_end.strftime('%Y-%m-%d'),
-                    'limit': 1000,
-                    'apiKey': settings.POLYGON_API_KEY,
-                }
-
-                resp = _requests.get(
-                    'https://api.polygon.io/v3/reference/options/contracts',
-                    params=params,
-                    timeout=30,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                api_calls += 1
-
-                for r in data.get('results', []):
-                    exp = r.get('expiration_date')
-                    if exp:
-                        dates.add(exp)
-
+                windows.append((window_start.strftime('%Y-%m-%d'), window_end.strftime('%Y-%m-%d')))
                 window_start = window_end + timedelta(days=1)
+
+            logger.info(f"[Expirations] Firing {len(windows)} window requests concurrently")
+
+            # Fire all windows in parallel
+            dates: set[str] = set()
+            with ThreadPoolExecutor(max_workers=len(windows)) as pool:
+                futures = {
+                    pool.submit(_fetch_window, ws, we, effective_type): (ws, we)
+                    for ws, we in windows
+                }
+                for future in as_completed(futures):
+                    dates.update(future.result())
 
             result = sorted(dates)
             logger.info(
                 f"Found {len(result)} unique expirations for {underlying_ticker} "
-                f"({api_calls} API calls)"
+                f"({len(windows)} windows)"
             )
             return result
 
         except Exception as e:
-            logger.error(f"Error listing expirations for {underlying_ticker}: {str(e)}")
+            err_msg = str(e).replace(settings.POLYGON_API_KEY, '***')
+            logger.error(f"Error listing expirations for {underlying_ticker}: {err_msg}")
             raise
 
     def list_snapshot_options_chain(
