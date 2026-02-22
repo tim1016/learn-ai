@@ -1,0 +1,404 @@
+<div class="strategy-lab-page">
+  <header class="page-header">
+    <h1><i class="pi pi-calculator"></i> Options Strategy Lab</h1>
+    <p class="subtitle">Analyze payoff, probability of profit, and expected value</p>
+  </header>
+
+  <!-- Step 1: Ticker + Load Chain -->
+  <div class="config-section">
+    <div class="ticker-row">
+      <div class="field">
+        <label for="ticker">Ticker</label>
+        <input
+          pInputText
+          id="ticker"
+          [ngModel]="ticker()"
+          (ngModelChange)="ticker.set($event)"
+          (keyup.enter)="fetchExpirations()"
+          placeholder="SPY"
+          class="ticker-input"
+        />
+      </div>
+      <p-button
+        label="Load Chain"
+        icon="pi pi-download"
+        [loading]="expirationsLoading()"
+        (onClick)="fetchExpirations()"
+        severity="primary"
+        size="small"
+      />
+      @if (underlying()) {
+        <div class="spot-field">
+          <label for="spotPrice">Spot</label>
+          <p-inputNumber
+            id="spotPrice"
+            [ngModel]="spotPrice()"
+            (ngModelChange)="spotPriceOverride.set($event)"
+            mode="currency"
+            currency="USD"
+            locale="en-US"
+            [minFractionDigits]="2"
+            [maxFractionDigits]="2"
+            [style]="{ width: '130px' }"
+          />
+        </div>
+      } @else if (spotPrice() > 0) {
+        <span class="spot-badge">
+          Spot: ${{ spotPrice() | number:'1.2-2' }}
+        </span>
+      }
+    </div>
+
+    <!-- Chain Filters -->
+    <div class="filter-row">
+      <div class="field">
+        <label>Type</label>
+        <p-selectButton
+          [options]="contractTypeOptions"
+          [ngModel]="filterContractType()"
+          (ngModelChange)="filterContractType.set($event)"
+          optionLabel="label"
+          optionValue="value"
+          size="small"
+        />
+      </div>
+      <div class="field">
+        <label>Expiration Range</label>
+        <p-selectButton
+          [options]="expirationRangeOptions"
+          [ngModel]="filterExpirationRange()"
+          (ngModelChange)="filterExpirationRange.set($event)"
+          optionLabel="label"
+          optionValue="value"
+          [allowEmpty]="false"
+          size="small"
+        />
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: Expiration Ribbon -->
+  @if (availableExpirations().length > 0) {
+    <app-expiration-ribbon
+      [expirations]="availableExpirations()"
+      [selectedDate]="selectedExpiration()"
+      [loading]="chainLoading()"
+      (dateSelected)="onExpirationSelected($event)"
+    />
+  }
+
+  <!-- Loading -->
+  @if (chainLoading()) {
+    <div class="loading-bar">
+      <p-progressSpinner strokeWidth="3" [style]="{ width: '30px', height: '30px' }" />
+      <span>Loading chain data...</span>
+    </div>
+  }
+
+  <!-- Step 3: Strategy Config -->
+  @if (allContracts().length > 0 && !chainLoading()) {
+    <div class="config-section">
+      <div class="strategy-header">
+        <div class="field">
+          <label>Strategy</label>
+          <p-select
+            [options]="strategyOptions"
+            [ngModel]="strategyType()"
+            (ngModelChange)="strategyType.set($event); onStrategyTypeChanged()"
+            optionLabel="label"
+            optionValue="value"
+            [style]="{ width: '220px' }"
+          />
+        </div>
+        <div class="mode-toggle">
+          <label>Manual Entry</label>
+          <p-toggleSwitch
+            [ngModel]="manualMode()"
+            (ngModelChange)="manualMode.set($event)"
+          />
+        </div>
+      </div>
+
+      <!-- Leg Configuration -->
+      <div class="legs-container">
+        @for (leg of legs(); track $index; let i = $index) {
+          <div class="leg-row" [class.long-leg]="leg.position === 'long'" [class.short-leg]="leg.position === 'short'" [class.disabled-leg]="!leg.enabled">
+            <div class="leg-header">
+              <p-checkbox
+                [ngModel]="leg.enabled"
+                (ngModelChange)="updateLegField(i, 'enabled', $event)"
+                [binary]="true"
+                inputId="leg-enabled-{{i}}"
+              />
+              <span class="leg-badge" [class.long-badge]="leg.position === 'long'" [class.short-badge]="leg.position === 'short'">
+                Leg {{ i + 1 }}
+              </span>
+              @if (legs().length > 1) {
+                <button class="remove-btn" (click)="removeLeg(i)" title="Remove leg">
+                  <i class="pi pi-times"></i>
+                </button>
+              }
+            </div>
+
+            <!-- Position -->
+            <div class="leg-field">
+              <label>Position</label>
+              <p-selectButton
+                [options]="positionOptions"
+                [ngModel]="leg.position"
+                (ngModelChange)="updateLegField(i, 'position', $event)"
+                optionLabel="label"
+                optionValue="value"
+                [allowEmpty]="false"
+                size="small"
+              />
+            </div>
+
+            <!-- Type -->
+            <div class="leg-field">
+              <label>Type</label>
+              <p-selectButton
+                [options]="typeOptions"
+                [ngModel]="leg.optionType"
+                (ngModelChange)="updateLegField(i, 'optionType', $event)"
+                optionLabel="label"
+                optionValue="value"
+                [allowEmpty]="false"
+                size="small"
+              />
+            </div>
+
+            <!-- Strike -->
+            <div class="leg-field">
+              <label>Strike</label>
+              @if (!manualMode() && strikeOptions().length > 0) {
+                <p-select
+                  [options]="strikeOptions()"
+                  [ngModel]="leg.strike"
+                  (ngModelChange)="updateLegStrike(i, $event)"
+                  optionLabel="label"
+                  optionValue="value"
+                  [filter]="true"
+                  filterBy="label"
+                  [style]="{ width: '130px' }"
+                />
+              } @else {
+                <p-inputNumber
+                  [ngModel]="leg.strike"
+                  (ngModelChange)="updateLegField(i, 'strike', $event)"
+                  mode="decimal"
+                  [minFractionDigits]="2"
+                  [maxFractionDigits]="2"
+                  [style]="{ width: '120px' }"
+                />
+              }
+            </div>
+
+            <!-- Premium -->
+            <div class="leg-field">
+              <label>Premium</label>
+              <p-inputNumber
+                [ngModel]="leg.premium"
+                (ngModelChange)="updateLegField(i, 'premium', $event)"
+                mode="decimal"
+                prefix="$"
+                [minFractionDigits]="2"
+                [maxFractionDigits]="4"
+                [readonly]="!manualMode()"
+                [style]="{ width: '110px' }"
+              />
+            </div>
+
+            <!-- IV -->
+            <div class="leg-field">
+              <label>IV</label>
+              <p-inputNumber
+                [ngModel]="leg.iv * 100"
+                (ngModelChange)="updateLegField(i, 'iv', ($event ?? 0) / 100)"
+                mode="decimal"
+                suffix="%"
+                [minFractionDigits]="1"
+                [maxFractionDigits]="1"
+                [readonly]="!manualMode()"
+                [style]="{ width: '90px' }"
+              />
+            </div>
+
+            <!-- Qty -->
+            <div class="leg-field">
+              <label>Qty</label>
+              <p-inputNumber
+                [ngModel]="leg.quantity"
+                (ngModelChange)="updateLegField(i, 'quantity', $event)"
+                [min]="1"
+                [max]="100"
+                [style]="{ width: '70px' }"
+              />
+            </div>
+          </div>
+        }
+
+        <div class="legs-actions">
+          <p-button
+            label="Add Leg"
+            icon="pi pi-plus"
+            severity="secondary"
+            [outlined]="true"
+            (onClick)="addLeg()"
+            [disabled]="legs().length >= 8"
+            size="small"
+          />
+        </div>
+      </div>
+
+      <!-- Analyze Button -->
+      <div class="analyze-row">
+        <p-button
+          label="Analyze Strategy"
+          icon="pi pi-chart-line"
+          (onClick)="analyzeStrategy()"
+          [loading]="analyzing()"
+          [disabled]="!canAnalyze()"
+          severity="success"
+        />
+      </div>
+    </div>
+  }
+
+  <!-- Error -->
+  @if (error()) {
+    <div class="error-message">
+      <i class="pi pi-exclamation-triangle"></i>
+      {{ error() }}
+    </div>
+  }
+
+  <!-- Live Payoff Chart — updates instantly on any leg change -->
+  @if (livePayoffCurve().length > 0) {
+    <div class="chart-section">
+      <h2>Payoff Diagram</h2>
+
+      <!-- Chart Toolbar -->
+      <div class="chart-toolbar">
+        <div class="whatif-panel">
+          <span class="toolbar-label">What-If:</span>
+          @for (scenario of whatIfScenarios(); track scenario.id) {
+            <button
+              class="whatif-chip"
+              [class.active]="scenario.enabled"
+              [style.--chip-color]="scenario.color"
+              (click)="toggleWhatIf(scenario.id)"
+            >
+              {{ scenario.label }}
+            </button>
+          }
+          @if (whatIfScenarios().length < 8) {
+            <button class="add-whatif-btn" (click)="addCustomWhatIf()" title="Add scenario">
+              <i class="pi pi-plus"></i>
+            </button>
+          }
+        </div>
+        <div class="toolbar-right">
+          <div class="range-selector">
+            <span class="toolbar-label">Range:</span>
+            <p-selectButton
+              [options]="rangeOptions"
+              [ngModel]="priceRangePct()"
+              (ngModelChange)="priceRangePct.set($event)"
+              optionLabel="label"
+              optionValue="value"
+              [allowEmpty]="false"
+              size="small"
+            />
+          </div>
+          <div class="greek-selector">
+            <span class="toolbar-label">Greek:</span>
+            <p-select
+              [options]="greekOptions"
+              [ngModel]="selectedGreek()"
+              (ngModelChange)="selectedGreek.set($event)"
+              optionLabel="label"
+              optionValue="value"
+              [style]="{ width: '150px' }"
+            />
+          </div>
+        </div>
+      </div>
+
+      <app-payoff-chart
+        [expirationCurve]="livePayoffCurve()"
+        [currentPnlCurve]="currentPnlCurve()"
+        [whatIfCurves]="whatIfCurves()"
+        [greekCurve]="greekCurve()"
+        [selectedGreek]="selectedGreek()"
+        [breakevens]="liveBreakevens()"
+        [spotPrice]="spotPrice()"
+        [weightedIv]="weightedIv()"
+        [timeToExpiry]="timeToExpiry()"
+        [riskFreeRate]="riskFreeRate()"
+      />
+    </div>
+  }
+
+  <!-- Stats (after Analyze) -->
+  @if (analysisResult(); as result) {
+    <div class="stats-grid">
+      <div class="stat-card pop-card">
+        <span class="stat-label">Probability of Profit</span>
+        <span class="stat-value pop-value">{{ result.pop * 100 | number:'1.1-1' }}%</span>
+      </div>
+      <div class="stat-card ev-card" [class.positive]="result.expectedValue >= 0" [class.negative]="result.expectedValue < 0">
+        <span class="stat-label">Expected Value</span>
+        <span class="stat-value">${{ result.expectedValue | number:'1.2-2' }}</span>
+      </div>
+      <div class="stat-card profit-card">
+        <span class="stat-label">Max Profit</span>
+        <span class="stat-value">${{ result.maxProfit | number:'1.2-2' }}</span>
+      </div>
+      <div class="stat-card loss-card">
+        <span class="stat-label">Max Loss</span>
+        <span class="stat-value">${{ result.maxLoss | number:'1.2-2' }}</span>
+      </div>
+      <div class="stat-card cost-card">
+        <span class="stat-label">Net Cost</span>
+        <span class="stat-value" [class.credit]="result.strategyCost < 0" [class.debit]="result.strategyCost > 0">
+          ${{ result.strategyCost | number:'1.2-2' }}
+        </span>
+      </div>
+      <div class="stat-card breakeven-card">
+        <span class="stat-label">Breakeven{{ result.breakevens.length > 1 ? 's' : '' }}</span>
+        <span class="stat-value breakeven-value">
+          @for (be of result.breakevens; track be; let last = $last) {
+            ${{ be | number:'1.2-2' }}{{ last ? '' : ', ' }}
+          }
+        </span>
+      </div>
+    </div>
+
+    <!-- Greeks -->
+    <div class="greeks-grid">
+      <div class="greek-card">
+        <span class="greek-symbol">&Delta;</span>
+        <span class="greek-label">Delta</span>
+        <span class="greek-value">{{ result.greeks.delta | number:'1.4-4' }}</span>
+      </div>
+      <div class="greek-card">
+        <span class="greek-symbol">&Gamma;</span>
+        <span class="greek-label">Gamma</span>
+        <span class="greek-value">{{ result.greeks.gamma | number:'1.4-4' }}</span>
+      </div>
+      <div class="greek-card">
+        <span class="greek-symbol">&Theta;</span>
+        <span class="greek-label">Theta</span>
+        <span class="greek-value" [class.negative-greek]="result.greeks.theta < 0">
+          {{ result.greeks.theta | number:'1.4-4' }}
+        </span>
+      </div>
+      <div class="greek-card">
+        <span class="greek-symbol">V</span>
+        <span class="greek-label">Vega</span>
+        <span class="greek-value">{{ result.greeks.vega | number:'1.4-4' }}</span>
+      </div>
+    </div>
+  }
+</div>

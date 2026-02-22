@@ -355,6 +355,61 @@ public class PolygonService : IPolygonService
         }
     }
 
+    public async Task<StrategyAnalyzeResponseDto> AnalyzeOptionsStrategyAsync(
+        string symbol,
+        List<StrategyLegInput> legs,
+        string expirationDate,
+        decimal spotPrice,
+        decimal riskFreeRate = 0.043m,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation(
+                "[Strategy] Analyzing {LegCount}-leg strategy for {Symbol}",
+                legs.Count, symbol);
+
+            var request = new
+            {
+                symbol,
+                legs = legs.Select(l => new
+                {
+                    strike = l.Strike,
+                    option_type = l.OptionType,
+                    position = l.Position,
+                    premium = l.Premium,
+                    iv = l.Iv,
+                    quantity = l.Quantity,
+                }),
+                expiration_date = expirationDate,
+                spot_price = spotPrice,
+                risk_free_rate = riskFreeRate,
+            };
+
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/strategy/analyze", request, cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<StrategyAnalyzeResponseDto>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+                throw new HttpRequestException("Received null response from Python service for strategy analysis");
+
+            _logger.LogInformation(
+                "[Strategy] Analysis complete for {Symbol}: POP={Pop}",
+                symbol, result.Pop);
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Strategy] Error analyzing strategy for {Symbol}", symbol);
+            throw;
+        }
+    }
+
     public async Task<OptionsContractsResponse> FetchOptionsContractsAsync(
         string underlyingTicker,
         string? asOfDate = null,
@@ -410,6 +465,55 @@ public class PolygonService : IPolygonService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error fetching options contracts for {Underlying}", underlyingTicker);
+            throw;
+        }
+    }
+
+    public async Task<OptionsExpirationsResponse> FetchOptionsExpirationsAsync(
+        string underlyingTicker,
+        string? contractType = null,
+        string? expirationDateGte = null,
+        string? expirationDateLte = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation(
+                "Fetching options expirations for {Underlying}, type={Type}, range=[{Gte},{Lte}]",
+                underlyingTicker, contractType, expirationDateGte, expirationDateLte);
+
+            var request = new
+            {
+                underlying_ticker = underlyingTicker,
+                contract_type = contractType,
+                expiration_date_gte = expirationDateGte,
+                expiration_date_lte = expirationDateLte,
+            };
+
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/options/expirations",
+                request,
+                cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<OptionsExpirationsResponse>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+            {
+                throw new HttpRequestException("Received null response from Python service for options expirations");
+            }
+
+            _logger.LogInformation(
+                "Fetched {Count} expirations for {Underlying}",
+                result.Count, underlyingTicker);
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching options expirations for {Underlying}", underlyingTicker);
             throw;
         }
     }

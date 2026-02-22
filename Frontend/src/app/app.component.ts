@@ -33,6 +33,7 @@ export class AppComponent {
       items: [
         { label: "Options Chain", icon: "pi pi-table", routerLink: "/options-chain" },
         { label: "Strategy Lab", icon: "pi pi-wrench", routerLink: "/strategy-lab" },
+        { label: "Options Strategy Lab", icon: "pi pi-calculator", routerLink: "/options-strategy-lab" },
         { label: "Options History", icon: "pi pi-history", routerLink: "/options-history" },
         { label: "Snapshots", icon: "pi pi-camera", routerLink: "/snapshots" },
       ],

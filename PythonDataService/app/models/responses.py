@@ -58,6 +58,14 @@ class OptionsContractsResponse(BaseModel):
     error: Optional[str] = None
 
 
+class OptionsExpirationsResponse(BaseModel):
+    """Response schema for unique options expiration dates"""
+    success: bool
+    expirations: List[str] = []
+    count: int = 0
+    error: Optional[str] = None
+
+
 class GreeksSnapshot(BaseModel):
     """Greeks for an options contract snapshot"""
     delta: Optional[float] = None

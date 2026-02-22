@@ -7,6 +7,7 @@ import {
   OptionsChainSnapshotResult, BacktestResult, StockSnapshotResult,
   StockSnapshotsResult, MarketMoversResult, UnifiedSnapshotResult,
   TrackedTickersResult, TickerDetailResult, RelatedTickersResult,
+  StrategyAnalyzeResult, StrategyLegInput,
 } from '../graphql/types';
 
 const GRAPHQL_URL = 'http://localhost:5000/graphql';
@@ -148,6 +149,32 @@ const GET_OPTIONS_CONTRACTS_QUERY = `
 
 interface OptionsContractsResponse {
   data: { getOptionsContracts: OptionsContractsResult };
+  errors?: { message: string }[];
+}
+
+const GET_OPTIONS_EXPIRATIONS_QUERY = `
+  query GetOptionsExpirations(
+    $underlyingTicker: String!
+    $contractType: String
+    $expirationDateGte: String
+    $expirationDateLte: String
+  ) {
+    getOptionsExpirations(
+      underlyingTicker: $underlyingTicker
+      contractType: $contractType
+      expirationDateGte: $expirationDateGte
+      expirationDateLte: $expirationDateLte
+    ) {
+      success
+      expirations
+      count
+      error
+    }
+  }
+`;
+
+interface OptionsExpirationsResponse {
+  data: { getOptionsExpirations: { success: boolean; expirations: string[]; count: number; error?: string } };
   errors?: { message: string }[];
 }
 
@@ -341,6 +368,35 @@ interface RunBacktestResponse {
   errors?: { message: string }[];
 }
 
+const ANALYZE_OPTIONS_STRATEGY_QUERY = `
+  query AnalyzeOptionsStrategy(
+    $symbol: String!
+    $legs: [StrategyLegInput!]!
+    $expirationDate: String!
+    $spotPrice: Decimal!
+    $riskFreeRate: Decimal = 0.043
+  ) {
+    analyzeOptionsStrategy(
+      symbol: $symbol
+      legs: $legs
+      expirationDate: $expirationDate
+      spotPrice: $spotPrice
+      riskFreeRate: $riskFreeRate
+    ) {
+      success symbol spotPrice strategyCost
+      pop expectedValue maxProfit maxLoss breakevens
+      curve { price pnl }
+      greeks { delta gamma theta vega }
+      error
+    }
+  }
+`;
+
+interface AnalyzeOptionsStrategyResponse {
+  data: { analyzeOptionsStrategy: StrategyAnalyzeResult };
+  errors?: { message: string }[];
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -428,23 +484,37 @@ export class MarketDataService {
       );
   }
 
-  getOptionsExpirations(underlyingTicker: string): Observable<string[]> {
+  getOptionsExpirations(
+    underlyingTicker: string,
+    options: {
+      contractType?: string;
+      expirationDateGte?: string;
+      expirationDateLte?: string;
+    } = {}
+  ): Observable<string[]> {
     const today = new Date().toISOString().slice(0, 10);
-    return this.getOptionsContracts(underlyingTicker, {
-      expirationDateGte: today,
-      limit: 250,
-    }).pipe(
-      map(result => {
-        if (!result.success) return [];
-        const dates = new Set<string>();
-        for (const contract of result.contracts) {
-          if (contract.expirationDate) {
-            dates.add(contract.expirationDate);
-          }
+    const sixMonthsOut = new Date(Date.now() + 180 * 86400000).toISOString().slice(0, 10);
+    return this.http
+      .post<OptionsExpirationsResponse>(GRAPHQL_URL, {
+        query: GET_OPTIONS_EXPIRATIONS_QUERY,
+        variables: {
+          underlyingTicker,
+          contractType: options.contractType,
+          expirationDateGte: options.expirationDateGte ?? today,
+          expirationDateLte: options.expirationDateLte ?? sixMonthsOut,
         }
-        return [...dates].sort();
       })
-    );
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => {
+          const result = response.data.getOptionsExpirations;
+          return result.success ? result.expirations : [];
+        })
+      );
   }
 
   calculateIndicators(
@@ -622,6 +692,28 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.runBacktest)
+      );
+  }
+
+  analyzeOptionsStrategy(
+    symbol: string,
+    legs: StrategyLegInput[],
+    expirationDate: string,
+    spotPrice: number,
+    riskFreeRate: number = 0.043
+  ): Observable<StrategyAnalyzeResult> {
+    return this.http
+      .post<AnalyzeOptionsStrategyResponse>(GRAPHQL_URL, {
+        query: ANALYZE_OPTIONS_STRATEGY_QUERY,
+        variables: { symbol, legs, expirationDate, spotPrice, riskFreeRate }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.analyzeOptionsStrategy)
       );
   }
 }

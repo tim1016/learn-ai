@@ -96,6 +96,21 @@ class OptionsContractsRequest(BaseModel):
         return v
 
 
+class OptionsExpirationsRequest(BaseModel):
+    """Request schema for listing unique options expiration dates"""
+    underlying_ticker: str = Field(..., min_length=1, max_length=20, description="Underlying stock ticker")
+    contract_type: Optional[str] = Field(None, description="Filter: call or put")
+    expiration_date_gte: Optional[str] = Field(None, description="Min expiration date")
+    expiration_date_lte: Optional[str] = Field(None, description="Max expiration date")
+
+    @field_validator('contract_type')
+    @classmethod
+    def validate_contract_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ['call', 'put']:
+            raise ValueError('contract_type must be "call" or "put"')
+        return v
+
+
 class OptionsChainSnapshotRequest(BaseModel):
     """Request schema for fetching options chain snapshot"""
     underlying_ticker: str = Field(..., min_length=1, max_length=20, description="Underlying stock ticker")

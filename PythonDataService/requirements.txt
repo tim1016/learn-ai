@@ -10,6 +10,7 @@ setuptools<78
 pandas-dq>=1.29
 ipython
 pandas-ta
+scipy>=1.14.0
 pytest
 pytest-asyncio
 httpx

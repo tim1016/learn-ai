@@ -1,0 +1,15 @@
+<div class="payoff-chart-wrapper">
+  @if (chartData()) {
+    <p-chart
+      type="line"
+      [data]="chartData()"
+      [options]="chartOptions()"
+      [height]="height() + 'px'"
+    />
+  } @else {
+    <div class="empty-state">
+      <i class="pi pi-chart-line"></i>
+      <p>Analyze a strategy to see the payoff diagram</p>
+    </div>
+  }
+</div>

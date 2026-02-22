@@ -326,3 +326,64 @@ export interface BacktestResult {
   trades: BacktestTrade[];
   error: string | null;
 }
+
+// Options Strategy Analysis types
+export interface StrategyLegInput {
+  strike: number;
+  optionType: string;
+  position: string;
+  premium: number;
+  iv: number;
+  quantity?: number;
+}
+
+export interface PayoffPoint {
+  price: number;
+  pnl: number;
+}
+
+export interface GreeksResult {
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+}
+
+export interface StrategyAnalyzeResult {
+  success: boolean;
+  symbol: string;
+  spotPrice: number;
+  strategyCost: number;
+  pop: number;
+  expectedValue: number;
+  maxProfit: number;
+  maxLoss: number;
+  breakevens: number[];
+  curve: PayoffPoint[];
+  greeks: GreeksResult;
+  error: string | null;
+}
+
+// Chart enhancement types
+export type GreekType = 'delta' | 'gamma' | 'theta' | 'vega' | 'rho';
+
+export interface WhatIfScenario {
+  id: string;
+  label: string;
+  enabled: boolean;
+  timeDeltaDays: number;
+  ivShift: number;
+  color: string;
+}
+
+export interface ChartCurveData {
+  label: string;
+  points: PayoffPoint[];
+  color: string;
+  borderDash?: number[];
+}
+
+export interface GreekCurvePoint {
+  price: number;
+  value: number;
+}

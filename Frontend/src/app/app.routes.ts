@@ -8,6 +8,7 @@ import { DayDetailComponent } from "./components/stock-analysis/day-detail/day-d
 import { OptionsChainComponent } from "./components/options-chain-v2/options-chain.component";
 import { StrategyLabComponent } from "./components/strategy-lab/strategy-lab.component";
 import { OptionsHistoryComponent } from "./components/options-history/options-history.component";
+import { OptionsStrategyLabComponent } from "./components/options-strategy-lab/options-strategy-lab.component";
 import { SnapshotsComponent } from "./components/snapshots/snapshots.component";
 import { TrackedInstrumentsComponent } from "./components/tracked-instruments/tracked-instruments.component";
 import { LstmTrainComponent } from "./components/lstm/train/lstm-train.component";
@@ -25,6 +26,7 @@ export const routes: Routes = [
   { path: "stock-analysis/day/:ticker/:date", component: DayDetailComponent },
   { path: "options-chain", component: OptionsChainComponent },
   { path: "strategy-lab", component: StrategyLabComponent },
+  { path: "options-strategy-lab", component: OptionsStrategyLabComponent },
   { path: "options-history", component: OptionsHistoryComponent },
   { path: "snapshots", component: SnapshotsComponent },
   { path: "tracked-instruments", component: TrackedInstrumentsComponent },

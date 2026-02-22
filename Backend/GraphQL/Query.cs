@@ -386,6 +386,47 @@ public class Query
     }
 
     /// <summary>
+    /// List unique expiration dates for an underlying ticker.
+    /// Much faster than fetching full contracts — returns only date strings.
+    /// </summary>
+    [GraphQLName("getOptionsExpirations")]
+    public async Task<OptionsExpirationsResult> GetOptionsExpirations(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        string underlyingTicker,
+        string? contractType = null,
+        string? expirationDateGte = null,
+        string? expirationDateLte = null)
+    {
+        try
+        {
+            logger.LogInformation(
+                "[Options] Expirations query: underlying={Underlying}, type={Type}, range=[{Gte},{Lte}]",
+                underlyingTicker, contractType, expirationDateGte, expirationDateLte);
+
+            var response = await polygonService.FetchOptionsExpirationsAsync(
+                underlyingTicker, contractType, expirationDateGte, expirationDateLte);
+
+            return new OptionsExpirationsResult
+            {
+                Success = response.Success,
+                Expirations = response.Expirations,
+                Count = response.Count,
+                Error = response.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Options] Error fetching expirations for {Underlying}", underlyingTicker);
+            return new OptionsExpirationsResult
+            {
+                Success = false,
+                Error = ex.Message,
+            };
+        }
+    }
+
+    /// <summary>
     /// Fetch a live snapshot of the options chain for an underlying ticker.
     /// Returns greeks, IV, open interest, day OHLCV, and underlying price.
     /// </summary>
@@ -645,6 +686,67 @@ public class Query
         TodaysChangePercent = dto.TodaysChangePercent,
         Updated = dto.Updated,
     };
+
+    /// <summary>
+    /// Analyze an options strategy: payoff curve, POP, EV, max profit/loss, breakevens.
+    /// All probability math is computed server-side in Python using Black-Scholes.
+    /// </summary>
+    [GraphQLName("analyzeOptionsStrategy")]
+    public async Task<StrategyAnalyzeResult> AnalyzeOptionsStrategy(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        string symbol,
+        List<StrategyLegInput> legs,
+        string expirationDate,
+        decimal spotPrice,
+        decimal riskFreeRate = 0.043m)
+    {
+        try
+        {
+            logger.LogInformation(
+                "[Strategy] GraphQL query: symbol={Symbol}, legs={LegCount}, expiration={Expiration}",
+                symbol, legs.Count, expirationDate);
+
+            var response = await polygonService.AnalyzeOptionsStrategyAsync(
+                symbol, legs, expirationDate, spotPrice, riskFreeRate);
+
+            return new StrategyAnalyzeResult
+            {
+                Success = response.Success,
+                Symbol = response.Symbol,
+                SpotPrice = response.SpotPrice,
+                StrategyCost = response.StrategyCost,
+                Pop = response.Pop,
+                ExpectedValue = response.ExpectedValue,
+                MaxProfit = response.MaxProfit,
+                MaxLoss = response.MaxLoss,
+                Breakevens = response.Breakevens,
+                Curve = response.Curve.Select(p => new PayoffPointResult
+                {
+                    Price = p.Price,
+                    Pnl = p.Pnl,
+                }).ToList(),
+                Greeks = new StrategyGreeksResult
+                {
+                    Delta = response.Greeks.Delta,
+                    Gamma = response.Greeks.Gamma,
+                    Theta = response.Greeks.Theta,
+                    Vega = response.Greeks.Vega,
+                },
+                Error = response.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Strategy] Error analyzing strategy for {Symbol}", symbol);
+            return new StrategyAnalyzeResult
+            {
+                Success = false,
+                Symbol = symbol,
+                Error = ex.Message,
+            };
+        }
+    }
 
     #endregion
 
@@ -979,6 +1081,14 @@ public class OptionsContractResult
     public string? ExerciseStyle { get; set; }
 }
 
+public class OptionsExpirationsResult
+{
+    public bool Success { get; set; }
+    public List<string> Expirations { get; set; } = [];
+    public int Count { get; set; }
+    public string? Error { get; set; }
+}
+
 public class DateRangeInput
 {
     public required string FromDate { get; set; }
@@ -1136,5 +1246,41 @@ public class RelatedTickersResult
     public bool Success { get; set; }
     public string Ticker { get; set; } = "";
     public List<string> Related { get; set; } = [];
+    public string? Error { get; set; }
+}
+
+// ------------------------------------------------------------------
+// Options Strategy Analysis result types
+// ------------------------------------------------------------------
+
+public class PayoffPointResult
+{
+    public decimal Price { get; set; }
+
+    [GraphQLName("pnl")]
+    public decimal Pnl { get; set; }
+}
+
+public class StrategyGreeksResult
+{
+    public decimal Delta { get; set; }
+    public decimal Gamma { get; set; }
+    public decimal Theta { get; set; }
+    public decimal Vega { get; set; }
+}
+
+public class StrategyAnalyzeResult
+{
+    public bool Success { get; set; }
+    public string Symbol { get; set; } = "";
+    public decimal SpotPrice { get; set; }
+    public decimal StrategyCost { get; set; }
+    public decimal Pop { get; set; }
+    public decimal ExpectedValue { get; set; }
+    public decimal MaxProfit { get; set; }
+    public decimal MaxLoss { get; set; }
+    public List<decimal> Breakevens { get; set; } = [];
+    public List<PayoffPointResult> Curve { get; set; } = [];
+    public StrategyGreeksResult Greeks { get; set; } = new();
     public string? Error { get; set; }
 }

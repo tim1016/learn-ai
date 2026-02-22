@@ -107,6 +107,8 @@ class PolygonClientService:
             logger.info(f"Listing options contracts for {underlying_ticker}, as_of={as_of_date}")
 
             contracts = []
+            # SDK limit is per-page; cap total results to avoid exhausting all pages
+            page_size = min(limit, 250)
             for c in self.client.list_options_contracts(
                 underlying_ticker=underlying_ticker,
                 as_of=as_of_date,
@@ -117,7 +119,7 @@ class PolygonClientService:
                 expiration_date_gte=expiration_date_gte,
                 expiration_date_lte=expiration_date_lte,
                 expired=expired,
-                limit=limit,
+                limit=page_size,
             ):
                 contracts.append({
                     'ticker': c.ticker,
@@ -129,12 +131,93 @@ class PolygonClientService:
                     'shares_per_contract': getattr(c, 'shares_per_contract', None),
                     'primary_exchange': getattr(c, 'primary_exchange', None),
                 })
+                if len(contracts) >= limit:
+                    logger.info(f"Reached max {limit} contracts for {underlying_ticker}, stopping pagination")
+                    break
 
             logger.info(f"Found {len(contracts)} options contracts for {underlying_ticker}")
             return contracts
 
         except Exception as e:
             logger.error(f"Error listing options contracts for {underlying_ticker}: {str(e)}")
+            raise
+
+    def list_options_expirations(
+        self,
+        underlying_ticker: str,
+        contract_type: Optional[str] = None,
+        expiration_date_gte: Optional[str] = None,
+        expiration_date_lte: Optional[str] = None,
+    ) -> List[str]:
+        """Fetch unique expiration dates for an underlying ticker.
+
+        Breaks the date range into ~30-day windows and makes one direct
+        REST call per window (bypassing the auto-paginating client).
+        Each narrow-window call is fast even for high-volume tickers
+        like SPY.  Typically 6 API calls for a 6-month range.
+        """
+        import requests as _requests
+        from datetime import datetime, timedelta
+
+        try:
+            logger.info(
+                f"Listing expirations for {underlying_ticker}, "
+                f"range=[{expiration_date_gte}, {expiration_date_lte}]"
+            )
+
+            today = datetime.now().strftime('%Y-%m-%d')
+            start = datetime.strptime(expiration_date_gte or today, '%Y-%m-%d')
+            end = datetime.strptime(
+                expiration_date_lte or (datetime.now() + timedelta(days=180)).strftime('%Y-%m-%d'),
+                '%Y-%m-%d',
+            )
+
+            dates: set[str] = set()
+            api_calls = 0
+            window_days = 30
+            window_start = start
+
+            while window_start <= end:
+                window_end = min(window_start + timedelta(days=window_days - 1), end)
+
+                # Default to 'call' when no type specified — we only need
+                # one side to discover which expiration dates exist.
+                effective_type = contract_type or 'call'
+
+                params: Dict[str, Any] = {
+                    'underlying_ticker': underlying_ticker,
+                    'contract_type': effective_type,
+                    'expiration_date.gte': window_start.strftime('%Y-%m-%d'),
+                    'expiration_date.lte': window_end.strftime('%Y-%m-%d'),
+                    'limit': 1000,
+                    'apiKey': settings.POLYGON_API_KEY,
+                }
+
+                resp = _requests.get(
+                    'https://api.polygon.io/v3/reference/options/contracts',
+                    params=params,
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                api_calls += 1
+
+                for r in data.get('results', []):
+                    exp = r.get('expiration_date')
+                    if exp:
+                        dates.add(exp)
+
+                window_start = window_end + timedelta(days=1)
+
+            result = sorted(dates)
+            logger.info(
+                f"Found {len(result)} unique expirations for {underlying_ticker} "
+                f"({api_calls} API calls)"
+            )
+            return result
+
+        except Exception as e:
+            logger.error(f"Error listing expirations for {underlying_ticker}: {str(e)}")
             raise
 
     def list_snapshot_options_chain(
@@ -227,6 +310,19 @@ class PolygonClientService:
 
             if underlying_info is None:
                 underlying_info = {'ticker': underlying_asset, 'price': 0, 'change': 0, 'change_percent': 0}
+
+            # Fallback: if underlying price is 0/None, fetch from stock snapshot
+            if not underlying_info.get('price'):
+                try:
+                    stock_snap = self.get_stock_snapshot(underlying_asset)
+                    day = stock_snap.get('day', {})
+                    prev_day = stock_snap.get('prev_day', {})
+                    price = day.get('close') or prev_day.get('close') or 0
+                    underlying_info['price'] = price
+                    if price:
+                        logger.info(f"Enriched underlying price from stock snapshot: {price}")
+                except Exception as enrich_err:
+                    logger.warning(f"Could not enrich underlying price: {enrich_err}")
 
             logger.info(f"Fetched {len(contracts)} options chain snapshots for {underlying_asset}")
             return {

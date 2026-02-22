@@ -3,6 +3,20 @@ using Backend.Models.DTOs.PolygonResponses;
 namespace Backend.Services.Interfaces;
 
 /// <summary>
+/// Input type for a single leg in an options strategy.
+/// Used by both the GraphQL layer and the service layer.
+/// </summary>
+public class StrategyLegInput
+{
+    public decimal Strike { get; set; }
+    public required string OptionType { get; set; }
+    public required string Position { get; set; }
+    public decimal Premium { get; set; }
+    public decimal Iv { get; set; }
+    public int Quantity { get; set; } = 1;
+}
+
+/// <summary>
 /// Service for calling Python Polygon.io data service
 /// Interface allows easy mocking in unit tests
 /// </summary>
@@ -88,6 +102,17 @@ public interface IPolygonService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Analyze an options strategy: payoff curve, POP, EV, breakevens.
+    /// </summary>
+    Task<StrategyAnalyzeResponseDto> AnalyzeOptionsStrategyAsync(
+        string symbol,
+        List<StrategyLegInput> legs,
+        string expirationDate,
+        decimal spotPrice,
+        decimal riskFreeRate = 0.043m,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// List options contracts for an underlying ticker
     /// </summary>
     Task<OptionsContractsResponse> FetchOptionsContractsAsync(
@@ -100,5 +125,16 @@ public interface IPolygonService
         string? expirationDateGte = null,
         string? expirationDateLte = null,
         int limit = 100,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// List unique expiration dates for an underlying ticker.
+    /// Much faster than FetchOptionsContractsAsync for just getting dates.
+    /// </summary>
+    Task<OptionsExpirationsResponse> FetchOptionsExpirationsAsync(
+        string underlyingTicker,
+        string? contractType = null,
+        string? expirationDateGte = null,
+        string? expirationDateLte = null,
         CancellationToken cancellationToken = default);
 }
