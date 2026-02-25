@@ -3,13 +3,6 @@
   min-height: 100vh;
 }
 
-// Override the global .container max-width + padding for full-width layout
-:host-context(.container) {
-  max-width: none !important;
-  padding-left: 8px !important;
-  padding-right: 8px !important;
-}
-
 // Chain table column sizing
 .chain-table {
   table-layout: fixed;

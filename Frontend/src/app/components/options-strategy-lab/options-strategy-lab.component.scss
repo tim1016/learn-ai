@@ -524,3 +524,184 @@
   align-items: center;
   gap: 8px;
 }
+
+// ---------------------------------------------------------------------------
+// Black-Scholes Diagnostic Table
+// ---------------------------------------------------------------------------
+
+.bs-diagnostic-section {
+  margin-top: 32px;
+  padding: 20px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 0 0 8px;
+    color: #f1f5f9;
+  }
+
+  .bs-diagnostic-desc {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    margin: 0 0 16px;
+    line-height: 1.5;
+  }
+}
+
+.bs-params-block {
+  margin-bottom: 20px;
+
+  h4 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #cbd5e1;
+    margin: 0 0 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #1e293b;
+  }
+}
+
+.bs-params-table {
+  font-size: 0.8rem;
+  border-collapse: collapse;
+
+  td {
+    padding: 4px 12px 4px 0;
+    vertical-align: top;
+  }
+
+  .param-label {
+    color: #94a3b8;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+
+  .param-value {
+    color: #e2e8f0;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.78rem;
+  }
+}
+
+.bs-formulae {
+  font-size: 0.82rem;
+  color: #cbd5e1;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  line-height: 1.8;
+  background: #1e293b;
+  padding: 12px 16px;
+  border-radius: 6px;
+
+  p {
+    margin: 0;
+  }
+
+  .bs-formula-note {
+    color: #64748b;
+    font-size: 0.75rem;
+    padding-left: 20px;
+    font-family: inherit;
+  }
+}
+
+.bs-diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  overflow-x: auto;
+  display: block;
+
+  thead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  th {
+    background: #1e293b;
+    color: #94a3b8;
+    font-weight: 600;
+    padding: 6px 8px;
+    text-align: left;
+    white-space: nowrap;
+    border-bottom: 2px solid #334155;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  td {
+    padding: 5px 8px;
+    color: #e2e8f0;
+    border-bottom: 1px solid #1e293b;
+    white-space: nowrap;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.75rem;
+  }
+
+  tbody tr:hover {
+    background: rgba(99, 102, 241, 0.08);
+  }
+}
+
+.bs-calc-table {
+  th {
+    font-size: 0.68rem;
+    padding: 5px 6px;
+  }
+
+  td {
+    padding: 4px 6px;
+    font-size: 0.72rem;
+  }
+}
+
+.bs-price-block {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #1a1f35;
+  border-radius: 6px;
+  border: 1px solid #1e293b;
+
+  &.at-spot {
+    border-color: #3b82f6;
+    background: rgba(59, 130, 246, 0.06);
+  }
+
+  h4 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    margin: 0 0 8px;
+
+    .spot-tag {
+      font-size: 0.7rem;
+      color: #3b82f6;
+      font-weight: 700;
+      margin-left: 8px;
+    }
+  }
+}
+
+.total-row {
+  td {
+    border-top: 2px solid #334155;
+    padding-top: 8px;
+    font-size: 0.8rem;
+  }
+}
+
+.mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.positive-pnl {
+  color: #22c55e !important;
+}
+
+.negative-pnl {
+  color: #ef4444 !important;
+}

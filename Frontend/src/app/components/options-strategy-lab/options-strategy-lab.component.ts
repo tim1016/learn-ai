@@ -3,7 +3,7 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { DecimalPipe } from '@angular/common';
+import { DecimalPipe, UpperCasePipe } from '@angular/common';
 import { firstValueFrom } from 'rxjs';
 import { InputText } from 'primeng/inputtext';
 import { Button } from 'primeng/button';
@@ -20,6 +20,7 @@ import {
 } from '../../graphql/types';
 import {
   strategyPnlAtPrice, strategyGreekAtPrice, LegParams, GreekName,
+  bsD1, bsD2, bsPrice, normCdf,
 } from '../../utils/black-scholes';
 import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
 import { PayoffChartComponent } from './payoff-chart/payoff-chart.component';
@@ -44,7 +45,7 @@ interface StrategyTemplate {
   selector: 'app-options-strategy-lab',
   standalone: true,
   imports: [
-    FormsModule, DecimalPipe,
+    FormsModule, DecimalPipe, UpperCasePipe,
     InputText, Button, Select, SelectButton, ProgressSpinner,
     InputNumber, ToggleSwitch, Checkbox,
     ExpirationRibbonComponent, PayoffChartComponent,
@@ -232,7 +233,10 @@ export class OptionsStrategyLabComponent {
       && !this.analyzing();
   });
 
-  // Adaptive price grid — base uniform + dense zones around strikes for smooth curvature
+  // Uniform price grid with exact strike injection.
+  // A uniform grid produces a smooth BS-priced Current P&L (now that normCdf
+  // is correct) and, crucially, injecting exact strike prices ensures the
+  // Expiration P&L is properly piecewise-linear with sharp kinks at strikes.
   priceGrid = computed<number[]>(() => {
     const spot = this.spotPrice();
     if (spot <= 0) return [];
@@ -240,26 +244,16 @@ export class OptionsStrategyLabComponent {
     const low = spot * (1 - pct);
     const high = spot * (1 + pct);
 
+    const count = 1200;
     const gridSet = new Set<number>();
-
-    // Base uniform grid (400 points)
-    const baseCount = 400;
-    for (let i = 0; i <= baseCount; i++) {
-      gridSet.add(Math.round((low + (high - low) * (i / baseCount)) * 100) / 100);
+    for (let i = 0; i <= count; i++) {
+      gridSet.add(Math.round((low + (high - low) * (i / count)) * 100) / 100);
     }
 
-    // Dense zones: ±2% of spot around each unique enabled strike
-    const enabledStrikes = new Set(
-      this.legs().filter(l => l.enabled && l.strike > low && l.strike < high).map(l => l.strike),
-    );
-    const bandHalf = spot * 0.02;
-    const denseCount = 200;
-    for (const strike of enabledStrikes) {
-      gridSet.add(strike);
-      const bLow = Math.max(strike - bandHalf, low);
-      const bHigh = Math.min(strike + bandHalf, high);
-      for (let i = 0; i <= denseCount; i++) {
-        gridSet.add(Math.round((bLow + (bHigh - bLow) * (i / denseCount)) * 100) / 100);
+    // Inject exact strike prices so expiration payoff kinks land precisely
+    for (const leg of this.legs()) {
+      if (leg.enabled && leg.strike > low && leg.strike < high) {
+        gridSet.add(leg.strike);
       }
     }
 
@@ -391,6 +385,117 @@ export class OptionsStrategyLabComponent {
       price,
       value: strategyGreekAtPrice(params, price, t, r, greek),
     }));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Diagnostic table: per-price, per-leg Black-Scholes calculation breakdown
+  // ---------------------------------------------------------------------------
+
+  /** Sample prices for the diagnostic table: spot ± offsets + each strike */
+  diagnosticPrices = computed<number[]>(() => {
+    const spot = this.spotPrice();
+    if (spot <= 0) return [];
+    const legs = this.legs().filter(l => l.enabled && l.strike > 0);
+    const prices = new Set<number>();
+
+    // Spot and offsets
+    const offsets = [-10, -5, -2, -1, 0, 1, 2, 5, 10];
+    for (const off of offsets) {
+      prices.add(Math.round((spot + off) * 100) / 100);
+    }
+
+    // Each strike and ±$1 around it
+    for (const leg of legs) {
+      prices.add(leg.strike - 1);
+      prices.add(leg.strike);
+      prices.add(leg.strike + 1);
+    }
+
+    return [...prices].sort((a, b) => a - b);
+  });
+
+  /** Full BS calculation details for each sample price × leg */
+  diagnosticRows = computed(() => {
+    const params = this.enabledLegsParams();
+    const t = this.timeToExpiry();
+    const r = this.riskFreeRate();
+    const spot = this.spotPrice();
+    const prices = this.diagnosticPrices();
+    if (prices.length === 0 || params.length === 0 || t <= 0 || spot <= 0) return [];
+
+    return prices.map(price => {
+      const legDetails = params.map(leg => {
+        const sigma = leg.iv;
+        const sqrtT = Math.sqrt(t);
+        const lnSK = (price > 0 && leg.strike > 0) ? Math.log(price / leg.strike) : 0;
+        const d1 = bsD1(price, leg.strike, r, sigma, t);
+        const d2 = bsD2(price, leg.strike, r, sigma, t);
+        const nd1 = normCdf(d1);
+        const nd2 = normCdf(d2);
+        const nNegD1 = normCdf(-d1);
+        const nNegD2 = normCdf(-d2);
+        const discount = Math.exp(-r * t);
+
+        const theoPrice = bsPrice(price, leg.strike, r, sigma, t, leg.optionType);
+
+        // Intrinsic value at expiration for comparison
+        const intrinsic = leg.optionType === 'call'
+          ? Math.max(price - leg.strike, 0)
+          : Math.max(leg.strike - price, 0);
+
+        // Leg P&L
+        const legPnl = leg.position === 'long'
+          ? (theoPrice - leg.premium) * leg.quantity
+          : (leg.premium - theoPrice) * leg.quantity;
+
+        // Expiration P&L
+        const expPnl = leg.position === 'long'
+          ? (intrinsic - leg.premium) * leg.quantity
+          : (leg.premium - intrinsic) * leg.quantity;
+
+        return {
+          strike: leg.strike,
+          optionType: leg.optionType,
+          position: leg.position,
+          premium: leg.premium,
+          iv: sigma,
+          quantity: leg.quantity,
+          lnSK,
+          d1,
+          d2,
+          nd1,
+          nd2,
+          nNegD1,
+          nNegD2,
+          discount,
+          sqrtT,
+          theoPrice,
+          intrinsic,
+          legPnl,
+          expPnl,
+        };
+      });
+
+      const totalCurrentPnl = legDetails.reduce((s, l) => s + l.legPnl, 0);
+      const totalExpPnl = legDetails.reduce((s, l) => s + l.expPnl, 0);
+
+      return {
+        underlyingPrice: price,
+        legDetails,
+        totalCurrentPnl,
+        totalExpPnl,
+      };
+    });
+  });
+
+  /** Summary metadata for the diagnostic panel header */
+  diagnosticMeta = computed(() => {
+    const spot = this.spotPrice();
+    const t = this.timeToExpiry();
+    const dte = this.daysToExpiry();
+    const r = this.riskFreeRate();
+    const params = this.enabledLegsParams();
+    return { spot, t, dte, r, legs: params };
   });
 
   // Fetch expirations

@@ -9,7 +9,7 @@ import { MenuItem } from "primeng/api";
   imports: [RouterOutlet, Menubar],
   template: `
     <p-menubar [model]="items()" />
-    <div class="container">
+    <div class="px-4">
       <router-outlet />
     </div>
   `,
@@ -32,6 +32,7 @@ export class AppComponent {
       icon: "pi pi-objects-column",
       items: [
         { label: "Options Chain", icon: "pi pi-table", routerLink: "/options-chain" },
+        { label: "Strategy Builder", icon: "pi pi-th-large", routerLink: "/strategy-builder" },
         { label: "Strategy Lab", icon: "pi pi-wrench", routerLink: "/strategy-lab" },
         { label: "Options Strategy Lab", icon: "pi pi-calculator", routerLink: "/options-strategy-lab" },
         { label: "Options History", icon: "pi pi-history", routerLink: "/options-history" },

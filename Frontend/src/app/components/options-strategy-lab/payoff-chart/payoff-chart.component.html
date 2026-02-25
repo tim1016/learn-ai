@@ -1,15 +1,28 @@
 <div class="payoff-chart-wrapper">
-  @if (chartData()) {
-    <p-chart
-      type="line"
-      [data]="chartData()"
-      [options]="chartOptions()"
-      [height]="height() + 'px'"
-    />
-  } @else {
-    <div class="empty-state">
-      <i class="pi pi-chart-line"></i>
-      <p>Analyze a strategy to see the payoff diagram</p>
+  @if (hasData()) {
+    <div class="chart-legend">
+      <span class="legend-item">
+        <span class="legend-swatch exp"></span>
+        Expiration P&L
+      </span>
+      @if (currentPnlCurve().length) {
+        <span class="legend-item">
+          <span class="legend-swatch curr"></span>
+          Current P&L
+        </span>
+      }
     </div>
   }
+
+  <div class="chart-outer" [style.height.px]="height()">
+    <div #chartContainer class="chart-canvas"></div>
+    <div #tooltip class="chart-tooltip"></div>
+
+    @if (!hasData()) {
+      <div class="empty-overlay">
+        <i class="pi pi-chart-line"></i>
+        <p>Configure a strategy to see the payoff diagram</p>
+      </div>
+    }
+  </div>
 </div>

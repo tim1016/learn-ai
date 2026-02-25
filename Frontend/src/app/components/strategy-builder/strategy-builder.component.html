@@ -1,0 +1,494 @@
+<div class="builder-page bg-slate-900 text-slate-200 min-h-screen px-2 py-3">
+  <!-- Header Bar -->
+  <div class="flex items-center gap-3 mb-3">
+    <h1 class="text-lg font-bold text-white shrink-0 flex items-center gap-2">
+      <i class="pi pi-th-large text-indigo-400"></i>
+      Strategy Builder
+    </h1>
+    <input
+      pInputText
+      [ngModel]="ticker()"
+      (ngModelChange)="ticker.set($event)"
+      placeholder="Ticker"
+      class="w-24"
+      (keyup.enter)="fetchExpirations()"
+    />
+    <p-button
+      label="Load"
+      icon="pi pi-search"
+      [loading]="expirationsLoading()"
+      (onClick)="fetchExpirations()"
+      severity="info"
+      size="small"
+    />
+
+    @if (stockSnapshot(); as snap) {
+      <div class="flex items-center gap-3 ml-2 border-l border-slate-700 pl-3">
+        <span class="text-white font-bold">{{ snap.ticker }}</span>
+        @if (snap.day; as day) {
+          @if (day.close != null) {
+            <span class="text-slate-100 font-semibold">{{ day.close | number:'1.2-2' }}</span>
+          }
+          @if (snap.todaysChange != null) {
+            <span
+              class="text-xs font-semibold px-1.5 py-0.5 rounded"
+              [class]="snap.todaysChange >= 0
+                ? 'text-emerald-400 bg-emerald-400/10'
+                : 'text-red-400 bg-red-400/10'"
+            >
+              {{ snap.todaysChange >= 0 ? '+' : '' }}{{ snap.todaysChange | number:'1.2-2' }}
+              ({{ snap.todaysChangePercent | number:'1.2-2' }}%)
+            </span>
+          }
+        }
+      </div>
+    }
+
+    <div class="flex-1"></div>
+
+    @if (selectedExpiration()) {
+      <span class="text-slate-400 text-xs bg-slate-800 px-2 py-1 rounded">
+        DTE: {{ daysToExpiry() | number:'1.0-0' }}
+      </span>
+    }
+
+    <div class="flex items-center gap-1.5 border-l border-slate-700 pl-3">
+      <span class="text-slate-400 text-xs">&plusmn;Strikes</span>
+      <select
+        class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600"
+        [ngModel]="strikeRange()"
+        (ngModelChange)="strikeRange.set(+$event)"
+        [disabled]="showAllStrikes()"
+      >
+        @for (n of strikeRangeOptions; track n) {
+          <option [value]="n">{{ n }}</option>
+        }
+      </select>
+      <button
+        class="text-xs px-2 py-1 rounded border transition-colors"
+        [class]="showAllStrikes()
+          ? 'bg-blue-600 text-white border-blue-500'
+          : 'bg-slate-700 text-slate-300 border-slate-600 hover:bg-slate-600'"
+        (click)="showAllStrikes.set(!showAllStrikes())"
+      >All</button>
+    </div>
+  </div>
+
+  <!-- Error -->
+  @if (error()) {
+    <div class="bg-red-900/50 text-red-300 px-4 py-2 rounded mb-3 flex items-center gap-2">
+      <i class="pi pi-exclamation-triangle"></i>
+      {{ error() }}
+    </div>
+  }
+
+  <!-- Expiration Ribbon -->
+  @if (availableExpirations().length > 0) {
+    <div class="mb-3 bg-slate-800 rounded-lg px-3 py-2">
+      <app-expiration-ribbon
+        [expirations]="availableExpirations()"
+        [selectedDate]="selectedExpiration()"
+        [loading]="expirationsLoading()"
+        (dateSelected)="onExpirationSelected($event)"
+      />
+    </div>
+  }
+
+  <!-- Main Layout: Chain (full width) -->
+  <div class="main-layout">
+    <!-- Drawer Toggle (floating) -->
+    @if (allContracts().length > 0 && !chainLoading()) {
+      <button
+        class="drawer-toggle-btn"
+        (click)="drawerOpen.set(true)"
+        [class.has-legs]="legs().length > 0"
+      >
+        <i class="pi pi-sliders-h"></i>
+        @if (legs().length > 0) {
+          <span class="leg-badge">{{ legs().length }}</span>
+        }
+      </button>
+    }
+
+    <!-- Chain Panel (Full Width) -->
+    <div class="chain-panel">
+      @if (chainLoading()) {
+        <div class="space-y-2 p-3">
+          @for (i of skeletonRows; track i) {
+            <div class="flex gap-2">
+              @for (j of [0,1,2,3,4,5,6,7,8,9,10,11,12]; track j) {
+                <p-skeleton width="55px" height="22px" />
+              }
+            </div>
+          }
+        </div>
+      } @else if (visibleRows().length > 0) {
+        <div class="overflow-x-auto">
+          <table class="chain-table w-full border-collapse text-xs">
+            <colgroup>
+              <col class="col-action" />
+              <col class="col-action" />
+              <col class="col-greek" />
+              <col class="col-price" />
+              <col class="col-oi" />
+              <col class="col-vol" />
+              <col class="col-strike" />
+              <col class="col-vol" />
+              <col class="col-oi" />
+              <col class="col-price" />
+              <col class="col-greek" />
+              <col class="col-action" />
+              <col class="col-action" />
+            </colgroup>
+            <thead>
+              <tr class="border-b-2 border-slate-700">
+                <th colspan="6" class="text-center text-emerald-400 font-bold py-1.5 text-xs">CALLS</th>
+                <th class="bg-slate-800/80"></th>
+                <th colspan="6" class="text-center text-red-400 font-bold py-1.5 text-xs">PUTS</th>
+              </tr>
+              <tr class="border-b border-slate-700 text-slate-400 text-[10px] uppercase tracking-wider">
+                <th class="px-0.5 py-1 text-center" pTooltip="Buy (Long)" tooltipPosition="top">L</th>
+                <th class="px-0.5 py-1 text-center" pTooltip="Sell (Short)" tooltipPosition="top">S</th>
+                <th class="px-1.5 py-1 text-right">Delta</th>
+                <th class="px-1.5 py-1 text-right font-semibold">Price</th>
+                <th class="px-1.5 py-1 text-right">OI</th>
+                <th class="px-1.5 py-1 text-right">Vol</th>
+                <th class="px-2 py-1 text-center bg-slate-800/80 border-x border-slate-700">Strike</th>
+                <th class="px-1.5 py-1 text-left">Vol</th>
+                <th class="px-1.5 py-1 text-left">OI</th>
+                <th class="px-1.5 py-1 text-left font-semibold">Price</th>
+                <th class="px-1.5 py-1 text-left">Delta</th>
+                <th class="px-0.5 py-1 text-center" pTooltip="Buy (Long)" tooltipPosition="top">L</th>
+                <th class="px-0.5 py-1 text-center" pTooltip="Sell (Short)" tooltipPosition="top">S</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of visibleRows(); track row.strike) {
+                <tr
+                  class="border-b border-slate-800 hover:bg-slate-700/30 transition-colors"
+                  [class.row-atm]="row.isAtm"
+                  [class.row-itm-call]="row.itmCall"
+                  [class.row-otm-call]="row.otmCall"
+                  [class.row-itm-put]="row.itmPut"
+                  [class.row-otm-put]="row.otmPut"
+                  [attr.data-atm]="row.isAtm ? 'true' : null"
+                >
+                  <!-- CALL Long -->
+                  <td class="col-call px-0.5 py-1 text-center">
+                    <button
+                      class="action-btn long-btn"
+                      [class.active]="isLegActive('call', row.strike, 'long')"
+                      [disabled]="!row.call"
+                      (click)="addLegFromChain(row.call, 'call', 'long')"
+                    >L</button>
+                  </td>
+                  <!-- CALL Short -->
+                  <td class="col-call px-0.5 py-1 text-center">
+                    <button
+                      class="action-btn short-btn"
+                      [class.active]="isLegActive('call', row.strike, 'short')"
+                      [disabled]="!row.call"
+                      (click)="addLegFromChain(row.call, 'call', 'short')"
+                    >S</button>
+                  </td>
+                  <!-- CALL Delta -->
+                  <td class="col-call px-1.5 py-1 text-right text-slate-300">{{ row.callDelta }}</td>
+                  <!-- CALL Price -->
+                  <td class="col-call col-call-price px-1.5 py-1 text-right text-slate-100 font-semibold">{{ row.callPrice }}</td>
+                  <!-- CALL OI -->
+                  <td class="col-call px-1.5 py-1 text-right text-slate-300">{{ row.callOi }}</td>
+                  <!-- CALL Volume -->
+                  <td class="col-call relative px-1.5 py-1 text-right">
+                    <div class="absolute inset-y-0 right-0 bg-blue-500/25 rounded-l" [style.width.%]="row.callVolumeBarWidth"></div>
+                    <span class="relative">{{ row.callVolume }}</span>
+                  </td>
+
+                  <!-- STRIKE -->
+                  <td class="col-strike px-2 py-1 text-center font-bold text-white bg-slate-800/80 border-x border-slate-700">
+                    {{ row.strikeFormatted }}
+                    @if (row.isAtm) {
+                      <div class="atm-price-badge">ATM {{ spotPrice() | number:'1.2-2' }}</div>
+                    }
+                  </td>
+
+                  <!-- PUT Volume -->
+                  <td class="col-put relative px-1.5 py-1 text-left">
+                    <div class="absolute inset-y-0 left-0 bg-red-500/25 rounded-r" [style.width.%]="row.putVolumeBarWidth"></div>
+                    <span class="relative">{{ row.putVolume }}</span>
+                  </td>
+                  <!-- PUT OI -->
+                  <td class="col-put px-1.5 py-1 text-left text-slate-300">{{ row.putOi }}</td>
+                  <!-- PUT Price -->
+                  <td class="col-put col-put-price px-1.5 py-1 text-left text-slate-100 font-semibold">{{ row.putPrice }}</td>
+                  <!-- PUT Delta -->
+                  <td class="col-put px-1.5 py-1 text-left text-slate-300">{{ row.putDelta }}</td>
+                  <!-- PUT Long -->
+                  <td class="col-put px-0.5 py-1 text-center">
+                    <button
+                      class="action-btn long-btn"
+                      [class.active]="isLegActive('put', row.strike, 'long')"
+                      [disabled]="!row.put"
+                      (click)="addLegFromChain(row.put, 'put', 'long')"
+                    >L</button>
+                  </td>
+                  <!-- PUT Short -->
+                  <td class="col-put px-0.5 py-1 text-center">
+                    <button
+                      class="action-btn short-btn"
+                      [class.active]="isLegActive('put', row.strike, 'short')"
+                      [disabled]="!row.put"
+                      (click)="addLegFromChain(row.put, 'put', 'short')"
+                    >S</button>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      } @else if (!chainLoading() && !expirationsLoading() && availableExpirations().length > 0) {
+        <div class="text-slate-400 text-center py-12">
+          No contracts available for this expiration.
+        </div>
+      }
+    </div>
+
+  </div>
+
+  <!-- Strategy Drawer (slides from right) -->
+  @if (drawerOpen()) {
+    <div class="drawer-backdrop" (click)="drawerOpen.set(false)"></div>
+  }
+  <aside class="strategy-drawer" [class.open]="drawerOpen()">
+    <!-- Drawer Header -->
+    <div class="drawer-header">
+      <h2 class="drawer-title">
+        <i class="pi pi-sliders-h text-indigo-400"></i>
+        Strategy Preview
+      </h2>
+      <button class="drawer-close" (click)="drawerOpen.set(false)">
+        <i class="pi pi-times"></i>
+      </button>
+    </div>
+
+    <div class="drawer-body">
+      <!-- Template Selector -->
+      <div class="panel-section">
+        <label class="section-label">Template</label>
+        <select
+          class="template-select"
+          [ngModel]="strategyType()"
+          (ngModelChange)="strategyType.set($event); onStrategyTypeChanged()"
+        >
+          <option value="custom">Custom</option>
+          <optgroup label="Bullish">
+            <option value="bull_call_spread">Bull Call Spread</option>
+            <option value="covered_call">Covered Call</option>
+            <option value="naked_put">Naked Put</option>
+            <option value="ratio_call_spread">Ratio Call Spread</option>
+          </optgroup>
+          <optgroup label="Bearish">
+            <option value="bear_put_spread">Bear Put Spread</option>
+            <option value="protective_put">Protective Put</option>
+            <option value="naked_call">Naked Call</option>
+            <option value="ratio_put_spread">Ratio Put Spread</option>
+          </optgroup>
+          <optgroup label="Neutral / Volatility">
+            <option value="long_straddle">Long Straddle</option>
+            <option value="short_straddle">Short Straddle</option>
+            <option value="long_strangle">Long Strangle</option>
+            <option value="short_strangle">Short Strangle</option>
+            <option value="long_butterfly">Long Butterfly</option>
+            <option value="short_butterfly">Short Butterfly</option>
+            <option value="iron_condor">Iron Condor</option>
+            <option value="iron_butterfly">Iron Butterfly</option>
+          </optgroup>
+        </select>
+      </div>
+
+      <!-- Legs -->
+      <div class="panel-section">
+        <div class="flex items-center justify-between mb-2">
+          <label class="section-label mb-0">Legs ({{ legs().length }})</label>
+          @if (legs().length > 0) {
+            <button class="clear-btn" (click)="clearLegs()">Clear</button>
+          }
+        </div>
+        @if (legs().length === 0) {
+          <div class="text-slate-500 text-[11px] text-center py-3">
+            Click L/S in the chain to add legs
+          </div>
+        } @else {
+          <div class="legs-list">
+            @for (leg of legs(); track $index; let i = $index) {
+              <div class="leg-chip" [class.long-chip]="leg.position === 'long'" [class.short-chip]="leg.position === 'short'">
+                <span class="leg-pos">{{ leg.position === 'long' ? 'BUY' : 'SELL' }}</span>
+                <span class="leg-detail">
+                  {{ leg.quantity }}x
+                  <span [class.text-emerald-400]="leg.optionType === 'call'" [class.text-red-400]="leg.optionType === 'put'">
+                    {{ leg.optionType === 'call' ? 'C' : 'P' }}
+                  </span>
+                  {{ leg.strike }}
+                </span>
+                <span class="leg-premium">${{ leg.premium | number:'1.2-2' }}</span>
+                <button class="leg-remove" (click)="removeLeg(i)"><i class="pi pi-times"></i></button>
+              </div>
+            }
+          </div>
+        }
+      </div>
+
+      <!-- Summary + Greeks + Chart (only when legs produce a payoff curve) -->
+      @if (livePayoffCurve().length > 0) {
+        <!-- Summary & Greeks side by side -->
+        <div class="panel-section">
+          <div class="drawer-summary-row">
+            <div class="summary-grid">
+              <div class="summary-row">
+                <span class="summary-label">Net Cost</span>
+                <span class="summary-value" [class.credit]="netCost() > 0" [class.debit]="netCost() < 0">
+                  {{ netCost() >= 0 ? '+' : '' }}${{ netCost() | number:'1.2-2' }}
+                </span>
+              </div>
+              <div class="summary-row">
+                <span class="summary-label">Max Profit</span>
+                <span class="summary-value profit">${{ liveMaxProfit() | number:'1.2-2' }}</span>
+              </div>
+              <div class="summary-row">
+                <span class="summary-label">Max Loss</span>
+                <span class="summary-value loss">${{ liveMaxLoss() | number:'1.2-2' }}</span>
+              </div>
+              @if (liveBreakevens().length > 0) {
+                <div class="summary-row">
+                  <span class="summary-label">BE</span>
+                  <span class="summary-value breakeven">
+                    @for (be of liveBreakevens(); track be; let last = $last) {
+                      ${{ be | number:'1.2-2' }}{{ last ? '' : ', ' }}
+                    }
+                  </span>
+                </div>
+              }
+            </div>
+
+            @if (liveGreeks(); as greeks) {
+              <div class="greeks-mini">
+                <div class="gm-item">
+                  <span class="gm-label">&Delta;</span>
+                  <span class="gm-value">{{ greeks.delta | number:'1.3-3' }}</span>
+                </div>
+                <div class="gm-item">
+                  <span class="gm-label">&Gamma;</span>
+                  <span class="gm-value">{{ greeks.gamma | number:'1.4-4' }}</span>
+                </div>
+                <div class="gm-item">
+                  <span class="gm-label">&Theta;</span>
+                  <span class="gm-value" [class.text-red-400]="greeks.theta < 0">{{ greeks.theta | number:'1.3-3' }}</span>
+                </div>
+                <div class="gm-item">
+                  <span class="gm-label">V</span>
+                  <span class="gm-value">{{ greeks.vega | number:'1.3-3' }}</span>
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+
+        <!-- What-If + Greek Selector -->
+        <div class="panel-section">
+          <div class="flex items-center gap-3 flex-wrap">
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <span class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold shrink-0">What-If</span>
+              @for (scenario of whatIfScenarios(); track scenario.id) {
+                <button
+                  class="whatif-chip"
+                  [class.active]="scenario.enabled"
+                  [style.--chip-color]="scenario.color"
+                  (click)="toggleWhatIf(scenario.id)"
+                >{{ scenario.label }}</button>
+              }
+            </div>
+            <div class="flex items-center gap-2 ml-auto">
+              <span class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold shrink-0">Greek</span>
+              <select
+                class="greek-select"
+                [ngModel]="selectedGreek()"
+                (ngModelChange)="selectedGreek.set($event)"
+              >
+                <option value="delta">Delta (&Delta;)</option>
+                <option value="gamma">Gamma (&Gamma;)</option>
+                <option value="theta">Theta (&Theta;)</option>
+                <option value="vega">Vega (V)</option>
+                <option value="rho">Rho (&rho;)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Payoff Chart (taller in drawer) -->
+        <div class="panel-section chart-section">
+          <app-payoff-chart
+            [expirationCurve]="livePayoffCurve()"
+            [currentPnlCurve]="currentPnlCurve()"
+            [whatIfCurves]="whatIfCurves()"
+            [greekCurve]="greekCurve()"
+            [selectedGreek]="selectedGreek()"
+            [breakevens]="liveBreakevens()"
+            [spotPrice]="spotPrice()"
+            [weightedIv]="weightedIv()"
+            [timeToExpiry]="timeToExpiry()"
+            [riskFreeRate]="riskFreeRate()"
+            [height]="380"
+          />
+        </div>
+      }
+
+      <!-- Analyze Button -->
+      @if (legs().length > 0) {
+        <div class="panel-section">
+          <p-button
+            label="Analyze"
+            icon="pi pi-chart-line"
+            (onClick)="analyzeStrategy()"
+            [loading]="analyzing()"
+            [disabled]="!canAnalyze()"
+            severity="success"
+            size="small"
+            [style]="{ width: '100%' }"
+          />
+        </div>
+      }
+
+      <!-- Analysis Results (inside drawer) -->
+      @if (analysisResult(); as result) {
+        <div class="panel-section">
+          <label class="section-label">Analysis Results</label>
+          <div class="stats-grid">
+            <div class="stat-card pop-card">
+              <span class="stat-label">Prob. of Profit</span>
+              <span class="stat-value pop-value">{{ result.pop * 100 | number:'1.1-1' }}%</span>
+            </div>
+            <div class="stat-card ev-card" [class.positive]="result.expectedValue >= 0" [class.negative]="result.expectedValue < 0">
+              <span class="stat-label">Expected Value</span>
+              <span class="stat-value">${{ result.expectedValue | number:'1.2-2' }}</span>
+            </div>
+            <div class="stat-card profit-card">
+              <span class="stat-label">Max Profit</span>
+              <span class="stat-value">${{ result.maxProfit | number:'1.2-2' }}</span>
+            </div>
+            <div class="stat-card loss-card">
+              <span class="stat-label">Max Loss</span>
+              <span class="stat-value">${{ result.maxLoss | number:'1.2-2' }}</span>
+            </div>
+            <div class="stat-card be-card">
+              <span class="stat-label">Breakeven{{ result.breakevens.length > 1 ? 's' : '' }}</span>
+              <span class="stat-value">
+                @for (be of result.breakevens; track be; let last = $last) {
+                  ${{ be | number:'1.2-2' }}{{ last ? '' : ', ' }}
+                }
+              </span>
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+  </aside>
+</div>

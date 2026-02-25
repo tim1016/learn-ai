@@ -15,6 +15,7 @@ import { LstmTrainComponent } from "./components/lstm/train/lstm-train.component
 import { LstmValidateComponent } from "./components/lstm/validate/lstm-validate.component";
 import { LstmPredictionsComponent } from "./components/lstm/predictions/lstm-predictions.component";
 import { LstmModelsComponent } from "./components/lstm/models/lstm-models.component";
+import { StrategyBuilderComponent } from "./components/strategy-builder/strategy-builder.component";
 
 export const routes: Routes = [
   { path: "", redirectTo: "/market-data", pathMatch: "full" },
@@ -27,6 +28,7 @@ export const routes: Routes = [
   { path: "options-chain", component: OptionsChainComponent },
   { path: "strategy-lab", component: StrategyLabComponent },
   { path: "options-strategy-lab", component: OptionsStrategyLabComponent },
+  { path: "strategy-builder", component: StrategyBuilderComponent },
   { path: "options-history", component: OptionsHistoryComponent },
   { path: "snapshots", component: SnapshotsComponent },
   { path: "tracked-instruments", component: TrackedInstrumentsComponent },

@@ -1,17 +1,115 @@
 .payoff-chart-wrapper {
-  border: 1px solid #dee2e6;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
   padding: 16px;
 }
 
-.empty-state {
+// ── Legend ──────────────────────────────────────────────────────────
+
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 8px;
+  font-size: 0.8rem;
+  color: #9ca3af;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 20px;
+  height: 3px;
+  border-radius: 2px;
+
+  &.exp {
+    background: rgba(34, 197, 94, 0.9);
+  }
+
+  &.curr {
+    background: transparent;
+    border-top: 2px dashed rgba(59, 130, 246, 0.9);
+    height: 0;
+  }
+}
+
+// ── Chart container ────────────────────────────────────────────────
+
+.chart-outer {
+  position: relative;
+}
+
+.chart-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+// ── Tooltip ────────────────────────────────────────────────────────
+
+.chart-tooltip {
+  display: none;
+  position: absolute;
+  z-index: 10;
+  background: rgba(22, 22, 30, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.78rem;
+  color: #e5e7eb;
+  pointer-events: none;
+  white-space: nowrap;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+// Tooltip inner classes (written via innerHTML, so use :host ::ng-deep)
+:host ::ng-deep {
+  .tt-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: #f3f4f6;
+  }
+
+  .tt-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    line-height: 1.6;
+  }
+
+  .tt-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+
+  .tt-exp {
+    background: rgba(34, 197, 94, 0.9);
+  }
+
+  .tt-curr {
+    background: rgba(59, 130, 246, 0.9);
+  }
+}
+
+// ── Empty state ────────────────────────────────────────────────────
+
+.empty-overlay {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 300px;
   color: #6c757d;
   gap: 12px;
+  background: inherit;
 
   i {
     font-size: 2.5rem;

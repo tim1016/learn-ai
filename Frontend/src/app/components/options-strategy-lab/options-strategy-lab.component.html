@@ -337,6 +337,159 @@
         [timeToExpiry]="timeToExpiry()"
         [riskFreeRate]="riskFreeRate()"
       />
+
+      <!-- Black-Scholes Diagnostic Table -->
+      @if (diagnosticRows().length > 0) {
+        @let meta = diagnosticMeta();
+        @let rows = diagnosticRows();
+        @let firstRow = rows[0];
+        <div class="bs-diagnostic-section">
+          <h3>Black-Scholes Calculation Diagnostic</h3>
+          <p class="bs-diagnostic-desc">
+            This table shows the full Black-Scholes calculation breakdown for each sample underlying
+            price across all strategy legs. Use it to verify the Current P&amp;L values plotted on the
+            chart above.
+          </p>
+
+          <!-- Parameters -->
+          <div class="bs-params-block">
+            <h4>Global Parameters</h4>
+            <table class="bs-params-table">
+              <tbody>
+                <tr><td class="param-label">Spot Price (S₀)</td><td class="param-value">${{ meta.spot | number:'1.4-4' }}</td></tr>
+                <tr><td class="param-label">Days to Expiry (DTE)</td><td class="param-value">{{ meta.dte | number:'1.2-2' }} days</td></tr>
+                <tr><td class="param-label">Time to Expiry (T = DTE / 365)</td><td class="param-value">{{ meta.t | number:'1.8-8' }} years</td></tr>
+                <tr><td class="param-label">Risk-Free Rate (r)</td><td class="param-value">{{ meta.r * 100 | number:'1.2-2' }}% ({{ meta.r | number:'1.4-4' }})</td></tr>
+                <tr><td class="param-label">√T</td><td class="param-value">{{ diagnosticRows()[0]?.legDetails?.[0]?.sqrtT | number:'1.8-8' }}</td></tr>
+                <tr><td class="param-label">e⁻ʳᵀ (discount factor)</td><td class="param-value">{{ diagnosticRows()[0]?.legDetails?.[0]?.discount | number:'1.8-8' }}</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Per-leg parameters -->
+          <div class="bs-params-block">
+            <h4>Per-Leg Parameters</h4>
+            <table class="bs-diag-table">
+              <thead>
+                <tr>
+                  <th>Leg</th>
+                  <th>Type</th>
+                  <th>Position</th>
+                  <th>Strike (K)</th>
+                  <th>Premium Paid</th>
+                  <th>IV (σ)</th>
+                  <th>Qty</th>
+                </tr>
+              </thead>
+              <tbody>
+                @if (firstRow) {
+                  @for (leg of firstRow.legDetails; track leg.strike; let i = $index) {
+                    <tr>
+                      <td>{{ i + 1 }}</td>
+                      <td>{{ leg.optionType | uppercase }}</td>
+                      <td>{{ leg.position | uppercase }}</td>
+                      <td>{{ leg.strike | number:'1.2-2' }}</td>
+                      <td>${{ leg.premium | number:'1.4-4' }}</td>
+                      <td>{{ leg.iv * 100 | number:'1.2-2' }}% ({{ leg.iv | number:'1.4-4' }})</td>
+                      <td>{{ leg.quantity }}</td>
+                    </tr>
+                  }
+                }
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Formulae reference -->
+          <div class="bs-params-block">
+            <h4>Black-Scholes Formulae Used</h4>
+            <div class="bs-formulae">
+              <p><strong>d₁</strong> = [ln(S/K) + (r + σ²/2) × T] / (σ × √T)</p>
+              <p><strong>d₂</strong> = d₁ − σ × √T</p>
+              <p><strong>Call Price</strong> = S × N(d₁) − K × e⁻ʳᵀ × N(d₂)</p>
+              <p><strong>Put Price</strong> = K × e⁻ʳᵀ × N(−d₂) − S × N(−d₁)</p>
+              <p><strong>Leg P&amp;L</strong> = position_sign × (BS_Price − Premium_Paid) × Quantity</p>
+              <p class="bs-formula-note">where position_sign = +1 for Long, −1 for Short (i.e., Long P&amp;L = (Value − Premium) × Qty, Short P&amp;L = (Premium − Value) × Qty)</p>
+              <p><strong>Expiration P&amp;L</strong> = position_sign × (Intrinsic − Premium_Paid) × Quantity</p>
+              <p class="bs-formula-note">where Intrinsic = max(S − K, 0) for Calls, max(K − S, 0) for Puts</p>
+              <p><strong>Total P&amp;L</strong> = Σ (all leg P&amp;Ls)</p>
+              <p><strong>N(x)</strong> = standard normal CDF (Abramowitz &amp; Stegun approximation, error &lt; 7.5×10⁻⁸)</p>
+            </div>
+          </div>
+
+          <!-- Detailed calculation per price point -->
+          @for (row of rows; track row.underlyingPrice) {
+            <div class="bs-price-block" [class.at-spot]="row.underlyingPrice === meta.spot">
+              <h4>
+                Underlying Price S = ${{ row.underlyingPrice | number:'1.2-2' }}
+                @if (row.underlyingPrice === meta.spot) {
+                  <span class="spot-tag">(SPOT)</span>
+                }
+              </h4>
+              <table class="bs-diag-table bs-calc-table">
+                <thead>
+                  <tr>
+                    <th>Leg</th>
+                    <th>Strike K</th>
+                    <th>Type</th>
+                    <th>Pos</th>
+                    <th>σ</th>
+                    <th>ln(S/K)</th>
+                    <th>d₁</th>
+                    <th>d₂</th>
+                    <th>N(d₁)</th>
+                    <th>N(d₂)</th>
+                    <th>N(−d₁)</th>
+                    <th>N(−d₂)</th>
+                    <th>BS Price</th>
+                    <th>Intrinsic</th>
+                    <th>Premium</th>
+                    <th>Leg Current P&L</th>
+                    <th>Leg Exp P&L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (leg of row.legDetails; track leg.strike; let i = $index) {
+                    <tr>
+                      <td>{{ i + 1 }}</td>
+                      <td>{{ leg.strike | number:'1.2-2' }}</td>
+                      <td>{{ leg.optionType }}</td>
+                      <td>{{ leg.position }}</td>
+                      <td>{{ leg.iv | number:'1.4-4' }}</td>
+                      <td>{{ leg.lnSK | number:'1.6-6' }}</td>
+                      <td>{{ leg.d1 | number:'1.6-6' }}</td>
+                      <td>{{ leg.d2 | number:'1.6-6' }}</td>
+                      <td>{{ leg.nd1 | number:'1.8-8' }}</td>
+                      <td>{{ leg.nd2 | number:'1.8-8' }}</td>
+                      <td>{{ leg.nNegD1 | number:'1.8-8' }}</td>
+                      <td>{{ leg.nNegD2 | number:'1.8-8' }}</td>
+                      <td class="mono">${{ leg.theoPrice | number:'1.6-6' }}</td>
+                      <td class="mono">${{ leg.intrinsic | number:'1.4-4' }}</td>
+                      <td class="mono">${{ leg.premium | number:'1.4-4' }}</td>
+                      <td class="mono" [class.positive-pnl]="leg.legPnl >= 0" [class.negative-pnl]="leg.legPnl < 0">
+                        ${{ leg.legPnl | number:'1.4-4' }}
+                      </td>
+                      <td class="mono" [class.positive-pnl]="leg.expPnl >= 0" [class.negative-pnl]="leg.expPnl < 0">
+                        ${{ leg.expPnl | number:'1.4-4' }}
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+                <tfoot>
+                  <tr class="total-row">
+                    <td colspan="15"><strong>Total Strategy P&amp;L</strong></td>
+                    <td class="mono" [class.positive-pnl]="row.totalCurrentPnl >= 0" [class.negative-pnl]="row.totalCurrentPnl < 0">
+                      <strong>${{ row.totalCurrentPnl | number:'1.4-4' }}</strong>
+                    </td>
+                    <td class="mono" [class.positive-pnl]="row.totalExpPnl >= 0" [class.negative-pnl]="row.totalExpPnl < 0">
+                      <strong>${{ row.totalExpPnl | number:'1.4-4' }}</strong>
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          }
+        </div>
+      }
     </div>
   }
 
