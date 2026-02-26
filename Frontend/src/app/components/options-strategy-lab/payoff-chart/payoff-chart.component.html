@@ -11,6 +11,12 @@
           Current P&L
         </span>
       }
+      @if (greekCurve().length) {
+        <span class="legend-item">
+          <span class="legend-swatch greek"></span>
+          {{ selectedGreek() | titlecase }}
+        </span>
+      }
     </div>
   }
 

@@ -9,8 +9,9 @@ import {
   TrackedTickersResult, TickerDetailResult, RelatedTickersResult,
   StrategyAnalyzeResult, StrategyLegInput,
 } from '../graphql/types';
+import { environment } from '../../environments/environment';
 
-const GRAPHQL_URL = 'http://localhost:5000/graphql';
+const GRAPHQL_URL = environment.backendUrl;
 
 const QUERY = `
   query GetOrFetchStockAggregates(
@@ -411,10 +412,6 @@ export class MarketDataService {
     multiplier: number = 1,
     forceRefresh: boolean = false
   ): Observable<SmartAggregatesResult> {
-    console.log('[STEP 1.5 - Service] Sending GraphQL query:', {
-      ticker, fromDate, toDate, timespan, multiplier, forceRefresh
-    });
-
     return this.http
       .post<GraphQLResponse>(GRAPHQL_URL, {
         query: QUERY,
@@ -422,11 +419,6 @@ export class MarketDataService {
       })
       .pipe(
         tap(response => {
-          console.log('[STEP 1.7 - Service] GraphQL response:', {
-            hasData: !!response.data,
-            errors: response.errors,
-            result: response.data?.getOrFetchStockAggregates
-          });
           if (response.errors?.length) {
             throw new Error(response.errors.map(e => e.message).join(', '));
           }

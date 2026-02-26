@@ -425,16 +425,25 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
     return valid.reduce((s, l) => s + l.iv * l.premium * l.quantity, 0) / totalWeight;
   });
 
-  // Uniform price grid with exact strike injection.
-  // A uniform grid produces a smooth BS-priced Current P&L (now that normCdf
-  // is correct) and, crucially, injecting exact strike prices ensures the
-  // Expiration P&L is properly piecewise-linear with sharp kinks at strikes.
+  // X-axis center: single-leg → strike, multi-leg → midpoint of min/max strikes.
+  chartCenter = computed(() => {
+    const enabledStrikes = this.legs()
+      .filter(l => l.enabled && l.strike > 0)
+      .map(l => l.strike);
+    if (enabledStrikes.length === 0) return this.spotPrice();
+    if (enabledStrikes.length === 1) return enabledStrikes[0];
+    const minK = Math.min(...enabledStrikes);
+    const maxK = Math.max(...enabledStrikes);
+    return (minK + maxK) / 2;
+  });
+
+  // Uniform price grid centered on strike(s) with exact strike injection.
   priceGrid = computed<number[]>(() => {
-    const spot = this.spotPrice();
-    if (spot <= 0) return [];
+    const center = this.chartCenter();
+    if (center <= 0) return [];
     const pct = this.priceRangePct();
-    const low = spot * (1 - pct);
-    const high = spot * (1 + pct);
+    const low = center * (1 - pct);
+    const high = center * (1 + pct);
 
     const count = 1200;
     const gridSet = new Set<number>();

@@ -4,6 +4,9 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { firstValueFrom } from 'rxjs';
 import { MarketDataService } from './market-data.service';
 import { createMockAggregate, createMockSummary, createMockIndicatorSeries } from '../../testing/factories/market-data.factory';
+import { environment } from '../../environments/environment';
+
+const GRAPHQL_URL = environment.backendUrl;
 
 describe('MarketDataService', () => {
   let service: MarketDataService;
@@ -24,7 +27,7 @@ describe('MarketDataService', () => {
     it('should send POST to GraphQL endpoint', () => {
       service.getOrFetchStockAggregates('AAPL', '2026-01-01', '2026-01-31').subscribe();
 
-      const req = httpMock.expectOne('http://localhost:5000/graphql');
+      const req = httpMock.expectOne(GRAPHQL_URL);
       expect(req.request.method).toBe('POST');
       req.flush({ data: { getOrFetchStockAggregates: { ticker: 'AAPL', aggregates: [], summary: null } } });
     });
@@ -32,7 +35,7 @@ describe('MarketDataService', () => {
     it('should send correct variables', () => {
       service.getOrFetchStockAggregates('MSFT', '2026-01-01', '2026-06-30', 'hour', 4).subscribe();
 
-      const req = httpMock.expectOne('http://localhost:5000/graphql');
+      const req = httpMock.expectOne(GRAPHQL_URL);
       expect(req.request.body.variables).toEqual({
         ticker: 'MSFT',
         fromDate: '2026-01-01',
@@ -52,7 +55,7 @@ describe('MarketDataService', () => {
         service.getOrFetchStockAggregates('AAPL', '2026-01-01', '2026-01-31')
       );
 
-      httpMock.expectOne('http://localhost:5000/graphql').flush({
+      httpMock.expectOne(GRAPHQL_URL).flush({
         data: { getOrFetchStockAggregates: { ticker: 'AAPL', aggregates: [aggregate], summary } },
       });
 
@@ -68,7 +71,7 @@ describe('MarketDataService', () => {
         service.getOrFetchStockAggregates('BAD', '2026-01-01', '2026-01-31')
       );
 
-      httpMock.expectOne('http://localhost:5000/graphql').flush({
+      httpMock.expectOne(GRAPHQL_URL).flush({
         data: null,
         errors: [{ message: 'Ticker not found' }],
       });
@@ -82,7 +85,7 @@ describe('MarketDataService', () => {
       const indicators = [{ name: 'sma', window: 20 }];
       service.calculateIndicators('AAPL', '2026-01-01', '2026-01-31', indicators).subscribe();
 
-      const req = httpMock.expectOne('http://localhost:5000/graphql');
+      const req = httpMock.expectOne(GRAPHQL_URL);
       expect(req.request.body.variables.ticker).toBe('AAPL');
       expect(req.request.body.variables.indicators).toEqual(indicators);
       req.flush({
@@ -102,7 +105,7 @@ describe('MarketDataService', () => {
         service.calculateIndicators('AAPL', '2026-01-01', '2026-01-31', indicators)
       );
 
-      httpMock.expectOne('http://localhost:5000/graphql').flush({
+      httpMock.expectOne(GRAPHQL_URL).flush({
         data: {
           calculateIndicators: {
             success: true, ticker: 'AAPL',

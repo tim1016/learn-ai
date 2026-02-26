@@ -325,6 +325,32 @@
         </div>
       </div>
 
+      <!-- Live Stats Bar -->
+      <div class="live-stats-bar">
+        @if (probabilityOfProfit() !== null) {
+          <div class="live-stat">
+            <span class="live-stat-label">Prob. of Profit</span>
+            <span class="live-stat-value pop-highlight">{{ probabilityOfProfit()! * 100 | number:'1.1-1' }}%</span>
+          </div>
+        }
+        @if (liveBreakevens().length > 0) {
+          <div class="live-stat">
+            <span class="live-stat-label">Breakeven{{ liveBreakevens().length > 1 ? 's' : '' }}</span>
+            <span class="live-stat-value">
+              @for (be of liveBreakevens(); track be; let last = $last) {
+                ${{ be | number:'1.2-2' }}{{ last ? '' : ', ' }}
+              }
+            </span>
+          </div>
+        }
+        @if (daysToExpiry() > 0) {
+          <div class="live-stat">
+            <span class="live-stat-label">DTE</span>
+            <span class="live-stat-value">{{ daysToExpiry() | number:'1.0-0' }}d</span>
+          </div>
+        }
+      </div>
+
       <app-payoff-chart
         [expirationCurve]="livePayoffCurve()"
         [currentPnlCurve]="currentPnlCurve()"

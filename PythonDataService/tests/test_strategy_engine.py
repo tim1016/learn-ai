@@ -350,3 +350,204 @@ class TestInterpolateIV:
         iv_at_100 = interpolate_iv_at_price(legs, 100)
         assert 0.25 < iv_at_100 < 0.30
         assert iv_at_100 == pytest.approx(0.275, abs=0.001)
+
+
+# ---------------------------------------------------------------------------
+# Iron condor strategy (4 legs) — edge case coverage
+# ---------------------------------------------------------------------------
+
+def iron_condor() -> list[StrategyLeg]:
+    """Short 95P@$2 / Long 90P@$0.50 / Short 105C@$2 / Long 110C@$0.50
+    Net credit = $3, max loss = $2 per side.
+    """
+    return [
+        _leg(90, "put", "long", 0.50, iv=0.35),
+        _leg(95, "put", "short", 2.0, iv=0.30),
+        _leg(105, "call", "short", 2.0, iv=0.25),
+        _leg(110, "call", "long", 0.50, iv=0.22),
+    ]
+
+
+def covered_call() -> list[StrategyLeg]:
+    """Synthetic: long 100C@$0 (stock proxy) + short 110C@$3."""
+    return [
+        _leg(100, "call", "long", 0.0, iv=0.25),
+        _leg(110, "call", "short", 3.0, iv=0.22),
+    ]
+
+
+def naked_put() -> list[StrategyLeg]:
+    """Short 95P@$2."""
+    return [_leg(95, "put", "short", 2.0, iv=0.30)]
+
+
+class TestIronCondorPayoff:
+    def test_max_profit_in_middle(self):
+        """Between the short strikes (95-105), full credit is kept."""
+        legs = iron_condor()
+        pnl = compute_payoff_at_expiry(legs, 100)
+        expected_credit = 2.0 + 2.0 - 0.50 - 0.50  # = 3.0
+        assert pnl == pytest.approx(expected_credit)
+
+    def test_max_loss_below_lower_wing(self):
+        """Below 90 (long put strike), max loss is capped."""
+        legs = iron_condor()
+        pnl = compute_payoff_at_expiry(legs, 80)
+        # Net credit 3 - spread width 5 = -2
+        assert pnl == pytest.approx(-2.0)
+
+    def test_max_loss_above_upper_wing(self):
+        """Above 110 (long call strike), max loss is capped."""
+        legs = iron_condor()
+        pnl = compute_payoff_at_expiry(legs, 120)
+        assert pnl == pytest.approx(-2.0)
+
+    def test_breakevens(self):
+        """Iron condor has two breakevens."""
+        bes = find_breakevens(iron_condor(), 100, 0.30)
+        assert len(bes) == 2
+        assert bes[0] == pytest.approx(92.0, abs=0.2)
+        assert bes[1] == pytest.approx(108.0, abs=0.2)
+
+    def test_max_profit_loss_values(self):
+        max_p, max_l = compute_max_profit_loss(iron_condor(), 100, 0.30)
+        assert max_p == pytest.approx(3.0, abs=0.05)
+        assert max_l == pytest.approx(-2.0, abs=0.05)
+
+
+class TestIronCondorFull:
+    def test_full_analysis(self):
+        req = StrategyAnalyzeRequest(
+            symbol="TEST",
+            legs=iron_condor(),
+            expiration_date="2026-12-31",
+            spot_price=100,
+        )
+        result = analyze_strategy(req)
+        assert result.success is True
+        assert result.strategy_cost == pytest.approx(-3.0)  # credit
+        assert len(result.breakevens) == 2
+        assert 0.0 <= result.pop <= 1.0
+        assert result.greeks.delta is not None
+        # Iron condor should be roughly delta neutral
+        assert abs(result.greeks.delta) < 0.3
+
+
+class TestNakedPut:
+    def test_profit_above_strike(self):
+        legs = naked_put()
+        assert compute_payoff_at_expiry(legs, 100) == pytest.approx(2.0)
+
+    def test_loss_below_strike(self):
+        legs = naked_put()
+        # At 90: put intrinsic = 5, short position: 2 - 5 = -3
+        assert compute_payoff_at_expiry(legs, 90) == pytest.approx(-3.0)
+
+    def test_unlimited_risk(self):
+        """Naked put has theoretically large (if not unlimited) downside."""
+        legs = naked_put()
+        pnl_at_50 = compute_payoff_at_expiry(legs, 50)
+        assert pnl_at_50 < -40  # large loss
+
+    def test_single_breakeven(self):
+        bes = find_breakevens(naked_put(), 100, 0.50)
+        assert len(bes) == 1
+        assert bes[0] == pytest.approx(93.0, abs=0.2)
+
+    def test_strategy_cost_is_credit(self):
+        assert compute_strategy_cost(naked_put()) == pytest.approx(-2.0)
+
+
+class TestCoveredCall:
+    def test_profit_capped_at_upper_strike(self):
+        legs = covered_call()
+        # Above 110: long 100C earns 10+, short 110C costs the excess
+        pnl_120 = compute_payoff_at_expiry(legs, 120)
+        # Long 100C: 20 - 0 = 20, short 110C: 3 - 10 = -7 → net 13
+        assert pnl_120 == pytest.approx(13.0)
+
+    def test_at_lower_strike(self):
+        legs = covered_call()
+        # At 100: both OTM, just net credit from short call
+        pnl = compute_payoff_at_expiry(legs, 100)
+        assert pnl == pytest.approx(3.0)  # only short call premium
+
+    def test_below_lower_strike(self):
+        legs = covered_call()
+        # Below 100: both OTM, still just keep the credit
+        pnl = compute_payoff_at_expiry(legs, 90)
+        assert pnl == pytest.approx(3.0)
+
+
+class TestBearPutSpread:
+    def test_full_analysis(self):
+        req = StrategyAnalyzeRequest(
+            symbol="TEST",
+            legs=bear_put_spread(),
+            expiration_date="2026-12-31",
+            spot_price=102,
+        )
+        result = analyze_strategy(req)
+        assert result.success is True
+        assert result.strategy_cost == pytest.approx(2.5)  # debit
+        assert result.max_profit == pytest.approx(2.5, abs=0.1)
+        assert result.max_loss == pytest.approx(-2.5, abs=0.1)
+        assert len(result.breakevens) == 1
+
+
+# ---------------------------------------------------------------------------
+# Greeks edge cases
+# ---------------------------------------------------------------------------
+
+class TestGreeks:
+    def test_long_call_positive_delta(self):
+        from app.services.strategy_engine import compute_strategy_greeks
+        legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
+        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
+        assert greeks.delta > 0
+
+    def test_short_call_negative_delta(self):
+        from app.services.strategy_engine import compute_strategy_greeks
+        legs = [_leg(100, "call", "short", 5.0, iv=0.25)]
+        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
+        assert greeks.delta < 0
+
+    def test_straddle_near_zero_delta(self):
+        from app.services.strategy_engine import compute_strategy_greeks
+        legs = long_straddle()
+        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
+        # ATM straddle is roughly delta neutral
+        assert abs(greeks.delta) < 0.15
+
+    def test_straddle_positive_gamma(self):
+        from app.services.strategy_engine import compute_strategy_greeks
+        legs = long_straddle()
+        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
+        assert greeks.gamma > 0  # long options = long gamma
+
+    def test_straddle_negative_theta(self):
+        from app.services.strategy_engine import compute_strategy_greeks
+        legs = long_straddle()
+        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
+        assert greeks.theta < 0  # long options = time decay
+
+    def test_quantity_multiplier(self):
+        from app.services.strategy_engine import compute_strategy_greeks
+        single = [_leg(100, "call", "long", 5.0, iv=0.25, qty=1)]
+        double = [_leg(100, "call", "long", 5.0, iv=0.25, qty=2)]
+        g1 = compute_strategy_greeks(single, spot=100, r=0.043, days_to_expiry=30)
+        g2 = compute_strategy_greeks(double, spot=100, r=0.043, days_to_expiry=30)
+        assert g2.delta == pytest.approx(g1.delta * 2, abs=0.001)
+        assert g2.gamma == pytest.approx(g1.gamma * 2, abs=0.001)
+
+    def test_at_expiry_call_itm_delta_one(self):
+        from app.services.strategy_engine import compute_strategy_greeks
+        legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
+        greeks = compute_strategy_greeks(legs, spot=110, r=0.043, days_to_expiry=0)
+        assert greeks.delta == pytest.approx(1.0, abs=0.001)
+
+    def test_at_expiry_zero_gamma(self):
+        from app.services.strategy_engine import compute_strategy_greeks
+        legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
+        greeks = compute_strategy_greeks(legs, spot=110, r=0.043, days_to_expiry=0)
+        assert greeks.gamma == 0.0

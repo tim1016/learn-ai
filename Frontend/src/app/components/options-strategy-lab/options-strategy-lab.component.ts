@@ -20,7 +20,7 @@ import {
 } from '../../graphql/types';
 import {
   strategyPnlAtPrice, strategyGreekAtPrice, LegParams, GreekName,
-  bsD1, bsD2, bsPrice, normCdf,
+  bsD1, bsD2, bsPrice, normCdf, lognormalCdf,
 } from '../../utils/black-scholes';
 import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
 import { PayoffChartComponent } from './payoff-chart/payoff-chart.component';
@@ -233,16 +233,27 @@ export class OptionsStrategyLabComponent {
       && !this.analyzing();
   });
 
+  // X-axis center: single-leg → strike, multi-leg → midpoint of min/max strikes.
+  // Falls back to spot price if no enabled legs have strikes.
+  chartCenter = computed(() => {
+    const enabledStrikes = this.legs()
+      .filter(l => l.enabled && l.strike > 0)
+      .map(l => l.strike);
+    if (enabledStrikes.length === 0) return this.spotPrice();
+    if (enabledStrikes.length === 1) return enabledStrikes[0];
+    const minK = Math.min(...enabledStrikes);
+    const maxK = Math.max(...enabledStrikes);
+    return (minK + maxK) / 2;
+  });
+
   // Uniform price grid with exact strike injection.
-  // A uniform grid produces a smooth BS-priced Current P&L (now that normCdf
-  // is correct) and, crucially, injecting exact strike prices ensures the
-  // Expiration P&L is properly piecewise-linear with sharp kinks at strikes.
+  // Centered on the strategy's strike(s), not spot.
   priceGrid = computed<number[]>(() => {
-    const spot = this.spotPrice();
-    if (spot <= 0) return [];
+    const center = this.chartCenter();
+    if (center <= 0) return [];
     const pct = this.priceRangePct();
-    const low = spot * (1 - pct);
-    const high = spot * (1 + pct);
+    const low = center * (1 - pct);
+    const high = center * (1 + pct);
 
     const count = 1200;
     const gridSet = new Set<number>();
@@ -385,6 +396,78 @@ export class OptionsStrategyLabComponent {
       price,
       value: strategyGreekAtPrice(params, price, t, r, greek),
     }));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Probability of Profit — uses lognormal terminal distribution
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Computes the probability that the strategy is profitable at expiration,
+   * based on the lognormal distribution of the terminal stock price.
+   *
+   * Algorithm: walk the expiration payoff curve, find zero-crossings (breakevens),
+   * then sum P(S_T in profitable_region) using the lognormal CDF.
+   */
+  probabilityOfProfit = computed<number | null>(() => {
+    const curve = this.livePayoffCurve();
+    const spot = this.spotPrice();
+    const t = this.timeToExpiry();
+    const r = this.riskFreeRate();
+    const iv = this.weightedIv();
+    if (curve.length < 2 || spot <= 0 || t <= 0 || iv <= 0) return null;
+
+    // Find breakeven prices (linear interpolation at zero-crossings)
+    const breakevens: number[] = [];
+    for (let i = 0; i < curve.length - 1; i++) {
+      const p1 = curve[i];
+      const p2 = curve[i + 1];
+      if ((p1.pnl <= 0 && p2.pnl > 0) || (p1.pnl >= 0 && p2.pnl < 0)) {
+        const ratio = Math.abs(p1.pnl) / (Math.abs(p1.pnl) + Math.abs(p2.pnl));
+        breakevens.push(p1.price + (p2.price - p1.price) * ratio);
+      }
+    }
+
+    // Build boundaries: [gridMin, ...breakevens, gridMax]
+    const lo = curve[0].price;
+    const hi = curve[curve.length - 1].price;
+    const bounds = [lo, ...breakevens, hi];
+
+    // Sum probability mass over profitable segments
+    let pop = 0;
+    for (let i = 0; i < bounds.length - 1; i++) {
+      const mid = (bounds[i] + bounds[i + 1]) / 2;
+      // Find the payoff at the midpoint of this segment
+      let pnlAtMid = 0;
+      for (let j = 0; j < curve.length - 1; j++) {
+        if (curve[j].price <= mid && mid <= curve[j + 1].price) {
+          const frac = (mid - curve[j].price) / (curve[j + 1].price - curve[j].price);
+          pnlAtMid = curve[j].pnl + frac * (curve[j + 1].pnl - curve[j].pnl);
+          break;
+        }
+      }
+
+      if (pnlAtMid > 0) {
+        // This segment is profitable — add P(S_T in [bounds[i], bounds[i+1]])
+        const cdfHi = lognormalCdf(bounds[i + 1], spot, r, iv, t);
+        const cdfLo = lognormalCdf(bounds[i], spot, r, iv, t);
+        pop += cdfHi - cdfLo;
+      }
+    }
+
+    // Add tail probability if the last segment is profitable
+    // (price beyond the grid's upper bound)
+    const lastPnl = curve[curve.length - 1].pnl;
+    if (lastPnl > 0) {
+      pop += 1 - lognormalCdf(hi, spot, r, iv, t);
+    }
+    // Add lower tail if the first segment is profitable
+    const firstPnl = curve[0].pnl;
+    if (firstPnl > 0) {
+      pop += lognormalCdf(lo, spot, r, iv, t);
+    }
+
+    return Math.max(0, Math.min(1, pop));
   });
 
   // ---------------------------------------------------------------------------

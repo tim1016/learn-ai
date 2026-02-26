@@ -35,6 +35,12 @@
     border-top: 2px dashed rgba(59, 130, 246, 0.9);
     height: 0;
   }
+
+  &.greek {
+    background: transparent;
+    border-top: 2px dotted rgba(251, 146, 60, 0.9);
+    height: 0;
+  }
 }
 
 // ── Chart container ────────────────────────────────────────────────
@@ -95,6 +101,10 @@
 
   .tt-curr {
     background: rgba(59, 130, 246, 0.9);
+  }
+
+  .tt-greek {
+    background: rgba(251, 146, 60, 0.9);
   }
 }
 

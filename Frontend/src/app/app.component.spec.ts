@@ -25,22 +25,23 @@ describe('AppComponent', () => {
     expect(menubar).toBeTruthy();
   });
 
-  it('should have 3 top-level menu items (Stocks, Options, Tracked Instruments)', () => {
+  it('should have 4 top-level menu items (Stocks, Options, ML Predictions, Tracked Instruments)', () => {
     const items = fixture.componentInstance.items();
-    expect(items.length).toBe(3);
+    expect(items.length).toBe(4);
     expect(items[0].label).toBe('Stocks');
     expect(items[1].label).toBe('Options');
-    expect(items[2].label).toBe('Tracked Instruments');
+    expect(items[2].label).toBe('ML Predictions');
+    expect(items[3].label).toBe('Tracked Instruments');
   });
 
-  it('should have 4 sub-items under Stocks', () => {
+  it('should have 5 sub-items under Stocks', () => {
     const stockItems = fixture.componentInstance.items()[0].items!;
     expect(stockItems.length).toBe(5);
   });
 
-  it('should have 4 sub-items under Options', () => {
+  it('should have 6 sub-items under Options', () => {
     const optionItems = fixture.componentInstance.items()[1].items!;
-    expect(optionItems.length).toBe(4);
+    expect(optionItems.length).toBe(6);
   });
 
   it('should contain a router-outlet', () => {

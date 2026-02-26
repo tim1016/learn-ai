@@ -2,6 +2,9 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { TickerExplorerComponent } from './ticker-explorer.component';
+import { environment } from '../../../environments/environment';
+
+const GRAPHQL_URL = environment.backendUrl;
 
 describe('TickerExplorerComponent', () => {
   let component: TickerExplorerComponent;
@@ -52,9 +55,9 @@ describe('TickerExplorerComponent', () => {
 
   it('should compute call and put contracts separately', () => {
     component.allContracts.set([
-      { ticker: 'O:AAPL250221C00185000', contractType: 'call', strikePrice: 185, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null },
-      { ticker: 'O:AAPL250221P00185000', contractType: 'put', strikePrice: 185, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null },
-      { ticker: 'O:AAPL250221C00190000', contractType: 'call', strikePrice: 190, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null },
+      { ticker: 'O:AAPL250221C00185000', contractType: 'call', strikePrice: 185, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null, lastTrade: null, lastQuote: null },
+      { ticker: 'O:AAPL250221P00185000', contractType: 'put', strikePrice: 185, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null, lastTrade: null, lastQuote: null },
+      { ticker: 'O:AAPL250221C00190000', contractType: 'call', strikePrice: 190, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null, lastTrade: null, lastQuote: null },
     ]);
 
     expect(component.callContracts().length).toBe(2);
@@ -65,8 +68,8 @@ describe('TickerExplorerComponent', () => {
   it('should compute ATM strike closest to underlying price', () => {
     component.underlying.set({ ticker: 'AAPL', price: 187, change: 0, changePercent: 0 });
     component.allContracts.set([
-      { ticker: 'C1', contractType: 'call', strikePrice: 185, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null },
-      { ticker: 'C2', contractType: 'call', strikePrice: 190, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null },
+      { ticker: 'C1', contractType: 'call', strikePrice: 185, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null, lastTrade: null, lastQuote: null },
+      { ticker: 'C2', contractType: 'call', strikePrice: 190, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null, lastTrade: null, lastQuote: null },
     ]);
 
     expect(component.atmStrike()).toBe(185);
@@ -74,8 +77,8 @@ describe('TickerExplorerComponent', () => {
 
   it('should filter by expiration date', () => {
     component.allContracts.set([
-      { ticker: 'C1', contractType: 'call', strikePrice: 185, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null },
-      { ticker: 'C2', contractType: 'call', strikePrice: 190, expirationDate: '2025-02-28', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null },
+      { ticker: 'C1', contractType: 'call', strikePrice: 185, expirationDate: '2025-02-21', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null, lastTrade: null, lastQuote: null },
+      { ticker: 'C2', contractType: 'call', strikePrice: 190, expirationDate: '2025-02-28', breakEvenPrice: null, impliedVolatility: null, openInterest: null, greeks: null, day: null, lastTrade: null, lastQuote: null },
     ]);
 
     expect(component.filteredContracts().length).toBe(2);
@@ -105,7 +108,7 @@ describe('TickerExplorerComponent', () => {
   it('should fetch snapshot and populate signals', async () => {
     const promise = component.fetchSnapshot();
 
-    const req = httpMock.expectOne('http://localhost:5000/graphql');
+    const req = httpMock.expectOne(GRAPHQL_URL);
     expect(req.request.method).toBe('POST');
     req.flush({
       data: {
@@ -133,7 +136,7 @@ describe('TickerExplorerComponent', () => {
   it('should handle fetch error', async () => {
     const promise = component.fetchSnapshot();
 
-    const req = httpMock.expectOne('http://localhost:5000/graphql');
+    const req = httpMock.expectOne(GRAPHQL_URL);
     req.error(new ProgressEvent('error'));
 
     await promise;

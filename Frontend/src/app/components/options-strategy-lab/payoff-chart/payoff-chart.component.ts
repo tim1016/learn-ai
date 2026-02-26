@@ -2,6 +2,7 @@ import {
   Component, input, computed, effect, viewChild, ElementRef,
   ChangeDetectionStrategy, OnDestroy, afterNextRender, inject, Injector,
 } from '@angular/core';
+import { TitleCasePipe } from '@angular/common';
 import {
   createChart, LineSeries, BaselineSeries, LineStyle, CrosshairMode,
   type IChartApi, type ISeriesApi, type UTCTimestamp, type MouseEventParams,
@@ -13,7 +14,7 @@ import {
 @Component({
   selector: 'app-payoff-chart',
   standalone: true,
-  imports: [],
+  imports: [TitleCasePipe],
   templateUrl: './payoff-chart.component.html',
   styleUrls: ['./payoff-chart.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -40,7 +41,17 @@ export class PayoffChartComponent implements OnDestroy {
   private chart: IChartApi | null = null;
   private expSeries: ISeriesApi<'Baseline'> | null = null;
   private currSeries: ISeriesApi<'Line'> | null = null;
+  private greekSeries: ISeriesApi<'Line'> | null = null;
   private injector = inject(Injector);
+
+  /** Greek display name for tooltip */
+  private readonly greekLabels: Record<string, string> = {
+    delta: 'Delta (Δ)',
+    gamma: 'Gamma (Γ)',
+    theta: 'Theta (Θ)',
+    vega: 'Vega (V)',
+    rho: 'Rho (ρ)',
+  };
 
   hasData = computed(() => this.expirationCurve().length > 0);
 
@@ -72,6 +83,10 @@ export class PayoffChartComponent implements OnDestroy {
       },
       rightPriceScale: {
         borderVisible: false,
+      },
+      leftPriceScale: {
+        borderVisible: false,
+        visible: false, // toggled on when greek data arrives
       },
       timeScale: {
         borderVisible: false,
@@ -123,6 +138,16 @@ export class PayoffChartComponent implements OnDestroy {
       crosshairMarkerRadius: 4,
     });
 
+    // 3. Greek curve — orange line on left price scale
+    this.greekSeries = this.chart.addSeries(LineSeries, {
+      color: 'rgba(251, 146, 60, 0.9)',
+      lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 3,
+      priceScaleId: 'left',
+    });
+
     // Tooltip via crosshair
     this.chart.subscribeCrosshairMove(p => this.onCrosshair(p));
   }
@@ -133,13 +158,16 @@ export class PayoffChartComponent implements OnDestroy {
     // Read signals to track dependencies
     const pts = this.expirationCurve();
     const curr = this.currentPnlCurve();
+    const greekPts = this.greekCurve();
     const spot = this.spotPrice();
 
-    if (!this.chart || !this.expSeries || !this.currSeries) return;
+    if (!this.chart || !this.expSeries || !this.currSeries || !this.greekSeries) return;
 
     if (pts.length === 0) {
       this.expSeries.setData([]);
       this.currSeries.setData([]);
+      this.greekSeries.setData([]);
+      this.chart.applyOptions({ leftPriceScale: { visible: false } });
       return;
     }
 
@@ -154,6 +182,17 @@ export class PayoffChartComponent implements OnDestroy {
         ? curr.map(p => ({ time: p.price as UTCTimestamp, value: p.pnl }))
         : [],
     );
+
+    // Greek curve — left price scale
+    if (greekPts.length > 0) {
+      this.greekSeries.setData(
+        greekPts.map(p => ({ time: p.price as UTCTimestamp, value: p.value })),
+      );
+      this.chart.applyOptions({ leftPriceScale: { visible: true } });
+    } else {
+      this.greekSeries.setData([]);
+      this.chart.applyOptions({ leftPriceScale: { visible: false } });
+    }
 
     this.chart.timeScale().fitContent();
   }
@@ -172,10 +211,12 @@ export class PayoffChartComponent implements OnDestroy {
     const price = Number(param.time);
     const expRaw = param.seriesData.get(this.expSeries!) as any;
     const currRaw = param.seriesData.get(this.currSeries!) as any;
+    const greekRaw = param.seriesData.get(this.greekSeries!) as any;
     const expVal: number | null = expRaw?.value ?? null;
     const currVal: number | null = currRaw?.value ?? null;
+    const greekVal: number | null = greekRaw?.value ?? null;
 
-    if (expVal == null && currVal == null) {
+    if (expVal == null && currVal == null && greekVal == null) {
       tip.style.display = 'none';
       return;
     }
@@ -187,6 +228,10 @@ export class PayoffChartComponent implements OnDestroy {
     }
     if (currVal != null) {
       html += `<div class="tt-row"><span class="tt-dot tt-curr"></span>Cur P&L: ${fmt(currVal)}</div>`;
+    }
+    if (greekVal != null) {
+      const greekLabel = this.greekLabels[this.selectedGreek()] ?? this.selectedGreek();
+      html += `<div class="tt-row"><span class="tt-dot tt-greek"></span>${greekLabel}: ${greekVal.toFixed(4)}</div>`;
     }
 
     tip.innerHTML = html;
@@ -208,5 +253,6 @@ export class PayoffChartComponent implements OnDestroy {
     this.chart = null;
     this.expSeries = null;
     this.currSeries = null;
+    this.greekSeries = null;
   }
 }
