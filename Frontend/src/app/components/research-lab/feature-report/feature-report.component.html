@@ -1,0 +1,75 @@
+<div class="mt-4">
+  <!-- Validation Badge -->
+  <div class="flex items-center gap-3 mb-6">
+    <h3 class="text-xl font-bold">
+      {{ result().featureName }} on {{ result().ticker }}
+    </h3>
+    <p-tag [severity]="validationSeverity" [value]="validationLabel" />
+  </div>
+
+  <!-- Summary Metrics Grid -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
+      <div class="text-sm text-gray-400">Mean IC</div>
+      <div class="text-2xl font-bold">{{ result().meanIC | number: '1.4-4' }}</div>
+    </div>
+    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
+      <div class="text-sm text-gray-400">IC t-Stat</div>
+      <div class="text-2xl font-bold">{{ result().icTStat | number: '1.2-2' }}</div>
+    </div>
+    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
+      <div class="text-sm text-gray-400">IC p-Value</div>
+      <div class="text-2xl font-bold">{{ result().icPValue | number: '1.4-4' }}</div>
+    </div>
+    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
+      <div class="text-sm text-gray-400">Bars Used</div>
+      <div class="text-2xl font-bold">{{ result().barsUsed | number }}</div>
+    </div>
+  </div>
+
+  <!-- Stationarity + Monotonicity Badges -->
+  <div class="flex items-center gap-3 mb-6">
+    <span class="text-sm text-gray-400">Stationarity:</span>
+    <p-tag [severity]="stationaritySeverity" [value]="stationarityLabel" />
+    <span class="text-sm text-gray-400 ml-4">ADF p={{ result().adfPvalue | number: '1.4-4' }}</span>
+    <span class="text-sm text-gray-400">KPSS p={{ result().kpssPvalue | number: '1.4-4' }}</span>
+
+    <span class="text-sm text-gray-400 ml-6">Monotonicity:</span>
+    <p-tag [severity]="monotonicitySeverity" [value]="monotonicityLabel" />
+    <span class="text-sm text-gray-400 ml-2">{{ result().monotonicityRatio | percent: '1.0-0' }}</span>
+  </div>
+
+  <!-- Charts -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
+      <canvas #icChart></canvas>
+    </div>
+    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
+      <canvas #quantileChart></canvas>
+    </div>
+  </div>
+
+  <!-- Quantile Table -->
+  <p-table [value]="result().quantileBins" [tableStyle]="{ 'min-width': '40rem' }">
+    <ng-template #header>
+      <tr>
+        <th>Quantile</th>
+        <th>Lower Bound</th>
+        <th>Upper Bound</th>
+        <th>Mean Return</th>
+        <th>Count</th>
+      </tr>
+    </ng-template>
+    <ng-template #body let-bin>
+      <tr>
+        <td>Q{{ bin.binNumber }}</td>
+        <td>{{ bin.lowerBound | number: '1.6-6' }}</td>
+        <td>{{ bin.upperBound | number: '1.6-6' }}</td>
+        <td [class]="bin.meanReturn >= 0 ? 'text-green-400' : 'text-red-400'">
+          {{ bin.meanReturn | number: '1.6-6' }}
+        </td>
+        <td>{{ bin.count }}</td>
+      </tr>
+    </ng-template>
+  </p-table>
+</div>

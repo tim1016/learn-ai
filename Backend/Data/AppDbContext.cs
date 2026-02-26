@@ -26,6 +26,9 @@ public class AppDbContext : DbContext
     public DbSet<StrategyExecution> StrategyExecutions => Set<StrategyExecution>();
     public DbSet<BacktestTrade> BacktestTrades => Set<BacktestTrade>();
 
+    // Research models
+    public DbSet<ResearchExperiment> ResearchExperiments => Set<ResearchExperiment>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Author>(entity =>
@@ -179,6 +182,23 @@ public class AppDbContext : DbContext
                   .HasForeignKey(t => t.StrategyExecutionId)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(t => t.StrategyExecutionId);
+        });
+
+        // ResearchExperiment configuration
+        modelBuilder.Entity<ResearchExperiment>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.MeanIC).HasPrecision(18, 8);
+            entity.Property(e => e.ICTStat).HasPrecision(18, 8);
+            entity.Property(e => e.ICPValue).HasPrecision(18, 8);
+            entity.Property(e => e.AdfPValue).HasPrecision(18, 8);
+            entity.Property(e => e.KpssPValue).HasPrecision(18, 8);
+            entity.Property(e => e.MonotonicityRatio).HasPrecision(18, 8);
+            entity.HasOne(e => e.Ticker)
+                  .WithMany()
+                  .HasForeignKey(e => e.TickerId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(e => new { e.TickerId, e.FeatureName, e.CreatedAt });
         });
     }
 }

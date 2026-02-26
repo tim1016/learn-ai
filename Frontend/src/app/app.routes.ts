@@ -16,6 +16,7 @@ import { LstmValidateComponent } from "./components/lstm/validate/lstm-validate.
 import { LstmPredictionsComponent } from "./components/lstm/predictions/lstm-predictions.component";
 import { LstmModelsComponent } from "./components/lstm/models/lstm-models.component";
 import { StrategyBuilderComponent } from "./components/strategy-builder/strategy-builder.component";
+import { ResearchLabComponent } from "./components/research-lab/research-lab.component";
 
 export const routes: Routes = [
   { path: "", redirectTo: "/market-data", pathMatch: "full" },
@@ -36,4 +37,5 @@ export const routes: Routes = [
   { path: "lstm/validate", component: LstmValidateComponent },
   { path: "lstm/predictions", component: LstmPredictionsComponent },
   { path: "lstm/models", component: LstmModelsComponent },
+  { path: "research-lab", component: ResearchLabComponent },
 ];

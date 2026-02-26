@@ -1,0 +1,63 @@
+<div class="mt-4">
+  <!-- Target Definition -->
+  <p-accordion [multiple]="true" [value]="['target']">
+    <p-accordion-panel value="target">
+      <p-accordion-header>Target: {{ targetDoc.name }}</p-accordion-header>
+      <p-accordion-content>
+        <div class="p-4">
+          <div class="mb-3">
+            <span class="font-semibold text-sm text-gray-400">Formula:</span>
+            <code class="ml-2 text-blue-400">{{ targetDoc.formula }}</code>
+          </div>
+          <p class="text-sm text-gray-300">{{ targetDoc.description }}</p>
+        </div>
+      </p-accordion-content>
+    </p-accordion-panel>
+  </p-accordion>
+
+  <!-- Features -->
+  <h3 class="text-lg font-bold mt-6 mb-3">Available Features</h3>
+  <p-accordion [multiple]="true">
+    @for (feat of features; track feat.name) {
+      <p-accordion-panel [value]="feat.name">
+        <p-accordion-header>
+          {{ feat.name }}
+          <span class="ml-2 text-xs text-gray-500">(window={{ feat.window }})</span>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="p-4">
+            <div class="mb-2">
+              <span class="font-semibold text-sm text-gray-400">Formula:</span>
+              <code class="ml-2 text-blue-400">{{ feat.formula }}</code>
+            </div>
+            <div class="mb-2">
+              <span class="font-semibold text-sm text-gray-400">Variables:</span>
+              <span class="ml-2 text-sm">{{ feat.variables }}</span>
+            </div>
+            <p class="text-sm text-gray-300">{{ feat.interpretation }}</p>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    }
+  </p-accordion>
+
+  <!-- Validation Tests -->
+  <h3 class="text-lg font-bold mt-6 mb-3">Validation Tests</h3>
+  <p-accordion [multiple]="true">
+    @for (test of tests; track test.name) {
+      <p-accordion-panel [value]="test.name">
+        <p-accordion-header>{{ test.name }}</p-accordion-header>
+        <p-accordion-content>
+          <div class="p-4">
+            <p class="text-sm text-gray-300 mb-3">{{ test.description }}</p>
+            <div class="mb-2">
+              <span class="font-semibold text-sm text-gray-400">Formula:</span>
+              <code class="ml-2 text-blue-400">{{ test.formula }}</code>
+            </div>
+            <p class="text-sm text-gray-300 italic">{{ test.interpretation }}</p>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    }
+  </p-accordion>
+</div>

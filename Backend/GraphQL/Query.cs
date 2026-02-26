@@ -993,6 +993,67 @@ public class Query
     }
 
     #endregion
+
+    #region Research Lab Queries
+
+    [GraphQLName("getResearchExperiments")]
+    public async Task<List<ResearchExperimentType>> GetResearchExperiments(
+        [Service] IResearchService researchService,
+        string ticker)
+    {
+        var experiments = await researchService.GetExperimentsAsync(ticker);
+
+        return experiments.Select(e => new ResearchExperimentType
+        {
+            Id = e.Id,
+            Ticker = e.Ticker,
+            FeatureName = e.FeatureName,
+            StartDate = e.StartDate,
+            EndDate = e.EndDate,
+            BarsUsed = e.BarsUsed,
+            MeanIC = e.MeanIC,
+            ICTStat = e.ICTStat,
+            ICPValue = e.ICPValue,
+            AdfPValue = e.AdfPValue,
+            KpssPValue = e.KpssPValue,
+            IsStationary = e.IsStationary,
+            PassedValidation = e.PassedValidation,
+            MonotonicityRatio = e.MonotonicityRatio,
+            IsMonotonic = e.IsMonotonic,
+            CreatedAt = e.CreatedAt,
+        }).ToList();
+    }
+
+    [GraphQLName("getResearchExperiment")]
+    public async Task<ResearchExperimentType?> GetResearchExperiment(
+        [Service] IResearchService researchService,
+        int id)
+    {
+        var experiment = await researchService.GetExperimentAsync(id);
+        if (experiment is null) return null;
+
+        return new ResearchExperimentType
+        {
+            Id = experiment.Id,
+            Ticker = experiment.Ticker,
+            FeatureName = experiment.FeatureName,
+            StartDate = experiment.StartDate,
+            EndDate = experiment.EndDate,
+            BarsUsed = experiment.BarsUsed,
+            MeanIC = experiment.MeanIC,
+            ICTStat = experiment.ICTStat,
+            ICPValue = experiment.ICPValue,
+            AdfPValue = experiment.AdfPValue,
+            KpssPValue = experiment.KpssPValue,
+            IsStationary = experiment.IsStationary,
+            PassedValidation = experiment.PassedValidation,
+            MonotonicityRatio = experiment.MonotonicityRatio,
+            IsMonotonic = experiment.IsMonotonic,
+            CreatedAt = experiment.CreatedAt,
+        };
+    }
+
+    #endregion
 }
 
 public class OptionsChainSnapshotResult

@@ -84,6 +84,20 @@ builder.Services.AddHttpClient<ILstmService, LstmService>(client =>
     .HandleTransientHttpError()
     .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
 
+// Add HttpClient for ResearchService (same Python service, 120s timeout for sync IC computation)
+builder.Services.AddHttpClient<IResearchService, ResearchService>(client =>
+{
+    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(120);
+})
+.AddPolicyHandler(HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
+.AddPolicyHandler(HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
 builder.Services.AddScoped<IBacktestService, BacktestService>();
@@ -117,7 +131,7 @@ using (var scope = app.Services.CreateScope())
             Console.WriteLine("Database initialized successfully.");
             break;
         }
-        catch (Exception ex) when (i < maxRetries - 1)
+        catch (Exception) when (i < maxRetries - 1)
         {
             Console.WriteLine($"Waiting for database... attempt {i + 1}/{maxRetries}");
             await Task.Delay(2000);

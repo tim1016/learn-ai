@@ -50,6 +50,11 @@ export class AppComponent {
       ],
     },
     {
+      label: "Research Lab",
+      icon: "pi pi-search",
+      routerLink: "/research-lab",
+    },
+    {
       label: "Tracked Instruments",
       icon: "pi pi-eye",
       routerLink: "/tracked-instruments",

@@ -249,6 +249,73 @@ public class Mutation
 
     #endregion
 
+    #region Research Lab Mutations
+
+    [GraphQLName("runFeatureResearch")]
+    public async Task<ResearchResultType> RunFeatureResearch(
+        [Service] IResearchService researchService,
+        [Service] ILogger<Mutation> logger,
+        string ticker,
+        string featureName,
+        string fromDate,
+        string toDate,
+        string timespan = "minute",
+        int multiplier = 1)
+    {
+        try
+        {
+            logger.LogInformation(
+                "[Research] Running {Feature} on {Ticker} from {From} to {To}",
+                featureName, ticker, fromDate, toDate);
+
+            var report = await researchService.RunFeatureResearchAsync(
+                ticker, featureName, fromDate, toDate, timespan, multiplier);
+
+            return new ResearchResultType
+            {
+                Success = report.Success,
+                Ticker = report.Ticker,
+                FeatureName = report.FeatureName,
+                StartDate = report.StartDate,
+                EndDate = report.EndDate,
+                BarsUsed = report.BarsUsed,
+                MeanIC = report.MeanIc,
+                ICTStat = report.IcTStat,
+                ICPValue = report.IcPValue,
+                ICValues = report.IcValues,
+                ICDates = report.IcDates,
+                AdfPvalue = report.AdfPvalue,
+                KpssPvalue = report.KpssPvalue,
+                IsStationary = report.IsStationary,
+                QuantileBins = report.QuantileBins.Select(b => new QuantileBinType
+                {
+                    BinNumber = b.BinNumber,
+                    LowerBound = b.LowerBound,
+                    UpperBound = b.UpperBound,
+                    MeanReturn = b.MeanReturn,
+                    Count = b.Count,
+                }).ToList(),
+                IsMonotonic = report.IsMonotonic,
+                MonotonicityRatio = report.MonotonicityRatio,
+                PassedValidation = report.PassedValidation,
+                Error = report.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Research] Error running {Feature} on {Ticker}", featureName, ticker);
+            return new ResearchResultType
+            {
+                Success = false,
+                Ticker = ticker,
+                FeatureName = featureName,
+                Error = ex.Message,
+            };
+        }
+    }
+
+    #endregion
+
     #region LSTM Prediction Mutations
 
     [GraphQLName("startLstmTraining")]

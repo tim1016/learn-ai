@@ -1,0 +1,79 @@
+<div class="mt-4">
+  <div class="flex items-end gap-3 mb-4">
+    <div class="flex flex-col gap-2">
+      <label for="historyTicker" class="font-semibold text-sm">Ticker</label>
+      <input
+        pInputText
+        id="historyTicker"
+        [ngModel]="ticker()"
+        (ngModelChange)="ticker.set($event)"
+        placeholder="e.g. AAPL"
+      />
+    </div>
+    <p-button
+      label="Load History"
+      icon="pi pi-refresh"
+      [loading]="loading()"
+      (onClick)="loadExperiments()"
+    />
+  </div>
+
+  @if (error(); as err) {
+    <p-message severity="error" [text]="err" class="mb-4" />
+  }
+
+  @if (experiments().length > 0) {
+    <p-table
+      [value]="experiments()"
+      [paginator]="true"
+      [rows]="10"
+      [tableStyle]="{ 'min-width': '60rem' }"
+      [rowHover]="true"
+      [showGridlines]="true"
+    >
+      <ng-template #header>
+        <tr>
+          <th pSortableColumn="featureName">Feature <p-sortIcon field="featureName" /></th>
+          <th pSortableColumn="meanIC">Mean IC <p-sortIcon field="meanIC" /></th>
+          <th>IC t-Stat</th>
+          <th>ADF p</th>
+          <th>Monotonic</th>
+          <th pSortableColumn="passedValidation">Result <p-sortIcon field="passedValidation" /></th>
+          <th>Date Range</th>
+          <th pSortableColumn="createdAt">Run Date <p-sortIcon field="createdAt" /></th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-exp>
+        <tr>
+          <td>{{ exp.featureName }}</td>
+          <td>{{ exp.meanIC | number: '1.4-4' }}</td>
+          <td>{{ exp.icTStat | number: '1.2-2' }}</td>
+          <td>{{ exp.adfPValue | number: '1.4-4' }}</td>
+          <td>
+            <p-tag
+              [severity]="exp.isMonotonic ? 'success' : 'warn'"
+              [value]="exp.isMonotonic ? 'Yes' : 'No'"
+            />
+          </td>
+          <td>
+            <p-tag
+              [severity]="validationSeverity(exp.passedValidation)"
+              [value]="validationLabel(exp.passedValidation)"
+            />
+          </td>
+          <td>{{ exp.startDate }} — {{ exp.endDate }}</td>
+          <td>{{ exp.createdAt | date: 'short' }}</td>
+        </tr>
+      </ng-template>
+      <ng-template #emptymessage>
+        <tr>
+          <td [attr.colspan]="8" class="text-center text-gray-400 py-4">
+            No experiments found for this ticker.
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+  } @else if (!loading()) {
+    <p class="text-gray-400">Enter a ticker and click "Load History" to view past experiments.</p>
+  }
+</div>

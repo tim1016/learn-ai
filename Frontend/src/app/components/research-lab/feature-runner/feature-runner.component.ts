@@ -1,0 +1,116 @@
+import {
+  Component,
+  signal,
+  computed,
+  inject,
+  DestroyRef,
+  ChangeDetectionStrategy,
+} from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { catchError, of, finalize } from 'rxjs';
+import { ResearchService, ResearchResult } from '../../../services/research.service';
+import { FeatureReportComponent } from '../feature-report/feature-report.component';
+import { Select } from 'primeng/select';
+import { InputText } from 'primeng/inputtext';
+import { DatePicker } from 'primeng/datepicker';
+import { ButtonModule } from 'primeng/button';
+import { MessageModule } from 'primeng/message';
+import { ProgressSpinner } from 'primeng/progressspinner';
+
+interface FeatureOption {
+  label: string;
+  value: string;
+}
+
+@Component({
+  selector: 'app-feature-runner',
+  standalone: true,
+  imports: [
+    CommonModule,
+    FormsModule,
+    FeatureReportComponent,
+    Select,
+    InputText,
+    ButtonModule,
+    MessageModule,
+    ProgressSpinner,
+  ],
+  templateUrl: './feature-runner.component.html',
+  styleUrls: ['./feature-runner.component.scss'],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+})
+export class FeatureRunnerComponent {
+  private researchService = inject(ResearchService);
+  private destroyRef = inject(DestroyRef);
+
+  // Form inputs
+  ticker = signal('AAPL');
+  featureName = signal('momentum_5m');
+  fromDate = signal('2024-01-01');
+  toDate = signal('2024-03-31');
+  timespan = signal('minute');
+  multiplier = signal(1);
+
+  // State
+  loading = signal(false);
+  result = signal<ResearchResult | null>(null);
+  error = signal<string | null>(null);
+
+  features: FeatureOption[] = [
+    { label: '5-Minute Momentum', value: 'momentum_5m' },
+    { label: 'RSI (14)', value: 'rsi_14' },
+    { label: 'Realized Volatility (30)', value: 'realized_vol_30' },
+    { label: 'Volume Z-Score', value: 'volume_zscore' },
+    { label: 'MACD Signal', value: 'macd_signal' },
+  ];
+
+  timespanOptions: FeatureOption[] = [
+    { label: 'Minute', value: 'minute' },
+    { label: 'Hour', value: 'hour' },
+    { label: 'Day', value: 'day' },
+  ];
+
+  canRun = computed(() => {
+    return (
+      this.ticker().trim().length > 0 &&
+      this.featureName().trim().length > 0 &&
+      this.fromDate().trim().length > 0 &&
+      this.toDate().trim().length > 0 &&
+      !this.loading()
+    );
+  });
+
+  runResearch(): void {
+    this.loading.set(true);
+    this.error.set(null);
+    this.result.set(null);
+
+    this.researchService
+      .runFeatureResearch({
+        ticker: this.ticker().toUpperCase(),
+        featureName: this.featureName(),
+        fromDate: this.fromDate(),
+        toDate: this.toDate(),
+        timespan: this.timespan(),
+        multiplier: this.multiplier(),
+      })
+      .pipe(
+        takeUntilDestroyed(this.destroyRef),
+        catchError(err => {
+          this.error.set(err?.message ?? 'An unexpected error occurred');
+          return of(null);
+        }),
+        finalize(() => this.loading.set(false)),
+      )
+      .subscribe(res => {
+        if (res) {
+          this.result.set(res);
+          if (!res.success && res.error) {
+            this.error.set(res.error);
+          }
+        }
+      });
+  }
+}
