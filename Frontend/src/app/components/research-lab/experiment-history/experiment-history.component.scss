@@ -1,3 +1,50 @@
 :host {
   display: block;
 }
+
+.col-header {
+  .col-header-content {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: help;
+    border-bottom: 1px dashed #94a3b8;
+    padding-bottom: 1px;
+    transition: color 0.15s;
+
+    &:hover {
+      color: #2563eb;
+
+      .col-icon {
+        color: #2563eb;
+      }
+    }
+  }
+
+  .col-icon {
+    font-size: 0.85rem;
+    color: #64748b;
+    transition: color 0.15s;
+  }
+}
+
+.help-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: #1e293b;
+
+  .help-dialog-icon {
+    font-size: 1.1rem;
+    color: #3b82f6;
+  }
+}
+
+.help-dialog-body {
+  font-size: 0.9rem;
+  color: #475569;
+  line-height: 1.7;
+  margin: 0;
+}

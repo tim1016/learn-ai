@@ -1,56 +1,99 @@
 <div class="mt-4">
-  <!-- Validation Badge -->
-  <div class="flex items-center gap-3 mb-6">
-    <h3 class="text-xl font-bold">
-      {{ result().featureName }} on {{ result().ticker }}
-    </h3>
-    <p-tag [severity]="validationSeverity" [value]="validationLabel" />
+  <!-- Verdict Banner -->
+  <div class="verdict-banner" [class.passed]="result().passedValidation" [class.failed]="!result().passedValidation">
+    <div class="verdict-header">
+      <i [class]="result().passedValidation ? 'pi pi-verified' : 'pi pi-times-circle'" class="verdict-icon"></i>
+      <h3 class="verdict-title">
+        {{ result().featureName }} on {{ result().ticker }}
+      </h3>
+      <p-tag [severity]="validationSeverity" [value]="validationLabel" />
+    </div>
+    <p class="verdict-text">{{ validationVerdict }}</p>
   </div>
 
   <!-- Summary Metrics Grid -->
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
-      <div class="text-sm text-gray-400">Mean IC</div>
-      <div class="text-2xl font-bold">{{ result().meanIC | number: '1.4-4' }}</div>
+  <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+    <div class="metric-card">
+      <div class="metric-label">
+        Mean IC
+        <i class="pi pi-info-circle ml-1"
+           pTooltip="Average daily Spearman rank correlation between feature values and 15-min forward returns. |IC| > 0.03 is meaningful."
+           tooltipPosition="top"></i>
+      </div>
+      <div class="metric-value" [class.text-green-700]="result().meanIC >= 0.03" [class.text-red-700]="result().meanIC < 0.03">
+        {{ result().meanIC | number: '1.4-4' }}
+      </div>
+      <div class="metric-sub">{{ icSignalStrength }}</div>
     </div>
-    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
-      <div class="text-sm text-gray-400">IC t-Stat</div>
-      <div class="text-2xl font-bold">{{ result().icTStat | number: '1.2-2' }}</div>
+
+    <div class="metric-card">
+      <div class="metric-label">
+        IC t-Stat
+        <i class="pi pi-info-circle ml-1"
+           pTooltip="Statistical significance of mean IC. t > 1.65 rejects H0 at 10% level (meaningful signal)."
+           tooltipPosition="top"></i>
+      </div>
+      <div class="metric-value" [class.text-green-700]="result().icTStat >= 1.65" [class.text-red-700]="result().icTStat < 1.65">
+        {{ result().icTStat | number: '1.2-2' }}
+      </div>
+      <div class="metric-sub">{{ result().icTStat >= 1.65 ? 'Significant' : 'Not significant' }}</div>
     </div>
-    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
-      <div class="text-sm text-gray-400">IC p-Value</div>
-      <div class="text-2xl font-bold">{{ result().icPValue | number: '1.4-4' }}</div>
+
+    <div class="metric-card">
+      <div class="metric-label">
+        IC p-Value
+        <i class="pi pi-info-circle ml-1"
+           pTooltip="Probability of observing this IC by chance. p < 0.10 confirms significance."
+           tooltipPosition="top"></i>
+      </div>
+      <div class="metric-value">{{ result().icPValue | number: '1.4-4' }}</div>
+      <div class="metric-sub">{{ result().icPValue < 0.10 ? 'p < 0.10' : 'Not significant' }}</div>
     </div>
-    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
-      <div class="text-sm text-gray-400">Bars Used</div>
-      <div class="text-2xl font-bold">{{ result().barsUsed | number }}</div>
+
+    <div class="metric-card">
+      <div class="metric-label">
+        Stationarity
+        <i class="pi pi-info-circle ml-1"
+           pTooltip="ADF test checks for unit root. Stationary features have stable statistical properties, making them reliable predictors."
+           tooltipPosition="top"></i>
+      </div>
+      <div class="flex items-center gap-2 mt-1">
+        <p-tag [severity]="stationaritySeverity" [value]="stationarityLabel" />
+      </div>
+      <div class="metric-sub mt-1">ADF p={{ result().adfPvalue | number: '1.3-3' }} &middot; KPSS p={{ result().kpssPvalue | number: '1.3-3' }}</div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-label">
+        Monotonicity
+        <i class="pi pi-info-circle ml-1"
+           pTooltip="Checks if mean returns increase/decrease monotonically across quantiles. Ratio >= 75% confirms dose-response relationship."
+           tooltipPosition="top"></i>
+      </div>
+      <div class="flex items-center gap-2 mt-1">
+        <p-tag [severity]="monotonicitySeverity" [value]="monotonicityLabel" />
+      </div>
+      <div class="metric-sub mt-1">{{ result().monotonicityRatio | percent: '1.0-0' }} adjacent pairs ordered</div>
     </div>
   </div>
 
-  <!-- Stationarity + Monotonicity Badges -->
-  <div class="flex items-center gap-3 mb-6">
-    <span class="text-sm text-gray-400">Stationarity:</span>
-    <p-tag [severity]="stationaritySeverity" [value]="stationarityLabel" />
-    <span class="text-sm text-gray-400 ml-4">ADF p={{ result().adfPvalue | number: '1.4-4' }}</span>
-    <span class="text-sm text-gray-400">KPSS p={{ result().kpssPvalue | number: '1.4-4' }}</span>
-
-    <span class="text-sm text-gray-400 ml-6">Monotonicity:</span>
-    <p-tag [severity]="monotonicitySeverity" [value]="monotonicityLabel" />
-    <span class="text-sm text-gray-400 ml-2">{{ result().monotonicityRatio | percent: '1.0-0' }}</span>
-  </div>
-
-  <!-- Charts -->
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
+  <!-- Charts — Full Width, Taller -->
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+    <div class="chart-container">
       <canvas #icChart></canvas>
     </div>
-    <div class="p-4 rounded-lg bg-surface-100 dark:bg-surface-800">
+    <div class="chart-container">
       <canvas #quantileChart></canvas>
     </div>
   </div>
 
-  <!-- Quantile Table -->
-  <p-table [value]="result().quantileBins" [tableStyle]="{ 'min-width': '40rem' }">
+  <!-- Quantile Details Table -->
+  <div class="mb-2">
+    <h4 class="table-title">
+      <i class="pi pi-table mr-2"></i>Quantile Breakdown
+    </h4>
+  </div>
+  <p-table [value]="result().quantileBins" [tableStyle]="{ 'min-width': '36rem' }" styleClass="p-datatable-sm">
     <ng-template #header>
       <tr>
         <th>Quantile</th>
@@ -62,14 +105,21 @@
     </ng-template>
     <ng-template #body let-bin>
       <tr>
-        <td>Q{{ bin.binNumber }}</td>
+        <td class="font-semibold">Q{{ bin.binNumber }}</td>
         <td>{{ bin.lowerBound | number: '1.6-6' }}</td>
         <td>{{ bin.upperBound | number: '1.6-6' }}</td>
-        <td [class]="bin.meanReturn >= 0 ? 'text-green-400' : 'text-red-400'">
+        <td [class]="bin.meanReturn >= 0 ? 'text-green-700 font-semibold' : 'text-red-700 font-semibold'">
           {{ bin.meanReturn | number: '1.6-6' }}
         </td>
-        <td>{{ bin.count }}</td>
+        <td>{{ bin.count | number }}</td>
       </tr>
     </ng-template>
   </p-table>
+
+  <!-- Bars Used Footer -->
+  <div class="bars-footer">
+    <i class="pi pi-database mr-2"></i>
+    Analysis based on <strong>{{ result().barsUsed | number }}</strong> bars
+    ({{ result().startDate }} to {{ result().endDate }})
+  </div>
 </div>

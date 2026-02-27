@@ -2,7 +2,564 @@
   display: block;
 }
 
-code {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+.doc-section {
+  margin-bottom: 2rem;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+
+  h3 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #1e293b;
+    margin: 0;
+  }
+
+  .section-icon {
+    font-size: 1.1rem;
+    color: #2563eb;
+  }
+}
+
+.section-description {
   font-size: 0.875rem;
+  color: #64748b;
+  margin-bottom: 1rem;
+}
+
+.doc-card {
+  padding: 1.25rem;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+
+  h4 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #1e293b;
+    margin-bottom: 1rem;
+  }
+}
+
+.highlight-card {
+  border-left: 3px solid #2563eb;
+}
+
+.formula-block {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 1rem 1.5rem;
+  margin: 0.75rem 0;
+  text-align: center;
+  overflow-x: auto;
+
+  &.hypothesis {
+    background: #f1f5f9;
+    padding: 0.75rem 1.5rem;
+    font-size: 0.9em;
+  }
+}
+
+.variable-list {
+  margin: 0.75rem 0;
+
+  .label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    display: block;
+    margin-bottom: 0.35rem;
+  }
+
+  .variable-item {
+    padding: 0.2rem 0 0.2rem 1rem;
+    font-size: 0.9rem;
+    color: #374151;
+
+    &::before {
+      content: "\2022";
+      margin-right: 0.5rem;
+      color: #94a3b8;
+    }
+  }
+}
+
+.interpretation {
+  font-size: 0.9rem;
+  color: #475569;
+  line-height: 1.7;
+  margin: 0.5rem 0;
+}
+
+.test-description {
+  font-size: 0.9rem;
+  color: #475569;
+  line-height: 1.7;
+  margin-bottom: 0.5rem;
+}
+
+.impl-note {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  font-size: 0.8rem;
+
+  i {
+    color: #2563eb;
+    font-size: 0.85rem;
+  }
+
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    color: #1d4ed8;
+  }
+}
+
+.info-callout {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  background: #eff6ff;
+  border-left: 3px solid #2563eb;
+  font-size: 0.85rem;
+  color: #334155;
+
+  i {
+    color: #2563eb;
+    margin-top: 2px;
+  }
+
+  strong {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: #1e293b;
+  }
+
+  ul {
+    margin: 0.25rem 0 0 1.25rem;
+    padding: 0;
+
+    li {
+      margin-bottom: 0.15rem;
+    }
+  }
+
+  &.warn {
+    background: #fffbeb;
+    border-left-color: #d97706;
+
+    i {
+      color: #d97706;
+    }
+  }
+}
+
+// Trading Insight / Why it matters callout
+.insight-callout {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  background: #fefce8;
+  border-left: 3px solid #ca8a04;
+  font-size: 0.85rem;
+  color: #334155;
+  margin-top: 0.75rem;
+
+  i {
+    color: #ca8a04;
+    margin-top: 2px;
+    font-size: 1rem;
+  }
+
+  strong {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: #854d0e;
+  }
+
+  span {
+    line-height: 1.6;
+  }
+}
+
+.threshold-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  font-size: 0.85rem;
+  color: #166534;
+
+  i {
+    color: #16a34a;
+  }
+
+  strong {
+    color: #15803d;
+  }
+}
+
+// Feature accordion header
+.feature-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+
+  .feature-name {
+    font-weight: 600;
+    color: #1e293b;
+  }
+
+  .feature-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 9999px;
+    background: #dbeafe;
+    color: #1d4ed8;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .feature-window {
+    font-size: 0.75rem;
+    color: #64748b;
+    margin-left: auto;
+  }
+}
+
+// Best practices grid
+.best-practices-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+
+  .bp-card {
+    padding: 1rem 1.25rem;
+    border-radius: 8px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-top: 3px solid #3b82f6;
+
+    h4 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #1e293b;
+      margin: 0 0 0.5rem 0;
+    }
+
+    p {
+      font-size: 0.85rem;
+      color: #475569;
+      line-height: 1.6;
+      margin: 0;
+    }
+  }
+}
+
+// ──── Economic Rationale & Microstructure Section ────
+
+.hypothesis-callout {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: 6px;
+  background: #eef2ff;
+  border-left: 3px solid #6366f1;
+  font-size: 0.85rem;
+  color: #334155;
+  margin-bottom: 1rem;
+
+  i {
+    color: #6366f1;
+    margin-top: 2px;
+    font-size: 1rem;
+  }
+
+  strong {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: #3730a3;
+  }
+
+  span {
+    line-height: 1.6;
+  }
+}
+
+.subsection-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 1rem 0 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+
+  i {
+    font-size: 0.85rem;
+  }
+
+  .pi-clock {
+    color: #2563eb;
+  }
+
+  .pi-exclamation-triangle {
+    color: #d97706;
+  }
+
+  .pi-bookmark {
+    color: #7c3aed;
+  }
+}
+
+.driver-card {
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 0.5rem;
+
+  h5 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #334155;
+    margin: 0 0 0.35rem;
+  }
+
+  p {
+    font-size: 0.85rem;
+    color: #475569;
+    line-height: 1.65;
+    margin: 0;
+  }
+
+  .formula-block {
+    margin: 0.5rem 0;
+  }
+}
+
+.decay-section,
+.failure-section,
+.references-section {
+  margin-top: 0.75rem;
+}
+
+.decay-list,
+.failure-list {
+  margin: 0.25rem 0 0 1.5rem;
+  padding: 0;
+
+  li {
+    font-size: 0.85rem;
+    line-height: 1.65;
+    padding: 0.15rem 0;
+  }
+}
+
+.decay-list li {
+  color: #475569;
+
+  &::marker {
+    color: #2563eb;
+  }
+}
+
+.failure-list li {
+  color: #475569;
+
+  &::marker {
+    color: #d97706;
+  }
+}
+
+.reference-list {
+  margin: 0.25rem 0 0 1.5rem;
+  padding: 0;
+
+  li {
+    font-size: 0.8rem;
+    color: #64748b;
+    font-style: italic;
+    line-height: 1.65;
+    padding: 0.1rem 0;
+
+    &::marker {
+      color: #7c3aed;
+    }
+  }
+}
+
+.econ-checklist {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+
+  thead {
+    background: #f1f5f9;
+
+    th {
+      padding: 0.6rem 0.75rem;
+      text-align: left;
+      font-weight: 600;
+      color: #334155;
+      border-bottom: 1px solid #e2e8f0;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+  }
+
+  tbody tr {
+    border-bottom: 1px solid #f1f5f9;
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    &:hover {
+      background: #f8fafc;
+    }
+  }
+
+  td {
+    padding: 0.55rem 0.75rem;
+    color: #475569;
+    line-height: 1.5;
+    vertical-align: top;
+  }
+
+  .question-cell {
+    font-weight: 500;
+    color: #334155;
+    white-space: nowrap;
+    width: 30%;
+  }
+}
+
+.justification-card {
+  margin-top: 1.5rem;
+  padding: 1.25rem;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #6366f1;
+
+  .justification-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+
+    i {
+      color: #6366f1;
+      font-size: 1rem;
+    }
+
+    h4 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #1e293b;
+      margin: 0;
+    }
+  }
+
+  .justification-intro {
+    font-size: 0.85rem;
+    color: #64748b;
+    line-height: 1.6;
+    margin-bottom: 1rem;
+  }
+}
+
+.justification-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.75rem;
+
+  .criterion-card {
+    padding: 0.75rem 1rem;
+    border-radius: 6px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+
+    h5 {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: #4338ca;
+      margin: 0 0 0.3rem;
+    }
+
+    p {
+      font-size: 0.8rem;
+      color: #475569;
+      line-height: 1.55;
+      margin: 0;
+    }
+  }
+}
+
+.deep-insight-callout {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #eef2ff 0%, #faf5ff 100%);
+  border-left: 3px solid #7c3aed;
+  font-size: 0.85rem;
+  color: #334155;
+
+  i {
+    color: #7c3aed;
+    font-size: 1.1rem;
+    margin-top: 2px;
+  }
+
+  strong {
+    display: block;
+    font-size: 0.95rem;
+    color: #4c1d95;
+    margin-bottom: 0.5rem;
+  }
+
+  p {
+    margin: 0.25rem 0;
+    line-height: 1.6;
+  }
+
+  .conclusion {
+    margin-top: 0.5rem;
+    font-weight: 500;
+    color: #1e293b;
+  }
+}
+
+// KaTeX overrides for light theme
+:host ::ng-deep .katex {
+  font-size: 1.1em;
+  color: #1e293b;
 }

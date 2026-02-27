@@ -14,7 +14,6 @@ import { ResearchService, ResearchResult } from '../../../services/research.serv
 import { FeatureReportComponent } from '../feature-report/feature-report.component';
 import { Select } from 'primeng/select';
 import { InputText } from 'primeng/inputtext';
-import { DatePicker } from 'primeng/datepicker';
 import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
 import { ProgressSpinner } from 'primeng/progressspinner';
@@ -57,6 +56,7 @@ export class FeatureRunnerComponent {
   loading = signal(false);
   result = signal<ResearchResult | null>(null);
   error = signal<string | null>(null);
+  formCollapsed = signal(false);
 
   features: FeatureOption[] = [
     { label: '5-Minute Momentum', value: 'momentum_5m' },
@@ -81,6 +81,15 @@ export class FeatureRunnerComponent {
       !this.loading()
     );
   });
+
+  get selectedFeatureLabel(): string {
+    const found = this.features.find(f => f.value === this.featureName());
+    return found ? found.label : this.featureName();
+  }
+
+  get runSummary(): string {
+    return `${this.selectedFeatureLabel} on ${this.ticker().toUpperCase()} (${this.fromDate()} to ${this.toDate()})`;
+  }
 
   runResearch(): void {
     this.loading.set(true);
@@ -109,8 +118,20 @@ export class FeatureRunnerComponent {
           this.result.set(res);
           if (!res.success && res.error) {
             this.error.set(res.error);
+          } else if (res.success) {
+            this.formCollapsed.set(true);
           }
         }
       });
+  }
+
+  toggleForm(): void {
+    this.formCollapsed.update(v => !v);
+  }
+
+  newRun(): void {
+    this.formCollapsed.set(false);
+    this.result.set(null);
+    this.error.set(null);
   }
 }

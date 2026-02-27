@@ -1,105 +1,138 @@
 <div class="mt-4">
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-    <!-- Ticker -->
-    <div class="flex flex-col gap-2">
-      <label for="ticker" class="font-semibold text-sm">Ticker</label>
-      <input
-        pInputText
-        id="ticker"
-        [ngModel]="ticker()"
-        (ngModelChange)="ticker.set($event)"
-        placeholder="e.g. AAPL"
-        class="w-full"
-      />
+  <!-- Collapsed summary bar when form is hidden -->
+  @if (formCollapsed()) {
+    <div class="collapsed-summary">
+      <div class="summary-content">
+        <i class="pi pi-check-circle text-green-600"></i>
+        <span class="summary-text">{{ runSummary }}</span>
+      </div>
+      <div class="summary-actions">
+        <p-button
+          label="Modify & Re-run"
+          icon="pi pi-pencil"
+          severity="secondary"
+          [text]="true"
+          size="small"
+          (onClick)="toggleForm()"
+        />
+        <p-button
+          label="New Run"
+          icon="pi pi-plus"
+          severity="secondary"
+          [text]="true"
+          size="small"
+          (onClick)="newRun()"
+        />
+      </div>
     </div>
+  }
 
-    <!-- Feature -->
-    <div class="flex flex-col gap-2">
-      <label for="feature" class="font-semibold text-sm">Feature</label>
-      <p-select
-        id="feature"
-        [options]="features"
-        [ngModel]="featureName()"
-        (ngModelChange)="featureName.set($event)"
-        optionLabel="label"
-        optionValue="value"
-        class="w-full"
-      />
+  <!-- Form fields (collapsible) -->
+  @if (!formCollapsed()) {
+    <div class="form-section">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <!-- Ticker -->
+        <div class="flex flex-col gap-2">
+          <label for="ticker" class="font-semibold text-sm text-gray-700">Ticker</label>
+          <input
+            pInputText
+            id="ticker"
+            [ngModel]="ticker()"
+            (ngModelChange)="ticker.set($event)"
+            placeholder="e.g. AAPL"
+            class="w-full"
+          />
+        </div>
+
+        <!-- Feature -->
+        <div class="flex flex-col gap-2">
+          <label for="feature" class="font-semibold text-sm text-gray-700">Feature</label>
+          <p-select
+            id="feature"
+            [options]="features"
+            [ngModel]="featureName()"
+            (ngModelChange)="featureName.set($event)"
+            optionLabel="label"
+            optionValue="value"
+            class="w-full"
+          />
+        </div>
+
+        <!-- Timespan -->
+        <div class="flex flex-col gap-2">
+          <label for="timespan" class="font-semibold text-sm text-gray-700">Timespan</label>
+          <p-select
+            id="timespan"
+            [options]="timespanOptions"
+            [ngModel]="timespan()"
+            (ngModelChange)="timespan.set($event)"
+            optionLabel="label"
+            optionValue="value"
+            class="w-full"
+          />
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <!-- From Date -->
+        <div class="flex flex-col gap-2">
+          <label for="fromDate" class="font-semibold text-sm text-gray-700">From Date</label>
+          <input
+            pInputText
+            id="fromDate"
+            [ngModel]="fromDate()"
+            (ngModelChange)="fromDate.set($event)"
+            placeholder="YYYY-MM-DD"
+            class="w-full"
+          />
+        </div>
+
+        <!-- To Date -->
+        <div class="flex flex-col gap-2">
+          <label for="toDate" class="font-semibold text-sm text-gray-700">To Date</label>
+          <input
+            pInputText
+            id="toDate"
+            [ngModel]="toDate()"
+            (ngModelChange)="toDate.set($event)"
+            placeholder="YYYY-MM-DD"
+            class="w-full"
+          />
+        </div>
+
+        <!-- Multiplier -->
+        <div class="flex flex-col gap-2">
+          <label for="multiplier" class="font-semibold text-sm text-gray-700">Multiplier</label>
+          <input
+            pInputText
+            id="multiplier"
+            type="number"
+            [ngModel]="multiplier()"
+            (ngModelChange)="multiplier.set($event)"
+            class="w-full"
+          />
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <p-button
+          label="Run Feature Research"
+          icon="pi pi-play"
+          [disabled]="!canRun()"
+          [loading]="loading()"
+          (onClick)="runResearch()"
+        />
+      </div>
     </div>
-
-    <!-- Timespan -->
-    <div class="flex flex-col gap-2">
-      <label for="timespan" class="font-semibold text-sm">Timespan</label>
-      <p-select
-        id="timespan"
-        [options]="timespanOptions"
-        [ngModel]="timespan()"
-        (ngModelChange)="timespan.set($event)"
-        optionLabel="label"
-        optionValue="value"
-        class="w-full"
-      />
-    </div>
-  </div>
-
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-    <!-- From Date -->
-    <div class="flex flex-col gap-2">
-      <label for="fromDate" class="font-semibold text-sm">From Date</label>
-      <input
-        pInputText
-        id="fromDate"
-        [ngModel]="fromDate()"
-        (ngModelChange)="fromDate.set($event)"
-        placeholder="YYYY-MM-DD"
-        class="w-full"
-      />
-    </div>
-
-    <!-- To Date -->
-    <div class="flex flex-col gap-2">
-      <label for="toDate" class="font-semibold text-sm">To Date</label>
-      <input
-        pInputText
-        id="toDate"
-        [ngModel]="toDate()"
-        (ngModelChange)="toDate.set($event)"
-        placeholder="YYYY-MM-DD"
-        class="w-full"
-      />
-    </div>
-
-    <!-- Multiplier -->
-    <div class="flex flex-col gap-2">
-      <label for="multiplier" class="font-semibold text-sm">Multiplier</label>
-      <input
-        pInputText
-        id="multiplier"
-        type="number"
-        [ngModel]="multiplier()"
-        (ngModelChange)="multiplier.set($event)"
-        class="w-full"
-      />
-    </div>
-  </div>
-
-  <div class="mb-6">
-    <p-button
-      label="Run Feature Research"
-      icon="pi pi-play"
-      [disabled]="!canRun()"
-      [loading]="loading()"
-      (onClick)="runResearch()"
-    />
-  </div>
+  }
 
   @if (loading()) {
-    <div class="flex items-center gap-3 my-4">
+    <div class="flex items-center gap-3 my-6">
       <p-progressSpinner
         [style]="{ width: '30px', height: '30px' }"
         strokeWidth="4"
       />
-      <span class="text-gray-400">Running IC analysis...</span>
+      <span class="text-gray-500">Running IC analysis...</span>
     </div>
   }
 

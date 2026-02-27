@@ -1,63 +1,331 @@
-<div class="mt-4">
-  <!-- Target Definition -->
-  <p-accordion [multiple]="true" [value]="['target']">
-    <p-accordion-panel value="target">
-      <p-accordion-header>Target: {{ targetDoc.name }}</p-accordion-header>
-      <p-accordion-content>
-        <div class="p-4">
-          <div class="mb-3">
-            <span class="font-semibold text-sm text-gray-400">Formula:</span>
-            <code class="ml-2 text-blue-400">{{ targetDoc.formula }}</code>
+<div class="mt-4 max-w-5xl">
+
+  <!-- ──── Methodology Overview ──── -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-book section-icon"></i>
+      <h3>Methodology</h3>
+    </div>
+    <div class="doc-card highlight-card">
+      <h4>Information Coefficient Framework</h4>
+      <p class="interpretation">{{ methodology.icExplanation }}</p>
+      <p-divider />
+      <h4>Why Spearman Rank Correlation?</h4>
+      <p class="interpretation">{{ methodology.whySpearman }}</p>
+      <p-divider />
+      <h4>Signal Consistency (ICIR)</h4>
+      <p class="interpretation">{{ methodology.icirExplanation }}</p>
+      <p-divider />
+      <h4>Alpha Decay</h4>
+      <p class="interpretation">{{ methodology.alphaDecay }}</p>
+    </div>
+  </section>
+
+  <!-- ──── Target Variable ──── -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-bullseye section-icon"></i>
+      <h3>Target Variable</h3>
+    </div>
+    <div class="doc-card highlight-card">
+      <h4>{{ targetDoc.name }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="targetDoc.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <div class="variable-list">
+        <span class="label">Where:</span>
+        @for (v of targetDoc.variablesLatex; track v) {
+          <div class="variable-item">
+            <span [appKatex]="v"></span>
           </div>
-          <p class="text-sm text-gray-300">{{ targetDoc.description }}</p>
+        }
+      </div>
+      <p-divider />
+      <div class="info-callout">
+        <i class="pi pi-info-circle"></i>
+        <div>
+          <strong>Why log returns?</strong>
+          <ul>
+            @for (reason of targetDoc.whyLogReturns; track reason) {
+              <li>{{ reason }}</li>
+            }
+          </ul>
         </div>
-      </p-accordion-content>
-    </p-accordion-panel>
-  </p-accordion>
+      </div>
+      <div class="info-callout mt-3">
+        <i class="pi pi-clock"></i>
+        <div>
+          <strong>Why 15 minutes?</strong>
+          <span>{{ targetDoc.horizonNote }}</span>
+        </div>
+      </div>
+      <div class="info-callout warn mt-3">
+        <i class="pi pi-exclamation-triangle"></i>
+        <span>{{ targetDoc.crossDayNote }}</span>
+      </div>
+    </div>
+  </section>
 
-  <!-- Features -->
-  <h3 class="text-lg font-bold mt-6 mb-3">Available Features</h3>
-  <p-accordion [multiple]="true">
-    @for (feat of features; track feat.name) {
-      <p-accordion-panel [value]="feat.name">
-        <p-accordion-header>
-          {{ feat.name }}
-          <span class="ml-2 text-xs text-gray-500">(window={{ feat.window }})</span>
-        </p-accordion-header>
-        <p-accordion-content>
-          <div class="p-4">
-            <div class="mb-2">
-              <span class="font-semibold text-sm text-gray-400">Formula:</span>
-              <code class="ml-2 text-blue-400">{{ feat.formula }}</code>
+  <!-- ──── Features ──── -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sliders-h section-icon"></i>
+      <h3>Available Features</h3>
+    </div>
+    <p-accordion [multiple]="true">
+      @for (feat of features; track feat.name) {
+        <p-accordion-panel [value]="feat.name">
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ feat.name }}</span>
+              <span class="feature-badge">{{ feat.category }}</span>
+              <span class="feature-window">window={{ feat.window }}</span>
             </div>
-            <div class="mb-2">
-              <span class="font-semibold text-sm text-gray-400">Variables:</span>
-              <span class="ml-2 text-sm">{{ feat.variables }}</span>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="doc-card">
+              <div class="formula-block">
+                <span [appKatex]="feat.formulaLatex" [displayMode]="true"></span>
+              </div>
+              <div class="variable-list">
+                <span class="label">Variables:</span>
+                @for (v of feat.variablesLatex; track v) {
+                  <div class="variable-item">
+                    <span [appKatex]="v"></span>
+                  </div>
+                }
+              </div>
+              <p-divider />
+              <p class="interpretation">{{ feat.interpretation }}</p>
+              <div class="insight-callout">
+                <i class="pi pi-lightbulb"></i>
+                <div>
+                  <strong>Trading Insight</strong>
+                  <span>{{ feat.tradingInsight }}</span>
+                </div>
+              </div>
+              <div class="impl-note">
+                <i class="pi pi-code"></i>
+                <code>{{ feat.implementationNote }}</code>
+              </div>
             </div>
-            <p class="text-sm text-gray-300">{{ feat.interpretation }}</p>
-          </div>
-        </p-accordion-content>
-      </p-accordion-panel>
-    }
-  </p-accordion>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+  </section>
 
-  <!-- Validation Tests -->
-  <h3 class="text-lg font-bold mt-6 mb-3">Validation Tests</h3>
-  <p-accordion [multiple]="true">
-    @for (test of tests; track test.name) {
-      <p-accordion-panel [value]="test.name">
-        <p-accordion-header>{{ test.name }}</p-accordion-header>
-        <p-accordion-content>
-          <div class="p-4">
-            <p class="text-sm text-gray-300 mb-3">{{ test.description }}</p>
-            <div class="mb-2">
-              <span class="font-semibold text-sm text-gray-400">Formula:</span>
-              <code class="ml-2 text-blue-400">{{ test.formula }}</code>
+  <!-- ──── Economic Rationale & Microstructure Foundations ──── -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sitemap section-icon"></i>
+      <h3>Economic Rationale & Microstructure Foundations</h3>
+    </div>
+    <p class="section-description">
+      For each feature, this section documents the market inefficiency being exploited, the behavioral or structural
+      explanation, expected decay horizons, and failure regimes. Statistical validation tells you if a signal is real
+      in data — economic rationale tells you if it will survive live trading.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (ms of microstructureDocs; track ms.featureName) {
+        <p-accordion-panel [value]="ms.featureName">
+          <p-accordion-header>
+            <span class="feature-name">{{ ms.featureName }}</span>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="doc-card">
+
+              <!-- Hypothesis -->
+              <div class="hypothesis-callout">
+                <i class="pi pi-compass"></i>
+                <div>
+                  <strong>Hypothesis</strong>
+                  <span>{{ ms.hypothesis }}</span>
+                </div>
+              </div>
+
+              <!-- Microstructure Drivers -->
+              <h4 class="subsection-title">Microstructure Drivers</h4>
+              @for (driver of ms.drivers; track driver.title) {
+                <div class="driver-card">
+                  <h5>{{ driver.title }}</h5>
+                  <p>{{ driver.explanation }}</p>
+                  @if (driver.formulaLatex) {
+                    <div class="formula-block">
+                      <span [appKatex]="driver.formulaLatex" [displayMode]="true"></span>
+                    </div>
+                    @if (driver.formulaVariables) {
+                      <div class="variable-list">
+                        <span class="label">Where:</span>
+                        @for (v of driver.formulaVariables; track v) {
+                          <div class="variable-item">
+                            <span [appKatex]="v"></span>
+                          </div>
+                        }
+                      </div>
+                    }
+                  }
+                </div>
+              }
+
+              <p-divider />
+
+              <!-- Expected Decay -->
+              <div class="decay-section">
+                <h4 class="subsection-title">
+                  <i class="pi pi-clock"></i>
+                  Expected Decay
+                </h4>
+                <ul class="decay-list">
+                  @for (item of ms.expectedDecay; track item) {
+                    <li>{{ item }}</li>
+                  }
+                </ul>
+              </div>
+
+              <!-- Failure Regimes -->
+              <div class="failure-section">
+                <h4 class="subsection-title">
+                  <i class="pi pi-exclamation-triangle"></i>
+                  Failure Regimes
+                </h4>
+                <ul class="failure-list">
+                  @for (item of ms.failureRegimes; track item) {
+                    <li>{{ item }}</li>
+                  }
+                </ul>
+              </div>
+
+              <!-- Academic References -->
+              <div class="references-section">
+                <h4 class="subsection-title">
+                  <i class="pi pi-bookmark"></i>
+                  Academic References
+                </h4>
+                <ul class="reference-list">
+                  @for (ref of ms.academicReferences; track ref) {
+                    <li>{{ ref }}</li>
+                  }
+                </ul>
+              </div>
+
+              <p-divider />
+
+              <!-- Economic Validation Checklist -->
+              <h4 class="subsection-title">Economic Validation Checklist</h4>
+              <table class="econ-checklist">
+                <thead>
+                  <tr>
+                    <th>Question</th>
+                    <th>Answer</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (row of ms.checklist; track row.question) {
+                    <tr>
+                      <td class="question-cell">{{ row.question }}</td>
+                      <td>{{ row.answer }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
             </div>
-            <p class="text-sm text-gray-300 italic">{{ test.interpretation }}</p>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+
+    <!-- Signal Justification Score -->
+    <div class="justification-card">
+      <div class="justification-header">
+        <i class="pi pi-star-fill"></i>
+        <h4>Signal Justification Score (1\u20135)</h4>
+      </div>
+      <p class="justification-intro">
+        Rate each feature on a 1\u20135 scale across these dimensions. A feature with IC = 0.015 but strong economic logic
+        is more deployable than IC = 0.03 with no story.
+      </p>
+      <div class="justification-grid">
+        @for (criterion of justificationCriteria; track criterion.name) {
+          <div class="criterion-card">
+            <h5>{{ criterion.name }}</h5>
+            <p>{{ criterion.description }}</p>
           </div>
-        </p-accordion-content>
-      </p-accordion-panel>
-    }
-  </p-accordion>
+        }
+      </div>
+    </div>
+
+    <!-- Deep Insight -->
+    <div class="deep-insight-callout">
+      <i class="pi pi-bolt"></i>
+      <div>
+        <strong>The Deep Insight</strong>
+        <p>{{ deepInsight.statistical }}</p>
+        <p>{{ deepInsight.economic }}</p>
+        <p class="conclusion">{{ deepInsight.conclusion }}</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ──── Validation Tests ──── -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-check-square section-icon"></i>
+      <h3>Validation Tests</h3>
+    </div>
+    <p class="section-description">
+      Every feature must pass all three tests to be considered a validated predictor.
+    </p>
+    <p-accordion [multiple]="true">
+      @for (test of tests; track test.name) {
+        <p-accordion-panel [value]="test.name">
+          <p-accordion-header>{{ test.name }}</p-accordion-header>
+          <p-accordion-content>
+            <div class="doc-card">
+              <p class="test-description">{{ test.description }}</p>
+              <div class="formula-block">
+                <span [appKatex]="test.formulaLatex" [displayMode]="true"></span>
+              </div>
+              @if (test.hypothesisLatex) {
+                <div class="formula-block hypothesis">
+                  <span [appKatex]="test.hypothesisLatex" [displayMode]="true"></span>
+                </div>
+              }
+              <p-divider />
+              <p class="interpretation">{{ test.interpretation }}</p>
+              <div class="insight-callout">
+                <i class="pi pi-lightbulb"></i>
+                <div>
+                  <strong>Why it matters</strong>
+                  <span>{{ test.whyItMatters }}</span>
+                </div>
+              </div>
+              <div class="threshold-badge">
+                <i class="pi pi-flag"></i>
+                <span>Pass threshold: <strong>{{ test.threshold }}</strong></span>
+              </div>
+            </div>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+  </section>
+
+  <!-- ──── Best Practices ──── -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-star section-icon"></i>
+      <h3>Best Practices</h3>
+    </div>
+    <div class="best-practices-grid">
+      @for (bp of bestPractices; track bp.title) {
+        <div class="bp-card">
+          <h4>{{ bp.title }}</h4>
+          <p>{{ bp.detail }}</p>
+        </div>
+      }
+    </div>
+  </section>
+
 </div>

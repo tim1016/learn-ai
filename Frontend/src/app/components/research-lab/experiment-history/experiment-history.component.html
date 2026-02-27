@@ -1,7 +1,7 @@
 <div class="mt-4">
   <div class="flex items-end gap-3 mb-4">
     <div class="flex flex-col gap-2">
-      <label for="historyTicker" class="font-semibold text-sm">Ticker</label>
+      <label for="historyTicker" class="font-semibold text-sm text-gray-700">Ticker</label>
       <input
         pInputText
         id="historyTicker"
@@ -27,28 +27,72 @@
       [value]="experiments()"
       [paginator]="true"
       [rows]="10"
-      [tableStyle]="{ 'min-width': '60rem' }"
+      [tableStyle]="{ 'min-width': '56rem' }"
       [rowHover]="true"
-      [showGridlines]="true"
+      styleClass="p-datatable-sm"
     >
       <ng-template #header>
         <tr>
-          <th pSortableColumn="featureName">Feature <p-sortIcon field="featureName" /></th>
-          <th pSortableColumn="meanIC">Mean IC <p-sortIcon field="meanIC" /></th>
-          <th>IC t-Stat</th>
-          <th>ADF p</th>
-          <th>Monotonic</th>
-          <th pSortableColumn="passedValidation">Result <p-sortIcon field="passedValidation" /></th>
-          <th>Date Range</th>
-          <th pSortableColumn="createdAt">Run Date <p-sortIcon field="createdAt" /></th>
+          <th pSortableColumn="featureName" class="col-header">
+            <span class="col-header-content" (click)="showHelp('feature'); $event.stopPropagation()">
+              <i class="pi pi-sliders-h col-icon"></i>
+              Feature
+            </span>
+            <p-sortIcon field="featureName" />
+          </th>
+          <th pSortableColumn="meanIC" class="col-header">
+            <span class="col-header-content" (click)="showHelp('meanIC'); $event.stopPropagation()">
+              <i class="pi pi-chart-line col-icon"></i>
+              Mean IC
+            </span>
+            <p-sortIcon field="meanIC" />
+          </th>
+          <th class="col-header">
+            <span class="col-header-content" (click)="showHelp('tStat')">
+              <i class="pi pi-percentage col-icon"></i>
+              t-Stat
+            </span>
+          </th>
+          <th class="col-header">
+            <span class="col-header-content" (click)="showHelp('adf')">
+              <i class="pi pi-wave-pulse col-icon"></i>
+              ADF p
+            </span>
+          </th>
+          <th class="col-header">
+            <span class="col-header-content" (click)="showHelp('monotonic')">
+              <i class="pi pi-sort-amount-up col-icon"></i>
+              Mono
+            </span>
+          </th>
+          <th pSortableColumn="passedValidation" class="col-header">
+            <span class="col-header-content" (click)="showHelp('result'); $event.stopPropagation()">
+              <i class="pi pi-verified col-icon"></i>
+              Result
+            </span>
+            <p-sortIcon field="passedValidation" />
+          </th>
+          <th class="col-header">
+            <span class="col-header-content" (click)="showHelp('dateRange')">
+              <i class="pi pi-calendar col-icon"></i>
+              Period
+            </span>
+          </th>
+          <th pSortableColumn="createdAt" class="col-header">
+            <span class="col-header-content" (click)="showHelp('runDate'); $event.stopPropagation()">
+              <i class="pi pi-clock col-icon"></i>
+              Run Date
+            </span>
+            <p-sortIcon field="createdAt" />
+          </th>
         </tr>
       </ng-template>
       <ng-template #body let-exp>
         <tr>
-          <td>{{ exp.featureName }}</td>
-          <td>{{ exp.meanIC | number: '1.4-4' }}</td>
-          <td>{{ exp.icTStat | number: '1.2-2' }}</td>
-          <td>{{ exp.adfPValue | number: '1.4-4' }}</td>
+          <td class="font-semibold text-gray-800">{{ exp.featureName }}</td>
+          <td [class]="icSeverityClass(exp.meanIC)">{{ exp.meanIC | number: '1.4-4' }}</td>
+          <td [class]="tStatSeverityClass(exp.icTStat)">{{ exp.icTStat | number: '1.2-2' }}</td>
+          <td [class]="adfSeverityClass(exp.adfPValue)">{{ exp.adfPValue | number: '1.4-4' }}</td>
           <td>
             <p-tag
               [severity]="exp.isMonotonic ? 'success' : 'warn'"
@@ -61,8 +105,8 @@
               [value]="validationLabel(exp.passedValidation)"
             />
           </td>
-          <td>{{ exp.startDate }} — {{ exp.endDate }}</td>
-          <td>{{ exp.createdAt | date: 'short' }}</td>
+          <td class="text-sm text-gray-600">{{ exp.startDate }} — {{ exp.endDate }}</td>
+          <td class="text-sm text-gray-600">{{ exp.createdAt | date: 'short' }}</td>
         </tr>
       </ng-template>
       <ng-template #emptymessage>
@@ -74,6 +118,29 @@
       </ng-template>
     </p-table>
   } @else if (!loading()) {
-    <p class="text-gray-400">Enter a ticker and click "Load History" to view past experiments.</p>
+    <p class="text-gray-500">Enter a ticker and click "Load History" to view past experiments.</p>
   }
+
+  <!-- Help Dialog -->
+  <p-dialog
+    [visible]="helpVisible()"
+    (visibleChange)="helpVisible.set($event)"
+    [modal]="true"
+    [style]="{ width: '28rem' }"
+    [draggable]="false"
+    [resizable]="false"
+    [closable]="true"
+  >
+    <ng-template #header>
+      @if (helpColumn(); as col) {
+        <div class="help-dialog-header">
+          <i [class]="col.icon" class="help-dialog-icon"></i>
+          <span>{{ col.label }}</span>
+        </div>
+      }
+    </ng-template>
+    @if (helpColumn(); as col) {
+      <p class="help-dialog-body">{{ col.description }}</p>
+    }
+  </p-dialog>
 </div>
