@@ -1,0 +1,237 @@
+<div class="robustness-container">
+
+  <!-- Robustness Scorecard -->
+  <div class="scorecard-section mb-6">
+    <h5 class="section-title">
+      <i class="pi pi-chart-bar mr-2"></i>Robustness Scorecard
+    </h5>
+
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-3">
+      <!-- Stability -->
+      <div class="metric-card">
+        <div class="metric-label">
+          Stability
+          <i class="pi pi-info-circle ml-1"
+             pTooltip="Based on % of months with positive IC. >70% Strong, 60-70% Tradeable, 50-60% Weak, <50% Noise"
+             tooltipPosition="top"></i>
+        </div>
+        <div class="flex items-center gap-2 mt-1">
+          <p-tag [severity]="stabilityLabelSeverity" [value]="robustness().stabilityLabel" />
+        </div>
+        <div class="metric-sub mt-1">{{ robustness().pctPositiveMonths | percent: '1.0-0' }} months positive</div>
+      </div>
+
+      <!-- % Significant Months -->
+      <div class="metric-card">
+        <div class="metric-label">
+          Significant Months
+          <i class="pi pi-info-circle ml-1"
+             pTooltip="% of months where |t-stat| > 1.65 (statistically significant at 10% level)"
+             tooltipPosition="top"></i>
+        </div>
+        <div class="metric-value">{{ robustness().pctSignificantMonths | percent: '1.0-0' }}</div>
+      </div>
+
+      <!-- Best Month -->
+      <div class="metric-card">
+        <div class="metric-label">Best Month IC</div>
+        <div class="metric-value text-green-700">{{ robustness().bestMonthIC | number: '1.4-4' }}</div>
+      </div>
+
+      <!-- Worst Month -->
+      <div class="metric-card">
+        <div class="metric-label">Worst Month IC</div>
+        <div class="metric-value" [class]="robustness().worstMonthIC >= 0 ? 'text-green-700' : 'text-red-700'">
+          {{ robustness().worstMonthIC | number: '1.4-4' }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Train vs Test Split -->
+  @if (hasTrainTest) {
+    @let tt = robustness().trainTest!;
+    <div class="train-test-section mb-6">
+      <h5 class="section-title">
+        <i class="pi pi-arrows-h mr-2"></i>Train / Test Split (70/30)
+        <p-tag [severity]="overfitSeverity" [value]="overfitLabel" class="ml-2" />
+      </h5>
+
+      @if (tt.overfitFlag) {
+        <div class="overfit-warning mt-3">
+          <i class="pi pi-exclamation-triangle mr-2"></i>
+          Train IC significantly exceeds Test IC — possible overfitting detected. Feature may not generalize to unseen data.
+        </div>
+      }
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+        <!-- Train -->
+        <div class="split-card train">
+          <div class="split-label">TRAIN</div>
+          <div class="split-dates">{{ tt.trainStart }} to {{ tt.trainEnd }}</div>
+          <div class="split-metrics">
+            <div class="split-metric">
+              <span class="split-metric-label">Mean IC</span>
+              <span class="split-metric-value" [class]="tt.trainMeanIC >= 0.03 ? 'text-green-700' : ''">
+                {{ tt.trainMeanIC | number: '1.4-4' }}
+              </span>
+            </div>
+            <div class="split-metric">
+              <span class="split-metric-label">t-Stat</span>
+              <span class="split-metric-value" [class]="tt.trainTStat >= 1.65 ? 'text-green-700' : ''">
+                {{ tt.trainTStat | number: '1.2-2' }}
+              </span>
+            </div>
+            <div class="split-metric">
+              <span class="split-metric-label">Days</span>
+              <span class="split-metric-value">{{ tt.trainDays }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Test -->
+        <div class="split-card test">
+          <div class="split-label">TEST</div>
+          <div class="split-dates">{{ tt.testStart }} to {{ tt.testEnd }}</div>
+          <div class="split-metrics">
+            <div class="split-metric">
+              <span class="split-metric-label">Mean IC</span>
+              <span class="split-metric-value" [class]="tt.testMeanIC >= 0.03 ? 'text-green-700' : ''">
+                {{ tt.testMeanIC | number: '1.4-4' }}
+              </span>
+            </div>
+            <div class="split-metric">
+              <span class="split-metric-label">t-Stat</span>
+              <span class="split-metric-value" [class]="tt.testTStat >= 1.65 ? 'text-green-700' : ''">
+                {{ tt.testTStat | number: '1.2-2' }}
+              </span>
+            </div>
+            <div class="split-metric">
+              <span class="split-metric-label">Days</span>
+              <span class="split-metric-value">{{ tt.testDays }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- Rolling 6-Month t-stat Chart -->
+  @if (hasRollingData) {
+    <div class="rolling-chart-section mb-6">
+      <h5 class="section-title">
+        <i class="pi pi-chart-line mr-2"></i>Rolling t-Statistic
+      </h5>
+      <div class="chart-container mt-3">
+        <canvas #rollingTStatChart></canvas>
+      </div>
+    </div>
+  }
+
+  <!-- Monthly IC Breakdown Table -->
+  @if (hasMonthlyData) {
+    <div class="monthly-section mb-6">
+      <h5 class="section-title">
+        <i class="pi pi-calendar mr-2"></i>Monthly IC Breakdown
+      </h5>
+      <p-table
+        [value]="robustness().monthlyBreakdown"
+        [tableStyle]="{ 'min-width': '32rem' }"
+        styleClass="p-datatable-sm"
+        class="mt-3"
+      >
+        <ng-template #header>
+          <tr>
+            <th>Month</th>
+            <th>Mean IC</th>
+            <th>t-Stat</th>
+            <th>Observations</th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-row>
+          <tr>
+            <td class="font-semibold">{{ row.month }}</td>
+            <td [class]="monthlyIcSeverity(row.meanIC)">{{ row.meanIC | number: '1.4-4' }}</td>
+            <td [class]="monthlyTStatSeverity(row.tStat)">{{ row.tStat | number: '1.2-2' }}</td>
+            <td>{{ row.observationCount }}</td>
+          </tr>
+        </ng-template>
+      </p-table>
+    </div>
+  }
+
+  <!-- Regime Analysis -->
+  @if (hasVolRegimes || hasTrendRegimes) {
+    <div class="regime-section mb-6">
+      <h5 class="section-title">
+        <i class="pi pi-sliders-h mr-2"></i>Regime Segmentation
+      </h5>
+
+      <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mt-3">
+        @if (hasVolRegimes) {
+          <div>
+            <h6 class="regime-subtitle">Volatility Regimes</h6>
+            <p-table
+              [value]="robustness().volatilityRegimes"
+              [tableStyle]="{ 'min-width': '20rem' }"
+              styleClass="p-datatable-sm"
+            >
+              <ng-template #header>
+                <tr>
+                  <th>Regime</th>
+                  <th>Mean IC</th>
+                  <th>t-Stat</th>
+                  <th>Days</th>
+                </tr>
+              </ng-template>
+              <ng-template #body let-row>
+                <tr>
+                  <td class="font-semibold">{{ row.regimeLabel }}</td>
+                  <td [class]="regimeIcClass(row.meanIC)">{{ row.meanIC | number: '1.4-4' }}</td>
+                  <td [class]="monthlyTStatSeverity(row.tStat)">{{ row.tStat | number: '1.2-2' }}</td>
+                  <td>{{ row.observationCount }}</td>
+                </tr>
+              </ng-template>
+            </p-table>
+          </div>
+        }
+
+        @if (hasTrendRegimes) {
+          <div>
+            <h6 class="regime-subtitle">Trend Regimes</h6>
+            <p-table
+              [value]="robustness().trendRegimes"
+              [tableStyle]="{ 'min-width': '20rem' }"
+              styleClass="p-datatable-sm"
+            >
+              <ng-template #header>
+                <tr>
+                  <th>Regime</th>
+                  <th>Mean IC</th>
+                  <th>t-Stat</th>
+                  <th>Days</th>
+                </tr>
+              </ng-template>
+              <ng-template #body let-row>
+                <tr>
+                  <td class="font-semibold">{{ row.regimeLabel }}</td>
+                  <td [class]="regimeIcClass(row.meanIC)">{{ row.meanIC | number: '1.4-4' }}</td>
+                  <td [class]="monthlyTStatSeverity(row.tStat)">{{ row.tStat | number: '1.2-2' }}</td>
+                  <td>{{ row.observationCount }}</td>
+                </tr>
+              </ng-template>
+            </p-table>
+          </div>
+        }
+      </div>
+    </div>
+  }
+
+  <!-- No data fallback -->
+  @if (!hasMonthlyData && !hasTrainTest) {
+    <div class="no-data-notice">
+      <i class="pi pi-info-circle mr-2"></i>
+      Not enough data for robustness analysis. Use a longer date range (3+ months) for meaningful stability metrics.
+    </div>
+  }
+</div>

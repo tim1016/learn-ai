@@ -15,6 +15,52 @@ export interface QuantileBin {
   count: number;
 }
 
+export interface MonthlyICBreakdown {
+  month: string;
+  meanIC: number;
+  tStat: number;
+  observationCount: number;
+}
+
+export interface RollingTStatPoint {
+  month: string;
+  tStatSmoothed: number;
+}
+
+export interface RegimeIC {
+  regimeLabel: string;
+  meanIC: number;
+  tStat: number;
+  observationCount: number;
+}
+
+export interface TrainTestSplit {
+  trainStart: string;
+  trainEnd: string;
+  testStart: string;
+  testEnd: string;
+  trainMeanIC: number;
+  trainTStat: number;
+  trainDays: number;
+  testMeanIC: number;
+  testTStat: number;
+  testDays: number;
+  overfitFlag: boolean;
+}
+
+export interface Robustness {
+  monthlyBreakdown: MonthlyICBreakdown[];
+  pctPositiveMonths: number;
+  pctSignificantMonths: number;
+  bestMonthIC: number;
+  worstMonthIC: number;
+  stabilityLabel: string;
+  rollingTStat: RollingTStatPoint[];
+  volatilityRegimes: RegimeIC[];
+  trendRegimes: RegimeIC[];
+  trainTest: TrainTestSplit | null;
+}
+
 export interface ResearchResult {
   success: boolean;
   ticker: string;
@@ -34,6 +80,7 @@ export interface ResearchResult {
   isMonotonic: boolean;
   monotonicityRatio: number;
   passedValidation: boolean;
+  robustness?: Robustness;
   error?: string;
 }
 
@@ -101,7 +148,22 @@ const RUN_FEATURE_RESEARCH_MUTATION = `
       adfPvalue kpssPvalue isStationary
       quantileBins { binNumber lowerBound upperBound meanReturn count }
       isMonotonic monotonicityRatio
-      passedValidation error
+      passedValidation
+      robustness {
+        monthlyBreakdown { month meanIC tStat observationCount }
+        pctPositiveMonths pctSignificantMonths
+        bestMonthIC worstMonthIC stabilityLabel
+        rollingTStat { month tStatSmoothed }
+        volatilityRegimes { regimeLabel meanIC tStat observationCount }
+        trendRegimes { regimeLabel meanIC tStat observationCount }
+        trainTest {
+          trainStart trainEnd testStart testEnd
+          trainMeanIC trainTStat trainDays
+          testMeanIC testTStat testDays
+          overfitFlag
+        }
+      }
+      error
     }
   }
 `;

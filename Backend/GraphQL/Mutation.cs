@@ -298,6 +298,54 @@ public class Mutation
                 IsMonotonic = report.IsMonotonic,
                 MonotonicityRatio = report.MonotonicityRatio,
                 PassedValidation = report.PassedValidation,
+                Robustness = report.Robustness != null ? new RobustnessType
+                {
+                    MonthlyBreakdown = report.Robustness.MonthlyBreakdown.Select(m => new MonthlyICBreakdownType
+                    {
+                        Month = m.Month,
+                        MeanIC = m.MeanIc,
+                        TStat = m.TStat,
+                        ObservationCount = m.ObservationCount,
+                    }).ToList(),
+                    PctPositiveMonths = report.Robustness.PctPositiveMonths,
+                    PctSignificantMonths = report.Robustness.PctSignificantMonths,
+                    BestMonthIC = report.Robustness.BestMonthIc,
+                    WorstMonthIC = report.Robustness.WorstMonthIc,
+                    StabilityLabel = report.Robustness.StabilityLabel,
+                    RollingTStat = report.Robustness.RollingTStat.Select(r => new RollingTStatPointType
+                    {
+                        Month = r.Month,
+                        TStatSmoothed = r.TStatSmoothed,
+                    }).ToList(),
+                    VolatilityRegimes = report.Robustness.VolatilityRegimes.Select(r => new RegimeICType
+                    {
+                        RegimeLabel = r.RegimeLabel,
+                        MeanIC = r.MeanIc,
+                        TStat = r.TStat,
+                        ObservationCount = r.ObservationCount,
+                    }).ToList(),
+                    TrendRegimes = report.Robustness.TrendRegimes.Select(r => new RegimeICType
+                    {
+                        RegimeLabel = r.RegimeLabel,
+                        MeanIC = r.MeanIc,
+                        TStat = r.TStat,
+                        ObservationCount = r.ObservationCount,
+                    }).ToList(),
+                    TrainTest = report.Robustness.TrainTest != null ? new TrainTestSplitType
+                    {
+                        TrainStart = report.Robustness.TrainTest.TrainStart,
+                        TrainEnd = report.Robustness.TrainTest.TrainEnd,
+                        TestStart = report.Robustness.TrainTest.TestStart,
+                        TestEnd = report.Robustness.TrainTest.TestEnd,
+                        TrainMeanIC = report.Robustness.TrainTest.TrainMeanIc,
+                        TrainTStat = report.Robustness.TrainTest.TrainTStat,
+                        TrainDays = report.Robustness.TrainTest.TrainDays,
+                        TestMeanIC = report.Robustness.TrainTest.TestMeanIc,
+                        TestTStat = report.Robustness.TrainTest.TestTStat,
+                        TestDays = report.Robustness.TrainTest.TestDays,
+                        OverfitFlag = report.Robustness.TrainTest.OverfitFlag,
+                    } : null,
+                } : null,
                 Error = report.Error,
             };
         }

@@ -11,9 +11,14 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.models.research_models import (
     FeatureInfoResponse,
+    MonthlyICBreakdownResponse,
     QuantileBinResponse,
+    RegimeICResponse,
+    RobustnessResponse,
+    RollingTStatPointResponse,
     RunFeatureResearchRequest,
     RunFeatureResearchResponse,
+    TrainTestSplitResponse,
 )
 from app.research.config import ResearchConfig
 from app.research.documentation.formulas import get_all_documentation
@@ -53,6 +58,64 @@ async def run_feature_research_endpoint(
             config=ResearchConfig(),
         )
 
+        # Map robustness results if available
+        robustness_response = None
+        if report.robustness is not None:
+            rob = report.robustness
+            robustness_response = RobustnessResponse(
+                monthly_breakdown=[
+                    MonthlyICBreakdownResponse(
+                        month=m.month,
+                        mean_ic=m.mean_ic,
+                        t_stat=m.t_stat,
+                        observation_count=m.observation_count,
+                    )
+                    for m in rob.monthly_breakdown
+                ],
+                pct_positive_months=rob.pct_positive_months,
+                pct_significant_months=rob.pct_significant_months,
+                best_month_ic=rob.best_month_ic,
+                worst_month_ic=rob.worst_month_ic,
+                stability_label=rob.stability_label,
+                rolling_t_stat=[
+                    RollingTStatPointResponse(
+                        month=r.month, t_stat_smoothed=r.t_stat_smoothed,
+                    )
+                    for r in rob.rolling_t_stat
+                ],
+                volatility_regimes=[
+                    RegimeICResponse(
+                        regime_label=r.regime_label,
+                        mean_ic=r.mean_ic,
+                        t_stat=r.t_stat,
+                        observation_count=r.observation_count,
+                    )
+                    for r in rob.volatility_regimes
+                ],
+                trend_regimes=[
+                    RegimeICResponse(
+                        regime_label=r.regime_label,
+                        mean_ic=r.mean_ic,
+                        t_stat=r.t_stat,
+                        observation_count=r.observation_count,
+                    )
+                    for r in rob.trend_regimes
+                ],
+                train_test=TrainTestSplitResponse(
+                    train_start=rob.train_test.train_start,
+                    train_end=rob.train_test.train_end,
+                    test_start=rob.train_test.test_start,
+                    test_end=rob.train_test.test_end,
+                    train_mean_ic=rob.train_test.train_mean_ic,
+                    train_t_stat=rob.train_test.train_t_stat,
+                    train_days=rob.train_test.train_days,
+                    test_mean_ic=rob.train_test.test_mean_ic,
+                    test_t_stat=rob.train_test.test_t_stat,
+                    test_days=rob.train_test.test_days,
+                    overfit_flag=rob.train_test.overfit_flag,
+                ) if rob.train_test else None,
+            )
+
         return RunFeatureResearchResponse(
             success=report.error is None,
             ticker=report.ticker,
@@ -74,6 +137,7 @@ async def run_feature_research_endpoint(
             monotonicity_ratio=report.monotonicity_ratio,
             ic_values=report.ic_values,
             ic_dates=report.ic_dates,
+            robustness=robustness_response,
             error=report.error,
         )
 

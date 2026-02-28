@@ -35,6 +35,62 @@ class QuantileBinResponse(BaseModel):
     count: int
 
 
+class MonthlyICBreakdownResponse(BaseModel):
+    """Monthly IC statistics."""
+
+    month: str
+    mean_ic: float
+    t_stat: float
+    observation_count: int
+
+
+class RollingTStatPointResponse(BaseModel):
+    """Single point in rolling smoothed t-stat series."""
+
+    month: str
+    t_stat_smoothed: float
+
+
+class RegimeICResponse(BaseModel):
+    """IC computed within a specific market regime."""
+
+    regime_label: str
+    mean_ic: float
+    t_stat: float
+    observation_count: int
+
+
+class TrainTestSplitResponse(BaseModel):
+    """Chronological train/test split IC comparison."""
+
+    train_start: str
+    train_end: str
+    test_start: str
+    test_end: str
+    train_mean_ic: float
+    train_t_stat: float
+    train_days: int
+    test_mean_ic: float
+    test_t_stat: float
+    test_days: int
+    overfit_flag: bool
+
+
+class RobustnessResponse(BaseModel):
+    """Complete robustness analysis."""
+
+    monthly_breakdown: list[MonthlyICBreakdownResponse] = []
+    pct_positive_months: float = 0.0
+    pct_significant_months: float = 0.0
+    best_month_ic: float = 0.0
+    worst_month_ic: float = 0.0
+    stability_label: str = "Unknown"
+    rolling_t_stat: list[RollingTStatPointResponse] = []
+    volatility_regimes: list[RegimeICResponse] = []
+    trend_regimes: list[RegimeICResponse] = []
+    train_test: TrainTestSplitResponse | None = None
+
+
 class RunFeatureResearchResponse(BaseModel):
     """Response body for POST /research/run-feature."""
 
@@ -56,6 +112,7 @@ class RunFeatureResearchResponse(BaseModel):
     monotonicity_ratio: float = 0.0
     ic_values: list[float] = []
     ic_dates: list[str] = []
+    robustness: RobustnessResponse | None = None
     error: str | None = None
 
 

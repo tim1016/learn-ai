@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ResearchResult } from '../../../services/research.service';
+import { RobustnessReportComponent } from '../robustness-report/robustness-report.component';
 import { TagModule } from 'primeng/tag';
 import { TableModule } from 'primeng/table';
 import { TooltipModule } from 'primeng/tooltip';
@@ -18,7 +19,7 @@ Chart.register(...registerables);
 @Component({
   selector: 'app-feature-report',
   standalone: true,
-  imports: [CommonModule, TagModule, TableModule, TooltipModule],
+  imports: [CommonModule, TagModule, TableModule, TooltipModule, RobustnessReportComponent],
   templateUrl: './feature-report.component.html',
   styleUrls: ['./feature-report.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

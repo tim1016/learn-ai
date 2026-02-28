@@ -15,6 +15,7 @@ from app.research.features.ta_features import TechnicalFeatures
 from app.research.target import compute_15min_forward_return, validate_return_series
 from app.research.validation.ic import compute_information_coefficient
 from app.research.validation.quantile import compute_quantile_analysis
+from app.research.validation.robustness import RobustnessResult, compute_robustness
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,9 @@ class ResearchReport:
     quantile_bins: list[dict] = field(default_factory=list)
     is_monotonic: bool = False
     monotonicity_ratio: float = 0.0
+
+    # Robustness
+    robustness: RobustnessResult | None = None
 
     # Overall
     passed_validation: bool = False
@@ -150,7 +154,15 @@ def run_feature_research(
         report.is_monotonic = quantile_result.is_monotonic
         report.monotonicity_ratio = quantile_result.monotonicity_ratio
 
-        # Step 6: Overall validation
+        # Step 6: Robustness analysis
+        if len(ic_result.daily_ic_values) >= 2:
+            report.robustness = compute_robustness(
+                daily_ic_values=ic_result.daily_ic_values,
+                daily_ic_dates=ic_result.daily_ic_dates,
+                bars=bars,
+            )
+
+        # Step 7: Overall validation
         report.passed_validation = (
             ic_result.ic_p_value < config.ic_significance
             and report.is_stationary

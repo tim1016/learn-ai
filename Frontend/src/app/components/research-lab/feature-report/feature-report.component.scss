@@ -118,6 +118,19 @@
   }
 }
 
+// Robustness section divider
+.robustness-divider {
+  height: 1px;
+  background: #e2e8f0;
+  margin-bottom: 1.5rem;
+}
+
+.robustness-section {
+  .table-title i {
+    color: #8b5cf6;
+  }
+}
+
 // Bars footer
 .bars-footer {
   display: flex;

@@ -39,7 +39,86 @@ public class ResearchResultType
     public double MonotonicityRatio { get; set; }
 
     public bool PassedValidation { get; set; }
+    public RobustnessType? Robustness { get; set; }
     public string? Error { get; set; }
+}
+
+public class MonthlyICBreakdownType
+{
+    public string Month { get; set; } = "";
+
+    [GraphQLName("meanIC")]
+    public double MeanIC { get; set; }
+
+    [GraphQLName("tStat")]
+    public double TStat { get; set; }
+
+    public int ObservationCount { get; set; }
+}
+
+public class RollingTStatPointType
+{
+    public string Month { get; set; } = "";
+
+    [GraphQLName("tStatSmoothed")]
+    public double TStatSmoothed { get; set; }
+}
+
+public class RegimeICType
+{
+    public string RegimeLabel { get; set; } = "";
+
+    [GraphQLName("meanIC")]
+    public double MeanIC { get; set; }
+
+    [GraphQLName("tStat")]
+    public double TStat { get; set; }
+
+    public int ObservationCount { get; set; }
+}
+
+public class TrainTestSplitType
+{
+    public string TrainStart { get; set; } = "";
+    public string TrainEnd { get; set; } = "";
+    public string TestStart { get; set; } = "";
+    public string TestEnd { get; set; } = "";
+
+    [GraphQLName("trainMeanIC")]
+    public double TrainMeanIC { get; set; }
+
+    [GraphQLName("trainTStat")]
+    public double TrainTStat { get; set; }
+
+    public int TrainDays { get; set; }
+
+    [GraphQLName("testMeanIC")]
+    public double TestMeanIC { get; set; }
+
+    [GraphQLName("testTStat")]
+    public double TestTStat { get; set; }
+
+    public int TestDays { get; set; }
+    public bool OverfitFlag { get; set; }
+}
+
+public class RobustnessType
+{
+    public List<MonthlyICBreakdownType> MonthlyBreakdown { get; set; } = [];
+    public double PctPositiveMonths { get; set; }
+    public double PctSignificantMonths { get; set; }
+
+    [GraphQLName("bestMonthIC")]
+    public double BestMonthIC { get; set; }
+
+    [GraphQLName("worstMonthIC")]
+    public double WorstMonthIC { get; set; }
+
+    public string StabilityLabel { get; set; } = "Unknown";
+    public List<RollingTStatPointType> RollingTStat { get; set; } = [];
+    public List<RegimeICType> VolatilityRegimes { get; set; } = [];
+    public List<RegimeICType> TrendRegimes { get; set; } = [];
+    public TrainTestSplitType? TrainTest { get; set; }
 }
 
 public class QuantileBinType

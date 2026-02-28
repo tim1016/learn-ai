@@ -1,0 +1,192 @@
+:host {
+  display: block;
+}
+
+.robustness-container {
+  padding-top: 0.5rem;
+}
+
+.section-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #1e293b;
+  display: flex;
+  align-items: center;
+  margin: 0;
+
+  i {
+    color: #8b5cf6;
+    font-size: 0.95rem;
+  }
+}
+
+// Metric Cards (reuse pattern from feature-report)
+.metric-card {
+  padding: 1rem 1.25rem;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+
+  .metric-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    display: flex;
+    align-items: center;
+
+    i {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      cursor: help;
+    }
+  }
+
+  .metric-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #1e293b;
+    margin-top: 0.25rem;
+    line-height: 1.3;
+  }
+
+  .metric-sub {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin-top: 0.15rem;
+  }
+}
+
+// Chart container (matches feature-report)
+.chart-container {
+  padding: 1.25rem;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  height: 380px;
+  position: relative;
+
+  canvas {
+    width: 100% !important;
+    height: 100% !important;
+  }
+}
+
+// Train/Test split cards
+.split-card {
+  padding: 1.25rem;
+  border-radius: 10px;
+  border: 1px solid;
+
+  &.train {
+    background: #f0f9ff;
+    border-color: #bae6fd;
+
+    .split-label {
+      color: #0369a1;
+      background: #e0f2fe;
+    }
+  }
+
+  &.test {
+    background: #faf5ff;
+    border-color: #e9d5ff;
+
+    .split-label {
+      color: #7c3aed;
+      background: #f3e8ff;
+    }
+  }
+
+  .split-label {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+  }
+
+  .split-dates {
+    font-size: 0.8rem;
+    color: #64748b;
+    margin-bottom: 0.75rem;
+  }
+
+  .split-metrics {
+    display: flex;
+    gap: 1.5rem;
+  }
+
+  .split-metric {
+    display: flex;
+    flex-direction: column;
+
+    .split-metric-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .split-metric-value {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: #1e293b;
+    }
+  }
+}
+
+// Overfit warning
+.overfit-warning {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+
+  i {
+    color: #dc2626;
+    font-size: 1rem;
+  }
+}
+
+// Regime subtitles
+.regime-subtitle {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #475569;
+  margin: 0 0 0.5rem 0;
+}
+
+// No data notice
+.no-data-notice {
+  display: flex;
+  align-items: center;
+  padding: 1rem 1.25rem;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #64748b;
+  font-size: 0.85rem;
+
+  i {
+    color: #94a3b8;
+    font-size: 1rem;
+  }
+}
+
+// Scorecard section
+.scorecard-section,
+.train-test-section,
+.rolling-chart-section,
+.monthly-section,
+.regime-section {
+  padding-top: 0.5rem;
+}

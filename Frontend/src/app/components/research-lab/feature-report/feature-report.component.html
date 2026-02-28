@@ -122,4 +122,15 @@
     Analysis based on <strong>{{ result().barsUsed | number }}</strong> bars
     ({{ result().startDate }} to {{ result().endDate }})
   </div>
+
+  <!-- Robustness Analysis -->
+  @if (result().robustness) {
+    <div class="robustness-section mt-6">
+      <div class="robustness-divider"></div>
+      <h4 class="table-title mb-4">
+        <i class="pi pi-shield mr-2"></i>Robustness Analysis
+      </h4>
+      <app-robustness-report [robustness]="result().robustness!" />
+    </div>
+  }
 </div>
