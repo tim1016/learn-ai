@@ -6,7 +6,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, of, tap } from 'rxjs';
 import { MarketDataService } from '../../services/market-data.service';
 import { MarketMonitorService } from '../../services/market-monitor.service';
-import { StockAggregate, AggregatesSummary } from '../../graphql/types';
+import { StockAggregate, AggregatesSummary, GapDetectionInfo } from '../../graphql/types';
 import { MarketHolidayEvent } from '../../models/market-monitor';
 import { validateDateRange, getMinAllowedDate } from '../../utils/date-validation';
 import { CandlestickChartComponent } from './candlestick-chart/candlestick-chart.component';
@@ -44,6 +44,7 @@ export class MarketDataComponent implements OnInit {
   error = signal<string | null>(null);
   aggregates = signal<StockAggregate[]>([]);
   summary = signal<AggregatesSummary | null>(null);
+  gapDetection = signal<GapDetectionInfo | null>(null);
 
   holidays = signal<MarketHolidayEvent[]>([]);
   holidaysLoading = signal(false);
@@ -108,6 +109,7 @@ export class MarketDataComponent implements OnInit {
     this.error.set(null);
     this.aggregates.set([]);
     this.summary.set(null);
+    this.gapDetection.set(null);
 
     console.log('[STEP 1 - Component] fetchData called:', {
       ticker: this.ticker().toUpperCase(),
@@ -137,6 +139,7 @@ export class MarketDataComponent implements OnInit {
             (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
           ));
           this.summary.set(result.summary);
+          this.gapDetection.set(result.gapDetection);
           this.loading.set(false);
         }),
         catchError((err) => {

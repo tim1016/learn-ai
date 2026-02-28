@@ -6,6 +6,20 @@ public class SmartAggregatesResult
     public List<AggregateBar> Aggregates { get; set; } = [];
     public AggregatesSummary? Summary { get; set; }
     public string? SanitizationSummary { get; set; }
+    public GapDetectionInfo? GapDetection { get; set; }
+}
+
+public class GapDetectionInfo
+{
+    public int TotalWeekdays { get; set; }
+    public int DaysWithData { get; set; }
+    public int MissingDays { get; set; }
+    public int PartialDays { get; set; }
+    public decimal CoveragePercent { get; set; }
+    public int ExpectedBars { get; set; }
+    public int ActualBars { get; set; }
+    public List<string> MissingDates { get; set; } = [];
+    public List<string> PartialDates { get; set; } = [];
 }
 
 /// <summary>

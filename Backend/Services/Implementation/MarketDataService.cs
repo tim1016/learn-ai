@@ -1,4 +1,5 @@
 using Backend.Data;
+using Backend.Models.DTOs;
 using Backend.Models.MarketData;
 using Backend.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
@@ -87,7 +88,7 @@ public class MarketDataService : IMarketDataService
         }
     }
 
-    public async Task<List<StockAggregate>> GetOrFetchAggregatesAsync(
+    public async Task<AggregatesWithGapInfo> GetOrFetchAggregatesAsync(
         string ticker,
         int multiplier,
         string timespan,
@@ -106,8 +107,17 @@ public class MarketDataService : IMarketDataService
                 "[MarketDataService] FORCE REFRESH for {Ticker} from {From} to {To}, bypassing cache",
                 symbol, fromDate, toDate);
 
-            return await FetchAndStoreAggregatesAsync(
+            var (fetchedAggs, windowStatuses) = await FetchWithWindowsAsync(
                 ticker, multiplier, timespan, fromDate, toDate, cancellationToken);
+
+            var gapInfo = DetectGaps(fetchedAggs, fromDate, toDate, timespan, multiplier);
+            gapInfo.WindowStatuses = windowStatuses;
+
+            return new AggregatesWithGapInfo
+            {
+                Aggregates = fetchedAggs,
+                GapDetection = gapInfo
+            };
         }
 
         var market = DetectMarket(symbol);
@@ -138,18 +148,207 @@ public class MarketDataService : IMarketDataService
                 _logger.LogInformation(
                     "[STEP 4.7 - MarketDataService] CACHE HIT: {Count} aggregates for {Ticker} from {From} to {To}",
                     existing.Count, symbol, fromDate, toDate);
-                return existing;
+
+                var gapInfo = DetectGaps(existing, fromDate, toDate, timespan, multiplier);
+                return new AggregatesWithGapInfo
+                {
+                    Aggregates = existing,
+                    GapDetection = gapInfo
+                };
             }
         }
 
-        // Cache miss — fetch from Polygon and store
+        // Cache miss — fetch from Polygon using windowed approach
         _logger.LogInformation(
             "[STEP 5.5 - MarketDataService] CACHE MISS for {Ticker} from {From} to {To}, fetching from Polygon",
             symbol, fromDate, toDate);
 
-        return await FetchAndStoreAggregatesAsync(
+        var (aggs, statuses) = await FetchWithWindowsAsync(
             ticker, multiplier, timespan, fromDate, toDate, cancellationToken);
+
+        var gap = DetectGaps(aggs, fromDate, toDate, timespan, multiplier);
+        gap.WindowStatuses = statuses;
+
+        return new AggregatesWithGapInfo
+        {
+            Aggregates = aggs,
+            GapDetection = gap
+        };
     }
+
+    #region Windowed Fetch
+
+    internal static List<(string FromDate, string ToDate)> GenerateFetchWindows(
+        string fromDate, string toDate, string timespan)
+    {
+        var from = DateTime.Parse(fromDate);
+        var to = DateTime.Parse(toDate);
+
+        // Only split for minute and hour timespans
+        if (timespan is not ("minute" or "hour"))
+            return [(fromDate, toDate)];
+
+        var windowMonths = timespan == "minute" ? 1 : 3;
+        var windows = new List<(string, string)>();
+        var cursor = from;
+
+        while (cursor <= to)
+        {
+            var windowEnd = cursor.AddMonths(windowMonths).AddDays(-1);
+            if (windowEnd > to) windowEnd = to;
+
+            windows.Add((cursor.ToString("yyyy-MM-dd"), windowEnd.ToString("yyyy-MM-dd")));
+            cursor = windowEnd.AddDays(1);
+        }
+
+        return windows;
+    }
+
+    private async Task<(List<StockAggregate> Aggregates, List<WindowFetchStatus> Statuses)> FetchWithWindowsAsync(
+        string ticker,
+        int multiplier,
+        string timespan,
+        string fromDate,
+        string toDate,
+        CancellationToken cancellationToken)
+    {
+        var windows = GenerateFetchWindows(fromDate, toDate, timespan);
+
+        _logger.LogInformation(
+            "[STEP W1] Windowed fetch for {Ticker}: {WindowCount} windows from {From} to {To}",
+            ticker, windows.Count, fromDate, toDate);
+
+        var allAggregates = new List<StockAggregate>();
+        var statuses = new List<WindowFetchStatus>();
+
+        for (var i = 0; i < windows.Count; i++)
+        {
+            var (winFrom, winTo) = windows[i];
+
+            _logger.LogInformation(
+                "[STEP W2] Window {Index}/{Total}: {From} to {To}",
+                i + 1, windows.Count, winFrom, winTo);
+
+            try
+            {
+                var windowAggs = await FetchAndStoreAggregatesAsync(
+                    ticker, multiplier, timespan, winFrom, winTo, cancellationToken);
+
+                _logger.LogInformation(
+                    "[STEP W3] Window {Index}/{Total} result: {Count} bars fetched",
+                    i + 1, windows.Count, windowAggs.Count);
+
+                allAggregates.AddRange(windowAggs);
+                statuses.Add(new WindowFetchStatus
+                {
+                    FromDate = winFrom,
+                    ToDate = winTo,
+                    Success = true,
+                    BarsFetched = windowAggs.Count,
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "[STEP W3] Window {Index}/{Total} FAILED: {From} to {To}",
+                    i + 1, windows.Count, winFrom, winTo);
+
+                statuses.Add(new WindowFetchStatus
+                {
+                    FromDate = winFrom,
+                    ToDate = winTo,
+                    Success = false,
+                    BarsFetched = 0,
+                    Error = ex.Message,
+                });
+            }
+        }
+
+        // Sort by timestamp to ensure contiguous ordering
+        allAggregates.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
+
+        return (allAggregates, statuses);
+    }
+
+    #endregion
+
+    #region Gap Detection
+
+    internal static GapDetectionResult DetectGaps(
+        List<StockAggregate> aggregates,
+        string fromDate,
+        string toDate,
+        string timespan,
+        int multiplier)
+    {
+        var from = DateTime.Parse(fromDate);
+        var to = DateTime.Parse(toDate);
+
+        // Count weekdays in the range
+        var totalWeekdays = 0;
+        for (var d = from; d <= to; d = d.AddDays(1))
+        {
+            if (d.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+                totalWeekdays++;
+        }
+
+        // Group bars by date
+        var barsByDate = aggregates
+            .GroupBy(a => a.Timestamp.Date)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        // Expected bars per day based on timespan
+        var expectedBarsPerDay = timespan switch
+        {
+            "minute" => 390 / multiplier,  // 6.5 hours * 60 minutes
+            "hour" => 7 / multiplier,       // ~7 trading hours
+            _ => 1
+        };
+        if (expectedBarsPerDay < 1) expectedBarsPerDay = 1;
+
+        var missingDates = new List<string>();
+        var partialDates = new List<string>();
+        var daysWithData = 0;
+        var partialThreshold = expectedBarsPerDay * 0.5;
+
+        for (var d = from; d <= to; d = d.AddDays(1))
+        {
+            if (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                continue;
+
+            if (barsByDate.TryGetValue(d.Date, out var count))
+            {
+                daysWithData++;
+
+                // Only flag partial days for intraday timespans
+                if (timespan is "minute" or "hour" && count < partialThreshold)
+                    partialDates.Add(d.ToString("yyyy-MM-dd"));
+            }
+            else
+            {
+                missingDates.Add(d.ToString("yyyy-MM-dd"));
+            }
+        }
+
+        var coveragePercent = totalWeekdays > 0
+            ? Math.Round((decimal)daysWithData / totalWeekdays * 100, 1)
+            : 0;
+
+        return new GapDetectionResult
+        {
+            TotalWeekdays = totalWeekdays,
+            DaysWithData = daysWithData,
+            MissingDays = missingDates.Count,
+            PartialDays = partialDates.Count,
+            CoveragePercent = coveragePercent,
+            ExpectedBars = totalWeekdays * expectedBarsPerDay,
+            ActualBars = aggregates.Count,
+            MissingDates = missingDates,
+            PartialDates = partialDates,
+        };
+    }
+
+    #endregion
 
     public async Task<Ticker> GetOrCreateTickerAsync(
         string symbol,

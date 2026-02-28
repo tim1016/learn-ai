@@ -71,6 +71,80 @@ interface ReferenceDoc {
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class SignalInfoPanelComponent {
+  // ─── 0. Research Protocol ─────────────────────────────────
+  researchProtocol = {
+    intro:
+      'Every signal analysis follows a strict 5-phase protocol. No backtest is run before a hypothesis is documented. No feature graduates without passing all five phases in order. This protocol prevents post-hoc narrative fitting and data-mining bias.',
+    phases: [
+      {
+        number: 1,
+        title: 'Formulate a Structural Hypothesis',
+        summary: 'Document the market mechanism, counterparty, and regime expectations before any computation.',
+        requirement: 'No backtest may begin until a hypothesis is written. This prevents running dozens of features and inventing stories for whichever one passed.',
+      },
+      {
+        number: 2,
+        title: 'Construct the Tradable Signal',
+        summary: 'Transform the raw feature through Z-score standardization, threshold filtering, and regime gating \u2014 all using train-only statistics.',
+        requirement: 'Every statistic (\u03BC, \u03C3, \u03B8) is computed on training data only and frozen before OOS evaluation. No re-optimization during test windows.',
+      },
+      {
+        number: 3,
+        title: 'Walk-Forward Validation',
+        summary: 'Simulate live deployment with rolling 3-month train / 1-month test windows and frozen parameters.',
+        requirement: 'Single backtests are insufficient. Validation requires rolling OOS evaluation across multiple time periods.',
+      },
+      {
+        number: 4,
+        title: 'Pass the 5-Point Graduation System',
+        summary: 'Evaluate the signal against five criteria: Net Sharpe, Max Drawdown, OOS consistency, regime coverage, and parameter stability.',
+        requirement: 'Graduation is denied if any critical criterion fails. Status is determined by the weakest link.',
+      },
+      {
+        number: 5,
+        title: 'Internal Audit Checklist',
+        summary: 'Verify statistical integrity, execution integrity, and reporting integrity before finalizing.',
+        requirement: 'If any audit condition fails, the feature cannot graduate regardless of backtest results.',
+      },
+    ],
+  };
+
+  hypothesisRequirements = [
+    {
+      label: 'Market Mechanism',
+      question: 'Why should this feature predict future returns?',
+      examples: 'Liquidity shocks, inventory rebalancing, behavioral overreaction, information asymmetry, institutional order flow.',
+    },
+    {
+      label: 'Counterparty Identification',
+      question: 'Who is systematically losing money on the other side of this trade?',
+      examples: 'Late-to-trend retail traders, passive market makers absorbing flow, stop-loss cascades from overleveraged positions.',
+    },
+    {
+      label: 'Regime Expectation',
+      question: 'Under what conditions should the signal perform well, degrade, or fail entirely?',
+      examples: 'Works in Low Vol + Sideways (mean-reversion); fails during trending regimes or macro events.',
+    },
+  ];
+
+  hypothesisExamples = [
+    {
+      strategy: 'Mean-Reversion / Overextension (Contrarian)',
+      hypothesis:
+        'RSI (Relative Strength Index) Divergence exhibits negative correlation to future returns at a 15-minute horizon due to liquidity exhaustion after rapid localized buying/selling. The signal exploits short-term mean reversion with late-to-trend retail momentum traders on the other side. Expected to work best in Low Volatility + Sideways conditions and fail in High Volatility or strong Trending regimes.',
+    },
+    {
+      strategy: 'Momentum / Trend Continuation',
+      hypothesis:
+        'VWAP (Volume Weighted Average Price) Crossover exhibits positive correlation to future returns at a 1-hour horizon due to institutional accumulation/distribution algorithms executing VWAP-pegged orders. The signal exploits intraday trend persistence with passive limit-order providers (market makers) on the other side. Expected to work best in Normal Volatility + Trending conditions and fail in Sideways/Choppy regimes.',
+    },
+    {
+      strategy: 'Volatility Breakout',
+      hypothesis:
+        'Bollinger Band Expansion exhibits positive correlation to future returns at a 30-minute horizon due to sudden price discovery following periods of volatility compression. The signal exploits volatility clustering and breakout momentum with mean-reversion traders getting stopped out on the other side. Expected to work best in Transitioning from Low to High Volatility conditions and fail in Low Volatility + Sideways regimes.',
+    },
+  ];
+
   // ─── 1. Pipeline Overview ──────────────────────────────────
   pipelineOverview = {
     intro:
@@ -651,9 +725,8 @@ export class SignalInfoPanelComponent {
 
   // ─── 13. Hypothesis & Failure Interpretation (§4.1\u20134.2) ──
   hypothesisTemplate = {
-    instruction: 'Every signal analysis should begin with a clear structural hypothesis. This ensures research intent is explicit and prevents data-mining without economic rationale.',
-    template: 'Hypothesis: [Feature name] exhibits [positive/negative] autocorrelation at [horizon] due to [structural mechanism]. The signal exploits [specific inefficiency] with [counterparty] on the other side. Expected to work in [regime conditions] and fail in [failure conditions].',
-    example: 'Hypothesis: 5-minute momentum exhibits negative autocorrelation at 15-minute horizons due to market maker inventory rebalancing and retail overreaction. The signal exploits short-term mean reversion with late-to-trend retail traders as the counterparty. Expected to work in Low Vol + Sideways conditions and fail during trending or macro-event regimes.',
+    instruction: 'No backtest is run before a hypothesis is documented. Every signal analysis must begin with a clear structural hypothesis. This prevents post-hoc narrative fitting and ensures research intent is explicit.',
+    template: 'Hypothesis: [Feature Name] exhibits [positive/negative] correlation to future returns at a [Time Horizon] horizon due to [Structural Mechanism / Market Microstructure]. The signal exploits [Specific Inefficiency] with [Counterparty] on the other side. Expected to work best in [Optimal Regimes] and fail in [Hostile Regimes].',
   };
 
   failureInterpretation = {

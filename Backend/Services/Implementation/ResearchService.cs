@@ -46,9 +46,10 @@ public class ResearchService : IResearchService
             featureName, ticker, fromDate, toDate);
 
         // Step 1: Fetch cached aggregates from PostgreSQL
-        var aggregates = await _marketDataService.GetOrFetchAggregatesAsync(
+        var fetchResult = await _marketDataService.GetOrFetchAggregatesAsync(
             ticker.ToUpper(), multiplier, timespan, fromDate, toDate,
             forceRefresh: false, cancellationToken: cancellationToken);
+        var aggregates = fetchResult.Aggregates;
 
         if (aggregates.Count == 0)
         {
@@ -187,9 +188,10 @@ public class ResearchService : IResearchService
             "[Signal] Running {Feature} on {Ticker} from {From} to {To}",
             featureName, ticker, fromDate, toDate);
 
-        var aggregates = await _marketDataService.GetOrFetchAggregatesAsync(
+        var signalFetchResult = await _marketDataService.GetOrFetchAggregatesAsync(
             ticker.ToUpper(), multiplier, timespan, fromDate, toDate,
             forceRefresh: false, cancellationToken: cancellationToken);
+        var aggregates = signalFetchResult.Aggregates;
 
         if (aggregates.Count == 0)
         {

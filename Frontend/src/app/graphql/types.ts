@@ -48,10 +48,23 @@ export interface AggregatesSummary {
   totalBars: number;
 }
 
+export interface GapDetectionInfo {
+  totalWeekdays: number;
+  daysWithData: number;
+  missingDays: number;
+  partialDays: number;
+  coveragePercent: number;
+  expectedBars: number;
+  actualBars: number;
+  missingDates: string[];
+  partialDates: string[];
+}
+
 export interface SmartAggregatesResult {
   ticker: string;
   aggregates: StockAggregate[];
   summary: AggregatesSummary | null;
+  gapDetection: GapDetectionInfo | null;
 }
 
 export interface GetOrFetchStockAggregatesResponse {

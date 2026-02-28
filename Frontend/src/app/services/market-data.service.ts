@@ -40,6 +40,11 @@ const QUERY = `
         periodHigh periodLow averageVolume averageVwap
         openPrice closePrice priceChange priceChangePercent totalBars
       }
+      gapDetection {
+        totalWeekdays daysWithData missingDays partialDays
+        coveragePercent expectedBars actualBars
+        missingDates partialDates
+      }
     }
   }
 `;

@@ -116,8 +116,9 @@ public class Query
             "[STEP 3 - GraphQL] Query received: ticker={Ticker}, from={From}, to={To}, timespan={Timespan}, multiplier={Multiplier}, forceRefresh={ForceRefresh}",
             ticker, fromDate, toDate, timespan, multiplier, forceRefresh);
 
-        var aggregates = await marketDataService.GetOrFetchAggregatesAsync(
+        var fetchResult = await marketDataService.GetOrFetchAggregatesAsync(
             ticker, multiplier, timespan, fromDate, toDate, forceRefresh);
+        var aggregates = fetchResult.Aggregates;
 
         logger.LogInformation(
             "[STEP 4 - GraphQL] MarketDataService returned {Count} aggregates for {Ticker}",
@@ -147,7 +148,19 @@ public class Query
         {
             Ticker = ticker.ToUpper(),
             Aggregates = bars,
-            SanitizationSummary = tickerEntity?.SanitizationSummary
+            SanitizationSummary = tickerEntity?.SanitizationSummary,
+            GapDetection = fetchResult.GapDetection is { } gap ? new GapDetectionInfo
+            {
+                TotalWeekdays = gap.TotalWeekdays,
+                DaysWithData = gap.DaysWithData,
+                MissingDays = gap.MissingDays,
+                PartialDays = gap.PartialDays,
+                CoveragePercent = gap.CoveragePercent,
+                ExpectedBars = gap.ExpectedBars,
+                ActualBars = gap.ActualBars,
+                MissingDates = gap.MissingDates,
+                PartialDates = gap.PartialDates,
+            } : null,
         };
 
         if (bars.Count > 0)

@@ -1,6 +1,13 @@
+using Backend.Models.DTOs;
 using Backend.Models.MarketData;
 
 namespace Backend.Services.Interfaces;
+
+public class AggregatesWithGapInfo
+{
+    public List<StockAggregate> Aggregates { get; set; } = [];
+    public GapDetectionResult? GapDetection { get; set; }
+}
 
 /// <summary>
 /// Orchestration service for fetching and storing market data
@@ -23,9 +30,9 @@ public interface IMarketDataService
     /// <summary>
     /// Smart cache: check DB for existing aggregates, fetch from Polygon if missing.
     /// When forceRefresh is true, bypasses cache and always fetches from Polygon.
-    /// Returns all aggregates for the requested range.
+    /// Uses windowed fetching for minute/hour timespans and detects data gaps.
     /// </summary>
-    Task<List<StockAggregate>> GetOrFetchAggregatesAsync(
+    Task<AggregatesWithGapInfo> GetOrFetchAggregatesAsync(
         string ticker,
         int multiplier,
         string timespan,

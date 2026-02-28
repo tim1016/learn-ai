@@ -71,6 +71,39 @@
     <div class="loading">Fetching data for {{ ticker() }}...</div>
   }
 
+  <!-- Gap Detection Banner -->
+  @if (gapDetection(); as gap) {
+    <div class="gap-detection-banner" [class.gap-warning]="gap.coveragePercent < 95">
+      <div class="gap-header">
+        <strong>Data Coverage: {{ gap.coveragePercent }}%</strong>
+        <span class="gap-stats">
+          {{ gap.actualBars | number }} / {{ gap.expectedBars | number }} expected bars
+          &mdash; {{ gap.daysWithData }} / {{ gap.totalWeekdays }} trading days
+        </span>
+      </div>
+      @if (gap.missingDays > 0 || gap.partialDays > 0) {
+        <div class="gap-details">
+          @if (gap.missingDays > 0) {
+            <span>{{ gap.missingDays }} missing days</span>
+          }
+          @if (gap.partialDays > 0) {
+            <span>{{ gap.partialDays }} partial days</span>
+          }
+        </div>
+        @if (gap.missingDates.length > 0 && gap.missingDates.length <= 20) {
+          <details class="gap-dates">
+            <summary>Show missing dates</summary>
+            <div class="date-list">
+              @for (date of gap.missingDates; track date) {
+                <span class="date-chip">{{ date }}</span>
+              }
+            </div>
+          </details>
+        }
+      }
+    </div>
+  }
+
   <!-- Dashboard Content -->
   @if (aggregates().length > 0 && !loading()) {
     <div class="dashboard-content">

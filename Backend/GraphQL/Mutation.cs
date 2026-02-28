@@ -180,8 +180,9 @@ public class Mutation
                 strategyName, ticker, fromDate, toDate);
 
             // Get or fetch the aggregates
-            var aggregates = await marketDataService.GetOrFetchAggregatesAsync(
+            var fetchResult = await marketDataService.GetOrFetchAggregatesAsync(
                 ticker.ToUpper(), multiplier, timespan, fromDate, toDate, false);
+            var aggregates = fetchResult.Aggregates;
 
             if (aggregates.Count == 0)
             {

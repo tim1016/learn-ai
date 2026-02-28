@@ -1,5 +1,32 @@
 <div class="mt-4 max-w-5xl">
 
+  <!-- ═══ 0. Research Protocol ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-map section-icon"></i>
+      <h3>Research Protocol</h3>
+    </div>
+    <div class="doc-card highlight-card">
+      <p class="interpretation">{{ researchProtocol.intro }}</p>
+    </div>
+
+    <div class="protocol-phases mt-4">
+      @for (phase of researchProtocol.phases; track phase.number) {
+        <div class="protocol-phase">
+          <div class="phase-number">{{ phase.number }}</div>
+          <div class="phase-content">
+            <h4>{{ phase.title }}</h4>
+            <p>{{ phase.summary }}</p>
+            <div class="info-callout warn mt-2">
+              <i class="pi pi-lock"></i>
+              <span>{{ phase.requirement }}</span>
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+  </section>
+
   <!-- ═══ 1. Pipeline Overview ═══ -->
   <section class="doc-section">
     <div class="section-header">
@@ -968,21 +995,47 @@
       <h3>Hypothesis & Failure Interpretation</h3>
     </div>
 
-    <!-- Hypothesis Template -->
+    <!-- Hypothesis Requirement -->
     <div class="doc-card highlight-card">
       <h4>Hypothesis Statement</h4>
       <p class="interpretation">{{ hypothesisTemplate.instruction }}</p>
+
+      <p-divider />
+
+      <h4 class="subsection-title">
+        <i class="pi pi-list"></i>
+        Required Components
+      </h4>
+      <p class="interpretation">Each hypothesis must address all three components before any computation begins.</p>
+      @for (req of hypothesisRequirements; track req.label) {
+        <div class="driver-card">
+          <h5>{{ req.label }}</h5>
+          <p><strong>{{ req.question }}</strong></p>
+          <p class="interpretation">Examples: {{ req.examples }}</p>
+        </div>
+      }
+
+      <p-divider />
+
+      <h4 class="subsection-title">
+        <i class="pi pi-file-edit"></i>
+        Standard Template
+      </h4>
       <div class="driver-card">
-        <h5>Template</h5>
         <p class="template-text">{{ hypothesisTemplate.template }}</p>
       </div>
-      <div class="info-callout mt-3">
-        <i class="pi pi-info-circle"></i>
-        <div>
-          <strong>Example</strong>
-          <span>{{ hypothesisTemplate.example }}</span>
+    </div>
+
+    <!-- Example Hypotheses -->
+    <div class="doc-card mt-4">
+      <h4>Example Hypotheses</h4>
+      <p class="interpretation">Three drafts illustrating different strategy archetypes.</p>
+      @for (ex of hypothesisExamples; track ex.strategy) {
+        <div class="driver-card">
+          <h5>{{ ex.strategy }}</h5>
+          <p class="template-text">{{ ex.hypothesis }}</p>
         </div>
-      </div>
+      }
     </div>
 
     <!-- Failure Interpretation -->
