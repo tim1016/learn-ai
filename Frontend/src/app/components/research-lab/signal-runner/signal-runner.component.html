@@ -1,0 +1,125 @@
+<div class="mt-4">
+  @if (formCollapsed()) {
+    <div class="collapsed-summary">
+      <div class="summary-content">
+        <i class="pi pi-check-circle text-green-600"></i>
+        <span class="summary-text">{{ runSummary }}</span>
+      </div>
+      <div class="summary-actions">
+        <p-button
+          label="Modify & Re-run"
+          icon="pi pi-pencil"
+          severity="secondary"
+          [text]="true"
+          size="small"
+          (onClick)="toggleForm()"
+        />
+        <p-button
+          label="New Run"
+          icon="pi pi-plus"
+          severity="secondary"
+          [text]="true"
+          size="small"
+          (onClick)="newRun()"
+        />
+      </div>
+    </div>
+  }
+
+  @if (!formCollapsed()) {
+    <div class="form-section">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <div class="flex flex-col gap-2">
+          <label for="sig-ticker" class="font-semibold text-sm text-gray-700">Ticker</label>
+          <input
+            pInputText
+            id="sig-ticker"
+            [ngModel]="ticker()"
+            (ngModelChange)="ticker.set($event)"
+            placeholder="e.g. AAPL"
+            class="w-full"
+          />
+        </div>
+
+        <div class="flex flex-col gap-2">
+          <label for="sig-feature" class="font-semibold text-sm text-gray-700">Feature</label>
+          <p-select
+            id="sig-feature"
+            [options]="features"
+            [ngModel]="featureName()"
+            (ngModelChange)="featureName.set($event)"
+            optionLabel="label"
+            optionValue="value"
+            class="w-full"
+          />
+        </div>
+
+        <div class="flex flex-col gap-2">
+          <label for="sig-from" class="font-semibold text-sm text-gray-700">From Date</label>
+          <input
+            pInputText
+            id="sig-from"
+            [ngModel]="fromDate()"
+            (ngModelChange)="fromDate.set($event)"
+            placeholder="YYYY-MM-DD"
+            class="w-full"
+          />
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <div class="flex flex-col gap-2">
+          <label for="sig-to" class="font-semibold text-sm text-gray-700">To Date</label>
+          <input
+            pInputText
+            id="sig-to"
+            [ngModel]="toDate()"
+            (ngModelChange)="toDate.set($event)"
+            placeholder="YYYY-MM-DD"
+            class="w-full"
+          />
+        </div>
+
+        <div class="flex flex-col gap-2">
+          <label class="font-semibold text-sm text-gray-700">Flip Sign (mean-reversion)</label>
+          <p-toggleswitch [(ngModel)]="flipSign" />
+        </div>
+
+        <div class="flex flex-col gap-2">
+          <label class="font-semibold text-sm text-gray-700">Regime Gate</label>
+          <p-toggleswitch [(ngModel)]="regimeGateEnabled" />
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <p-button
+          label="Run Signal Engine"
+          icon="pi pi-bolt"
+          [disabled]="!canRun()"
+          [loading]="loading()"
+          (onClick)="runSignalEngine()"
+        />
+      </div>
+    </div>
+  }
+
+  @if (loading()) {
+    <div class="flex items-center gap-3 my-6">
+      <p-progressSpinner
+        [style]="{ width: '30px', height: '30px' }"
+        strokeWidth="4"
+      />
+      <span class="text-gray-500">Running signal engine pipeline...</span>
+    </div>
+  }
+
+  @if (error(); as err) {
+    <p-message severity="error" [text]="err" class="mb-4" />
+  }
+
+  @if (result(); as res) {
+    @if (res.success) {
+      <app-signal-report [result]="res" />
+    }
+  }
+</div>

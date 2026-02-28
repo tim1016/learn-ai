@@ -145,3 +145,167 @@ class FeatureInfoResponse(BaseModel):
     implementation_note: str
     window: int
     category: str
+
+
+# ─── Signal Engine Models ─────────────────────────────────────
+
+
+class RunSignalEngineRequest(BaseModel):
+    """Request body for POST /research/run-signal."""
+
+    ticker: str = Field(..., description="Stock symbol (e.g. AAPL)")
+    feature_name: str = Field(default="momentum_5m", description="Feature to test")
+    bars: list[OHLCVBar] = Field(..., description="OHLCV bars (1-minute)")
+    start_date: str = Field(..., description="ISO date (YYYY-MM-DD)")
+    end_date: str = Field(..., description="ISO date (YYYY-MM-DD)")
+    flip_sign: bool = Field(default=True, description="Flip sign for negative IC features")
+    regime_gate_enabled: bool = Field(default=True, description="Enable regime gating")
+
+
+class BacktestResultResponse(BaseModel):
+    """Single backtest result for a threshold x cost config."""
+
+    threshold: float
+    cost_bps: float
+    dates: list[str] = []
+    cumulative_returns: list[float] = []
+    positions: list[float] = []
+    gross_sharpe: float = 0.0
+    net_sharpe: float = 0.0
+    max_drawdown: float = 0.0
+    annualized_turnover: float = 0.0
+    avg_holding_bars: float = 0.0
+    win_rate: float = 0.0
+    avg_win_loss_ratio: float = 0.0
+    total_trades: int = 0
+    net_total_return: float = 0.0
+    gross_total_return: float = 0.0
+
+
+class WalkForwardWindowResponse(BaseModel):
+    """Single walk-forward fold result."""
+
+    fold_index: int = 0
+    train_start: str = ""
+    train_end: str = ""
+    test_start: str = ""
+    test_end: str = ""
+    train_bars: int = 0
+    test_bars: int = 0
+    mu: float = 0.0
+    sigma: float = 0.0
+    best_threshold: float = 0.0
+    oos_net_sharpe: float = 0.0
+    oos_gross_sharpe: float = 0.0
+    oos_max_drawdown: float = 0.0
+    oos_net_return: float = 0.0
+    oos_win_rate: float = 0.0
+    oos_total_trades: int = 0
+    oos_dates: list[str] = []
+    oos_cumulative_returns: list[float] = []
+
+
+class WalkForwardResultResponse(BaseModel):
+    """Aggregated walk-forward validation results."""
+
+    windows: list[WalkForwardWindowResponse] = []
+    mean_oos_sharpe: float = 0.0
+    std_oos_sharpe: float = 0.0
+    median_oos_sharpe: float = 0.0
+    pct_windows_profitable: float = 0.0
+    pct_windows_positive_sharpe: float = 0.0
+    worst_window_sharpe: float = 0.0
+    best_window_sharpe: float = 0.0
+    total_oos_bars: int = 0
+    combined_oos_dates: list[str] = []
+    combined_oos_cumulative_returns: list[float] = []
+    oos_sharpe_trend_slope: float = 0.0
+
+
+class GraduationCriterionResponse(BaseModel):
+    """Single graduation criterion."""
+
+    name: str = ""
+    description: str = ""
+    passed: bool = False
+    value: float = 0.0
+    threshold: float = 0.0
+    label: str = "Fail"
+    failure_reason: str = ""
+
+
+class ParameterStabilityResponse(BaseModel):
+    """Parameter stability assessment."""
+
+    sharpe_values_by_threshold: dict[float, float] = {}
+    stability_score: float = 0.0
+    stability_label: str = "Fragile"
+
+
+class GraduationResultResponse(BaseModel):
+    """Complete graduation assessment."""
+
+    criteria: list[GraduationCriterionResponse] = []
+    overall_passed: bool = False
+    overall_grade: str = "F"
+    summary: str = ""
+    status_label: str = "Exploratory"
+    parameter_stability: ParameterStabilityResponse | None = None
+
+
+class SignalDiagnosticsResponse(BaseModel):
+    """Signal diagnostics."""
+
+    signal_mean: float = 0.0
+    signal_std: float = 0.0
+    pct_time_active: float = 0.0
+    avg_abs_signal: float = 0.0
+    pct_filtered_by_threshold: float = 0.0
+    pct_gated_by_regime: float = 0.0
+
+
+class DataSufficiencyResponse(BaseModel):
+    """Data sufficiency assessment."""
+
+    total_bars: int = 0
+    train_bars: int = 0
+    test_bars: int = 0
+    walk_forward_folds: int = 0
+    effective_oos_bars: int = 0
+    regimes_covered: int = 0
+    regime_coverage: dict[str, int] = {}
+    coverage_warnings: list[str] = []
+
+
+class EffectiveSampleSizeResponse(BaseModel):
+    """Autocorrelation-adjusted sample size."""
+
+    raw_n: int = 0
+    effective_n: float = 0.0
+    autocorrelation_lag1: float = 0.0
+    independent_bets: int = 0
+
+
+class RunSignalEngineResponse(BaseModel):
+    """Response body for POST /research/run-signal."""
+
+    success: bool
+    ticker: str
+    feature_name: str
+    start_date: str
+    end_date: str
+    bars_used: int = 0
+    flip_sign: bool = True
+    thresholds_tested: list[float] = []
+    cost_bps_options: list[float] = []
+    best_threshold: float = 0.0
+    best_cost_bps: float = 0.0
+    backtest_grid: list[BacktestResultResponse] = []
+    walk_forward: WalkForwardResultResponse | None = None
+    graduation: GraduationResultResponse | None = None
+    signal_diagnostics: SignalDiagnosticsResponse | None = None
+    data_sufficiency: DataSufficiencyResponse | None = None
+    effective_sample: EffectiveSampleSizeResponse | None = None
+    regime_coverage: dict[str, int] = {}
+    research_log: str = ""
+    error: str | None = None

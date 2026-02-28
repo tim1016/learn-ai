@@ -10,21 +10,34 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.research_models import (
+    BacktestResultResponse,
+    DataSufficiencyResponse,
+    EffectiveSampleSizeResponse,
     FeatureInfoResponse,
+    GraduationCriterionResponse,
+    GraduationResultResponse,
     MonthlyICBreakdownResponse,
+    ParameterStabilityResponse,
     QuantileBinResponse,
     RegimeICResponse,
     RobustnessResponse,
     RollingTStatPointResponse,
     RunFeatureResearchRequest,
     RunFeatureResearchResponse,
+    RunSignalEngineRequest,
+    RunSignalEngineResponse,
+    SignalDiagnosticsResponse,
     StructuralBreakPointResponse,
     TrainTestSplitResponse,
+    WalkForwardResultResponse,
+    WalkForwardWindowResponse,
 )
 from app.research.config import ResearchConfig
 from app.research.documentation.formulas import get_all_documentation
 from app.research.features.registry import get_feature_metadata, list_available_features
 from app.research.runner import run_feature_research
+from app.research.signal.config import SignalConfig
+from app.research.signal.engine import run_signal_engine
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -164,6 +177,201 @@ async def run_feature_research_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Research execution failed: {e}",
+        )
+
+
+@router.post("/run-signal", response_model=RunSignalEngineResponse)
+async def run_signal_engine_endpoint(
+    request: RunSignalEngineRequest,
+) -> RunSignalEngineResponse:
+    """Run the signal engine pipeline.
+
+    Converts a validated feature into a tradable signal with
+    standardization, regime gating, backtesting, walk-forward validation,
+    and graduation assessment.
+    """
+    try:
+        logger.info(
+            "[Signal] Request: %s %s (%d bars)",
+            request.ticker,
+            request.feature_name,
+            len(request.bars),
+        )
+
+        bars_dicts = [bar.model_dump() for bar in request.bars]
+        config = SignalConfig(
+            feature_name=request.feature_name,
+            flip_sign=request.flip_sign,
+            regime_gate_enabled=request.regime_gate_enabled,
+        )
+
+        report = run_signal_engine(
+            ticker=request.ticker,
+            feature_name=request.feature_name,
+            bars=bars_dicts,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            config=config,
+        )
+
+        # Map backtest grid
+        backtest_grid = [
+            BacktestResultResponse(
+                threshold=bt.threshold,
+                cost_bps=bt.cost_bps,
+                dates=bt.dates,
+                cumulative_returns=bt.cumulative_returns,
+                positions=bt.positions,
+                gross_sharpe=bt.gross_sharpe,
+                net_sharpe=bt.net_sharpe,
+                max_drawdown=bt.max_drawdown,
+                annualized_turnover=bt.annualized_turnover,
+                avg_holding_bars=bt.avg_holding_bars,
+                win_rate=bt.win_rate,
+                avg_win_loss_ratio=bt.avg_win_loss_ratio,
+                total_trades=bt.total_trades,
+                net_total_return=bt.net_total_return,
+                gross_total_return=bt.gross_total_return,
+            )
+            for bt in report.backtest_grid
+        ]
+
+        # Map walk-forward
+        walk_forward_response = None
+        if report.walk_forward and report.walk_forward.windows:
+            wf = report.walk_forward
+            walk_forward_response = WalkForwardResultResponse(
+                windows=[
+                    WalkForwardWindowResponse(
+                        fold_index=w.fold_index,
+                        train_start=w.train_start,
+                        train_end=w.train_end,
+                        test_start=w.test_start,
+                        test_end=w.test_end,
+                        train_bars=w.train_bars,
+                        test_bars=w.test_bars,
+                        mu=w.mu,
+                        sigma=w.sigma,
+                        best_threshold=w.best_threshold,
+                        oos_net_sharpe=w.oos_net_sharpe,
+                        oos_gross_sharpe=w.oos_gross_sharpe,
+                        oos_max_drawdown=w.oos_max_drawdown,
+                        oos_net_return=w.oos_net_return,
+                        oos_win_rate=w.oos_win_rate,
+                        oos_total_trades=w.oos_total_trades,
+                        oos_dates=w.oos_dates,
+                        oos_cumulative_returns=w.oos_cumulative_returns,
+                    )
+                    for w in wf.windows
+                ],
+                mean_oos_sharpe=wf.mean_oos_sharpe,
+                std_oos_sharpe=wf.std_oos_sharpe,
+                median_oos_sharpe=wf.median_oos_sharpe,
+                pct_windows_profitable=wf.pct_windows_profitable,
+                pct_windows_positive_sharpe=wf.pct_windows_positive_sharpe,
+                worst_window_sharpe=wf.worst_window_sharpe,
+                best_window_sharpe=wf.best_window_sharpe,
+                total_oos_bars=wf.total_oos_bars,
+                combined_oos_dates=wf.combined_oos_dates,
+                combined_oos_cumulative_returns=wf.combined_oos_cumulative_returns,
+                oos_sharpe_trend_slope=wf.oos_sharpe_trend_slope,
+            )
+
+        # Map graduation
+        graduation_response = None
+        if report.graduation:
+            g = report.graduation
+            graduation_response = GraduationResultResponse(
+                criteria=[
+                    GraduationCriterionResponse(
+                        name=c.name,
+                        description=c.description,
+                        passed=c.passed,
+                        value=c.value,
+                        threshold=c.threshold,
+                        label=c.label,
+                        failure_reason=c.failure_reason,
+                    )
+                    for c in g.criteria
+                ],
+                overall_passed=g.overall_passed,
+                overall_grade=g.overall_grade,
+                summary=g.summary,
+                status_label=g.status_label,
+                parameter_stability=ParameterStabilityResponse(
+                    sharpe_values_by_threshold=g.parameter_stability.sharpe_values_by_threshold,
+                    stability_score=g.parameter_stability.stability_score,
+                    stability_label=g.parameter_stability.stability_label,
+                ) if g.parameter_stability else None,
+            )
+
+        # Map diagnostics
+        diag_response = None
+        if report.signal_diagnostics:
+            d = report.signal_diagnostics
+            diag_response = SignalDiagnosticsResponse(
+                signal_mean=d.signal_mean,
+                signal_std=d.signal_std,
+                pct_time_active=d.pct_time_active,
+                avg_abs_signal=d.avg_abs_signal,
+                pct_filtered_by_threshold=d.pct_filtered_by_threshold,
+                pct_gated_by_regime=d.pct_gated_by_regime,
+            )
+
+        # Map data sufficiency
+        ds_response = None
+        if report.data_sufficiency:
+            ds = report.data_sufficiency
+            ds_response = DataSufficiencyResponse(
+                total_bars=ds.total_bars,
+                train_bars=ds.train_bars,
+                test_bars=ds.test_bars,
+                walk_forward_folds=ds.walk_forward_folds,
+                effective_oos_bars=ds.effective_oos_bars,
+                regimes_covered=ds.regimes_covered,
+                regime_coverage=ds.regime_coverage,
+                coverage_warnings=ds.coverage_warnings,
+            )
+
+        # Map effective sample
+        es_response = None
+        if report.effective_sample:
+            es = report.effective_sample
+            es_response = EffectiveSampleSizeResponse(
+                raw_n=es.raw_n,
+                effective_n=es.effective_n,
+                autocorrelation_lag1=es.autocorrelation_lag1,
+                independent_bets=es.independent_bets,
+            )
+
+        return RunSignalEngineResponse(
+            success=report.error is None,
+            ticker=report.ticker,
+            feature_name=report.feature_name,
+            start_date=report.start_date,
+            end_date=report.end_date,
+            bars_used=report.bars_used,
+            flip_sign=report.flip_sign,
+            thresholds_tested=report.thresholds_tested,
+            cost_bps_options=report.cost_bps_options,
+            best_threshold=report.best_threshold,
+            best_cost_bps=report.best_cost_bps,
+            backtest_grid=backtest_grid,
+            walk_forward=walk_forward_response,
+            graduation=graduation_response,
+            signal_diagnostics=diag_response,
+            data_sufficiency=ds_response,
+            effective_sample=es_response,
+            regime_coverage=report.regime_coverage,
+            research_log=report.research_log,
+            error=report.error,
+        )
+
+    except Exception as e:
+        logger.error("[Signal] Endpoint error: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Signal engine execution failed: {e}",
         )
 
 

@@ -1,0 +1,351 @@
+:host {
+  display: block;
+}
+
+// ─── Graduation Card ─────────────────────────────────────
+.graduation-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.5rem;
+  padding: 1.25rem 1.5rem;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 1rem;
+
+  .grade-display {
+    text-align: center;
+    min-width: 80px;
+
+    .grade-letter {
+      font-size: 3rem;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .grade-sub {
+      font-size: 0.65rem;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-top: 0.25rem;
+    }
+  }
+
+  .grade-details {
+    flex: 1;
+
+    .grade-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.5rem;
+    }
+
+    .grade-title {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: #1e293b;
+      margin: 0;
+    }
+
+    .grade-summary {
+      font-size: 0.85rem;
+      color: #64748b;
+      line-height: 1.5;
+      margin: 0;
+    }
+  }
+}
+
+// ─── Criteria Grid ───────────────────────────────────────
+.criteria-grid {
+  margin-bottom: 1.5rem;
+
+  .criterion-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid #f1f5f9;
+    flex-wrap: wrap;
+
+    &:last-child { border-bottom: none; }
+
+    .criterion-name {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: #334155;
+      min-width: 180px;
+    }
+
+    .criterion-values {
+      font-size: 0.85rem;
+      color: #64748b;
+      display: flex;
+      gap: 0.25rem;
+      align-items: center;
+
+      .criterion-value { font-weight: 600; color: #1e293b; }
+      .criterion-vs { color: #94a3b8; font-size: 0.75rem; }
+      .criterion-threshold { color: #64748b; }
+    }
+
+    .criterion-reason {
+      width: 100%;
+      font-size: 0.8rem;
+      color: #dc2626;
+      padding-left: 180px;
+      margin-top: 0.15rem;
+    }
+
+    &.criterion-failed {
+      background: #fef2f2;
+    }
+  }
+}
+
+// ─── Metric Card ─────────────────────────────────────────
+.metric-card {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+
+  .metric-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .metric-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #1e293b;
+    margin-top: 0.15rem;
+  }
+}
+
+// ─── Table Title ─────────────────────────────────────────
+.table-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #1e293b;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+
+  i {
+    color: #3b82f6;
+    font-size: 0.95rem;
+  }
+}
+
+// ─── Chart Container ─────────────────────────────────────
+.chart-container {
+  padding: 1.25rem;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  height: 380px;
+  position: relative;
+
+  canvas {
+    width: 100% !important;
+    height: 100% !important;
+  }
+}
+
+// ─── Grid Table ──────────────────────────────────────────
+.grid-table-wrapper {
+  overflow-x: auto;
+}
+
+.grid-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+
+  th, td {
+    padding: 0.5rem 0.75rem;
+    text-align: center;
+    border: 1px solid #e2e8f0;
+  }
+
+  th {
+    background: #f8fafc;
+    font-weight: 600;
+    color: #475569;
+    font-size: 0.8rem;
+  }
+
+  .row-header {
+    text-align: left;
+    font-weight: 600;
+    color: #334155;
+    background: #f8fafc;
+  }
+}
+
+.cell-green {
+  background: #dcfce7;
+  color: #166534;
+  font-weight: 600;
+}
+
+.cell-yellow {
+  background: #fef9c3;
+  color: #854d0e;
+  font-weight: 600;
+}
+
+.cell-red {
+  background: #fee2e2;
+  color: #991b1b;
+  font-weight: 600;
+}
+
+// ─── Regime Grid ─────────────────────────────────────────
+.regime-grid {
+  display: grid;
+  grid-template-columns: 100px repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 0.75rem;
+
+  .regime-header {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #64748b;
+    text-align: center;
+    text-transform: uppercase;
+    padding: 0.3rem;
+  }
+
+  .regime-row-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #334155;
+    display: flex;
+    align-items: center;
+    padding-right: 0.5rem;
+  }
+
+  .regime-cell {
+    text-align: center;
+    padding: 0.4rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+
+    &.regime-covered {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    &.regime-missing {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+  }
+}
+
+// ─── Alpha Decay Warning ─────────────────────────────────
+.alpha-decay-warning {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: #dc2626;
+  font-weight: 600;
+
+  i { font-size: 1rem; }
+}
+
+// ─── Assumptions Grid ────────────────────────────────────
+.assumptions-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 1rem;
+  font-size: 0.8rem;
+  padding: 0.5rem 0;
+
+  .assumption-label {
+    color: #64748b;
+    font-weight: 600;
+  }
+
+  .assumption-value {
+    color: #334155;
+  }
+}
+
+// ─── Sufficiency Card ────────────────────────────────────
+.sufficiency-card {
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+// ─── Coverage Warnings ──────────────────────────────────
+.coverage-warnings {
+  .warning-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    font-size: 0.8rem;
+    color: #d97706;
+
+    i {
+      font-size: 0.75rem;
+      margin-top: 2px;
+      flex-shrink: 0;
+    }
+  }
+}
+
+// ─── Research Log ────────────────────────────────────────
+.research-log {
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+
+  .table-title i { color: #6366f1; }
+
+  .log-content {
+    font-size: 0.85rem;
+    color: #475569;
+    line-height: 1.6;
+    font-family: ui-monospace, monospace;
+    white-space: pre-wrap;
+    user-select: all;
+  }
+}
+
+// ─── Bars Footer ─────────────────────────────────────────
+.bars-footer {
+  display: flex;
+  align-items: center;
+  padding: 0.6rem 1rem;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  font-size: 0.85rem;
+  color: #64748b;
+
+  i {
+    color: #3b82f6;
+    font-size: 0.9rem;
+  }
+}

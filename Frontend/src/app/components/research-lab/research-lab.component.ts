@@ -2,6 +2,7 @@ import { Component, ChangeDetectionStrategy } from '@angular/core';
 import { FeatureRunnerComponent } from './feature-runner/feature-runner.component';
 import { InfoPanelComponent } from './info-panel/info-panel.component';
 import { ExperimentHistoryComponent } from './experiment-history/experiment-history.component';
+import { SignalRunnerComponent } from './signal-runner/signal-runner.component';
 import { TabsModule } from 'primeng/tabs';
 
 @Component({
@@ -11,6 +12,7 @@ import { TabsModule } from 'primeng/tabs';
     FeatureRunnerComponent,
     InfoPanelComponent,
     ExperimentHistoryComponent,
+    SignalRunnerComponent,
     TabsModule,
   ],
   templateUrl: './research-lab.component.html',

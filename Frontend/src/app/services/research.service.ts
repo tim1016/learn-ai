@@ -140,6 +140,158 @@ export interface RunFeatureResearchInput {
   multiplier?: number;
 }
 
+// ─── Signal Engine Interfaces ─────────────────────────────────
+
+export interface SignalBacktestResult {
+  threshold: number;
+  costBps: number;
+  dates: string[];
+  cumulativeReturns: number[];
+  positions: number[];
+  grossSharpe: number;
+  netSharpe: number;
+  maxDrawdown: number;
+  annualizedTurnover: number;
+  avgHoldingBars: number;
+  winRate: number;
+  avgWinLossRatio: number;
+  totalTrades: number;
+  netTotalReturn: number;
+  grossTotalReturn: number;
+}
+
+export interface WalkForwardWindow {
+  foldIndex: number;
+  trainStart: string;
+  trainEnd: string;
+  testStart: string;
+  testEnd: string;
+  trainBars: number;
+  testBars: number;
+  mu: number;
+  sigma: number;
+  bestThreshold: number;
+  oosNetSharpe: number;
+  oosGrossSharpe: number;
+  oosMaxDrawdown: number;
+  oosNetReturn: number;
+  oosWinRate: number;
+  oosTotalTrades: number;
+  oosDates: string[];
+  oosCumulativeReturns: number[];
+}
+
+export interface WalkForwardResult {
+  windows: WalkForwardWindow[];
+  meanOosSharpe: number;
+  stdOosSharpe: number;
+  medianOosSharpe: number;
+  pctWindowsProfitable: number;
+  pctWindowsPositiveSharpe: number;
+  worstWindowSharpe: number;
+  bestWindowSharpe: number;
+  totalOosBars: number;
+  combinedOosDates: string[];
+  combinedOosCumulativeReturns: number[];
+  oosSharpeTrendSlope: number;
+}
+
+export interface GraduationCriterion {
+  name: string;
+  description: string;
+  passed: boolean;
+  value: number;
+  threshold: number;
+  label: string;
+  failureReason: string;
+}
+
+export interface ThresholdSharpeEntry {
+  threshold: number;
+  sharpe: number;
+}
+
+export interface ParameterStability {
+  sharpeValuesByThreshold: ThresholdSharpeEntry[];
+  stabilityScore: number;
+  stabilityLabel: string;
+}
+
+export interface GraduationResult {
+  criteria: GraduationCriterion[];
+  overallPassed: boolean;
+  overallGrade: string;
+  summary: string;
+  statusLabel: string;
+  parameterStability: ParameterStability | null;
+}
+
+export interface SignalDiagnostics {
+  signalMean: number;
+  signalStd: number;
+  pctTimeActive: number;
+  avgAbsSignal: number;
+  pctFilteredByThreshold: number;
+  pctGatedByRegime: number;
+}
+
+export interface RegimeCoverageEntry {
+  regime: string;
+  count: number;
+}
+
+export interface DataSufficiency {
+  totalBars: number;
+  trainBars: number;
+  testBars: number;
+  walkForwardFolds: number;
+  effectiveOosBars: number;
+  regimesCovered: number;
+  regimeCoverage: RegimeCoverageEntry[];
+  coverageWarnings: string[];
+}
+
+export interface EffectiveSampleSize {
+  rawN: number;
+  effectiveN: number;
+  autocorrelationLag1: number;
+  independentBets: number;
+}
+
+export interface SignalEngineResult {
+  success: boolean;
+  ticker: string;
+  featureName: string;
+  startDate: string;
+  endDate: string;
+  barsUsed: number;
+  flipSign: boolean;
+  thresholdsTested: number[];
+  costBpsOptions: number[];
+  bestThreshold: number;
+  bestCostBps: number;
+  backtestGrid: SignalBacktestResult[];
+  walkForward: WalkForwardResult | null;
+  graduation: GraduationResult | null;
+  signalDiagnostics: SignalDiagnostics | null;
+  dataSufficiency: DataSufficiency | null;
+  effectiveSample: EffectiveSampleSize | null;
+  regimeCoverage: RegimeCoverageEntry[];
+  researchLog: string;
+  error?: string;
+}
+
+export interface RunSignalEngineInput {
+  ticker: string;
+  featureName: string;
+  fromDate: string;
+  toDate: string;
+  flipSign: boolean;
+  regimeGateEnabled: boolean;
+  timespan?: string;
+  multiplier?: number;
+}
+
 // ─── GraphQL Queries ───────────────────────────────────────
 
 const RUN_FEATURE_RESEARCH_MUTATION = `
@@ -209,6 +361,78 @@ const GET_RESEARCH_EXPERIMENT_QUERY = `
   }
 `;
 
+const RUN_SIGNAL_ENGINE_MUTATION = `
+  mutation RunSignalEngine(
+    $ticker: String!
+    $featureName: String! = "momentum_5m"
+    $fromDate: String!
+    $toDate: String!
+    $flipSign: Boolean! = true
+    $regimeGateEnabled: Boolean! = true
+    $timespan: String! = "minute"
+    $multiplier: Int! = 1
+  ) {
+    runSignalEngine(
+      ticker: $ticker
+      featureName: $featureName
+      fromDate: $fromDate
+      toDate: $toDate
+      flipSign: $flipSign
+      regimeGateEnabled: $regimeGateEnabled
+      timespan: $timespan
+      multiplier: $multiplier
+    ) {
+      success ticker featureName startDate endDate barsUsed
+      flipSign thresholdsTested costBpsOptions bestThreshold bestCostBps
+      backtestGrid {
+        threshold costBps dates cumulativeReturns positions
+        grossSharpe netSharpe maxDrawdown annualizedTurnover
+        avgHoldingBars winRate avgWinLossRatio totalTrades
+        netTotalReturn grossTotalReturn
+      }
+      walkForward {
+        windows {
+          foldIndex trainStart trainEnd testStart testEnd
+          trainBars testBars mu sigma bestThreshold
+          oosNetSharpe oosGrossSharpe oosMaxDrawdown
+          oosNetReturn oosWinRate oosTotalTrades
+          oosDates oosCumulativeReturns
+        }
+        meanOosSharpe stdOosSharpe medianOosSharpe
+        pctWindowsProfitable pctWindowsPositiveSharpe
+        worstWindowSharpe bestWindowSharpe totalOosBars
+        combinedOosDates combinedOosCumulativeReturns
+        oosSharpeTrendSlope
+      }
+      graduation {
+        criteria {
+          name description passed value threshold label failureReason
+        }
+        overallPassed overallGrade summary statusLabel
+        parameterStability {
+          sharpeValuesByThreshold { threshold sharpe }
+          stabilityScore stabilityLabel
+        }
+      }
+      signalDiagnostics {
+        signalMean signalStd pctTimeActive avgAbsSignal
+        pctFilteredByThreshold pctGatedByRegime
+      }
+      dataSufficiency {
+        totalBars trainBars testBars walkForwardFolds
+        effectiveOosBars regimesCovered
+        regimeCoverage { regime count }
+        coverageWarnings
+      }
+      effectiveSample {
+        rawN effectiveN autocorrelationLag1 independentBets
+      }
+      regimeCoverage { regime count }
+      researchLog error
+    }
+  }
+`;
+
 // ─── Response Types ────────────────────────────────────────
 
 interface RunResearchResponse {
@@ -223,6 +447,11 @@ interface GetExperimentsResponse {
 
 interface GetExperimentResponse {
   data: { getResearchExperiment: ResearchExperiment | null };
+  errors?: { message: string }[];
+}
+
+interface RunSignalEngineResponse {
+  data: { runSignalEngine: SignalEngineResult };
   errors?: { message: string }[];
 }
 
@@ -270,6 +499,31 @@ export class ResearchService {
           }
         }),
         map(response => response.data.getResearchExperiments)
+      );
+  }
+
+  runSignalEngine(input: RunSignalEngineInput): Observable<SignalEngineResult> {
+    return this.http
+      .post<RunSignalEngineResponse>(GRAPHQL_URL, {
+        query: RUN_SIGNAL_ENGINE_MUTATION,
+        variables: {
+          ticker: input.ticker,
+          featureName: input.featureName,
+          fromDate: input.fromDate,
+          toDate: input.toDate,
+          flipSign: input.flipSign,
+          regimeGateEnabled: input.regimeGateEnabled,
+          timespan: input.timespan ?? 'minute',
+          multiplier: input.multiplier ?? 1,
+        }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.runSignalEngine)
       );
   }
 

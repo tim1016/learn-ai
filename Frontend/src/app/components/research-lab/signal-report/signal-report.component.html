@@ -1,0 +1,381 @@
+<div class="mt-4">
+
+  <!-- 1. Graduation Card -->
+  @if (result().graduation; as grad) {
+    <div class="graduation-card">
+      <div class="grade-display">
+        <div class="grade-letter" [style.color]="gradeColor">{{ grad.overallGrade }}</div>
+        <div class="grade-sub">Signal Grade</div>
+      </div>
+      <div class="grade-details">
+        <div class="grade-header">
+          <h3 class="grade-title">{{ result().featureName }} on {{ result().ticker }}</h3>
+          <p-tag [severity]="statusSeverity" [value]="grad.statusLabel" />
+          <p-tag
+            [severity]="grad.overallPassed ? 'success' : 'danger'"
+            [value]="grad.overallPassed ? 'Passed' : 'Failed'"
+            class="ml-2"
+          />
+        </div>
+        <p class="grade-summary">{{ grad.summary }}</p>
+      </div>
+    </div>
+
+    <!-- Criteria rows -->
+    <div class="criteria-grid">
+      @for (c of grad.criteria; track c.name) {
+        <div class="criterion-row" [class.criterion-failed]="!c.passed">
+          <div class="criterion-name">{{ c.name }}</div>
+          <div class="criterion-values">
+            <span class="criterion-value">{{ c.value | number: '1.2-2' }}</span>
+            <span class="criterion-vs">vs</span>
+            <span class="criterion-threshold">{{ c.threshold | number: '1.2-2' }}</span>
+          </div>
+          <p-tag [severity]="criterionSeverity(c.passed)" [value]="c.label" />
+          @if (c.failureReason) {
+            <div class="criterion-reason">{{ c.failureReason }}</div>
+          }
+        </div>
+      }
+    </div>
+  }
+
+  <!-- 2. Execution Assumptions Panel -->
+  <div class="mt-6 mb-6">
+    <p-accordion>
+      <p-accordion-panel value="exec-assumptions">
+        <p-accordion-header>
+          <i class="pi pi-cog mr-2"></i>Execution Assumptions
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="assumptions-grid">
+            @for (a of executionAssumptions; track a.label) {
+              <span class="assumption-label">{{ a.label }}</span>
+              <span class="assumption-value">{{ a.value }}</span>
+            }
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </div>
+
+  <!-- 3. Data Sufficiency & Coverage -->
+  @if (result().dataSufficiency; as ds) {
+    <div class="sufficiency-card mb-6">
+      <h4 class="table-title mb-3">
+        <i class="pi pi-database mr-2"></i>Data Sufficiency & Coverage
+      </h4>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+        <div class="metric-card">
+          <div class="metric-label">Total Bars</div>
+          <div class="metric-value">{{ ds.totalBars | number }}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Train / Test</div>
+          <div class="metric-value">{{ ds.trainBars | number }} / {{ ds.testBars | number }}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">WF Folds</div>
+          <div class="metric-value">{{ ds.walkForwardFolds }}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Effective OOS Bars</div>
+          <div class="metric-value">{{ ds.effectiveOosBars | number }}</div>
+        </div>
+      </div>
+
+      @if (result().effectiveSample; as es) {
+        <div class="grid grid-cols-3 gap-4 mb-4">
+          <div class="metric-card">
+            <div class="metric-label">Raw N</div>
+            <div class="metric-value">{{ es.rawN | number }}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Effective N</div>
+            <div class="metric-value">{{ es.effectiveN | number: '1.0-0' }}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Independent Bets</div>
+            <div class="metric-value">{{ es.independentBets | number }}</div>
+          </div>
+        </div>
+      }
+
+      <!-- Regime coverage grid -->
+      <div class="regime-grid">
+        <div class="regime-header"></div>
+        @for (trend of trendRegimes; track trend) {
+          <div class="regime-header">{{ trend }}</div>
+        }
+        @for (vol of volRegimes; track vol) {
+          <div class="regime-row-label">{{ vol }}</div>
+          @for (trend of trendRegimes; track trend) {
+            <div class="regime-cell" [class.regime-covered]="regimeCovered(vol) && regimeCovered(trend)" [class.regime-missing]="!regimeCovered(vol) || !regimeCovered(trend)">
+              {{ regimeCovered(vol) && regimeCovered(trend) ? getRegimeCount(vol) : 0 }}
+            </div>
+          }
+        }
+      </div>
+
+      @if (ds.coverageWarnings.length > 0) {
+        <div class="coverage-warnings mt-3">
+          @for (warn of ds.coverageWarnings; track $index) {
+            <div class="warning-item">
+              <i class="pi pi-exclamation-triangle"></i>
+              <span>{{ warn }}</span>
+            </div>
+          }
+        </div>
+      }
+    </div>
+  }
+
+  <!-- 4. Signal Diagnostics -->
+  @if (result().signalDiagnostics; as diag) {
+    <div class="mb-6">
+      <h4 class="table-title mb-3">
+        <i class="pi pi-chart-bar mr-2"></i>Signal Diagnostics
+      </h4>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+        <div class="metric-card">
+          <div class="metric-label">Signal Mean</div>
+          <div class="metric-value">{{ diag.signalMean | number: '1.4-4' }}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Signal Std</div>
+          <div class="metric-value">{{ diag.signalStd | number: '1.4-4' }}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">% Time Active</div>
+          <div class="metric-value">{{ diag.pctTimeActive | percent: '1.1-1' }}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Avg |Signal|</div>
+          <div class="metric-value">{{ diag.avgAbsSignal | number: '1.4-4' }}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">% Filtered by Threshold</div>
+          <div class="metric-value">{{ diag.pctFilteredByThreshold | percent: '1.1-1' }}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">% Gated by Regime</div>
+          <div class="metric-value">{{ diag.pctGatedByRegime | percent: '1.1-1' }}</div>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- 5. Walk-Forward Summary -->
+  @if (result().walkForward; as wf) {
+    @if (wf.windows.length > 0) {
+      <div class="mb-6">
+        <h4 class="table-title mb-3">
+          <i class="pi pi-sync mr-2"></i>Walk-Forward Summary
+        </h4>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+          <div class="metric-card">
+            <div class="metric-label">Mean OOS Sharpe</div>
+            <div class="metric-value" [class.text-green-700]="wf.meanOosSharpe > 0" [class.text-red-700]="wf.meanOosSharpe <= 0">
+              {{ wf.meanOosSharpe | number: '1.2-2' }}
+            </div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Median OOS Sharpe</div>
+            <div class="metric-value">{{ wf.medianOosSharpe | number: '1.2-2' }}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Best / Worst</div>
+            <div class="metric-value">{{ wf.bestWindowSharpe | number: '1.2-2' }} / {{ wf.worstWindowSharpe | number: '1.2-2' }}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">% Windows Positive Sharpe</div>
+            <div class="metric-value">{{ wf.pctWindowsPositiveSharpe | percent: '1.0-0' }}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">% Windows Profitable</div>
+            <div class="metric-value">{{ wf.pctWindowsProfitable | percent: '1.0-0' }}</div>
+          </div>
+        </div>
+
+        @if (hasAlphaDecay) {
+          <div class="alpha-decay-warning">
+            <i class="pi pi-exclamation-triangle"></i>
+            <span>OOS Sharpe declining over time (slope: {{ wf.oosSharpeTrendSlope | number: '1.3-3' }}). Possible alpha decay detected.</span>
+          </div>
+        }
+
+        <!-- OOS Equity Curve -->
+        @if (wf.combinedOosDates.length > 0) {
+          <div class="chart-container mb-4">
+            <canvas #oosEquityCurve></canvas>
+          </div>
+        }
+      </div>
+
+      <!-- 6. Walk-Forward Windows Table -->
+      <div class="mb-6">
+        <h4 class="table-title mb-3">
+          <i class="pi pi-list mr-2"></i>Walk-Forward Windows
+        </h4>
+        <p-table [value]="wf.windows" styleClass="p-datatable-sm" [tableStyle]="{ 'min-width': '50rem' }">
+          <ng-template #header>
+            <tr>
+              <th>Fold</th>
+              <th>Train Period</th>
+              <th>Test Period</th>
+              <th>Threshold</th>
+              <th>OOS Sharpe</th>
+              <th>OOS Return</th>
+              <th>OOS Max DD</th>
+              <th>Trades</th>
+            </tr>
+          </ng-template>
+          <ng-template #body let-w>
+            <tr>
+              <td>{{ w.foldIndex }}</td>
+              <td>{{ w.trainStart }} to {{ w.trainEnd }}</td>
+              <td>{{ w.testStart }} to {{ w.testEnd }}</td>
+              <td>{{ w.bestThreshold | number: '1.1-1' }}</td>
+              <td [class.text-green-700]="w.oosNetSharpe > 0" [class.text-red-700]="w.oosNetSharpe <= 0">
+                {{ w.oosNetSharpe | number: '1.2-2' }}
+              </td>
+              <td [class.text-green-700]="w.oosNetReturn > 0" [class.text-red-700]="w.oosNetReturn <= 0">
+                {{ w.oosNetReturn | number: '1.4-4' }}
+              </td>
+              <td>{{ w.oosMaxDrawdown | number: '1.4-4' }}</td>
+              <td>{{ w.oosTotalTrades }}</td>
+            </tr>
+          </ng-template>
+        </p-table>
+      </div>
+    }
+  }
+
+  <!-- 7. Backtest Grid - Net Sharpe -->
+  @if (result().backtestGrid.length > 0) {
+    <div class="mb-6">
+      <h4 class="table-title mb-3">
+        <i class="pi pi-th-large mr-2"></i>Backtest Grid — Net Sharpe
+      </h4>
+      <div class="grid-table-wrapper">
+        <table class="grid-table">
+          <thead>
+            <tr>
+              <th>Threshold \ Cost</th>
+              @for (cost of uniqueCosts; track cost) {
+                <th>{{ cost }}bps</th>
+              }
+            </tr>
+          </thead>
+          <tbody>
+            @for (threshold of uniqueThresholds; track threshold) {
+              <tr>
+                <td class="row-header">{{ threshold | number: '1.1-1' }}</td>
+                @for (cost of uniqueCosts; track cost) {
+                  @let bt = getGridResult(threshold, cost);
+                  <td [class]="bt ? sharpeCellClass(bt.netSharpe) : ''">
+                    {{ bt ? (bt.netSharpe | number: '1.2-2') : '-' }}
+                  </td>
+                }
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 8. Backtest Grid - Turnover -->
+    <div class="mb-6">
+      <h4 class="table-title mb-3">
+        <i class="pi pi-replay mr-2"></i>Backtest Grid — Annualized Turnover
+      </h4>
+      <div class="grid-table-wrapper">
+        <table class="grid-table">
+          <thead>
+            <tr>
+              <th>Threshold \ Cost</th>
+              @for (cost of uniqueCosts; track cost) {
+                <th>{{ cost }}bps</th>
+              }
+            </tr>
+          </thead>
+          <tbody>
+            @for (threshold of uniqueThresholds; track threshold) {
+              <tr>
+                <td class="row-header">{{ threshold | number: '1.1-1' }}</td>
+                @for (cost of uniqueCosts; track cost) {
+                  @let bt = getGridResult(threshold, cost);
+                  <td [class]="bt ? turnoverCellClass(bt.annualizedTurnover) : ''">
+                    {{ bt ? (bt.annualizedTurnover | number: '1.1-1') + 'x' : '-' }}
+                  </td>
+                }
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  }
+
+  <!-- 9. Best Config Equity Curve -->
+  @if (bestBacktest?.dates?.length) {
+    <div class="mb-6">
+      <h4 class="table-title mb-3">
+        <i class="pi pi-chart-line mr-2"></i>Best Config Equity Curve
+      </h4>
+      <div class="chart-container">
+        <canvas #bestEquityCurve></canvas>
+      </div>
+    </div>
+  }
+
+  <!-- 10. Parameter Stability -->
+  @if (result().graduation?.parameterStability; as ps) {
+    <div class="mb-6">
+      <h4 class="table-title mb-3">
+        <i class="pi pi-sliders-h mr-2"></i>Parameter Stability
+        <p-tag
+          [severity]="ps.stabilityLabel === 'Stable' ? 'success' : (ps.stabilityLabel === 'Sensitive' ? 'warn' : 'danger')"
+          [value]="ps.stabilityLabel"
+          class="ml-2"
+        />
+        <span class="ml-2 text-sm text-gray-500">Score: {{ ps.stabilityScore | number: '1.2-2' }}</span>
+      </h4>
+      <div class="chart-container">
+        <canvas #stabilityChart></canvas>
+      </div>
+    </div>
+  }
+
+  <!-- 11. Signal Lifespan -->
+  @if (result().walkForward?.windows?.length) {
+    <div class="mb-6">
+      <h4 class="table-title mb-3">
+        <i class="pi pi-clock mr-2"></i>Signal Lifespan
+        @if (hasAlphaDecay) {
+          <p-tag severity="danger" value="Alpha Decay Detected" class="ml-2" />
+        }
+      </h4>
+      <div class="chart-container">
+        <canvas #lifespanChart></canvas>
+      </div>
+    </div>
+  }
+
+  <!-- 12. Research Log Snapshot -->
+  @if (result().researchLog) {
+    <div class="research-log">
+      <h4 class="table-title mb-2">
+        <i class="pi pi-file mr-2"></i>Research Log
+      </h4>
+      <div class="log-content">{{ result().researchLog }}</div>
+    </div>
+  }
+
+  <!-- Bars Footer -->
+  <div class="bars-footer mt-4">
+    <i class="pi pi-database mr-2"></i>
+    Analysis based on <strong>{{ result().barsUsed | number }}</strong> bars
+    ({{ result().startDate }} to {{ result().endDate }})
+  </div>
+</div>

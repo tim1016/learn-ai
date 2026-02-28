@@ -172,6 +172,76 @@ public class ResearchService : IResearchService
         return experiment;
     }
 
+    public async Task<SignalEngineReportDto> RunSignalEngineAsync(
+        string ticker,
+        string featureName,
+        string fromDate,
+        string toDate,
+        bool flipSign = true,
+        bool regimeGateEnabled = true,
+        string timespan = "minute",
+        int multiplier = 1,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation(
+            "[Signal] Running {Feature} on {Ticker} from {From} to {To}",
+            featureName, ticker, fromDate, toDate);
+
+        var aggregates = await _marketDataService.GetOrFetchAggregatesAsync(
+            ticker.ToUpper(), multiplier, timespan, fromDate, toDate,
+            forceRefresh: false, cancellationToken: cancellationToken);
+
+        if (aggregates.Count == 0)
+        {
+            return new SignalEngineReportDto
+            {
+                Success = false,
+                Ticker = ticker,
+                FeatureName = featureName,
+                Error = $"No aggregates found for {ticker} in date range {fromDate} to {toDate}"
+            };
+        }
+
+        _logger.LogInformation(
+            "[Signal] Found {Count} aggregates for {Ticker}, sending to Python",
+            aggregates.Count, ticker);
+
+        var bars = aggregates.Select(a => new OhlcvBarDto(
+            new DateTimeOffset(a.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+            a.Open, a.High, a.Low, a.Close, a.Volume
+        )).ToList();
+
+        var request = new RunSignalEngineRequest
+        {
+            Ticker = ticker.ToUpper(),
+            FeatureName = featureName,
+            Bars = bars,
+            StartDate = fromDate,
+            EndDate = toDate,
+            FlipSign = flipSign,
+            RegimeGateEnabled = regimeGateEnabled,
+        };
+
+        var response = await _httpClient.PostAsJsonAsync(
+            "/api/research/run-signal", request, _jsonOptions, cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+
+        var report = await response.Content.ReadFromJsonAsync<SignalEngineReportDto>(
+            _jsonOptions, cancellationToken);
+
+        if (report is null)
+            throw new HttpRequestException("Failed to parse signal engine report from Python service");
+
+        _logger.LogInformation(
+            "[Signal] Completed {Feature} on {Ticker}: grade={Grade}, status={Status}",
+            featureName, ticker,
+            report.Graduation?.OverallGrade ?? "N/A",
+            report.Graduation?.StatusLabel ?? "N/A");
+
+        return report;
+    }
+
     private async Task PersistExperimentAsync(
         string ticker,
         ResearchReportDto report,
