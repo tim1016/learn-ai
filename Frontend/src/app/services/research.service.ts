@@ -194,6 +194,7 @@ export interface WalkForwardResult {
   combinedOosDates: string[];
   combinedOosCumulativeReturns: number[];
   oosSharpeTrendSlope: number;
+  alphaDecay: AlphaDecayStats | null;
 }
 
 export interface GraduationCriterion {
@@ -256,6 +257,40 @@ export interface EffectiveSampleSize {
   effectiveN: number;
   autocorrelationLag1: number;
   independentBets: number;
+  maxLagUsed: number;
+  rhoSum: number;
+}
+
+export interface AlphaDecayStats {
+  slope: number;
+  intercept: number;
+  tStat: number;
+  pValue: number;
+  rSquared: number;
+}
+
+export interface SignalBehaviorMetrics {
+  avgForwardReturnWhenActive: number;
+  skewnessActiveReturns: number;
+  avgWinReturn: number;
+  avgLossReturn: number;
+  hitRate: number;
+}
+
+export interface Methodology {
+  trainMonths: number;
+  testMonths: number;
+  windowType: string;
+  optimizationTarget: string;
+  annualizationFactor: number;
+  barsPerDay: number;
+  horizon: number;
+  defaultCostBps: number;
+  minBarsForSignal: number;
+  flipSign: boolean;
+  regimeGateEnabled: boolean;
+  thresholds: number[];
+  costBpsOptions: number[];
 }
 
 export interface SignalEngineResult {
@@ -277,8 +312,28 @@ export interface SignalEngineResult {
   dataSufficiency: DataSufficiency | null;
   effectiveSample: EffectiveSampleSize | null;
   regimeCoverage: RegimeCoverageEntry[];
+  signalBehavior: SignalBehaviorMetrics | null;
+  methodology: Methodology | null;
   researchLog: string;
   error?: string;
+}
+
+export interface SignalExperiment {
+  id: number;
+  ticker: string;
+  featureName: string;
+  startDate: string;
+  endDate: string;
+  barsUsed: number;
+  overallGrade: string;
+  statusLabel: string;
+  overallPassed: boolean;
+  meanOosSharpe: number;
+  bestThreshold: number;
+  bestCostBps: number;
+  flipSign: boolean;
+  regimeGateEnabled: boolean;
+  createdAt: string;
 }
 
 export interface RunSignalEngineInput {
@@ -406,6 +461,7 @@ const RUN_SIGNAL_ENGINE_MUTATION = `
         worstWindowSharpe bestWindowSharpe totalOosBars
         combinedOosDates combinedOosCumulativeReturns
         oosSharpeTrendSlope
+        alphaDecay { slope intercept tStat pValue rSquared }
       }
       graduation {
         criteria {
@@ -429,8 +485,96 @@ const RUN_SIGNAL_ENGINE_MUTATION = `
       }
       effectiveSample {
         rawN effectiveN autocorrelationLag1 independentBets
+        maxLagUsed rhoSum
       }
       regimeCoverage { regime count }
+      signalBehavior {
+        avgForwardReturnWhenActive skewnessActiveReturns
+        avgWinReturn avgLossReturn hitRate
+      }
+      methodology {
+        trainMonths testMonths windowType optimizationTarget
+        annualizationFactor barsPerDay horizon defaultCostBps
+        minBarsForSignal flipSign regimeGateEnabled
+        thresholds costBpsOptions
+      }
+      researchLog error
+    }
+  }
+`;
+
+const GET_SIGNAL_EXPERIMENTS_QUERY = `
+  query GetSignalExperiments($ticker: String!) {
+    getSignalExperiments(ticker: $ticker) {
+      id ticker featureName startDate endDate barsUsed
+      overallGrade statusLabel overallPassed
+      meanOosSharpe bestThreshold bestCostBps
+      flipSign regimeGateEnabled createdAt
+    }
+  }
+`;
+
+const GET_SIGNAL_EXPERIMENT_REPORT_QUERY = `
+  query GetSignalExperimentReport($id: Int!) {
+    getSignalExperimentReport(id: $id) {
+      success ticker featureName startDate endDate barsUsed
+      flipSign thresholdsTested costBpsOptions bestThreshold bestCostBps
+      backtestGrid {
+        threshold costBps dates cumulativeReturns positions
+        grossSharpe netSharpe maxDrawdown annualizedTurnover
+        avgHoldingBars winRate avgWinLossRatio totalTrades
+        netTotalReturn grossTotalReturn
+      }
+      walkForward {
+        windows {
+          foldIndex trainStart trainEnd testStart testEnd
+          trainBars testBars mu sigma bestThreshold
+          oosNetSharpe oosGrossSharpe oosMaxDrawdown
+          oosNetReturn oosWinRate oosTotalTrades
+          oosDates oosCumulativeReturns
+        }
+        meanOosSharpe stdOosSharpe medianOosSharpe
+        pctWindowsProfitable pctWindowsPositiveSharpe
+        worstWindowSharpe bestWindowSharpe totalOosBars
+        combinedOosDates combinedOosCumulativeReturns
+        oosSharpeTrendSlope
+        alphaDecay { slope intercept tStat pValue rSquared }
+      }
+      graduation {
+        criteria {
+          name description passed value threshold label failureReason
+        }
+        overallPassed overallGrade summary statusLabel
+        parameterStability {
+          sharpeValuesByThreshold { threshold sharpe }
+          stabilityScore stabilityLabel
+        }
+      }
+      signalDiagnostics {
+        signalMean signalStd pctTimeActive avgAbsSignal
+        pctFilteredByThreshold pctGatedByRegime
+      }
+      dataSufficiency {
+        totalBars trainBars testBars walkForwardFolds
+        effectiveOosBars regimesCovered
+        regimeCoverage { regime count }
+        coverageWarnings
+      }
+      effectiveSample {
+        rawN effectiveN autocorrelationLag1 independentBets
+        maxLagUsed rhoSum
+      }
+      regimeCoverage { regime count }
+      signalBehavior {
+        avgForwardReturnWhenActive skewnessActiveReturns
+        avgWinReturn avgLossReturn hitRate
+      }
+      methodology {
+        trainMonths testMonths windowType optimizationTarget
+        annualizationFactor barsPerDay horizon defaultCostBps
+        minBarsForSignal flipSign regimeGateEnabled
+        thresholds costBpsOptions
+      }
       researchLog error
     }
   }
@@ -455,6 +599,16 @@ interface GetExperimentResponse {
 
 interface RunSignalEngineResponse {
   data: { runSignalEngine: SignalEngineResult };
+  errors?: { message: string }[];
+}
+
+interface GetSignalExperimentsResponse {
+  data: { getSignalExperiments: SignalExperiment[] };
+  errors?: { message: string }[];
+}
+
+interface GetSignalExperimentReportResponse {
+  data: { getSignalExperimentReport: SignalEngineResult | null };
   errors?: { message: string }[];
 }
 
@@ -544,6 +698,38 @@ export class ResearchService {
           }
         }),
         map(response => response.data.getResearchExperiment)
+      );
+  }
+
+  getSignalExperiments(ticker: string): Observable<SignalExperiment[]> {
+    return this.http
+      .post<GetSignalExperimentsResponse>(GRAPHQL_URL, {
+        query: GET_SIGNAL_EXPERIMENTS_QUERY,
+        variables: { ticker }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.getSignalExperiments)
+      );
+  }
+
+  getSignalExperimentReport(id: number): Observable<SignalEngineResult | null> {
+    return this.http
+      .post<GetSignalExperimentReportResponse>(GRAPHQL_URL, {
+        query: GET_SIGNAL_EXPERIMENT_REPORT_QUERY,
+        variables: { id }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.getSignalExperimentReport)
       );
   }
 }

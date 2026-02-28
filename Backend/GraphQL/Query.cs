@@ -1083,6 +1083,44 @@ public class Query
         };
     }
 
+    [GraphQLName("getSignalExperiments")]
+    public async Task<List<SignalExperimentType>> GetSignalExperiments(
+        [Service] IResearchService researchService,
+        string ticker)
+    {
+        var experiments = await researchService.GetSignalExperimentsAsync(ticker);
+
+        return experiments.Select(e => new SignalExperimentType
+        {
+            Id = e.Id,
+            Ticker = e.Ticker,
+            FeatureName = e.FeatureName,
+            StartDate = e.StartDate,
+            EndDate = e.EndDate,
+            BarsUsed = e.BarsUsed,
+            OverallGrade = e.OverallGrade,
+            StatusLabel = e.StatusLabel,
+            OverallPassed = e.OverallPassed,
+            MeanOosSharpe = e.MeanOosSharpe,
+            BestThreshold = e.BestThreshold,
+            BestCostBps = e.BestCostBps,
+            FlipSign = e.FlipSign,
+            RegimeGateEnabled = e.RegimeGateEnabled,
+            CreatedAt = e.CreatedAt,
+        }).ToList();
+    }
+
+    [GraphQLName("getSignalExperimentReport")]
+    public async Task<SignalEngineResultType?> GetSignalExperimentReport(
+        [Service] IResearchService researchService,
+        int id)
+    {
+        var report = await researchService.GetSignalExperimentReportAsync(id);
+        if (report is null) return null;
+
+        return SignalResultMapper.ToGraphQL(report);
+    }
+
     #endregion
 }
 

@@ -15,6 +15,29 @@ public class RunSignalEngineRequest
 
 #endregion
 
+#region Signal Experiment DTOs
+
+public class SignalExperimentDto
+{
+    public int Id { get; set; }
+    public string Ticker { get; set; } = "";
+    public string FeatureName { get; set; } = "";
+    public string StartDate { get; set; } = "";
+    public string EndDate { get; set; } = "";
+    public int BarsUsed { get; set; }
+    public string OverallGrade { get; set; } = "F";
+    public string StatusLabel { get; set; } = "Exploratory";
+    public bool OverallPassed { get; set; }
+    public double MeanOosSharpe { get; set; }
+    public double BestThreshold { get; set; }
+    public double BestCostBps { get; set; }
+    public bool FlipSign { get; set; }
+    public bool RegimeGateEnabled { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+#endregion
+
 #region Signal Engine Response DTOs
 
 public class SignalEngineReportDto
@@ -37,6 +60,8 @@ public class SignalEngineReportDto
     public DataSufficiencyDto? DataSufficiency { get; set; }
     public EffectiveSampleSizeDto? EffectiveSample { get; set; }
     public Dictionary<string, int> RegimeCoverage { get; set; } = new();
+    public SignalBehaviorMetricsDto? SignalBehavior { get; set; }
+    public MethodologyDto? Methodology { get; set; }
     public string ResearchLog { get; set; } = "";
     public string? Error { get; set; }
 }
@@ -96,6 +121,7 @@ public class WalkForwardResultDto
     public List<string> CombinedOosDates { get; set; } = [];
     public List<double> CombinedOosCumulativeReturns { get; set; } = [];
     public double OosSharpeTrendSlope { get; set; }
+    public AlphaDecayStatsDto? AlphaDecay { get; set; }
 }
 
 public class GraduationCriterionDto
@@ -154,6 +180,43 @@ public class EffectiveSampleSizeDto
     public double EffectiveN { get; set; }
     public double AutocorrelationLag1 { get; set; }
     public int IndependentBets { get; set; }
+    public int MaxLagUsed { get; set; }
+    public double RhoSum { get; set; }
+}
+
+public class AlphaDecayStatsDto
+{
+    public double Slope { get; set; }
+    public double Intercept { get; set; }
+    public double TStat { get; set; }
+    public double PValue { get; set; }
+    public double RSquared { get; set; }
+}
+
+public class SignalBehaviorMetricsDto
+{
+    public double AvgForwardReturnWhenActive { get; set; }
+    public double SkewnessActiveReturns { get; set; }
+    public double AvgWinReturn { get; set; }
+    public double AvgLossReturn { get; set; }
+    public double HitRate { get; set; }
+}
+
+public class MethodologyDto
+{
+    public int TrainMonths { get; set; }
+    public int TestMonths { get; set; }
+    public string WindowType { get; set; } = "rolling";
+    public string OptimizationTarget { get; set; } = "net_sharpe";
+    public int AnnualizationFactor { get; set; }
+    public int BarsPerDay { get; set; }
+    public int Horizon { get; set; }
+    public double DefaultCostBps { get; set; }
+    public int MinBarsForSignal { get; set; }
+    public bool FlipSign { get; set; }
+    public bool RegimeGateEnabled { get; set; }
+    public List<double> Thresholds { get; set; } = [];
+    public List<double> CostBpsOptions { get; set; } = [];
 }
 
 #endregion

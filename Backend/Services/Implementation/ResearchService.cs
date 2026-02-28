@@ -242,7 +242,104 @@ public class ResearchService : IResearchService
             report.Graduation?.OverallGrade ?? "N/A",
             report.Graduation?.StatusLabel ?? "N/A");
 
+        if (report.Success)
+        {
+            await PersistSignalExperimentAsync(ticker, report, cancellationToken);
+        }
+
         return report;
+    }
+
+    public async Task<List<SignalExperimentDto>> GetSignalExperimentsAsync(
+        string ticker,
+        CancellationToken cancellationToken = default)
+    {
+        var upperTicker = ticker.ToUpper();
+
+        return await _context.SignalExperiments
+            .AsNoTracking()
+            .Include(e => e.Ticker)
+            .Where(e => e.Ticker.Symbol == upperTicker)
+            .OrderByDescending(e => e.CreatedAt)
+            .Select(e => new SignalExperimentDto
+            {
+                Id = e.Id,
+                Ticker = e.Ticker.Symbol,
+                FeatureName = e.FeatureName,
+                StartDate = e.StartDate,
+                EndDate = e.EndDate,
+                BarsUsed = e.BarsUsed,
+                OverallGrade = e.OverallGrade,
+                StatusLabel = e.StatusLabel,
+                OverallPassed = e.OverallPassed,
+                MeanOosSharpe = (double)e.MeanOosSharpe,
+                BestThreshold = (double)e.BestThreshold,
+                BestCostBps = (double)e.BestCostBps,
+                FlipSign = e.FlipSign,
+                RegimeGateEnabled = e.RegimeGateEnabled,
+                CreatedAt = e.CreatedAt,
+            })
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<SignalEngineReportDto?> GetSignalExperimentReportAsync(
+        int id,
+        CancellationToken cancellationToken = default)
+    {
+        var jsonReport = await _context.SignalExperiments
+            .AsNoTracking()
+            .Where(e => e.Id == id)
+            .Select(e => e.JsonReport)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (jsonReport is null)
+            return null;
+
+        return JsonSerializer.Deserialize<SignalEngineReportDto>(jsonReport, _jsonOptions);
+    }
+
+    private async Task PersistSignalExperimentAsync(
+        string ticker,
+        SignalEngineReportDto report,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var market = ticker.StartsWith("O:", StringComparison.OrdinalIgnoreCase) ? "options" : "stocks";
+            var tickerEntity = await _marketDataService.GetOrCreateTickerAsync(
+                ticker.ToUpper(), market, cancellationToken);
+
+            var experiment = new SignalExperiment
+            {
+                TickerId = tickerEntity.Id,
+                FeatureName = report.FeatureName,
+                StartDate = report.StartDate,
+                EndDate = report.EndDate,
+                BarsUsed = report.BarsUsed,
+                OverallGrade = report.Graduation?.OverallGrade ?? "N/A",
+                StatusLabel = report.Graduation?.StatusLabel ?? "N/A",
+                OverallPassed = report.Graduation?.OverallPassed ?? false,
+                MeanOosSharpe = (decimal)(report.WalkForward?.MeanOosSharpe ?? 0),
+                BestThreshold = (decimal)report.BestThreshold,
+                BestCostBps = (decimal)report.BestCostBps,
+                FlipSign = report.FlipSign,
+                RegimeGateEnabled = report.Methodology?.RegimeGateEnabled ?? true,
+                JsonReport = JsonSerializer.Serialize(report, _jsonOptions),
+            };
+
+            _context.SignalExperiments.Add(experiment);
+            await _context.SaveChangesAsync(cancellationToken);
+
+            _logger.LogInformation(
+                "[Signal] Persisted experiment {Id} for {Ticker}/{Feature}",
+                experiment.Id, ticker, report.FeatureName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "[Signal] Failed to persist experiment for {Ticker}/{Feature} — result still returned",
+                ticker, report.FeatureName);
+        }
     }
 
     private async Task PersistExperimentAsync(

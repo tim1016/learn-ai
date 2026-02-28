@@ -1,0 +1,11 @@
+<div class="p-4">
+  @if (loading()) {
+    <div class="flex justify-center items-center py-16">
+      <p-progressSpinner strokeWidth="3" />
+    </div>
+  } @else if (error(); as err) {
+    <p-message severity="error" [text]="err" />
+  } @else if (result(); as res) {
+    <app-signal-report [result]="res" />
+  }
+</div>

@@ -113,7 +113,7 @@ builder.Services
     .ModifyRequestOptions(opt =>
     {
         opt.IncludeExceptionDetails = true;
-        opt.ExecutionTimeout = TimeSpan.FromMinutes(2);
+        opt.ExecutionTimeout = TimeSpan.FromMinutes(10);
     });
 
 var app = builder.Build();

@@ -4,7 +4,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
+from scipy.stats import skew as scipy_skew
 
 from app.research.signal.backtest import BacktestResult, run_backtest_grid
 from app.research.signal.config import SignalConfig
@@ -24,6 +26,17 @@ from app.research.features.ta_features import TechnicalFeatures
 from app.research.target import compute_15min_forward_return, validate_return_series
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SignalBehaviorMetrics:
+    """Signal behavior analysis on active bars."""
+
+    avg_forward_return_when_active: float = 0.0
+    skewness_active_returns: float = 0.0
+    avg_win_return: float = 0.0
+    avg_loss_return: float = 0.0
+    hit_rate: float = 0.0
 
 
 @dataclass
@@ -47,6 +60,8 @@ class SignalEngineReport:
     data_sufficiency: DataSufficiency | None = None
     effective_sample: EffectiveSampleSize | None = None
     regime_coverage: dict[str, int] = field(default_factory=dict)
+    signal_behavior: SignalBehaviorMetrics | None = None
+    methodology: dict | None = None
     research_log: str = ""
     error: str | None = None
 
@@ -145,6 +160,33 @@ def run_signal_engine(
             report.best_threshold = best.threshold
             report.best_cost_bps = best.cost_bps
 
+        # Step 5b: Signal behavior metrics on best config
+        logger.info("[Signal] Step 5b: Computing signal behavior metrics")
+        if report.best_threshold > 0:
+            best_signal = apply_threshold_filter(z_scores, report.best_threshold)
+            if regime_gate is not None:
+                best_signal = best_signal * regime_gate
+            report.signal_behavior = _compute_signal_behavior(
+                best_signal, forward_returns,
+            )
+
+        # Step 5c: Methodology metadata
+        report.methodology = {
+            "train_months": config.walk_forward_train_months,
+            "test_months": config.walk_forward_test_months,
+            "window_type": "rolling",
+            "optimization_target": "net_sharpe",
+            "annualization_factor": 98280,
+            "bars_per_day": 390,
+            "horizon": config.horizon,
+            "default_cost_bps": config.default_cost_bps,
+            "min_bars_for_signal": config.min_bars_for_signal,
+            "flip_sign": config.flip_sign,
+            "regime_gate_enabled": config.regime_gate_enabled,
+            "thresholds": list(config.thresholds),
+            "cost_bps_options": list(config.cost_bps_options),
+        }
+
         # Step 6: Walk-forward validation
         logger.info("[Signal] Step 5: Running walk-forward validation")
         report.walk_forward = run_walk_forward(bars, feature_name, config)
@@ -192,6 +234,28 @@ def run_signal_engine(
         report.error = str(e)
 
     return report
+
+
+def _compute_signal_behavior(
+    signal: pd.Series, forward_returns: pd.Series,
+) -> SignalBehaviorMetrics:
+    """Compute signal behavior metrics on active bars."""
+    active_mask = signal != 0
+    active_returns = (signal[active_mask] * forward_returns[active_mask]).dropna()
+
+    if len(active_returns) < 2:
+        return SignalBehaviorMetrics()
+
+    wins = active_returns[active_returns > 0]
+    losses = active_returns[active_returns <= 0]
+
+    return SignalBehaviorMetrics(
+        avg_forward_return_when_active=float(active_returns.mean()),
+        skewness_active_returns=float(scipy_skew(active_returns.values, bias=False)),
+        avg_win_return=float(wins.mean()) if len(wins) > 0 else 0.0,
+        avg_loss_return=float(losses.mean()) if len(losses) > 0 else 0.0,
+        hit_rate=float(len(wins) / len(active_returns)),
+    )
 
 
 def _generate_research_log(report: SignalEngineReport, config: SignalConfig) -> str:

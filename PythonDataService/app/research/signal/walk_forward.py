@@ -7,6 +7,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+from scipy import stats as scipy_stats
 
 from app.research.signal.backtest import run_backtest
 from app.research.signal.config import SignalConfig
@@ -16,6 +17,17 @@ from app.research.features.ta_features import TechnicalFeatures
 from app.research.target import compute_15min_forward_return
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class AlphaDecayStats:
+    """Regression statistics for OOS Sharpe trend (alpha decay)."""
+
+    slope: float = 0.0
+    intercept: float = 0.0
+    t_stat: float = 0.0
+    p_value: float = 1.0
+    r_squared: float = 0.0
 
 
 @dataclass
@@ -58,6 +70,7 @@ class WalkForwardResult:
     combined_oos_dates: list[str] = field(default_factory=list)
     combined_oos_cumulative_returns: list[float] = field(default_factory=list)
     oos_sharpe_trend_slope: float = 0.0
+    alpha_decay: AlphaDecayStats = field(default_factory=AlphaDecayStats)
 
 
 def run_walk_forward(
@@ -219,7 +232,7 @@ def _aggregate_walk_forward(windows: list[WalkForwardWindow]) -> WalkForwardResu
             running_total += w.oos_cumulative_returns[-1]
 
     # Alpha decay: linear regression of OOS Sharpe vs fold index
-    slope = _compute_sharpe_trend_slope(sharpes)
+    decay = _compute_sharpe_trend_slope(sharpes)
 
     return WalkForwardResult(
         windows=windows,
@@ -233,24 +246,52 @@ def _aggregate_walk_forward(windows: list[WalkForwardWindow]) -> WalkForwardResu
         total_oos_bars=total_oos_bars,
         combined_oos_dates=combined_dates,
         combined_oos_cumulative_returns=combined_cum,
-        oos_sharpe_trend_slope=slope,
+        oos_sharpe_trend_slope=decay.slope,
+        alpha_decay=decay,
     )
 
 
-def _compute_sharpe_trend_slope(sharpes: list[float]) -> float:
-    """Linear regression slope of OOS Sharpe over fold indices."""
+def _compute_sharpe_trend_slope(sharpes: list[float]) -> AlphaDecayStats:
+    """Linear regression of OOS Sharpe over fold indices with t-stat/p-value."""
     n = len(sharpes)
     if n < 2:
-        return 0.0
+        return AlphaDecayStats()
+
     x = np.arange(n, dtype=float)
     y = np.array(sharpes, dtype=float)
-    x_mean = np.mean(x)
-    y_mean = np.mean(y)
-    ss_xy = np.sum((x - x_mean) * (y - y_mean))
-    ss_xx = np.sum((x - x_mean) ** 2)
+    x_mean = float(np.mean(x))
+    y_mean = float(np.mean(y))
+    ss_xy = float(np.sum((x - x_mean) * (y - y_mean)))
+    ss_xx = float(np.sum((x - x_mean) ** 2))
+
     if ss_xx < 1e-12:
-        return 0.0
-    return float(ss_xy / ss_xx)
+        return AlphaDecayStats()
+
+    slope = ss_xy / ss_xx
+    intercept = y_mean - slope * x_mean
+
+    # Residuals and standard error
+    y_hat = slope * x + intercept
+    ssr = float(np.sum((y - y_hat) ** 2))
+    ss_tot = float(np.sum((y - y_mean) ** 2))
+    r_squared = 1.0 - ssr / ss_tot if ss_tot > 1e-12 else 0.0
+
+    if n > 2:
+        mse = ssr / (n - 2)
+        se_slope = float(np.sqrt(mse / ss_xx)) if mse > 0 else 0.0
+        t_stat = slope / se_slope if se_slope > 1e-12 else 0.0
+        p_value = float(2.0 * scipy_stats.t.sf(abs(t_stat), df=n - 2))
+    else:
+        t_stat = 0.0
+        p_value = 1.0
+
+    return AlphaDecayStats(
+        slope=slope,
+        intercept=intercept,
+        t_stat=t_stat,
+        p_value=p_value,
+        r_squared=r_squared,
+    )
 
 
 def _get_month_boundaries(dates: list[date]) -> list[tuple[date, date]]:

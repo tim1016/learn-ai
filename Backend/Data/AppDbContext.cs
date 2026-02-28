@@ -28,6 +28,7 @@ public class AppDbContext : DbContext
 
     // Research models
     public DbSet<ResearchExperiment> ResearchExperiments => Set<ResearchExperiment>();
+    public DbSet<SignalExperiment> SignalExperiments => Set<SignalExperiment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -194,6 +195,20 @@ public class AppDbContext : DbContext
             entity.Property(e => e.AdfPValue).HasPrecision(18, 8);
             entity.Property(e => e.KpssPValue).HasPrecision(18, 8);
             entity.Property(e => e.MonotonicityRatio).HasPrecision(18, 8);
+            entity.HasOne(e => e.Ticker)
+                  .WithMany()
+                  .HasForeignKey(e => e.TickerId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(e => new { e.TickerId, e.FeatureName, e.CreatedAt });
+        });
+
+        // SignalExperiment configuration
+        modelBuilder.Entity<SignalExperiment>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.MeanOosSharpe).HasPrecision(18, 8);
+            entity.Property(e => e.BestThreshold).HasPrecision(18, 8);
+            entity.Property(e => e.BestCostBps).HasPrecision(18, 8);
             entity.HasOne(e => e.Ticker)
                   .WithMany()
                   .HasForeignKey(e => e.TickerId)

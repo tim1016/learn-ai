@@ -2,6 +2,26 @@ using HotChocolate;
 
 namespace Backend.GraphQL.Types;
 
+public class SignalExperimentType
+{
+    public int Id { get; set; }
+    public string Ticker { get; set; } = "";
+    public string FeatureName { get; set; } = "";
+    public string StartDate { get; set; } = "";
+    public string EndDate { get; set; } = "";
+    public int BarsUsed { get; set; }
+    public string OverallGrade { get; set; } = "F";
+    public string StatusLabel { get; set; } = "Exploratory";
+    public bool OverallPassed { get; set; }
+    [GraphQLName("meanOosSharpe")]
+    public double MeanOosSharpe { get; set; }
+    public double BestThreshold { get; set; }
+    public double BestCostBps { get; set; }
+    public bool FlipSign { get; set; }
+    public bool RegimeGateEnabled { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
 public class SignalEngineResultType
 {
     public bool Success { get; set; }
@@ -22,6 +42,8 @@ public class SignalEngineResultType
     public DataSufficiencyType? DataSufficiency { get; set; }
     public EffectiveSampleSizeType? EffectiveSample { get; set; }
     public List<RegimeCoverageEntryType> RegimeCoverage { get; set; } = [];
+    public SignalBehaviorMetricsType? SignalBehavior { get; set; }
+    public MethodologyType? Methodology { get; set; }
     public string ResearchLog { get; set; } = "";
     public string? Error { get; set; }
 }
@@ -66,6 +88,7 @@ public class WalkForwardResultType
     public List<double> CombinedOosCumulativeReturns { get; set; } = [];
     [GraphQLName("oosSharpeTrendSlope")]
     public double OosSharpeTrendSlope { get; set; }
+    public AlphaDecayStatsType? AlphaDecay { get; set; }
 }
 
 public class WalkForwardWindowType
@@ -161,6 +184,43 @@ public class EffectiveSampleSizeType
     public double EffectiveN { get; set; }
     public double AutocorrelationLag1 { get; set; }
     public int IndependentBets { get; set; }
+    public int MaxLagUsed { get; set; }
+    public double RhoSum { get; set; }
+}
+
+public class AlphaDecayStatsType
+{
+    public double Slope { get; set; }
+    public double Intercept { get; set; }
+    public double TStat { get; set; }
+    public double PValue { get; set; }
+    public double RSquared { get; set; }
+}
+
+public class SignalBehaviorMetricsType
+{
+    public double AvgForwardReturnWhenActive { get; set; }
+    public double SkewnessActiveReturns { get; set; }
+    public double AvgWinReturn { get; set; }
+    public double AvgLossReturn { get; set; }
+    public double HitRate { get; set; }
+}
+
+public class MethodologyType
+{
+    public int TrainMonths { get; set; }
+    public int TestMonths { get; set; }
+    public string WindowType { get; set; } = "rolling";
+    public string OptimizationTarget { get; set; } = "net_sharpe";
+    public int AnnualizationFactor { get; set; }
+    public int BarsPerDay { get; set; }
+    public int Horizon { get; set; }
+    public double DefaultCostBps { get; set; }
+    public int MinBarsForSignal { get; set; }
+    public bool FlipSign { get; set; }
+    public bool RegimeGateEnabled { get; set; }
+    public List<double> Thresholds { get; set; } = [];
+    public List<double> CostBpsOptions { get; set; } = [];
 }
 
 public class RegimeCoverageEntryType

@@ -1,0 +1,147 @@
+<div class="mt-4">
+  <div class="flex items-end gap-3 mb-4">
+    <div class="flex flex-col gap-2">
+      <label for="signalHistoryTicker" class="font-semibold text-sm text-gray-700">Ticker</label>
+      <input
+        pInputText
+        id="signalHistoryTicker"
+        [ngModel]="ticker()"
+        (ngModelChange)="ticker.set($event)"
+        placeholder="e.g. AAPL"
+      />
+    </div>
+    <p-button
+      label="Load History"
+      icon="pi pi-refresh"
+      [loading]="loading()"
+      (onClick)="loadExperiments()"
+    />
+  </div>
+
+  @if (error(); as err) {
+    <p-message severity="error" [text]="err" class="mb-4" />
+  }
+
+  @if (experiments().length > 0) {
+    <p-table
+      [value]="experiments()"
+      [paginator]="true"
+      [rows]="10"
+      [tableStyle]="{ 'min-width': '60rem' }"
+      [rowHover]="true"
+      styleClass="p-datatable-sm"
+    >
+      <ng-template #header>
+        <tr>
+          <th pSortableColumn="featureName" class="col-header">
+            <span class="col-header-content" (click)="showHelp('feature'); $event.stopPropagation()">
+              <i class="pi pi-sliders-h col-icon"></i>
+              Feature
+            </span>
+            <p-sortIcon field="featureName" />
+          </th>
+          <th pSortableColumn="overallGrade" class="col-header">
+            <span class="col-header-content" (click)="showHelp('grade'); $event.stopPropagation()">
+              <i class="pi pi-star col-icon"></i>
+              Grade
+            </span>
+            <p-sortIcon field="overallGrade" />
+          </th>
+          <th class="col-header">
+            <span class="col-header-content" (click)="showHelp('status')">
+              <i class="pi pi-flag col-icon"></i>
+              Status
+            </span>
+          </th>
+          <th pSortableColumn="meanOosSharpe" class="col-header">
+            <span class="col-header-content" (click)="showHelp('meanOosSharpe'); $event.stopPropagation()">
+              <i class="pi pi-chart-line col-icon"></i>
+              Mean OOS Sharpe
+            </span>
+            <p-sortIcon field="meanOosSharpe" />
+          </th>
+          <th class="col-header">
+            <span class="col-header-content" (click)="showHelp('bestThreshold')">
+              <i class="pi pi-filter col-icon"></i>
+              Best Threshold
+            </span>
+          </th>
+          <th class="col-header">
+            <span class="col-header-content" (click)="showHelp('period')">
+              <i class="pi pi-calendar col-icon"></i>
+              Period
+            </span>
+          </th>
+          <th pSortableColumn="createdAt" class="col-header">
+            <span class="col-header-content" (click)="showHelp('runDate'); $event.stopPropagation()">
+              <i class="pi pi-clock col-icon"></i>
+              Run Date
+            </span>
+            <p-sortIcon field="createdAt" />
+          </th>
+          <th>Report</th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-exp>
+        <tr>
+          <td class="font-semibold text-gray-800">{{ exp.featureName }}</td>
+          <td [class]="gradeSeverityClass(exp.overallGrade)">{{ exp.overallGrade }}</td>
+          <td>
+            <p-tag
+              [severity]="statusSeverity(exp.statusLabel)"
+              [value]="exp.statusLabel"
+            />
+          </td>
+          <td [class]="sharpeSeverityClass(exp.meanOosSharpe)">
+            {{ exp.meanOosSharpe | number: '1.3-3' }}
+          </td>
+          <td class="text-gray-600">{{ exp.bestThreshold | number: '1.2-2' }}</td>
+          <td class="text-sm text-gray-600">{{ exp.startDate }} — {{ exp.endDate }}</td>
+          <td class="text-sm text-gray-600">{{ exp.createdAt | date: 'short' }}</td>
+          <td>
+            <p-button
+              icon="pi pi-external-link"
+              label="View Report"
+              severity="secondary"
+              [text]="true"
+              size="small"
+              (onClick)="openReport(exp.id)"
+            />
+          </td>
+        </tr>
+      </ng-template>
+      <ng-template #emptymessage>
+        <tr>
+          <td [attr.colspan]="8" class="text-center text-gray-400 py-4">
+            No signal experiments found for this ticker.
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+  } @else if (!loading()) {
+    <p class="text-gray-500">Enter a ticker and click "Load History" to view past signal experiments.</p>
+  }
+
+  <!-- Help Dialog -->
+  <p-dialog
+    [visible]="helpVisible()"
+    (visibleChange)="helpVisible.set($event)"
+    [modal]="true"
+    [style]="{ width: '28rem' }"
+    [draggable]="false"
+    [resizable]="false"
+    [closable]="true"
+  >
+    <ng-template #header>
+      @if (helpColumn(); as col) {
+        <div class="help-dialog-header">
+          <i [class]="col.icon" class="help-dialog-icon"></i>
+          <span>{{ col.label }}</span>
+        </div>
+      }
+    </ng-template>
+    @if (helpColumn(); as col) {
+      <p class="help-dialog-body">{{ col.description }}</p>
+    }
+  </p-dialog>
+</div>

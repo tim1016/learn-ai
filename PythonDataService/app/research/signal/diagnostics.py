@@ -42,6 +42,8 @@ class EffectiveSampleSize:
     effective_n: float = 0.0
     autocorrelation_lag1: float = 0.0
     independent_bets: int = 0
+    max_lag_used: int = 0
+    rho_sum: float = 0.0
 
 
 def compute_signal_diagnostics(
@@ -147,12 +149,14 @@ def compute_effective_sample_size(returns: pd.Series) -> EffectiveSampleSize:
 
     max_lag = min(int(math.sqrt(n)), n // 3)
     rho_sum = 0.0
+    last_lag_used = 0
 
     for k in range(1, max_lag + 1):
         rho_k = float(np.sum(demeaned[k:] * demeaned[:-k]) / n) / var
         if rho_k < 0.05:
             break
         rho_sum += rho_k
+        last_lag_used = k
 
     denominator = 1 + 2 * rho_sum
     if denominator < 1.0:
@@ -165,4 +169,6 @@ def compute_effective_sample_size(returns: pd.Series) -> EffectiveSampleSize:
         effective_n=n_eff,
         autocorrelation_lag1=rho1,
         independent_bets=int(math.floor(n_eff)),
+        max_lag_used=last_lag_used,
+        rho_sum=rho_sum,
     )

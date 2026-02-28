@@ -205,6 +205,16 @@ class WalkForwardWindowResponse(BaseModel):
     oos_cumulative_returns: list[float] = []
 
 
+class AlphaDecayStatsResponse(BaseModel):
+    """Alpha decay regression statistics."""
+
+    slope: float = 0.0
+    intercept: float = 0.0
+    t_stat: float = 0.0
+    p_value: float = 1.0
+    r_squared: float = 0.0
+
+
 class WalkForwardResultResponse(BaseModel):
     """Aggregated walk-forward validation results."""
 
@@ -220,6 +230,7 @@ class WalkForwardResultResponse(BaseModel):
     combined_oos_dates: list[str] = []
     combined_oos_cumulative_returns: list[float] = []
     oos_sharpe_trend_slope: float = 0.0
+    alpha_decay: AlphaDecayStatsResponse | None = None
 
 
 class GraduationCriterionResponse(BaseModel):
@@ -284,6 +295,36 @@ class EffectiveSampleSizeResponse(BaseModel):
     effective_n: float = 0.0
     autocorrelation_lag1: float = 0.0
     independent_bets: int = 0
+    max_lag_used: int = 0
+    rho_sum: float = 0.0
+
+
+class SignalBehaviorMetricsResponse(BaseModel):
+    """Signal behavior analysis on active bars."""
+
+    avg_forward_return_when_active: float = 0.0
+    skewness_active_returns: float = 0.0
+    avg_win_return: float = 0.0
+    avg_loss_return: float = 0.0
+    hit_rate: float = 0.0
+
+
+class MethodologyResponse(BaseModel):
+    """Methodology metadata from signal engine configuration."""
+
+    train_months: int = 3
+    test_months: int = 1
+    window_type: str = "rolling"
+    optimization_target: str = "net_sharpe"
+    annualization_factor: int = 98280
+    bars_per_day: int = 390
+    horizon: int = 15
+    default_cost_bps: float = 2.0
+    min_bars_for_signal: int = 500
+    flip_sign: bool = True
+    regime_gate_enabled: bool = True
+    thresholds: list[float] = []
+    cost_bps_options: list[float] = []
 
 
 class RunSignalEngineResponse(BaseModel):
@@ -307,5 +348,7 @@ class RunSignalEngineResponse(BaseModel):
     data_sufficiency: DataSufficiencyResponse | None = None
     effective_sample: EffectiveSampleSizeResponse | None = None
     regime_coverage: dict[str, int] = {}
+    signal_behavior: SignalBehaviorMetricsResponse | None = None
+    methodology: MethodologyResponse | None = None
     research_log: str = ""
     error: str | None = None

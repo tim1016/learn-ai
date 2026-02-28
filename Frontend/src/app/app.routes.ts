@@ -38,4 +38,11 @@ export const routes: Routes = [
   { path: "lstm/predictions", component: LstmPredictionsComponent },
   { path: "lstm/models", component: LstmModelsComponent },
   { path: "research-lab", component: ResearchLabComponent },
+  {
+    path: "research-lab/signal-report/:id",
+    loadComponent: () =>
+      import("./components/research-lab/signal-report-page/signal-report-page.component").then(
+        (m) => m.SignalReportPageComponent
+      ),
+  },
 ];

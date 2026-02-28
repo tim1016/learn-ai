@@ -10,12 +10,14 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.research_models import (
+    AlphaDecayStatsResponse,
     BacktestResultResponse,
     DataSufficiencyResponse,
     EffectiveSampleSizeResponse,
     FeatureInfoResponse,
     GraduationCriterionResponse,
     GraduationResultResponse,
+    MethodologyResponse,
     MonthlyICBreakdownResponse,
     ParameterStabilityResponse,
     QuantileBinResponse,
@@ -26,6 +28,7 @@ from app.models.research_models import (
     RunFeatureResearchResponse,
     RunSignalEngineRequest,
     RunSignalEngineResponse,
+    SignalBehaviorMetricsResponse,
     SignalDiagnosticsResponse,
     StructuralBreakPointResponse,
     TrainTestSplitResponse,
@@ -275,6 +278,13 @@ async def run_signal_engine_endpoint(
                 combined_oos_dates=wf.combined_oos_dates,
                 combined_oos_cumulative_returns=wf.combined_oos_cumulative_returns,
                 oos_sharpe_trend_slope=wf.oos_sharpe_trend_slope,
+                alpha_decay=AlphaDecayStatsResponse(
+                    slope=wf.alpha_decay.slope,
+                    intercept=wf.alpha_decay.intercept,
+                    t_stat=wf.alpha_decay.t_stat,
+                    p_value=wf.alpha_decay.p_value,
+                    r_squared=wf.alpha_decay.r_squared,
+                ) if wf.alpha_decay else None,
             )
 
         # Map graduation
@@ -342,6 +352,40 @@ async def run_signal_engine_endpoint(
                 effective_n=es.effective_n,
                 autocorrelation_lag1=es.autocorrelation_lag1,
                 independent_bets=es.independent_bets,
+                max_lag_used=es.max_lag_used,
+                rho_sum=es.rho_sum,
+            )
+
+        # Map signal behavior
+        sb_response = None
+        if report.signal_behavior:
+            sb = report.signal_behavior
+            sb_response = SignalBehaviorMetricsResponse(
+                avg_forward_return_when_active=sb.avg_forward_return_when_active,
+                skewness_active_returns=sb.skewness_active_returns,
+                avg_win_return=sb.avg_win_return,
+                avg_loss_return=sb.avg_loss_return,
+                hit_rate=sb.hit_rate,
+            )
+
+        # Map methodology
+        meth_response = None
+        if report.methodology:
+            m = report.methodology
+            meth_response = MethodologyResponse(
+                train_months=m["train_months"],
+                test_months=m["test_months"],
+                window_type=m["window_type"],
+                optimization_target=m["optimization_target"],
+                annualization_factor=m["annualization_factor"],
+                bars_per_day=m["bars_per_day"],
+                horizon=m["horizon"],
+                default_cost_bps=m["default_cost_bps"],
+                min_bars_for_signal=m["min_bars_for_signal"],
+                flip_sign=m["flip_sign"],
+                regime_gate_enabled=m["regime_gate_enabled"],
+                thresholds=m["thresholds"],
+                cost_bps_options=m["cost_bps_options"],
             )
 
         return RunSignalEngineResponse(
@@ -363,6 +407,8 @@ async def run_signal_engine_endpoint(
             data_sufficiency=ds_response,
             effective_sample=es_response,
             regime_coverage=report.regime_coverage,
+            signal_behavior=sb_response,
+            methodology=meth_response,
             research_log=report.research_log,
             error=report.error,
         )

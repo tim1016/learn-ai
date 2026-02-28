@@ -32,4 +32,12 @@ public interface IResearchService
         int multiplier = 1,
         bool forceRefresh = false,
         CancellationToken cancellationToken = default);
+
+    Task<List<SignalExperimentDto>> GetSignalExperimentsAsync(
+        string ticker,
+        CancellationToken cancellationToken = default);
+
+    Task<SignalEngineReportDto?> GetSignalExperimentReportAsync(
+        int id,
+        CancellationToken cancellationToken = default);
 }

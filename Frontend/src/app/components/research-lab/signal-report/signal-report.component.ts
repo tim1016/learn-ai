@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SignalEngineResult, SignalBacktestResult } from '../../../services/research.service';
+import { KatexDirective } from '../../../shared/katex.directive';
 import { TagModule } from 'primeng/tag';
 import { TableModule } from 'primeng/table';
 import { TooltipModule } from 'primeng/tooltip';
@@ -19,7 +20,7 @@ Chart.register(...registerables);
 @Component({
   selector: 'app-signal-report',
   standalone: true,
-  imports: [CommonModule, TagModule, TableModule, TooltipModule, AccordionModule],
+  imports: [CommonModule, KatexDirective, TagModule, TableModule, TooltipModule, AccordionModule],
   templateUrl: './signal-report.component.html',
   styleUrls: ['./signal-report.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -167,6 +168,60 @@ export class SignalReportComponent {
   get hasAlphaDecay(): boolean {
     return (this.result().walkForward?.oosSharpeTrendSlope ?? 0) < -0.1;
   }
+
+  // ─── Executive Summary ────────────────────────────────────
+
+  get executiveSummary(): string {
+    const r = this.result();
+    const grad = r.graduation;
+    if (!grad) return '';
+
+    const parts: string[] = [];
+    parts.push(`Signal "${r.featureName}" on ${r.ticker} received grade ${grad.overallGrade} (${grad.statusLabel}).`);
+
+    if (r.walkForward?.windows?.length) {
+      const wf = r.walkForward;
+      parts.push(`Mean OOS Sharpe is ${wf.meanOosSharpe.toFixed(2)} across ${wf.windows.length} folds.`);
+    }
+
+    if (this.alphaDecaySignificant) {
+      parts.push('Alpha decay is statistically significant (p < 0.05) — signal edge may be eroding over time.');
+    } else if (this.hasAlphaDecay) {
+      parts.push('Negative Sharpe trend detected but not statistically significant.');
+    }
+
+    return parts.join(' ');
+  }
+
+  get oosSharpeDivergence(): number {
+    const wf = this.result().walkForward;
+    if (!wf) return 0;
+    return Math.abs(wf.meanOosSharpe - wf.medianOosSharpe);
+  }
+
+  get hasSharpeDivergence(): boolean {
+    return this.oosSharpeDivergence > 0.15;
+  }
+
+  get alphaDecaySignificant(): boolean {
+    return (this.result().walkForward?.alphaDecay?.pValue ?? 1) < 0.05;
+  }
+
+  get skewnessInterpretation(): string {
+    const skew = this.result().signalBehavior?.skewnessActiveReturns ?? 0;
+    if (skew > 0.5) return 'Positive skew — right tail dominates, favorable for trend strategies.';
+    if (skew < -0.5) return 'Negative skew — left tail dominates, risk of large drawdowns.';
+    return 'Approximately symmetric return distribution.';
+  }
+
+  // ─── KaTeX Formulas ──────────────────────────────────────
+
+  readonly sharpeFormula = 'S = \\frac{\\bar{r} - r_f}{\\sigma_r} \\times \\sqrt{\\frac{252 \\times 390}{1}}';
+  readonly neffFormula = 'N_{\\text{eff}} = \\frac{N}{1 + 2\\sum_{k=1}^{K}\\hat{\\rho}_k}';
+  readonly stabilityFormula = '\\text{Stability} = 1 - \\frac{\\sigma_{\\text{Sharpe}(\\theta)}}{|\\bar{S}(\\theta)|}';
+  readonly alphaDecayFormula = 'S_i = \\beta_0 + \\beta_1 \\cdot i + \\epsilon_i, \\quad i = 0, \\ldots, N_{\\text{folds}}-1';
+  readonly drawdownFormula = 'DD_t = \\frac{P_t - \\max_{s \\le t} P_s}{\\max_{s \\le t} P_s}';
+  readonly turnoverFormula = '\\text{Turnover} = \\frac{1}{T}\\sum_{t=1}^{T} |w_t - w_{t-1}| \\times 252';
 
   // ─── Charts ─────────────────────────────────────────────
 

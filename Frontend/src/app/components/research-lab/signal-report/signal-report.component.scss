@@ -2,6 +2,42 @@
   display: block;
 }
 
+// ─── Executive Summary Card ─────────────────────────────
+.executive-summary-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border: 1px solid #bae6fd;
+
+  .executive-icon {
+    font-size: 1.5rem;
+    color: #0284c7;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .executive-content {
+    flex: 1;
+  }
+
+  .executive-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #0c4a6e;
+    margin: 0 0 0.35rem 0;
+  }
+
+  .executive-text {
+    font-size: 0.85rem;
+    color: #334155;
+    line-height: 1.6;
+    margin: 0;
+  }
+}
+
 // ─── Graduation Card ─────────────────────────────────────
 .graduation-card {
   display: flex;
@@ -99,6 +135,15 @@
       color: #dc2626;
       padding-left: 180px;
       margin-top: 0.15rem;
+    }
+
+    .criterion-annotation {
+      width: 100%;
+      font-size: 0.75rem;
+      color: #64748b;
+      font-style: italic;
+      padding-left: 180px;
+      margin-top: 0.1rem;
     }
 
     &.criterion-failed {
@@ -268,6 +313,132 @@
   font-weight: 600;
 
   i { font-size: 1rem; }
+}
+
+// ─── Alpha Decay Panel ──────────────────────────────────
+.alpha-decay-panel {
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+
+  .alpha-decay-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+
+    h5 {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: #92400e;
+      margin: 0;
+    }
+  }
+}
+
+// ─── Formula Annotation ─────────────────────────────────
+.formula-annotation {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  text-align: center;
+
+  .formula-note {
+    font-size: 0.75rem;
+    color: #64748b;
+    margin-top: 0.5rem;
+    font-style: italic;
+  }
+}
+
+// ─── Divergence Note ────────────────────────────────────
+.divergence-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  font-size: 0.85rem;
+  color: #1e40af;
+
+  i {
+    font-size: 0.9rem;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+}
+
+// ─── Interpretation Note ────────────────────────────────
+.interpretation-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  font-size: 0.85rem;
+  color: #166534;
+
+  i {
+    font-size: 0.9rem;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+}
+
+// ─── Methodology Grid ───────────────────────────────────
+.methodology-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 1.25rem;
+  font-size: 0.8rem;
+  padding: 0.5rem 0;
+
+  .meth-label {
+    color: #64748b;
+    font-weight: 600;
+  }
+
+  .meth-value {
+    color: #334155;
+  }
+}
+
+// ─── Appendix Section ───────────────────────────────────
+.appendix-section {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #f1f5f9;
+
+  &:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  h5 {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #1e293b;
+    margin: 0 0 0.5rem 0;
+  }
+
+  .var-list {
+    margin: 0.5rem 0 0 1rem;
+    padding: 0;
+    font-size: 0.8rem;
+    color: #475569;
+    line-height: 1.7;
+
+    li {
+      margin-bottom: 0.1rem;
+    }
+  }
 }
 
 // ─── Assumptions Grid ────────────────────────────────────
