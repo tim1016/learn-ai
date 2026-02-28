@@ -182,6 +182,7 @@ public class ResearchService : IResearchService
         bool regimeGateEnabled = true,
         string timespan = "minute",
         int multiplier = 1,
+        bool forceRefresh = false,
         CancellationToken cancellationToken = default)
     {
         _logger.LogInformation(
@@ -190,7 +191,7 @@ public class ResearchService : IResearchService
 
         var signalFetchResult = await _marketDataService.GetOrFetchAggregatesAsync(
             ticker.ToUpper(), multiplier, timespan, fromDate, toDate,
-            forceRefresh: false, cancellationToken: cancellationToken);
+            forceRefresh: forceRefresh, cancellationToken: cancellationToken);
         var aggregates = signalFetchResult.Aggregates;
 
         if (aggregates.Count == 0)

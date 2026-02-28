@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Backend.Data;
 using Backend.Models.DTOs;
 using Backend.Models.MarketData;
@@ -12,6 +13,14 @@ namespace Backend.Services.Implementation;
 /// </summary>
 public class MarketDataService : IMarketDataService
 {
+    private static readonly ConcurrentDictionary<string, FetchProgress> _progressTracker = new();
+
+    public static FetchProgress? GetProgress(string ticker)
+    {
+        _progressTracker.TryGetValue(ticker.ToUpper(), out var progress);
+        return progress;
+    }
+
     private readonly AppDbContext _context;
     private readonly IPolygonService _polygonService;
     private readonly ILogger<MarketDataService> _logger;
@@ -213,55 +222,85 @@ public class MarketDataService : IMarketDataService
         CancellationToken cancellationToken)
     {
         var windows = GenerateFetchWindows(fromDate, toDate, timespan);
+        var key = ticker.ToUpper();
 
         _logger.LogInformation(
             "[STEP W1] Windowed fetch for {Ticker}: {WindowCount} windows from {From} to {To}",
             ticker, windows.Count, fromDate, toDate);
 
+        var progress = new FetchProgress
+        {
+            Ticker = key,
+            TotalWindows = windows.Count,
+            Status = "fetching"
+        };
+        _progressTracker[key] = progress;
+
         var allAggregates = new List<StockAggregate>();
         var statuses = new List<WindowFetchStatus>();
 
-        for (var i = 0; i < windows.Count; i++)
+        try
         {
-            var (winFrom, winTo) = windows[i];
-
-            _logger.LogInformation(
-                "[STEP W2] Window {Index}/{Total}: {From} to {To}",
-                i + 1, windows.Count, winFrom, winTo);
-
-            try
+            for (var i = 0; i < windows.Count; i++)
             {
-                var windowAggs = await FetchAndStoreAggregatesAsync(
-                    ticker, multiplier, timespan, winFrom, winTo, cancellationToken);
+                var (winFrom, winTo) = windows[i];
+                progress.CurrentWindow = $"{winFrom} to {winTo}";
 
                 _logger.LogInformation(
-                    "[STEP W3] Window {Index}/{Total} result: {Count} bars fetched",
-                    i + 1, windows.Count, windowAggs.Count);
-
-                allAggregates.AddRange(windowAggs);
-                statuses.Add(new WindowFetchStatus
-                {
-                    FromDate = winFrom,
-                    ToDate = winTo,
-                    Success = true,
-                    BarsFetched = windowAggs.Count,
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "[STEP W3] Window {Index}/{Total} FAILED: {From} to {To}",
+                    "[STEP W2] Window {Index}/{Total}: {From} to {To}",
                     i + 1, windows.Count, winFrom, winTo);
 
-                statuses.Add(new WindowFetchStatus
+                try
                 {
-                    FromDate = winFrom,
-                    ToDate = winTo,
-                    Success = false,
-                    BarsFetched = 0,
-                    Error = ex.Message,
-                });
+                    var windowAggs = await FetchAndStoreAggregatesAsync(
+                        ticker, multiplier, timespan, winFrom, winTo, cancellationToken);
+
+                    _logger.LogInformation(
+                        "[STEP W3] Window {Index}/{Total} result: {Count} bars fetched",
+                        i + 1, windows.Count, windowAggs.Count);
+
+                    allAggregates.AddRange(windowAggs);
+                    progress.CompletedWindows = i + 1;
+                    progress.BarsFetched += windowAggs.Count;
+
+                    statuses.Add(new WindowFetchStatus
+                    {
+                        FromDate = winFrom,
+                        ToDate = winTo,
+                        Success = true,
+                        BarsFetched = windowAggs.Count,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "[STEP W3] Window {Index}/{Total} FAILED: {From} to {To}",
+                        i + 1, windows.Count, winFrom, winTo);
+
+                    progress.CompletedWindows = i + 1;
+
+                    statuses.Add(new WindowFetchStatus
+                    {
+                        FromDate = winFrom,
+                        ToDate = winTo,
+                        Success = false,
+                        BarsFetched = 0,
+                        Error = ex.Message,
+                    });
+                }
             }
+
+            progress.Status = "done";
+        }
+        catch
+        {
+            progress.Status = "error";
+            throw;
+        }
+        finally
+        {
+            // Remove progress after a brief delay so the frontend can read the final state
+            _ = Task.Delay(TimeSpan.FromSeconds(5)).ContinueWith(t => _progressTracker.TryRemove(key, out var removed));
         }
 
         // Sort by timestamp to ensure contiguous ordering

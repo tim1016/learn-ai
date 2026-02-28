@@ -67,6 +67,15 @@ export interface SmartAggregatesResult {
   gapDetection: GapDetectionInfo | null;
 }
 
+export interface FetchProgress {
+  ticker: string;
+  totalWindows: number;
+  completedWindows: number;
+  barsFetched: number;
+  currentWindow: string;
+  status: string;
+}
+
 export interface GetOrFetchStockAggregatesResponse {
   getOrFetchStockAggregates: SmartAggregatesResult;
 }

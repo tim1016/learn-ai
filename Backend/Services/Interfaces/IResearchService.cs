@@ -30,5 +30,6 @@ public interface IResearchService
         bool regimeGateEnabled = true,
         string timespan = "minute",
         int multiplier = 1,
+        bool forceRefresh = false,
         CancellationToken cancellationToken = default);
 }

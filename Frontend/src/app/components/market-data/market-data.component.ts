@@ -3,10 +3,10 @@ import { ActivatedRoute } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { catchError, of, tap } from 'rxjs';
+import { catchError, of, tap, interval, switchMap, Subscription, EMPTY } from 'rxjs';
 import { MarketDataService } from '../../services/market-data.service';
 import { MarketMonitorService } from '../../services/market-monitor.service';
-import { StockAggregate, AggregatesSummary, GapDetectionInfo } from '../../graphql/types';
+import { StockAggregate, AggregatesSummary, GapDetectionInfo, FetchProgress } from '../../graphql/types';
 import { MarketHolidayEvent } from '../../models/market-monitor';
 import { validateDateRange, getMinAllowedDate } from '../../utils/date-validation';
 import { CandlestickChartComponent } from './candlestick-chart/candlestick-chart.component';
@@ -37,6 +37,7 @@ export class MarketDataComponent implements OnInit {
   toDate = signal('');
   timespan = signal('day');
   multiplier = signal(1);
+  forceRefresh = signal(false);
   minDate = getMinAllowedDate();
 
   // State signals
@@ -45,6 +46,8 @@ export class MarketDataComponent implements OnInit {
   aggregates = signal<StockAggregate[]>([]);
   summary = signal<AggregatesSummary | null>(null);
   gapDetection = signal<GapDetectionInfo | null>(null);
+  fetchProgress = signal<FetchProgress | null>(null);
+  private progressSub: Subscription | null = null;
 
   holidays = signal<MarketHolidayEvent[]>([]);
   holidaysLoading = signal(false);
@@ -110,6 +113,7 @@ export class MarketDataComponent implements OnInit {
     this.aggregates.set([]);
     this.summary.set(null);
     this.gapDetection.set(null);
+    this.fetchProgress.set(null);
 
     console.log('[STEP 1 - Component] fetchData called:', {
       ticker: this.ticker().toUpperCase(),
@@ -119,15 +123,19 @@ export class MarketDataComponent implements OnInit {
       multiplier: this.multiplier()
     });
 
+    this.startProgressPolling();
+
     this.marketDataService.getOrFetchStockAggregates(
       this.ticker().toUpperCase(),
       this.fromDate(),
       this.toDate(),
       this.timespan(),
-      this.multiplier()
+      this.multiplier(),
+      this.forceRefresh()
     )
       .pipe(
         tap((result) => {
+          this.stopProgressPolling();
           console.log('[STEP 2 - Component] GraphQL response received:', {
             ticker: result?.ticker,
             aggregatesCount: result?.aggregates?.length ?? 0,
@@ -143,6 +151,7 @@ export class MarketDataComponent implements OnInit {
           this.loading.set(false);
         }),
         catchError((err) => {
+          this.stopProgressPolling();
           console.error('[STEP 2 - Component] GraphQL ERROR:', {
             message: err?.message,
             networkError: err?.networkError,
@@ -156,6 +165,26 @@ export class MarketDataComponent implements OnInit {
         takeUntilDestroyed(this.destroyRef)
       )
       .subscribe();
+  }
+
+  private startProgressPolling(): void {
+    this.stopProgressPolling();
+    this.progressSub = interval(2000)
+      .pipe(
+        switchMap(() => this.marketDataService.getFetchProgress(this.ticker().toUpperCase())
+          .pipe(catchError(() => EMPTY))
+        ),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe(progress => {
+        this.fetchProgress.set(progress);
+      });
+  }
+
+  private stopProgressPolling(): void {
+    this.progressSub?.unsubscribe();
+    this.progressSub = null;
+    this.fetchProgress.set(null);
   }
 
   private loadHolidays(): void {

@@ -84,12 +84,12 @@ builder.Services.AddHttpClient<ILstmService, LstmService>(client =>
     .HandleTransientHttpError()
     .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
 
-// Add HttpClient for ResearchService (same Python service, 120s timeout for sync IC computation)
+// Add HttpClient for ResearchService (same Python service, 600s timeout for large dataset research)
 builder.Services.AddHttpClient<IResearchService, ResearchService>(client =>
 {
     var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
     client.BaseAddress = new Uri(baseUrl);
-    client.Timeout = TimeSpan.FromSeconds(120);
+    client.Timeout = TimeSpan.FromSeconds(600);
 })
 .AddPolicyHandler(HttpPolicyExtensions
     .HandleTransientHttpError()

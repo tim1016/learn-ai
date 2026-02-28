@@ -22,3 +22,13 @@ public class WindowFetchStatus
     public int BarsFetched { get; set; }
     public string? Error { get; set; }
 }
+
+public class FetchProgress
+{
+    public string Ticker { get; set; } = "";
+    public int TotalWindows { get; set; }
+    public int CompletedWindows { get; set; }
+    public int BarsFetched { get; set; }
+    public string CurrentWindow { get; set; } = "";
+    public string Status { get; set; } = "idle";
+}

@@ -89,6 +89,11 @@
           <label class="font-semibold text-sm text-gray-700">Regime Gate</label>
           <p-toggleswitch [(ngModel)]="regimeGateEnabled" />
         </div>
+
+        <div class="flex flex-col gap-2">
+          <label class="font-semibold text-sm text-gray-700">Force Refresh</label>
+          <p-toggleswitch [(ngModel)]="forceRefresh" />
+        </div>
       </div>
 
       <div class="mb-4">
@@ -104,12 +109,33 @@
   }
 
   @if (loading()) {
-    <div class="flex items-center gap-3 my-6">
-      <p-progressSpinner
-        [style]="{ width: '30px', height: '30px' }"
-        strokeWidth="4"
-      />
-      <span class="text-gray-500">Running signal engine pipeline...</span>
+    <div class="my-6">
+      @if (fetchProgress(); as p) {
+        <div class="fetch-progress">
+          <div class="flex items-center gap-3 mb-2">
+            <p-progressSpinner
+              [style]="{ width: '24px', height: '24px' }"
+              strokeWidth="4"
+            />
+            <span class="text-gray-700 font-medium">
+              Fetching data &mdash; Window {{ p.completedWindows }} / {{ p.totalWindows }}
+              ({{ p.barsFetched | number }} bars)
+            </span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" [style.width.%]="p.completedWindows / p.totalWindows * 100"></div>
+          </div>
+          <div class="text-xs text-gray-400 font-mono mt-1">{{ p.currentWindow }}</div>
+        </div>
+      } @else {
+        <div class="flex items-center gap-3">
+          <p-progressSpinner
+            [style]="{ width: '30px', height: '30px' }"
+            strokeWidth="4"
+          />
+          <span class="text-gray-500">Running signal engine pipeline...</span>
+        </div>
+      }
     </div>
   }
 

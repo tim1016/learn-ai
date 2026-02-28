@@ -9,8 +9,10 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { catchError, of, finalize } from 'rxjs';
+import { catchError, of, finalize, interval, switchMap, EMPTY, Subscription } from 'rxjs';
 import { ResearchService, SignalEngineResult } from '../../../services/research.service';
+import { MarketDataService } from '../../../services/market-data.service';
+import { FetchProgress } from '../../../graphql/types';
 import { SignalReportComponent } from '../signal-report/signal-report.component';
 import { Select } from 'primeng/select';
 import { InputText } from 'primeng/inputtext';
@@ -44,6 +46,7 @@ interface FeatureOption {
 })
 export class SignalRunnerComponent {
   private researchService = inject(ResearchService);
+  private marketDataService = inject(MarketDataService);
   private destroyRef = inject(DestroyRef);
 
   // Form inputs
@@ -53,12 +56,15 @@ export class SignalRunnerComponent {
   toDate = signal('2024-06-30');
   flipSign = signal(true);
   regimeGateEnabled = signal(true);
+  forceRefresh = signal(false);
 
   // State
   loading = signal(false);
   result = signal<SignalEngineResult | null>(null);
   error = signal<string | null>(null);
   formCollapsed = signal(false);
+  fetchProgress = signal<FetchProgress | null>(null);
+  private progressSub: Subscription | null = null;
 
   features: FeatureOption[] = [
     { label: '5-Minute Momentum', value: 'momentum_5m' },
@@ -91,6 +97,9 @@ export class SignalRunnerComponent {
     this.loading.set(true);
     this.error.set(null);
     this.result.set(null);
+    this.fetchProgress.set(null);
+
+    this.startProgressPolling();
 
     this.researchService
       .runSignalEngine({
@@ -100,6 +109,7 @@ export class SignalRunnerComponent {
         toDate: this.toDate(),
         flipSign: this.flipSign(),
         regimeGateEnabled: this.regimeGateEnabled(),
+        forceRefresh: this.forceRefresh(),
       })
       .pipe(
         takeUntilDestroyed(this.destroyRef),
@@ -107,7 +117,10 @@ export class SignalRunnerComponent {
           this.error.set(err?.message ?? 'An unexpected error occurred');
           return of(null);
         }),
-        finalize(() => this.loading.set(false)),
+        finalize(() => {
+          this.stopProgressPolling();
+          this.loading.set(false);
+        }),
       )
       .subscribe(res => {
         if (res) {
@@ -119,6 +132,26 @@ export class SignalRunnerComponent {
           }
         }
       });
+  }
+
+  private startProgressPolling(): void {
+    this.stopProgressPolling();
+    this.progressSub = interval(2000)
+      .pipe(
+        switchMap(() => this.marketDataService.getFetchProgress(this.ticker().toUpperCase())
+          .pipe(catchError(() => EMPTY))
+        ),
+        takeUntilDestroyed(this.destroyRef)
+      )
+      .subscribe(progress => {
+        this.fetchProgress.set(progress);
+      });
+  }
+
+  private stopProgressPolling(): void {
+    this.progressSub?.unsubscribe();
+    this.progressSub = null;
+    this.fetchProgress.set(null);
   }
 
   toggleForm(): void {

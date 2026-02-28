@@ -40,6 +40,16 @@ public class AggregateBar
     public long? TransactionCount { get; set; }
 }
 
+public class FetchProgressInfo
+{
+    public string Ticker { get; set; } = "";
+    public int TotalWindows { get; set; }
+    public int CompletedWindows { get; set; }
+    public int BarsFetched { get; set; }
+    public string CurrentWindow { get; set; } = "";
+    public string Status { get; set; } = "idle";
+}
+
 public class AggregatesSummary
 {
     public decimal PeriodHigh { get; set; }

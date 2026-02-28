@@ -5,6 +5,7 @@ using Backend.Models;
 using Backend.Models.DTOs;
 using Backend.Models.MarketData;
 using Backend.Models.DTOs.PolygonResponses;
+using Backend.Services.Implementation;
 using Backend.Services.Interfaces;
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
@@ -95,6 +96,22 @@ public class Query
     [UseProjection]
     public IQueryable<Ticker?> GetTickerBySymbol(AppDbContext context, string symbol)
         => context.Tickers.Where(t => t.Symbol == symbol);
+
+    [GraphQLName("getFetchProgress")]
+    public FetchProgressInfo? GetFetchProgress(string ticker)
+    {
+        var progress = MarketDataService.GetProgress(ticker.ToUpper());
+        if (progress == null) return null;
+        return new FetchProgressInfo
+        {
+            Ticker = progress.Ticker,
+            TotalWindows = progress.TotalWindows,
+            CompletedWindows = progress.CompletedWindows,
+            BarsFetched = progress.BarsFetched,
+            CurrentWindow = progress.CurrentWindow,
+            Status = progress.Status,
+        };
+    }
 
     /// <summary>
     /// Smart query: returns cached data if available, fetches from Polygon if not.

@@ -389,7 +389,8 @@ public class Mutation
         bool flipSign = true,
         bool regimeGateEnabled = true,
         string timespan = "minute",
-        int multiplier = 1)
+        int multiplier = 1,
+        bool forceRefresh = false)
     {
         try
         {
@@ -399,7 +400,7 @@ public class Mutation
 
             var report = await researchService.RunSignalEngineAsync(
                 ticker, featureName, fromDate, toDate,
-                flipSign, regimeGateEnabled, timespan, multiplier);
+                flipSign, regimeGateEnabled, timespan, multiplier, forceRefresh);
 
             return new SignalEngineResultType
             {

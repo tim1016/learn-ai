@@ -7,7 +7,7 @@ import {
   OptionsChainSnapshotResult, BacktestResult, StockSnapshotResult,
   StockSnapshotsResult, MarketMoversResult, UnifiedSnapshotResult,
   TrackedTickersResult, TickerDetailResult, RelatedTickersResult,
-  StrategyAnalyzeResult, StrategyLegInput,
+  StrategyAnalyzeResult, StrategyLegInput, FetchProgress,
 } from '../graphql/types';
 import { environment } from '../../environments/environment';
 
@@ -374,6 +374,20 @@ interface RunBacktestResponse {
   errors?: { message: string }[];
 }
 
+const GET_FETCH_PROGRESS_QUERY = `
+  query GetFetchProgress($ticker: String!) {
+    getFetchProgress(ticker: $ticker) {
+      ticker totalWindows completedWindows
+      barsFetched currentWindow status
+    }
+  }
+`;
+
+interface FetchProgressResponse {
+  data: { getFetchProgress: FetchProgress | null };
+  errors?: { message: string }[];
+}
+
 const ANALYZE_OPTIONS_STRATEGY_QUERY = `
   query AnalyzeOptionsStrategy(
     $symbol: String!
@@ -429,6 +443,17 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.getOrFetchStockAggregates)
+      );
+  }
+
+  getFetchProgress(ticker: string): Observable<FetchProgress | null> {
+    return this.http
+      .post<FetchProgressResponse>(GRAPHQL_URL, {
+        query: GET_FETCH_PROGRESS_QUERY,
+        variables: { ticker: ticker.toUpperCase() }
+      })
+      .pipe(
+        map(response => response.data.getFetchProgress)
       );
   }
 

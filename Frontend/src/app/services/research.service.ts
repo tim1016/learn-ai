@@ -290,6 +290,7 @@ export interface RunSignalEngineInput {
   regimeGateEnabled: boolean;
   timespan?: string;
   multiplier?: number;
+  forceRefresh?: boolean;
 }
 
 // ─── GraphQL Queries ───────────────────────────────────────
@@ -371,6 +372,7 @@ const RUN_SIGNAL_ENGINE_MUTATION = `
     $regimeGateEnabled: Boolean! = true
     $timespan: String! = "minute"
     $multiplier: Int! = 1
+    $forceRefresh: Boolean! = false
   ) {
     runSignalEngine(
       ticker: $ticker
@@ -381,6 +383,7 @@ const RUN_SIGNAL_ENGINE_MUTATION = `
       regimeGateEnabled: $regimeGateEnabled
       timespan: $timespan
       multiplier: $multiplier
+      forceRefresh: $forceRefresh
     ) {
       success ticker featureName startDate endDate barsUsed
       flipSign thresholdsTested costBpsOptions bestThreshold bestCostBps
@@ -515,6 +518,7 @@ export class ResearchService {
           regimeGateEnabled: input.regimeGateEnabled,
           timespan: input.timespan ?? 'minute',
           multiplier: input.multiplier ?? 1,
+          forceRefresh: input.forceRefresh ?? false,
         }
       })
       .pipe(

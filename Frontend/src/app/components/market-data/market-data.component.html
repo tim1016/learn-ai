@@ -49,6 +49,14 @@
         <option value="week">Weekly</option>
         <option value="month">Monthly</option>
       </select>
+      <label class="force-refresh-label">
+        <input
+          type="checkbox"
+          [checked]="forceRefresh()"
+          (change)="forceRefresh.set($any($event.target).checked)"
+        />
+        Force Refresh
+      </label>
       <button (click)="fetchData()" [disabled]="loading()">
         {{ loading() ? 'Loading...' : 'Fetch Data' }}
       </button>
@@ -68,7 +76,22 @@
 
   <!-- Loading -->
   @if (loading()) {
-    <div class="loading">Fetching data for {{ ticker() }}...</div>
+    <div class="loading">
+      @if (fetchProgress(); as p) {
+        <div class="fetch-progress">
+          <div class="progress-text">
+            Window {{ p.completedWindows }} / {{ p.totalWindows }}
+            &mdash; {{ p.barsFetched | number }} bars fetched
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" [style.width.%]="p.completedWindows / p.totalWindows * 100"></div>
+          </div>
+          <div class="progress-detail">{{ p.currentWindow }}</div>
+        </div>
+      } @else {
+        Fetching data for {{ ticker() }}...
+      }
+    </div>
   }
 
   <!-- Gap Detection Banner -->
