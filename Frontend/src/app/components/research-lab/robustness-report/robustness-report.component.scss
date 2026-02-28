@@ -234,7 +234,79 @@
 .rolling-chart-section,
 .cumulative-monthly-section,
 .monthly-section,
+.coverage-timeline-section,
 .regime-section,
 .breaks-section {
   padding-top: 0.5rem;
+}
+
+// ─── Regime Coverage Timeline ────────────────────────────
+.coverage-count {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.regime-timeline {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+
+  .regime-segment {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0.6rem 0.25rem;
+    border-radius: 6px;
+    text-align: center;
+    transition: box-shadow 0.15s;
+    cursor: help;
+
+    &:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08); }
+
+    &.covered {
+      background: #ecfdf5;
+      border: 1px solid #a7f3d0;
+
+      .regime-label { color: #166534; }
+      .regime-days { color: #16a34a; }
+    }
+
+    &.missing {
+      background: repeating-linear-gradient(
+        45deg,
+        #fef2f2,
+        #fef2f2 4px,
+        #fff5f5 4px,
+        #fff5f5 8px
+      );
+      border: 1px dashed #fca5a5;
+
+      .regime-label { color: #991b1b; }
+      .regime-gap { color: #dc2626; }
+    }
+
+    .regime-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      line-height: 1.2;
+    }
+
+    .regime-days {
+      font-size: 0.8rem;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+
+    .regime-gap {
+      font-size: 0.7rem;
+      font-weight: 600;
+      font-style: italic;
+      margin-top: 2px;
+    }
+  }
 }

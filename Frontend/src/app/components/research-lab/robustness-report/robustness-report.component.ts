@@ -150,6 +150,34 @@ export class RobustnessReportComponent {
     return Math.abs(value);
   }
 
+  // ─── Regime Coverage Timeline ──────────────────────────
+
+  get regimeCoverageTimeline(): { label: string; covered: boolean; days: number }[] {
+    const rob = this.robustness();
+    const expectedVol = ['Low Vol', 'Normal Vol', 'High Vol'];
+    const expectedTrend = ['Trending Up', 'Sideways', 'Trending Down'];
+    const segments: { label: string; covered: boolean; days: number }[] = [];
+
+    for (const label of expectedVol) {
+      const regime = rob.volatilityRegimes.find(r => r.regimeLabel === label);
+      segments.push({ label, covered: !!regime, days: regime?.observationCount ?? 0 });
+    }
+    for (const label of expectedTrend) {
+      const regime = rob.trendRegimes.find(r => r.regimeLabel === label);
+      segments.push({ label, covered: !!regime, days: regime?.observationCount ?? 0 });
+    }
+
+    return segments;
+  }
+
+  get regimeCoverageCount(): number {
+    return this.regimeCoverageTimeline.filter(s => s.covered).length;
+  }
+
+  get regimeCoverageTotal(): number {
+    return this.regimeCoverageTimeline.length;
+  }
+
   monthlyIcSeverity(meanIc: number): string {
     if (meanIc >= 0.03) return 'text-green-700';
     if (meanIc > 0) return 'text-green-600';

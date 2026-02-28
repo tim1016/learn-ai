@@ -201,6 +201,32 @@
     </div>
   }
 
+  <!-- Regime Coverage Timeline -->
+  <div class="coverage-timeline-section mb-6">
+    <h5 class="section-title">
+      <i class="pi pi-map mr-2"></i>Market Regime Coverage
+      <span class="coverage-count ml-2">{{ regimeCoverageCount }}/{{ regimeCoverageTotal }} regimes observed</span>
+    </h5>
+    <div class="regime-timeline mt-2">
+      @for (segment of regimeCoverageTimeline; track segment.label) {
+        <div class="regime-segment"
+             [class.covered]="segment.covered"
+             [class.missing]="!segment.covered"
+             [pTooltip]="segment.covered
+               ? segment.label + ': ' + segment.days + ' days observed'
+               : segment.label + ': Not represented in sample'"
+             tooltipPosition="top">
+          <span class="regime-label">{{ segment.label }}</span>
+          @if (segment.covered) {
+            <span class="regime-days">{{ segment.days }}d</span>
+          } @else {
+            <span class="regime-gap">Gap</span>
+          }
+        </div>
+      }
+    </div>
+  </div>
+
   <!-- Regime Analysis -->
   @if (hasVolRegimes || hasTrendRegimes) {
     <div class="regime-section mb-6">

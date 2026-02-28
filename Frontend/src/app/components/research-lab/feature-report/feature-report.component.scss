@@ -2,29 +2,149 @@
   display: block;
 }
 
-// Verdict Banner
+// ─── Research Grade Card ──────────────────────────────────
+.grade-card {
+  display: flex;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 1.5rem;
+
+  .grade-dimension {
+    flex: 1;
+    text-align: center;
+    padding: 0.75rem;
+    border-radius: 8px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    cursor: help;
+    transition: box-shadow 0.15s;
+
+    &:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+
+    .grade-letter {
+      font-size: 2rem;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .grade-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-top: 0.25rem;
+    }
+  }
+}
+
+// ─── Exploratory Override Banner ──────────────────────────
+.exploratory-banner {
+  padding: 1rem 1.25rem;
+  border-radius: 8px;
+  background: #fefce8;
+  border: 1px solid #fef08a;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+
+  i { color: #ca8a04; font-size: 1.2rem; margin-top: 2px; }
+
+  .exploratory-title {
+    font-weight: 700;
+    color: #854d0e;
+    font-size: 0.95rem;
+  }
+
+  .exploratory-text {
+    font-size: 0.85rem;
+    color: #92400e;
+    line-height: 1.5;
+  }
+}
+
+// ─── Sample Size Badge ────────────────────────────────────
+.sample-badge {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  border: 1px solid;
+  margin-bottom: 1rem;
+
+  &.severity-success { background: #f0fdf4; border-color: #bbf7d0; }
+  &.severity-warn { background: #fffbeb; border-color: #fef08a; }
+  &.severity-danger { background: #fef2f2; border-color: #fecaca; }
+
+  .badge-stats {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 60px;
+  }
+
+  .badge-stat {
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: #1e293b;
+  }
+
+  .badge-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .badge-separator {
+    color: #e2e8f0;
+    font-size: 1.2rem;
+    font-weight: 300;
+  }
+
+  .severity-text-success { color: #16a34a; }
+  .severity-text-warn { color: #d97706; }
+  .severity-text-danger { color: #dc2626; }
+}
+
+// ─── Verdict Banner ───────────────────────────────────────
 .verdict-banner {
   padding: 1.25rem 1.5rem;
   border-radius: 10px;
   margin-bottom: 1.5rem;
   border: 1px solid;
 
-  &.passed {
+  &.success {
     background: #f0fdf4;
     border-color: #bbf7d0;
-
     .verdict-icon { color: #16a34a; }
     .verdict-title { color: #166534; }
     .verdict-text { color: #15803d; }
+    .verdict-tier-desc { color: #16a34a; }
   }
 
-  &.failed {
-    background: #fef2f2;
-    border-color: #fecaca;
+  &.warn {
+    background: #fffbeb;
+    border-color: #fef08a;
+    .verdict-icon { color: #d97706; }
+    .verdict-title { color: #92400e; }
+    .verdict-text { color: #a16207; }
+    .verdict-tier-desc { color: #ca8a04; }
+  }
 
-    .verdict-icon { color: #dc2626; }
-    .verdict-title { color: #991b1b; }
-    .verdict-text { color: #b91c1c; }
+  &.info {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+    .verdict-icon { color: #2563eb; }
+    .verdict-title { color: #1e40af; }
+    .verdict-text { color: #1d4ed8; }
+    .verdict-tier-desc { color: #3b82f6; }
   }
 
   .verdict-header {
@@ -32,10 +152,9 @@
     align-items: center;
     gap: 0.75rem;
     margin-bottom: 0.5rem;
+    flex-wrap: wrap;
 
-    .verdict-icon {
-      font-size: 1.4rem;
-    }
+    .verdict-icon { font-size: 1.4rem; }
 
     .verdict-title {
       font-size: 1.2rem;
@@ -49,9 +168,16 @@
     line-height: 1.6;
     margin: 0;
   }
+
+  .verdict-tier-desc {
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin-top: 0.5rem;
+    font-style: italic;
+  }
 }
 
-// Method selector
+// ─── Method Selector ──────────────────────────────────────
 .method-selector {
   display: flex;
   align-items: center;
@@ -67,7 +193,7 @@
   }
 }
 
-// Metric Cards
+// ─── Metric Cards ─────────────────────────────────────────
 .metric-card {
   padding: 1rem 1.25rem;
   border-radius: 8px;
@@ -105,7 +231,7 @@
   }
 }
 
-// Chart containers — taller for readability
+// ─── Chart Containers ─────────────────────────────────────
 .chart-container {
   padding: 1.25rem;
   border-radius: 10px;
@@ -120,13 +246,14 @@
   }
 }
 
-// Quantile table title
+// ─── Table Title ──────────────────────────────────────────
 .table-title {
   font-size: 1rem;
   font-weight: 700;
   color: #1e293b;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
 
   i {
     color: #3b82f6;
@@ -134,7 +261,124 @@
   }
 }
 
-// Robustness section divider
+// ─── Transaction Cost Sensitivity ─────────────────────────
+.cost-section {
+  padding-top: 0.5rem;
+
+  .table-title i { color: #059669; }
+
+  .cost-slider-container {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .cost-value {
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: #1e293b;
+    min-width: 50px;
+  }
+
+  .cost-result {
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.5rem 0;
+  }
+
+  .cost-note {
+    font-size: 0.8rem;
+    color: #64748b;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.25rem;
+
+    i { color: #94a3b8; font-size: 0.75rem; margin-top: 2px; }
+  }
+}
+
+// ─── Statistical Assumptions ──────────────────────────────
+.assumptions-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 1rem;
+  font-size: 0.8rem;
+  padding: 0.5rem 0;
+
+  .assumption-label {
+    color: #64748b;
+    font-weight: 600;
+  }
+
+  .assumption-value {
+    color: #334155;
+  }
+}
+
+// ─── Falsification Box ────────────────────────────────────
+.falsification-box {
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  background: #fdf4ff;
+  border: 1px solid #f0abfc;
+
+  .table-title i { color: #a855f7; }
+
+  .kill-criterion {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #f5d0fe;
+
+    &:last-child { border-bottom: none; }
+
+    i {
+      color: #16a34a;
+      font-size: 0.85rem;
+      margin-top: 2px;
+    }
+
+    .kill-label {
+      font-weight: 700;
+      font-size: 0.85rem;
+      color: #86198f;
+      min-width: 130px;
+      flex-shrink: 0;
+    }
+
+    .kill-desc {
+      font-size: 0.8rem;
+      color: #6b21a8;
+    }
+
+    &.triggered {
+      i { color: #dc2626; }
+      .kill-label { color: #dc2626; }
+    }
+  }
+}
+
+// ─── Limitations Panel ────────────────────────────────────
+.limitations-panel {
+  .limitation-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.4rem 0;
+    font-size: 0.85rem;
+    color: #64748b;
+
+    i {
+      color: #f59e0b;
+      font-size: 0.8rem;
+      margin-top: 3px;
+      flex-shrink: 0;
+    }
+  }
+}
+
+// ─── Robustness Section ───────────────────────────────────
 .robustness-divider {
   height: 1px;
   background: #e2e8f0;
@@ -142,12 +386,10 @@
 }
 
 .robustness-section {
-  .table-title i {
-    color: #8b5cf6;
-  }
+  .table-title i { color: #8b5cf6; }
 }
 
-// Bars footer
+// ─── Bars Footer ──────────────────────────────────────────
 .bars-footer {
   display: flex;
   align-items: center;

@@ -1,17 +1,67 @@
 <div class="mt-4">
-  <!-- Verdict Banner -->
-  <div class="verdict-banner" [class.passed]="result().passedValidation" [class.failed]="!result().passedValidation">
+
+  <!-- 1. Research Grade Card -->
+  <div class="grade-card">
+    @for (dim of researchGrade; track dim.label) {
+      <div class="grade-dimension" [pTooltip]="dim.tooltip" tooltipPosition="top">
+        <div class="grade-letter" [style.color]="gradeColor(dim.grade)">{{ dim.grade }}</div>
+        <div class="grade-label">{{ dim.label }}</div>
+      </div>
+    }
+  </div>
+
+  <!-- 2. Exploratory Override Banner -->
+  @if (isExploratoryOverride) {
+    <div class="exploratory-banner">
+      <i class="pi pi-exclamation-triangle"></i>
+      <div>
+        <div class="exploratory-title">Exploratory Result</div>
+        <div class="exploratory-text">
+          Sample: {{ icDaysCount }} IC days ({{ result().startDate }} to {{ result().endDate }}).
+          Multi-year validation required before deployment.
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- 3. Sample Size Credibility Badge -->
+  <div class="sample-badge" [class]="'severity-' + effectiveNSeverity">
+    <div class="badge-stats">
+      <span class="badge-stat">{{ result().effectiveN | number: '1.0-0' }}</span>
+      <span class="badge-label">Effective N</span>
+    </div>
+    <span class="badge-separator">|</span>
+    <div class="badge-stats">
+      <span class="badge-stat">{{ icDaysCount }}</span>
+      <span class="badge-label">IC Days</span>
+    </div>
+    <span class="badge-separator">|</span>
+    <div class="badge-stats">
+      <span class="badge-stat" [class]="'severity-text-' + coverageSeverity">{{ coverageRatio | percent: '1.0-0' }}</span>
+      <span class="badge-label">Coverage</span>
+    </div>
+    <span class="badge-separator">|</span>
+    <div class="badge-stats">
+      <span class="badge-stat">250+</span>
+      <span class="badge-label">Recommended</span>
+    </div>
+  </div>
+
+  <!-- 4. Confidence Tier + Verdict Banner -->
+  <div class="verdict-banner" [class]="validationSeverity">
     <div class="verdict-header">
-      <i [class]="result().passedValidation ? 'pi pi-verified' : 'pi pi-times-circle'" class="verdict-icon"></i>
+      <i [class]="isExploratoryOverride ? 'pi pi-info-circle' : (result().passedValidation ? 'pi pi-verified' : 'pi pi-times-circle')" class="verdict-icon"></i>
       <h3 class="verdict-title">
         {{ result().featureName }} on {{ result().ticker }}
       </h3>
       <p-tag [severity]="validationSeverity" [value]="validationLabel" />
+      <p-tag [severity]="confidenceTierSeverity" [value]="confidenceTierLabel" class="ml-2" />
     </div>
     <p class="verdict-text">{{ validationVerdict }}</p>
+    <p class="verdict-tier-desc">{{ confidenceTierDescription }}</p>
   </div>
 
-  <!-- t-Stat Method Selector -->
+  <!-- 5. t-Stat Method Selector -->
   <div class="method-selector mb-4">
     <label class="method-label">t-Stat Method:</label>
     <p-select
@@ -24,7 +74,7 @@
     />
   </div>
 
-  <!-- Summary Metrics Grid -->
+  <!-- 6. Summary Metrics Grid -->
   <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
     <div class="metric-card">
       <div class="metric-label">
@@ -92,7 +142,7 @@
     </div>
   </div>
 
-  <!-- Charts — IC and Quantile -->
+  <!-- 7. Charts — IC and Quantile -->
   <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
     <div class="chart-container">
       <canvas #icChart></canvas>
@@ -109,7 +159,58 @@
     </div>
   </div>
 
-  <!-- Quantile Details Table -->
+  <!-- 8. Transaction Cost Sensitivity -->
+  <div class="cost-section mb-6">
+    <h4 class="table-title">
+      <i class="pi pi-dollar mr-2"></i>Transaction Cost Sensitivity
+    </h4>
+
+    <div class="cost-slider-container mt-3">
+      <label class="method-label">Assumed one-way cost:</label>
+      <p-slider [(ngModel)]="costBps" [min]="0" [max]="10" [step]="1"
+                [style]="{ width: '200px' }" />
+      <span class="cost-value">{{ costBps() }} bps</span>
+    </div>
+
+    <div class="cost-result mt-2" [class.text-green-700]="isCostViable" [class.text-red-700]="!isCostViable">
+      @if (isCostViable) {
+        At {{ costBps() }}bps one-way cost, estimated net Q5-Q1 spread: {{ netReturnAtSelectedCost | number: '1.1-1' }}bps.
+      } @else {
+        At {{ costBps() }}bps one-way cost, transaction costs likely erase the estimated alpha.
+      }
+    </div>
+
+    <p-table [value]="costScenarios" styleClass="p-datatable-sm" class="mt-3" [tableStyle]="{ 'min-width': '24rem' }">
+      <ng-template #header>
+        <tr>
+          <th>One-Way Cost</th>
+          <th>Gross Spread (bps)</th>
+          <th>Net Spread (bps)</th>
+          <th>Viable?</th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-row>
+        <tr>
+          <td>{{ row.costBps }}bps</td>
+          <td>{{ row.grossBps | number: '1.1-1' }}</td>
+          <td [class]="row.viable ? 'text-green-700 font-semibold' : 'text-red-700 font-semibold'">
+            {{ row.netBps | number: '1.1-1' }}
+          </td>
+          <td>
+            <p-tag [severity]="row.viable ? 'success' : 'danger'" [value]="row.viable ? 'Yes' : 'No'" />
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+
+    <div class="cost-note mt-2">
+      <i class="pi pi-info-circle mr-1"></i>
+      Alpha fully erased at approximately {{ costErasureThreshold | number: '1.1-1' }}bps one-way cost.
+      Assumes round-trip cost = 2x one-way. Slippage and market impact not modeled.
+    </div>
+  </div>
+
+  <!-- 9. Quantile Details Table -->
   <div class="mb-2">
     <h4 class="table-title">
       <i class="pi pi-table mr-2"></i>Quantile Breakdown
@@ -138,7 +239,26 @@
     </ng-template>
   </p-table>
 
-  <!-- Bars Used Footer -->
+  <!-- 10. Statistical Assumptions Disclosure -->
+  <div class="mt-6 mb-6">
+    <p-accordion>
+      <p-accordion-panel value="assumptions">
+        <p-accordion-header>
+          <i class="pi pi-cog mr-2"></i>Statistical Assumptions & Parameters
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="assumptions-grid">
+            @for (a of statisticalAssumptions; track a.label) {
+              <span class="assumption-label">{{ a.label }}</span>
+              <span class="assumption-value">{{ a.value }}</span>
+            }
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </div>
+
+  <!-- 11. Bars Used Footer -->
   <div class="bars-footer">
     <i class="pi pi-database mr-2"></i>
     Analysis based on <strong>{{ result().barsUsed | number }}</strong> bars
@@ -149,7 +269,7 @@
     }
   </div>
 
-  <!-- Robustness Analysis -->
+  <!-- 12. Robustness Analysis -->
   @if (result().robustness) {
     <div class="robustness-section mt-6">
       <div class="robustness-divider"></div>
@@ -157,6 +277,48 @@
         <i class="pi pi-shield mr-2"></i>Robustness Analysis
       </h4>
       <app-robustness-report [robustness]="result().robustness!" />
+    </div>
+  }
+
+  <!-- 13. Kill Criteria / Falsification Box -->
+  <div class="falsification-box mt-6">
+    <h4 class="table-title mb-3">
+      <i class="pi pi-flag mr-2"></i>Kill Criteria — What Would Invalidate This Signal?
+      @if (triggeredKillCriteria > 0) {
+        <p-tag severity="danger" [value]="triggeredKillCriteria + ' triggered'" class="ml-2" />
+      } @else {
+        <p-tag severity="success" value="None triggered" class="ml-2" />
+      }
+    </h4>
+    @for (criterion of falsificationCriteria; track criterion.label) {
+      <div class="kill-criterion" [class.triggered]="criterion.triggered">
+        <i [class]="criterion.triggered ? 'pi pi-exclamation-circle' : 'pi pi-check-circle'"></i>
+        <span class="kill-label">{{ criterion.label }}</span>
+        <span class="kill-desc">{{ criterion.description }}</span>
+      </div>
+    }
+  </div>
+
+  <!-- 14. Research Limitations -->
+  @if (hasLimitations) {
+    <div class="mt-6">
+      <p-accordion>
+        <p-accordion-panel value="limitations">
+          <p-accordion-header>
+            <i class="pi pi-exclamation-triangle mr-2"></i>Research Caveats ({{ researchLimitations.length }})
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="limitations-panel">
+              @for (limitation of researchLimitations; track $index) {
+                <div class="limitation-item">
+                  <i class="pi pi-minus-circle"></i>
+                  <span>{{ limitation }}</span>
+                </div>
+              }
+            </div>
+          </p-accordion-content>
+        </p-accordion-panel>
+      </p-accordion>
     </div>
   }
 </div>
