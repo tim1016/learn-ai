@@ -1,5 +1,18 @@
 <div class="robustness-container">
 
+  <!-- Stability Method Selector -->
+  <div class="method-selector mb-3">
+    <label class="method-label">Stability Metric:</label>
+    <p-select
+      [options]="stabilityMethodOptions"
+      [(ngModel)]="selectedStabilityMethod"
+      optionLabel="label"
+      optionValue="value"
+      [style]="{ 'min-width': '280px' }"
+      size="small"
+    />
+  </div>
+
   <!-- Robustness Scorecard -->
   <div class="scorecard-section mb-6">
     <h5 class="section-title">
@@ -12,13 +25,13 @@
         <div class="metric-label">
           Stability
           <i class="pi pi-info-circle ml-1"
-             pTooltip="Based on % of months with positive IC. >70% Strong, 60-70% Tradeable, 50-60% Weak, <50% Noise"
+             [pTooltip]="stabilityTooltip"
              tooltipPosition="top"></i>
         </div>
         <div class="flex items-center gap-2 mt-1">
-          <p-tag [severity]="stabilityLabelSeverity" [value]="robustness().stabilityLabel" />
+          <p-tag [severity]="stabilityLabelSeverity" [value]="displayedStabilityLabel" />
         </div>
-        <div class="metric-sub mt-1">{{ robustness().pctPositiveMonths | percent: '1.0-0' }} months positive</div>
+        <div class="metric-sub mt-1">{{ displayedStabilityPct | percent: '1.0-0' }} {{ stabilityMetricSub }}</div>
       </div>
 
       <!-- % Significant Months -->
@@ -72,13 +85,13 @@
           <div class="split-metrics">
             <div class="split-metric">
               <span class="split-metric-label">Mean IC</span>
-              <span class="split-metric-value" [class]="tt.trainMeanIC >= 0.03 ? 'text-green-700' : ''">
+              <span class="split-metric-value" [class.text-green-700]="abs(tt.trainMeanIC) >= 0.03">
                 {{ tt.trainMeanIC | number: '1.4-4' }}
               </span>
             </div>
             <div class="split-metric">
               <span class="split-metric-label">t-Stat</span>
-              <span class="split-metric-value" [class]="tt.trainTStat >= 1.65 ? 'text-green-700' : ''">
+              <span class="split-metric-value" [class.text-green-700]="abs(tt.trainTStat) >= 1.96">
                 {{ tt.trainTStat | number: '1.2-2' }}
               </span>
             </div>
@@ -96,13 +109,13 @@
           <div class="split-metrics">
             <div class="split-metric">
               <span class="split-metric-label">Mean IC</span>
-              <span class="split-metric-value" [class]="tt.testMeanIC >= 0.03 ? 'text-green-700' : ''">
+              <span class="split-metric-value" [class.text-green-700]="abs(tt.testMeanIC) >= 0.03">
                 {{ tt.testMeanIC | number: '1.4-4' }}
               </span>
             </div>
             <div class="split-metric">
               <span class="split-metric-label">t-Stat</span>
-              <span class="split-metric-value" [class]="tt.testTStat >= 1.65 ? 'text-green-700' : ''">
+              <span class="split-metric-value" [class.text-green-700]="abs(tt.testTStat) >= 1.96">
                 {{ tt.testTStat | number: '1.2-2' }}
               </span>
             </div>
@@ -113,6 +126,22 @@
           </div>
         </div>
       </div>
+
+      <!-- OOS Retention -->
+      @if (hasOosRetention) {
+        <div class="oos-retention-card mt-4">
+          <div class="metric-label">
+            OOS Retention
+            <i class="pi pi-info-circle ml-1"
+               pTooltip="|IC_test| / |IC_train|. >80% Excellent, 60-80% Acceptable, 40-60% Weak, <40% Likely Overfit"
+               tooltipPosition="top"></i>
+          </div>
+          <div class="flex items-center gap-2 mt-1">
+            <span class="metric-value">{{ tt.oosRetention | percent: '1.0-0' }}</span>
+            <p-tag [severity]="oosRetentionSeverity" [value]="tt.oosRetentionLabel" />
+          </div>
+        </div>
+      }
     </div>
   }
 
@@ -124,6 +153,18 @@
       </h5>
       <div class="chart-container mt-3">
         <canvas #rollingTStatChart></canvas>
+      </div>
+    </div>
+  }
+
+  <!-- Cumulative Monthly IC Chart -->
+  @if (hasMonthlyData) {
+    <div class="cumulative-monthly-section mb-6">
+      <h5 class="section-title">
+        <i class="pi pi-chart-line mr-2"></i>Cumulative Monthly IC
+      </h5>
+      <div class="chart-container mt-3">
+        <canvas #cumulativeMonthlyIcChart></canvas>
       </div>
     </div>
   }
@@ -224,6 +265,51 @@
           </div>
         }
       </div>
+    </div>
+  }
+
+  <!-- Structural Breaks -->
+  @if (hasStructuralBreaks) {
+    <div class="breaks-section mb-6">
+      <h5 class="section-title">
+        <i class="pi pi-bolt mr-2"></i>Structural Break Detection
+        @if (significantBreaks.length > 0) {
+          <p-tag severity="warn" [value]="significantBreaks.length + ' significant'" class="ml-2" />
+        } @else {
+          <p-tag severity="success" value="None significant" class="ml-2" />
+        }
+      </h5>
+      <p-table
+        [value]="robustness().structuralBreaks"
+        [tableStyle]="{ 'min-width': '32rem' }"
+        styleClass="p-datatable-sm"
+        class="mt-3"
+      >
+        <ng-template #header>
+          <tr>
+            <th>Break Date</th>
+            <th>IC Before</th>
+            <th>IC After</th>
+            <th>t-Stat</th>
+            <th>Significant</th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-row>
+          <tr>
+            <td class="font-semibold">{{ row.date }}</td>
+            <td [class]="regimeIcClass(row.icBefore)">{{ row.icBefore | number: '1.4-4' }}</td>
+            <td [class]="regimeIcClass(row.icAfter)">{{ row.icAfter | number: '1.4-4' }}</td>
+            <td>{{ row.tStat | number: '1.2-2' }}</td>
+            <td>
+              @if (row.significant) {
+                <p-tag severity="warn" value="YES" />
+              } @else {
+                <p-tag severity="success" value="NO" />
+              }
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
     </div>
   }
 

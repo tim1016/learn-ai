@@ -282,6 +282,9 @@ public class Mutation
                 MeanIC = report.MeanIc,
                 ICTStat = report.IcTStat,
                 ICPValue = report.IcPValue,
+                NwTStat = report.NwTStat,
+                NwPValue = report.NwPValue,
+                EffectiveN = report.EffectiveN,
                 ICValues = report.IcValues,
                 ICDates = report.IcDates,
                 AdfPvalue = report.AdfPvalue,
@@ -312,6 +315,8 @@ public class Mutation
                     BestMonthIC = report.Robustness.BestMonthIc,
                     WorstMonthIC = report.Robustness.WorstMonthIc,
                     StabilityLabel = report.Robustness.StabilityLabel,
+                    PctSignConsistentMonths = report.Robustness.PctSignConsistentMonths,
+                    SignConsistentStabilityLabel = report.Robustness.SignConsistentStabilityLabel,
                     RollingTStat = report.Robustness.RollingTStat.Select(r => new RollingTStatPointType
                     {
                         Month = r.Month,
@@ -344,7 +349,17 @@ public class Mutation
                         TestTStat = report.Robustness.TrainTest.TestTStat,
                         TestDays = report.Robustness.TrainTest.TestDays,
                         OverfitFlag = report.Robustness.TrainTest.OverfitFlag,
+                        OosRetention = report.Robustness.TrainTest.OosRetention,
+                        OosRetentionLabel = report.Robustness.TrainTest.OosRetentionLabel,
                     } : null,
+                    StructuralBreaks = report.Robustness.StructuralBreaks.Select(b => new StructuralBreakPointType
+                    {
+                        Date = b.Date,
+                        IcBefore = b.IcBefore,
+                        IcAfter = b.IcAfter,
+                        TStat = b.TStat,
+                        Significant = b.Significant,
+                    }).ToList(),
                 } : null,
                 Error = report.Error,
             };

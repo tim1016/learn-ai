@@ -9,6 +9,7 @@ from app.research.validation.robustness import (
     compute_regime_analysis,
     compute_robustness,
     compute_rolling_t_stat,
+    compute_structural_breaks,
     compute_train_test_split,
 )
 
@@ -242,6 +243,100 @@ class TestRegimeAnalysis:
         assert trend == []
 
 
+class TestOosRetention:
+    def test_retention_computed(self) -> None:
+        """OOS retention should be computed when train/test split exists."""
+        ic_values, ic_dates = _generate_multi_month_ic(n_months=6, base_ic=0.03)
+        result = compute_train_test_split(ic_values, ic_dates)
+
+        assert result is not None
+        assert result.oos_retention > 0
+        assert result.oos_retention_label != "Unknown"
+
+    def test_retention_label_excellent(self) -> None:
+        """Consistent IC across train/test should yield high retention."""
+        ic_values, ic_dates = _generate_multi_month_ic(n_months=6, base_ic=0.05, seed=10)
+        result = compute_train_test_split(ic_values, ic_dates)
+
+        assert result is not None
+        assert result.oos_retention_label in ("Excellent", "Acceptable")
+
+    def test_retention_bounded_zero_to_one_ish(self) -> None:
+        """OOS retention should be a reasonable positive ratio."""
+        ic_values, ic_dates = _generate_multi_month_ic(n_months=8, base_ic=0.03)
+        result = compute_train_test_split(ic_values, ic_dates)
+
+        assert result is not None
+        assert result.oos_retention >= 0
+
+
+class TestSignConsistentStability:
+    def test_computed_with_positive_base(self) -> None:
+        """Sign-consistent stability should be computed for positive-IC features."""
+        ic_values, ic_dates = _generate_multi_month_ic(n_months=8, base_ic=0.05)
+        bars = _generate_multi_month_bars(n_months=8)
+
+        result = compute_robustness(ic_values, ic_dates, bars)
+
+        assert result.pct_sign_consistent_months > 0
+        assert result.sign_consistent_stability_label != "Unknown"
+
+    def test_positive_base_high_consistency(self) -> None:
+        """Feature with strong positive IC should have high sign consistency."""
+        ic_values, ic_dates = _generate_multi_month_ic(n_months=10, base_ic=0.08, seed=99)
+        bars = _generate_multi_month_bars(n_months=10, seed=99)
+
+        result = compute_robustness(ic_values, ic_dates, bars)
+
+        assert result.pct_sign_consistent_months >= 0.5
+
+    def test_insufficient_data_defaults(self) -> None:
+        """With insufficient data, sign-consistent fields should be defaults."""
+        result = compute_robustness([0.01], ["2024-01-01"], [])
+
+        assert result.pct_sign_consistent_months == 0.0
+        assert result.sign_consistent_stability_label == "Unknown"
+
+
+class TestStructuralBreaks:
+    def test_detects_break_when_sign_flips(self) -> None:
+        """Should detect structural break when IC changes sign."""
+        rng = np.random.default_rng(42)
+        ic_values: list[float] = []
+        ic_dates: list[str] = []
+
+        # 4 months positive, 4 months negative
+        for month_idx in range(8):
+            month = month_idx + 1
+            base = 0.05 if month_idx < 4 else -0.05
+            for day in range(1, 21):
+                if day > 28:
+                    continue
+                ic_values.append(base + rng.normal(0, 0.01))
+                ic_dates.append(f"2024-{month:02d}-{day:02d}")
+
+        breaks = compute_structural_breaks(ic_values, ic_dates)
+
+        significant = [b for b in breaks if b.significant]
+        assert len(significant) > 0
+
+    def test_no_break_in_stable_series(self) -> None:
+        """Should not detect significant breaks in a stable IC series."""
+        ic_values, ic_dates = _generate_multi_month_ic(n_months=8, base_ic=0.03)
+
+        breaks = compute_structural_breaks(ic_values, ic_dates)
+
+        significant = [b for b in breaks if b.significant]
+        # A stable series should have few or no significant breaks
+        assert len(significant) <= 1
+
+    def test_insufficient_data_returns_empty(self) -> None:
+        """Should return empty list with insufficient data."""
+        breaks = compute_structural_breaks([0.01, 0.02], ["2024-01-01", "2024-01-02"])
+
+        assert breaks == []
+
+
 class TestComputeRobustness:
     def test_end_to_end(self) -> None:
         ic_values, ic_dates = _generate_multi_month_ic(n_months=8)
@@ -254,6 +349,13 @@ class TestComputeRobustness:
         assert 0.0 <= result.pct_significant_months <= 1.0
         assert result.stability_label != "Unknown"
         assert result.train_test is not None
+        # New fields
+        assert result.pct_sign_consistent_months >= 0
+        assert result.sign_consistent_stability_label != "Unknown"
+        assert isinstance(result.structural_breaks, list)
+        if result.train_test is not None:
+            assert result.train_test.oos_retention >= 0
+            assert result.train_test.oos_retention_label != "Unknown"
 
     def test_insufficient_data_returns_defaults(self) -> None:
         result = compute_robustness([0.01], ["2024-01-01"], [])
@@ -261,3 +363,5 @@ class TestComputeRobustness:
         assert result.monthly_breakdown == []
         assert result.stability_label == "Unknown"
         assert result.train_test is None
+        assert result.pct_sign_consistent_months == 0.0
+        assert result.structural_breaks == []

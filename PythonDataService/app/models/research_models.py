@@ -74,6 +74,18 @@ class TrainTestSplitResponse(BaseModel):
     test_t_stat: float
     test_days: int
     overfit_flag: bool
+    oos_retention: float = 0.0
+    oos_retention_label: str = "Unknown"
+
+
+class StructuralBreakPointResponse(BaseModel):
+    """A detected structural break in the IC series."""
+
+    date: str
+    ic_before: float
+    ic_after: float
+    t_stat: float
+    significant: bool
 
 
 class RobustnessResponse(BaseModel):
@@ -85,10 +97,13 @@ class RobustnessResponse(BaseModel):
     best_month_ic: float = 0.0
     worst_month_ic: float = 0.0
     stability_label: str = "Unknown"
+    pct_sign_consistent_months: float = 0.0
+    sign_consistent_stability_label: str = "Unknown"
     rolling_t_stat: list[RollingTStatPointResponse] = []
     volatility_regimes: list[RegimeICResponse] = []
     trend_regimes: list[RegimeICResponse] = []
     train_test: TrainTestSplitResponse | None = None
+    structural_breaks: list[StructuralBreakPointResponse] = []
 
 
 class RunFeatureResearchResponse(BaseModel):
@@ -103,6 +118,9 @@ class RunFeatureResearchResponse(BaseModel):
     mean_ic: float
     ic_t_stat: float
     ic_p_value: float
+    nw_t_stat: float = 0.0
+    nw_p_value: float = 1.0
+    effective_n: float = 0.0
     adf_pvalue: float
     kpss_pvalue: float
     is_stationary: bool

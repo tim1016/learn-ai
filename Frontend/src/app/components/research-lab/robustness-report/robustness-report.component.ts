@@ -1,16 +1,19 @@
 import {
   Component,
   input,
+  signal,
   ChangeDetectionStrategy,
   ElementRef,
   viewChild,
   effect,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Robustness } from '../../../services/research.service';
+import { FormsModule } from '@angular/forms';
+import { Robustness, StructuralBreakPoint } from '../../../services/research.service';
 import { TagModule } from 'primeng/tag';
 import { TableModule } from 'primeng/table';
 import { TooltipModule } from 'primeng/tooltip';
+import { Select } from 'primeng/select';
 import { Chart, registerables } from 'chart.js';
 
 Chart.register(...registerables);
@@ -18,7 +21,7 @@ Chart.register(...registerables);
 @Component({
   selector: 'app-robustness-report',
   standalone: true,
-  imports: [CommonModule, TagModule, TableModule, TooltipModule],
+  imports: [CommonModule, FormsModule, TagModule, TableModule, TooltipModule, Select],
   templateUrl: './robustness-report.component.html',
   styleUrls: ['./robustness-report.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -27,16 +30,68 @@ export class RobustnessReportComponent {
   robustness = input.required<Robustness>();
 
   rollingTStatCanvas = viewChild<ElementRef<HTMLCanvasElement>>('rollingTStatChart');
+  cumulativeMonthlyIcCanvas = viewChild<ElementRef<HTMLCanvasElement>>('cumulativeMonthlyIcChart');
 
   private rollingChart: Chart | null = null;
+  private cumulativeMonthlyChart: Chart | null = null;
+
+  // Stability method dropdown
+  stabilityMethodOptions = [
+    { label: '% Sign-Consistent (Recommended)', value: 'sign_consistent' },
+    { label: '% Positive Months', value: 'positive' },
+  ];
+  selectedStabilityMethod = signal<string>('sign_consistent');
+
+  get displayedStabilityPct(): number {
+    return this.selectedStabilityMethod() === 'sign_consistent'
+      ? this.robustness().pctSignConsistentMonths
+      : this.robustness().pctPositiveMonths;
+  }
+
+  get displayedStabilityLabel(): string {
+    return this.selectedStabilityMethod() === 'sign_consistent'
+      ? this.robustness().signConsistentStabilityLabel
+      : this.robustness().stabilityLabel;
+  }
+
+  get stabilityMetricSub(): string {
+    return this.selectedStabilityMethod() === 'sign_consistent'
+      ? 'months sign-consistent'
+      : 'months positive';
+  }
+
+  get stabilityTooltip(): string {
+    return this.selectedStabilityMethod() === 'sign_consistent'
+      ? 'Measures % of months where IC sign matches expected direction (from train split). More robust than raw positivity.'
+      : 'Based on % of months with positive IC. >70% Strong, 60-70% Tradeable, 50-60% Weak, <50% Noise';
+  }
 
   get stabilityLabelSeverity(): 'success' | 'warn' | 'danger' | 'info' {
-    const label = this.robustness().stabilityLabel;
+    const label = this.displayedStabilityLabel;
     if (label === 'Strong') return 'success';
     if (label === 'Tradeable') return 'success';
     if (label === 'Weak') return 'warn';
     if (label === 'Suspicious') return 'info';
     return 'danger';
+  }
+
+  get hasOosRetention(): boolean {
+    return (this.robustness().trainTest?.oosRetention ?? 0) > 0;
+  }
+
+  get oosRetentionSeverity(): 'success' | 'warn' | 'danger' {
+    const r = this.robustness().trainTest?.oosRetention ?? 0;
+    if (r >= 0.6) return 'success';
+    if (r >= 0.4) return 'warn';
+    return 'danger';
+  }
+
+  get hasStructuralBreaks(): boolean {
+    return (this.robustness().structuralBreaks?.length ?? 0) > 0;
+  }
+
+  get significantBreaks(): StructuralBreakPoint[] {
+    return this.robustness().structuralBreaks?.filter(b => b.significant) ?? [];
   }
 
   get hasMonthlyData(): boolean {
@@ -81,6 +136,18 @@ export class RobustnessReportComponent {
         this.renderRollingTStatChart(canvas.nativeElement, rob);
       }
     });
+
+    effect(() => {
+      const rob = this.robustness();
+      const canvas = this.cumulativeMonthlyIcCanvas();
+      if (rob && canvas && rob.monthlyBreakdown.length > 0) {
+        this.renderCumulativeMonthlyIcChart(canvas.nativeElement, rob);
+      }
+    });
+  }
+
+  abs(value: number): number {
+    return Math.abs(value);
   }
 
   monthlyIcSeverity(meanIc: number): string {
@@ -97,6 +164,117 @@ export class RobustnessReportComponent {
     if (Math.abs(meanIc) >= 0.03) return 'text-green-700 font-semibold';
     if (meanIc > 0) return 'text-green-600';
     return 'text-red-700';
+  }
+
+  private renderCumulativeMonthlyIcChart(canvas: HTMLCanvasElement, rob: Robustness): void {
+    if (this.cumulativeMonthlyChart) this.cumulativeMonthlyChart.destroy();
+
+    const months = rob.monthlyBreakdown.map(m => m.month);
+    const cumIc: number[] = [];
+    let sum = 0;
+    for (const m of rob.monthlyBreakdown) {
+      sum += m.meanIC;
+      cumIc.push(sum);
+    }
+
+    // Color the line based on final direction
+    const lineColor = sum >= 0 ? '#10b981' : '#ef4444';
+    const bgColor = sum >= 0 ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)';
+
+    // Mark train/test split if available
+    const datasets: Chart['data']['datasets'] = [
+      {
+        label: 'Cumulative Monthly IC',
+        data: cumIc,
+        borderColor: lineColor,
+        backgroundColor: bgColor,
+        fill: true,
+        tension: 0.3,
+        pointRadius: 4,
+        pointHoverRadius: 7,
+        borderWidth: 2,
+      },
+      {
+        label: 'Zero',
+        data: months.map(() => 0),
+        borderColor: '#cbd5e1',
+        borderDash: [3, 3],
+        pointRadius: 0,
+        borderWidth: 1,
+      },
+    ];
+
+    this.cumulativeMonthlyChart = new Chart(canvas, {
+      type: 'line',
+      data: { labels: months, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          title: {
+            display: true,
+            text: 'Cumulative Monthly IC',
+            font: { size: 15, weight: 'bold' },
+            color: '#1e293b',
+            padding: { bottom: 16 },
+          },
+          legend: {
+            position: 'bottom',
+            labels: {
+              font: { size: 12 },
+              color: '#475569',
+              padding: 16,
+              usePointStyle: true,
+              filter: (item) => item.text !== 'Zero',
+            },
+          },
+          tooltip: {
+            backgroundColor: '#1e293b',
+            titleFont: { size: 13 },
+            bodyFont: { size: 12 },
+            padding: 10,
+            cornerRadius: 6,
+            callbacks: {
+              label: (ctx) => {
+                if (ctx.dataset.label === 'Zero') return '';
+                const monthData = rob.monthlyBreakdown[ctx.dataIndex];
+                return [
+                  `Cumulative IC: ${Number(ctx.raw).toFixed(4)}`,
+                  `Month IC: ${monthData.meanIC.toFixed(4)}`,
+                ];
+              },
+            },
+          },
+        },
+        scales: {
+          y: {
+            title: {
+              display: true,
+              text: 'Cumulative IC (sum of monthly means)',
+              font: { size: 13, weight: 'bold' },
+              color: '#475569',
+            },
+            ticks: { font: { size: 12 }, color: '#64748b' },
+            grid: { color: '#f1f5f9' },
+          },
+          x: {
+            title: {
+              display: true,
+              text: 'Month',
+              font: { size: 13, weight: 'bold' },
+              color: '#475569',
+            },
+            ticks: {
+              font: { size: 11 },
+              color: '#64748b',
+              maxRotation: 45,
+              maxTicksLimit: 12,
+            },
+            grid: { display: false },
+          },
+        },
+      },
+    });
   }
 
   private renderRollingTStatChart(canvas: HTMLCanvasElement, rob: Robustness): void {

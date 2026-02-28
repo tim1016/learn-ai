@@ -8,10 +8,13 @@ Formulas
     IC_d = Spearman(rank(feature_d), rank(return_d))
     mean_IC = (1/N) * sum(IC_d)
     t = mean_IC / (std_IC / sqrt(N))
+    t_NW = mean_IC / sqrt(NW_var / N)   (Newey-West HAC corrected)
+    N_eff = N / (1 + 2 * sum(rho_k))    (effective sample size)
 """
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -30,6 +33,84 @@ class ICResult:
     ic_p_value: float
     daily_ic_values: list[float] = field(default_factory=list)
     daily_ic_dates: list[str] = field(default_factory=list)
+    nw_t_stat: float = 0.0
+    nw_p_value: float = 1.0
+    effective_n: float = 0.0
+
+
+def _compute_newey_west_t_stat(ic_array: np.ndarray) -> tuple[float, float]:
+    """Compute Newey-West HAC-corrected t-stat for the IC series.
+
+    Uses a Bartlett kernel with automatic lag selection to account for
+    serial correlation in daily IC values.
+
+    Returns (nw_t_stat, nw_p_value).
+    """
+    n = len(ic_array)
+    if n < 3:
+        return 0.0, 1.0
+
+    mean_ic = float(np.mean(ic_array))
+    demeaned = ic_array - mean_ic
+
+    # Automatic lag selection: Andrews (1991) rule for Bartlett kernel
+    max_lag = max(1, int(math.floor(4 * (n / 100) ** (2 / 9))))
+    max_lag = min(max_lag, n - 2)
+
+    # Gamma_0: variance
+    gamma_0 = float(np.sum(demeaned**2) / n)
+
+    # Weighted autocovariances with Bartlett kernel
+    weighted_sum = 0.0
+    for j in range(1, max_lag + 1):
+        gamma_j = float(np.sum(demeaned[j:] * demeaned[:-j]) / n)
+        bartlett_weight = 1 - j / (max_lag + 1)
+        weighted_sum += bartlett_weight * gamma_j
+
+    nw_var = gamma_0 + 2 * weighted_sum
+
+    if nw_var <= 1e-20:
+        return 0.0, 1.0
+
+    nw_se = math.sqrt(nw_var / n)
+    nw_t = mean_ic / nw_se
+    nw_p = float(2 * (1 - stats.t.cdf(abs(nw_t), n - 1)))
+
+    return float(nw_t), nw_p
+
+
+def _compute_effective_sample_size(ic_array: np.ndarray) -> float:
+    """Compute effective sample size accounting for autocorrelation.
+
+    N_eff = N / (1 + 2 * sum(rho_k)) where rho_k is the autocorrelation
+    at lag k. Summation is truncated when autocorrelation drops below 0.05
+    or turns negative.
+    """
+    n = len(ic_array)
+    if n < 3:
+        return float(n)
+
+    mean_ic = np.mean(ic_array)
+    demeaned = ic_array - mean_ic
+    var = float(np.sum(demeaned**2) / n)
+
+    if var < 1e-20:
+        return float(n)
+
+    max_lag = min(int(math.sqrt(n)), n // 3)
+    rho_sum = 0.0
+
+    for k in range(1, max_lag + 1):
+        rho_k = float(np.sum(demeaned[k:] * demeaned[:-k]) / n) / var
+        if rho_k < 0.05:
+            break
+        rho_sum += rho_k
+
+    denominator = 1 + 2 * rho_sum
+    if denominator < 1.0:
+        denominator = 1.0
+
+    return n / denominator
 
 
 def compute_information_coefficient(
@@ -102,9 +183,14 @@ def compute_information_coefficient(
         t_stat = 0.0
         p_value = 1.0
 
+    # Newey-West corrected t-stat (accounts for serial correlation)
+    nw_t_stat, nw_p_value = _compute_newey_west_t_stat(ic_array)
+    effective_n = _compute_effective_sample_size(ic_array)
+
     logger.info(
-        "[Research] IC: mean=%.4f, t=%.4f, p=%.4f, days=%d",
-        mean_ic, t_stat, p_value, n,
+        "[Research] IC: mean=%.4f, t=%.4f (NW=%.4f), p=%.4f (NW=%.4f), "
+        "days=%d (effective=%.0f)",
+        mean_ic, t_stat, nw_t_stat, p_value, nw_p_value, n, effective_n,
     )
 
     return ICResult(
@@ -113,4 +199,7 @@ def compute_information_coefficient(
         ic_p_value=p_value,
         daily_ic_values=daily_ics,
         daily_ic_dates=daily_dates,
+        nw_t_stat=nw_t_stat,
+        nw_p_value=nw_p_value,
+        effective_n=effective_n,
     )

@@ -36,6 +36,9 @@ class ResearchReport:
     ic_p_value: float = 1.0
     ic_values: list[float] = field(default_factory=list)
     ic_dates: list[str] = field(default_factory=list)
+    nw_t_stat: float = 0.0
+    nw_p_value: float = 1.0
+    effective_n: float = 0.0
 
     # Stationarity results
     adf_pvalue: float = 1.0
@@ -128,6 +131,9 @@ def run_feature_research(
         report.ic_p_value = ic_result.ic_p_value
         report.ic_values = ic_result.daily_ic_values
         report.ic_dates = ic_result.daily_ic_dates
+        report.nw_t_stat = ic_result.nw_t_stat
+        report.nw_p_value = ic_result.nw_p_value
+        report.effective_n = ic_result.effective_n
 
         # Step 4: Stationarity test on the feature series
         clean_feature = feature_values.dropna().values
@@ -163,8 +169,12 @@ def run_feature_research(
             )
 
         # Step 7: Overall validation
+        # Use absolute value of mean IC for threshold (negative IC = mean-reversion signal)
+        # Use NW p-value when available as it accounts for autocorrelation
+        effective_p = ic_result.nw_p_value if ic_result.nw_p_value < 1.0 else ic_result.ic_p_value
         report.passed_validation = (
-            ic_result.ic_p_value < config.ic_significance
+            abs(ic_result.mean_ic) >= 0.03
+            and effective_p < config.ic_significance
             and report.is_stationary
             and quantile_result.is_monotonic
         )

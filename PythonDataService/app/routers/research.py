@@ -18,6 +18,7 @@ from app.models.research_models import (
     RollingTStatPointResponse,
     RunFeatureResearchRequest,
     RunFeatureResearchResponse,
+    StructuralBreakPointResponse,
     TrainTestSplitResponse,
 )
 from app.research.config import ResearchConfig
@@ -77,6 +78,8 @@ async def run_feature_research_endpoint(
                 best_month_ic=rob.best_month_ic,
                 worst_month_ic=rob.worst_month_ic,
                 stability_label=rob.stability_label,
+                pct_sign_consistent_months=rob.pct_sign_consistent_months,
+                sign_consistent_stability_label=rob.sign_consistent_stability_label,
                 rolling_t_stat=[
                     RollingTStatPointResponse(
                         month=r.month, t_stat_smoothed=r.t_stat_smoothed,
@@ -113,7 +116,19 @@ async def run_feature_research_endpoint(
                     test_t_stat=rob.train_test.test_t_stat,
                     test_days=rob.train_test.test_days,
                     overfit_flag=rob.train_test.overfit_flag,
+                    oos_retention=rob.train_test.oos_retention,
+                    oos_retention_label=rob.train_test.oos_retention_label,
                 ) if rob.train_test else None,
+                structural_breaks=[
+                    StructuralBreakPointResponse(
+                        date=b.date,
+                        ic_before=b.ic_before,
+                        ic_after=b.ic_after,
+                        t_stat=b.t_stat,
+                        significant=b.significant,
+                    )
+                    for b in rob.structural_breaks
+                ],
             )
 
         return RunFeatureResearchResponse(
@@ -126,6 +141,9 @@ async def run_feature_research_endpoint(
             mean_ic=report.mean_ic,
             ic_t_stat=report.ic_t_stat,
             ic_p_value=report.ic_p_value,
+            nw_t_stat=report.nw_t_stat,
+            nw_p_value=report.nw_p_value,
+            effective_n=report.effective_n,
             adf_pvalue=report.adf_pvalue,
             kpss_pvalue=report.kpss_pvalue,
             is_stationary=report.is_stationary,

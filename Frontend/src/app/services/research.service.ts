@@ -46,6 +46,16 @@ export interface TrainTestSplit {
   testTStat: number;
   testDays: number;
   overfitFlag: boolean;
+  oosRetention: number;
+  oosRetentionLabel: string;
+}
+
+export interface StructuralBreakPoint {
+  date: string;
+  icBefore: number;
+  icAfter: number;
+  tStat: number;
+  significant: boolean;
 }
 
 export interface Robustness {
@@ -55,10 +65,13 @@ export interface Robustness {
   bestMonthIC: number;
   worstMonthIC: number;
   stabilityLabel: string;
+  pctSignConsistentMonths: number;
+  signConsistentStabilityLabel: string;
   rollingTStat: RollingTStatPoint[];
   volatilityRegimes: RegimeIC[];
   trendRegimes: RegimeIC[];
   trainTest: TrainTestSplit | null;
+  structuralBreaks: StructuralBreakPoint[];
 }
 
 export interface ResearchResult {
@@ -71,6 +84,9 @@ export interface ResearchResult {
   meanIC: number;
   icTStat: number;
   icPValue: number;
+  nwTStat: number;
+  nwPValue: number;
+  effectiveN: number;
   icValues: number[];
   icDates: string[];
   adfPvalue: number;
@@ -144,7 +160,8 @@ const RUN_FEATURE_RESEARCH_MUTATION = `
       multiplier: $multiplier
     ) {
       success ticker featureName startDate endDate barsUsed
-      meanIC icTStat icPValue icValues icDates
+      meanIC icTStat icPValue nwTStat nwPValue effectiveN
+      icValues icDates
       adfPvalue kpssPvalue isStationary
       quantileBins { binNumber lowerBound upperBound meanReturn count }
       isMonotonic monotonicityRatio
@@ -153,6 +170,7 @@ const RUN_FEATURE_RESEARCH_MUTATION = `
         monthlyBreakdown { month meanIC tStat observationCount }
         pctPositiveMonths pctSignificantMonths
         bestMonthIC worstMonthIC stabilityLabel
+        pctSignConsistentMonths signConsistentStabilityLabel
         rollingTStat { month tStatSmoothed }
         volatilityRegimes { regimeLabel meanIC tStat observationCount }
         trendRegimes { regimeLabel meanIC tStat observationCount }
@@ -160,8 +178,9 @@ const RUN_FEATURE_RESEARCH_MUTATION = `
           trainStart trainEnd testStart testEnd
           trainMeanIC trainTStat trainDays
           testMeanIC testTStat testDays
-          overfitFlag
+          overfitFlag oosRetention oosRetentionLabel
         }
+        structuralBreaks { date icBefore icAfter tStat significant }
       }
       error
     }

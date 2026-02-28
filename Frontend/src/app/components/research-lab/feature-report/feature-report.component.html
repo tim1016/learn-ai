@@ -11,43 +11,58 @@
     <p class="verdict-text">{{ validationVerdict }}</p>
   </div>
 
+  <!-- t-Stat Method Selector -->
+  <div class="method-selector mb-4">
+    <label class="method-label">t-Stat Method:</label>
+    <p-select
+      [options]="tStatOptions"
+      [(ngModel)]="selectedTStatMethod"
+      optionLabel="label"
+      optionValue="value"
+      [style]="{ 'min-width': '280px' }"
+      size="small"
+    />
+  </div>
+
   <!-- Summary Metrics Grid -->
   <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
     <div class="metric-card">
       <div class="metric-label">
         Mean IC
         <i class="pi pi-info-circle ml-1"
-           pTooltip="Average daily Spearman rank correlation between feature values and 15-min forward returns. |IC| > 0.03 is meaningful."
+           pTooltip="Average daily Spearman rank correlation between feature values and 15-min forward returns. |IC| > 0.03 is meaningful. Negative IC = mean-reversion signal."
            tooltipPosition="top"></i>
       </div>
-      <div class="metric-value" [class.text-green-700]="result().meanIC >= 0.03" [class.text-red-700]="result().meanIC < 0.03">
+      <div class="metric-value" [class.text-green-700]="isIcMeaningful" [class.text-red-700]="!isIcMeaningful">
         {{ result().meanIC | number: '1.4-4' }}
       </div>
-      <div class="metric-sub">{{ icSignalStrength }}</div>
+      <div class="metric-sub">{{ icSignalStrength }} · {{ icDirectionLabel }}</div>
     </div>
 
     <div class="metric-card">
       <div class="metric-label">
-        IC t-Stat
+        {{ tStatLabel }}
         <i class="pi pi-info-circle ml-1"
-           pTooltip="Statistical significance of mean IC. t > 1.65 rejects H0 at 10% level (meaningful signal)."
+           [pTooltip]="tStatTooltip"
            tooltipPosition="top"></i>
       </div>
-      <div class="metric-value" [class.text-green-700]="result().icTStat >= 1.65" [class.text-red-700]="result().icTStat < 1.65">
-        {{ result().icTStat | number: '1.2-2' }}
+      <div class="metric-value" [class.text-green-700]="isTStatSignificant" [class.text-red-700]="!isTStatSignificant">
+        {{ displayedTStat | number: '1.2-2' }}
       </div>
-      <div class="metric-sub">{{ result().icTStat >= 1.65 ? 'Significant' : 'Not significant' }}</div>
+      <div class="metric-sub">{{ tStatSignificanceLabel }}</div>
     </div>
 
     <div class="metric-card">
       <div class="metric-label">
         IC p-Value
         <i class="pi pi-info-circle ml-1"
-           pTooltip="Probability of observing this IC by chance. p < 0.10 confirms significance."
+           [pTooltip]="pValueTooltip"
            tooltipPosition="top"></i>
       </div>
-      <div class="metric-value">{{ result().icPValue | number: '1.4-4' }}</div>
-      <div class="metric-sub">{{ result().icPValue < 0.10 ? 'p < 0.10' : 'Not significant' }}</div>
+      <div class="metric-value" [class.text-green-700]="isPValueSignificant" [class.text-red-700]="!isPValueSignificant">
+        {{ displayedPValue | number: '1.4-4' }}
+      </div>
+      <div class="metric-sub">{{ pValueSignificanceLabel }}</div>
     </div>
 
     <div class="metric-card">
@@ -77,13 +92,20 @@
     </div>
   </div>
 
-  <!-- Charts — Full Width, Taller -->
+  <!-- Charts — IC and Quantile -->
   <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
     <div class="chart-container">
       <canvas #icChart></canvas>
     </div>
     <div class="chart-container">
       <canvas #quantileChart></canvas>
+    </div>
+  </div>
+
+  <!-- Cumulative IC Chart -->
+  <div class="grid grid-cols-1 gap-6 mb-6">
+    <div class="chart-container">
+      <canvas #cumulativeIcChart></canvas>
     </div>
   </div>
 
@@ -121,6 +143,10 @@
     <i class="pi pi-database mr-2"></i>
     Analysis based on <strong>{{ result().barsUsed | number }}</strong> bars
     ({{ result().startDate }} to {{ result().endDate }})
+    @if (result().effectiveN > 0) {
+      &middot; Effective N = <strong>{{ result().effectiveN | number: '1.0-0' }}</strong>
+      of {{ result().icValues.length }} IC days
+    }
   </div>
 
   <!-- Robustness Analysis -->

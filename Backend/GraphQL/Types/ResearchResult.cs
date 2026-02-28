@@ -26,6 +26,14 @@ public class ResearchResultType
     [GraphQLName("icDates")]
     public List<string> ICDates { get; set; } = [];
 
+    [GraphQLName("nwTStat")]
+    public double NwTStat { get; set; }
+
+    [GraphQLName("nwPValue")]
+    public double NwPValue { get; set; }
+
+    public double EffectiveN { get; set; }
+
     [GraphQLName("adfPvalue")]
     public double AdfPvalue { get; set; }
 
@@ -100,6 +108,24 @@ public class TrainTestSplitType
 
     public int TestDays { get; set; }
     public bool OverfitFlag { get; set; }
+    public double OosRetention { get; set; }
+    public string OosRetentionLabel { get; set; } = "Unknown";
+}
+
+public class StructuralBreakPointType
+{
+    public string Date { get; set; } = "";
+
+    [GraphQLName("icBefore")]
+    public double IcBefore { get; set; }
+
+    [GraphQLName("icAfter")]
+    public double IcAfter { get; set; }
+
+    [GraphQLName("tStat")]
+    public double TStat { get; set; }
+
+    public bool Significant { get; set; }
 }
 
 public class RobustnessType
@@ -115,10 +141,13 @@ public class RobustnessType
     public double WorstMonthIC { get; set; }
 
     public string StabilityLabel { get; set; } = "Unknown";
+    public double PctSignConsistentMonths { get; set; }
+    public string SignConsistentStabilityLabel { get; set; } = "Unknown";
     public List<RollingTStatPointType> RollingTStat { get; set; } = [];
     public List<RegimeICType> VolatilityRegimes { get; set; } = [];
     public List<RegimeICType> TrendRegimes { get; set; } = [];
     public TrainTestSplitType? TrainTest { get; set; }
+    public List<StructuralBreakPointType> StructuralBreaks { get; set; } = [];
 }
 
 public class QuantileBinType

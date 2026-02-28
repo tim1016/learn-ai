@@ -62,6 +62,19 @@ class TrainTestSplit:
     test_t_stat: float
     test_days: int
     overfit_flag: bool
+    oos_retention: float = 0.0
+    oos_retention_label: str = "Unknown"
+
+
+@dataclass
+class StructuralBreakPoint:
+    """A detected structural break in the IC series."""
+
+    date: str
+    ic_before: float
+    ic_after: float
+    t_stat: float
+    significant: bool
 
 
 @dataclass
@@ -75,12 +88,17 @@ class RobustnessResult:
     worst_month_ic: float = 0.0
     stability_label: str = "Unknown"
 
+    pct_sign_consistent_months: float = 0.0
+    sign_consistent_stability_label: str = "Unknown"
+
     rolling_t_stat: list[RollingTStatPoint] = field(default_factory=list)
 
     volatility_regimes: list[RegimeICResult] = field(default_factory=list)
     trend_regimes: list[RegimeICResult] = field(default_factory=list)
 
     train_test: TrainTestSplit | None = None
+
+    structural_breaks: list[StructuralBreakPoint] = field(default_factory=list)
 
 
 def _compute_ic_stats(ic_array: np.ndarray) -> tuple[float, float]:
@@ -99,17 +117,28 @@ def _compute_ic_stats(ic_array: np.ndarray) -> tuple[float, float]:
     return mean_ic, float(t_stat)
 
 
-def _stability_label(pct_positive: float) -> str:
-    """Map % positive months to a stability classification."""
-    if pct_positive >= 0.80:
+def _stability_label(pct: float) -> str:
+    """Map % consistent months to a stability classification."""
+    if pct >= 0.80:
         return "Suspicious"
-    if pct_positive >= 0.70:
+    if pct >= 0.70:
         return "Strong"
-    if pct_positive >= 0.60:
+    if pct >= 0.60:
         return "Tradeable"
-    if pct_positive >= 0.50:
+    if pct >= 0.50:
         return "Weak"
     return "Noise"
+
+
+def _oos_retention_label(retention: float) -> str:
+    """Map OOS retention ratio to an interpretation label."""
+    if retention >= 0.80:
+        return "Excellent"
+    if retention >= 0.60:
+        return "Acceptable"
+    if retention >= 0.40:
+        return "Weak"
+    return "Likely Overfit"
 
 
 def compute_monthly_ic_breakdown(
@@ -358,11 +387,19 @@ def compute_train_test_split(
         or (abs(train_t_stat) > 1.65 and abs(test_t_stat) < 1.0)
     )
 
+    # OOS Retention: |IC_test| / |IC_train|
+    if abs(train_mean_ic) > 1e-10:
+        oos_retention = abs(test_mean_ic) / abs(train_mean_ic)
+    else:
+        oos_retention = 0.0
+    oos_label = _oos_retention_label(oos_retention)
+
     logger.info(
         "[Robustness] Train/Test: train IC=%.4f (t=%.2f, %d days), "
-        "test IC=%.4f (t=%.2f, %d days), overfit=%s",
+        "test IC=%.4f (t=%.2f, %d days), overfit=%s, OOS retention=%.1f%% (%s)",
         train_mean_ic, train_t_stat, len(train_ics),
         test_mean_ic, test_t_stat, len(test_ics), overfit_flag,
+        oos_retention * 100, oos_label,
     )
 
     return TrainTestSplit(
@@ -377,7 +414,107 @@ def compute_train_test_split(
         test_t_stat=test_t_stat,
         test_days=len(test_ics),
         overfit_flag=overfit_flag,
+        oos_retention=oos_retention,
+        oos_retention_label=oos_label,
     )
+
+
+def _compute_sign_consistency(
+    monthly: list[MonthlyICBreakdown],
+    expected_sign: float,
+) -> tuple[float, str]:
+    """Compute % of months consistent with the expected IC sign.
+
+    Parameters
+    ----------
+    monthly : list[MonthlyICBreakdown]
+        Monthly IC breakdowns.
+    expected_sign : float
+        Expected sign of IC (+1.0 or -1.0).
+
+    Returns
+    -------
+    tuple
+        (pct_sign_consistent, stability_label)
+    """
+    if not monthly or expected_sign == 0:
+        return 0.0, "Unknown"
+
+    consistent = sum(1 for m in monthly if np.sign(m.mean_ic) == expected_sign)
+    pct = consistent / len(monthly)
+    return pct, _stability_label(pct)
+
+
+def compute_structural_breaks(
+    daily_ic_values: list[float],
+    daily_ic_dates: list[str],
+    window_months: int = 2,
+) -> list[StructuralBreakPoint]:
+    """Detect structural breaks in IC via sliding window Welch's t-test.
+
+    Slides a window of ``2 * window_months`` months across the IC series,
+    splitting each window in half and testing for a significant shift in
+    mean IC between the halves.
+
+    Parameters
+    ----------
+    daily_ic_values : list[float]
+        One IC per trading day.
+    daily_ic_dates : list[str]
+        YYYY-MM-DD dates.
+    window_months : int
+        Half-window size in months (default 2, giving a 4-month sliding window).
+
+    Returns
+    -------
+    list[StructuralBreakPoint]
+        Detected break points with significance flags.
+    """
+    if len(daily_ic_values) < 10:
+        return []
+
+    df = pd.DataFrame({
+        "ic": daily_ic_values,
+        "date": pd.to_datetime(daily_ic_dates),
+    })
+    df["month"] = df["date"].dt.to_period("M")
+
+    months = sorted(df["month"].unique())
+    full_window = 2 * window_months
+    if len(months) < full_window:
+        return []
+
+    breaks: list[StructuralBreakPoint] = []
+    for i in range(len(months) - full_window + 1):
+        window_months_list = months[i : i + full_window]
+        mid = window_months_list[window_months]
+
+        before_mask = df["month"].isin(window_months_list[:window_months])
+        after_mask = df["month"].isin(window_months_list[window_months:])
+
+        before_ics = df.loc[before_mask, "ic"].values
+        after_ics = df.loc[after_mask, "ic"].values
+
+        if len(before_ics) < 5 or len(after_ics) < 5:
+            continue
+
+        t_stat_val, p_val = stats.ttest_ind(before_ics, after_ics, equal_var=False)
+
+        if np.isnan(t_stat_val):
+            continue
+
+        breaks.append(StructuralBreakPoint(
+            date=str(mid),
+            ic_before=float(np.mean(before_ics)),
+            ic_after=float(np.mean(after_ics)),
+            t_stat=float(t_stat_val),
+            significant=abs(t_stat_val) > 2.0,
+        ))
+
+    logger.info("[Robustness] Structural breaks: %d tested, %d significant",
+                len(breaks), sum(1 for b in breaks if b.significant))
+
+    return breaks
 
 
 def compute_robustness(
@@ -428,13 +565,29 @@ def compute_robustness(
     # Train/Test split
     result.train_test = compute_train_test_split(daily_ic_values, daily_ic_dates)
 
+    # Sign-consistent stability: expected sign from train IC or overall mean
+    if result.train_test is not None:
+        expected_sign = float(np.sign(result.train_test.train_mean_ic))
+    else:
+        expected_sign = float(np.sign(np.mean(daily_ic_values)))
+
+    if result.monthly_breakdown:
+        result.pct_sign_consistent_months, result.sign_consistent_stability_label = (
+            _compute_sign_consistency(result.monthly_breakdown, expected_sign)
+        )
+
+    # Structural break detection
+    result.structural_breaks = compute_structural_breaks(daily_ic_values, daily_ic_dates)
+
     logger.info(
-        "[Robustness] Complete: %d months, %d rolling points, %d vol regimes, %d trend regimes, train/test=%s",
+        "[Robustness] Complete: %d months, %d rolling points, %d vol regimes, "
+        "%d trend regimes, train/test=%s, %d structural breaks",
         len(result.monthly_breakdown),
         len(result.rolling_t_stat),
         len(result.volatility_regimes),
         len(result.trend_regimes),
         result.train_test is not None,
+        len(result.structural_breaks),
     )
 
     return result

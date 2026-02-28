@@ -27,6 +27,9 @@ public class ResearchReportDto
     public double MeanIc { get; set; }
     public double IcTStat { get; set; }
     public double IcPValue { get; set; }
+    public double NwTStat { get; set; }
+    public double NwPValue { get; set; } = 1.0;
+    public double EffectiveN { get; set; }
     public List<double> IcValues { get; set; } = [];
     public List<string> IcDates { get; set; } = [];
 
@@ -78,6 +81,17 @@ public class TrainTestSplitDto
     public double TestTStat { get; set; }
     public int TestDays { get; set; }
     public bool OverfitFlag { get; set; }
+    public double OosRetention { get; set; }
+    public string OosRetentionLabel { get; set; } = "Unknown";
+}
+
+public class StructuralBreakPointDto
+{
+    public string Date { get; set; } = "";
+    public double IcBefore { get; set; }
+    public double IcAfter { get; set; }
+    public double TStat { get; set; }
+    public bool Significant { get; set; }
 }
 
 public class RobustnessDto
@@ -88,10 +102,13 @@ public class RobustnessDto
     public double BestMonthIc { get; set; }
     public double WorstMonthIc { get; set; }
     public string StabilityLabel { get; set; } = "Unknown";
+    public double PctSignConsistentMonths { get; set; }
+    public string SignConsistentStabilityLabel { get; set; } = "Unknown";
     public List<RollingTStatPointDto> RollingTStat { get; set; } = [];
     public List<RegimeICDto> VolatilityRegimes { get; set; } = [];
     public List<RegimeICDto> TrendRegimes { get; set; } = [];
     public TrainTestSplitDto? TrainTest { get; set; }
+    public List<StructuralBreakPointDto> StructuralBreaks { get; set; } = [];
 }
 
 public class QuantileBinDto
