@@ -3,6 +3,7 @@ import { FeatureRunnerComponent } from './feature-runner/feature-runner.componen
 import { InfoPanelComponent } from './info-panel/info-panel.component';
 import { ExperimentHistoryComponent } from './experiment-history/experiment-history.component';
 import { SignalRunnerComponent } from './signal-runner/signal-runner.component';
+import { SignalInfoPanelComponent } from './signal-info-panel/signal-info-panel.component';
 import { TabsModule } from 'primeng/tabs';
 
 @Component({
@@ -13,6 +14,7 @@ import { TabsModule } from 'primeng/tabs';
     InfoPanelComponent,
     ExperimentHistoryComponent,
     SignalRunnerComponent,
+    SignalInfoPanelComponent,
     TabsModule,
   ],
   templateUrl: './research-lab.component.html',

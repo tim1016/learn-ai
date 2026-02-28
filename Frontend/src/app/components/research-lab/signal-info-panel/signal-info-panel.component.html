@@ -1,0 +1,1095 @@
+<div class="mt-4 max-w-5xl">
+
+  <!-- ═══ 1. Pipeline Overview ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-bolt section-icon"></i>
+      <h3>Signal Engine Pipeline</h3>
+    </div>
+    <div class="doc-card highlight-card">
+      <p class="interpretation">{{ pipelineOverview.intro }}</p>
+
+      <div class="pipeline-flow">
+        @for (stage of pipelineOverview.stages; track stage) {
+          <div class="pipeline-stage">
+            <i class="pi pi-arrow-right"></i>
+            <span>{{ stage }}</span>
+          </div>
+        }
+      </div>
+
+      <p-divider />
+
+      <h4>Design Principles</h4>
+      @for (p of pipelineOverview.principles; track p.title) {
+        <div class="info-callout mt-3">
+          <i class="pi pi-shield"></i>
+          <div>
+            <strong>{{ p.title }}</strong>
+            <span>{{ p.detail }}</span>
+          </div>
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 2. Symbol Glossary ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-book section-icon"></i>
+      <h3>Symbol Glossary</h3>
+    </div>
+    <p class="section-description">
+      Canonical symbol definitions used throughout this documentation and the signal report.
+    </p>
+    <div class="doc-card">
+      <table class="econ-checklist">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Name</th>
+            <th>Definition</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (s of symbolGlossary; track s.name) {
+            <tr>
+              <td class="question-cell"><span [appKatex]="s.symbolLatex"></span></td>
+              <td>{{ s.name }}</td>
+              <td>{{ s.definition }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+      <div class="info-callout mt-3">
+        <i class="pi pi-info-circle"></i>
+        <span>{{ symbolNote }}</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 3. Data Assumptions ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-database section-icon"></i>
+      <h3>Data Assumptions</h3>
+    </div>
+    <p class="section-description">
+      Full data contract for reproducibility. Every dataset construction choice is documented below.
+    </p>
+    <div class="doc-card highlight-card">
+      <div class="assumptions-grid">
+        @for (a of dataAssumptions; track a.label) {
+          <span class="assumption-label">{{ a.label }}</span>
+          <span class="assumption-value">{{ a.value }}</span>
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 4. Formal Signal Definition ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-code section-icon"></i>
+      <h3>Formal Signal Definition</h3>
+    </div>
+    <p class="section-description">
+      Complete, unambiguous specification. The signal must be fully reconstructible from these equations alone.
+    </p>
+
+    <div class="doc-card highlight-card">
+      <!-- Raw Feature -->
+      <h4>{{ formalSignalDef.featureFormula.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="formalSignalDef.featureFormula.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <p class="interpretation">{{ formalSignalDef.featureFormula.note }}</p>
+      <div class="detail-row">
+        <span class="detail-label">Lookback:</span>
+        <span>{{ formalSignalDef.lookback }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Return Horizon:</span>
+        <span>{{ formalSignalDef.returnHorizon }}</span>
+      </div>
+
+      <p-divider />
+
+      <!-- Forward Return -->
+      <h4>{{ formalSignalDef.returnFormula.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="formalSignalDef.returnFormula.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <p class="interpretation">{{ formalSignalDef.returnFormula.note }}</p>
+
+      <p-divider />
+
+      <!-- IC Definition -->
+      <h4>{{ formalSignalDef.icDefinition.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="formalSignalDef.icDefinition.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <p class="interpretation">{{ formalSignalDef.icDefinition.note }}</p>
+
+      <div class="assumptions-grid mt-3">
+        @for (spec of formalSignalDef.icDefinition.formalSpec; track spec.label) {
+          <span class="assumption-label">{{ spec.label }}</span>
+          <span class="assumption-value">{{ spec.value }}</span>
+        }
+      </div>
+
+      <p-divider />
+
+      <!-- Signal Chain -->
+      <h4>Complete Signal Chain</h4>
+      @for (step of formalSignalDef.signalChain; track step.step) {
+        <div class="signal-chain-step">
+          <span class="chain-label">{{ step.step }}</span>
+          <div class="formula-block compact">
+            <span [appKatex]="step.formulaLatex" [displayMode]="true"></span>
+          </div>
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 5. Execution Timeline ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-clock section-icon"></i>
+      <h3>Execution Timeline</h3>
+    </div>
+    <div class="doc-card highlight-card">
+      <div class="timeline">
+        @for (step of executionTimeline.steps; track step.time) {
+          <div class="timeline-step">
+            <div class="timeline-marker"></div>
+            <div class="timeline-content">
+              <span class="timeline-time">{{ step.time }}</span>
+              <span class="timeline-action">{{ step.action }}</span>
+            </div>
+          </div>
+        }
+      </div>
+
+      <p-divider />
+
+      <h4>Explicit Clarifications</h4>
+      <div class="assumptions-grid">
+        @for (c of executionTimeline.clarifications; track c.label) {
+          <span class="assumption-label">{{ c.label }}</span>
+          <span class="assumption-value">{{ c.value }}</span>
+        }
+      </div>
+
+      <div class="info-callout mt-3">
+        <i class="pi pi-check-circle"></i>
+        <div>
+          <strong>No Contradiction</strong>
+          <span>{{ executionTimeline.noContradictionNote }}</span>
+        </div>
+      </div>
+
+      <p-divider />
+
+      <h4>{{ executionTimeline.returnBindingFormula.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="executionTimeline.returnBindingFormula.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <p class="interpretation">{{ executionTimeline.returnBindingFormula.note }}</p>
+      <div class="assumptions-grid mt-3">
+        @for (ts of executionTimeline.returnBindingFormula.timestamps; track ts.label) {
+          <span class="assumption-label">{{ ts.label }}</span>
+          <span class="assumption-value">{{ ts.value }}</span>
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 6. Signal Construction ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sliders-h section-icon"></i>
+      <h3>Signal Construction</h3>
+    </div>
+    <p class="section-description">
+      Three sequential transformations convert a raw feature into a tradable signal.
+    </p>
+
+    <p-accordion [multiple]="true">
+      <!-- Z-Score -->
+      <p-accordion-panel value="zscore">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Step 1: Z-Score Standardization</span>
+            <span class="feature-badge">Normalization</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="formula-block">
+              <span [appKatex]="zScoreDoc.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="variable-list">
+              <span class="label">Where:</span>
+              @for (v of zScoreDoc.variablesLatex; track v) {
+                <div class="variable-item">
+                  <span [appKatex]="v"></span>
+                </div>
+              }
+            </div>
+            <p-divider />
+            <p class="interpretation">{{ zScoreDoc.interpretation }}</p>
+            <div class="insight-callout">
+              <i class="pi pi-lightbulb"></i>
+              <div>
+                <strong>Why it matters</strong>
+                <span>{{ zScoreDoc.whyItMatters }}</span>
+              </div>
+            </div>
+
+            <div class="info-callout warn mt-3">
+              <i class="pi pi-exclamation-triangle"></i>
+              <div>
+                <strong>Stationarity Assumption</strong>
+                <span>{{ zScoreDoc.stationarityAssumption }}</span>
+              </div>
+            </div>
+
+            <p-divider />
+
+            <!-- Parameter Storage -->
+            <h4>Parameter Storage & Freezing</h4>
+            <div class="driver-card">
+              <p>{{ parameterStorage.muStorage }}</p>
+            </div>
+            <div class="driver-card">
+              <p>{{ parameterStorage.sigmaStorage }}</p>
+            </div>
+            <div class="driver-card">
+              <p>{{ parameterStorage.thetaStorage }}</p>
+            </div>
+            <div class="info-callout warn mt-2">
+              <i class="pi pi-lock"></i>
+              <div>
+                <strong>Freeze Enforcement</strong>
+                <span>{{ parameterStorage.freezeEnforcement }}</span>
+              </div>
+            </div>
+
+            <p-divider />
+
+            <!-- Sign Flipping -->
+            <h4>Sign Flipping (Negative IC Features)</h4>
+            <p class="interpretation">{{ signFlipDoc.explanation }}</p>
+            <div class="formula-block">
+              <span [appKatex]="signFlipDoc.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="info-callout mt-3">
+              <i class="pi pi-info-circle"></i>
+              <div>
+                <strong>Example</strong>
+                <span>{{ signFlipDoc.example }}</span>
+              </div>
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Threshold Filter -->
+      <p-accordion-panel value="threshold">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Step 2: Threshold Filtering</span>
+            <span class="feature-badge">Conviction Filter</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="formula-block">
+              <span [appKatex]="thresholdDoc.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="variable-list">
+              <span class="label">Where:</span>
+              @for (v of thresholdDoc.variablesLatex; track v) {
+                <div class="variable-item">
+                  <span [appKatex]="v"></span>
+                </div>
+              }
+            </div>
+            <p-divider />
+            <p class="interpretation">{{ thresholdDoc.interpretation }}</p>
+            <div class="insight-callout">
+              <i class="pi pi-lightbulb"></i>
+              <div>
+                <strong>Why it matters</strong>
+                <span>{{ thresholdDoc.whyItMatters }}</span>
+              </div>
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Regime Gate -->
+      <p-accordion-panel value="regime">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Step 3: Regime Gating</span>
+            <span class="feature-badge">Environment Filter</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <p class="interpretation">{{ regimeDoc.overview }}</p>
+            <div class="formula-block">
+              <span [appKatex]="regimeDoc.gatingFormulaLatex" [displayMode]="true"></span>
+            </div>
+
+            <p-divider />
+
+            <!-- Vol classification -->
+            <h4 class="subsection-title">
+              <i class="pi pi-chart-bar"></i>
+              {{ regimeDoc.volClassification.name }}
+            </h4>
+            <div class="formula-block">
+              <span [appKatex]="regimeDoc.volClassification.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ regimeDoc.volClassification.interpretation }}</p>
+            <div class="regime-table">
+              @for (r of regimeDoc.volClassification.regimes; track r.label) {
+                <div class="regime-row">
+                  <span class="regime-label">{{ r.label }}</span>
+                  <span class="regime-rule">{{ r.rule }}</span>
+                </div>
+              }
+            </div>
+
+            <p-divider />
+
+            <!-- Trend classification -->
+            <h4 class="subsection-title">
+              <i class="pi pi-arrow-right-arrow-left"></i>
+              {{ regimeDoc.trendClassification.name }}
+            </h4>
+            <div class="formula-block">
+              <span [appKatex]="regimeDoc.trendClassification.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ regimeDoc.trendClassification.interpretation }}</p>
+            <div class="regime-table">
+              @for (r of regimeDoc.trendClassification.regimes; track r.label) {
+                <div class="regime-row">
+                  <span class="regime-label">{{ r.label }}</span>
+                  <span class="regime-rule">{{ r.rule }}</span>
+                </div>
+              }
+            </div>
+
+            <p-divider />
+
+            <!-- Percentile Scope (§1.4) -->
+            <h4 class="subsection-title">
+              <i class="pi pi-info-circle"></i>
+              Regime Percentile Scope
+            </h4>
+            <p class="interpretation">{{ regimeDoc.percentileScope }}</p>
+            <div class="info-callout warn mt-2">
+              <i class="pi pi-exclamation-triangle"></i>
+              <span>{{ regimeDoc.percentileCaveat }}</span>
+            </div>
+
+            <p-divider />
+
+            <div class="insight-callout">
+              <i class="pi pi-lightbulb"></i>
+              <div>
+                <strong>Why Regime Gating?</strong>
+                <span>{{ regimeDoc.whyGating }}</span>
+              </div>
+            </div>
+
+            <div class="info-callout warn mt-3">
+              <i class="pi pi-exclamation-triangle"></i>
+              <span>{{ regimeDoc.caveat }}</span>
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </section>
+
+  <!-- ═══ 7. Backtesting Framework ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-calculator section-icon"></i>
+      <h3>Backtesting Framework</h3>
+    </div>
+    <p class="section-description">
+      The backtesting engine converts position signals into cost-adjusted returns with strict no-lookahead enforcement.
+    </p>
+
+    <p-accordion [multiple]="true">
+      <!-- Position & Returns -->
+      <p-accordion-panel value="positions">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Position Sizing & Return Computation</span>
+            <span class="feature-badge">Core Mechanics</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            @for (step of backtestSteps; track step.name) {
+              <div class="driver-card">
+                <h5>{{ step.name }}</h5>
+                <div class="formula-block">
+                  <span [appKatex]="step.formulaLatex" [displayMode]="true"></span>
+                </div>
+                <p>{{ step.explanation }}</p>
+                <div class="info-callout warn mt-2">
+                  <i class="pi pi-exclamation-triangle"></i>
+                  <span>{{ step.caveat }}</span>
+                </div>
+              </div>
+            }
+
+            <p-divider />
+
+            <!-- Turnover Boundary (§2.5) -->
+            <h4 class="subsection-title">
+              <i class="pi pi-replay"></i>
+              Turnover Calculation Boundary
+            </h4>
+            <div class="driver-card">
+              <p>{{ turnoverBoundary.scope }}</p>
+            </div>
+            <div class="driver-card">
+              <h5>Position Change Examples</h5>
+              <p>{{ turnoverBoundary.flatToFlat }}</p>
+            </div>
+            <div class="driver-card">
+              <h5>One-Way vs Round-Trip</h5>
+              <p>{{ turnoverBoundary.directionality }}</p>
+            </div>
+            <div class="driver-card">
+              <h5>Formula in Words</h5>
+              <p>{{ turnoverBoundary.formula }}</p>
+            </div>
+
+            <p-divider />
+
+            <!-- Execution Assumptions -->
+            <h4 class="subsection-title">
+              <i class="pi pi-cog"></i>
+              Execution Assumptions
+            </h4>
+            <div class="assumptions-grid">
+              @for (a of executionAssumptions; track a.label) {
+                <span class="assumption-label">{{ a.label }}</span>
+                <span class="assumption-value">{{ a.value }}</span>
+              }
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Performance Metrics -->
+      <p-accordion-panel value="metrics">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Performance Metrics</span>
+            <span class="feature-badge">Evaluation</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            @for (metric of backtestMetrics; track metric.name) {
+              <div class="driver-card">
+                <h5>{{ metric.name }}</h5>
+                <div class="formula-block">
+                  <span [appKatex]="metric.formulaLatex" [displayMode]="true"></span>
+                </div>
+                <p>{{ metric.interpretation }}</p>
+              </div>
+            }
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </section>
+
+  <!-- ═══ 8. Walk-Forward Validation ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sync section-icon"></i>
+      <h3>Walk-Forward Validation</h3>
+    </div>
+    <div class="doc-card highlight-card">
+      <p class="interpretation">{{ walkForwardDoc.overview }}</p>
+
+      <p-divider />
+
+      <h4>Methodology</h4>
+      <ol class="methodology-list">
+        @for (step of walkForwardDoc.methodology; track step) {
+          <li>{{ step }}</li>
+        }
+      </ol>
+
+      <p-divider />
+
+      <h4>Threshold Selection</h4>
+      <div class="formula-block">
+        <span [appKatex]="walkForwardDoc.thresholdSelectionLatex" [displayMode]="true"></span>
+      </div>
+      <p class="interpretation">{{ walkForwardDoc.thresholdNote }}</p>
+
+      <p-divider />
+
+      <h4>Aggregate OOS Metrics</h4>
+      <ul class="decay-list">
+        @for (metric of walkForwardDoc.aggregateMetrics; track metric) {
+          <li>{{ metric }}</li>
+        }
+      </ul>
+
+      <div class="info-callout mt-3">
+        <i class="pi pi-chart-line"></i>
+        <div>
+          <strong>Combined OOS Equity Curve</strong>
+          <span>{{ walkForwardDoc.equityCurveNote }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Window Logic (§2.3) -->
+    <div class="doc-card mt-4">
+      <h4>Window Construction Logic</h4>
+      <div class="code-block">
+        @for (line of walkForwardWindowLogic.pseudoCode; track line) {
+          <div class="code-line">{{ line }}</div>
+        }
+      </div>
+
+      <p-divider />
+
+      <div class="driver-card">
+        <h5>Overlap Policy</h5>
+        <p>{{ walkForwardWindowLogic.overlapPolicy }}</p>
+      </div>
+      <div class="driver-card">
+        <h5>Minimum Trade Rule</h5>
+        <p>{{ walkForwardWindowLogic.minimumTradeRule }}</p>
+      </div>
+      <div class="driver-card">
+        <h5>Fold Construction</h5>
+        <p>{{ walkForwardWindowLogic.foldConstruction }}</p>
+      </div>
+    </div>
+
+    <!-- Alpha Decay -->
+    <div class="doc-card mt-4">
+      <div class="hypothesis-callout">
+        <i class="pi pi-exclamation-triangle"></i>
+        <div>
+          <strong>Alpha Decay Detection</strong>
+          <span>{{ alphaDecayDoc.interpretation }}</span>
+        </div>
+      </div>
+      <div class="formula-block">
+        <span [appKatex]="alphaDecayDoc.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <div class="variable-list">
+        <span class="label">Where:</span>
+        @for (v of alphaDecayDoc.variablesLatex; track v) {
+          <div class="variable-item">
+            <span [appKatex]="v"></span>
+          </div>
+        }
+      </div>
+      <div class="threshold-badge mt-3">
+        <i class="pi pi-flag"></i>
+        <span>Decay threshold: <strong>&beta; &lt; &minus;0.1 triggers "Degrading" status</strong></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 9. Effective Sample Size ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-percentage section-icon"></i>
+      <h3>Effective Sample Size</h3>
+    </div>
+    <div class="doc-card highlight-card">
+      <div class="info-callout warn">
+        <i class="pi pi-exclamation-triangle"></i>
+        <span>{{ effectiveSampleDoc.problem }}</span>
+      </div>
+
+      <div class="formula-block mt-3">
+        <span [appKatex]="effectiveSampleDoc.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <div class="variable-list">
+        <span class="label">Where:</span>
+        @for (v of effectiveSampleDoc.variablesLatex; track v) {
+          <div class="variable-item">
+            <span [appKatex]="v"></span>
+          </div>
+        }
+      </div>
+
+      <p-divider />
+
+      <div class="formula-block hypothesis">
+        <span [appKatex]="effectiveSampleDoc.independentBetsLatex" [displayMode]="true"></span>
+      </div>
+
+      <div class="insight-callout mt-3">
+        <i class="pi pi-lightbulb"></i>
+        <div>
+          <strong>Why it matters</strong>
+          <span>{{ effectiveSampleDoc.whyItMatters }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Autocorrelation Truncation (§2.4) -->
+    <div class="doc-card mt-4">
+      <h4>Autocorrelation Truncation Rule</h4>
+      <div class="driver-card">
+        <h5>Stopping Criterion</h5>
+        <p>{{ autocorrelationTruncation.rule }}</p>
+      </div>
+      <div class="driver-card">
+        <h5>Signed or Absolute?</h5>
+        <p>{{ autocorrelationTruncation.signedOrAbsolute }}</p>
+      </div>
+      <div class="driver-card">
+        <h5>Consecutive Requirement</h5>
+        <p>{{ autocorrelationTruncation.consecutiveRequirement }}</p>
+      </div>
+      <div class="driver-card">
+        <h5>Maximum Lag Cap</h5>
+        <p>{{ autocorrelationTruncation.maxLagCap }}</p>
+      </div>
+      <div class="driver-card">
+        <h5>Denominator Floor</h5>
+        <p>{{ autocorrelationTruncation.denominatorFloor }}</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 10. Statistical Significance ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-chart-bar section-icon"></i>
+      <h3>Statistical Significance</h3>
+    </div>
+    <p class="section-description">
+      Formulas for assessing whether observed Sharpe ratios are statistically distinguishable from zero.
+      Based on Lo (2002), using effective sample size.
+    </p>
+    <div class="doc-card highlight-card">
+      <!-- t-stat -->
+      <h4>{{ statSignificance.tStatFormula.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="statSignificance.tStatFormula.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <p class="interpretation">{{ statSignificance.tStatFormula.note }}</p>
+
+      <p-divider />
+
+      <!-- Confidence Interval -->
+      <h4>{{ statSignificance.confidenceInterval.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="statSignificance.confidenceInterval.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <p class="interpretation">{{ statSignificance.confidenceInterval.note }}</p>
+
+      <div class="info-callout mt-3">
+        <i class="pi pi-info-circle"></i>
+        <span>{{ statSignificance.practicalNote }}</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 11. Graduation System ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-trophy section-icon"></i>
+      <h3>Graduation System</h3>
+    </div>
+    <p class="section-description">
+      Signals are evaluated against five criteria. The overall grade and status label determine deployment readiness.
+    </p>
+    <div class="doc-card highlight-card mb-4">
+      <p class="interpretation">{{ graduationIntro }}</p>
+    </div>
+
+    <p-accordion [multiple]="true">
+      <!-- Graduation Criteria -->
+      <p-accordion-panel value="criteria">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Graduation Criteria (5 Tests)</span>
+            <span class="feature-badge">Pass/Fail</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            @for (c of graduationCriteria; track c.name) {
+              <div class="driver-card">
+                <h5>{{ c.name }} — {{ c.threshold }}</h5>
+                @if (c.formulaLatex) {
+                  <div class="formula-block">
+                    <span [appKatex]="c.formulaLatex" [displayMode]="true"></span>
+                  </div>
+                }
+                <p>{{ c.rationale }}</p>
+                <div class="hypothesis-callout mt-2">
+                  <i class="pi pi-compass"></i>
+                  <div>
+                    <strong>Justification</strong>
+                    <span>{{ c.justification }}</span>
+                  </div>
+                </div>
+                <div class="info-callout mt-2">
+                  <i class="pi pi-wrench"></i>
+                  <div>
+                    <strong>If it fails</strong>
+                    <span>{{ c.failureAdvice }}</span>
+                  </div>
+                </div>
+              </div>
+            }
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Grading Scale -->
+      <p-accordion-panel value="grading">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Grading Scale & Status Labels</span>
+            <span class="feature-badge">Assessment</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <h4>Letter Grades</h4>
+            <table class="econ-checklist">
+              <thead>
+                <tr>
+                  <th>Grade</th>
+                  <th>Criteria Passed</th>
+                  <th>Meaning</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (g of gradingScale; track g.grade) {
+                  <tr>
+                    <td class="question-cell">{{ g.grade }}</td>
+                    <td>{{ g.criteria }}</td>
+                    <td>{{ g.meaning }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+
+            <p-divider />
+
+            <h4>Status Labels</h4>
+            <p class="interpretation">
+              Status labels provide a finer-grained assessment than letter grades, incorporating data sufficiency, alpha decay, and parameter stability.
+            </p>
+            @for (s of statusLabels; track s.label) {
+              <div class="driver-card">
+                <h5>{{ s.label }}</h5>
+                <p><strong>Condition:</strong> {{ s.condition }}</p>
+                <p>{{ s.meaning }}</p>
+              </div>
+            }
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Parameter Stability -->
+      <p-accordion-panel value="stability">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Parameter Stability</span>
+            <span class="feature-badge">Sensitivity</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="formula-block">
+              <span [appKatex]="stabilityDoc.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="variable-list">
+              <span class="label">Where:</span>
+              @for (v of stabilityDoc.variablesLatex; track v) {
+                <div class="variable-item">
+                  <span [appKatex]="v"></span>
+                </div>
+              }
+            </div>
+
+            <p-divider />
+
+            <h4 class="subsection-title">Stability Labels</h4>
+            <table class="econ-checklist">
+              <thead>
+                <tr>
+                  <th>Label</th>
+                  <th>Score Range</th>
+                  <th>Interpretation</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (s of stabilityDoc.labels; track s.label) {
+                  <tr>
+                    <td class="question-cell">{{ s.label }}</td>
+                    <td>{{ s.range }}</td>
+                    <td>{{ s.meaning }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </section>
+
+  <!-- ═══ 12. IS/OOS Reporting Standards ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-file section-icon"></i>
+      <h3>Reporting Standards</h3>
+    </div>
+
+    <p-accordion [multiple]="true">
+      <!-- IS/OOS Separation -->
+      <p-accordion-panel value="separation">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">In-Sample / Out-of-Sample Separation</span>
+            <span class="feature-badge">Clarity</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <ul class="decay-list">
+              @for (item of reportingStandards.separation; track item) {
+                <li>{{ item }}</li>
+              }
+            </ul>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Trade Disclosure -->
+      <p-accordion-panel value="trades">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Minimum Trade Disclosure</span>
+            <span class="feature-badge">Transparency</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <ul class="decay-list">
+              @for (item of reportingStandards.minimumTradeDisclosure; track item) {
+                <li>{{ item }}</li>
+              }
+            </ul>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Distribution Stability -->
+      <p-accordion-panel value="distribution">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Distribution Stability Snapshot</span>
+            <span class="feature-badge">Diagnostics</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <ul class="decay-list">
+              @for (item of reportingStandards.distributionStability; track item) {
+                <li>{{ item }}</li>
+              }
+            </ul>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Decimal Precision -->
+      <p-accordion-panel value="precision">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Fixed Decimal Precision</span>
+            <span class="feature-badge">Formatting</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <table class="econ-checklist">
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <th>Decimals</th>
+                  <th>Example</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (p of reportingPrecision; track p.metric) {
+                  <tr>
+                    <td class="question-cell">{{ p.metric }}</td>
+                    <td>{{ p.decimals }}</td>
+                    <td><code>{{ p.example }}</code></td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </section>
+
+  <!-- ═══ 13. Hypothesis & Failure Interpretation ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-compass section-icon hypothesis-icon"></i>
+      <h3>Hypothesis & Failure Interpretation</h3>
+    </div>
+
+    <!-- Hypothesis Template -->
+    <div class="doc-card highlight-card">
+      <h4>Hypothesis Statement</h4>
+      <p class="interpretation">{{ hypothesisTemplate.instruction }}</p>
+      <div class="driver-card">
+        <h5>Template</h5>
+        <p class="template-text">{{ hypothesisTemplate.template }}</p>
+      </div>
+      <div class="info-callout mt-3">
+        <i class="pi pi-info-circle"></i>
+        <div>
+          <strong>Example</strong>
+          <span>{{ hypothesisTemplate.example }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Failure Interpretation -->
+    <div class="doc-card mt-4">
+      <h4>Failure Interpretation</h4>
+      <p class="interpretation">{{ failureInterpretation.instruction }}</p>
+      @for (s of failureInterpretation.sections; track s.label) {
+        <div class="driver-card">
+          <h5>{{ s.label }}</h5>
+          <p>{{ s.description }}</p>
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 14. Versioning ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-tag section-icon"></i>
+      <h3>Versioning</h3>
+    </div>
+    <div class="doc-card">
+      <div class="assumptions-grid">
+        @for (v of versioning.fields; track v.label) {
+          <span class="assumption-label">{{ v.label }}</span>
+          <span class="assumption-value">{{ v.value }}</span>
+        }
+      </div>
+      <div class="info-callout mt-3">
+        <i class="pi pi-info-circle"></i>
+        <span>{{ versioning.note }}</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 15. Internal Audit Checklist ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-check-square section-icon"></i>
+      <h3>Internal Audit Checklist</h3>
+    </div>
+    <p class="section-description">
+      Verification items to confirm before marking any signal as "Exploratory" or promoting to a higher status.
+    </p>
+    <div class="doc-card">
+      @for (group of auditChecklist; track group.category) {
+        <div class="audit-group">
+          <h5 class="audit-category">{{ group.category }}</h5>
+          @for (check of group.checks; track check) {
+            <div class="audit-item">
+              <i class="pi pi-check"></i>
+              <span>{{ check }}</span>
+            </div>
+          }
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 16. Interpreting Results ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-star section-icon"></i>
+      <h3>Interpreting Results</h3>
+    </div>
+    <div class="best-practices-grid">
+      @for (bp of bestPractices; track bp.title) {
+        <div class="bp-card">
+          <h4>{{ bp.title }}</h4>
+          <p>{{ bp.detail }}</p>
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 17. Known Limitations ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-exclamation-circle section-icon limitations-icon"></i>
+      <h3>Known Limitations</h3>
+    </div>
+    <div class="limitations-grid">
+      @for (lim of limitations; track lim.title) {
+        <div class="limitation-card">
+          <h5>{{ lim.title }}</h5>
+          <p>{{ lim.detail }}</p>
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 18. Academic References ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-bookmark section-icon references-icon"></i>
+      <h3>Academic References</h3>
+    </div>
+    <div class="doc-card">
+      <ul class="reference-list">
+        @for (ref of references; track ref.citation) {
+          <li>
+            <span class="ref-citation">{{ ref.citation }}</span>
+            <span class="ref-relevance">{{ ref.relevance }}</span>
+          </li>
+        }
+      </ul>
+    </div>
+  </section>
+
+</div>
