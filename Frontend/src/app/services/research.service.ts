@@ -348,6 +348,51 @@ export interface RunSignalEngineInput {
   forceRefresh?: boolean;
 }
 
+// ─── Batch / Cross-Sectional Interfaces ──────────────────
+
+export interface TickerBatchResult {
+  ticker: string;
+  meanIc: number;
+  icTStat: number;
+  icPValue: number;
+  nwTStat: number;
+  nwPValue: number;
+  effectiveN: number;
+  isStationary: boolean;
+  passedValidation: boolean;
+  dataPoints: number;
+  error?: string;
+}
+
+export interface BatchResearchResult {
+  success: boolean;
+  featureName: string;
+  tickersTested: number;
+  tickersPassed: number;
+  passRate: number;
+  crossSectionalConsistent: boolean;
+  aggregateIc: number;
+  tickerResults: TickerBatchResult[];
+  summary: string;
+  error?: string;
+}
+
+export interface RunBatchOptionsInput {
+  featureName: string;
+  tickers: string[];
+  fromDate: string;
+  toDate: string;
+  targetType?: string;
+}
+
+export interface RunOptionsFeatureInput {
+  ticker: string;
+  featureName: string;
+  fromDate: string;
+  toDate: string;
+  targetType?: string;
+}
+
 // ─── GraphQL Queries ───────────────────────────────────────
 
 const RUN_FEATURE_RESEARCH_MUTATION = `
@@ -580,7 +625,89 @@ const GET_SIGNAL_EXPERIMENT_REPORT_QUERY = `
   }
 `;
 
+const RUN_OPTIONS_FEATURE_MUTATION = `
+  mutation RunOptionsFeatureResearch(
+    $ticker: String!
+    $featureName: String!
+    $fromDate: String!
+    $toDate: String!
+    $targetType: String! = "directional"
+  ) {
+    runOptionsFeatureResearch(
+      ticker: $ticker
+      featureName: $featureName
+      fromDate: $fromDate
+      toDate: $toDate
+      targetType: $targetType
+    ) {
+      success ticker featureName startDate endDate barsUsed
+      meanIC icTStat icPValue nwTStat nwPValue effectiveN
+      icValues icDates
+      adfPvalue kpssPvalue isStationary
+      quantileBins { binNumber lowerBound upperBound meanReturn count }
+      isMonotonic monotonicityRatio
+      passedValidation
+      robustness {
+        monthlyBreakdown { month meanIC tStat observationCount }
+        pctPositiveMonths pctSignificantMonths
+        bestMonthIC worstMonthIC stabilityLabel
+        pctSignConsistentMonths signConsistentStabilityLabel
+        rollingTStat { month tStatSmoothed }
+        volatilityRegimes { regimeLabel meanIC tStat observationCount }
+        trendRegimes { regimeLabel meanIC tStat observationCount }
+        trainTest {
+          trainStart trainEnd testStart testEnd
+          trainMeanIC trainTStat trainDays
+          testMeanIC testTStat testDays
+          overfitFlag oosRetention oosRetentionLabel
+        }
+        structuralBreaks { date icBefore icAfter tStat significant }
+      }
+      error
+    }
+  }
+`;
+
+const RUN_BATCH_OPTIONS_MUTATION = `
+  mutation RunBatchOptionsResearch(
+    $featureName: String!
+    $tickers: [String!]!
+    $fromDate: String!
+    $toDate: String!
+    $targetType: String! = "directional"
+  ) {
+    runBatchOptionsResearch(
+      featureName: $featureName
+      tickers: $tickers
+      fromDate: $fromDate
+      toDate: $toDate
+      targetType: $targetType
+    ) {
+      success featureName
+      tickersTested tickersPassed passRate
+      crossSectionalConsistent aggregateIc
+      tickerResults {
+        ticker meanIc icTStat icPValue
+        nwTStat nwPValue effectiveN
+        isStationary passedValidation
+        dataPoints error
+      }
+      summary error
+    }
+  }
+`;
+
 // ─── Response Types ────────────────────────────────────────
+
+interface RunOptionsFeatureResponse {
+  data: { runOptionsFeatureResearch: ResearchResult };
+  errors?: { message: string }[];
+}
+
+interface RunBatchOptionsResponse {
+  data: { runBatchOptionsResearch: BatchResearchResult };
+  errors?: { message: string }[];
+}
 
 interface RunResearchResponse {
   data: { runFeatureResearch: ResearchResult };
@@ -730,6 +857,50 @@ export class ResearchService {
           }
         }),
         map(response => response.data.getSignalExperimentReport)
+      );
+  }
+
+  runOptionsFeatureResearch(input: RunOptionsFeatureInput): Observable<ResearchResult> {
+    return this.http
+      .post<RunOptionsFeatureResponse>(GRAPHQL_URL, {
+        query: RUN_OPTIONS_FEATURE_MUTATION,
+        variables: {
+          ticker: input.ticker,
+          featureName: input.featureName,
+          fromDate: input.fromDate,
+          toDate: input.toDate,
+          targetType: input.targetType ?? 'directional',
+        }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.runOptionsFeatureResearch)
+      );
+  }
+
+  runBatchOptionsResearch(input: RunBatchOptionsInput): Observable<BatchResearchResult> {
+    return this.http
+      .post<RunBatchOptionsResponse>(GRAPHQL_URL, {
+        query: RUN_BATCH_OPTIONS_MUTATION,
+        variables: {
+          featureName: input.featureName,
+          tickers: input.tickers,
+          fromDate: input.fromDate,
+          toDate: input.toDate,
+          targetType: input.targetType ?? 'directional',
+        }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.runBatchOptionsResearch)
       );
   }
 }

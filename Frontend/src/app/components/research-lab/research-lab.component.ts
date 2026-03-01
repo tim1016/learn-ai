@@ -5,6 +5,7 @@ import { ExperimentHistoryComponent } from './experiment-history/experiment-hist
 import { SignalRunnerComponent } from './signal-runner/signal-runner.component';
 import { SignalInfoPanelComponent } from './signal-info-panel/signal-info-panel.component';
 import { SignalHistoryComponent } from './signal-history/signal-history.component';
+import { BatchRunnerComponent } from './batch-runner/batch-runner.component';
 import { TabsModule } from 'primeng/tabs';
 
 @Component({
@@ -17,6 +18,7 @@ import { TabsModule } from 'primeng/tabs';
     SignalRunnerComponent,
     SignalInfoPanelComponent,
     SignalHistoryComponent,
+    BatchRunnerComponent,
     TabsModule,
   ],
   templateUrl: './research-lab.component.html',

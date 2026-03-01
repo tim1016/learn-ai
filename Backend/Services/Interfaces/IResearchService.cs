@@ -40,4 +40,20 @@ public interface IResearchService
     Task<SignalEngineReportDto?> GetSignalExperimentReportAsync(
         int id,
         CancellationToken cancellationToken = default);
+
+    Task<ResearchReportDto> RunOptionsFeatureResearchAsync(
+        string ticker,
+        string featureName,
+        string fromDate,
+        string toDate,
+        string targetType = "directional",
+        CancellationToken cancellationToken = default);
+
+    Task<BatchResearchResultDto> RunBatchOptionsResearchAsync(
+        string featureName,
+        List<string> tickers,
+        string fromDate,
+        string toDate,
+        string targetType = "directional",
+        CancellationToken cancellationToken = default);
 }

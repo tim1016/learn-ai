@@ -6,13 +6,20 @@ from enum import Enum
 
 
 class FeatureName(str, Enum):
-    """Supported Phase 1 features."""
+    """Supported features."""
 
     MOMENTUM_5M = "momentum_5m"
     RSI_14 = "rsi_14"
     REALIZED_VOL_30 = "realized_vol_30"
     VOLUME_ZSCORE = "volume_zscore"
     MACD_SIGNAL = "macd_signal"
+
+    # Options-derived features (daily frequency)
+    IV_30D = "iv_30d"
+    IV_RANK_60 = "iv_rank_60"
+    LOG_SKEW = "log_skew"
+    IV_RANK_252 = "iv_rank_252"
+    VRP_5 = "vrp_5"
 
 
 @dataclass(frozen=True)
@@ -26,7 +33,8 @@ class FeatureMetadata:
     interpretation: str
     implementation_note: str
     window: int
-    category: str  # "momentum" | "volatility" | "volume"
+    category: str  # "momentum" | "volatility" | "volume" | "options"
+    data_source: str = "stock"  # "stock" | "options"
 
 
 FEATURE_REGISTRY: dict[FeatureName, FeatureMetadata] = {
@@ -80,6 +88,72 @@ FEATURE_REGISTRY: dict[FeatureName, FeatureMetadata] = {
         window=26,
         category="momentum",
     ),
+    # Options-derived features
+    FeatureName.IV_30D: FeatureMetadata(
+        name="30-Day ATM Implied Volatility",
+        formula_latex=r"\text{IV}_{30d}(t) = w_1 \cdot \text{IV}_{\text{low}} + w_2 \cdot \text{IV}_{\text{high}}",
+        variables=r"w_1 = \frac{DTE_H - 30}{DTE_H - DTE_L}; \; w_2 = \frac{30 - DTE_L}{DTE_H - DTE_L}; \; \text{30-day constant-maturity interpolation}",
+        example="If IV_low (DTE=25) = 0.20, IV_high (DTE=35) = 0.22, then IV_30d = 0.21",
+        interpretation="Market's expectation of annualized volatility over the next 30 days. Direct output from IV derivation engine.",
+        implementation_note="Derived from expired options via Black-Scholes inversion with 30-day constant-maturity interpolation. European BS approximation — acceptable for relative IV movements.",
+        window=0,
+        category="options",
+        data_source="options",
+    ),
+    FeatureName.IV_RANK_60: FeatureMetadata(
+        name="IV Rank (60-Day)",
+        formula_latex=r"\text{IVR}_{60}(t) = \frac{\text{IV}_t - \min(\text{IV}_{60})}{\max(\text{IV}_{60}) - \min(\text{IV}_{60})}",
+        variables=r"\text{IV}_t = \text{30-day ATM IV at time } t; \; \text{IV}_{60} = \text{IV values over prior 60 trading days}",
+        example="If IV_t = 0.25, min_60 = 0.15, max_60 = 0.35, then IVR = 0.50",
+        interpretation="0-1 scale. High IVR = IV is elevated vs recent history (mean-reversion candidate). Low = IV is depressed.",
+        implementation_note="60-day rolling min/max rank. min_periods=30 for warm-up. Start with 60-day window before validating with 252-day.",
+        window=60,
+        category="options",
+        data_source="options",
+    ),
+    FeatureName.LOG_SKEW: FeatureMetadata(
+        name="Log Put-Call Skew",
+        formula_latex=r"\text{Skew}(t) = \ln\left(\frac{\text{IV}_{30d,\text{put}}(t)}{\text{IV}_{30d,\text{call}}(t)}\right)",
+        variables=r"\text{IV}_{30d,\text{put}} = \text{OTM put IV (5\% below ATM)}; \; \text{IV}_{30d,\text{call}} = \text{OTM call IV (5\% above ATM)}",
+        example="If IV_put = 0.28, IV_call = 0.22, then log_skew = ln(1.27) = 0.24",
+        interpretation="Positive = elevated put demand (downside protection). Scale-invariant across vol regimes. More statistically normal than simple difference.",
+        implementation_note="Log-transform (not difference) for scale invariance. Both legs require volume >= 50 and OI >= 100.",
+        window=0,
+        category="options",
+        data_source="options",
+    ),
+    FeatureName.IV_RANK_252: FeatureMetadata(
+        name="IV Rank (252-Day / Annual)",
+        formula_latex=r"\text{IVR}_{252}(t) = \frac{\text{IV}_t - \min(\text{IV}_{252})}{\max(\text{IV}_{252}) - \min(\text{IV}_{252})}",
+        variables=r"\text{IV}_{252} = \text{IV values over prior 252 trading days (1 year)}",
+        example="If IV_t = 0.30, min_252 = 0.12, max_252 = 0.45, then IVR = 0.545",
+        interpretation="Full-year IV rank. More stable than 60-day. Requires validated IV data (Cycle 2 feature).",
+        implementation_note="252-day rolling min/max rank. min_periods=60. Deferred to Cycle 2 after IV data quality confirmed.",
+        window=252,
+        category="options",
+        data_source="options",
+    ),
+    FeatureName.VRP_5: FeatureMetadata(
+        name="Volatility Risk Premium (5-Day)",
+        formula_latex=r"\text{VRP}(t) = \text{IV}_{30d}(t) - \text{RV}_{5}(t)",
+        variables=r"\text{RV}_5 = \sqrt{252} \cdot \text{std}(\ln(P_i / P_{i-1}))_{i=t-4}^{t}; \; \text{annualized 5-day realized vol}",
+        example="If IV_30d = 0.25, RV_5 = 0.18, then VRP = 0.07 (options are 'expensive')",
+        interpretation="Positive VRP = options overpriced vs realized. Signal mode uses trailing RV (no lookahead). Research mode uses forward RV.",
+        implementation_note="Research: VRP = IV - RV_forward_5d. Signal: VRP = IV - RV_trailing_5d. Deferred to Cycle 2.",
+        window=5,
+        category="options",
+        data_source="options",
+    ),
+}
+
+
+# Features that use options IV data (not stock OHLCV)
+OPTIONS_FEATURES = {
+    FeatureName.IV_30D.value,
+    FeatureName.IV_RANK_60.value,
+    FeatureName.LOG_SKEW.value,
+    FeatureName.IV_RANK_252.value,
+    FeatureName.VRP_5.value,
 }
 
 

@@ -38,11 +38,17 @@ class ICResult:
     effective_n: float = 0.0
 
 
-def _compute_newey_west_t_stat(ic_array: np.ndarray) -> tuple[float, float]:
+def _compute_newey_west_t_stat(
+    ic_array: np.ndarray, min_lag: int = 0,
+) -> tuple[float, float]:
     """Compute Newey-West HAC-corrected t-stat for the IC series.
 
     Uses a Bartlett kernel with automatic lag selection to account for
     serial correlation in daily IC values.
+
+    Args:
+        ic_array: Array of daily IC values
+        min_lag: Minimum lag to enforce (e.g. 5 for daily options data)
 
     Returns (nw_t_stat, nw_p_value).
     """
@@ -55,6 +61,7 @@ def _compute_newey_west_t_stat(ic_array: np.ndarray) -> tuple[float, float]:
 
     # Automatic lag selection: Andrews (1991) rule for Bartlett kernel
     max_lag = max(1, int(math.floor(4 * (n / 100) ** (2 / 9))))
+    max_lag = max(max_lag, min_lag)  # Enforce minimum lag
     max_lag = min(max_lag, n - 2)
 
     # Gamma_0: variance
@@ -113,11 +120,107 @@ def _compute_effective_sample_size(ic_array: np.ndarray) -> float:
     return n / denominator
 
 
+def _compute_rolling_ic(
+    feature_values: pd.Series,
+    target_returns: pd.Series,
+    timestamps_ms: pd.Series,
+    correlation_method: str,
+    rolling_window: int,
+    min_nw_lag: int,
+) -> ICResult:
+    """Compute rolling-window IC for daily/time-series data.
+
+    Instead of grouping by day (cross-sectional), compute Spearman rank
+    correlation within rolling windows of ``rolling_window`` observations.
+    """
+    df = pd.DataFrame({
+        "feature": feature_values.values,
+        "target": target_returns.values,
+        "timestamp": timestamps_ms.values,
+    }).dropna(subset=["feature", "target"])
+
+    if len(df) < rolling_window:
+        logger.warning(
+            "[Research] Not enough data for rolling IC (%d < %d)",
+            len(df), rolling_window,
+        )
+        return ICResult(mean_ic=0.0, ic_t_stat=0.0, ic_p_value=1.0)
+
+    rolling_ics: list[float] = []
+    rolling_dates: list[str] = []
+
+    # Step through non-overlapping windows
+    step = max(1, rolling_window // 2)  # 50% overlap for more IC observations
+    for start in range(0, len(df) - rolling_window + 1, step):
+        window = df.iloc[start : start + rolling_window]
+        feat = window["feature"]
+        tgt = window["target"]
+
+        if feat.std() < 1e-12 or tgt.std() < 1e-12:
+            continue
+
+        if correlation_method == "spearman":
+            corr, _ = stats.spearmanr(feat, tgt)
+        else:
+            corr = feat.corr(tgt)
+
+        if np.isnan(corr):
+            continue
+
+        rolling_ics.append(float(corr))
+        mid_ts = int(window["timestamp"].iloc[rolling_window // 2])
+        rolling_dates.append(
+            str(pd.to_datetime(mid_ts, unit="ms").date())
+        )
+
+    if len(rolling_ics) < 2:
+        logger.warning(
+            "[Research] Not enough rolling windows with valid ICs (%d)",
+            len(rolling_ics),
+        )
+        return ICResult(mean_ic=0.0, ic_t_stat=0.0, ic_p_value=1.0)
+
+    ic_array = np.array(rolling_ics)
+    mean_ic = float(np.mean(ic_array))
+    std_ic = float(np.std(ic_array, ddof=1))
+    n = len(ic_array)
+
+    if std_ic > 1e-10:
+        t_stat = mean_ic / (std_ic / np.sqrt(n))
+        p_value = float(2 * (1 - stats.t.cdf(abs(t_stat), n - 1)))
+    else:
+        t_stat = 0.0
+        p_value = 1.0
+
+    nw_t_stat, nw_p_value = _compute_newey_west_t_stat(ic_array, min_lag=min_nw_lag)
+    effective_n = _compute_effective_sample_size(ic_array)
+
+    logger.info(
+        "[Research] Rolling IC (w=%d): mean=%.4f, t=%.4f (NW=%.4f), "
+        "p=%.4f (NW=%.4f), windows=%d (effective=%.0f)",
+        rolling_window, mean_ic, t_stat, nw_t_stat,
+        p_value, nw_p_value, n, effective_n,
+    )
+
+    return ICResult(
+        mean_ic=mean_ic,
+        ic_t_stat=t_stat,
+        ic_p_value=p_value,
+        daily_ic_values=rolling_ics,
+        daily_ic_dates=rolling_dates,
+        nw_t_stat=nw_t_stat,
+        nw_p_value=nw_p_value,
+        effective_n=effective_n,
+    )
+
+
 def compute_information_coefficient(
     feature_values: pd.Series,
     target_returns: pd.Series,
     timestamps_ms: pd.Series,
     correlation_method: str = "spearman",
+    min_nw_lag: int = 0,
+    rolling_window: int | None = None,
 ) -> ICResult:
     """Compute daily Information Coefficient.
 
@@ -131,12 +234,23 @@ def compute_information_coefficient(
         Bar timestamps in milliseconds since epoch.
     correlation_method : str
         Correlation method (default ``"spearman"``).
+    min_nw_lag : int
+        Minimum Newey-West lag to enforce.
+    rolling_window : int | None
+        If set, use rolling-window IC (for daily time-series data)
+        instead of daily cross-sectional grouping.
 
     Returns
     -------
     ICResult
         Mean IC, t-stat, p-value, and per-day IC values.
     """
+    if rolling_window is not None:
+        return _compute_rolling_ic(
+            feature_values, target_returns, timestamps_ms,
+            correlation_method, rolling_window, min_nw_lag,
+        )
+
     df = pd.DataFrame(
         {
             "feature": feature_values.values,
@@ -184,7 +298,7 @@ def compute_information_coefficient(
         p_value = 1.0
 
     # Newey-West corrected t-stat (accounts for serial correlation)
-    nw_t_stat, nw_p_value = _compute_newey_west_t_stat(ic_array)
+    nw_t_stat, nw_p_value = _compute_newey_west_t_stat(ic_array, min_lag=min_nw_lag)
     effective_n = _compute_effective_sample_size(ic_array)
 
     logger.info(

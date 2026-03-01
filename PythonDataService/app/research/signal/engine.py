@@ -23,6 +23,7 @@ from app.research.signal.regime import compute_bar_regime_gate, compute_daily_re
 from app.research.signal.standardize import apply_threshold_filter, compute_train_zscore
 from app.research.signal.walk_forward import WalkForwardResult, run_walk_forward
 from app.research.features.ta_features import TechnicalFeatures
+from app.research.features.registry import OPTIONS_FEATURES
 from app.research.target import compute_15min_forward_return, validate_return_series
 
 logger = logging.getLogger(__name__)

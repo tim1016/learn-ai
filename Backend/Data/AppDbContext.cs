@@ -30,6 +30,9 @@ public class AppDbContext : DbContext
     public DbSet<ResearchExperiment> ResearchExperiments => Set<ResearchExperiment>();
     public DbSet<SignalExperiment> SignalExperiments => Set<SignalExperiment>();
 
+    // Options IV cache
+    public DbSet<OptionsIvSnapshot> OptionsIvSnapshots => Set<OptionsIvSnapshot>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Author>(entity =>
@@ -214,6 +217,21 @@ public class AppDbContext : DbContext
                   .HasForeignKey(e => e.TickerId)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(e => new { e.TickerId, e.FeatureName, e.CreatedAt });
+        });
+
+        // OptionsIvSnapshot configuration
+        modelBuilder.Entity<OptionsIvSnapshot>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Iv30dAtm).HasPrecision(18, 8);
+            entity.Property(e => e.Iv30dPut).HasPrecision(18, 8);
+            entity.Property(e => e.Iv30dCall).HasPrecision(18, 8);
+            entity.Property(e => e.StockClose).HasPrecision(18, 8);
+            entity.HasOne(e => e.Ticker)
+                  .WithMany()
+                  .HasForeignKey(e => e.TickerId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(e => new { e.TickerId, e.TradingDate }).IsUnique();
         });
     }
 }

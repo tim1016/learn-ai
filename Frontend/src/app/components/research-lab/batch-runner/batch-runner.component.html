@@ -1,0 +1,157 @@
+<div class="batch-runner">
+  <!-- Configuration Form -->
+  <div class="grid mb-4">
+    <div class="col-12 md:col-4">
+      <label class="block mb-1 font-semibold text-sm">Options Feature</label>
+      <p-select
+        [options]="features"
+        [(ngModel)]="featureName"
+        optionLabel="label"
+        optionValue="value"
+        class="w-full"
+      />
+    </div>
+    <div class="col-12 md:col-4">
+      <label class="block mb-1 font-semibold text-sm">Target Type</label>
+      <p-select
+        [options]="targetTypes"
+        [(ngModel)]="targetType"
+        optionLabel="label"
+        optionValue="value"
+        class="w-full"
+      />
+    </div>
+    <div class="col-6 md:col-2">
+      <label class="block mb-1 font-semibold text-sm">From</label>
+      <input pInputText type="date" [(ngModel)]="fromDate" class="w-full" />
+    </div>
+    <div class="col-6 md:col-2">
+      <label class="block mb-1 font-semibold text-sm">To</label>
+      <input pInputText type="date" [(ngModel)]="toDate" class="w-full" />
+    </div>
+  </div>
+
+  <!-- Ticker Selection -->
+  <div class="mb-4">
+    <div class="flex align-items-center gap-2 mb-2">
+      <span class="font-semibold text-sm">Ticker Universe ({{ selectedTickers().length }}/{{ allTickers.length }})</span>
+      <p-button label="All" [text]="true" size="small" (onClick)="selectAll()" />
+      <p-button label="None" [text]="true" size="small" (onClick)="deselectAll()" />
+    </div>
+    <div class="flex flex-wrap gap-2">
+      @for (ticker of allTickers; track ticker) {
+        <p-button
+          [label]="ticker"
+          [severity]="selectedTickers().includes(ticker) ? 'primary' : 'secondary'"
+          [outlined]="!selectedTickers().includes(ticker)"
+          size="small"
+          (onClick)="toggleTicker(ticker)"
+        />
+      }
+    </div>
+  </div>
+
+  <!-- Run Button -->
+  <div class="mb-4">
+    <p-button
+      label="Run Cross-Sectional Study"
+      icon="pi pi-play"
+      [loading]="loading()"
+      [disabled]="loading() || selectedTickers().length === 0"
+      (onClick)="runBatch()"
+    />
+  </div>
+
+  @if (loading()) {
+    <p-progressBar mode="indeterminate" styleClass="mb-4" />
+    <p-message severity="info" text="Processing tickers sequentially. This may take several minutes..." />
+  }
+
+  @if (error(); as err) {
+    <p-message severity="error" [text]="err" class="mb-4" />
+  }
+
+  <!-- Results -->
+  @if (result(); as res) {
+    <!-- Summary Card -->
+    <p-card styleClass="mb-4">
+      <ng-template #header>
+        <div class="p-3 flex align-items-center gap-3">
+          <span class="text-xl font-bold">Cross-Sectional Results</span>
+          <p-tag [severity]="consistentSeverity" [value]="consistentLabel" />
+        </div>
+      </ng-template>
+      <div class="grid">
+        <div class="col-6 md:col-3">
+          <div class="text-sm text-color-secondary">Tickers Tested</div>
+          <div class="text-2xl font-bold">{{ res.tickersTested }}</div>
+        </div>
+        <div class="col-6 md:col-3">
+          <div class="text-sm text-color-secondary">Tickers Passed</div>
+          <div class="text-2xl font-bold">{{ res.tickersPassed }}</div>
+        </div>
+        <div class="col-6 md:col-3">
+          <div class="text-sm text-color-secondary">Pass Rate</div>
+          <div class="text-2xl font-bold">{{ passRatePct | number:'1.0-0' }}%</div>
+        </div>
+        <div class="col-6 md:col-3">
+          <div class="text-sm text-color-secondary">Aggregate IC</div>
+          <div class="text-2xl font-bold" [class]="getIcClass(res.aggregateIc)">
+            {{ res.aggregateIc | number:'1.4-4' }}
+          </div>
+        </div>
+      </div>
+      @if (res.summary) {
+        <p class="mt-3 text-sm text-color-secondary">{{ res.summary }}</p>
+      }
+    </p-card>
+
+    <!-- Per-Ticker Results Table -->
+    <p-table
+      [value]="res.tickerResults"
+      [sortField]="'passedValidation'"
+      [sortOrder]="-1"
+      styleClass="p-datatable-sm p-datatable-striped"
+    >
+      <ng-template #header>
+        <tr>
+          <th pSortableColumn="ticker">Ticker <p-sortIcon field="ticker" /></th>
+          <th pSortableColumn="meanIc">Mean IC <p-sortIcon field="meanIc" /></th>
+          <th pSortableColumn="nwTStat">NW t-Stat <p-sortIcon field="nwTStat" /></th>
+          <th pSortableColumn="nwPValue">NW p-Value <p-sortIcon field="nwPValue" /></th>
+          <th pSortableColumn="effectiveN">N_eff <p-sortIcon field="effectiveN" /></th>
+          <th pSortableColumn="isStationary">Stationary <p-sortIcon field="isStationary" /></th>
+          <th pSortableColumn="passedValidation">Result <p-sortIcon field="passedValidation" /></th>
+          <th>Data Points</th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-row>
+        <tr>
+          <td class="font-bold">{{ row.ticker }}</td>
+          <td [class]="getIcClass(row.meanIc)">{{ row.meanIc | number:'1.4-4' }}</td>
+          <td>{{ row.nwTStat | number:'1.2-2' }}</td>
+          <td>{{ row.nwPValue | number:'1.4-4' }}</td>
+          <td>{{ row.effectiveN | number:'1.0-0' }}</td>
+          <td>
+            <p-tag
+              [severity]="row.isStationary ? 'success' : 'danger'"
+              [value]="row.isStationary ? 'Yes' : 'No'"
+            />
+          </td>
+          <td>
+            <p-tag
+              [severity]="getValidationSeverity(row.passedValidation)"
+              [value]="row.passedValidation ? 'PASS' : 'FAIL'"
+            />
+          </td>
+          <td>{{ row.dataPoints }}</td>
+        </tr>
+        @if (row.error) {
+          <tr>
+            <td colspan="8" class="text-red-500 text-sm">{{ row.error }}</td>
+          </tr>
+        }
+      </ng-template>
+    </p-table>
+  }
+</div>

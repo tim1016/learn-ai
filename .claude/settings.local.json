@@ -54,7 +54,10 @@
       "Bash(ls:*)",
       "Bash(wc:*)",
       "Bash(npx vitest:*)",
-      "Bash(npx ng:*)"
+      "Bash(npx ng:*)",
+      "Bash(wsl:*)",
+      "Bash(podman machine:*)",
+      "Bash(podman volume:*)"
     ]
   }
 }

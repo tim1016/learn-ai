@@ -12,11 +12,15 @@ from fastapi import APIRouter, HTTPException, status
 from app.models.research_models import (
     AlphaDecayStatsResponse,
     BacktestResultResponse,
+    BuildIvHistoryRequest,
+    BuildIvHistoryResponse,
+    CrossSectionalReportResponse,
     DataSufficiencyResponse,
     EffectiveSampleSizeResponse,
     FeatureInfoResponse,
     GraduationCriterionResponse,
     GraduationResultResponse,
+    IvDiagnosticsReportResponse,
     MethodologyResponse,
     MonthlyICBreakdownResponse,
     ParameterStabilityResponse,
@@ -24,13 +28,16 @@ from app.models.research_models import (
     RegimeICResponse,
     RobustnessResponse,
     RollingTStatPointResponse,
+    RunBatchOptionsRequest,
     RunFeatureResearchRequest,
     RunFeatureResearchResponse,
+    RunOptionsFeatureResearchRequest,
     RunSignalEngineRequest,
     RunSignalEngineResponse,
     SignalBehaviorMetricsResponse,
     SignalDiagnosticsResponse,
     StructuralBreakPointResponse,
+    TickerBatchResult,
     TrainTestSplitResponse,
     WalkForwardResultResponse,
     WalkForwardWindowResponse,
@@ -38,9 +45,14 @@ from app.models.research_models import (
 from app.research.config import ResearchConfig
 from app.research.documentation.formulas import get_all_documentation
 from app.research.features.registry import get_feature_metadata, list_available_features
+from app.research.options.diagnostics import run_iv_diagnostics
+from app.research.options.iv_builder import build_iv_history
+from app.research.options_runner import run_options_feature_research
+from app.research.batch_runner import run_cross_sectional_study
 from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
+from app.services.polygon_client import PolygonClientService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -447,3 +459,272 @@ async def list_features() -> list[FeatureInfoResponse]:
 async def get_documentation() -> dict:
     """Return complete mathematical documentation for the UI information panel."""
     return get_all_documentation()
+
+
+@router.post("/build-iv-history", response_model=BuildIvHistoryResponse)
+async def build_iv_history_endpoint(
+    request: BuildIvHistoryRequest,
+) -> BuildIvHistoryResponse:
+    """Build historical 30-day constant-maturity IV for a ticker.
+
+    Long-running: may take 5-10 minutes per ticker due to API calls.
+    Derives IV from expired options contracts + Black-Scholes inversion.
+    """
+    try:
+        logger.info(
+            "[IV Builder] Request: %s [%s → %s]",
+            request.underlying_ticker,
+            request.start_date,
+            request.end_date,
+        )
+
+        polygon_client = PolygonClientService()
+
+        iv_df = build_iv_history(
+            underlying=request.underlying_ticker,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            polygon_client=polygon_client,
+        )
+
+        if iv_df.empty:
+            return BuildIvHistoryResponse(
+                success=False,
+                underlying_ticker=request.underlying_ticker,
+                start_date=request.start_date,
+                end_date=request.end_date,
+                error="No IV data could be derived",
+            )
+
+        # Run diagnostics
+        diag = run_iv_diagnostics(iv_df)
+        diag_response = IvDiagnosticsReportResponse(
+            valid=diag.valid,
+            missing_pct=diag.missing_pct,
+            total_trading_days=diag.total_trading_days,
+            valid_iv_days=diag.valid_iv_days,
+            first_date=diag.first_date,
+            last_date=diag.last_date,
+            gaps=diag.gaps,
+            dte_spikes=diag.dte_spikes,
+            iv_mean=diag.iv_mean,
+            iv_std=diag.iv_std,
+            iv_min=diag.iv_min,
+            iv_max=diag.iv_max,
+            iv_skewness=diag.iv_skewness,
+            discontinuities=diag.discontinuities,
+            warnings=diag.warnings,
+        )
+
+        iv_records = iv_df.to_dict(orient="records")
+
+        return BuildIvHistoryResponse(
+            success=True,
+            underlying_ticker=request.underlying_ticker,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            data_points=len(iv_records),
+            iv_data=iv_records,
+            diagnostics=diag_response,
+        )
+
+    except Exception as e:
+        logger.error("[IV Builder] Endpoint error: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"IV history build failed: {e}",
+        )
+
+
+@router.post("/run-options-feature", response_model=RunFeatureResearchResponse)
+async def run_options_feature_endpoint(
+    request: RunOptionsFeatureResearchRequest,
+) -> RunFeatureResearchResponse:
+    """Run options feature research using derived IV data.
+
+    Uses the same IC analysis pipeline as stock features but adapted for
+    daily-frequency options signals.
+    """
+    try:
+        logger.info(
+            "[Options Research] Request: %s %s (%d IV points)",
+            request.ticker,
+            request.feature_name,
+            len(request.iv_data),
+        )
+
+        iv_dicts = [iv.model_dump() for iv in request.iv_data]
+        bar_dicts = [bar.model_dump() for bar in request.stock_daily_bars]
+
+        report = run_options_feature_research(
+            ticker=request.ticker,
+            feature_name=request.feature_name,
+            iv_data=iv_dicts,
+            stock_daily_bars=bar_dicts,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            target_type=request.target_type,
+        )
+
+        # Map robustness (same mapping as run-feature)
+        robustness_response = None
+        if report.robustness is not None:
+            rob = report.robustness
+            robustness_response = RobustnessResponse(
+                monthly_breakdown=[
+                    MonthlyICBreakdownResponse(
+                        month=m.month, mean_ic=m.mean_ic,
+                        t_stat=m.t_stat, observation_count=m.observation_count,
+                    )
+                    for m in rob.monthly_breakdown
+                ],
+                pct_positive_months=rob.pct_positive_months,
+                pct_significant_months=rob.pct_significant_months,
+                best_month_ic=rob.best_month_ic,
+                worst_month_ic=rob.worst_month_ic,
+                stability_label=rob.stability_label,
+                pct_sign_consistent_months=rob.pct_sign_consistent_months,
+                sign_consistent_stability_label=rob.sign_consistent_stability_label,
+                rolling_t_stat=[
+                    RollingTStatPointResponse(
+                        month=r.month, t_stat_smoothed=r.t_stat_smoothed,
+                    )
+                    for r in rob.rolling_t_stat
+                ],
+                volatility_regimes=[
+                    RegimeICResponse(
+                        regime_label=r.regime_label, mean_ic=r.mean_ic,
+                        t_stat=r.t_stat, observation_count=r.observation_count,
+                    )
+                    for r in rob.volatility_regimes
+                ],
+                trend_regimes=[
+                    RegimeICResponse(
+                        regime_label=r.regime_label, mean_ic=r.mean_ic,
+                        t_stat=r.t_stat, observation_count=r.observation_count,
+                    )
+                    for r in rob.trend_regimes
+                ],
+                train_test=TrainTestSplitResponse(
+                    train_start=rob.train_test.train_start,
+                    train_end=rob.train_test.train_end,
+                    test_start=rob.train_test.test_start,
+                    test_end=rob.train_test.test_end,
+                    train_mean_ic=rob.train_test.train_mean_ic,
+                    train_t_stat=rob.train_test.train_t_stat,
+                    train_days=rob.train_test.train_days,
+                    test_mean_ic=rob.train_test.test_mean_ic,
+                    test_t_stat=rob.train_test.test_t_stat,
+                    test_days=rob.train_test.test_days,
+                    overfit_flag=rob.train_test.overfit_flag,
+                    oos_retention=rob.train_test.oos_retention,
+                    oos_retention_label=rob.train_test.oos_retention_label,
+                ) if rob.train_test else None,
+                structural_breaks=[
+                    StructuralBreakPointResponse(
+                        date=b.date, ic_before=b.ic_before,
+                        ic_after=b.ic_after, t_stat=b.t_stat,
+                        significant=b.significant,
+                    )
+                    for b in rob.structural_breaks
+                ],
+            )
+
+        return RunFeatureResearchResponse(
+            success=report.error is None,
+            ticker=report.ticker,
+            feature_name=report.feature_name,
+            start_date=report.start_date,
+            end_date=report.end_date,
+            bars_used=report.bars_used,
+            mean_ic=report.mean_ic,
+            ic_t_stat=report.ic_t_stat,
+            ic_p_value=report.ic_p_value,
+            nw_t_stat=report.nw_t_stat,
+            nw_p_value=report.nw_p_value,
+            effective_n=report.effective_n,
+            adf_pvalue=report.adf_pvalue,
+            kpss_pvalue=report.kpss_pvalue,
+            is_stationary=report.is_stationary,
+            passed_validation=report.passed_validation,
+            quantile_bins=[
+                QuantileBinResponse(**bin_dict) for bin_dict in report.quantile_bins
+            ],
+            is_monotonic=report.is_monotonic,
+            monotonicity_ratio=report.monotonicity_ratio,
+            ic_values=report.ic_values,
+            ic_dates=report.ic_dates,
+            robustness=robustness_response,
+            error=report.error,
+        )
+
+    except Exception as e:
+        logger.error("[Options Research] Endpoint error: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Options feature research failed: {e}",
+        )
+
+
+@router.post("/run-batch-options", response_model=CrossSectionalReportResponse)
+async def run_batch_options_endpoint(
+    request: RunBatchOptionsRequest,
+) -> CrossSectionalReportResponse:
+    """Run cross-sectional options feature study across multiple tickers.
+
+    Tests the same options feature across a universe of tickers and
+    determines if the effect is cross-sectionally consistent.
+    """
+    try:
+        logger.info(
+            "[Batch Options] Request: %s across %d tickers",
+            request.feature_name,
+            len(request.tickers),
+        )
+
+        polygon_client = PolygonClientService()
+
+        report = run_cross_sectional_study(
+            feature_name=request.feature_name,
+            tickers=request.tickers,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            polygon_client=polygon_client,
+            target_type=request.target_type,
+        )
+
+        ticker_results = [
+            TickerBatchResult(
+                ticker=tr["ticker"],
+                mean_ic=tr.get("mean_ic", 0.0),
+                ic_t_stat=tr.get("ic_t_stat", 0.0),
+                ic_p_value=tr.get("ic_p_value", 1.0),
+                nw_t_stat=tr.get("nw_t_stat", 0.0),
+                nw_p_value=tr.get("nw_p_value", 1.0),
+                effective_n=tr.get("effective_n", 0.0),
+                is_stationary=tr.get("is_stationary", False),
+                passed_validation=tr.get("passed_validation", False),
+                data_points=tr.get("data_points", 0),
+                error=tr.get("error"),
+            )
+            for tr in report.ticker_results
+        ]
+
+        return CrossSectionalReportResponse(
+            success=True,
+            feature_name=report.feature_name,
+            tickers_tested=report.tickers_tested,
+            tickers_passed=report.tickers_passed,
+            pass_rate=report.pass_rate,
+            cross_sectional_consistent=report.cross_sectional_consistent,
+            aggregate_ic=report.aggregate_ic,
+            ticker_results=ticker_results,
+            summary=report.summary,
+        )
+
+    except Exception as e:
+        logger.error("[Batch Options] Endpoint error: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Batch options research failed: {e}",
+        )

@@ -78,7 +78,7 @@ async def test_list_features(client: AsyncClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
-    assert len(data) == 5
+    assert len(data) == 10
     names = {f["name"] for f in data}
     assert "5-Minute Momentum" in names
 

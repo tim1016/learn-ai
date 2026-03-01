@@ -417,6 +417,189 @@ public class Mutation
         }
     }
 
+    [GraphQLName("runOptionsFeatureResearch")]
+    public async Task<ResearchResultType> RunOptionsFeatureResearch(
+        [Service] IResearchService researchService,
+        [Service] ILogger<Mutation> logger,
+        string ticker,
+        string featureName,
+        string fromDate,
+        string toDate,
+        string targetType = "directional")
+    {
+        try
+        {
+            logger.LogInformation(
+                "[Options Research] Running {Feature} on {Ticker} from {From} to {To} (target={Target})",
+                featureName, ticker, fromDate, toDate, targetType);
+
+            var report = await researchService.RunOptionsFeatureResearchAsync(
+                ticker, featureName, fromDate, toDate, targetType);
+
+            return new ResearchResultType
+            {
+                Success = report.Success,
+                Ticker = report.Ticker,
+                FeatureName = report.FeatureName,
+                StartDate = report.StartDate,
+                EndDate = report.EndDate,
+                BarsUsed = report.BarsUsed,
+                MeanIC = report.MeanIc,
+                ICTStat = report.IcTStat,
+                ICPValue = report.IcPValue,
+                NwTStat = report.NwTStat,
+                NwPValue = report.NwPValue,
+                EffectiveN = report.EffectiveN,
+                ICValues = report.IcValues,
+                ICDates = report.IcDates,
+                AdfPvalue = report.AdfPvalue,
+                KpssPvalue = report.KpssPvalue,
+                IsStationary = report.IsStationary,
+                QuantileBins = report.QuantileBins.Select(b => new QuantileBinType
+                {
+                    BinNumber = b.BinNumber,
+                    LowerBound = b.LowerBound,
+                    UpperBound = b.UpperBound,
+                    MeanReturn = b.MeanReturn,
+                    Count = b.Count,
+                }).ToList(),
+                IsMonotonic = report.IsMonotonic,
+                MonotonicityRatio = report.MonotonicityRatio,
+                PassedValidation = report.PassedValidation,
+                Robustness = report.Robustness != null ? new RobustnessType
+                {
+                    MonthlyBreakdown = report.Robustness.MonthlyBreakdown.Select(m => new MonthlyICBreakdownType
+                    {
+                        Month = m.Month,
+                        MeanIC = m.MeanIc,
+                        TStat = m.TStat,
+                        ObservationCount = m.ObservationCount,
+                    }).ToList(),
+                    PctPositiveMonths = report.Robustness.PctPositiveMonths,
+                    PctSignificantMonths = report.Robustness.PctSignificantMonths,
+                    BestMonthIC = report.Robustness.BestMonthIc,
+                    WorstMonthIC = report.Robustness.WorstMonthIc,
+                    StabilityLabel = report.Robustness.StabilityLabel,
+                    PctSignConsistentMonths = report.Robustness.PctSignConsistentMonths,
+                    SignConsistentStabilityLabel = report.Robustness.SignConsistentStabilityLabel,
+                    RollingTStat = report.Robustness.RollingTStat.Select(r => new RollingTStatPointType
+                    {
+                        Month = r.Month,
+                        TStatSmoothed = r.TStatSmoothed,
+                    }).ToList(),
+                    VolatilityRegimes = report.Robustness.VolatilityRegimes.Select(r => new RegimeICType
+                    {
+                        RegimeLabel = r.RegimeLabel,
+                        MeanIC = r.MeanIc,
+                        TStat = r.TStat,
+                        ObservationCount = r.ObservationCount,
+                    }).ToList(),
+                    TrendRegimes = report.Robustness.TrendRegimes.Select(r => new RegimeICType
+                    {
+                        RegimeLabel = r.RegimeLabel,
+                        MeanIC = r.MeanIc,
+                        TStat = r.TStat,
+                        ObservationCount = r.ObservationCount,
+                    }).ToList(),
+                    TrainTest = report.Robustness.TrainTest != null ? new TrainTestSplitType
+                    {
+                        TrainStart = report.Robustness.TrainTest.TrainStart,
+                        TrainEnd = report.Robustness.TrainTest.TrainEnd,
+                        TestStart = report.Robustness.TrainTest.TestStart,
+                        TestEnd = report.Robustness.TrainTest.TestEnd,
+                        TrainMeanIC = report.Robustness.TrainTest.TrainMeanIc,
+                        TrainTStat = report.Robustness.TrainTest.TrainTStat,
+                        TrainDays = report.Robustness.TrainTest.TrainDays,
+                        TestMeanIC = report.Robustness.TrainTest.TestMeanIc,
+                        TestTStat = report.Robustness.TrainTest.TestTStat,
+                        TestDays = report.Robustness.TrainTest.TestDays,
+                        OverfitFlag = report.Robustness.TrainTest.OverfitFlag,
+                        OosRetention = report.Robustness.TrainTest.OosRetention,
+                        OosRetentionLabel = report.Robustness.TrainTest.OosRetentionLabel,
+                    } : null,
+                    StructuralBreaks = report.Robustness.StructuralBreaks.Select(b => new StructuralBreakPointType
+                    {
+                        Date = b.Date,
+                        IcBefore = b.IcBefore,
+                        IcAfter = b.IcAfter,
+                        TStat = b.TStat,
+                        Significant = b.Significant,
+                    }).ToList(),
+                } : null,
+                Error = report.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Options Research] Error running {Feature} on {Ticker}", featureName, ticker);
+            return new ResearchResultType
+            {
+                Success = false,
+                Ticker = ticker,
+                FeatureName = featureName,
+                Error = ex.Message,
+            };
+        }
+    }
+
+    [GraphQLName("runBatchOptionsResearch")]
+    public async Task<BatchResearchResultType> RunBatchOptionsResearch(
+        [Service] IResearchService researchService,
+        [Service] ILogger<Mutation> logger,
+        string featureName,
+        List<string> tickers,
+        string fromDate,
+        string toDate,
+        string targetType = "directional")
+    {
+        try
+        {
+            logger.LogInformation(
+                "[Batch Options] Running {Feature} across {Count} tickers",
+                featureName, tickers.Count);
+
+            var report = await researchService.RunBatchOptionsResearchAsync(
+                featureName, tickers, fromDate, toDate, targetType);
+
+            return new BatchResearchResultType
+            {
+                Success = report.Success,
+                FeatureName = report.FeatureName,
+                TickersTested = report.TickersTested,
+                TickersPassed = report.TickersPassed,
+                PassRate = report.PassRate,
+                CrossSectionalConsistent = report.CrossSectionalConsistent,
+                AggregateIc = report.AggregateIc,
+                TickerResults = report.TickerResults.Select(tr => new TickerBatchResultType
+                {
+                    Ticker = tr.Ticker,
+                    MeanIc = tr.MeanIc,
+                    IcTStat = tr.IcTStat,
+                    IcPValue = tr.IcPValue,
+                    NwTStat = tr.NwTStat,
+                    NwPValue = tr.NwPValue,
+                    EffectiveN = tr.EffectiveN,
+                    IsStationary = tr.IsStationary,
+                    PassedValidation = tr.PassedValidation,
+                    DataPoints = tr.DataPoints,
+                    Error = tr.Error,
+                }).ToList(),
+                Summary = report.Summary,
+                Error = report.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Batch Options] Error running {Feature}", featureName);
+            return new BatchResearchResultType
+            {
+                Success = false,
+                FeatureName = featureName,
+                Error = ex.Message,
+            };
+        }
+    }
+
     #endregion
 
     #region LSTM Prediction Mutations
@@ -572,4 +755,33 @@ public class BacktestTradeType
     [GraphQLName("cumulativePnl")]
     public decimal CumulativePnL { get; set; }
     public string SignalReason { get; set; } = "";
+}
+
+public class BatchResearchResultType
+{
+    public bool Success { get; set; }
+    public string FeatureName { get; set; } = "";
+    public int TickersTested { get; set; }
+    public int TickersPassed { get; set; }
+    public double PassRate { get; set; }
+    public bool CrossSectionalConsistent { get; set; }
+    public double AggregateIc { get; set; }
+    public List<TickerBatchResultType> TickerResults { get; set; } = [];
+    public string Summary { get; set; } = "";
+    public string? Error { get; set; }
+}
+
+public class TickerBatchResultType
+{
+    public string Ticker { get; set; } = "";
+    public double MeanIc { get; set; }
+    public double IcTStat { get; set; }
+    public double IcPValue { get; set; } = 1.0;
+    public double NwTStat { get; set; }
+    public double NwPValue { get; set; } = 1.0;
+    public double EffectiveN { get; set; }
+    public bool IsStationary { get; set; }
+    public bool PassedValidation { get; set; }
+    public int DataPoints { get; set; }
+    public string? Error { get; set; }
 }

@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from app.research.features.ta_features import TechnicalFeatures
-from app.research.features.registry import FeatureName, list_available_features
+from app.research.features.registry import FeatureName, list_available_features, OPTIONS_FEATURES
 
 
 class TestMomentum5m:
@@ -61,6 +61,8 @@ class TestMACDSignal:
 class TestFeatureDispatcher:
     def test_all_registered_features_compute(self, sample_bars_single_day: list[dict]) -> None:
         for feature_name in list_available_features():
+            if feature_name in OPTIONS_FEATURES:
+                continue  # Options features use OptionsFeatures, not TechnicalFeatures
             result = TechnicalFeatures.compute_feature(feature_name, sample_bars_single_day)
             assert isinstance(result, pd.Series)
             assert len(result) == len(sample_bars_single_day)

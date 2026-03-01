@@ -352,3 +352,110 @@ class RunSignalEngineResponse(BaseModel):
     methodology: MethodologyResponse | None = None
     research_log: str = ""
     error: str | None = None
+
+
+# ─── Options IV Models ──────────────────────────────────────
+
+
+class IvDataPoint(BaseModel):
+    """Single IV data point for options research."""
+
+    date: str
+    atm_iv: float | None = None
+    iv_otm_put: float | None = None
+    iv_otm_call: float | None = None
+    stock_close: float | None = None
+
+
+class BuildIvHistoryRequest(BaseModel):
+    """Request body for POST /research/build-iv-history."""
+
+    underlying_ticker: str = Field(..., description="Stock symbol (e.g. SPY)")
+    start_date: str = Field(..., description="ISO date (YYYY-MM-DD)")
+    end_date: str = Field(..., description="ISO date (YYYY-MM-DD)")
+
+
+class IvDiagnosticsReportResponse(BaseModel):
+    """IV series diagnostics report."""
+
+    valid: bool = False
+    missing_pct: float = 0.0
+    total_trading_days: int = 0
+    valid_iv_days: int = 0
+    first_date: str | None = None
+    last_date: str | None = None
+    gaps: int = 0
+    dte_spikes: int = 0
+    iv_mean: float | None = None
+    iv_std: float | None = None
+    iv_min: float | None = None
+    iv_max: float | None = None
+    iv_skewness: float | None = None
+    discontinuities: int = 0
+    warnings: list[str] = []
+
+
+class BuildIvHistoryResponse(BaseModel):
+    """Response body for POST /research/build-iv-history."""
+
+    success: bool
+    underlying_ticker: str
+    start_date: str
+    end_date: str
+    data_points: int = 0
+    iv_data: list[dict] = []
+    diagnostics: IvDiagnosticsReportResponse | None = None
+    error: str | None = None
+
+
+class RunOptionsFeatureResearchRequest(BaseModel):
+    """Request body for POST /research/run-options-feature."""
+
+    ticker: str = Field(..., description="Stock symbol (e.g. AAPL)")
+    feature_name: str = Field(..., description="Options feature (e.g. iv_rank_60)")
+    iv_data: list[IvDataPoint] = Field(..., description="Historical IV data")
+    stock_daily_bars: list[OHLCVBar] = Field(..., description="Daily stock OHLCV")
+    start_date: str = Field(..., description="ISO date (YYYY-MM-DD)")
+    end_date: str = Field(..., description="ISO date (YYYY-MM-DD)")
+    target_type: str = Field(default="directional", description="Target: directional, volatility, abs_return")
+
+
+class RunBatchOptionsRequest(BaseModel):
+    """Request body for POST /research/run-batch-options."""
+
+    feature_name: str = Field(..., description="Options feature to test")
+    tickers: list[str] = Field(..., description="List of tickers to test")
+    start_date: str = Field(..., description="ISO date (YYYY-MM-DD)")
+    end_date: str = Field(..., description="ISO date (YYYY-MM-DD)")
+    target_type: str = Field(default="directional", description="Target type")
+
+
+class TickerBatchResult(BaseModel):
+    """Per-ticker result in batch research."""
+
+    ticker: str
+    mean_ic: float = 0.0
+    ic_t_stat: float = 0.0
+    ic_p_value: float = 1.0
+    nw_t_stat: float = 0.0
+    nw_p_value: float = 1.0
+    effective_n: float = 0.0
+    is_stationary: bool = False
+    passed_validation: bool = False
+    data_points: int = 0
+    error: str | None = None
+
+
+class CrossSectionalReportResponse(BaseModel):
+    """Response body for POST /research/run-batch-options."""
+
+    success: bool
+    feature_name: str
+    tickers_tested: int = 0
+    tickers_passed: int = 0
+    pass_rate: float = 0.0
+    cross_sectional_consistent: bool = False
+    aggregate_ic: float = 0.0
+    ticker_results: list[TickerBatchResult] = []
+    summary: str = ""
+    error: str | None = None
