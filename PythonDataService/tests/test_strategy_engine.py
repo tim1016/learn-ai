@@ -551,3 +551,39 @@ class TestGreeks:
         legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
         greeks = compute_strategy_greeks(legs, spot=110, r=0.043, days_to_expiry=0)
         assert greeks.gamma == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Edge cases: input validation
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeStrategyValidation:
+    def test_invalid_option_type_rejected(self):
+        """Unknown option type should be rejected by Pydantic."""
+        with pytest.raises(Exception):
+            _leg(100, "butterfly", "long", 5.0)
+
+    def test_invalid_position_rejected(self):
+        """Unknown position should be rejected by Pydantic."""
+        with pytest.raises(Exception):
+            _leg(100, "call", "neutral", 5.0)
+
+    def test_negative_spot_price_rejected(self):
+        """Negative spot price should be rejected by Pydantic gt=0."""
+        with pytest.raises(Exception):
+            StrategyAnalyzeRequest(
+                symbol="TEST",
+                legs=[_leg(100, "call", "long", 5.0)],
+                expiration_date="2026-12-31",
+                spot_price=-10.0,
+            )
+
+    def test_empty_legs_rejected(self):
+        """Empty legs list should be rejected by Pydantic min_length=1."""
+        with pytest.raises(Exception):
+            StrategyAnalyzeRequest(
+                symbol="TEST",
+                legs=[],
+                expiration_date="2026-12-31",
+                spot_price=100.0,
+            )

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Backend.Models.DTOs;
 using Backend.Services.Implementation;
+using Backend.Tests.Helpers;
 using Microsoft.Extensions.Logging;
 using Moq;
 
@@ -313,18 +314,4 @@ public class LstmServiceTests
     }
 
     #endregion
-}
-
-/// <summary>
-/// Simple fake handler for mocking HttpClient without an external library.
-/// </summary>
-public class FakeHttpMessageHandler : HttpMessageHandler
-{
-    private readonly HttpResponseMessage _response;
-
-    public FakeHttpMessageHandler(HttpResponseMessage response) => _response = response;
-
-    protected override Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request, CancellationToken cancellationToken)
-        => Task.FromResult(_response);
 }

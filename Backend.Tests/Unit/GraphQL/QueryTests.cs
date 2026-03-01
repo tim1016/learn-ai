@@ -34,7 +34,7 @@ public class QueryTests
 
         _marketDataMock.Setup(s => s.GetOrFetchAggregatesAsync(
                 "AAPL", 1, "day", "2026-01-01", "2026-01-31", false, default))
-            .ReturnsAsync(aggregates);
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var query = new Query();
         var result = await query.GetOrFetchStockAggregates(
@@ -57,7 +57,7 @@ public class QueryTests
         _marketDataMock.Setup(s => s.GetOrFetchAggregatesAsync(
                 It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(),
                 It.IsAny<string>(), It.IsAny<string>(), false, default))
-            .ReturnsAsync(new List<StockAggregate>());
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = [] });
 
         var query = new Query();
         var result = await query.GetOrFetchStockAggregates(
@@ -83,7 +83,7 @@ public class QueryTests
         _marketDataMock.Setup(s => s.GetOrFetchAggregatesAsync(
                 It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(),
                 It.IsAny<string>(), It.IsAny<string>(), false, default))
-            .ReturnsAsync(aggregates);
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var query = new Query();
         var result = await query.GetOrFetchStockAggregates(

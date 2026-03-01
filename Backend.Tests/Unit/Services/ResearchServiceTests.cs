@@ -40,7 +40,7 @@ public class ResearchServiceTests
     private static List<StockAggregate> CreateSampleAggregates(int count = 200)
     {
         var aggregates = new List<StockAggregate>();
-        var baseTs = 1704117000000L;
+        var baseTs = new DateTime(2024, 1, 2, 9, 30, 0, DateTimeKind.Utc);
 
         for (var i = 0; i < count; i++)
         {
@@ -48,12 +48,13 @@ public class ResearchServiceTests
             {
                 Id = i + 1,
                 TickerId = 1,
-                Timestamp = baseTs + i * 60_000,
+                Timestamp = baseTs.AddMinutes(i),
                 Open = 100.0m + i * 0.01m,
                 High = 101.0m + i * 0.01m,
                 Low = 99.0m + i * 0.01m,
                 Close = 100.5m + i * 0.01m,
                 Volume = 1_000_000m,
+                Timespan = "minute",
             });
         }
 
@@ -104,7 +105,7 @@ public class ResearchServiceTests
         _marketDataServiceMock
             .Setup(s => s.GetOrFetchAggregatesAsync(
                 "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
-            .ReturnsAsync(aggregates);
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var report = CreateSuccessReport();
         var httpClient = CreateMockHttpClient(report);
@@ -140,7 +141,7 @@ public class ResearchServiceTests
         _marketDataServiceMock
             .Setup(s => s.GetOrFetchAggregatesAsync(
                 "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
-            .ReturnsAsync([]);
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = [] });
 
         var httpClient = CreateMockHttpClient(new ResearchReportDto());
         var service = CreateService(httpClient);
@@ -162,7 +163,7 @@ public class ResearchServiceTests
         _marketDataServiceMock
             .Setup(s => s.GetOrFetchAggregatesAsync(
                 "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
-            .ReturnsAsync(aggregates);
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var handler = new FakeHttpMessageHandler("Internal Server Error", HttpStatusCode.InternalServerError);
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
@@ -312,6 +313,293 @@ public class ResearchServiceTests
         Assert.Equal("AAPL", result.Ticker);
         Assert.Equal("momentum_5m", result.FeatureName);
         Assert.True(result.PassedValidation);
+    }
+
+    #endregion
+
+    #region RunSignalEngineAsync
+
+    private static SignalEngineReportDto CreateSuccessSignalReport()
+    {
+        return new SignalEngineReportDto
+        {
+            Success = true,
+            Ticker = "AAPL",
+            FeatureName = "momentum_5m",
+            StartDate = "2024-01-01",
+            EndDate = "2024-01-31",
+            BarsUsed = 200,
+            FlipSign = true,
+            ThresholdsTested = [0.5, 1.0, 1.5],
+            CostBpsOptions = [5, 10],
+            BestThreshold = 1.0,
+            BestCostBps = 5,
+            BacktestGrid = [],
+            WalkForward = new WalkForwardResultDto { MeanOosSharpe = 0.8 },
+            Graduation = new GraduationResultDto
+            {
+                OverallPassed = true,
+                OverallGrade = "B",
+                Summary = "Passed",
+                StatusLabel = "Candidate",
+            },
+            Methodology = new MethodologyDto { RegimeGateEnabled = true },
+        };
+    }
+
+    private static HttpClient CreateSignalMockHttpClient(
+        SignalEngineReportDto report, HttpStatusCode statusCode = HttpStatusCode.OK)
+    {
+        var handler = new FakeHttpMessageHandler(
+            JsonSerializer.Serialize(report, _jsonOptions), statusCode);
+        return new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+    }
+
+    [Fact]
+    public async Task RunSignalEngineAsync_ValidRequest_ReturnsSuccessResult()
+    {
+        // Arrange
+        var aggregates = CreateSampleAggregates();
+        _marketDataServiceMock
+            .Setup(s => s.GetOrFetchAggregatesAsync(
+                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
+
+        var report = CreateSuccessSignalReport();
+        var httpClient = CreateSignalMockHttpClient(report);
+
+        var context = TestDbContextFactory.Create();
+        var ticker = new Ticker { Id = 1, Symbol = "AAPL", Name = "Apple Inc.", Market = "stocks" };
+        context.Tickers.Add(ticker);
+        await context.SaveChangesAsync();
+
+        _marketDataServiceMock
+            .Setup(s => s.GetOrCreateTickerAsync("AAPL", "stocks", default))
+            .ReturnsAsync(ticker);
+
+        var service = CreateService(httpClient, context);
+
+        // Act
+        var result = await service.RunSignalEngineAsync(
+            "AAPL", "momentum_5m", "2024-01-01", "2024-01-31");
+
+        // Assert
+        Assert.True(result.Success);
+        Assert.Equal("AAPL", result.Ticker);
+        Assert.Equal("momentum_5m", result.FeatureName);
+        Assert.Equal(1.0, result.BestThreshold);
+        Assert.NotNull(result.Graduation);
+        Assert.True(result.Graduation!.OverallPassed);
+    }
+
+    [Fact]
+    public async Task RunSignalEngineAsync_NoAggregates_ReturnsError()
+    {
+        // Arrange
+        _marketDataServiceMock
+            .Setup(s => s.GetOrFetchAggregatesAsync(
+                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = [] });
+
+        var httpClient = CreateSignalMockHttpClient(new SignalEngineReportDto());
+        var service = CreateService(httpClient);
+
+        // Act
+        var result = await service.RunSignalEngineAsync(
+            "AAPL", "momentum_5m", "2024-01-01", "2024-01-31");
+
+        // Assert
+        Assert.False(result.Success);
+        Assert.Contains("No aggregates found", result.Error);
+    }
+
+    [Fact]
+    public async Task RunSignalEngineAsync_PythonServiceError_ThrowsException()
+    {
+        // Arrange
+        var aggregates = CreateSampleAggregates();
+        _marketDataServiceMock
+            .Setup(s => s.GetOrFetchAggregatesAsync(
+                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
+
+        var handler = new FakeHttpMessageHandler("Internal Server Error", HttpStatusCode.InternalServerError);
+        var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var service = CreateService(httpClient);
+
+        // Act & Assert
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            service.RunSignalEngineAsync("AAPL", "momentum_5m", "2024-01-01", "2024-01-31"));
+    }
+
+    [Fact]
+    public async Task RunSignalEngineAsync_PersistenceFailure_StillReturnsResult()
+    {
+        // Arrange
+        var aggregates = CreateSampleAggregates();
+        _marketDataServiceMock
+            .Setup(s => s.GetOrFetchAggregatesAsync(
+                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
+
+        var report = CreateSuccessSignalReport();
+        var httpClient = CreateSignalMockHttpClient(report);
+
+        // GetOrCreateTickerAsync throws to simulate persistence failure
+        _marketDataServiceMock
+            .Setup(s => s.GetOrCreateTickerAsync("AAPL", "stocks", default))
+            .ThrowsAsync(new InvalidOperationException("DB connection lost"));
+
+        var service = CreateService(httpClient);
+
+        // Act — should NOT throw despite persistence failure (silent catch)
+        var result = await service.RunSignalEngineAsync(
+            "AAPL", "momentum_5m", "2024-01-01", "2024-01-31");
+
+        // Assert
+        Assert.True(result.Success);
+        Assert.Equal("AAPL", result.Ticker);
+    }
+
+    #endregion
+
+    #region GetSignalExperimentsAsync
+
+    [Fact]
+    public async Task GetSignalExperimentsAsync_NoResults_ReturnsEmptyList()
+    {
+        // Arrange
+        var httpClient = CreateSignalMockHttpClient(new SignalEngineReportDto());
+        var context = TestDbContextFactory.Create();
+        var service = CreateService(httpClient, context);
+
+        // Act
+        var result = await service.GetSignalExperimentsAsync("AAPL");
+
+        // Assert
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetSignalExperimentsAsync_WithData_ReturnsOrderedHistory()
+    {
+        // Arrange
+        var httpClient = CreateSignalMockHttpClient(new SignalEngineReportDto());
+        var context = TestDbContextFactory.Create();
+
+        var ticker = new Ticker { Id = 1, Symbol = "AAPL", Name = "Apple Inc.", Market = "stocks" };
+        context.Tickers.Add(ticker);
+
+        context.SignalExperiments.AddRange(
+            new SignalExperiment
+            {
+                TickerId = 1,
+                FeatureName = "momentum_5m",
+                StartDate = "2024-01-01",
+                EndDate = "2024-01-31",
+                BarsUsed = 200,
+                OverallGrade = "B",
+                StatusLabel = "Candidate",
+                OverallPassed = true,
+                MeanOosSharpe = 0.8m,
+                BestThreshold = 1.0m,
+                BestCostBps = 5m,
+                FlipSign = true,
+                RegimeGateEnabled = true,
+                CreatedAt = DateTime.UtcNow.AddDays(-1),
+            },
+            new SignalExperiment
+            {
+                TickerId = 1,
+                FeatureName = "rsi_14",
+                StartDate = "2024-01-01",
+                EndDate = "2024-01-31",
+                BarsUsed = 200,
+                OverallGrade = "D",
+                StatusLabel = "Exploratory",
+                OverallPassed = false,
+                MeanOosSharpe = -0.2m,
+                BestThreshold = 0.5m,
+                BestCostBps = 10m,
+                FlipSign = false,
+                RegimeGateEnabled = true,
+                CreatedAt = DateTime.UtcNow,
+            }
+        );
+        await context.SaveChangesAsync();
+
+        var service = CreateService(httpClient, context);
+
+        // Act
+        var result = await service.GetSignalExperimentsAsync("AAPL");
+
+        // Assert
+        Assert.Equal(2, result.Count);
+        Assert.Equal("rsi_14", result[0].FeatureName); // most recent first
+        Assert.Equal("momentum_5m", result[1].FeatureName);
+    }
+
+    #endregion
+
+    #region GetSignalExperimentReportAsync
+
+    [Fact]
+    public async Task GetSignalExperimentReportAsync_NotFound_ReturnsNull()
+    {
+        // Arrange
+        var httpClient = CreateSignalMockHttpClient(new SignalEngineReportDto());
+        var context = TestDbContextFactory.Create();
+        var service = CreateService(httpClient, context);
+
+        // Act
+        var result = await service.GetSignalExperimentReportAsync(999);
+
+        // Assert
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetSignalExperimentReportAsync_Found_DeserializesReport()
+    {
+        // Arrange
+        var httpClient = CreateSignalMockHttpClient(new SignalEngineReportDto());
+        var context = TestDbContextFactory.Create();
+
+        var ticker = new Ticker { Id = 1, Symbol = "AAPL", Name = "Apple Inc.", Market = "stocks" };
+        context.Tickers.Add(ticker);
+
+        var report = CreateSuccessSignalReport();
+        var experiment = new SignalExperiment
+        {
+            TickerId = 1,
+            FeatureName = "momentum_5m",
+            StartDate = "2024-01-01",
+            EndDate = "2024-01-31",
+            BarsUsed = 200,
+            OverallGrade = "B",
+            StatusLabel = "Candidate",
+            OverallPassed = true,
+            MeanOosSharpe = 0.8m,
+            BestThreshold = 1.0m,
+            BestCostBps = 5m,
+            FlipSign = true,
+            RegimeGateEnabled = true,
+            JsonReport = JsonSerializer.Serialize(report, _jsonOptions),
+        };
+        context.SignalExperiments.Add(experiment);
+        await context.SaveChangesAsync();
+
+        var service = CreateService(httpClient, context);
+
+        // Act
+        var result = await service.GetSignalExperimentReportAsync(experiment.Id);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.True(result!.Success);
+        Assert.Equal("AAPL", result.Ticker);
+        Assert.Equal("momentum_5m", result.FeatureName);
+        Assert.Equal(1.0, result.BestThreshold);
     }
 
     #endregion

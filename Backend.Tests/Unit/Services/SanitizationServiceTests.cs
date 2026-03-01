@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using Backend.Models.DTOs;
 using Backend.Services.Implementation;
+using Backend.Tests.Helpers;
 using Microsoft.Extensions.Logging;
 using Moq;
 

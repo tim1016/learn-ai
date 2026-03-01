@@ -1,6 +1,8 @@
 import { TestBed } from '@angular/core/testing';
-import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
-import { ResearchService, ResearchResult, ResearchExperiment } from './research.service';
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { firstValueFrom } from 'rxjs';
+import { ResearchService, ResearchResult, ResearchExperiment, SignalEngineResult, SignalExperiment } from './research.service';
 import { environment } from '../../environments/environment';
 
 describe('ResearchService', () => {
@@ -8,9 +10,9 @@ describe('ResearchService', () => {
   let httpMock: HttpTestingController;
 
   beforeEach(() => {
+    TestBed.resetTestingModule();
     TestBed.configureTestingModule({
-      imports: [HttpClientTestingModule],
-      providers: [ResearchService],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
     });
     service = TestBed.inject(ResearchService);
     httpMock = TestBed.inject(HttpTestingController);
@@ -45,6 +47,9 @@ describe('ResearchService', () => {
       ],
       isMonotonic: true,
       monotonicityRatio: 1.0,
+      nwTStat: 2.3,
+      nwPValue: 0.025,
+      effectiveN: 180,
       passedValidation: true,
     };
   }
@@ -139,6 +144,149 @@ describe('ResearchService', () => {
 
       const req = httpMock.expectOne(environment.backendUrl);
       req.flush({ data: { getResearchExperiment: null } });
+    });
+  });
+
+  describe('runSignalEngine', () => {
+    it('should POST GraphQL mutation with correct variables', () => {
+      service
+        .runSignalEngine({
+          ticker: 'AAPL',
+          featureName: 'momentum_5m',
+          fromDate: '2024-01-01',
+          toDate: '2024-03-31',
+          flipSign: true,
+          regimeGateEnabled: true,
+        })
+        .subscribe();
+
+      const req = httpMock.expectOne(environment.backendUrl);
+      expect(req.request.method).toBe('POST');
+      expect(req.request.body.query).toContain('runSignalEngine');
+      expect(req.request.body.variables.ticker).toBe('AAPL');
+      expect(req.request.body.variables.flipSign).toBe(true);
+      req.flush({
+        data: {
+          runSignalEngine: {
+            success: true, ticker: 'AAPL', featureName: 'momentum_5m',
+            startDate: '2024-01-01', endDate: '2024-03-31', barsUsed: 200,
+            flipSign: true, thresholdsTested: [0.5, 1.0], costBpsOptions: [5],
+            bestThreshold: 1.0, bestCostBps: 5, backtestGrid: [],
+            walkForward: null, graduation: null, signalDiagnostics: null,
+            dataSufficiency: null, effectiveSample: null, regimeCoverage: [],
+            signalBehavior: null, methodology: null, researchLog: '',
+          },
+        },
+      });
+    });
+
+    it('should map response and return result', async () => {
+      const promise = firstValueFrom(
+        service.runSignalEngine({
+          ticker: 'AAPL', featureName: 'momentum_5m',
+          fromDate: '2024-01-01', toDate: '2024-03-31',
+          flipSign: true, regimeGateEnabled: true,
+        })
+      );
+
+      httpMock.expectOne(environment.backendUrl).flush({
+        data: {
+          runSignalEngine: {
+            success: true, ticker: 'AAPL', featureName: 'momentum_5m',
+            startDate: '2024-01-01', endDate: '2024-03-31', barsUsed: 200,
+            flipSign: true, thresholdsTested: [0.5, 1.0], costBpsOptions: [5],
+            bestThreshold: 1.0, bestCostBps: 5, backtestGrid: [],
+            walkForward: null, graduation: { overallPassed: true, overallGrade: 'B', summary: 'OK', statusLabel: 'Candidate', parameterStability: null, criteria: [] },
+            signalDiagnostics: null, dataSufficiency: null, effectiveSample: null,
+            regimeCoverage: [], signalBehavior: null, methodology: null, researchLog: '',
+          },
+        },
+      });
+
+      const result = await promise;
+      expect(result.success).toBe(true);
+      expect(result.bestThreshold).toBe(1.0);
+      expect(result.graduation?.overallGrade).toBe('B');
+    });
+
+    it('should throw on GraphQL errors', async () => {
+      const promise = firstValueFrom(
+        service.runSignalEngine({
+          ticker: 'AAPL', featureName: 'bad_feature',
+          fromDate: '2024-01-01', toDate: '2024-03-31',
+          flipSign: true, regimeGateEnabled: true,
+        })
+      );
+
+      httpMock.expectOne(environment.backendUrl).flush({
+        data: null,
+        errors: [{ message: 'Signal engine failed' }],
+      });
+
+      await expect(promise).rejects.toThrow('Signal engine failed');
+    });
+  });
+
+  describe('getSignalExperiments', () => {
+    it('should POST query with ticker filter and return experiments', async () => {
+      const mockExperiments: SignalExperiment[] = [
+        {
+          id: 1, ticker: 'AAPL', featureName: 'momentum_5m',
+          startDate: '2024-01-01', endDate: '2024-03-31', barsUsed: 200,
+          overallGrade: 'B', statusLabel: 'Candidate', overallPassed: true,
+          meanOosSharpe: 0.8, bestThreshold: 1.0, bestCostBps: 5,
+          flipSign: true, regimeGateEnabled: true, createdAt: '2024-04-01T00:00:00Z',
+        },
+      ];
+
+      const promise = firstValueFrom(service.getSignalExperiments('AAPL'));
+
+      const req = httpMock.expectOne(environment.backendUrl);
+      expect(req.request.body.query).toContain('getSignalExperiments');
+      expect(req.request.body.variables.ticker).toBe('AAPL');
+      req.flush({ data: { getSignalExperiments: mockExperiments } });
+
+      const result = await promise;
+      expect(result).toHaveLength(1);
+      expect(result[0].overallGrade).toBe('B');
+    });
+  });
+
+  describe('getSignalExperimentReport', () => {
+    it('should return report by id', async () => {
+      const promise = firstValueFrom(service.getSignalExperimentReport(42));
+
+      const req = httpMock.expectOne(environment.backendUrl);
+      expect(req.request.body.query).toContain('getSignalExperimentReport');
+      expect(req.request.body.variables.id).toBe(42);
+      req.flush({
+        data: {
+          getSignalExperimentReport: {
+            success: true, ticker: 'AAPL', featureName: 'momentum_5m',
+            startDate: '2024-01-01', endDate: '2024-03-31', barsUsed: 200,
+            flipSign: true, thresholdsTested: [], costBpsOptions: [],
+            bestThreshold: 1.0, bestCostBps: 5, backtestGrid: [],
+            walkForward: null, graduation: null, signalDiagnostics: null,
+            dataSufficiency: null, effectiveSample: null, regimeCoverage: [],
+            signalBehavior: null, methodology: null, researchLog: '',
+          },
+        },
+      });
+
+      const result = await promise;
+      expect(result).not.toBeNull();
+      expect(result!.ticker).toBe('AAPL');
+    });
+
+    it('should return null when not found', async () => {
+      const promise = firstValueFrom(service.getSignalExperimentReport(999));
+
+      httpMock.expectOne(environment.backendUrl).flush({
+        data: { getSignalExperimentReport: null },
+      });
+
+      const result = await promise;
+      expect(result).toBeNull();
     });
   });
 });

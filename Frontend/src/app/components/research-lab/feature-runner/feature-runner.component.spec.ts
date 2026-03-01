@@ -30,6 +30,9 @@ describe('FeatureRunnerComponent', () => {
       quantileBins: [],
       isMonotonic: true,
       monotonicityRatio: 1.0,
+      nwTStat: 2.3,
+      nwPValue: 0.025,
+      effectiveN: 180,
       passedValidation: true,
     };
   }

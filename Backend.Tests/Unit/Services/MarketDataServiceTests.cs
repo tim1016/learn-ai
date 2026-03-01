@@ -87,8 +87,8 @@ public class MarketDataServiceTests
         var result = await service.GetOrFetchAggregatesAsync(
             "AAPL", 1, "day", "2026-01-01", "2026-01-31");
 
-        Assert.Single(result);
-        Assert.Equal(150m, result[0].Open);
+        Assert.Single(result.Aggregates);
+        Assert.Equal(150m, result.Aggregates[0].Open);
         // Should NOT have called the polygon service
         _polygonServiceMock.Verify(
             p => p.FetchAggregatesAsync(It.IsAny<string>(), It.IsAny<int>(),
@@ -390,8 +390,8 @@ public class MarketDataServiceTests
                 It.IsAny<CancellationToken>()),
             Times.Once);
 
-        Assert.Single(result);
-        Assert.Equal(200m, result[0].Open); // fresh data
+        Assert.Single(result.Aggregates);
+        Assert.Equal(200m, result.Aggregates[0].Open); // fresh data
     }
 
     #endregion
@@ -430,13 +430,74 @@ public class MarketDataServiceTests
         var result = await service.GetOrFetchAggregatesAsync(
             "NVDA", 1, "day", "2026-01-15", "2026-01-15");
 
-        Assert.Single(result);
-        Assert.Equal(800m, result[0].Open);
+        Assert.Single(result.Aggregates);
+        Assert.Equal(800m, result.Aggregates[0].Open);
 
         _polygonServiceMock.Verify(
             p => p.FetchAggregatesAsync("NVDA", 1, "day", "2026-01-15", "2026-01-15",
                 It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    #endregion
+
+    #region FetchAndStoreAggregatesAsync — Edge Cases
+
+    [Fact]
+    public async Task FetchAndStoreAggregatesAsync_NullDataList_ReturnsEmpty()
+    {
+        var context = TestDbContextFactory.Create();
+        var service = new MarketDataService(context, _polygonServiceMock.Object, _loggerMock.Object);
+
+        var nullDataResponse = new AggregateResponse
+        {
+            Success = true,
+            Ticker = "AAPL",
+            DataType = "aggregates",
+            Data = null,
+            Summary = null
+        };
+
+        _polygonServiceMock
+            .Setup(p => p.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-15", "2026-01-16",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(nullDataResponse);
+
+        var result = await service.FetchAndStoreAggregatesAsync(
+            "AAPL", 1, "day", "2026-01-15", "2026-01-16");
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetOrFetchAggregatesAsync_CancellationRequested_ThrowsOperationCanceled()
+    {
+        var context = TestDbContextFactory.Create();
+        var service = new MarketDataService(context, _polygonServiceMock.Object, _loggerMock.Object);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.GetOrFetchAggregatesAsync(
+                "AAPL", 1, "day", "2026-01-01", "2026-01-31",
+                cancellationToken: cts.Token));
+    }
+
+    [Fact]
+    public async Task FetchAndStoreAggregatesAsync_PolygonServiceThrows_RethrowsException()
+    {
+        var context = TestDbContextFactory.Create();
+        var service = new MarketDataService(context, _polygonServiceMock.Object, _loggerMock.Object);
+
+        _polygonServiceMock
+            .Setup(p => p.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-15", "2026-01-16",
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Service unavailable"));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            service.FetchAndStoreAggregatesAsync(
+                "AAPL", 1, "day", "2026-01-15", "2026-01-16"));
     }
 
     #endregion

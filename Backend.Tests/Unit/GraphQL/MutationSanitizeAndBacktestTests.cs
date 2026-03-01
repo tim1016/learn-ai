@@ -70,7 +70,7 @@ public class MutationSanitizeAndBacktestTests
         _marketDataMock.Setup(s => s.GetOrFetchAggregatesAsync(
                 It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(),
                 It.IsAny<string>(), It.IsAny<string>(), false, default))
-            .ReturnsAsync(new List<StockAggregate>());
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = [] });
 
         var mutation = new Mutation();
         var result = await mutation.RunBacktest(
@@ -94,7 +94,7 @@ public class MutationSanitizeAndBacktestTests
         _marketDataMock.Setup(s => s.GetOrFetchAggregatesAsync(
                 It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(),
                 It.IsAny<string>(), It.IsAny<string>(), false, default))
-            .ReturnsAsync(aggregates);
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var mutation = new Mutation();
         var result = await mutation.RunBacktest(
@@ -120,7 +120,7 @@ public class MutationSanitizeAndBacktestTests
 
         _marketDataMock.Setup(s => s.GetOrFetchAggregatesAsync(
                 "AAPL", 1, "minute", "2026-01-01", "2026-01-31", false, default))
-            .ReturnsAsync(aggregates);
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var execution = new StrategyExecution
         {
@@ -184,7 +184,7 @@ public class MutationSanitizeAndBacktestTests
         _marketDataMock.Setup(s => s.GetOrFetchAggregatesAsync(
                 It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(),
                 It.IsAny<string>(), It.IsAny<string>(), false, default))
-            .ReturnsAsync(aggregates);
+            .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         _backtestMock.Setup(s => s.RunBacktestAsync(
                 It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(),

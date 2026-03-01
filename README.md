@@ -1,6 +1,16 @@
 # Market Data Dashboard
 
-A full-stack market data analysis platform for fetching, caching, visualizing, and backtesting stock and options data from Polygon.io.
+A full-stack market data analysis platform for fetching, caching, visualizing, backtesting, and researching stock and options data from Polygon.io.
+
+## Key Features
+
+- **Smart data caching** — cache-first strategy with gap detection and windowed fetching for large date ranges
+- **Candlestick charting** — TradingView lightweight-charts v5 with volume bars and technical indicator overlays
+- **Options analysis** — TradingView-style options chain, multi-leg strategy payoff analysis with Greeks
+- **Algorithmic backtesting** — SMA Crossover, RSI Mean Reversion, and custom strategy execution engine
+- **Quantitative research** — Feature validation pipeline (IC analysis, stationarity, monotonicity) with signal engine graduation
+- **LSTM predictions** — Train, validate, and run ML-based price predictions
+- **Market snapshots** — Real-time gainers/losers, market movers, and tracked instrument watchlists
 
 ## Architecture
 
@@ -29,13 +39,15 @@ The backend implements a cache-first strategy for all market data:
 3. If not found (cache miss), fetch from Polygon.io via the Python service, persist to DB, then return
 4. Data accumulates over time — subsequent requests for the same range are served instantly from cache
 
+For large date ranges (minute/hour timespans), the system uses **windowed fetching** — splitting requests into monthly chunks with progress tracking.
+
 ## Pages
 
 ### Market Data (`/market-data`)
 Fetch OHLCV bars for any ticker across multiple timespans (minute, hourly, daily, weekly, monthly). Results are displayed as candlestick, volume, and line charts with a sortable data table. Each page has an expandable "How to use this page" guide.
 
 ### Stock Analysis (`/stock-analysis`)
-Bulk-fetch months of minute-level data in automated monthly chunks. Features a chunk queue with live progress tracking, caching detection, and per-chunk refresh. Optionally fetches 0DTE options contracts for each trading day with ATM strike selection. Drill down into chunk-level and day-level detail pages.
+Bulk-fetch months of minute-level data in automated monthly chunks. Features a chunk queue with live progress tracking, caching detection, and per-chunk refresh. Optionally fetches 0DTE options contracts for each trading day with ATM strike selection. Drill down into chunk-level (`/stock-analysis/chunk/:ticker/:from/:to`) and day-level (`/stock-analysis/day/:ticker/:date`) detail pages.
 
 ### Technical Analysis (`/technical-analysis`)
 Overlay SMA, EMA, and RSI indicators on previously fetched data. Powered by pandas-ta on the Python service. Supports intraday through weekly timespans with configurable lookback windows.
@@ -44,21 +56,64 @@ Overlay SMA, EMA, and RSI indicators on previously fetched data. Powered by pand
 Professional dark-themed options chain viewer inspired by TradingView. Features include:
 - **Expiration ribbon** — horizontal scrollable date picker grouped by month
 - **Symmetrical chain table** — Calls (Vega, Theta, Gamma, Delta, Price, OI, Volume) | Strike + IV% | Puts (mirrored)
-- **Smart price resolution** — displays best available price: day close → last trade → quote midpoint → bid/ask midpoint, with bid/ask spread shown below
+- **Smart price resolution** — displays best available price: day close -> last trade -> quote midpoint -> bid/ask midpoint, with bid/ask spread shown below
 - **Zone coloring** — ATM row highlighted in amber, ITM cells tinted (emerald for calls, red for puts), OTM cells dimmed
 - **Volume bars** — proportional colored bars inside volume cells (blue for calls, red for puts)
-- **Strike controls** — adjustable ±N strike range around ATM, "Show All" toggle, ascending/descending sort
+- **Strike controls** — adjustable strike range around ATM, "Show All" toggle, ascending/descending sort
 - **Historical drill-down** — click any cell to open a slide-out drawer with candlestick + volume charts, all Greeks (Delta, Gamma, Theta, Vega), IV, OI, bid/ask, break-even price, and historical summary stats
 - **Stock snapshot** — header displays real-time price, daily change %, and OHLV from Polygon snapshot API
 
-### Ticker Explorer (`/ticker-explorer`)
-Legacy options chain viewer with Greeks (delta, theta), IV, open interest, and volume. Kept as reference; the Options Chain page above is the primary options viewer.
+### Options Strategy Lab (`/options-strategy-lab`)
+Multi-leg options strategy payoff analysis. Build strategies (bull call spreads, iron condors, straddles, etc.) with up to 8 legs. Displays:
+- Payoff curve at expiration
+- Max profit / max loss / breakeven prices
+- Probability of profit (POP) and expected value
+- Aggregate Greeks (delta, gamma, theta, vega)
+- Strategy cost (debit/credit)
+
+### Strategy Builder (`/strategy-builder`)
+Visual strategy construction with pre-built templates and custom leg configuration.
 
 ### Strategy Lab (`/strategy-lab`)
 Run algorithmic backtests (SMA Crossover, RSI Mean Reversion) on cached data. Displays summary stats (P&L, win rate, Sharpe ratio, max drawdown), an equity curve with multiple chart type options (Lightweight Charts, SVG, PrimeNG/Chart.js), and a full trade log.
 
+### Research Lab (`/research-lab`)
+Quantitative feature research and signal engine pipeline:
+
+- **Feature Research** — Validate alpha features (momentum, RSI, VWAP deviation, etc.) using Information Coefficient (IC) analysis with:
+  - IC time series and t-statistics (Newey-West adjusted)
+  - Stationarity tests (ADF + KPSS)
+  - Quantile bin analysis with monotonicity check
+  - Robustness: monthly breakdowns, regime analysis (volatility + trend), train/test splits, structural break detection
+
+- **Signal Engine** — Full walk-forward backtesting and graduation pipeline:
+  - Z-score standardized signals with threshold/cost grid search
+  - Walk-forward validation with rolling train/test windows
+  - Graduation criteria (OOS Sharpe, win rate, max drawdown, parameter stability)
+  - Alpha decay analysis and signal diagnostics
+  - Effective sample size (autocorrelation-adjusted)
+
+### Signal Report (`/research-lab/signal-report/:id`)
+Detailed signal engine experiment report with walk-forward equity curves, graduation scorecard, backtest grid, and alpha decay metrics.
+
+### LSTM Predictions (`/lstm/*`)
+Machine learning pipeline for price predictions:
+- **Train** (`/lstm/train`) — Configure and train LSTM models with custom hyperparameters
+- **Validate** (`/lstm/validate`) — Evaluate model performance with validation metrics
+- **Predictions** (`/lstm/predictions`) — Generate and visualize price predictions
+- **Models** (`/lstm/models`) — Browse and manage saved models
+
+### Snapshots (`/snapshots`)
+Market movers dashboard showing top gainers and losers from Polygon snapshot API with price change, volume, and VWAP data.
+
+### Tracked Instruments (`/tracked-instruments`)
+Watchlist of tracked ticker symbols with unified snapshot data including current price, daily change, and market status.
+
 ### Tickers (`/tickers`)
 Inventory of all tracked ticker symbols with TradingView mini-charts, aggregate counts, date ranges, and data sanitization summaries. Tickers are added automatically when you fetch data from any page.
+
+### Options History (`/options-history`)
+Historical options data viewer for analyzing past options contract behavior.
 
 ## Prerequisites
 
@@ -139,28 +194,44 @@ All date pickers enforce the 2-year limit and display a warning if you try to go
 learn-ai/
   Backend/                        .NET 10 GraphQL API
     GraphQL/                        Query.cs, Mutation.cs
-    Models/                         EF Core entities and DTOs
-    Services/                       MarketDataService, PolygonService, BacktestService
+    Models/
+      MarketData/                   EF Core entities (Ticker, StockAggregate, SignalExperiment...)
+      DTOs/                         Data transfer objects (ResearchReportDto, SignalModels...)
+    Services/
+      Implementation/               MarketDataService, PolygonService, BacktestService, ResearchService
+      Interfaces/                   Service contracts (IMarketDataService, IResearchService...)
+    Data/                           AppDbContext (EF Core)
     Program.cs                      App entry point and DI configuration
+  Backend.Tests/                  xUnit + Moq test suite
+    Unit/Services/                  Service-level unit tests
+    Unit/GraphQL/                   GraphQL resolver integration tests
+    Helpers/                        TestDbContextFactory, FakeHttpMessageHandler
   Frontend/                       Angular 21 SPA
     src/app/
       components/
         market-data/                Candlestick, volume, line charts + data table
         stock-analysis/             Chunk queue, chunk detail, day detail
         tickers/                    Ticker inventory + TradingView widgets
-          technical-analysis/       SMA, EMA, RSI indicator overlays
+        technical-analysis/         SMA, EMA, RSI indicator overlays
         options-chain-v2/           TradingView-style options chain (dark theme)
-          expiration-ribbon/          Expiration date ribbon sub-component
-        ticker-explorer/            Legacy options chain viewer
+        options-strategy-lab/       Multi-leg strategy payoff analysis
         strategy-lab/               Backtesting engine + equity curve charts
+        strategy-builder/           Visual strategy construction
+        research-lab/               Feature research + signal engine pipeline
+          signal-report-page/         Walk-forward, graduation, backtesting grid
+        lstm/                       LSTM train, validate, predictions, models
+        snapshots/                  Market movers (gainers/losers)
+        tracked-instruments/        Watchlist with unified snapshots
       graphql/                      TypeScript types matching GraphQL schema
-      services/                     Apollo-based data services
+      services/                     HTTP-based data services (market-data, research, lstm)
       utils/                        Shared utilities (date validation, etc.)
+    src/testing/                  Test factories for mock data
   PythonDataService/              FastAPI proxy to Polygon.io
     app/
-      routers/                      REST endpoints (aggregates, options, snapshot)
-      services/                     polygon_client.py (Polygon SDK wrapper)
+      routers/                      REST endpoints (aggregates, options, snapshot, research, lstm)
+      services/                     polygon_client.py, strategy_engine.py, signal engine
       models/                       Pydantic request/response models
+    tests/                          pytest test suite
   compose.yaml                    Podman/Docker Compose orchestration
 ```
 
@@ -213,11 +284,14 @@ podman compose up -d
 ## Running Tests
 
 ```bash
-cd Frontend
-npx jest
+# Frontend (Vitest via Angular CLI)
+cd Frontend && npx ng test
 
-# If you get module resolution errors, clear the cache first:
-npx jest --clearCache && npx jest
+# Backend (.NET xUnit)
+cd Backend.Tests && dotnet test
+
+# Python (pytest)
+cd PythonDataService && python -m pytest tests/ -v
 ```
 
 ## Stopping the Stack

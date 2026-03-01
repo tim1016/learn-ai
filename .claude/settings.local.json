@@ -51,7 +51,10 @@
       "Bash(python:*)",
       "Read(//c/Users/inkan/client-python/**)",
       "Bash(npx ng test --no-watch)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(npx vitest:*)",
+      "Bash(npx ng:*)"
     ]
   }
 }

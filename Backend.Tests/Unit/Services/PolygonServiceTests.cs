@@ -3,6 +3,7 @@ using System.Text.Json;
 using Backend.Configuration;
 using Backend.Models.DTOs.PolygonResponses;
 using Backend.Services.Implementation;
+using Backend.Tests.Helpers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -227,39 +228,4 @@ public class PolygonServiceTests
     }
 
     #endregion
-}
-
-/// <summary>
-/// Fake HttpMessageHandler for testing HTTP client calls without a real server.
-/// </summary>
-public class FakeHttpMessageHandler : HttpMessageHandler
-{
-    private readonly HttpStatusCode _statusCode;
-    private readonly string _responseBody;
-
-    public Uri? LastRequestUri { get; private set; }
-    public HttpMethod? LastRequestMethod { get; private set; }
-    public string? LastRequestBody { get; private set; }
-
-    public FakeHttpMessageHandler(HttpStatusCode statusCode, string responseBody)
-    {
-        _statusCode = statusCode;
-        _responseBody = responseBody;
-    }
-
-    protected override async Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        LastRequestUri = request.RequestUri;
-        LastRequestMethod = request.Method;
-        if (request.Content != null)
-            LastRequestBody = await request.Content.ReadAsStringAsync(cancellationToken);
-
-        return new HttpResponseMessage(_statusCode)
-        {
-            Content = new StringContent(_responseBody, System.Text.Encoding.UTF8, "application/json")
-        };
-    }
 }
