@@ -57,7 +57,9 @@
       "Bash(npx ng:*)",
       "Bash(wsl:*)",
       "Bash(podman machine:*)",
-      "Bash(podman volume:*)"
+      "Bash(podman volume:*)",
+      "Bash(podman exec:*)",
+      "Bash(podman restart:*)"
     ]
   }
 }

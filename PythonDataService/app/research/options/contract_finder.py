@@ -86,6 +86,8 @@ def _fetch_contracts_for_expiry(
 ) -> dict[str, Any]:
     """Fetch and filter contracts for a specific expiry, returning ATM + OTM contracts."""
     strike_range = stock_close * 0.15  # Search within 15% of ATM
+    # expired=True is needed here (no as_of_date conflict) to find
+    # contracts whose expiration date has already passed.
     contracts = polygon_client.list_options_contracts(
         underlying_ticker=underlying,
         expiration_date=expiration_date,
@@ -113,6 +115,7 @@ def _find_bracket_expiries(
     polygon_client: PolygonClientService,
     underlying: str,
     trade_date: datetime,
+    stock_close: float | None = None,
 ) -> tuple[str | None, str | None]:
     """Find two expiry dates bracketing 30 DTE from trade_date.
 
@@ -126,12 +129,25 @@ def _find_bracket_expiries(
 
     trade_date_str = trade_date.strftime("%Y-%m-%d")
 
+    # Use narrow strike filter (±5% ATM) to reduce results per expiry,
+    # ensuring we capture enough expiry dates within the limit.
+    strike_gte = None
+    strike_lte = None
+    if stock_close and stock_close > 0:
+        narrow_range = stock_close * 0.05
+        strike_gte = stock_close - narrow_range
+        strike_lte = stock_close + narrow_range
+
+    # Do NOT pass expired=True with as_of — that combination filters to
+    # contracts already expired on the as_of date, returning 0 results
+    # for contracts that were still active at that time.
     contracts = polygon_client.list_options_contracts(
         underlying_ticker=underlying,
         as_of_date=trade_date_str,
         expiration_date_gte=search_start.strftime("%Y-%m-%d"),
         expiration_date_lte=search_end.strftime("%Y-%m-%d"),
-        expired=True,
+        strike_price_gte=strike_gte,
+        strike_price_lte=strike_lte,
         contract_type="call",
         limit=500,
     )
@@ -210,6 +226,9 @@ def find_bracket_contracts(
     # Cache expiry lookups — same expiries are valid for nearby dates
     _expiry_cache: dict[str, tuple[str | None, str | None]] = {}
 
+    # Cache contract selections — same (underlying, expiry) reused across many trading days
+    _contract_cache: dict[str, dict[str, Any]] = {}
+
     for i, date_str in enumerate(filtered_dates):
         stock_close = date_close_map[date_str]
         trade_date = datetime.strptime(date_str, "%Y-%m-%d")
@@ -221,7 +240,9 @@ def find_bracket_contracts(
         cache_key = f"{underlying}:{trade_date.strftime('%Y-%m')}"
         if cache_key not in _expiry_cache:
             try:
-                low_exp, high_exp = _find_bracket_expiries(polygon_client, underlying, trade_date)
+                low_exp, high_exp = _find_bracket_expiries(
+                    polygon_client, underlying, trade_date, stock_close=stock_close
+                )
                 _expiry_cache[cache_key] = (low_exp, high_exp)
             except Exception as e:
                 logger.warning(f"[CONTRACT FINDER] Error finding expiries for {date_str}: {e}")
@@ -247,9 +268,12 @@ def find_bracket_contracts(
             if low_dte >= 7:
                 row["low_dte"] = low_dte
                 try:
-                    low_contracts = _fetch_contracts_for_expiry(
-                        polygon_client, underlying, low_exp, stock_close
-                    )
+                    contract_key = f"{underlying}:{low_exp}"
+                    if contract_key not in _contract_cache:
+                        _contract_cache[contract_key] = _fetch_contracts_for_expiry(
+                            polygon_client, underlying, low_exp, stock_close
+                        )
+                    low_contracts = _contract_cache[contract_key]
                     if low_contracts["atm_call"]:
                         row["low_dte_atm_contract"] = low_contracts["atm_call"].get("ticker")
                     if low_contracts["otm_put"]:
@@ -264,9 +288,12 @@ def find_bracket_contracts(
             if high_dte >= 7:
                 row["high_dte"] = high_dte
                 try:
-                    high_contracts = _fetch_contracts_for_expiry(
-                        polygon_client, underlying, high_exp, stock_close
-                    )
+                    contract_key = f"{underlying}:{high_exp}"
+                    if contract_key not in _contract_cache:
+                        _contract_cache[contract_key] = _fetch_contracts_for_expiry(
+                            polygon_client, underlying, high_exp, stock_close
+                        )
+                    high_contracts = _contract_cache[contract_key]
                     if high_contracts["atm_call"]:
                         row["high_dte_atm_contract"] = high_contracts["atm_call"].get("ticker")
                     if high_contracts["otm_put"]:

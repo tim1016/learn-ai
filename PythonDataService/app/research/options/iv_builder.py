@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
 
@@ -24,26 +25,73 @@ TARGET_DTE = 30
 MAX_FFILL_DAYS = 2
 
 
-def _fetch_option_daily_bar(
+_CONTRACT_COLUMNS = [
+    "low_dte_atm_contract", "low_dte_put_contract", "low_dte_call_contract",
+    "high_dte_atm_contract", "high_dte_put_contract", "high_dte_call_contract",
+]
+
+_PREFETCH_WORKERS = 5
+
+
+def _collect_unique_tickers(bracket_df: pd.DataFrame) -> set[str]:
+    """Scan bracket DataFrame and return all unique option tickers."""
+    tickers: set[str] = set()
+    for col in _CONTRACT_COLUMNS:
+        if col in bracket_df.columns:
+            tickers.update(bracket_df[col].dropna().unique())
+    return tickers
+
+
+def _prefetch_all_bars(
     polygon_client: PolygonClientService,
+    tickers: set[str],
+    start_date: str,
+    end_date: str,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Fetch full date-range daily bars for each option ticker in parallel.
+
+    Returns nested dict: bars_by_contract[ticker][date_str] = bar
+    """
+    bars_by_contract: dict[str, dict[str, dict[str, Any]]] = {}
+
+    def _fetch_one(ticker: str) -> tuple[str, dict[str, dict[str, Any]]]:
+        date_map: dict[str, dict[str, Any]] = {}
+        try:
+            bars = polygon_client.fetch_aggregates(
+                ticker=ticker,
+                multiplier=1,
+                timespan="day",
+                from_date=start_date,
+                to_date=end_date,
+            )
+            for bar in bars:
+                ts = bar.get("timestamp") or bar.get("t")
+                if ts is not None:
+                    if isinstance(ts, (int, float)):
+                        dt = datetime.utcfromtimestamp(ts / 1000)
+                    else:
+                        dt = pd.Timestamp(ts).to_pydatetime()
+                    date_map[dt.strftime("%Y-%m-%d")] = bar
+        except Exception as e:
+            logger.debug(f"[IV BUILDER] Failed to prefetch bars for {ticker}: {e}")
+        return ticker, date_map
+
+    with ThreadPoolExecutor(max_workers=_PREFETCH_WORKERS) as executor:
+        futures = {executor.submit(_fetch_one, t): t for t in tickers}
+        for future in as_completed(futures):
+            ticker, date_map = future.result()
+            bars_by_contract[ticker] = date_map
+
+    return bars_by_contract
+
+
+def _lookup_bar(
+    bars_by_contract: dict[str, dict[str, dict[str, Any]]],
     option_ticker: str,
     trade_date: str,
 ) -> dict[str, Any] | None:
-    """Fetch daily OHLCV bar for an options contract on a specific date."""
-    try:
-        bars = polygon_client.fetch_aggregates(
-            ticker=option_ticker,
-            multiplier=1,
-            timespan="day",
-            from_date=trade_date,
-            to_date=trade_date,
-            limit=1,
-        )
-        if bars:
-            return bars[0]
-    except Exception as e:
-        logger.debug(f"Failed to fetch bar for {option_ticker} on {trade_date}: {e}")
-    return None
+    """Look up a pre-fetched bar by ticker and date."""
+    return bars_by_contract.get(option_ticker, {}).get(trade_date)
 
 
 def _get_option_price(bar: dict[str, Any]) -> tuple[float | None, str]:
@@ -66,21 +114,19 @@ def _get_option_price(bar: dict[str, Any]) -> tuple[float | None, str]:
 
 
 def _derive_iv_for_contract(
-    polygon_client: PolygonClientService,
+    bar: dict[str, Any] | None,
     option_ticker: str,
-    trade_date: str,
     stock_close: float,
     dte: int,
     option_type: str,
 ) -> tuple[float | None, str]:
-    """Derive IV for a single contract on a single date.
+    """Derive IV for a single contract from a pre-fetched bar.
 
     Returns (iv, price_source) or (None, reason).
     """
     if dte < MIN_DTE_DAYS:
         return None, "dte_too_low"
 
-    bar = _fetch_option_daily_bar(polygon_client, option_ticker, trade_date)
     if bar is None:
         return None, "no_bar"
 
@@ -173,10 +219,14 @@ def build_iv_history(
 
     logger.info(f"[IV BUILDER] Processing {len(bracket_df)} trading days for IV derivation")
 
-    # Step 3: For each day, derive IV from bracket contracts
-    # Cache option bars to avoid duplicate fetches
-    _option_bar_cache: dict[str, dict | None] = {}
+    # Step 3: Batch prefetch all option bars
+    unique_tickers = _collect_unique_tickers(bracket_df)
+    logger.info(f"[IV BUILDER] Prefetching bars for {len(unique_tickers)} unique contracts...")
+    bars_by_contract = _prefetch_all_bars(polygon_client, unique_tickers, start_date, end_date)
+    total_bars = sum(len(dates) for dates in bars_by_contract.values())
+    logger.info(f"[IV BUILDER] Prefetched {total_bars} bars across {len(bars_by_contract)} contracts")
 
+    # Step 4: Per-day loop — local lookups instead of API calls
     rows: list[dict[str, Any]] = []
 
     for idx, row in bracket_df.iterrows():
@@ -207,15 +257,17 @@ def build_iv_history(
         high_atm = row.get("high_dte_atm_contract")
 
         if low_atm and dte_low and dte_low >= MIN_DTE_DAYS:
+            bar = _lookup_bar(bars_by_contract, low_atm, date_str)
             iv_atm_low, src = _derive_iv_for_contract(
-                polygon_client, low_atm, date_str, stock_close, dte_low, "call"
+                bar, low_atm, stock_close, dte_low, "call"
             )
             if iv_atm_low:
                 source = src
 
         if high_atm and dte_high and dte_high >= MIN_DTE_DAYS:
+            bar = _lookup_bar(bars_by_contract, high_atm, date_str)
             iv_atm_high, src = _derive_iv_for_contract(
-                polygon_client, high_atm, date_str, stock_close, dte_high, "call"
+                bar, high_atm, stock_close, dte_high, "call"
             )
             if iv_atm_high:
                 source = src
@@ -235,13 +287,15 @@ def build_iv_history(
         high_put = row.get("high_dte_put_contract")
 
         if low_put and dte_low and dte_low >= MIN_DTE_DAYS:
+            bar = _lookup_bar(bars_by_contract, low_put, date_str)
             iv_put_low, _ = _derive_iv_for_contract(
-                polygon_client, low_put, date_str, stock_close, dte_low, "put"
+                bar, low_put, stock_close, dte_low, "put"
             )
 
         if high_put and dte_high and dte_high >= MIN_DTE_DAYS:
+            bar = _lookup_bar(bars_by_contract, high_put, date_str)
             iv_put_high, _ = _derive_iv_for_contract(
-                polygon_client, high_put, date_str, stock_close, dte_high, "put"
+                bar, high_put, stock_close, dte_high, "put"
             )
 
         if iv_put_low is not None and iv_put_high is not None:
@@ -258,13 +312,15 @@ def build_iv_history(
         high_call = row.get("high_dte_call_contract")
 
         if low_call and dte_low and dte_low >= MIN_DTE_DAYS:
+            bar = _lookup_bar(bars_by_contract, low_call, date_str)
             iv_call_low, _ = _derive_iv_for_contract(
-                polygon_client, low_call, date_str, stock_close, dte_low, "call"
+                bar, low_call, stock_close, dte_low, "call"
             )
 
         if high_call and dte_high and dte_high >= MIN_DTE_DAYS:
+            bar = _lookup_bar(bars_by_contract, high_call, date_str)
             iv_call_high, _ = _derive_iv_for_contract(
-                polygon_client, high_call, date_str, stock_close, dte_high, "call"
+                bar, high_call, stock_close, dte_high, "call"
             )
 
         if iv_call_low is not None and iv_call_high is not None:

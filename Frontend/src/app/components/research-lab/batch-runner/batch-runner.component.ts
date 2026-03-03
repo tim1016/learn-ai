@@ -1,29 +1,28 @@
-import { Component, ChangeDetectionStrategy, signal, computed, inject, DestroyRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
+import { ChangeDetectionStrategy, Component, DestroyRef, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { FormsModule } from '@angular/forms';
 import { catchError, finalize, of } from 'rxjs';
 
 import { ButtonModule } from 'primeng/button';
-import { SelectModule } from 'primeng/select';
+import { CardModule } from 'primeng/card';
+import { CheckboxModule } from 'primeng/checkbox';
 import { InputTextModule } from 'primeng/inputtext';
+import { MessageModule } from 'primeng/message';
+import { ProgressBarModule } from 'primeng/progressbar';
+import { SelectModule } from 'primeng/select';
 import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
-import { ProgressBarModule } from 'primeng/progressbar';
-import { MessageModule } from 'primeng/message';
-import { CheckboxModule } from 'primeng/checkbox';
-import { CardModule } from 'primeng/card';
 
 import {
-  ResearchService,
   BatchResearchResult,
-  TickerBatchResult,
+  ResearchService
 } from '../../../services/research.service';
 
 const DEFAULT_TICKERS = [
-  'SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA',
-  'TSLA', 'AMD', 'META', 'AMZN', 'NFLX',
-  'JPM', 'XOM', 'BAC', 'IWM', 'DIA',
+     'SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA',                   
+       'TSLA', 'AMD', 'META', 'AMZN', 'NFLX',                  
+      'JPM', 'XOM', 'BAC', 'IWM', 'DIA',                      
 ];
 
 const OPTIONS_FEATURES = [

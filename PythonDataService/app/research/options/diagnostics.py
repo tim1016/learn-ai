@@ -134,10 +134,12 @@ def run_iv_diagnostics(iv_data_df: pd.DataFrame) -> IvDiagnosticsReport:
             )
 
     # Final validity determination
+    # Discontinuity threshold at 10%: real market data has IV spikes around
+    # FOMC, earnings, and bracket transitions — 5% was too strict.
     report.valid = (
         report.missing_pct <= MAX_MISSING_PCT
         and report.valid_iv_days >= 30  # Minimum 30 valid days
-        and report.discontinuities <= report.total_trading_days * 0.05  # Max 5% discontinuities
+        and report.discontinuities <= report.total_trading_days * 0.10  # Max 10% discontinuities
     )
 
     if report.valid:

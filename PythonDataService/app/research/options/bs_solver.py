@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from scipy.optimize import brentq
 from scipy.stats import norm
 
 
@@ -68,20 +69,21 @@ def implied_volatility(
     if market_price < intrinsic - tolerance:
         return None
 
-    # Initial guess: Brenner-Subrahmanyam approximation
+    # Initial guess: Brenner-Subrahmanyam approximation (ATM-biased).
+    # Clamp to [0.15, 3.0] — the B-S formula underestimates sigma for OTM
+    # options, causing Newton-Raphson to diverge on the first step.
     sigma = math.sqrt(2 * math.pi / T) * market_price / S
-    sigma = max(0.01, min(sigma, 5.0))
+    sigma = max(0.15, min(sigma, 3.0))
 
     for _ in range(max_iterations):
         price = bs_price(S, K, T, r, sigma, option_type)
         vega = bs_vega(S, K, T, r, sigma)
 
         if vega < 1e-12:
-            return None
+            break  # Fall through to bisection fallback
 
         diff = price - market_price
         if abs(diff) < tolerance:
-            # Reject IV outside [0.05, 3.0] (5%-300% annualized)
             if 0.05 <= sigma <= 3.0:
                 return sigma
             return None
@@ -92,6 +94,17 @@ def implied_volatility(
         if sigma <= 0.001:
             sigma = 0.001
         elif sigma > 5.0:
-            return None
+            break  # Fall through to bisection fallback
+
+    # Bisection fallback (Brent's method) — guaranteed convergence
+    def _objective(s: float) -> float:
+        return bs_price(S, K, T, r, s, option_type) - market_price
+
+    try:
+        sigma = brentq(_objective, 0.01, 5.0, xtol=tolerance)
+        if 0.05 <= sigma <= 3.0:
+            return sigma
+    except (ValueError, RuntimeError):
+        pass
 
     return None
