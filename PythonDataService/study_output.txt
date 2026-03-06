@@ -1,0 +1,188 @@
+2026-03-05 21:47:23,282 - __main__ - INFO - [STUDY] Prefetching FRED Treasury rates for 2025-01-01 to 2025-06-30...
+2026-03-05 21:47:24,004 - httpx - INFO - HTTP Request: GET https://api.stlouisfed.org/fred/series/observations?series_id=DTB4WK&api_key=1b431899c2eba382d8ec18b66d1ef3f9&file_type=json&observation_start=2025-01-01&observation_end=2025-06-30&sort_order=asc&limit=10000 "HTTP/1.1 200 OK"
+2026-03-05 21:47:24,436 - httpx - INFO - HTTP Request: GET https://api.stlouisfed.org/fred/series/observations?series_id=DTB3&api_key=1b431899c2eba382d8ec18b66d1ef3f9&file_type=json&observation_start=2025-01-01&observation_end=2025-06-30&sort_order=asc&limit=10000 "HTTP/1.1 200 OK"
+2026-03-05 21:47:24,864 - httpx - INFO - HTTP Request: GET https://api.stlouisfed.org/fred/series/observations?series_id=DTB6&api_key=1b431899c2eba382d8ec18b66d1ef3f9&file_type=json&observation_start=2025-01-01&observation_end=2025-06-30&sort_order=asc&limit=10000 "HTTP/1.1 200 OK"
+2026-03-05 21:47:25,428 - httpx - INFO - HTTP Request: GET https://api.stlouisfed.org/fred/series/observations?series_id=DTB1YR&api_key=1b431899c2eba382d8ec18b66d1ef3f9&file_type=json&observation_start=2025-01-01&observation_end=2025-06-30&sort_order=asc&limit=10000 "HTTP/1.1 200 OK"
+2026-03-05 21:47:25,431 - app.services.fred_service - INFO - [FRED] Prefetched rates for 180 dates (2025-01-01 to 2025-06-30)
+2026-03-05 21:47:25,432 - __main__ - INFO - [STUDY] Building IV history for SPY...
+2026-03-05 21:47:25,432 - app.research.options.iv_builder - INFO - [IV BUILDER] Building IV history for SPY [2025-01-01 \u2192 2025-06-30]
+2026-03-05 21:47:25,432 - app.services.polygon_client - INFO - Fetching aggregates for SPY: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:25,973 - app.services.polygon_client - INFO - Fetched 122 aggregates for SPY
+2026-03-05 21:47:25,973 - app.research.options.iv_builder - INFO - [IV BUILDER] Finding bracket contracts...
+2026-03-05 21:47:25,974 - app.research.options.contract_finder - INFO - [CONTRACT FINDER] Processing 122 trading days for SPY
+2026-03-05 21:47:25,975 - app.research.options.contract_finder - INFO - [CONTRACT FINDER] Processing date 1/122: 2025-01-02
+2026-03-05 21:47:25,975 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=2025-01-02
+2026-03-05 21:47:26,557 - app.services.polygon_client - INFO - Found 192 options contracts for SPY
+2026-03-05 21:47:26,558 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:26,692 - app.services.polygon_client - INFO - Reached max 250 contracts for SPY, stopping pagination
+2026-03-05 21:47:26,692 - app.services.polygon_client - INFO - Found 250 options contracts for SPY
+2026-03-05 21:47:26,704 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:26,831 - app.services.polygon_client - INFO - Found 204 options contracts for SPY
+2026-03-05 21:47:26,838 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=2025-02-03
+2026-03-05 21:47:26,984 - app.services.polygon_client - INFO - Found 158 options contracts for SPY
+2026-03-05 21:47:26,984 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:27,146 - app.services.polygon_client - INFO - Reached max 250 contracts for SPY, stopping pagination
+2026-03-05 21:47:27,146 - app.services.polygon_client - INFO - Found 250 options contracts for SPY
+2026-03-05 21:47:27,153 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:27,238 - app.services.polygon_client - INFO - Found 248 options contracts for SPY
+2026-03-05 21:47:27,248 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=2025-03-03
+2026-03-05 21:47:27,745 - app.services.polygon_client - INFO - Found 273 options contracts for SPY
+2026-03-05 21:47:27,745 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:27,812 - app.services.polygon_client - INFO - Reached max 250 contracts for SPY, stopping pagination
+2026-03-05 21:47:27,812 - app.services.polygon_client - INFO - Found 250 options contracts for SPY
+2026-03-05 21:47:27,820 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:27,901 - app.services.polygon_client - INFO - Reached max 250 contracts for SPY, stopping pagination
+2026-03-05 21:47:27,902 - app.services.polygon_client - INFO - Found 250 options contracts for SPY
+2026-03-05 21:47:27,924 - app.research.options.contract_finder - INFO - [CONTRACT FINDER] Processing date 51/122: 2025-03-18
+2026-03-05 21:47:27,925 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=2025-04-01
+2026-03-05 21:47:28,370 - app.services.polygon_client - INFO - Found 277 options contracts for SPY
+2026-03-05 21:47:28,370 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:28,514 - app.services.polygon_client - INFO - Reached max 250 contracts for SPY, stopping pagination
+2026-03-05 21:47:28,514 - app.services.polygon_client - INFO - Found 250 options contracts for SPY
+2026-03-05 21:47:28,521 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:28,666 - app.services.polygon_client - INFO - Reached max 250 contracts for SPY, stopping pagination
+2026-03-05 21:47:28,666 - app.services.polygon_client - INFO - Found 250 options contracts for SPY
+2026-03-05 21:47:28,684 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=2025-05-01
+2026-03-05 21:47:28,830 - app.services.polygon_client - INFO - Found 189 options contracts for SPY
+2026-03-05 21:47:28,830 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:28,919 - app.services.polygon_client - INFO - Reached max 250 contracts for SPY, stopping pagination
+2026-03-05 21:47:28,919 - app.services.polygon_client - INFO - Found 250 options contracts for SPY
+2026-03-05 21:47:28,932 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:29,080 - app.services.polygon_client - INFO - Reached max 250 contracts for SPY, stopping pagination
+2026-03-05 21:47:29,081 - app.services.polygon_client - INFO - Found 250 options contracts for SPY
+2026-03-05 21:47:29,097 - app.research.options.contract_finder - INFO - [CONTRACT FINDER] Processing date 101/122: 2025-05-29
+2026-03-05 21:47:29,098 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=2025-06-02
+2026-03-05 21:47:29,243 - app.services.polygon_client - INFO - Found 193 options contracts for SPY
+2026-03-05 21:47:29,243 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:29,305 - app.services.polygon_client - INFO - Reached max 250 contracts for SPY, stopping pagination
+2026-03-05 21:47:29,306 - app.services.polygon_client - INFO - Found 250 options contracts for SPY
+2026-03-05 21:47:29,319 - app.services.polygon_client - INFO - Listing options contracts for SPY, as_of=None
+2026-03-05 21:47:29,454 - app.services.polygon_client - INFO - Reached max 250 contracts for SPY, stopping pagination
+2026-03-05 21:47:29,455 - app.services.polygon_client - INFO - Found 250 options contracts for SPY
+2026-03-05 21:47:29,475 - app.research.options.iv_builder - INFO - [IV BUILDER] Processing 122 trading days for IV derivation
+2026-03-05 21:47:29,484 - app.research.options.iv_builder - INFO - [IV BUILDER] Prefetching bars for 48 unique contracts...
+2026-03-05 21:47:29,485 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250404P00559000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:29,486 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250530P00536000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:29,486 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250404P00584000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:29,487 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250606P00534000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:29,488 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250530P00558000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:29,561 - app.services.polygon_client - INFO - Fetched 17 aggregates for O:SPY250404P00559000
+2026-03-05 21:47:29,562 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250131P00585000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:29,625 - app.services.polygon_client - INFO - Fetched 20 aggregates for O:SPY250131P00585000
+2026-03-05 21:47:29,626 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250331P00584000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:29,701 - app.services.polygon_client - INFO - Fetched 60 aggregates for O:SPY250331P00584000
+2026-03-05 21:47:29,702 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250131C00617000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:29,763 - app.services.polygon_client - INFO - Fetched 20 aggregates for O:SPY250131C00617000
+2026-03-05 21:47:29,763 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250430P00538000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:29,828 - app.services.polygon_client - INFO - Fetched 59 aggregates for O:SPY250430P00538000
+2026-03-05 21:47:29,829 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250331C00584000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:29,894 - app.services.polygon_client - INFO - Fetched 42 aggregates for O:SPY250331C00584000
+2026-03-05 21:47:29,895 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250207P00585000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:29,959 - app.services.polygon_client - INFO - Fetched 25 aggregates for O:SPY250207P00585000
+2026-03-05 21:47:29,960 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250530C00589000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,033 - app.services.polygon_client - INFO - Fetched 79 aggregates for O:SPY250530C00589000
+2026-03-05 21:47:30,034 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250207P00559000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,090 - app.services.polygon_client - INFO - Fetched 9 aggregates for O:SPY250207P00559000
+2026-03-05 21:47:30,091 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250228C00598000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,157 - app.services.polygon_client - INFO - Fetched 39 aggregates for O:SPY250228C00598000
+2026-03-05 21:47:30,158 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250630C00593000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,227 - app.services.polygon_client - INFO - Fetched 60 aggregates for O:SPY250630C00593000
+2026-03-05 21:47:30,227 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250228C00628000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,296 - app.services.polygon_client - INFO - Fetched 39 aggregates for O:SPY250228C00628000
+2026-03-05 21:47:30,296 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250307C00632000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,318 - app.services.polygon_client - INFO - Fetched 30 aggregates for O:SPY250606P00534000
+2026-03-05 21:47:30,318 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250606P00558000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,322 - app.services.polygon_client - INFO - Fetched 72 aggregates for O:SPY250530P00536000
+2026-03-05 21:47:30,323 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250307P00572000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,325 - app.services.polygon_client - INFO - Fetched 77 aggregates for O:SPY250530P00558000
+2026-03-05 21:47:30,327 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250630C00625000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,341 - app.services.polygon_client - INFO - Fetched 34 aggregates for O:SPY250404P00584000
+2026-03-05 21:47:30,341 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250703P00592500: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,375 - app.services.polygon_client - INFO - Fetched 26 aggregates for O:SPY250307C00632000
+2026-03-05 21:47:30,376 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250502P00561000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,381 - app.services.polygon_client - INFO - Fetched 9 aggregates for O:SPY250307P00572000
+2026-03-05 21:47:30,381 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250502C00595000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,383 - app.services.polygon_client - INFO - Fetched 30 aggregates for O:SPY250606P00558000
+2026-03-05 21:47:30,383 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250228P00598000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,412 - app.services.polygon_client - INFO - Fetched 122 aggregates for O:SPY250630C00625000
+2026-03-05 21:47:30,413 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250703C00592500: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,416 - app.services.polygon_client - INFO - Fetched 23 aggregates for O:SPY250703P00592500
+2026-03-05 21:47:30,416 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250430C00592000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,439 - app.services.polygon_client - INFO - Fetched 36 aggregates for O:SPY250502C00595000
+2026-03-05 21:47:30,439 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250606C00593000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,442 - app.services.polygon_client - INFO - Fetched 29 aggregates for O:SPY250502P00561000
+2026-03-05 21:47:30,442 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250404C00584000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,455 - app.services.polygon_client - INFO - Fetched 39 aggregates for O:SPY250228P00598000
+2026-03-05 21:47:30,455 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250502C00561000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,477 - app.services.polygon_client - INFO - Fetched 24 aggregates for O:SPY250703C00592500
+2026-03-05 21:47:30,478 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250331P00560000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,499 - app.services.polygon_client - INFO - Fetched 77 aggregates for O:SPY250430C00592000
+2026-03-05 21:47:30,500 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250530C00558000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,503 - app.services.polygon_client - INFO - Fetched 16 aggregates for O:SPY250606C00593000
+2026-03-05 21:47:30,503 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250207C00585000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,509 - app.services.polygon_client - INFO - Fetched 31 aggregates for O:SPY250404C00584000
+2026-03-05 21:47:30,510 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250630P00569000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,524 - app.services.polygon_client - INFO - Fetched 35 aggregates for O:SPY250502C00561000
+2026-03-05 21:47:30,525 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250430P00557000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,549 - app.services.polygon_client - INFO - Fetched 60 aggregates for O:SPY250331P00560000
+2026-03-05 21:47:30,549 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250331C00615000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,569 - app.services.polygon_client - INFO - Fetched 25 aggregates for O:SPY250207C00585000
+2026-03-05 21:47:30,570 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250630P00575000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,580 - app.services.polygon_client - INFO - Fetched 87 aggregates for O:SPY250630P00569000
+2026-03-05 21:47:30,580 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250703C00627000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,585 - app.services.polygon_client - INFO - Fetched 85 aggregates for O:SPY250530C00558000
+2026-03-05 21:47:30,586 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250131C00585000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,592 - app.services.polygon_client - INFO - Fetched 67 aggregates for O:SPY250430P00557000
+2026-03-05 21:47:30,593 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250404C00618000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,620 - app.services.polygon_client - INFO - Fetched 57 aggregates for O:SPY250331C00615000
+2026-03-05 21:47:30,622 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250430C00561000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,641 - app.services.polygon_client - INFO - Fetched 3 aggregates for O:SPY250703C00627000
+2026-03-05 21:47:30,642 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250703P00568000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,649 - app.services.polygon_client - INFO - Fetched 116 aggregates for O:SPY250630P00575000
+2026-03-05 21:47:30,650 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250307P00598000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,659 - app.services.polygon_client - INFO - Fetched 29 aggregates for O:SPY250404C00618000
+2026-03-05 21:47:30,660 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250502P00537000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,662 - app.services.polygon_client - INFO - Fetched 20 aggregates for O:SPY250131C00585000
+2026-03-05 21:47:30,663 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250207C00621000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,685 - app.services.polygon_client - INFO - Fetched 66 aggregates for O:SPY250430C00561000
+2026-03-05 21:47:30,686 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250307C00598000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,705 - app.services.polygon_client - INFO - Fetched 25 aggregates for O:SPY250703P00568000
+2026-03-05 21:47:30,705 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250131P00561000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,711 - app.services.polygon_client - INFO - Fetched 31 aggregates for O:SPY250307P00598000
+2026-03-05 21:47:30,711 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250606C00558000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,727 - app.services.polygon_client - INFO - Fetched 35 aggregates for O:SPY250502P00537000
+2026-03-05 21:47:30,727 - app.services.polygon_client - INFO - Fetching aggregates for O:SPY250228P00575000: 2025-01-01 to 2025-06-30
+2026-03-05 21:47:30,737 - app.services.polygon_client - INFO - Fetched 12 aggregates for O:SPY250207C00621000
+2026-03-05 21:47:30,754 - urllib3.connectionpool - WARNING - Connection pool is full, discarding connection: api.polygon.io. Connection pool size: 1
+2026-03-05 21:47:30,756 - app.services.polygon_client - INFO - Fetched 29 aggregates for O:SPY250307C00598000
+2026-03-05 21:47:30,772 - urllib3.connectionpool - WARNING - Connection pool is full, discarding connection: api.polygon.io. Connection pool size: 1
+2026-03-05 21:47:30,777 - app.services.polygon_client - INFO - Fetched 28 aggregates for O:SPY250606C00558000
+2026-03-05 21:47:30,778 - urllib3.connectionpool - WARNING - Connection pool is full, discarding connection: api.polygon.io. Connection pool size: 1
+2026-03-05 21:47:30,779 - app.services.polygon_client - INFO - Fetched 20 aggregates for O:SPY250131P00561000
+2026-03-05 21:47:30,796 - urllib3.connectionpool - WARNING - Connection pool is full, discarding connection: api.polygon.io. Connection pool size: 1
+2026-03-05 21:47:30,797 - app.services.polygon_client - INFO - Fetched 39 aggregates for O:SPY250228P00575000
+2026-03-05 21:47:30,799 - app.research.options.iv_builder - INFO - [IV BUILDER] Prefetched 2013 bars across 48 contracts
+2026-03-05 21:47:30,803 - app.research.options.iv_builder - INFO - [IV BUILDER] Deriving IV for date 1/122: 2025-01-02
+2026-03-05 21:47:30,951 - app.research.options.iv_builder - INFO - [IV BUILDER] Deriving IV for date 51/122: 2025-03-18
+2026-03-05 21:47:31,012 - __main__ - ERROR - [STUDY] SPY failed: math domain error
+
+========================================================================
+  IV Pipeline Empirical Validation Study
+  Period: 2025-01-01 to 2025-06-30
+  Tickers: SPY
+========================================================================
+
+--- SPY (0 observations) ---
+  SKIPPED: insufficient data
+
+========================================================================
+  OVERALL VERDICTS
+========================================================================
+  Fact 1 (IV > RV):              FAIL
+  Fact 2 (IV predicts fwd RV):   FAIL
+  Fact 3 (IV predicts |returns|): FAIL
+
+  Pipeline Validation: SOME FACTS NOT CONFIRMED
+  (Check data coverage and date range — short periods may not show significance)
+========================================================================
+

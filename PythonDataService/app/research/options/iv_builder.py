@@ -189,6 +189,8 @@ def _interpolate_iv(
     weight_high = (TARGET_DTE - dte_low) / (dte_high - dte_low)
 
     total_var = weight_low * iv_low**2 * t_low + weight_high * iv_high**2 * t_high
+    if total_var <= 0:
+        return (iv_low + iv_high) / 2
     return math.sqrt(total_var / t_target)
 
 

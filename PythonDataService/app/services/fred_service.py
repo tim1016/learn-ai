@@ -168,6 +168,92 @@ def get_risk_free_rate(dte_days: int = 30, observation_date: str | None = None) 
     return FALLBACK_RATE
 
 
+def prefetch_rate_cache(start_date: str, end_date: str) -> int:
+    """Bulk-fetch FRED rates for a date range and populate the cache.
+
+    Makes only 4 HTTP calls total (one per tenor) instead of 4 per trading day.
+    Returns the number of dates cached.
+    """
+    global _rate_cache, _cache_timestamp
+
+    api_key = getattr(settings, "FRED_API_KEY", None)
+    if not api_key:
+        logger.warning("[FRED] No API key — skipping prefetch")
+        return 0
+
+    # Fetch full range for each tenor
+    all_series: dict[str, list[dict[str, Any]]] = {}
+    for series_id in TENOR_MAP:
+        params = {
+            "series_id": series_id,
+            "api_key": api_key,
+            "file_type": "json",
+            "observation_start": start_date,
+            "observation_end": end_date,
+            "sort_order": "asc",
+            "limit": 10000,
+        }
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                resp = client.get(FRED_BASE_URL, params=params)
+                resp.raise_for_status()
+                all_series[series_id] = resp.json().get("observations", [])
+        except (httpx.HTTPError, Exception) as e:
+            logger.warning("[FRED] Prefetch failed for %s: %s", series_id, e)
+            all_series[series_id] = []
+
+    # Build per-date rate maps
+    # Index: {series_id: {date_str: rate_float}}
+    series_by_date: dict[str, dict[str, float]] = {}
+    for series_id, observations in all_series.items():
+        for obs in observations:
+            dt = obs.get("date", "")
+            val = obs.get("value", ".")
+            if val != "." and dt:
+                try:
+                    series_by_date.setdefault(series_id, {})[dt] = float(val) / 100.0
+                except ValueError:
+                    continue
+
+    # Collect all unique dates across all series
+    all_dates: set[str] = set()
+    for date_map in series_by_date.values():
+        all_dates.update(date_map.keys())
+
+    # For each date, assemble {days: rate} from all tenors
+    cached_count = 0
+    for date_str in sorted(all_dates):
+        rates: dict[int, float] = {}
+        for series_id, days in TENOR_MAP.items():
+            rate = series_by_date.get(series_id, {}).get(date_str)
+            if rate is not None:
+                rates[days] = rate
+        if rates:
+            _rate_cache[date_str] = rates
+            cached_count += 1
+
+    # Also fill non-FRED dates (weekends/holidays) by forward-filling
+    # so that get_risk_free_rate() for any date in range hits cache
+    sorted_cached = sorted(_rate_cache.keys())
+    if sorted_cached:
+        from datetime import datetime as dt_cls, timedelta as td_cls
+        d = dt_cls.strptime(start_date, "%Y-%m-%d")
+        end_d = dt_cls.strptime(end_date, "%Y-%m-%d")
+        last_rates: dict[int, float] | None = None
+        while d <= end_d:
+            ds = d.strftime("%Y-%m-%d")
+            if ds in _rate_cache:
+                last_rates = _rate_cache[ds]
+            elif last_rates is not None:
+                _rate_cache[ds] = last_rates
+                cached_count += 1
+            d += td_cls(days=1)
+
+    _cache_timestamp = time.time()
+    logger.info("[FRED] Prefetched rates for %d dates (%s to %s)", cached_count, start_date, end_date)
+    return cached_count
+
+
 def clear_cache() -> None:
     """Clear the rate cache (for testing)."""
     global _rate_cache, _cache_timestamp
