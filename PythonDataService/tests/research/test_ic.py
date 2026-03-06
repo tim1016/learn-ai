@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from app.research.validation.ic import (
+    _andrews_lag,
     _compute_effective_sample_size,
     _compute_newey_west_t_stat,
     compute_information_coefficient,
@@ -159,3 +160,45 @@ class TestNeweyWest:
         effective = _compute_effective_sample_size(small)
 
         assert effective == 2.0  # Too small for correction
+
+
+class TestAndrewsLag:
+    """Test Andrews (1991) automatic bandwidth selection."""
+
+    def test_small_sample(self) -> None:
+        """Small n=10 → floor(4 * (10/100)^(2/9)) = floor(2.15) = 2."""
+        assert _andrews_lag(10) == 2
+
+    def test_100_sample(self) -> None:
+        """n=100 → floor(4 * 1.0) = 4."""
+        assert _andrews_lag(100) == 4
+
+    def test_250_sample(self) -> None:
+        """n=250 → floor(4 * (250/100)^(2/9)) ≈ floor(4 * 1.22) = 4."""
+        lag = _andrews_lag(250)
+        assert lag >= 4
+
+    def test_500_sample(self) -> None:
+        """n=500 → floor(4 * (5)^(2/9)) ≈ floor(5.4) = 5."""
+        lag = _andrews_lag(500)
+        assert lag >= 5
+
+    def test_monotonically_increasing(self) -> None:
+        """Larger n should give >= lag than smaller n."""
+        lags = [_andrews_lag(n) for n in [50, 100, 200, 500, 1000]]
+        for i in range(len(lags) - 1):
+            assert lags[i] <= lags[i + 1]
+
+    def test_n_eff_uses_andrews_lag(self) -> None:
+        """Effective N should use Andrews lag, consistent with Newey-West."""
+        rng = np.random.default_rng(42)
+        # Autocorrelated series
+        ic = np.zeros(200)
+        ic[0] = rng.normal(0.02, 0.05)
+        for i in range(1, 200):
+            ic[i] = 0.5 * ic[i-1] + rng.normal(0.01, 0.03)
+
+        # With min_lag=5, effective N should be less than actual N
+        eff = _compute_effective_sample_size(ic, min_lag=5)
+        assert eff < 200
+        assert eff > 0

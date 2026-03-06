@@ -5,7 +5,7 @@ from scipy.optimize import brentq
 from scipy.stats import norm
 
 
-RISK_FREE_RATE = 0.043  # Fed funds approximation — cancels in IV rank/VRP
+RISK_FREE_RATE = 0.043  # Static fallback — prefer get_risk_free_rate() for dynamic rates
 
 
 def bs_price(

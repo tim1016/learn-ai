@@ -59,7 +59,8 @@
       "Bash(podman machine:*)",
       "Bash(podman volume:*)",
       "Bash(podman exec:*)",
-      "Bash(podman restart:*)"
+      "Bash(podman restart:*)",
+      "Bash(FRED_API_KEY=1b431899c2eba382d8ec18b66d1ef3f9 python:*)"
     ]
   }
 }

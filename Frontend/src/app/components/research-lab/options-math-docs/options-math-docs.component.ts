@@ -63,7 +63,7 @@ export class OptionsMathDocsComponent {
   symbolGlossary: SymbolEntry[] = [
     { symbolLatex: 'S', name: 'Spot Price', definition: 'Current underlying (stock) price' },
     { symbolLatex: 'K', name: 'Strike Price', definition: 'Option strike price' },
-    { symbolLatex: 'r', name: 'Risk-Free Rate', definition: 'Annualized risk-free interest rate (decimal, e.g. 0.043)' },
+    { symbolLatex: 'r', name: 'Risk-Free Rate', definition: 'Annualized risk-free rate from FRED Treasury curve, interpolated to option DTE (fallback: 0.043)' },
     { symbolLatex: String.raw`\sigma`, name: 'Implied Volatility', definition: 'Annualized implied volatility (decimal, e.g. 0.30 = 30%)' },
     { symbolLatex: 'T', name: 'Time to Expiry', definition: 'Time to expiration in years (DTE / 365)' },
     { symbolLatex: String.raw`\Phi(x)`, name: 'Normal CDF', definition: 'Standard normal cumulative distribution function' },
@@ -218,10 +218,10 @@ export class OptionsMathDocsComponent {
   // ─── 30-Day IV Construction ────────────────────────────────
   ivConstructionIntro = 'The system constructs a constant-maturity 30-day IV series by finding two option expiries that bracket the 30-day mark, solving IV for each, and interpolating to the target maturity.';
 
-  currentInterpolation: FormulaDoc = {
-    label: 'Linear-in-Volatility Interpolation (Current)',
+  previousInterpolation: FormulaDoc = {
+    label: 'Linear-in-Volatility Interpolation (Replaced)',
     formulaLatex: String.raw`\text{IV}_{30d} = w_{\text{low}} \cdot \sigma_{\text{low}} + w_{\text{high}} \cdot \sigma_{\text{high}}`,
-    note: 'Simple linear interpolation in vol space. First-order correct but introduces downward bias when the term structure has curvature (by Jensen\'s inequality).',
+    note: 'Previously used simple linear interpolation in vol space. Introduced downward bias when the term structure has curvature (Jensen\'s inequality). Replaced by variance-time interpolation.',
     variablesLatex: [
       String.raw`w_{\text{low}} = \frac{\text{DTE}_{\text{high}} - 30}{\text{DTE}_{\text{high}} - \text{DTE}_{\text{low}}}`,
       String.raw`w_{\text{high}} = \frac{30 - \text{DTE}_{\text{low}}}{\text{DTE}_{\text{high}} - \text{DTE}_{\text{low}}}`,
@@ -229,9 +229,9 @@ export class OptionsMathDocsComponent {
   };
 
   varianceInterpolation: FormulaDoc = {
-    label: 'Variance-Time Interpolation (Upgrade 1)',
+    label: 'Variance-Time Interpolation (Active)',
     formulaLatex: String.raw`\sigma_{30} = \sqrt{\frac{w_{\text{low}} \cdot \sigma_{\text{low}}^2 \cdot T_{\text{low}} + w_{\text{high}} \cdot \sigma_{\text{high}}^2 \cdot T_{\text{high}}}{T_{30}}}`,
-    note: 'The industry standard for constructing constant-maturity vol surfaces. Interpolates in total variance (σ²T) space, then extracts σ. Eliminates the systematic downward bias from linear-in-vol interpolation.',
+    note: 'Industry standard for constructing constant-maturity vol surfaces. Interpolates in total variance (σ²T) space, then extracts σ. Eliminates the systematic downward bias from linear-in-vol interpolation.',
     variablesLatex: [
       String.raw`T_x = \text{DTE}_x / 365 \quad \text{(time in years)}`,
       String.raw`T_{30} = 30 / 365`,
@@ -246,23 +246,23 @@ export class OptionsMathDocsComponent {
   };
 
   singleBracketFallback: FormulaDoc = {
-    label: 'Single-Bracket Fallback (Dropped in Upgrade 2)',
+    label: 'Single-Bracket Fallback (Removed)',
     formulaLatex: String.raw`\text{IV}_{30d} \approx \text{IV}_{\text{obs}} \cdot \sqrt{\frac{30}{\text{DTE}_{\text{obs}}}}`,
-    note: 'Assumes volatility scales as √T — requires flat term structure, no skew shift, and IID returns (all empirically false). Systematically over-estimates for short DTE and under-estimates for long DTE. Replaced with returning None and relying on forward-fill (limit 2 days).',
+    note: 'Removed. Previously assumed volatility scales as √T — requires flat term structure, no skew shift, and IID returns (all empirically false). Now returns None, relying on forward-fill (limit 2 business days) for missing days.',
   };
 
   bracketWindow = {
-    current: 'DTE window: 14–60 days',
-    upgraded: 'DTE window: 20–45 days (Upgrade 3)',
-    rationale: 'Narrowing to 20–45 ensures max |DTE − 30| ≤ 15, preventing asymmetric interpolation where one bracket dominates. Both weights stay in [0.25, 0.75] range.',
+    current: 'DTE window: 20–45 days',
+    upgraded: 'Narrowed from 14–60 (completed)',
+    rationale: 'Window of 20–45 ensures max |DTE − 30| ≤ 15, preventing asymmetric interpolation where one bracket dominates. Both weights stay in [0.25, 0.75] range.',
   };
 
   // ─── Price Source Hierarchy ────────────────────────────────
   priceHierarchy = [
-    { rank: '1', source: 'Midpoint', condition: 'bid > 0, ask > 0, spread/mid ≤ 15%, mid ≥ $0.05' },
-    { rank: '2', source: 'VWAP', condition: 'If available from exchange data' },
-    { rank: '3', source: 'Close', condition: 'volume ≥ 100 AND close within [bid, ask] range' },
-    { rank: '4', source: 'Reject', condition: 'Don\'t use stale or edge prints' },
+    { rank: '1', source: 'Midpoint', condition: 'bid > 0, ask > 0, (ask − bid)/mid ≤ 15%, mid ≥ $0.05' },
+    { rank: '2', source: 'VWAP', condition: 'vw field available, vwap ≥ $0.05' },
+    { rank: '3', source: 'Close', condition: 'volume ≥ 50, close within [bid, ask] if available, close ≥ $0.05' },
+    { rank: '4', source: 'Reject', condition: 'None of the above — stale or edge prints dropped' },
   ];
 
   // ─── Research Features ─────────────────────────────────────
@@ -307,31 +307,31 @@ export class OptionsMathDocsComponent {
 
   // ─── Risk-Free Rate ────────────────────────────────────────
   riskFreeRateDoc = {
-    problem: 'Current system hardcodes r = 0.043. IV sensitivity to rate: ∂σ/∂r ≈ −(∂C/∂r) / vega. For a 60-DTE ATM option, ~50bps rate error → ~0.3-0.5 vol point IV error. This is systematic — it biases the entire term structure.',
-    currentLatex: String.raw`r = 0.043 \quad \text{(hardcoded constant)}`,
-    upgradedLatex: String.raw`r(t, \text{DTE}) = \text{interpolate}\big(\text{FRED tenors: DTB4WK, DTB3, DTB6, DTB1YR}\big)`,
+    problem: 'IV sensitivity to rate: ∂σ/∂r ≈ −(∂C/∂r) / vega. For a 60-DTE ATM option, ~50bps rate error → ~0.3-0.5 vol point IV error. Now using FRED-sourced dynamic rates per trading day.',
+    currentLatex: String.raw`r(t, \text{DTE}) = \text{interpolate}\big(\text{FRED tenors: DTB4WK, DTB3, DTB6, DTB1YR}\big)`,
+    upgradedLatex: String.raw`\text{Tenors: 4wk (28d), 3mo (91d), 6mo (182d), 1yr (365d) — linear interpolation to DTE}`,
     sensitivityLatex: String.raw`\frac{\partial \sigma}{\partial r} \approx -\frac{K \cdot T \cdot e^{-rT} \cdot \Phi(d_2)}{\nu}`,
-    fallback: 'If FRED is unavailable, falls back to r = 0.043 with a warning log. Never fails the IV build due to rate fetch failure.',
+    fallback: 'If FRED API is unavailable, falls back to r = 0.043 with a warning log. 24-hour cache prevents repeated API calls. Never fails the IV build due to rate fetch failure.',
   };
 
   // ─── Delta-Based Strikes ───────────────────────────────────
   deltaFormula: FormulaDoc = {
-    label: 'Black-Scholes Delta (for Strike Selection)',
+    label: 'Black-Scholes Delta (Active — for Skew Strike Selection)',
     formulaLatex: String.raw`\Delta = \begin{cases} \Phi(d_1) & \text{call} \\ \Phi(d_1) - 1 & \text{put} \end{cases}`,
-    note: 'Current system uses fixed 5% OTM offset for skew strikes. Upgrade 5 replaces this with delta-based selection — selecting the strikes closest to 25Δ put and 25Δ call. This makes skew measurements comparable across underlyings and time periods.',
+    note: 'OTM skew strikes are now selected by 25Δ — the put/call with BS delta closest to ±0.25. Uses default IV (0.25) and FRED risk-free rate for delta estimation at contract discovery time. Falls back to 5% OTM offset when DTE is unavailable.',
   };
 
-  deltaCircularity = 'Delta depends on IV, which we\'re trying to solve for — a circular dependency. Resolution: (1) Fetch all strikes, (2) Compute IV for each, (3) Compute delta using solved IV, (4) Select closest to 25Δ. One iteration is typically sufficient.';
+  deltaCircularity = 'Note: delta estimation at contract discovery time uses a default IV (0.25) rather than solved IV, since IV solving happens after contract selection. This single-pass approach is sufficient because delta is relatively insensitive to IV for 25Δ-range strikes at 20–45 DTE.';
 
   // ─── Synthetic Forward ─────────────────────────────────────
   syntheticForward: FormulaDoc = {
-    label: 'Synthetic Forward (Put-Call Parity)',
-    formulaLatex: String.raw`F = K + e^{rT} \cdot (C - P)`,
-    note: 'The forward price derived from put-call parity. ATM is defined as the strike closest to F. ATM IV is computed as the average of call and put IV at that strike, eliminating skew bias in the ATM measurement.',
+    label: 'Synthetic Forward (Active — ATM IV from Call/Put Average)',
+    formulaLatex: String.raw`\sigma_{\text{ATM}} = \frac{\sigma_{\text{call}}(K_{\text{ATM}}) + \sigma_{\text{put}}(K_{\text{ATM}})}{2}`,
+    note: 'ATM IV is now the average of call and put IV at the strike closest to spot. Both ATM call and ATM put contracts are fetched per bracket expiry. Falls back to call-only when ATM put is unavailable.',
     variablesLatex: [
-      String.raw`F = \text{synthetic forward price}`,
-      String.raw`C, P = \text{call/put prices at the same strike } K`,
-      String.raw`\sigma_{\text{ATM}} = \frac{\sigma_{\text{call}}(K_{\text{ATM}}) + \sigma_{\text{put}}(K_{\text{ATM}})}{2}`,
+      String.raw`K_{\text{ATM}} = \arg\min_K |K - S| \quad \text{(closest strike to spot)}`,
+      String.raw`\sigma_{\text{call}}, \sigma_{\text{put}} = \text{implied vols from BS solver}`,
+      String.raw`\text{Fallback: } \sigma_{\text{ATM}} = \sigma_{\text{call}} \text{ if put unavailable}`,
     ],
   };
 
@@ -451,12 +451,12 @@ export class OptionsMathDocsComponent {
 
   // ─── Data Pipeline ─────────────────────────────────────────
   pipelineSteps: PipelineStep[] = [
-    { label: 'Contract Discovery', detail: 'Per trading day: identify 2 bracket expiries (20–45 DTE around 30d). ATM strike = argmin|K − S| (closest to spot). OTM put/call at fixed 5% offset. Note: ATM strike availability is not guaranteed for all underlyings — the system selects the closest available strike.' },
-    { label: 'IV Derivation', detail: 'Fetch stock daily bars. Prefetch all option bars (5 threads). Per-day: solve IV via BS solver → interpolate to 30d → clamp [0.05, 3.0].' },
+    { label: 'Contract Discovery', detail: 'Per trading day: identify 2 bracket expiries (20–45 DTE around 30d). ATM strike = argmin|K − S| for both calls and puts. OTM skew strikes selected by 25Δ (BS delta), with 5% offset fallback. Note: ATM strike availability is not guaranteed — system selects closest available.' },
+    { label: 'IV Derivation', detail: 'Fetch stock daily bars. Prefetch all option bars (5 threads). Per-day: solve IV via BS solver with FRED-sourced risk-free rate → variance-time interpolation to 30d. ATM IV = average of call and put IV (synthetic forward). Quality flags assigned per day.' },
     { label: 'Gap Filling', detail: 'Forward-fill ≤ 2 business day gaps. Longer gaps reported as missing.' },
     { label: 'Diagnostics', detail: 'Validate: missing% ≤ 15, valid days ≥ 30, discontinuities ≤ 10%. Flag day-over-day changes > 50%.' },
-    { label: 'Feature Engineering', detail: 'Compute IV rank, log skew, VRP from the clean 30-day IV series.' },
-    { label: 'Research Runner', detail: 'IC analysis with Newey-West, ADF/KPSS stationarity, quantile analysis, regime robustness, train/test split.' },
+    { label: 'Feature Engineering', detail: 'Compute IV rank, log skew, VRP (vrp_5 trailing for signals, vrp_5_forward for research) from the 30-day IV series.' },
+    { label: 'Research Runner', detail: 'IC analysis with unified Andrews (1991) bandwidth for Newey-West and N_eff. ADF/KPSS stationarity, quantile analysis, regime robustness.' },
     { label: 'Persistence', detail: '.NET ResearchService checks cache, proxies to Python, persists results to PostgreSQL.' },
   ];
 
@@ -465,14 +465,15 @@ export class OptionsMathDocsComponent {
     { stage: 'Contract Finder', filter: 'Min volume', threshold: '50' },
     { stage: 'Contract Finder', filter: 'Min open interest', threshold: '100' },
     { stage: 'Contract Finder', filter: 'Max spread ratio', threshold: '10% of mid' },
-    { stage: 'Contract Finder', filter: 'OTM offset', threshold: '5% from ATM' },
+    { stage: 'Contract Finder', filter: 'OTM skew selection', threshold: '25Δ (BS delta), fallback: 5% from ATM' },
     { stage: 'Contract Finder', filter: 'Strike search range', threshold: '±15% of ATM' },
     { stage: 'Bracket Search', filter: 'DTE window', threshold: '20–45 days' },
     { stage: 'BS Solver', filter: 'Min DTE', threshold: '7 days' },
+    { stage: 'BS Solver', filter: 'Risk-free rate', threshold: 'FRED daily (4wk–1yr), fallback 0.043' },
     { stage: 'BS Solver', filter: 'Initial σ clamp', threshold: '[0.15, 3.0]' },
     { stage: 'BS Solver', filter: 'Final σ acceptance', threshold: '[0.05, 3.0]' },
-    { stage: 'IV Builder', filter: 'Min option price', threshold: '$0.05' },
-    { stage: 'IV Builder', filter: 'Post-derivation IV clamp', threshold: '[0.05, 3.0]' },
+    { stage: 'IV Builder', filter: 'Price hierarchy', threshold: 'Mid (≤15% spread) → VWAP → Close (in range) → Reject' },
+    { stage: 'IV Builder', filter: 'Quality flags', threshold: 'high / medium / low / missing (no hard drops)' },
     { stage: 'IV Builder', filter: 'Forward-fill limit', threshold: '2 business days' },
     { stage: 'Diagnostics', filter: 'Max missing data', threshold: '15%' },
     { stage: 'Diagnostics', filter: 'Min valid IV days', threshold: '30' },
@@ -487,68 +488,68 @@ export class OptionsMathDocsComponent {
       currentFormulaLatex: String.raw`\sigma_{30} = w_1 \sigma_1 + w_2 \sigma_2`,
       correctedFormulaLatex: String.raw`\sigma_{30} = \sqrt{\frac{w_1 \sigma_1^2 T_1 + w_2 \sigma_2^2 T_2}{T_{30}}}`,
       explanation: 'Interpolate in total variance (σ²T) space — the industry standard for constant-maturity vol surfaces.',
-      phase: 'Phase 1',
+      phase: 'Phase 1 ✓',
     },
     {
       id: 2, title: 'Drop √T Fallback', impact: 'MEDIUM', effort: 'TRIVIAL',
       problem: 'Single-bracket √T normalization assumes flat term structure and IID returns.',
       currentFormulaLatex: String.raw`\text{IV}_{30} \approx \text{IV}_{\text{obs}} \cdot \sqrt{30 / \text{DTE}}`,
-      explanation: 'Return None when only one bracket exists. Forward-fill (limit 2 days) covers short gaps.',
-      phase: 'Phase 1',
+      explanation: 'Returns None when only one bracket exists. Forward-fill (limit 2 days) covers short gaps.',
+      phase: 'Phase 1 ✓',
     },
     {
       id: 3, title: 'Narrow Bracket Window', impact: 'MEDIUM', effort: 'TRIVIAL',
-      problem: 'Wide 14–60 DTE window allows extreme asymmetry in interpolation weights.',
-      explanation: 'Tighten to 20–45 DTE, ensuring max |DTE − 30| ≤ 15. Both weights stay in [0.25, 0.75].',
-      phase: 'Phase 1',
+      problem: 'Previous 14–60 DTE window allowed extreme asymmetry in interpolation weights.',
+      explanation: 'Tightened to 20–45 DTE, ensuring max |DTE − 30| ≤ 15. Both weights stay in [0.25, 0.75].',
+      phase: 'Phase 1 ✓',
     },
     {
       id: 4, title: 'Dynamic Risk-Free Rate', impact: 'HIGH', effort: 'MEDIUM',
-      problem: 'Hardcoded r = 0.043. A 50bps error → 0.3-0.5 vol point systematic IV bias.',
+      problem: 'Previously hardcoded r = 0.043. A 50bps error → 0.3-0.5 vol point systematic IV bias.',
       currentFormulaLatex: String.raw`r = 0.043`,
       correctedFormulaLatex: String.raw`r = \text{FRED}(\text{DTB4WK}, \text{DTB3}, \text{DTB6}, \text{DTB1YR})`,
-      explanation: 'Fetch daily Treasury rates from FRED API. Interpolate to arbitrary DTE. 24h cache with constant fallback.',
-      phase: 'Phase 2',
+      explanation: 'Fetches daily Treasury rates from FRED API per trading day. Interpolates across 4 tenors (4wk, 3mo, 6mo, 1yr) to match option DTE. 24h cache with 0.043 fallback if FRED unavailable.',
+      phase: 'Phase 2 ✓',
     },
     {
       id: 5, title: 'Delta-Based Skew Strikes', impact: 'HIGH', effort: 'HIGH',
-      problem: 'Fixed 5% OTM offset means skew is not comparable across underlyings or time.',
+      problem: 'Previously used fixed 5% OTM offset — skew not comparable across underlyings or time.',
       currentFormulaLatex: String.raw`K_{\text{put}} = S \times 0.95`,
       correctedFormulaLatex: String.raw`|\Delta(K_{\text{put}})| \approx 0.25`,
-      explanation: 'Select 25Δ put and 25Δ call for skew measurement. Requires solving IV for multiple strikes — more API calls but cross-sectionally correct.',
-      phase: 'Phase 4',
+      explanation: 'Selects 25Δ put and 25Δ call using BS delta at each candidate strike. Falls back to 5% offset when DTE is unavailable. Cross-sectionally correct across underlyings.',
+      phase: 'Phase 4 ✓',
     },
     {
       id: 6, title: 'Synthetic Forward for ATM', impact: 'MEDIUM', effort: 'MEDIUM',
-      problem: 'ATM IV from call-only. Stock close ≠ forward price (dividends, borrow cost).',
-      correctedFormulaLatex: String.raw`F = K + e^{rT}(C - P)`,
-      explanation: 'Use put-call parity for forward price. ATM IV = average of call/put IV at the strike closest to F.',
-      phase: 'Phase 3',
+      problem: 'Previously used call-only ATM IV. Stock close ≠ forward price (dividends, borrow cost).',
+      correctedFormulaLatex: String.raw`\text{IV}_{\text{ATM}} = \frac{\text{IV}_{\text{call}} + \text{IV}_{\text{put}}}{2}`,
+      explanation: 'ATM IV now averages call and put IV at the strike closest to spot. Both ATM call and ATM put contracts are fetched per bracket expiry. Falls back to call-only when put is unavailable.',
+      phase: 'Phase 3 ✓',
     },
     {
       id: 7, title: 'Quality Flags (Not Hard Drops)', impact: 'MEDIUM', effort: 'LOW',
-      problem: 'Hard liquidity filters create survivorship bias — drop data exactly when IV spikes are most informative.',
-      explanation: 'Replace hard drops with soft quality flags (high/medium/low). Keep all data, let downstream decide.',
-      phase: 'Phase 3',
+      problem: 'Previously hard-dropped IV outside [0.05, 3.0] — created survivorship bias during vol spikes.',
+      explanation: 'Replaced with soft quality flags: "high" (midpoint, valid range), "medium" (close/VWAP price), "low" (outside IV range), "missing". All data kept — downstream decides filtering.',
+      phase: 'Phase 3 ✓',
     },
     {
       id: 8, title: 'Strict Price Hierarchy', impact: 'LOW', effort: 'TRIVIAL',
-      problem: 'Close price often prints at bid/ask edge — not representative of fair value.',
-      explanation: 'Midpoint (tight spread) → VWAP → Close (in range) → Reject. Never use stale prints.',
-      phase: 'Phase 2',
+      problem: 'Previously accepted close at bid/ask edge — not representative of fair value.',
+      explanation: 'Midpoint (spread/mid ≤ 15%) → VWAP → Close (within bid-ask range, volume ≥ 50) → Reject. Eliminates stale prints and edge fills.',
+      phase: 'Phase 2 ✓',
     },
     {
       id: 9, title: 'Newey-West Auto-Lag', impact: 'MEDIUM', effort: 'LOW',
-      problem: 'Fixed lag ≥ 5 doesn\'t adapt to sample size and autocorrelation structure.',
-      correctedFormulaLatex: String.raw`L = \lfloor 4 \cdot (n/100)^{2/9} \rfloor`,
-      explanation: 'Andrews (1991) automatic bandwidth selection. Also compute and report effective sample size.',
-      phase: 'Phase 4',
+      problem: 'NW and N_eff previously used different lag formulas — inconsistent bandwidth selection.',
+      correctedFormulaLatex: String.raw`L = \max\big(\lfloor 4 \cdot (n/100)^{2/9} \rfloor,\; L_{\min}\big)`,
+      explanation: 'Unified lag selection: both Newey-West and effective sample size now use Andrews (1991) bandwidth with shared _andrews_lag() function. min_lag floor preserved for daily options data.',
+      phase: 'Phase 4 ✓',
     },
     {
       id: 10, title: 'Forward RV Namespace Isolation', impact: 'LOW', effort: 'LOW',
-      problem: 'vrp_5 in research mode uses forward-looking RV. If leaked into signal mode → look-ahead bias.',
-      explanation: 'Rename to vrp_5_forward explicitly. Add runtime assertion preventing forward data access in signal mode.',
-      phase: 'Phase 3',
+      problem: 'Previously vrp_5 used forward-looking RV in research mode — risk of look-ahead bias leak.',
+      explanation: 'Signal mode: vrp_5 (trailing RV only). Research mode: vrp_5_forward (forward RV). Runtime guards prevent cross-mode access — vrp_5 in research mode and vrp_5_forward in signal mode both raise ValueError.',
+      phase: 'Phase 3 ✓',
     },
   ];
 
@@ -556,9 +557,9 @@ export class OptionsMathDocsComponent {
   simplifications = [
     { title: 'No Dividends', detail: 'BS assumes no dividends. For dividend-paying underlyings, slightly overprices calls and underprices puts.' },
     { title: 'European-Style Only', detail: 'BS assumes European exercise. American equity options can be exercised early, which BS doesn\'t model.' },
-    { title: 'Per-Leg IV', detail: 'Each leg uses its own IV from the market snapshot. No vol surface interpolation or IV smile modeling between strikes. Skew features implicitly assume a surface exists but do not construct one.' },
+    { title: 'Per-Leg IV', detail: 'Each leg uses its own IV from the market snapshot. Skew now uses 25Δ strikes (delta-based selection), but no full vol surface interpolation or smile modeling between strikes.' },
     { title: 'Calendar-Day Theta', detail: 'Theta ÷ 365 (calendar days), not 252 (trading days). Slightly understates weekday decay.' },
-    { title: 'Constant Risk-Free Rate', detail: 'r = 0.043 hardcoded (being upgraded to FRED-sourced dynamic rates).' },
+    { title: 'Risk-Free Rate Granularity', detail: 'FRED rates are fetched per trading day with 4 tenors (4wk–1yr). Intraday rate changes and ultra-short tenors (<4wk) are not captured. Falls back to r = 0.043 if FRED is unavailable.' },
     { title: 'Daily Bar IV Input', detail: 'IV is derived from daily OHLCV bars, not intraday snapshots. Options spreads widen near close and midpoints are unstable at end-of-day. Professional pipelines typically use intraday snapshots (e.g. 15:45 NBBO midpoint). This adds noise to derived IV.' },
     { title: 'Forward-Fill Introduces Bias', detail: 'Missing IV days are forward-filled (limit 2 business days). Since IV changes daily, this carries stale values forward. A better approach would be to interpolate between bracket expiries without time-filling, or mark gaps as truly missing.' },
     { title: 'No Cross-Sectional Normalization', detail: 'Features are z-scored time-series wise (train-period mean/std), NOT cross-sectionally per observation date. Without cross-sectional normalization, regime shifts can contaminate signals when comparing across tickers.' },

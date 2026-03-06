@@ -78,12 +78,14 @@ class OptionsFeatures:
         if mode == "research":
             # Forward-looking RV (only for research, NOT signal generation)
             rv = log_returns.shift(-5).rolling(window=5).std() * math.sqrt(252)
+            vrp = iv - rv
+            vrp.name = "vrp_5_forward"
         else:
             # Trailing RV (safe for signal mode — no lookahead)
             rv = log_returns.rolling(window=5).std() * math.sqrt(252)
+            vrp = iv - rv
+            vrp.name = "vrp_5"
 
-        vrp = iv - rv
-        vrp.name = "vrp_5"
         return vrp
 
     @staticmethod
@@ -112,6 +114,20 @@ class OptionsFeatures:
         elif feature_name == "vrp_5":
             if stock_data is None:
                 raise ValueError("VRP requires stock_data (daily OHLCV)")
-            return OptionsFeatures.compute_vrp(iv_data, stock_data, mode=mode)
+            if mode == "research":
+                raise ValueError(
+                    "vrp_5 uses trailing RV only. Use vrp_5_forward for research mode "
+                    "with forward-looking RV."
+                )
+            return OptionsFeatures.compute_vrp(iv_data, stock_data, mode="signal")
+        elif feature_name == "vrp_5_forward":
+            if stock_data is None:
+                raise ValueError("VRP requires stock_data (daily OHLCV)")
+            if mode == "signal":
+                raise ValueError(
+                    "vrp_5_forward uses forward-looking RV and must NOT be used in signal mode. "
+                    "Use vrp_5 instead."
+                )
+            return OptionsFeatures.compute_vrp(iv_data, stock_data, mode="research")
         else:
             raise ValueError(f"Unknown options feature: {feature_name}")

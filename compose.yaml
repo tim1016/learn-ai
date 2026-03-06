@@ -25,6 +25,7 @@ services:
       - "8000:8000"
     environment:
       - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - FRED_API_KEY=${FRED_API_KEY}
       - HOST=0.0.0.0
       - PORT=8000
       - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200

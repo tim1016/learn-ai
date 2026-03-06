@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     # Polygon API
     POLYGON_API_KEY: str
 
+    # FRED API (for dynamic risk-free rate)
+    FRED_API_KEY: str = ""
+
     # Server configuration
     HOST: str = "0.0.0.0"
     PORT: int = 8000

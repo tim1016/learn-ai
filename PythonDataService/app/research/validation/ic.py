@@ -60,8 +60,7 @@ def _compute_newey_west_t_stat(
     demeaned = ic_array - mean_ic
 
     # Automatic lag selection: Andrews (1991) rule for Bartlett kernel
-    max_lag = max(1, int(math.floor(4 * (n / 100) ** (2 / 9))))
-    max_lag = max(max_lag, min_lag)  # Enforce minimum lag
+    max_lag = max(_andrews_lag(n), min_lag)
     max_lag = min(max_lag, n - 2)
 
     # Gamma_0: variance
@@ -86,12 +85,17 @@ def _compute_newey_west_t_stat(
     return float(nw_t), nw_p
 
 
-def _compute_effective_sample_size(ic_array: np.ndarray) -> float:
+def _andrews_lag(n: int) -> int:
+    """Andrews (1991) automatic bandwidth selection for Bartlett kernel."""
+    return max(1, int(math.floor(4 * (n / 100) ** (2 / 9))))
+
+
+def _compute_effective_sample_size(ic_array: np.ndarray, min_lag: int = 0) -> float:
     """Compute effective sample size accounting for autocorrelation.
 
     N_eff = N / (1 + 2 * sum(rho_k)) where rho_k is the autocorrelation
-    at lag k. Summation is truncated when autocorrelation drops below 0.05
-    or turns negative.
+    at lag k, using Andrews (1991) bandwidth for consistency with Newey-West.
+    Summation truncated when autocorrelation drops below 0.05 or turns negative.
     """
     n = len(ic_array)
     if n < 3:
@@ -104,7 +108,9 @@ def _compute_effective_sample_size(ic_array: np.ndarray) -> float:
     if var < 1e-20:
         return float(n)
 
-    max_lag = min(int(math.sqrt(n)), n // 3)
+    # Use Andrews (1991) bandwidth, consistent with Newey-West
+    max_lag = max(_andrews_lag(n), min_lag)
+    max_lag = min(max_lag, n - 2)
     rho_sum = 0.0
 
     for k in range(1, max_lag + 1):
@@ -193,7 +199,7 @@ def _compute_rolling_ic(
         p_value = 1.0
 
     nw_t_stat, nw_p_value = _compute_newey_west_t_stat(ic_array, min_lag=min_nw_lag)
-    effective_n = _compute_effective_sample_size(ic_array)
+    effective_n = _compute_effective_sample_size(ic_array, min_lag=min_nw_lag)
 
     logger.info(
         "[Research] Rolling IC (w=%d): mean=%.4f, t=%.4f (NW=%.4f), "
@@ -299,7 +305,7 @@ def compute_information_coefficient(
 
     # Newey-West corrected t-stat (accounts for serial correlation)
     nw_t_stat, nw_p_value = _compute_newey_west_t_stat(ic_array, min_lag=min_nw_lag)
-    effective_n = _compute_effective_sample_size(ic_array)
+    effective_n = _compute_effective_sample_size(ic_array, min_lag=min_nw_lag)
 
     logger.info(
         "[Research] IC: mean=%.4f, t=%.4f (NW=%.4f), p=%.4f (NW=%.4f), "

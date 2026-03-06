@@ -167,8 +167,14 @@ def run_options_feature_research(
             stock_for_vrp = merged[["close"]].copy() if "close" in merged.columns else merged[["close_stock"]].rename(columns={"close_stock": "close"}).copy()
             stock_for_vrp.index = merged.index
 
+        # Resolve VRP feature name based on target type (namespace isolation)
+        resolved_feature = feature_name
+        if feature_name == "vrp_5" and target_type != "directional":
+            resolved_feature = "vrp_5_forward"
+
+        compute_mode = "research" if target_type != "directional" else "signal"
         feature_values = OptionsFeatures.compute_feature(
-            feature_name, iv_aligned, stock_for_vrp, mode="research" if target_type != "directional" else "signal"
+            resolved_feature, iv_aligned, stock_for_vrp, mode=compute_mode
         )
 
         # Step 3: Information Coefficient (daily)

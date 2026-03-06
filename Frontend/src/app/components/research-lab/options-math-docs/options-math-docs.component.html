@@ -288,24 +288,24 @@
       <p-accordion-panel value="linear-interp">
         <p-accordion-header>
           <div class="feature-header">
-            <span class="feature-name">Linear Interpolation (Current)</span>
-            <span class="feature-badge">Baseline</span>
+            <span class="feature-name">Linear Interpolation (Replaced)</span>
+            <span class="feature-badge deprecated-badge">Replaced</span>
           </div>
         </p-accordion-header>
         <p-accordion-content>
           <div class="doc-card">
             <div class="formula-block">
-              <span [appKatex]="currentInterpolation.formulaLatex" [displayMode]="true"></span>
+              <span [appKatex]="previousInterpolation.formulaLatex" [displayMode]="true"></span>
             </div>
             <div class="variable-list">
               <span class="label">Where:</span>
-              @for (v of currentInterpolation.variablesLatex!; track v) {
+              @for (v of previousInterpolation.variablesLatex!; track v) {
                 <div class="variable-item">
                   <span [appKatex]="v"></span>
                 </div>
               }
             </div>
-            <p class="interpretation">{{ currentInterpolation.note }}</p>
+            <p class="interpretation">{{ previousInterpolation.note }}</p>
           </div>
         </p-accordion-content>
       </p-accordion-panel>
@@ -314,8 +314,8 @@
       <p-accordion-panel value="variance-interp">
         <p-accordion-header>
           <div class="feature-header">
-            <span class="feature-name">Variance-Time Interpolation (Upgrade)</span>
-            <span class="feature-badge upgrade-badge">Upgrade 1</span>
+            <span class="feature-name">Variance-Time Interpolation (Active)</span>
+            <span class="feature-badge upgrade-badge">Active</span>
           </div>
         </p-accordion-header>
         <p-accordion-content>

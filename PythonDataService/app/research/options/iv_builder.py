@@ -11,6 +11,7 @@ import pandas as pd
 
 from app.research.options.bs_solver import RISK_FREE_RATE, implied_volatility
 from app.research.options.contract_finder import find_bracket_contracts
+from app.services.fred_service import get_risk_free_rate
 from app.services.polygon_client import PolygonClientService
 
 logger = logging.getLogger(__name__)
@@ -26,8 +27,10 @@ MAX_FFILL_DAYS = 2
 
 
 _CONTRACT_COLUMNS = [
-    "low_dte_atm_contract", "low_dte_put_contract", "low_dte_call_contract",
-    "high_dte_atm_contract", "high_dte_put_contract", "high_dte_call_contract",
+    "low_dte_atm_contract", "low_dte_atm_put_contract",
+    "low_dte_put_contract", "low_dte_call_contract",
+    "high_dte_atm_contract", "high_dte_atm_put_contract",
+    "high_dte_put_contract", "high_dte_call_contract",
 ]
 
 _PREFETCH_WORKERS = 5
@@ -94,21 +97,40 @@ def _lookup_bar(
     return bars_by_contract.get(option_ticker, {}).get(trade_date)
 
 
+MAX_SPREAD_RATIO = 0.15  # Max bid-ask spread / mid for tight-spread filter
+
+
 def _get_option_price(bar: dict[str, Any]) -> tuple[float | None, str]:
-    """Extract best price from option bar. Returns (price, source)."""
-    # Prefer mid price if bid/ask available
+    """Extract best price from option bar using strict hierarchy.
+
+    Priority: midpoint (tight spread) → VWAP → close (in range) → reject.
+    """
     bid = bar.get("bid")
     ask = bar.get("ask")
+
+    # Tier 1: Midpoint with tight spread validation
     if bid is not None and ask is not None and bid > 0 and ask > 0:
         mid = (bid + ask) / 2
-        if mid >= MIN_OPTION_PRICE:
+        spread_ratio = (ask - bid) / mid if mid > 0 else 1.0
+        if mid >= MIN_OPTION_PRICE and spread_ratio <= MAX_SPREAD_RATIO:
             return mid, "mid"
 
-    # Fallback to close price with volume/OI filter
+    # Tier 2: VWAP if available
+    vwap = bar.get("vw") or bar.get("vwap")
+    if vwap is not None and vwap >= MIN_OPTION_PRICE:
+        return float(vwap), "vwap"
+
+    # Tier 3: Close price — must have volume AND be within bid-ask range if available
     close = bar.get("close") or bar.get("c")
     volume = bar.get("volume") or bar.get("v") or 0
     if close is not None and close >= MIN_OPTION_PRICE and volume >= MIN_VOLUME:
-        return float(close), "close_filtered"
+        # If bid/ask exist, validate close is within range
+        if bid is not None and ask is not None and bid > 0 and ask > 0:
+            if bid <= close <= ask:
+                return float(close), "close_filtered"
+        else:
+            # No bid/ask to validate against — accept with volume filter only
+            return float(close), "close_filtered"
 
     return None, "rejected"
 
@@ -119,6 +141,7 @@ def _derive_iv_for_contract(
     stock_close: float,
     dte: int,
     option_type: str,
+    risk_free_rate: float = RISK_FREE_RATE,
 ) -> tuple[float | None, str]:
     """Derive IV for a single contract from a pre-fetched bar.
 
@@ -144,7 +167,7 @@ def _derive_iv_for_contract(
     except (ValueError, IndexError):
         return None, "bad_ticker_format"
 
-    iv = implied_volatility(price, stock_close, strike, T, RISK_FREE_RATE, option_type)
+    iv = implied_volatility(price, stock_close, strike, T, risk_free_rate, option_type)
     if iv is None:
         return None, "solver_failed"
 
@@ -154,21 +177,24 @@ def _derive_iv_for_contract(
 def _interpolate_iv(
     iv_low: float, dte_low: int, iv_high: float, dte_high: int
 ) -> float:
-    """30-day constant-maturity linear interpolation."""
+    """30-day constant-maturity variance-time interpolation."""
     if dte_high == dte_low:
         return (iv_low + iv_high) / 2
+
+    t_low = dte_low / 365
+    t_high = dte_high / 365
+    t_target = TARGET_DTE / 365
 
     weight_low = (dte_high - TARGET_DTE) / (dte_high - dte_low)
     weight_high = (TARGET_DTE - dte_low) / (dte_high - dte_low)
 
-    return weight_low * iv_low + weight_high * iv_high
+    total_var = weight_low * iv_low**2 * t_low + weight_high * iv_high**2 * t_high
+    return math.sqrt(total_var / t_target)
 
 
-def _normalize_iv_fallback(iv: float, dte: int) -> float:
-    """DTE normalization fallback when only one bracket available."""
-    if dte <= 0:
-        return iv
-    return iv * math.sqrt(TARGET_DTE / dte)
+def _normalize_iv_fallback(iv: float, dte: int) -> float | None:
+    """Fallback removed — returns None to avoid unreliable sqrt(T) scaling."""
+    return None
 
 
 def build_iv_history(
@@ -238,6 +264,9 @@ def build_iv_history(
         if idx % 50 == 0:
             logger.info(f"[IV BUILDER] Deriving IV for date {idx + 1}/{len(bracket_df)}: {date_str}")
 
+        # Dynamic risk-free rate for this trading day (cached per date)
+        rfr = get_risk_free_rate(dte_days=TARGET_DTE, observation_date=date_str)
+
         result: dict[str, Any] = {
             "date": date_str,
             "iv_30d_atm": None,
@@ -249,26 +278,49 @@ def build_iv_history(
             "price_source": None,
         }
 
-        # Derive ATM IV
+        # Derive ATM IV (synthetic forward: average of call and put IV at ATM strike)
         iv_atm_low, iv_atm_high = None, None
         source = None
 
         low_atm = row.get("low_dte_atm_contract")
+        low_atm_put = row.get("low_dte_atm_put_contract")
         high_atm = row.get("high_dte_atm_contract")
+        high_atm_put = row.get("high_dte_atm_put_contract")
 
         if low_atm and dte_low and dte_low >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, low_atm, date_str)
-            iv_atm_low, src = _derive_iv_for_contract(
-                bar, low_atm, stock_close, dte_low, "call"
+            iv_call_low_atm, src = _derive_iv_for_contract(
+                bar, low_atm, stock_close, dte_low, "call", rfr
             )
+            iv_put_low_atm = None
+            if low_atm_put:
+                bar_p = _lookup_bar(bars_by_contract, low_atm_put, date_str)
+                iv_put_low_atm, _ = _derive_iv_for_contract(
+                    bar_p, low_atm_put, stock_close, dte_low, "put", rfr
+                )
+            # Synthetic forward: average call/put IV; fall back to call-only
+            if iv_call_low_atm is not None and iv_put_low_atm is not None:
+                iv_atm_low = (iv_call_low_atm + iv_put_low_atm) / 2
+            else:
+                iv_atm_low = iv_call_low_atm
             if iv_atm_low:
                 source = src
 
         if high_atm and dte_high and dte_high >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, high_atm, date_str)
-            iv_atm_high, src = _derive_iv_for_contract(
-                bar, high_atm, stock_close, dte_high, "call"
+            iv_call_high_atm, src = _derive_iv_for_contract(
+                bar, high_atm, stock_close, dte_high, "call", rfr
             )
+            iv_put_high_atm = None
+            if high_atm_put:
+                bar_p = _lookup_bar(bars_by_contract, high_atm_put, date_str)
+                iv_put_high_atm, _ = _derive_iv_for_contract(
+                    bar_p, high_atm_put, stock_close, dte_high, "put", rfr
+                )
+            if iv_call_high_atm is not None and iv_put_high_atm is not None:
+                iv_atm_high = (iv_call_high_atm + iv_put_high_atm) / 2
+            else:
+                iv_atm_high = iv_call_high_atm
             if iv_atm_high:
                 source = src
 
@@ -289,13 +341,13 @@ def build_iv_history(
         if low_put and dte_low and dte_low >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, low_put, date_str)
             iv_put_low, _ = _derive_iv_for_contract(
-                bar, low_put, stock_close, dte_low, "put"
+                bar, low_put, stock_close, dte_low, "put", rfr
             )
 
         if high_put and dte_high and dte_high >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, high_put, date_str)
             iv_put_high, _ = _derive_iv_for_contract(
-                bar, high_put, stock_close, dte_high, "put"
+                bar, high_put, stock_close, dte_high, "put", rfr
             )
 
         if iv_put_low is not None and iv_put_high is not None:
@@ -314,13 +366,13 @@ def build_iv_history(
         if low_call and dte_low and dte_low >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, low_call, date_str)
             iv_call_low, _ = _derive_iv_for_contract(
-                bar, low_call, stock_close, dte_low, "call"
+                bar, low_call, stock_close, dte_low, "call", rfr
             )
 
         if high_call and dte_high and dte_high >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, high_call, date_str)
             iv_call_high, _ = _derive_iv_for_contract(
-                bar, high_call, stock_close, dte_high, "call"
+                bar, high_call, stock_close, dte_high, "call", rfr
             )
 
         if iv_call_low is not None and iv_call_high is not None:
@@ -338,11 +390,19 @@ def build_iv_history(
     if df.empty:
         return df
 
-    # Quality filters
-    for col in ["iv_30d_atm", "iv_30d_put", "iv_30d_call"]:
-        if col in df.columns:
-            mask = df[col].notna()
-            df.loc[mask & ((df[col] < MIN_IV) | (df[col] > MAX_IV)), col] = np.nan
+    # Quality flags (soft — keep all data, let downstream decide)
+    def _quality_flag(row: pd.Series) -> str:
+        iv = row.get("iv_30d_atm")
+        src = row.get("price_source")
+        if iv is None or pd.isna(iv):
+            return "missing"
+        if iv < MIN_IV or iv > MAX_IV:
+            return "low"
+        if src in ("close_filtered", "vwap"):
+            return "medium"
+        return "high"
+
+    df["iv_quality"] = df.apply(_quality_flag, axis=1)
 
     # Forward-fill gaps <= 2 days (weekends/holidays)
     df["date"] = pd.to_datetime(df["date"])

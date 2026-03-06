@@ -165,13 +165,14 @@ class TestLogSkew:
 
 
 class TestVrp:
-    """Test Volatility Risk Premium."""
+    """Test Volatility Risk Premium with namespace isolation."""
 
     def test_signal_mode_no_future_leak(self):
         """Signal mode uses trailing RV — no NaN at the end."""
         iv_df = _make_iv_df(n=50)
         stock_df = _make_stock_df(n=50)
         result = OptionsFeatures.compute_vrp(iv_df, stock_df, mode="signal")
+        assert result.name == "vrp_5"
         # Trailing RV: last values should NOT be NaN (after warmup)
         assert result.iloc[-1] is not np.nan or pd.notna(result.iloc[-1])
 
@@ -180,6 +181,7 @@ class TestVrp:
         iv_df = _make_iv_df(n=50)
         stock_df = _make_stock_df(n=50)
         result = OptionsFeatures.compute_vrp(iv_df, stock_df, mode="research")
+        assert result.name == "vrp_5_forward"
         # Forward-looking: last 5 values should be NaN
         assert result.iloc[-5:].isna().all()
 
@@ -188,6 +190,28 @@ class TestVrp:
         iv_df = _make_iv_df()
         with pytest.raises(ValueError, match="VRP requires stock_data"):
             OptionsFeatures.compute_feature("vrp_5", iv_df, stock_data=None)
+
+    def test_vrp_5_rejects_research_mode(self):
+        """vrp_5 must NOT be used in research mode — use vrp_5_forward instead."""
+        iv_df = _make_iv_df(n=50)
+        stock_df = _make_stock_df(n=50)
+        with pytest.raises(ValueError, match="vrp_5_forward"):
+            OptionsFeatures.compute_feature("vrp_5", iv_df, stock_df, mode="research")
+
+    def test_vrp_5_forward_rejects_signal_mode(self):
+        """vrp_5_forward must NOT be used in signal mode."""
+        iv_df = _make_iv_df(n=50)
+        stock_df = _make_stock_df(n=50)
+        with pytest.raises(ValueError, match="must NOT be used in signal mode"):
+            OptionsFeatures.compute_feature("vrp_5_forward", iv_df, stock_df, mode="signal")
+
+    def test_vrp_5_forward_accepted_in_research_mode(self):
+        """vrp_5_forward should work in research mode."""
+        iv_df = _make_iv_df(n=50)
+        stock_df = _make_stock_df(n=50)
+        result = OptionsFeatures.compute_feature("vrp_5_forward", iv_df, stock_df, mode="research")
+        assert result.name == "vrp_5_forward"
+        assert len(result) == 50
 
 
 class TestComputeFeatureDispatch:

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import Any
 
 import pandas as pd
+from scipy.stats import norm
 
 from app.services.polygon_client import PolygonClientService
 
@@ -17,7 +19,23 @@ _SEMAPHORE = asyncio.Semaphore(5)
 MIN_VOLUME = 50
 MIN_OPEN_INTEREST = 100
 MAX_SPREAD_RATIO = 0.10  # 10% bid-ask spread / mid
-OTM_OFFSET_PCT = 0.05    # 5% OTM for skew contracts
+OTM_OFFSET_PCT = 0.05    # Fallback: 5% OTM for skew contracts
+TARGET_DELTA_PUT = -0.25  # Target delta for OTM put (25Δ)
+TARGET_DELTA_CALL = 0.25  # Target delta for OTM call (25Δ)
+DEFAULT_IV = 0.25         # Default IV for delta estimation when not available
+DEFAULT_RFR = 0.043       # Default risk-free rate for delta estimation
+
+
+def _bs_delta(
+    S: float, K: float, T: float, r: float, sigma: float, option_type: str,
+) -> float:
+    """Black-Scholes delta for strike selection."""
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return 0.0
+    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+    if option_type == "call":
+        return float(norm.cdf(d1))
+    return float(norm.cdf(d1) - 1)
 
 
 def _find_atm_strike(contracts: list[dict], stock_close: float) -> dict | None:
@@ -27,22 +45,57 @@ def _find_atm_strike(contracts: list[dict], stock_close: float) -> dict | None:
     return min(contracts, key=lambda c: abs(c["strike_price"] - stock_close))
 
 
-def _find_otm_put(contracts: list[dict], stock_close: float) -> dict | None:
-    """Find OTM put ~5% below ATM."""
-    target = stock_close * (1 - OTM_OFFSET_PCT)
+def _find_otm_put_by_delta(
+    contracts: list[dict],
+    stock_close: float,
+    dte_days: int,
+    iv_estimate: float = DEFAULT_IV,
+    rfr: float = DEFAULT_RFR,
+) -> dict | None:
+    """Find OTM put closest to 25Δ. Falls back to 5% OTM offset."""
     puts = [c for c in contracts if c.get("contract_type") == "put"]
     if not puts:
         return None
-    return min(puts, key=lambda c: abs(c["strike_price"] - target))
+
+    T = dte_days / 365.0
+    if T <= 0 or iv_estimate <= 0:
+        # Fall back to fixed offset
+        target = stock_close * (1 - OTM_OFFSET_PCT)
+        return min(puts, key=lambda c: abs(c["strike_price"] - target))
+
+    return min(
+        puts,
+        key=lambda c: abs(
+            _bs_delta(stock_close, c["strike_price"], T, rfr, iv_estimate, "put")
+            - TARGET_DELTA_PUT
+        ),
+    )
 
 
-def _find_otm_call(contracts: list[dict], stock_close: float) -> dict | None:
-    """Find OTM call ~5% above ATM."""
-    target = stock_close * (1 + OTM_OFFSET_PCT)
+def _find_otm_call_by_delta(
+    contracts: list[dict],
+    stock_close: float,
+    dte_days: int,
+    iv_estimate: float = DEFAULT_IV,
+    rfr: float = DEFAULT_RFR,
+) -> dict | None:
+    """Find OTM call closest to 25Δ. Falls back to 5% OTM offset."""
     calls = [c for c in contracts if c.get("contract_type") == "call"]
     if not calls:
         return None
-    return min(calls, key=lambda c: abs(c["strike_price"] - target))
+
+    T = dte_days / 365.0
+    if T <= 0 or iv_estimate <= 0:
+        target = stock_close * (1 + OTM_OFFSET_PCT)
+        return min(calls, key=lambda c: abs(c["strike_price"] - target))
+
+    return min(
+        calls,
+        key=lambda c: abs(
+            _bs_delta(stock_close, c["strike_price"], T, rfr, iv_estimate, "call")
+            - TARGET_DELTA_CALL
+        ),
+    )
 
 
 def _passes_liquidity_filter(contract: dict) -> bool:
@@ -83,6 +136,7 @@ def _fetch_contracts_for_expiry(
     underlying: str,
     expiration_date: str,
     stock_close: float,
+    dte_days: int = 30,
 ) -> dict[str, Any]:
     """Fetch and filter contracts for a specific expiry, returning ATM + OTM contracts."""
     strike_range = stock_close * 0.15  # Search within 15% of ATM
@@ -101,11 +155,13 @@ def _fetch_contracts_for_expiry(
     puts = [c for c in contracts if c.get("contract_type") == "put"]
 
     atm_call = _find_atm_strike(calls, stock_close)
-    otm_put = _find_otm_put(puts, stock_close)
-    otm_call = _find_otm_call(calls, stock_close)
+    atm_put = _find_atm_strike(puts, stock_close)
+    otm_put = _find_otm_put_by_delta(contracts, stock_close, dte_days)
+    otm_call = _find_otm_call_by_delta(contracts, stock_close, dte_days)
 
     return {
         "atm_call": atm_call,
+        "atm_put": atm_put,
         "otm_put": otm_put,
         "otm_call": otm_call,
     }
@@ -124,8 +180,8 @@ def _find_bracket_expiries(
     - high_expiry has DTE > 30 (closest above 30)
     """
     target_date = trade_date + timedelta(days=30)
-    search_start = trade_date + timedelta(days=14)  # At least 14 DTE
-    search_end = trade_date + timedelta(days=60)    # At most 60 DTE
+    search_start = trade_date + timedelta(days=20)  # At least 20 DTE
+    search_end = trade_date + timedelta(days=45)    # At most 45 DTE
 
     trade_date_str = trade_date.strftime("%Y-%m-%d")
 
@@ -194,9 +250,9 @@ def find_bracket_contracts(
 
     Returns:
         DataFrame with columns per date:
-        [date, stock_close, low_dte, low_dte_atm_contract, low_dte_put_contract,
-         low_dte_call_contract, high_dte, high_dte_atm_contract, high_dte_put_contract,
-         high_dte_call_contract]
+        [date, stock_close, low_dte, low_dte_atm_contract, low_dte_atm_put_contract,
+         low_dte_put_contract, low_dte_call_contract, high_dte, high_dte_atm_contract,
+         high_dte_atm_put_contract, high_dte_put_contract, high_dte_call_contract]
     """
     # Build date→close map from stock bars
     date_close_map: dict[str, float] = {}
@@ -255,10 +311,12 @@ def find_bracket_contracts(
             "stock_close": stock_close,
             "low_dte": None,
             "low_dte_atm_contract": None,
+            "low_dte_atm_put_contract": None,
             "low_dte_put_contract": None,
             "low_dte_call_contract": None,
             "high_dte": None,
             "high_dte_atm_contract": None,
+            "high_dte_atm_put_contract": None,
             "high_dte_put_contract": None,
             "high_dte_call_contract": None,
         }
@@ -271,11 +329,13 @@ def find_bracket_contracts(
                     contract_key = f"{underlying}:{low_exp}"
                     if contract_key not in _contract_cache:
                         _contract_cache[contract_key] = _fetch_contracts_for_expiry(
-                            polygon_client, underlying, low_exp, stock_close
+                            polygon_client, underlying, low_exp, stock_close, dte_days=low_dte
                         )
                     low_contracts = _contract_cache[contract_key]
                     if low_contracts["atm_call"]:
                         row["low_dte_atm_contract"] = low_contracts["atm_call"].get("ticker")
+                    if low_contracts.get("atm_put"):
+                        row["low_dte_atm_put_contract"] = low_contracts["atm_put"].get("ticker")
                     if low_contracts["otm_put"]:
                         row["low_dte_put_contract"] = low_contracts["otm_put"].get("ticker")
                     if low_contracts["otm_call"]:
@@ -291,11 +351,13 @@ def find_bracket_contracts(
                     contract_key = f"{underlying}:{high_exp}"
                     if contract_key not in _contract_cache:
                         _contract_cache[contract_key] = _fetch_contracts_for_expiry(
-                            polygon_client, underlying, high_exp, stock_close
+                            polygon_client, underlying, high_exp, stock_close, dte_days=high_dte
                         )
                     high_contracts = _contract_cache[contract_key]
                     if high_contracts["atm_call"]:
                         row["high_dte_atm_contract"] = high_contracts["atm_call"].get("ticker")
+                    if high_contracts.get("atm_put"):
+                        row["high_dte_atm_put_contract"] = high_contracts["atm_put"].get("ticker")
                     if high_contracts["otm_put"]:
                         row["high_dte_put_contract"] = high_contracts["otm_put"].get("ticker")
                     if high_contracts["otm_call"]:
