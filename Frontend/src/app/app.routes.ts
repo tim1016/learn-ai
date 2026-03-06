@@ -1,48 +1,138 @@
 import { Routes } from "@angular/router";
-import { MarketDataComponent } from "./components/market-data/market-data.component";
-import { TickersComponent } from "./components/tickers/tickers.component";
-import { TechnicalAnalysisComponent } from "./components/tickers/technical-analysis/technical-analysis.component";
-import { StockAnalysisComponent } from "./components/stock-analysis/stock-analysis.component";
-import { ChunkDetailComponent } from "./components/stock-analysis/chunk-detail/chunk-detail.component";
-import { DayDetailComponent } from "./components/stock-analysis/day-detail/day-detail.component";
-import { OptionsChainComponent } from "./components/options-chain-v2/options-chain.component";
-import { StrategyLabComponent } from "./components/strategy-lab/strategy-lab.component";
-import { OptionsHistoryComponent } from "./components/options-history/options-history.component";
-import { OptionsStrategyLabComponent } from "./components/options-strategy-lab/options-strategy-lab.component";
-import { SnapshotsComponent } from "./components/snapshots/snapshots.component";
-import { TrackedInstrumentsComponent } from "./components/tracked-instruments/tracked-instruments.component";
-import { LstmTrainComponent } from "./components/lstm/train/lstm-train.component";
-import { LstmValidateComponent } from "./components/lstm/validate/lstm-validate.component";
-import { LstmPredictionsComponent } from "./components/lstm/predictions/lstm-predictions.component";
-import { LstmModelsComponent } from "./components/lstm/models/lstm-models.component";
-import { StrategyBuilderComponent } from "./components/strategy-builder/strategy-builder.component";
-import { ResearchLabComponent } from "./components/research-lab/research-lab.component";
 
 export const routes: Routes = [
   { path: "", redirectTo: "/market-data", pathMatch: "full" },
-  { path: "market-data", component: MarketDataComponent },
-  { path: "tickers", component: TickersComponent },
-  { path: "technical-analysis", component: TechnicalAnalysisComponent },
-  { path: "stock-analysis", component: StockAnalysisComponent },
-  { path: "stock-analysis/chunk/:ticker/:fromDate/:toDate", component: ChunkDetailComponent },
-  { path: "stock-analysis/day/:ticker/:date", component: DayDetailComponent },
-  { path: "options-chain", component: OptionsChainComponent },
-  { path: "strategy-lab", component: StrategyLabComponent },
-  { path: "options-strategy-lab", component: OptionsStrategyLabComponent },
-  { path: "strategy-builder", component: StrategyBuilderComponent },
-  { path: "options-history", component: OptionsHistoryComponent },
-  { path: "snapshots", component: SnapshotsComponent },
-  { path: "tracked-instruments", component: TrackedInstrumentsComponent },
-  { path: "lstm/train", component: LstmTrainComponent },
-  { path: "lstm/validate", component: LstmValidateComponent },
-  { path: "lstm/predictions", component: LstmPredictionsComponent },
-  { path: "lstm/models", component: LstmModelsComponent },
-  { path: "research-lab", component: ResearchLabComponent },
+  {
+    path: "market-data",
+    loadComponent: () =>
+      import("./components/market-data/market-data.component").then(
+        (m) => m.MarketDataComponent
+      ),
+  },
+  {
+    path: "tickers",
+    loadComponent: () =>
+      import("./components/tickers/tickers.component").then(
+        (m) => m.TickersComponent
+      ),
+  },
+  {
+    path: "technical-analysis",
+    loadComponent: () =>
+      import(
+        "./components/tickers/technical-analysis/technical-analysis.component"
+      ).then((m) => m.TechnicalAnalysisComponent),
+  },
+  {
+    path: "stock-analysis",
+    loadComponent: () =>
+      import("./components/stock-analysis/stock-analysis.component").then(
+        (m) => m.StockAnalysisComponent
+      ),
+  },
+  {
+    path: "stock-analysis/chunk/:ticker/:fromDate/:toDate",
+    loadComponent: () =>
+      import(
+        "./components/stock-analysis/chunk-detail/chunk-detail.component"
+      ).then((m) => m.ChunkDetailComponent),
+  },
+  {
+    path: "stock-analysis/day/:ticker/:date",
+    loadComponent: () =>
+      import(
+        "./components/stock-analysis/day-detail/day-detail.component"
+      ).then((m) => m.DayDetailComponent),
+  },
+  {
+    path: "options-chain",
+    loadComponent: () =>
+      import("./components/options-chain-v2/options-chain.component").then(
+        (m) => m.OptionsChainComponent
+      ),
+  },
+  {
+    path: "strategy-lab",
+    loadComponent: () =>
+      import("./components/strategy-lab/strategy-lab.component").then(
+        (m) => m.StrategyLabComponent
+      ),
+  },
+  {
+    path: "options-strategy-lab",
+    loadComponent: () =>
+      import(
+        "./components/options-strategy-lab/options-strategy-lab.component"
+      ).then((m) => m.OptionsStrategyLabComponent),
+  },
+  {
+    path: "strategy-builder",
+    loadComponent: () =>
+      import("./components/strategy-builder/strategy-builder.component").then(
+        (m) => m.StrategyBuilderComponent
+      ),
+  },
+  {
+    path: "options-history",
+    loadComponent: () =>
+      import("./components/options-history/options-history.component").then(
+        (m) => m.OptionsHistoryComponent
+      ),
+  },
+  {
+    path: "snapshots",
+    loadComponent: () =>
+      import("./components/snapshots/snapshots.component").then(
+        (m) => m.SnapshotsComponent
+      ),
+  },
+  {
+    path: "tracked-instruments",
+    loadComponent: () =>
+      import(
+        "./components/tracked-instruments/tracked-instruments.component"
+      ).then((m) => m.TrackedInstrumentsComponent),
+  },
+  {
+    path: "lstm/train",
+    loadComponent: () =>
+      import("./components/lstm/train/lstm-train.component").then(
+        (m) => m.LstmTrainComponent
+      ),
+  },
+  {
+    path: "lstm/validate",
+    loadComponent: () =>
+      import("./components/lstm/validate/lstm-validate.component").then(
+        (m) => m.LstmValidateComponent
+      ),
+  },
+  {
+    path: "lstm/predictions",
+    loadComponent: () =>
+      import("./components/lstm/predictions/lstm-predictions.component").then(
+        (m) => m.LstmPredictionsComponent
+      ),
+  },
+  {
+    path: "lstm/models",
+    loadComponent: () =>
+      import("./components/lstm/models/lstm-models.component").then(
+        (m) => m.LstmModelsComponent
+      ),
+  },
+  {
+    path: "research-lab",
+    loadComponent: () =>
+      import("./components/research-lab/research-lab.component").then(
+        (m) => m.ResearchLabComponent
+      ),
+  },
   {
     path: "research-lab/signal-report/:id",
     loadComponent: () =>
-      import("./components/research-lab/signal-report-page/signal-report-page.component").then(
-        (m) => m.SignalReportPageComponent
-      ),
+      import(
+        "./components/research-lab/signal-report-page/signal-report-page.component"
+      ).then((m) => m.SignalReportPageComponent),
   },
 ];

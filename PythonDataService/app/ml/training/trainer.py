@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from tensorflow import keras
 
 from app.ml.evaluation.metrics import calculate_rmse
 from app.ml.models.schemas import TrainingConfig, TrainingResult
@@ -30,7 +29,7 @@ class LSTMTrainer:
         X_test: np.ndarray,
         y_train: np.ndarray,
         y_test: np.ndarray,
-    ) -> tuple[TrainingResult, keras.Model, dict]:
+    ) -> tuple[TrainingResult, object, dict]:
         """Train LSTM, compare to baseline, return results.
 
         Returns:
@@ -44,6 +43,8 @@ class LSTMTrainer:
             f"batch_size={config.batch_size}, "
             f"train_samples={X_train.shape[0]}, test_samples={X_test.shape[0]}"
         )
+
+        from tensorflow import keras
 
         callbacks = [
             keras.callbacks.EarlyStopping(

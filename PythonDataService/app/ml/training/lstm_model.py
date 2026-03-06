@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import logging
 
-import tensorflow as tf
-from tensorflow import keras
-
 from app.ml.models.schemas import TrainingConfig
 
 logger = logging.getLogger(__name__)
@@ -12,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 def build_lstm_model(
     config: TrainingConfig, input_shape: tuple[int, int]
-) -> keras.Model:
+):  # -> keras.Model
     """Build LSTM model based on TrainingConfig.
 
     Args:
@@ -22,6 +19,8 @@ def build_lstm_model(
     Returns:
         Compiled Keras model.
     """
+    from tensorflow import keras
+
     model = keras.Sequential(name=f"lstm_{config.ticker}")
 
     for i in range(config.lstm_layers):

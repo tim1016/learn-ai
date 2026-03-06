@@ -11,14 +11,11 @@ pandas-dq>=1.29
 ipython
 pandas-ta
 scipy>=1.14.0
-pytest
-pytest-asyncio
 httpx
+statsmodels>=0.14.0
+click>=8.1.0
 
-# ML / Deep Learning
+# ML / Deep Learning (lazy-imported at runtime)
 tensorflow>=2.16.0
 scikit-learn>=1.5.0
 matplotlib>=3.9.0
-click>=8.1.0
-jupyter>=1.0.0
-statsmodels>=0.14.0

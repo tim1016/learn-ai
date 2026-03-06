@@ -4,5 +4,8 @@
       "WebFetch(domain:medium.com)",
       "Bash(podman start my-backend)"
     ]
+  },
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true
   }
 }

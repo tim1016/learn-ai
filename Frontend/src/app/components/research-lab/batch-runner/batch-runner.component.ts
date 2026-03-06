@@ -19,10 +19,14 @@ import {
   ResearchService
 } from '../../../services/research.service';
 
+// const DEFAULT_TICKERS = [
+//      'SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA',                   
+//        'TSLA', 'AMD', 'META', 'AMZN', 'NFLX',                  
+//       'JPM', 'XOM', 'BAC', 'IWM', 'DIA',                      
+// ];
+
 const DEFAULT_TICKERS = [
-     'SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA',                   
-       'TSLA', 'AMD', 'META', 'AMZN', 'NFLX',                  
-      'JPM', 'XOM', 'BAC', 'IWM', 'DIA',                      
+     'SPY', 'QQQ', 'AAPL',                
 ];
 
 const OPTIONS_FEATURES = [
