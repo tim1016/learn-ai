@@ -6,6 +6,7 @@ import { SignalRunnerComponent } from './signal-runner/signal-runner.component';
 import { SignalInfoPanelComponent } from './signal-info-panel/signal-info-panel.component';
 import { SignalHistoryComponent } from './signal-history/signal-history.component';
 import { BatchRunnerComponent } from './batch-runner/batch-runner.component';
+import { OptionsMathDocsComponent } from './options-math-docs/options-math-docs.component';
 import { TabsModule } from 'primeng/tabs';
 
 @Component({
@@ -19,6 +20,7 @@ import { TabsModule } from 'primeng/tabs';
     SignalInfoPanelComponent,
     SignalHistoryComponent,
     BatchRunnerComponent,
+    OptionsMathDocsComponent,
     TabsModule,
   ],
   templateUrl: './research-lab.component.html',

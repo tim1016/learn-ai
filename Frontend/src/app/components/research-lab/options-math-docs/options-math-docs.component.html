@@ -1,0 +1,918 @@
+<div class="mt-4 max-w-5xl">
+
+  <!-- ═══ 0. Symbol Glossary ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-book section-icon"></i>
+      <h3>Symbol Glossary</h3>
+    </div>
+    <p class="section-description">
+      Canonical symbol definitions used throughout the options system and this documentation.
+    </p>
+    <div class="doc-card">
+      <table class="econ-checklist">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Name</th>
+            <th>Definition</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (s of symbolGlossary; track s.name) {
+            <tr>
+              <td class="question-cell"><span [appKatex]="s.symbolLatex"></span></td>
+              <td>{{ s.name }}</td>
+              <td>{{ s.definition }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+      <div class="info-callout mt-3">
+        <i class="pi pi-info-circle"></i>
+        <span>{{ symbolNote }}</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 1. Black-Scholes Pricing Model ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-calculator section-icon"></i>
+      <h3>Black-Scholes Pricing Model</h3>
+    </div>
+    <p class="section-description">
+      The foundation of all option pricing, IV derivation, and Greek calculations in this system.
+    </p>
+
+    <p-accordion [multiple]="true">
+      <!-- Normal Distribution -->
+      <p-accordion-panel value="normal">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Normal Distribution Primitives</span>
+            <span class="feature-badge">Foundation</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <h4>{{ normalPdf.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="normalPdf.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ normalPdf.note }}</p>
+
+            <p-divider />
+
+            <h4>{{ normalCdf.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="normalCdf.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ normalCdf.note }}</p>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- d₁ and d₂ -->
+      <p-accordion-panel value="d1d2">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">d₁ and d₂ Parameters</span>
+            <span class="feature-badge">Core</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <h4>{{ d1Formula.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="d1Formula.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="variable-list">
+              <span class="label">Where:</span>
+              @for (v of d1Formula.variablesLatex!; track v) {
+                <div class="variable-item">
+                  <span [appKatex]="v"></span>
+                </div>
+              }
+            </div>
+            <p class="interpretation">{{ d1Formula.note }}</p>
+
+            <p-divider />
+
+            <h4>{{ d2Formula.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="d2Formula.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ d2Formula.note }}</p>
+
+            <div class="info-callout warn mt-3">
+              <i class="pi pi-exclamation-triangle"></i>
+              <div>
+                <strong>Guards</strong>
+                @for (guard of bsGuards; track guard) {
+                  <div>{{ guard }}</div>
+                }
+              </div>
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Option Pricing -->
+      <p-accordion-panel value="pricing">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">European Option Pricing</span>
+            <span class="feature-badge">Pricing</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <h4>{{ callPriceFormula.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="callPriceFormula.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ callPriceFormula.note }}</p>
+
+            <p-divider />
+
+            <h4>{{ putPriceFormula.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="putPriceFormula.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ putPriceFormula.note }}</p>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </section>
+
+  <!-- ═══ 2. Greeks ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-chart-line section-icon"></i>
+      <h3>Option Greeks</h3>
+    </div>
+    <p class="section-description">
+      First and second-order sensitivities of option price to market parameters. All computed per single option before position/quantity adjustments.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (greek of greeks; track greek.name) {
+        <p-accordion-panel [value]="greek.name">
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ greek.name }} (<span [appKatex]="greek.symbol"></span>)</span>
+              <span class="feature-badge">Sensitivity</span>
+            </div>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="doc-card">
+              <h4>Call</h4>
+              <div class="formula-block">
+                <span [appKatex]="greek.callFormulaLatex" [displayMode]="true"></span>
+              </div>
+
+              <h4>Put</h4>
+              <div class="formula-block">
+                <span [appKatex]="greek.putFormulaLatex" [displayMode]="true"></span>
+              </div>
+
+              <p-divider />
+              <p class="interpretation">{{ greek.interpretation }}</p>
+
+              <div class="info-callout mt-3">
+                <i class="pi pi-code"></i>
+                <span>{{ greek.codeNote }}</span>
+              </div>
+            </div>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+
+      <!-- Strategy-Level Greeks -->
+      <p-accordion-panel value="strategy-greeks">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Strategy-Level Aggregation</span>
+            <span class="feature-badge">Portfolio</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="formula-block">
+              <span [appKatex]="strategyGreekFormula.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="variable-list">
+              <span class="label">Where:</span>
+              @for (v of strategyGreekFormula.variablesLatex!; track v) {
+                <div class="variable-item">
+                  <span [appKatex]="v"></span>
+                </div>
+              }
+            </div>
+            <p class="interpretation">{{ strategyGreekFormula.note }}</p>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </section>
+
+  <!-- ═══ 3. IV Solver ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-search section-icon"></i>
+      <h3>Implied Volatility Solver</h3>
+    </div>
+    <div class="doc-card highlight-card">
+      <p class="interpretation">{{ ivSolverIntro }}</p>
+    </div>
+
+    <div class="doc-card mt-4">
+      <h4>{{ brennerFormula.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="brennerFormula.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <p class="interpretation">{{ brennerFormula.note }}</p>
+
+      <p-divider />
+
+      <h4>{{ newtonFormula.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="newtonFormula.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <div class="variable-list">
+        <span class="label">Derivative:</span>
+        @for (v of newtonFormula.variablesLatex!; track v) {
+          <div class="variable-item">
+            <span [appKatex]="v"></span>
+          </div>
+        }
+      </div>
+      <p class="interpretation">{{ newtonFormula.note }}</p>
+
+      <p-divider />
+
+      <h4>{{ brentFormula.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="brentFormula.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <p class="interpretation">{{ brentFormula.note }}</p>
+
+      <p-divider />
+
+      <h4 class="subsection-title">
+        <i class="pi pi-shield"></i>
+        Safety Guards
+      </h4>
+      @for (guard of ivSolverGuards; track guard) {
+        <div class="driver-card">
+          <p>{{ guard }}</p>
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 4. 30-Day IV Construction ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sliders-h section-icon"></i>
+      <h3>30-Day Constant-Maturity IV</h3>
+    </div>
+    <div class="doc-card highlight-card">
+      <p class="interpretation">{{ ivConstructionIntro }}</p>
+    </div>
+
+    <p-accordion [multiple]="true">
+      <!-- Current Method -->
+      <p-accordion-panel value="linear-interp">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Linear Interpolation (Current)</span>
+            <span class="feature-badge">Baseline</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="formula-block">
+              <span [appKatex]="currentInterpolation.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="variable-list">
+              <span class="label">Where:</span>
+              @for (v of currentInterpolation.variablesLatex!; track v) {
+                <div class="variable-item">
+                  <span [appKatex]="v"></span>
+                </div>
+              }
+            </div>
+            <p class="interpretation">{{ currentInterpolation.note }}</p>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Variance Interpolation -->
+      <p-accordion-panel value="variance-interp">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Variance-Time Interpolation (Upgrade)</span>
+            <span class="feature-badge upgrade-badge">Upgrade 1</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="formula-block">
+              <span [appKatex]="varianceInterpolation.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="variable-list">
+              <span class="label">Where:</span>
+              @for (v of varianceInterpolation.variablesLatex!; track v) {
+                <div class="variable-item">
+                  <span [appKatex]="v"></span>
+                </div>
+              }
+            </div>
+            <p class="interpretation">{{ varianceInterpolation.note }}</p>
+
+            <p-divider />
+
+            <h4>{{ jensenInequality.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="jensenInequality.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ jensenInequality.note }}</p>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Single Bracket -->
+      <p-accordion-panel value="single-bracket">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Single-Bracket Fallback (Deprecated)</span>
+            <span class="feature-badge deprecated-badge">Removed</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="formula-block">
+              <span [appKatex]="singleBracketFallback.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ singleBracketFallback.note }}</p>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Bracket Window -->
+      <p-accordion-panel value="bracket-window">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Bracket DTE Window</span>
+            <span class="feature-badge">Selection</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="assumptions-grid">
+              <span class="assumption-label">Current</span>
+              <span class="assumption-value">{{ bracketWindow.current }}</span>
+              <span class="assumption-label">Upgraded</span>
+              <span class="assumption-value">{{ bracketWindow.upgraded }}</span>
+            </div>
+            <div class="insight-callout mt-3">
+              <i class="pi pi-lightbulb"></i>
+              <div>
+                <strong>Rationale</strong>
+                <span>{{ bracketWindow.rationale }}</span>
+              </div>
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </section>
+
+  <!-- ═══ 5. Risk-Free Rate & Strike Selection ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-cog section-icon"></i>
+      <h3>Rate & Strike Selection</h3>
+    </div>
+
+    <p-accordion [multiple]="true">
+      <!-- Risk-Free Rate -->
+      <p-accordion-panel value="risk-free">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Dynamic Risk-Free Rate</span>
+            <span class="feature-badge upgrade-badge">Upgrade 4</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="info-callout warn">
+              <i class="pi pi-exclamation-triangle"></i>
+              <span>{{ riskFreeRateDoc.problem }}</span>
+            </div>
+
+            <h4 class="mt-3">Current</h4>
+            <div class="formula-block">
+              <span [appKatex]="riskFreeRateDoc.currentLatex" [displayMode]="true"></span>
+            </div>
+
+            <h4>Upgraded</h4>
+            <div class="formula-block">
+              <span [appKatex]="riskFreeRateDoc.upgradedLatex" [displayMode]="true"></span>
+            </div>
+
+            <p-divider />
+
+            <h4>IV Sensitivity to Rate Error</h4>
+            <div class="formula-block">
+              <span [appKatex]="riskFreeRateDoc.sensitivityLatex" [displayMode]="true"></span>
+            </div>
+
+            <div class="info-callout mt-3">
+              <i class="pi pi-shield"></i>
+              <span>{{ riskFreeRateDoc.fallback }}</span>
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Delta-Based Strikes -->
+      <p-accordion-panel value="delta-strikes">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Delta-Based Skew Strikes</span>
+            <span class="feature-badge upgrade-badge">Upgrade 5</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="formula-block">
+              <span [appKatex]="deltaFormula.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ deltaFormula.note }}</p>
+
+            <p-divider />
+
+            <div class="hypothesis-callout">
+              <i class="pi pi-sync"></i>
+              <div>
+                <strong>Circular Dependency Resolution</strong>
+                <span>{{ deltaCircularity }}</span>
+              </div>
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Synthetic Forward -->
+      <p-accordion-panel value="synthetic-forward">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Synthetic Forward for ATM</span>
+            <span class="feature-badge upgrade-badge">Upgrade 6</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="formula-block">
+              <span [appKatex]="syntheticForward.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="variable-list">
+              <span class="label">Where:</span>
+              @for (v of syntheticForward.variablesLatex!; track v) {
+                <div class="variable-item">
+                  <span [appKatex]="v"></span>
+                </div>
+              }
+            </div>
+            <p class="interpretation">{{ syntheticForward.note }}</p>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </section>
+
+  <!-- ═══ 6. Research Features ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-chart-bar section-icon"></i>
+      <h3>Research Features</h3>
+    </div>
+    <p class="section-description">
+      Derived features computed from the 30-day IV series for cross-sectional and time-series research.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (feat of featureFormulas; track feat.label) {
+        <p-accordion-panel [value]="feat.label">
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ feat.label }}</span>
+              <span class="feature-badge">Feature</span>
+            </div>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="doc-card">
+              <div class="formula-block">
+                <span [appKatex]="feat.formulaLatex" [displayMode]="true"></span>
+              </div>
+              @if (feat.variablesLatex) {
+                <div class="variable-list">
+                  <span class="label">Where:</span>
+                  @for (v of feat.variablesLatex; track v) {
+                    <div class="variable-item">
+                      <span [appKatex]="v"></span>
+                    </div>
+                  }
+                </div>
+              }
+              <p class="interpretation">{{ feat.note }}</p>
+            </div>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+
+    <!-- Forward Targets -->
+    <div class="doc-card mt-4">
+      <h4>Forward Return Targets</h4>
+      <p class="interpretation">Features are evaluated against these forward-looking targets to measure predictive power.</p>
+      @for (target of forwardTargets; track target.label) {
+        <div class="driver-card">
+          <h5>{{ target.label }}</h5>
+          <div class="formula-block">
+            <span [appKatex]="target.formulaLatex" [displayMode]="true"></span>
+          </div>
+          <p>{{ target.note }}</p>
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 7. Strategy Engine ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sitemap section-icon"></i>
+      <h3>Strategy Engine</h3>
+    </div>
+    <p class="section-description">
+      Multi-leg strategy P&L computation, probability of profit, and expected value calculations.
+    </p>
+
+    <p-accordion [multiple]="true">
+      <p-accordion-panel value="pnl">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">P&L Computation</span>
+            <span class="feature-badge">Core</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <h4>{{ strategyPnl.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="strategyPnl.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ strategyPnl.note }}</p>
+
+            <p-divider />
+
+            <h4>{{ totalPnl.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="totalPnl.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ totalPnl.note }}</p>
+
+            <p-divider />
+
+            <h4>{{ breakevenFormula.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="breakevenFormula.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ breakevenFormula.note }}</p>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <p-accordion-panel value="probability">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Probability & Expected Value</span>
+            <span class="feature-badge">Analytics</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <h4>{{ popFormula.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="popFormula.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="variable-list">
+              <span class="label">Where:</span>
+              @for (v of popFormula.variablesLatex!; track v) {
+                <div class="variable-item">
+                  <span [appKatex]="v"></span>
+                </div>
+              }
+            </div>
+            <p class="interpretation">{{ popFormula.note }}</p>
+
+            <p-divider />
+
+            <h4>{{ evFormula.label }}</h4>
+            <div class="formula-block">
+              <span [appKatex]="evFormula.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ evFormula.note }}</p>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </section>
+
+  <!-- ═══ 8. Statistical Framework ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-percentage section-icon"></i>
+      <h3>Statistical Framework</h3>
+    </div>
+    <p class="section-description">
+      Statistical methods for evaluating feature predictive power and ensuring robust inference.
+    </p>
+
+    <div class="doc-card highlight-card">
+      <h4>{{ icFormula.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="icFormula.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <div class="variable-list">
+        <span class="label">Where:</span>
+        @for (v of icFormula.variablesLatex!; track v) {
+          <div class="variable-item">
+            <span [appKatex]="v"></span>
+          </div>
+        }
+      </div>
+      <p class="interpretation">{{ icFormula.note }}</p>
+    </div>
+
+    <div class="doc-card mt-4">
+      <h4>{{ neweyWestFormula.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="neweyWestFormula.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <div class="variable-list">
+        <span class="label">Where:</span>
+        @for (v of neweyWestFormula.variablesLatex!; track v) {
+          <div class="variable-item">
+            <span [appKatex]="v"></span>
+          </div>
+        }
+      </div>
+      <p class="interpretation">{{ neweyWestFormula.note }}</p>
+    </div>
+
+    <div class="doc-card mt-4">
+      <h4>{{ effectiveSampleSize.label }}</h4>
+      <div class="formula-block">
+        <span [appKatex]="effectiveSampleSize.formulaLatex" [displayMode]="true"></span>
+      </div>
+      <div class="variable-list">
+        <span class="label">Where:</span>
+        @for (v of effectiveSampleSize.variablesLatex!; track v) {
+          <div class="variable-item">
+            <span [appKatex]="v"></span>
+          </div>
+        }
+      </div>
+      <p class="interpretation">{{ effectiveSampleSize.note }}</p>
+    </div>
+
+    <!-- Validation Gate -->
+    <div class="doc-card mt-4">
+      <h4>Validation Gate</h4>
+      <p class="interpretation">{{ validationGate.intro }}</p>
+      <table class="econ-checklist">
+        <thead>
+          <tr>
+            <th>Test</th>
+            <th>Rule</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (c of validationGate.criteria; track c.test) {
+            <tr>
+              <td class="question-cell">{{ c.test }}</td>
+              <td><code>{{ c.rule }}</code></td>
+              <td>{{ c.rationale }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Validation Caveats -->
+    <div class="doc-card mt-4">
+      <h4>Validation Caveats</h4>
+      @for (caveat of validationCaveats; track caveat) {
+        <div class="info-callout warn mt-3">
+          <i class="pi pi-exclamation-triangle"></i>
+          <span>{{ caveat }}</span>
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 9. Data Pipeline ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-bolt section-icon"></i>
+      <h3>Data Pipeline</h3>
+    </div>
+    <div class="doc-card highlight-card">
+      <div class="pipeline-flow">
+        @for (step of pipelineSteps; track step.label) {
+          <div class="pipeline-stage">
+            <i class="pi pi-arrow-right"></i>
+            <div>
+              <strong>{{ step.label }}</strong>
+              <span class="pipeline-detail">{{ step.detail }}</span>
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+
+    <!-- Price Source Hierarchy -->
+    <div class="doc-card mt-4">
+      <h4>Option Price Source Hierarchy</h4>
+      <table class="econ-checklist">
+        <thead>
+          <tr>
+            <th>Priority</th>
+            <th>Source</th>
+            <th>Condition</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (p of priceHierarchy; track p.rank) {
+            <tr>
+              <td class="question-cell">{{ p.rank }}</td>
+              <td>{{ p.source }}</td>
+              <td>{{ p.condition }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══ 10. Quality & Filtering ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-filter section-icon"></i>
+      <h3>Quality & Filtering</h3>
+    </div>
+
+    <!-- Quality Flags -->
+    <div class="doc-card highlight-card">
+      <h4>Quality Flags</h4>
+      <div class="info-callout warn">
+        <i class="pi pi-exclamation-triangle"></i>
+        <span>{{ qualityNote }}</span>
+      </div>
+      <table class="econ-checklist mt-3">
+        <thead>
+          <tr>
+            <th>Flag</th>
+            <th>Rule</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (q of qualityFlags; track q.flag) {
+            <tr>
+              <td class="question-cell">{{ q.flag }}</td>
+              <td>{{ q.rule }}</td>
+              <td>{{ q.action }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Filter Rules -->
+    <div class="doc-card mt-4">
+      <h4>Sanitization & Filter Rules</h4>
+      <table class="econ-checklist">
+        <thead>
+          <tr>
+            <th>Stage</th>
+            <th>Filter</th>
+            <th>Threshold</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (f of filterRules; track f.filter) {
+            <tr>
+              <td class="question-cell">{{ f.stage }}</td>
+              <td>{{ f.filter }}</td>
+              <td><code>{{ f.threshold }}</code></td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══ 11. Upgrade Roadmap ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-flag section-icon upgrade-icon"></i>
+      <h3>Math Rigor Upgrade Roadmap</h3>
+    </div>
+    <p class="section-description">
+      Ten upgrades ordered by impact-to-effort ratio. Each addresses a specific mathematical correction in the options pipeline.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (u of upgrades; track u.id) {
+        <p-accordion-panel [value]="'upgrade-' + u.id">
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ u.id }}. {{ u.title }}</span>
+              <span class="feature-badge" [class.high-impact]="u.impact === 'HIGH'" [class.low-impact]="u.impact === 'LOW'">{{ u.impact }} / {{ u.effort }}</span>
+              <span class="feature-window">{{ u.phase }}</span>
+            </div>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="doc-card">
+              <div class="hypothesis-callout">
+                <i class="pi pi-exclamation-triangle"></i>
+                <div>
+                  <strong>Problem</strong>
+                  <span>{{ u.problem }}</span>
+                </div>
+              </div>
+
+              @if (u.currentFormulaLatex) {
+                <h4 class="mt-3">Current</h4>
+                <div class="formula-block">
+                  <span [appKatex]="u.currentFormulaLatex" [displayMode]="true"></span>
+                </div>
+              }
+
+              @if (u.correctedFormulaLatex) {
+                <h4>Corrected</h4>
+                <div class="formula-block upgrade-formula">
+                  <span [appKatex]="u.correctedFormulaLatex" [displayMode]="true"></span>
+                </div>
+              }
+
+              <p class="interpretation">{{ u.explanation }}</p>
+            </div>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+  </section>
+
+  <!-- ═══ 12. Known Simplifications ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-exclamation-circle section-icon limitations-icon"></i>
+      <h3>Known Simplifications</h3>
+    </div>
+    <div class="limitations-grid">
+      @for (s of simplifications; track s.title) {
+        <div class="limitation-card">
+          <h5>{{ s.title }}</h5>
+          <p>{{ s.detail }}</p>
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 13. Academic References ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-bookmark section-icon references-icon"></i>
+      <h3>Academic References</h3>
+    </div>
+    <div class="doc-card">
+      <ul class="reference-list">
+        @for (ref of references; track ref.citation) {
+          <li>
+            <span class="ref-citation">{{ ref.citation }}</span>
+            <span class="ref-relevance">{{ ref.relevance }}</span>
+          </li>
+        }
+      </ul>
+    </div>
+  </section>
+
+</div>
