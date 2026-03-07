@@ -95,7 +95,7 @@ Results are cached to prevent redundant calculations.
 
 ### Portfolio Management
 
-**Portfolio Dashboard** (`/portfolio`) — Full event-sourced portfolio tracking system with FIFO lot accounting, risk management, and strategy attribution. Seven interactive tabs:
+**Portfolio Dashboard** (`/portfolio`) — Full event-sourced portfolio tracking system with FIFO lot accounting, risk management, strategy attribution, and built-in system validation. Nine interactive tabs:
 
 **Dashboard** — Account summary with cash balance, position count, performance metrics (Sharpe, Sortino, Calmar, max drawdown, win rate, profit factor), trade recording form, and recent trades table. Take point-in-time snapshots to build your equity curve.
 
@@ -137,13 +137,32 @@ Results are cached to prevent redundant calculations.
 - Contribution percentages showing each strategy's share of total PnL
 - Links to the existing backtest system (`/strategy-lab`)
 
+**Validation** — Frontend-piloted system validation suite that verifies the entire portfolio engine:
+
+- One-click execution of 10 automated tests against a temporary test account
+- **FIFO Accounting** — lot closures, realized PnL, remaining quantities, average cost basis
+- **Rebuild Determinism** — event sourcing guarantee: positions rebuild identically from trade log
+- **Cash Accounting** — cash balance correctness after buys/sells including fees
+- **Unrealized PnL** — mark-to-market valuation with explicit prices
+- **Snapshot Stability** — Equity = Cash + MarketValue invariant at every snapshot
+- **Drawdown Calculation** — peak tracking, drawdown amount and percentage
+- **Risk Rule Triggering** — MaxPositionSize violation detection
+- **Scenario Engine** — PnL impact under price shocks
+- **Equity Invariant** — NetQuantity = sum(lot remaining), fundamental accounting identity
+- **Stress Test** — 200 trades across 50 symbols, rebuild < 5 seconds, zero drift
+- Per-assertion pass/fail detail with expected vs. actual values, timing, and category breakdown
+- Automatic cleanup — test account and all related data are deleted after the suite completes
+
+**Documentation** — Built-in reference with LaTeX-rendered formulas for FIFO algorithm, valuation, performance metrics (Sharpe, Sortino, Calmar), risk engine, scenario analysis, strategy attribution, position lifecycle, snapshot sampling, reconciliation process, notation glossary, and data model summary.
+
 **Architecture**:
 
 - **Event-sourced**: Trades are the single source of truth; positions are derived via FIFO lot matching
 - **Multiplier-aware**: Options use contract multiplier (default 100) for correct market value, delta, and PnL
 - **Position lifecycle**: Open → Closed (with ClosedAt timestamp when all lots are consumed)
 - **Metrics**: Sharpe (√252 annualized, sample stddev), Sortino (downside deviation only), Calmar (return / max drawdown)
-- **Full documentation**: See `docs/portfolio-system.md` for entity schemas, service APIs, GraphQL operations, and formulas
+- **Self-validating**: Built-in validation suite tests all subsystems (accounting, valuation, risk, scenarios, rebuild) from the UI
+- **Full documentation**: See `docs/portfolio-management.md` for entity schemas, service APIs, GraphQL operations, and formulas. See `docs/portfolio-validation-plan.md` for the validation plan with test specifications
 
 ### Strategy Backtesting
 
@@ -457,7 +476,8 @@ learn-ai/
     Services/
       Implementation/               MarketDataService, PolygonService, BacktestService, ResearchService, LstmService,
                                     PositionEngine, PortfolioService, PortfolioValuationService, SnapshotService,
-                                    PortfolioRiskService, PortfolioReconciliationService, StrategyAttributionService
+                                    PortfolioRiskService, PortfolioReconciliationService, StrategyAttributionService,
+                                    PortfolioValidationService
       Interfaces/                   Service contracts (IMarketDataService, IResearchService, IPositionEngine, etc.)
     Data/                           AppDbContext (EF Core)
     Program.cs                      App entry point and DI configuration
@@ -483,7 +503,7 @@ learn-ai/
         tracked-instruments/        Watchlist with unified snapshots
         options-history/            Historical 0DTE contract lookup
       graphql/                      TypeScript types matching GraphQL schema
-        portfolio/                    Dashboard, positions, equity chart, risk, scenarios, reconciliation, attribution
+        portfolio/                    Dashboard, positions, equity chart, risk, scenarios, reconciliation, attribution, validation
       services/                     Angular services (MarketData, Research, LSTM, Replay, Portfolio)
       utils/                        Shared utilities (Black-Scholes calculator, date validation)
     src/testing/                  Test factories for mock data
