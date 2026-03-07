@@ -222,11 +222,11 @@ export class PortfolioDocsComponent {
     },
     {
       name: 'Portfolio Vega',
-      formulaLatex: '\\mathcal{V}_{\\text{port}} = \\sum_{i \\in \\text{options}} \\nu_i \\times Q_i \\times M_i',
+      formulaLatex: '\\mathcal{V}_{\\text{port}} = \\sum_{i \\in \\text{options}} \\nu_i \\times Q_{\\text{pos},i} \\times M_i',
       variablesLatex: [
-        '\\nu_i = \\text{entry vega of option position } i',
+        '\\nu_i = \\text{entry vega of option position } i \\text{ (captured at trade time)}',
       ],
-      interpretation: 'Total portfolio sensitivity to a 1% change in implied volatility across all option positions.',
+      interpretation: 'Total portfolio sensitivity to a 1% change in implied volatility across all option positions. Caveat: this uses entry vega, which drifts as price, time, and IV change. For accurate live vega, recompute Greeks from a pricing model (e.g., Black-Scholes) or fetch from a Greeks API.',
     },
   ];
 

@@ -302,8 +302,8 @@
     <div class="info-callout warn mt-4">
       <i class="pi pi-exclamation-triangle"></i>
       <div>
-        <strong>Linear Approximation</strong>
-        <span>Scenario analysis uses entry Greeks (delta, vega, theta) for linear approximation. For large moves, second-order effects (gamma, vanna, volga) may cause significant deviation from actual P&amp;L.</span>
+        <strong>Linear Approximation — Known Limitation</strong>
+        <span>Scenario analysis uses entry Greeks (delta, vega, theta) for first-order approximation. Entry Greeks drift as price, time, and IV change — they are snapshots, not live values. For large moves (>5% price shock or >10% IV change), second-order effects (gamma, vanna, volga) may cause significant deviation from actual P&amp;L. A full-revaluation mode (repricing via Black-Scholes) would eliminate this approximation error but is not yet implemented.</span>
       </div>
     </div>
   </div>
