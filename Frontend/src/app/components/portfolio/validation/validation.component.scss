@@ -1,0 +1,501 @@
+:host {
+  display: block;
+}
+
+.validation-page {
+  max-width: 960px;
+  padding: 1rem 0;
+}
+
+// ─── Header ──────────────────────────────────────────────
+.validation-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+
+  h3 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #1e293b;
+    margin: 0 0 0.25rem;
+  }
+
+  .description {
+    font-size: 0.85rem;
+    color: #64748b;
+    line-height: 1.5;
+    max-width: 600px;
+    margin: 0;
+  }
+}
+
+// ─── Buttons ─────────────────────────────────────────────
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.55rem 1.1rem;
+  white-space: nowrap;
+  transition: background 0.15s;
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.btn-primary {
+  background: #2563eb;
+  color: #fff;
+
+  &:hover:not(:disabled) {
+    background: #1d4ed8;
+  }
+}
+
+.btn-sm {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+
+  &:hover {
+    background: #f1f5f9;
+  }
+}
+
+.btn-outline-warn {
+  background: transparent;
+  border: 1px solid #f59e0b;
+  color: #92400e;
+
+  &:hover {
+    background: #fffbeb;
+  }
+}
+
+// ─── Error ───────────────────────────────────────────────
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #991b1b;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+
+  button {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: #991b1b;
+    cursor: pointer;
+    font-size: 1rem;
+  }
+}
+
+// ─── Running Indicator ───────────────────────────────────
+.running-indicator {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: #475569;
+
+  p {
+    margin: 0.5rem 0 0;
+    font-size: 0.9rem;
+  }
+
+  .hint {
+    font-size: 0.8rem;
+    color: #94a3b8;
+  }
+}
+
+.spinner-bar {
+  width: 200px;
+  height: 3px;
+  background: #e2e8f0;
+  border-radius: 2px;
+  margin: 0 auto 1rem;
+  position: relative;
+  overflow: hidden;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -40%;
+    width: 40%;
+    height: 100%;
+    background: #2563eb;
+    border-radius: 2px;
+    animation: slide 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes slide {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+
+// ─── Summary Cards ───────────────────────────────────────
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.summary-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+
+  &.all-pass {
+    border-color: #86efac;
+    background: #f0fdf4;
+  }
+
+  &.has-fail {
+    border-color: #fca5a5;
+    background: #fef2f2;
+  }
+}
+
+.summary-icon {
+  font-size: 1.5rem;
+
+  .pi-check-circle {
+    color: #16a34a;
+  }
+
+  .pi-exclamation-circle {
+    color: #dc2626;
+  }
+}
+
+.summary-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.summary-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.summary-label {
+  font-size: 0.75rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.fail-text {
+  color: #dc2626;
+
+  &.zero {
+    color: #16a34a;
+  }
+}
+
+// ─── Category Bar ────────────────────────────────────────
+.category-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.category-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 9999px;
+  font-size: 0.78rem;
+  font-weight: 500;
+
+  &.cat-pass {
+    background: #dcfce7;
+    color: #166534;
+  }
+
+  &.cat-fail {
+    background: #fee2e2;
+    color: #991b1b;
+  }
+}
+
+.cat-count {
+  font-weight: 600;
+}
+
+// ─── Controls ────────────────────────────────────────────
+.test-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+// ─── Test List ───────────────────────────────────────────
+.test-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.test-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+
+  &.test-pass {
+    border-left: 3px solid #16a34a;
+  }
+
+  &.test-fail {
+    border-left: 3px solid #dc2626;
+  }
+}
+
+.test-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  user-select: none;
+
+  &:hover {
+    background: #f8fafc;
+  }
+}
+
+.test-status {
+  flex-shrink: 0;
+}
+
+.pass-icon {
+  color: #16a34a;
+  font-size: 1.1rem;
+}
+
+.fail-icon {
+  color: #dc2626;
+  font-size: 1.1rem;
+}
+
+.test-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.test-name {
+  display: block;
+  font-weight: 600;
+  color: #1e293b;
+  font-size: 0.9rem;
+}
+
+.test-num {
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  color: #64748b;
+  margin-right: 0.4rem;
+}
+
+.test-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.2rem;
+}
+
+.test-category-badge {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 9999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.test-duration {
+  font-size: 0.78rem;
+  color: #94a3b8;
+  font-family: ui-monospace, monospace;
+}
+
+.test-assertion-count {
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
+.test-expand {
+  flex-shrink: 0;
+  color: #94a3b8;
+}
+
+// ─── Test Detail ─────────────────────────────────────────
+.test-detail {
+  padding: 0 1rem 1rem;
+  border-top: 1px solid #f1f5f9;
+}
+
+.test-objective {
+  font-size: 0.85rem;
+  color: #475569;
+  margin: 0.75rem 0;
+  font-style: italic;
+}
+
+.test-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.6rem 0.8rem;
+  background: #fef2f2;
+  border-radius: 6px;
+  color: #991b1b;
+  font-size: 0.82rem;
+  margin-bottom: 0.75rem;
+  font-family: ui-monospace, monospace;
+
+  i {
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+}
+
+// ─── Assertion Table ─────────────────────────────────────
+.assertion-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+
+  thead {
+    background: #f8fafc;
+
+    th {
+      padding: 0.45rem 0.6rem;
+      text-align: left;
+      font-weight: 600;
+      color: #475569;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-bottom: 1px solid #e2e8f0;
+    }
+  }
+
+  tbody tr {
+    border-bottom: 1px solid #f1f5f9;
+
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+
+  td {
+    padding: 0.4rem 0.6rem;
+    color: #334155;
+    vertical-align: top;
+  }
+
+  .col-status {
+    width: 24px;
+    text-align: center;
+  }
+}
+
+.pass-icon-sm {
+  color: #16a34a;
+  font-size: 0.85rem;
+}
+
+.fail-icon-sm {
+  color: #dc2626;
+  font-size: 0.85rem;
+}
+
+.assertion-label {
+  font-weight: 500;
+  color: #334155;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+
+.assertion-value {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  color: #475569;
+
+  &.mismatch {
+    color: #dc2626;
+    font-weight: 600;
+    background: #fef2f2;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+  }
+}
+
+.row-pass {
+  &:hover {
+    background: #f0fdf4;
+  }
+}
+
+.row-fail {
+  background: #fff5f5;
+
+  &:hover {
+    background: #fef2f2;
+  }
+}
+
+// ─── Footer ─────────────────────────────────────────────
+.validation-footer {
+  margin-top: 1.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.footer-note {
+  font-size: 0.78rem;
+  color: #94a3b8;
+
+  code {
+    font-family: ui-monospace, monospace;
+    font-size: 0.75rem;
+    background: #f1f5f9;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    color: #475569;
+  }
+}

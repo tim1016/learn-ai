@@ -3,6 +3,8 @@ using Backend.Services.Interfaces;
 using HotChocolate;
 using Microsoft.Extensions.Logging;
 
+// Validation result types are in Backend.Models.Portfolio.ValidationResult
+
 namespace Backend.GraphQL;
 
 [ExtendObjectType<Mutation>]
@@ -322,6 +324,19 @@ public class PortfolioMutation
         {
             return new ImportResult { Success = false, Error = ex.Message };
         }
+    }
+
+    #endregion
+
+    #region Phase 5 — Validation
+
+    [GraphQLName("runPortfolioValidation")]
+    public async Task<ValidationSuiteResult> RunPortfolioValidation(
+        [Service] IPortfolioValidationService validationService,
+        [Service] ILogger<PortfolioMutation> logger)
+    {
+        logger.LogInformation("[Validation] Starting portfolio validation suite");
+        return await validationService.RunValidationSuiteAsync();
     }
 
     #endregion

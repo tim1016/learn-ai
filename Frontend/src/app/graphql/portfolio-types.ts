@@ -261,3 +261,35 @@ export interface RebuildResult {
   message?: string;
   error?: string;
 }
+
+// Validation
+
+export interface ValidationSuiteResult {
+  accountId: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  totalTests: number;
+  passed: number;
+  failed: number;
+  tests: ValidationTestResult[];
+}
+
+export interface ValidationTestResult {
+  testNumber: number;
+  name: string;
+  category: string;
+  objective: string;
+  passed: boolean;
+  durationMs: number;
+  error?: string;
+  assertions: ValidationAssertion[];
+}
+
+export interface ValidationAssertion {
+  label: string;
+  expected: string;
+  actual: string;
+  passed: boolean;
+  tolerance?: number;
+}

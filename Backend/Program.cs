@@ -108,6 +108,7 @@ builder.Services.AddScoped<ISnapshotService, SnapshotService>();
 builder.Services.AddScoped<IPortfolioRiskService, PortfolioRiskService>();
 builder.Services.AddScoped<IPortfolioReconciliationService, PortfolioReconciliationService>();
 builder.Services.AddScoped<IStrategyAttributionService, StrategyAttributionService>();
+builder.Services.AddScoped<IPortfolioValidationService, PortfolioValidationService>();
 
 // Add GraphQL services
 builder.Services

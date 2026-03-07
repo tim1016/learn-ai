@@ -9,6 +9,7 @@ import {
   RiskViolation, ScenarioResult, ReconciliationReport,
   StrategyPnLResult, AlphaAttribution, StrategyAllocation,
   SnapshotResultGql, TradeResult, RebuildResult, ImportResult,
+  ValidationSuiteResult,
 } from '../graphql/portfolio-types';
 
 const GRAPHQL_URL = environment.backendUrl;
@@ -291,6 +292,23 @@ export class PortfolioService {
         }
       }
     `, { strategyExecutionId }).pipe(map(d => d.getStrategyPnL));
+  }
+
+  // ── Validation ──
+
+  runValidation(): Observable<ValidationSuiteResult> {
+    return gql<{ runPortfolioValidation: ValidationSuiteResult }>(this.http, `
+      mutation RunValidation {
+        runPortfolioValidation {
+          accountId startedAt completedAt durationMs
+          totalTests passed failed
+          tests {
+            testNumber name category objective passed durationMs error
+            assertions { label expected actual passed tolerance }
+          }
+        }
+      }
+    `).pipe(map(d => d.runPortfolioValidation));
   }
 
   getAlphaAttribution(accountId: string): Observable<AlphaAttribution[]> {

@@ -1,0 +1,180 @@
+<div class="validation-page">
+
+  <!-- Header -->
+  <div class="validation-header">
+    <div>
+      <h3>Portfolio System Validation</h3>
+      <p class="description">
+        Run the full validation suite against a temporary test account.
+        Tests cover FIFO accounting, rebuild determinism, cash integrity,
+        valuation, snapshots, drawdowns, risk rules, scenarios, and stress testing.
+      </p>
+    </div>
+    <button class="btn btn-primary"
+            [disabled]="running()"
+            (click)="runValidation()">
+      @if (running()) {
+        <i class="pi pi-spin pi-spinner"></i> Running Suite...
+      } @else {
+        <i class="pi pi-play"></i> Run Validation
+      }
+    </button>
+  </div>
+
+  @if (error()) {
+    <div class="error-banner">
+      <i class="pi pi-exclamation-triangle"></i>
+      {{ error() }}
+      <button (click)="error.set(null)">x</button>
+    </div>
+  }
+
+  @if (running()) {
+    <div class="running-indicator">
+      <div class="spinner-bar"></div>
+      <p>Executing validation suite — creating test account, running trades, verifying assertions...</p>
+      <p class="hint">This may take 10-30 seconds depending on database performance.</p>
+    </div>
+  }
+
+  @if (result(); as r) {
+    <!-- Summary Cards -->
+    <div class="summary-grid">
+      <div class="summary-card" [class.all-pass]="r.failed === 0" [class.has-fail]="r.failed > 0">
+        <div class="summary-icon">
+          @if (r.failed === 0) {
+            <i class="pi pi-check-circle"></i>
+          } @else {
+            <i class="pi pi-exclamation-circle"></i>
+          }
+        </div>
+        <div class="summary-body">
+          <span class="summary-value">{{ passRate() }}%</span>
+          <span class="summary-label">Pass Rate</span>
+        </div>
+      </div>
+
+      <div class="summary-card">
+        <div class="summary-body">
+          <span class="summary-value">{{ r.passed }} / {{ r.totalTests }}</span>
+          <span class="summary-label">Tests Passed</span>
+        </div>
+      </div>
+
+      <div class="summary-card">
+        <div class="summary-body">
+          <span class="summary-value fail-text" [class.zero]="r.failed === 0">{{ r.failed }}</span>
+          <span class="summary-label">Failed</span>
+        </div>
+      </div>
+
+      <div class="summary-card">
+        <div class="summary-body">
+          <span class="summary-value">{{ r.durationMs | number:'1.0-0' }}ms</span>
+          <span class="summary-label">Total Duration</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Category Breakdown -->
+    <div class="category-bar">
+      @for (cat of categories(); track cat.name) {
+        <div class="category-chip" [class.cat-pass]="cat.failed === 0" [class.cat-fail]="cat.failed > 0">
+          <span class="cat-name">{{ cat.name }}</span>
+          <span class="cat-count">{{ cat.passed }}/{{ cat.passed + cat.failed }}</span>
+        </div>
+      }
+    </div>
+
+    <!-- Controls -->
+    <div class="test-controls">
+      <button class="btn btn-sm btn-outline" (click)="expandAll()">Expand All</button>
+      <button class="btn btn-sm btn-outline" (click)="collapseAll()">Collapse All</button>
+      @if (r.failed > 0) {
+        <button class="btn btn-sm btn-outline-warn" (click)="expandFailed()">Show Failed</button>
+      }
+    </div>
+
+    <!-- Test Results -->
+    <div class="test-list">
+      @for (test of r.tests; track test.testNumber) {
+        <div class="test-card" [class.test-pass]="test.passed" [class.test-fail]="!test.passed">
+          <div class="test-header" (click)="toggleTest(test.testNumber)">
+            <div class="test-status">
+              @if (test.passed) {
+                <i class="pi pi-check-circle pass-icon"></i>
+              } @else {
+                <i class="pi pi-times-circle fail-icon"></i>
+              }
+            </div>
+            <div class="test-info">
+              <span class="test-name">
+                <span class="test-num">T{{ test.testNumber }}</span>
+                {{ test.name }}
+              </span>
+              <span class="test-meta">
+                <span class="test-category-badge">{{ test.category }}</span>
+                <span class="test-duration">{{ test.durationMs | number:'1.0-0' }}ms</span>
+                <span class="test-assertion-count">{{ test.assertions.length }} assertions</span>
+              </span>
+            </div>
+            <div class="test-expand">
+              <i class="pi" [class.pi-chevron-down]="!isExpanded(test.testNumber)"
+                 [class.pi-chevron-up]="isExpanded(test.testNumber)"></i>
+            </div>
+          </div>
+
+          @if (isExpanded(test.testNumber)) {
+            <div class="test-detail">
+              <p class="test-objective">{{ test.objective }}</p>
+
+              @if (test.error) {
+                <div class="test-error">
+                  <i class="pi pi-exclamation-triangle"></i>
+                  {{ test.error }}
+                </div>
+              }
+
+              @if (test.assertions.length > 0) {
+                <table class="assertion-table">
+                  <thead>
+                    <tr>
+                      <th class="col-status"></th>
+                      <th>Assertion</th>
+                      <th>Expected</th>
+                      <th>Actual</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (a of test.assertions; track a.label) {
+                      <tr [class.row-pass]="a.passed" [class.row-fail]="!a.passed">
+                        <td class="col-status">
+                          @if (a.passed) {
+                            <i class="pi pi-check pass-icon-sm"></i>
+                          } @else {
+                            <i class="pi pi-times fail-icon-sm"></i>
+                          }
+                        </td>
+                        <td class="assertion-label">{{ a.label }}</td>
+                        <td class="assertion-value">{{ a.expected }}</td>
+                        <td class="assertion-value" [class.mismatch]="!a.passed">{{ a.actual }}</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              }
+            </div>
+          }
+        </div>
+      }
+    </div>
+
+    <!-- Footer -->
+    <div class="validation-footer">
+      <span class="footer-note">
+        Suite ran on temporary account <code>{{ r.accountId }}</code> (auto-cleaned).
+        Completed at {{ r.completedAt | date:'medium' }}.
+      </span>
+    </div>
+  }
+</div>

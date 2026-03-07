@@ -2,7 +2,43 @@
 
 ## Purpose
 
-This document defines **10 core tests** (plus 2 bonus tests) that validate the correctness, determinism, and reliability of the Portfolio Management System. Each test follows a consistent structure to ensure results are **repeatable and auditable**.
+This document defines **10 core tests** that validate the correctness, determinism, and reliability of the Portfolio Management System. The suite is **frontend-piloted** — a single button click in the Validation tab triggers the entire suite via a GraphQL mutation. Results are rendered in real-time with per-assertion pass/fail detail.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Angular Frontend — Validation Tab                           │
+│  ┌────────────┐  ┌──────────────┐  ┌──────────────────────┐ │
+│  │ Run Button  │→│ GraphQL Mut  │→│ Results Dashboard     │ │
+│  │             │  │ runPortfolio │  │  - Summary cards      │ │
+│  │             │  │  Validation  │  │  - Category breakdown │ │
+│  │             │  │              │  │  - Per-test accordion │ │
+│  │             │  │              │  │  - Assertion table    │ │
+│  └─────────────┘  └──────┬───────┘  └──────────────────────┘ │
+└──────────────────────────┼───────────────────────────────────┘
+                           │ GraphQL
+┌──────────────────────────┼───────────────────────────────────┐
+│  .NET Backend                                                 │
+│  ┌───────────────────────┴────────────────────────────────┐  │
+│  │ PortfolioValidationService                              │  │
+│  │  1. Creates temporary test account ($100k)              │  │
+│  │  2. Runs 10 tests sequentially                          │  │
+│  │  3. Each test: setup → execute → assert                 │  │
+│  │  4. Cleans up test account + all related data           │  │
+│  │  5. Returns ValidationSuiteResult                       │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│     Uses: PortfolioService, PositionEngine, ValuationService, │
+│           SnapshotService, RiskService, ReconciliationService │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### How to Run
+
+1. Navigate to **Portfolio Management** → **Validation** tab
+2. Click **Run Validation**
+3. The suite creates a temporary test account, executes all tests, and cleans up
+4. Results appear with pass/fail per assertion, timing, and category breakdown
 
 ### Test Structure
 
@@ -15,6 +51,18 @@ Every test uses the same format:
 | **Execution**       | API calls or methods invoked                     |
 | **Expected Result** | Precise values the system must produce           |
 | **Validation**      | Assertion strategy and tolerance                 |
+
+### Implementation Files
+
+| Layer    | File                                                                 |
+|----------|----------------------------------------------------------------------|
+| Model    | `Backend/Models/Portfolio/ValidationResult.cs`                       |
+| Interface| `Backend/Services/Interfaces/IPortfolioValidationService.cs`         |
+| Service  | `Backend/Services/Implementation/PortfolioValidationService.cs`      |
+| GraphQL  | `Backend/GraphQL/PortfolioMutation.cs` — `runPortfolioValidation`    |
+| FE Types | `Frontend/src/app/graphql/portfolio-types.ts`                        |
+| FE Service| `Frontend/src/app/services/portfolio.service.ts` — `runValidation()`|
+| Component| `Frontend/src/app/components/portfolio/validation/`                  |
 
 ---
 

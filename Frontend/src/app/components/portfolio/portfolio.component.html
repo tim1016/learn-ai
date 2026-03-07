@@ -47,7 +47,8 @@
         <p-tab value="4">Scenario Explorer</p-tab>
         <p-tab value="5">Reconciliation</p-tab>
         <p-tab value="6">Strategy Attribution</p-tab>
-        <p-tab value="7">Documentation</p-tab>
+        <p-tab value="7">Validation</p-tab>
+        <p-tab value="8">Documentation</p-tab>
       </p-tablist>
       <p-tabpanels>
         <p-tabpanel value="0">
@@ -72,6 +73,9 @@
           <app-strategy-attribution [accountId]="accountId" />
         </p-tabpanel>
         <p-tabpanel value="7">
+          <app-validation />
+        </p-tabpanel>
+        <p-tabpanel value="8">
           <app-portfolio-docs />
         </p-tabpanel>
       </p-tabpanels>

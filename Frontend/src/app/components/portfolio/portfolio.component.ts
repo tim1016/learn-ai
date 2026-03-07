@@ -13,6 +13,7 @@ import { ScenarioExplorerComponent } from './scenario-explorer/scenario-explorer
 import { ReconciliationComponent } from './reconciliation/reconciliation.component';
 import { StrategyAttributionComponent } from './strategy-attribution/strategy-attribution.component';
 import { PortfolioDocsComponent } from './portfolio-docs/portfolio-docs.component';
+import { ValidationComponent } from './validation/validation.component';
 import { catchError, finalize, of } from 'rxjs';
 
 @Component({
@@ -24,7 +25,7 @@ import { catchError, finalize, of } from 'rxjs';
     DashboardComponent, PositionsComponent, EquityChartComponent,
     RiskPanelComponent, ScenarioExplorerComponent,
     ReconciliationComponent, StrategyAttributionComponent,
-    PortfolioDocsComponent,
+    PortfolioDocsComponent, ValidationComponent,
   ],
   templateUrl: './portfolio.component.html',
   styleUrls: ['./portfolio.component.scss'],
