@@ -29,7 +29,7 @@
       <i class="pi pi-info-circle"></i>
       <div>
         <strong>Event Sourcing Guarantee</strong>
-        <span>Trades are immutable facts. Positions and lots are derived state that can be completely rebuilt from the trade log at any time via <code>RebuildPositionsAsync</code>.</span>
+        <span>Trades are immutable facts. Positions and lots are <em>cached derived state</em>, rebuildable from the trade log at any time via <code>RebuildPositionsAsync</code>. The trade log is the single source of truth — cached fields like <code>Position.NetQuantity</code> and <code>Position.RealizedPnL</code> exist for query performance, not as authoritative state.</span>
       </div>
     </div>
 
@@ -359,7 +359,101 @@
     </div>
   </div>
 
-  <!-- ═══ 8. Reconciliation ═══ -->
+  <!-- ═══ 8. Position Lifecycle & Cash Accounting ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-replay section-icon"></i>
+      <h3>Position Lifecycle &amp; Cash Accounting</h3>
+    </div>
+    <p class="section-description">
+      How positions transition between states, and edge cases in cash accounting.
+    </p>
+
+    <div class="subsection-title">
+      <i class="pi pi-arrows-v"></i>
+      Position States
+    </div>
+    <table class="econ-checklist">
+      <thead>
+        <tr>
+          <th>State</th>
+          <th>Rule</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (p of positionLifecycle; track p.state) {
+          <tr>
+            <td class="question-cell"><code>{{ p.state }}</code></td>
+            <td>{{ p.rule }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="subsection-title mt-4">
+      <i class="pi pi-exclamation-triangle"></i>
+      Cash Accounting Edge Cases
+    </div>
+    <table class="econ-checklist">
+      <thead>
+        <tr>
+          <th>Scenario</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (c of cashEdgeCases; track c.scenario) {
+          <tr>
+            <td class="question-cell">{{ c.scenario }}</td>
+            <td>{{ c.status }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="info-callout warn mt-4">
+      <i class="pi pi-exclamation-triangle"></i>
+      <div>
+        <strong>Current Limitations</strong>
+        <span>The system currently supports long-only positions. Short selling, option assignment/exercise, and expiration must be manually recorded as equivalent trade sequences.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 9. Snapshot Sampling ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-clock section-icon"></i>
+      <h3>Snapshot Sampling &amp; Metric Accuracy</h3>
+    </div>
+    <p class="section-description">
+      Performance metrics depend on snapshot frequency. Understanding sampling assumptions is critical for correct interpretation.
+    </p>
+
+    <div class="doc-card">
+      <h4>Snapshot Cadence</h4>
+      <div class="pipeline-flow">
+        @for (note of snapshotNotes; track note) {
+          <div class="pipeline-stage">
+            <i class="pi pi-chevron-right"></i>
+            <div>
+              <span class="pipeline-detail">{{ note }}</span>
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+
+    <div class="info-callout warn mt-4">
+      <i class="pi pi-exclamation-triangle"></i>
+      <div>
+        <strong>Annualization Assumption</strong>
+        <span>The <span [appKatex]="'\\sqrt{252}'"></span> annualization factor in Sharpe and Sortino ratios assumes daily snapshots taken on trading days. If snapshots are taken at a different frequency (e.g., hourly or weekly), the annualization factor must be adjusted accordingly: <span [appKatex]="'\\sqrt{N_{\\text{periods per year}}}'"></span>.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 10. Reconciliation ═══ -->
   <div class="doc-section">
     <div class="section-header">
       <i class="pi pi-sync section-icon"></i>
@@ -393,7 +487,43 @@
     </div>
   </div>
 
-  <!-- ═══ 9. Data Model Summary ═══ -->
+  <!-- ═══ 11. Notation Glossary ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-book section-icon"></i>
+      <h3>Notation Glossary</h3>
+    </div>
+    <p class="section-description">
+      Standardized variable names used throughout this documentation.
+    </p>
+
+    <table class="econ-checklist">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Meaning</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="question-cell"><span [appKatex]="'Q_{\\text{pos}}'"></span></td><td>Net position quantity (sum of remaining lot quantities)</td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'Q_{\\text{lot}}'"></span></td><td>Original lot quantity at creation</td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'Q_{\\text{rem}}'"></span></td><td>Remaining (unclosed) quantity in a lot</td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'Q_{\\text{close}}'"></span></td><td>Quantity closed from a lot in a single sell</td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'M'"></span></td><td>Contract multiplier (1 for stocks, 100 for standard options)</td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'P_{\\text{current}}'"></span></td><td>Current market price</td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'P_{\\text{entry}}'"></span></td><td>Entry price of a lot</td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'\\bar{C}'"></span></td><td>Weighted average cost basis</td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'\\delta_{\\text{share}}'"></span></td><td>Per-share delta (1.0 for stocks)</td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'\\nu'"></span></td><td>Option vega (per-share)</td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'\\theta'"></span></td><td>Option theta (per-share, typically negative)</td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'E_t'"></span></td><td>Portfolio equity at snapshot <span [appKatex]="'t'"></span></td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'R_t'"></span></td><td>Simple return between snapshots <span [appKatex]="'t-1'"></span> and <span [appKatex]="'t'"></span></td></tr>
+        <tr><td class="question-cell"><span [appKatex]="'N'"></span></td><td>Total number of return observations</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ═══ 12. Data Model Summary ═══ -->
   <div class="doc-section">
     <div class="section-header">
       <i class="pi pi-database section-icon"></i>
@@ -425,7 +555,7 @@
         <tr>
           <td class="question-cell"><code>Position</code></td>
           <td>NetQuantity, AvgCostBasis, RealizedPnL, Status</td>
-          <td>Derived aggregate of open lots per ticker</td>
+          <td>Cached derived state — aggregate of open lots per ticker (rebuildable from trades)</td>
         </tr>
         <tr>
           <td class="question-cell"><code>PositionLot</code></td>

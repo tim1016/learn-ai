@@ -36,7 +36,7 @@ export class PortfolioDocsComponent {
   ];
 
   designPrinciples = [
-    { title: 'Event Sourcing', description: 'PortfolioTrade records are immutable facts. Positions and lots are derived state rebuilt from the trade log at any time.' },
+    { title: 'Event Sourcing', description: 'PortfolioTrade records are immutable facts. Positions and lots are cached derived state, rebuildable from the trade log at any time via RebuildPositionsAsync. The trade log is the single source of truth.' },
     { title: 'FIFO Lot Tracking', description: 'Every buy creates a PositionLot. Sells close the oldest open lots first, making realized PnL deterministic and auditable.' },
     { title: 'Multiplier-Aware', description: 'All PnL, market value, and delta calculations multiply by the contract multiplier (1 for stocks, 100 for standard options).' },
     { title: 'Cash Tracking', description: 'Account.Cash is updated on every fill — buys deduct, sells add — including fees.' },
@@ -60,10 +60,10 @@ export class PortfolioDocsComponent {
       variablesLatex: [
         'P_{\\text{sell}} = \\text{execution price of the sell trade}',
         'P_{\\text{entry}} = \\text{entry price of the lot}',
-        'Q_{\\text{close}} = \\text{quantity closed from this lot}',
+        'Q_{\\text{close}} = \\text{quantity closed from this lot (always positive)}',
         'M = \\text{contract multiplier (1 for stocks, 100 for options)}',
       ],
-      interpretation: 'Realized PnL is computed per lot at close time. The multiplier ensures option PnL reflects the notional value per contract.',
+      interpretation: 'Realized PnL is computed per lot at close time. The multiplier ensures option PnL reflects the notional value per contract. Sign convention: Q is always positive (long positions). The system does not currently support short selling — all sells close existing long lots.',
     },
     {
       name: 'Position Realized PnL',
@@ -75,7 +75,7 @@ export class PortfolioDocsComponent {
     },
     {
       name: 'Average Cost Basis',
-      formulaLatex: '\\bar{C} = \\frac{\\sum_{j \\in \\text{open}} P_{\\text{entry},j} \\times Q_{\\text{rem},j}}{\\sum_{j \\in \\text{open}} Q_{\\text{rem},j}}',
+      formulaLatex: '\\bar{C} = \\frac{\\displaystyle\\sum_{j \\in \\text{open}} \\bigl(P_{\\text{entry},j} \\times Q_{\\text{rem},j}\\bigr)}{\\displaystyle\\sum_{j \\in \\text{open}} Q_{\\text{rem},j}}',
       variablesLatex: [
         'j \\in \\text{open} = \\text{lots with RemainingQuantity} > 0',
         'P_{\\text{entry},j} = \\text{entry price of lot } j',
@@ -90,19 +90,22 @@ export class PortfolioDocsComponent {
   valuationFormulas: FormulaDoc[] = [
     {
       name: 'Position Market Value',
-      formulaLatex: '\\text{MV}_i = P_{\\text{current},i} \\times Q_i \\times M_i',
+      formulaLatex: '\\text{MV}_i = P_{\\text{current},i} \\times Q_{\\text{pos},i} \\times M_i',
       variablesLatex: [
         'P_{\\text{current},i} = \\text{current market price}',
-        'Q_i = \\text{net quantity (open lots)}',
+        'Q_{\\text{pos},i} = \\text{net position quantity (sum of open lot remainders)}',
         'M_i = \\text{contract multiplier}',
       ],
       interpretation: 'The dollar value of a single position at current market prices.',
     },
     {
       name: 'Unrealized PnL',
-      formulaLatex: '\\text{UPnL}_i = (P_{\\text{current},i} - \\bar{C}_i) \\times Q_i \\times M_i',
+      formulaLatex: '\\text{UPnL}_i = (P_{\\text{current},i} - \\bar{C}_i) \\times Q_{\\text{pos},i} \\times M_i',
       variablesLatex: [
+        'P_{\\text{current},i} = \\text{current market price}',
         '\\bar{C}_i = \\text{average cost basis of position } i',
+        'Q_{\\text{pos},i} = \\text{net position quantity}',
+        'M_i = \\text{contract multiplier}',
       ],
       interpretation: 'Paper profit or loss — what you would realize if you closed the position now.',
     },
@@ -189,9 +192,11 @@ export class PortfolioDocsComponent {
     },
     {
       name: 'Win Rate',
-      formulaLatex: 'W = \\frac{\\#\\{t : R_t > 0\\}}{\\#\\{t : R_t \\neq 0\\}}',
-      variablesLatex: [],
-      interpretation: 'Fraction of return periods that were profitable.',
+      formulaLatex: 'W = \\frac{\\#\\{t : R_t > 0\\}}{N}',
+      variablesLatex: [
+        'N = \\text{total number of return observations}',
+      ],
+      interpretation: 'Fraction of all return periods that were profitable. Zero-return periods count against the win rate.',
     },
     {
       name: 'Profit Factor',
@@ -206,13 +211,14 @@ export class PortfolioDocsComponent {
   riskFormulas: FormulaDoc[] = [
     {
       name: 'Dollar Delta',
-      formulaLatex: '\\$\\Delta_i = \\delta_i \\times P_i \\times Q_i \\times M_i',
+      formulaLatex: '\\$\\Delta_i = \\delta_{\\text{share},i} \\times P_i \\times Q_{\\text{pos},i} \\times M_i',
       variablesLatex: [
-        '\\delta_i = \\text{position delta (1 for stocks, entry delta for options)}',
+        '\\delta_{\\text{share},i} = \\text{per-share delta (1.0 for stocks, entry delta for options)}',
         'P_i = \\text{current price of the underlying}',
-        'Q_i = \\text{quantity},\\quad M_i = \\text{multiplier}',
+        'Q_{\\text{pos},i} = \\text{position quantity (contracts for options)}',
+        'M_i = \\text{contract multiplier (1 for stocks, 100 for standard options)}',
       ],
-      interpretation: 'The dollar change in position value for a 1-unit move in the underlying. Aggregated across all positions gives portfolio dollar delta.',
+      interpretation: 'The dollar change in position value for a $1 move in the underlying. Delta here is per-share (not per-contract) — the multiplier separately accounts for contract size. This avoids double-counting when option APIs report per-share delta.',
     },
     {
       name: 'Portfolio Vega',
@@ -296,7 +302,33 @@ export class PortfolioDocsComponent {
     },
   ];
 
-  // ── Section 8: Reconciliation ──
+  // ── Section 8: Position Lifecycle ──
+
+  positionLifecycle = [
+    { state: 'Open', rule: 'Position has at least one lot with RemainingQuantity > 0.' },
+    { state: 'Closed', rule: 'All lots have RemainingQuantity = 0. ClosedAt is set to the timestamp of the final closing trade.' },
+    { state: 'Partial Close', rule: 'A sell reduces some lots but not all. Position stays Open with reduced NetQuantity.' },
+    { state: 'Position Flip', rule: 'Not supported. Selling more than NetQuantity is rejected. Short selling requires a separate short position (not yet implemented).' },
+  ];
+
+  cashEdgeCases = [
+    { scenario: 'Short Selling', status: 'Not implemented. Sells are restricted to closing existing long positions.' },
+    { scenario: 'Option Premium Received', status: 'Handled via sell trade: Cash += premium * quantity * multiplier - fees.' },
+    { scenario: 'Option Assignment/Exercise', status: 'Not automated. Must be manually recorded as a sell trade to close the option position and a buy/sell trade for the resulting stock position.' },
+    { scenario: 'Option Expiration (OTM)', status: 'Not automated. Must be manually recorded as a sell at price $0 to close the position with zero proceeds.' },
+  ];
+
+  // ── Section 9: Snapshot & Sampling ──
+
+  snapshotNotes = [
+    'Snapshots are taken on-demand via the "Take Snapshot" button or the takePortfolioSnapshot mutation.',
+    'There is no automatic snapshot cadence — frequency is user-controlled.',
+    'Performance metrics (Sharpe, Sortino, drawdown) assume uniform snapshot intervals. Irregular spacing can distort annualized ratios.',
+    'For accurate daily metrics, take snapshots at market close each trading day. For intraday analysis, use consistent intervals (e.g., every hour).',
+    'The annualization factor √252 assumes daily snapshots taken on trading days only.',
+  ];
+
+  // ── Section 10: Reconciliation ──
 
   reconciliationSteps = [
     { step: 1, action: 'Snapshot', detail: 'Read all current (cached) positions for the account.' },
