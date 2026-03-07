@@ -1,0 +1,100 @@
+<div class="attribution-panel">
+  <h4>Strategy Attribution</h4>
+
+  <div class="toolbar">
+    <button class="btn btn-primary btn-sm" (click)="load()" [disabled]="loading()">Refresh</button>
+    <button class="btn btn-outline btn-sm" (click)="loadAttribution()" [disabled]="loading()">Compute Attribution</button>
+  </div>
+
+  @if (error()) {
+    <div class="error-msg">{{ error() }} <button class="dismiss" (click)="error.set(null)">×</button></div>
+  }
+
+  <!-- Import Backtest -->
+  <div class="import-section">
+    <h5>Import Backtest Trades</h5>
+    <div class="import-form">
+      <label>Strategy Execution ID:</label>
+      <input type="number" [ngModel]="importStrategyId()" (ngModelChange)="importStrategyId.set($event)" placeholder="e.g. 1" />
+      <button class="btn btn-primary btn-sm" [disabled]="importing() || !importStrategyId()" (click)="importTrades()">
+        {{ importing() ? 'Importing...' : 'Import' }}
+      </button>
+    </div>
+    @if (importMsg()) {
+      <div class="success-msg">{{ importMsg() }}</div>
+    }
+  </div>
+
+  <!-- Attribution Breakdown -->
+  @if (attributions().length > 0) {
+    <h5>Alpha Attribution</h5>
+    <div class="attribution-bars">
+      @for (attr of attributions(); track attr.strategyExecutionId) {
+        <div class="attr-row">
+          <span class="attr-name">{{ attr.strategyName }}</span>
+          <div class="attr-bar-container">
+            <div class="attr-bar"
+              [style.width.%]="(Math.abs(attr.contributionPercent) / maxContribution) * 100"
+              [class.positive]="attr.pnL > 0"
+              [class.negative]="attr.pnL < 0">
+            </div>
+          </div>
+          <span class="attr-pnl" [class.positive]="attr.pnL > 0" [class.negative]="attr.pnL < 0">
+            ${{ attr.pnL | number:'1.2-2' }}
+          </span>
+          <span class="attr-pct">{{ attr.contributionPercent * 100 | number:'1.1-1' }}%</span>
+          <span class="attr-trades">{{ attr.tradeCount }} trades</span>
+          <button class="btn-link" (click)="viewStrategyPnL(attr.strategyExecutionId)">Details</button>
+        </div>
+      }
+    </div>
+  }
+
+  <!-- Strategy PnL Detail -->
+  @if (selectedPnL(); as pnl) {
+    <div class="pnl-detail">
+      <h5>{{ pnl.strategyName }} — PnL Detail</h5>
+      <div class="pnl-cards">
+        <div class="card">
+          <span class="card-label">Total PnL</span>
+          <span class="card-value" [class.positive]="pnl.totalPnL > 0" [class.negative]="pnl.totalPnL < 0">
+            ${{ pnl.totalPnL | number:'1.2-2' }}
+          </span>
+        </div>
+        <div class="card">
+          <span class="card-label">Trade Count</span>
+          <span class="card-value">{{ pnl.tradeCount }}</span>
+        </div>
+        <div class="card">
+          <span class="card-label">Win Rate</span>
+          <span class="card-value">{{ pnl.winRate * 100 | number:'1.1-1' }}%</span>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- Allocations Table -->
+  @if (allocations().length > 0) {
+    <h5>Strategy Allocations</h5>
+    <table>
+      <thead>
+        <tr><th>Strategy</th><th>Capital Allocated</th><th>Start</th><th>End</th><th>Actions</th></tr>
+      </thead>
+      <tbody>
+        @for (a of allocations(); track a.id) {
+          <tr>
+            <td class="symbol">{{ a.strategyExecution?.strategyName ?? 'ID:' + a.strategyExecutionId }}</td>
+            <td>${{ a.capitalAllocated | number:'1.2-2' }}</td>
+            <td>{{ a.startDate | date:'mediumDate' }}</td>
+            <td>{{ a.endDate | date:'mediumDate' }}</td>
+            <td><button class="btn-link" (click)="viewStrategyPnL(a.strategyExecutionId)">View PnL</button></td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+
+  @if (allocations().length === 0 && !loading()) {
+    <p class="muted">No strategies imported yet. Use the import form above to link backtest results to this portfolio.</p>
+  }
+</div>

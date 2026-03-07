@@ -1,0 +1,81 @@
+<div class="portfolio-page">
+  <div class="portfolio-header">
+    <h2>Portfolio Management</h2>
+    <div class="account-selector">
+      <label>Account:</label>
+      @if (loadingAccounts()) {
+        <span class="text-muted">Loading accounts...</span>
+      } @else {
+        <select [ngModel]="selectedAccountId()" (ngModelChange)="selectedAccountId.set($event)">
+          @for (account of accounts(); track account.id) {
+            <option [value]="account.id">{{ account.name }} ({{ account.type }}) — ${{ account.cash | number:'1.2-2' }}</option>
+          }
+        </select>
+        <button class="btn btn-sm btn-outline" (click)="showCreateForm.set(!showCreateForm())">
+          {{ showCreateForm() ? 'Cancel' : '+ New Account' }}
+        </button>
+      }
+    </div>
+  </div>
+
+  @if (showCreateForm()) {
+    <div class="create-form">
+      <input type="text" placeholder="Account name" [ngModel]="newAccountName()" (ngModelChange)="newAccountName.set($event)" />
+      <select [ngModel]="newAccountType()" (ngModelChange)="newAccountType.set($event)">
+        @for (t of accountTypes; track t) {
+          <option [value]="t">{{ t }}</option>
+        }
+      </select>
+      <input type="number" [ngModel]="newAccountCash()" (ngModelChange)="newAccountCash.set($event)" />
+      <button class="btn btn-primary" [disabled]="creating() || !newAccountName().trim()" (click)="createAccount()">
+        {{ creating() ? 'Creating...' : 'Create' }}
+      </button>
+    </div>
+  }
+
+  @if (error()) {
+    <div class="error-banner">{{ error() }} <button (click)="error.set(null)">×</button></div>
+  }
+
+  @if (selectedAccountId(); as accountId) {
+    <p-tabs value="0">
+      <p-tablist>
+        <p-tab value="0">Dashboard</p-tab>
+        <p-tab value="1">Positions</p-tab>
+        <p-tab value="2">Equity Curve</p-tab>
+        <p-tab value="3">Risk Engine</p-tab>
+        <p-tab value="4">Scenario Explorer</p-tab>
+        <p-tab value="5">Reconciliation</p-tab>
+        <p-tab value="6">Strategy Attribution</p-tab>
+      </p-tablist>
+      <p-tabpanels>
+        <p-tabpanel value="0">
+          <app-dashboard [accountId]="accountId" />
+        </p-tabpanel>
+        <p-tabpanel value="1">
+          <app-positions [accountId]="accountId" />
+        </p-tabpanel>
+        <p-tabpanel value="2">
+          <app-equity-chart [accountId]="accountId" />
+        </p-tabpanel>
+        <p-tabpanel value="3">
+          <app-risk-panel [accountId]="accountId" />
+        </p-tabpanel>
+        <p-tabpanel value="4">
+          <app-scenario-explorer [accountId]="accountId" />
+        </p-tabpanel>
+        <p-tabpanel value="5">
+          <app-reconciliation [accountId]="accountId" />
+        </p-tabpanel>
+        <p-tabpanel value="6">
+          <app-strategy-attribution [accountId]="accountId" />
+        </p-tabpanel>
+      </p-tabpanels>
+    </p-tabs>
+  } @else {
+    <div class="empty-state">
+      <p>No accounts found. Create one to get started.</p>
+      <button class="btn btn-primary" (click)="showCreateForm.set(true)">Create Account</button>
+    </div>
+  }
+</div>

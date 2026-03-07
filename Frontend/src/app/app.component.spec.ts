@@ -25,13 +25,15 @@ describe('AppComponent', () => {
     expect(menubar).toBeTruthy();
   });
 
-  it('should have 4 top-level menu items (Stocks, Options, ML Predictions, Tracked Instruments)', () => {
+  it('should have 6 top-level menu items', () => {
     const items = fixture.componentInstance.items();
-    expect(items.length).toBe(4);
+    expect(items.length).toBe(6);
     expect(items[0].label).toBe('Stocks');
     expect(items[1].label).toBe('Options');
     expect(items[2].label).toBe('ML Predictions');
-    expect(items[3].label).toBe('Tracked Instruments');
+    expect(items[3].label).toBe('Portfolio');
+    expect(items[4].label).toBe('Research Lab');
+    expect(items[5].label).toBe('Tracked Instruments');
   });
 
   it('should have 5 sub-items under Stocks', () => {

@@ -1,0 +1,96 @@
+<div class="positions-panel">
+  <div class="toolbar">
+    <button class="btn btn-primary btn-sm" (click)="load()" [disabled]="loading()">Refresh</button>
+    <button class="btn btn-outline btn-sm" (click)="rebuild()" [disabled]="loading()">Rebuild from Trades</button>
+    <label class="toggle">
+      <input type="checkbox" [checked]="showClosed()" (change)="showClosed.set(!showClosed())" />
+      Show closed
+    </label>
+  </div>
+
+  @if (loading()) {
+    <p class="muted">Loading positions...</p>
+  }
+
+  @if (error()) {
+    <div class="error-msg">{{ error() }}</div>
+  }
+
+  @if (!loading() && filteredPositions.length === 0) {
+    <p class="muted">No positions found.</p>
+  }
+
+  @if (filteredPositions.length > 0) {
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Symbol</th>
+          <th>Type</th>
+          <th>Qty</th>
+          <th>Avg Cost</th>
+          <th>Realized PnL</th>
+          <th>Status</th>
+          <th>Opened</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (pos of filteredPositions; track pos.id) {
+          <tr class="position-row" (click)="toggleExpand(pos.id)">
+            <td class="expand-icon">{{ expandedId() === pos.id ? '▼' : '▶' }}</td>
+            <td class="symbol">{{ pos.ticker?.symbol ?? 'ID:' + pos.tickerId }}</td>
+            <td>{{ pos.assetType }}</td>
+            <td>{{ pos.netQuantity }}</td>
+            <td>${{ pos.avgCostBasis | number:'1.2-4' }}</td>
+            <td [class.positive]="pos.realizedPnL > 0" [class.negative]="pos.realizedPnL < 0">
+              ${{ pos.realizedPnL | number:'1.2-2' }}
+            </td>
+            <td>
+              <span class="status-badge" [class.open]="pos.status === 'Open'" [class.closed]="pos.status === 'Closed'">
+                {{ pos.status }}
+              </span>
+            </td>
+            <td>{{ pos.openedAt | date:'mediumDate' }}</td>
+          </tr>
+
+          @if (expandedId() === pos.id && pos.lots && pos.lots.length > 0) {
+            <tr class="lot-header-row">
+              <td></td>
+              <td colspan="7">
+                <div class="lots-section">
+                  <h5>FIFO Lots ({{ pos.lots!.length }})</h5>
+                  <table class="lots-table">
+                    <thead>
+                      <tr>
+                        <th>Entry Price</th>
+                        <th>Original Qty</th>
+                        <th>Remaining</th>
+                        <th>Realized PnL</th>
+                        <th>Opened</th>
+                        <th>Closed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (lot of pos.lots!; track lot.id) {
+                        <tr>
+                          <td>${{ lot.entryPrice | number:'1.2-4' }}</td>
+                          <td>{{ lot.quantity }}</td>
+                          <td>{{ lot.remainingQuantity }}</td>
+                          <td [class.positive]="lot.realizedPnL > 0" [class.negative]="lot.realizedPnL < 0">
+                            ${{ lot.realizedPnL | number:'1.2-2' }}
+                          </td>
+                          <td>{{ lot.openedAt | date:'short' }}</td>
+                          <td>{{ lot.closedAt ? (lot.closedAt | date:'short') : '—' }}</td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              </td>
+            </tr>
+          }
+        }
+      </tbody>
+    </table>
+  }
+</div>

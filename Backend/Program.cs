@@ -101,12 +101,21 @@ builder.Services.AddHttpClient<IResearchService, ResearchService>(client =>
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
 builder.Services.AddScoped<IBacktestService, BacktestService>();
+builder.Services.AddScoped<IPositionEngine, PositionEngine>();
+builder.Services.AddScoped<IPortfolioService, PortfolioService>();
+builder.Services.AddScoped<IPortfolioValuationService, PortfolioValuationService>();
+builder.Services.AddScoped<ISnapshotService, SnapshotService>();
+builder.Services.AddScoped<IPortfolioRiskService, PortfolioRiskService>();
+builder.Services.AddScoped<IPortfolioReconciliationService, PortfolioReconciliationService>();
+builder.Services.AddScoped<IStrategyAttributionService, StrategyAttributionService>();
 
 // Add GraphQL services
 builder.Services
     .AddGraphQLServer()
     .AddQueryType<Query>()
+    .AddTypeExtension<PortfolioQuery>()
     .AddMutationType<Mutation>()
+    .AddTypeExtension<PortfolioMutation>()
     .AddProjections()
     .AddFiltering()
     .AddSorting()

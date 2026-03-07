@@ -1,0 +1,31 @@
+<div class="equity-panel">
+  <div class="toolbar">
+    <button class="btn btn-primary btn-sm" (click)="load()" [disabled]="loading()">
+      {{ loading() ? 'Loading...' : 'Refresh' }}
+    </button>
+  </div>
+
+  @if (error()) {
+    <div class="error-msg">{{ error() }}</div>
+  }
+
+  @if (metrics(); as m) {
+    <div class="metrics-bar">
+      <span><strong>Return:</strong> {{ m.totalReturnPercent | number:'1.2-2' }}%</span>
+      <span><strong>Sharpe:</strong> {{ m.sharpeRatio | number:'1.3-3' }}</span>
+      <span><strong>Sortino:</strong> {{ m.sortinoRatio | number:'1.3-3' }}</span>
+      <span><strong>Calmar:</strong> {{ m.calmarRatio | number:'1.3-3' }}</span>
+      <span><strong>Max DD:</strong> {{ m.maxDrawdownPercent | number:'1.2-2' }}%</span>
+      <span><strong>Snapshots:</strong> {{ m.snapshotCount }}</span>
+    </div>
+  }
+
+  <h4>Equity Curve</h4>
+  @if (snapshots().length === 0 && !loading()) {
+    <p class="muted">No snapshots yet. Take snapshots from the Dashboard tab to build your equity curve.</p>
+  }
+  <div #equityChartContainer class="chart-container"></div>
+
+  <h4>Drawdown</h4>
+  <div #drawdownChartContainer class="chart-container"></div>
+</div>

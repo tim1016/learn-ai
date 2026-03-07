@@ -1,0 +1,57 @@
+.positions-panel { padding: 1rem 0; }
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+th { text-align: left; padding: 0.5rem; background: #f1f3f5; border-bottom: 2px solid #dee2e6; font-size: 0.8rem; }
+td { padding: 0.5rem; border-bottom: 1px solid #eee; }
+
+.position-row { cursor: pointer; &:hover { background: #f8f9fa; } }
+.expand-icon { width: 24px; color: #999; font-size: 0.7rem; }
+.symbol { font-weight: 600; }
+.positive { color: #28a745; }
+.negative { color: #dc3545; }
+
+.status-badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  &.open { background: #d4edda; color: #155724; }
+  &.closed { background: #f8d7da; color: #721c24; }
+}
+
+.lots-section { padding: 0.5rem 0; }
+.lots-section h5 { margin: 0 0 0.5rem; font-size: 0.85rem; color: #495057; }
+.lots-table {
+  background: #fafafa;
+  th { background: #e9ecef; font-size: 0.75rem; }
+  td { font-size: 0.8rem; }
+}
+
+.lot-header-row { background: #fafafa; }
+
+.muted { color: #6c757d; }
+.error-msg { color: #dc3545; margin-bottom: 1rem; }
+
+.btn {
+  padding: 0.4rem 0.8rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.875rem; font-weight: 500;
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+.btn-primary { background: #007bff; color: #fff; &:hover:not(:disabled) { background: #0069d9; } }
+.btn-outline { background: transparent; border: 1px solid #6c757d; color: #6c757d; }
+.btn-sm { padding: 0.25rem 0.6rem; font-size: 0.8rem; }

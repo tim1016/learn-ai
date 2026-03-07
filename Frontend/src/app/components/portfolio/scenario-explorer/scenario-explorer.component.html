@@ -1,0 +1,75 @@
+<div class="scenario-panel">
+  <h4>Stress Test Scenarios</h4>
+
+  <!-- Preset Buttons -->
+  <div class="presets">
+    @for (p of presets; track p.label) {
+      <button class="preset-btn" (click)="applyPreset(p)">{{ p.label }}</button>
+    }
+  </div>
+
+  <!-- Custom Inputs -->
+  <div class="scenario-form">
+    <div class="form-group">
+      <label>Price Change (%)</label>
+      <input type="number" step="1" [ngModel]="priceChange()" (ngModelChange)="priceChange.set($event)" placeholder="e.g. -10" />
+    </div>
+    <div class="form-group">
+      <label>IV Change (%)</label>
+      <input type="number" step="1" [ngModel]="ivChange()" (ngModelChange)="ivChange.set($event)" placeholder="e.g. 5" />
+    </div>
+    <div class="form-group">
+      <label>Theta Decay (days)</label>
+      <input type="number" step="1" [ngModel]="thetaDays()" (ngModelChange)="thetaDays.set($event)" placeholder="e.g. 5" />
+    </div>
+    <button class="btn btn-primary" [disabled]="loading()" (click)="runScenario()">
+      {{ loading() ? 'Running...' : 'Run Scenario' }}
+    </button>
+  </div>
+
+  @if (error()) {
+    <div class="error-msg">{{ error() }}</div>
+  }
+
+  @if (result(); as r) {
+    <!-- Summary -->
+    <div class="result-summary">
+      <div class="result-card">
+        <span class="label">Current Equity</span>
+        <span class="value">${{ r.currentEquity | number:'1.2-2' }}</span>
+      </div>
+      <div class="result-card">
+        <span class="label">Scenario Equity</span>
+        <span class="value">${{ r.scenarioEquity | number:'1.2-2' }}</span>
+      </div>
+      <div class="result-card impact">
+        <span class="label">P&L Impact</span>
+        <span class="value" [class.positive]="r.pnLImpact > 0" [class.negative]="r.pnLImpact < 0">
+          ${{ r.pnLImpact | number:'1.2-2' }} ({{ r.pnLImpactPercent * 100 | number:'1.2-2' }}%)
+        </span>
+      </div>
+    </div>
+
+    <!-- Per-Position Breakdown -->
+    @if (r.positions.length > 0) {
+      <h5>Position Breakdown</h5>
+      <table>
+        <thead>
+          <tr><th>Symbol</th><th>Current Value</th><th>Scenario Value</th><th>P&L Impact</th></tr>
+        </thead>
+        <tbody>
+          @for (pos of r.positions; track pos.symbol) {
+            <tr>
+              <td class="symbol">{{ pos.symbol }}</td>
+              <td>${{ pos.currentValue | number:'1.2-2' }}</td>
+              <td>${{ pos.scenarioValue | number:'1.2-2' }}</td>
+              <td [class.positive]="pos.pnLImpact > 0" [class.negative]="pos.pnLImpact < 0">
+                ${{ pos.pnLImpact | number:'1.2-2' }}
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  }
+</div>

@@ -50,6 +50,11 @@ export class AppComponent {
       ],
     },
     {
+      label: "Portfolio",
+      icon: "pi pi-wallet",
+      routerLink: "/portfolio",
+    },
+    {
       label: "Research Lab",
       icon: "pi pi-search",
       routerLink: "/research-lab",

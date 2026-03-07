@@ -1,0 +1,72 @@
+<div class="reconciliation-panel">
+  <h4>Portfolio Reconciliation</h4>
+  <p class="description">
+    Compares cached position state against positions rebuilt from the trade log.
+    Detects quantity mismatches, missing positions, and PnL drift.
+  </p>
+
+  <div class="toolbar">
+    <button class="btn btn-primary" (click)="runReconciliation()" [disabled]="loading()">
+      {{ loading() ? 'Running...' : 'Run Reconciliation' }}
+    </button>
+    @if (report()?.hasDrift) {
+      <button class="btn btn-warning" (click)="autoFix()" [disabled]="fixing()">
+        {{ fixing() ? 'Fixing...' : 'Auto-Fix (Rebuild)' }}
+      </button>
+    }
+  </div>
+
+  @if (error()) {
+    <div class="error-msg">{{ error() }}</div>
+  }
+
+  @if (fixMessage()) {
+    <div class="success-msg">{{ fixMessage() }}</div>
+  }
+
+  @if (report(); as r) {
+    <div class="report-summary" [class.clean]="!r.hasDrift" [class.drifted]="r.hasDrift">
+      <div class="status-icon">{{ r.hasDrift ? '⚠' : '✓' }}</div>
+      <div class="status-text">
+        @if (r.hasDrift) {
+          <strong>Drift Detected</strong> — {{ r.drifts.length }} position(s) differ between cached and rebuilt state.
+        } @else {
+          <strong>All Clear</strong> — Cached positions match trade-derived state perfectly.
+        }
+      </div>
+      <div class="counts">
+        <span>Cached: {{ r.cachedPositionCount }}</span>
+        <span>Rebuilt: {{ r.rebuiltPositionCount }}</span>
+      </div>
+    </div>
+
+    @if (r.drifts.length > 0) {
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Drift Type</th>
+            <th>Cached Qty</th>
+            <th>Rebuilt Qty</th>
+            <th>Cached PnL</th>
+            <th>Rebuilt PnL</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (d of r.drifts; track d.tickerId) {
+            <tr [class]="'drift-' + d.driftType.toLowerCase()">
+              <td class="symbol">{{ d.symbol }}</td>
+              <td>
+                <span class="drift-badge">{{ d.driftType }}</span>
+              </td>
+              <td>{{ d.cachedQuantity }}</td>
+              <td>{{ d.rebuiltQuantity }}</td>
+              <td>${{ d.cachedRealizedPnL | number:'1.2-2' }}</td>
+              <td>${{ d.rebuiltRealizedPnL | number:'1.2-2' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  }
+</div>

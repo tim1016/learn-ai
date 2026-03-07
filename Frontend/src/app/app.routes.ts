@@ -122,6 +122,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "portfolio",
+    loadComponent: () =>
+      import("./components/portfolio/portfolio.component").then(
+        (m) => m.PortfolioComponent
+      ),
+  },
+  {
     path: "research-lab",
     loadComponent: () =>
       import("./components/research-lab/research-lab.component").then(

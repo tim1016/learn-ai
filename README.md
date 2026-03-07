@@ -93,6 +93,58 @@ Results are cached to prevent redundant calculations.
 
 **Options History** (`/options-history`) — Historical 0DTE options contract lookup for a specific date. Scans ATM +/- N strikes with per-contract daily bar data and relative strike positioning.
 
+### Portfolio Management
+
+**Portfolio Dashboard** (`/portfolio`) — Full event-sourced portfolio tracking system with FIFO lot accounting, risk management, and strategy attribution. Seven interactive tabs:
+
+**Dashboard** — Account summary with cash balance, position count, performance metrics (Sharpe, Sortino, Calmar, max drawdown, win rate, profit factor), trade recording form, and recent trades table. Take point-in-time snapshots to build your equity curve.
+
+**Positions** — View all open/closed positions with FIFO lot drill-down. Each position expands to show individual lots with entry price, remaining quantity, and per-lot realized PnL. Rebuild positions from the trade log to verify consistency.
+
+**Equity Curve** — Interactive TradingView lightweight-charts visualization:
+
+- Area chart of portfolio equity over time (built from snapshots)
+- Histogram drawdown chart with color-coded severity (orange < 5%, red > 5%)
+- Metrics summary bar: total return, Sharpe, Sortino, Calmar, max drawdown
+
+**Risk Engine** — Configure and evaluate portfolio risk rules:
+
+- **Rule types**: MaxDrawdown, MaxPositionSize, MaxVegaExposure, MaxDelta
+- **Actions**: Warn or Block, with Low/Medium/High/Critical severity
+- **Dollar Delta exposure**: Per-position delta × price × quantity × multiplier breakdown
+- **Risk evaluation**: Real-time rule checks against current portfolio valuation
+- Toggle rules on/off, view last-triggered timestamps
+
+**Scenario Explorer** — Stress test the portfolio with configurable shocks:
+
+- **Preset scenarios**: Market Crash (-20%), Correction (-10%), Rally (+10%), Vol Spike, Theta Decay
+- **Custom inputs**: Price change %, IV change %, time forward (days)
+- Per-position impact breakdown showing current vs. scenario value
+- Options positions reflect vega (IV changes) and theta (time decay) impacts
+
+**Reconciliation** — Detect and fix position drift:
+
+- Compares cached position state vs. positions rebuilt from the trade log
+- Reports drift type: Mismatch, ExtraInCache, MissingFromCache
+- Shows quantity and PnL differences per position
+- One-click Auto-Fix rebuilds positions from the authoritative trade log
+
+**Strategy Attribution** — Connect backtest results to portfolio performance:
+
+- Import trades from backtest strategy executions into the portfolio
+- Per-strategy PnL breakdown with win rate and trade count
+- Alpha contribution bar chart — see which strategies drive returns
+- Contribution percentages showing each strategy's share of total PnL
+- Links to the existing backtest system (`/strategy-lab`)
+
+**Architecture**:
+
+- **Event-sourced**: Trades are the single source of truth; positions are derived via FIFO lot matching
+- **Multiplier-aware**: Options use contract multiplier (default 100) for correct market value, delta, and PnL
+- **Position lifecycle**: Open → Closed (with ClosedAt timestamp when all lots are consumed)
+- **Metrics**: Sharpe (√252 annualized, sample stddev), Sortino (downside deviation only), Calmar (return / max drawdown)
+- **Full documentation**: See `docs/portfolio-system.md` for entity schemas, service APIs, GraphQL operations, and formulas
+
 ### Strategy Backtesting
 
 **Backtest Engine** (`/strategy-lab`) — Execute trading strategies against historical data:
@@ -222,8 +274,19 @@ The .NET backend uses Polly policies for all outbound HTTP calls:
 | **ResearchExperiment** | Alpha validation results (IC, t-stat, stationarity, monotonicity) |
 | **SignalExperiment** | Signal testing results (OOS Sharpe, threshold, cost) |
 | **OptionsIvSnapshot** | Cached IV data (30d ATM/call/put) |
+| **Account** | Portfolio account (Paper/Live/Backtest) with cash tracking |
+| **Order** | Order lifecycle (Pending → Filled/Cancelled) |
+| **PortfolioTrade** | Executed trade (source of truth for positions) |
+| **Position** | Derived position state (NetQuantity, AvgCostBasis, RealizedPnL) |
+| **PositionLot** | FIFO lot for cost basis and realized PnL tracking |
+| **OptionContract** | Reusable option contract reference (strike, expiry, multiplier) |
+| **OptionLeg** | Greeks snapshot at trade entry (IV, delta, gamma, theta, vega) |
+| **PortfolioSnapshot** | Point-in-time equity, cash, Greeks, PnL capture |
+| **RiskRule** | Configurable risk rule (MaxDrawdown, MaxPositionSize, etc.) |
+| **StrategyAllocation** | Links account to strategy execution with capital allocated |
+| **StrategyTradeLink** | Maps portfolio trades to backtest strategy executions |
 
-Key indexes: composite `(TickerId, Timestamp, Timespan)` on StockAggregate for fast range queries. Unique constraint on `(Symbol, Market)` for Ticker.
+Key indexes: composite `(TickerId, Timestamp, Timespan)` on StockAggregate for fast range queries. Unique constraint on `(Symbol, Market)` for Ticker. Composite `(AccountId, TickerId, Status)` on Position for portfolio queries.
 
 ---
 
@@ -389,10 +452,13 @@ learn-ai/
     GraphQL/                        Query.cs, Mutation.cs (Hot Chocolate resolvers)
     Models/
       MarketData/                   EF Core entities (Ticker, StockAggregate, SignalExperiment...)
+      Portfolio/                    Account, Order, PortfolioTrade, Position, PositionLot, OptionContract, RiskRule, etc.
       DTOs/                         Data transfer objects (ResearchReportDto, SignalModels...)
     Services/
-      Implementation/               MarketDataService, PolygonService, BacktestService, ResearchService, LstmService
-      Interfaces/                   Service contracts (IMarketDataService, IResearchService...)
+      Implementation/               MarketDataService, PolygonService, BacktestService, ResearchService, LstmService,
+                                    PositionEngine, PortfolioService, PortfolioValuationService, SnapshotService,
+                                    PortfolioRiskService, PortfolioReconciliationService, StrategyAttributionService
+      Interfaces/                   Service contracts (IMarketDataService, IResearchService, IPositionEngine, etc.)
     Data/                           AppDbContext (EF Core)
     Program.cs                      App entry point and DI configuration
   Backend.Tests/                  xUnit + Moq test suite
@@ -417,7 +483,8 @@ learn-ai/
         tracked-instruments/        Watchlist with unified snapshots
         options-history/            Historical 0DTE contract lookup
       graphql/                      TypeScript types matching GraphQL schema
-      services/                     Angular services (MarketData, Research, LSTM, Replay)
+        portfolio/                    Dashboard, positions, equity chart, risk, scenarios, reconciliation, attribution
+      services/                     Angular services (MarketData, Research, LSTM, Replay, Portfolio)
       utils/                        Shared utilities (Black-Scholes calculator, date validation)
     src/testing/                  Test factories for mock data
   PythonDataService/              FastAPI proxy to Polygon.io

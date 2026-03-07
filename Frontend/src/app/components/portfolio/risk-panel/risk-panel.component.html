@@ -1,0 +1,106 @@
+<div class="risk-panel">
+  <div class="toolbar">
+    <button class="btn btn-primary btn-sm" (click)="loadRules()" [disabled]="loading()">Refresh Rules</button>
+    <button class="btn btn-outline btn-sm" (click)="evaluateRules()" [disabled]="loading()">Evaluate Rules</button>
+    <button class="btn btn-outline btn-sm" (click)="loadVega()">Load Delta/Vega</button>
+  </div>
+
+  @if (error()) {
+    <div class="error-msg">{{ error() }} <button class="dismiss" (click)="error.set(null)">×</button></div>
+  }
+
+  <!-- Violations -->
+  @if (violations().length > 0) {
+    <div class="violations-section">
+      <h4>Risk Violations</h4>
+      @for (v of violations(); track v.ruleId) {
+        <div class="violation" [class]="'severity-' + v.severity.toLowerCase()">
+          <span class="violation-badge">{{ v.severity }}</span>
+          <span class="violation-msg">{{ v.message }}</span>
+          <span class="violation-action">Action: {{ v.action }}</span>
+        </div>
+      }
+    </div>
+  }
+
+  <!-- Delta Results -->
+  @if (deltaResults().length > 0) {
+    <h4>Dollar Delta Exposure</h4>
+    <table>
+      <thead>
+        <tr><th>Symbol</th><th>Delta</th><th>Price</th><th>Qty</th><th>Multiplier</th><th>$ Delta</th></tr>
+      </thead>
+      <tbody>
+        @for (d of deltaResults(); track d.positionId) {
+          <tr>
+            <td class="symbol">{{ d.symbol }}</td>
+            <td>{{ d.delta | number:'1.3-3' }}</td>
+            <td>${{ d.price | number:'1.2-2' }}</td>
+            <td>{{ d.quantity }}</td>
+            <td>{{ d.multiplier }}</td>
+            <td [class.positive]="d.dollarDelta > 0" [class.negative]="d.dollarDelta < 0">
+              ${{ d.dollarDelta | number:'1.0-0' }}
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+
+  <!-- Rules -->
+  <h4>Risk Rules</h4>
+
+  @if (rules().length === 0 && !loading()) {
+    <p class="muted">No risk rules configured.</p>
+  }
+
+  @if (rules().length > 0) {
+    <table>
+      <thead>
+        <tr><th>Type</th><th>Threshold</th><th>Action</th><th>Severity</th><th>Enabled</th><th>Last Triggered</th></tr>
+      </thead>
+      <tbody>
+        @for (rule of rules(); track rule.id) {
+          <tr>
+            <td>{{ rule.ruleType }}</td>
+            <td>{{ rule.threshold | number:'1.2-4' }}</td>
+            <td>{{ rule.action }}</td>
+            <td><span class="severity-tag" [class]="'sev-' + rule.severity.toLowerCase()">{{ rule.severity }}</span></td>
+            <td>
+              <button class="toggle-btn" [class.on]="rule.enabled" (click)="toggleRule(rule)">
+                {{ rule.enabled ? 'ON' : 'OFF' }}
+              </button>
+            </td>
+            <td>{{ rule.lastTriggered ? (rule.lastTriggered | date:'short') : '—' }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+
+  <!-- Create Rule Form -->
+  <div class="create-rule-form">
+    <h5>Add Rule</h5>
+    <div class="form-row">
+      <select [ngModel]="newRuleType()" (ngModelChange)="newRuleType.set($event)">
+        @for (t of ruleTypes; track t) {
+          <option [value]="t">{{ t }}</option>
+        }
+      </select>
+      <input type="number" step="0.01" [ngModel]="newThreshold()" (ngModelChange)="newThreshold.set($event)" placeholder="Threshold" />
+      <select [ngModel]="newAction()" (ngModelChange)="newAction.set($event)">
+        @for (a of actions; track a) {
+          <option [value]="a">{{ a }}</option>
+        }
+      </select>
+      <select [ngModel]="newSeverity()" (ngModelChange)="newSeverity.set($event)">
+        @for (s of severities; track s) {
+          <option [value]="s">{{ s }}</option>
+        }
+      </select>
+      <button class="btn btn-primary btn-sm" [disabled]="creating()" (click)="createRule()">
+        {{ creating() ? 'Creating...' : 'Add Rule' }}
+      </button>
+    </div>
+  </div>
+</div>
