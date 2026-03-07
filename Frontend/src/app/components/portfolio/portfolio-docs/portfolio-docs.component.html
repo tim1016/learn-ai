@@ -1,0 +1,459 @@
+<div class="portfolio-docs">
+
+  <!-- ═══ 1. Architecture Overview ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sitemap section-icon"></i>
+      <h3>Architecture Overview</h3>
+    </div>
+    <p class="section-description">
+      An event-sourced portfolio tracker with FIFO lot accounting, real-time valuation, risk management, and strategy attribution.
+    </p>
+
+    <div class="doc-card highlight-card mb-4">
+      <h4>System Layers</h4>
+      <div class="pipeline-flow">
+        @for (layer of architectureLayers; track layer.name) {
+          <div class="pipeline-stage">
+            <i class="pi pi-chevron-right"></i>
+            <div>
+              <strong>{{ layer.name }}</strong>
+              <span class="pipeline-detail">{{ layer.detail }}</span>
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+
+    <div class="info-callout mb-4">
+      <i class="pi pi-info-circle"></i>
+      <div>
+        <strong>Event Sourcing Guarantee</strong>
+        <span>Trades are immutable facts. Positions and lots are derived state that can be completely rebuilt from the trade log at any time via <code>RebuildPositionsAsync</code>.</span>
+      </div>
+    </div>
+
+    <div class="design-grid">
+      @for (p of designPrinciples; track p.title) {
+        <div class="driver-card">
+          <h5>{{ p.title }}</h5>
+          <p>{{ p.description }}</p>
+        </div>
+      }
+    </div>
+  </div>
+
+  <!-- ═══ 2. FIFO Lot Algorithm ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sort-amount-down section-icon"></i>
+      <h3>FIFO Lot Algorithm</h3>
+    </div>
+    <p class="section-description">
+      First-In, First-Out lot tracking ensures deterministic, auditable realized PnL. Every buy creates a lot; sells close lots oldest-first.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (f of fifoFormulas; track f.name) {
+        <p-accordion-panel>
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ f.name }}</span>
+              <span class="feature-badge">FIFO</span>
+            </div>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="formula-block">
+              <span [appKatex]="f.formulaLatex" [displayMode]="true"></span>
+            </div>
+            @if (f.variablesLatex.length > 0) {
+              <div class="variable-list">
+                <span class="label">Variables</span>
+                @for (v of f.variablesLatex; track v) {
+                  <div class="variable-item">
+                    <span [appKatex]="v"></span>
+                  </div>
+                }
+              </div>
+            }
+            <p class="interpretation">{{ f.interpretation }}</p>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+
+    <div class="info-callout mt-4">
+      <i class="pi pi-lightbulb"></i>
+      <div>
+        <strong>FIFO Example</strong>
+        <span>
+          Sell 150 shares &#64; $170 with Lot A (100 &#64; $150) and Lot B (100 &#64; $160):
+          Lot A closes 100 shares for <span [appKatex]="'(170-150) \\times 100 = \\$2{,}000'"></span>,
+          then Lot B closes 50 shares for <span [appKatex]="'(170-160) \\times 50 = \\$500'"></span>.
+          Total realized: <span [appKatex]="'\\$2{,}500'"></span>.
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 3. Valuation ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-dollar section-icon"></i>
+      <h3>Valuation Formulas</h3>
+    </div>
+    <p class="section-description">
+      How position market values, unrealized PnL, and portfolio equity are computed from live prices.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (f of valuationFormulas; track f.name) {
+        <p-accordion-panel>
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ f.name }}</span>
+              <span class="feature-badge">Valuation</span>
+            </div>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="formula-block">
+              <span [appKatex]="f.formulaLatex" [displayMode]="true"></span>
+            </div>
+            @if (f.variablesLatex.length > 0) {
+              <div class="variable-list">
+                <span class="label">Variables</span>
+                @for (v of f.variablesLatex; track v) {
+                  <div class="variable-item">
+                    <span [appKatex]="v"></span>
+                  </div>
+                }
+              </div>
+            }
+            <p class="interpretation">{{ f.interpretation }}</p>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+  </div>
+
+  <!-- ═══ 4. Performance Metrics ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-chart-line section-icon"></i>
+      <h3>Performance Metrics</h3>
+    </div>
+    <p class="section-description">
+      Computed from the equity snapshot history. All ratios are annualized assuming 252 trading days per year.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (f of metricsFormulas; track f.name) {
+        <p-accordion-panel>
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ f.name }}</span>
+              @if (f.name === 'Sharpe Ratio' || f.name === 'Sortino Ratio' || f.name === 'Calmar Ratio') {
+                <span class="feature-badge high-impact">Key Ratio</span>
+              }
+            </div>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="formula-block">
+              <span [appKatex]="f.formulaLatex" [displayMode]="true"></span>
+            </div>
+            @if (f.variablesLatex.length > 0) {
+              <div class="variable-list">
+                <span class="label">Variables</span>
+                @for (v of f.variablesLatex; track v) {
+                  <div class="variable-item">
+                    <span [appKatex]="v"></span>
+                  </div>
+                }
+              </div>
+            }
+            <p class="interpretation">{{ f.interpretation }}</p>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+
+    <div class="insight-callout mt-4">
+      <i class="pi pi-star"></i>
+      <div>
+        <strong>Interpreting the Ratios</strong>
+        <span>
+          Sharpe > 1 is generally good; > 2 is excellent. Sortino is preferred when returns are skewed.
+          Calmar focuses purely on drawdown risk. Profit Factor > 1 means the system is net profitable.
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 5. Risk Engine ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-shield section-icon"></i>
+      <h3>Risk Engine</h3>
+    </div>
+    <p class="section-description">
+      Dollar delta, portfolio vega, configurable risk rules, and automated violation detection.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (f of riskFormulas; track f.name) {
+        <p-accordion-panel>
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ f.name }}</span>
+              <span class="feature-badge">Risk</span>
+            </div>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="formula-block">
+              <span [appKatex]="f.formulaLatex" [displayMode]="true"></span>
+            </div>
+            @if (f.variablesLatex.length > 0) {
+              <div class="variable-list">
+                <span class="label">Variables</span>
+                @for (v of f.variablesLatex; track v) {
+                  <div class="variable-item">
+                    <span [appKatex]="v"></span>
+                  </div>
+                }
+              </div>
+            }
+            <p class="interpretation">{{ f.interpretation }}</p>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+
+    <div class="subsection-title mt-4">
+      <i class="pi pi-exclamation-triangle"></i>
+      Risk Rule Types
+    </div>
+    <table class="econ-checklist">
+      <thead>
+        <tr>
+          <th>Rule Type</th>
+          <th>Actual Value Computation</th>
+          <th>Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (r of riskRules; track r.ruleType) {
+          <tr>
+            <td class="question-cell"><code>{{ r.ruleType }}</code></td>
+            <td>{{ r.computation }}</td>
+            <td>{{ r.example }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="info-callout mt-4">
+      <i class="pi pi-info-circle"></i>
+      <div>
+        <strong>Rule Evaluation</strong>
+        <span>If <span [appKatex]="'\\text{actualValue} > \\text{threshold}'"></span>, a <code>RiskViolation</code> is returned with the rule's configured action (<code>Warn</code> or <code>Block</code>) and severity.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 6. Scenario Analysis ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sliders-h section-icon"></i>
+      <h3>Scenario Analysis</h3>
+    </div>
+    <p class="section-description">
+      Stress-test the portfolio by combining price shocks, IV changes, and theta decay in a single what-if simulation.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (f of scenarioFormulas; track f.name) {
+        <p-accordion-panel>
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ f.name }}</span>
+              <span class="feature-badge">Scenario</span>
+            </div>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="formula-block">
+              <span [appKatex]="f.formulaLatex" [displayMode]="true"></span>
+            </div>
+            @if (f.variablesLatex.length > 0) {
+              <div class="variable-list">
+                <span class="label">Variables</span>
+                @for (v of f.variablesLatex; track v) {
+                  <div class="variable-item">
+                    <span [appKatex]="v"></span>
+                  </div>
+                }
+              </div>
+            }
+            <p class="interpretation">{{ f.interpretation }}</p>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+
+    <div class="info-callout warn mt-4">
+      <i class="pi pi-exclamation-triangle"></i>
+      <div>
+        <strong>Linear Approximation</strong>
+        <span>Scenario analysis uses entry Greeks (delta, vega, theta) for linear approximation. For large moves, second-order effects (gamma, vanna, volga) may cause significant deviation from actual P&amp;L.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 7. Strategy Attribution ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-chart-pie section-icon"></i>
+      <h3>Strategy Attribution</h3>
+    </div>
+    <p class="section-description">
+      Link trades to automated strategy executions and decompose portfolio PnL by strategy contribution.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (f of attributionFormulas; track f.name) {
+        <p-accordion-panel>
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ f.name }}</span>
+              <span class="feature-badge">Attribution</span>
+            </div>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="formula-block">
+              <span [appKatex]="f.formulaLatex" [displayMode]="true"></span>
+            </div>
+            @if (f.variablesLatex.length > 0) {
+              <div class="variable-list">
+                <span class="label">Variables</span>
+                @for (v of f.variablesLatex; track v) {
+                  <div class="variable-item">
+                    <span [appKatex]="v"></span>
+                  </div>
+                }
+              </div>
+            }
+            <p class="interpretation">{{ f.interpretation }}</p>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+
+    <div class="hypothesis-callout mt-4">
+      <i class="pi pi-link"></i>
+      <div>
+        <strong>Backtest Import Flow</strong>
+        <span>
+          <code>ImportBacktestTrades</code> reads trades from a completed strategy execution and records them as <code>PortfolioTrade</code> entries linked via <code>StrategyTradeLink</code>.
+          This allows comparing backtest performance against live trading in the same account.
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 8. Reconciliation ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sync section-icon"></i>
+      <h3>Reconciliation</h3>
+    </div>
+    <p class="section-description">
+      Detects and fixes drift between cached position state and the authoritative trade log.
+    </p>
+
+    <div class="doc-card">
+      <h4>Drift Detection Process</h4>
+      <div class="pipeline-flow">
+        @for (s of reconciliationSteps; track s.step) {
+          <div class="pipeline-stage">
+            <i class="pi pi-chevron-right"></i>
+            <div>
+              <strong>Step {{ s.step }}: {{ s.action }}</strong>
+              <span class="pipeline-detail">{{ s.detail }}</span>
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+
+    <div class="info-callout mt-4">
+      <i class="pi pi-info-circle"></i>
+      <div>
+        <strong>When Does Drift Occur?</strong>
+        <span>Drift can happen if a trade is manually edited or deleted, if the position engine has a bug that's later fixed, or if concurrent operations cause a race condition. The reconciliation system acts as the self-healing layer.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 9. Data Model Summary ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-database section-icon"></i>
+      <h3>Data Model</h3>
+    </div>
+    <p class="section-description">
+      Core entities and their relationships in the portfolio system.
+    </p>
+
+    <table class="econ-checklist">
+      <thead>
+        <tr>
+          <th>Entity</th>
+          <th>Key Fields</th>
+          <th>Role</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="question-cell"><code>Account</code></td>
+          <td>Name, Type, Cash, InitialCash</td>
+          <td>Trading account (Paper or Backtest)</td>
+        </tr>
+        <tr>
+          <td class="question-cell"><code>PortfolioTrade</code></td>
+          <td>Side, Quantity, Price, Fees, Multiplier</td>
+          <td>Immutable trade record (source of truth)</td>
+        </tr>
+        <tr>
+          <td class="question-cell"><code>Position</code></td>
+          <td>NetQuantity, AvgCostBasis, RealizedPnL, Status</td>
+          <td>Derived aggregate of open lots per ticker</td>
+        </tr>
+        <tr>
+          <td class="question-cell"><code>PositionLot</code></td>
+          <td>EntryPrice, Quantity, RemainingQuantity</td>
+          <td>Individual FIFO lot created by a buy trade</td>
+        </tr>
+        <tr>
+          <td class="question-cell"><code>OptionLeg</code></td>
+          <td>EntryIV, EntryDelta, EntryGamma, EntryTheta, EntryVega</td>
+          <td>Greeks snapshot at trade time for risk calculations</td>
+        </tr>
+        <tr>
+          <td class="question-cell"><code>PortfolioSnapshot</code></td>
+          <td>Equity, Cash, MarketValue, Greeks</td>
+          <td>Point-in-time portfolio valuation for equity curves</td>
+        </tr>
+        <tr>
+          <td class="question-cell"><code>RiskRule</code></td>
+          <td>RuleType, Threshold, Action, Severity</td>
+          <td>Configurable risk limit with Warn/Block action</td>
+        </tr>
+        <tr>
+          <td class="question-cell"><code>StrategyTradeLink</code></td>
+          <td>TradeId, StrategyExecutionId</td>
+          <td>Links trades to strategy executions for attribution</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
