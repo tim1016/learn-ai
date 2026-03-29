@@ -23,12 +23,15 @@ services:
     restart: always
     ports:
       - "8000:8000"
+    volumes:
+      - ./PythonDataService/app:/app/app:z
     environment:
       - POLYGON_API_KEY=${POLYGON_API_KEY}
       - FRED_API_KEY=${FRED_API_KEY}
       - HOST=0.0.0.0
       - PORT=8000
       - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s

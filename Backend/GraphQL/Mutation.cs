@@ -3,6 +3,7 @@ using Backend.GraphQL.Types;
 using Backend.Models;
 using Backend.Models.DTOs;
 using Backend.Models.MarketData;
+using Backend.Services.Implementation;
 using Backend.Services.Interfaces;
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
@@ -171,18 +172,49 @@ public class Mutation
         string toDate,
         string parametersJson = "{}",
         string timespan = "minute",
-        int multiplier = 1)
+        int multiplier = 1,
+        bool filterRth = true)
     {
         try
         {
             logger.LogInformation(
-                "[Backtest] Running {Strategy} on {Ticker} from {From} to {To}",
-                strategyName, ticker, fromDate, toDate);
+                "[Backtest] Running {Strategy} on {Ticker} from {From} to {To} timeframe={Timespan}x{Multiplier}",
+                strategyName, ticker, fromDate, toDate, timespan, multiplier);
 
-            // Get or fetch the aggregates
+            // Always fetch 1-minute data as the base, then resample to target timeframe.
+            // This means users only need to fetch 1m data once via Market Data page.
             var fetchResult = await marketDataService.GetOrFetchAggregatesAsync(
-                ticker.ToUpper(), multiplier, timespan, fromDate, toDate, false);
+                ticker.ToUpper(), 1, "minute", fromDate, toDate, false);
             var aggregates = fetchResult.Aggregates;
+            var sourceBarsCount = aggregates.Count;
+
+            // Filter to Regular Trading Hours (9:30 AM – 4:00 PM ET)
+            // Removes pre-market and after-hours bars that would distort strategy signals
+            var rthBarsCount = sourceBarsCount;
+            if (filterRth)
+            {
+                aggregates = BacktestService.FilterToRegularHours(aggregates);
+                rthBarsCount = aggregates.Count;
+            }
+            logger.LogInformation(
+                "[Backtest] Filtered to RTH: {Source} total bars → {Rth} RTH bars",
+                sourceBarsCount, rthBarsCount);
+
+            // Resample to the requested timeframe
+            var targetMinutes = timespan.ToLowerInvariant() switch
+            {
+                "minute" => multiplier,
+                "hour" => multiplier * 60,
+                _ => BacktestService.ParseTimeframeMinutes(timespan) * multiplier,
+            };
+
+            if (targetMinutes > 1)
+            {
+                logger.LogInformation(
+                    "[Backtest] Resampling {Count} 1m bars to {Minutes}m bars",
+                    aggregates.Count, targetMinutes);
+                aggregates = BacktestService.ResampleBars(aggregates, targetMinutes);
+            }
 
             if (aggregates.Count == 0)
             {
@@ -207,6 +239,9 @@ public class Mutation
                 };
             }
 
+            var resampledBarsCount = aggregates.Count;
+            var timeframeLabel = targetMinutes >= 60 ? $"{targetMinutes / 60}h" : $"{targetMinutes}m";
+
             var execution = await backtestService.RunBacktestAsync(
                 tickerEntity.Id, strategyName, parametersJson,
                 fromDate, toDate, timespan, multiplier, aggregates);
@@ -224,6 +259,10 @@ public class Mutation
                 MaxDrawdown = execution.MaxDrawdown,
                 SharpeRatio = execution.SharpeRatio,
                 DurationMs = execution.DurationMs,
+                SourceBars = sourceBarsCount,
+                RthBars = rthBarsCount,
+                ResampledBars = resampledBarsCount,
+                Timeframe = timeframeLabel,
                 Trades = execution.Trades.Select(t => new BacktestTradeType
                 {
                     TradeType = t.TradeType,
@@ -240,6 +279,125 @@ public class Mutation
         catch (Exception ex)
         {
             logger.LogError(ex, "[Backtest] Error running {Strategy} on {Ticker}", strategyName, ticker);
+            return new BacktestResultType
+            {
+                Success = false,
+                Error = ex.Message,
+            };
+        }
+    }
+
+    /// <summary>
+    /// Run a backtest on externally-supplied OHLCV bars (e.g. from TradingView CSV export).
+    /// Skips Polygon fetch — uses the bars directly. Does not persist to DB.
+    /// </summary>
+    [GraphQLName("runBacktestFromCsvBars")]
+    public BacktestResultType RunBacktestFromCsvBars(
+        [Service] ILogger<Mutation> logger,
+        string strategyName,
+        string parametersJson = "{}",
+        List<CsvBarInput>? bars = null,
+        bool filterRth = false)
+    {
+        try
+        {
+            if (bars == null || bars.Count < 2)
+            {
+                return new BacktestResultType
+                {
+                    Success = false,
+                    Error = "Need at least 2 bars to run a backtest",
+                };
+            }
+
+            logger.LogInformation(
+                "[Backtest/CSV] Running {Strategy} on {Count} imported bars",
+                strategyName, bars.Count);
+
+            // Convert CSV bar inputs to StockAggregate
+            var aggregates = bars.Select(b => new StockAggregate
+            {
+                Id = 0,
+                TickerId = 0,
+                Open = b.Open,
+                High = b.High,
+                Low = b.Low,
+                Close = b.Close,
+                Volume = b.Volume,
+                Timestamp = DateTimeOffset.FromUnixTimeMilliseconds(b.Timestamp).UtcDateTime,
+                Timespan = "csv",
+                Multiplier = 1,
+            }).OrderBy(a => a.Timestamp).ToList();
+
+            var sourceBarsCount = aggregates.Count;
+
+            // Optionally filter RTH
+            var rthBarsCount = sourceBarsCount;
+            if (filterRth)
+            {
+                aggregates = BacktestService.FilterToRegularHours(aggregates);
+                rthBarsCount = aggregates.Count;
+            }
+
+            if (aggregates.Count < 2)
+            {
+                return new BacktestResultType
+                {
+                    Success = false,
+                    Error = "Not enough bars remaining after filtering",
+                };
+            }
+
+            // Run strategy directly (bypass DB persistence)
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var sortedBars = aggregates.OrderBy(b => b.Timestamp).ToList();
+
+            var trades = strategyName.ToLowerInvariant() switch
+            {
+                "rsi_reversal" => BacktestService.RunStrategy(sortedBars, strategyName, parametersJson),
+                "sma_crossover" => BacktestService.RunStrategy(sortedBars, strategyName, parametersJson),
+                "rsi_mean_reversion" => BacktestService.RunStrategy(sortedBars, strategyName, parametersJson),
+                _ => throw new ArgumentException($"Unknown strategy: {strategyName}")
+            };
+
+            sw.Stop();
+
+            var winning = trades.Count(t => t.PnL > 0);
+            var losing = trades.Count(t => t.PnL <= 0);
+            var totalPnl = trades.Sum(t => t.PnL);
+
+            return new BacktestResultType
+            {
+                Success = true,
+                StrategyName = strategyName,
+                Parameters = parametersJson,
+                TotalTrades = trades.Count,
+                WinningTrades = winning,
+                LosingTrades = losing,
+                TotalPnL = totalPnl,
+                MaxDrawdown = BacktestService.CalcMaxDrawdown(trades),
+                SharpeRatio = BacktestService.CalcSharpe(trades),
+                DurationMs = sw.ElapsedMilliseconds,
+                SourceBars = sourceBarsCount,
+                RthBars = rthBarsCount,
+                ResampledBars = aggregates.Count,
+                Timeframe = "csv",
+                Trades = trades.Select(t => new BacktestTradeType
+                {
+                    TradeType = t.TradeType,
+                    EntryTimestamp = t.EntryTimestamp.ToString("o"),
+                    ExitTimestamp = t.ExitTimestamp.ToString("o"),
+                    EntryPrice = t.EntryPrice,
+                    ExitPrice = t.ExitPrice,
+                    PnL = t.PnL,
+                    CumulativePnL = t.CumulativePnL,
+                    SignalReason = t.SignalReason,
+                }).ToList(),
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Backtest/CSV] Error running {Strategy}", strategyName);
             return new BacktestResultType
             {
                 Success = false,
@@ -602,127 +760,6 @@ public class Mutation
 
     #endregion
 
-    #region LSTM Prediction Mutations
-
-    [GraphQLName("startLstmTraining")]
-    public async Task<LstmJobResult> StartLstmTraining(
-        [Service] ILstmService lstmService,
-        [Service] ILogger<Mutation> logger,
-        string ticker,
-        string fromDate,
-        string toDate,
-        int epochs = 50,
-        int sequenceLength = 60,
-        string features = "close",
-        bool mock = false,
-        string scalerType = "standard",
-        bool logReturns = false,
-        bool winsorize = false,
-        string timespan = "day",
-        int multiplier = 1)
-    {
-        try
-        {
-            logger.LogInformation(
-                "[LSTM] Starting training: {Ticker}, epochs={Epochs}, seq={SeqLen}, features={Features}, scaler={Scaler}, timespan={Timespan}",
-                ticker, epochs, sequenceLength, features, scalerType, timespan);
-
-            var config = new LstmTrainingConfigDto
-            {
-                Ticker = ticker,
-                FromDate = fromDate,
-                ToDate = toDate,
-                Epochs = epochs,
-                SequenceLength = sequenceLength,
-                Features = features,
-                Mock = mock,
-                ScalerType = scalerType,
-                LogReturns = logReturns,
-                Winsorize = winsorize,
-                Timespan = timespan,
-                Multiplier = multiplier,
-            };
-
-            var response = await lstmService.StartTrainingAsync(config);
-
-            return new LstmJobResult
-            {
-                Success = true,
-                JobId = response.JobId,
-                Message = $"Training job submitted for {ticker}",
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[LSTM] Error starting training for {Ticker}", ticker);
-            return new LstmJobResult
-            {
-                Success = false,
-                Message = ex.Message,
-            };
-        }
-    }
-
-    [GraphQLName("startLstmValidation")]
-    public async Task<LstmJobResult> StartLstmValidation(
-        [Service] ILstmService lstmService,
-        [Service] ILogger<Mutation> logger,
-        string ticker,
-        string fromDate,
-        string toDate,
-        int folds = 5,
-        int epochs = 20,
-        int sequenceLength = 60,
-        bool mock = false,
-        string scalerType = "standard",
-        bool logReturns = false,
-        bool winsorize = false,
-        string timespan = "day",
-        int multiplier = 1)
-    {
-        try
-        {
-            logger.LogInformation(
-                "[LSTM] Starting validation: {Ticker}, folds={Folds}, epochs={Epochs}, scaler={Scaler}, timespan={Timespan}",
-                ticker, folds, epochs, scalerType, timespan);
-
-            var config = new LstmValidationConfigDto
-            {
-                Ticker = ticker,
-                FromDate = fromDate,
-                ToDate = toDate,
-                Folds = folds,
-                Epochs = epochs,
-                SequenceLength = sequenceLength,
-                Mock = mock,
-                ScalerType = scalerType,
-                LogReturns = logReturns,
-                Winsorize = winsorize,
-                Timespan = timespan,
-                Multiplier = multiplier,
-            };
-
-            var response = await lstmService.StartValidationAsync(config);
-
-            return new LstmJobResult
-            {
-                Success = true,
-                JobId = response.JobId,
-                Message = $"Validation job submitted for {ticker}",
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[LSTM] Error starting validation for {Ticker}", ticker);
-            return new LstmJobResult
-            {
-                Success = false,
-                Message = ex.Message,
-            };
-        }
-    }
-
-    #endregion
 }
 
 public class BacktestResultType
@@ -741,6 +778,10 @@ public class BacktestResultType
     public long DurationMs { get; set; }
     public List<BacktestTradeType> Trades { get; set; } = [];
     public string? Error { get; set; }
+    public int SourceBars { get; set; }
+    public int RthBars { get; set; }
+    public int ResampledBars { get; set; }
+    public string Timeframe { get; set; } = "";
 }
 
 public class BacktestTradeType
@@ -755,6 +796,16 @@ public class BacktestTradeType
     [GraphQLName("cumulativePnl")]
     public decimal CumulativePnL { get; set; }
     public string SignalReason { get; set; } = "";
+}
+
+public class CsvBarInput
+{
+    public long Timestamp { get; set; }  // Unix milliseconds
+    public decimal Open { get; set; }
+    public decimal High { get; set; }
+    public decimal Low { get; set; }
+    public decimal Close { get; set; }
+    public long Volume { get; set; }
 }
 
 public class BatchResearchResultType

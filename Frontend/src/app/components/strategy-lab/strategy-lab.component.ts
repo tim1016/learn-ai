@@ -5,6 +5,7 @@ import {
 import { FormsModule } from '@angular/forms';
 import { CommonModule } from '@angular/common';
 import { forkJoin } from 'rxjs';
+import { RouterModule } from '@angular/router';
 import { MarketDataService } from '../../services/market-data.service';
 import { BacktestResult, StockAggregate } from '../../graphql/types';
 import { LineChartComponent } from '../market-data/line-chart/line-chart.component';
@@ -24,7 +25,7 @@ export type LabMode = 'backtest' | 'replay';
   selector: 'app-strategy-lab',
   standalone: true,
   imports: [
-    CommonModule, FormsModule, LineChartComponent,
+    CommonModule, FormsModule, RouterModule, LineChartComponent,
     BacktestSvgChartComponent, BacktestPrimengChartComponent,
     ReplayControlsComponent, ReplayChartComponent,
   ],
@@ -53,9 +54,26 @@ export class StrategyLabComponent {
   ticker = signal('AAPL');
   fromDate = signal('2025-01-02');
   toDate = signal('2025-02-01');
-  timespan = signal('minute');
-  multiplier = signal(1);
-  strategyName = signal<'sma_crossover' | 'rsi_mean_reversion'>('sma_crossover');
+  timeframe = signal('5m');
+  strategyName = signal<'sma_crossover' | 'rsi_mean_reversion' | 'momentum_rsi_stochastic'>('sma_crossover');
+
+  // Timeframe options for the dropdown
+  readonly timeframeOptions = [
+    { label: '1 min', value: '1m' },
+    { label: '5 min', value: '5m' },
+    { label: '15 min', value: '15m' },
+    { label: '30 min', value: '30m' },
+    { label: '1 hour', value: '1h' },
+  ];
+
+  // Derived timespan + multiplier from timeframe (for backward-compatible GraphQL calls)
+  private get parsedTimeframe(): { timespan: string; multiplier: number } {
+    const tf = this.timeframe();
+    if (tf.endsWith('h')) {
+      return { timespan: 'hour', multiplier: parseInt(tf) || 1 };
+    }
+    return { timespan: 'minute', multiplier: parseInt(tf) || 1 };
+  }
 
   // Date validation
   minDate = getMinAllowedDate();
@@ -69,6 +87,16 @@ export class StrategyLabComponent {
   oversold = signal(30);
   overbought = signal(70);
 
+  // Momentum RSI + Stochastic params
+  momentumRsiLength = signal(14);
+  momentumRsiLow = signal(40);
+  momentumRsiHigh = signal(60);
+  momentumFastMa = signal(20);
+  momentumSlowMa = signal(50);
+  momentumStochK = signal(14);
+  momentumStochD = signal(3);
+  momentumExitMinutes = signal(15);
+
   // State
   loading = signal(false);
   error = signal<string | null>(null);
@@ -76,17 +104,30 @@ export class StrategyLabComponent {
 
   // Computed: parameter JSON based on selected strategy
   parametersJson = computed(() => {
-    if (this.strategyName() === 'sma_crossover') {
-      return JSON.stringify({
-        ShortWindow: this.shortWindow(),
-        LongWindow: this.longWindow(),
-      });
+    switch (this.strategyName()) {
+      case 'sma_crossover':
+        return JSON.stringify({
+          ShortWindow: this.shortWindow(),
+          LongWindow: this.longWindow(),
+        });
+      case 'rsi_mean_reversion':
+        return JSON.stringify({
+          Window: this.rsiWindow(),
+          Oversold: this.oversold(),
+          Overbought: this.overbought(),
+        });
+      case 'momentum_rsi_stochastic':
+        return JSON.stringify({
+          RsiLength: this.momentumRsiLength(),
+          RsiLow: this.momentumRsiLow(),
+          RsiHigh: this.momentumRsiHigh(),
+          FastMa: this.momentumFastMa(),
+          SlowMa: this.momentumSlowMa(),
+          StochK: this.momentumStochK(),
+          StochD: this.momentumStochD(),
+          ExitMinutesBefore: this.momentumExitMinutes(),
+        });
     }
-    return JSON.stringify({
-      Window: this.rsiWindow(),
-      Oversold: this.oversold(),
-      Overbought: this.overbought(),
-    });
   });
 
   // Computed: equity curve data for the line chart
@@ -153,13 +194,14 @@ export class StrategyLabComponent {
     this.error.set(null);
     this.result.set(null);
 
+    const { timespan, multiplier } = this.parsedTimeframe;
     this.marketDataService.runBacktest(
       this.ticker().toUpperCase(),
       this.strategyName(),
       this.fromDate(),
       this.toDate(),
-      this.timespan(),
-      this.multiplier(),
+      timespan,
+      multiplier,
       this.parametersJson()
     ).subscribe({
       next: (res) => {
@@ -191,12 +233,13 @@ export class StrategyLabComponent {
     this.replayIndicators.reset();
     this.replayStrategy.reset();
 
+    const { timespan, multiplier } = this.parsedTimeframe;
     this.marketDataService.getOrFetchStockAggregates(
       this.ticker().toUpperCase(),
       this.fromDate(),
       this.toDate(),
-      this.timespan(),
-      this.multiplier(),
+      timespan,
+      multiplier,
     ).subscribe({
       next: (res) => {
         const aggregates = res.aggregates ?? [];
@@ -225,15 +268,21 @@ export class StrategyLabComponent {
     const ticker = this.ticker().toUpperCase();
     const from = this.fromDate();
     const to = this.toDate();
-    const timespan = this.timespan();
-    const multiplier = this.multiplier();
+    const { timespan, multiplier } = this.parsedTimeframe;
+
+    const indicatorList = this.strategyName() === 'momentum_rsi_stochastic'
+      ? [
+          { name: 'sma', window: this.momentumFastMa() },
+          { name: 'sma', window: this.momentumSlowMa() },
+        ]
+      : [
+          { name: 'sma', window: this.shortWindow() },
+          { name: 'sma', window: this.longWindow() },
+        ];
 
     const indicators$ = this.marketDataService.calculateIndicators(
       ticker, from, to,
-      [
-        { name: 'sma', window: this.shortWindow() },
-        { name: 'sma', window: this.longWindow() },
-      ],
+      indicatorList,
       timespan, multiplier,
     );
 
@@ -265,10 +314,13 @@ export class StrategyLabComponent {
 
   formatTimestamp(iso: string): string {
     if (!iso) return '';
-    const d = new Date(iso);
+    // Ensure UTC interpretation — backend stores all timestamps as UTC
+    const hasTimezone = iso.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(iso);
+    const d = new Date(hasTimezone ? iso : iso + 'Z');
     return d.toLocaleString('en-US', {
       month: 'short', day: 'numeric',
       hour: '2-digit', minute: '2-digit',
+      timeZoneName: 'short',
     });
   }
 }

@@ -9,7 +9,7 @@
       <ol>
         <li>Type a <strong>ticker</strong> that already has data in the database (fetch it from <strong>Market Data</strong> or <strong>Stock Analysis</strong> first).</li>
         <li>Set the <strong>date range</strong> and <strong>timespan</strong> (minute, hourly, daily, or weekly).</li>
-        <li>Check the indicators you want: <strong>SMA</strong>, <strong>EMA</strong>, and/or <strong>RSI</strong>. Set the <strong>window</strong> (lookback period in bars) for each.</li>
+        <li>Check the indicators you want: <strong>SMA</strong>, <strong>EMA</strong>, <strong>RSI</strong>, <strong>MACD</strong>, and/or <strong>Stochastic</strong>. Set the <strong>window</strong> (lookback period in bars) for each.</li>
         <li>Click <strong>Analyze</strong>. Indicator lines are overlaid on the candlestick chart.</li>
       </ol>
       <h4>Indicators explained</h4>
@@ -17,11 +17,13 @@
         <li><strong>SMA</strong> (Simple Moving Average) &mdash; Average of the last N closes. Smooths noise; shows overall trend direction. Try 50 or 200 for daily charts.</li>
         <li><strong>EMA</strong> (Exponential Moving Average) &mdash; Like SMA but weights recent prices more. Reacts faster to trend changes. Try 12 or 26.</li>
         <li><strong>RSI</strong> (Relative Strength Index) &mdash; Momentum oscillator (0&ndash;100). Below 30 = oversold (buy signal), above 70 = overbought (sell signal). Standard window: 14.</li>
+        <li><strong>MACD</strong> (Moving Average Convergence Divergence) &mdash; Trend momentum indicator showing MACD line, signal line, and histogram. Crossovers signal trend changes. Window sets the slow EMA period (default 26).</li>
+        <li><strong>Stochastic</strong> (%K / %D) &mdash; Momentum oscillator (0&ndash;100). Below 20 = oversold, above 80 = overbought. %K is the fast line, %D (signal) is a 3-period SMA of %K. Window sets the lookback period (default 14).</li>
       </ul>
       <h4>Reading the chart</h4>
       <ul>
         <li>SMA/EMA lines are overlaid directly on the <strong>candlestick chart</strong>.</li>
-        <li>RSI appears on a <strong>separate panel</strong> below, with dashed reference lines at 30 and 70.</li>
+        <li>RSI, MACD, and Stochastic appear on <strong>separate panels</strong> below the price chart.</li>
         <li>When SMA/EMA lines <strong>cross</strong>, it signals a potential trend reversal (golden cross = bullish, death cross = bearish).</li>
       </ul>
       <h4>Common setups</h4>
@@ -88,6 +90,30 @@
         type="number" [ngModel]="rsiWindow()" (ngModelChange)="rsiWindow.set($event)"
         min="1" max="200" class="window-input"
         [disabled]="!showRsi()"
+      />
+    </div>
+    <div class="indicator-toggle">
+      <label>
+        <input type="checkbox" [ngModel]="showMacd()" (ngModelChange)="showMacd.set($event)" />
+        MACD
+      </label>
+      <input
+        type="number" [ngModel]="macdWindow()" (ngModelChange)="macdWindow.set($event)"
+        min="1" max="200" class="window-input"
+        [disabled]="!showMacd()"
+        title="Slow period (fast=12, signal=9 are fixed)"
+      />
+    </div>
+    <div class="indicator-toggle">
+      <label>
+        <input type="checkbox" [ngModel]="showStoch()" (ngModelChange)="showStoch.set($event)" />
+        Stochastic
+      </label>
+      <input
+        type="number" [ngModel]="stochWindow()" (ngModelChange)="stochWindow.set($event)"
+        min="1" max="200" class="window-input"
+        [disabled]="!showStoch()"
+        title="%K lookback period (%D smoothing = 3)"
       />
     </div>
   </div>

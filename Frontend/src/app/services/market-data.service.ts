@@ -8,6 +8,7 @@ import {
   StockSnapshotsResult, MarketMoversResult, UnifiedSnapshotResult,
   TrackedTickersResult, TickerDetailResult, RelatedTickersResult,
   StrategyAnalyzeResult, StrategyLegInput, FetchProgress,
+  IndicatorTableResult,
 } from '../graphql/types';
 import { environment } from '../../environments/environment';
 
@@ -347,6 +348,7 @@ const RUN_BACKTEST_MUTATION = `
     $timespan: String! = "minute"
     $multiplier: Int! = 1
     $parametersJson: String! = "{}"
+    $filterRth: Boolean! = true
   ) {
     runBacktest(
       ticker: $ticker
@@ -356,10 +358,12 @@ const RUN_BACKTEST_MUTATION = `
       timespan: $timespan
       multiplier: $multiplier
       parametersJson: $parametersJson
+      filterRth: $filterRth
     ) {
       success id strategyName parameters
       totalTrades winningTrades losingTrades
       totalPnL maxDrawdown sharpeRatio durationMs
+      sourceBars rthBars resampledBars timeframe
       trades {
         tradeType entryTimestamp exitTimestamp
         entryPrice exitPrice pnl cumulativePnl signalReason
@@ -371,6 +375,37 @@ const RUN_BACKTEST_MUTATION = `
 
 interface RunBacktestResponse {
   data: { runBacktest: BacktestResult };
+  errors?: { message: string }[];
+}
+
+const RUN_BACKTEST_FROM_CSV_MUTATION = `
+  mutation RunBacktestFromCsvBars(
+    $strategyName: String!
+    $parametersJson: String! = "{}"
+    $bars: [CsvBarInputInput!]!
+    $filterRth: Boolean! = false
+  ) {
+    runBacktestFromCsvBars(
+      strategyName: $strategyName
+      parametersJson: $parametersJson
+      bars: $bars
+      filterRth: $filterRth
+    ) {
+      success id strategyName parameters
+      totalTrades winningTrades losingTrades
+      totalPnL maxDrawdown sharpeRatio durationMs
+      sourceBars rthBars resampledBars timeframe
+      trades {
+        tradeType entryTimestamp exitTimestamp
+        entryPrice exitPrice pnl cumulativePnl signalReason
+      }
+      error
+    }
+  }
+`;
+
+interface RunBacktestFromCsvResponse {
+  data: { runBacktestFromCsvBars: BacktestResult };
   errors?: { message: string }[];
 }
 
@@ -414,6 +449,53 @@ const ANALYZE_OPTIONS_STRATEGY_QUERY = `
 
 interface AnalyzeOptionsStrategyResponse {
   data: { analyzeOptionsStrategy: StrategyAnalyzeResult };
+  errors?: { message: string }[];
+}
+
+const GENERATE_INDICATOR_TABLE_QUERY = `
+  query GenerateIndicatorTable(
+    $ticker: String!
+    $fromDate: String!
+    $toDate: String!
+    $multiplier: Int! = 1
+    $timespan: String! = "minute"
+    $emaPeriods: [Int!]
+    $bbLength: Int! = 20
+    $bbStd: Float! = 2.0
+    $supertrendLength: Int! = 10
+    $supertrendMultiplier: Float! = 3.0
+    $rsiLength: Int! = 14
+    $rsiMaLength: Int! = 14
+    $macdFast: Int! = 12
+    $macdSlow: Int! = 26
+    $macdSignal: Int! = 9
+    $adxLength: Int! = 14
+  ) {
+    generateIndicatorTable(
+      ticker: $ticker
+      fromDate: $fromDate
+      toDate: $toDate
+      multiplier: $multiplier
+      timespan: $timespan
+      emaPeriods: $emaPeriods
+      bbLength: $bbLength
+      bbStd: $bbStd
+      supertrendLength: $supertrendLength
+      supertrendMultiplier: $supertrendMultiplier
+      rsiLength: $rsiLength
+      rsiMaLength: $rsiMaLength
+      macdFast: $macdFast
+      macdSlow: $macdSlow
+      macdSignal: $macdSignal
+      adxLength: $adxLength
+    ) {
+      success ticker rowCount columns rows error
+    }
+  }
+`;
+
+interface GenerateIndicatorTableResponse {
+  data: { generateIndicatorTable: IndicatorTableResult };
   errors?: { message: string }[];
 }
 
@@ -700,12 +782,13 @@ export class MarketDataService {
     toDate: string,
     timespan: string = 'minute',
     multiplier: number = 1,
-    parametersJson: string = '{}'
+    parametersJson: string = '{}',
+    filterRth: boolean = true
   ): Observable<BacktestResult> {
     return this.http
       .post<RunBacktestResponse>(GRAPHQL_URL, {
         query: RUN_BACKTEST_MUTATION,
-        variables: { ticker, strategyName, fromDate, toDate, timespan, multiplier, parametersJson }
+        variables: { ticker, strategyName, fromDate, toDate, timespan, multiplier, parametersJson, filterRth }
       })
       .pipe(
         tap(response => {
@@ -714,6 +797,62 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.runBacktest)
+      );
+  }
+
+  runBacktestFromCsvBars(
+    strategyName: string,
+    bars: { timestamp: number; open: number; high: number; low: number; close: number; volume: number }[],
+    parametersJson: string = '{}',
+    filterRth: boolean = false
+  ): Observable<BacktestResult> {
+    return this.http
+      .post<RunBacktestFromCsvResponse>(GRAPHQL_URL, {
+        query: RUN_BACKTEST_FROM_CSV_MUTATION,
+        variables: { strategyName, bars, parametersJson, filterRth }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.runBacktestFromCsvBars)
+      );
+  }
+
+  generateIndicatorTable(
+    ticker: string,
+    fromDate: string,
+    toDate: string,
+    options: {
+      multiplier?: number;
+      timespan?: string;
+      emaPeriods?: number[];
+      bbLength?: number;
+      bbStd?: number;
+      supertrendLength?: number;
+      supertrendMultiplier?: number;
+      rsiLength?: number;
+      rsiMaLength?: number;
+      macdFast?: number;
+      macdSlow?: number;
+      macdSignal?: number;
+      adxLength?: number;
+    } = {}
+  ): Observable<IndicatorTableResult> {
+    return this.http
+      .post<GenerateIndicatorTableResponse>(GRAPHQL_URL, {
+        query: GENERATE_INDICATOR_TABLE_QUERY,
+        variables: { ticker, fromDate, toDate, ...options }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.generateIndicatorTable)
       );
   }
 

@@ -1,0 +1,333 @@
+<div class="strategy-lab">
+  <h1>Strategy Lab Validation</h1>
+  <p class="subtitle">Compare our backtest results against an external source (e.g. TradingView)</p>
+
+  <details class="page-guide">
+    <summary>How to use this page</summary>
+    <div class="guide-content">
+      <h4>Quick start</h4>
+      <ol>
+        <li>Export OHLCV bars from TradingView using the Pine Script below.</li>
+        <li>Upload the <strong>OHLCV bars CSV</strong> — this feeds the exact same price data into our engine.</li>
+        <li>Optionally upload the <strong>Trade Report CSV</strong> (Strategy Tester → Export → Trade List) for side-by-side comparison.</li>
+        <li>Set the same <strong>RSI parameters</strong> (Window=14, Oversold=30, Overbought=70).</li>
+        <li>Click <strong>Run Backtest</strong>.</li>
+      </ol>
+      <h4>Data source modes</h4>
+      <ul>
+        <li><strong>Import CSV Bars</strong> — Runs our strategy on TradingView's exported bars. This eliminates price data differences and isolates pure strategy logic comparison.</li>
+        <li><strong>Use Polygon Data</strong> — Runs on our own Polygon.io data. Useful for general backtesting but prices will differ from TradingView.</li>
+      </ul>
+      <h4>Strategy: RSI Reversal</h4>
+      <p>Always-in-the-market RSI strategy matching TradingView's built-in "RSI Strategy":</p>
+      <ul>
+        <li><strong>RsiLE</strong> — RSI crosses below oversold level → close short, open long</li>
+        <li><strong>RsiSE</strong> — RSI crosses above overbought level → close long, open short</li>
+      </ul>
+    </div>
+  </details>
+
+  <!-- Data Source Toggle -->
+  <div class="mode-toggle">
+    <button
+      [class.active]="dataSource() === 'csv'"
+      (click)="dataSource.set('csv')"
+    >Import CSV Bars</button>
+    <button
+      [class.active]="dataSource() === 'polygon'"
+      (click)="dataSource.set('polygon')"
+    >Use Polygon Data</button>
+  </div>
+
+  <!-- Configuration Form -->
+  <div class="config-form">
+    @if (dataSource() === 'csv') {
+      <!-- CSV Bar Import -->
+      <div class="form-row">
+        <div class="form-group file-upload">
+          <label>TradingView OHLCV Bars CSV</label>
+          <input type="file" accept=".csv" (change)="onBarsCsvSelected($event)" />
+          @if (barsFileName()) {
+            <span class="file-name">{{ barsFileName() }} ({{ importedBars().length | number }} bars loaded)</span>
+          }
+        </div>
+      </div>
+    } @else {
+      <!-- Polygon mode inputs -->
+      <div class="form-row">
+        <div class="form-group">
+          <label>Ticker</label>
+          <input type="text" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="AAPL" />
+        </div>
+        <div class="form-group">
+          <label>From</label>
+          <input type="date" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" [min]="minDate" />
+        </div>
+        <div class="form-group">
+          <label>To</label>
+          <input type="date" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" [min]="minDate" />
+        </div>
+        <div class="form-group">
+          <label>Timeframe</label>
+          <select [ngModel]="timeframe()" (ngModelChange)="timeframe.set($event)">
+            @for (opt of timeframeOptions; track opt.value) {
+              <option [value]="opt.value">{{ opt.label }}</option>
+            }
+          </select>
+        </div>
+      </div>
+    }
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>RSI Window</label>
+        <input type="number" [ngModel]="rsiWindow()" (ngModelChange)="rsiWindow.set($event)" min="2" />
+      </div>
+      <div class="form-group">
+        <label>Oversold</label>
+        <input type="number" [ngModel]="oversold()" (ngModelChange)="oversold.set($event)" min="1" max="50" />
+      </div>
+      <div class="form-group">
+        <label>Overbought</label>
+        <input type="number" [ngModel]="overbought()" (ngModelChange)="overbought.set($event)" min="50" max="99" />
+      </div>
+      <div class="form-group checkbox-group">
+        <label>
+          <input type="checkbox" [ngModel]="filterRth()" (ngModelChange)="filterRth.set($event)" />
+          RTH Only
+        </label>
+        <span class="checkbox-hint">Uncheck for extended hours</span>
+      </div>
+    </div>
+
+    <div class="form-row actions-row">
+      <div class="form-group file-upload">
+        <label>TradingView Trade Report CSV (optional)</label>
+        <input type="file" accept=".csv" (change)="onTradeReportSelected($event)" />
+        @if (externalFileName()) {
+          <span class="file-name">{{ externalFileName() }} ({{ externalTrades().length }} trades)</span>
+        }
+      </div>
+      <button class="run-btn" (click)="runBacktest()" [disabled]="loading()">
+        {{ loading() ? 'Running...' : 'Run Backtest' }}
+      </button>
+    </div>
+  </div>
+
+  @if (error()) {
+    <div class="error-message">{{ error() }}</div>
+  }
+
+  @if (loading()) {
+    <div class="loading">Running RSI Reversal backtest...</div>
+  }
+
+  <!-- Side-by-side summary -->
+  @if (result(); as r) {
+    <div class="data-info-panel">
+      <div class="info-icon"><i class="pi pi-database"></i></div>
+      <div class="info-content">
+        <div class="info-row pipeline">
+          <span class="pipeline-step">
+            <span class="info-label">{{ dataSource() === 'csv' ? 'Imported' : 'Fetched' }}</span>
+            <strong>{{ r.sourceBars | number }}</strong>
+            <span class="info-label">bars</span>
+          </span>
+          <span class="info-separator">&rarr;</span>
+          <span class="pipeline-step">
+            <span class="info-label">{{ filterRth() ? 'RTH filter' : 'All hours' }}</span>
+            <strong>{{ r.rthBars | number }}</strong>
+            <span class="info-label">bars</span>
+          </span>
+          <span class="info-separator">&rarr;</span>
+          <span class="pipeline-step">
+            <span class="info-label">Strategy input</span>
+            <strong>{{ r.resampledBars | number }}</strong>
+            <span class="info-label">bars</span>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <h2>Summary Comparison</h2>
+    <div class="comparison-grid">
+      <div class="comparison-card">
+        <h3>Our Backtest</h3>
+        <div class="comparison-stats">
+          <div class="comparison-row">
+            <span>Total Trades</span>
+            <strong>{{ r.totalTrades }}</strong>
+          </div>
+          <div class="comparison-row">
+            <span>Win / Loss</span>
+            <strong>{{ r.winningTrades }} / {{ r.losingTrades }}</strong>
+          </div>
+          <div class="comparison-row">
+            <span>Win Rate</span>
+            <strong>{{ winRate() }}%</strong>
+          </div>
+          <div class="comparison-row" [class.positive]="r.totalPnL > 0" [class.negative]="r.totalPnL <= 0">
+            <span>Total P&L</span>
+            <strong>${{ formatPrice(r.totalPnL) }}</strong>
+          </div>
+          <div class="comparison-row">
+            <span>Max Drawdown</span>
+            <strong>${{ formatPrice(r.maxDrawdown) }}</strong>
+          </div>
+          <div class="comparison-row">
+            <span>Sharpe Ratio</span>
+            <strong>{{ r.sharpeRatio.toFixed(4) }}</strong>
+          </div>
+        </div>
+      </div>
+
+      @if (externalSummary(); as ext) {
+        <div class="comparison-card external">
+          <h3>TradingView</h3>
+          <div class="comparison-stats">
+            <div class="comparison-row">
+              <span>Total Trades</span>
+              <strong>{{ ext.totalTrades }}</strong>
+            </div>
+            <div class="comparison-row">
+              <span>Win / Loss</span>
+              <strong>{{ ext.winning }} / {{ ext.losing }}</strong>
+            </div>
+            <div class="comparison-row">
+              <span>Win Rate</span>
+              <strong>{{ ext.winRate }}%</strong>
+            </div>
+            <div class="comparison-row" [class.positive]="ext.totalPnl > 0" [class.negative]="ext.totalPnl <= 0">
+              <span>Total P&L</span>
+              <strong>${{ formatPrice(ext.totalPnl) }}</strong>
+            </div>
+            <div class="comparison-row">
+              <span>Max Drawdown</span>
+              <strong>-</strong>
+            </div>
+            <div class="comparison-row">
+              <span>Sharpe Ratio</span>
+              <strong>-</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="comparison-card delta">
+          <h3>Delta</h3>
+          <div class="comparison-stats">
+            <div class="comparison-row" [class.match]="r.totalTrades === ext.totalTrades" [class.mismatch]="r.totalTrades !== ext.totalTrades">
+              <span>Trade Count</span>
+              <strong>{{ r.totalTrades - ext.totalTrades }}</strong>
+            </div>
+            <div class="comparison-row">
+              <span>Win Rate</span>
+              <strong>{{ winRate() - ext.winRate }}pp</strong>
+            </div>
+            <div class="comparison-row" [class.positive]="r.totalPnL - ext.totalPnl > 0" [class.negative]="r.totalPnL - ext.totalPnl < 0">
+              <span>P&L Diff</span>
+              <strong>${{ formatPrice(r.totalPnL - ext.totalPnl) }}</strong>
+            </div>
+            <div class="comparison-row">
+              <span>Match Rate</span>
+              <strong>{{ matchRate() }}%</strong>
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+
+    <!-- Trade-by-trade comparison -->
+    @if (comparisons().length > 0) {
+      <div class="trade-log">
+        <h2>Trade-by-Trade Comparison ({{ comparisons().length }} rows)</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Type (TV)</th>
+                <th>Type (Ours)</th>
+                <th>Entry Time (TV)</th>
+                <th>Entry Time (Ours)</th>
+                <th>Entry $ (TV)</th>
+                <th>Entry $ (Ours)</th>
+                <th>Exit $ (TV)</th>
+                <th>Exit $ (Ours)</th>
+                <th>P&L (TV)</th>
+                <th>P&L (Ours)</th>
+                <th>Diff</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (c of comparisons(); track c.tradeNum) {
+                <tr [class.match]="c.matched" [class.mismatch]="!c.matched">
+                  <td>{{ c.tradeNum }}</td>
+                  <td>{{ c.externalType }}</td>
+                  <td>{{ c.ourType }}</td>
+                  <td class="time-cell">{{ c.externalEntryTime }}</td>
+                  <td class="time-cell">{{ c.ourEntryTime }}</td>
+                  <td>{{ c.externalEntryPrice ? formatPrice(c.externalEntryPrice) : '-' }}</td>
+                  <td>{{ c.ourEntryPrice ? formatPrice(c.ourEntryPrice) : '-' }}</td>
+                  <td>{{ c.externalExitPrice ? formatPrice(c.externalExitPrice) : '-' }}</td>
+                  <td>{{ c.ourExitPrice ? formatPrice(c.ourExitPrice) : '-' }}</td>
+                  <td [class.positive]="c.externalPnl > 0" [class.negative]="c.externalPnl < 0">
+                    {{ formatPrice(c.externalPnl) }}
+                  </td>
+                  <td [class.positive]="c.ourPnl > 0" [class.negative]="c.ourPnl < 0">
+                    {{ formatPrice(c.ourPnl) }}
+                  </td>
+                  <td [class.positive]="c.pnlDiff > 0" [class.negative]="c.pnlDiff < 0">
+                    {{ c.pnlDiff > 0 ? '+' : '' }}{{ formatPrice(c.pnlDiff) }}
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    }
+
+    <!-- Our trade log (standalone, no external comparison) -->
+    @if (r.trades.length > 0 && !externalTrades().length) {
+      <div class="trade-log">
+        <h2>Our Trade Log ({{ r.trades.length }} trades)</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Type</th>
+                <th>Entry Time</th>
+                <th>Exit Time</th>
+                <th>Entry Price</th>
+                <th>Exit Price</th>
+                <th>P&L</th>
+                <th>Cum. P&L</th>
+                <th>Signal</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (trade of r.trades; track $index) {
+                <tr [class.win]="trade.pnl > 0" [class.loss]="trade.pnl <= 0">
+                  <td>{{ $index + 1 }}</td>
+                  <td>{{ trade.tradeType }}</td>
+                  <td>{{ formatTimestamp(trade.entryTimestamp) }}</td>
+                  <td>{{ formatTimestamp(trade.exitTimestamp) }}</td>
+                  <td>{{ formatPrice(trade.entryPrice) }}</td>
+                  <td>{{ formatPrice(trade.exitPrice) }}</td>
+                  <td [class.positive]="trade.pnl > 0" [class.negative]="trade.pnl <= 0">
+                    {{ trade.pnl > 0 ? '+' : '' }}{{ formatPrice(trade.pnl) }}
+                  </td>
+                  <td [class.positive]="trade.cumulativePnl > 0" [class.negative]="trade.cumulativePnl <= 0">
+                    {{ formatPrice(trade.cumulativePnl) }}
+                  </td>
+                  <td class="signal-cell">{{ trade.signalReason }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    }
+  }
+</div>

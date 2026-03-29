@@ -54,4 +54,54 @@ public class TechnicalAnalysisService : ITechnicalAnalysisService
 
         return result;
     }
+
+    public async Task<IndicatorTableResponseDto> GenerateIndicatorTableAsync(
+        IndicatorTableRequestDto request,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation(
+            "[TA-TABLE] Requesting indicator table for {Ticker}: {From} to {To}",
+            request.Ticker, request.FromDate, request.ToDate);
+
+        var response = await _httpClient.PostAsJsonAsync(
+            "/api/indicators/generate-table", request, _jsonOptions, cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<IndicatorTableResponseDto>(
+            _jsonOptions, cancellationToken);
+
+        if (result is null || !result.Success)
+        {
+            var error = result?.Error ?? "Unknown error";
+            _logger.LogError("[TA-TABLE] Python service returned error: {Error}", error);
+            throw new HttpRequestException($"Indicator table generation failed: {error}");
+        }
+
+        _logger.LogInformation(
+            "[TA-TABLE] Received {Rows} rows with {Cols} columns for {Ticker}",
+            result.RowCount, result.Columns.Count, request.Ticker);
+
+        return result;
+    }
+
+    public async Task<AvailableIndicatorsResponseDto> GetAvailableIndicatorsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("[TA] Fetching available indicators from Python service");
+
+        var response = await _httpClient.GetAsync("/api/dataset/available", cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<AvailableIndicatorsResponseDto>(
+            _jsonOptions, cancellationToken);
+
+        if (result is null)
+        {
+            throw new HttpRequestException("Failed to deserialize available indicators response");
+        }
+
+        _logger.LogInformation("[TA] Got {Total} available indicators", result.Total);
+        return result;
+    }
 }

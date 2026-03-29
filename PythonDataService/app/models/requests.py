@@ -63,13 +63,13 @@ class OhlcvBar(BaseModel):
 
 class IndicatorConfig(BaseModel):
     """Configuration for a single indicator"""
-    name: str = Field(..., description="Indicator name: sma, ema, rsi, macd, bbands")
+    name: str = Field(..., description="Indicator name: sma, ema, rsi, macd, bbands, stoch")
     window: int = Field(14, ge=1, description="Lookback period")
 
     @field_validator('name')
     @classmethod
     def validate_name(cls, v: str) -> str:
-        valid = ['sma', 'ema', 'rsi', 'macd', 'bbands']
+        valid = ['sma', 'ema', 'rsi', 'macd', 'bbands', 'stoch']
         if v.lower() not in valid:
             raise ValueError(f'indicator name must be one of {valid}')
         return v.lower()
@@ -165,3 +165,66 @@ class TickerDetailRequest(BaseModel):
 class RelatedTickersRequest(BaseModel):
     """Request schema for fetching related companies for a ticker"""
     ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")
+
+
+class IndicatorTableRequest(BaseModel):
+    """Request to generate a full TradingView-style indicator table from Polygon minute data"""
+    ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")
+    from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
+    to_date: str = Field(..., description="End date (YYYY-MM-DD)")
+    multiplier: int = Field(1, ge=1, description="Timespan multiplier for aggregates")
+    timespan: str = Field("minute", description="Timespan: minute, hour, day")
+    ema_periods: List[int] = Field(
+        default=[5, 10, 20, 30, 40, 50, 100, 200],
+        description="EMA periods to calculate",
+    )
+    bb_length: int = Field(20, ge=1, description="Bollinger Bands length")
+    bb_std: float = Field(2.0, gt=0, description="Bollinger Bands standard deviation")
+    supertrend_length: int = Field(10, ge=1, description="Supertrend ATR length")
+    supertrend_multiplier: float = Field(3.0, gt=0, description="Supertrend multiplier")
+    rsi_length: int = Field(14, ge=1, description="RSI period")
+    rsi_ma_length: int = Field(14, ge=1, description="RSI moving average period")
+    macd_fast: int = Field(12, ge=1, description="MACD fast period")
+    macd_slow: int = Field(26, ge=1, description="MACD slow period")
+    macd_signal: int = Field(9, ge=1, description="MACD signal period")
+    adx_length: int = Field(14, ge=1, description="ADX period")
+    session: str = Field(
+        "extended",
+        description="'rth' for regular trading hours (09:30-16:00 ET), 'extended' for all hours",
+    )
+    forward_fill: bool = Field(
+        False,
+        description="Fill missing minute bars with previous close (volume=0)",
+    )
+
+    @field_validator('timespan')
+    @classmethod
+    def validate_timespan(cls, v: str) -> str:
+        valid = ['minute', 'hour', 'day']
+        if v not in valid:
+            raise ValueError(f'timespan must be one of {valid}')
+        return v
+
+
+class DatasetGenerationRequest(BaseModel):
+    """Request to generate a full indicator dataset with chunked OHLCV fetching"""
+    ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")
+    from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
+    to_date: str = Field(..., description="End date (YYYY-MM-DD)")
+    indicator_entries: List[Dict[str, Any]] = Field(
+        default=[],
+        description="List of indicator entries, each with 'name' and optional 'params' dict. "
+                    "e.g. [{'name': 'ema', 'params': {'length': 20}}, {'name': 'rsi', 'params': {'length': 14}}]",
+    )
+    session: str = Field(
+        "extended",
+        description="'rth' for regular trading hours only (09:30-16:00 ET), 'extended' for all hours",
+    )
+    forward_fill: bool = Field(
+        True,
+        description="Fill missing minute bars with previous close (volume=0) for continuous indicator calculation",
+    )
+    warmup: bool = Field(
+        True,
+        description="Fetch extra bars before from_date to warm up indicator calculations",
+    )

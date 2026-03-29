@@ -45,6 +45,10 @@ export class TechnicalAnalysisComponent {
   emaWindow = signal(50);
   showRsi = signal(true);
   rsiWindow = signal(14);
+  showMacd = signal(false);
+  macdWindow = signal(26);
+  showStoch = signal(false);
+  stochWindow = signal(14);
 
   private analyzeRequest = signal<AnalysisRequest | undefined>(undefined);
 
@@ -98,6 +102,8 @@ export class TechnicalAnalysisComponent {
     if (this.showSma()) indicatorConfigs.push({ name: 'sma', window: this.smaWindow() });
     if (this.showEma()) indicatorConfigs.push({ name: 'ema', window: this.emaWindow() });
     if (this.showRsi()) indicatorConfigs.push({ name: 'rsi', window: this.rsiWindow() });
+    if (this.showMacd()) indicatorConfigs.push({ name: 'macd', window: this.macdWindow() });
+    if (this.showStoch()) indicatorConfigs.push({ name: 'stoch', window: this.stochWindow() });
 
     this.analyzeRequest.set({
       ticker: t.toUpperCase(),

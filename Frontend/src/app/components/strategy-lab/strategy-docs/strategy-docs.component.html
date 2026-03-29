@@ -1,0 +1,404 @@
+<div class="strategy-docs">
+
+  <div class="page-header">
+    <h1>Momentum RSI + Stochastic Strategy</h1>
+    <p class="subtitle">State-based intraday bullish momentum alignment</p>
+    <a routerLink="/strategy-lab" class="back-link">
+      <i class="pi pi-arrow-left"></i> Back to Strategy Lab
+    </a>
+  </div>
+
+  <!-- ═══ 1. Strategy Overview ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-compass section-icon"></i>
+      <h3>Strategy Overview</h3>
+    </div>
+    <p class="section-description">
+      This strategy identifies short-term bullish momentum alignment using RSI, a dual moving average
+      trend filter, and the Stochastic Oscillator. It is designed as an intraday-only strategy with
+      forced end-of-day exit to avoid overnight risk.
+    </p>
+
+    <div class="doc-card highlight-card mb-4">
+      <h4>Core Concept</h4>
+      <div class="pipeline-flow">
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>RSI Regime Filter</strong>
+            <span class="pipeline-detail">Only enter when RSI is in a neutral band (40–60). Avoid overbought/oversold extremes.</span>
+          </div>
+        </div>
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>MA Trend Confirmation</strong>
+            <span class="pipeline-detail">Fast MA &gt; Slow MA confirms bullish trend. Price above Fast MA confirms the asset is not in a deep pullback.</span>
+          </div>
+        </div>
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>Stochastic Momentum</strong>
+            <span class="pipeline-detail">%K &gt; %D indicates short-term momentum is accelerating upward.</span>
+          </div>
+        </div>
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>EOD Exit</strong>
+            <span class="pipeline-detail">All positions closed 15 minutes before market close. No overnight holding.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="info-callout mb-4">
+      <i class="pi pi-info-circle"></i>
+      <div>
+        <strong>State-Based vs. Crossover-Based</strong>
+        <span>This strategy uses <em>state conditions</em> (e.g., %K &gt; %D) rather than <em>crossover events</em>
+          (e.g., %K crosses above %D). This dramatically increases the number of trade opportunities
+          while maintaining the same directional bias. A crossover requirement on the same bar is
+          extremely restrictive and produces very few trades.</span>
+      </div>
+    </div>
+
+    <div class="design-grid">
+      <div class="driver-card">
+        <h5>Long Only</h5>
+        <p>Only long positions are taken. The strategy does not short.</p>
+      </div>
+      <div class="driver-card">
+        <h5>No Overnight</h5>
+        <p>All positions exit before market close to eliminate overnight gap risk.</p>
+      </div>
+      <div class="driver-card">
+        <h5>Max 1 Position</h5>
+        <p>Only one position open at a time. No pyramiding or scaling in.</p>
+      </div>
+      <div class="driver-card">
+        <h5>Next-Bar Entry</h5>
+        <p>Signal fires on bar t; entry occurs at open of bar t+1 to avoid look-ahead bias.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 2. Configurable Parameters ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sliders-h section-icon"></i>
+      <h3>Configurable Parameters</h3>
+    </div>
+    <p class="section-description">
+      All parameters are adjustable from the Strategy Lab UI. These defaults are a reasonable starting point for US large-cap equities on 5-minute bars.
+    </p>
+
+    <table class="econ-checklist">
+      <thead>
+        <tr>
+          <th>Parameter</th>
+          <th>Description</th>
+          <th>Default</th>
+          <th>Range</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (p of parameters; track p.name) {
+          <tr>
+            <td class="question-cell">{{ p.name }}</td>
+            <td>{{ p.description }}</td>
+            <td><code>{{ p.defaultValue }}</code></td>
+            <td>{{ p.range }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ═══ 3. Indicator Calculations ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-chart-line section-icon"></i>
+      <h3>Indicator Calculations</h3>
+    </div>
+    <p class="section-description">
+      Three technical indicators are combined to form the entry signal. Each indicator contributes a distinct perspective: regime, trend, and momentum.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (ind of indicators; track ind.name) {
+        <p-accordion-panel>
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ ind.name }}</span>
+              <span class="feature-badge">INDICATOR</span>
+            </div>
+          </p-accordion-header>
+          <p-accordion-content>
+            <div class="formula-block">
+              <span [appKatex]="ind.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="subsection-title">
+              <i class="pi pi-filter"></i> Entry Condition
+            </div>
+            <div class="formula-block">
+              <span [appKatex]="ind.conditionLatex" [displayMode]="true"></span>
+            </div>
+            <p class="interpretation">{{ ind.description }}</p>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+  </div>
+
+  <!-- ═══ 4. Entry Conditions ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sign-in section-icon"></i>
+      <h3>Entry Conditions</h3>
+    </div>
+    <p class="section-description">
+      A long position is opened when <strong>all four</strong> conditions are true simultaneously on the same bar.
+      The entry is executed at the open of the <em>next</em> bar to avoid look-ahead bias.
+    </p>
+
+    <div class="conditions-list">
+      @for (c of entryConditions; track c.label; let i = $index) {
+        <div class="condition-item">
+          <span class="condition-number">{{ i + 1 }}</span>
+          <div class="condition-content">
+            <div class="formula-block compact">
+              <span [appKatex]="c.latex"></span>
+            </div>
+            <span class="condition-label">{{ c.label }}</span>
+          </div>
+        </div>
+      }
+    </div>
+
+    <div class="info-callout mt-4">
+      <i class="pi pi-info-circle"></i>
+      <div>
+        <strong>Entry Execution</strong>
+        <span>When all conditions are met on bar <span [appKatex]="'t'"></span>, the position is entered at the
+          <strong>open price</strong> of bar <span [appKatex]="'t+1'"></span>. This is a critical no-look-ahead
+          safeguard — you cannot trade at the close of a bar you haven't yet observed.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 5. Exit Conditions ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sign-out section-icon"></i>
+      <h3>Exit Conditions</h3>
+    </div>
+    <p class="section-description">
+      All open positions are closed at a fixed time before the market close.
+    </p>
+
+    <div class="doc-card highlight-card mb-4">
+      <h4>Time-Based Exit</h4>
+      <div class="formula-block">
+        <span [appKatex]="'\\text{Exit Time} = 16{:}00 - \\Delta t \\quad (\\text{default } \\Delta t = 15 \\text{ min})'" [displayMode]="true"></span>
+      </div>
+      <p class="interpretation">
+        For US equities, the market closes at 16:00 ET. With the default 15-minute exit parameter,
+        all positions are closed at 15:45. If using larger timeframes (e.g., 15-minute bars), the exit
+        occurs at the closest bar on or after the exit time.
+      </p>
+    </div>
+
+    <div class="insight-callout">
+      <i class="pi pi-lightbulb"></i>
+      <div>
+        <strong>Position closed at end of period</strong>
+        <span>If the backtest period ends before the exit time is reached, the position is closed at the
+          last available bar. This prevents phantom open positions in backtest results.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 6. Timeframe Guide ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-clock section-icon"></i>
+      <h3>Timeframe Behavior</h3>
+    </div>
+    <p class="section-description">
+      The bar timeframe dramatically affects strategy performance. Indicators measure different phenomena at different resolutions.
+    </p>
+
+    <table class="econ-checklist">
+      <thead>
+        <tr>
+          <th>Timeframe</th>
+          <th>Behavior</th>
+          <th>Recommendation</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (t of timeframeBehaviors; track t.timeframe) {
+          <tr>
+            <td class="question-cell">{{ t.timeframe }}</td>
+            <td>{{ t.behavior }}</td>
+            <td>{{ t.recommendation }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="info-callout warn mt-4">
+      <i class="pi pi-exclamation-triangle"></i>
+      <div>
+        <strong>Overfitting Risk</strong>
+        <span>If you test many timeframes and pick the best-performing one, you may be overfitting to historical data.
+          Always validate on out-of-sample periods. A strategy that works on 5m but fails on 1m and 15m is likely noise.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 7. Known Pitfalls & Mitigations ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-exclamation-triangle section-icon"></i>
+      <h3>Known Pitfalls &amp; Mitigations</h3>
+    </div>
+    <p class="section-description">
+      Every trading strategy has structural weaknesses. Understanding them is essential for proper use.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (p of pitfalls; track p.title) {
+        <p-accordion-panel>
+          <p-accordion-header>
+            <div class="feature-header">
+              <span class="feature-name">{{ p.title }}</span>
+              <span class="feature-badge high-impact">PITFALL</span>
+            </div>
+          </p-accordion-header>
+          <p-accordion-content>
+            <p class="interpretation"><strong>Problem:</strong> {{ p.description }}</p>
+            <div class="info-callout mt-3">
+              <i class="pi pi-shield"></i>
+              <div>
+                <strong>Mitigation</strong>
+                <span>{{ p.mitigation }}</span>
+              </div>
+            </div>
+          </p-accordion-content>
+        </p-accordion-panel>
+      }
+    </p-accordion>
+  </div>
+
+  <!-- ═══ 8. Recommended Improvements ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-bolt section-icon"></i>
+      <h3>Recommended Improvements</h3>
+    </div>
+    <p class="section-description">
+      Future enhancements that would make this strategy more robust for live trading.
+    </p>
+
+    <div class="design-grid">
+      <div class="driver-card">
+        <h5>Stop Loss (1 ATR)</h5>
+        <p>Add a trailing or fixed stop loss based on Average True Range to limit downside on individual trades.</p>
+      </div>
+      <div class="driver-card">
+        <h5>Take Profit (2 ATR)</h5>
+        <p>Lock in gains when the trade reaches 2x the ATR from entry. This creates a 1:2 risk-reward ratio.</p>
+      </div>
+      <div class="driver-card">
+        <h5>Position Sizing</h5>
+        <p>Risk a fixed percentage of equity per trade (e.g., 1%) instead of fixed 1-share lots.</p>
+      </div>
+      <div class="driver-card">
+        <h5>Max Trades Per Day</h5>
+        <p>Limit entries to prevent overtrading on choppy days. Typical cap: 3–5 trades per session.</p>
+      </div>
+      <div class="driver-card">
+        <h5>Volume Filter</h5>
+        <p>Require above-average volume on the entry bar to confirm institutional participation.</p>
+      </div>
+      <div class="driver-card">
+        <h5>Walk-Forward Validation</h5>
+        <p>Optimize parameters on in-sample data, then validate on out-of-sample. Prevents overfitting.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 9. Implementation Notes ═══ -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-code section-icon"></i>
+      <h3>Implementation Notes</h3>
+    </div>
+
+    <div class="hypothesis-callout mb-4">
+      <i class="pi pi-microchip"></i>
+      <div>
+        <strong>Backend Location</strong>
+        <span>Strategy logic is in <code>Backend/Services/Implementation/BacktestService.cs</code> method
+          <code>RunMomentumRsiStochastic()</code>. Indicator helpers: <code>ComputeRsi()</code>,
+          <code>ComputeSma()</code>, <code>ComputeStochastic()</code>.</span>
+      </div>
+    </div>
+
+    <div class="doc-card mb-4">
+      <h4>Execution Pipeline</h4>
+      <div class="pipeline-flow">
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>1. Load Bars</strong>
+            <span class="pipeline-detail">Fetch historical aggregates from PostgreSQL (pre-loaded via Market Data page).</span>
+          </div>
+        </div>
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>2. Compute Indicators</strong>
+            <span class="pipeline-detail">RSI, SMA (fast + slow), Stochastic %K/%D calculated over the full bar set.</span>
+          </div>
+        </div>
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>3. Scan for Entries</strong>
+            <span class="pipeline-detail">Walk forward through bars. When all 4 conditions are true and no position is open, mark entry at next bar.</span>
+          </div>
+        </div>
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>4. Apply Exit</strong>
+            <span class="pipeline-detail">Check each bar's timestamp. If at or past exit time, close the position and record the trade.</span>
+          </div>
+        </div>
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>5. Compute Metrics</strong>
+            <span class="pipeline-detail">Calculate total P&amp;L, win rate, Sharpe ratio, max drawdown from the trade list.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="info-callout">
+      <i class="pi pi-info-circle"></i>
+      <div>
+        <strong>Data Prerequisite</strong>
+        <span>Historical bars must already be in the database for your chosen ticker + date range.
+          Use the <strong>Market Data</strong> or <strong>Stock Analysis</strong> page to fetch data first.
+          The backtest engine reads from the local PostgreSQL store, not from Polygon.io directly.</span>
+      </div>
+    </div>
+  </div>
+
+</div>

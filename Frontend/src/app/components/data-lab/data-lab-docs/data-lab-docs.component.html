@@ -1,0 +1,225 @@
+<div class="data-lab-docs">
+
+  <div class="page-header">
+    <h1>Data Lab — Calculation Reference</h1>
+    <p class="subtitle">CSV column definitions, indicator formulas, library attribution, and validation methodology</p>
+    <a routerLink="/data-lab" class="back-link">
+      <i class="pi pi-arrow-left"></i> Back to Data Lab
+    </a>
+  </div>
+
+  <!-- 1. Overview -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-compass section-icon"></i>
+      <h3>Overview</h3>
+    </div>
+    <p class="section-description">
+      Data Lab generates a single CSV file containing minute-by-minute OHLCV data from
+      <strong>Polygon.io</strong> with configurable technical indicators calculated by the
+      <strong>pandas-ta</strong> library. A companion metadata JSON file documents every column.
+    </p>
+
+    <div class="doc-card highlight-card mb-4">
+      <h4>Pipeline</h4>
+      <div class="pipeline-flow">
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>Polygon.io REST API</strong>
+            <span class="pipeline-detail">Fetches 1-minute OHLCV bars in ~111-day chunks (max 50,000 bars per request). Auto-paginates and de-duplicates.</span>
+          </div>
+        </div>
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>pandas-ta Calculation</strong>
+            <span class="pipeline-detail">Each selected indicator is applied to the full DataFrame. Column names follow pandas-ta conventions (e.g. EMA_10, MACD_12_26_9).</span>
+          </div>
+        </div>
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>CSV + Metadata Export</strong>
+            <span class="pipeline-detail">Single CSV file with unix_ts + iso_time as first two columns. Metadata JSON describes every column with source, library, and parameters.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Base CSV Columns -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-table section-icon"></i>
+      <h3>Base CSV Columns (always present)</h3>
+    </div>
+    <table class="params-table">
+      <thead>
+        <tr>
+          <th>Column</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (col of csvBaseColumns; track col.column) {
+          <tr>
+            <td class="param-name"><code>{{ col.column }}</code></td>
+            <td>{{ col.type }}</td>
+            <td>{{ col.description }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 3. Default Indicators -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-calculator section-icon"></i>
+      <h3>Default Indicators (pre-selected)</h3>
+    </div>
+    <p class="section-description">
+      These indicators are selected by default when the Data Lab loads.
+      All formulas are implemented by the <code>pandas-ta</code> library
+      (<a href="https://github.com/twopirllc/pandas-ta" target="_blank">github.com/twopirllc/pandas-ta</a>).
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (ind of defaultIndicators; track ind.name) {
+        <p-accordionpanel>
+          <p-accordionheader>
+            <div class="feature-header">
+              <span class="feature-name">{{ ind.displayName }}</span>
+              <span class="feature-badge">{{ ind.outputColumns.length }} col{{ ind.outputColumns.length > 1 ? 's' : '' }}</span>
+            </div>
+          </p-accordionheader>
+          <p-accordioncontent>
+            <div class="indicator-detail">
+              <div class="subsection-title"><i class="pi pi-percentage"></i> Formula</div>
+              <div class="formula-block" [appKatex]="ind.formulaLatex"></div>
+
+              <div class="subsection-title"><i class="pi pi-info-circle"></i> Description</div>
+              <p class="interpretation">{{ ind.description }}</p>
+
+              <div class="subsection-title"><i class="pi pi-cog"></i> Default Parameters</div>
+              <p class="interpretation"><code>{{ ind.defaultParams }}</code></p>
+
+              <div class="subsection-title"><i class="pi pi-table"></i> Output Columns</div>
+              <div class="column-chips">
+                @for (col of ind.outputColumns; track col) {
+                  <code class="column-chip">{{ col }}</code>
+                }
+              </div>
+
+              <div class="subsection-title"><i class="pi pi-box"></i> Library</div>
+              <p class="interpretation"><code>{{ ind.library }}</code></p>
+            </div>
+          </p-accordioncontent>
+        </p-accordionpanel>
+      }
+    </p-accordion>
+  </div>
+
+  <!-- 4. Additional Indicators -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-plus-circle section-icon"></i>
+      <h3>Additional Configurable Indicators</h3>
+    </div>
+    <p class="section-description">
+      These are commonly added indicators available through the Data Lab catalog.
+      The full library contains 151 indicators across 9 categories.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (ind of additionalIndicators; track ind.name) {
+        <p-accordionpanel>
+          <p-accordionheader>
+            <div class="feature-header">
+              <span class="feature-name">{{ ind.displayName }}</span>
+              <span class="feature-badge">{{ ind.outputColumns.length }} col{{ ind.outputColumns.length > 1 ? 's' : '' }}</span>
+            </div>
+          </p-accordionheader>
+          <p-accordioncontent>
+            <div class="indicator-detail">
+              <div class="subsection-title"><i class="pi pi-percentage"></i> Formula</div>
+              <div class="formula-block" [appKatex]="ind.formulaLatex"></div>
+
+              <div class="subsection-title"><i class="pi pi-info-circle"></i> Description</div>
+              <p class="interpretation">{{ ind.description }}</p>
+
+              <div class="subsection-title"><i class="pi pi-cog"></i> Default Parameters</div>
+              <p class="interpretation"><code>{{ ind.defaultParams }}</code></p>
+
+              <div class="subsection-title"><i class="pi pi-table"></i> Output Columns</div>
+              <div class="column-chips">
+                @for (col of ind.outputColumns; track col) {
+                  <code class="column-chip">{{ col }}</code>
+                }
+              </div>
+
+              <div class="subsection-title"><i class="pi pi-box"></i> Library</div>
+              <p class="interpretation"><code>{{ ind.library }}</code></p>
+            </div>
+          </p-accordioncontent>
+        </p-accordionpanel>
+      }
+    </p-accordion>
+  </div>
+
+  <!-- 5. Metadata JSON -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-file section-icon"></i>
+      <h3>CSV Metadata File</h3>
+    </div>
+    <p class="section-description">
+      The metadata JSON file accompanies the CSV and documents every column.
+      Download it alongside the CSV using the "Metadata JSON" button in Data Lab.
+    </p>
+    <div class="doc-card">
+      <h4>Metadata Structure</h4>
+      <div class="impl-grid">
+        <div class="impl-item">
+          <h5>dataset</h5>
+          <p>Ticker, date range, timespan, bar count, generation timestamp</p>
+        </div>
+        <div class="impl-item">
+          <h5>data_source</h5>
+          <p>Polygon.io provider details, API version, chunking strategy</p>
+        </div>
+        <div class="impl-item">
+          <h5>calculation_engine</h5>
+          <p>Library name (<code>pandas-ta</code>), version, GitHub URL</p>
+        </div>
+        <div class="impl-item">
+          <h5>columns[]</h5>
+          <p>Array of every CSV column with: name, type, description, source/library, parameters used</p>
+        </div>
+        <div class="impl-item">
+          <h5>notes[]</h5>
+          <p>Precision, NaN handling, timestamp convention, de-duplication</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. Validation -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-check-circle section-icon"></i>
+      <h3>Data Validation</h3>
+    </div>
+    <div class="validation-list">
+      @for (note of validationNotes; track note) {
+        <div class="validation-item">
+          <i class="pi pi-check"></i>
+          <span>{{ note }}</span>
+        </div>
+      }
+    </div>
+  </div>
+
+</div>

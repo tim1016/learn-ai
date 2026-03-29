@@ -333,3 +333,66 @@ class RelatedTickersResponse(BaseModel):
     ticker: str = ""
     related: List[str] = []
     error: Optional[str] = None
+
+
+# ------------------------------------------------------------------
+# Indicator Table responses (TradingView-style)
+# ------------------------------------------------------------------
+
+class IndicatorTableRow(BaseModel):
+    """A single row from the full indicator table"""
+    time: int
+    open: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
+    close: Optional[float] = None
+    volume: Optional[float] = None
+    bb_basis: Optional[float] = None
+    bb_upper: Optional[float] = None
+    bb_lower: Optional[float] = None
+    supertrend_up: Optional[float] = None
+    supertrend_down: Optional[float] = None
+    rsi: Optional[float] = None
+    rsi_ma: Optional[float] = None
+    macd: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_histogram: Optional[float] = None
+    adx: Optional[float] = None
+
+
+class IndicatorTableResponse(BaseModel):
+    """Response containing the full indicator table"""
+    success: bool
+    ticker: str
+    row_count: int = 0
+    columns: List[str] = []
+    rows: List[Dict[str, Any]] = []
+    error: Optional[str] = None
+
+
+# ------------------------------------------------------------------
+# Available Indicators & Dataset Generation
+# ------------------------------------------------------------------
+
+class IndicatorInfo(BaseModel):
+    """Metadata for a single pandas-ta indicator"""
+    name: str
+    category: str
+    description: str
+
+class AvailableIndicatorsResponse(BaseModel):
+    """All available pandas-ta indicators grouped by category"""
+    success: bool
+    categories: Dict[str, List[IndicatorInfo]] = {}
+    total: int = 0
+    error: Optional[str] = None
+
+class DatasetGenerationResponse(BaseModel):
+    """Response for dataset generation (non-CSV JSON mode)"""
+    success: bool
+    ticker: str
+    row_count: int = 0
+    bar_count: int = 0
+    columns: List[str] = []
+    indicators_calculated: List[str] = []
+    error: Optional[str] = None

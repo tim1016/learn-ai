@@ -345,6 +345,10 @@ export interface BacktestResult {
   maxDrawdown: number;
   sharpeRatio: number;
   durationMs: number;
+  sourceBars: number;
+  rthBars: number;
+  resampledBars: number;
+  timeframe: string;
   trades: BacktestTrade[];
   error: string | null;
 }
@@ -408,4 +412,38 @@ export interface ChartCurveData {
 export interface GreekCurvePoint {
   price: number;
   value: number;
+}
+
+// ------------------------------------------------------------------
+// Indicator Table (TradingView-style)
+// ------------------------------------------------------------------
+
+export interface IndicatorTableResult {
+  success: boolean;
+  ticker: string;
+  rowCount: number;
+  columns: string[];
+  rows: string[]; // JSON-serialized row dicts
+  error?: string;
+}
+
+export interface IndicatorTableRow {
+  time: number;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+  bb_basis: number | null;
+  bb_upper: number | null;
+  bb_lower: number | null;
+  supertrend_up: number | null;
+  supertrend_down: number | null;
+  rsi: number | null;
+  rsi_ma: number | null;
+  macd: number | null;
+  macd_signal: number | null;
+  macd_histogram: number | null;
+  adx: number | null;
+  [key: string]: number | null; // dynamic EMA columns like ema_5, ema_10, etc.
 }

@@ -1,0 +1,331 @@
+<div class="indicator-docs">
+
+  <div class="page-header">
+    <h1>Indicator Calculation Reference</h1>
+    <p class="subtitle">Mathematical definitions and parameters for each indicator in the validation table</p>
+    <a routerLink="/indicator-validation" class="back-link">
+      <i class="pi pi-arrow-left"></i> Back to Indicator Validation
+    </a>
+  </div>
+
+  <!-- 1. Overview -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-compass section-icon"></i>
+      <h3>Overview</h3>
+    </div>
+    <p class="section-description">
+      The indicator table generates OHLCV data plus 6 indicator families in a single request.
+      Data is fetched from Polygon.io and all indicators are calculated server-side using the
+      <code>pandas-ta</code> library — the same formulas used by TradingView's Pine Script built-in indicators.
+    </p>
+
+    <div class="doc-card highlight-card mb-4">
+      <h4>Data Pipeline</h4>
+      <div class="pipeline-flow">
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>Polygon.io API</strong>
+            <span class="pipeline-detail">Fetches OHLCV bars for the requested ticker, date range, and timespan</span>
+          </div>
+        </div>
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>pandas-ta Calculation</strong>
+            <span class="pipeline-detail">Computes all indicators on the full dataset — EMA, Bollinger Bands, Supertrend, RSI, MACD, ADX</span>
+          </div>
+        </div>
+        <div class="pipeline-stage">
+          <i class="pi pi-chevron-right"></i>
+          <div>
+            <strong>JSON Serialization</strong>
+            <span class="pipeline-detail">NaN values become null, all floats rounded to 6 decimal places, returned as row dictionaries</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Global Parameters -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sliders-h section-icon"></i>
+      <h3>Global Parameters</h3>
+    </div>
+    <table class="params-table">
+      <thead>
+        <tr>
+          <th>Parameter</th>
+          <th>Default</th>
+          <th>Range</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (p of globalParameters; track p.name) {
+          <tr>
+            <td class="param-name">{{ p.name }}</td>
+            <td><code>{{ p.defaultValue }}</code></td>
+            <td>{{ p.range }}</td>
+            <td>{{ p.description }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 3. Indicator Calculations -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-calculator section-icon"></i>
+      <h3>Indicator Calculations</h3>
+    </div>
+    <p class="section-description">
+      Each indicator panel below shows the mathematical formula, configurable parameters, output columns, and interpretation notes.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (ind of indicators; track ind.name) {
+        <p-accordionpanel>
+          <p-accordionheader>
+            <div class="feature-header">
+              <span class="feature-name">{{ ind.name }}</span>
+              <span class="feature-badge">{{ ind.columns.length }} column{{ ind.columns.length > 1 ? 's' : '' }}</span>
+            </div>
+          </p-accordionheader>
+          <p-accordioncontent>
+            <div class="indicator-detail">
+
+              <div class="subsection-title">
+                <i class="pi pi-percentage"></i> Formula
+              </div>
+              <div class="formula-block" [appKatex]="ind.formulaLatex"></div>
+
+              <div class="subsection-title">
+                <i class="pi pi-info-circle"></i> Description
+              </div>
+              <p class="interpretation">{{ ind.description }}</p>
+
+              <div class="subsection-title">
+                <i class="pi pi-sliders-h"></i> Parameters
+              </div>
+              <table class="params-table compact">
+                <thead>
+                  <tr>
+                    <th>Parameter</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (param of ind.parameters; track param.name) {
+                    <tr>
+                      <td class="param-name">{{ param.name }}</td>
+                      <td><code>{{ param.default }}</code></td>
+                      <td>{{ param.description }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+
+              <div class="subsection-title">
+                <i class="pi pi-table"></i> Output Columns
+              </div>
+              <div class="column-chips">
+                @for (col of ind.columns; track col) {
+                  <code class="column-chip">{{ col }}</code>
+                }
+              </div>
+            </div>
+          </p-accordioncontent>
+        </p-accordionpanel>
+      }
+    </p-accordion>
+  </div>
+
+  <!-- 4. Comparison Methodology -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-check-circle section-icon"></i>
+      <h3>Comparison Methodology</h3>
+    </div>
+    <p class="section-description">
+      The Comparison tab performs a row-by-row diff between the pandas-ta output and a TradingView CSV export.
+      Each row is classified by the absolute percentage difference of the selected field.
+    </p>
+
+    <table class="params-table">
+      <thead>
+        <tr>
+          <th>Classification</th>
+          <th>% Diff Range</th>
+          <th>Meaning</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (t of comparisonThresholds; track t.className) {
+          <tr>
+            <td>
+              <span class="threshold-badge" [class]="t.className">{{ t.className }}</span>
+            </td>
+            <td><code>{{ t.range }}</code></td>
+            <td>{{ t.meaning }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="info-callout mt-3">
+      <i class="pi pi-info-circle"></i>
+      <div>
+        <strong>Summary Statistics</strong>
+        <span>
+          The summary box shows <code>Mean |diff|</code> (average absolute difference across all matched rows)
+          and <code>Max |diff|</code> (worst-case divergence). Both use raw value difference, not percentage.
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. Common Divergence Causes -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-exclamation-triangle section-icon"></i>
+      <h3>Common Divergence Causes</h3>
+    </div>
+    <p class="section-description">
+      If the comparison shows significant differences, these are the most likely causes.
+    </p>
+
+    <p-accordion [multiple]="true">
+      @for (item of divergenceCauses; track item.cause) {
+        <p-accordionpanel>
+          <p-accordionheader>
+            <div class="feature-header">
+              <span class="feature-name">{{ item.cause }}</span>
+            </div>
+          </p-accordionheader>
+          <p-accordioncontent>
+            <p class="interpretation">{{ item.detail }}</p>
+          </p-accordioncontent>
+        </p-accordionpanel>
+      }
+    </p-accordion>
+  </div>
+
+  <!-- 6. Full pandas-ta Indicator Catalog -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-list section-icon"></i>
+      <h3>Full pandas-ta Indicator Catalog (146 indicators)</h3>
+    </div>
+    <p class="section-description">
+      Beyond the 6 indicator families used in the validation table, <code>pandas-ta</code> provides
+      146 indicators across 7 categories. All are available in the <a routerLink="/data-lab">Data Lab</a>
+      for CSV export with custom date ranges.
+    </p>
+
+    <table class="params-table">
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Notable Indicators</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (cat of pandasTaCategories; track cat.name) {
+          <tr>
+            <td class="param-name">{{ cat.name }}</td>
+            <td>{{ cat.examples }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="info-callout mt-3">
+      <i class="pi pi-info-circle"></i>
+      <div>
+        <strong>Data Lab</strong>
+        <span>
+          Use the <a routerLink="/data-lab">Data Lab</a> to fetch minute-by-minute OHLCV data for up to 2 years,
+          select any combination of 146 indicators, and export the result as a CSV with
+          <code>unix_ts</code> and <code>iso_time</code> columns.
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. Warm-up Buffer -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-history section-icon"></i>
+      <h3>Warm-up Buffer</h3>
+    </div>
+    <p class="section-description">
+      Recursive indicators (EMA, RSI, ADX, MACD) need historical data before the requested window
+      to produce stable values. The system automatically fetches <strong>5 &times; max lookback</strong>
+      extra bars before the requested start date, calculates all indicators on the full dataset,
+      then trims the output to the requested window.
+    </p>
+
+    <div class="info-callout">
+      <i class="pi pi-info-circle"></i>
+      <div>
+        <strong>Example</strong>
+        <span>
+          For a request with EMA-200, the max lookback is 200. The warm-up fetches
+          200 &times; 5 = 1000 extra bars (~3 trading days of minute data) before the start date.
+          This ensures even the longest EMA has fully converged before the output window begins.
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. Implementation Notes -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-code section-icon"></i>
+      <h3>Implementation Notes</h3>
+      <!-- Updated with warm-up buffer and tvmode -->
+    </div>
+    <div class="doc-card">
+      <div class="impl-grid">
+        <div class="impl-item">
+          <h5>Calculation Engine</h5>
+          <p>Python <code>pandas-ta</code> library — wraps TA-Lib-compatible implementations in pure pandas</p>
+        </div>
+        <div class="impl-item">
+          <h5>Backend Route</h5>
+          <p><code>POST /api/indicators/generate-table</code> on the Python FastAPI service</p>
+        </div>
+        <div class="impl-item">
+          <h5>GraphQL Query</h5>
+          <p><code>generateIndicatorTable</code> — proxied through the .NET backend with Polly resilience</p>
+        </div>
+        <div class="impl-item">
+          <h5>Precision</h5>
+          <p>All indicator values rounded to 6 decimal places; NaN mapped to <code>null</code></p>
+        </div>
+        <div class="impl-item">
+          <h5>Warm-up Buffer</h5>
+          <p>Fetches 5&times; max lookback extra bars before the requested window for indicator convergence</p>
+        </div>
+        <div class="impl-item">
+          <h5>ADX tvmode</h5>
+          <p><code>ta.adx(tvmode=True)</code> — uses TradingView-compatible ADX calculation variant</p>
+        </div>
+        <div class="impl-item">
+          <h5>Data Lab CSV</h5>
+          <p><code>POST /api/dataset/generate-csv</code> — chunked fetch + 146 dynamic indicators + streaming CSV</p>
+        </div>
+        <div class="impl-item">
+          <h5>Source Files</h5>
+          <p><code>ta_service.py</code> (validation table), <code>dataset_service.py</code> (Data Lab)</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>

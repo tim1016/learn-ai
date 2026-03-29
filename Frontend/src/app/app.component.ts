@@ -25,6 +25,14 @@ export class AppComponent {
         { label: "Technical Analysis", icon: "pi pi-wave-pulse", routerLink: "/technical-analysis" },
         { label: "Stock Analysis", icon: "pi pi-search", routerLink: "/stock-analysis" },
         { label: "Snapshots", icon: "pi pi-camera", routerLink: "/snapshots" },
+        { label: "Strategy Lab", icon: "pi pi-wrench", routerLink: "/strategy-lab" },
+        { label: "Strategy Validation", icon: "pi pi-check-square", routerLink: "/strategy-lab-validation" },
+        { label: "Strategy Docs", icon: "pi pi-book", routerLink: "/strategy-docs" },
+        { label: "Indicator Validation", icon: "pi pi-verified", routerLink: "/indicator-validation" },
+        { label: "Indicator Docs", icon: "pi pi-book", routerLink: "/indicator-docs" },
+        { label: "Indicator Report", icon: "pi pi-chart-scatter", routerLink: "/indicator-report" },
+        { label: "Data Lab", icon: "pi pi-database", routerLink: "/data-lab" },
+        { label: "Data Lab Docs", icon: "pi pi-book", routerLink: "/data-lab-docs" },
       ],
     },
     {
@@ -33,20 +41,9 @@ export class AppComponent {
       items: [
         { label: "Options Chain", icon: "pi pi-table", routerLink: "/options-chain" },
         { label: "Strategy Builder", icon: "pi pi-th-large", routerLink: "/strategy-builder" },
-        { label: "Strategy Lab", icon: "pi pi-wrench", routerLink: "/strategy-lab" },
         { label: "Options Strategy Lab", icon: "pi pi-calculator", routerLink: "/options-strategy-lab" },
         { label: "Options History", icon: "pi pi-history", routerLink: "/options-history" },
         { label: "Snapshots", icon: "pi pi-camera", routerLink: "/snapshots" },
-      ],
-    },
-    {
-      label: "ML Predictions",
-      icon: "pi pi-microchip-ai",
-      items: [
-        { label: "Train Model", icon: "pi pi-play", routerLink: "/lstm/train" },
-        { label: "Validation", icon: "pi pi-check-circle", routerLink: "/lstm/validate" },
-        { label: "Predictions", icon: "pi pi-chart-line", routerLink: "/lstm/predictions" },
-        { label: "Model History", icon: "pi pi-history", routerLink: "/lstm/models" },
       ],
     },
     {

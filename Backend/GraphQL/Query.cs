@@ -312,6 +312,121 @@ public class Query
     }
 
     /// <summary>
+    /// Generate a full indicator table from Polygon minute data.
+    /// Returns OHLCV + EMAs, BB, Supertrend, RSI, MACD, ADX in a tabular format.
+    /// </summary>
+    [GraphQLName("generateIndicatorTable")]
+    public async Task<IndicatorTableResult> GenerateIndicatorTable(
+        [Service] ITechnicalAnalysisService taService,
+        [Service] ILogger<Query> logger,
+        string ticker,
+        string fromDate,
+        string toDate,
+        int multiplier = 1,
+        string timespan = "minute",
+        List<int>? emaPeriods = null,
+        int bbLength = 20,
+        double bbStd = 2.0,
+        int supertrendLength = 10,
+        double supertrendMultiplier = 3.0,
+        int rsiLength = 14,
+        int rsiMaLength = 14,
+        int macdFast = 12,
+        int macdSlow = 26,
+        int macdSignal = 9,
+        int adxLength = 14)
+    {
+        try
+        {
+            var request = new IndicatorTableRequestDto(
+                Ticker: ticker.ToUpper(),
+                FromDate: fromDate,
+                ToDate: toDate,
+                Multiplier: multiplier,
+                Timespan: timespan,
+                EmaPeriods: emaPeriods ?? [5, 10, 20, 30, 40, 50, 100, 200],
+                BbLength: bbLength,
+                BbStd: bbStd,
+                SupertrendLength: supertrendLength,
+                SupertrendMultiplier: supertrendMultiplier,
+                RsiLength: rsiLength,
+                RsiMaLength: rsiMaLength,
+                MacdFast: macdFast,
+                MacdSlow: macdSlow,
+                MacdSignal: macdSignal,
+                AdxLength: adxLength
+            );
+
+            var response = await taService.GenerateIndicatorTableAsync(request);
+
+            // Serialize each row dict to JSON string for GraphQL transport
+            var jsonRows = response.Rows
+                .Select(row => System.Text.Json.JsonSerializer.Serialize(row))
+                .ToList();
+
+            return new IndicatorTableResult
+            {
+                Success = true,
+                Ticker = ticker.ToUpper(),
+                RowCount = response.RowCount,
+                Columns = response.Columns,
+                Rows = jsonRows,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[TA-TABLE] Error generating indicator table for {Ticker}", ticker);
+            return new IndicatorTableResult
+            {
+                Success = false,
+                Ticker = ticker.ToUpper(),
+                Error = ex.Message,
+            };
+        }
+    }
+
+    /// <summary>
+    /// List all available pandas-ta indicators grouped by category.
+    /// </summary>
+    [GraphQLName("availableIndicators")]
+    public async Task<AvailableIndicatorsResult> AvailableIndicators(
+        [Service] ITechnicalAnalysisService taService,
+        [Service] ILogger<Query> logger)
+    {
+        try
+        {
+            var response = await taService.GetAvailableIndicatorsAsync();
+
+            var categories = response.Categories.Select(kv => new IndicatorCategory
+            {
+                Name = kv.Key,
+                Indicators = kv.Value.Select(i => new IndicatorInfoItem
+                {
+                    Name = i.Name,
+                    Category = i.Category,
+                    Description = i.Description,
+                }).ToList(),
+            }).ToList();
+
+            return new AvailableIndicatorsResult
+            {
+                Success = true,
+                Categories = categories,
+                Total = response.Total,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error fetching available indicators");
+            return new AvailableIndicatorsResult
+            {
+                Success = false,
+                Error = ex.Message,
+            };
+        }
+    }
+
+    /// <summary>
     /// Check which date ranges already have cached data in the database.
     /// Used by the frontend to show cached vs. uncached chunks before fetching.
     /// </summary>
@@ -775,130 +890,6 @@ public class Query
                 Symbol = symbol,
                 Error = ex.Message,
             };
-        }
-    }
-
-    #endregion
-
-    #region LSTM Prediction Queries
-
-    [GraphQLName("lstmJobStatus")]
-    public async Task<LstmJobStatus> GetLstmJobStatus(
-        [Service] ILstmService lstmService,
-        [Service] ILogger<Query> logger,
-        string jobId)
-    {
-        try
-        {
-            logger.LogInformation("[LSTM] Querying job status: {JobId}", jobId);
-
-            var dto = await lstmService.GetJobStatusAsync(jobId);
-
-            var result = new LstmJobStatus
-            {
-                JobId = dto.JobId,
-                Status = dto.Status,
-                Error = dto.Error,
-                CreatedAt = dto.CreatedAt,
-                CompletedAt = dto.CompletedAt,
-            };
-
-            if (dto.TrainResult is not null)
-            {
-                result.TrainResult = new LstmTrainResult
-                {
-                    Ticker = dto.TrainResult.Ticker,
-                    ValRmse = dto.TrainResult.ValRmse,
-                    TrainRmse = dto.TrainResult.TrainRmse,
-                    BaselineRmse = dto.TrainResult.BaselineRmse,
-                    Improvement = dto.TrainResult.Improvement,
-                    EpochsCompleted = dto.TrainResult.EpochsCompleted,
-                    BestEpoch = dto.TrainResult.BestEpoch,
-                    ModelId = dto.TrainResult.ModelId,
-                    ActualValues = dto.TrainResult.ActualValues,
-                    PredictedValues = dto.TrainResult.PredictedValues,
-                    HistoryLoss = dto.TrainResult.HistoryLoss,
-                    HistoryValLoss = dto.TrainResult.HistoryValLoss,
-                    Residuals = dto.TrainResult.Residuals,
-                    StationarityAdfPvalue = dto.TrainResult.StationarityAdfPvalue,
-                    StationarityKpssPvalue = dto.TrainResult.StationarityKpssPvalue,
-                    StationarityIsStationary = dto.TrainResult.StationarityIsStationary,
-                };
-            }
-
-            if (dto.ValidateResult is not null)
-            {
-                result.ValidateResult = new LstmValidateResult
-                {
-                    Ticker = dto.ValidateResult.Ticker,
-                    NumFolds = dto.ValidateResult.NumFolds,
-                    AvgRmse = dto.ValidateResult.AvgRmse,
-                    AvgMae = dto.ValidateResult.AvgMae,
-                    AvgMape = dto.ValidateResult.AvgMape,
-                    AvgDirectionalAccuracy = dto.ValidateResult.AvgDirectionalAccuracy,
-                    AvgSharpeRatio = dto.ValidateResult.AvgSharpeRatio,
-                    AvgMaxDrawdown = dto.ValidateResult.AvgMaxDrawdown,
-                    AvgProfitFactor = dto.ValidateResult.AvgProfitFactor,
-                    FoldResults = dto.ValidateResult.FoldResults.Select(f => new LstmFoldResult
-                    {
-                        Fold = f.Fold,
-                        TrainSize = f.TrainSize,
-                        TestSize = f.TestSize,
-                        Rmse = f.Rmse,
-                        Mae = f.Mae,
-                        Mape = f.Mape,
-                        DirectionalAccuracy = f.DirectionalAccuracy,
-                        SharpeRatio = f.SharpeRatio,
-                        MaxDrawdown = f.MaxDrawdown,
-                        ProfitFactor = f.ProfitFactor,
-                    }).ToList(),
-                };
-            }
-
-            return result;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[LSTM] Error querying job status: {JobId}", jobId);
-            return new LstmJobStatus
-            {
-                JobId = jobId,
-                Status = "error",
-                Error = ex.Message,
-            };
-        }
-    }
-
-    [GraphQLName("lstmModels")]
-    public async Task<List<LstmModelInfo>> GetLstmModels(
-        [Service] ILstmService lstmService,
-        [Service] ILogger<Query> logger)
-    {
-        try
-        {
-            logger.LogInformation("[LSTM] Querying model list");
-
-            var dtos = await lstmService.GetModelsAsync();
-
-            return dtos.Select(d => new LstmModelInfo
-            {
-                ModelId = d.ModelId,
-                Ticker = d.Ticker,
-                CreatedAt = d.CreatedAt,
-                ValRmse = d.ValRmse,
-                TrainRmse = d.TrainRmse,
-                BaselineRmse = d.BaselineRmse,
-                Improvement = d.Improvement,
-                EpochsCompleted = d.EpochsCompleted,
-                BestEpoch = d.BestEpoch,
-                SequenceLength = d.SequenceLength,
-                Features = d.Features,
-            }).ToList();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[LSTM] Error querying models");
-            return [];
         }
     }
 

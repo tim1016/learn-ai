@@ -8,17 +8,24 @@ RUN apt-get update && apt-get install -y \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements-lock.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements-lock.txt
+# Layer 1: Heavy/stable libs (tensorflow, scipy, scikit-learn, etc.)
+# This layer is cached and only rebuilt when requirements-heavy.txt changes.
+COPY requirements-heavy.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements-heavy.txt
+
+# Layer 2: Light/frequently-changing libs
+COPY requirements-light.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements-light.txt
 
 # --- Runtime stage ---
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# Only curl needed at runtime (for healthcheck)
+# curl for healthcheck, tzdata for ZoneInfo("US/Eastern")
 RUN apt-get update && apt-get install -y \
     curl \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder

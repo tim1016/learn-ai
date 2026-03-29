@@ -59,6 +59,20 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "strategy-lab-validation",
+    loadComponent: () =>
+      import(
+        "./components/strategy-lab-validation/strategy-lab-validation.component"
+      ).then((m) => m.StrategyLabValidationComponent),
+  },
+  {
+    path: "strategy-docs",
+    loadComponent: () =>
+      import(
+        "./components/strategy-lab/strategy-docs/strategy-docs.component"
+      ).then((m) => m.StrategyDocsComponent),
+  },
+  {
     path: "options-strategy-lab",
     loadComponent: () =>
       import(
@@ -94,39 +108,46 @@ export const routes: Routes = [
       ).then((m) => m.TrackedInstrumentsComponent),
   },
   {
-    path: "lstm/train",
-    loadComponent: () =>
-      import("./components/lstm/train/lstm-train.component").then(
-        (m) => m.LstmTrainComponent
-      ),
-  },
-  {
-    path: "lstm/validate",
-    loadComponent: () =>
-      import("./components/lstm/validate/lstm-validate.component").then(
-        (m) => m.LstmValidateComponent
-      ),
-  },
-  {
-    path: "lstm/predictions",
-    loadComponent: () =>
-      import("./components/lstm/predictions/lstm-predictions.component").then(
-        (m) => m.LstmPredictionsComponent
-      ),
-  },
-  {
-    path: "lstm/models",
-    loadComponent: () =>
-      import("./components/lstm/models/lstm-models.component").then(
-        (m) => m.LstmModelsComponent
-      ),
-  },
-  {
     path: "portfolio",
     loadComponent: () =>
       import("./components/portfolio/portfolio.component").then(
         (m) => m.PortfolioComponent
       ),
+  },
+  {
+    path: "indicator-validation",
+    loadComponent: () =>
+      import(
+        "./components/indicator-validation/indicator-validation.component"
+      ).then((m) => m.IndicatorValidationComponent),
+  },
+  {
+    path: "indicator-docs",
+    loadComponent: () =>
+      import(
+        "./components/indicator-validation/indicator-docs/indicator-docs.component"
+      ).then((m) => m.IndicatorDocsComponent),
+  },
+  {
+    path: "data-lab",
+    loadComponent: () =>
+      import("./components/data-lab/data-lab.component").then(
+        (m) => m.DataLabComponent
+      ),
+  },
+  {
+    path: "data-lab-docs",
+    loadComponent: () =>
+      import(
+        "./components/data-lab/data-lab-docs/data-lab-docs.component"
+      ).then((m) => m.DataLabDocsComponent),
+  },
+  {
+    path: "indicator-report",
+    loadComponent: () =>
+      import(
+        "./components/indicator-validation/indicator-report/indicator-report.component"
+      ).then((m) => m.IndicatorReportComponent),
   },
   {
     path: "research-lab",

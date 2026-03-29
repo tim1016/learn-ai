@@ -1,0 +1,449 @@
+.strategy-lab {
+  padding: 20px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+h1 {
+  color: #2c3e50;
+  margin-bottom: 4px;
+}
+
+h2 {
+  color: #2c3e50;
+  margin-bottom: 12px;
+  font-size: 18px;
+}
+
+.subtitle {
+  color: #7f8c8d;
+  margin-top: 0;
+  margin-bottom: 20px;
+}
+
+.mode-toggle {
+  display: flex;
+  gap: 2px;
+  background: #e9ecef;
+  border-radius: 8px;
+  padding: 3px;
+  margin-bottom: 20px;
+  width: fit-content;
+
+  button {
+    padding: 8px 24px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    font-size: 14px;
+    font-weight: 600;
+    color: #666;
+    cursor: pointer;
+    transition: all 0.15s;
+
+    &:hover:not(.active) {
+      background: #dee2e6;
+    }
+
+    &.active {
+      background: white;
+      color: #1976d2;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    }
+  }
+}
+
+.config-form {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  border: 1px solid #e9ecef;
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+
+  &:last-of-type {
+    margin-bottom: 0;
+  }
+
+  &.actions-row {
+    align-items: flex-end;
+    margin-top: 4px;
+  }
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #555;
+    text-transform: uppercase;
+  }
+
+  input, select {
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    min-width: 100px;
+  }
+
+  input[type="number"] {
+    width: 90px;
+  }
+
+  input[type="text"] {
+    width: 100px;
+  }
+
+  &.checkbox-group {
+    justify-content: center;
+
+    label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 14px;
+      text-transform: none;
+      cursor: pointer;
+
+      input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        min-width: unset;
+      }
+    }
+
+    .checkbox-hint {
+      font-size: 11px;
+      color: #999;
+    }
+  }
+
+  &.file-upload {
+    flex: 1;
+
+    input[type="file"] {
+      border: none;
+      padding: 4px 0;
+      min-width: unset;
+    }
+
+    .file-name {
+      font-size: 12px;
+      color: #1976d2;
+      font-weight: 500;
+    }
+  }
+}
+
+.run-btn {
+  padding: 10px 28px;
+  background: #1976d2;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  height: fit-content;
+
+  &:hover:not(:disabled) {
+    background: #1565c0;
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.error-message {
+  padding: 12px;
+  background: #fde8e8;
+  color: #c0392b;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.loading {
+  padding: 12px;
+  background: #e3f2fd;
+  color: #1565c0;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.data-info-panel {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #eff6ff;
+  border-left: 3px solid #2563eb;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #334155;
+
+  .info-icon {
+    color: #2563eb;
+    font-size: 16px;
+    margin-top: 2px;
+  }
+
+  .info-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .info-row.pipeline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .pipeline-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: white;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid #dbeafe;
+
+    strong {
+      font-size: 15px;
+      color: #1e40af;
+    }
+  }
+
+  .info-label {
+    color: #64748b;
+  }
+
+  .info-separator {
+    color: #93c5fd;
+    font-size: 16px;
+    font-weight: 700;
+  }
+}
+
+// Comparison grid
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.comparison-card {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid #e9ecef;
+
+  h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  &.external {
+    background: #fff8e1;
+    border-color: #ffecb3;
+
+    h3 { color: #f57f17; }
+  }
+
+  &.delta {
+    background: #ede7f6;
+    border-color: #d1c4e9;
+
+    h3 { color: #5e35b1; }
+  }
+}
+
+.comparison-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comparison-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+
+  span {
+    color: #666;
+  }
+
+  strong {
+    font-size: 15px;
+    color: #2c3e50;
+  }
+
+  &.match strong {
+    color: #2e7d32;
+  }
+
+  &.mismatch strong {
+    color: #c0392b;
+  }
+}
+
+// Trade comparison table
+.trade-log {
+  margin-bottom: 24px;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+
+  th, td {
+    padding: 6px 8px;
+    text-align: right;
+    border-bottom: 1px solid #f0f0f0;
+    white-space: nowrap;
+  }
+
+  th {
+    font-size: 10px;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    border-bottom: 2px solid #e0e0e0;
+  }
+
+  td:first-child, th:first-child {
+    text-align: center;
+    width: 35px;
+  }
+
+  td:nth-child(2), td:nth-child(3),
+  th:nth-child(2), th:nth-child(3) {
+    text-align: left;
+  }
+
+  .time-cell {
+    text-align: left;
+    font-size: 11px;
+    color: #555;
+  }
+
+  .signal-cell {
+    text-align: left;
+    font-size: 11px;
+    color: #666;
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  tr.match {
+    background: rgba(46, 125, 50, 0.04);
+  }
+
+  tr.mismatch {
+    background: rgba(192, 57, 43, 0.04);
+  }
+
+  tr.win {
+    background: rgba(46, 125, 50, 0.03);
+  }
+
+  tr.loss {
+    background: rgba(192, 57, 43, 0.03);
+  }
+
+  tbody tr:hover {
+    background: #e3f2fd;
+  }
+}
+
+.positive {
+  color: #2e7d32;
+  font-weight: 600;
+}
+
+.negative {
+  color: #c0392b;
+  font-weight: 600;
+}
+
+// Guide
+.page-guide {
+  margin-bottom: 20px;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  overflow: hidden;
+
+  summary {
+    padding: 10px 16px;
+    background: #f8f9fa;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 14px;
+    color: #555;
+
+    &:hover {
+      background: #e9ecef;
+    }
+  }
+
+  .guide-content {
+    padding: 16px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #444;
+
+    h4 {
+      margin: 16px 0 6px;
+      color: #2c3e50;
+      font-size: 14px;
+    }
+
+    h4:first-child {
+      margin-top: 0;
+    }
+
+    ol, ul {
+      margin: 6px 0;
+      padding-left: 24px;
+    }
+
+    li {
+      margin-bottom: 4px;
+    }
+  }
+
+  .guide-tip {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: #fff3e0;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #e65100;
+  }
+}

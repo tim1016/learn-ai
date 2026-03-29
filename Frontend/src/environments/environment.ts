@@ -6,5 +6,6 @@ export const environment = {
   polygonApiKey: '', // Leave empty — use backend proxy in production
   useBackendProxy: true, // Always use backend in production
   backendUrl: 'http://localhost:5000/graphql',
-  polygonProxyUrl: 'http://localhost:5000/api/polygon' // Backend proxy endpoint
+  polygonProxyUrl: 'http://localhost:5000/api/polygon', // Backend proxy endpoint
+  pythonServiceUrl: 'http://localhost:8000',
 };

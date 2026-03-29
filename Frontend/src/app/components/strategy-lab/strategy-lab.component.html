@@ -31,6 +31,7 @@
         <ul>
           <li><strong>SMA Crossover</strong> &mdash; Buys on golden cross (short SMA crosses above long SMA), sells on death cross. Recommended starting params: Short=10, Long=30 for minute data; Short=50, Long=200 for daily.</li>
           <li><strong>RSI Mean Reversion</strong> &mdash; Buys when RSI drops below Oversold, sells when RSI rises above Overbought. Default params (Window=14, Oversold=30, Overbought=70) work well for most tickers.</li>
+          <li><strong>Momentum RSI + Stochastic</strong> &mdash; State-based intraday momentum strategy. Enters long when RSI is in a neutral regime (40&ndash;60), fast MA &gt; slow MA (trend confirmation), price &gt; fast MA, and Stochastic %K &gt; %D. Exits 15 minutes before market close. Best on 5-minute bars. See <a routerLink="/strategy-docs">Strategy Docs</a> for full specification.</li>
         </ul>
         <h4>Reading the results</h4>
         <ul>
@@ -63,16 +64,12 @@
           <input type="date" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" [min]="minDate" />
         </div>
         <div class="form-group">
-          <label>Timespan</label>
-          <select [ngModel]="timespan()" (ngModelChange)="timespan.set($event)">
-            <option value="minute">Minute</option>
-            <option value="hour">Hour</option>
-            <option value="day">Day</option>
+          <label>Timeframe</label>
+          <select [ngModel]="timeframe()" (ngModelChange)="timeframe.set($event)">
+            @for (opt of timeframeOptions; track opt.value) {
+              <option [value]="opt.value">{{ opt.label }}</option>
+            }
           </select>
-        </div>
-        <div class="form-group">
-          <label>Multiplier</label>
-          <input type="number" [ngModel]="multiplier()" (ngModelChange)="multiplier.set($event)" min="1" />
         </div>
       </div>
 
@@ -82,6 +79,7 @@
           <select [ngModel]="strategyName()" (ngModelChange)="strategyName.set($event)">
             <option value="sma_crossover">SMA Crossover</option>
             <option value="rsi_mean_reversion">RSI Mean Reversion</option>
+            <option value="momentum_rsi_stochastic">Momentum RSI + Stochastic</option>
           </select>
         </div>
 
@@ -110,6 +108,41 @@
             <input type="number" [ngModel]="overbought()" (ngModelChange)="overbought.set($event)" min="50" max="99" />
           </div>
         }
+
+        @if (strategyName() === 'momentum_rsi_stochastic') {
+          <div class="form-group">
+            <label>RSI Length</label>
+            <input type="number" [ngModel]="momentumRsiLength()" (ngModelChange)="momentumRsiLength.set($event)" min="2" />
+          </div>
+          <div class="form-group">
+            <label>RSI Low</label>
+            <input type="number" [ngModel]="momentumRsiLow()" (ngModelChange)="momentumRsiLow.set($event)" min="1" max="99" />
+          </div>
+          <div class="form-group">
+            <label>RSI High</label>
+            <input type="number" [ngModel]="momentumRsiHigh()" (ngModelChange)="momentumRsiHigh.set($event)" min="1" max="99" />
+          </div>
+          <div class="form-group">
+            <label>Fast MA</label>
+            <input type="number" [ngModel]="momentumFastMa()" (ngModelChange)="momentumFastMa.set($event)" min="2" />
+          </div>
+          <div class="form-group">
+            <label>Slow MA</label>
+            <input type="number" [ngModel]="momentumSlowMa()" (ngModelChange)="momentumSlowMa.set($event)" min="5" />
+          </div>
+          <div class="form-group">
+            <label>Stoch %K</label>
+            <input type="number" [ngModel]="momentumStochK()" (ngModelChange)="momentumStochK.set($event)" min="2" />
+          </div>
+          <div class="form-group">
+            <label>Stoch %D</label>
+            <input type="number" [ngModel]="momentumStochD()" (ngModelChange)="momentumStochD.set($event)" min="1" />
+          </div>
+          <div class="form-group">
+            <label>Exit (min before close)</label>
+            <input type="number" [ngModel]="momentumExitMinutes()" (ngModelChange)="momentumExitMinutes.set($event)" min="1" max="60" />
+          </div>
+        }
       </div>
 
       <button class="run-btn" (click)="runBacktest()" [disabled]="loading()">
@@ -126,6 +159,51 @@
     }
 
     @if (result(); as r) {
+      <!-- Data Info Panel -->
+      <div class="data-info-panel">
+        <div class="info-icon">
+          <i class="pi pi-database"></i>
+        </div>
+        <div class="info-content">
+          <div class="info-row pipeline">
+            <span class="pipeline-step">
+              <span class="info-label">Fetched</span>
+              <strong>{{ r.sourceBars | number }}</strong>
+              <span class="info-label">1m bars</span>
+            </span>
+            <span class="info-separator">→</span>
+            <span class="pipeline-step">
+              <span class="info-label">RTH filter</span>
+              <strong>{{ r.rthBars | number }}</strong>
+              <span class="info-label">bars</span>
+            </span>
+            <span class="info-separator">→</span>
+            <span class="pipeline-step">
+              <span class="info-label">Resampled</span>
+              <strong>{{ r.resampledBars | number }}</strong>
+              <span class="info-label">{{ r.timeframe }} bars</span>
+            </span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Date range:</span>
+            <strong>{{ fromDate() }} to {{ toDate() }}</strong>
+          </div>
+          <div class="info-explanation">
+            <i class="pi pi-info-circle"></i>
+            <span>
+              <strong>Pipeline:</strong> All 1-minute bars in the date range are fetched from the database.
+              Pre-market and after-hours bars are removed (RTH = 9:30 AM – 4:00 PM ET only).
+              @if (r.timeframe !== '1m') {
+                Then {{ r.rthBars | number }} RTH bars are aggregated into {{ r.resampledBars | number }}
+                {{ r.timeframe }} candles (Open=first, High=max, Low=min, Close=last, Volume=sum).
+                Larger timeframes produce fewer bars but smoother, higher-quality signals.
+              }
+              Indicators and strategy logic run on the final {{ r.timeframe }} bars.
+            </span>
+          </div>
+        </div>
+      </div>
+
       <!-- Summary Stats -->
       <div class="stats-grid">
         <div class="stat-card" [class.positive]="r.totalPnL > 0" [class.negative]="r.totalPnL <= 0">
@@ -310,16 +388,12 @@
           <input type="date" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" [min]="minDate" />
         </div>
         <div class="form-group">
-          <label>Timespan</label>
-          <select [ngModel]="timespan()" (ngModelChange)="timespan.set($event)">
-            <option value="minute">Minute</option>
-            <option value="hour">Hour</option>
-            <option value="day">Day</option>
+          <label>Timeframe</label>
+          <select [ngModel]="timeframe()" (ngModelChange)="timeframe.set($event)">
+            @for (opt of timeframeOptions; track opt.value) {
+              <option [value]="opt.value">{{ opt.label }}</option>
+            }
           </select>
-        </div>
-        <div class="form-group">
-          <label>Multiplier</label>
-          <input type="number" [ngModel]="multiplier()" (ngModelChange)="multiplier.set($event)" min="1" />
         </div>
       </div>
 

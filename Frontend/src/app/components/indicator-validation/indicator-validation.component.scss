@@ -1,0 +1,268 @@
+.indicator-validation {
+  padding: 1rem;
+
+  h2 {
+    margin-bottom: 0;
+    color: #e0e0e0;
+  }
+}
+
+.page-title {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+
+  .docs-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.85rem;
+    color: #4a9eff;
+    text-decoration: none;
+    font-weight: 500;
+
+    &:hover {
+      text-decoration: underline;
+    }
+
+    i {
+      font-size: 0.8rem;
+    }
+  }
+}
+
+.controls {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-end;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+
+  .input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+
+    label {
+      font-size: 0.8rem;
+      color: #aaa;
+    }
+
+    input {
+      padding: 0.4rem 0.6rem;
+      border: 1px solid #555;
+      border-radius: 4px;
+      background: #2a2a2a;
+      color: #e0e0e0;
+      font-size: 0.9rem;
+
+      &[type='text'] {
+        width: 80px;
+      }
+    }
+  }
+
+  button {
+    padding: 0.5rem 1.2rem;
+    border: none;
+    border-radius: 4px;
+    background: #4a9eff;
+    color: white;
+    cursor: pointer;
+    font-size: 0.9rem;
+
+    &:hover:not(:disabled) {
+      background: #3a8eef;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+}
+
+.csv-upload {
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+
+  .file-label {
+    padding: 0.4rem 0.8rem;
+    border: 1px dashed #666;
+    border-radius: 4px;
+    cursor: pointer;
+    color: #ccc;
+    font-size: 0.85rem;
+
+    input[type='file'] {
+      display: none;
+    }
+
+    &:hover {
+      border-color: #4a9eff;
+    }
+  }
+
+  .file-name {
+    color: #8bc34a;
+    font-size: 0.85rem;
+  }
+}
+
+.error-msg {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.1);
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+}
+
+.tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0.5rem;
+
+  button {
+    padding: 0.5rem 1rem;
+    border: 1px solid #555;
+    border-bottom: none;
+    background: #1e1e1e;
+    color: #aaa;
+    cursor: pointer;
+    font-size: 0.85rem;
+
+    &.active {
+      background: #2a2a2a;
+      color: #fff;
+      border-bottom: 2px solid #4a9eff;
+    }
+
+    &:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+  }
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+  color: #aaa;
+
+  button {
+    padding: 0.3rem 0.6rem;
+    border: 1px solid #555;
+    border-radius: 3px;
+    background: #2a2a2a;
+    color: #ccc;
+    cursor: pointer;
+
+    &:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+  }
+}
+
+.comparison-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+
+  label {
+    color: #475569;
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+
+  select {
+    padding: 0.3rem 0.5rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    color: #1e293b;
+    font-size: 0.85rem;
+  }
+
+  .summary-stats {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.8rem;
+    color: #1e293b;
+    background: #f1f5f9;
+    padding: 0.3rem 0.8rem;
+    border-radius: 4px;
+    border: 1px solid #e2e8f0;
+  }
+}
+
+.table-container {
+  overflow-x: auto;
+  max-height: 70vh;
+  overflow-y: auto;
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+
+    th, td {
+      padding: 0.35rem 0.6rem;
+      border: 1px solid #e2e8f0;
+      white-space: nowrap;
+      text-align: right;
+    }
+
+    th {
+      background: #f1f5f9;
+      color: #334155;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+    }
+
+    td {
+      color: #1e293b;
+      background: #ffffff;
+    }
+
+    tbody tr:hover td {
+      background: #f8fafc;
+    }
+  }
+}
+
+// Comparison diff highlighting
+tr.match-exact td {
+  background: #dcfce7;
+  color: #166534;
+}
+
+tr.match-close td {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+tr.match-ok td {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+tr.match-bad td {
+  background: #fee2e2;
+  color: #991b1b;
+}

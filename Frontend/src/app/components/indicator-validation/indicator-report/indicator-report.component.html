@@ -1,0 +1,111 @@
+<div class="indicator-report">
+  <div class="page-header">
+    <h2>Indicator Comparison Report</h2>
+    <a routerLink="/indicator-validation" class="back-link">
+      <i class="pi pi-arrow-left"></i> Back to Validation
+    </a>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <div class="input-group">
+      <label>Ticker</label>
+      <input type="text" [(ngModel)]="ticker" />
+    </div>
+    <div class="input-group">
+      <label>From</label>
+      <input type="date" [(ngModel)]="fromDate" />
+    </div>
+    <div class="input-group">
+      <label>To</label>
+      <input type="date" [(ngModel)]="toDate" />
+    </div>
+    <button (click)="generate()" [disabled]="loading()">
+      @if (loading()) { Generating... } @else { Generate Report }
+    </button>
+    <div class="csv-upload">
+      <label class="file-label">
+        <i class="pi pi-upload"></i> Upload TradingView CSV
+        <input type="file" accept=".csv" (change)="onCsvUpload($event)" />
+      </label>
+      @if (csvFileName()) {
+        <span class="file-name">{{ csvFileName() }} ({{ csvRows().length }} rows)</span>
+      }
+    </div>
+  </div>
+
+  @if (error()) {
+    <div class="error-msg">{{ error() }}</div>
+  }
+
+  <!-- Legend -->
+  @if (hasOur() || hasCsv()) {
+    <div class="legend">
+      @if (hasOur()) {
+        <div class="legend-item">
+          <span class="legend-swatch pandas-ta"></span>
+          <span>pandas-ta (solid)</span>
+        </div>
+      }
+      @if (hasCsv()) {
+        <div class="legend-item">
+          <span class="legend-swatch tradingview"></span>
+          <span>TradingView (dashed)</span>
+        </div>
+      }
+    </div>
+  }
+
+  <!-- Chart Panels -->
+  @if (generated()) {
+    <div class="charts-grid">
+      @for (panel of panels; track panel.id) {
+        <div class="chart-panel">
+          <div class="chart-title">{{ panel.title }}</div>
+          <div class="chart-container" #chartContainer></div>
+        </div>
+      }
+    </div>
+  }
+
+  <!-- Summary Statistics Table -->
+  @if (fieldStats().length) {
+    <div class="stats-section">
+      <h3>Field-by-Field Accuracy Report</h3>
+      <p class="stats-subtitle">
+        Comparing {{ ourRows().length }} pandas-ta rows against {{ csvRows().length }} TradingView CSV rows
+      </p>
+
+      <div class="stats-table-wrap">
+        <table class="stats-table">
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Matched Rows</th>
+              <th>Mean |Diff|</th>
+              <th>Max |Diff|</th>
+              <th>Mean % Diff</th>
+              <th>Grade</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (stat of fieldStats(); track stat.field) {
+              <tr>
+                <td class="field-name">{{ stat.field }}</td>
+                <td>{{ stat.count }}</td>
+                <td>{{ stat.meanAbsDiff.toExponential(4) }}</td>
+                <td>{{ stat.maxAbsDiff.toExponential(4) }}</td>
+                <td>{{ stat.meanPctDiff.toFixed(6) }}%</td>
+                <td>
+                  <span class="grade-badge" [class]="gradeClass(stat.grade)">
+                    {{ stat.grade }}
+                  </span>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  }
+</div>

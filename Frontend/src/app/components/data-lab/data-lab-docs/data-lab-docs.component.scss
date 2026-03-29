@@ -1,0 +1,139 @@
+:host { display: block; }
+
+.data-lab-docs {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+.page-header {
+  margin-bottom: 2rem;
+  h1 { font-size: 1.75rem; font-weight: 700; color: #1e293b; margin: 0 0 0.25rem; }
+  .subtitle { color: #64748b; font-size: 0.95rem; margin: 0 0 0.75rem; }
+  .back-link {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    font-size: 0.85rem; color: #2563eb; text-decoration: none; font-weight: 500;
+    &:hover { text-decoration: underline; }
+    i { font-size: 0.75rem; }
+  }
+}
+
+.doc-section { margin-bottom: 2rem; }
+
+.section-header {
+  display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;
+  h3 { font-size: 1.25rem; font-weight: 700; color: #1e293b; margin: 0; }
+  .section-icon { font-size: 1.1rem; color: #2563eb; }
+}
+
+.section-description {
+  font-size: 0.875rem; color: #64748b; margin-bottom: 1rem; line-height: 1.7;
+  code {
+    font-family: ui-monospace, monospace; font-size: 0.8rem;
+    background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 3px; color: #334155;
+  }
+  a { color: #2563eb; }
+}
+
+.doc-card {
+  padding: 1.25rem; border-radius: 8px; background: #ffffff; border: 1px solid #e2e8f0;
+  h4 { font-size: 1.05rem; font-weight: 600; color: #1e293b; margin-bottom: 1rem; }
+}
+.highlight-card { border-left: 3px solid #2563eb; }
+
+.pipeline-flow {
+  margin: 1rem 0; padding: 0.75rem 1rem; border-radius: 6px; background: #f1f5f9;
+  .pipeline-stage {
+    display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.5rem 0;
+    font-size: 0.85rem; color: #334155;
+    i { color: #3b82f6; font-size: 0.7rem; margin-top: 4px; }
+    strong { display: block; color: #1e293b; margin-bottom: 0.15rem; }
+    .pipeline-detail { display: block; color: #64748b; font-size: 0.8rem; line-height: 1.5; }
+  }
+}
+
+.params-table {
+  width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 0.5rem;
+  border-radius: 6px; overflow: hidden; border: 1px solid #e2e8f0;
+  thead {
+    background: #f1f5f9;
+    th {
+      padding: 0.6rem 0.75rem; text-align: left; font-weight: 600; color: #334155;
+      border-bottom: 1px solid #e2e8f0; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+  }
+  tbody tr {
+    border-bottom: 1px solid #f1f5f9;
+    &:last-child { border-bottom: none; }
+    &:hover { background: #f8fafc; }
+  }
+  td { padding: 0.55rem 0.75rem; color: #475569; line-height: 1.5; vertical-align: top; }
+  .param-name { font-weight: 500; color: #334155; white-space: nowrap; }
+  code {
+    font-family: ui-monospace, monospace; font-size: 0.8rem;
+    background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 3px; color: #334155;
+  }
+}
+
+.formula-block {
+  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
+  padding: 1rem 1.5rem; margin: 0.75rem 0; text-align: center; overflow-x: auto;
+}
+
+.interpretation {
+  font-size: 0.9rem; color: #475569; line-height: 1.7; margin: 0.5rem 0;
+  code {
+    font-family: ui-monospace, monospace; font-size: 0.8rem;
+    background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 3px; color: #334155;
+  }
+}
+
+.feature-header {
+  display: flex; align-items: center; gap: 0.75rem; width: 100%;
+  .feature-name { font-weight: 600; color: #1e293b; }
+  .feature-badge {
+    font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 9999px;
+    background: #dbeafe; color: #1d4ed8; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+}
+
+.subsection-title {
+  font-size: 0.95rem; font-weight: 600; color: #1e293b; margin: 1rem 0 0.5rem;
+  display: flex; align-items: center; gap: 0.4rem;
+  i { font-size: 0.85rem; color: #d97706; }
+}
+
+.indicator-detail { padding: 0.5rem 0; }
+
+.column-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.25rem; }
+.column-chip {
+  font-family: ui-monospace, monospace; font-size: 0.75rem;
+  background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af;
+  padding: 0.2rem 0.5rem; border-radius: 4px;
+}
+
+.impl-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem;
+}
+.impl-item {
+  padding: 0.75rem 1rem; border-radius: 6px; background: #f8fafc; border: 1px solid #e2e8f0;
+  h5 { font-size: 0.9rem; font-weight: 600; color: #334155; margin: 0 0 0.35rem; }
+  p { font-size: 0.85rem; color: #475569; line-height: 1.65; margin: 0; }
+  code {
+    font-family: ui-monospace, monospace; font-size: 0.8rem;
+    background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 3px; color: #334155;
+  }
+}
+
+.validation-list {
+  display: flex; flex-direction: column; gap: 0.5rem;
+}
+.validation-item {
+  display: flex; align-items: flex-start; gap: 0.5rem;
+  font-size: 0.85rem; color: #334155; line-height: 1.6;
+  i { color: #16a34a; margin-top: 3px; font-size: 0.8rem; }
+}
+
+.mb-4 { margin-bottom: 1rem; }
+
+:host ::ng-deep .katex { font-size: 1.1em; color: #1e293b; }

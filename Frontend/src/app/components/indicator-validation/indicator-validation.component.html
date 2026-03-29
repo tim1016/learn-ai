@@ -1,0 +1,203 @@
+<div class="indicator-validation">
+  <div class="page-title">
+    <h2>Indicator Validation — TradingView vs pandas-ta</h2>
+    <a routerLink="/indicator-docs" class="docs-link">
+      <i class="pi pi-book"></i> Calculation Reference
+    </a>
+    <a routerLink="/indicator-report" class="docs-link">
+      <i class="pi pi-chart-scatter"></i> Visual Report
+    </a>
+  </div>
+
+  <div class="controls">
+    <div class="input-group">
+      <label>Ticker</label>
+      <input type="text" [(ngModel)]="ticker" />
+    </div>
+    <div class="input-group">
+      <label>From</label>
+      <input type="date" [(ngModel)]="fromDate" />
+    </div>
+    <div class="input-group">
+      <label>To</label>
+      <input type="date" [(ngModel)]="toDate" />
+    </div>
+    <button (click)="generate()" [disabled]="loading()">
+      @if (loading()) {
+        Generating...
+      } @else {
+        Generate Table
+      }
+    </button>
+  </div>
+
+  <div class="csv-upload">
+    <label class="file-label">
+      Upload TradingView CSV:
+      <input type="file" accept=".csv" (change)="onCsvUpload($event)" />
+    </label>
+    @if (csvFileName()) {
+      <span class="file-name">{{ csvFileName() }} ({{ csvRows().length }} rows)</span>
+    }
+  </div>
+
+  @if (error()) {
+    <div class="error-msg">{{ error() }}</div>
+  }
+
+  @if (ourRows().length || csvRows().length) {
+    <div class="tabs">
+      <button
+        [class.active]="activeTab() === 'table'"
+        (click)="activeTab.set('table')">
+        Our Data ({{ ourRows().length }} rows)
+      </button>
+      <button
+        [class.active]="activeTab() === 'comparison'"
+        (click)="activeTab.set('comparison')"
+        [disabled]="!csvRows().length || !ourRows().length">
+        Comparison
+      </button>
+      <button
+        [class.active]="activeTab() === 'csv'"
+        (click)="activeTab.set('csv')"
+        [disabled]="!csvRows().length">
+        CSV Data ({{ csvRows().length }} rows)
+      </button>
+    </div>
+
+    <div class="pagination">
+      <button (click)="prevPage()" [disabled]="page() === 0">Prev</button>
+      <span>Page {{ page() + 1 }} / {{ totalPages }}</span>
+      <button (click)="nextPage()" [disabled]="page() >= totalPages - 1">Next</button>
+    </div>
+
+    @switch (activeTab()) {
+      @case ('table') {
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                @for (col of ourColumns(); track col) {
+                  <th>{{ col }}</th>
+                }
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of pagedOurRows(); track row['time']) {
+                <tr>
+                  @for (col of ourColumns(); track col) {
+                    <td>
+                      @if (col === 'time') {
+                        {{ formatTimestamp(row[col]) }}
+                      } @else {
+                        {{ formatNum(row[col]) }}
+                      }
+                    </td>
+                  }
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+
+      @case ('csv') {
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>time</th>
+                <th>open</th><th>high</th><th>low</th><th>close</th>
+                <th>volume</th>
+                <th>bb_basis</th><th>bb_upper</th><th>bb_lower</th>
+                <th>st_up</th><th>st_down</th>
+                <th>ema_5</th><th>ema_10</th><th>ema_20</th><th>ema_30</th>
+                <th>ema_40</th><th>ema_50</th><th>ema_100</th><th>ema_200</th>
+                <th>rsi</th><th>rsi_ma</th>
+                <th>macd</th><th>signal</th><th>hist</th>
+                <th>adx</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of pagedCsvRows(); track row.time) {
+                <tr>
+                  <td>{{ row.time }}</td>
+                  <td>{{ row.open }}</td>
+                  <td>{{ row.high }}</td>
+                  <td>{{ row.low }}</td>
+                  <td>{{ row.close }}</td>
+                  <td>{{ row.volume }}</td>
+                  <td>{{ formatNum(row.bb_basis) }}</td>
+                  <td>{{ formatNum(row.bb_upper) }}</td>
+                  <td>{{ formatNum(row.bb_lower) }}</td>
+                  <td>{{ formatNum(row.supertrend_up) }}</td>
+                  <td>{{ formatNum(row.supertrend_down) }}</td>
+                  <td>{{ formatNum(row.ema_5) }}</td>
+                  <td>{{ formatNum(row.ema_10) }}</td>
+                  <td>{{ formatNum(row.ema_20) }}</td>
+                  <td>{{ formatNum(row.ema_30) }}</td>
+                  <td>{{ formatNum(row.ema_40) }}</td>
+                  <td>{{ formatNum(row.ema_50) }}</td>
+                  <td>{{ formatNum(row.ema_100) }}</td>
+                  <td>{{ formatNum(row.ema_200) }}</td>
+                  <td>{{ formatNum(row.rsi) }}</td>
+                  <td>{{ formatNum(row.rsi_ma) }}</td>
+                  <td>{{ formatNum(row.macd) }}</td>
+                  <td>{{ formatNum(row.macd_signal) }}</td>
+                  <td>{{ formatNum(row.macd_histogram) }}</td>
+                  <td>{{ formatNum(row.adx) }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+
+      @case ('comparison') {
+        <div class="comparison-controls">
+          <label>Compare field:</label>
+          <select [(ngModel)]="selectedField">
+            @for (f of comparisonFields(); track f) {
+              <option [value]="f">{{ f }}</option>
+            }
+          </select>
+
+          @if (summaryStats(); as stats) {
+            <div class="summary-stats">
+              <span><strong>{{ stats.field }}</strong></span>
+              <span>Points: {{ stats.count }}</span>
+              <span>Mean |diff|: {{ stats.meanAbsDiff.toExponential(4) }}</span>
+              <span>Max |diff|: {{ stats.maxAbsDiff.toExponential(4) }}</span>
+            </div>
+          }
+        </div>
+
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>CSV ({{ selectedField() }})</th>
+                <th>Ours ({{ selectedField() }})</th>
+                <th>Diff</th>
+                <th>% Diff</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of comparisonRows(); track row.time) {
+                <tr [class]="getDiffClass(row.pctDiff)">
+                  <td>{{ row.time }}</td>
+                  <td>{{ formatNum(row.csvValue) }}</td>
+                  <td>{{ formatNum(row.ourValue) }}</td>
+                  <td>{{ row.diff != null ? row.diff.toExponential(4) : '—' }}</td>
+                  <td>{{ row.pctDiff != null ? row.pctDiff.toFixed(6) + '%' : '—' }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    }
+  }
+</div>

@@ -9,3 +9,15 @@
         <div #rsiChartContainer class="rsi-container"></div>
       </div>
     }
+    @if (hasMacd()) {
+      <div class="chart-section">
+        <h4>MACD ({{ macdIndicator()?.window }})</h4>
+        <div #macdChartContainer class="oscillator-container"></div>
+      </div>
+    }
+    @if (hasStoch()) {
+      <div class="chart-section">
+        <h4>Stochastic ({{ stochIndicator()?.window }})</h4>
+        <div #stochChartContainer class="oscillator-container"></div>
+      </div>
+    }

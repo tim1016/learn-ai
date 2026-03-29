@@ -60,7 +60,12 @@
       "Bash(podman volume:*)",
       "Bash(podman exec:*)",
       "Bash(podman restart:*)",
-      "Bash(FRED_API_KEY=1b431899c2eba382d8ec18b66d1ef3f9 python:*)"
+      "Bash(FRED_API_KEY=1b431899c2eba382d8ec18b66d1ef3f9 python:*)",
+      "Bash(head -1 \"/c/Users/inkan/Downloads/AMEX_SPY, 1 \\(3\\).csv\")",
+      "Bash(podman cp:*)",
+      "Read(//c/Users/inkan/AppData/Local/Temp/claude/C--Users-inkan-learn-ai/60110999-e3d8-43db-8c10-a6331a3bb702/tasks/**)",
+      "Bash(ls /c/Python* /c/Users/inkan/AppData/Local/Programs/Python/*/python.exe)",
+      "Bash(command -v python3)"
     ]
   }
 }

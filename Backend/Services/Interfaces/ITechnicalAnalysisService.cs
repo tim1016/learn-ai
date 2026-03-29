@@ -9,4 +9,11 @@ public interface ITechnicalAnalysisService
         List<OhlcvBarDto> bars,
         List<IndicatorConfigDto> indicators,
         CancellationToken cancellationToken = default);
+
+    Task<IndicatorTableResponseDto> GenerateIndicatorTableAsync(
+        IndicatorTableRequestDto request,
+        CancellationToken cancellationToken = default);
+
+    Task<AvailableIndicatorsResponseDto> GetAvailableIndicatorsAsync(
+        CancellationToken cancellationToken = default);
 }

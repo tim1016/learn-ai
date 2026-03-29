@@ -1,0 +1,34 @@
+// ============================================================================
+// TradingView Pine Script — Export OHLCV Bars as CSV
+// ============================================================================
+//
+// HOW TO USE:
+// 1. Open TradingView and navigate to your chart (e.g. NASDAQ:AAPL, 5m)
+// 2. Open Pine Script Editor (bottom panel)
+// 3. Paste this entire script and click "Add to chart"
+// 4. The indicator will appear on your chart
+// 5. Open the DATA WINDOW (press D or click the icon on the right sidebar)
+// 6. Hover over any bar to see the formatted CSV line
+//
+// TO EXPORT ALL BARS:
+// 1. After adding the indicator, right-click the indicator name on the chart
+// 2. Select "Export data..." (or use the three-dot menu)
+// 3. Choose "Indicator data" and export as CSV
+// 4. The exported CSV will have columns: time, open, high, low, close, volume
+// 5. Upload this CSV to the Strategy Lab Validation page
+//
+// IMPORTANT SETTINGS:
+// - Set your chart to the EXACT same timeframe used in the strategy (e.g. 5m)
+// - Make sure the date range on the chart covers the full strategy period
+// - The export uses Unix timestamps (seconds) which our system converts automatically
+// ============================================================================
+
+//@version=6
+indicator("OHLCV Bar Export", overlay=true)
+
+// Plot nothing visible (we just want the data export)
+plot(close, "Close", color=color.new(color.blue, 100), display=display.data_window)
+plot(open, "Open", color=color.new(color.blue, 100), display=display.data_window)
+plot(high, "High", color=color.new(color.blue, 100), display=display.data_window)
+plot(low, "Low", color=color.new(color.blue, 100), display=display.data_window)
+plot(volume, "Volume", color=color.new(color.blue, 100), display=display.data_window)
