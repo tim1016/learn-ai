@@ -98,7 +98,7 @@
                       [min]="p.min"
                       [max]="p.max"
                       [step]="p.type === 'float' ? 0.1 : 1"
-                      [ngModel]="entry.params[p.name] ?? p.default"
+                      [ngModel]="entry.params[p.name]"
                       (ngModelChange)="updateEntryParam($index, p.name, $event)" />
                   </div>
                 }
@@ -118,6 +118,60 @@
         <code class="col-chip" [class.base]="['unix_ts','iso_time','open','high','low','close','volume','vwap','transactions'].includes(col)">{{ col }}</code>
       }
     </div>
+  </div>
+
+  <!-- Validation Report -->
+  <div class="validation-section">
+    <h3>Validation Report — pandas-ta vs TradingView</h3>
+    <p class="section-desc">
+      Upload your pandas-ta generated CSV and a TradingView CSV export to compare row-by-row.
+      The report shows match rates, divergence hotspots, and percentage differences per indicator.
+    </p>
+
+    <div class="validation-controls">
+      <div class="file-upload-group">
+        <label class="file-upload-label">
+          <i class="pi pi-file"></i>
+          pandas-ta CSV
+          <input type="file" accept=".csv" (change)="onOurCsvSelected($event)" />
+        </label>
+        @if (ourCsvFile()) {
+          <span class="file-name">{{ ourCsvFile()!.name }}</span>
+        }
+      </div>
+
+      <div class="file-upload-group">
+        <label class="file-upload-label">
+          <i class="pi pi-file"></i>
+          TradingView CSV
+          <input type="file" accept=".csv" (change)="onTvCsvSelected($event)" />
+        </label>
+        @if (tvCsvFile()) {
+          <span class="file-name">{{ tvCsvFile()!.name }}</span>
+        }
+      </div>
+
+      <button class="btn-primary" (click)="runValidation()"
+              [disabled]="loadingValidation() || !ourCsvFile() || !tvCsvFile()">
+        @if (loadingValidation()) {
+          <i class="pi pi-spin pi-spinner"></i> Analyzing...
+        } @else {
+          <i class="pi pi-check-circle"></i> Run Validation
+        }
+      </button>
+
+      @if (validationReport()) {
+        <button class="btn-secondary" (click)="downloadValidationReport()">
+          <i class="pi pi-download"></i> Download .md
+        </button>
+      }
+    </div>
+
+    @if (validationReport()) {
+      <div class="report-container">
+        <pre class="report-content">{{ validationReport() }}</pre>
+      </div>
+    }
   </div>
 
   <!-- Indicator Catalog -->

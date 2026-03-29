@@ -91,4 +91,5 @@ wcwidth==0.6.0
 websockets==11.0.3
 Werkzeug==3.1.6
 wheel==0.46.3
+python-multipart==0.0.20
 wrapt==2.1.1

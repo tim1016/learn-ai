@@ -75,8 +75,14 @@ export class DataLabComponent {
 
   loading = signal(false);
   loadingIndicators = signal(false);
+  loadingValidation = signal(false);
   error = signal('');
   progress = signal('');
+
+  // Validation report state
+  validationReport = signal('');
+  ourCsvFile = signal<File | null>(null);
+  tvCsvFile = signal<File | null>(null);
 
   categories = signal<CategoryData[]>([]);
   indicatorMap = signal<Record<string, IndicatorInfo>>({});
@@ -321,6 +327,57 @@ export class DataLabComponent {
     } catch (e: unknown) {
       this.error.set(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  onOurCsvSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    this.ourCsvFile.set(input.files?.[0] ?? null);
+  }
+
+  onTvCsvSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    this.tvCsvFile.set(input.files?.[0] ?? null);
+  }
+
+  async runValidation(): Promise<void> {
+    const ourFile = this.ourCsvFile();
+    const tvFile = this.tvCsvFile();
+    if (!ourFile || !tvFile) return;
+
+    this.loadingValidation.set(true);
+    this.error.set('');
+    this.validationReport.set('');
+
+    try {
+      const formData = new FormData();
+      formData.append('our_csv', ourFile);
+      formData.append('tv_csv', tvFile);
+      formData.append('ticker', this.ticker());
+
+      const response = await firstValueFrom(
+        this.http.post<{ success: boolean; report: string }>(
+          `${environment.pythonServiceUrl}/api/dataset/validation-report`,
+          formData
+        )
+      );
+
+      if (response.success) {
+        this.validationReport.set(response.report);
+      } else {
+        this.error.set('Validation report generation failed');
+      }
+    } catch (e: unknown) {
+      this.error.set(e instanceof Error ? e.message : String(e));
+    } finally {
+      this.loadingValidation.set(false);
+    }
+  }
+
+  downloadValidationReport(): void {
+    const report = this.validationReport();
+    if (!report) return;
+    const blob = new Blob([report], { type: 'text/markdown' });
+    this.downloadBlob(blob, `${this.ticker()}_validation_report.md`);
   }
 
   private downloadBlob(blob: Blob, filename: string): void {

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 import io
 import logging
@@ -186,3 +186,67 @@ async def generate_dataset_metadata_csv(request: DatasetGenerationRequest):
     except Exception as e:
         logger.error(f"[DATASET] Metadata CSV error: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/validation-report")
+async def generate_validation_report(
+    our_csv: UploadFile = File(..., description="pandas-ta generated CSV"),
+    tv_csv: UploadFile = File(..., description="TradingView exported CSV"),
+    ticker: str = Form("SPY"),
+):
+    """
+    Compare a pandas-ta generated CSV against a TradingView CSV export.
+    Returns a markdown validation report.
+    """
+    from app.services.validation_service import generate_validation_report as gen_report
+
+    try:
+        our_bytes = await our_csv.read()
+        tv_bytes = await tv_csv.read()
+
+        logger.info(
+            f"[VALIDATION] Comparing {len(our_bytes)} bytes (ours) "
+            f"vs {len(tv_bytes)} bytes (TV) for {ticker}"
+        )
+
+        report_md = gen_report(our_bytes, tv_bytes, ticker)
+
+        return {"success": True, "report": report_md}
+
+    except Exception as e:
+        logger.error(f"[VALIDATION] Error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Validation report failed: {str(e)}",
+        )
+
+
+@router.post("/validation-report-download")
+async def download_validation_report(
+    our_csv: UploadFile = File(..., description="pandas-ta generated CSV"),
+    tv_csv: UploadFile = File(..., description="TradingView exported CSV"),
+    ticker: str = Form("SPY"),
+):
+    """Same as validation-report but returns the markdown as a downloadable file."""
+    from app.services.validation_service import generate_validation_report as gen_report
+
+    try:
+        our_bytes = await our_csv.read()
+        tv_bytes = await tv_csv.read()
+
+        report_md = gen_report(our_bytes, tv_bytes, ticker)
+        report_bytes = report_md.encode("utf-8")
+
+        filename = f"{ticker}_validation_report.md"
+        return StreamingResponse(
+            io.BytesIO(report_bytes),
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    except Exception as e:
+        logger.error(f"[VALIDATION] Download error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
