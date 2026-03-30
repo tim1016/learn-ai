@@ -65,7 +65,15 @@
       "Bash(podman cp:*)",
       "Read(//c/Users/inkan/AppData/Local/Temp/claude/C--Users-inkan-learn-ai/60110999-e3d8-43db-8c10-a6331a3bb702/tasks/**)",
       "Bash(ls /c/Python* /c/Users/inkan/AppData/Local/Programs/Python/*/python.exe)",
-      "Bash(command -v python3)"
+      "Bash(command -v python3)",
+      "Bash(py:*)",
+      "Bash(where python:*)",
+      "Bash(/c/Users/inkan/AppData/Local/Programs/Python/Python313/python C:/Users/inkan/learn-ai/tmp_analysis.py 2>&1)",
+      "Bash(/c/Users/inkan/AppData/Local/Programs/Python/Python313/python C:/Users/inkan/learn-ai/tmp_analysis2.py 2>&1)",
+      "Bash(/c/Users/inkan/AppData/Local/Programs/Python/Python313/python C:/Users/inkan/learn-ai/tmp_analysis3.py 2>&1)",
+      "Bash(/tmp/request_flow_mapping.txt:*)",
+      "Read(//tmp/**)",
+      "Bash(find C:/Users/inkan/learn-ai/Frontend -name tailwind.config* -o -name postcss.config*)"
     ]
   }
 }
