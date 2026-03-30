@@ -36,8 +36,8 @@ These are installed in the container but **zero imports** exist in production co
 
 | Package | Current File | Est. Size | Why It's There |
 |---------|-------------|-----------|----------------|
-| **numba** | requirements-heavy.txt | ~150 MB | Was planned for JIT, never used |
-| **llvmlite** | requirements-heavy.txt | ~50 MB | numba dependency |
+| **numba** | requirements-heavy.txt | ~150 MB | Was in heavy layer explicitly — removed, but pandas-ta 0.4.71b0 pulls it back as a transitive dep |
+| **llvmlite** | requirements-heavy.txt | ~50 MB | numba dependency — same as above |
 | **tensorflow** | requirements-lock.txt | ~500-800 MB | Manually pip-installed in container, captured by freeze |
 | **keras** | requirements-lock.txt | ~50-100 MB | tensorflow transitive |
 | **tensorboard** | requirements-lock.txt | ~50 MB | tensorflow transitive |

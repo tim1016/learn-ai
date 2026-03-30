@@ -6,14 +6,12 @@ pydantic==2.5.0
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 polygon-api-client==1.12.5
-setuptools<78
 pandas-dq>=1.29
-ipython
 pandas-ta
 scipy>=1.14.0
 httpx
 statsmodels>=0.14.0
-click>=8.1.0
+python-multipart>=0.0.20
 
 # ML / Data Science
 scikit-learn>=1.5.0
