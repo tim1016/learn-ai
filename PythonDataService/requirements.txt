@@ -6,13 +6,9 @@ pydantic==2.5.0
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 polygon-api-client==1.12.5
-pandas-dq>=1.29
 pandas-ta
+pandas_market_calendars
 scipy>=1.14.0
 httpx
 statsmodels>=0.14.0
 python-multipart>=0.0.20
-
-# ML / Data Science
-scikit-learn>=1.5.0
-matplotlib>=3.9.0

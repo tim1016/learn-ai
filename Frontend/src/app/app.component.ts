@@ -36,6 +36,14 @@ export class AppComponent {
       ],
     },
     {
+      label: "Data Quality",
+      icon: "pi pi-shield",
+      items: [
+        { label: "Quality Analysis", icon: "pi pi-check-circle", routerLink: "/data-quality" },
+        { label: "Pipeline Docs", icon: "pi pi-book", routerLink: "/data-quality-docs" },
+      ],
+    },
+    {
       label: "Options",
       icon: "pi pi-objects-column",
       items: [

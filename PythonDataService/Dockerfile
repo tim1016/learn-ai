@@ -2,24 +2,22 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# Install build tools for native extensions (numpy, scipy, etc.)
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
 # Use a real venv — eliminates pip warnings
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Layer 1: Heavy/stable libs (scipy, scikit-learn, etc.)
+# Upgrade pip and ensure setuptools is present (polygon-api-client needs pkg_resources)
+RUN pip install --upgrade pip "setuptools>=70,<81"
+
+# Layer 1: Heavy/stable libs (scipy, numpy, pandas, statsmodels)
+# Pre-built binary wheels only — no source compilation needed.
 # This layer is cached and only rebuilt when requirements-heavy.txt changes.
 COPY requirements-heavy.txt .
-RUN pip install --no-cache-dir -r requirements-heavy.txt
+RUN pip install --only-binary :all: -r requirements-heavy.txt
 
 # Layer 2: Light/frequently-changing libs
 COPY requirements-light.txt .
-RUN pip install --no-cache-dir -r requirements-light.txt
+RUN pip install -r requirements-light.txt
 
 # --- Runtime stage ---
 FROM python:3.12-slim

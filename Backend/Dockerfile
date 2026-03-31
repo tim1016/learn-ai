@@ -1,13 +1,13 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-# Copy csproj and restore dependencies
+# Copy csproj and restore dependencies (cached unless .csproj changes)
 COPY *.csproj ./
 RUN dotnet restore
 
 # Copy everything else and build
 COPY . .
-RUN dotnet publish -c Release -o /app -p:PublishReadyToRun=true
+RUN dotnet publish -c Release -o /app
 
 # Runtime image
 FROM mcr.microsoft.com/dotnet/aspnet:10.0

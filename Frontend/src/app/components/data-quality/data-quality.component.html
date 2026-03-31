@@ -1,0 +1,268 @@
+<div class="data-quality">
+  <!-- Header -->
+  <div class="page-header">
+    <h2>Data Quality Analysis</h2>
+    <a routerLink="/data-quality-docs" class="docs-link">
+      <i class="pi pi-book"></i> Pipeline Docs
+    </a>
+  </div>
+
+  <!-- Config Form -->
+  <div class="card">
+    <h3>Configuration</h3>
+    <div class="form-row">
+      <label>
+        Ticker
+        <input type="text" [(ngModel)]="ticker" placeholder="DIA" />
+      </label>
+      <label>
+        From
+        <input type="date" [(ngModel)]="fromDate" />
+      </label>
+      <label>
+        To
+        <input type="date" [(ngModel)]="toDate" />
+      </label>
+    </div>
+
+    <div class="form-row">
+      <label>
+        Volume Fix
+        <select [(ngModel)]="volumeFix">
+          <option value="round">Round to integer</option>
+          <option value="drop">Drop fractional bars</option>
+          <option value="nullify">Set to NaN</option>
+        </select>
+      </label>
+      <label class="checkbox-label">
+        <input
+          type="checkbox"
+          [checked]="recomputeIndicators()"
+          (change)="recomputeIndicators.set(!recomputeIndicators())"
+        />
+        Recompute indicators
+      </label>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn-primary" [disabled]="loading()" (click)="runAnalysis()">
+        @if (loading()) {
+          <i class="pi pi-spin pi-spinner"></i> Analyzing...
+        } @else {
+          <i class="pi pi-check-circle"></i> Run Analysis
+        }
+      </button>
+    </div>
+  </div>
+
+  <!-- Error -->
+  @if (error()) {
+    <div class="error-msg">
+      <i class="pi pi-exclamation-triangle"></i>
+      {{ error() }}
+    </div>
+  }
+
+  <!-- Results -->
+  @if (result()) {
+    <!-- Summary Cards -->
+    <div class="summary-cards">
+      <div class="summary-card">
+        <div class="summary-value">{{ formatNumber(rawSummary()!.total_bars) }}</div>
+        <div class="summary-label">Raw Bars</div>
+      </div>
+      <div class="summary-card accent">
+        <div class="summary-value">{{ formatNumber(cleanSummary()!.total_bars) }}</div>
+        <div class="summary-label">Clean Bars</div>
+      </div>
+      <div class="summary-card warn">
+        <div class="summary-value">{{ formatNumber(totalRemoved()) }}</div>
+        <div class="summary-label">Removed ({{ removalPct() }}%)</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-value">{{ steps().length }}</div>
+        <div class="summary-label">Steps Run</div>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button
+        class="tab"
+        [class.active]="activeTab() === 'steps'"
+        (click)="activeTab.set('steps')"
+      >
+        <i class="pi pi-list"></i> Step-by-Step Report
+      </button>
+      <button
+        class="tab"
+        [class.active]="activeTab() === 'comparison'"
+        (click)="activeTab.set('comparison')"
+      >
+        <i class="pi pi-arrows-h"></i> Before / After
+      </button>
+      <button
+        class="tab"
+        [class.active]="activeTab() === 'viewer'"
+        (click)="activeTab.set('viewer')"
+      >
+        <i class="pi pi-download"></i> Data Download
+      </button>
+    </div>
+
+    <!-- Tab: Step-by-Step Report -->
+    @if (activeTab() === 'steps') {
+      <div class="card">
+        @for (step of steps(); track step.order) {
+          <div class="step-card">
+            <div class="step-header">
+              <div class="step-number">{{ step.order }}</div>
+              <div class="step-info">
+                <div class="step-name">{{ step.name }}</div>
+                <div class="step-library">
+                  <i class="pi pi-box"></i> {{ step.library }}
+                </div>
+              </div>
+              <div class="step-stats">
+                <span class="stat-bars">{{ formatNumber(step.bars_before) }} → {{ formatNumber(step.bars_after) }}</span>
+                @if (step.bars_removed > 0) {
+                  <span class="stat-removed">-{{ formatNumber(step.bars_removed) }}</span>
+                }
+              </div>
+            </div>
+
+            <div class="step-description">{{ step.description }}</div>
+
+            <!-- Progress bar -->
+            <div class="step-progress">
+              <div class="step-progress-bar" [style.width]="stepBarWidth(step)"></div>
+            </div>
+            <div class="step-progress-label">
+              @if (step.bars_before > 0) {
+                {{ ((step.bars_after / step.bars_before) * 100).toFixed(1) }}% kept
+              }
+            </div>
+
+            <!-- Details -->
+            @if (detailEntries(step.details).length > 0) {
+              <div class="step-details">
+                @for (d of detailEntries(step.details); track d.key) {
+                  <div class="detail-item">
+                    <span class="detail-key">{{ d.key }}:</span>
+                    <span class="detail-value">{{ d.value }}</span>
+                  </div>
+                }
+              </div>
+            }
+          </div>
+        }
+      </div>
+    }
+
+    <!-- Tab: Before / After Comparison -->
+    @if (activeTab() === 'comparison') {
+      <div class="card">
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th class="num">Raw</th>
+              <th class="num">Cleaned</th>
+              <th class="num">Delta</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (m of comparisonMetrics(); track m.label) {
+              <tr>
+                <td>{{ m.label }}</td>
+                <td class="num">{{ formatNumber(m.raw) }}</td>
+                <td class="num">{{ formatNumber(m.clean) }}</td>
+                <td class="num">
+                  <span
+                    class="delta-badge"
+                    [class.improved]="m.improved"
+                    [class.neutral]="m.neutral"
+                    [class.regressed]="!m.improved && !m.neutral"
+                  >
+                    {{ m.delta }}
+                  </span>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+
+        <!-- Bars per day distribution -->
+        <div class="dist-section">
+          <h4>Bars per Day Distribution</h4>
+          <div class="dist-row">
+            <div class="dist-col">
+              <h5>Raw</h5>
+              @for (entry of rawSummary()!.bars_per_day_distribution | keyvalue; track entry.key) {
+                <div class="dist-item">
+                  <span class="dist-bars">{{ entry.key }} bars/day:</span>
+                  <span class="dist-count">{{ entry.value }} days</span>
+                </div>
+              }
+            </div>
+            <div class="dist-col">
+              <h5>Cleaned</h5>
+              @for (entry of cleanSummary()!.bars_per_day_distribution | keyvalue; track entry.key) {
+                <div class="dist-item">
+                  <span class="dist-bars">{{ entry.key }} bars/day:</span>
+                  <span class="dist-count">{{ entry.value }} days</span>
+                </div>
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Tab: Data Download -->
+    @if (activeTab() === 'viewer') {
+      <div class="card">
+        <p class="viewer-description">
+          Download the raw (uncleaned) or cleaned data as CSV files.
+          Raw data is the original Polygon output; cleaned data has been processed through all pipeline steps.
+        </p>
+
+        <div class="download-cards">
+          <div class="download-card">
+            <div class="download-icon raw">
+              <i class="pi pi-file"></i>
+            </div>
+            <div class="download-info">
+              <div class="download-title">Raw Data</div>
+              <div class="download-meta">
+                {{ formatNumber(rawSummary()!.total_bars) }} bars &middot;
+                {{ rawSummary()!.trading_days }} days
+              </div>
+              <div class="download-note">Original Polygon output, no modifications</div>
+            </div>
+            <button class="btn-primary" (click)="downloadCsv('raw')">
+              <i class="pi pi-download"></i> Download CSV
+            </button>
+          </div>
+
+          <div class="download-card">
+            <div class="download-icon clean">
+              <i class="pi pi-check-circle"></i>
+            </div>
+            <div class="download-info">
+              <div class="download-title">Cleaned Data</div>
+              <div class="download-meta">
+                {{ formatNumber(cleanSummary()!.total_bars) }} bars &middot;
+                {{ cleanSummary()!.trading_days }} days
+              </div>
+              <div class="download-note">Processed through {{ steps().length }}-step cleanup pipeline</div>
+            </div>
+            <button class="btn-primary" (click)="downloadCsv('clean')">
+              <i class="pi pi-download"></i> Download CSV
+            </button>
+          </div>
+        </div>
+      </div>
+    }
+  }
+</div>

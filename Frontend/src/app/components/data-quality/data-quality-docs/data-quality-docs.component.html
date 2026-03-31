@@ -1,0 +1,185 @@
+<div class="dq-docs">
+
+  <div class="page-header">
+    <h1>Data Quality Pipeline Documentation</h1>
+    <p class="subtitle">Step-by-step cleanup process, libraries, formulas, and rationale</p>
+    <a routerLink="/data-quality" class="back-link">
+      <i class="pi pi-arrow-left"></i> Back to Data Quality
+    </a>
+  </div>
+
+  @if (loading()) {
+    <div class="loading-msg">
+      <i class="pi pi-spin pi-spinner"></i> Loading documentation...
+    </div>
+  }
+
+  @if (error()) {
+    <div class="error-msg">
+      <i class="pi pi-exclamation-triangle"></i> {{ error() }}
+    </div>
+  }
+
+  @if (!loading() && !error()) {
+
+    <!-- Overview -->
+    <div class="doc-section">
+      <div class="section-header">
+        <i class="pi pi-compass section-icon"></i>
+        <h3>Overview</h3>
+      </div>
+      <p class="section-description">
+        This pipeline cleans raw <strong>Polygon.io</strong> minute-level OHLCV data to produce
+        reliable, indicator-ready datasets. It addresses fabricated bars on early-close days,
+        fractional volumes, misleading cumulative VWAP, and opaque indicator warmup — all of which
+        distort EMA, MACD, RSI, and ADX calculations and cause TradingView mismatch.
+      </p>
+
+      <div class="doc-card highlight-card">
+        <h4>Recommended Pipeline Order</h4>
+        <div class="pipeline-flow">
+          @for (step of pipelineOrder; track $index) {
+            <div class="pipeline-stage">
+              <span class="pipeline-num">{{ $index + 1 }}</span>
+              <span>{{ step }}</span>
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+
+    <!-- Steps Accordion -->
+    <div class="doc-section">
+      <div class="section-header">
+        <i class="pi pi-list section-icon"></i>
+        <h3>Cleanup Steps</h3>
+      </div>
+
+      <p-accordion [multiple]="true">
+        @for (step of steps(); track step.order) {
+          <p-accordion-panel>
+            <p-accordion-header>
+              <span class="step-badge">{{ step.order }}</span>
+              {{ step.name }}
+              <span class="header-library">{{ step.library }}</span>
+            </p-accordion-header>
+            <p-accordion-content>
+              <div class="step-content">
+
+                <div class="step-block">
+                  <h5>Problem</h5>
+                  <p>{{ step.problem }}</p>
+                </div>
+
+                <div class="step-block">
+                  <h5>Fix</h5>
+                  <p>{{ step.fix }}</p>
+                </div>
+
+                @if (step.formula_latex) {
+                  <div class="step-block">
+                    <h5>Formula</h5>
+                    <div class="formula-block" [appKatex]="step.formula_latex" [displayMode]="true"></div>
+                  </div>
+                }
+
+                <div class="step-block">
+                  <h5>Rules</h5>
+                  <ul class="rules-list">
+                    @for (rule of step.rules; track $index) {
+                      <li><code>{{ rule }}</code></li>
+                    }
+                  </ul>
+                </div>
+
+                <div class="step-block">
+                  <h5>Code</h5>
+                  <pre class="code-block"><code>{{ step.code }}</code></pre>
+                </div>
+
+                <div class="step-block">
+                  <h5>Impact</h5>
+                  <p class="impact-text">{{ step.impact }}</p>
+                </div>
+
+                @if (step.library_url) {
+                  <div class="library-link">
+                    <i class="pi pi-external-link"></i>
+                    <a [href]="step.library_url" target="_blank" rel="noopener">{{ step.library }}</a>
+                  </div>
+                }
+
+              </div>
+            </p-accordion-content>
+          </p-accordion-panel>
+        }
+      </p-accordion>
+    </div>
+
+    <!-- Libraries Table -->
+    <div class="doc-section">
+      <div class="section-header">
+        <i class="pi pi-box section-icon"></i>
+        <h3>Libraries Used</h3>
+      </div>
+
+      <table class="libs-table">
+        <thead>
+          <tr>
+            <th>Library</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (lib of libraries; track lib.name) {
+            <tr>
+              <td>
+                @if (lib.url) {
+                  <a [href]="lib.url" target="_blank" rel="noopener">{{ lib.name }}</a>
+                } @else {
+                  {{ lib.name }}
+                }
+              </td>
+              <td>{{ lib.purpose }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Quick Wins -->
+    <div class="doc-section">
+      <div class="section-header">
+        <i class="pi pi-bolt section-icon"></i>
+        <h3>If You Only Do 3 Things</h3>
+      </div>
+      <div class="quick-wins">
+        <div class="quick-win">
+          <span class="qw-num">1</span>
+          <div>
+            <strong>NYSE calendar filtering</strong>
+            <span class="qw-detail">Removes fabricated bars on early-close days</span>
+          </div>
+        </div>
+        <div class="quick-win">
+          <span class="qw-num">2</span>
+          <div>
+            <strong>Recompute VWAP yourself</strong>
+            <span class="qw-detail">Fixes thousands of out-of-range VWAP violations</span>
+          </div>
+        </div>
+        <div class="quick-win">
+          <span class="qw-num">3</span>
+          <div>
+            <strong>Fix fractional volume</strong>
+            <span class="qw-detail">Prevents broken volume-dependent indicators</span>
+          </div>
+        </div>
+      </div>
+      <p class="qw-footer">
+        These alone eliminate almost all TradingView mismatch problems.
+      </p>
+    </div>
+
+  }
+</div>

@@ -1,7 +1,6 @@
 
 using Backend.Data;
 using Backend.GraphQL.Types;
-using Backend.Models;
 using Backend.Models.DTOs;
 using Backend.Models.MarketData;
 using Backend.Models.DTOs.PolygonResponses;
@@ -14,31 +13,6 @@ namespace Backend.GraphQL;
 
 public class Query
 {
-    #region Demo Queries (Books/Authors)
-    [UseProjection]
-    [UseFiltering]
-    [UseSorting]
-    public IQueryable<Book> GetBooks(AppDbContext context)
-        => context.Books;
-
-    [UseProjection]
-    [UseFiltering]
-    [UseSorting]
-    public IQueryable<Author> GetAuthors(AppDbContext context)
-        => context.Authors;
-
-    [UseFirstOrDefault]
-    [UseProjection]
-    public IQueryable<Book?> GetBookById(AppDbContext context, int id)
-        => context.Books.Where(b => b.Id == id);
-
-    [UseFirstOrDefault]
-    [UseProjection]
-    public IQueryable<Author?> GetAuthorById(AppDbContext context, int id)
-        => context.Authors.Where(a => a.Id == id);
-
-    #endregion
-
     #region Market Data Queries
 
     /// <summary>

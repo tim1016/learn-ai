@@ -1,0 +1,530 @@
+:host {
+  display: block;
+}
+
+.data-quality {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+// ─── Header ──────────────────────────────────
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+
+  h2 {
+    margin: 0;
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: #0f172a;
+  }
+}
+
+.docs-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: #2563eb;
+  text-decoration: none;
+  font-weight: 500;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+// ─── Card ────────────────────────────────────
+
+.card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+
+  h3 {
+    margin: 0 0 1rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #1e293b;
+  }
+}
+
+// ─── Form ────────────────────────────────────
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+
+  > label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #334155;
+    flex: 1;
+    min-width: 140px;
+  }
+}
+
+input[type="text"],
+input[type="date"],
+select {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: #0f172a;
+  background: #f8fafc;
+  transition: border-color 0.15s;
+
+  &:focus {
+    outline: none;
+    border-color: #2563eb;
+  }
+}
+
+.checkbox-label {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem !important;
+  padding-top: 1.2rem;
+
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #2563eb;
+  }
+}
+
+.form-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+// ─── Buttons ─────────────────────────────────
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1.1rem;
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover:not(:disabled) {
+    background: #1d4ed8;
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+}
+
+// ─── Error ───────────────────────────────────
+
+.error-msg {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-left: 3px solid #dc2626;
+  background: #fee2e2;
+  color: #991b1b;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+// ─── Summary Cards ───────────────────────────
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.summary-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 1rem;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+
+  &.accent {
+    border-color: #2563eb;
+    background: #eff6ff;
+  }
+
+  &.warn {
+    border-color: #f59e0b;
+    background: #fffbeb;
+  }
+}
+
+.summary-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.summary-label {
+  font-size: 0.78rem;
+  color: #64748b;
+  margin-top: 0.2rem;
+}
+
+// ─── Tabs ────────────────────────────────────
+
+.tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1rem;
+  border-bottom: 2px solid #e2e8f0;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.6rem 1rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #64748b;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+
+  &:hover {
+    color: #334155;
+  }
+
+  &.active {
+    color: #2563eb;
+    border-bottom-color: #2563eb;
+  }
+}
+
+// ─── Step Cards ──────────────────────────────
+
+.step-card {
+  padding: 1rem 0;
+  border-bottom: 1px solid #f1f5f9;
+
+  &:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+}
+
+.step-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.step-number {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.step-info {
+  flex: 1;
+}
+
+.step-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.step-library {
+  font-size: 0.78rem;
+  color: #64748b;
+  margin-top: 0.15rem;
+
+  i {
+    font-size: 0.7rem;
+  }
+}
+
+.step-stats {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.stat-bars {
+  font-size: 0.8rem;
+  color: #334155;
+  font-weight: 500;
+}
+
+.stat-removed {
+  display: block;
+  font-size: 0.75rem;
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.step-description {
+  font-size: 0.82rem;
+  color: #475569;
+  margin: 0.5rem 0 0.6rem 2.75rem;
+  line-height: 1.45;
+}
+
+.step-progress {
+  height: 6px;
+  background: #f1f5f9;
+  border-radius: 3px;
+  margin: 0 0 0.25rem 2.75rem;
+  overflow: hidden;
+}
+
+.step-progress-bar {
+  height: 100%;
+  background: #2563eb;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.step-progress-label {
+  font-size: 0.72rem;
+  color: #94a3b8;
+  margin-left: 2.75rem;
+}
+
+.step-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  margin: 0.6rem 0 0 2.75rem;
+  padding: 0.5rem 0.75rem;
+  background: #f8fafc;
+  border-radius: 6px;
+  border: 1px solid #f1f5f9;
+}
+
+.detail-item {
+  font-size: 0.78rem;
+}
+
+.detail-key {
+  color: #64748b;
+  text-transform: capitalize;
+}
+
+.detail-value {
+  color: #0f172a;
+  font-weight: 500;
+  margin-left: 0.25rem;
+}
+
+// ─── Comparison Table ────────────────────────
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+
+  th {
+    text-align: left;
+    padding: 0.6rem 0.75rem;
+    border-bottom: 2px solid #e2e8f0;
+    color: #475569;
+    font-weight: 600;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+
+    &.num {
+      text-align: right;
+    }
+  }
+
+  td {
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid #f1f5f9;
+    color: #1e293b;
+
+    &.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+  }
+
+  tr:hover {
+    background: #f8fafc;
+  }
+}
+
+.delta-badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+
+  &.improved {
+    background: #dcfce7;
+    color: #166534;
+  }
+
+  &.neutral {
+    background: #f1f5f9;
+    color: #64748b;
+  }
+
+  &.regressed {
+    background: #fee2e2;
+    color: #991b1b;
+  }
+}
+
+// ─── Distribution Section ────────────────────
+
+.dist-section {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e2e8f0;
+
+  h4 {
+    margin: 0 0 0.75rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #1e293b;
+  }
+}
+
+.dist-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+.dist-col {
+  h5 {
+    margin: 0 0 0.4rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #475569;
+  }
+}
+
+.dist-item {
+  font-size: 0.82rem;
+  padding: 0.2rem 0;
+}
+
+.dist-bars {
+  color: #64748b;
+}
+
+.dist-count {
+  color: #0f172a;
+  font-weight: 500;
+  margin-left: 0.3rem;
+}
+
+// ─── Data Download ───────────────────────────
+
+.viewer-description {
+  font-size: 0.85rem;
+  color: #475569;
+  margin: 0 0 1.25rem;
+  line-height: 1.5;
+}
+
+.download-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.download-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.download-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  flex-shrink: 0;
+
+  &.raw {
+    background: #fef3c7;
+    color: #d97706;
+  }
+
+  &.clean {
+    background: #dcfce7;
+    color: #16a34a;
+  }
+}
+
+.download-info {
+  flex: 1;
+}
+
+.download-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.download-meta {
+  font-size: 0.8rem;
+  color: #475569;
+  margin-top: 0.15rem;
+}
+
+.download-note {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-top: 0.1rem;
+}

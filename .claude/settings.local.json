@@ -73,7 +73,8 @@
       "Bash(/c/Users/inkan/AppData/Local/Programs/Python/Python313/python C:/Users/inkan/learn-ai/tmp_analysis3.py 2>&1)",
       "Bash(/tmp/request_flow_mapping.txt:*)",
       "Read(//tmp/**)",
-      "Bash(find C:/Users/inkan/learn-ai/Frontend -name tailwind.config* -o -name postcss.config*)"
+      "Bash(find C:/Users/inkan/learn-ai/Frontend -name tailwind.config* -o -name postcss.config*)",
+      "Bash(/c/Users/inkan/AppData/Local/Programs/Python/Python313/python -c \"import ast; ast.parse\\(open\\('C:/Users/inkan/learn-ai/PythonDataService/app/services/data_quality_service.py'\\).read\\(\\)\\); print\\('service OK'\\); ast.parse\\(open\\('C:/Users/inkan/learn-ai/PythonDataService/app/routers/data_quality.py'\\).read\\(\\)\\); print\\('router OK'\\)\")"
     ]
   }
 }

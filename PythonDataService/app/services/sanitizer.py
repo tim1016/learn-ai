@@ -1,41 +1,42 @@
-"""Data sanitization using pandas-dq Fix_DQ"""
+"""Data sanitization using native pandas/numpy (replaces pandas-dq Fix_DQ)"""
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Any
 import logging
 
-from pandas_dq import Fix_DQ
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Initialize Fix_DQ at module level for performance (reused across requests)
-_fix_dq = Fix_DQ(quantile=0.99, cat_fill_value="missing", num_fill_value="median",
-                 rare_threshold=0.01, correlation_threshold=0.9)
+
+def _clean_numeric(df: pd.DataFrame, quantile: float = 0.99) -> pd.DataFrame:
+    """Clean numeric DataFrame: fill NaNs with median, clip outliers by quantile."""
+    numeric = df.select_dtypes(include="number")
+    if numeric.empty:
+        return df
+
+    # Fill missing with column median
+    filled = numeric.fillna(numeric.median())
+
+    # Clip outliers beyond lower/upper quantile bounds
+    lo = filled.quantile(1 - quantile)
+    hi = filled.quantile(quantile)
+    clipped = filled.clip(lower=lo, upper=hi, axis=1)
+
+    # Remove rows that were entirely NaN across all numeric cols before fill
+    all_nan_mask = numeric.isna().all(axis=1)
+    result = df.copy()
+    result[clipped.columns] = clipped
+    result = result[~all_nan_mask]
+    return result
 
 
 class DataSanitizer:
-    """Sanitize market data using pandas-dq Fix_DQ"""
-
-    @staticmethod
-    def _run_fix_dq(df: pd.DataFrame, target_col: str | None = None) -> pd.DataFrame:
-        """Run Fix_DQ on a DataFrame. Returns the cleaned DataFrame."""
-        try:
-            if target_col and target_col in df.columns:
-                target = df[target_col]
-                features = df.drop(columns=[target_col])
-                cleaned = _fix_dq.fit_transform(features, target)
-                cleaned[target_col] = target.loc[cleaned.index]
-            else:
-                cleaned = _fix_dq.fit_transform(df)
-            return cleaned
-        except Exception as e:
-            logger.warning(f"Fix_DQ encountered an issue: {e}. Returning original data.")
-            return df
+    """Sanitize market data using native pandas/numpy operations"""
 
     @staticmethod
     def sanitize_aggregates(raw_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Clean and validate OHLCV aggregate data using Fix_DQ"""
+        """Clean and validate OHLCV aggregate data"""
         try:
             if not raw_data:
                 return {'data': [], 'summary': {'original_count': 0, 'cleaned_count': 0}}
@@ -43,7 +44,7 @@ class DataSanitizer:
             df = pd.DataFrame(raw_data)
             original_count = len(df)
 
-            logger.info(f"Sanitizing {original_count} aggregate records with Fix_DQ")
+            logger.info(f"Sanitizing {original_count} aggregate records")
 
             # Convert timestamp from ms to datetime for proper time-series handling
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -55,19 +56,16 @@ class DataSanitizer:
             # Sort by timestamp
             df = df.sort_values('timestamp').reset_index(drop=True)
 
-            # Separate timestamp before Fix_DQ (it works on numeric/categorical data)
-            timestamps = df['timestamp']
+            # Clean numeric columns (median fill + quantile clip)
             numeric_cols = ['open', 'high', 'low', 'close', 'volume']
             optional_cols = [c for c in ['vwap', 'transactions'] if c in df.columns]
             dq_cols = numeric_cols + optional_cols
 
+            timestamps = df['timestamp']
             dq_df = df[dq_cols].copy()
+            cleaned = _clean_numeric(dq_df)
 
-            # Run Fix_DQ: handles missing values, outliers (0.99 quantile), type enforcement
-            cleaned_dq = DataSanitizer._run_fix_dq(dq_df, target_col='close')
-
-            # Reassemble with timestamps (aligned by index)
-            df = cleaned_dq.copy()
+            df = cleaned.copy()
             df['timestamp'] = timestamps.loc[df.index]
 
             # Basic OHLCV integrity filter (keep rows where high >= low and volume >= 0)
@@ -80,7 +78,7 @@ class DataSanitizer:
             cleaned_count = len(df)
             removed_count = original_count - cleaned_count
 
-            logger.info(f"Fix_DQ sanitization complete: {cleaned_count} records retained, {removed_count} removed")
+            logger.info(f"Sanitization complete: {cleaned_count} records retained, {removed_count} removed")
 
             return {
                 'data': df.to_dict('records'),
@@ -98,7 +96,7 @@ class DataSanitizer:
 
     @staticmethod
     def sanitize_trades(raw_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Clean and validate trade data using Fix_DQ"""
+        """Clean and validate trade data"""
         try:
             if not raw_data:
                 return {'data': [], 'summary': {'original_count': 0, 'cleaned_count': 0}}
@@ -106,7 +104,7 @@ class DataSanitizer:
             df = pd.DataFrame(raw_data)
             original_count = len(df)
 
-            logger.info(f"Sanitizing {original_count} trade records with Fix_DQ")
+            logger.info(f"Sanitizing {original_count} trade records")
 
             # Convert timestamp (nanoseconds for trades)
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ns')
@@ -120,21 +118,19 @@ class DataSanitizer:
 
             df = df.sort_values('timestamp').reset_index(drop=True)
 
-            # Run Fix_DQ on numeric trade columns
+            # Clean numeric trade columns
             timestamps = df['timestamp']
+            non_numeric_cols = ['exchange', 'conditions', 'sequence_number', 'trade_id']
+            saved_cols = {col: df[col].copy() for col in non_numeric_cols if col in df.columns}
+
             numeric_cols = [c for c in ['price', 'size'] if c in df.columns]
             dq_df = df[numeric_cols].copy()
+            cleaned = _clean_numeric(dq_df)
 
-            cleaned_dq = DataSanitizer._run_fix_dq(dq_df)
-
-            df = cleaned_dq.copy()
+            df = cleaned.copy()
             df['timestamp'] = timestamps.loc[df.index]
-
-            # Restore non-numeric columns that Fix_DQ didn't process
-            for col in ['exchange', 'conditions', 'sequence_number', 'trade_id']:
-                if col in pd.DataFrame(raw_data).columns:
-                    original = pd.DataFrame(raw_data)[col]
-                    df[col] = original.loc[df.index].values
+            for col, series in saved_cols.items():
+                df[col] = series.loc[df.index].values
 
             # Basic validity: price > 0, size > 0
             df = df[(df['price'] > 0) & (df['size'] > 0)]
@@ -158,13 +154,13 @@ class DataSanitizer:
 
     @staticmethod
     def sanitize_indicator(raw_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Clean and validate technical indicator data using Fix_DQ"""
+        """Clean and validate technical indicator data"""
         try:
-            logger.info(f"Sanitizing {raw_data.get('indicator_type')} indicator with Fix_DQ")
+            logger.info(f"Sanitizing {raw_data.get('indicator_type')} indicator")
 
             if 'values' in raw_data and raw_data['values']:
                 values_df = pd.DataFrame(raw_data['values'])
-                cleaned = DataSanitizer._run_fix_dq(values_df)
+                cleaned = _clean_numeric(values_df)
                 raw_data['values'] = cleaned.to_dict('records')
 
             return {
@@ -182,7 +178,7 @@ class DataSanitizer:
 
     @staticmethod
     def sanitize_generic(raw_data: List[Dict[str, Any]], quantile: float = 0.99) -> Dict[str, Any]:
-        """Sanitize arbitrary market data using Fix_DQ.
+        """Sanitize arbitrary market data.
         Used by the standalone /api/sanitize endpoint."""
         try:
             if not raw_data:
@@ -191,7 +187,7 @@ class DataSanitizer:
             df = pd.DataFrame(raw_data)
             original_count = len(df)
 
-            logger.info(f"Generic Fix_DQ sanitization on {original_count} records (quantile={quantile})")
+            logger.info(f"Generic sanitization on {original_count} records (quantile={quantile})")
 
             # Handle timestamp column if present (convert from Unix ms)
             has_timestamp = 'timestamp' in df.columns
@@ -200,20 +196,13 @@ class DataSanitizer:
                 timestamps = pd.to_datetime(df['timestamp'], unit='ms')
                 df = df.drop(columns=['timestamp'])
 
-            # Handle symbol/string columns — Fix_DQ works on numeric data
+            # Handle symbol/string columns
             string_cols = df.select_dtypes(include=['object']).columns.tolist()
             string_data = df[string_cols].copy() if string_cols else None
             if string_cols:
                 df = df.drop(columns=string_cols)
 
-            # Create a per-request Fix_DQ if quantile differs from default
-            if quantile != 0.99:
-                local_fixer = Fix_DQ(quantile=quantile, cat_fill_value="missing",
-                                     num_fill_value="median", rare_threshold=0.01,
-                                     correlation_threshold=0.9)
-                cleaned = local_fixer.fit_transform(df)
-            else:
-                cleaned = _fix_dq.fit_transform(df)
+            cleaned = _clean_numeric(df, quantile=quantile)
 
             # Reassemble
             if string_data is not None:

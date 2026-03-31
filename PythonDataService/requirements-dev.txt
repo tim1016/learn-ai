@@ -6,5 +6,4 @@ pytest-asyncio
 
 # Development tools
 ipython
-jupyter
 rich

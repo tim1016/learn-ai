@@ -150,6 +150,20 @@ export const routes: Routes = [
       ).then((m) => m.IndicatorReportComponent),
   },
   {
+    path: "data-quality",
+    loadComponent: () =>
+      import("./components/data-quality/data-quality.component").then(
+        (m) => m.DataQualityComponent
+      ),
+  },
+  {
+    path: "data-quality-docs",
+    loadComponent: () =>
+      import(
+        "./components/data-quality/data-quality-docs/data-quality-docs.component"
+      ).then((m) => m.DataQualityDocsComponent),
+  },
+  {
     path: "research-lab",
     loadComponent: () =>
       import("./components/research-lab/research-lab.component").then(
