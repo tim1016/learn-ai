@@ -22,7 +22,7 @@ A full-stack quantitative trading research platform for US equity and options ma
 |-------|------|---------|
 | **Frontend** | Angular 21, Apollo Angular, PrimeNG, Tailwind CSS, TradingView lightweight-charts v5 | SPA with interactive charts, tables, and forms |
 | **Backend** | .NET 10, Hot Chocolate v15 (GraphQL), EF Core 10, Polly | GraphQL API, data caching, backtesting engine |
-| **Data Service** | Python FastAPI, Polygon.io REST client v1.12.5, pandas, pandas-ta, TensorFlow/Keras | Polygon.io proxy, indicator calculations, ML training |
+| **Data Service** | Python FastAPI, Polygon.io REST client v1.12.5, pandas, pandas-ta, scipy, statsmodels | Polygon.io proxy, indicator calculations, data quality pipeline |
 | **Database** | PostgreSQL 16 | Persistent storage for tickers, OHLCV bars, indicators, research experiments |
 | **Infrastructure** | Podman Compose | 3 containers: `db`, `python-service`, `backend` |
 
@@ -236,6 +236,25 @@ Deep learning pipeline for price forecasting under `/lstm/*`:
 
 **Model History** (`/lstm/models`) — Browse, compare, and manage all trained model artifacts with hyperparameters and training performance.
 
+### Data Quality & Validation
+
+**Data Quality Pipeline** (`/data-quality`) — 7-step automated cleanup pipeline for minute-level OHLCV data with before/after reporting:
+
+- **Step 1 — Session Filter**: NYSE calendar-aware filtering using `pandas_market_calendars` (handles early-close days)
+- **Step 2 — Fix Volume**: Corrects zero/missing volume bars
+- **Step 3 — Recompute VWAP**: Recalculates VWAP from OHLCV when source data is suspect
+- **Step 4 — Remove Flat Bars**: Detects and removes bars where O=H=L=C (no price movement)
+- **Step 5 — OHLC Integrity**: Validates high >= low, all prices > 0
+- **Step 6 — Normalize Timezone**: Ensures consistent US/Eastern timestamps
+- **Step 7 — Recompute Indicators**: Recalculates technical indicators on cleaned data
+- Per-step summary statistics (rows removed, percentage impact)
+- CSV download of cleaned data for offline analysis
+- Built-in pipeline documentation page (`/data-quality-docs`)
+
+**Data Lab** (`/data-lab`) — Validation report for comparing pandas-ta computed indicators against TradingView CSV exports. Upload a TradingView export and compare indicator values side-by-side to verify calculation accuracy.
+
+**Indicator Validation** (`/indicator-validation`) — Cross-reference computed technical indicators against external sources.
+
 ### Snapshots & Market Data
 
 **Snapshots** (`/snapshots`) — Four snapshot modes in a single tabbed view:
@@ -259,7 +278,7 @@ The system follows a **DB-first** approach for all market data:
 
 1. Check PostgreSQL for cached data matching the requested ticker, timeframe, and date range
 2. On cache miss, fetch from Polygon.io through the Python data service
-3. Sanitize data (pandas-dq Fix_DQ) — removes duplicates, handles nulls, forward-fills gaps
+3. Sanitize data (native pandas/numpy) — removes duplicates, handles nulls, clips outliers by quantile
 4. Persist to PostgreSQL with deduplication (upsert)
 5. Return the result with a sanitization summary (original count, cleaned count, removal %)
 
@@ -502,6 +521,8 @@ learn-ai/
         snapshots/                  Market movers and multi-ticker snapshots
         tracked-instruments/        Watchlist with unified snapshots
         options-history/            Historical 0DTE contract lookup
+        data-quality/               Data quality 7-step pipeline with before/after reporting
+        data-lab/                   Indicator validation report (pandas-ta vs TradingView CSV)
       graphql/                      TypeScript types matching GraphQL schema
         portfolio/                    Dashboard, positions, equity chart, risk, scenarios, reconciliation, attribution, validation
       services/                     Angular services (MarketData, Research, LSTM, Replay, Portfolio)
@@ -509,8 +530,8 @@ learn-ai/
     src/testing/                  Test factories for mock data
   PythonDataService/              FastAPI proxy to Polygon.io
     app/
-      routers/                      REST endpoints (aggregates, options, snapshots, indicators, research, predictions, strategy, market, tickers, trades)
-      services/                     PolygonClient, DataSanitizer, TechnicalAnalysis, StrategyEngine, LSTM, SignalEngine
+      routers/                      REST endpoints (aggregates, options, snapshots, indicators, research, predictions, strategy, market, tickers, trades, data_quality, dataset)
+      services/                     PolygonClient, DataSanitizer, DataQualityService, TechnicalAnalysis, StrategyEngine, LSTM, SignalEngine
       models/                       Pydantic request/response models
     tests/                          pytest test suite
   compose.yaml                    Podman/Docker Compose (3 services)
