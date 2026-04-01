@@ -4,7 +4,6 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
-from statsmodels.tsa.stattools import adfuller, kpss
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +60,9 @@ def run_stationarity_tests(
             kpss_pvalue=0.0,
             is_stationary=False,
         )
+
+    # Lazy import — statsmodels is heavy and only needed here
+    from statsmodels.tsa.stattools import adfuller, kpss
 
     # ADF test
     adf_result = adfuller(series, autolag="AIC")

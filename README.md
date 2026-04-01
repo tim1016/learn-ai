@@ -393,7 +393,7 @@ Open [http://localhost:4200](http://localhost:4200) in your browser.
 | Frontend | http://localhost:4200 | Angular dev server |
 | GraphQL API | http://localhost:5000/graphql | Hot Chocolate endpoint (Banana Cake Pop playground) |
 | Python Service | http://localhost:8000 | FastAPI data service (health check at `/health`) |
-| PostgreSQL | localhost:5432 | Database (postgres/mysecretpassword) |
+| PostgreSQL | localhost:5432 | Database (credentials in `.env`) |
 
 ---
 
@@ -457,6 +457,42 @@ podman compose up -d
 ```
 
 > **Note**: EF Core's `EnsureCreated()` does nothing if any tables already exist. New entities require a volume reset or switching to EF migrations.
+
+## Container Operations
+
+### Dev vs. Production containers
+
+`compose.yaml` is the **dev** config — it mounts source code, uses the full .NET SDK image, and enables hot-reload (`dotnet watch`, `uvicorn --reload`). The Dockerfiles under `Backend/Dockerfile` and `PythonDataService/Dockerfile` produce lean **production** runtime images (multi-stage builds). To validate the production Dockerfiles still build:
+
+```bash
+podman build -t marketscope-backend ./Backend
+podman build -t marketscope-python ./PythonDataService
+```
+
+### Debugging containers
+
+```bash
+# View live logs
+podman compose logs -f python-service
+
+# Shell into a running container
+podman compose exec python-service bash
+
+# Check healthcheck status
+podman inspect --format='{{json .State.Health}}' polygon-data-service
+```
+
+### Data persistence
+
+PostgreSQL data lives in the `pgdata` named volume and survives `podman compose down`. To backup or reset:
+
+```bash
+# Backup
+podman exec my-postgres pg_dump -U postgres postgres > backup.sql
+
+# Full reset (destroys all data)
+podman compose down -v
+```
 
 ## Running Tests
 

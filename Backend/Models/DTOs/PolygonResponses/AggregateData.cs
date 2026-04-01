@@ -13,5 +13,5 @@ public class AggregateData
     public decimal Close { get; set; }
     public decimal Volume { get; set; }
     public decimal? Vwap { get; set; }
-    public long? Transactions { get; set; }
+    public decimal? Transactions { get; set; }
 }

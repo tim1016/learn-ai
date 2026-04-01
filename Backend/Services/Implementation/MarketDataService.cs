@@ -79,10 +79,17 @@ public class MarketDataService : IMarketDataService
             // Convert DTOs to entities (mapping logic testable)
             var aggregates = response.Data.Select(d => MapToEntity(d, tickerEntity.Id, timespan, multiplier)).ToList();
 
-            // Upsert logic (testable business rule)
-            var storedAggregates = await UpsertAggregatesAsync(aggregates, cancellationToken);
+            // Upsert in batches to avoid change tracker memory exhaustion on large datasets
+            const int batchSize = 1000;
+            var storedAggregates = new List<StockAggregate>(aggregates.Count);
 
-            await _context.SaveChangesAsync(cancellationToken);
+            foreach (var batch in aggregates.Chunk(batchSize))
+            {
+                var batchResult = await UpsertAggregatesAsync(batch.ToList(), cancellationToken);
+                await _context.SaveChangesAsync(cancellationToken);
+                _context.ChangeTracker.Clear();
+                storedAggregates.AddRange(batchResult);
+            }
 
             _logger.LogInformation(
                 "Stored {Count} aggregates for {Ticker}",
@@ -440,7 +447,7 @@ public class MarketDataService : IMarketDataService
             Timestamp = DateTime.Parse(dto.Timestamp).ToUniversalTime(),
             Timespan = timespan,
             Multiplier = multiplier,
-            TransactionCount = dto.Transactions,
+            TransactionCount = dto.Transactions.HasValue ? (long?)decimal.ToInt64(dto.Transactions.Value) : null,
             CreatedAt = DateTime.UtcNow
         };
     }

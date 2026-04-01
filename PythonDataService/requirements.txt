@@ -1,14 +1,23 @@
+# DEPRECATED: This file is NOT used by the Dockerfile.
+# The container installs from requirements-heavy.txt + requirements-light.txt.
+# This file exists only for local `pip install -r requirements.txt` convenience.
+# To regenerate: cat requirements-heavy.txt requirements-light.txt > requirements.txt
+
+# --- Heavy (from requirements-heavy.txt) ---
+scipy==1.17.1
+numpy==2.2.6
+pandas==3.0.1
+statsmodels==0.14.6
+
+# --- Light (from requirements-light.txt) ---
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pandas>=2.2.0
-numpy>=2.2.6
 pydantic==2.5.0
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 polygon-api-client==1.12.5
-pandas-ta
+setuptools>=70.0,<81
+pandas-ta==0.4.71b0
 pandas_market_calendars
-scipy>=1.14.0
-httpx
-statsmodels>=0.14.0
-python-multipart>=0.0.20
+httpx==0.28.1
+python-multipart==0.0.20

@@ -4,7 +4,7 @@ services:
     container_name: my-postgres
     restart: always
     environment:
-      - POSTGRES_PASSWORD=mysecretpassword
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data:Z
     ports:
@@ -14,6 +14,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     networks:
       - app-network
 
@@ -38,6 +42,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 512M
     networks:
       - app-network
 
@@ -51,12 +62,22 @@ services:
     volumes:
       - ./Backend:/src:z
     environment:
-      - ConnectionStrings__DefaultConnection=Host=db;Database=postgres;Username=postgres;Password=mysecretpassword
+      - ConnectionStrings__DefaultConnection=Host=db;Database=postgres;Username=postgres;Password=${POSTGRES_PASSWORD}
       - PolygonService__BaseUrl=http://python-service:8000
       - DOTNET_USE_POLLING_FILE_WATCHER=true
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:8080
     command: ["dotnet", "watch", "run", "--non-interactive"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     depends_on:
       db:
         condition: service_healthy
