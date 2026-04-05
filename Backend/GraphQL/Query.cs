@@ -7,6 +7,7 @@ using Backend.Models.DTOs.PolygonResponses;
 using Backend.Services.Implementation;
 using Backend.Services.Interfaces;
 using HotChocolate;
+using HotChocolate.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace Backend.GraphQL;
