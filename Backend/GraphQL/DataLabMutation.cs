@@ -1,6 +1,7 @@
 using Backend.Data;
 using Backend.Models.DataLab;
 using HotChocolate;
+using HotChocolate.Types;
 using Microsoft.EntityFrameworkCore;
 
 namespace Backend.GraphQL;

@@ -118,6 +118,12 @@ export class DataLabComponent {
     return `${y}-${m}-${day}`;
   }
 
+  private static parseDate(dateStr: string): Date {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const date = new Date(y, m - 1, d, 0, 0, 0, 0);
+    return date;
+  }
+
   fromDateValue = signal<Date>(DataLabComponent.get30DaysAgo());
   toDateValue = signal<Date>(DataLabComponent.getYesterday());
   fromDate = computed(() => DataLabComponent.formatDate(this.fromDateValue()));
@@ -300,8 +306,8 @@ export class DataLabComponent {
 
     // Restore configuration
     this.ticker.set(session.config.ticker);
-    this.fromDate.set(session.config.fromDate);
-    this.toDate.set(session.config.toDate);
+    this.fromDateValue.set(DataLabComponent.parseDate(session.config.fromDate));
+    this.toDateValue.set(DataLabComponent.parseDate(session.config.toDate));
     this.session.set(session.config.session);
     this.forwardFill.set(session.config.forwardFill);
     this.entries.set([...session.config.entries]);

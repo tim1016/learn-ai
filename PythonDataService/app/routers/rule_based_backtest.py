@@ -87,14 +87,15 @@ RTH_CLOSE_MINUTES = 16 * 60       # 4:00 PM
 def _filter_rth(bars: list[dict]) -> list[dict]:
     """Filter bars to Regular Trading Hours (9:30 AM - 4:00 PM ET).
     Polygon timestamps are in ms UTC; convert to ET for filtering."""
-    import pytz
-    eastern = pytz.timezone("America/New_York")
+    from zoneinfo import ZoneInfo
+    from datetime import timezone
+    eastern = ZoneInfo("America/New_York")
     filtered = []
     for bar in bars:
         ts_ms = bar.get("t") or bar.get("timestamp")
         if ts_ms is None:
             continue
-        dt_utc = datetime.utcfromtimestamp(ts_ms / 1000).replace(tzinfo=pytz.utc)
+        dt_utc = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
         dt_et = dt_utc.astimezone(eastern)
         minutes = dt_et.hour * 60 + dt_et.minute
         if RTH_OPEN_MINUTES <= minutes < RTH_CLOSE_MINUTES:

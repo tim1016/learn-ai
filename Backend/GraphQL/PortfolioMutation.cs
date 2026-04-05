@@ -2,6 +2,7 @@ using Backend.Models.Portfolio;
 using Backend.Services.Interfaces;
 using HotChocolate;
 using HotChocolate.Data;
+using HotChocolate.Types;
 using Microsoft.Extensions.Logging;
 
 // Validation result types are in Backend.Models.Portfolio.ValidationResult
