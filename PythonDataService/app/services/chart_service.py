@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 
 from app.services.polygon_client import PolygonClientService
 from app.services.dataset_service import (
-    fetch_minute_bars_chunked,
+    fetch_bars_chunked,
     calculate_dynamic_indicators,
     estimate_max_lookback,
     compute_warmup_start_date,
@@ -705,7 +705,7 @@ def get_chart_data(
             fetch_from = compute_warmup_start_date(from_date, max_lookback)
             logger.info(f"[CHART] Warmup: fetching from {fetch_from} (requested {from_date})")
 
-        bars = fetch_minute_bars_chunked(_polygon, ticker, fetch_from, to_date)
+        bars = fetch_bars_chunked(_polygon, ticker, fetch_from, to_date)
         if not bars:
             return {
                 "error_code": "NO_DATA",
