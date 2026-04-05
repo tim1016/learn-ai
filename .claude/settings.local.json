@@ -76,7 +76,10 @@
       "Bash(find C:/Users/inkan/learn-ai/Frontend -name tailwind.config* -o -name postcss.config*)",
       "Bash(/c/Users/inkan/AppData/Local/Programs/Python/Python313/python -c \"import ast; ast.parse\\(open\\('C:/Users/inkan/learn-ai/PythonDataService/app/services/data_quality_service.py'\\).read\\(\\)\\); print\\('service OK'\\); ast.parse\\(open\\('C:/Users/inkan/learn-ai/PythonDataService/app/routers/data_quality.py'\\).read\\(\\)\\); print\\('router OK'\\)\")",
       "Bash(npx tsc:*)",
-      "Bash(podman run:*)"
+      "Bash(podman run:*)",
+      "Read(//c/Users/inkan/learn-ai//**)",
+      "Read(//c/Users/inkan/**)",
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

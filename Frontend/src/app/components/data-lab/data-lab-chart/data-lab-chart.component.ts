@@ -15,6 +15,7 @@ import {
   LogicalRange,
 } from 'lightweight-charts';
 import { environment } from '../../../../environments/environment';
+import { QualityModalComponent } from '../quality-modal/quality-modal.component';
 
 // ──────────────────────────────────────────────
 // Types
@@ -44,6 +45,12 @@ export interface ChartIndicatorResult {
   refs: number[];
 }
 
+export interface GapDetail {
+  before_ts: number;
+  after_ts: number;
+  duration_minutes: number;
+}
+
 export interface QualityReport {
   raw_bar_count: number;
   resampled_bar_count: number;
@@ -53,6 +60,8 @@ export interface QualityReport {
   missing_sessions: number;
   session_coverage_pct: number;
   synthetic_bars: number;
+  gap_details: GapDetail[];
+  missing_session_dates: string[];
 }
 
 export interface ChartDataResponse {
@@ -145,7 +154,7 @@ function getEmaRibbonColor(length: number): string | null {
 @Component({
   selector: 'app-data-lab-chart',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, QualityModalComponent],
   templateUrl: './data-lab-chart.component.html',
   styleUrls: ['./data-lab-chart.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -189,7 +198,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   toastMessage = signal('');
 
   quality = signal<QualityReport | null>(null);
-  qualityExpanded = signal(false);
+  qualityModalOpen = signal(false);
 
   // Chart data
   private bars = signal<ChartBar[]>([]);
@@ -198,19 +207,28 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   // Indicator visibility (Set of indicator IDs that are visible)
   visibleIndicators = signal<Set<string>>(new Set());
 
-  // Indicator chips for the toolbar
+  // Indicator chips for the toolbar — use the actual rendered color (e.g. EMA ribbon)
   indicatorChips = computed(() => {
     const results = this.indicatorResults();
     return results.map(r => ({
       id: r.id,
       panel: r.panel,
-      color: r.color,
+      color: this.getRenderedColor(r),
       visible: this.visibleIndicators().has(r.id),
     }));
   });
 
   get hasIndicators(): boolean {
     return this.indicatorResults().length > 0;
+  }
+
+  /** Resolve the actual color used when rendering a series (e.g. EMA ribbon override). */
+  private getRenderedColor(ind: ChartIndicatorResult): string {
+    const emaMatch = ind.id.match(/^ema[_.](\d+)/i);
+    if (emaMatch) {
+      return getEmaRibbonColor(parseInt(emaMatch[1], 10)) ?? ind.color;
+    }
+    return ind.color;
   }
 
   // Chart instances
@@ -888,6 +906,6 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   // Quality report toggle
   // ──────────────────────────────────────────────
   toggleQuality(): void {
-    this.qualityExpanded.update(v => !v);
+    this.qualityModalOpen.update(v => !v);
   }
 }

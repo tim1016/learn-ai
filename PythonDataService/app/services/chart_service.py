@@ -231,6 +231,14 @@ def _indicator_cache_key(resample_key: str, indicators: List[Dict[str, Any]]) ->
 # Data preprocessing
 # ──────────────────────────────────────────────
 @dataclass
+class GapDetail:
+    """Single intra-session gap."""
+    before_ts: int          # ms epoch of bar before the gap
+    after_ts: int           # ms epoch of bar after the gap
+    duration_minutes: int   # gap duration in minutes
+
+
+@dataclass
 class QualityReport:
     raw_bar_count: int = 0
     duplicates_removed: int = 0
@@ -240,6 +248,8 @@ class QualityReport:
     session_coverage_pct: float = 0.0
     synthetic_bars: int = 0
     resampled_bar_count: int = 0
+    gap_details: List[GapDetail] = field(default_factory=list)
+    missing_session_dates: List[str] = field(default_factory=list)
 
 
 def _preprocess_minute_bars(
@@ -315,6 +325,13 @@ def _preprocess_minute_bars(
         quality.gaps_found = len(gaps)
         if not gaps.empty:
             quality.largest_gap_minutes = int(gaps.max() / 60_000)
+            for idx in gaps.index:
+                before_ts = int(df.at[idx - 1, "timestamp"])
+                after_ts = int(df.at[idx, "timestamp"])
+                dur = int((after_ts - before_ts) / 60_000)
+                quality.gap_details.append(GapDetail(
+                    before_ts=before_ts, after_ts=after_ts, duration_minutes=dur,
+                ))
 
     # Session coverage
     expected_mins = _count_trading_minutes(from_date, to_date, session)
@@ -325,7 +342,9 @@ def _preprocess_minute_bars(
     if not schedule.empty:
         trading_dates = set(schedule.index.date)
         actual_dates = set(df["_dt_et"].dt.date.unique())
-        quality.missing_sessions = len(trading_dates - actual_dates)
+        missing = trading_dates - actual_dates
+        quality.missing_sessions = len(missing)
+        quality.missing_session_dates = sorted(d.isoformat() for d in missing)
 
     # Forward fill
     if forward_fill:
@@ -791,6 +810,15 @@ def get_chart_data(
             "missing_sessions": quality.missing_sessions,
             "session_coverage_pct": quality.session_coverage_pct,
             "synthetic_bars": quality.synthetic_bars,
+            "gap_details": [
+                {
+                    "before_ts": g.before_ts,
+                    "after_ts": g.after_ts,
+                    "duration_minutes": g.duration_minutes,
+                }
+                for g in quality.gap_details
+            ],
+            "missing_session_dates": quality.missing_session_dates,
         },
         "allowed_timeframes": allowed,
         "estimated_bars_per_timeframe": estimates,

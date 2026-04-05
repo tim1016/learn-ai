@@ -34,44 +34,9 @@
     }
   </div>
 
-  <!-- Quality report (collapsible) -->
-  @if (qualityExpanded() && quality(); as q) {
-    <div class="quality-panel">
-      <div class="quality-grid">
-        <div class="quality-item">
-          <span class="q-label">Raw bars</span>
-          <span class="q-value">{{ q.raw_bar_count | number }}</span>
-        </div>
-        <div class="quality-item">
-          <span class="q-label">Resampled</span>
-          <span class="q-value">{{ q.resampled_bar_count | number }}</span>
-        </div>
-        <div class="quality-item">
-          <span class="q-label">Duplicates removed</span>
-          <span class="q-value">{{ q.duplicates_removed }}</span>
-        </div>
-        <div class="quality-item">
-          <span class="q-label">Gaps found</span>
-          <span class="q-value" [class.warn]="q.gaps_found > 0">{{ q.gaps_found }}</span>
-        </div>
-        <div class="quality-item">
-          <span class="q-label">Largest gap</span>
-          <span class="q-value" [class.warn]="q.largest_gap_minutes > 30">{{ q.largest_gap_minutes }} min</span>
-        </div>
-        <div class="quality-item">
-          <span class="q-label">Missing sessions</span>
-          <span class="q-value" [class.warn]="q.missing_sessions > 0">{{ q.missing_sessions }}</span>
-        </div>
-        <div class="quality-item">
-          <span class="q-label">Session coverage</span>
-          <span class="q-value">{{ q.session_coverage_pct }}%</span>
-        </div>
-        <div class="quality-item">
-          <span class="q-label">Synthetic bars</span>
-          <span class="q-value">{{ q.synthetic_bars }}</span>
-        </div>
-      </div>
-    </div>
+  <!-- Quality details modal -->
+  @if (qualityModalOpen() && quality(); as q) {
+    <app-quality-modal [quality]="q" (closed)="toggleQuality()" />
   }
 
   <!-- Indicator visibility toolbar -->
