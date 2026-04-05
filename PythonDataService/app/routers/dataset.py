@@ -10,7 +10,7 @@ import logging
 from app.services.dataset_service import (
     list_available_indicators,
     get_indicator_configs,
-    fetch_minute_bars_chunked,
+    fetch_bars_chunked,
     compute_warmup_start_date,
     estimate_max_lookback,
     preprocess_and_calculate,
@@ -35,15 +35,19 @@ def _fetch_and_process(request: DatasetGenerationRequest):
     trim_from_ts = None
     if request.warmup and request.indicator_entries:
         max_lookback = estimate_max_lookback(request.indicator_entries)
-        fetch_from = compute_warmup_start_date(request.from_date, max_lookback)
+        fetch_from = compute_warmup_start_date(
+            request.from_date, max_lookback,
+            timespan=request.timespan, multiplier=request.multiplier,
+        )
         trim_from_ts = int(datetime.strptime(request.from_date, "%Y-%m-%d").timestamp() * 1000)
         logger.info(
             f"[DATASET] Warm-up: fetching from {fetch_from} "
             f"(requested {request.from_date}, lookback={max_lookback})"
         )
 
-    bars = fetch_minute_bars_chunked(
-        polygon_client, request.ticker, fetch_from, request.to_date
+    bars = fetch_bars_chunked(
+        polygon_client, request.ticker, fetch_from, request.to_date,
+        timespan=request.timespan, multiplier=request.multiplier,
     )
     if not bars:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No bars returned")
@@ -106,7 +110,8 @@ async def generate_dataset_csv(request: DatasetGenerationRequest):
         csv_bytes = build_csv_bytes(df, all_data_cols)
 
         session_label = "rth" if request.session == "rth" else "ext"
-        filename = f"{request.ticker}_minute_{session_label}_{request.from_date}_to_{request.to_date}.csv"
+        ts_label = f"{request.multiplier}{request.timespan}" if request.multiplier > 1 else request.timespan
+        filename = f"{request.ticker}_{ts_label}_{session_label}_{request.from_date}_to_{request.to_date}.csv"
         logger.info(
             f"[DATASET] CSV ready: {raw_count} raw bars → {len(df)} processed, "
             f"{len(indicator_col_names)} indicator columns"

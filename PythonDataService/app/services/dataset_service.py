@@ -136,28 +136,36 @@ def list_available_indicators() -> Dict[str, List[Dict[str, str]]]:
     return categories
 
 
-def fetch_minute_bars_chunked(
+def fetch_bars_chunked(
     polygon: PolygonClientService,
     ticker: str,
     from_date: str,
     to_date: str,
+    timespan: str = "minute",
+    multiplier: int = 1,
 ) -> List[Dict[str, Any]]:
-    """Fetch 1-minute OHLCV bars for a long date range by splitting into chunks."""
+    """Fetch OHLCV bars for a long date range by splitting into chunks."""
     start = datetime.strptime(from_date, "%Y-%m-%d")
     end = datetime.strptime(to_date, "%Y-%m-%d")
+
+    # Dynamic chunk size based on timespan and multiplier
+    _bars_per_day = {"minute": 450, "hour": 24, "day": 1}
+    effective_bpd = _bars_per_day.get(timespan, 450) // max(1, multiplier)
+    days_per_chunk = max(1, _POLYGON_MAX_BARS // max(1, effective_bpd))
+
     all_bars: List[Dict[str, Any]] = []
     chunk_start = start
     chunk_idx = 0
 
     while chunk_start < end:
-        chunk_end = min(chunk_start + timedelta(days=_DAYS_PER_CHUNK), end)
+        chunk_end = min(chunk_start + timedelta(days=days_per_chunk), end)
         chunk_idx += 1
         logger.info(
-            f"[CHUNK {chunk_idx}] Fetching minute bars for {ticker}: "
+            f"[CHUNK {chunk_idx}] Fetching {multiplier}{timespan} bars for {ticker}: "
             f"{chunk_start.strftime('%Y-%m-%d')} to {chunk_end.strftime('%Y-%m-%d')}"
         )
         bars = polygon.fetch_aggregates(
-            ticker=ticker, multiplier=1, timespan="minute",
+            ticker=ticker, multiplier=multiplier, timespan=timespan,
             from_date=chunk_start.strftime("%Y-%m-%d"),
             to_date=chunk_end.strftime("%Y-%m-%d"),
         )
@@ -173,7 +181,7 @@ def fetch_minute_bars_chunked(
             seen.add(ts)
             unique_bars.append(bar)
     unique_bars.sort(key=lambda b: b["timestamp"])
-    logger.info(f"Total unique minute bars: {len(unique_bars)}")
+    logger.info(f"Total unique {multiplier}{timespan} bars: {len(unique_bars)}")
     return unique_bars
 
 

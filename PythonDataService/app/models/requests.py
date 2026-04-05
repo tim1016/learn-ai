@@ -228,3 +228,21 @@ class DatasetGenerationRequest(BaseModel):
         True,
         description="Fetch extra bars before from_date to warm up indicator calculations",
     )
+    timespan: str = Field(
+        "minute",
+        description="Bar timespan: 'minute', 'hour', or 'day'",
+    )
+    multiplier: int = Field(
+        1,
+        ge=1,
+        le=60,
+        description="Bar multiplier (e.g., 5 with timespan='minute' gives 5-min bars)",
+    )
+
+    @field_validator('timespan')
+    @classmethod
+    def validate_dataset_timespan(cls, v: str) -> str:
+        valid = ['minute', 'hour', 'day']
+        if v not in valid:
+            raise ValueError(f'timespan must be one of {valid}')
+        return v

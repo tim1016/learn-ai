@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 from app.services.polygon_client import PolygonClientService
 from app.services.dataset_service import (
-    fetch_minute_bars_chunked,
+    fetch_bars_chunked,
     calculate_dynamic_indicators,
     compute_warmup_start_date,
     estimate_max_lookback,
@@ -371,7 +371,7 @@ def step7_recompute_indicators(
         warmup_start = compute_warmup_start_date(from_date, max_lookback)
         trim_ts = int(df["timestamp"].iloc[0])
 
-        warmup_bars_raw = fetch_minute_bars_chunked(polygon, ticker, warmup_start, from_date)
+        warmup_bars_raw = fetch_bars_chunked(polygon, ticker, warmup_start, from_date)
         warmup_bars_used = len(warmup_bars_raw)
 
         if warmup_bars_raw:
@@ -425,7 +425,7 @@ def analyze(
     logger.info(f"[DQ] Starting analysis for {ticker}: {from_date} to {to_date}")
 
     # Fetch raw data
-    bars = fetch_minute_bars_chunked(polygon, ticker, from_date, to_date)
+    bars = fetch_bars_chunked(polygon, ticker, from_date, to_date)
     if not bars:
         return {"error": "No bars returned from Polygon"}
 
