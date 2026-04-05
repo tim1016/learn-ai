@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Frontend (Angular)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start"],
+      "port": 4200
+    },
+    {
+      "name": "Backend (.NET GraphQL)",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["watch", "run", "--non-interactive"],
+      "port": 5000
+    },
+    {
+      "name": "Python Data Service (FastAPI)",
+      "runtimeExecutable": "uvicorn",
+      "runtimeArgs": ["app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+      "port": 8000
+    }
+  ]
+}
