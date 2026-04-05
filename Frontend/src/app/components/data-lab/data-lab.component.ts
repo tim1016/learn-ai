@@ -7,7 +7,18 @@ import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
+import { DatePicker } from 'primeng/datepicker';
+import { SharedModule } from 'primeng/api';
+import { Tooltip } from 'primeng/tooltip';
 import { environment } from '../../../environments/environment';
+import { MarketMonitorService } from '../../services/market-monitor.service';
+import { MarketHolidayEvent } from '../../models/market-monitor';
+import {
+  getDisabledHolidayDates,
+  buildHolidayMap,
+  getMinAllowedDate,
+  validateDateRange,
+} from '../../utils/date-validation';
 
 interface ParamConfig {
   name: string;
@@ -59,19 +70,57 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
 @Component({
   selector: 'app-data-lab',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule],
+  imports: [CommonModule, FormsModule, RouterModule, DatePicker, SharedModule, Tooltip],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class DataLabComponent {
   private http = inject(HttpClient);
+  private marketMonitor = inject(MarketMonitorService);
 
   ticker = signal('SPY');
-  fromDate = signal('2025-03-28');
-  toDate = signal('2026-03-28');
+
+  // Date state: PrimeNG DatePicker binds to Date objects
+  private static getYesterday(): Date {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  private static get30DaysAgo(): Date {
+    const d = DataLabComponent.getYesterday();
+    d.setDate(d.getDate() - 30);
+    return d;
+  }
+  private static formatDate(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  fromDateValue = signal<Date>(DataLabComponent.get30DaysAgo());
+  toDateValue = signal<Date>(DataLabComponent.getYesterday());
+  fromDate = computed(() => DataLabComponent.formatDate(this.fromDateValue()));
+  toDate = computed(() => DataLabComponent.formatDate(this.toDateValue()));
+
+  // Calendar constraints
+  holidays = signal<MarketHolidayEvent[]>([]);
+  disabledDates = computed(() => getDisabledHolidayDates(this.holidays()));
+  holidayMap = computed(() => buildHolidayMap(this.holidays()));
+  disabledDays: number[] = [0, 6];
+  minDate = new Date(getMinAllowedDate() + 'T00:00:00');
+  maxDate = DataLabComponent.getYesterday();
+
+  // Date range validation
+  dateRangeWarning = computed(() => validateDateRange(this.fromDate(), this.toDate()));
+
   session = signal<'rth' | 'extended'>('rth');
   forwardFill = signal(true);
+  warmup = signal(true);
+  timespan = signal<'minute' | 'hour' | 'day'>('minute');
+  multiplier = signal(1);
 
   loading = signal(false);
   loadingIndicators = signal(false);
@@ -133,6 +182,46 @@ export class DataLabComponent {
 
   constructor() {
     this.loadAvailableIndicators();
+    this.loadHolidays();
+  }
+
+  private loadHolidays(): void {
+    firstValueFrom(this.marketMonitor.getHolidays(20))
+      .then(events => this.holidays.set(events))
+      .catch(() => {}); // non-critical — calendar still works without holidays
+  }
+
+  /** Look up whether a calendar cell date is a holiday. Month is 0-indexed from PrimeNG. */
+  getHolidayForDate(day: number, month: number, year: number): MarketHolidayEvent | null {
+    const m = String(month + 1).padStart(2, '0');
+    const d = String(day).padStart(2, '0');
+    return this.holidayMap().get(`${year}-${m}-${d}`) ?? null;
+  }
+
+  getHolidayTooltip(holiday: MarketHolidayEvent): string {
+    let text = holiday.name ?? 'Market Holiday';
+    if (holiday.status === 'Early Close') {
+      text += ' (Early Close)';
+    } else if (holiday.status) {
+      text += ` - ${holiday.status}`;
+    }
+    return text;
+  }
+
+  setPresetRange(daysBack: number): void {
+    const to = DataLabComponent.getYesterday();
+    const from = new Date(to);
+    from.setDate(from.getDate() - daysBack);
+    this.fromDateValue.set(from);
+    this.toDateValue.set(to);
+  }
+
+  setPresetMonths(months: number): void {
+    const to = DataLabComponent.getYesterday();
+    const from = new Date(to);
+    from.setMonth(from.getMonth() - months);
+    this.fromDateValue.set(from);
+    this.toDateValue.set(to);
   }
 
   async loadAvailableIndicators(): Promise<void> {
@@ -253,6 +342,9 @@ export class DataLabComponent {
         indicator_entries: this.entries(),
         session: this.session(),
         forward_fill: this.forwardFill(),
+        warmup: this.warmup(),
+        timespan: this.timespan(),
+        multiplier: this.multiplier(),
       };
 
       const blob = await firstValueFrom(
@@ -264,8 +356,9 @@ export class DataLabComponent {
       );
 
       const sessionLabel = this.session() === 'rth' ? 'rth' : 'ext';
+      const tsLabel = this.multiplier() > 1 ? `${this.multiplier()}${this.timespan()}` : this.timespan();
       this.progress.set('Downloading CSV...');
-      this.downloadBlob(blob, `${this.ticker()}_minute_${sessionLabel}_${this.fromDate()}_to_${this.toDate()}.csv`);
+      this.downloadBlob(blob, `${this.ticker()}_${tsLabel}_${sessionLabel}_${this.fromDate()}_to_${this.toDate()}.csv`);
       this.progress.set('Done! CSV downloaded.');
     } catch (e: unknown) {
       this.error.set(e instanceof Error ? e.message : String(e));
@@ -285,6 +378,9 @@ export class DataLabComponent {
         indicator_entries: this.entries(),
         session: this.session(),
         forward_fill: this.forwardFill(),
+        warmup: this.warmup(),
+        timespan: this.timespan(),
+        multiplier: this.multiplier(),
       };
 
       const blob = await firstValueFrom(
@@ -312,6 +408,9 @@ export class DataLabComponent {
         indicator_entries: this.entries(),
         session: this.session(),
         forward_fill: this.forwardFill(),
+        warmup: this.warmup(),
+        timespan: this.timespan(),
+        multiplier: this.multiplier(),
       };
 
       const blob = await firstValueFrom(

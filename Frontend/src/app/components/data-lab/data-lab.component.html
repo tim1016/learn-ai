@@ -11,6 +11,22 @@
     </p>
   </div>
 
+  <!-- Data source info -->
+  <div class="info-callout">
+    <i class="pi pi-info-circle"></i>
+    <div>
+      <strong>Polygon.io (Starter plan)</strong>
+      <span>Up to 2 years historical, 15-min delayed. Data is fetched in chunks to stay within API limits.</span>
+    </div>
+  </div>
+
+  @if (dateRangeWarning()) {
+    <div class="info-callout warn">
+      <i class="pi pi-exclamation-triangle"></i>
+      <span>{{ dateRangeWarning() }}</span>
+    </div>
+  }
+
   <!-- Controls -->
   <div class="controls-card">
     <div class="controls-row">
@@ -18,14 +34,92 @@
         <label>Ticker</label>
         <input type="text" [(ngModel)]="ticker" />
       </div>
-      <div class="input-group">
+      <div class="input-group date-picker-group">
         <label>From</label>
-        <input type="date" [(ngModel)]="fromDate" />
+        <p-datepicker
+          [(ngModel)]="fromDateValue"
+          dateFormat="yy-mm-dd"
+          [showIcon]="true"
+          [minDate]="minDate"
+          [maxDate]="maxDate"
+          [disabledDays]="disabledDays"
+          [disabledDates]="disabledDates()"
+          [showButtonBar]="true"
+          [firstDayOfWeek]="1"
+        >
+          <ng-template pTemplate="date" let-dateMeta>
+            @let holiday = getHolidayForDate(dateMeta.day, dateMeta.month, dateMeta.year);
+            @if (holiday) {
+              <span
+                class="holiday-date"
+                [class.early-close]="holiday.status === 'Early Close'"
+                [class.closed]="holiday.status === 'Closed'"
+                [pTooltip]="getHolidayTooltip(holiday)"
+                tooltipPosition="top"
+              >{{ dateMeta.day }}</span>
+            } @else {
+              <span>{{ dateMeta.day }}</span>
+            }
+          </ng-template>
+          <ng-template pTemplate="footer">
+            @if (holidays().length) {
+              <div class="holiday-legend">
+                <span class="legend-item"><span class="legend-dot closed"></span> Closed</span>
+                <span class="legend-item"><span class="legend-dot early-close"></span> Early Close</span>
+              </div>
+            }
+          </ng-template>
+        </p-datepicker>
       </div>
-      <div class="input-group">
+      <div class="input-group date-picker-group">
         <label>To</label>
-        <input type="date" [(ngModel)]="toDate" />
+        <p-datepicker
+          [(ngModel)]="toDateValue"
+          dateFormat="yy-mm-dd"
+          [showIcon]="true"
+          [minDate]="minDate"
+          [maxDate]="maxDate"
+          [disabledDays]="disabledDays"
+          [disabledDates]="disabledDates()"
+          [showButtonBar]="true"
+          [firstDayOfWeek]="1"
+        >
+          <ng-template pTemplate="date" let-dateMeta>
+            @let holiday = getHolidayForDate(dateMeta.day, dateMeta.month, dateMeta.year);
+            @if (holiday) {
+              <span
+                class="holiday-date"
+                [class.early-close]="holiday.status === 'Early Close'"
+                [class.closed]="holiday.status === 'Closed'"
+                [pTooltip]="getHolidayTooltip(holiday)"
+                tooltipPosition="top"
+              >{{ dateMeta.day }}</span>
+            } @else {
+              <span>{{ dateMeta.day }}</span>
+            }
+          </ng-template>
+          <ng-template pTemplate="footer">
+            @if (holidays().length) {
+              <div class="holiday-legend">
+                <span class="legend-item"><span class="legend-dot closed"></span> Closed</span>
+                <span class="legend-item"><span class="legend-dot early-close"></span> Early Close</span>
+              </div>
+            }
+          </ng-template>
+        </p-datepicker>
       </div>
+    </div>
+
+    <div class="date-presets">
+      <span class="presets-label">Quick:</span>
+      <button class="preset-btn" (click)="setPresetRange(7)">7d</button>
+      <button class="preset-btn" (click)="setPresetRange(30)">30d</button>
+      <button class="preset-btn" (click)="setPresetMonths(3)">3m</button>
+      <button class="preset-btn" (click)="setPresetMonths(6)">6m</button>
+      <button class="preset-btn" (click)="setPresetMonths(12)">1y</button>
+    </div>
+
+    <div class="controls-row" style="margin-top: 0.75rem;">
       <button class="btn-primary" (click)="generateCsv()" [disabled]="loading()">
         @if (loading()) {
           <i class="pi pi-spin pi-spinner"></i> Generating...
@@ -43,16 +137,37 @@
 
     <div class="options-row">
       <div class="option-group">
+        <label>Timespan</label>
+        <select [(ngModel)]="timespan">
+          <option value="minute">Minute</option>
+          <option value="hour">Hour</option>
+          <option value="day">Day</option>
+        </select>
+      </div>
+      <div class="option-group">
+        <label>Multiplier</label>
+        <input type="number" [(ngModel)]="multiplier" min="1" max="60" class="multiplier-input" />
+        <span class="option-hint">e.g. 5 + minute = 5-min bars</span>
+      </div>
+      <div class="option-group">
         <label>Session</label>
         <select [(ngModel)]="session">
           <option value="rth">RTH Only (09:30-16:00 ET)</option>
           <option value="extended">Extended Hours</option>
         </select>
       </div>
+    </div>
+
+    <div class="options-row">
       <label class="checkbox-option">
         <input type="checkbox" [checked]="forwardFill()" (change)="forwardFill.set(!forwardFill())" />
         <span>Forward-fill gaps</span>
-        <span class="option-hint">(fills missing minutes with previous close, volume=0)</span>
+        <span class="option-hint">(fills missing bars with previous close, volume=0)</span>
+      </label>
+      <label class="checkbox-option">
+        <input type="checkbox" [checked]="warmup()" (change)="warmup.set(!warmup())" />
+        <span>Indicator warm-up</span>
+        <span class="option-hint">(fetch extra bars before start date so indicators converge from bar 1)</span>
       </label>
     </div>
 

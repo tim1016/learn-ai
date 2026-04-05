@@ -56,6 +56,29 @@
   }
 }
 
+// ─── Info Callouts ─────────────────────────────────────
+.info-callout {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  background: #eff6ff;
+  border-left: 3px solid #2563eb;
+  font-size: 0.85rem;
+  color: #334155;
+  margin-bottom: 1rem;
+
+  > i { color: #2563eb; margin-top: 2px; flex-shrink: 0; }
+  strong { display: block; margin-bottom: 0.15rem; color: #1e293b; font-size: 0.82rem; }
+  span { line-height: 1.5; }
+
+  &.warn {
+    background: #fffbeb;
+    border-left-color: #d97706;
+    > i { color: #d97706; }
+  }
+}
+
 // ─── Controls Card ──────────────────────────────────────
 .controls-card {
   background: #ffffff;
@@ -102,8 +125,99 @@
     }
 
     &[type='text'] { width: 80px; }
-    &[type='date'] { width: 150px; }
   }
+
+  &.date-picker-group {
+    :host ::ng-deep .p-datepicker {
+      .p-inputtext {
+        padding: 0.5rem 0.65rem;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        background: #f8fafc;
+        color: #1e293b;
+        font-size: 0.85rem;
+        width: 140px;
+      }
+    }
+  }
+}
+
+// ─── Date Presets ───────────────────────────────────────
+.date-presets {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+
+  .presets-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+}
+
+.preset-btn {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 5px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+
+  &:hover {
+    background: #dbeafe;
+    border-color: #bfdbfe;
+    color: #1d4ed8;
+  }
+}
+
+// ─── Holiday Calendar Styles ────────────────────────────
+.holiday-date {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+
+  &.closed {
+    background-color: #ffebee;
+    color: #c62828;
+  }
+
+  &.early-close {
+    background-color: #fff8e1;
+    color: #f57f17;
+  }
+}
+
+.holiday-legend {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  padding: 0.4rem 0;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+
+  &.closed { background: #c62828; }
+  &.early-close { background: #f57f17; }
 }
 
 .btn-primary, .btn-secondary {
@@ -167,6 +281,22 @@
       color: #1e293b;
       font-size: 0.82rem;
       &:focus { outline: none; border-color: #2563eb; }
+    }
+
+    .multiplier-input {
+      width: 55px;
+      padding: 0.35rem 0.5rem;
+      border: 1px solid #cbd5e1;
+      border-radius: 5px;
+      background: #f8fafc;
+      color: #1e293b;
+      font-size: 0.82rem;
+      &:focus { outline: none; border-color: #2563eb; }
+    }
+
+    .option-hint {
+      font-size: 0.72rem;
+      color: #94a3b8;
     }
   }
 }
