@@ -7,7 +7,7 @@ import { CommonModule } from '@angular/common';
 import { forkJoin } from 'rxjs';
 import { RouterModule } from '@angular/router';
 import { MarketDataService } from '../../services/market-data.service';
-import { BacktestResult, StockAggregate } from '../../graphql/types';
+import { BacktestResult, StockAggregate, RuleBasedBacktestResult } from '../../graphql/types';
 import { LineChartComponent } from '../market-data/line-chart/line-chart.component';
 import { BacktestSvgChartComponent } from './charts/backtest-svg-chart.component';
 import { BacktestPrimengChartComponent } from './charts/backtest-primeng-chart.component';
@@ -55,7 +55,7 @@ export class StrategyLabComponent {
   fromDate = signal('2025-01-02');
   toDate = signal('2025-02-01');
   timeframe = signal('5m');
-  strategyName = signal<'sma_crossover' | 'rsi_mean_reversion' | 'momentum_rsi_stochastic'>('sma_crossover');
+  strategyName = signal<'sma_crossover' | 'rsi_mean_reversion' | 'momentum_rsi_stochastic' | 'ema_crossover_rsi'>('sma_crossover');
 
   // Timeframe options for the dropdown
   readonly timeframeOptions = [
@@ -86,6 +86,19 @@ export class StrategyLabComponent {
   rsiWindow = signal(14);
   oversold = signal(30);
   overbought = signal(70);
+
+  // EMA Crossover RSI params
+  emaCrossoverFastPeriod = signal(5);
+  emaCrossoverSlowPeriod = signal(10);
+  emaCrossoverRsiPeriod = signal(14);
+  emaCrossoverAdxPeriod = signal(14);
+  emaCrossoverMinGap = signal(0.20);
+  emaCrossoverRsiMin = signal(50);
+  emaCrossoverRsiMax = signal(70);
+  emaCrossoverExitBars = signal(5);
+
+  // Rule-based backtest result (richer than standard BacktestResult)
+  ruleBasedResult = signal<RuleBasedBacktestResult | null>(null);
 
   // Momentum RSI + Stochastic params
   momentumRsiLength = signal(14);
@@ -126,6 +139,20 @@ export class StrategyLabComponent {
           StochK: this.momentumStochK(),
           StochD: this.momentumStochD(),
           ExitMinutesBefore: this.momentumExitMinutes(),
+        });
+      case 'ema_crossover_rsi':
+        return JSON.stringify({
+          strategy_name: 'ema_crossover_rsi',
+          fast_ema_period: this.emaCrossoverFastPeriod(),
+          slow_ema_period: this.emaCrossoverSlowPeriod(),
+          rsi_period: this.emaCrossoverRsiPeriod(),
+          adx_period: this.emaCrossoverAdxPeriod(),
+          min_ema_gap: this.emaCrossoverMinGap(),
+          rsi_min: this.emaCrossoverRsiMin(),
+          rsi_max: this.emaCrossoverRsiMax(),
+          exit_mode: 'fixed_bars',
+          exit_bars: this.emaCrossoverExitBars(),
+          direction: 'long',
         });
     }
   });
@@ -193,8 +220,36 @@ export class StrategyLabComponent {
     this.loading.set(true);
     this.error.set(null);
     this.result.set(null);
+    this.ruleBasedResult.set(null);
 
     const { timespan, multiplier } = this.parsedTimeframe;
+
+    if (this.strategyName() === 'ema_crossover_rsi') {
+      this.marketDataService.runRuleBasedBacktest(
+        this.ticker().toUpperCase(),
+        this.fromDate(),
+        this.toDate(),
+        multiplier,
+        timespan,
+        true,
+        this.parametersJson()
+      ).subscribe({
+        next: (res) => {
+          if (!res.success) {
+            this.error.set(res.error || 'Rule-based backtest failed');
+          } else {
+            this.ruleBasedResult.set(res);
+          }
+          this.loading.set(false);
+        },
+        error: (err) => {
+          this.error.set(err.message || 'Request failed');
+          this.loading.set(false);
+        },
+      });
+      return;
+    }
+
     this.marketDataService.runBacktest(
       this.ticker().toUpperCase(),
       this.strategyName(),
@@ -217,6 +272,30 @@ export class StrategyLabComponent {
         this.loading.set(false);
       },
     });
+  }
+
+  // Computed: rule-based equity curve
+  ruleBasedEquityCurve = computed<StockAggregate[]>(() => {
+    const r = this.ruleBasedResult();
+    if (!r?.trades?.length) return [];
+    return r.trades.map((t, i) => ({
+      id: i,
+      tickerId: 0,
+      open: t.cumulativePnlPct * 100,
+      high: t.cumulativePnlPct * 100,
+      low: t.cumulativePnlPct * 100,
+      close: t.cumulativePnlPct * 100,
+      volume: 0,
+      volumeWeightedAveragePrice: null,
+      timestamp: t.exitTimestamp,
+      timespan: 'trade',
+      multiplier: 1,
+      transactionCount: null,
+    }));
+  });
+
+  formatPct(val: number): string {
+    return (val * 100).toFixed(3) + '%';
   }
 
   loadReplayData(): void {

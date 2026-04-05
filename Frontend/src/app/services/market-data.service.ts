@@ -8,7 +8,7 @@ import {
   StockSnapshotsResult, MarketMoversResult, UnifiedSnapshotResult,
   TrackedTickersResult, TickerDetailResult, RelatedTickersResult,
   StrategyAnalyzeResult, StrategyLegInput, FetchProgress,
-  IndicatorTableResult,
+  IndicatorTableResult, RuleBasedBacktestResult,
 } from '../graphql/types';
 import { environment } from '../../environments/environment';
 
@@ -406,6 +406,49 @@ const RUN_BACKTEST_FROM_CSV_MUTATION = `
 
 interface RunBacktestFromCsvResponse {
   data: { runBacktestFromCsvBars: BacktestResult };
+  errors?: { message: string }[];
+}
+
+const RUN_RULE_BASED_BACKTEST_MUTATION = `
+  mutation RunRuleBasedBacktest(
+    $ticker: String!
+    $fromDate: String!
+    $toDate: String!
+    $multiplier: Int! = 15
+    $timespan: String! = "minute"
+    $filterRth: Boolean! = true
+    $parametersJson: String! = "{}"
+  ) {
+    runRuleBasedBacktest(
+      ticker: $ticker
+      fromDate: $fromDate
+      toDate: $toDate
+      multiplier: $multiplier
+      timespan: $timespan
+      filterRth: $filterRth
+      parametersJson: $parametersJson
+    ) {
+      success ticker strategyName parameters
+      totalTrades winningTrades losingTrades
+      winRate avgWinPct avgLossPct
+      winLossRatio profitFactor expectancyPerTrade
+      totalPnlPct maxDrawdownPct totalPnlPts
+      sharpeRatio barsProcessed
+      trades {
+        tradeNumber tradeType
+        entryTimestamp exitTimestamp
+        entryPrice exitPrice
+        pnl pnlPct cumulativePnlPct
+        signalReason
+        emaFast emaSlow emaGap rsi adx
+      }
+      error
+    }
+  }
+`;
+
+interface RunRuleBasedBacktestResponse {
+  data: { runRuleBasedBacktest: RuleBasedBacktestResult };
   errors?: { message: string }[];
 }
 
@@ -818,6 +861,30 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.runBacktestFromCsvBars)
+      );
+  }
+
+  runRuleBasedBacktest(
+    ticker: string,
+    fromDate: string,
+    toDate: string,
+    multiplier: number = 15,
+    timespan: string = 'minute',
+    filterRth: boolean = true,
+    parametersJson: string = '{}',
+  ): Observable<RuleBasedBacktestResult> {
+    return this.http
+      .post<RunRuleBasedBacktestResponse>(GRAPHQL_URL, {
+        query: RUN_RULE_BASED_BACKTEST_MUTATION,
+        variables: { ticker, fromDate, toDate, multiplier, timespan, filterRth, parametersJson }
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.runRuleBasedBacktest)
       );
   }
 

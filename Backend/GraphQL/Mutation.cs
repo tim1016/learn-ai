@@ -695,6 +695,123 @@ public class Mutation
 
     #endregion
 
+    #region Rule-Based Backtest Mutations
+
+    /// <summary>
+    /// Run a configurable rule-based backtest via the Python service.
+    /// Supports EMA crossover + RSI filter + gap filter + fixed-bar exit.
+    /// </summary>
+    [GraphQLName("runRuleBasedBacktest")]
+    public async Task<RuleBasedBacktestResultType> RunRuleBasedBacktest(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Mutation> logger,
+        string ticker,
+        string fromDate,
+        string toDate,
+        int multiplier = 15,
+        string timespan = "minute",
+        bool filterRth = true,
+        string parametersJson = "{}")
+    {
+        try
+        {
+            logger.LogInformation(
+                "[RuleBasedBacktest] Running on {Ticker} {Multiplier}×{Timespan} from {From} to {To}",
+                ticker, multiplier, timespan, fromDate, toDate);
+
+            var requestBody = new
+            {
+                ticker = ticker.ToUpper(),
+                from_date = fromDate,
+                to_date = toDate,
+                multiplier = multiplier,
+                timespan = timespan,
+                filter_rth = filterRth,
+                parameters = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(
+                    parametersJson, new System.Text.Json.JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true,
+                    }) ?? new Dictionary<string, object>(),
+            };
+
+            var jsonOptions = new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower,
+                PropertyNameCaseInsensitive = true,
+            };
+
+            var httpClient = polygonService.GetHttpClient();
+            var response = await httpClient.PostAsJsonAsync(
+                "/api/backtest/rule-based/run", requestBody, jsonOptions);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                logger.LogError("[RuleBasedBacktest] Python service error: {Status} {Body}",
+                    response.StatusCode, errorBody);
+                return new RuleBasedBacktestResultType
+                {
+                    Success = false,
+                    Error = $"Python service returned {response.StatusCode}: {errorBody}",
+                };
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<RuleBasedPythonResponse>(jsonOptions);
+            if (result == null)
+            {
+                return new RuleBasedBacktestResultType { Success = false, Error = "Empty response from Python" };
+            }
+
+            return new RuleBasedBacktestResultType
+            {
+                Success = result.Success,
+                Ticker = result.Ticker ?? ticker,
+                StrategyName = result.StrategyName ?? "ema_crossover_rsi",
+                Parameters = parametersJson,
+                TotalTrades = result.TotalTrades,
+                WinningTrades = result.WinningTrades,
+                LosingTrades = result.LosingTrades,
+                WinRate = result.WinRate,
+                AvgWinPct = result.AvgWinPct,
+                AvgLossPct = result.AvgLossPct,
+                WinLossRatio = result.WinLossRatio,
+                ProfitFactor = result.ProfitFactor,
+                ExpectancyPerTrade = result.ExpectancyPerTrade,
+                TotalPnlPct = result.TotalPnlPct,
+                MaxDrawdownPct = result.MaxDrawdownPct,
+                TotalPnlPts = result.TotalPnlPts,
+                SharpeRatio = result.SharpeRatio,
+                BarsProcessed = result.BarsProcessed,
+                Trades = result.Trades?.Select(t => new RuleBasedTradeType
+                {
+                    TradeNumber = t.TradeNumber,
+                    TradeType = t.TradeType ?? "Buy",
+                    EntryTimestamp = t.EntryTimestamp ?? "",
+                    ExitTimestamp = t.ExitTimestamp ?? "",
+                    EntryPrice = t.EntryPrice,
+                    ExitPrice = t.ExitPrice,
+                    Pnl = t.Pnl,
+                    PnlPct = t.PnlPct,
+                    CumulativePnlPct = t.CumulativePnlPct,
+                    SignalReason = t.SignalReason ?? "",
+                    EmaFast = t.EmaFast,
+                    EmaSlow = t.EmaSlow,
+                    EmaGap = t.EmaGap,
+                    Rsi = t.Rsi,
+                    Adx = t.Adx,
+                }).ToList() ?? [],
+                Error = result.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[RuleBasedBacktest] Error running on {Ticker}", ticker);
+            return new RuleBasedBacktestResultType { Success = false, Error = ex.Message };
+        }
+    }
+
+    #endregion
+
 }
 
 public class BacktestResultType
@@ -770,4 +887,94 @@ public class TickerBatchResultType
     public bool PassedValidation { get; set; }
     public int DataPoints { get; set; }
     public string? Error { get; set; }
+}
+
+// Rule-Based Backtest types
+
+public class RuleBasedBacktestResultType
+{
+    public bool Success { get; set; }
+    public string Ticker { get; set; } = "";
+    public string StrategyName { get; set; } = "";
+    public string Parameters { get; set; } = "{}";
+    public int TotalTrades { get; set; }
+    public int WinningTrades { get; set; }
+    public int LosingTrades { get; set; }
+    public double WinRate { get; set; }
+    public double AvgWinPct { get; set; }
+    public double AvgLossPct { get; set; }
+    public double WinLossRatio { get; set; }
+    public double ProfitFactor { get; set; }
+    public double ExpectancyPerTrade { get; set; }
+    public double TotalPnlPct { get; set; }
+    public double MaxDrawdownPct { get; set; }
+    public double TotalPnlPts { get; set; }
+    public double SharpeRatio { get; set; }
+    public int BarsProcessed { get; set; }
+    public List<RuleBasedTradeType> Trades { get; set; } = [];
+    public string? Error { get; set; }
+}
+
+public class RuleBasedTradeType
+{
+    public int TradeNumber { get; set; }
+    public string TradeType { get; set; } = "Buy";
+    public string EntryTimestamp { get; set; } = "";
+    public string ExitTimestamp { get; set; } = "";
+    public double EntryPrice { get; set; }
+    public double ExitPrice { get; set; }
+    [GraphQLName("pnl")]
+    public double Pnl { get; set; }
+    public double PnlPct { get; set; }
+    public double CumulativePnlPct { get; set; }
+    public string SignalReason { get; set; } = "";
+    public double? EmaFast { get; set; }
+    public double? EmaSlow { get; set; }
+    public double? EmaGap { get; set; }
+    public double? Rsi { get; set; }
+    public double? Adx { get; set; }
+}
+
+/// <summary>DTO for deserializing the Python rule-based backtest response (snake_case).</summary>
+internal class RuleBasedPythonResponse
+{
+    public bool Success { get; set; }
+    public string? Ticker { get; set; }
+    public string? StrategyName { get; set; }
+    public Dictionary<string, object>? Parameters { get; set; }
+    public int TotalTrades { get; set; }
+    public int WinningTrades { get; set; }
+    public int LosingTrades { get; set; }
+    public double WinRate { get; set; }
+    public double AvgWinPct { get; set; }
+    public double AvgLossPct { get; set; }
+    public double WinLossRatio { get; set; }
+    public double ProfitFactor { get; set; }
+    public double ExpectancyPerTrade { get; set; }
+    public double TotalPnlPct { get; set; }
+    public double MaxDrawdownPct { get; set; }
+    public double TotalPnlPts { get; set; }
+    public double SharpeRatio { get; set; }
+    public int BarsProcessed { get; set; }
+    public List<RuleBasedPythonTrade>? Trades { get; set; }
+    public string? Error { get; set; }
+}
+
+internal class RuleBasedPythonTrade
+{
+    public int TradeNumber { get; set; }
+    public string? TradeType { get; set; }
+    public string? EntryTimestamp { get; set; }
+    public string? ExitTimestamp { get; set; }
+    public double EntryPrice { get; set; }
+    public double ExitPrice { get; set; }
+    public double Pnl { get; set; }
+    public double PnlPct { get; set; }
+    public double CumulativePnlPct { get; set; }
+    public string? SignalReason { get; set; }
+    public double? EmaFast { get; set; }
+    public double? EmaSlow { get; set; }
+    public double? EmaGap { get; set; }
+    public double? Rsi { get; set; }
+    public double? Adx { get; set; }
 }

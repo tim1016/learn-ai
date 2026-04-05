@@ -567,4 +567,6 @@ public class PolygonService : IPolygonService
             throw;
         }
     }
+
+    public HttpClient GetHttpClient() => _httpClient;
 }

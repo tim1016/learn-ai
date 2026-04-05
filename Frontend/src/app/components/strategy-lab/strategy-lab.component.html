@@ -77,11 +77,47 @@
         <div class="form-group">
           <label>Strategy</label>
           <select [ngModel]="strategyName()" (ngModelChange)="strategyName.set($event)">
+            <option value="ema_crossover_rsi">EMA Crossover + RSI (Rule-Based)</option>
             <option value="sma_crossover">SMA Crossover</option>
             <option value="rsi_mean_reversion">RSI Mean Reversion</option>
             <option value="momentum_rsi_stochastic">Momentum RSI + Stochastic</option>
           </select>
         </div>
+
+        @if (strategyName() === 'ema_crossover_rsi') {
+          <div class="form-group">
+            <label>Fast EMA</label>
+            <input type="number" [ngModel]="emaCrossoverFastPeriod()" (ngModelChange)="emaCrossoverFastPeriod.set($event)" min="2" />
+          </div>
+          <div class="form-group">
+            <label>Slow EMA</label>
+            <input type="number" [ngModel]="emaCrossoverSlowPeriod()" (ngModelChange)="emaCrossoverSlowPeriod.set($event)" min="2" />
+          </div>
+          <div class="form-group">
+            <label>Min EMA Gap</label>
+            <input type="number" step="0.01" [ngModel]="emaCrossoverMinGap()" (ngModelChange)="emaCrossoverMinGap.set($event)" min="0" />
+          </div>
+          <div class="form-group">
+            <label>RSI Min</label>
+            <input type="number" [ngModel]="emaCrossoverRsiMin()" (ngModelChange)="emaCrossoverRsiMin.set($event)" min="1" max="99" />
+          </div>
+          <div class="form-group">
+            <label>RSI Max</label>
+            <input type="number" [ngModel]="emaCrossoverRsiMax()" (ngModelChange)="emaCrossoverRsiMax.set($event)" min="1" max="99" />
+          </div>
+          <div class="form-group">
+            <label>Exit Bars</label>
+            <input type="number" [ngModel]="emaCrossoverExitBars()" (ngModelChange)="emaCrossoverExitBars.set($event)" min="1" max="20" />
+          </div>
+          <div class="form-group">
+            <label>RSI Period</label>
+            <input type="number" [ngModel]="emaCrossoverRsiPeriod()" (ngModelChange)="emaCrossoverRsiPeriod.set($event)" min="2" />
+          </div>
+          <div class="form-group">
+            <label>ADX Period</label>
+            <input type="number" [ngModel]="emaCrossoverAdxPeriod()" (ngModelChange)="emaCrossoverAdxPeriod.set($event)" min="2" />
+          </div>
+        }
 
         @if (strategyName() === 'sma_crossover') {
           <div class="form-group">
@@ -156,6 +192,138 @@
 
     @if (loading()) {
       <div class="loading">Running backtest... This may take a moment for large datasets.</div>
+    }
+
+    <!-- Rule-Based Backtest Results -->
+    @if (ruleBasedResult(); as rb) {
+      <div class="strategy-info-banner">
+        <strong>{{ rb.strategyName }}</strong> — {{ rb.ticker }} — {{ rb.barsProcessed | number }} bars processed
+      </div>
+
+      <!-- Performance Metrics Grid -->
+      <div class="stats-grid">
+        <div class="stat-card" [class.positive]="rb.totalPnlPct > 0" [class.negative]="rb.totalPnlPct <= 0">
+          <span class="stat-label">Total P&L</span>
+          <span class="stat-value">{{ formatPct(rb.totalPnlPct) }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Win Rate</span>
+          <span class="stat-value">{{ (rb.winRate * 100).toFixed(1) }}%</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Total Trades</span>
+          <span class="stat-value">{{ rb.totalTrades }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">W / L</span>
+          <span class="stat-value">{{ rb.winningTrades }} / {{ rb.losingTrades }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Avg Win</span>
+          <span class="stat-value positive">{{ formatPct(rb.avgWinPct) }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Avg Loss</span>
+          <span class="stat-value negative">{{ formatPct(rb.avgLossPct) }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">W/L Ratio</span>
+          <span class="stat-value">{{ rb.winLossRatio.toFixed(3) }}x</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Profit Factor</span>
+          <span class="stat-value">{{ rb.profitFactor.toFixed(3) }}x</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Expectancy</span>
+          <span class="stat-value">{{ formatPct(rb.expectancyPerTrade) }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Max Drawdown</span>
+          <span class="stat-value negative">{{ formatPct(rb.maxDrawdownPct) }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">P&L (pts)</span>
+          <span class="stat-value">${{ rb.totalPnlPts.toFixed(2) }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Sharpe Ratio</span>
+          <span class="stat-value">{{ rb.sharpeRatio.toFixed(4) }}</span>
+        </div>
+      </div>
+
+      <!-- Equity Curve -->
+      @if (ruleBasedEquityCurve().length > 0) {
+        <div class="chart-section">
+          <h2>Equity Curve (Cumulative P&L %)</h2>
+          <app-line-chart
+            [data]="ruleBasedEquityCurve()"
+            [ticker]="ticker()"
+            [timeVisible]="true"
+            [height]="300"
+            [lineColor]="rb.totalPnlPct > 0 ? '#2e7d32' : '#c0392b'"
+          />
+        </div>
+      }
+
+      <!-- Trade Log with Indicator Details -->
+      @if (rb.trades.length > 0) {
+        <div class="trade-log">
+          <h2>Trade Log ({{ rb.trades.length }} trades)</h2>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Entry Time</th>
+                  <th>Exit Time</th>
+                  <th>Entry $</th>
+                  <th>Exit $</th>
+                  <th>EMA{{ emaCrossoverFastPeriod() }}</th>
+                  <th>EMA{{ emaCrossoverSlowPeriod() }}</th>
+                  <th>EMA Gap</th>
+                  <th>RSI</th>
+                  <th>ADX</th>
+                  <th>P&L Pts</th>
+                  <th>P&L %</th>
+                  <th>Cum P&L %</th>
+                  <th>Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (trade of rb.trades; track trade.tradeNumber) {
+                  <tr [class.win]="trade.pnl > 0" [class.loss]="trade.pnl <= 0">
+                    <td>{{ trade.tradeNumber }}</td>
+                    <td>{{ trade.entryTimestamp }}</td>
+                    <td>{{ trade.exitTimestamp }}</td>
+                    <td>{{ trade.entryPrice.toFixed(2) }}</td>
+                    <td>{{ trade.exitPrice.toFixed(2) }}</td>
+                    <td>{{ trade.emaFast?.toFixed(4) ?? '–' }}</td>
+                    <td>{{ trade.emaSlow?.toFixed(4) ?? '–' }}</td>
+                    <td>{{ trade.emaGap?.toFixed(4) ?? '–' }}</td>
+                    <td>{{ trade.rsi?.toFixed(2) ?? '–' }}</td>
+                    <td>{{ trade.adx?.toFixed(2) ?? '–' }}</td>
+                    <td [class.positive]="trade.pnl > 0" [class.negative]="trade.pnl <= 0">
+                      {{ trade.pnl > 0 ? '+' : '' }}{{ trade.pnl.toFixed(2) }}
+                    </td>
+                    <td [class.positive]="trade.pnlPct > 0" [class.negative]="trade.pnlPct <= 0">
+                      {{ formatPct(trade.pnlPct) }}
+                    </td>
+                    <td [class.positive]="trade.cumulativePnlPct > 0" [class.negative]="trade.cumulativePnlPct <= 0">
+                      {{ formatPct(trade.cumulativePnlPct) }}
+                    </td>
+                    <td>
+                      <span class="result-badge" [class.win-badge]="trade.pnl > 0" [class.loss-badge]="trade.pnl <= 0">
+                        {{ trade.pnl > 0 ? 'WIN' : 'LOSS' }}
+                      </span>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
     }
 
     @if (result(); as r) {

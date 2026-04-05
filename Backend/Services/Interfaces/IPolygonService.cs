@@ -137,4 +137,10 @@ public interface IPolygonService
         string? expirationDateGte = null,
         string? expirationDateLte = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Expose the underlying HttpClient for ad-hoc calls to the Python service.
+    /// Used by rule-based backtest and other passthrough mutations.
+    /// </summary>
+    HttpClient GetHttpClient();
 }

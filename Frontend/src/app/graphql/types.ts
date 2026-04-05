@@ -447,3 +447,45 @@ export interface IndicatorTableRow {
   adx: number | null;
   [key: string]: number | null; // dynamic EMA columns like ema_5, ema_10, etc.
 }
+
+// Rule-Based Backtest types
+export interface RuleBasedBacktestResult {
+  success: boolean;
+  ticker: string;
+  strategyName: string;
+  parameters: string;
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  winRate: number;
+  avgWinPct: number;
+  avgLossPct: number;
+  winLossRatio: number;
+  profitFactor: number;
+  expectancyPerTrade: number;
+  totalPnlPct: number;
+  maxDrawdownPct: number;
+  totalPnlPts: number;
+  sharpeRatio: number;
+  barsProcessed: number;
+  trades: RuleBasedTrade[];
+  error: string | null;
+}
+
+export interface RuleBasedTrade {
+  tradeNumber: number;
+  tradeType: string;
+  entryTimestamp: string;
+  exitTimestamp: string;
+  entryPrice: number;
+  exitPrice: number;
+  pnl: number;
+  pnlPct: number;
+  cumulativePnlPct: number;
+  signalReason: string;
+  emaFast: number | null;
+  emaSlow: number | null;
+  emaGap: number | null;
+  rsi: number | null;
+  adx: number | null;
+}
