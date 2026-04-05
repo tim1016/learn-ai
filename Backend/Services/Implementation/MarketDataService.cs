@@ -440,7 +440,7 @@ public class MarketDataService : IMarketDataService
             Timestamp = DateTime.Parse(dto.Timestamp).ToUniversalTime(),
             Timespan = timespan,
             Multiplier = multiplier,
-            TransactionCount = dto.Transactions,
+            TransactionCount = dto.Transactions.HasValue ? (long?)decimal.ToInt64(dto.Transactions.Value) : null,
             CreatedAt = DateTime.UtcNow
         };
     }

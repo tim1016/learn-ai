@@ -2,6 +2,7 @@ using Backend.Data;
 using Backend.Models.Portfolio;
 using Backend.Services.Interfaces;
 using HotChocolate;
+using HotChocolate.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace Backend.GraphQL;
