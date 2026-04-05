@@ -1,0 +1,244 @@
+// ── Design Tokens (matches data-lab-chart) ──
+$bg-canvas:    #0f1117;
+$bg-surface:   #161922;
+$bg-elevated:  #1c1f2e;
+$bg-hover:     #232738;
+$border:       #2a2e3e;
+$border-light: #353a4d;
+
+$text-primary:   #e2e8f0;
+$text-secondary: #8892a8;
+$text-muted:     #5a6178;
+
+$bull:   #00c896;
+$bear:   #e5334e;
+$accent: #3b82f6;
+$warn:   #f59e0b;
+
+// ── Backdrop ──
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+// ── Panel ──
+.modal-panel {
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 620px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  animation: slideUp 0.2s ease-out;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(16px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+// ── Header ──
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid $border;
+
+  h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: $text-primary;
+  }
+}
+
+.close-btn {
+  background: none;
+  border: 1px solid $border;
+  border-radius: 6px;
+  color: $text-secondary;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: all 0.15s;
+
+  &:hover {
+    background: $bg-hover;
+    color: $text-primary;
+    border-color: $border-light;
+  }
+}
+
+// ── Body ──
+.modal-body {
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+// ── Summary section ──
+.summary-section h4,
+.detail-section h4 {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: $text-secondary;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.subtitle {
+  font-weight: 400;
+  color: $text-muted;
+  font-size: 0.72rem;
+  margin-left: 8px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.summary-card {
+  background: $bg-elevated;
+  border: 1px solid $border;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  &.wide {
+    grid-column: span 2;
+  }
+}
+
+.card-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: $text-primary;
+  font-family: ui-monospace, monospace;
+
+  &.warn { color: $warn; }
+  &.good { color: $bull; }
+  &.ok   { color: $text-primary; }
+}
+
+.card-label {
+  font-size: 0.65rem;
+  color: $text-muted;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+// ── Detail table ──
+.detail-table-wrap {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid $border;
+  border-radius: 8px;
+}
+
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+
+  th {
+    position: sticky;
+    top: 0;
+    background: $bg-elevated;
+    color: $text-muted;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    font-size: 0.65rem;
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid $border;
+  }
+
+  td {
+    padding: 6px 10px;
+    color: $text-secondary;
+    border-bottom: 1px solid rgba($border, 0.5);
+    font-family: ui-monospace, monospace;
+  }
+
+  .row-num {
+    color: $text-muted;
+    width: 32px;
+  }
+
+  .duration {
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  tr.large-gap {
+    .duration { color: $warn; }
+  }
+
+  tbody tr:hover {
+    background: $bg-hover;
+  }
+}
+
+// ── Date chips ──
+.date-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.date-chip {
+  display: inline-block;
+  padding: 4px 10px;
+  background: $bg-elevated;
+  border: 1px solid $border;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-family: ui-monospace, monospace;
+  color: $text-secondary;
+}
+
+// ── Icons ──
+.warn-icon { color: $warn; font-size: 0.85rem; }
+.ok-icon   { color: $bull; font-size: 0.85rem; }
+
+// ── All-clear banner ──
+.all-clear {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: rgba($bull, 0.08);
+  border: 1px solid rgba($bull, 0.2);
+  border-radius: 8px;
+  color: $bull;
+  font-size: 0.8rem;
+  font-weight: 500;
+
+  i { font-size: 1.1rem; }
+}

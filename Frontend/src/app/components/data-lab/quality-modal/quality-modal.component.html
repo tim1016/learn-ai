@@ -1,0 +1,104 @@
+<div class="modal-backdrop" (click)="onBackdrop($event)">
+  <div class="modal-panel">
+    <!-- Header -->
+    <div class="modal-header">
+      <h3>Data Quality Report</h3>
+      <button class="close-btn" (click)="close()" title="Close">
+        <i class="pi pi-times"></i>
+      </button>
+    </div>
+
+    <!-- Summary grid -->
+    @let q = quality();
+    <div class="modal-body">
+      <section class="summary-section">
+        <h4>Summary</h4>
+        <div class="summary-grid">
+          <div class="summary-card">
+            <span class="card-value">{{ q.raw_bar_count | number }}</span>
+            <span class="card-label">Raw Bars</span>
+          </div>
+          <div class="summary-card">
+            <span class="card-value">{{ q.resampled_bar_count | number }}</span>
+            <span class="card-label">After Resampling</span>
+          </div>
+          <div class="summary-card">
+            <span class="card-value" [class.warn]="q.duplicates_removed > 0">{{ q.duplicates_removed }}</span>
+            <span class="card-label">Duplicates Removed</span>
+          </div>
+          <div class="summary-card">
+            <span class="card-value" [class.warn]="q.synthetic_bars > 0">{{ q.synthetic_bars }}</span>
+            <span class="card-label">Synthetic (Forward-Fill)</span>
+          </div>
+          <div class="summary-card wide">
+            <span class="card-value" [ngClass]="coverageClass">{{ q.session_coverage_pct }}%</span>
+            <span class="card-label">Session Coverage</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Gaps section -->
+      @if (q.gaps_found > 0) {
+        <section class="detail-section">
+          <h4>
+            <i class="pi pi-exclamation-triangle warn-icon"></i>
+            Gaps Found ({{ q.gaps_found }})
+            <span class="subtitle">Largest: {{ q.largest_gap_minutes }} min</span>
+          </h4>
+          <div class="detail-table-wrap">
+            <table class="detail-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Before Gap</th>
+                  <th>After Gap</th>
+                  <th>Duration</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (gap of q.gap_details; track $index) {
+                  <tr [class.large-gap]="gap.duration_minutes > 30">
+                    <td class="row-num">{{ $index + 1 }}</td>
+                    <td>{{ formatTs(gap.before_ts) }}</td>
+                    <td>{{ formatTs(gap.after_ts) }}</td>
+                    <td class="duration">{{ gap.duration_minutes }} min</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </section>
+      } @else {
+        <section class="detail-section">
+          <h4>
+            <i class="pi pi-check-circle ok-icon"></i>
+            No Gaps Detected
+          </h4>
+        </section>
+      }
+
+      <!-- Missing sessions section -->
+      @if (q.missing_sessions > 0) {
+        <section class="detail-section">
+          <h4>
+            <i class="pi pi-calendar-minus warn-icon"></i>
+            Missing Trading Sessions ({{ q.missing_sessions }})
+          </h4>
+          <div class="date-chips">
+            @for (d of q.missing_session_dates; track d) {
+              <span class="date-chip">{{ d }}</span>
+            }
+          </div>
+        </section>
+      }
+
+      <!-- All-clear banner -->
+      @if (!hasIssues) {
+        <div class="all-clear">
+          <i class="pi pi-verified"></i>
+          <span>Data is clean — no gaps, duplicates, or missing sessions.</span>
+        </div>
+      }
+    </div>
+  </div>
+</div>

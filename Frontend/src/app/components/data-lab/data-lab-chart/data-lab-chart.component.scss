@@ -130,40 +130,6 @@ $warn:   #f59e0b;
   }
 }
 
-// ── Quality panel ──
-.quality-panel {
-  padding: 8px 12px;
-  border-bottom: 1px solid $border;
-  background: $bg-surface;
-}
-
-.quality-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 8px;
-}
-
-.quality-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-
-  .q-label {
-    font-size: 0.65rem;
-    color: $text-muted;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .q-value {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: $text-primary;
-
-    &.warn { color: $warn; }
-  }
-}
-
 // ── Indicator toolbar ──
 .indicator-toolbar {
   border-bottom: 1px solid $border;
