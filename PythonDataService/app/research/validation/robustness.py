@@ -117,8 +117,19 @@ def _compute_ic_stats(ic_array: np.ndarray) -> tuple[float, float]:
     return mean_ic, float(t_stat)
 
 
-def _stability_label(pct: float) -> str:
-    """Map % consistent months to a stability classification."""
+def _stability_label(pct: float, month_count: int = 0) -> str:
+    """Map % consistent months to a stability classification.
+
+    Parameters
+    ----------
+    pct : float
+        Fraction of months consistent (0.0 to 1.0).
+    month_count : int
+        Number of months in the sample. Below 3, returns "Insufficient Data"
+        regardless of percentage.
+    """
+    if month_count < 3:
+        return "Insufficient Data"
     if pct >= 0.80:
         return "Suspicious"
     if pct >= 0.70:
@@ -197,7 +208,7 @@ def compute_monthly_ic_breakdown(
     mean_ics = [m.mean_ic for m in monthly]
     best_month_ic = max(mean_ics)
     worst_month_ic = min(mean_ics)
-    label = _stability_label(pct_positive)
+    label = _stability_label(pct_positive, month_count=total)
 
     logger.info(
         "[Robustness] Monthly: %d months, %.0f%% positive, %.0f%% significant, label=%s",
@@ -442,7 +453,7 @@ def _compute_sign_consistency(
 
     consistent = sum(1 for m in monthly if np.sign(m.mean_ic) == expected_sign)
     pct = consistent / len(monthly)
-    return pct, _stability_label(pct)
+    return pct, _stability_label(pct, month_count=len(monthly))
 
 
 def compute_structural_breaks(

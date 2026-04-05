@@ -78,8 +78,11 @@ def run_stationarity_tests(
     kpss_pvalue = float(kpss_result[1])
 
     # Stationary if ADF rejects unit root AND KPSS fails to reject stationarity
+    # NOTE: statsmodels clamps KPSS p-values to [0.01, 0.10]. A reported p=0.10
+    # means "p >= 0.10", so we use >= to avoid a floating-point boundary miss
+    # when kpss_significance == 0.10.
     adf_rejects = adf_pvalue < adf_significance
-    kpss_fails_to_reject = kpss_pvalue > kpss_significance
+    kpss_fails_to_reject = kpss_pvalue >= kpss_significance
     is_stationary = adf_rejects and kpss_fails_to_reject
 
     result = StationarityResult(

@@ -159,55 +159,71 @@
     </div>
   </div>
 
+  <!-- IC / Quantile Divergence Diagnostic -->
+  @if (icQuantileDivergence) {
+    <div class="divergence-note mb-6">
+      <i class="pi pi-info-circle mr-2"></i>
+      <span>{{ icQuantileDivergence }}</span>
+    </div>
+  }
+
   <!-- 8. Transaction Cost Sensitivity -->
   <div class="cost-section mb-6">
     <h4 class="table-title">
       <i class="pi pi-dollar mr-2"></i>Transaction Cost Sensitivity
     </h4>
 
-    <div class="cost-slider-container mt-3">
-      <label class="method-label">Assumed one-way cost:</label>
-      <p-slider [(ngModel)]="costBps" [min]="0" [max]="10" [step]="1"
-                [style]="{ width: '200px' }" />
-      <span class="cost-value">{{ costBps() }} bps</span>
-    </div>
+    @if (hasMeaningfulSpread) {
+      <div class="cost-slider-container mt-3">
+        <label class="method-label">Assumed one-way cost:</label>
+        <p-slider [(ngModel)]="costBps" [min]="0" [max]="10" [step]="1"
+                  [style]="{ width: '200px' }" />
+        <span class="cost-value">{{ costBps() }} bps</span>
+      </div>
 
-    <div class="cost-result mt-2" [class.text-green-700]="isCostViable" [class.text-red-700]="!isCostViable">
-      @if (isCostViable) {
-        At {{ costBps() }}bps one-way cost, estimated net Q5-Q1 spread: {{ netReturnAtSelectedCost | number: '1.1-1' }}bps.
-      } @else {
-        At {{ costBps() }}bps one-way cost, transaction costs likely erase the estimated alpha.
-      }
-    </div>
+      <div class="cost-result mt-2" [class.text-green-700]="isCostViable" [class.text-red-700]="!isCostViable">
+        @if (isCostViable) {
+          At {{ costBps() }}bps one-way cost, estimated net Q5-Q1 spread: {{ netReturnAtSelectedCost | number: '1.1-1' }}bps.
+        } @else {
+          At {{ costBps() }}bps one-way cost, transaction costs likely erase the estimated alpha.
+        }
+      </div>
 
-    <p-table [value]="costScenarios" styleClass="p-datatable-sm" class="mt-3" [tableStyle]="{ 'min-width': '24rem' }">
-      <ng-template #header>
-        <tr>
-          <th>One-Way Cost</th>
-          <th>Gross Spread (bps)</th>
-          <th>Net Spread (bps)</th>
-          <th>Viable?</th>
-        </tr>
-      </ng-template>
-      <ng-template #body let-row>
-        <tr>
-          <td>{{ row.costBps }}bps</td>
-          <td>{{ row.grossBps | number: '1.1-1' }}</td>
-          <td [class]="row.viable ? 'text-green-700 font-semibold' : 'text-red-700 font-semibold'">
-            {{ row.netBps | number: '1.1-1' }}
-          </td>
-          <td>
-            <p-tag [severity]="row.viable ? 'success' : 'danger'" [value]="row.viable ? 'Yes' : 'No'" />
-          </td>
-        </tr>
-      </ng-template>
-    </p-table>
+      <p-table [value]="costScenarios" styleClass="p-datatable-sm" class="mt-3" [tableStyle]="{ 'min-width': '24rem' }">
+        <ng-template #header>
+          <tr>
+            <th>One-Way Cost</th>
+            <th>Gross Spread (bps)</th>
+            <th>Net Spread (bps)</th>
+            <th>Viable?</th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-row>
+          <tr>
+            <td>{{ row.costBps }}bps</td>
+            <td>{{ row.grossBps | number: '1.1-1' }}</td>
+            <td [class]="row.viable ? 'text-green-700 font-semibold' : 'text-red-700 font-semibold'">
+              {{ row.netBps | number: '1.1-1' }}
+            </td>
+            <td>
+              <p-tag [severity]="row.viable ? 'success' : 'danger'" [value]="row.viable ? 'Yes' : 'No'" />
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
 
-    <div class="cost-note mt-2">
-      <i class="pi pi-info-circle mr-1"></i>
-      Alpha fully erased at approximately {{ costErasureThreshold | number: '1.1-1' }}bps one-way cost.
-      Assumes round-trip cost = 2x one-way. Slippage and market impact not modeled.
-    </div>
+      <div class="cost-note mt-2">
+        <i class="pi pi-info-circle mr-1"></i>
+        Alpha fully erased at approximately {{ costErasureThreshold | number: '1.1-1' }}bps one-way cost.
+        Assumes round-trip cost = 2x one-way. Slippage and market impact not modeled.
+      </div>
+    } @else {
+      <div class="cost-note mt-3">
+        <i class="pi pi-info-circle mr-1"></i>
+        No measurable quantile spread detected (Q5-Q1 &lt; 0.5 bps). Transaction cost sensitivity analysis
+        is not applicable — the signal shows no estimated alpha to erode.
+      </div>
+    }
   </div>
 
   <!-- 9. Quantile Details Table -->
@@ -286,13 +302,19 @@
       <i class="pi pi-flag mr-2"></i>Kill Criteria — What Would Invalidate This Signal?
       @if (triggeredKillCriteria > 0) {
         <p-tag severity="danger" [value]="triggeredKillCriteria + ' triggered'" class="ml-2" />
+      } @else if (untestableKillCriteria > 0) {
+        <p-tag severity="warn" [value]="untestableKillCriteria + ' untestable'" class="ml-2" />
       } @else {
         <p-tag severity="success" value="None triggered" class="ml-2" />
       }
     </h4>
     @for (criterion of falsificationCriteria; track criterion.label) {
-      <div class="kill-criterion" [class.triggered]="criterion.triggered">
-        <i [class]="criterion.triggered ? 'pi pi-exclamation-circle' : 'pi pi-check-circle'"></i>
+      <div class="kill-criterion" [class.triggered]="criterion.triggered" [class.untestable]="criterion.untestable">
+        @if (criterion.untestable) {
+          <i class="pi pi-question-circle"></i>
+        } @else {
+          <i [class]="criterion.triggered ? 'pi pi-exclamation-circle' : 'pi pi-check-circle'"></i>
+        }
         <span class="kill-label">{{ criterion.label }}</span>
         <span class="kill-desc">{{ criterion.description }}</span>
       </div>

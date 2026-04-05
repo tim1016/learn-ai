@@ -31,6 +31,7 @@ interface FalsificationCriterion {
   label: string;
   description: string;
   triggered: boolean;
+  untestable: boolean;
 }
 
 interface CostScenario {
@@ -209,6 +210,9 @@ export class FeatureReportComponent {
     const rob = this.result().robustness;
     if (!rob) return 'N/A';
 
+    // Require at least 3 months of data for a meaningful stability grade
+    if (rob.monthlyBreakdown.length < 3) return 'N/A';
+
     let score = 0;
     const signConsistent = rob.pctSignConsistentMonths;
     if (signConsistent >= 0.70) score += 4;
@@ -299,32 +303,47 @@ export class FeatureReportComponent {
 
   get falsificationCriteria(): FalsificationCriterion[] {
     const rob = this.result().robustness;
+    const hasTrainTest = !!rob?.trainTest;
+    const regimeState = this.regimeStabilityState;
 
     return [
       {
         label: 'IC Collapse',
-        description: 'Abandon if test-period Mean IC drops below 0.01 for 3+ consecutive months.',
-        triggered: rob?.trainTest ? Math.abs(rob.trainTest.testMeanIC) < 0.01 : false,
+        description: hasTrainTest
+          ? 'Abandon if overall Mean IC or test-period Mean IC drops below 0.01.'
+          : 'Abandon if Mean IC drops below 0.01. Train/test split unavailable.',
+        triggered: hasTrainTest
+          ? Math.abs(this.result().meanIC) < 0.01 || Math.abs(rob!.trainTest!.testMeanIC) < 0.01
+          : Math.abs(this.result().meanIC) < 0.01,
+        untestable: false,
       },
       {
         label: 'Regime Instability',
-        description: 'Abandon if IC sign flips across majority of volatility or trend regimes.',
-        triggered: this.isRegimeUnstable,
+        description: regimeState === 'untestable'
+          ? 'Cannot evaluate — fewer than 2 regimes observed in sample.'
+          : 'Abandon if IC sign flips across majority of volatility or trend regimes.',
+        triggered: regimeState === 'unstable',
+        untestable: regimeState === 'untestable',
       },
       {
         label: 'Cost Erosion',
         description: 'Abandon if quantile spread (Q5-Q1) is less than 2x estimated round-trip costs.',
         triggered: this.quantileSpreadBps < 4,
+        untestable: false,
       },
       {
         label: 'OOS Degradation',
-        description: 'Abandon if OOS retention falls below 40% (likely overfit).',
-        triggered: rob?.trainTest ? rob.trainTest.oosRetention < 0.40 : false,
+        description: hasTrainTest
+          ? 'Abandon if OOS retention falls below 40% (likely overfit).'
+          : 'Cannot evaluate — insufficient data for train/test split.',
+        triggered: hasTrainTest ? rob!.trainTest!.oosRetention < 0.40 : false,
+        untestable: !hasTrainTest,
       },
       {
         label: 'Structural Break',
         description: 'Re-evaluate if a significant structural break is detected in the IC series.',
         triggered: (rob?.structuralBreaks?.filter(b => b.significant).length ?? 0) > 0,
+        untestable: false,
       },
     ];
   }
@@ -333,17 +352,23 @@ export class FeatureReportComponent {
     return this.falsificationCriteria.filter(c => c.triggered).length;
   }
 
-  private get isRegimeUnstable(): boolean {
+  get untestableKillCriteria(): number {
+    return this.falsificationCriteria.filter(c => c.untestable).length;
+  }
+
+  private get regimeStabilityState(): 'stable' | 'unstable' | 'untestable' {
     const rob = this.result().robustness;
-    if (!rob) return false;
+    if (!rob) return 'untestable';
     const allSigns = [
       ...rob.volatilityRegimes.map(r => Math.sign(r.meanIC)),
       ...rob.trendRegimes.map(r => Math.sign(r.meanIC)),
     ];
-    if (allSigns.length < 2) return false;
+    if (allSigns.length < 2) return 'untestable';
     const positives = allSigns.filter(s => s > 0).length;
     const negatives = allSigns.filter(s => s < 0).length;
-    return Math.min(positives, negatives) >= Math.max(positives, negatives) * 0.5;
+    return Math.min(positives, negatives) >= Math.max(positives, negatives) * 0.5
+      ? 'unstable'
+      : 'stable';
   }
 
   // ─── Transaction Cost Sensitivity ──────────────────────
@@ -379,6 +404,32 @@ export class FeatureReportComponent {
   get costErasureThreshold(): number {
     if (this.quantileSpreadBps <= 0) return 0;
     return Math.round(this.quantileSpreadBps / 2 * 100) / 100;
+  }
+
+  get hasMeaningfulSpread(): boolean {
+    return this.quantileSpreadBps >= 0.5;
+  }
+
+  // ─── IC / Quantile Divergence Diagnostic ──────────────────
+
+  get icQuantileDivergence(): string | null {
+    const meanIC = this.result().meanIC;
+    const bins = this.result().quantileBins;
+    if (bins.length < 2) return null;
+
+    const firstBinReturn = bins[0].meanReturn;
+    const lastBinReturn = bins[bins.length - 1].meanReturn;
+    const quantileDirection = lastBinReturn - firstBinReturn;
+
+    // Check if IC sign and quantile spread direction disagree
+    if ((meanIC > 0.001 && quantileDirection < -1e-8) ||
+        (meanIC < -0.001 && quantileDirection > 1e-8)) {
+      return 'The IC sign and quantile return direction disagree. This can happen because the IC is computed as a '
+        + 'daily cross-sectional rank correlation (averaged across days), while quantile returns pool all observations '
+        + 'across the entire sample. When daily signal structure does not survive time-pooled aggregation, these metrics '
+        + 'can legitimately diverge. Consider this signal exploratory until the divergence is understood.';
+    }
+    return null;
   }
 
   // ─── Statistical Assumptions ────────────────────────────

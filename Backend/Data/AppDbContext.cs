@@ -1,3 +1,4 @@
+using Backend.Models.DataLab;
 using Backend.Models.MarketData;
 using Backend.Models.Portfolio;
 using Microsoft.EntityFrameworkCore;
@@ -29,6 +30,9 @@ public class AppDbContext : DbContext
     // Options IV cache
     public DbSet<OptionsIvSnapshot> OptionsIvSnapshots => Set<OptionsIvSnapshot>();
 
+    // Data Lab models
+    public DbSet<DataLabSession> DataLabSessions => Set<DataLabSession>();
+
     // Portfolio models
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<Order> Orders => Set<Order>();
@@ -46,6 +50,9 @@ public class AppDbContext : DbContext
     {
         // Market Data Configurations
         ConfigureMarketDataModels(modelBuilder);
+
+        // Data Lab Configurations
+        ConfigureDataLabModels(modelBuilder);
 
         // Portfolio Configurations
         ConfigurePortfolioModels(modelBuilder);
@@ -216,6 +223,23 @@ public class AppDbContext : DbContext
                   .HasForeignKey(e => e.TickerId)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(e => new { e.TickerId, e.TradingDate }).IsUnique();
+        });
+    }
+
+    private static void ConfigureDataLabModels(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<DataLabSession>(entity =>
+        {
+            entity.HasKey(s => s.Id);
+            entity.Property(s => s.Name).IsRequired().HasMaxLength(300);
+            entity.Property(s => s.Ticker).IsRequired().HasMaxLength(20);
+            entity.Property(s => s.FromDate).IsRequired().HasMaxLength(10);
+            entity.Property(s => s.ToDate).IsRequired().HasMaxLength(10);
+            entity.Property(s => s.Session).IsRequired().HasMaxLength(10);
+            entity.Property(s => s.EntriesJson).IsRequired().HasColumnType("jsonb");
+            entity.Property(s => s.ChartSnapshotJson).HasColumnType("jsonb");
+            entity.HasIndex(s => s.UpdatedAt);
+            entity.HasIndex(s => s.Ticker);
         });
     }
 

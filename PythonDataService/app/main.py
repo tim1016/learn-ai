@@ -1,11 +1,12 @@
 """FastAPI application entry point"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import logging
 
 from app.config import settings
-from app.routers import aggregates, sanitize, indicators, options, snapshot, market_monitor, tickers, strategy, research, dataset, data_quality
+from app.routers import aggregates, sanitize, indicators, options, snapshot, market_monitor, tickers, strategy, research, dataset, data_quality, chart
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -32,6 +33,9 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# GZip middleware for large chart responses
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 # CORS middleware for C# backend
 app.add_middleware(
     CORSMiddleware,
@@ -53,6 +57,7 @@ app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
+app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
 
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)

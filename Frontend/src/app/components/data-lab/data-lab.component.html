@@ -2,13 +2,121 @@
   <div class="page-header">
     <div class="header-row">
       <h2>Data Lab</h2>
-      <a routerLink="/data-lab-docs" class="docs-link">
-        <i class="pi pi-book"></i> Documentation
-      </a>
+      <div class="header-actions">
+        <button class="btn-sessions" (click)="toggleSessionPanel()" [class.active]="sessionPanelOpen()">
+          <i class="pi pi-history"></i> Sessions
+          @if (savedSessions().length) {
+            <span class="session-count">{{ savedSessions().length }}</span>
+          }
+        </button>
+        <a routerLink="/data-lab-docs" class="docs-link">
+          <i class="pi pi-book"></i> Documentation
+        </a>
+      </div>
     </div>
     <p class="subtitle">
       Fetch minute-by-minute OHLCV from Polygon.io, calculate pandas-ta indicators, export as a single CSV + metadata JSON
     </p>
+
+    <!-- Active session indicator -->
+    @if (activeSessionId()) {
+      <div class="active-session-bar">
+        <i class="pi pi-bookmark-fill"></i>
+        <span>Session: <strong>{{ sessionName() || 'Untitled' }}</strong></span>
+        <button class="btn-text" (click)="saveSession()" [disabled]="savingSession()">
+          <i class="pi pi-save"></i> Save
+        </button>
+        <button class="btn-text" (click)="saveAsNewSession()">
+          <i class="pi pi-copy"></i> Save as new
+        </button>
+        <button class="btn-text" (click)="detachSession()">
+          <i class="pi pi-times"></i> Detach
+        </button>
+      </div>
+    }
+
+    <!-- Session panel (slide-down) -->
+    @if (sessionPanelOpen()) {
+      <div class="session-panel">
+        <div class="session-save-row">
+          <input
+            type="text"
+            class="session-name-input"
+            placeholder="Session name (optional)"
+            [(ngModel)]="sessionName"
+          />
+          <button class="btn-primary" (click)="saveSession()" [disabled]="savingSession()">
+            @if (savingSession()) {
+              <i class="pi pi-spin pi-spinner"></i>
+            } @else {
+              <i class="pi pi-save"></i>
+            }
+            {{ activeSessionId() ? 'Update Session' : 'Save Session' }}
+          </button>
+          @if (activeSessionId()) {
+            <button class="btn-secondary" (click)="saveAsNewSession()">
+              <i class="pi pi-copy"></i> Save as New
+            </button>
+          }
+        </div>
+
+        @if (savedSessions().length) {
+          <div class="session-list">
+            @for (s of savedSessions(); track s.id) {
+              <div
+                class="session-card"
+                [class.active]="activeSessionId() === s.id"
+                (click)="loadSession(s.id)">
+
+                @if (renamingSessionId() === s.id) {
+                  <div class="rename-row" (click)="$event.stopPropagation()">
+                    <input
+                      type="text"
+                      class="rename-input"
+                      [(ngModel)]="renameValue"
+                      (keyup.enter)="confirmRename(s.id)"
+                      (keyup.escape)="cancelRename()"
+                    />
+                    <button class="btn-icon" (click)="confirmRename(s.id)" title="Confirm">
+                      <i class="pi pi-check"></i>
+                    </button>
+                    <button class="btn-icon" (click)="cancelRename()" title="Cancel">
+                      <i class="pi pi-times"></i>
+                    </button>
+                  </div>
+                } @else {
+                  <div class="session-card-header">
+                    <span class="session-card-name">{{ s.name }}</span>
+                    <div class="session-card-actions">
+                      <button class="btn-icon" (click)="startRenaming(s, $event)" title="Rename">
+                        <i class="pi pi-pencil"></i>
+                      </button>
+                      <button class="btn-icon danger" (click)="deleteSession(s.id, $event)" title="Delete">
+                        <i class="pi pi-trash"></i>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="session-card-meta">
+                    <span class="meta-ticker">{{ s.ticker }}</span>
+                    <span class="meta-range">{{ s.fromDate }} → {{ s.toDate }}</span>
+                    <span class="meta-indicators">{{ s.indicatorCount }} indicators</span>
+                    @if (s.hasChart) {
+                      <span class="meta-chart"><i class="pi pi-chart-line"></i> Chart cached</span>
+                    }
+                  </div>
+                  <div class="session-card-date">{{ formatDate(s.updatedAt) }}</div>
+                }
+              </div>
+            }
+          </div>
+        } @else {
+          <div class="session-empty">
+            <i class="pi pi-inbox"></i>
+            <p>No saved sessions yet. Configure your indicators, fetch chart data, then save.</p>
+          </div>
+        }
+      </div>
+    }
   </div>
 
   <!-- Controls -->
@@ -73,6 +181,25 @@
       <i class="pi pi-info-circle"></i> {{ progress() }}
     </div>
   }
+
+  <!-- Multi-Timeframe Chart -->
+  <div class="chart-section">
+    <div class="chart-actions">
+      <button class="btn-primary" (click)="chartComponent.fetchData()" [disabled]="!ticker()">
+        <i class="pi pi-chart-line"></i> Fetch Data
+      </button>
+    </div>
+    <app-data-lab-chart
+      #chartComponent
+      [ticker]="ticker()"
+      [fromDate]="fromDate()"
+      [toDate]="toDate()"
+      [session]="session()"
+      [forwardFill]="forwardFill()"
+      [chartIndicators]="chartIndicators()"
+      (dataLoaded)="onChartDataLoaded($event)"
+    />
+  </div>
 
   <!-- Active Entries (configured indicators) -->
   @if (entries().length) {

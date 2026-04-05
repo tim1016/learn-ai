@@ -1,5 +1,5 @@
 import {
-  Component, signal, computed, inject,
+  Component, signal, computed, inject, viewChild,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -8,6 +8,8 @@ import { RouterModule } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../../environments/environment';
+import { DataLabChartComponent, ChartIndicatorEntry } from './data-lab-chart/data-lab-chart.component';
+import { DataLabSessionService, DataLabSessionSummary, DataLabSessionChartSnapshot } from '../../services/data-lab-session.service';
 
 interface ParamConfig {
   name: string;
@@ -59,13 +61,29 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
 @Component({
   selector: 'app-data-lab',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule],
+  imports: [CommonModule, FormsModule, RouterModule, DataLabChartComponent],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class DataLabComponent {
   private http = inject(HttpClient);
+  private sessionService = inject(DataLabSessionService);
+
+  /** Reference to the chart child so we can call loadCachedData(). */
+  chartComponent = viewChild<DataLabChartComponent>('chartComponent');
+
+  // ── Session management state ──────────────────────────────
+  savedSessions = signal<DataLabSessionSummary[]>([]);
+  activeSessionId = signal<string | null>(null);
+  sessionPanelOpen = signal(false);
+  savingSession = signal(false);
+  sessionName = signal('');
+  renamingSessionId = signal<string | null>(null);
+  renameValue = signal('');
+
+  /** The latest chart snapshot received from the chart component. */
+  private latestChartSnapshot = signal<DataLabSessionChartSnapshot | null>(null);
 
   ticker = signal('SPY');
   fromDate = signal('2025-03-28');
@@ -103,6 +121,11 @@ export class DataLabComponent {
 
   entryCount = computed(() => this.entries().length);
 
+  // Chart-compatible indicator entries (same shape, typed for chart component)
+  chartIndicators = computed<ChartIndicatorEntry[]>(() =>
+    this.entries().map(e => ({ name: e.name, params: e.params }))
+  );
+
   // Estimated output columns
   estimatedColumns = computed(() => {
     const base = ['unix_ts', 'iso_time', 'open', 'high', 'low', 'close', 'volume', 'vwap', 'transactions'];
@@ -133,6 +156,173 @@ export class DataLabComponent {
 
   constructor() {
     this.loadAvailableIndicators();
+    this.refreshSessionList();
+  }
+
+  // ── Session management ─────────────────────────────────────
+
+  async refreshSessionList(): Promise<void> {
+    this.savedSessions.set(await this.sessionService.listSessions());
+  }
+
+  toggleSessionPanel(): void {
+    this.sessionPanelOpen.update(v => !v);
+    if (this.sessionPanelOpen()) this.refreshSessionList();
+  }
+
+  /**
+   * Called by the chart component's (dataLoaded) event.
+   * Captures the chart payload so the next "Save" includes it.
+   */
+  onChartDataLoaded(event: {
+    bars: any[];
+    indicators: any[];
+    quality: any;
+    allowedTimeframes: string[];
+    estimatedBarsPerTimeframe: Record<string, number>;
+    recommendedTimeframe: string;
+    visibleIndicatorIds: string[];
+    timeframe: string;
+  }): void {
+    this.latestChartSnapshot.set({
+      timeframe: event.timeframe,
+      bars: event.bars,
+      indicators: event.indicators,
+      quality: event.quality,
+      allowedTimeframes: event.allowedTimeframes,
+      estimatedBarsPerTimeframe: event.estimatedBarsPerTimeframe,
+      recommendedTimeframe: event.recommendedTimeframe,
+      visibleIndicatorIds: event.visibleIndicatorIds,
+    });
+
+    // Auto-update snapshot if this is an active (already-saved) session
+    const activeId = this.activeSessionId();
+    if (activeId) {
+      this.sessionService.updateChartSnapshot(activeId, this.latestChartSnapshot()!);
+    }
+  }
+
+  async saveSession(): Promise<void> {
+    this.savingSession.set(true);
+    try {
+      const config = {
+        ticker: this.ticker(),
+        fromDate: this.fromDate(),
+        toDate: this.toDate(),
+        session: this.session(),
+        forwardFill: this.forwardFill(),
+        entries: this.entries(),
+      };
+
+      const activeId = this.activeSessionId();
+      if (activeId) {
+        // Update existing session
+        await this.sessionService.updateSession(
+          activeId,
+          config,
+          this.latestChartSnapshot(),
+          this.sessionName() || config.ticker
+        );
+      } else {
+        // Create new session
+        const newId = await this.sessionService.saveSession(
+          config,
+          this.latestChartSnapshot(),
+          this.sessionName() || undefined
+        );
+        if (newId) this.activeSessionId.set(newId);
+      }
+
+      await this.refreshSessionList();
+    } finally {
+      this.savingSession.set(false);
+    }
+  }
+
+  async saveAsNewSession(): Promise<void> {
+    this.activeSessionId.set(null); // Force new
+    await this.saveSession();
+  }
+
+  async loadSession(id: string): Promise<void> {
+    const session = await this.sessionService.getSession(id);
+    if (!session) return;
+
+    // Restore configuration
+    this.ticker.set(session.config.ticker);
+    this.fromDate.set(session.config.fromDate);
+    this.toDate.set(session.config.toDate);
+    this.session.set(session.config.session);
+    this.forwardFill.set(session.config.forwardFill);
+    this.entries.set([...session.config.entries]);
+    this.activeSessionId.set(session.id);
+    this.sessionName.set(session.name);
+
+    // Restore chart data from snapshot (no API call)
+    if (session.chartSnapshot) {
+      this.latestChartSnapshot.set(session.chartSnapshot);
+
+      // Give Angular a tick to propagate input changes to the chart child
+      setTimeout(() => {
+        const chart = this.chartComponent();
+        if (chart) {
+          chart.loadCachedData({
+            bars: session.chartSnapshot!.bars,
+            indicators: session.chartSnapshot!.indicators,
+            quality: session.chartSnapshot!.quality,
+            allowedTimeframes: session.chartSnapshot!.allowedTimeframes,
+            estimatedBarsPerTimeframe: session.chartSnapshot!.estimatedBarsPerTimeframe,
+            recommendedTimeframe: session.chartSnapshot!.recommendedTimeframe,
+            visibleIndicatorIds: session.chartSnapshot!.visibleIndicatorIds,
+            timeframe: session.chartSnapshot!.timeframe,
+          });
+        }
+      });
+    }
+
+    this.sessionPanelOpen.set(false);
+  }
+
+  async deleteSession(id: string, event: Event): Promise<void> {
+    event.stopPropagation();
+    await this.sessionService.deleteSession(id);
+    if (this.activeSessionId() === id) {
+      this.activeSessionId.set(null);
+      this.sessionName.set('');
+    }
+    await this.refreshSessionList();
+  }
+
+  startRenaming(session: DataLabSessionSummary, event: Event): void {
+    event.stopPropagation();
+    this.renamingSessionId.set(session.id);
+    this.renameValue.set(session.name);
+  }
+
+  async confirmRename(id: string): Promise<void> {
+    if (this.renameValue().trim()) {
+      await this.sessionService.renameSession(id, this.renameValue().trim());
+      await this.refreshSessionList();
+    }
+    this.renamingSessionId.set(null);
+  }
+
+  cancelRename(): void {
+    this.renamingSessionId.set(null);
+  }
+
+  formatDate(timestamp: string): string {
+    return new Date(timestamp).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  detachSession(): void {
+    this.activeSessionId.set(null);
+    this.sessionName.set('');
   }
 
   async loadAvailableIndicators(): Promise<void> {
