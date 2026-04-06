@@ -135,6 +135,13 @@
     </div>
   }
 
+  @if (volumeWarning()) {
+    <div class="info-callout warn">
+      <i class="pi pi-exclamation-triangle"></i>
+      <span>{{ volumeWarning() }}</span>
+    </div>
+  }
+
   <!-- Controls -->
   <div class="controls-card">
     <div class="controls-row">
@@ -277,6 +284,11 @@
         <span>Indicator warm-up</span>
         <span class="option-hint">(fetch extra bars before start date so indicators converge from bar 1)</span>
       </label>
+      <label class="checkbox-option">
+        <input type="checkbox" [checked]="computeAllIndicators()" (change)="computeAllIndicators.set(!computeAllIndicators())" />
+        <span>Pre-calculate all indicators</span>
+        <span class="option-hint">(compute all indicators at once; toggle visibility on the chart instantly)</span>
+      </label>
     </div>
 
     <div class="selected-summary">
@@ -312,6 +324,7 @@
       [session]="session()"
       [forwardFill]="forwardFill()"
       [chartIndicators]="chartIndicators()"
+      [computeAllIndicators]="computeAllIndicators()"
       (dataLoaded)="onChartDataLoaded($event)"
     />
   </div>
@@ -325,10 +338,23 @@
           @let params = getConfigParams(entry.name);
           <div class="entry-card">
             <div class="entry-header">
-              <span class="entry-name">{{ entryLabel(entry) }}</span>
-              <button class="btn-remove" (click)="removeEntry($index)">
-                <i class="pi pi-times"></i>
-              </button>
+              <span class="entry-name">
+                {{ entryLabel(entry) }}
+                @if (timeframeWarnings()[$index]; as warning) {
+                  <i class="pi pi-exclamation-triangle tf-warn"
+                     [pTooltip]="warning" tooltipPosition="top"></i>
+                }
+              </span>
+              <div class="entry-actions">
+                @if (params.length) {
+                  <button class="btn-reset" (click)="resetEntryToDefaults($index)" title="Reset to defaults">
+                    <i class="pi pi-refresh"></i>
+                  </button>
+                }
+                <button class="btn-remove" (click)="removeEntry($index)">
+                  <i class="pi pi-times"></i>
+                </button>
+              </div>
             </div>
             @if (params.length) {
               <div class="entry-params">
@@ -453,7 +479,7 @@
                       type="checkbox"
                       [checked]="isSelected(ind.name)"
                       (change)="toggleIndicator(ind)" />
-                    <div class="indicator-info">
+                    <div class="indicator-info" [pTooltip]="getTooltipText(ind)" tooltipPosition="top">
                       <span class="ind-name">{{ ind.name }}</span>
                       <span class="ind-desc">{{ ind.description }}</span>
                     </div>

@@ -134,6 +134,61 @@
   i { color: #16a34a; margin-top: 3px; font-size: 0.8rem; }
 }
 
+.interpretation-list {
+  margin: 0.5rem 0; padding-left: 1.25rem; list-style: disc;
+  li {
+    font-size: 0.875rem; color: #475569; line-height: 1.7; margin-bottom: 0.15rem;
+  }
+}
+
+.data-notes {
+  margin: 0.5rem 0; padding: 0.6rem 0.75rem 0.6rem 1.75rem;
+  background: #fffbeb; border-left: 3px solid #f59e0b; border-radius: 0 4px 4px 0;
+  list-style: disc;
+  li {
+    font-size: 0.825rem; color: #92400e; line-height: 1.65; margin-bottom: 0.15rem;
+    code {
+      font-family: ui-monospace, monospace; font-size: 0.78rem;
+      background: rgba(245, 158, 11, 0.12); padding: 0.1rem 0.3rem; border-radius: 3px; color: #78350f;
+    }
+  }
+}
+
+.caveat-chip {
+  display: inline-flex; align-items: center; margin-left: 0.35rem;
+  i { font-size: 0.75rem; color: #f59e0b; }
+}
+
+.caveat-chip-inline {
+  display: inline-flex; align-items: center; vertical-align: middle;
+  padding: 0.1rem 0.25rem; border-radius: 3px; background: #fffbeb;
+  i { font-size: 0.7rem; color: #f59e0b; }
+}
+
+.related-chips {
+  display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.25rem;
+}
+.related-link {
+  font-family: ui-monospace, monospace; font-size: 0.75rem;
+  background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534;
+  padding: 0.2rem 0.5rem; border-radius: 4px;
+  cursor: pointer; transition: background 0.15s, border-color 0.15s;
+  &:hover { background: #dcfce7; border-color: #86efac; }
+}
+
+.caveat-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.75rem;
+}
+.caveat-card {
+  padding: 0.75rem 1rem; border-radius: 6px; background: #fffbeb; border: 1px solid #fde68a;
+  .caveat-card-header {
+    display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.35rem;
+    i { font-size: 0.85rem; color: #d97706; }
+    strong { font-size: 0.85rem; color: #78350f; }
+  }
+  p { font-size: 0.8rem; color: #92400e; line-height: 1.6; margin: 0; }
+}
+
 .mb-4 { margin-bottom: 1rem; }
 
 :host ::ng-deep .katex { font-size: 1.1em; color: #1e293b; }

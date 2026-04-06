@@ -468,6 +468,29 @@ $warn:    #f59e0b;
   }
 }
 
+.entry-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.tf-warn {
+  font-size: 0.7rem;
+  color: $warn;
+  margin-left: 0.3rem;
+  vertical-align: middle;
+}
+
+.btn-reset {
+  background: none;
+  border: none;
+  color: $text-muted;
+  cursor: pointer;
+  padding: 0.15rem;
+  font-size: 0.65rem;
+  &:hover { color: $accent; }
+}
+
 .btn-remove {
   background: none;
   border: none;

@@ -74,34 +74,49 @@
     </table>
   </div>
 
-  <!-- 3. Default Indicators -->
+  <!-- 3. Overlay Indicators -->
   <div class="doc-section">
     <div class="section-header">
-      <i class="pi pi-calculator section-icon"></i>
-      <h3>Default Indicators (pre-selected)</h3>
+      <i class="pi pi-chart-line section-icon"></i>
+      <h3>Overlay Indicators (drawn on price chart)</h3>
     </div>
     <p class="section-description">
-      These indicators are selected by default when the Data Lab loads.
+      These indicators render directly on the price chart as lines or bands.
       All formulas are implemented by the <code>pandas-ta</code> library
       (<a href="https://github.com/twopirllc/pandas-ta" target="_blank">github.com/twopirllc/pandas-ta</a>).
     </p>
 
     <p-accordion [multiple]="true">
-      @for (ind of defaultIndicators; track ind.name) {
-        <p-accordionpanel>
+      @for (ind of overlayIndicators; track ind.name) {
+        <p-accordionpanel [attr.id]="'ind-' + ind.name">
           <p-accordionheader>
             <div class="feature-header">
               <span class="feature-name">{{ ind.displayName }}</span>
               <span class="feature-badge">{{ ind.outputColumns.length }} col{{ ind.outputColumns.length > 1 ? 's' : '' }}</span>
+              @if (hasCriticalCaveat(ind)) {
+                <span class="caveat-chip" title="Has important data caveats — see Data Notes">
+                  <i class="pi pi-exclamation-triangle"></i>
+                </span>
+              }
             </div>
           </p-accordionheader>
           <p-accordioncontent>
             <div class="indicator-detail">
               <div class="subsection-title"><i class="pi pi-percentage"></i> Formula</div>
-              <div class="formula-block" [appKatex]="ind.formulaLatex"></div>
+              <div class="formula-block" [appKatex]="ind.formulaLatex" [displayMode]="true"></div>
 
               <div class="subsection-title"><i class="pi pi-info-circle"></i> Description</div>
               <p class="interpretation">{{ ind.description }}</p>
+
+              <div class="subsection-title"><i class="pi pi-lightbulb"></i> Interpretation</div>
+              <ul class="interpretation-list">
+                @for (item of ind.interpretation; track item) {
+                  <li>{{ item }}</li>
+                }
+              </ul>
+
+              <div class="subsection-title"><i class="pi pi-clock"></i> Recommended Timeframes</div>
+              <p class="interpretation">{{ ind.recommendedTimeframes }}</p>
 
               <div class="subsection-title"><i class="pi pi-cog"></i> Default Parameters</div>
               <p class="interpretation"><code>{{ ind.defaultParams }}</code></p>
@@ -113,6 +128,24 @@
                 }
               </div>
 
+              @if (ind.dataNotes.length) {
+                <div class="subsection-title"><i class="pi pi-exclamation-triangle"></i> Data Notes</div>
+                <ul class="data-notes">
+                  @for (note of ind.dataNotes; track note) {
+                    <li>{{ note }}</li>
+                  }
+                </ul>
+              }
+
+              @if (ind.relatedIndicators.length) {
+                <div class="subsection-title"><i class="pi pi-link"></i> Related Indicators</div>
+                <div class="related-chips">
+                  @for (rel of ind.relatedIndicators; track rel) {
+                    <button class="related-link" (click)="scrollToIndicator(rel)">{{ getDisplayName(rel) }}</button>
+                  }
+                </div>
+              }
+
               <div class="subsection-title"><i class="pi pi-box"></i> Library</div>
               <p class="interpretation"><code>{{ ind.library }}</code></p>
             </div>
@@ -122,33 +155,48 @@
     </p-accordion>
   </div>
 
-  <!-- 4. Additional Indicators -->
+  <!-- 4. Sub-Panel Indicators -->
   <div class="doc-section">
     <div class="section-header">
-      <i class="pi pi-plus-circle section-icon"></i>
-      <h3>Additional Configurable Indicators</h3>
+      <i class="pi pi-chart-bar section-icon"></i>
+      <h3>Sub-Panel Indicators (separate synced pane)</h3>
     </div>
     <p class="section-description">
-      These are commonly added indicators available through the Data Lab catalog.
-      The full library contains 151 indicators across 9 categories.
+      These indicators render in their own panel below the price chart, with axes synced to the time axis.
+      Multi-output indicators (e.g. MACD line + signal + histogram) share a single sub-panel.
     </p>
 
     <p-accordion [multiple]="true">
-      @for (ind of additionalIndicators; track ind.name) {
-        <p-accordionpanel>
+      @for (ind of subPanelIndicators; track ind.name) {
+        <p-accordionpanel [attr.id]="'ind-' + ind.name">
           <p-accordionheader>
             <div class="feature-header">
               <span class="feature-name">{{ ind.displayName }}</span>
               <span class="feature-badge">{{ ind.outputColumns.length }} col{{ ind.outputColumns.length > 1 ? 's' : '' }}</span>
+              @if (hasCriticalCaveat(ind)) {
+                <span class="caveat-chip" title="Has important data caveats — see Data Notes">
+                  <i class="pi pi-exclamation-triangle"></i>
+                </span>
+              }
             </div>
           </p-accordionheader>
           <p-accordioncontent>
             <div class="indicator-detail">
               <div class="subsection-title"><i class="pi pi-percentage"></i> Formula</div>
-              <div class="formula-block" [appKatex]="ind.formulaLatex"></div>
+              <div class="formula-block" [appKatex]="ind.formulaLatex" [displayMode]="true"></div>
 
               <div class="subsection-title"><i class="pi pi-info-circle"></i> Description</div>
               <p class="interpretation">{{ ind.description }}</p>
+
+              <div class="subsection-title"><i class="pi pi-lightbulb"></i> Interpretation</div>
+              <ul class="interpretation-list">
+                @for (item of ind.interpretation; track item) {
+                  <li>{{ item }}</li>
+                }
+              </ul>
+
+              <div class="subsection-title"><i class="pi pi-clock"></i> Recommended Timeframes</div>
+              <p class="interpretation">{{ ind.recommendedTimeframes }}</p>
 
               <div class="subsection-title"><i class="pi pi-cog"></i> Default Parameters</div>
               <p class="interpretation"><code>{{ ind.defaultParams }}</code></p>
@@ -160,6 +208,24 @@
                 }
               </div>
 
+              @if (ind.dataNotes.length) {
+                <div class="subsection-title"><i class="pi pi-exclamation-triangle"></i> Data Notes</div>
+                <ul class="data-notes">
+                  @for (note of ind.dataNotes; track note) {
+                    <li>{{ note }}</li>
+                  }
+                </ul>
+              }
+
+              @if (ind.relatedIndicators.length) {
+                <div class="subsection-title"><i class="pi pi-link"></i> Related Indicators</div>
+                <div class="related-chips">
+                  @for (rel of ind.relatedIndicators; track rel) {
+                    <button class="related-link" (click)="scrollToIndicator(rel)">{{ getDisplayName(rel) }}</button>
+                  }
+                </div>
+              }
+
               <div class="subsection-title"><i class="pi pi-box"></i> Library</div>
               <p class="interpretation"><code>{{ ind.library }}</code></p>
             </div>
@@ -169,7 +235,31 @@
     </p-accordion>
   </div>
 
-  <!-- 5. Metadata JSON -->
+  <!-- 5. Data Caveats -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-shield section-icon"></i>
+      <h3>Known Data Caveats</h3>
+    </div>
+    <p class="section-description">
+      These are common pitfalls when working with technical indicator data. Indicators flagged with
+      <span class="caveat-chip-inline"><i class="pi pi-exclamation-triangle"></i></span> in the sections above
+      are affected by one or more of these caveats.
+    </p>
+    <div class="caveat-grid">
+      @for (caveat of dataCaveats; track caveat.label) {
+        <div class="caveat-card">
+          <div class="caveat-card-header">
+            <i class="pi {{ caveat.icon }}"></i>
+            <strong>{{ caveat.label }}</strong>
+          </div>
+          <p>{{ caveat.text }}</p>
+        </div>
+      }
+    </div>
+  </div>
+
+  <!-- 6. Metadata JSON -->
   <div class="doc-section">
     <div class="section-header">
       <i class="pi pi-file section-icon"></i>
@@ -206,7 +296,7 @@
     </div>
   </div>
 
-  <!-- 6. Validation -->
+  <!-- 7. Validation -->
   <div class="doc-section">
     <div class="section-header">
       <i class="pi pi-check-circle section-icon"></i>

@@ -54,6 +54,55 @@ interface CategoryData {
   indicators: IndicatorInfo[];
 }
 
+// ── Indicator runtime metadata for tooltips & warnings ─────────
+interface IndicatorMeta {
+  goodTimeframes: string[];
+  poorTimeframes: string[];
+  volumeDependent: boolean;
+  tooltipSummary: string;
+}
+
+const VOLUME_DEPENDENT_INDICATORS = ['vwap', 'ad', 'cmf', 'mfi', 'obv'];
+
+const INDICATOR_META: Record<string, IndicatorMeta> = {
+  // Overlay
+  ema:        { goodTimeframes: ['1m','5m','15m','30m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Exponential Moving Average. Weights recent prices more heavily. Use multiple lengths for crossover signals and ribbon analysis.' },
+  sma:        { goodTimeframes: ['1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Simple Moving Average. Arithmetic mean of last n closes. Price above SMA = bullish, below = bearish.' },
+  dema:       { goodTimeframes: ['5m','15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Double EMA. Reduces lag vs standard EMA. Good for catching early trend entries.' },
+  tema:       { goodTimeframes: ['15m','1h','4h','1D'], poorTimeframes: ['1m','5m'], volumeDependent: false, tooltipSummary: 'Triple EMA. Further lag reduction. Better for early reversals but can be noisy on very short timeframes.' },
+  wma:        { goodTimeframes: ['1m','5m','15m','1h','4h'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Weighted Moving Average. Heavier weight on recent bars. Good for short-term trend tracking and crossover systems.' },
+  hma:        { goodTimeframes: ['4h','1D'], poorTimeframes: ['1m','5m'], tooltipSummary: 'Hull Moving Average. Very smooth with minimal lag. Can be choppy on low timeframes.', volumeDependent: false },
+  kama:       { goodTimeframes: ['1m','5m','15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Kaufman Adaptive MA. Adapts smoothing to market efficiency. Smooth in chop, fast in trends.' },
+  zlma:       { goodTimeframes: ['1m','5m','15m','1h'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Zero Lag MA. Compensates for EMA lag. Faster signals but more false positives in sideways markets.' },
+  rma:        { goodTimeframes: ['1m','5m','15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Wilder Smoothing (RMA). Used internally by ATR, RSI, ADX. Slightly slower than EMA.' },
+  alma:       { goodTimeframes: ['15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Arnaud Legoux MA. Gaussian-weighted smoothing. Very smooth and low-lag for medium-term trends.' },
+  bbands:     { goodTimeframes: ['5m','15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Bollinger Bands. Volatility bands around SMA. Band squeeze = breakout pending. %B shows price position within bands.' },
+  supertrend: { goodTimeframes: ['15m','1h','4h','1D'], poorTimeframes: ['1m'], volumeDependent: false, tooltipSummary: 'ATR-based trend follower. Direction flips between support/resistance. Higher multiplier = fewer whipsaws.' },
+  vwap:       { goodTimeframes: ['1m','5m','15m','30m'], poorTimeframes: ['1D'], volumeDependent: true, tooltipSummary: 'Volume-weighted average price. Intraday fair value anchor. Resets each session. Requires reliable volume.' },
+  psar:       { goodTimeframes: ['15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Parabolic SAR. Trailing stop-and-reverse. Dots below price = uptrend, above = downtrend.' },
+  kc:         { goodTimeframes: ['5m','15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Keltner Channel. ATR-based volatility bands. Smoother than Bollinger. Break above upper = bullish expansion.' },
+  donchian:   { goodTimeframes: ['1h','4h','1D'], poorTimeframes: ['1m','5m'], volumeDependent: false, tooltipSummary: 'Donchian Channel. Highest high / lowest low over n bars. Used in Turtle Trading breakout systems.' },
+  // Sub-panel
+  macd:       { goodTimeframes: ['15m','1h','4h','1D'], poorTimeframes: ['1m'], volumeDependent: false, tooltipSummary: 'MACD. Momentum from EMA convergence/divergence. Signal crossovers and histogram for entry timing.' },
+  rsi:        { goodTimeframes: ['5m','15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'RSI. Momentum oscillator. Above 70 = overbought, below 30 = oversold. Divergence signals reversals.' },
+  adx:        { goodTimeframes: ['1h','4h','1D'], poorTimeframes: ['1m'], volumeDependent: false, tooltipSummary: 'ADX. Measures trend strength (not direction). Above 25 = strong trend, below 20 = range-bound.' },
+  atr:        { goodTimeframes: ['1m','5m','15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'ATR. Volatility measure. Rising ATR = expanding vol. Used for position sizing and stop placement.' },
+  stoch:      { goodTimeframes: ['5m','15m','1h','4h'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Stochastic. Close position in high-low range. K/D above 80 = overbought, below 20 = oversold.' },
+  stochrsi:   { goodTimeframes: ['1m','5m','15m','1h','4h'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Stochastic RSI. Stochastic applied to RSI — faster oscillator. Near 0 = oversold, near 1 = overbought.' },
+  obv:        { goodTimeframes: ['1h','4h','1D'], poorTimeframes: [], volumeDependent: true, tooltipSummary: 'On Balance Volume. Cumulative volume flow. Rising OBV confirms uptrend. Divergence = potential reversal.' },
+  cci:        { goodTimeframes: ['15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'CCI. Deviation from mean. Above +100 = overbought, below -100 = oversold.' },
+  willr:      { goodTimeframes: ['1m','5m','15m','1h','4h'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Williams %R. Close vs high-low range. -20 to 0 = overbought, -80 to -100 = oversold.' },
+  roc:        { goodTimeframes: ['15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Rate of Change. Percentage price change over n bars. Above 0 = bullish momentum.' },
+  mom:        { goodTimeframes: ['1m','5m','15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Momentum. Absolute price change over n periods. Best paired with normalization or other confirmation.' },
+  natr:       { goodTimeframes: ['1m','5m','15m','1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'Normalized ATR. ATR as percentage of price. Comparable across instruments for risk sizing.' },
+  ad:         { goodTimeframes: ['4h','1D'], poorTimeframes: ['1m','5m'], volumeDependent: true, tooltipSummary: 'A/D Line. Buying vs selling pressure via close position + volume. Divergence with price = distribution.' },
+  cmf:        { goodTimeframes: ['1D'], poorTimeframes: [], volumeDependent: true, tooltipSummary: 'Chaikin Money Flow. Accumulation/distribution over n bars. Positive = buying, negative = selling pressure.' },
+  mfi:        { goodTimeframes: ['4h','1D'], poorTimeframes: ['1m','5m'], volumeDependent: true, tooltipSummary: 'Money Flow Index. Volume-weighted RSI. Above 80 = overbought, below 20 = oversold.' },
+  tsi:        { goodTimeframes: ['1h','4h','1D'], poorTimeframes: [], volumeDependent: false, tooltipSummary: 'True Strength Index. Smooth momentum oscillator. Above 0 = bullish. Signal line crossovers for entries.' },
+  fisher:     { goodTimeframes: ['15m','1h','4h'], poorTimeframes: ['1m','5m'], volumeDependent: false, tooltipSummary: 'Fisher Transform. Gaussian-normalized price. Crossing signal = reversal. Too noisy below 15m.' },
+  squeeze:    { goodTimeframes: ['15m','1h','4h','1D'], poorTimeframes: ['1m','5m'], volumeDependent: false, tooltipSummary: 'Volatility Squeeze. BB inside KC = compression. Squeeze release signals breakout.' },
+};
+
 // Default indicators pre-selected on load
 const DEFAULT_ENTRIES: IndicatorEntry[] = [
   { name: 'ema', params: { length: 5 } },
@@ -67,6 +116,8 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
   { name: 'bbands', params: { length: 20, std: 2.0 } },
   { name: 'supertrend', params: { length: 10, multiplier: 3.0 } },
   { name: 'macd', params: { fast: 12, slow: 26, signal: 9 } },
+  { name: 'rsi', params: { length: 14 } },
+  { name: 'adx', params: { length: 14 } },
 ];
 
 @Component({
@@ -143,6 +194,7 @@ export class DataLabComponent {
   session = signal<'rth' | 'extended'>('rth');
   forwardFill = signal(true);
   warmup = signal(true);
+  computeAllIndicators = signal(false);
   timespan = signal<'minute' | 'hour' | 'day'>('minute');
   multiplier = signal(1);
 
@@ -169,6 +221,9 @@ export class DataLabComponent {
 
   expandedCategories = signal<Set<string>>(new Set());
 
+  // Volume warning — set after chart data loads
+  volumeWarning = signal('');
+
   // Selected indicator names (unique set for checkbox state)
   get selectedNames(): Set<string> {
     return new Set(this.entries().map(e => e.name));
@@ -180,6 +235,30 @@ export class DataLabComponent {
   chartIndicators = computed<ChartIndicatorEntry[]>(() =>
     this.entries().map(e => ({ name: e.name, params: e.params }))
   );
+
+  // Current timeframe key for warning logic (e.g. "1m", "5m", "1h", "1D")
+  currentTimeframeKey = computed(() => {
+    const m = this.multiplier();
+    const t = this.timespan();
+    const suffix = t === 'day' ? 'D' : t[0];
+    return `${m}${suffix}`;
+  });
+
+  // Timeframe warnings per entry index
+  timeframeWarnings = computed<Record<number, string>>(() => {
+    const key = this.currentTimeframeKey();
+    const warnings: Record<number, string> = {};
+    this.entries().forEach((entry, i) => {
+      const meta = INDICATOR_META[entry.name];
+      if (!meta) return;
+      if (meta.poorTimeframes.includes(key)) {
+        warnings[i] = `${entry.name} is not recommended for ${key} timeframe`;
+      } else if (meta.goodTimeframes.length > 0 && !meta.goodTimeframes.includes(key)) {
+        warnings[i] = `${entry.name} works best on: ${meta.goodTimeframes.join(', ')}`;
+      }
+    });
+    return warnings;
+  });
 
   // Estimated output columns
   estimatedColumns = computed(() => {
@@ -255,6 +334,21 @@ export class DataLabComponent {
     const activeId = this.activeSessionId();
     if (activeId) {
       this.sessionService.updateChartSnapshot(activeId, this.latestChartSnapshot()!);
+    }
+
+    // Volume dependency check
+    const bars = event.bars as { v: number }[];
+    const zeroVolBars = bars.filter(b => !b.v || b.v === 0).length;
+    const zeroVolPct = bars.length > 0 ? (zeroVolBars / bars.length) * 100 : 0;
+    const activeVolDep = this.entries().filter(e => VOLUME_DEPENDENT_INDICATORS.includes(e.name));
+
+    if (zeroVolPct > 10 && activeVolDep.length > 0) {
+      const names = [...new Set(activeVolDep.map(e => e.name))].join(', ');
+      this.volumeWarning.set(
+        `${zeroVolPct.toFixed(0)}% of bars have zero/missing volume. Volume-dependent indicators (${names}) may be unreliable.`
+      );
+    } else {
+      this.volumeWarning.set('');
     }
   }
 
@@ -525,6 +619,25 @@ export class DataLabComponent {
 
   getConfigParams(name: string): ParamConfig[] {
     return this.indicatorMap()[name]?.configurable_params ?? [];
+  }
+
+  getTooltipText(ind: IndicatorInfo): string {
+    return INDICATOR_META[ind.name]?.tooltipSummary ?? ind.description;
+  }
+
+  resetEntryToDefaults(index: number): void {
+    const entry = this.entries()[index];
+    const info = this.indicatorMap()[entry.name];
+    if (!info) return;
+    const defaults: Record<string, number> = {};
+    for (const p of info.configurable_params) {
+      defaults[p.name] = p.default;
+    }
+    this.entries.update(list => {
+      const next = [...list];
+      next[index] = { ...next[index], params: defaults };
+      return next;
+    });
   }
 
   async generateCsv(): Promise<void> {

@@ -39,6 +39,10 @@ class ChartDataRequest(BaseModel):
         default_factory=list,
         description="Indicators to compute on resampled bars",
     )
+    compute_all_indicators: bool = Field(
+        False,
+        description="When True, compute all indicators with default params (ignores 'indicators' list)",
+    )
 
 
 class AllowedTimeframesRequest(BaseModel):
@@ -83,6 +87,7 @@ async def chart_data(request: ChartDataRequest):
             session=request.session,
             forward_fill=request.forward_fill,
             indicators=indicator_dicts,
+            compute_all_indicators=request.compute_all_indicators,
         )
 
         # Check if result is an error

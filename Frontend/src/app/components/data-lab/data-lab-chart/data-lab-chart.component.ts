@@ -43,6 +43,7 @@ export interface ChartIndicatorResult {
   color: string;
   data: IndicatorPoint[] | Record<string, IndicatorPoint[]>;
   refs: number[];
+  default_visible?: boolean;
 }
 
 export interface GapDetail {
@@ -169,6 +170,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   session = input.required<string>();
   forwardFill = input.required<boolean>();
   chartIndicators = input<ChartIndicatorEntry[]>([]);
+  computeAllIndicators = input(false);
 
   // Outputs
   timeframeChanged = output<string>();
@@ -358,7 +360,8 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     this.error.set('');
 
     try {
-      const indicators = this.chartIndicators().map(i => ({
+      const computeAll = this.computeAllIndicators();
+      const indicators = computeAll ? [] : this.chartIndicators().map(i => ({
         name: i.name,
         params: i.params,
       }));
@@ -374,6 +377,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
             session: this.session(),
             forward_fill: this.forwardFill(),
             indicators,
+            compute_all_indicators: computeAll,
           }
         )
       );
@@ -385,8 +389,11 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
       this.estimatedBars.set(resp.estimated_bars_per_timeframe);
       this.recommendedTimeframe.set(resp.recommended_timeframe);
 
-      // Default all indicators to visible
-      const visibleIds = resp.indicators.map(i => i.id);
+      // When compute_all_indicators is on, only show default_visible indicators.
+      // Otherwise, show all indicators (existing behavior).
+      const visibleIds = computeAll
+        ? resp.indicators.filter(i => i.default_visible).map(i => i.id)
+        : resp.indicators.map(i => i.id);
       this.visibleIndicators.set(new Set(visibleIds));
 
       this.renderMainChart();
@@ -558,7 +565,16 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     })).sort((a, b) => (a.time as number) - (b.time as number));
 
     this.volumeSeries.setData(volumeData);
-    this.mainChart?.timeScale().fitContent();
+
+    // Set visible range to actual data bounds, clamped to the input date range
+    const inputFrom = new Date(this.fromDate()).getTime() / 1000;
+    const inputTo = new Date(this.toDate() + 'T23:59:59').getTime() / 1000;
+    const dataFrom = candleData[0].time as number;
+    const dataTo = candleData[candleData.length - 1].time as number;
+    this.mainChart?.timeScale().setVisibleRange({
+      from: Math.max(inputFrom, dataFrom) as UTCTimestamp,
+      to: Math.min(inputTo, dataTo) as UTCTimestamp,
+    });
   }
 
   // ──────────────────────────────────────────────

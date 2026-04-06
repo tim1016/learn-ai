@@ -42,6 +42,24 @@ _ET = ZoneInfo("US/Eastern")
 _UTC = ZoneInfo("UTC")
 _MAX_BARS = 10_000
 
+# All indicators with default params — built from the canonical registry.
+# EMA gets multiple default lengths for the ribbon.
+_EMA_RIBBON_LENGTHS = [5, 10, 20, 30, 40, 50, 100, 200]
+
+ALL_CHART_INDICATORS: List[Dict[str, Any]] = [
+    {"name": "ema", "params": {"length": length}}
+    for length in _EMA_RIBBON_LENGTHS
+] + [
+    {"name": name, "params": {p["name"]: p["default"] for p in params_list}}
+    for name, params_list in INDICATOR_CONFIGS.items()
+    if name != "ema"  # EMA handled above with ribbon lengths
+]
+
+# Indicators visible by default when compute_all_indicators is used.
+DEFAULT_VISIBLE_INDICATORS: frozenset[str] = frozenset({
+    "ema", "bbands", "supertrend", "macd", "rsi", "adx",
+})
+
 # Timeframe definitions: (label, pandas resample rule, minutes per bar)
 TIMEFRAME_DEFS: Dict[str, Dict[str, Any]] = {
     "1m":  {"rule": "1min",  "minutes": 1},
@@ -522,10 +540,12 @@ def _format_indicator_results(
     df: pd.DataFrame,
     column_meta: List[Dict[str, Any]],
     indicators_requested: List[Dict[str, Any]],
+    compute_all_indicators: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Format indicator columns into the structured response schema.
     Each indicator becomes an entry with id, panel, type, color, data, and optional refs.
+    When compute_all_indicators is True, each entry also gets a 'default_visible' flag.
     """
     results: List[Dict[str, Any]] = []
 
@@ -663,6 +683,13 @@ def _format_indicator_results(
                 "refs": refs,
             })
 
+    # Tag each result with default_visible when using compute_all_indicators
+    if compute_all_indicators:
+        for r in results:
+            # Extract base indicator name from the id (e.g. "ema_20" → "ema")
+            base_name = r["id"].split("_")[0]
+            r["default_visible"] = base_name in DEFAULT_VISIBLE_INDICATORS
+
     return results
 
 
@@ -680,12 +707,20 @@ def get_chart_data(
     session: str = "rth",
     forward_fill: bool = False,
     indicators: Optional[List[Dict[str, Any]]] = None,
+    compute_all_indicators: bool = False,
 ) -> Dict[str, Any]:
     """
     Main entry point: fetch 1m bars, preprocess, resample, compute indicators.
     Uses two-layer caching.
+
+    When compute_all_indicators=True, ignores the indicators list and computes
+    ALL indicators from the registry with default params. Each indicator result
+    includes a 'default_visible' flag.
     """
-    indicators = indicators or []
+    if compute_all_indicators:
+        indicators = list(ALL_CHART_INDICATORS)
+    else:
+        indicators = indicators or []
 
     # Validate timeframe
     if timeframe not in TIMEFRAME_DEFS:
@@ -778,7 +813,7 @@ def get_chart_data(
         else:
             logger.info(f"[CHART] Cache MISS for indicators, computing...")
             df_with_ind, col_meta = _compute_indicators(df_resampled, indicators)
-            indicator_results = _format_indicator_results(df_with_ind, col_meta, indicators)
+            indicator_results = _format_indicator_results(df_with_ind, col_meta, indicators, compute_all_indicators)
             _indicator_cache.put(ind_key, indicator_results)
 
     # ── Build response ──

@@ -79,7 +79,9 @@
       "Bash(podman run:*)",
       "Read(//c/Users/inkan/learn-ai//**)",
       "Read(//c/Users/inkan/**)",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Bash(sed \"s/.*name: '//\")",
+      "Bash(sed \"s/',.*//\")"
     ]
   }
 }

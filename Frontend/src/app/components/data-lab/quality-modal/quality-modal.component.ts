@@ -7,7 +7,7 @@ import { QualityReport, GapDetail } from '../data-lab-chart/data-lab-chart.compo
 @Component({
   selector: 'app-quality-modal',
   standalone: true,
-  imports: [CommonModule, DatePipe],
+  imports: [CommonModule],
   templateUrl: './quality-modal.component.html',
   styleUrls: ['./quality-modal.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
