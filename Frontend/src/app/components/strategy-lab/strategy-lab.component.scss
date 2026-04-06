@@ -1,33 +1,68 @@
+// ═══════════════════════════════════════════════════════════
+// Strategy Lab — Dark Mode Theme
+// Duplicated from Data Lab for consistency
+// ═══════════════════════════════════════════════════════════
+
+// ── Design Tokens (synced with Data Lab) ──
+$bg-canvas:    #0f1117;
+$bg-surface:   #161922;
+$bg-elevated:  #1c1f2e;
+$bg-hover:     #232738;
+$border:       #2a2e3e;
+$border-light: #353a4d;
+
+$text-primary:   #e2e8f0;
+$text-secondary: #8892a8;
+$text-muted:     #5a6178;
+
+$accent:  #3b82f6;
+$accent-hover: #2563eb;
+$bull:    #00c896;
+$bear:    #e5334e;
+$warn:    #f59e0b;
+
+:host {
+  display: block;
+  background: $bg-canvas;
+  color: $text-primary;
+  min-height: 100vh;
+}
+
 .strategy-lab {
-  padding: 20px;
-  max-width: 1400px;
+  max-width: 1200px;
   margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
 }
 
-h1 {
-  color: #2c3e50;
-  margin-bottom: 4px;
+// ─── Page Header ────────────────────────────────────────
+.page-header {
+  margin-bottom: 1.5rem;
+
+  h2 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: $text-primary;
+    margin: 0;
+    letter-spacing: -0.02em;
+  }
+
+  .subtitle {
+    font-size: 0.88rem;
+    color: $text-secondary;
+    margin: 0.25rem 0 0;
+    line-height: 1.6;
+  }
 }
 
-h2 {
-  color: #2c3e50;
-  margin-bottom: 12px;
-  font-size: 18px;
-}
-
-.subtitle {
-  color: #7f8c8d;
-  margin-top: 0;
-  margin-bottom: 20px;
-}
-
+// ─── Mode Toggle ────────────────────────────────────────
 .mode-toggle {
   display: flex;
   gap: 2px;
-  background: #e9ecef;
+  background: $bg-elevated;
+  border: 1px solid $border;
   border-radius: 8px;
   padding: 3px;
-  margin-bottom: 20px;
+  margin-bottom: 1.25rem;
   width: fit-content;
 
   button {
@@ -37,305 +72,440 @@ h2 {
     background: transparent;
     font-size: 14px;
     font-weight: 600;
-    color: #666;
+    color: $text-secondary;
     cursor: pointer;
     transition: all 0.15s;
 
     &:hover:not(.active) {
-      background: #dee2e6;
+      background: $bg-hover;
     }
 
     &.active {
-      background: white;
-      color: #1976d2;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+      background: $accent;
+      color: #ffffff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     }
   }
 }
 
-.config-form {
-  background: #f8f9fa;
-  border-radius: 8px;
-  padding: 16px 20px;
-  margin-bottom: 20px;
-  border: 1px solid #e9ecef;
-}
-
-.form-row {
+// ─── Info Callouts ─────────────────────────────────────
+.info-callout {
   display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-
-  &:last-of-type {
-    margin-bottom: 16px;
-  }
-}
-
-.form-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-
-  label {
-    font-size: 12px;
-    font-weight: 600;
-    color: #555;
-    text-transform: uppercase;
-  }
-
-  input, select {
-    padding: 6px 10px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    font-size: 14px;
-    min-width: 100px;
-  }
-
-  input[type="number"] {
-    width: 90px;
-  }
-
-  input[type="text"] {
-    width: 100px;
-  }
-}
-
-.run-btn {
-  padding: 10px 28px;
-  background: #1976d2;
-  color: white;
-  border: none;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
   border-radius: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-
-  &:hover:not(:disabled) {
-    background: #1565c0;
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-}
-
-.error-message {
-  padding: 12px;
-  background: #fde8e8;
-  color: #c0392b;
-  border-radius: 6px;
-  margin-bottom: 16px;
-}
-
-.loading {
-  padding: 12px;
-  background: #e3f2fd;
-  color: #1565c0;
-  border-radius: 6px;
-  margin-bottom: 16px;
-}
-
-.data-info-panel {
-  display: flex;
-  gap: 12px;
-  padding: 14px 16px;
   background: #eff6ff;
   border-left: 3px solid #2563eb;
-  border-radius: 6px;
-  margin-bottom: 16px;
-  font-size: 13px;
+  font-size: 0.85rem;
   color: #334155;
+  margin-bottom: 1rem;
 
-  .info-icon {
-    color: #2563eb;
-    font-size: 16px;
-    margin-top: 2px;
-  }
+  > i { color: #2563eb; margin-top: 2px; flex-shrink: 0; }
+  strong { display: block; margin-bottom: 0.15rem; color: #1e293b; font-size: 0.82rem; }
+  span { line-height: 1.5; }
 
-  .info-content {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .info-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-
-    &.pipeline {
-      gap: 8px;
-    }
-  }
-
-  .pipeline-step {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: white;
-    padding: 4px 10px;
-    border-radius: 6px;
-    border: 1px solid #dbeafe;
-
-    strong {
-      font-size: 15px;
-      color: #1e40af;
-    }
-  }
-
-  .info-label {
-    color: #64748b;
-  }
-
-  .info-separator {
-    color: #93c5fd;
-    font-size: 16px;
-    font-weight: 700;
-  }
-
-  .info-explanation {
-    display: flex;
-    gap: 6px;
-    align-items: flex-start;
-    font-size: 12px;
-    color: #64748b;
-    line-height: 1.6;
-    padding-top: 4px;
-    border-top: 1px solid #dbeafe;
-
-    i {
-      color: #93c5fd;
-      margin-top: 2px;
-      font-size: 12px;
-    }
-
-    strong {
-      color: #475569;
-    }
-  }
-
-  strong {
-    color: #1e293b;
+  &.warn {
+    background: #fffbeb;
+    border-left-color: #d97706;
+    > i { color: #d97706; }
   }
 }
 
+// ─── Controls Card ──────────────────────────────────────
+.controls-card {
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.controls-row {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+
+  label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: $text-muted;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  input {
+    padding: 0.5rem 0.65rem;
+    border: 1px solid $border;
+    border-radius: 6px;
+    background: $bg-elevated;
+    color: $text-primary;
+    font-size: 0.88rem;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    &:focus {
+      outline: none;
+      border-color: $accent;
+      box-shadow: 0 0 0 3px rgba($accent, 0.15);
+    }
+
+    &[type='text'] { width: 80px; }
+  }
+
+  &.date-picker-group {
+    :host ::ng-deep .p-datepicker {
+      .p-inputtext {
+        padding: 0.5rem 0.65rem;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        background: #f8fafc;
+        color: #1e293b;
+        font-size: 0.85rem;
+        width: 140px;
+      }
+    }
+  }
+}
+
+// ─── Date Presets ───────────────────────────────────────
+.date-presets {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+
+  .presets-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+}
+
+.preset-btn {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 5px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+
+  &:hover {
+    background: #dbeafe;
+    border-color: #bfdbfe;
+    color: #1d4ed8;
+  }
+}
+
+// ─── Holiday Calendar Styles ────────────────────────────
+.holiday-date {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+
+  &.closed {
+    background-color: #ffebee;
+    color: #c62828;
+  }
+
+  &.early-close {
+    background-color: #fff8e1;
+    color: #f57f17;
+  }
+}
+
+.holiday-legend {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  padding: 0.4rem 0;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+
+  &.closed { background: #c62828; }
+  &.early-close { background: #f57f17; }
+}
+
+// ─── Options Row ───────────────────────────────────────
+.options-row {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid $border;
+  flex-wrap: wrap;
+
+  .option-group {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+
+    label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: $text-muted;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    select {
+      padding: 0.35rem 0.5rem;
+      border: 1px solid $border;
+      border-radius: 5px;
+      background: $bg-elevated;
+      color: $text-primary;
+      font-size: 0.82rem;
+      &:focus { outline: none; border-color: $accent; }
+    }
+
+    .multiplier-input {
+      width: 55px;
+      padding: 0.35rem 0.5rem;
+      border: 1px solid #cbd5e1;
+      border-radius: 5px;
+      background: #f8fafc;
+      color: #1e293b;
+      font-size: 0.82rem;
+      &:focus { outline: none; border-color: #2563eb; }
+    }
+
+    .option-hint {
+      font-size: 0.72rem;
+      color: #94a3b8;
+    }
+  }
+}
+
+.checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: $text-secondary;
+
+  input[type='checkbox'] { accent-color: $accent; }
+
+  .option-hint {
+    font-size: 0.72rem;
+    color: $text-muted;
+  }
+}
+
+// ─── Strategy Params ───────────────────────────────────
+.strategy-params {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid $border;
+}
+
+.params-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.param-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: $text-muted;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  input {
+    width: 90px;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid $border;
+    border-radius: 5px;
+    background: $bg-elevated;
+    color: $text-primary;
+    font-size: 0.82rem;
+
+    &:focus {
+      outline: none;
+      border-color: $accent;
+      box-shadow: 0 0 0 3px rgba($accent, 0.15);
+    }
+  }
+}
+
+// ─── Buttons ───────────────────────────────────────────
+.btn-primary, .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 1.1rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  white-space: nowrap;
+
+  &:active:not(:disabled) { transform: scale(0.98); }
+  &:disabled { opacity: 0.55; cursor: not-allowed; }
+  i { font-size: 0.8rem; }
+}
+
+.btn-primary {
+  background: $accent;
+  color: #ffffff;
+  &:hover:not(:disabled) { background: $accent-hover; }
+}
+
+.btn-secondary {
+  background: $bg-elevated;
+  color: $text-secondary;
+  border: 1px solid $border;
+  &:hover:not(:disabled) { background: $bg-hover; color: $text-primary; }
+}
+
+// ─── Error ─────────────────────────────────────────────
+.error-msg {
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  background: rgba($bear, 0.12);
+  border-left: 3px solid $bear;
+  color: #fca5a5;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+// ─── Stats Grid ────────────────────────────────────────
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-  margin-bottom: 24px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 1.25rem;
 }
 
 .stat-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 14px 10px;
-  background: #f8f9fa;
+  padding: 12px 8px;
+  background: $bg-surface;
+  border: 1px solid $border;
   border-radius: 8px;
-  border: 1px solid #e9ecef;
 
   &.positive {
-    background: #e8f5e9;
-    border-color: #c8e6c9;
+    background: rgba($bull, 0.08);
+    border-color: rgba($bull, 0.25);
   }
 
   &.negative {
-    background: #fde8e8;
-    border-color: #f5c6cb;
+    background: rgba($bear, 0.08);
+    border-color: rgba($bear, 0.25);
   }
 }
 
 .stat-label {
-  font-size: 11px;
+  font-size: 0.65rem;
   font-weight: 600;
-  color: #888;
+  color: $text-muted;
   text-transform: uppercase;
+  letter-spacing: 0.04em;
   margin-bottom: 4px;
 }
 
 .stat-value {
-  font-size: 18px;
+  font-size: 1.1rem;
   font-weight: 700;
-  color: #2c3e50;
+  color: $text-primary;
 }
 
+.positive { color: $bull; font-weight: 600; }
+.negative { color: $bear; font-weight: 600; }
+
+// ─── Chart Section ────────────────────────────────────
 .chart-section {
-  margin-bottom: 24px;
-}
+  margin-bottom: 1.5rem;
 
-.chart-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-
-  h2 {
-    margin-bottom: 0;
+  h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: $text-primary;
+    margin: 0 0 0.75rem;
   }
 }
 
-.chart-type-selector {
-  display: flex;
-  gap: 4px;
-  background: #f0f0f0;
-  border-radius: 6px;
-  padding: 3px;
-
-  button {
-    padding: 5px 12px;
-    border: none;
-    border-radius: 4px;
-    background: transparent;
-    font-size: 12px;
-    font-weight: 500;
-    color: #666;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: all 0.15s;
-
-    &:hover:not(.active) {
-      background: #e0e0e0;
-    }
-
-    &.active {
-      background: white;
-      color: #1976d2;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-    }
-  }
-}
-
+// ─── Trade Log ────────────────────────────────────────
 .trade-log {
-  margin-bottom: 24px;
+  margin-bottom: 1.5rem;
+
+  h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: $text-primary;
+    margin: 0 0 0.75rem;
+  }
 }
 
 .table-wrapper {
   overflow-x: auto;
+  border: 1px solid $border;
+  border-radius: 8px;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 0.78rem;
 
   th, td {
     padding: 8px 10px;
     text-align: right;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid $border;
   }
 
   th {
-    font-size: 11px;
+    font-size: 0.65rem;
     font-weight: 600;
-    color: #888;
+    color: $text-muted;
     text-transform: uppercase;
-    border-bottom: 2px solid #e0e0e0;
+    background: $bg-surface;
+    border-bottom: 2px solid $border-light;
     white-space: nowrap;
+    position: sticky;
+    top: 0;
+  }
+
+  td {
+    color: $text-secondary;
   }
 
   td:first-child, th:first-child {
@@ -355,84 +525,65 @@ table {
 
   .signal-cell {
     text-align: left;
-    font-size: 12px;
-    color: #666;
-    max-width: 250px;
+    font-size: 0.72rem;
+    color: $text-muted;
+    max-width: 200px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   tr.win {
-    background: rgba(46, 125, 50, 0.03);
+    background: rgba($bull, 0.04);
   }
 
   tr.loss {
-    background: rgba(192, 57, 43, 0.03);
+    background: rgba($bear, 0.04);
   }
 
   tbody tr:hover {
-    background: #e3f2fd;
+    background: $bg-hover;
   }
-}
-
-.positive {
-  color: #2e7d32;
-  font-weight: 600;
-}
-
-.negative {
-  color: #c0392b;
-  font-weight: 600;
-}
-
-.active-position {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  background: #fff3e0;
-  border: 1px solid #ffcc80;
-  border-radius: 8px;
-  margin-bottom: 12px;
-  font-size: 14px;
-  color: #e65100;
-}
-
-.position-badge {
-  font-weight: 700;
-  background: #ff9800;
-  color: white;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-}
-
-.strategy-info-banner {
-  padding: 10px 16px;
-  background: #e8eaf6;
-  border-left: 3px solid #3f51b5;
-  border-radius: 6px;
-  margin-bottom: 16px;
-  font-size: 14px;
-  color: #283593;
 }
 
 .result-badge {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 0.65rem;
   font-weight: 700;
   text-transform: uppercase;
 
   &.win-badge {
-    background: #e8f5e9;
-    color: #2e7d32;
+    background: rgba($bull, 0.15);
+    color: $bull;
   }
 
   &.loss-badge {
-    background: #fde8e8;
-    color: #c0392b;
+    background: rgba($bear, 0.15);
+    color: $bear;
   }
+}
+
+// ─── Active Position (Replay) ──────────────────────────
+.active-position {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgba($warn, 0.1);
+  border: 1px solid rgba($warn, 0.3);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 0.85rem;
+  color: $warn;
+}
+
+.position-badge {
+  font-weight: 700;
+  background: $warn;
+  color: $bg-canvas;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
 }

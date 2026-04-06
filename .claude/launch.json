@@ -5,7 +5,8 @@
       "name": "Frontend (Angular)",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["start"],
-      "port": 4200
+      "port": 4200,
+      "cwd": "Frontend"
     },
     {
       "name": "Backend (.NET GraphQL)",

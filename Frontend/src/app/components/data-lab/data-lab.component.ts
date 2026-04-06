@@ -640,7 +640,7 @@ export class DataLabComponent {
     });
   }
 
-  async generateCsv(): Promise<void> {
+  async generateZip(): Promise<void> {
     this.loading.set(true);
     this.error.set('');
     this.progress.set('Fetching OHLCV data and calculating indicators...');
@@ -660,7 +660,7 @@ export class DataLabComponent {
 
       const blob = await firstValueFrom(
         this.http.post(
-          `${environment.pythonServiceUrl}/api/dataset/generate-csv`,
+          `${environment.pythonServiceUrl}/api/dataset/generate-zip`,
           payload,
           { responseType: 'blob' }
         )
@@ -668,74 +668,14 @@ export class DataLabComponent {
 
       const sessionLabel = this.session() === 'rth' ? 'rth' : 'ext';
       const tsLabel = this.multiplier() > 1 ? `${this.multiplier()}${this.timespan()}` : this.timespan();
-      this.progress.set('Downloading CSV...');
-      this.downloadBlob(blob, `${this.ticker()}_${tsLabel}_${sessionLabel}_${this.fromDate()}_to_${this.toDate()}.csv`);
-      this.progress.set('Done! CSV downloaded.');
+      this.progress.set('Downloading ZIP...');
+      this.downloadBlob(blob, `${this.ticker()}_${tsLabel}_${sessionLabel}_${this.fromDate()}_to_${this.toDate()}.zip`);
+      this.progress.set('Done! ZIP downloaded (dataset.csv + metadata.csv + columns.csv).');
     } catch (e: unknown) {
       this.error.set(e instanceof Error ? e.message : String(e));
       this.progress.set('');
     } finally {
       this.loading.set(false);
-    }
-  }
-
-  async downloadMetadata(): Promise<void> {
-    this.error.set('');
-    try {
-      const payload = {
-        ticker: this.ticker(),
-        from_date: this.fromDate(),
-        to_date: this.toDate(),
-        indicator_entries: this.entries(),
-        session: this.session(),
-        forward_fill: this.forwardFill(),
-        warmup: this.warmup(),
-        timespan: this.timespan(),
-        multiplier: this.multiplier(),
-      };
-
-      const blob = await firstValueFrom(
-        this.http.post(
-          `${environment.pythonServiceUrl}/api/dataset/generate-metadata`,
-          payload,
-          { responseType: 'blob' }
-        )
-      );
-
-      const sessionLabel = this.session() === 'rth' ? 'rth' : 'ext';
-      this.downloadBlob(blob, `${this.ticker()}_minute_${sessionLabel}_${this.fromDate()}_to_${this.toDate()}_metadata.json`);
-    } catch (e: unknown) {
-      this.error.set(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  async downloadColumnsCsv(): Promise<void> {
-    this.error.set('');
-    try {
-      const payload = {
-        ticker: this.ticker(),
-        from_date: this.fromDate(),
-        to_date: this.toDate(),
-        indicator_entries: this.entries(),
-        session: this.session(),
-        forward_fill: this.forwardFill(),
-        warmup: this.warmup(),
-        timespan: this.timespan(),
-        multiplier: this.multiplier(),
-      };
-
-      const blob = await firstValueFrom(
-        this.http.post(
-          `${environment.pythonServiceUrl}/api/dataset/generate-metadata-csv`,
-          payload,
-          { responseType: 'blob' }
-        )
-      );
-
-      const sessionLabel = this.session() === 'rth' ? 'rth' : 'ext';
-      this.downloadBlob(blob, `${this.ticker()}_minute_${sessionLabel}_${this.fromDate()}_to_${this.toDate()}_columns.csv`);
-    } catch (e: unknown) {
-      this.error.set(e instanceof Error ? e.message : String(e));
     }
   }
 

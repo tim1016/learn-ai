@@ -775,3 +775,97 @@ def _fmt(val: Any) -> str:
     if isinstance(val, float):
         return f"{val:.6f}"
     return str(val)
+
+
+def build_metadata_kv_csv(
+    ticker: str,
+    from_date: str,
+    to_date: str,
+    bar_count: int,
+    session: str = "rth",
+    forward_fill: bool = True,
+    timespan: str = "minute",
+    multiplier: int = 1,
+    raw_bar_count: int = 0,
+    filled_bar_count: int = 0,
+    column_meta: Optional[List[Dict[str, Any]]] = None,
+) -> bytes:
+    """Generate a simple key-value CSV with dataset metadata."""
+    import zipfile as _zf  # noqa: F401 — just to verify import
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["key", "value"])
+
+    rows = [
+        ("ticker", ticker),
+        ("from_date", from_date),
+        ("to_date", to_date),
+        ("timespan", timespan),
+        ("multiplier", str(multiplier)),
+        ("session_filter", session),
+        ("forward_fill", str(forward_fill).lower()),
+        ("bar_count", str(bar_count)),
+        ("raw_bars_from_polygon", str(raw_bar_count)),
+        ("bars_after_processing", str(filled_bar_count or bar_count)),
+        ("generated_at", datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")),
+        ("data_source", "Polygon.io (Starter plan)"),
+        ("calculation_engine", f"pandas-ta {getattr(ta, 'version', 'unknown')}"),
+    ]
+
+    if column_meta:
+        for i, meta in enumerate(column_meta, 1):
+            rows.append((f"indicator_{i}_name", meta["indicator"]))
+            rows.append((f"indicator_{i}_column", meta["column"]))
+            rows.append((f"indicator_{i}_params", meta["params"]))
+
+    for key, value in rows:
+        writer.writerow([key, value])
+
+    return output.getvalue().encode("utf-8")
+
+
+def build_zip_bytes(
+    df: pd.DataFrame,
+    columns: List[str],
+    column_meta: List[Dict[str, Any]],
+    ohlcv_cols: List[str],
+    ticker: str,
+    from_date: str,
+    to_date: str,
+    session: str = "rth",
+    forward_fill: bool = True,
+    timespan: str = "minute",
+    multiplier: int = 1,
+    raw_bar_count: int = 0,
+    filled_bar_count: int = 0,
+    trades_csv_bytes: Optional[bytes] = None,
+) -> bytes:
+    """Pack dataset.csv, metadata.csv, columns.csv into a ZIP. Optionally include trades.csv."""
+    import zipfile
+
+    dataset_csv = build_csv_bytes(df, columns)
+    metadata_csv = build_metadata_kv_csv(
+        ticker=ticker,
+        from_date=from_date,
+        to_date=to_date,
+        bar_count=len(df),
+        session=session,
+        forward_fill=forward_fill,
+        timespan=timespan,
+        multiplier=multiplier,
+        raw_bar_count=raw_bar_count,
+        filled_bar_count=filled_bar_count,
+        column_meta=column_meta,
+    )
+    columns_csv = build_metadata_csv(column_meta, ohlcv_cols)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("dataset.csv", dataset_csv)
+        zf.writestr("metadata.csv", metadata_csv)
+        zf.writestr("columns.csv", columns_csv)
+        if trades_csv_bytes is not None:
+            zf.writestr("trades.csv", trades_csv_bytes)
+
+    return buf.getvalue()

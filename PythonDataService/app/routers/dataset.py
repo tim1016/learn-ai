@@ -17,6 +17,7 @@ from app.services.dataset_service import (
     build_csv_bytes,
     build_metadata_json,
     build_metadata_csv,
+    build_zip_bytes,
 )
 from app.services.polygon_client import PolygonClientService
 from app.models.requests import DatasetGenerationRequest
@@ -192,6 +193,61 @@ async def generate_dataset_metadata_csv(request: DatasetGenerationRequest):
         raise
     except Exception as e:
         logger.error(f"[DATASET] Metadata CSV error: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/generate-zip")
+async def generate_dataset_zip(request: DatasetGenerationRequest):
+    """Fetch OHLCV, calculate indicators, and return a ZIP with dataset.csv, metadata.csv, columns.csv."""
+    try:
+        logger.info(
+            f"[DATASET] Generating ZIP for {request.ticker}: "
+            f"{request.from_date} to {request.to_date}, "
+            f"indicators={[e.get('name') for e in request.indicator_entries]}"
+        )
+
+        df, column_meta, raw_count = _fetch_and_process(request)
+
+        ohlcv_cols = ["open", "high", "low", "close", "volume"]
+        extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
+        indicator_col_names = [m["column"] for m in column_meta]
+        all_data_cols = ohlcv_cols + extra_cols + indicator_col_names
+
+        zip_bytes = build_zip_bytes(
+            df=df,
+            columns=all_data_cols,
+            column_meta=column_meta,
+            ohlcv_cols=ohlcv_cols + extra_cols,
+            ticker=request.ticker,
+            from_date=request.from_date,
+            to_date=request.to_date,
+            session=request.session,
+            forward_fill=request.forward_fill,
+            timespan=request.timespan,
+            multiplier=request.multiplier,
+            raw_bar_count=raw_count,
+            filled_bar_count=len(df),
+        )
+
+        session_label = "rth" if request.session == "rth" else "ext"
+        ts_label = f"{request.multiplier}{request.timespan}" if request.multiplier > 1 else request.timespan
+        filename = f"{request.ticker}_{ts_label}_{session_label}_{request.from_date}_to_{request.to_date}.zip"
+
+        logger.info(
+            f"[DATASET] ZIP ready: {raw_count} raw bars → {len(df)} processed, "
+            f"{len(indicator_col_names)} indicator columns"
+        )
+
+        return StreamingResponse(
+            io.BytesIO(zip_bytes),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[DATASET] ZIP error: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 

@@ -83,7 +83,9 @@
       "Bash(sed \"s/.*name: '//\")",
       "Bash(sed \"s/',.*//\")",
       "Bash(pip list:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(find /c/Users/inkan/learn-ai -type d -name *backend* -o -name *server*)",
+      "Bash(grep -r '\"\"port\"\"' /c/Users/inkan/learn-ai/Frontend/angular.json)"
     ]
   }
 }

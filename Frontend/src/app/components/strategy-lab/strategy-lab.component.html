@@ -1,6 +1,8 @@
 <div class="strategy-lab">
-  <h1>Strategy Lab</h1>
-  <p class="subtitle">Run algorithmic backtests on historical market data</p>
+  <div class="page-header">
+    <h2>Strategy Lab</h2>
+    <p class="subtitle">Run algorithmic backtests on historical market data using the Python data pipeline</p>
+  </div>
 
   <!-- Mode Toggle -->
   <div class="mode-toggle">
@@ -15,303 +17,423 @@
   </div>
 
   @if (mode() === 'backtest') {
-    <details class="page-guide">
-      <summary>How to use this page</summary>
-      <div class="guide-content">
-        <h4>Quick start</h4>
-        <ol>
-          <li>Type a <strong>ticker</strong> (e.g. <code>AAPL</code>) and set a <strong>date range</strong>.</li>
-          <li>Pick a <strong>timespan</strong>: Minute for intraday signals, Day for swing/position trades.</li>
-          <li>Choose a <strong>strategy</strong> and adjust its parameters (see below).</li>
-          <li>Click <strong>Run Backtest</strong>. Results appear in ~seconds for small ranges, longer for minute data across months.</li>
-        </ol>
-        <h4>Prerequisite</h4>
-        <p>Data must already be in the database for the ticker + date range you choose. Use the <strong>Market Data</strong> or <strong>Stock Analysis</strong> page to fetch data first. If no data exists, the backtest will return 0 trades.</p>
-        <h4>Strategies</h4>
-        <ul>
-          <li><strong>SMA Crossover</strong> &mdash; Buys on golden cross (short SMA crosses above long SMA), sells on death cross. Recommended starting params: Short=10, Long=30 for minute data; Short=50, Long=200 for daily.</li>
-          <li><strong>RSI Mean Reversion</strong> &mdash; Buys when RSI drops below Oversold, sells when RSI rises above Overbought. Default params (Window=14, Oversold=30, Overbought=70) work well for most tickers.</li>
-          <li><strong>Momentum RSI + Stochastic</strong> &mdash; State-based intraday momentum strategy. Enters long when RSI is in a neutral regime (40&ndash;60), fast MA &gt; slow MA (trend confirmation), price &gt; fast MA, and Stochastic %K &gt; %D. Exits 15 minutes before market close. Best on 5-minute bars. See <a routerLink="/strategy-docs">Strategy Docs</a> for full specification.</li>
-        </ul>
-        <h4>Reading the results</h4>
-        <ul>
-          <li><strong>Total P&amp;L</strong> &mdash; Net profit/loss. Green = profitable, Red = losing.</li>
-          <li><strong>Win Rate</strong> &mdash; % of trades that were profitable. Above 50% is decent for trend-following.</li>
-          <li><strong>Sharpe Ratio</strong> &mdash; Risk-adjusted return. Above 1.0 = good, above 2.0 = excellent.</li>
-          <li><strong>Max Drawdown</strong> &mdash; Largest peak-to-trough drop. Lower is better.</li>
-          <li><strong>Equity Curve</strong> &mdash; Cumulative P&amp;L over time. Switch between chart types (Lightweight Charts, SVG, PrimeNG) using the buttons above the chart.</li>
-          <li><strong>Trade Log</strong> &mdash; Every trade with entry/exit timestamps, prices, P&amp;L, and the signal that triggered it.</li>
-        </ul>
-        <div class="guide-tip">
-          Note: All data is <strong>15-minute delayed</strong> and limited to the past <strong>2 years</strong> (Polygon Starter plan).
+    <!-- Warnings -->
+    @if (dateRangeWarning()) {
+      <div class="info-callout warn">
+        <i class="pi pi-exclamation-triangle"></i>
+        <span>{{ dateRangeWarning() }}</span>
+      </div>
+    }
+
+    @if (volumeWarning()) {
+      <div class="info-callout warn">
+        <i class="pi pi-exclamation-triangle"></i>
+        <span>{{ volumeWarning() }}</span>
+      </div>
+    }
+
+    <!-- Controls -->
+    <div class="controls-card">
+      <div class="controls-row">
+        <div class="input-group">
+          <label>Ticker</label>
+          <input type="text" [(ngModel)]="ticker" />
+        </div>
+        <div class="input-group date-picker-group">
+          <label>From</label>
+          <p-datepicker
+            [(ngModel)]="fromDateValue"
+            dateFormat="yy-mm-dd"
+            [showIcon]="true"
+            [minDate]="minDate"
+            [maxDate]="maxDate"
+            [disabledDays]="disabledDays"
+            [disabledDates]="disabledDates()"
+            [showButtonBar]="true"
+            [firstDayOfWeek]="1"
+          >
+            <ng-template pTemplate="date" let-dateMeta>
+              @let holiday = getHolidayForDate(dateMeta.day, dateMeta.month, dateMeta.year);
+              @if (holiday) {
+                <span
+                  class="holiday-date"
+                  [class.early-close]="holiday.status === 'Early Close'"
+                  [class.closed]="holiday.status === 'Closed'"
+                  [pTooltip]="getHolidayTooltip(holiday)"
+                  tooltipPosition="top"
+                >{{ dateMeta.day }}</span>
+              } @else {
+                <span>{{ dateMeta.day }}</span>
+              }
+            </ng-template>
+            <ng-template pTemplate="footer">
+              @if (holidays().length) {
+                <div class="holiday-legend">
+                  <span class="legend-item"><span class="legend-dot closed"></span> Closed</span>
+                  <span class="legend-item"><span class="legend-dot early-close"></span> Early Close</span>
+                </div>
+              }
+            </ng-template>
+          </p-datepicker>
+        </div>
+        <div class="input-group date-picker-group">
+          <label>To</label>
+          <p-datepicker
+            [(ngModel)]="toDateValue"
+            dateFormat="yy-mm-dd"
+            [showIcon]="true"
+            [minDate]="minDate"
+            [maxDate]="maxDate"
+            [disabledDays]="disabledDays"
+            [disabledDates]="disabledDates()"
+            [showButtonBar]="true"
+            [firstDayOfWeek]="1"
+          >
+            <ng-template pTemplate="date" let-dateMeta>
+              @let holiday = getHolidayForDate(dateMeta.day, dateMeta.month, dateMeta.year);
+              @if (holiday) {
+                <span
+                  class="holiday-date"
+                  [class.early-close]="holiday.status === 'Early Close'"
+                  [class.closed]="holiday.status === 'Closed'"
+                  [pTooltip]="getHolidayTooltip(holiday)"
+                  tooltipPosition="top"
+                >{{ dateMeta.day }}</span>
+              } @else {
+                <span>{{ dateMeta.day }}</span>
+              }
+            </ng-template>
+            <ng-template pTemplate="footer">
+              @if (holidays().length) {
+                <div class="holiday-legend">
+                  <span class="legend-item"><span class="legend-dot closed"></span> Closed</span>
+                  <span class="legend-item"><span class="legend-dot early-close"></span> Early Close</span>
+                </div>
+              }
+            </ng-template>
+          </p-datepicker>
         </div>
       </div>
-    </details>
 
-    <!-- Backtest Configuration Form -->
-    <div class="config-form">
-      <div class="form-row">
-        <div class="form-group">
-          <label>Ticker</label>
-          <input type="text" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="AAPL" />
+      <div class="date-presets">
+        <span class="presets-label">Quick:</span>
+        <button class="preset-btn" (click)="setPresetRange(7)">7d</button>
+        <button class="preset-btn" (click)="setPresetRange(30)">30d</button>
+        <button class="preset-btn" (click)="setPresetMonths(3)">3m</button>
+        <button class="preset-btn" (click)="setPresetMonths(6)">6m</button>
+        <button class="preset-btn" (click)="setPresetMonths(12)">1y</button>
+      </div>
+
+      <div class="options-row">
+        <div class="option-group">
+          <label>Timespan</label>
+          <select [(ngModel)]="timespan">
+            <option value="minute">Minute</option>
+            <option value="hour">Hour</option>
+            <option value="day">Day</option>
+          </select>
         </div>
-        <div class="form-group">
-          <label>From</label>
-          <input type="date" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" [min]="minDate" />
+        <div class="option-group">
+          <label>Multiplier</label>
+          <input type="number" [(ngModel)]="multiplier" min="1" max="60" class="multiplier-input" />
+          <span class="option-hint">e.g. 5 + minute = 5-min bars</span>
         </div>
-        <div class="form-group">
-          <label>To</label>
-          <input type="date" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" [min]="minDate" />
-        </div>
-        <div class="form-group">
-          <label>Timeframe</label>
-          <select [ngModel]="timeframe()" (ngModelChange)="timeframe.set($event)">
-            @for (opt of timeframeOptions; track opt.value) {
-              <option [value]="opt.value">{{ opt.label }}</option>
-            }
+        <div class="option-group">
+          <label>Session</label>
+          <select [(ngModel)]="session">
+            <option value="rth">RTH Only (09:30-16:00 ET)</option>
+            <option value="extended">Extended Hours</option>
           </select>
         </div>
       </div>
 
-      <div class="form-row">
-        <div class="form-group">
+      <div class="options-row">
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="forwardFill()" (change)="forwardFill.set(!forwardFill())" />
+          <span>Forward-fill gaps</span>
+          <span class="option-hint">(fills missing bars with previous close, volume=0)</span>
+        </label>
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="warmup()" (change)="warmup.set(!warmup())" />
+          <span>Indicator warm-up</span>
+          <span class="option-hint">(fetch extra bars before start date so indicators converge from bar 1)</span>
+        </label>
+      </div>
+
+      <!-- Strategy selection -->
+      <div class="options-row">
+        <div class="option-group">
           <label>Strategy</label>
-          <select [ngModel]="strategyName()" (ngModelChange)="strategyName.set($event)">
-            <option value="ema_crossover_rsi">EMA Crossover + RSI (Rule-Based)</option>
+          <select [(ngModel)]="strategyName">
             <option value="sma_crossover">SMA Crossover</option>
             <option value="rsi_mean_reversion">RSI Mean Reversion</option>
             <option value="momentum_rsi_stochastic">Momentum RSI + Stochastic</option>
+            <option value="ema_crossover_rsi">EMA Crossover + RSI</option>
+            <option value="rsi_reversal">RSI Reversal</option>
           </select>
         </div>
+      </div>
 
-        @if (strategyName() === 'ema_crossover_rsi') {
-          <div class="form-group">
-            <label>Fast EMA</label>
-            <input type="number" [ngModel]="emaCrossoverFastPeriod()" (ngModelChange)="emaCrossoverFastPeriod.set($event)" min="2" />
-          </div>
-          <div class="form-group">
-            <label>Slow EMA</label>
-            <input type="number" [ngModel]="emaCrossoverSlowPeriod()" (ngModelChange)="emaCrossoverSlowPeriod.set($event)" min="2" />
-          </div>
-          <div class="form-group">
-            <label>Min EMA Gap</label>
-            <input type="number" step="0.01" [ngModel]="emaCrossoverMinGap()" (ngModelChange)="emaCrossoverMinGap.set($event)" min="0" />
-          </div>
-          <div class="form-group">
-            <label>RSI Min</label>
-            <input type="number" [ngModel]="emaCrossoverRsiMin()" (ngModelChange)="emaCrossoverRsiMin.set($event)" min="1" max="99" />
-          </div>
-          <div class="form-group">
-            <label>RSI Max</label>
-            <input type="number" [ngModel]="emaCrossoverRsiMax()" (ngModelChange)="emaCrossoverRsiMax.set($event)" min="1" max="99" />
-          </div>
-          <div class="form-group">
-            <label>Exit Bars</label>
-            <input type="number" [ngModel]="emaCrossoverExitBars()" (ngModelChange)="emaCrossoverExitBars.set($event)" min="1" max="20" />
-          </div>
-          <div class="form-group">
-            <label>RSI Period</label>
-            <input type="number" [ngModel]="emaCrossoverRsiPeriod()" (ngModelChange)="emaCrossoverRsiPeriod.set($event)" min="2" />
-          </div>
-          <div class="form-group">
-            <label>ADX Period</label>
-            <input type="number" [ngModel]="emaCrossoverAdxPeriod()" (ngModelChange)="emaCrossoverAdxPeriod.set($event)" min="2" />
-          </div>
-        }
-
-        @if (strategyName() === 'sma_crossover') {
-          <div class="form-group">
-            <label>Short Window</label>
-            <input type="number" [ngModel]="shortWindow()" (ngModelChange)="shortWindow.set($event)" min="2" />
-          </div>
-          <div class="form-group">
-            <label>Long Window</label>
-            <input type="number" [ngModel]="longWindow()" (ngModelChange)="longWindow.set($event)" min="5" />
-          </div>
-        }
-
-        @if (strategyName() === 'rsi_mean_reversion') {
-          <div class="form-group">
-            <label>RSI Window</label>
-            <input type="number" [ngModel]="rsiWindow()" (ngModelChange)="rsiWindow.set($event)" min="2" />
-          </div>
-          <div class="form-group">
-            <label>Oversold</label>
-            <input type="number" [ngModel]="oversold()" (ngModelChange)="oversold.set($event)" min="1" max="50" />
-          </div>
-          <div class="form-group">
-            <label>Overbought</label>
-            <input type="number" [ngModel]="overbought()" (ngModelChange)="overbought.set($event)" min="50" max="99" />
-          </div>
-        }
-
-        @if (strategyName() === 'momentum_rsi_stochastic') {
-          <div class="form-group">
-            <label>RSI Length</label>
-            <input type="number" [ngModel]="momentumRsiLength()" (ngModelChange)="momentumRsiLength.set($event)" min="2" />
-          </div>
-          <div class="form-group">
-            <label>RSI Low</label>
-            <input type="number" [ngModel]="momentumRsiLow()" (ngModelChange)="momentumRsiLow.set($event)" min="1" max="99" />
-          </div>
-          <div class="form-group">
-            <label>RSI High</label>
-            <input type="number" [ngModel]="momentumRsiHigh()" (ngModelChange)="momentumRsiHigh.set($event)" min="1" max="99" />
-          </div>
-          <div class="form-group">
-            <label>Fast MA</label>
-            <input type="number" [ngModel]="momentumFastMa()" (ngModelChange)="momentumFastMa.set($event)" min="2" />
-          </div>
-          <div class="form-group">
-            <label>Slow MA</label>
-            <input type="number" [ngModel]="momentumSlowMa()" (ngModelChange)="momentumSlowMa.set($event)" min="5" />
-          </div>
-          <div class="form-group">
-            <label>Stoch %K</label>
-            <input type="number" [ngModel]="momentumStochK()" (ngModelChange)="momentumStochK.set($event)" min="2" />
-          </div>
-          <div class="form-group">
-            <label>Stoch %D</label>
-            <input type="number" [ngModel]="momentumStochD()" (ngModelChange)="momentumStochD.set($event)" min="1" />
-          </div>
-          <div class="form-group">
-            <label>Exit (min before close)</label>
-            <input type="number" [ngModel]="momentumExitMinutes()" (ngModelChange)="momentumExitMinutes.set($event)" min="1" max="60" />
-          </div>
+      <!-- Strategy-specific parameters -->
+      <div class="strategy-params">
+        @switch (strategyName()) {
+          @case ('sma_crossover') {
+            <div class="params-row">
+              <div class="param-group">
+                <label>Short Window</label>
+                <input type="number" [(ngModel)]="shortWindow" min="2" />
+              </div>
+              <div class="param-group">
+                <label>Long Window</label>
+                <input type="number" [(ngModel)]="longWindow" min="5" />
+              </div>
+            </div>
+          }
+          @case ('rsi_mean_reversion') {
+            <div class="params-row">
+              <div class="param-group">
+                <label>RSI Window</label>
+                <input type="number" [(ngModel)]="rsiWindow" min="2" />
+              </div>
+              <div class="param-group">
+                <label>Oversold</label>
+                <input type="number" [(ngModel)]="oversold" min="1" max="50" />
+              </div>
+              <div class="param-group">
+                <label>Overbought</label>
+                <input type="number" [(ngModel)]="overbought" min="50" max="99" />
+              </div>
+            </div>
+          }
+          @case ('momentum_rsi_stochastic') {
+            <div class="params-row">
+              <div class="param-group">
+                <label>RSI Length</label>
+                <input type="number" [(ngModel)]="momentumRsiLength" min="2" />
+              </div>
+              <div class="param-group">
+                <label>RSI Low</label>
+                <input type="number" [(ngModel)]="momentumRsiLow" min="1" max="99" />
+              </div>
+              <div class="param-group">
+                <label>RSI High</label>
+                <input type="number" [(ngModel)]="momentumRsiHigh" min="1" max="99" />
+              </div>
+              <div class="param-group">
+                <label>Fast MA</label>
+                <input type="number" [(ngModel)]="momentumFastMa" min="2" />
+              </div>
+              <div class="param-group">
+                <label>Slow MA</label>
+                <input type="number" [(ngModel)]="momentumSlowMa" min="5" />
+              </div>
+              <div class="param-group">
+                <label>Stoch %K</label>
+                <input type="number" [(ngModel)]="momentumStochK" min="2" />
+              </div>
+              <div class="param-group">
+                <label>Stoch %D</label>
+                <input type="number" [(ngModel)]="momentumStochD" min="1" />
+              </div>
+              <div class="param-group">
+                <label>Exit (min before close)</label>
+                <input type="number" [(ngModel)]="momentumExitMinutes" min="1" max="60" />
+              </div>
+            </div>
+          }
+          @case ('ema_crossover_rsi') {
+            <div class="params-row">
+              <div class="param-group">
+                <label>Fast EMA</label>
+                <input type="number" [(ngModel)]="emaCrossoverFastPeriod" min="2" />
+              </div>
+              <div class="param-group">
+                <label>Slow EMA</label>
+                <input type="number" [(ngModel)]="emaCrossoverSlowPeriod" min="2" />
+              </div>
+              <div class="param-group">
+                <label>Min EMA Gap</label>
+                <input type="number" step="0.01" [(ngModel)]="emaCrossoverMinGap" min="0" />
+              </div>
+              <div class="param-group">
+                <label>RSI Min</label>
+                <input type="number" [(ngModel)]="emaCrossoverRsiMin" min="1" max="99" />
+              </div>
+              <div class="param-group">
+                <label>RSI Max</label>
+                <input type="number" [(ngModel)]="emaCrossoverRsiMax" min="1" max="99" />
+              </div>
+              <div class="param-group">
+                <label>Exit Bars</label>
+                <input type="number" [(ngModel)]="emaCrossoverExitBars" min="1" max="20" />
+              </div>
+              <div class="param-group">
+                <label>RSI Period</label>
+                <input type="number" [(ngModel)]="emaCrossoverRsiPeriod" min="2" />
+              </div>
+              <div class="param-group">
+                <label>ADX Period</label>
+                <input type="number" [(ngModel)]="emaCrossoverAdxPeriod" min="2" />
+              </div>
+            </div>
+          }
+          @case ('rsi_reversal') {
+            <div class="params-row">
+              <div class="param-group">
+                <label>RSI Window</label>
+                <input type="number" [(ngModel)]="rsiReversalWindow" min="2" />
+              </div>
+              <div class="param-group">
+                <label>Oversold</label>
+                <input type="number" [(ngModel)]="rsiReversalOversold" min="1" max="50" />
+              </div>
+              <div class="param-group">
+                <label>Overbought</label>
+                <input type="number" [(ngModel)]="rsiReversalOverbought" min="50" max="99" />
+              </div>
+            </div>
+          }
         }
       </div>
 
-      <button class="run-btn" (click)="runBacktest()" [disabled]="loading()">
-        {{ loading() ? 'Running...' : 'Run Backtest' }}
-      </button>
+      <div class="controls-row" style="margin-top: 0.75rem;">
+        <button class="btn-primary" (click)="runBacktest()" [disabled]="loading()">
+          @if (loading()) {
+            <i class="pi pi-spin pi-spinner"></i> Running...
+          } @else {
+            <i class="pi pi-play"></i> Run Backtest
+          }
+        </button>
+        <button class="btn-secondary" (click)="generateZip()" [disabled]="loading() || !result()">
+          <i class="pi pi-download"></i> Generate CSV
+        </button>
+      </div>
     </div>
 
     @if (error()) {
-      <div class="error-message">{{ error() }}</div>
+      <div class="error-msg">{{ error() }}</div>
     }
 
-    @if (loading()) {
-      <div class="loading">Running backtest... This may take a moment for large datasets.</div>
-    }
-
-    <!-- Rule-Based Backtest Results -->
-    @if (ruleBasedResult(); as rb) {
-      <div class="strategy-info-banner">
-        <strong>{{ rb.strategyName }}</strong> — {{ rb.ticker }} — {{ rb.barsProcessed | number }} bars processed
+    <!-- Backtest Results -->
+    @if (result(); as r) {
+      <!-- Pipeline Info -->
+      <div class="info-callout">
+        <i class="pi pi-database"></i>
+        <div>
+          <strong>{{ r.ticker }} &mdash; {{ r.strategy_name }}</strong>
+          <span>
+            {{ r.source_bars | number }} source bars
+            &rarr; {{ r.rth_bars | number }} RTH bars
+            &rarr; {{ r.resampled_bars | number }} {{ r.timeframe }} bars
+            &mdash; {{ r.bars_processed | number }} processed
+          </span>
+        </div>
       </div>
 
       <!-- Performance Metrics Grid -->
       <div class="stats-grid">
-        <div class="stat-card" [class.positive]="rb.totalPnlPct > 0" [class.negative]="rb.totalPnlPct <= 0">
+        <div class="stat-card" [class.positive]="r.total_pnl_pct > 0" [class.negative]="r.total_pnl_pct <= 0">
           <span class="stat-label">Total P&L</span>
-          <span class="stat-value">{{ formatPct(rb.totalPnlPct) }}</span>
+          <span class="stat-value">{{ formatPct(r.total_pnl_pct) }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Win Rate</span>
-          <span class="stat-value">{{ (rb.winRate * 100).toFixed(1) }}%</span>
+          <span class="stat-value">{{ (r.win_rate * 100).toFixed(1) }}%</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Total Trades</span>
-          <span class="stat-value">{{ rb.totalTrades }}</span>
+          <span class="stat-value">{{ r.total_trades }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">W / L</span>
-          <span class="stat-value">{{ rb.winningTrades }} / {{ rb.losingTrades }}</span>
+          <span class="stat-value">{{ r.winning_trades }} / {{ r.losing_trades }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Avg Win</span>
-          <span class="stat-value positive">{{ formatPct(rb.avgWinPct) }}</span>
+          <span class="stat-value positive">{{ formatPct(r.avg_win_pct) }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Avg Loss</span>
-          <span class="stat-value negative">{{ formatPct(rb.avgLossPct) }}</span>
+          <span class="stat-value negative">{{ formatPct(r.avg_loss_pct) }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">W/L Ratio</span>
-          <span class="stat-value">{{ rb.winLossRatio.toFixed(3) }}x</span>
+          <span class="stat-value">{{ r.win_loss_ratio.toFixed(3) }}x</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Profit Factor</span>
-          <span class="stat-value">{{ rb.profitFactor.toFixed(3) }}x</span>
+          <span class="stat-value">{{ r.profit_factor.toFixed(3) }}x</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Expectancy</span>
-          <span class="stat-value">{{ formatPct(rb.expectancyPerTrade) }}</span>
+          <span class="stat-value">{{ formatPct(r.expectancy_per_trade) }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Max Drawdown</span>
-          <span class="stat-value negative">{{ formatPct(rb.maxDrawdownPct) }}</span>
+          <span class="stat-value negative">{{ formatPct(r.max_drawdown_pct) }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">P&L (pts)</span>
-          <span class="stat-value">${{ rb.totalPnlPts.toFixed(2) }}</span>
+          <span class="stat-value">${{ r.total_pnl_pts.toFixed(2) }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Sharpe Ratio</span>
-          <span class="stat-value">{{ rb.sharpeRatio.toFixed(4) }}</span>
+          <span class="stat-value">{{ r.sharpe_ratio.toFixed(4) }}</span>
         </div>
       </div>
 
-      <!-- Equity Curve -->
-      @if (ruleBasedEquityCurve().length > 0) {
-        <div class="chart-section">
-          <h2>Equity Curve (Cumulative P&L %)</h2>
-          <app-line-chart
-            [data]="ruleBasedEquityCurve()"
-            [ticker]="ticker()"
-            [timeVisible]="true"
-            [height]="300"
-            [lineColor]="rb.totalPnlPct > 0 ? '#2e7d32' : '#c0392b'"
-          />
-        </div>
-      }
+      <!-- Chart -->
+      <div class="chart-section">
+        <app-strategy-lab-chart
+          [chartBars]="chartBars()"
+          [chartIndicators]="chartIndicators()"
+          [quality]="chartQuality()"
+          [trades]="chartTrades()"
+          [fromDate]="fromDate()"
+          [toDate]="toDate()"
+        />
+      </div>
 
-      <!-- Trade Log with Indicator Details -->
-      @if (rb.trades.length > 0) {
+      <!-- Trade Log -->
+      @if (r.trades.length > 0) {
         <div class="trade-log">
-          <h2>Trade Log ({{ rb.trades.length }} trades)</h2>
+          <h3>Trade Log ({{ r.trades.length }} trades)</h3>
           <div class="table-wrapper">
             <table>
               <thead>
                 <tr>
                   <th>#</th>
+                  <th>Type</th>
                   <th>Entry Time</th>
                   <th>Exit Time</th>
                   <th>Entry $</th>
                   <th>Exit $</th>
-                  <th>EMA{{ emaCrossoverFastPeriod() }}</th>
-                  <th>EMA{{ emaCrossoverSlowPeriod() }}</th>
-                  <th>EMA Gap</th>
-                  <th>RSI</th>
-                  <th>ADX</th>
                   <th>P&L Pts</th>
                   <th>P&L %</th>
                   <th>Cum P&L %</th>
+                  <th>Signal</th>
                   <th>Result</th>
                 </tr>
               </thead>
               <tbody>
-                @for (trade of rb.trades; track trade.tradeNumber) {
+                @for (trade of r.trades; track trade.trade_number) {
                   <tr [class.win]="trade.pnl > 0" [class.loss]="trade.pnl <= 0">
-                    <td>{{ trade.tradeNumber }}</td>
-                    <td>{{ trade.entryTimestamp }}</td>
-                    <td>{{ trade.exitTimestamp }}</td>
-                    <td>{{ trade.entryPrice.toFixed(2) }}</td>
-                    <td>{{ trade.exitPrice.toFixed(2) }}</td>
-                    <td>{{ trade.emaFast?.toFixed(4) ?? '–' }}</td>
-                    <td>{{ trade.emaSlow?.toFixed(4) ?? '–' }}</td>
-                    <td>{{ trade.emaGap?.toFixed(4) ?? '–' }}</td>
-                    <td>{{ trade.rsi?.toFixed(2) ?? '–' }}</td>
-                    <td>{{ trade.adx?.toFixed(2) ?? '–' }}</td>
+                    <td>{{ trade.trade_number }}</td>
+                    <td>{{ trade.trade_type }}</td>
+                    <td>{{ trade.entry_timestamp }}</td>
+                    <td>{{ trade.exit_timestamp }}</td>
+                    <td>{{ trade.entry_price.toFixed(2) }}</td>
+                    <td>{{ trade.exit_price.toFixed(2) }}</td>
                     <td [class.positive]="trade.pnl > 0" [class.negative]="trade.pnl <= 0">
                       {{ trade.pnl > 0 ? '+' : '' }}{{ trade.pnl.toFixed(2) }}
                     </td>
-                    <td [class.positive]="trade.pnlPct > 0" [class.negative]="trade.pnlPct <= 0">
-                      {{ formatPct(trade.pnlPct) }}
+                    <td [class.positive]="trade.pnl_pct > 0" [class.negative]="trade.pnl_pct <= 0">
+                      {{ formatPct(trade.pnl_pct) }}
                     </td>
-                    <td [class.positive]="trade.cumulativePnlPct > 0" [class.negative]="trade.cumulativePnlPct <= 0">
-                      {{ formatPct(trade.cumulativePnlPct) }}
+                    <td [class.positive]="trade.cumulative_pnl_pct > 0" [class.negative]="trade.cumulative_pnl_pct <= 0">
+                      {{ formatPct(trade.cumulative_pnl_pct) }}
                     </td>
+                    <td class="signal-cell">{{ trade.signal_reason }}</td>
                     <td>
                       <span class="result-badge" [class.win-badge]="trade.pnl > 0" [class.loss-badge]="trade.pnl <= 0">
                         {{ trade.pnl > 0 ? 'WIN' : 'LOSS' }}
@@ -325,264 +447,123 @@
         </div>
       }
     }
-
-    @if (result(); as r) {
-      <!-- Data Info Panel -->
-      <div class="data-info-panel">
-        <div class="info-icon">
-          <i class="pi pi-database"></i>
-        </div>
-        <div class="info-content">
-          <div class="info-row pipeline">
-            <span class="pipeline-step">
-              <span class="info-label">Fetched</span>
-              <strong>{{ r.sourceBars | number }}</strong>
-              <span class="info-label">1m bars</span>
-            </span>
-            <span class="info-separator">→</span>
-            <span class="pipeline-step">
-              <span class="info-label">RTH filter</span>
-              <strong>{{ r.rthBars | number }}</strong>
-              <span class="info-label">bars</span>
-            </span>
-            <span class="info-separator">→</span>
-            <span class="pipeline-step">
-              <span class="info-label">Resampled</span>
-              <strong>{{ r.resampledBars | number }}</strong>
-              <span class="info-label">{{ r.timeframe }} bars</span>
-            </span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Date range:</span>
-            <strong>{{ fromDate() }} to {{ toDate() }}</strong>
-          </div>
-          <div class="info-explanation">
-            <i class="pi pi-info-circle"></i>
-            <span>
-              <strong>Pipeline:</strong> All 1-minute bars in the date range are fetched from the database.
-              Pre-market and after-hours bars are removed (RTH = 9:30 AM – 4:00 PM ET only).
-              @if (r.timeframe !== '1m') {
-                Then {{ r.rthBars | number }} RTH bars are aggregated into {{ r.resampledBars | number }}
-                {{ r.timeframe }} candles (Open=first, High=max, Low=min, Close=last, Volume=sum).
-                Larger timeframes produce fewer bars but smoother, higher-quality signals.
-              }
-              Indicators and strategy logic run on the final {{ r.timeframe }} bars.
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Summary Stats -->
-      <div class="stats-grid">
-        <div class="stat-card" [class.positive]="r.totalPnL > 0" [class.negative]="r.totalPnL <= 0">
-          <span class="stat-label">Total P&L</span>
-          <span class="stat-value">${{ formatPrice(r.totalPnL) }}</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Win Rate</span>
-          <span class="stat-value">{{ winRate() }}%</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Total Trades</span>
-          <span class="stat-value">{{ r.totalTrades }}</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Max Drawdown</span>
-          <span class="stat-value">${{ formatPrice(r.maxDrawdown) }}</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Sharpe Ratio</span>
-          <span class="stat-value">{{ r.sharpeRatio.toFixed(4) }}</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Avg P&L/Trade</span>
-          <span class="stat-value">${{ formatPrice(avgPnl()) }}</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Duration</span>
-          <span class="stat-value">{{ r.durationMs }}ms</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">W / L</span>
-          <span class="stat-value">{{ r.winningTrades }} / {{ r.losingTrades }}</span>
-        </div>
-      </div>
-
-      <!-- Equity Curve -->
-      @if (equityCurve().length > 0 || r.trades.length > 0) {
-        <div class="chart-section">
-          <div class="chart-header">
-            <h2>Equity Curve</h2>
-            <div class="chart-type-selector">
-              <button
-                [class.active]="chartType() === 'lightweight'"
-                (click)="chartType.set('lightweight')"
-              >Lightweight Charts</button>
-              <button
-                [class.active]="chartType() === 'svg'"
-                (click)="chartType.set('svg')"
-              >SVG</button>
-              <button
-                [class.active]="chartType() === 'primeng'"
-                (click)="chartType.set('primeng')"
-              >PrimeNG (Chart.js)</button>
-            </div>
-          </div>
-
-          @switch (chartType()) {
-            @case ('lightweight') {
-              <app-line-chart
-                [data]="equityCurve()"
-                [ticker]="ticker()"
-                [timeVisible]="true"
-                [height]="300"
-                [lineColor]="r.totalPnL > 0 ? '#2e7d32' : '#c0392b'"
-              />
-            }
-            @case ('svg') {
-              <app-backtest-svg-chart
-                [trades]="r.trades"
-                [height]="300"
-              />
-            }
-            @case ('primeng') {
-              <app-backtest-primeng-chart
-                [trades]="r.trades"
-                [height]="300"
-              />
-            }
-          }
-        </div>
-      }
-
-      <!-- Trade Log -->
-      @if (r.trades.length > 0) {
-        <div class="trade-log">
-          <h2>Trade Log ({{ r.trades.length }} trades)</h2>
-          <div class="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Type</th>
-                  <th>Entry Time</th>
-                  <th>Exit Time</th>
-                  <th>Entry Price</th>
-                  <th>Exit Price</th>
-                  <th>P&L</th>
-                  <th>Cum. P&L</th>
-                  <th>Signal</th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (trade of r.trades; track $index) {
-                  <tr [class.win]="trade.pnl > 0" [class.loss]="trade.pnl <= 0">
-                    <td>{{ $index + 1 }}</td>
-                    <td>{{ trade.tradeType }}</td>
-                    <td>{{ formatTimestamp(trade.entryTimestamp) }}</td>
-                    <td>{{ formatTimestamp(trade.exitTimestamp) }}</td>
-                    <td>{{ formatPrice(trade.entryPrice) }}</td>
-                    <td>{{ formatPrice(trade.exitPrice) }}</td>
-                    <td [class.positive]="trade.pnl > 0" [class.negative]="trade.pnl <= 0">
-                      {{ trade.pnl > 0 ? '+' : '' }}{{ formatPrice(trade.pnl) }}
-                    </td>
-                    <td [class.positive]="trade.cumulativePnl > 0" [class.negative]="trade.cumulativePnl <= 0">
-                      {{ formatPrice(trade.cumulativePnl) }}
-                    </td>
-                    <td class="signal-cell">{{ trade.signalReason }}</td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          </div>
-        </div>
-      }
-    }
   }
 
   @if (mode() === 'replay') {
-    <details class="page-guide">
-      <summary>How to use Replay mode</summary>
-      <div class="guide-content">
-        <h4>Quick start</h4>
-        <ol>
-          <li>Type a <strong>ticker</strong> and set a <strong>date range</strong> for the data you want to replay.</li>
-          <li>Choose a <strong>timespan</strong> and <strong>multiplier</strong> (e.g. 1-minute bars).</li>
-          <li>Click <strong>Load Data for Replay</strong>. The system fetches historical bars and pre-computes indicator overlays and strategy trades.</li>
-          <li>Use the <strong>playback controls</strong> to step through or auto-play the data bar by bar.</li>
-        </ol>
-        <h4>Playback controls</h4>
-        <ul>
-          <li><strong>Play / Pause</strong> &mdash; Start or pause auto-advancing through bars.</li>
-          <li><strong>Step Forward / Back</strong> &mdash; Move one bar at a time for precise analysis.</li>
-          <li><strong>Seek to Start / End</strong> &mdash; Jump to the first or last bar instantly.</li>
-          <li><strong>Speed selector</strong> &mdash; Choose 1x, 2x, 5x, 10x, or 50x playback speed.</li>
-          <li><strong>Timeline slider</strong> &mdash; Drag to scrub to any point in the dataset.</li>
-        </ul>
-        <h4>Indicator overlays</h4>
-        <p>SMA and EMA lines are computed from the backtest engine and revealed <strong>progressively</strong> as the replay advances. No future indicator values are shown.</p>
-        <h4>Trade markers</h4>
-        <ul>
-          <li><span style="color:#2196f3"><strong>Blue arrow up</strong></span> &mdash; Trade entry point.</li>
-          <li><span style="color:#4caf50"><strong>Green arrow down</strong></span> &mdash; Profitable exit.</li>
-          <li><span style="color:#f44336"><strong>Red arrow down</strong></span> &mdash; Losing exit.</li>
-          <li><span style="color:#ff9800"><strong>Orange circle</strong></span> &mdash; Currently open position (not yet exited).</li>
-        </ul>
-        <h4>Equity curve</h4>
-        <p>A running cumulative P&amp;L chart appears below the main chart as trades complete. Green = profitable overall, Red = losing.</p>
-        <h4>No-lookahead guarantee</h4>
-        <p>At every replay point, only data up to the current bar is visible. Future candles, indicator values, and trade outcomes are hidden until the replay reaches them.</p>
-        <h4>Prerequisite</h4>
-        <p>Data must already be in the database for the ticker + date range you choose. Use the <strong>Market Data</strong> or <strong>Stock Analysis</strong> page to fetch data first.</p>
-        <div class="guide-tip">
-          Note: All data is <strong>15-minute delayed</strong> and limited to the past <strong>2 years</strong> (Polygon Starter plan).
+    <!-- Replay Configuration -->
+    <div class="controls-card">
+      <div class="controls-row">
+        <div class="input-group">
+          <label>Ticker</label>
+          <input type="text" [(ngModel)]="ticker" />
+        </div>
+        <div class="input-group date-picker-group">
+          <label>From</label>
+          <p-datepicker
+            [(ngModel)]="fromDateValue"
+            dateFormat="yy-mm-dd"
+            [showIcon]="true"
+            [minDate]="minDate"
+            [maxDate]="maxDate"
+            [disabledDays]="disabledDays"
+            [disabledDates]="disabledDates()"
+            [showButtonBar]="true"
+            [firstDayOfWeek]="1"
+          >
+            <ng-template pTemplate="date" let-dateMeta>
+              @let holiday = getHolidayForDate(dateMeta.day, dateMeta.month, dateMeta.year);
+              @if (holiday) {
+                <span
+                  class="holiday-date"
+                  [class.early-close]="holiday.status === 'Early Close'"
+                  [class.closed]="holiday.status === 'Closed'"
+                  [pTooltip]="getHolidayTooltip(holiday)"
+                  tooltipPosition="top"
+                >{{ dateMeta.day }}</span>
+              } @else {
+                <span>{{ dateMeta.day }}</span>
+              }
+            </ng-template>
+          </p-datepicker>
+        </div>
+        <div class="input-group date-picker-group">
+          <label>To</label>
+          <p-datepicker
+            [(ngModel)]="toDateValue"
+            dateFormat="yy-mm-dd"
+            [showIcon]="true"
+            [minDate]="minDate"
+            [maxDate]="maxDate"
+            [disabledDays]="disabledDays"
+            [disabledDates]="disabledDates()"
+            [showButtonBar]="true"
+            [firstDayOfWeek]="1"
+          >
+            <ng-template pTemplate="date" let-dateMeta>
+              @let holiday = getHolidayForDate(dateMeta.day, dateMeta.month, dateMeta.year);
+              @if (holiday) {
+                <span
+                  class="holiday-date"
+                  [class.early-close]="holiday.status === 'Early Close'"
+                  [class.closed]="holiday.status === 'Closed'"
+                  [pTooltip]="getHolidayTooltip(holiday)"
+                  tooltipPosition="top"
+                >{{ dateMeta.day }}</span>
+              } @else {
+                <span>{{ dateMeta.day }}</span>
+              }
+            </ng-template>
+          </p-datepicker>
         </div>
       </div>
-    </details>
 
-    <!-- Replay Configuration Form -->
-    <div class="config-form">
-      <div class="form-row">
-        <div class="form-group">
-          <label>Ticker</label>
-          <input type="text" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="AAPL" />
-        </div>
-        <div class="form-group">
-          <label>From</label>
-          <input type="date" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" [min]="minDate" />
-        </div>
-        <div class="form-group">
-          <label>To</label>
-          <input type="date" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" [min]="minDate" />
-        </div>
-        <div class="form-group">
-          <label>Timeframe</label>
-          <select [ngModel]="timeframe()" (ngModelChange)="timeframe.set($event)">
-            @for (opt of timeframeOptions; track opt.value) {
-              <option [value]="opt.value">{{ opt.label }}</option>
-            }
+      <div class="date-presets">
+        <span class="presets-label">Quick:</span>
+        <button class="preset-btn" (click)="setPresetRange(7)">7d</button>
+        <button class="preset-btn" (click)="setPresetRange(30)">30d</button>
+        <button class="preset-btn" (click)="setPresetMonths(3)">3m</button>
+        <button class="preset-btn" (click)="setPresetMonths(6)">6m</button>
+        <button class="preset-btn" (click)="setPresetMonths(12)">1y</button>
+      </div>
+
+      <div class="options-row">
+        <div class="option-group">
+          <label>Timespan</label>
+          <select [(ngModel)]="timespan">
+            <option value="minute">Minute</option>
+            <option value="hour">Hour</option>
+            <option value="day">Day</option>
           </select>
         </div>
+        <div class="option-group">
+          <label>Multiplier</label>
+          <input type="number" [(ngModel)]="multiplier" min="1" max="60" class="multiplier-input" />
+        </div>
       </div>
 
-      <button class="run-btn" (click)="loadReplayData()" [disabled]="replayLoading()">
-        {{ replayLoading() ? 'Loading...' : 'Load Data for Replay' }}
-      </button>
+      <div class="controls-row" style="margin-top: 0.75rem;">
+        <button class="btn-primary" (click)="loadReplayData()" [disabled]="replayLoading()">
+          @if (replayLoading()) {
+            <i class="pi pi-spin pi-spinner"></i> Loading...
+          } @else {
+            <i class="pi pi-play"></i> Load Data for Replay
+          }
+        </button>
+      </div>
     </div>
 
     @if (error()) {
-      <div class="error-message">{{ error() }}</div>
-    }
-
-    @if (replayLoading()) {
-      <div class="loading">Loading market data for replay...</div>
+      <div class="error-msg">{{ error() }}</div>
     }
 
     @if (replayDataLoaded()) {
       <app-replay-controls />
 
       @if (replayOverlayLoading()) {
-        <div class="loading">Loading indicators and strategy overlay...</div>
+        <div class="info-callout">
+          <i class="pi pi-spin pi-spinner"></i>
+          <span>Loading indicators and strategy overlay...</span>
+        </div>
       }
 
       <!-- Active Position Status -->
@@ -595,7 +576,7 @@
       }
 
       <div class="chart-section">
-        <h2>{{ ticker() }} - Market Replay</h2>
+        <h3>{{ ticker() }} - Market Replay</h3>
         <app-replay-chart
           [data]="replayEngine.visibleBars()"
           [ticker]="ticker()"
@@ -608,7 +589,7 @@
       <!-- Replay Equity Curve -->
       @if (replayEquityCurve().length > 0) {
         <div class="chart-section">
-          <h2>Equity Curve ({{ replayStrategy.completedTrades().length }} completed trades)</h2>
+          <h3>Equity Curve ({{ replayStrategy.completedTrades().length }} completed trades)</h3>
           <app-line-chart
             [data]="replayEquityCurve()"
             [ticker]="ticker()"

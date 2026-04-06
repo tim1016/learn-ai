@@ -1,0 +1,243 @@
+// ═══════════════════════════════════════════════════════════
+// Strategy Lab Chart — Dark Mode Theme
+// Duplicated from Data Lab Chart for consistency
+// ═══════════════════════════════════════════════════════════
+
+$bg-canvas:    #0f1117;
+$bg-surface:   #161922;
+$bg-elevated:  #1c1f2e;
+$bg-hover:     #232738;
+$border:       #2a2e3e;
+$border-light: #353a4d;
+
+$text-primary:   #e2e8f0;
+$text-secondary: #8892a8;
+$text-muted:     #5a6178;
+
+$bull:  #00c896;
+$bear:  #e5334e;
+$accent: #3b82f6;
+$warn:   #f59e0b;
+
+.chart-wrapper {
+  position: relative;
+  margin-bottom: 1.5rem;
+  border: 1px solid $border;
+  border-radius: 10px;
+  overflow: hidden;
+  background: $bg-canvas;
+}
+
+// ── Timeframe / Quality bar ──
+.timeframe-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid $border;
+  background: $bg-surface;
+}
+
+.quality-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+}
+
+.quality-badge {
+  color: $text-primary;
+  font-weight: 500;
+}
+
+.quality-warn {
+  color: $warn;
+  font-weight: 600;
+}
+
+.quality-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  border: 1px solid $border;
+  border-radius: 4px;
+  background: $bg-elevated;
+  color: $text-secondary;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover { background: $bg-hover; }
+}
+
+// ── Indicator toolbar ──
+.indicator-toolbar {
+  border-bottom: 1px solid $border;
+  background: $bg-surface;
+  padding: 6px 12px;
+}
+
+.indicator-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: $text-muted;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.indicator-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid $border;
+  border-radius: 9999px;
+  background: $bg-elevated;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: $text-secondary;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+
+  &:hover {
+    border-color: $border-light;
+    background: $bg-hover;
+    color: $text-primary;
+  }
+
+  &.hidden {
+    opacity: 0.4;
+    background: $bg-surface;
+
+    .chip-label {
+      text-decoration: line-through;
+      color: $text-muted;
+    }
+  }
+
+  .chip-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: background 0.15s;
+  }
+
+  .chip-label {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: ui-monospace, monospace;
+  }
+
+  i {
+    font-size: 0.6rem;
+    color: $text-muted;
+  }
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.toolbar-btn {
+  padding: 3px 6px;
+  border: 1px solid $border;
+  border-radius: 4px;
+  background: $bg-elevated;
+  color: $text-secondary;
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all 0.15s;
+
+  &:hover {
+    background: $bg-hover;
+    color: $accent;
+  }
+}
+
+// ── Main chart ──
+.main-chart-area {
+  position: relative;
+  min-height: 560px;
+}
+
+.main-chart-container {
+  width: 100%;
+}
+
+.chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 560px;
+  color: $text-muted;
+
+  i {
+    font-size: 3rem;
+    margin-bottom: 12px;
+    color: $border-light;
+  }
+
+  p {
+    font-size: 0.9rem;
+  }
+}
+
+// ── Sub-panels ──
+.sub-panels-host {
+  width: 100%;
+}
+
+:host ::ng-deep {
+  .sub-panel {
+    position: relative;
+    border-top: 1px solid $border;
+  }
+
+  .sub-panel-label {
+    position: absolute;
+    top: 4px;
+    left: 8px;
+    z-index: 5;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: $text-muted;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sub-panel-close {
+    background: none;
+    border: none;
+    color: $text-muted;
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+
+    &:hover { color: $bear; }
+  }
+}
