@@ -50,6 +50,7 @@ export interface GapDetail {
   before_ts: number;
   after_ts: number;
   duration_minutes: number;
+  classification?: string;
 }
 
 export interface QualityReport {
@@ -63,6 +64,9 @@ export interface QualityReport {
   synthetic_bars: number;
   gap_details: GapDetail[];
   missing_session_dates: string[];
+  flat_bars_detected?: number;
+  ohlc_violations_detected?: number;
+  out_of_order_fixed?: number;
 }
 
 export interface ChartDataResponse {

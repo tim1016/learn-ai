@@ -45,11 +45,15 @@
             Gaps Found ({{ q.gaps_found }})
             <span class="subtitle">Largest: {{ q.largest_gap_minutes }} min</span>
           </h4>
+          @if (gapSummary) {
+            <div class="gap-summary">{{ gapSummary }}</div>
+          }
           <div class="detail-table-wrap">
             <table class="detail-table">
               <thead>
                 <tr>
                   <th>#</th>
+                  <th>Type</th>
                   <th>Before Gap</th>
                   <th>After Gap</th>
                   <th>Duration</th>
@@ -59,6 +63,11 @@
                 @for (gap of q.gap_details; track $index) {
                   <tr [class.large-gap]="gap.duration_minutes > 30">
                     <td class="row-num">{{ $index + 1 }}</td>
+                    <td>
+                      <span class="gap-chip" [attr.data-type]="gap.classification ?? 'unknown'">
+                        {{ gap.classification ?? 'unknown' }}
+                      </span>
+                    </td>
                     <td>{{ formatTs(gap.before_ts) }}</td>
                     <td>{{ formatTs(gap.after_ts) }}</td>
                     <td class="duration">{{ gap.duration_minutes }} min</td>
@@ -74,6 +83,36 @@
             <i class="pi pi-check-circle ok-icon"></i>
             No Gaps Detected
           </h4>
+        </section>
+      }
+
+      <!-- Processing details section -->
+      @if (hasProcessingDetails) {
+        <section class="detail-section">
+          <h4>
+            <i class="pi pi-cog"></i>
+            Processing Details
+          </h4>
+          <div class="summary-grid">
+            @if ((q.out_of_order_fixed ?? 0) > 0) {
+              <div class="summary-card">
+                <span class="card-value warn">{{ q.out_of_order_fixed }}</span>
+                <span class="card-label">Out-of-Order Fixed</span>
+              </div>
+            }
+            @if ((q.flat_bars_detected ?? 0) > 0) {
+              <div class="summary-card">
+                <span class="card-value">{{ q.flat_bars_detected }}</span>
+                <span class="card-label">Flat Bars Detected</span>
+              </div>
+            }
+            @if ((q.ohlc_violations_detected ?? 0) > 0) {
+              <div class="summary-card">
+                <span class="card-value warn">{{ q.ohlc_violations_detected }}</span>
+                <span class="card-label">OHLC Violations</span>
+              </div>
+            }
+          </div>
         </section>
       }
 

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import pandas_ta as ta
+import pandas_market_calendars as mcal
 
 from app.services.polygon_client import PolygonClientService
 
@@ -173,6 +174,7 @@ def fetch_bars_chunked(
         logger.info(f"[CHUNK {chunk_idx}] Got {len(bars)} bars (total: {len(all_bars)})")
         chunk_start = chunk_end + timedelta(days=1)
 
+    total_raw = len(all_bars)
     seen: set[int] = set()
     unique_bars: List[Dict[str, Any]] = []
     for bar in all_bars:
@@ -181,6 +183,24 @@ def fetch_bars_chunked(
             seen.add(ts)
             unique_bars.append(bar)
     unique_bars.sort(key=lambda b: b["timestamp"])
+
+    # Chunk boundary verification
+    chunk_overlaps = total_raw - len(unique_bars)
+    if chunk_overlaps > 0:
+        logger.info(
+            f"[CHUNK MERGE] Removed {chunk_overlaps} overlapping bars at chunk boundaries"
+        )
+    if len(unique_bars) > 1:
+        timestamps = [b["timestamp"] for b in unique_bars]
+        non_mono = sum(
+            1 for i in range(1, len(timestamps)) if timestamps[i] <= timestamps[i - 1]
+        )
+        if non_mono > 0:
+            logger.warning(
+                f"[CHUNK MERGE] {non_mono} non-monotonic timestamps after dedup — re-sorting"
+            )
+            unique_bars.sort(key=lambda b: b["timestamp"])
+
     logger.info(f"Total unique {multiplier}{timespan} bars: {len(unique_bars)}")
     return unique_bars
 
@@ -324,25 +344,59 @@ def indicator_table_params_to_entries(
     return entries
 
 
+def _tag_session_column(
+    df: pd.DataFrame, from_date: str, to_date: str,
+) -> pd.DataFrame:
+    """Tag each bar with session type: 'rth', 'pre', or 'post' using NYSE calendar."""
+    if df.empty:
+        return df
+    nyse = mcal.get_calendar("NYSE")
+    schedule = nyse.schedule(start_date=from_date, end_date=to_date)
+    if schedule.empty:
+        df["session"] = "pre"
+        return df
+
+    dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    df["session"] = "pre"  # default
+    for _, row in schedule.iterrows():
+        open_t = row["market_open"]
+        close_t = row["market_close"]
+        rth_mask = (dt_utc >= open_t) & (dt_utc < close_t)
+        df.loc[rth_mask, "session"] = "rth"
+        close_et = close_t.tz_convert(_ET)
+        post_end = close_et.replace(hour=20, minute=0, second=0)
+        post_end_utc = post_end.tz_convert("UTC")
+        post_mask = (dt_utc >= close_t) & (dt_utc < post_end_utc)
+        df.loc[post_mask, "session"] = "post"
+    return df
+
+
 def preprocess_and_calculate(
     bars: List[Dict[str, Any]],
     indicator_entries: List[Dict[str, Any]],
     session: str = "extended",
     forward_fill: bool = False,
     trim_from_ts: Optional[int] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
     """
     Shared preprocessing pipeline:
       1. Sort and deduplicate bars
       2. Session filter (RTH or extended)
-      3. Forward-fill gaps (optional)
-      4. Calculate dynamic indicators
-      5. Trim warm-up rows (optional, by timestamp)
+      3. Tag session column (rth/pre/post) for CSV export
+      4. Forward-fill gaps (optional)
+      5. Calculate dynamic indicators
+      6. Trim warm-up rows (optional, by timestamp)
     """
     df = pd.DataFrame(bars)
     df = df.sort_values("timestamp").reset_index(drop=True)
 
     df = filter_session(df, session)
+
+    # Tag session column for CSV export (uses NYSE calendar)
+    if from_date and to_date:
+        df = _tag_session_column(df, from_date, to_date)
 
     if forward_fill:
         df = forward_fill_gaps(df, session)
@@ -532,6 +586,14 @@ def build_metadata_json(
             "description": desc_map.get(col, col),
             "source": "Polygon.io REST API (list_aggs)",
         })
+
+    # Session column (added by _tag_session_column)
+    base_columns.append({
+        "column": "session",
+        "type": "string",
+        "description": "Trading session: rth (regular 09:30-16:00 ET), pre (pre-market), or post (after-hours)",
+        "source": "Derived from NYSE calendar",
+    })
 
     indicator_columns = []
     for meta in column_meta:

@@ -37,6 +37,26 @@ export class QualityModalComponent {
       || q.synthetic_bars > 0;
   }
 
+  get hasProcessingDetails(): boolean {
+    const q = this.quality();
+    return (q.flat_bars_detected ?? 0) > 0
+      || (q.ohlc_violations_detected ?? 0) > 0
+      || (q.out_of_order_fixed ?? 0) > 0;
+  }
+
+  get gapSummary(): string {
+    const q = this.quality();
+    if (!q.gap_details?.length) return '';
+    const counts: Record<string, number> = {};
+    for (const g of q.gap_details) {
+      const cls = g.classification ?? 'unknown';
+      counts[cls] = (counts[cls] ?? 0) + 1;
+    }
+    return Object.entries(counts)
+      .map(([cls, n]) => `${n} ${cls}`)
+      .join(', ');
+  }
+
   get coverageClass(): string {
     const pct = this.quality().session_coverage_pct;
     if (pct >= 99) return 'good';

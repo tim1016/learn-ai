@@ -205,6 +205,45 @@ $warn:   #f59e0b;
   }
 }
 
+// ── Gap classification chips ──
+.gap-summary {
+  font-size: 0.72rem;
+  color: $text-secondary;
+  margin-bottom: 8px;
+  font-family: ui-monospace, monospace;
+}
+
+.gap-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+
+  &[data-type="overnight"],
+  &[data-type="weekend"] {
+    background: rgba($text-muted, 0.15);
+    color: $text-muted;
+  }
+
+  &[data-type="session_boundary"] {
+    background: rgba($accent, 0.15);
+    color: $accent;
+  }
+
+  &[data-type="unexpected"] {
+    background: rgba($warn, 0.15);
+    color: $warn;
+  }
+
+  &[data-type="unknown"] {
+    background: rgba($text-muted, 0.1);
+    color: $text-muted;
+  }
+}
+
 // ── Date chips ──
 .date-chips {
   display: flex;

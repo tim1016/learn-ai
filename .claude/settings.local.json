@@ -81,7 +81,9 @@
       "Read(//c/Users/inkan/**)",
       "mcp__Claude_Preview__preview_start",
       "Bash(sed \"s/.*name: '//\")",
-      "Bash(sed \"s/',.*//\")"
+      "Bash(sed \"s/',.*//\")",
+      "Bash(pip list:*)",
+      "Bash(pip install:*)"
     ]
   }
 }

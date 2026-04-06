@@ -254,6 +254,7 @@ class GapDetail:
     before_ts: int          # ms epoch of bar before the gap
     after_ts: int           # ms epoch of bar after the gap
     duration_minutes: int   # gap duration in minutes
+    classification: str = "unknown"  # overnight | weekend | session_boundary | unexpected
 
 
 @dataclass
@@ -268,6 +269,47 @@ class QualityReport:
     resampled_bar_count: int = 0
     gap_details: List[GapDetail] = field(default_factory=list)
     missing_session_dates: List[str] = field(default_factory=list)
+    # Processing detail metrics
+    flat_bars_detected: int = 0
+    ohlc_violations_detected: int = 0
+    out_of_order_fixed: int = 0
+
+
+def _classify_gap(before_ts: int, after_ts: int) -> str:
+    """Classify a gap between two bars as overnight, weekend, session_boundary, or unexpected."""
+    before_dt = pd.Timestamp(before_ts, unit="ms", tz="UTC").tz_convert(_ET)
+    after_dt = pd.Timestamp(after_ts, unit="ms", tz="UTC").tz_convert(_ET)
+    before_date = before_dt.date()
+    after_date = after_dt.date()
+
+    # Weekend: gap spans Friday→Monday (or crosses weekend days)
+    if before_dt.weekday() == 4 and after_dt.weekday() == 0:
+        return "weekend"
+    if any(
+        (before_date + timedelta(days=d)).weekday() in (5, 6)
+        for d in range(1, (after_date - before_date).days + 1)
+    ) and before_date != after_date:
+        return "weekend"
+
+    # Different dates (non-weekend): overnight gap
+    if before_date != after_date:
+        return "overnight"
+
+    # Same date: check if it's a session boundary (RTH open/close transition)
+    before_mins = before_dt.hour * 60 + before_dt.minute
+    after_mins = after_dt.hour * 60 + after_dt.minute
+    rth_open = 9 * 60 + 30   # 09:30
+    rth_close = 16 * 60       # 16:00
+
+    # Pre-market → RTH boundary
+    if before_mins < rth_open and after_mins >= rth_open:
+        return "session_boundary"
+    # RTH → post-market boundary
+    if before_mins < rth_close and after_mins >= rth_close:
+        return "session_boundary"
+
+    # Same session, same date: unexpected intraday gap
+    return "unexpected"
 
 
 def _preprocess_minute_bars(
@@ -292,11 +334,33 @@ def _preprocess_minute_bars(
     if df.empty:
         return df, quality
 
+    # Detect out-of-order before sorting
+    raw_ts = df["timestamp"]
+    quality.out_of_order_fixed = int((raw_ts.diff().dropna() < 0).sum())
+
     # Sort + dedup
     df = df.sort_values("timestamp").reset_index(drop=True)
     before_dedup = len(df)
     df = df.drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
     quality.duplicates_removed = before_dedup - len(df)
+
+    # Detect flat bars and OHLC violations (count only, don't remove)
+    if not df.empty:
+        flat_mask = (
+            (df["volume"] == 0)
+            & (df["open"] == df["high"])
+            & (df["high"] == df["low"])
+            & (df["low"] == df["close"])
+        )
+        quality.flat_bars_detected = int(flat_mask.sum())
+
+        ohlc_bad = (
+            (df["high"] < df["open"])
+            | (df["high"] < df["close"])
+            | (df["low"] > df["open"])
+            | (df["low"] > df["close"])
+        )
+        quality.ohlc_violations_detected = int(ohlc_bad.sum())
 
     # Convert to datetime for session masking (UTC internally)
     df["_dt_utc"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
@@ -335,7 +399,7 @@ def _preprocess_minute_bars(
             post_mask = (df["_dt_utc"] >= close_t) & (df["_dt_utc"] < post_end_utc)
             df.loc[post_mask, "session"] = "post"
 
-    # Gap detection
+    # Gap detection + classification
     if len(df) > 1:
         diffs = df["timestamp"].diff().dropna()
         expected_gap = 60_000  # 1 minute in ms
@@ -347,8 +411,10 @@ def _preprocess_minute_bars(
                 before_ts = int(df.at[idx - 1, "timestamp"])
                 after_ts = int(df.at[idx, "timestamp"])
                 dur = int((after_ts - before_ts) / 60_000)
+                classification = _classify_gap(before_ts, after_ts)
                 quality.gap_details.append(GapDetail(
-                    before_ts=before_ts, after_ts=after_ts, duration_minutes=dur,
+                    before_ts=before_ts, after_ts=after_ts,
+                    duration_minutes=dur, classification=classification,
                 ))
 
     # Session coverage
@@ -850,10 +916,14 @@ def get_chart_data(
                     "before_ts": g.before_ts,
                     "after_ts": g.after_ts,
                     "duration_minutes": g.duration_minutes,
+                    "classification": g.classification,
                 }
                 for g in quality.gap_details
             ],
             "missing_session_dates": quality.missing_session_dates,
+            "flat_bars_detected": quality.flat_bars_detected,
+            "ohlc_violations_detected": quality.ohlc_violations_detected,
+            "out_of_order_fixed": quality.out_of_order_fixed,
         },
         "allowed_timeframes": allowed,
         "estimated_bars_per_timeframe": estimates,

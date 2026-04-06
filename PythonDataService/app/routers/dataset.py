@@ -60,6 +60,8 @@ def _fetch_and_process(request: DatasetGenerationRequest):
         session=request.session,
         forward_fill=request.forward_fill,
         trim_from_ts=trim_from_ts,
+        from_date=request.from_date,
+        to_date=request.to_date,
     )
 
     return df, column_meta, raw_count
@@ -103,7 +105,7 @@ async def generate_dataset_csv(request: DatasetGenerationRequest):
         df, column_meta, raw_count = _fetch_and_process(request)
 
         ohlcv_cols = ["open", "high", "low", "close", "volume"]
-        extra_cols = [c for c in ["vwap", "transactions"] if c in df.columns]
+        extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
         indicator_col_names = [m["column"] for m in column_meta]
         all_data_cols = ohlcv_cols + extra_cols + indicator_col_names
 
@@ -137,7 +139,7 @@ async def generate_dataset_metadata(request: DatasetGenerationRequest):
         df, column_meta, raw_count = _fetch_and_process(request)
 
         ohlcv_cols = ["open", "high", "low", "close", "volume"]
-        extra_cols = [c for c in ["vwap", "transactions"] if c in df.columns]
+        extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
 
         metadata_bytes = build_metadata_json(
             ticker=request.ticker,
@@ -174,7 +176,7 @@ async def generate_dataset_metadata_csv(request: DatasetGenerationRequest):
         df, column_meta, _ = _fetch_and_process(request)
 
         ohlcv_cols = ["open", "high", "low", "close", "volume"]
-        extra_cols = [c for c in ["vwap", "transactions"] if c in df.columns]
+        extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
 
         csv_bytes = build_metadata_csv(column_meta, ohlcv_cols + extra_cols)
 
