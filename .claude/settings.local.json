@@ -85,7 +85,10 @@
       "Bash(pip list:*)",
       "Bash(pip install:*)",
       "Bash(find /c/Users/inkan/learn-ai -type d -name *backend* -o -name *server*)",
-      "Bash(grep -r '\"\"port\"\"' /c/Users/inkan/learn-ai/Frontend/angular.json)"
+      "Bash(grep -r '\"\"port\"\"' /c/Users/inkan/learn-ai/Frontend/angular.json)",
+      "Bash(find /c/Users/inkan/learn-ai -maxdepth 2 -type f \\\\\\(-name compose.yaml -o -name docker-compose.yml -o -name Dockerfile* -o -name *.sln -o -name package.json -o -name .env* -o -name appsettings* \\\\\\))",
+      "Bash(find /c/Users/inkan/learn-ai -type f \\\\\\(-name *.py -o -name *.txt -o -name *.toml -o -name *.yaml -o -name *.yml \\\\\\) ! -path */.git/* ! -path */.claude/*)",
+      "Bash(find /c/Users/inkan/learn-ai -path */node_modules -prune -o -path */.claude -prune -o -type f -name *.yml -o -name *.yaml)"
     ]
   }
 }
