@@ -1,115 +1,60 @@
-<div class="strategy-lab">
-  <h1>Strategy Lab Validation</h1>
-  <p class="subtitle">Compare our backtest results against an external source (e.g. TradingView)</p>
+<div class="validation-study">
+  <h1>Strategy Validation Study</h1>
+  <p class="subtitle">Validate EMA Crossover RSI strategy by reproducing trades from minute-level CSV data</p>
 
+  <!-- How to use -->
   <details class="page-guide">
     <summary>How to use this page</summary>
     <div class="guide-content">
       <h4>Quick start</h4>
       <ol>
-        <li>Export OHLCV bars from TradingView using the Pine Script below.</li>
-        <li>Upload the <strong>OHLCV bars CSV</strong> — this feeds the exact same price data into our engine.</li>
-        <li>Optionally upload the <strong>Trade Report CSV</strong> (Strategy Tester → Export → Trade List) for side-by-side comparison.</li>
-        <li>Set the same <strong>RSI parameters</strong> (Window=14, Oversold=30, Overbought=70).</li>
-        <li>Click <strong>Run Backtest</strong>.</li>
+        <li>Upload the <strong>SPY 1-minute CSV</strong> file (with OHLCV data and pre-computed indicators).</li>
+        <li>Optionally upload a <strong>Reference Trades CSV</strong> (from the Excel study) for side-by-side comparison.</li>
+        <li>Click <strong>Run Validation</strong> to resample to 15-min bars, run the strategy, and compare results.</li>
+        <li>Review the chart, trade comparison table, and CSV data preview.</li>
+        <li>Export CSV package or generate a markdown report.</li>
       </ol>
-      <h4>Data source modes</h4>
-      <ul>
-        <li><strong>Import CSV Bars</strong> — Runs our strategy on TradingView's exported bars. This eliminates price data differences and isolates pure strategy logic comparison.</li>
-        <li><strong>Use Polygon Data</strong> — Runs on our own Polygon.io data. Useful for general backtesting but prices will differ from TradingView.</li>
-      </ul>
-      <h4>Strategy: RSI Reversal</h4>
-      <p>Always-in-the-market RSI strategy matching TradingView's built-in "RSI Strategy":</p>
-      <ul>
-        <li><strong>RsiLE</strong> — RSI crosses below oversold level → close short, open long</li>
-        <li><strong>RsiSE</strong> — RSI crosses above overbought level → close long, open short</li>
-      </ul>
+      <h4>Reference Trades CSV Format</h4>
+      <p>CSV with columns: <code>entry_time, exit_time, entry_price, exit_price, pnl, pnl_pct</code></p>
+      <p>Timestamps in <code>YYYY-MM-DD HH:MM</code> format (UTC).</p>
     </div>
   </details>
 
-  <!-- Data Source Toggle -->
-  <div class="mode-toggle">
-    <button
-      [class.active]="dataSource() === 'csv'"
-      (click)="dataSource.set('csv')"
-    >Import CSV Bars</button>
-    <button
-      [class.active]="dataSource() === 'polygon'"
-      (click)="dataSource.set('polygon')"
-    >Use Polygon Data</button>
-  </div>
-
-  <!-- Configuration Form -->
+  <!-- File Uploads -->
   <div class="config-form">
-    @if (dataSource() === 'csv') {
-      <!-- CSV Bar Import -->
-      <div class="form-row">
-        <div class="form-group file-upload">
-          <label>TradingView OHLCV Bars CSV</label>
-          <input type="file" accept=".csv" (change)="onBarsCsvSelected($event)" />
-          @if (barsFileName()) {
-            <span class="file-name">{{ barsFileName() }} ({{ importedBars().length | number }} bars loaded)</span>
-          }
-        </div>
-      </div>
-    } @else {
-      <!-- Polygon mode inputs -->
-      <div class="form-row">
-        <div class="form-group">
-          <label>Ticker</label>
-          <input type="text" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="AAPL" />
-        </div>
-        <div class="form-group">
-          <label>From</label>
-          <input type="date" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" [min]="minDate" />
-        </div>
-        <div class="form-group">
-          <label>To</label>
-          <input type="date" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" [min]="minDate" />
-        </div>
-        <div class="form-group">
-          <label>Timeframe</label>
-          <select [ngModel]="timeframe()" (ngModelChange)="timeframe.set($event)">
-            @for (opt of timeframeOptions; track opt.value) {
-              <option [value]="opt.value">{{ opt.label }}</option>
-            }
-          </select>
-        </div>
-      </div>
-    }
-
     <div class="form-row">
-      <div class="form-group">
-        <label>RSI Window</label>
-        <input type="number" [ngModel]="rsiWindow()" (ngModelChange)="rsiWindow.set($event)" min="2" />
-      </div>
-      <div class="form-group">
-        <label>Oversold</label>
-        <input type="number" [ngModel]="oversold()" (ngModelChange)="oversold.set($event)" min="1" max="50" />
-      </div>
-      <div class="form-group">
-        <label>Overbought</label>
-        <input type="number" [ngModel]="overbought()" (ngModelChange)="overbought.set($event)" min="50" max="99" />
-      </div>
-      <div class="form-group checkbox-group">
-        <label>
-          <input type="checkbox" [ngModel]="filterRth()" (ngModelChange)="filterRth.set($event)" />
-          RTH Only
-        </label>
-        <span class="checkbox-hint">Uncheck for extended hours</span>
+      <div class="form-group file-upload">
+        <label>SPY 1-Minute CSV (OHLCV)</label>
+        <input type="file" accept=".csv" (change)="onMinuteCsvSelected($event)" />
+        @if (minuteFileName()) {
+          <span class="file-name">{{ minuteFileName() }} ({{ minuteBarCount() | number }} bars)</span>
+        }
       </div>
     </div>
 
-    <div class="form-row actions-row">
+    <div class="form-row">
       <div class="form-group file-upload">
-        <label>TradingView Trade Report CSV (optional)</label>
-        <input type="file" accept=".csv" (change)="onTradeReportSelected($event)" />
-        @if (externalFileName()) {
-          <span class="file-name">{{ externalFileName() }} ({{ externalTrades().length }} trades)</span>
+        <label>Reference Trades CSV (optional)</label>
+        <input type="file" accept=".csv" (change)="onReferenceTradesSelected($event)" />
+        @if (referenceFileName()) {
+          <span class="file-name">{{ referenceFileName() }} ({{ referenceTrades().length }} trades)</span>
         }
       </div>
-      <button class="run-btn" (click)="runBacktest()" [disabled]="loading()">
-        {{ loading() ? 'Running...' : 'Run Backtest' }}
+    </div>
+
+    <!-- Strategy params (read-only summary) -->
+    <div class="params-summary">
+      <span class="param-chip">EMA Fast: 5</span>
+      <span class="param-chip">EMA Slow: 10</span>
+      <span class="param-chip">Min Gap: 0.20</span>
+      <span class="param-chip">RSI: 50-70</span>
+      <span class="param-chip">Exit: 5 bars (75 min)</span>
+      <span class="param-chip">Direction: Long</span>
+    </div>
+
+    <div class="form-row actions-row">
+      <button class="run-btn" (click)="runValidation()" [disabled]="loading() || !minuteCsvFile()">
+        {{ loading() ? 'Running...' : 'Run Validation' }}
       </button>
     </div>
   </div>
@@ -119,87 +64,103 @@
   }
 
   @if (loading()) {
-    <div class="loading">Running RSI Reversal backtest...</div>
+    <div class="loading">Parsing CSV, resampling to 15-min, running EMA crossover strategy...</div>
   }
 
-  <!-- Side-by-side summary -->
+  <!-- Results -->
   @if (result(); as r) {
+    <!-- Pipeline info -->
     <div class="data-info-panel">
       <div class="info-icon"><i class="pi pi-database"></i></div>
       <div class="info-content">
         <div class="info-row pipeline">
           <span class="pipeline-step">
-            <span class="info-label">{{ dataSource() === 'csv' ? 'Imported' : 'Fetched' }}</span>
-            <strong>{{ r.sourceBars | number }}</strong>
+            <span class="info-label">Source 1-min</span>
+            <strong>{{ r.source_bars | number }}</strong>
             <span class="info-label">bars</span>
           </span>
           <span class="info-separator">&rarr;</span>
           <span class="pipeline-step">
-            <span class="info-label">{{ filterRth() ? 'RTH filter' : 'All hours' }}</span>
-            <strong>{{ r.rthBars | number }}</strong>
+            <span class="info-label">RTH filter</span>
+            <strong>{{ r.rth_bars | number }}</strong>
+            <span class="info-label">bars</span>
+          </span>
+          <span class="info-separator">&rarr;</span>
+          <span class="pipeline-step">
+            <span class="info-label">15-min resample</span>
+            <strong>{{ r.resampled_bars | number }}</strong>
             <span class="info-label">bars</span>
           </span>
           <span class="info-separator">&rarr;</span>
           <span class="pipeline-step">
             <span class="info-label">Strategy input</span>
-            <strong>{{ r.resampledBars | number }}</strong>
+            <strong>{{ r.bars_processed | number }}</strong>
             <span class="info-label">bars</span>
           </span>
         </div>
       </div>
     </div>
 
-    <h2>Summary Comparison</h2>
+    <!-- Metrics Comparison Grid -->
+    <h2>Performance Summary</h2>
     <div class="comparison-grid">
-      <div class="comparison-card">
-        <h3>Our Backtest</h3>
+      <div class="comparison-card ours">
+        <h3>Reproduced</h3>
         <div class="comparison-stats">
           <div class="comparison-row">
             <span>Total Trades</span>
-            <strong>{{ r.totalTrades }}</strong>
+            <strong>{{ r.total_trades }}</strong>
           </div>
           <div class="comparison-row">
             <span>Win / Loss</span>
-            <strong>{{ r.winningTrades }} / {{ r.losingTrades }}</strong>
+            <strong>{{ r.winning_trades }} / {{ r.losing_trades }}</strong>
           </div>
           <div class="comparison-row">
             <span>Win Rate</span>
-            <strong>{{ winRate() }}%</strong>
+            <strong>{{ formatPct(r.win_rate) }}</strong>
           </div>
-          <div class="comparison-row" [class.positive]="r.totalPnL > 0" [class.negative]="r.totalPnL <= 0">
-            <span>Total P&L</span>
-            <strong>${{ formatPrice(r.totalPnL) }}</strong>
+          <div class="comparison-row" [class.positive]="r.total_pnl_pct > 0" [class.negative]="r.total_pnl_pct <= 0">
+            <span>Total PnL</span>
+            <strong>{{ formatPct(r.total_pnl_pct) }}</strong>
+          </div>
+          <div class="comparison-row">
+            <span>Profit Factor</span>
+            <strong>{{ r.profit_factor.toFixed(2) }}</strong>
           </div>
           <div class="comparison-row">
             <span>Max Drawdown</span>
-            <strong>${{ formatPrice(r.maxDrawdown) }}</strong>
+            <strong>{{ formatPct(r.max_drawdown_pct) }}</strong>
           </div>
           <div class="comparison-row">
             <span>Sharpe Ratio</span>
-            <strong>{{ r.sharpeRatio.toFixed(4) }}</strong>
+            <strong>{{ r.sharpe_ratio.toFixed(4) }}</strong>
           </div>
         </div>
       </div>
 
-      @if (externalSummary(); as ext) {
+      @if (r.reference_summary; as ref) {
         <div class="comparison-card external">
-          <h3>TradingView</h3>
+          <h3>Excel Reference</h3>
           <div class="comparison-stats">
             <div class="comparison-row">
               <span>Total Trades</span>
-              <strong>{{ ext.totalTrades }}</strong>
+              <strong>{{ ref.total_trades }}</strong>
             </div>
             <div class="comparison-row">
               <span>Win / Loss</span>
-              <strong>{{ ext.winning }} / {{ ext.losing }}</strong>
+              <strong>{{ ref.winning_trades }} / {{ ref.losing_trades }}</strong>
             </div>
             <div class="comparison-row">
               <span>Win Rate</span>
-              <strong>{{ ext.winRate }}%</strong>
+              <strong>{{ formatPct(ref.win_rate) }}</strong>
             </div>
-            <div class="comparison-row" [class.positive]="ext.totalPnl > 0" [class.negative]="ext.totalPnl <= 0">
-              <span>Total P&L</span>
-              <strong>${{ formatPrice(ext.totalPnl) }}</strong>
+            <div class="comparison-row" [class.positive]="ref.total_pnl_pct > 0" [class.negative]="ref.total_pnl_pct <= 0">
+              <span>Total PnL</span>
+              <strong>{{ formatPct(ref.total_pnl_pct) }}</strong>
+            </div>
+            <div class="comparison-row">
+              <span>Profit Factor</span>
+              <strong>{{ ref.profit_factor.toFixed(2) }}</strong>
             </div>
             <div class="comparison-row">
               <span>Max Drawdown</span>
@@ -212,122 +173,392 @@
           </div>
         </div>
 
-        <div class="comparison-card delta">
-          <h3>Delta</h3>
-          <div class="comparison-stats">
-            <div class="comparison-row" [class.match]="r.totalTrades === ext.totalTrades" [class.mismatch]="r.totalTrades !== ext.totalTrades">
-              <span>Trade Count</span>
-              <strong>{{ r.totalTrades - ext.totalTrades }}</strong>
-            </div>
-            <div class="comparison-row">
-              <span>Win Rate</span>
-              <strong>{{ winRate() - ext.winRate }}pp</strong>
-            </div>
-            <div class="comparison-row" [class.positive]="r.totalPnL - ext.totalPnl > 0" [class.negative]="r.totalPnL - ext.totalPnl < 0">
-              <span>P&L Diff</span>
-              <strong>${{ formatPrice(r.totalPnL - ext.totalPnl) }}</strong>
-            </div>
-            <div class="comparison-row">
-              <span>Match Rate</span>
-              <strong>{{ matchRate() }}%</strong>
+        @if (matchStats(); as ms) {
+          <div class="comparison-card delta">
+            <h3>Match Summary</h3>
+            <div class="comparison-stats">
+              <div class="comparison-row" [class.match]="r.total_trades === ref.total_trades" [class.mismatch]="r.total_trades !== ref.total_trades">
+                <span>Trade Count Delta</span>
+                <strong>{{ r.total_trades - ref.total_trades }}</strong>
+              </div>
+              <div class="comparison-row">
+                <span>Matched Trades</span>
+                <strong>{{ ms.matched_count }} / {{ ms.total_ref }}</strong>
+              </div>
+              <div class="comparison-row">
+                <span>Match Rate</span>
+                <strong>{{ formatPct(ms.match_rate) }}</strong>
+              </div>
+              <div class="comparison-row">
+                <span>Avg Timestamp Delta</span>
+                <strong>{{ ms.avg_ts_delta_s }}s</strong>
+              </div>
+              <div class="comparison-row">
+                <span>Avg Price Delta</span>
+                <strong>${{ ms.avg_entry_price_delta.toFixed(2) }}</strong>
+              </div>
+              <div class="comparison-row">
+                <span>Avg PnL Delta</span>
+                <strong>${{ ms.avg_pnl_delta.toFixed(2) }}</strong>
+              </div>
+              <div class="comparison-row">
+                <span>Extra (Ref only)</span>
+                <strong>{{ ms.extra_ref }}</strong>
+              </div>
             </div>
           </div>
-        </div>
+        }
       }
     </div>
 
-    <!-- Trade-by-trade comparison -->
-    @if (comparisons().length > 0) {
-      <div class="trade-log">
-        <h2>Trade-by-Trade Comparison ({{ comparisons().length }} rows)</h2>
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Type (TV)</th>
-                <th>Type (Ours)</th>
-                <th>Entry Time (TV)</th>
-                <th>Entry Time (Ours)</th>
-                <th>Entry $ (TV)</th>
-                <th>Entry $ (Ours)</th>
-                <th>Exit $ (TV)</th>
-                <th>Exit $ (Ours)</th>
-                <th>P&L (TV)</th>
-                <th>P&L (Ours)</th>
-                <th>Diff</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (c of comparisons(); track c.tradeNum) {
-                <tr [class.match]="c.matched" [class.mismatch]="!c.matched">
-                  <td>{{ c.tradeNum }}</td>
-                  <td>{{ c.externalType }}</td>
-                  <td>{{ c.ourType }}</td>
-                  <td class="time-cell">{{ c.externalEntryTime }}</td>
-                  <td class="time-cell">{{ c.ourEntryTime }}</td>
-                  <td>{{ c.externalEntryPrice ? formatPrice(c.externalEntryPrice) : '-' }}</td>
-                  <td>{{ c.ourEntryPrice ? formatPrice(c.ourEntryPrice) : '-' }}</td>
-                  <td>{{ c.externalExitPrice ? formatPrice(c.externalExitPrice) : '-' }}</td>
-                  <td>{{ c.ourExitPrice ? formatPrice(c.ourExitPrice) : '-' }}</td>
-                  <td [class.positive]="c.externalPnl > 0" [class.negative]="c.externalPnl < 0">
-                    {{ formatPrice(c.externalPnl) }}
-                  </td>
-                  <td [class.positive]="c.ourPnl > 0" [class.negative]="c.ourPnl < 0">
-                    {{ formatPrice(c.ourPnl) }}
-                  </td>
-                  <td [class.positive]="c.pnlDiff > 0" [class.negative]="c.pnlDiff < 0">
-                    {{ c.pnlDiff > 0 ? '+' : '' }}{{ formatPrice(c.pnlDiff) }}
-                  </td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
-      </div>
+    <!-- Chart -->
+    @if (chartBars().length > 0) {
+      <h2>Chart (15-Min Bars with Trade Markers)</h2>
+      <app-strategy-lab-chart
+        [chartBars]="chartBars()"
+        [chartIndicators]="chartIndicators()"
+        [trades]="tradesForChart()"
+      />
     }
 
-    <!-- Our trade log (standalone, no external comparison) -->
-    @if (r.trades.length > 0 && !externalTrades().length) {
-      <div class="trade-log">
-        <h2>Our Trade Log ({{ r.trades.length }} trades)</h2>
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Type</th>
-                <th>Entry Time</th>
-                <th>Exit Time</th>
-                <th>Entry Price</th>
-                <th>Exit Price</th>
-                <th>P&L</th>
-                <th>Cum. P&L</th>
-                <th>Signal</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (trade of r.trades; track $index) {
-                <tr [class.win]="trade.pnl > 0" [class.loss]="trade.pnl <= 0">
-                  <td>{{ $index + 1 }}</td>
-                  <td>{{ trade.tradeType }}</td>
-                  <td>{{ formatTimestamp(trade.entryTimestamp) }}</td>
-                  <td>{{ formatTimestamp(trade.exitTimestamp) }}</td>
-                  <td>{{ formatPrice(trade.entryPrice) }}</td>
-                  <td>{{ formatPrice(trade.exitPrice) }}</td>
-                  <td [class.positive]="trade.pnl > 0" [class.negative]="trade.pnl <= 0">
-                    {{ trade.pnl > 0 ? '+' : '' }}{{ formatPrice(trade.pnl) }}
-                  </td>
-                  <td [class.positive]="trade.cumulativePnl > 0" [class.negative]="trade.cumulativePnl <= 0">
-                    {{ formatPrice(trade.cumulativePnl) }}
-                  </td>
-                  <td class="signal-cell">{{ trade.signalReason }}</td>
-                </tr>
+    <!-- Trade-by-Trade Comparison -->
+    @if (comparisons().length > 0) {
+      <h2>Trade-by-Trade Comparison ({{ comparisons().length }} rows)</h2>
+      <p-table
+        [value]="comparisons()"
+        [paginator]="true"
+        [rows]="15"
+        [rowsPerPageOptions]="[10, 15, 25, 50]"
+        styleClass="p-datatable-striped p-datatable-sm"
+        [scrollable]="true"
+        scrollHeight="500px"
+        [tableStyle]="{ 'min-width': '80rem' }"
+      >
+        <ng-template #header>
+          <tr>
+            <th pSortableColumn="trade_num"># <p-sortIcon field="trade_num" /></th>
+            <th>Ref Entry</th>
+            <th>Our Entry</th>
+            <th pSortableColumn="ref_entry_price">Ref Entry $ <p-sortIcon field="ref_entry_price" /></th>
+            <th pSortableColumn="our_entry_price">Our Entry $ <p-sortIcon field="our_entry_price" /></th>
+            <th>Ref Exit $</th>
+            <th>Our Exit $</th>
+            <th pSortableColumn="ref_pnl">Ref PnL <p-sortIcon field="ref_pnl" /></th>
+            <th pSortableColumn="our_pnl">Our PnL <p-sortIcon field="our_pnl" /></th>
+            <th pSortableColumn="pnl_delta">Delta <p-sortIcon field="pnl_delta" /></th>
+            <th>Match</th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-c>
+          <tr [class.match-row]="c.matched" [class.mismatch-row]="!c.matched">
+            <td>{{ c.trade_num }}</td>
+            <td class="time-cell">{{ c.ref_entry_time || '-' }}</td>
+            <td class="time-cell">{{ c.our_entry_time || '-' }}</td>
+            <td>{{ formatPrice(c.ref_entry_price) }}</td>
+            <td>{{ formatPrice(c.our_entry_price) }}</td>
+            <td>{{ formatPrice(c.ref_exit_price) }}</td>
+            <td>{{ formatPrice(c.our_exit_price) }}</td>
+            <td [class.positive]="c.ref_pnl > 0" [class.negative]="c.ref_pnl < 0">
+              {{ formatPrice(c.ref_pnl) }}
+            </td>
+            <td [class.positive]="c.our_pnl > 0" [class.negative]="c.our_pnl < 0">
+              {{ formatPrice(c.our_pnl) }}
+            </td>
+            <td [class.positive]="c.pnl_delta > 0" [class.negative]="c.pnl_delta < 0">
+              {{ formatPrice(c.pnl_delta) }}
+            </td>
+            <td>
+              <p-tag [severity]="matchSeverity(c.matched)" [value]="c.matched ? 'Match' : c.source === 'extra_ref' ? 'Ref Only' : 'Ours Only'" />
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+    }
+
+    <!-- Reproduced Trade Log (when no reference trades) -->
+    @if (r.trades.length > 0 && !referenceTrades().length) {
+      <h2>Reproduced Trade Log ({{ r.trades.length }} trades)</h2>
+      <p-table
+        [value]="r.trades"
+        [paginator]="true"
+        [rows]="15"
+        [rowsPerPageOptions]="[10, 15, 25, 50]"
+        styleClass="p-datatable-striped p-datatable-sm"
+        [scrollable]="true"
+        scrollHeight="500px"
+        [tableStyle]="{ 'min-width': '60rem' }"
+      >
+        <ng-template #header>
+          <tr>
+            <th pSortableColumn="trade_number"># <p-sortIcon field="trade_number" /></th>
+            <th>Type</th>
+            <th>Entry Time</th>
+            <th>Exit Time</th>
+            <th pSortableColumn="entry_price">Entry $ <p-sortIcon field="entry_price" /></th>
+            <th pSortableColumn="exit_price">Exit $ <p-sortIcon field="exit_price" /></th>
+            <th pSortableColumn="pnl">PnL <p-sortIcon field="pnl" /></th>
+            <th pSortableColumn="pnl_pct">PnL % <p-sortIcon field="pnl_pct" /></th>
+            <th pSortableColumn="cumulative_pnl_pct">Cum PnL % <p-sortIcon field="cumulative_pnl_pct" /></th>
+            <th>Signal</th>
+            <th>Result</th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-trade>
+          <tr>
+            <td>{{ trade.trade_number }}</td>
+            <td>{{ trade.trade_type }}</td>
+            <td class="time-cell">{{ trade.entry_timestamp }}</td>
+            <td class="time-cell">{{ trade.exit_timestamp }}</td>
+            <td>{{ formatPrice(trade.entry_price) }}</td>
+            <td>{{ formatPrice(trade.exit_price) }}</td>
+            <td [class.positive]="trade.pnl > 0" [class.negative]="trade.pnl <= 0">
+              {{ trade.pnl > 0 ? '+' : '' }}{{ formatPrice(trade.pnl) }}
+            </td>
+            <td [class.positive]="trade.pnl_pct > 0" [class.negative]="trade.pnl_pct <= 0">
+              {{ formatPct(trade.pnl_pct) }}
+            </td>
+            <td [class.positive]="trade.cumulative_pnl_pct > 0" [class.negative]="trade.cumulative_pnl_pct <= 0">
+              {{ formatPct(trade.cumulative_pnl_pct) }}
+            </td>
+            <td class="signal-cell">{{ trade.signal_reason }}</td>
+            <td>
+              <p-tag [severity]="trade.pnl > 0 ? 'success' : 'danger'" [value]="trade.pnl > 0 ? 'WIN' : 'LOSS'" />
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+    }
+
+    <!-- CSV Data Visualizer -->
+    @if (barTable().length > 0) {
+      <h2>
+        CSV Data Preview ({{ barTable().length | number }} rows)
+        <span class="preview-hint">This is what you will download in the CSV export</span>
+      </h2>
+      <p-table
+        [value]="barTable()"
+        [paginator]="true"
+        [rows]="20"
+        [rowsPerPageOptions]="[10, 20, 50, 100]"
+        [sortField]="'timestamp'"
+        [sortOrder]="1"
+        styleClass="p-datatable-striped p-datatable-sm"
+        [scrollable]="true"
+        scrollHeight="400px"
+        [tableStyle]="{ 'min-width': '50rem' }"
+      >
+        <ng-template #header>
+          <tr>
+            <th pSortableColumn="timestamp">Time <p-sortIcon field="timestamp" /></th>
+            <th pSortableColumn="open">Open <p-sortIcon field="open" /></th>
+            <th pSortableColumn="high">High <p-sortIcon field="high" /></th>
+            <th pSortableColumn="low">Low <p-sortIcon field="low" /></th>
+            <th pSortableColumn="close">Close <p-sortIcon field="close" /></th>
+            <th pSortableColumn="volume">Volume <p-sortIcon field="volume" /></th>
+            @for (col of barTableColumns; track col) {
+              @if (col !== 'timestamp' && col !== 'open' && col !== 'high' && col !== 'low' && col !== 'close' && col !== 'volume') {
+                <th pSortableColumn="{{ col }}">{{ col }} <p-sortIcon field="{{ col }}" /></th>
               }
-            </tbody>
-          </table>
+            }
+          </tr>
+        </ng-template>
+        <ng-template #body let-bar>
+          <tr>
+            <td class="time-cell">{{ formatTimestamp(bar.timestamp) }}</td>
+            <td>{{ bar.open | number:'1.2-2' }}</td>
+            <td>{{ bar.high | number:'1.2-2' }}</td>
+            <td>{{ bar.low | number:'1.2-2' }}</td>
+            <td>{{ bar.close | number:'1.2-2' }}</td>
+            <td>{{ bar.volume | number }}</td>
+            @for (col of barTableColumns; track col) {
+              @if (col !== 'timestamp' && col !== 'open' && col !== 'high' && col !== 'low' && col !== 'close' && col !== 'volume') {
+                <td>{{ bar[col] != null ? (bar[col] | number:'1.2-4') : '-' }}</td>
+              }
+            }
+          </tr>
+        </ng-template>
+      </p-table>
+
+      <!-- Column Descriptions -->
+      @if (columnDescriptions().length > 0) {
+        <div class="column-legend">
+          <h4>Column Descriptions</h4>
+          <div class="legend-grid">
+            @for (col of columnDescriptions(); track col.name) {
+              <div class="legend-item">
+                <code>{{ col.name }}</code>
+                <span>{{ col.description }}</span>
+              </div>
+            }
+          </div>
         </div>
+      }
+    }
+
+    <!-- Export Actions -->
+    <div class="export-actions">
+      <button class="export-btn" (click)="downloadCsvExport()" [disabled]="exportLoading()">
+        <i class="pi pi-download"></i>
+        {{ exportLoading() ? 'Exporting...' : 'Download CSV Package' }}
+      </button>
+      <button class="export-btn pdf" (click)="downloadPdfReport()" [disabled]="pdfLoading()">
+        <i class="pi pi-file-pdf"></i>
+        {{ pdfLoading() ? 'Generating...' : 'Download PDF Report' }}
+      </button>
+      <button class="export-btn secondary" (click)="generateReport()" [disabled]="reportLoading()">
+        <i class="pi pi-file"></i>
+        {{ reportLoading() ? 'Generating...' : 'Generate Markdown Report' }}
+      </button>
+    </div>
+
+    <!-- Markdown Report -->
+    @if (markdownReport()) {
+      <div class="report-section">
+        <div class="report-header">
+          <h2>Validation Report</h2>
+          <button class="copy-btn" (click)="copyReport()">
+            <i class="pi pi-copy"></i> Copy
+          </button>
+        </div>
+        <pre class="report-content">{{ markdownReport() }}</pre>
       </div>
     }
   }
+
+  <!-- Documentation -->
+  <div class="docs-section">
+    <h2>Documentation</h2>
+    <p-accordion [multiple]="true">
+      <p-accordion-panel>
+        <p-accordion-header>
+          <div class="doc-header">
+            <span class="doc-name">Strategy Rules</span>
+            <span class="doc-badge">ENTRY / EXIT</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <h4>Entry Conditions (ALL must be true simultaneously)</h4>
+          <ol>
+            <li><strong>EMA5 crosses ABOVE EMA10</strong> on the current 15-min candle CLOSE (fresh crossover only)</li>
+            <li><strong>EMA Gap</strong> = (EMA5 - EMA10) must be &ge; 0.20 at the crossover candle</li>
+            <li><strong>RSI (14-period)</strong> must be between 50 and 70 at the crossover candle</li>
+            <li>Enter at the <strong>CLOSE</strong> of the crossover candle</li>
+          </ol>
+          <h4>Exit Condition</h4>
+          <ul>
+            <li>Exit exactly <strong>5 candles (75 minutes)</strong> after entry at CLOSE</li>
+            <li>If the 5th candle is after market close, exit at next open</li>
+          </ul>
+          <h4>Skip Conditions (DO NOT TRADE)</h4>
+          <ul>
+            <li>RSI &lt; 50 or RSI &gt; 70 at signal</li>
+            <li>EMA gap &lt; 0.20 (crossover too weak)</li>
+            <li>Not a FRESH crossover (EMA5 was already above EMA10 on the previous bar)</li>
+          </ul>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <p-accordion-panel>
+        <p-accordion-header>
+          <div class="doc-header">
+            <span class="doc-name">Validation Methodology</span>
+            <span class="doc-badge">MATCHING</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <h4>How Trades Are Matched</h4>
+          <p>The validation engine uses <strong>greedy nearest-neighbor matching</strong> by entry timestamp:</p>
+          <ol>
+            <li>For each reference trade, find the closest reproduced trade whose entry timestamp is within <strong>15 minutes</strong>.</li>
+            <li>Once matched, a reproduced trade cannot be reused for another reference trade.</li>
+            <li>Unmatched reference trades are labeled <strong>"Ref Only"</strong> (signal found in Excel but not reproduced).</li>
+            <li>Unmatched reproduced trades are labeled <strong>"Ours Only"</strong> (signal found by engine but not in Excel).</li>
+          </ol>
+          <h4>What "Match" Means</h4>
+          <p>A trade is considered <strong>matched</strong> when the engine finds a corresponding entry within the 15-minute tolerance window. The PnL and prices may still differ due to data source differences, rounding, or resampling artifacts.</p>
+          <h4>Common Discrepancy Sources</h4>
+          <ul>
+            <li><strong>Resampling</strong>: The CSV has 1-min bars; we resample to 15-min. Anchor alignment (9:30 ET) may produce slightly different bar boundaries.</li>
+            <li><strong>Indicator warm-up</strong>: EMA and RSI values at the start of the dataset may differ if the Excel used a longer history.</li>
+            <li><strong>Market close handling</strong>: The engine uses fixed 5-bar exit without special overnight logic.</li>
+          </ul>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <p-accordion-panel>
+        <p-accordion-header>
+          <div class="doc-header">
+            <span class="doc-name">Metrics Definitions</span>
+            <span class="doc-badge">REFERENCE</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="metrics-grid">
+            <div class="metric-def">
+              <strong>Win Rate</strong>
+              <p>Percentage of trades with positive PnL. = Winning Trades / Total Trades</p>
+            </div>
+            <div class="metric-def">
+              <strong>Profit Factor</strong>
+              <p>Ratio of gross profit to gross loss. = Sum(winning PnL%) / |Sum(losing PnL%)|. Values &gt; 1.0 indicate profitability.</p>
+            </div>
+            <div class="metric-def">
+              <strong>Expectancy</strong>
+              <p>Average PnL% per trade. = Total PnL% / Total Trades. Positive values mean the strategy has a statistical edge.</p>
+            </div>
+            <div class="metric-def">
+              <strong>Max Drawdown</strong>
+              <p>Largest peak-to-trough decline in cumulative PnL%. Measures worst-case scenario for the strategy.</p>
+            </div>
+            <div class="metric-def">
+              <strong>Sharpe Ratio</strong>
+              <p>Risk-adjusted return. = (Mean PnL% / Std PnL%) * sqrt(252). Higher is better; &gt; 1.0 is generally acceptable.</p>
+            </div>
+            <div class="metric-def">
+              <strong>Win/Loss Ratio</strong>
+              <p>Average winning trade size divided by average losing trade size. = |Avg Win%| / |Avg Loss%|.</p>
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <p-accordion-panel>
+        <p-accordion-header>
+          <div class="doc-header">
+            <span class="doc-name">Data Pipeline</span>
+            <span class="doc-badge">TECHNICAL</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <h4>Processing Steps</h4>
+          <ol>
+            <li><strong>Parse CSV</strong>: Read 1-minute OHLCV bars from the uploaded file. Supports <code>unix_ts</code> or <code>iso_time</code> timestamp formats.</li>
+            <li><strong>RTH Filter</strong>: Keep only Regular Trading Hours bars (9:30 AM - 4:00 PM ET) using the NYSE calendar.</li>
+            <li><strong>Resample to 15-min</strong>: Aggregate 1-min bars into 15-min bars anchored to 9:30 ET. OHLCV aggregation: open=first, high=max, low=min, close=last, volume=sum.</li>
+            <li><strong>Compute Indicators</strong>: Calculate EMA(5), EMA(10), RSI(14), ADX(14) using <code>pandas-ta</code> on the 15-min close prices. Pre-computed indicators from the CSV are NOT used (they were computed on 1-min data).</li>
+            <li><strong>Run Strategy</strong>: Detect fresh EMA crossovers, apply gap + RSI filters, generate trades with 5-bar fixed exit.</li>
+          </ol>
+          <h4>Why Recompute Indicators?</h4>
+          <p>The uploaded CSV contains indicators computed on 1-minute closes. After resampling to 15-minute bars, those values are invalid. EMA(5) on 1-min data covers 5 minutes; EMA(5) on 15-min data covers 75 minutes. The strategy requires 15-min indicators.</p>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <p-accordion-panel>
+        <p-accordion-header>
+          <div class="doc-header">
+            <span class="doc-name">Known Limitations</span>
+            <span class="doc-badge">CAVEATS</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <ul>
+            <li><strong>Market close exit</strong>: The engine uses a strict 5-bar exit. The Excel strategy exits at next open if the 5th bar falls after market close. This may cause PnL differences for trades entered late in the session.</li>
+            <li><strong>Indicator warm-up</strong>: The first ~200 bars of EMA/RSI may differ from the Excel if it used a longer history for warm-up.</li>
+            <li><strong>Data source</strong>: Minor price differences between the CSV source (Polygon) and TradingView/broker data can produce different crossover signals.</li>
+            <li><strong>ADX filter</strong>: The Excel strategy does not use an ADX minimum filter. The engine defaults to no ADX filter (<code>adx_min=None</code>), matching the Excel behavior.</li>
+          </ul>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </div>
 </div>

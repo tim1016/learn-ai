@@ -88,7 +88,16 @@
       "Bash(grep -r '\"\"port\"\"' /c/Users/inkan/learn-ai/Frontend/angular.json)",
       "Bash(find /c/Users/inkan/learn-ai -maxdepth 2 -type f \\\\\\(-name compose.yaml -o -name docker-compose.yml -o -name Dockerfile* -o -name *.sln -o -name package.json -o -name .env* -o -name appsettings* \\\\\\))",
       "Bash(find /c/Users/inkan/learn-ai -type f \\\\\\(-name *.py -o -name *.txt -o -name *.toml -o -name *.yaml -o -name *.yml \\\\\\) ! -path */.git/* ! -path */.claude/*)",
-      "Bash(find /c/Users/inkan/learn-ai -path */node_modules -prune -o -path */.claude -prune -o -type f -name *.yml -o -name *.yaml)"
+      "Bash(find /c/Users/inkan/learn-ai -path */node_modules -prune -o -path */.claude -prune -o -type f -name *.yml -o -name *.yaml)",
+      "Bash(find /c/Users/inkan/learn-ai/Frontend/src/app -name \"*.ts\" -exec grep -l \"Apollo\" {} \\\\;)",
+      "Bash(find C:/Users/inkan/learn-ai/Backend -name *BacktestService* -o -name *backtest*service*)",
+      "Bash(netstat -ano)",
+      "Bash(wmic process:*)",
+      "Bash(powershell.exe -c \"Get-Process -Name python* | Select-Object Id,CommandLine | Format-Table\")",
+      "Bash(taskkill //F //PID 18216 2)",
+      "Bash(1 sleep:*)",
+      "Bash(podman system:*)",
+      "mcp__pdf-viewer__display_pdf"
     ]
   }
 }

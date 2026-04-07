@@ -140,15 +140,16 @@ export class StrategyLabComponent {
     d.setDate(d.getDate() - 30);
     return d;
   }
-  private static formatDate(d: Date): string {
+  private static formatDate(d: Date | null): string {
+    if (!d) return '';
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   }
 
-  fromDateValue = signal<Date>(StrategyLabComponent.get30DaysAgo());
-  toDateValue = signal<Date>(StrategyLabComponent.getYesterday());
+  fromDateValue = signal<Date | null>(StrategyLabComponent.get30DaysAgo());
+  toDateValue = signal<Date | null>(StrategyLabComponent.getYesterday());
   fromDate = computed(() => StrategyLabComponent.formatDate(this.fromDateValue()));
   toDate = computed(() => StrategyLabComponent.formatDate(this.toDateValue()));
 

@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from app.config import settings
-from app.routers import aggregates, sanitize, indicators, options, snapshot, market_monitor, tickers, strategy, research, dataset, data_quality, chart, rule_based_backtest, backtest
+from app.routers import aggregates, sanitize, indicators, options, snapshot, market_monitor, tickers, strategy, research, dataset, data_quality, chart, rule_based_backtest, backtest, validation_study
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -60,6 +60,7 @@ app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-
 app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
 app.include_router(rule_based_backtest.router, prefix="/api/backtest/rule-based", tags=["rule-based-backtest"])
 app.include_router(backtest.router, prefix="/api/backtest", tags=["backtest"])
+app.include_router(validation_study.router, prefix="/api/validation-study", tags=["validation-study"])
 
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)
