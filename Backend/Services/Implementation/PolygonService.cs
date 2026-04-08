@@ -37,13 +37,14 @@ public class PolygonService : IPolygonService
         string timespan,
         string fromDate,
         string toDate,
+        bool adjusted = true,
         CancellationToken cancellationToken = default)
     {
         try
         {
             _logger.LogInformation(
-                "Fetching aggregates for {Ticker}: {FromDate} to {ToDate}",
-                ticker, fromDate, toDate);
+                "Fetching aggregates for {Ticker}: {FromDate} to {ToDate} (adjusted={Adjusted})",
+                ticker, fromDate, toDate, adjusted);
 
             var request = new
             {
@@ -52,7 +53,8 @@ public class PolygonService : IPolygonService
                 timespan,
                 from_date = fromDate,
                 to_date = toDate,
-                limit = 50000
+                limit = 50000,
+                adjusted
             };
 
             _logger.LogInformation(

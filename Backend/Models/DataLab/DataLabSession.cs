@@ -33,6 +33,8 @@ public class DataLabSession
 
     public bool ForwardFill { get; set; } = true;
 
+    public bool Adjusted { get; set; } = true;
+
     /// <summary>
     /// Indicator entries stored as JSON array.
     /// Each element: { "name": "ema", "params": { "length": 20 } }

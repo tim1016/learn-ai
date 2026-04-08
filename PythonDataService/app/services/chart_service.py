@@ -237,8 +237,9 @@ def _canonical_indicator_key(indicators: List[Dict[str, Any]]) -> str:
 def _resample_cache_key(
     ticker: str, from_date: str, to_date: str,
     timeframe: str, session: str, forward_fill: bool,
+    adjusted: bool = True,
 ) -> str:
-    return f"{ticker}|{from_date}|{to_date}|{timeframe}|{session}|{forward_fill}"
+    return f"{ticker}|{from_date}|{to_date}|{timeframe}|{session}|{forward_fill}|{adjusted}"
 
 
 def _indicator_cache_key(resample_key: str, indicators: List[Dict[str, Any]]) -> str:
@@ -774,6 +775,7 @@ def get_chart_data(
     forward_fill: bool = False,
     indicators: Optional[List[Dict[str, Any]]] = None,
     compute_all_indicators: bool = False,
+    adjusted: bool = True,
 ) -> Dict[str, Any]:
     """
     Main entry point: fetch 1m bars, preprocess, resample, compute indicators.
@@ -807,7 +809,7 @@ def get_chart_data(
         }
 
     # ── Layer 1: Fetch + Preprocess + Resample (cached) ──
-    resample_key = _resample_cache_key(ticker, from_date, to_date, timeframe, session, forward_fill)
+    resample_key = _resample_cache_key(ticker, from_date, to_date, timeframe, session, forward_fill, adjusted)
     cached_resample = _resample_cache.get(resample_key)
 
     if cached_resample is not None:
@@ -825,7 +827,7 @@ def get_chart_data(
             fetch_from = compute_warmup_start_date(from_date, max_lookback)
             logger.info(f"[CHART] Warmup: fetching from {fetch_from} (requested {from_date})")
 
-        bars = fetch_bars_chunked(_polygon, ticker, fetch_from, to_date)
+        bars = fetch_bars_chunked(_polygon, ticker, fetch_from, to_date, adjusted=adjusted)
         if not bars:
             return {
                 "error_code": "NO_DATA",

@@ -102,14 +102,15 @@ public class Query
         string toDate,
         string timespan = "day",
         int multiplier = 1,
-        bool forceRefresh = false)
+        bool forceRefresh = false,
+        bool adjusted = true)
     {
         logger.LogInformation(
-            "[STEP 3 - GraphQL] Query received: ticker={Ticker}, from={From}, to={To}, timespan={Timespan}, multiplier={Multiplier}, forceRefresh={ForceRefresh}",
-            ticker, fromDate, toDate, timespan, multiplier, forceRefresh);
+            "[STEP 3 - GraphQL] Query received: ticker={Ticker}, from={From}, to={To}, timespan={Timespan}, multiplier={Multiplier}, forceRefresh={ForceRefresh}, adjusted={Adjusted}",
+            ticker, fromDate, toDate, timespan, multiplier, forceRefresh, adjusted);
 
         var fetchResult = await marketDataService.GetOrFetchAggregatesAsync(
-            ticker, multiplier, timespan, fromDate, toDate, forceRefresh);
+            ticker, multiplier, timespan, fromDate, toDate, forceRefresh, adjusted);
         var aggregates = fetchResult.Aggregates;
 
         logger.LogInformation(

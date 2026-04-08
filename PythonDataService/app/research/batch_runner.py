@@ -92,6 +92,7 @@ def run_cross_sectional_study(
                 timespan="day",
                 from_date=start_date,
                 to_date=end_date,
+                adjusted=True,
             )
 
             if not stock_bars:

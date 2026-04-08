@@ -41,7 +41,8 @@ async def fetch_aggregates(request: AggregateRequest):
             timespan=request.timespan,
             from_date=request.from_date,
             to_date=request.to_date,
-            limit=request.limit
+            limit=request.limit,
+            adjusted=request.adjusted,
         )
 
         logger.info(f"[STEP 11 - Python] Polygon API returned: "

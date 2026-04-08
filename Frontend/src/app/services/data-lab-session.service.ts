@@ -13,6 +13,7 @@ export interface DataLabSessionConfig {
   toDate: string;
   session: 'rth' | 'extended';
   forwardFill: boolean;
+  adjusted: boolean;
   entries: { name: string; params: Record<string, number> }[];
 }
 
@@ -64,6 +65,7 @@ const LIST_SESSIONS = `
       toDate
       session
       forwardFill
+      adjusted
       entriesJson
       chartSnapshotJson
     }
@@ -82,6 +84,7 @@ const GET_SESSION = `
       toDate
       session
       forwardFill
+      adjusted
       entriesJson
       chartSnapshotJson
     }
@@ -152,6 +155,7 @@ interface RawSession {
   toDate: string;
   session: string;
   forwardFill: boolean;
+  adjusted: boolean;
   entriesJson: string;
   chartSnapshotJson: string | null;
 }
@@ -290,6 +294,7 @@ export class DataLabSessionService {
       toDate: config.toDate,
       session: config.session,
       forwardFill: config.forwardFill,
+      adjusted: config.adjusted,
       entriesJson: JSON.stringify(config.entries),
       chartSnapshotJson: chartSnapshot ? JSON.stringify(chartSnapshot) : null,
     };
@@ -314,6 +319,7 @@ export class DataLabSessionService {
         toDate: raw.toDate,
         session: raw.session as 'rth' | 'extended',
         forwardFill: raw.forwardFill,
+        adjusted: raw.adjusted ?? true,
         entries,
       },
       chartSnapshot,

@@ -66,6 +66,7 @@ def _prefetch_all_bars(
                 timespan="day",
                 from_date=start_date,
                 to_date=end_date,
+                adjusted=True,
             )
             for bar in bars:
                 ts = bar.get("timestamp") or bar.get("t")

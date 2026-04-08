@@ -173,6 +173,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   toDate = input.required<string>();
   session = input.required<string>();
   forwardFill = input.required<boolean>();
+  adjusted = input(true);
   chartIndicators = input<ChartIndicatorEntry[]>([]);
   computeAllIndicators = input(false);
 
@@ -380,6 +381,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
             timeframe: this.selectedTimeframe(),
             session: this.session(),
             forward_fill: this.forwardFill(),
+            adjusted: this.adjusted(),
             indicators,
             compute_all_indicators: computeAll,
           }

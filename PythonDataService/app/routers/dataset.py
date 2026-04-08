@@ -49,6 +49,7 @@ def _fetch_and_process(request: DatasetGenerationRequest):
     bars = fetch_bars_chunked(
         polygon_client, request.ticker, fetch_from, request.to_date,
         timespan=request.timespan, multiplier=request.multiplier,
+        adjusted=request.adjusted,
     )
     if not bars:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No bars returned")

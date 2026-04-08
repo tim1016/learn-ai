@@ -22,11 +22,12 @@ class PolygonClientService:
         timespan: str,
         from_date: str,
         to_date: str,
-        limit: int = 50000
+        limit: int = 50000,
+        adjusted: bool = True,
     ) -> List[Dict[str, Any]]:
         """Fetch aggregate bars (OHLCV) from Polygon"""
         try:
-            logger.info(f"Fetching aggregates for {ticker}: {from_date} to {to_date}")
+            logger.info(f"Fetching aggregates for {ticker}: {from_date} to {to_date} (adjusted={adjusted})")
 
             aggs = []
             for agg in self.client.list_aggs(
@@ -35,7 +36,8 @@ class PolygonClientService:
                 timespan=timespan,
                 from_=from_date,
                 to=to_date,
-                limit=limit
+                limit=limit,
+                adjusted=adjusted,
             ):
                 # Convert to dict for serialization
                 aggs.append({

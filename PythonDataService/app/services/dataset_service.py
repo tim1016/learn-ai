@@ -144,6 +144,7 @@ def fetch_bars_chunked(
     to_date: str,
     timespan: str = "minute",
     multiplier: int = 1,
+    adjusted: bool = True,
 ) -> List[Dict[str, Any]]:
     """Fetch OHLCV bars for a long date range by splitting into chunks."""
     start = datetime.strptime(from_date, "%Y-%m-%d")
@@ -169,6 +170,7 @@ def fetch_bars_chunked(
             ticker=ticker, multiplier=multiplier, timespan=timespan,
             from_date=chunk_start.strftime("%Y-%m-%d"),
             to_date=chunk_end.strftime("%Y-%m-%d"),
+            adjusted=adjusted,
         )
         all_bars.extend(bars)
         logger.info(f"[CHUNK {chunk_idx}] Got {len(bars)} bars (total: {len(all_bars)})")

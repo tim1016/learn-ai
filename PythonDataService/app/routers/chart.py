@@ -43,6 +43,7 @@ class ChartDataRequest(BaseModel):
         False,
         description="When True, compute all indicators with default params (ignores 'indicators' list)",
     )
+    adjusted: bool = Field(True, description="Adjust for splits/dividends (Polygon default: true)")
 
 
 class AllowedTimeframesRequest(BaseModel):
@@ -88,6 +89,7 @@ async def chart_data(request: ChartDataRequest):
             forward_fill=request.forward_fill,
             indicators=indicator_dicts,
             compute_all_indicators=request.compute_all_indicators,
+            adjusted=request.adjusted,
         )
 
         # Check if result is an error

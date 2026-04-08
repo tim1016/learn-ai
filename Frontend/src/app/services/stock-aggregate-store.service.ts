@@ -80,7 +80,8 @@ export class StockAggregateStore {
     toDate: string,
     timespan: string = 'day',
     multiplier: number = 1,
-    forceRefresh: boolean = false
+    forceRefresh: boolean = false,
+    adjusted: boolean = true
   ): Promise<{ aggregates: StockAggregate[] }> {
     return new Promise(async (resolve, reject) => {
       try {
@@ -99,7 +100,8 @@ export class StockAggregateStore {
           toDate,
           timespan,
           multiplier,
-          forceRefresh
+          forceRefresh,
+          adjusted
         ).toPromise();
 
         if (!result) {

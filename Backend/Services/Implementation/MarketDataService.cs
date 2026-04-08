@@ -44,6 +44,7 @@ public class MarketDataService : IMarketDataService
         string timespan,
         string fromDate,
         string toDate,
+        bool adjusted = true,
         CancellationToken cancellationToken = default)
     {
         try
@@ -54,7 +55,7 @@ public class MarketDataService : IMarketDataService
 
             // Fetch sanitized data from Python service
             var response = await _polygonService.FetchAggregatesAsync(
-                ticker, multiplier, timespan, fromDate, toDate, cancellationToken);
+                ticker, multiplier, timespan, fromDate, toDate, adjusted, cancellationToken);
 
             _logger.LogInformation(
                 "[STEP 9 - MarketDataService] FetchAndStore: Python response success={Success}, dataCount={Count}",
@@ -111,6 +112,7 @@ public class MarketDataService : IMarketDataService
         string fromDate,
         string toDate,
         bool forceRefresh = false,
+        bool adjusted = true,
         CancellationToken cancellationToken = default)
     {
         var from = DateTime.Parse(fromDate).ToUniversalTime();
@@ -124,7 +126,7 @@ public class MarketDataService : IMarketDataService
                 symbol, fromDate, toDate);
 
             var (fetchedAggs, windowStatuses) = await FetchWithWindowsAsync(
-                ticker, multiplier, timespan, fromDate, toDate, cancellationToken);
+                ticker, multiplier, timespan, fromDate, toDate, adjusted, cancellationToken);
 
             var gapInfo = DetectGaps(fetchedAggs, fromDate, toDate, timespan, multiplier);
             gapInfo.WindowStatuses = windowStatuses;
@@ -180,7 +182,7 @@ public class MarketDataService : IMarketDataService
             symbol, fromDate, toDate);
 
         var (aggs, statuses) = await FetchWithWindowsAsync(
-            ticker, multiplier, timespan, fromDate, toDate, cancellationToken);
+            ticker, multiplier, timespan, fromDate, toDate, adjusted, cancellationToken);
 
         var gap = DetectGaps(aggs, fromDate, toDate, timespan, multiplier);
         gap.WindowStatuses = statuses;
@@ -226,6 +228,7 @@ public class MarketDataService : IMarketDataService
         string timespan,
         string fromDate,
         string toDate,
+        bool adjusted,
         CancellationToken cancellationToken)
     {
         var windows = GenerateFetchWindows(fromDate, toDate, timespan);
@@ -260,7 +263,7 @@ public class MarketDataService : IMarketDataService
                 try
                 {
                     var windowAggs = await FetchAndStoreAggregatesAsync(
-                        ticker, multiplier, timespan, winFrom, winTo, cancellationToken);
+                        ticker, multiplier, timespan, winFrom, winTo, adjusted, cancellationToken);
 
                     _logger.LogInformation(
                         "[STEP W3] Window {Index}/{Total} result: {Count} bars fetched",

@@ -273,6 +273,13 @@
         <span>Forward-fill gaps</span>
         <span class="option-hint">(fills missing bars with previous close, volume=0)</span>
       </label>
+      <label class="checkbox-option"
+             pTooltip="When checked, historical prices are retroactively adjusted for stock splits and dividends (Polygon.io default). Uncheck for raw exchange prices."
+             tooltipPosition="top">
+        <input type="checkbox" [checked]="adjusted()" (change)="adjusted.set(!adjusted())" />
+        <span>Split & dividend adjusted</span>
+        <span class="option-hint">(Polygon default; uncheck for raw prices)</span>
+      </label>
       <label class="checkbox-option">
         <input type="checkbox" [checked]="warmup()" (change)="warmup.set(!warmup())" />
         <span>Indicator warm-up</span>
@@ -317,6 +324,7 @@
       [toDate]="toDate()"
       [session]="session()"
       [forwardFill]="forwardFill()"
+      [adjusted]="adjusted()"
       [chartIndicators]="chartIndicators()"
       [computeAllIndicators]="computeAllIndicators()"
       (dataLoaded)="onChartDataLoaded($event)"

@@ -22,6 +22,7 @@ const QUERY = `
     $timespan: String! = "day"
     $multiplier: Int! = 1
     $forceRefresh: Boolean! = false
+    $adjusted: Boolean! = true
   ) {
     getOrFetchStockAggregates(
       ticker: $ticker
@@ -30,6 +31,7 @@ const QUERY = `
       timespan: $timespan
       multiplier: $multiplier
       forceRefresh: $forceRefresh
+      adjusted: $adjusted
     ) {
       ticker
       aggregates {
@@ -554,12 +556,13 @@ export class MarketDataService {
     toDate: string,
     timespan: string = 'day',
     multiplier: number = 1,
-    forceRefresh: boolean = false
+    forceRefresh: boolean = false,
+    adjusted: boolean = true
   ): Observable<SmartAggregatesResult> {
     return this.http
       .post<GraphQLResponse>(GRAPHQL_URL, {
         query: QUERY,
-        variables: { ticker, fromDate, toDate, timespan, multiplier, forceRefresh }
+        variables: { ticker, fromDate, toDate, timespan, multiplier, forceRefresh, adjusted }
       })
       .pipe(
         tap(response => {

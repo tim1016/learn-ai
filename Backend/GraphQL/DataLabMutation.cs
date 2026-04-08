@@ -28,6 +28,7 @@ public class DataLabMutation
                 ToDate = input.ToDate,
                 Session = input.Session,
                 ForwardFill = input.ForwardFill,
+                Adjusted = input.Adjusted,
                 EntriesJson = input.EntriesJson,
                 ChartSnapshotJson = input.ChartSnapshotJson,
                 CreatedAt = DateTime.UtcNow,
@@ -81,6 +82,7 @@ public class DataLabMutation
             session.ToDate = input.ToDate;
             session.Session = input.Session;
             session.ForwardFill = input.ForwardFill;
+            session.Adjusted = input.Adjusted;
             session.EntriesJson = input.EntriesJson;
             session.ChartSnapshotJson = input.ChartSnapshotJson;
             session.UpdatedAt = DateTime.UtcNow;
@@ -241,6 +243,7 @@ public class DataLabSessionInput
     public string ToDate { get; set; } = "";
     public string Session { get; set; } = "rth";
     public bool ForwardFill { get; set; } = true;
+    public bool Adjusted { get; set; } = true;
     public string EntriesJson { get; set; } = "[]";
     public string? ChartSnapshotJson { get; set; }
 }

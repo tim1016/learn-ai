@@ -25,6 +25,7 @@ public interface IMarketDataService
         string timespan,
         string fromDate,
         string toDate,
+        bool adjusted = true,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -39,6 +40,7 @@ public interface IMarketDataService
         string fromDate,
         string toDate,
         bool forceRefresh = false,
+        bool adjusted = true,
         CancellationToken cancellationToken = default);
 
     /// <summary>

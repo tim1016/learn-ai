@@ -23,6 +23,7 @@ class RuleBasedBacktestRequest(BaseModel):
     multiplier: int = Field(15, ge=1, description="Bar multiplier")
     timespan: str = Field("minute", description="minute, hour, day")
     filter_rth: bool = Field(True, description="Filter to Regular Trading Hours")
+    adjusted: bool = Field(True, description="Adjust for splits/dividends (Polygon default: true)")
     parameters: dict[str, Any] = Field(
         default_factory=lambda: {
             "fast_ema_period": 5,
@@ -119,6 +120,7 @@ async def run_backtest(request: RuleBasedBacktestRequest):
             timespan=request.timespan,
             from_date=request.from_date,
             to_date=request.to_date,
+            adjusted=request.adjusted,
         )
 
         if not raw_bars:

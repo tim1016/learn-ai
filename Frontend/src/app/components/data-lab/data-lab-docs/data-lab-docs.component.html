@@ -27,7 +27,7 @@
           <i class="pi pi-chevron-right"></i>
           <div>
             <strong>Polygon.io REST API</strong>
-            <span class="pipeline-detail">Fetches 1-minute OHLCV bars in ~111-day chunks (max 50,000 bars per request). Auto-paginates and de-duplicates.</span>
+            <span class="pipeline-detail">Fetches 1-minute OHLCV bars in ~111-day chunks (max 50,000 bars per request). Auto-paginates and de-duplicates. Prices are split/dividend-adjusted by default (configurable via the "Split &amp; dividend adjusted" checkbox).</span>
           </div>
         </div>
         <div class="pipeline-stage">
@@ -45,6 +45,35 @@
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- 1b. Split & Dividend Adjustment -->
+  <div class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sync section-icon"></i>
+      <h3>Split &amp; Dividend Adjustment</h3>
+    </div>
+    <div class="doc-card">
+      <p>
+        By default, all OHLCV prices are adjusted for historical stock splits and dividend
+        distributions (matching the Polygon.io API default of <code>adjusted=true</code>).
+        This means historical prices are retroactively modified so that price series are
+        continuous across corporate actions &mdash; a $100 stock that does a 2-for-1 split
+        will show $50 for all pre-split bars.
+      </p>
+      <p>
+        <strong>Why this is the default:</strong> Adjusted prices produce continuous series
+        that are essential for accurate technical indicator calculations (EMAs, RSI, MACD, etc.)
+        and meaningful backtesting. Without adjustment, a split or dividend would appear as a
+        sudden price gap, distorting every indicator that relies on price history.
+      </p>
+      <p>
+        <strong>When to use unadjusted data:</strong> Uncheck "Split &amp; dividend adjusted"
+        if you need raw exchange prices &mdash; for example, when verifying trade executions at
+        historical prices, when your indicator logic handles adjustments separately, or when
+        analysing the raw tape for microstructure research.
+      </p>
     </div>
   </div>
 

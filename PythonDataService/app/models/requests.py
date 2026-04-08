@@ -11,6 +11,7 @@ class AggregateRequest(BaseModel):
     from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
     to_date: str = Field(..., description="End date (YYYY-MM-DD)")
     limit: int = Field(50000, ge=1, le=50000, description="Max results")
+    adjusted: bool = Field(True, description="Adjust for splits/dividends (Polygon default: true)")
 
     @field_validator('timespan')
     @classmethod
@@ -196,6 +197,7 @@ class IndicatorTableRequest(BaseModel):
         False,
         description="Fill missing minute bars with previous close (volume=0)",
     )
+    adjusted: bool = Field(True, description="Adjust for splits/dividends (Polygon default: true)")
 
     @field_validator('timespan')
     @classmethod
@@ -238,6 +240,7 @@ class DatasetGenerationRequest(BaseModel):
         le=60,
         description="Bar multiplier (e.g., 5 with timespan='minute' gives 5-min bars)",
     )
+    adjusted: bool = Field(True, description="Adjust for splits/dividends (Polygon default: true)")
 
     @field_validator('timespan')
     @classmethod

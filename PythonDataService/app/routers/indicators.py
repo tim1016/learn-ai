@@ -98,6 +98,7 @@ async def generate_indicator_table(request: IndicatorTableRequest):
             timespan=request.timespan,
             from_date=warmup_start,
             to_date=request.to_date,
+            adjusted=request.adjusted,
         )
 
         if not bars:

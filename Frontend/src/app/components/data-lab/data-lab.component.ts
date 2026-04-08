@@ -193,6 +193,7 @@ export class DataLabComponent {
 
   session = signal<'rth' | 'extended'>('rth');
   forwardFill = signal(true);
+  adjusted = signal(true);
   warmup = signal(true);
   computeAllIndicators = signal(false);
   timespan = signal<'minute' | 'hour' | 'day'>('minute');
@@ -361,6 +362,7 @@ export class DataLabComponent {
         toDate: this.toDate(),
         session: this.session(),
         forwardFill: this.forwardFill(),
+        adjusted: this.adjusted(),
         entries: this.entries(),
       };
 
@@ -404,6 +406,7 @@ export class DataLabComponent {
     this.toDateValue.set(DataLabComponent.parseDate(session.config.toDate));
     this.session.set(session.config.session);
     this.forwardFill.set(session.config.forwardFill);
+    this.adjusted.set(session.config.adjusted ?? true);
     this.entries.set([...session.config.entries]);
     this.activeSessionId.set(session.id);
     this.sessionName.set(session.name);
@@ -653,6 +656,7 @@ export class DataLabComponent {
         indicator_entries: this.entries(),
         session: this.session(),
         forward_fill: this.forwardFill(),
+        adjusted: this.adjusted(),
         warmup: this.warmup(),
         timespan: this.timespan(),
         multiplier: this.multiplier(),

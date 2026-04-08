@@ -31,6 +31,7 @@ public interface IPolygonService
         string timespan,
         string fromDate,
         string toDate,
+        bool adjusted = true,
         CancellationToken cancellationToken = default);
 
     /// <summary>
