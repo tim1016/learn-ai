@@ -1,0 +1,270 @@
+"""SpyEmaCrossoverAlgorithm — Python port of LEAN's C# reference algorithm.
+
+Line-for-line port of
+``Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs`` (Apr 2026 revision).
+The intent is to produce the same trades, in the same order, at the same
+prices, as the LEAN reference output at
+``Lean/Launcher/bin/Debug/SpyEmaCrossoverAlgorithm-log.txt``.
+
+Strategy rules:
+  * 15-minute bars consolidated from minute SPY data.
+  * Long-only EMA(5)/EMA(10) crossover with RSI(14) filter (Wilders).
+  * Entry: fresh EMA5 > EMA10 crossover AND (ema5 - ema10) >= 0.20
+           AND 50 <= RSI <= 70.
+  * Position: SetHoldings(SPY, 1.0) — all-in on the signal bar.
+  * Exit: after exactly 5 consolidated bars (75 minutes), Liquidate.
+
+Trade logging:
+  Trades are logged in ``on_order_event`` using actual fill prices and
+  times from the portfolio's fills — NOT from the signal bar's close.
+  This makes the trade log consistent with the portfolio accounting
+  regardless of fill mode. In SIGNAL_BAR_CLOSE mode the fill price
+  equals the signal bar close (so the LEAN bit-exact match is
+  preserved); in NEXT_BAR_OPEN mode the trade log reflects actual
+  next-bar-open fills, so statistics computed from it match the
+  portfolio's net profit.
+
+  Indicator snapshots (EMA5, EMA10, RSI) are captured at signal time
+  and stashed in ``_pending_entry``, because they describe the decision
+  that triggered the entry — not the state at fill time.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from decimal import Decimal
+from typing import Optional
+
+from app.engine.data.trade_bar import TradeBar
+from app.engine.execution.order import Direction, OrderEvent
+from app.engine.indicators.ema import ExponentialMovingAverage
+from app.engine.indicators.rsi import RelativeStrengthIndex
+from app.engine.strategy.base import LoggedTrade, Strategy
+
+
+@dataclass
+class _PendingEntry:
+    """Indicator snapshot captured at entry signal time.
+
+    Populated when the strategy submits the entry order; consumed when
+    the corresponding entry fill arrives in ``on_order_event``.
+    """
+
+    ema5: Decimal
+    ema10: Decimal
+    rsi: Decimal
+
+
+@dataclass
+class _OpenTrade:
+    """An entry that has filled but not yet exited."""
+
+    entry_time: datetime
+    entry_price: Decimal
+    ema5: Decimal
+    ema10: Decimal
+    rsi: Decimal
+
+
+class SpyEmaCrossoverAlgorithm(Strategy):
+    def __init__(self) -> None:
+        super().__init__()
+        self._symbol: str = ""
+        self._ema5: ExponentialMovingAverage | None = None
+        self._ema10: ExponentialMovingAverage | None = None
+        self._rsi14: RelativeStrengthIndex | None = None
+
+        self._prev_ema5_above_ema10: bool = False
+
+        # Strategy state (flipped at signal time, like LEAN's C# code).
+        self._in_position: bool = False
+        self._bars_until_exit: int = 0
+
+        # Two-stage trade bookkeeping:
+        #   signal time     → _pending_entry (indicator snapshot)
+        #   entry fill      → _open_trade    (entry price/time from fill)
+        #   exit fill       → _LoggedTrade appended to trade_log
+        self._pending_entry: Optional[_PendingEntry] = None
+        self._open_trade: Optional[_OpenTrade] = None
+
+        self.trade_log: list[LoggedTrade] = []
+
+    def initialize(self) -> None:
+        # Date range and cash — match LEAN's Initialize().
+        self.set_start_date(2024, 3, 28)
+        self.set_end_date(2026, 3, 27)
+        self.set_cash(100000)
+
+        assert self.ctx is not None
+        self._symbol = self.ctx.add_equity("SPY")
+
+        # Indicators (updated manually in the handler).
+        self._ema5 = ExponentialMovingAverage("EMA5", 5)
+        self._ema10 = ExponentialMovingAverage("EMA10", 10)
+        self._rsi14 = RelativeStrengthIndex("RSI14", 14)
+
+        self._prev_ema5_above_ema10 = False
+        self._in_position = False
+
+        # 15-minute consolidator.
+        self.ctx.register_consolidator(
+            self._symbol,
+            timedelta(minutes=15),
+            self._on_fifteen_minute_bar,
+        )
+
+    # ------------------------------------------------------------------
+    # Bar handler — the line-for-line port of OnFifteenMinuteBar.
+    # ------------------------------------------------------------------
+    def _on_fifteen_minute_bar(self, bar: TradeBar) -> None:
+        assert self._ema5 is not None
+        assert self._ema10 is not None
+        assert self._rsi14 is not None
+        assert self.ctx is not None
+
+        # Update indicators with consolidated bar close at EndTime.
+        self._ema5.update(bar.end_time, bar.close)
+        self._ema10.update(bar.end_time, bar.close)
+        self._rsi14.update(bar.end_time, bar.close)
+
+        # Warmup guard — mirrors the C# branch.
+        if not (self._ema5.is_ready and self._ema10.is_ready and self._rsi14.is_ready):
+            if self._ema5.is_ready and self._ema10.is_ready:
+                assert self._ema5.current_value is not None
+                assert self._ema10.current_value is not None
+                self._prev_ema5_above_ema10 = (
+                    self._ema5.current_value > self._ema10.current_value
+                )
+            else:
+                self._prev_ema5_above_ema10 = False
+            return
+
+        assert self._ema5.current_value is not None
+        assert self._ema10.current_value is not None
+        assert self._rsi14.current_value is not None
+
+        ema5_val = self._ema5.current_value
+        ema10_val = self._ema10.current_value
+        rsi_val = self._rsi14.current_value
+
+        current_above = ema5_val > ema10_val
+        ema_gap = ema5_val - ema10_val
+
+        if self._in_position:
+            # Decrement bars-until-exit and liquidate when we hit zero.
+            self._bars_until_exit -= 1
+            if self._bars_until_exit <= 0:
+                # Submit the exit order. The actual exit price and time
+                # will come from the resulting fill event in
+                # ``on_order_event``.
+                self.ctx.liquidate(self._symbol)
+                self.ctx.log(
+                    f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"Close={bar.close:.2f}"
+                )
+                self._in_position = False
+        else:
+            # Entry check.
+            fresh_crossover = current_above and not self._prev_ema5_above_ema10
+            gap_ok = ema_gap >= Decimal("0.20")
+            rsi_ok = Decimal(50) <= rsi_val <= Decimal(70)
+
+            if fresh_crossover and gap_ok and rsi_ok:
+                # Stash the indicator snapshot — it describes the
+                # decision that triggered the entry, so it must be
+                # captured here (not at fill time).
+                self._pending_entry = _PendingEntry(
+                    ema5=ema5_val, ema10=ema10_val, rsi=rsi_val
+                )
+                self.ctx.set_holdings(self._symbol, Decimal(1))
+                self._in_position = True
+                self._bars_until_exit = 5
+
+                self.ctx.log(
+                    f"ENTRY SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"Close={bar.close:.2f} "
+                    f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} "
+                    f"Gap={ema_gap:.4f} RSI={rsi_val:.2f}"
+                )
+
+        # Update the crossover state for the next bar.
+        self._prev_ema5_above_ema10 = current_above
+
+    # ------------------------------------------------------------------
+    # Fill-driven trade bookkeeping.
+    # ------------------------------------------------------------------
+    def on_order_event(self, event: OrderEvent) -> None:
+        """Turn fills into trade log entries.
+
+        Entry fills pair with ``_pending_entry`` to start an open trade;
+        exit fills close the open trade and append a ``_LoggedTrade``.
+        The strategy ignores fills that don't correspond to its own
+        entry/exit intentions — e.g., a stray liquidation on
+        end-of-algorithm with no pending trade will just reset state.
+        """
+        if event.direction == Direction.LONG:
+            # Entry fill.
+            if self._pending_entry is None:
+                # Defensive: a LONG fill without a pending entry means
+                # state is out of sync. Log and skip.
+                if self.ctx is not None:
+                    self.ctx.log(
+                        f"WARN: LONG fill at {event.time} with no pending entry"
+                    )
+                return
+            self._open_trade = _OpenTrade(
+                entry_time=event.time,
+                entry_price=event.fill_price,
+                ema5=self._pending_entry.ema5,
+                ema10=self._pending_entry.ema10,
+                rsi=self._pending_entry.rsi,
+            )
+            self._pending_entry = None
+            if self.ctx is not None:
+                self.ctx.log(
+                    f"ENTRY: {event.time.strftime('%Y-%m-%d %H:%M')} "
+                    f"Price={event.fill_price:.2f} "
+                    f"EMA5={self._open_trade.ema5:.4f} "
+                    f"EMA10={self._open_trade.ema10:.4f} "
+                    f"RSI={self._open_trade.rsi:.2f}"
+                )
+        else:
+            # SHORT/FLAT fill → exit.
+            if self._open_trade is None:
+                # A liquidate with no open trade; nothing to record.
+                return
+            entry = self._open_trade
+            exit_price = event.fill_price
+            exit_time = event.time
+            pnl_pts = exit_price - entry.entry_price
+            pnl_pct = pnl_pts / entry.entry_price
+            result = "WIN" if pnl_pts >= 0 else "LOSS"
+            self.trade_log.append(
+                LoggedTrade(
+                    entry_time=entry.entry_time,
+                    entry_price=entry.entry_price,
+                    exit_time=exit_time,
+                    exit_price=exit_price,
+                    pnl_pts=pnl_pts,
+                    pnl_pct=pnl_pct,
+                    result=result,
+                    indicators={
+                        "ema5": entry.ema5,
+                        "ema10": entry.ema10,
+                        "rsi": entry.rsi,
+                    },
+                )
+            )
+            if self.ctx is not None:
+                self.ctx.log(
+                    f"EXIT: {exit_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"Price={exit_price:.2f} PnL={pnl_pts:.2f} "
+                    f"({pnl_pct * 100:.2f}%) {result}"
+                )
+            self._open_trade = None
+
+    def on_end_of_algorithm(self) -> None:
+        if self._in_position:
+            assert self.ctx is not None
+            self.ctx.liquidate(self._symbol)
+            self._in_position = False

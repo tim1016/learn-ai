@@ -164,6 +164,25 @@ export const routes: Routes = [
       ).then((m) => m.DataQualityDocsComponent),
   },
   {
+    path: "engine",
+    loadComponent: () =>
+      import("./components/lean-engine/lean-engine.component").then(
+        (m) => m.LeanEngineComponent
+      ),
+  },
+  {
+    path: "engine/docs",
+    loadComponent: () =>
+      import(
+        "./components/lean-engine/lean-engine-docs/lean-engine-docs.component"
+      ).then((m) => m.LeanEngineDocsComponent),
+  },
+  {
+    path: "lean-engine",
+    redirectTo: "engine",
+    pathMatch: "full",
+  },
+  {
     path: "research-lab",
     loadComponent: () =>
       import("./components/research-lab/research-lab.component").then(

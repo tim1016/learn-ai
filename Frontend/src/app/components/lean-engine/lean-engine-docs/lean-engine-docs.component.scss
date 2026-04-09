@@ -1,0 +1,80 @@
+:host {
+  display: block;
+  padding: 1.5rem 2rem;
+  color: #e5e7eb;
+  background: #0b1220;
+  min-height: 100vh;
+}
+
+.engine-docs {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1.5rem;
+
+  h1 {
+    margin: 0 0 0.25rem;
+    font-size: 1.75rem;
+    font-weight: 600;
+  }
+
+  .subtitle {
+    margin: 0;
+    color: #9ca3af;
+    font-size: 0.875rem;
+    max-width: 60ch;
+  }
+
+  .header-nav {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .nav-link {
+    color: #60a5fa;
+    text-decoration: none;
+    font-size: 0.875rem;
+    padding: 0.375rem 0.75rem;
+    border: 1px solid #1f2937;
+    border-radius: 6px;
+
+    &:hover {
+      background: #111827;
+    }
+  }
+}
+
+.placeholder-card {
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 10px;
+  padding: 1.5rem 1.75rem;
+
+  h2 {
+    margin: 0 0 0.75rem;
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: #f9fafb;
+  }
+
+  p {
+    margin: 0;
+    color: #cbd5e1;
+    line-height: 1.6;
+    font-size: 0.9375rem;
+  }
+
+  code {
+    background: #0f172a;
+    color: #93c5fd;
+    padding: 0.125rem 0.375rem;
+    border-radius: 4px;
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.875rem;
+  }
+}

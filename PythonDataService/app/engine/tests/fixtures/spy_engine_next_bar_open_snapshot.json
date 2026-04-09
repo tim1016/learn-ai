@@ -1,0 +1,16 @@
+{
+  "fill_mode": "next_bar_open",
+  "initial_cash": 100000.0,
+  "final_equity": 109430.07,
+  "net_profit": 9430.07,
+  "total_fees": 126.0,
+  "total_trades": 63,
+  "winning_trades": 40,
+  "losing_trades": 23,
+  "win_rate": 0.634921,
+  "profit_factor": 2.384611,
+  "max_drawdown_pct": 0.01303,
+  "sharpe_ratio": 1.617127,
+  "sortino_ratio": 3.539689,
+  "calmar_ratio": 3.544149
+}

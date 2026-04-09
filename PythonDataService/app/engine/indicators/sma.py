@@ -1,0 +1,39 @@
+"""SimpleMovingAverage — used internally to seed the EMA.
+
+Mirrors LEAN's Indicators/SimpleMovingAverage.cs. The indicator becomes
+``is_ready`` once ``period`` samples have been received, at which point
+``current_value`` equals the arithmetic mean of the most recent ``period``
+inputs. Before that, ``current_value`` is the mean of all samples seen so far
+(this matches LEAN, where the SMA uses a rolling window that also reports a
+value during warmup).
+"""
+from __future__ import annotations
+
+from collections import deque
+from datetime import datetime
+from decimal import Decimal
+from typing import Optional
+
+from app.engine.indicators.base import Indicator
+
+
+class SimpleMovingAverage(Indicator):
+    def __init__(self, name: str, period: int) -> None:
+        super().__init__(name, period)
+        self._window: deque[Decimal] = deque(maxlen=period)
+        self._sum: Decimal = Decimal(0)
+
+    def _compute_next_value(
+        self, time: datetime, value: Decimal
+    ) -> Optional[Decimal]:
+        if len(self._window) == self.period:
+            # Maxlen is already at period, popping is handled by deque,
+            # but we track _sum manually for precision.
+            self._sum -= self._window[0]
+        self._window.append(value)
+        self._sum += value
+        return self._sum / Decimal(len(self._window))
+
+    def _reset_state(self) -> None:
+        self._window.clear()
+        self._sum = Decimal(0)

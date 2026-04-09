@@ -1,0 +1,222 @@
+<div class="lean-engine">
+  <header class="page-header">
+    <div>
+      <h1>LEAN Engine</h1>
+      <p class="subtitle">
+        LEAN-compatible backtest engine. Picks a registered strategy, renders
+        parameters from its JSON schema, and runs against LEAN minute data.
+      </p>
+    </div>
+    <nav class="header-nav">
+      <a routerLink="/engine/docs" class="nav-link">Documentation</a>
+      <a routerLink="/strategy-lab" class="nav-link">Strategy Lab</a>
+    </nav>
+  </header>
+
+  @if (strategiesLoading()) {
+    <div class="notice">Loading strategies…</div>
+  }
+
+  @if (strategiesError(); as err) {
+    <div class="notice error">Failed to load strategies: {{ err }}</div>
+  }
+
+  @if (!strategiesLoading() && strategies().length > 0) {
+    <section class="config-card">
+      <div class="form-grid">
+        <label class="field">
+          <span class="label">Strategy</span>
+          <select
+            [ngModel]="selectedStrategyName()"
+            (ngModelChange)="onStrategyChange($event)"
+          >
+            @for (s of strategies(); track s.name) {
+              <option [value]="s.name">{{ s.display_name }}</option>
+            }
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="label">Fill mode</span>
+          <select
+            [ngModel]="fillMode()"
+            (ngModelChange)="fillMode.set($event)"
+          >
+            <option value="signal_bar_close">Signal bar close</option>
+            <option value="next_bar_open">Next bar open</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="label">Start date</span>
+          <input
+            type="date"
+            [ngModel]="startDate()"
+            (ngModelChange)="startDate.set($event)"
+          />
+        </label>
+
+        <label class="field">
+          <span class="label">End date</span>
+          <input
+            type="date"
+            [ngModel]="endDate()"
+            (ngModelChange)="endDate.set($event)"
+          />
+        </label>
+
+        <label class="field">
+          <span class="label">Initial cash</span>
+          <input
+            type="number"
+            min="0"
+            step="1000"
+            [ngModel]="initialCash()"
+            (ngModelChange)="initialCash.set($event)"
+          />
+        </label>
+      </div>
+
+      @if (selectedStrategy(); as strategy) {
+        <div class="strategy-description">{{ strategy.description }}</div>
+      }
+
+      @if (paramEntries().length > 0) {
+        <div class="params-card">
+          <h3>Parameters</h3>
+          <div class="form-grid">
+            @for (entry of paramEntries(); track entry.name) {
+              <label class="field">
+                <span class="label">
+                  {{ entry.prop.title || entry.name }}
+                  @if (entry.prop.description) {
+                    <span class="hint" [title]="entry.prop.description">?</span>
+                  }
+                </span>
+                <input
+                  [type]="
+                    entry.prop.type === 'integer' || entry.prop.type === 'number'
+                      ? 'number'
+                      : 'text'
+                  "
+                  [value]="paramValues()[entry.name] ?? ''"
+                  (input)="
+                    onParamChange(
+                      entry.name,
+                      $any($event.target).value,
+                      entry.prop.type
+                    )
+                  "
+                  [attr.min]="entry.prop.minimum ?? null"
+                  [attr.max]="entry.prop.maximum ?? null"
+                />
+              </label>
+            }
+          </div>
+        </div>
+      }
+
+      <div class="actions">
+        <button
+          type="button"
+          class="run-btn"
+          [disabled]="running() || !selectedStrategyName()"
+          (click)="run()"
+        >
+          {{ running() ? "Running…" : "Run backtest" }}
+        </button>
+      </div>
+    </section>
+  }
+
+  @if (runError(); as err) {
+    <div class="notice error">{{ err }}</div>
+  }
+
+  @if (result(); as r) {
+    <section class="results">
+      <div class="summary-grid">
+        <div class="stat">
+          <span class="stat-label">Initial cash</span>
+          <span class="stat-value">{{ formatCurrency(r.initial_cash) }}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Final equity</span>
+          <span class="stat-value">{{ formatCurrency(r.final_equity) }}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Net profit</span>
+          <span
+            class="stat-value"
+            [class.positive]="r.net_profit > 0"
+            [class.negative]="r.net_profit < 0"
+          >
+            {{ formatCurrency(r.net_profit) }}
+          </span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Total fees</span>
+          <span class="stat-value">{{ formatCurrency(r.total_fees) }}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Total trades</span>
+          <span class="stat-value">{{ r.total_trades }}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Win rate</span>
+          <span class="stat-value">{{ formatPercent(r.win_rate) }}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Wins / losses</span>
+          <span class="stat-value">
+            {{ r.winning_trades }} / {{ r.losing_trades }}
+          </span>
+        </div>
+      </div>
+
+      @if (r.trades.length > 0) {
+        <div class="trades-card">
+          <h3>Trades</h3>
+          <div class="table-wrap">
+            <table class="trades-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Entry time</th>
+                  <th>Entry</th>
+                  <th>Exit time</th>
+                  <th>Exit</th>
+                  <th>PnL (pts)</th>
+                  <th>PnL %</th>
+                  <th>Result</th>
+                  <th>Indicators</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (t of r.trades; track t.trade_number) {
+                  <tr [class.win]="t.result === 'WIN'" [class.loss]="t.result === 'LOSS'">
+                    <td>{{ t.trade_number }}</td>
+                    <td>{{ t.entry_time }}</td>
+                    <td>{{ formatNumber(t.entry_price) }}</td>
+                    <td>{{ t.exit_time }}</td>
+                    <td>{{ formatNumber(t.exit_price) }}</td>
+                    <td>{{ formatNumber(t.pnl_pts) }}</td>
+                    <td>{{ formatPercent(t.pnl_pct) }}</td>
+                    <td>{{ t.result }}</td>
+                    <td class="indicators">
+                      @for (ind of tradeIndicatorEntries(t); track ind.key) {
+                        <span class="indicator-chip">
+                          {{ ind.key }}: {{ formatNumber(ind.value, 4) }}
+                        </span>
+                      }
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+    </section>
+  }
+</div>
