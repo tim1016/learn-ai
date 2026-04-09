@@ -58,8 +58,8 @@ export class AppComponent {
       label: "Engine",
       icon: "pi pi-cog",
       items: [
-        { label: "Backtest Runner", icon: "pi pi-play", routerLink: "/engine" },
-        { label: "Documentation", icon: "pi pi-book", routerLink: "/engine/docs" },
+        { label: "Engine Lab", icon: "pi pi-play", routerLink: "/engine" },
+        { label: "Engine Docs", icon: "pi pi-book", routerLink: "/engine/docs" },
       ],
     },
     {

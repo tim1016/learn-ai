@@ -3,6 +3,7 @@ import {
   Component,
   OnInit,
   computed,
+  effect,
   inject,
   signal,
 } from "@angular/core";
@@ -77,6 +78,17 @@ interface EngineBacktestResponse {
   error?: string;
 }
 
+interface DataAvailability {
+  symbol: string;
+  start: string;
+  end: string;
+  expected_days: number;
+  available_days: number;
+  is_complete: boolean;
+  missing_days: string[];
+  sources: Record<string, string[]>;
+}
+
 @Component({
   selector: "app-lean-engine",
   standalone: true,
@@ -109,6 +121,26 @@ export class LeanEngineComponent implements OnInit {
   readonly result = signal<EngineBacktestResponse | null>(null);
   readonly runError = signal<string | null>(null);
 
+  // ------------------------------------------------------------------
+  // Dynamic data layer state — availability + on-demand fetch
+  // ------------------------------------------------------------------
+  readonly autoFetch = signal<boolean>(false);
+  readonly availability = signal<DataAvailability | null>(null);
+  readonly availabilityLoading = signal<boolean>(false);
+  readonly availabilityError = signal<string | null>(null);
+
+  /** The symbol the engine will run against — read from the params form so
+   *  we don't duplicate the strategy schema's own ``symbol`` field. SPY EMA
+   *  crossover has no symbol field (it's hardcoded), so this falls back to
+   *  SPY for reporting purposes. */
+  readonly effectiveSymbol = computed<string>(() => {
+    const fromParams = this.paramValues()["symbol"];
+    if (typeof fromParams === "string" && fromParams.trim().length > 0) {
+      return fromParams.trim().toUpperCase();
+    }
+    return "SPY";
+  });
+
   readonly selectedStrategy = computed(() => {
     const name = this.selectedStrategyName();
     if (!name) return null;
@@ -124,11 +156,55 @@ export class LeanEngineComponent implements OnInit {
     }));
   });
 
+  constructor() {
+    // Auto-refresh the availability report whenever the user changes
+    // symbol, start date, or end date. We don't wait for a "Check" button
+    // because that would make the UI feel sluggish and the endpoint is
+    // a cheap on-disk scan — no Polygon call involved.
+    effect(() => {
+      const symbol = this.effectiveSymbol();
+      const start = this.startDate();
+      const end = this.endDate();
+      if (!symbol || !start || !end) {
+        this.availability.set(null);
+        return;
+      }
+      void this.checkAvailability(symbol, start, end);
+    });
+  }
+
   // ------------------------------------------------------------------
   // Lifecycle
   // ------------------------------------------------------------------
   ngOnInit(): void {
     this.loadStrategies();
+  }
+
+  async checkAvailability(
+    symbol: string,
+    start: string,
+    end: string
+  ): Promise<void> {
+    this.availabilityLoading.set(true);
+    this.availabilityError.set(null);
+    try {
+      const url = `${this.apiBase}/data/availability`;
+      const params = { symbol, start, end };
+      const report = await firstValueFrom(
+        this.http.get<DataAvailability>(url, { params })
+      );
+      this.availability.set(report);
+    } catch (err: any) {
+      this.availability.set(null);
+      const detail = err?.error?.detail;
+      this.availabilityError.set(
+        typeof detail === "string"
+          ? detail
+          : err?.message ?? "Availability check failed"
+      );
+    } finally {
+      this.availabilityLoading.set(false);
+    }
   }
 
   async loadStrategies(): Promise<void> {
@@ -202,6 +278,7 @@ export class LeanEngineComponent implements OnInit {
       fill_mode: this.fillMode(),
       initial_cash: this.initialCash(),
       params: this.paramValues(),
+      auto_fetch: this.autoFetch(),
     };
     if (this.startDate()) body["start_date"] = this.startDate();
     if (this.endDate()) body["end_date"] = this.endDate();
@@ -251,5 +328,33 @@ export class LeanEngineComponent implements OnInit {
 
   tradeIndicatorEntries(trade: EngineTrade): Array<{ key: string; value: number }> {
     return Object.entries(trade.indicators).map(([key, value]) => ({ key, value }));
+  }
+
+  /** Condense the availability report's per-root counts into short chips
+   *  the UI can render: "reference: 42 days" / "cache: 3 days". Filters
+   *  out empty roots so SPY runs don't get a noisy empty-cache line. */
+  availabilitySourceChips(
+    report: DataAvailability
+  ): Array<{ label: string; days: number }> {
+    return Object.entries(report.sources)
+      .filter(([, dates]) => dates.length > 0)
+      .map(([root, dates]) => ({
+        label: this.rootDisplayName(root),
+        days: dates.length,
+      }));
+  }
+
+  private rootDisplayName(root: string): string {
+    // /lean-data → "reference mount", /lean-cache → "Polygon cache".
+    // Anything else falls back to the path tail so local dev setups with
+    // different layouts still render something meaningful.
+    if (root.endsWith("/lean-data") || root.endsWith("\\lean-data")) {
+      return "reference mount";
+    }
+    if (root.endsWith("/lean-cache") || root.endsWith("\\lean-cache")) {
+      return "Polygon cache";
+    }
+    const parts = root.split(/[\\/]/);
+    return parts[parts.length - 1] || root;
   }
 }

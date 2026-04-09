@@ -38,3 +38,7 @@ Frontend/.angular/
 
 # Windows reserved device names (can be accidentally created)
 nul
+
+# Polygon-sourced LEAN cache (populated at runtime by the engine)
+PythonDataService/lean-cache/
+!PythonDataService/lean-cache/.gitkeep

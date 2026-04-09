@@ -276,3 +276,89 @@
     font-family: "SF Mono", Menlo, monospace;
   }
 }
+
+.checkbox-field {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem;
+
+  input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+  }
+}
+
+.availability-card {
+  margin-top: 1rem;
+  padding: 0.875rem 1rem;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+
+  .availability-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+
+    h4 {
+      margin: 0;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: #e5e7eb;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+  }
+
+  .availability-status {
+    font-size: 0.8125rem;
+    font-weight: 500;
+
+    &.loading {
+      color: #9ca3af;
+    }
+    &.ok {
+      color: #34d399;
+    }
+    &.partial {
+      color: #fbbf24;
+    }
+  }
+
+  .availability-sources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    margin-bottom: 0.375rem;
+  }
+
+  .source-chip {
+    display: inline-block;
+    background: #1e293b;
+    color: #cbd5e1;
+    padding: 0.1875rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+
+    &.empty {
+      color: #64748b;
+      font-style: italic;
+    }
+  }
+
+  .availability-hint {
+    font-size: 0.75rem;
+    color: #9ca3af;
+
+    strong {
+      color: #fbbf24;
+    }
+  }
+
+  .availability-error {
+    font-size: 0.75rem;
+    color: #fca5a5;
+    margin-bottom: 0.5rem;
+  }
+}

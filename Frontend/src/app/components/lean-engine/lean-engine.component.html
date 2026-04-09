@@ -1,15 +1,16 @@
 <div class="lean-engine">
   <header class="page-header">
     <div>
-      <h1>LEAN Engine</h1>
+      <h1>Engine Lab</h1>
       <p class="subtitle">
         LEAN-compatible backtest engine. Picks a registered strategy, renders
         parameters from its JSON schema, and runs against LEAN minute data.
       </p>
     </div>
     <nav class="header-nav">
-      <a routerLink="/engine/docs" class="nav-link">Documentation</a>
+      <a routerLink="/engine/docs" class="nav-link">Engine Docs</a>
       <a routerLink="/strategy-lab" class="nav-link">Strategy Lab</a>
+      <a routerLink="/data-lab" class="nav-link">Data Lab</a>
     </nav>
   </header>
 
@@ -75,7 +76,64 @@
             (ngModelChange)="initialCash.set($event)"
           />
         </label>
+
+        <label class="field checkbox-field">
+          <input
+            type="checkbox"
+            [ngModel]="autoFetch()"
+            (ngModelChange)="autoFetch.set($event)"
+          />
+          <span class="label">
+            Auto-fetch missing data from Polygon
+            <span class="hint" title="When enabled, any minute bars missing from the LEAN reference mount and the local cache will be pulled from Polygon and written to the cache before the backtest starts. Does not affect SPY, which always reads from the bit-exact reference fixture.">?</span>
+          </span>
+        </label>
       </div>
+
+      @if (startDate() && endDate()) {
+        <div class="availability-card">
+          <div class="availability-header">
+            <h4>Data availability — {{ effectiveSymbol() }}</h4>
+            @if (availabilityLoading()) {
+              <span class="availability-status loading">Checking…</span>
+            } @else if (availability(); as av) {
+              @if (av.is_complete) {
+                <span class="availability-status ok">
+                  ✓ Complete ({{ av.available_days }}/{{ av.expected_days }} weekdays)
+                </span>
+              } @else {
+                <span class="availability-status partial">
+                  {{ av.available_days }} / {{ av.expected_days }} weekdays on disk
+                  ({{ av.missing_days.length }} missing)
+                </span>
+              }
+            }
+          </div>
+
+          @if (availabilityError(); as err) {
+            <div class="availability-error">{{ err }}</div>
+          }
+
+          @if (availability(); as av) {
+            <div class="availability-sources">
+              @for (chip of availabilitySourceChips(av); track chip.label) {
+                <span class="source-chip">{{ chip.label }}: {{ chip.days }} days</span>
+              }
+              @if (availabilitySourceChips(av).length === 0) {
+                <span class="source-chip empty">no data on disk yet</span>
+              }
+            </div>
+
+            @if (!av.is_complete && !autoFetch()) {
+              <div class="availability-hint">
+                Enable <strong>Auto-fetch</strong> above to pull the missing
+                {{ av.missing_days.length }} weekdays from Polygon into the
+                local cache before running.
+              </div>
+            }
+          }
+        </div>
+      }
 
       @if (selectedStrategy(); as strategy) {
         <div class="strategy-description">{{ strategy.description }}</div>

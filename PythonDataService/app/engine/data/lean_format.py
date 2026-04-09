@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import io
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -81,9 +81,9 @@ def _parse_csv_bytes(
 
 
 class LeanMinuteDataReader:
-    """Reads LEAN-format minute equity data from a directory tree.
+    """Reads LEAN-format minute equity data from one or more directory trees.
 
-    Expected layout under ``data_root``::
+    Expected layout under each root::
 
         data_root/
           equity/
@@ -91,33 +91,54 @@ class LeanMinuteDataReader:
               minute/
                 {symbol_lower}/
                   {YYYYMMDD}_trade.zip
+
+    The reader accepts either a single root (backward-compat) or a sequence
+    of roots. When multiple roots are supplied the reader looks for each
+    day's zip in the order they were given, using the first hit. This lets
+    the engine overlay a writable Polygon-sourced cache on top of a
+    read-only LEAN reference mount without changing any calling code.
     """
 
-    def __init__(self, data_root: Path | str) -> None:
-        self.data_root = Path(data_root)
+    def __init__(
+        self,
+        data_root: Path | str | Sequence[Path | str],
+    ) -> None:
+        # Normalize to a list of Paths while preserving order.
+        if isinstance(data_root, (str, Path)):
+            roots: list[Path] = [Path(data_root)]
+        else:
+            roots = [Path(r) for r in data_root]
+            if not roots:
+                raise ValueError("LeanMinuteDataReader requires at least one root")
+        self.data_roots: list[Path] = roots
+        # Preserved for backward compatibility with any code that reads the
+        # ``data_root`` attribute (tests, logging). Points at the first root.
+        self.data_root: Path = roots[0]
 
-    def _symbol_dir(self, symbol: str) -> Path:
-        return (
-            self.data_root
-            / "equity"
-            / "usa"
-            / "minute"
-            / symbol.lower()
-        )
+    def _symbol_dir(self, root: Path, symbol: str) -> Path:
+        return root / "equity" / "usa" / "minute" / symbol.lower()
 
     def _zip_path(self, symbol: str, trading_date: date) -> Path:
-        return (
-            self._symbol_dir(symbol)
-            / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
-        )
+        """Return the first existing zip across roots, or the first root's
+        candidate path (non-existent) when no root has the file."""
+        filename = f"{trading_date.strftime('%Y%m%d')}_trade.zip"
+        candidates = [self._symbol_dir(r, symbol) / filename for r in self.data_roots]
+        for c in candidates:
+            if c.exists():
+                return c
+        return candidates[0]
 
     def iter_dates(self, symbol: str, start: date, end: date) -> Iterator[date]:
-        """Yield trading dates in [start, end] for which a zip file exists."""
+        """Yield trading dates in [start, end] for which any root has a zip."""
         current = start
         one_day = timedelta(days=1)
+        filename_fmt = "%Y%m%d"
         while current <= end:
-            if self._zip_path(symbol, current).exists():
-                yield current
+            filename = f"{current.strftime(filename_fmt)}_trade.zip"
+            for root in self.data_roots:
+                if (self._symbol_dir(root, symbol) / filename).exists():
+                    yield current
+                    break
             current += one_day
 
     def read_day(self, symbol: str, trading_date: date) -> list[TradeBar]:

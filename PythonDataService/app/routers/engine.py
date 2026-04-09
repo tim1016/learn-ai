@@ -13,19 +13,27 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field, ValidationError
 
+from app.engine.data.availability import (
+    AvailabilityReport,
+    check_availability,
+    ensure_range,
+)
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.results.statistics import summarize
+from app.engine.strategy.algorithms.rsi_mean_reversion import (
+    RsiMeanReversionAlgorithm,
+)
 from app.engine.strategy.algorithms.sma_crossover import SmaCrossoverAlgorithm
 from app.engine.strategy.algorithms.spy_ema_crossover import (
     SpyEmaCrossoverAlgorithm,
@@ -82,6 +90,14 @@ class SmaCrossoverParams(StrategyParamsBase):
     resolution_minutes: int = Field(15, ge=1, le=1440)
 
 
+class RsiMeanReversionParams(StrategyParamsBase):
+    symbol: str = Field("SPY", min_length=1, max_length=20)
+    window: int = Field(14, ge=2, le=500)
+    oversold: float = Field(30.0, gt=0, lt=100)
+    overbought: float = Field(70.0, gt=0, lt=100)
+    resolution_minutes: int = Field(15, ge=1, le=1440)
+
+
 @dataclass
 class StrategyRegistration:
     display_name: str
@@ -116,21 +132,68 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
     ),
+    "rsi_mean_reversion": StrategyRegistration(
+        display_name="RSI Mean Reversion",
+        description=(
+            "Long-only RSI threshold strategy. Buys when RSI drops below the "
+            "oversold level and sells when RSI rises above the overbought "
+            "level. Configurable symbol, window, thresholds, and resolution."
+        ),
+        param_schema=RsiMeanReversionParams,
+        build=lambda p: RsiMeanReversionAlgorithm(
+            symbol=p.symbol,  # type: ignore[attr-defined]
+            window=p.window,  # type: ignore[attr-defined]
+            oversold=p.oversold,  # type: ignore[attr-defined]
+            overbought=p.overbought,  # type: ignore[attr-defined]
+            resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
+        ),
+    ),
 }
 
 
 def _resolve_lean_data_root() -> Path:
-    """Return the LEAN Data directory.
+    """Return the LEAN reference Data directory.
 
     Reads the ``LEAN_DATA_ROOT`` environment variable if set; otherwise
-    falls back to the standard local-development location. This keeps the
-    router decoupled from the Polygon-oriented ``app.config.settings``,
-    which has its own required fields unrelated to the engine.
+    falls back to the standard local-development location. This root is
+    expected to be read-only in containerized deployments — any
+    Polygon-sourced data goes into the cache root instead.
     """
     configured = os.environ.get("LEAN_DATA_ROOT")
     if configured:
         return Path(configured)
     return Path("/sessions/ecstatic-hopeful-volta/mnt/Lean/Data")
+
+
+def _resolve_lean_cache_root() -> Path:
+    """Return the writable cache root for Polygon-sourced LEAN zips.
+
+    Reads ``LEAN_DATA_CACHE`` if set, otherwise defaults to a sibling
+    ``lean-cache`` directory next to the service. This root is writable
+    and receives any data fetched on demand for symbols that aren't in
+    the read-only reference mount.
+    """
+    configured = os.environ.get("LEAN_DATA_CACHE")
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[2] / "lean-cache"
+
+
+def _resolve_lean_data_roots() -> list[Path]:
+    """Return the ordered list of roots the reader should search.
+
+    Reference mount comes first so the bit-exact SPY fixture always wins
+    over anything that may have been materialized into the cache with the
+    same date range.
+    """
+    roots: list[Path] = []
+    ref = _resolve_lean_data_root()
+    if ref.exists():
+        roots.append(ref)
+    cache = _resolve_lean_cache_root()
+    cache.mkdir(parents=True, exist_ok=True)
+    roots.append(cache)
+    return roots
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +215,14 @@ class EngineBacktestRequest(BaseModel):
     # corresponding ``StrategyParamsBase`` subclass in the registry. Left
     # untyped here because the schema varies per strategy.
     params: dict[str, Any] = Field(default_factory=dict)
+    # When true, the router will materialize any missing data for the
+    # run's symbol + date range into the cache root before starting the
+    # engine. Defaults to false so the SPY fixture path (which should
+    # always hit the reference mount) is never accidentally fetched.
+    auto_fetch: bool = Field(
+        False,
+        description="Fetch missing minute data from Polygon into the cache before running",
+    )
 
 
 class EngineTradeResponse(BaseModel):
@@ -299,23 +370,23 @@ def export_polygon_to_lean(request: LeanExportRequest) -> LeanExportResponse:
     """Fetch a Polygon minute-bar range and export it to LEAN zips.
 
     Writes one ``{YYYYMMDD}_trade.zip`` per trading day under
-    ``{LEAN_DATA_ROOT}/equity/usa/minute/{symbol}/``. After this runs,
-    the backtest engine can consume the newly-written data with no
-    further configuration.
+    ``{LEAN_DATA_CACHE}/equity/usa/minute/{symbol}/``. The read-only
+    reference mount is never touched — all fetched data lives in the
+    writable cache so the SPY fixture's bit-exact guarantee is preserved.
     """
     # Imported lazily — keeps this module importable in test contexts
     # that don't provide a Polygon API key.
     from app.engine.data.polygon_export import export_polygon_range_to_lean
     from app.services.polygon_client import PolygonClientService
 
-    data_root = _resolve_lean_data_root()
-    data_root.mkdir(parents=True, exist_ok=True)
+    cache_root = _resolve_lean_cache_root()
+    cache_root.mkdir(parents=True, exist_ok=True)
 
     try:
         polygon = PolygonClientService()
         files = export_polygon_range_to_lean(
             polygon=polygon,
-            output_root=data_root,
+            output_root=cache_root,
             symbol=request.symbol.upper(),
             from_date=request.from_date,
             to_date=request.to_date,
@@ -326,7 +397,7 @@ def export_polygon_to_lean(request: LeanExportRequest) -> LeanExportResponse:
         return LeanExportResponse(
             success=False,
             symbol=request.symbol.upper(),
-            data_root=str(data_root),
+            data_root=str(cache_root),
             days_written=0,
             error=str(exc),
         )
@@ -334,10 +405,69 @@ def export_polygon_to_lean(request: LeanExportRequest) -> LeanExportResponse:
     return LeanExportResponse(
         success=True,
         symbol=request.symbol.upper(),
-        data_root=str(data_root),
+        data_root=str(cache_root),
         days_written=len(files),
         files=[str(p) for p in files],
     )
+
+
+# ---------------------------------------------------------------------------
+# Data availability endpoint
+# ---------------------------------------------------------------------------
+class AvailabilityResponse(BaseModel):
+    symbol: str
+    start: str
+    end: str
+    expected_days: int
+    available_days: int
+    is_complete: bool
+    missing_days: list[str] = []
+    # Per-root breakdown (reference mount vs cache) so the UI can tell
+    # the user where the data is coming from.
+    sources: dict[str, list[str]] = Field(default_factory=dict)
+
+
+def _parse_iso_date(value: str, field_name: str) -> date:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field_name}: expected YYYY-MM-DD, got {value!r}",
+        ) from exc
+
+
+@router.get("/data/availability", response_model=AvailabilityResponse)
+def get_data_availability(
+    symbol: str = Query(..., min_length=1, max_length=20),
+    start: str = Query(..., description="YYYY-MM-DD (inclusive)"),
+    end: str = Query(..., description="YYYY-MM-DD (inclusive)"),
+) -> AvailabilityResponse:
+    """Report how many trading days are already on disk for a symbol.
+
+    Checks the reference mount first, then the writable cache, and
+    returns both the aggregate coverage and a per-root breakdown so the
+    Angular UI can show the user whether SPY is hitting the bit-exact
+    reference data or an arbitrary ticker has been fetched into the
+    Polygon cache.
+    """
+    start_date = _parse_iso_date(start, "start")
+    end_date = _parse_iso_date(end, "end")
+    if end_date < start_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"end ({end}) must not precede start ({start})",
+        )
+
+    roots = _resolve_lean_data_roots()
+    report: AvailabilityReport = check_availability(
+        roots=roots,
+        symbol=symbol,
+        start=start_date,
+        end=end_date,
+    )
+    data = report.to_dict()
+    return AvailabilityResponse(**data)
 
 
 @router.post("/backtest", response_model=EngineBacktestResponse)
@@ -375,15 +505,61 @@ def run_engine_backtest(request: EngineBacktestRequest) -> EngineBacktestRespons
 
     fill_mode = _parse_fill_mode(request.fill_mode)
 
-    data_root = _resolve_lean_data_root()
-    if not data_root.exists():
+    data_roots = _resolve_lean_data_roots()
+    if not data_roots:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"LEAN data root not found at {data_root}",
+            detail="No LEAN data roots configured (set LEAN_DATA_ROOT or LEAN_DATA_CACHE)",
         )
 
     strategy = registration.build(validated_params)
-    reader = LeanMinuteDataReader(data_root)
+
+    # Optional on-demand fetch: if the caller asked for auto_fetch and we
+    # know the symbol + date range, make sure the cache has everything the
+    # engine will try to read. The SPY fixture never needs this because it
+    # lives in the read-only reference mount and is already complete.
+    if request.auto_fetch:
+        symbol = getattr(validated_params, "symbol", None)
+        start_override = request.start_date
+        end_override = request.end_date
+        if symbol and start_override and end_override:
+            try:
+                from app.services.polygon_client import PolygonClientService
+
+                polygon = PolygonClientService()
+                ensure_range(
+                    reference_roots=data_roots[:-1],
+                    cache_root=data_roots[-1],
+                    symbol=symbol,
+                    start=_parse_iso_date(start_override, "start_date"),
+                    end=_parse_iso_date(end_override, "end_date"),
+                    polygon=polygon,
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "[ENGINE] auto_fetch failed for %s %s..%s",
+                    symbol,
+                    start_override,
+                    end_override,
+                )
+                return EngineBacktestResponse(
+                    success=False,
+                    strategy_name=request.strategy_name,
+                    fill_mode=request.fill_mode,
+                    initial_cash=0.0,
+                    final_equity=0.0,
+                    net_profit=0.0,
+                    total_fees=0.0,
+                    total_trades=0,
+                    winning_trades=0,
+                    losing_trades=0,
+                    win_rate=0.0,
+                    error=f"auto_fetch failed: {exc}",
+                )
+
+    reader = LeanMinuteDataReader(data_roots)
     engine = BacktestEngine(
         data_source=reader,
         fill_model=FillModel(
