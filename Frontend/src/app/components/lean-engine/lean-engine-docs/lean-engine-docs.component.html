@@ -1,10 +1,12 @@
-<div class="engine-docs">
+<div class="engine-docs mt-4 max-w-5xl">
+  <!-- ═══ Header ═══ -->
   <header class="page-header">
     <div>
       <h1>Engine Documentation</h1>
       <p class="subtitle">
         How the LEAN-compatible backtest engine turns raw minute bars into
-        trade verdicts and summary statistics.
+        trade verdicts and summary statistics. Formulas match
+        <code>PythonDataService/app/engine/</code> line-for-line.
       </p>
     </div>
     <nav class="header-nav">
@@ -12,15 +14,345 @@
     </nav>
   </header>
 
-  <section class="placeholder-card">
-    <h2>Coming soon</h2>
-    <p>
-      The full documentation — data pipeline walkthrough, indicator math
-      (SMA, EMA, Wilders RSI), statistics formulas (Sharpe, Sortino, Calmar,
-      profit factor, expectancy, max drawdown), and a bar-by-bar SPY first
-      trade worked example — lands with Phase 2 §2.4a. This page exists now
-      so the <code>/engine/docs</code> route resolves and can be linked from
-      the Engine menu and from the backtest runner.
+  <!-- ═══ TL;DR ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-bolt section-icon"></i>
+      <h3>TL;DR</h3>
+    </div>
+    <div class="doc-card highlight-card">
+      <p>
+        This engine reads zipped LEAN minute bars, consolidates them to the
+        strategy's resolution, runs indicators in Decimal arithmetic, applies
+        strategy rules, fills orders through a configurable fill model,
+        tracks a portfolio, and emits per-trade and portfolio statistics —
+        all with the invariant that the SPY EMA crossover reference
+        algorithm produces <strong>exactly</strong> the same 63 trades,
+        prices, indicator values, and net profit as LEAN's C# reference
+        implementation.
+      </p>
+      <p class="mt-3">
+        New strategies don't need LEAN data — they just need to preserve
+        the ordered WIN/LOSS sequence against a hermetic reference, which
+        is the parity contract enforced by <code>test_sma_crossover_parity.py</code>.
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══ 1. Data pipeline ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sitemap section-icon"></i>
+      <h3>1. Data pipeline</h3>
+    </div>
+    <p class="section-description">
+      Nine stages from a zipped CSV on disk to a JSON backtest response.
     </p>
+    <div class="doc-card">
+      <ol class="pipeline-list">
+        @for (step of pipelineSteps; track step.n) {
+          <li>
+            <div class="pipeline-head">
+              <span class="step-number">{{ step.n }}</span>
+              <span class="step-label">{{ step.label }}</span>
+              <code class="step-module">{{ step.module }}</code>
+            </div>
+            <p class="step-detail">{{ step.detail }}</p>
+          </li>
+        }
+      </ol>
+    </div>
+  </section>
+
+  <!-- ═══ 2. Indicator math ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-calculator section-icon"></i>
+      <h3>2. Indicator math</h3>
+    </div>
+    <p class="section-description">
+      Formulas mirror LEAN's C# implementations bit-exactly. Every
+      subtlety listed here has caused a divergence during Phase 1 and is
+      now guarded by the SPY bit-exact test.
+    </p>
+
+    <p-accordion [multiple]="true">
+      <!-- SMA -->
+      <p-accordion-panel value="sma">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">{{ smaFormula.label }}</span>
+            <span class="feature-badge">Foundation</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="formula-block">
+              <span [appKatex]="smaFormula.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="variable-list">
+              <span class="label">Where:</span>
+              @for (v of smaFormula.variablesLatex!; track v) {
+                <div class="variable-item">
+                  <span [appKatex]="v"></span>
+                </div>
+              }
+            </div>
+            <p class="interpretation">{{ smaFormula.note }}</p>
+            <div class="info-callout mt-3">
+              <i class="pi pi-code"></i>
+              <span>Code: <code>{{ smaFormula.codeRef }}</code></span>
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- EMA -->
+      <p-accordion-panel value="ema">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">{{ emaFormula.label }}</span>
+            <span class="feature-badge">Core</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            <div class="formula-block">
+              <span [appKatex]="emaFormula.formulaLatex" [displayMode]="true"></span>
+            </div>
+            <div class="variable-list">
+              <span class="label">Where:</span>
+              @for (v of emaFormula.variablesLatex!; track v) {
+                <div class="variable-item">
+                  <span [appKatex]="v"></span>
+                </div>
+              }
+            </div>
+            <p class="interpretation">{{ emaFormula.note }}</p>
+            <div class="info-callout mt-3">
+              <i class="pi pi-code"></i>
+              <span>Code: <code>{{ emaFormula.codeRef }}</code></span>
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+
+      <!-- Wilders RSI -->
+      <p-accordion-panel value="rsi">
+        <p-accordion-header>
+          <div class="feature-header">
+            <span class="feature-name">Wilders RSI</span>
+            <span class="feature-badge">Momentum</span>
+          </div>
+        </p-accordion-header>
+        <p-accordion-content>
+          <div class="doc-card">
+            @for (f of rsiFormulas; track f.label; let last = $last) {
+              <h4>{{ f.label }}</h4>
+              <div class="formula-block">
+                <span [appKatex]="f.formulaLatex" [displayMode]="true"></span>
+              </div>
+              @if (f.variablesLatex) {
+                <div class="variable-list">
+                  <span class="label">Where:</span>
+                  @for (v of f.variablesLatex; track v) {
+                    <div class="variable-item">
+                      <span [appKatex]="v"></span>
+                    </div>
+                  }
+                </div>
+              }
+              <p class="interpretation">{{ f.note }}</p>
+              @if (!last) {
+                <p-divider />
+              }
+            }
+            <div class="info-callout mt-3">
+              <i class="pi pi-code"></i>
+              <span>Code: <code>engine/indicators/rsi.py</code></span>
+            </div>
+          </div>
+        </p-accordion-content>
+      </p-accordion-panel>
+    </p-accordion>
+  </section>
+
+  <!-- ═══ 3. Portfolio statistics ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-chart-line section-icon"></i>
+      <h3>3. Portfolio statistics</h3>
+    </div>
+    <p class="section-description">
+      Metrics computed from the trade log and the rebuilt equity curve.
+      All ratios annualize against 252 trading days per year.
+    </p>
+    <div class="doc-card">
+      @for (s of statistics; track s.name; let last = $last) {
+        <h4>{{ s.name }}</h4>
+        <div class="formula-block">
+          <span [appKatex]="s.formulaLatex" [displayMode]="true"></span>
+        </div>
+        <p class="interpretation">{{ s.description }}</p>
+        @if (s.notes) {
+          <p class="interpretation subtle">{{ s.notes }}</p>
+        }
+        <div class="info-callout subtle">
+          <i class="pi pi-code"></i>
+          <span>{{ s.codeRef }}</span>
+        </div>
+        @if (!last) {
+          <p-divider />
+        }
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 4. Fill models ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sliders-h section-icon"></i>
+      <h3>4. Fill models</h3>
+    </div>
+    <p class="section-description">
+      Two fill modes. Only one of them — signal_bar_close — produces
+      bit-exact parity with LEAN.
+    </p>
+    <div class="doc-card">
+      <table class="compare-table">
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th>What it does</th>
+            <th>Invariant</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (f of fillModes; track f.mode) {
+            <tr>
+              <td>
+                <strong>{{ f.displayName }}</strong><br />
+                <code>{{ f.mode }}</code>
+              </td>
+              <td>{{ f.description }}</td>
+              <td>{{ f.invariant }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══ 5. Invariants ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-shield section-icon"></i>
+      <h3>5. Bit-exact invariants</h3>
+    </div>
+    <p class="section-description">
+      These are the things we assert equality on, not just statistical
+      similarity. Every one has a dedicated test.
+    </p>
+    <div class="doc-card">
+      @for (inv of invariants; track inv.label; let last = $last) {
+        <div class="invariant-row">
+          <div class="invariant-head">
+            <span class="invariant-label">{{ inv.label }}</span>
+            <code class="invariant-test">{{ inv.testRef }}</code>
+          </div>
+          <p class="invariant-assertion"><strong>Assertion:</strong> {{ inv.assertion }}</p>
+          <p class="invariant-why"><strong>Why it matters:</strong> {{ inv.why }}</p>
+        </div>
+        @if (!last) {
+          <p-divider />
+        }
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 6. Worked example ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-play section-icon"></i>
+      <h3>6. Worked example — SPY first trade</h3>
+    </div>
+    <p class="section-description">
+      Values below come directly from
+      <code>fixtures/spy_lean_trades.csv</code> row 1 and match LEAN's
+      reference output exactly. Times are America/New_York.
+    </p>
+    <div class="doc-card">
+      <h4>Entry (bar-by-bar state at the signal)</h4>
+      <table class="example-table">
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Time</th>
+            <th>Value</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of firstTradeEntry; track row.label) {
+            <tr>
+              <td class="field-cell">{{ row.label }}</td>
+              <td class="time-cell">{{ row.time }}</td>
+              <td class="value-cell"><code>{{ row.value }}</code></td>
+              <td class="note-cell">{{ row.note }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+
+      <p-divider />
+
+      <h4>Countdown and exit</h4>
+      <table class="example-table">
+        <thead>
+          <tr>
+            <th>Step</th>
+            <th>Time</th>
+            <th>Value</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of firstTradeExit; track row.label) {
+            <tr>
+              <td class="field-cell">{{ row.label }}</td>
+              <td class="time-cell">{{ row.time }}</td>
+              <td class="value-cell"><code>{{ row.value }}</code></td>
+              <td class="note-cell">{{ row.note }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+
+      <div class="info-callout mt-3">
+        <i class="pi pi-check-circle"></i>
+        <span>
+          This full trade — entry 515.34, exit 516.97, EMA5 514.1906,
+          EMA10 513.9322, RSI 57.33, +0.3163% — is asserted bit-exactly
+          against LEAN by
+          <code>test_spy_ema_crossover_bit_exact.py</code>.
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 7. Glossary ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-book section-icon"></i>
+      <h3>7. Glossary</h3>
+    </div>
+    <div class="doc-card">
+      <dl class="glossary">
+        @for (g of glossary; track g.term) {
+          <dt>{{ g.term }}</dt>
+          <dd>{{ g.definition }}</dd>
+        }
+      </dl>
+    </div>
   </section>
 </div>
