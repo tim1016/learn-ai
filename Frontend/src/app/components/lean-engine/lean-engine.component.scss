@@ -442,3 +442,32 @@
     }
   }
 }
+
+.th-with-tz {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+
+  .tz-select {
+    background: #1e293b;
+    color: #cbd5e1;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    padding: 0.15rem 0.35rem;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: normal;
+    cursor: pointer;
+
+    &:hover {
+      border-color: #475569;
+      color: #f1f5f9;
+    }
+
+    &:focus {
+      outline: none;
+      border-color: #64748b;
+    }
+  }
+}

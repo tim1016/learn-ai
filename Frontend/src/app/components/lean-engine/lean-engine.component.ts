@@ -13,6 +13,7 @@ import { RouterModule } from "@angular/router";
 import { HttpClient } from "@angular/common/http";
 import { firstValueFrom } from "rxjs";
 import { environment } from "../../../environments/environment";
+import { ButtonModule } from "primeng/button";
 
 /**
  * LEAN Engine — Phase 2 first cut.
@@ -97,7 +98,7 @@ interface DataAvailability {
 @Component({
   selector: "app-lean-engine",
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule],
+  imports: [CommonModule, FormsModule, RouterModule, ButtonModule ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./lean-engine.component.html",
   styleUrls: ["./lean-engine.component.scss"],
@@ -125,6 +126,27 @@ export class LeanEngineComponent implements OnInit {
   readonly startDate = signal<string>(LeanEngineComponent.defaultStart());
   readonly endDate = signal<string>(LeanEngineComponent.defaultEnd());
   readonly initialCash = signal<number>(100000);
+
+  // Timezone used for rendering entry_time / exit_time in the trades table
+  // AND for the CSV download — whatever the table shows is what the file gets.
+  readonly selectedTimezone = signal<string>("UTC");
+
+  /** Curated list of commonly useful zones, plus the browser's detected local
+   *  zone (only appended if it isn't already in the curated list). */
+  readonly timezoneOptions = computed<{ value: string; label: string }[]>(() => {
+    const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const base = [
+      { value: "UTC", label: "UTC" },
+      { value: "America/New_York", label: "New York (ET)" },
+      { value: "America/Los_Angeles", label: "Los Angeles (PT)" },
+      { value: "Europe/London", label: "London" },
+      { value: "Asia/Kolkata", label: "Mumbai (IST)" },
+      { value: "Asia/Tokyo", label: "Tokyo (JST)" },
+    ];
+    return base.some((o) => o.value === localZone)
+      ? base
+      : [...base, { value: localZone, label: `Local (${localZone})` }];
+  });
 
   /** Preset quick-range buttons — matches the Data Lab style so a user
    *  flipping between the two pages sees the same shortcuts. ``days`` is
@@ -391,6 +413,62 @@ export class LeanEngineComponent implements OnInit {
     return value.toFixed(places);
   }
 
+  /**
+   * Format a backend ISO-8601 timestamp in the currently selected timezone,
+   * emitting ISO-8601 with a numeric offset (e.g. 2025-04-17T10:00:00-04:00).
+   * UTC is rendered with a trailing 'Z'. Returned string is what the table
+   * cell displays AND what the CSV row writes for that field, so the two
+   * stay in lockstep regardless of which zone is picked.
+   */
+  formatTradeTime(iso: string): string {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso; // fail-soft: keep raw
+
+    const zone = this.selectedTimezone();
+    if (zone === "UTC") {
+      return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+    }
+
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: zone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })
+      .formatToParts(d)
+      .reduce<Record<string, string>>((acc, p) => {
+        if (p.type !== "literal") acc[p.type] = p.value;
+        return acc;
+      }, {});
+
+    // Some engines emit '24' for midnight — normalize to '00'.
+    const hh = parts["hour"] === "24" ? "00" : parts["hour"];
+    const local = `${parts["year"]}-${parts["month"]}-${parts["day"]}T${hh}:${parts["minute"]}:${parts["second"]}`;
+
+    // Signed offset in minutes for this zone at this specific instant
+    // (correctly handles DST transitions per-trade).
+    const asUtc = Date.UTC(
+      Number(parts["year"]),
+      Number(parts["month"]) - 1,
+      Number(parts["day"]),
+      Number(hh),
+      Number(parts["minute"]),
+      Number(parts["second"]),
+    );
+    const offsetMinutes = Math.round((asUtc - d.getTime()) / 60000);
+    const sign = offsetMinutes >= 0 ? "+" : "-";
+    const abs = Math.abs(offsetMinutes);
+    const offH = String(Math.floor(abs / 60)).padStart(2, "0");
+    const offM = String(abs % 60).padStart(2, "0");
+
+    return `${local}${sign}${offH}:${offM}`;
+  }
+
   tradeIndicatorEntries(trade: EngineTrade): Array<{ key: string; value: number }> {
     return Object.entries(trade.indicators).map(([key, value]) => ({ key, value }));
   }
@@ -457,9 +535,9 @@ export class LeanEngineComponent implements OnInit {
     ];
     const rows = res.trades.map((t) => [
       String(t.trade_number),
-      t.entry_time,
+      this.formatTradeTime(t.entry_time),
       String(t.entry_price),
-      t.exit_time,
+      this.formatTradeTime(t.exit_time),
       String(t.exit_price),
       String(t.pnl_pts),
       String(t.pnl_pct),

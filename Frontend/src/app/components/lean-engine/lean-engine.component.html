@@ -95,13 +95,12 @@
           <span class="label">Quick range</span>
           <div class="range-presets">
             @for (preset of rangePresets; track preset.label) {
-              <button
-                type="button"
-                class="range-preset-btn"
+              <p-button
+size="small"
                 (click)="setPresetRange(preset.days)"
               >
                 {{ preset.label }}
-              </button>
+              </p-button>
             }
           </div>
         </div>
@@ -293,7 +292,21 @@
               <thead>
                 <tr>
                   <th>#</th>
-                  <th>Entry time</th>
+                  <th>
+                    <div class="th-with-tz">
+                      <span>Entry time</span>
+                      <select
+                        class="tz-select"
+                        [ngModel]="selectedTimezone()"
+                        (ngModelChange)="selectedTimezone.set($event)"
+                        title="Display timezone for entry/exit time (also used in CSV download)"
+                      >
+                        @for (tz of timezoneOptions(); track tz.value) {
+                          <option [value]="tz.value">{{ tz.label }}</option>
+                        }
+                      </select>
+                    </div>
+                  </th>
                   <th>Entry</th>
                   <th>Exit time</th>
                   <th>Exit</th>
@@ -307,9 +320,9 @@
                 @for (t of r.trades; track t.trade_number) {
                   <tr [class.win]="t.result === 'WIN'" [class.loss]="t.result === 'LOSS'">
                     <td>{{ t.trade_number }}</td>
-                    <td>{{ t.entry_time }}</td>
+                    <td>{{ formatTradeTime(t.entry_time) }}</td>
                     <td>{{ formatNumber(t.entry_price) }}</td>
-                    <td>{{ t.exit_time }}</td>
+                    <td>{{ formatTradeTime(t.exit_time) }}</td>
                     <td>{{ formatNumber(t.exit_price) }}</td>
                     <td>{{ formatNumber(t.pnl_pts) }}</td>
                     <td>{{ formatPercent(t.pnl_pct) }}</td>
