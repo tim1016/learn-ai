@@ -119,9 +119,27 @@ export class LeanEngineComponent implements OnInit {
 
   readonly resolution = signal<EngineResolution>("minute");
   readonly fillMode = signal<"signal_bar_close" | "next_bar_open">("signal_bar_close");
-  readonly startDate = signal<string>("");
-  readonly endDate = signal<string>("");
+  // Default range = most recent one month ending yesterday. Matches the
+  // Data Lab convention so users have a sensible window pre-populated
+  // without any clicks. The quick-range buttons below can swap this out.
+  readonly startDate = signal<string>(LeanEngineComponent.defaultStart());
+  readonly endDate = signal<string>(LeanEngineComponent.defaultEnd());
   readonly initialCash = signal<number>(100000);
+
+  /** Preset quick-range buttons — matches the Data Lab style so a user
+   *  flipping between the two pages sees the same shortcuts. ``days`` is
+   *  a count of calendar days back from yesterday; labels are kept short
+   *  to fit a single inline row. */
+  readonly rangePresets: ReadonlyArray<{ label: string; days: number }> = [
+    { label: "1D", days: 1 },
+    { label: "7D", days: 7 },
+    { label: "15D", days: 15 },
+    { label: "1M", days: 30 },
+    { label: "3M", days: 90 },
+    { label: "6M", days: 180 },
+    { label: "12M", days: 365 },
+    { label: "2Y", days: 730 },
+  ];
 
   readonly running = signal(false);
   readonly result = signal<EngineBacktestResponse | null>(null);
@@ -130,7 +148,12 @@ export class LeanEngineComponent implements OnInit {
   // ------------------------------------------------------------------
   // Dynamic data layer state — availability + on-demand fetch
   // ------------------------------------------------------------------
-  readonly autoFetch = signal<boolean>(false);
+  // Default ON: the typical Engine Lab user is iterating on a ticker that
+  // is not guaranteed to live in the read-only reference mount, so having
+  // auto-fetch disabled by default silently produced zero-trade runs. The
+  // SPY bit-exact fixture still wins because the reference mount is
+  // always checked first — auto-fetch only pulls what's actually missing.
+  readonly autoFetch = signal<boolean>(true);
   readonly availability = signal<DataAvailability | null>(null);
   readonly availabilityLoading = signal<boolean>(false);
   readonly availabilityError = signal<string | null>(null);
@@ -370,6 +393,104 @@ export class LeanEngineComponent implements OnInit {
 
   tradeIndicatorEntries(trade: EngineTrade): Array<{ key: string; value: number }> {
     return Object.entries(trade.indicators).map(([key, value]) => ({ key, value }));
+  }
+
+  // ------------------------------------------------------------------
+  // Quick date-range presets — mirrors the Data Lab shortcut row so a
+  // user flipping between the two pages stays oriented. Each button
+  // snaps the end date to *yesterday* (latest full trading day from
+  // Polygon's perspective) and walks the start back by N calendar days.
+  // ------------------------------------------------------------------
+  setPresetRange(daysBack: number): void {
+    const end = LeanEngineComponent.yesterday();
+    const start = new Date(end);
+    start.setDate(start.getDate() - daysBack);
+    this.startDate.set(LeanEngineComponent.toIso(start));
+    this.endDate.set(LeanEngineComponent.toIso(end));
+  }
+
+  private static yesterday(): Date {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  private static toIso(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
+  private static defaultEnd(): string {
+    return LeanEngineComponent.toIso(LeanEngineComponent.yesterday());
+  }
+
+  private static defaultStart(): string {
+    const end = LeanEngineComponent.yesterday();
+    const start = new Date(end);
+    start.setDate(start.getDate() - 30);
+    return LeanEngineComponent.toIso(start);
+  }
+
+  // ------------------------------------------------------------------
+  // CSV export — download the trade table as currently rendered. Keys
+  // align 1:1 with the visible columns so a copy/paste into Excel or a
+  // notebook is friction-free. Indicators are serialized as "k=v;k=v"
+  // in a single cell because their shape varies per strategy.
+  // ------------------------------------------------------------------
+  downloadTradesCsv(): void {
+    const res = this.result();
+    if (!res || res.trades.length === 0) return;
+    const header = [
+      "trade_number",
+      "entry_time",
+      "entry_price",
+      "exit_time",
+      "exit_price",
+      "pnl_pts",
+      "pnl_pct",
+      "result",
+      "signal_reason",
+      "indicators",
+    ];
+    const rows = res.trades.map((t) => [
+      String(t.trade_number),
+      t.entry_time,
+      String(t.entry_price),
+      t.exit_time,
+      String(t.exit_price),
+      String(t.pnl_pts),
+      String(t.pnl_pct),
+      t.result,
+      t.signal_reason ?? "",
+      Object.entries(t.indicators)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(";"),
+    ]);
+    const csv = [header, ...rows]
+      .map((row) => row.map((cell) => LeanEngineComponent.csvEscape(cell)).join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeName = res.strategy_name.replace(/[^a-z0-9_-]/gi, "_");
+    link.href = url;
+    link.download = `trades_${safeName}_${this.startDate()}_${this.endDate()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  private static csvEscape(value: string): string {
+    if (value == null) return "";
+    if (/[",\n]/.test(value)) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
   }
 
   /** Condense the availability report's per-root counts into short chips

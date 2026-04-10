@@ -91,6 +91,21 @@
           />
         </label>
 
+        <div class="field range-presets-field">
+          <span class="label">Quick range</span>
+          <div class="range-presets">
+            @for (preset of rangePresets; track preset.label) {
+              <button
+                type="button"
+                class="range-preset-btn"
+                (click)="setPresetRange(preset.days)"
+              >
+                {{ preset.label }}
+              </button>
+            }
+          </div>
+        </div>
+
         <label class="field">
           <span class="label">Initial cash</span>
           <input
@@ -262,7 +277,17 @@
 
       @if (r.trades.length > 0) {
         <div class="trades-card">
-          <h3>Trades</h3>
+          <div class="trades-header">
+            <h3>Trades</h3>
+            <button
+              type="button"
+              class="csv-btn"
+              (click)="downloadTradesCsv()"
+              title="Download the trade table as CSV"
+            >
+              Download CSV
+            </button>
+          </div>
           <div class="table-wrap">
             <table class="trades-table">
               <thead>

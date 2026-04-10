@@ -74,27 +74,18 @@ class StrategyParamsBase(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-class SpyEmaCrossoverParams(StrategyParamsBase):
-    """SPY EMA crossover has no tunables today.
+class EmaCrossoverParams(StrategyParamsBase):
+    """EMA crossover parameters — dynamic ticker.
 
-    The algorithm's indicators (EMA5, EMA10, RSI14) and gap / RSI thresholds
-    are hardcoded to match the LEAN reference exactly — changing them would
-    break the bit-exact validation. This class exists so every registered
-    strategy has a schema; future work can promote fields here.
+    Shares the exact indicator / gap / RSI logic as the LEAN-parity SPY
+    reference run, but lets the user pick any ticker at request time.
+    Defaults to SPY so the out-of-the-box run matches the bit-exact
+    reference fixture; other symbols (QQQ, IWM, etc.) can be substituted
+    without touching code as long as the data has been fetched into the
+    cache first (flip ``auto_fetch: true`` to pull on demand).
     """
 
-
-class EmaCrossoverSymbolParams(StrategyParamsBase):
-    """Parametrized variant of the SPY EMA crossover rule set.
-
-    Shares the exact indicator / gap / RSI logic as SpyEmaCrossoverAlgorithm
-    but lets the user pick the ticker. Defaults to QQQ so the registry
-    entry "qqq_ema_crossover" reads naturally; other symbols (IWM, etc.)
-    can be substituted without touching code as long as the data has been
-    fetched into the cache first.
-    """
-
-    symbol: str = Field("QQQ", min_length=1, max_length=20)
+    symbol: str = Field("SPY", min_length=1, max_length=20)
 
 
 class SmaCrossoverParams(StrategyParamsBase):
@@ -141,27 +132,17 @@ class StrategyRegistration:
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
-    "spy_ema_crossover": StrategyRegistration(
-        display_name="SPY EMA Crossover (LEAN parity)",
+    "ema_crossover": StrategyRegistration(
+        display_name="EMA Crossover",
         description=(
-            "15-minute EMA(5)/EMA(10) crossover with Wilders RSI(14) filter. "
-            "Fixed to the LEAN reference rules so the engine's output can be "
-            "validated bit-exactly against the LEAN trade log."
+            "15-minute EMA(5)/EMA(10) crossover with Wilders RSI(14) filter "
+            "(50 ≤ RSI ≤ 70), minimum 0.20 gap between the fast and slow EMA "
+            "at the signal bar, and a 5-bar hold exit. Same rules as the "
+            "LEAN reference — bit-exact against the SPY log when run with "
+            "the default SPY symbol. Pick any ticker; flip auto-fetch on "
+            "to pull missing bars from Polygon into the local cache."
         ),
-        param_schema=SpyEmaCrossoverParams,
-        build=lambda _p: SpyEmaCrossoverAlgorithm(),
-    ),
-    "qqq_ema_crossover": StrategyRegistration(
-        display_name="QQQ EMA Crossover (SPY rules, QQQ data)",
-        description=(
-            "Identical 15-minute EMA(5)/EMA(10) crossover with Wilders "
-            "RSI(14) filter as the LEAN-parity SPY strategy — same "
-            "indicators, same gap/RSI thresholds, same 5-bar hold — "
-            "but run against a configurable symbol (default QQQ). Data "
-            "must already be in the reference mount or the Polygon "
-            "cache; enable auto-fetch if not."
-        ),
-        param_schema=EmaCrossoverSymbolParams,
+        param_schema=EmaCrossoverParams,
         build=lambda p: SpyEmaCrossoverAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
         ),
