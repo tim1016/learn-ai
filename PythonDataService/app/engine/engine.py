@@ -32,6 +32,9 @@ class BacktestResult:
     total_fees: Decimal
     order_events: list[OrderEvent] = field(default_factory=list)
     log_lines: list[str] = field(default_factory=list)
+    # Retained bar data for LEAN statistics computation. Each entry is a
+    # consolidated (or raw daily) bar that was actually iterated.
+    bars: list[TradeBar] = field(default_factory=list)
 
 
 class BacktestEngine:
@@ -66,6 +69,7 @@ class BacktestEngine:
         portfolio.cash = strategy.initial_cash
 
         order_events: list[OrderEvent] = []
+        retained_bars: list[TradeBar] = []
 
         # ------------------------------------------------------------------
         # 2. Main loop over minute bars.
@@ -141,6 +145,7 @@ class BacktestEngine:
                         # Defer until the next minute bar.
                         pending_fills.append((order, signal_bar))
 
+            retained_bars.append(minute_bar)
             previous_minute_bar = minute_bar
 
         # ------------------------------------------------------------------
@@ -155,6 +160,7 @@ class BacktestEngine:
             total_fees=portfolio.total_fees,
             order_events=order_events,
             log_lines=list(ctx.log_lines),
+            bars=retained_bars,
         )
 
     # ------------------------------------------------------------------

@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     REMOVE_DUPLICATES: bool = True
     FILL_METHOD: str = "ffill"  # forward fill for time series
 
+    # .NET backend URL for study persistence
+    BACKEND_URL: str = "http://localhost:5000"
+
     # Rate limiting (optional)
     MAX_REQUESTS_PER_MINUTE: int = 100
 

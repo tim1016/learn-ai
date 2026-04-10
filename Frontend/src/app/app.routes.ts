@@ -172,10 +172,8 @@ export const routes: Routes = [
   },
   {
     path: "engine/docs",
-    loadComponent: () =>
-      import(
-        "./components/lean-engine/lean-engine-docs/lean-engine-docs.component"
-      ).then((m) => m.LeanEngineDocsComponent),
+    redirectTo: "engine",
+    pathMatch: "full",
   },
   {
     path: "lean-engine",

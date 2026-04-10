@@ -156,11 +156,30 @@ public class AppDbContext : DbContext
             entity.Property(e => e.TotalPnL).HasPrecision(18, 8);
             entity.Property(e => e.MaxDrawdown).HasPrecision(18, 8);
             entity.Property(e => e.SharpeRatio).HasPrecision(18, 8);
+            // LEAN-parity KPI precision
+            entity.Property(e => e.InitialCash).HasPrecision(18, 2);
+            entity.Property(e => e.FinalEquity).HasPrecision(18, 2);
+            entity.Property(e => e.TotalFees).HasPrecision(18, 4);
+            entity.Property(e => e.WinRate).HasPrecision(18, 8);
+            entity.Property(e => e.CompoundingAnnualReturn).HasPrecision(18, 8);
+            entity.Property(e => e.SortinoRatio).HasPrecision(18, 8);
+            entity.Property(e => e.ProbabilisticSharpeRatio).HasPrecision(18, 8);
+            entity.Property(e => e.ProfitFactor).HasPrecision(18, 8);
+            entity.Property(e => e.Alpha).HasPrecision(18, 8);
+            entity.Property(e => e.Beta).HasPrecision(18, 8);
+            entity.Property(e => e.InformationRatio).HasPrecision(18, 8);
+            entity.Property(e => e.TrackingError).HasPrecision(18, 8);
+            entity.Property(e => e.TreynorRatio).HasPrecision(18, 8);
+            entity.Property(e => e.ValueAtRisk95).HasPrecision(18, 8);
+            entity.Property(e => e.ValueAtRisk99).HasPrecision(18, 8);
+            entity.Property(e => e.AnnualStandardDeviation).HasPrecision(18, 8);
             entity.HasOne(e => e.Ticker)
                   .WithMany()
                   .HasForeignKey(e => e.TickerId)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(e => new { e.TickerId, e.StrategyName });
+            entity.HasIndex(e => e.ExecutedAt);
+            entity.HasIndex(e => e.Source);
         });
 
         // BacktestTrade configuration

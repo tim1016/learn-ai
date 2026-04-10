@@ -14,6 +14,10 @@ import { HttpClient } from "@angular/common/http";
 import { firstValueFrom } from "rxjs";
 import { environment } from "../../../environments/environment";
 import { ButtonModule } from "primeng/button";
+import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
+import { EngineResultsComponent, EngineResultData } from "./engine-results/engine-results.component";
+import { EngineHistoryComponent } from "./engine-history/engine-history.component";
+import { LeanEngineDocsComponent } from "./lean-engine-docs/lean-engine-docs.component";
 
 /**
  * LEAN Engine — Phase 2 first cut.
@@ -78,6 +82,7 @@ interface EngineBacktestResponse {
   losing_trades: number;
   win_rate: number;
   statistics: Record<string, number | null>;
+  lean_statistics: any | null;
   trades: EngineTrade[];
   log_lines: string[];
   error?: string;
@@ -98,7 +103,11 @@ interface DataAvailability {
 @Component({
   selector: "app-lean-engine",
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, ButtonModule ],
+  imports: [
+    CommonModule, FormsModule, RouterModule, ButtonModule,
+    Tabs, TabList, Tab, TabPanel, TabPanels,
+    EngineResultsComponent, EngineHistoryComponent, LeanEngineDocsComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./lean-engine.component.html",
   styleUrls: ["./lean-engine.component.scss"],
@@ -162,6 +171,8 @@ export class LeanEngineComponent implements OnInit {
     { label: "12M", days: 365 },
     { label: "2Y", days: 730 },
   ];
+
+  readonly activeTab = signal<string>("0");
 
   readonly running = signal(false);
   readonly result = signal<EngineBacktestResponse | null>(null);
@@ -513,89 +524,91 @@ export class LeanEngineComponent implements OnInit {
   }
 
   // ------------------------------------------------------------------
-  // CSV export — download the trade table as currently rendered. Keys
-  // align 1:1 with the visible columns so a copy/paste into Excel or a
-  // notebook is friction-free. Indicators are serialized as "k=v;k=v"
-  // in a single cell because their shape varies per strategy.
+  // CSV download
   // ------------------------------------------------------------------
   downloadTradesCsv(): void {
-    const res = this.result();
-    if (!res || res.trades.length === 0) return;
-    const header = [
-      "trade_number",
-      "entry_time",
-      "entry_price",
-      "exit_time",
-      "exit_price",
-      "pnl_pts",
-      "pnl_pct",
-      "result",
-      "signal_reason",
-      "indicators",
-    ];
-    const rows = res.trades.map((t) => [
-      String(t.trade_number),
+    const r = this.result();
+    if (!r) return;
+    const header = '#,Entry Time,Entry,Exit Time,Exit,PnL (pts),PnL %,Result,Signal';
+    const rows = r.trades.map(t => [
+      t.trade_number,
       this.formatTradeTime(t.entry_time),
-      String(t.entry_price),
+      t.entry_price.toFixed(2),
       this.formatTradeTime(t.exit_time),
-      String(t.exit_price),
-      String(t.pnl_pts),
-      String(t.pnl_pct),
+      t.exit_price.toFixed(2),
+      t.pnl_pts.toFixed(4),
+      (t.pnl_pct * 100).toFixed(4) + '%',
       t.result,
-      t.signal_reason ?? "",
-      Object.entries(t.indicators)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(";"),
-    ]);
-    const csv = [header, ...rows]
-      .map((row) => row.map((cell) => LeanEngineComponent.csvEscape(cell)).join(","))
-      .join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      `"${t.signal_reason}"`,
+    ].join(','));
+    const csv = [header, ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    const safeName = res.strategy_name.replace(/[^a-z0-9_-]/gi, "_");
-    link.href = url;
-    link.download = `trades_${safeName}_${this.startDate()}_${this.endDate()}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${this.effectiveSymbol()}_engine_trades.csv`;
+    a.click();
     URL.revokeObjectURL(url);
   }
 
-  private static csvEscape(value: string): string {
-    if (value == null) return "";
-    if (/[",\n]/.test(value)) {
-      return `"${value.replace(/"/g, '""')}"`;
+  // ------------------------------------------------------------------
+  // History → load past study into Results tab
+  // ------------------------------------------------------------------
+  async onStudySelected(studyId: number): Promise<void> {
+    const backendBase = (environment.backendUrl ?? 'http://localhost:5000').replace(/\/graphql$/, '');
+    try {
+      const detail = await firstValueFrom(
+        this.http.get<any>(`${backendBase}/api/studies/${studyId}`)
+      );
+      // Parse LEAN statistics from JSON blob if present
+      let leanStats = null;
+      if (detail.leanStatisticsJson) {
+        try { leanStats = JSON.parse(detail.leanStatisticsJson); } catch {}
+      }
+      // Construct an EngineBacktestResponse-shaped object for the results component
+      this.result.set({
+        success: true,
+        strategy_name: detail.strategyName,
+        fill_mode: detail.fillMode,
+        initial_cash: detail.initialCash,
+        final_equity: detail.finalEquity,
+        net_profit: detail.totalPnL,
+        total_fees: detail.totalFees ?? 0,
+        total_trades: detail.totalTrades,
+        winning_trades: detail.winningTrades,
+        losing_trades: detail.losingTrades,
+        win_rate: detail.winRate,
+        statistics: {
+          max_drawdown_pct: detail.maxDrawdown,
+          sharpe_ratio: detail.sharpeRatio,
+          sortino_ratio: detail.sortinoRatio,
+          profit_factor: detail.profitFactor,
+        },
+        lean_statistics: leanStats,
+        trades: (detail.trades ?? []).map((t: any, i: number) => ({
+          trade_number: i + 1,
+          entry_time: t.entryTimestamp,
+          entry_price: t.entryPrice,
+          exit_time: t.exitTimestamp,
+          exit_price: t.exitPrice,
+          pnl_pts: t.pnL,
+          pnl_pct: 0,
+          result: t.pnL > 0 ? 'WIN' : 'LOSS',
+          signal_reason: t.signalReason ?? '',
+          indicators: {},
+        })),
+        log_lines: [],
+      });
+      this.activeTab.set("1"); // Switch to Results tab
+    } catch (err: any) {
+      this.runError.set(err?.message ?? 'Failed to load study');
     }
-    return value;
   }
 
-  /** Condense the availability report's per-root counts into short chips
-   *  the UI can render: "reference: 42 days" / "cache: 3 days". Filters
-   *  out empty roots so SPY runs don't get a noisy empty-cache line. */
-  availabilitySourceChips(
-    report: DataAvailability
-  ): Array<{ label: string; days: number }> {
-    return Object.entries(report.sources)
-      .filter(([, dates]) => dates.length > 0)
-      .map(([root, dates]) => ({
-        label: this.rootDisplayName(root),
-        days: dates.length,
-      }));
-  }
-
-  private rootDisplayName(root: string): string {
-    // /lean-data → "reference mount", /lean-cache → "Polygon cache".
-    // Anything else falls back to the path tail so local dev setups with
-    // different layouts still render something meaningful.
-    if (root.endsWith("/lean-data") || root.endsWith("\\lean-data")) {
-      return "reference mount";
-    }
-    if (root.endsWith("/lean-cache") || root.endsWith("\\lean-cache")) {
-      return "Polygon cache";
-    }
-    const parts = root.split(/[\\/]/);
-    return parts[parts.length - 1] || root;
+  availabilitySourceChips(av: DataAvailability): { label: string; days: number }[] {
+    return Object.entries(av.sources || {}).map(([label, days]) => ({
+      label,
+      days: Array.isArray(days) ? days.length : 0,
+    }));
   }
 }

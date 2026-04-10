@@ -1,0 +1,106 @@
+@if (loading()) {
+  <div class="loading">Loading studies…</div>
+}
+
+@if (error(); as err) {
+  <div class="error-notice">{{ err }}</div>
+}
+
+@if (!loading() && studies().length === 0 && !error()) {
+  <div class="empty-state">
+    <i class="pi pi-history"></i>
+    <p>No studies yet. Run a backtest and it will appear here automatically.</p>
+  </div>
+}
+
+@if (studies().length > 0) {
+  <div class="history-summary">
+    {{ totalCount() }} studies &mdash; sorted by
+    <strong>{{ sort().column }}</strong> {{ sort().direction }}
+  </div>
+
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th class="sortable" (click)="toggleSort('executedat')">
+            Date <i class="pi" [class]="sortIcon('executedat')"></i>
+          </th>
+          <th class="sortable" (click)="toggleSort('strategyname')">
+            Strategy <i class="pi" [class]="sortIcon('strategyname')"></i>
+          </th>
+          <th>Symbol</th>
+          <th>Range</th>
+          <th class="sortable num" (click)="toggleSort('totalpnl')">
+            Net P&L <i class="pi" [class]="sortIcon('totalpnl')"></i>
+          </th>
+          <th class="sortable num" (click)="toggleSort('cagr')">
+            CAGR <i class="pi" [class]="sortIcon('cagr')"></i>
+          </th>
+          <th class="sortable num" (click)="toggleSort('sharpe')">
+            Sharpe <i class="pi" [class]="sortIcon('sharpe')"></i>
+          </th>
+          <th class="sortable num" (click)="toggleSort('sortino')">
+            Sortino <i class="pi" [class]="sortIcon('sortino')"></i>
+          </th>
+          <th class="sortable num" (click)="toggleSort('psr')">
+            PSR <i class="pi" [class]="sortIcon('psr')"></i>
+          </th>
+          <th class="sortable num" (click)="toggleSort('drawdown')">
+            Max DD <i class="pi" [class]="sortIcon('drawdown')"></i>
+          </th>
+          <th class="sortable num" (click)="toggleSort('winrate')">
+            Win % <i class="pi" [class]="sortIcon('winrate')"></i>
+          </th>
+          <th class="sortable num" (click)="toggleSort('trades')">
+            Trades <i class="pi" [class]="sortIcon('trades')"></i>
+          </th>
+          <th class="sortable num" (click)="toggleSort('profitfactor')">
+            PF <i class="pi" [class]="sortIcon('profitfactor')"></i>
+          </th>
+          <th class="sortable num" (click)="toggleSort('var95')">
+            VaR 95 <i class="pi" [class]="sortIcon('var95')"></i>
+          </th>
+          <th>Params</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (s of studies(); track s.id) {
+          <tr class="study-row" (click)="onRowClick(s)">
+            <td class="date-cell">{{ formatDate(s.executedAt) }}</td>
+            <td class="strategy-cell">{{ s.strategyName }}</td>
+            <td>{{ s.symbol }}</td>
+            <td class="range-cell">{{ s.startDate }} → {{ s.endDate }}</td>
+            <td class="num" [class]="pnlClass(s.totalPnL)">{{ formatCurrency(s.totalPnL) }}</td>
+            <td class="num" [class]="pnlClass(s.compoundingAnnualReturn)">{{ formatPct(s.compoundingAnnualReturn) }}</td>
+            <td class="num">{{ s.sharpeRatio.toFixed(3) }}</td>
+            <td class="num">{{ s.sortinoRatio.toFixed(3) }}</td>
+            <td class="num">{{ formatPct(s.probabilisticSharpeRatio) }}</td>
+            <td class="num negative">{{ formatPct(s.maxDrawdown) }}</td>
+            <td class="num">{{ formatPct(s.winRate) }}</td>
+            <td class="num">{{ s.totalTrades }}</td>
+            <td class="num">{{ s.profitFactor.toFixed(2) }}</td>
+            <td class="num">{{ formatPct(s.valueAtRisk95) }}</td>
+            <td class="params-cell" [title]="s.parameters">{{ parseParams(s.parameters) }}</td>
+            <td class="notes-cell" (click)="startEditNotes(s, $event)">
+              @if (editingNotesId() === s.id) {
+                <input
+                  type="text"
+                  class="notes-input"
+                  [ngModel]="editingNotesValue()"
+                  (ngModelChange)="editingNotesValue.set($event)"
+                  (blur)="saveNotes(s)"
+                  (keydown.enter)="saveNotes(s)"
+                  (keydown.escape)="cancelEditNotes()"
+                />
+              } @else {
+                <span class="notes-text">{{ s.notes || '—' }}</span>
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+}

@@ -1,0 +1,133 @@
+@use '../../../styles/tokens' as *;
+
+// ─── Loading / Empty / Error ──────────────────────────
+.loading, .empty-state, .error-notice {
+  padding: 2rem;
+  text-align: center;
+  color: $text-muted;
+  font-size: 0.85rem;
+}
+
+.empty-state {
+  .pi { font-size: 2rem; margin-bottom: 0.75rem; display: block; }
+  p { margin: 0; }
+}
+
+.error-notice {
+  background: rgba($bear, 0.08);
+  border: 1px solid rgba($bear, 0.25);
+  border-radius: 8px;
+  color: $bear;
+}
+
+.history-summary {
+  font-size: 0.72rem;
+  color: $text-muted;
+  margin-bottom: 0.5rem;
+  padding: 0 2px;
+}
+
+// ─── Table ────────────────────────────────────────────
+.table-wrapper {
+  overflow-x: auto;
+  border: 1px solid $border;
+  border-radius: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+
+  th, td {
+    padding: 7px 8px;
+    border-bottom: 1px solid $border;
+    white-space: nowrap;
+  }
+
+  th {
+    font-size: 0.6rem;
+    font-weight: 700;
+    color: $text-muted;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: $bg-surface;
+    border-bottom: 2px solid $border-light;
+    position: sticky;
+    top: 0;
+    user-select: none;
+
+    &.sortable {
+      cursor: pointer;
+      transition: color 0.15s;
+
+      &:hover { color: $accent; }
+      .pi { font-size: 0.55rem; margin-left: 2px; }
+    }
+
+    &.num { text-align: right; }
+  }
+
+  td {
+    color: $text-secondary;
+
+    &.num { text-align: right; font-variant-numeric: tabular-nums; }
+  }
+
+  .study-row {
+    cursor: pointer;
+    transition: background 0.12s;
+
+    &:hover { background: $bg-hover; }
+  }
+}
+
+.positive { color: $bull; font-weight: 600; }
+.negative { color: $bear; font-weight: 600; }
+
+.date-cell {
+  font-size: 0.68rem;
+  color: $text-muted;
+}
+
+.strategy-cell {
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.range-cell {
+  font-size: 0.65rem;
+  color: $text-muted;
+}
+
+.params-cell {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.65rem;
+  color: $text-muted;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+// ─── Notes inline editing ─────────────────────────────
+.notes-cell {
+  min-width: 100px;
+  cursor: text;
+}
+
+.notes-text {
+  color: $text-muted;
+  font-style: italic;
+}
+
+.notes-input {
+  width: 100%;
+  background: $bg-elevated;
+  border: 1px solid $accent;
+  color: $text-primary;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.72rem;
+  font-family: inherit;
+  outline: none;
+}

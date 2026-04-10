@@ -3,16 +3,10 @@
     <div>
       <h1>Engine Lab</h1>
       <p class="subtitle">
-        LEAN-compatible backtest engine. Picks a registered strategy, renders
-        parameters from its JSON schema, and runs against LEAN minute or daily
-        bars depending on the selected resolution.
+        LEAN-compatible backtest engine with full statistics, trade history, and
+        research journal.
       </p>
     </div>
-    <nav class="header-nav">
-      <a routerLink="/engine/docs" class="nav-link">Engine Docs</a>
-      <a routerLink="/strategy-lab" class="nav-link">Strategy Lab</a>
-      <a routerLink="/data-lab" class="nav-link">Data Lab</a>
-    </nav>
   </header>
 
   @if (strategiesLoading()) {
@@ -24,324 +18,216 @@
   }
 
   @if (!strategiesLoading() && strategies().length > 0) {
-    <section class="config-card">
+    <p-tabs [(value)]="activeTab">
+      <p-tablist>
+        <p-tab value="0">
+          <i class="pi pi-cog"></i> Configure
+        </p-tab>
+        <p-tab value="1" [disabled]="!result()">
+          <i class="pi pi-chart-line"></i> Results
+        </p-tab>
+        <p-tab value="2">
+          <i class="pi pi-history"></i> History
+        </p-tab>
+        <p-tab value="3">
+          <i class="pi pi-book"></i> Docs
+        </p-tab>
+      </p-tablist>
+
+      <p-tabpanels>
+        <!-- ═══ Configure Tab ═══ -->
+        <p-tabpanel value="0">
+          <section class="config-card">
             @if (paramEntries().length > 0) {
-        <div class="params-card">
-          <h3>Parameters</h3>
-          <div class="form-grid">
-            @for (entry of paramEntries(); track entry.name) {
-              <label class="field">
-                <span class="label">
-                  {{ entry.prop.title || entry.name }}
-                  @if (entry.prop.description) {
-                    <span class="hint" [title]="entry.prop.description">?</span>
+              <div class="params-card">
+                <h3>Parameters</h3>
+                <div class="form-grid">
+                  @for (entry of paramEntries(); track entry.name) {
+                    <label class="field">
+                      <span class="label">
+                        {{ entry.prop.title || entry.name }}
+                        @if (entry.prop.description) {
+                          <span class="hint" [title]="entry.prop.description">?</span>
+                        }
+                      </span>
+                      <input
+                        [type]="entry.prop.type === 'integer' || entry.prop.type === 'number' ? 'number' : 'text'"
+                        [value]="paramValues()[entry.name] ?? ''"
+                        (input)="onParamChange(entry.name, $any($event.target).value, entry.prop.type)"
+                        [attr.min]="entry.prop.minimum ?? null"
+                        [attr.max]="entry.prop.maximum ?? null"
+                      />
+                    </label>
                   }
-                </span>
-                <input
-                  [type]="
-                    entry.prop.type === 'integer' || entry.prop.type === 'number'
-                      ? 'number'
-                      : 'text'
-                  "
-                  [value]="paramValues()[entry.name] ?? ''"
-                  (input)="
-                    onParamChange(
-                      entry.name,
-                      $any($event.target).value,
-                      entry.prop.type
-                    )
-                  "
-                  [attr.min]="entry.prop.minimum ?? null"
-                  [attr.max]="entry.prop.maximum ?? null"
-                />
-              </label>
-            }
-          </div>
-        </div>
-      }
-      <div class="form-grid">
-        <label class="field">
-          <span class="label">
-            Resolution
-            <span
-              class="hint"
-              title="Which on-disk LEAN resolution to read. Minute reads per-day zips under equity/usa/minute/ and drives intraday strategies via a consolidator. Daily reads the per-symbol history zip under equity/usa/daily/ and passes bars through 1:1 for end-of-day strategies. Switching resolution filters the strategy list to those that support it."
-            >?</span>
-          </span>
-          <select
-            [ngModel]="resolution()"
-            (ngModelChange)="resolution.set($event)"
-          >
-            <option value="minute">Minute</option>
-            <option value="daily">Daily</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span class="label">Strategy</span>
-          <select
-            [ngModel]="selectedStrategyName()"
-            (ngModelChange)="onStrategyChange($event)"
-            [disabled]="availableStrategies().length === 0"
-          >
-            @for (s of availableStrategies(); track s.name) {
-              <option [value]="s.name">{{ s.display_name }}</option>
-            }
-          </select>
-          @if (availableStrategies().length === 0) {
-            <span class="field-hint">
-              No strategies registered for <strong>{{ resolution() }}</strong>
-              resolution.
-            </span>
-          }
-        </label>
-
-        <label class="field">
-          <span class="label">Fill mode</span>
-          <select
-            [ngModel]="fillMode()"
-            (ngModelChange)="fillMode.set($event)"
-          >
-            <option value="signal_bar_close">Signal bar close</option>
-            <option value="next_bar_open">Next bar open</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span class="label">Start date</span>
-          <input
-            type="date"
-            [ngModel]="startDate()"
-            (ngModelChange)="startDate.set($event)"
-          />
-        </label>
-
-        <label class="field">
-          <span class="label">End date</span>
-          <input
-            type="date"
-            [ngModel]="endDate()"
-            (ngModelChange)="endDate.set($event)"
-          />
-        </label>
-
-        <div class="field range-presets-field">
-          <span class="label">Quick range</span>
-          <div class="range-presets">
-            @for (preset of rangePresets; track preset.label) {
-              <p-button
-size="small"
-                (click)="setPresetRange(preset.days)"
-              >
-                {{ preset.label }}
-              </p-button>
-            }
-          </div>
-        </div>
-
-        <label class="field">
-          <span class="label">Initial cash</span>
-          <input
-            type="number"
-            min="0"
-            step="1000"
-            [ngModel]="initialCash()"
-            (ngModelChange)="initialCash.set($event)"
-          />
-        </label>
-
-        <label class="field checkbox-field">
-          <input
-            type="checkbox"
-            [ngModel]="autoFetch()"
-            (ngModelChange)="autoFetch.set($event)"
-          />
-          <span class="label">
-            Auto-fetch missing data from Polygon
-            <span class="hint" title="When enabled, any bars missing from the LEAN reference mount and the local cache will be pulled from Polygon at the currently-selected resolution (minute → per-day zips; daily → merged into the per-symbol history zip) and written to the cache before the backtest starts. Does not affect the bit-exact reference fixtures.">?</span>
-          </span>
-        </label>
-      </div>
-
-      @if (startDate() && endDate()) {
-        <div class="availability-card">
-          <div class="availability-header">
-            <h4>
-              Data availability — {{ effectiveSymbol() }}
-              <span class="availability-resolution">({{ resolution() }})</span>
-            </h4>
-            @if (availabilityLoading()) {
-              <span class="availability-status loading">Checking…</span>
-            } @else if (availability(); as av) {
-              @if (av.is_complete) {
-                <span class="availability-status ok">
-                  ✓ Complete ({{ av.available_days }}/{{ av.expected_days }} weekdays)
-                </span>
-              } @else {
-                <span class="availability-status partial">
-                  {{ av.available_days }} / {{ av.expected_days }} weekdays on disk
-                  ({{ av.missing_days.length }} missing)
-                </span>
-              }
-            }
-          </div>
-
-          @if (availabilityError(); as err) {
-            <div class="availability-error">{{ err }}</div>
-          }
-
-          @if (availability(); as av) {
-            <div class="availability-sources">
-              @for (chip of availabilitySourceChips(av); track chip.label) {
-                <span class="source-chip">{{ chip.label }}: {{ chip.days }} days</span>
-              }
-              @if (availabilitySourceChips(av).length === 0) {
-                <span class="source-chip empty">no data on disk yet</span>
-              }
-            </div>
-
-            @if (!av.is_complete && !autoFetch()) {
-              <div class="availability-hint">
-                Enable <strong>Auto-fetch</strong> above to pull the missing
-                {{ av.missing_days.length }} weekdays from Polygon into the
-                local cache before running.
+                </div>
               </div>
             }
-          }
-        </div>
-      }
 
-      @if (selectedStrategy(); as strategy) {
-        <div class="strategy-description">{{ strategy.description }}</div>
-      }
+            <div class="form-grid">
+              <label class="field">
+                <span class="label">
+                  Resolution
+                  <span class="hint" title="Minute reads per-day zips; Daily reads per-symbol history zip.">?</span>
+                </span>
+                <select [ngModel]="resolution()" (ngModelChange)="resolution.set($event)">
+                  <option value="minute">Minute</option>
+                  <option value="daily">Daily</option>
+                </select>
+              </label>
 
-
-
-      <div class="actions">
-        <button
-          type="button"
-          class="run-btn"
-          [disabled]="running() || !selectedStrategyName()"
-          (click)="run()"
-        >
-          {{ running() ? "Running…" : "Run backtest" }}
-        </button>
-      </div>
-    </section>
-  }
-
-  @if (runError(); as err) {
-    <div class="notice error">{{ err }}</div>
-  }
-
-  @if (result(); as r) {
-    <section class="results">
-      <div class="summary-grid">
-        <div class="stat">
-          <span class="stat-label">Initial cash</span>
-          <span class="stat-value">{{ formatCurrency(r.initial_cash) }}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">Final equity</span>
-          <span class="stat-value">{{ formatCurrency(r.final_equity) }}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">Net profit</span>
-          <span
-            class="stat-value"
-            [class.positive]="r.net_profit > 0"
-            [class.negative]="r.net_profit < 0"
-          >
-            {{ formatCurrency(r.net_profit) }}
-          </span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">Total fees</span>
-          <span class="stat-value">{{ formatCurrency(r.total_fees) }}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">Total trades</span>
-          <span class="stat-value">{{ r.total_trades }}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">Win rate</span>
-          <span class="stat-value">{{ formatPercent(r.win_rate) }}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">Wins / losses</span>
-          <span class="stat-value">
-            {{ r.winning_trades }} / {{ r.losing_trades }}
-          </span>
-        </div>
-      </div>
-
-      @if (r.trades.length > 0) {
-        <div class="trades-card">
-          <div class="trades-header">
-            <h3>Trades</h3>
-            <button
-              type="button"
-              class="csv-btn"
-              (click)="downloadTradesCsv()"
-              title="Download the trade table as CSV"
-            >
-              Download CSV
-            </button>
-          </div>
-          <div class="table-wrap">
-            <table class="trades-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>
-                    <div class="th-with-tz">
-                      <span>Entry time</span>
-                      <select
-                        class="tz-select"
-                        [ngModel]="selectedTimezone()"
-                        (ngModelChange)="selectedTimezone.set($event)"
-                        title="Display timezone for entry/exit time (also used in CSV download)"
-                      >
-                        @for (tz of timezoneOptions(); track tz.value) {
-                          <option [value]="tz.value">{{ tz.label }}</option>
-                        }
-                      </select>
-                    </div>
-                  </th>
-                  <th>Entry</th>
-                  <th>Exit time</th>
-                  <th>Exit</th>
-                  <th>PnL (pts)</th>
-                  <th>PnL %</th>
-                  <th>Result</th>
-                  <th>Indicators</th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (t of r.trades; track t.trade_number) {
-                  <tr [class.win]="t.result === 'WIN'" [class.loss]="t.result === 'LOSS'">
-                    <td>{{ t.trade_number }}</td>
-                    <td>{{ formatTradeTime(t.entry_time) }}</td>
-                    <td>{{ formatNumber(t.entry_price) }}</td>
-                    <td>{{ formatTradeTime(t.exit_time) }}</td>
-                    <td>{{ formatNumber(t.exit_price) }}</td>
-                    <td>{{ formatNumber(t.pnl_pts) }}</td>
-                    <td>{{ formatPercent(t.pnl_pct) }}</td>
-                    <td>{{ t.result }}</td>
-                    <td class="indicators">
-                      @for (ind of tradeIndicatorEntries(t); track ind.key) {
-                        <span class="indicator-chip">
-                          {{ ind.key }}: {{ formatNumber(ind.value, 4) }}
-                        </span>
-                      }
-                    </td>
-                  </tr>
+              <label class="field">
+                <span class="label">Strategy</span>
+                <select
+                  [ngModel]="selectedStrategyName()"
+                  (ngModelChange)="onStrategyChange($event)"
+                  [disabled]="availableStrategies().length === 0"
+                >
+                  @for (s of availableStrategies(); track s.name) {
+                    <option [value]="s.name">{{ s.display_name }}</option>
+                  }
+                </select>
+                @if (availableStrategies().length === 0) {
+                  <span class="field-hint">
+                    No strategies registered for <strong>{{ resolution() }}</strong> resolution.
+                  </span>
                 }
-              </tbody>
-            </table>
-          </div>
-        </div>
-      }
-    </section>
+              </label>
+
+              <label class="field">
+                <span class="label">Fill mode</span>
+                <select [ngModel]="fillMode()" (ngModelChange)="fillMode.set($event)">
+                  <option value="signal_bar_close">Signal bar close</option>
+                  <option value="next_bar_open">Next bar open</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span class="label">Start date</span>
+                <input type="date" [ngModel]="startDate()" (ngModelChange)="startDate.set($event)" />
+              </label>
+
+              <label class="field">
+                <span class="label">End date</span>
+                <input type="date" [ngModel]="endDate()" (ngModelChange)="endDate.set($event)" />
+              </label>
+
+              <div class="field range-presets-field">
+                <span class="label">Quick range</span>
+                <div class="range-presets">
+                  @for (preset of rangePresets; track preset.label) {
+                    <p-button size="small" (click)="setPresetRange(preset.days)">
+                      {{ preset.label }}
+                    </p-button>
+                  }
+                </div>
+              </div>
+
+              <label class="field">
+                <span class="label">Initial cash</span>
+                <input type="number" min="0" step="1000"
+                  [ngModel]="initialCash()" (ngModelChange)="initialCash.set($event)" />
+              </label>
+
+              <label class="field checkbox-field">
+                <input type="checkbox" [ngModel]="autoFetch()" (ngModelChange)="autoFetch.set($event)" />
+                <span class="label">
+                  Auto-fetch missing data from Polygon
+                  <span class="hint" title="Pull bars missing from local cache via Polygon before the backtest.">?</span>
+                </span>
+              </label>
+            </div>
+
+            <!-- Data Availability Panel -->
+            @if (startDate() && endDate()) {
+              <div class="availability-card">
+                <div class="availability-header">
+                  <h4>
+                    Data availability — {{ effectiveSymbol() }}
+                    <span class="availability-resolution">({{ resolution() }})</span>
+                  </h4>
+                  @if (availabilityLoading()) {
+                    <span class="availability-status loading">Checking…</span>
+                  } @else if (availability(); as av) {
+                    @if (av.is_complete) {
+                      <span class="availability-status ok">
+                        ✓ Complete ({{ av.available_days }}/{{ av.expected_days }} weekdays)
+                      </span>
+                    } @else {
+                      <span class="availability-status partial">
+                        {{ av.available_days }} / {{ av.expected_days }} weekdays on disk
+                        ({{ av.missing_days.length }} missing)
+                      </span>
+                    }
+                  }
+                </div>
+
+                @if (availabilityError(); as err) {
+                  <div class="availability-error">{{ err }}</div>
+                }
+
+                @if (availability(); as av) {
+                  <div class="availability-sources">
+                    @for (chip of availabilitySourceChips(av); track chip.label) {
+                      <span class="source-chip">{{ chip.label }}: {{ chip.days }} days</span>
+                    }
+                    @if (availabilitySourceChips(av).length === 0) {
+                      <span class="source-chip empty">no data on disk yet</span>
+                    }
+                  </div>
+
+                  @if (!av.is_complete && !autoFetch()) {
+                    <div class="availability-hint">
+                      Enable <strong>Auto-fetch</strong> above to pull the missing
+                      {{ av.missing_days.length }} weekdays from Polygon.
+                    </div>
+                  }
+                }
+              </div>
+            }
+
+            @if (selectedStrategy(); as strategy) {
+              <div class="strategy-description">{{ strategy.description }}</div>
+            }
+
+            <div class="actions">
+              <button
+                type="button"
+                class="run-btn"
+                [disabled]="running() || !selectedStrategyName()"
+                (click)="run(); activeTab.set('1')"
+              >
+                {{ running() ? "Running…" : "Run backtest" }}
+              </button>
+            </div>
+          </section>
+        </p-tabpanel>
+
+        <!-- ═══ Results Tab ═══ -->
+        <p-tabpanel value="1">
+          @if (runError(); as err) {
+            <div class="notice error">{{ err }}</div>
+          }
+
+          @if (result(); as r) {
+            <app-engine-results [result]="r" [symbol]="effectiveSymbol()" />
+          } @else {
+            <div class="empty-tab">
+              <i class="pi pi-play"></i>
+              <p>Run a backtest to see results here.</p>
+            </div>
+          }
+        </p-tabpanel>
+
+        <!-- ═══ History Tab ═══ -->
+        <p-tabpanel value="2">
+          <app-engine-history (studySelected)="onStudySelected($event)" />
+        </p-tabpanel>
+
+        <!-- ═══ Docs Tab ═══ -->
+        <p-tabpanel value="3">
+          <app-lean-engine-docs />
+        </p-tabpanel>
+      </p-tabpanels>
+    </p-tabs>
   }
 </div>

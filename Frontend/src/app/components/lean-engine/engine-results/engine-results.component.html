@@ -1,0 +1,121 @@
+@let r = result();
+
+<!-- Pipeline Info -->
+<div class="info-callout">
+  <i class="pi pi-database"></i>
+  <div>
+    <strong>{{ symbol() }} &mdash; {{ r.strategy_name }}</strong>
+    <span>
+      {{ r.fill_mode === 'signal_bar_close' ? 'Signal Bar Close' : 'Next Bar Open' }}
+      &mdash; {{ r.total_trades }} trades
+      &mdash; {{ formatCurrency(r.initial_cash) }} &rarr; {{ formatCurrency(r.final_equity) }}
+    </span>
+  </div>
+</div>
+
+<!-- Hero Metrics -->
+<div class="hero-metrics">
+  <div class="hero-card" [class.positive]="r.net_profit > 0" [class.negative]="r.net_profit <= 0">
+    <span class="hero-label">Net Profit</span>
+    <span class="hero-value">{{ formatCurrency(r.net_profit) }}</span>
+    <span class="hero-sub">{{ formatPct(r.net_profit / r.initial_cash) }}</span>
+  </div>
+  <div class="hero-card negative">
+    <span class="hero-label">Max Drawdown</span>
+    <span class="hero-value">{{ formatPct(r.statistics['max_drawdown_pct'] ?? 0) }}</span>
+  </div>
+  <div class="hero-card">
+    <span class="hero-label">Trades</span>
+    <span class="hero-value">{{ r.total_trades }}</span>
+    <span class="hero-sub">{{ r.winning_trades }}W / {{ r.losing_trades }}L</span>
+  </div>
+  <div class="hero-card">
+    <span class="hero-label">Win Rate</span>
+    <span class="hero-value">{{ formatPct(r.win_rate) }}</span>
+  </div>
+  <div class="hero-card">
+    <span class="hero-label">Sharpe</span>
+    <span class="hero-value">{{ formatNumber(r.statistics['sharpe_ratio'] ?? 0, 3) }}</span>
+  </div>
+</div>
+
+<!-- LEAN Statistics Dashboard -->
+@if (leanStats(); as lean) {
+  <app-lean-statistics [stats]="lean" />
+}
+
+<!-- Trade Log (collapsed) -->
+@if (r.trades.length > 0) {
+  <div class="trade-log-panel">
+    <button class="panel-toggle" (click)="showTradeLog.set(!showTradeLog())">
+      <i class="pi" [class.pi-chevron-right]="!showTradeLog()" [class.pi-chevron-down]="showTradeLog()"></i>
+      <span>Trade Log</span>
+      <span class="panel-badge">{{ r.trades.length }} trades</span>
+    </button>
+
+    @if (showTradeLog()) {
+      <div class="trade-log-toolbar">
+        <div class="tz-selector">
+          <label>Timezone:</label>
+          <select [ngModel]="selectedTimezone()" (ngModelChange)="selectedTimezone.set($event)">
+            @for (tz of timezoneOptions; track tz.value) {
+              <option [value]="tz.value">{{ tz.label }}</option>
+            }
+          </select>
+        </div>
+        <button class="csv-btn" (click)="downloadTradesCsv()" title="Download CSV">
+          <i class="pi pi-download"></i> CSV
+        </button>
+      </div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Entry Time</th>
+              <th>Entry $</th>
+              <th>Exit Time</th>
+              <th>Exit $</th>
+              <th>PnL Pts</th>
+              <th>PnL %</th>
+              <th>Result</th>
+              <th>Signal</th>
+              <th>Indicators</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (t of r.trades; track t.trade_number) {
+              <tr [class.win]="t.result === 'WIN'" [class.loss]="t.result === 'LOSS'">
+                <td>{{ t.trade_number }}</td>
+                <td>{{ formatTradeTime(t.entry_time) }}</td>
+                <td>{{ formatNumber(t.entry_price) }}</td>
+                <td>{{ formatTradeTime(t.exit_time) }}</td>
+                <td>{{ formatNumber(t.exit_price) }}</td>
+                <td [class.positive]="t.pnl_pts > 0" [class.negative]="t.pnl_pts < 0">
+                  {{ t.pnl_pts > 0 ? '+' : '' }}{{ formatNumber(t.pnl_pts, 4) }}
+                </td>
+                <td [class.positive]="t.pnl_pct > 0" [class.negative]="t.pnl_pct < 0">
+                  {{ formatPct(t.pnl_pct) }}
+                </td>
+                <td>
+                  <span class="result-badge" [class.win-badge]="t.result === 'WIN'" [class.loss-badge]="t.result === 'LOSS'">
+                    {{ t.result }}
+                  </span>
+                </td>
+                <td class="signal-cell">{{ t.signal_reason }}</td>
+                <td>
+                  <div class="indicators">
+                    @for (ind of tradeIndicatorEntries(t); track ind.key) {
+                      <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
+                    }
+                  </div>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </div>
+}

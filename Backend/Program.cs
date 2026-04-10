@@ -1,3 +1,4 @@
+using Backend;
 using Backend.Configuration;
 using Backend.Data;
 using Backend.GraphQL;
@@ -139,6 +140,7 @@ using (var scope = app.Services.CreateScope())
 
 app.UseCors();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
+app.MapStudiesEndpoints();
 app.MapGraphQL();
 
 app.Run();

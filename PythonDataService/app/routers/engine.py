@@ -10,16 +10,23 @@ being rolled out.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field as dc_field
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from fastapi import APIRouter, HTTPException, Query, status
+import httpx
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from pydantic import BaseModel, Field, ValidationError
+
+import pandas as pd
 
 from app.engine.data.availability import (
     AvailabilityReport,
@@ -28,6 +35,14 @@ from app.engine.data.availability import (
     ensure_range,
 )
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
+from app.services.strategies.common import TradeRecord
+from app.services.strategies.lean_statistics import compute_lean_statistics
+from app.routers.backtest import (
+    LeanPortfolioStatsResponse,
+    LeanTradeStatsResponse,
+    LeanRuntimeStatsResponse,
+    LeanStatisticsResponse,
+)
 from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
@@ -318,6 +333,8 @@ class EngineBacktestResponse(BaseModel):
     # Extended statistics — computed from the trade log. See
     # app/engine/results/statistics.py for the full list of keys.
     statistics: dict[str, Any] = Field(default_factory=dict)
+    # Full LEAN-parity statistics (portfolio + trade + runtime).
+    lean_statistics: LeanStatisticsResponse | None = None
     trades: list[EngineTradeResponse] = []
     log_lines: list[str] = []
     error: str | None = None
@@ -547,13 +564,17 @@ def get_data_availability(
 
 
 @router.post("/backtest", response_model=EngineBacktestResponse)
-def run_engine_backtest(request: EngineBacktestRequest) -> EngineBacktestResponse:
+def run_engine_backtest(
+    request: EngineBacktestRequest,
+    background_tasks: BackgroundTasks,
+) -> EngineBacktestResponse:
     """Run a strategy through the LEAN-compatible backtest engine.
 
     The engine reads LEAN-format minute zips from the configured data root
     and produces trades that reproduce LEAN's reference log bit-exactly
     when the same strategy is run against the same data.
     """
+    _run_start = time.time()
     registration = _STRATEGY_REGISTRY.get(request.strategy_name)
     if registration is None:
         raise HTTPException(
@@ -719,7 +740,71 @@ def run_engine_backtest(request: EngineBacktestRequest) -> EngineBacktestRespons
         trading_days=trading_days,
     )
 
-    return EngineBacktestResponse(
+    # ── LEAN-parity statistics ──────────────────────────────────────
+    lean_stats_resp: LeanStatisticsResponse | None = None
+    if result.bars and trades:
+        try:
+            # Convert retained TradeBar objects → DataFrame with timestamp + close
+            bar_records = [
+                {
+                    "timestamp": b.time,
+                    "open": float(b.open),
+                    "high": float(b.high),
+                    "low": float(b.low),
+                    "close": float(b.close),
+                    "volume": int(b.volume),
+                }
+                for b in result.bars
+            ]
+            df = pd.DataFrame(bar_records)
+
+            # Convert LoggedTrade → TradeRecord
+            cum_pnl = 0.0
+            trade_records: list[TradeRecord] = []
+            for i, t in enumerate(trades):
+                cum_pnl += float(t.pnl_pct)
+                trade_records.append(
+                    TradeRecord(
+                        trade_number=i + 1,
+                        trade_type="Buy",  # engine strategies are long-only for now
+                        entry_timestamp=t.entry_time.strftime("%Y-%m-%d %H:%M"),
+                        exit_timestamp=t.exit_time.strftime("%Y-%m-%d %H:%M"),
+                        entry_price=float(t.entry_price),
+                        exit_price=float(t.exit_price),
+                        pnl=float(t.pnl_pts),
+                        pnl_pct=float(t.pnl_pct),
+                        cumulative_pnl_pct=cum_pnl,
+                        signal_reason=getattr(t, "signal_reason", "") or "",
+                        indicator_snapshot={
+                            k: float(v) for k, v in (getattr(t, "indicators", None) or {}).items()
+                        },
+                    )
+                )
+
+            lean_stats = compute_lean_statistics(
+                df=df,
+                trades=trade_records,
+                start_capital=float(result.initial_cash),
+                risk_free_rate=0.0,
+                benchmark_returns=None,
+            )
+
+            from dataclasses import asdict as _dc_asdict
+            lean_stats_resp = LeanStatisticsResponse(
+                portfolio=LeanPortfolioStatsResponse(**_dc_asdict(lean_stats.portfolio)),
+                trade=LeanTradeStatsResponse(**_dc_asdict(lean_stats.trade)),
+                runtime=LeanRuntimeStatsResponse(
+                    equity=lean_stats.equity,
+                    fees=lean_stats.fees,
+                    net_profit=lean_stats.net_profit,
+                    total_return=lean_stats.total_return,
+                    total_orders=lean_stats.total_orders,
+                ),
+            )
+        except Exception:
+            logger.exception("[ENGINE] LEAN statistics computation failed — returning without")
+
+    response = EngineBacktestResponse(
         success=True,
         strategy_name=request.strategy_name,
         fill_mode=request.fill_mode,
@@ -732,6 +817,106 @@ def run_engine_backtest(request: EngineBacktestRequest) -> EngineBacktestRespons
         losing_trades=losses,
         win_rate=win_rate,
         statistics=stats,
+        lean_statistics=lean_stats_resp,
         trades=formatted,
         log_lines=result.log_lines,
     )
+
+    # ── Auto-save to .NET backend (fire-and-forget) ──────────────
+    background_tasks.add_task(
+        _save_study_sync,
+        response=response,
+        symbol=strategy.ctx.symbols[0] if strategy.ctx.symbols else "SPY",
+        start_date=request.start_date or "",
+        end_date=request.end_date or "",
+        resolution=request.resolution or "minute",
+        params_json=json.dumps(request.params) if request.params else "{}",
+        duration_ms=int((time.time() - _run_start) * 1000),
+    )
+
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Study auto-save (fire-and-forget background task)
+# ---------------------------------------------------------------------------
+def _save_study_sync(
+    *,
+    response: EngineBacktestResponse,
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    resolution: str,
+    params_json: str,
+    duration_ms: int,
+) -> None:
+    """POST the backtest result to the .NET backend for persistence."""
+    from app.config import settings
+
+    backend_url = getattr(settings, "BACKEND_URL", "http://localhost:5000")
+    url = f"{backend_url}/api/studies"
+
+    # Extract LEAN portfolio stats for the top-level columns
+    lp = response.lean_statistics.portfolio if response.lean_statistics else None
+    lt = response.lean_statistics.trade if response.lean_statistics else None
+
+    body: dict[str, Any] = {
+        "symbol": symbol,
+        "strategyName": response.strategy_name,
+        "parameters": params_json,
+        "startDate": start_date,
+        "endDate": end_date,
+        "timespan": resolution,
+        "fillMode": response.fill_mode,
+        "source": "engine",
+        "totalTrades": response.total_trades,
+        "winningTrades": response.winning_trades,
+        "losingTrades": response.losing_trades,
+        "totalPnL": response.net_profit,
+        "maxDrawdown": lp.drawdown if lp else response.statistics.get("max_drawdown_pct", 0),
+        "sharpeRatio": lp.sharpe_ratio if lp else response.statistics.get("sharpe_ratio", 0),
+        "initialCash": response.initial_cash,
+        "finalEquity": response.final_equity,
+        "totalFees": response.total_fees,
+        "winRate": response.win_rate,
+        "compoundingAnnualReturn": lp.compounding_annual_return if lp else 0,
+        "sortinoRatio": lp.sortino_ratio if lp else response.statistics.get("sortino_ratio", 0),
+        "probabilisticSharpeRatio": lp.probabilistic_sharpe_ratio if lp else 0,
+        "profitFactor": lt.profit_factor if lt else response.statistics.get("profit_factor", 0),
+        "alpha": lp.alpha if lp else 0,
+        "beta": lp.beta if lp else 0,
+        "informationRatio": lp.information_ratio if lp else 0,
+        "trackingError": lp.tracking_error if lp else 0,
+        "treynorRatio": lp.treynor_ratio if lp else 0,
+        "valueAtRisk95": lp.value_at_risk_95 if lp else 0,
+        "valueAtRisk99": lp.value_at_risk_99 if lp else 0,
+        "annualStandardDeviation": lp.annual_standard_deviation if lp else 0,
+        "drawdownRecoveryDays": lp.drawdown_recovery if lp else 0,
+        "leanStatisticsJson": response.lean_statistics.model_dump_json() if response.lean_statistics else None,
+        "durationMs": duration_ms,
+        "trades": [
+            {
+                "tradeType": "Buy",
+                "entryTimestamp": t.entry_time,
+                "exitTimestamp": t.exit_time,
+                "entryPrice": t.entry_price,
+                "exitPrice": t.exit_price,
+                "pnL": t.pnl_pts,
+                "cumulativePnL": 0,  # not tracked per-trade in engine format
+                "signalReason": t.signal_reason,
+            }
+            for t in response.trades
+        ],
+    }
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(url, json=body)
+            if resp.status_code < 300:
+                logger.info("[ENGINE] Study saved (id=%s)", resp.json().get("id"))
+            else:
+                logger.warning(
+                    "[ENGINE] Study save failed: %s %s", resp.status_code, resp.text[:200]
+                )
+    except Exception:
+        logger.exception("[ENGINE] Study save request failed — study not persisted")
