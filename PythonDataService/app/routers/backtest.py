@@ -30,6 +30,7 @@ from app.services.chart_service import (
 )
 from app.services.strategies.registry import get_strategy, list_strategies
 from app.services.strategies.common import StrategyResult
+from app.services.strategies.lean_statistics import compute_lean_statistics, LeanStatistics
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -63,12 +64,86 @@ class BacktestTradeResponse(BaseModel):
     indicator_snapshot: dict[str, float | None] = {}
 
 
+class LeanPortfolioStatsResponse(BaseModel):
+    """LEAN PortfolioStatistics — 25 fields matching PS.cs exactly."""
+    average_win_rate: float = 0.0
+    average_loss_rate: float = 0.0
+    profit_loss_ratio: float = 0.0
+    win_rate: float = 0.0
+    loss_rate: float = 0.0
+    expectancy: float = 0.0
+    start_equity: float = 0.0
+    end_equity: float = 0.0
+    total_net_profit: float = 0.0
+    compounding_annual_return: float = 0.0
+    sharpe_ratio: float = 0.0
+    sortino_ratio: float = 0.0
+    probabilistic_sharpe_ratio: float = 0.0
+    annual_standard_deviation: float = 0.0
+    annual_variance: float = 0.0
+    alpha: float = 0.0
+    beta: float = 0.0
+    information_ratio: float = 0.0
+    tracking_error: float = 0.0
+    treynor_ratio: float = 0.0
+    drawdown: float = 0.0
+    drawdown_recovery: int = 0
+    value_at_risk_99: float = 0.0
+    value_at_risk_95: float = 0.0
+    portfolio_turnover: float = 0.0
+
+
+class LeanTradeStatsResponse(BaseModel):
+    """LEAN TradeStatistics — key fields matching TS.cs."""
+    start_date_time: str = ""
+    end_date_time: str = ""
+    total_number_of_trades: int = 0
+    number_of_winning_trades: int = 0
+    number_of_losing_trades: int = 0
+    total_profit_loss: float = 0.0
+    total_profit: float = 0.0
+    total_loss: float = 0.0
+    largest_profit: float = 0.0
+    largest_loss: float = 0.0
+    average_profit_loss: float = 0.0
+    average_profit: float = 0.0
+    average_loss: float = 0.0
+    average_trade_duration: str = ""
+    average_winning_trade_duration: str = ""
+    average_losing_trade_duration: str = ""
+    max_consecutive_winning_trades: int = 0
+    max_consecutive_losing_trades: int = 0
+    profit_factor: float = 0.0
+    profit_to_max_drawdown_ratio: float = 0.0
+    profit_loss_standard_deviation: float = 0.0
+    profit_loss_downside_deviation: float = 0.0
+    sharpe_ratio: float = 0.0
+    sortino_ratio: float = 0.0
+    total_fees: float = 0.0
+
+
+class LeanRuntimeStatsResponse(BaseModel):
+    """LEAN runtimeStatistics — 5 key fields."""
+    equity: float = 0.0
+    fees: float = 0.0
+    net_profit: float = 0.0
+    total_return: float = 0.0
+    total_orders: int = 0
+
+
+class LeanStatisticsResponse(BaseModel):
+    """Full LEAN statistics suite."""
+    portfolio: LeanPortfolioStatsResponse = Field(default_factory=LeanPortfolioStatsResponse)
+    trade: LeanTradeStatsResponse = Field(default_factory=LeanTradeStatsResponse)
+    runtime: LeanRuntimeStatsResponse = Field(default_factory=LeanRuntimeStatsResponse)
+
+
 class BacktestResponse(BaseModel):
     success: bool
     ticker: str
     strategy_name: str
     parameters: dict[str, Any]
-    # Performance metrics
+    # Performance metrics (kept for backward compat)
     total_trades: int = 0
     winning_trades: int = 0
     losing_trades: int = 0
@@ -82,6 +157,8 @@ class BacktestResponse(BaseModel):
     total_pnl_pts: float = 0.0
     max_drawdown_pct: float = 0.0
     sharpe_ratio: float = 0.0
+    # LEAN-compatible statistics (all 27 + 8 KPIs)
+    lean_statistics: LeanStatisticsResponse | None = None
     # Pipeline info
     source_bars: int = 0
     rth_bars: int = 0
@@ -187,6 +264,15 @@ def _run_backtest_pipeline(request: BacktestRequest) -> BacktestResponse:
             error=strategy_result.error,
         )
 
+    # Compute LEAN-compatible statistics from the full equity curve
+    lean_stats = compute_lean_statistics(
+        df=df.copy(),
+        trades=strategy_result.trades,
+        start_capital=100_000.0,
+        risk_free_rate=0.0,
+        benchmark_returns=None,  # zero benchmark like SetBenchmark(d => 0m)
+    )
+
     # Format chart bars
     chart_bars = []
     for _, row in df_with_indicators.iterrows():
@@ -230,6 +316,22 @@ def _run_backtest_pipeline(request: BacktestRequest) -> BacktestResponse:
     # Convert GapDetail dataclasses to dicts
     quality_dict["gap_details"] = [asdict(g) for g in quality.gap_details]
 
+    # Build LEAN statistics response
+    from dataclasses import asdict as _dc_asdict
+    lean_port = lean_stats.portfolio
+    lean_trade = lean_stats.trade
+    lean_stats_resp = LeanStatisticsResponse(
+        portfolio=LeanPortfolioStatsResponse(**_dc_asdict(lean_port)),
+        trade=LeanTradeStatsResponse(**_dc_asdict(lean_trade)),
+        runtime=LeanRuntimeStatsResponse(
+            equity=lean_stats.equity,
+            fees=lean_stats.fees,
+            net_profit=lean_stats.net_profit,
+            total_return=lean_stats.total_return,
+            total_orders=lean_stats.total_orders,
+        ),
+    )
+
     return BacktestResponse(
         success=True,
         ticker=ticker,
@@ -248,6 +350,7 @@ def _run_backtest_pipeline(request: BacktestRequest) -> BacktestResponse:
         total_pnl_pts=strategy_result.total_pnl_pts,
         max_drawdown_pct=strategy_result.max_drawdown_pct,
         sharpe_ratio=strategy_result.sharpe_ratio,
+        lean_statistics=lean_stats_resp,
         source_bars=source_bar_count,
         rth_bars=rth_bar_count,
         resampled_bars=resampled_bar_count,

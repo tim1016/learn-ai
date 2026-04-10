@@ -1,0 +1,118 @@
+@let s = stats();
+
+<!-- Always-visible: Return + Risk + Drawdown -->
+<div class="lean-stats-panel">
+  <section class="kpi-section">
+    <h4 class="section-title">
+      <i class="pi pi-chart-line"></i> Returns
+    </h4>
+    <div class="kpi-grid kpi-grid--4">
+      @for (item of returnMetrics; track item.label) {
+        <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
+          <span class="kpi-label">{{ item.label }}</span>
+          <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+          <span class="kpi-source">{{ item.source }}</span>
+        </div>
+      }
+    </div>
+  </section>
+
+  <section class="kpi-section">
+    <h4 class="section-title">
+      <i class="pi pi-shield"></i> Risk
+    </h4>
+    <div class="kpi-grid kpi-grid--4">
+      @for (item of riskMetrics; track item.label) {
+        <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
+          <span class="kpi-label">{{ item.label }}</span>
+          <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+          <span class="kpi-source">{{ item.source }}</span>
+        </div>
+      }
+    </div>
+  </section>
+
+  <section class="kpi-section">
+    <h4 class="section-title">
+      <i class="pi pi-arrow-down"></i> Drawdown
+    </h4>
+    <div class="kpi-grid kpi-grid--2">
+      @for (item of drawdownMetrics; track item.label) {
+        <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
+          <span class="kpi-label">{{ item.label }}</span>
+          <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+          <span class="kpi-source">{{ item.source }}</span>
+        </div>
+      }
+    </div>
+  </section>
+
+  <!-- Expandable sections -->
+  <button class="expand-toggle" (click)="showFullStats.set(!showFullStats())">
+    <i class="pi" [class.pi-chevron-right]="!showFullStats()" [class.pi-chevron-down]="showFullStats()"></i>
+    <span>{{ showFullStats() ? 'Hide' : 'Show' }} Full Statistics</span>
+    <span class="expand-badge">4 more sections</span>
+  </button>
+
+  @if (showFullStats()) {
+    <section class="kpi-section">
+      <h4 class="section-title">
+        <i class="pi pi-compass"></i> Benchmark
+      </h4>
+      <div class="kpi-grid kpi-grid--5">
+        @for (item of benchmarkMetrics; track item.label) {
+          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
+            <span class="kpi-label">{{ item.label }}</span>
+            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+            <span class="kpi-source">{{ item.source }}</span>
+          </div>
+        }
+      </div>
+    </section>
+
+    <section class="kpi-section">
+      <h4 class="section-title">
+        <i class="pi pi-dollar"></i> Trades
+      </h4>
+      <div class="kpi-grid kpi-grid--5">
+        @for (item of tradeMetrics; track item.label) {
+          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
+            <span class="kpi-label">{{ item.label }}</span>
+            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+            <span class="kpi-source">{{ item.source }}</span>
+          </div>
+        }
+      </div>
+    </section>
+
+    <section class="kpi-section">
+      <h4 class="section-title">
+        <i class="pi pi-bolt"></i> Streaks &amp; Duration
+      </h4>
+      <div class="kpi-grid kpi-grid--5">
+        @for (item of streakMetrics; track item.label) {
+          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
+            <span class="kpi-label">{{ item.label }}</span>
+            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+            <span class="kpi-source">{{ item.source }}</span>
+          </div>
+        }
+      </div>
+    </section>
+
+    <section class="kpi-section">
+      <h4 class="section-title">
+        <i class="pi pi-chart-bar"></i> Distribution
+      </h4>
+      <div class="kpi-grid kpi-grid--4">
+        @for (item of distributionMetrics; track item.label) {
+          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
+            <span class="kpi-label">{{ item.label }}</span>
+            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+            <span class="kpi-source">{{ item.source }}</span>
+          </div>
+        }
+      </div>
+    </section>
+  }
+</div>

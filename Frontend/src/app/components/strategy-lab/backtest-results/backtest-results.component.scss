@@ -1,0 +1,236 @@
+@use '../../../styles/tokens' as *;
+
+// ─── Info Callout ─────────────────────────────────────
+.info-callout {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  background: #eff6ff;
+  border-left: 3px solid #2563eb;
+  font-size: 0.85rem;
+  color: #334155;
+  margin-bottom: 1rem;
+
+  > i { color: #2563eb; margin-top: 2px; flex-shrink: 0; }
+  strong { display: block; margin-bottom: 0.15rem; color: #1e293b; font-size: 0.82rem; }
+  span { line-height: 1.5; }
+}
+
+// ─── Session Tag ──────────────────────────────────────
+.session-tag {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: rgba($accent, 0.15);
+  color: $accent;
+}
+
+// ─── Parity Badge ─────────────────────────────────────
+.parity-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 0.5rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+
+  &.validated { background: rgba($bull, 0.12); color: $bull; }
+  &.baseline { background: rgba($text-muted, 0.1); color: $text-muted; }
+
+  .parity-detail { font-weight: 400; margin-left: 2px; }
+  .pi { font-size: 0.68rem; }
+}
+
+// ─── Hero Metrics ─────────────────────────────────────
+.hero-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  margin-bottom: 1.25rem;
+
+  @media (max-width: 768px) { grid-template-columns: repeat(2, 1fr); }
+}
+
+.hero-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 8px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 10px;
+  text-align: center;
+
+  &.positive { background: rgba($bull, 0.08); border-color: rgba($bull, 0.25); }
+  &.negative { background: rgba($bear, 0.08); border-color: rgba($bear, 0.25); }
+}
+
+.hero-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: $text-muted;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+.hero-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: $text-primary;
+  line-height: 1.2;
+
+  .hero-card.positive & { color: $bull; }
+  .hero-card.negative & { color: $bear; }
+}
+
+.hero-sub {
+  font-size: 0.72rem;
+  color: $text-secondary;
+  margin-top: 4px;
+}
+
+// ─── Stats Grid ────────────────────────────────────────
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 1.25rem;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 8px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 8px;
+}
+
+.stat-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: $text-muted;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: $text-primary;
+}
+
+.positive { color: $bull; font-weight: 600; }
+.negative { color: $bear; font-weight: 600; }
+
+// ─── Chart Section ────────────────────────────────────
+.chart-section {
+  margin-bottom: 1.5rem;
+}
+
+// ─── Trade Log Panel ──────────────────────────────────
+.trade-log-panel {
+  margin-bottom: 1.5rem;
+}
+
+.panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 8px;
+  color: $text-primary;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover { background: $bg-hover; }
+  .pi { font-size: 0.72rem; color: $text-muted; }
+}
+
+.panel-badge {
+  margin-left: auto;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: $text-secondary;
+  background: $bg-elevated;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+// ─── Table ────────────────────────────────────────────
+.table-wrapper {
+  overflow-x: auto;
+  border: 1px solid $border;
+  border-radius: 8px;
+  margin-top: 0.5rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+
+  th, td {
+    padding: 8px 10px;
+    text-align: right;
+    border-bottom: 1px solid $border;
+  }
+
+  th {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: $text-muted;
+    text-transform: uppercase;
+    background: $bg-surface;
+    border-bottom: 2px solid $border-light;
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+  }
+
+  td { color: $text-secondary; }
+  td:first-child, th:first-child { text-align: center; width: 40px; }
+  td:nth-child(2), th:nth-child(2) { text-align: left; }
+  td:nth-child(3), td:nth-child(4), th:nth-child(3), th:nth-child(4) { text-align: left; white-space: nowrap; }
+
+  .signal-cell {
+    text-align: left;
+    font-size: 0.72rem;
+    color: $text-muted;
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  tr.win { background: rgba($bull, 0.04); }
+  tr.loss { background: rgba($bear, 0.04); }
+  tbody tr:hover { background: $bg-hover; }
+}
+
+.result-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+
+  &.win-badge { background: rgba($bull, 0.15); color: $bull; }
+  &.loss-badge { background: rgba($bear, 0.15); color: $bear; }
+}

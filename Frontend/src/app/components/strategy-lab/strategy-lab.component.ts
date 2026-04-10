@@ -11,6 +11,7 @@ import { forkJoin } from 'rxjs';
 import { DatePicker } from 'primeng/datepicker';
 import { SharedModule } from 'primeng/api';
 import { Tooltip } from 'primeng/tooltip';
+import { AutoComplete, AutoCompleteCompleteEvent } from 'primeng/autocomplete';
 import { environment } from '../../../environments/environment';
 import { MarketDataService } from '../../services/market-data.service';
 import { MarketMonitorService } from '../../services/market-monitor.service';
@@ -33,6 +34,7 @@ import {
   ChartBar,
   ChartIndicatorResult,
 } from './strategy-lab-chart/strategy-lab-chart.component';
+import { BacktestResultsComponent } from './backtest-results/backtest-results.component';
 
 export type LabMode = 'backtest' | 'replay';
 
@@ -49,6 +51,77 @@ interface BacktestTradeResponse {
   cumulative_pnl_pct: number;
   signal_reason: string;
   indicator_snapshot: Record<string, number | null>;
+}
+
+// ── LEAN Statistics types (matching Python LeanStatisticsResponse) ──
+export interface LeanPortfolioStats {
+  average_win_rate: number;
+  average_loss_rate: number;
+  profit_loss_ratio: number;
+  win_rate: number;
+  loss_rate: number;
+  expectancy: number;
+  start_equity: number;
+  end_equity: number;
+  total_net_profit: number;
+  compounding_annual_return: number;
+  sharpe_ratio: number;
+  sortino_ratio: number;
+  probabilistic_sharpe_ratio: number;
+  annual_standard_deviation: number;
+  annual_variance: number;
+  alpha: number;
+  beta: number;
+  information_ratio: number;
+  tracking_error: number;
+  treynor_ratio: number;
+  drawdown: number;
+  drawdown_recovery: number;
+  value_at_risk_99: number;
+  value_at_risk_95: number;
+  portfolio_turnover: number;
+}
+
+export interface LeanTradeStats {
+  start_date_time: string;
+  end_date_time: string;
+  total_number_of_trades: number;
+  number_of_winning_trades: number;
+  number_of_losing_trades: number;
+  total_profit_loss: number;
+  total_profit: number;
+  total_loss: number;
+  largest_profit: number;
+  largest_loss: number;
+  average_profit_loss: number;
+  average_profit: number;
+  average_loss: number;
+  average_trade_duration: string;
+  average_winning_trade_duration: string;
+  average_losing_trade_duration: string;
+  max_consecutive_winning_trades: number;
+  max_consecutive_losing_trades: number;
+  profit_factor: number;
+  profit_to_max_drawdown_ratio: number;
+  profit_loss_standard_deviation: number;
+  profit_loss_downside_deviation: number;
+  sharpe_ratio: number;
+  sortino_ratio: number;
+  total_fees: number;
+}
+
+export interface LeanRuntimeStats {
+  equity: number;
+  fees: number;
+  net_profit: number;
+  total_return: number;
+  total_orders: number;
+}
+
+export interface LeanStatistics {
+  portfolio: LeanPortfolioStats;
+  trade: LeanTradeStats;
+  runtime: LeanRuntimeStats;
 }
 
 interface BacktestResponse {
@@ -69,6 +142,7 @@ interface BacktestResponse {
   total_pnl_pts: number;
   max_drawdown_pct: number;
   sharpe_ratio: number;
+  lean_statistics: LeanStatistics | null;
   source_bars: number;
   rth_bars: number;
   resampled_bars: number;
@@ -100,10 +174,11 @@ export interface BacktestTradeForChart {
   standalone: true,
   imports: [
     CommonModule, FormsModule, RouterModule,
-    DatePicker, SharedModule, Tooltip,
+    DatePicker, SharedModule, Tooltip, AutoComplete,
     LineChartComponent,
     ReplayControlsComponent, ReplayChartComponent,
     StrategyLabChartComponent,
+    BacktestResultsComponent,
   ],
   templateUrl: './strategy-lab.component.html',
   styleUrls: ['./strategy-lab.component.scss'],
@@ -127,6 +202,16 @@ export class StrategyLabComponent {
 
   // ── Form inputs ──
   ticker = signal('AAPL');
+
+  // Ticker autocomplete
+  private readonly commonTickers = [
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'BRK.B',
+    'JPM', 'V', 'UNH', 'MA', 'HD', 'PG', 'JNJ', 'COST', 'ABBV', 'MRK',
+    'KO', 'PEP', 'AVGO', 'LLY', 'ADBE', 'CRM', 'NFLX', 'AMD', 'INTC',
+    'SPY', 'QQQ', 'IWM', 'DIA', 'XLF', 'XLE', 'XLK', 'GLD', 'SLV',
+    'BA', 'DIS', 'PYPL', 'SQ', 'SHOP', 'UBER', 'ABNB', 'COIN', 'SOFI',
+  ];
+  tickerSuggestions = signal<string[]>([]);
 
   // Date state: PrimeNG DatePicker binds to Date objects
   private static getYesterday(): Date {
@@ -199,6 +284,78 @@ export class StrategyLabComponent {
   rsiReversalWindow = signal(14);
   rsiReversalOversold = signal(30);
   rsiReversalOverbought = signal(70);
+
+  // ── UI toggles ──
+  showAdvanced = signal(false);
+  showTradeLog = signal(false);
+  showStrategyParams = signal(false);
+  activePreset = signal<string | null>(null);
+
+  // Strategy card: human-readable rules preview
+  strategyMeta = computed(() => {
+    const s = this.strategyName();
+    const meta: Record<string, { display: string; rules: string[] }> = {
+      sma_crossover: {
+        display: 'SMA Crossover',
+        rules: [
+          `Entry: SMA ${this.shortWindow()} crosses above SMA ${this.longWindow()}`,
+          `Exit: SMA ${this.shortWindow()} crosses below SMA ${this.longWindow()}`,
+        ],
+      },
+      rsi_mean_reversion: {
+        display: 'RSI Mean Reversion',
+        rules: [
+          `Buy when RSI(${this.rsiWindow()}) < ${this.oversold()}`,
+          `Sell when RSI(${this.rsiWindow()}) > ${this.overbought()}`,
+        ],
+      },
+      momentum_rsi_stochastic: {
+        display: 'Momentum RSI + Stochastic',
+        rules: [
+          `RSI(${this.momentumRsiLength()}) range: ${this.momentumRsiLow()}–${this.momentumRsiHigh()}`,
+          `MA filter: ${this.momentumFastMa()} / ${this.momentumSlowMa()}`,
+          `Stoch %K/${this.momentumStochK()} %D/${this.momentumStochD()}`,
+          `Exit ${this.momentumExitMinutes()} min before close`,
+        ],
+      },
+      ema_crossover_rsi: {
+        display: 'EMA Crossover + RSI',
+        rules: [
+          `Entry: EMA ${this.emaCrossoverFastPeriod()} crosses EMA ${this.emaCrossoverSlowPeriod()}`,
+          `Filter: RSI(${this.emaCrossoverRsiPeriod()}) ${this.emaCrossoverRsiMin()}–${this.emaCrossoverRsiMax()}`,
+          `Min gap: ${this.emaCrossoverMinGap()}`,
+          `Exit: hold ${this.emaCrossoverExitBars()} bars`,
+        ],
+      },
+      rsi_reversal: {
+        display: 'RSI Reversal',
+        rules: [
+          `Buy reversal: RSI(${this.rsiReversalWindow()}) < ${this.rsiReversalOversold()}`,
+          `Sell reversal: RSI(${this.rsiReversalWindow()}) > ${this.rsiReversalOverbought()}`,
+        ],
+      },
+    };
+    return meta[s] ?? { display: s, rules: [] };
+  });
+
+  // LEAN parity indicator
+  isParityValidated = computed(() =>
+    this.ticker().toUpperCase() === 'SPY' && this.strategyName() === 'ema_crossover_rsi'
+  );
+  parityReference = computed(() =>
+    this.isParityValidated() ? 'SPY × EMA Crossover RSI (63 trades, bit-exact)' : ''
+  );
+
+  // Computed summary for collapsed advanced panel
+  advancedSummary = computed(() => {
+    const ts = this.timespan();
+    const m = this.multiplier();
+    const unit = ts === 'minute' ? 'm' : ts === 'hour' ? 'h' : 'd';
+    const sess = this.session() === 'rth' ? 'RTH' : 'Extended';
+    const fill = this.forwardFill() ? 'Fill' : 'No fill';
+    const wu = this.warmup() ? 'Warmup' : 'No warmup';
+    return `${m}${unit} · ${sess} · ${fill} · ${wu}`;
+  });
 
   // State
   loading = signal(false);
@@ -373,6 +530,7 @@ export class StrategyLabComponent {
     from.setDate(from.getDate() - daysBack);
     this.fromDateValue.set(from);
     this.toDateValue.set(to);
+    this.activePreset.set(`${daysBack}d`);
   }
 
   setPresetMonths(months: number): void {
@@ -381,6 +539,39 @@ export class StrategyLabComponent {
     from.setMonth(from.getMonth() - months);
     this.fromDateValue.set(from);
     this.toDateValue.set(to);
+    const label = months >= 12 ? `${months / 12}y` : `${months}m`;
+    this.activePreset.set(label);
+  }
+
+  // ── Reset form to defaults ──
+
+  resetForm(): void {
+    this.ticker.set('AAPL');
+    this.fromDateValue.set(StrategyLabComponent.get30DaysAgo());
+    this.toDateValue.set(StrategyLabComponent.getYesterday());
+    this.timespan.set('minute');
+    this.multiplier.set(5);
+    this.session.set('rth');
+    this.forwardFill.set(true);
+    this.warmup.set(true);
+    this.strategyName.set('sma_crossover');
+    this.shortWindow.set(10);
+    this.longWindow.set(30);
+    this.activePreset.set(null);
+    this.showAdvanced.set(false);
+    this.showStrategyParams.set(false);
+    this.showTradeLog.set(false);
+    this.result.set(null);
+    this.error.set(null);
+  }
+
+  // ── Ticker search ──
+
+  searchTickers(event: AutoCompleteCompleteEvent): void {
+    const query = event.query.toUpperCase();
+    this.tickerSuggestions.set(
+      this.commonTickers.filter(t => t.includes(query))
+    );
   }
 
   // ── Helpers ──

@@ -43,6 +43,8 @@ class StrategyResult:
     sharpe_ratio: float = 0.0
     bars_processed: int = 0
     error: str | None = None
+    # LEAN-compatible statistics (populated by backtest router)
+    lean_statistics: dict | None = None
 
 
 def compute_metrics(trades: list[TradeRecord]) -> dict:

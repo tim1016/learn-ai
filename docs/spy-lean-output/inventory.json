@@ -1,0 +1,382 @@
+{
+  "run_metadata": {
+    "algorithm": "SpyEmaCrossoverAlgorithm",
+    "source": "Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs",
+    "date_range": [
+      "2024-03-28T00:00:00Z",
+      "2026-03-27T23:59:59Z"
+    ],
+    "trading_days_per_year": 252,
+    "parameters": {
+      "intrinio-username": "",
+      "intrinio-password": "",
+      "ema-fast": "10",
+      "ema-slow": "20"
+    },
+    "total_orders": 126,
+    "closed_trades": 63
+  },
+  "files": {
+    "SpyEmaCrossoverAlgorithm.json": {
+      "purpose": "full backtest result",
+      "top_level_keys": [
+        "rollingWindow",
+        "charts",
+        "orders",
+        "profitLoss",
+        "statistics",
+        "runtimeStatistics",
+        "state",
+        "algorithmConfiguration",
+        "totalPerformance"
+      ]
+    },
+    "SpyEmaCrossoverAlgorithm-summary.json": {
+      "purpose": "compact summary",
+      "top_level_keys": [
+        "rollingWindow",
+        "charts",
+        "statistics",
+        "runtimeStatistics",
+        "state",
+        "algorithmConfiguration"
+      ]
+    },
+    "SpyEmaCrossoverAlgorithm-order-events.json": {
+      "purpose": "per-fill order events (empty in this run)"
+    },
+    "SpyEmaCrossoverAlgorithm-log.txt": {
+      "purpose": "Debug/Log output"
+    }
+  },
+  "charts": {
+    "Drawdown": {
+      "chartType": 0,
+      "series": {
+        "Equity Drawdown": {
+          "unit": "%",
+          "seriesType": 0,
+          "n_values": 731,
+          "point_shape_len": 2
+        }
+      }
+    },
+    "Portfolio Turnover": {
+      "chartType": 0,
+      "series": {
+        "Portfolio Turnover": {
+          "unit": "%",
+          "seriesType": 0,
+          "n_values": 730,
+          "point_shape_len": 2
+        }
+      }
+    },
+    "Exposure": {
+      "chartType": 0,
+      "series": {
+        "Equity - Short Ratio": {
+          "unit": "",
+          "seriesType": 0,
+          "n_values": 731,
+          "point_shape_len": 2
+        },
+        "Equity - Long Ratio": {
+          "unit": "",
+          "seriesType": 0,
+          "n_values": 731,
+          "point_shape_len": 2
+        }
+      }
+    },
+    "Strategy Equity": {
+      "chartType": 0,
+      "series": {
+        "Equity": {
+          "unit": "$",
+          "seriesType": 2,
+          "n_values": 1727,
+          "point_shape_len": 5
+        },
+        "Return": {
+          "unit": "%",
+          "seriesType": 3,
+          "n_values": 731,
+          "point_shape_len": 2
+        }
+      }
+    },
+    "Capacity": {
+      "chartType": 0,
+      "series": {
+        "Strategy Capacity": {
+          "unit": "$",
+          "seriesType": 0,
+          "n_values": 731,
+          "point_shape_len": 2
+        }
+      }
+    },
+    "Assets Sales Volume": {
+      "chartType": 0,
+      "series": {
+        "SPY": {
+          "unit": "$",
+          "seriesType": 7,
+          "n_values": 716,
+          "point_shape_len": 2
+        }
+      }
+    },
+    "Portfolio Margin": {
+      "chartType": 0,
+      "series": {
+        "SPY": {
+          "unit": "%",
+          "seriesType": 3,
+          "n_values": 4,
+          "point_shape_len": 2
+        }
+      }
+    },
+    "Benchmark": {
+      "chartType": 0,
+      "series": {
+        "Benchmark": {
+          "unit": "$",
+          "seriesType": 0,
+          "n_values": 731,
+          "point_shape_len": 2
+        }
+      }
+    }
+  },
+  "statistics_keys": [
+    "Total Orders",
+    "Average Win",
+    "Average Loss",
+    "Compounding Annual Return",
+    "Drawdown",
+    "Expectancy",
+    "Start Equity",
+    "End Equity",
+    "Net Profit",
+    "Sharpe Ratio",
+    "Sortino Ratio",
+    "Probabilistic Sharpe Ratio",
+    "Loss Rate",
+    "Win Rate",
+    "Profit-Loss Ratio",
+    "Alpha",
+    "Beta",
+    "Annual Standard Deviation",
+    "Annual Variance",
+    "Information Ratio",
+    "Tracking Error",
+    "Treynor Ratio",
+    "Total Fees",
+    "Estimated Strategy Capacity",
+    "Lowest Capacity Asset",
+    "Portfolio Turnover",
+    "Drawdown Recovery"
+  ],
+  "runtime_statistics_keys": [
+    "Equity",
+    "Fees",
+    "Holdings",
+    "Net Profit",
+    "Probabilistic Sharpe Ratio",
+    "Return",
+    "Unrealized",
+    "Volume"
+  ],
+  "state_keys": [
+    "StartTime",
+    "EndTime",
+    "RuntimeError",
+    "StackTrace",
+    "LogCount",
+    "OrderCount",
+    "InsightCount",
+    "Name",
+    "Hostname",
+    "Status"
+  ],
+  "algorithm_configuration_keys": [
+    "name",
+    "tags",
+    "accountCurrency",
+    "brokerage",
+    "accountType",
+    "parameters",
+    "outOfSampleMaxEndDate",
+    "outOfSampleDays",
+    "startDate",
+    "endDate",
+    "tradingDaysPerYear"
+  ],
+  "order_fields": [
+    "type",
+    "id",
+    "contingentId",
+    "brokerId",
+    "symbol",
+    "price",
+    "priceCurrency",
+    "time",
+    "createdTime",
+    "lastFillTime",
+    "quantity",
+    "status",
+    "tag",
+    "properties",
+    "securityType",
+    "direction",
+    "value",
+    "orderSubmissionData",
+    "isMarketable",
+    "priceAdjustmentMode"
+  ],
+  "closed_trade_fields": [
+    "id",
+    "symbols",
+    "entryTime",
+    "entryPrice",
+    "direction",
+    "quantity",
+    "exitTime",
+    "exitPrice",
+    "profitLoss",
+    "totalFees",
+    "mae",
+    "mfe",
+    "duration",
+    "endTradeDrawdown",
+    "isWin",
+    "orderIds"
+  ],
+  "trade_statistics_keys": [
+    "startDateTime",
+    "endDateTime",
+    "totalNumberOfTrades",
+    "numberOfWinningTrades",
+    "numberOfLosingTrades",
+    "totalProfitLoss",
+    "totalProfit",
+    "totalLoss",
+    "largestProfit",
+    "largestLoss",
+    "averageProfitLoss",
+    "averageProfit",
+    "averageLoss",
+    "averageTradeDuration",
+    "averageWinningTradeDuration",
+    "averageLosingTradeDuration",
+    "medianTradeDuration",
+    "medianWinningTradeDuration",
+    "medianLosingTradeDuration",
+    "maxConsecutiveWinningTrades",
+    "maxConsecutiveLosingTrades",
+    "profitLossRatio",
+    "winLossRatio",
+    "winRate",
+    "lossRate",
+    "averageMAE",
+    "averageMFE",
+    "largestMAE",
+    "largestMFE",
+    "maximumClosedTradeDrawdown",
+    "maximumIntraTradeDrawdown",
+    "profitLossStandardDeviation",
+    "profitLossDownsideDeviation",
+    "profitFactor",
+    "sharpeRatio",
+    "sortinoRatio",
+    "profitToMaxDrawdownRatio",
+    "maximumEndTradeDrawdown",
+    "averageEndTradeDrawdown",
+    "maximumDrawdownDuration",
+    "totalFees"
+  ],
+  "portfolio_statistics_keys": [
+    "averageWinRate",
+    "averageLossRate",
+    "profitLossRatio",
+    "winRate",
+    "lossRate",
+    "expectancy",
+    "startEquity",
+    "endEquity",
+    "compoundingAnnualReturn",
+    "drawdown",
+    "totalNetProfit",
+    "sharpeRatio",
+    "probabilisticSharpeRatio",
+    "sortinoRatio",
+    "alpha",
+    "beta",
+    "annualStandardDeviation",
+    "annualVariance",
+    "informationRatio",
+    "trackingError",
+    "treynorRatio",
+    "portfolioTurnover",
+    "valueAtRisk99",
+    "valueAtRisk95",
+    "drawdownRecovery"
+  ],
+  "rolling_window": {
+    "count": 100,
+    "key_format": "M1_YYYYMMDD (monthly buckets)",
+    "sample_keys": [
+      "M1_20240331",
+      "M1_20240430",
+      "M1_20240531",
+      "M1_20240630",
+      "M1_20240731"
+    ],
+    "contents_keys_per_bucket": [
+      "tradeStatistics",
+      "portfolioStatistics",
+      "closedTrades"
+    ]
+  },
+  "profit_loss": {
+    "count": 63,
+    "key_format": "ISO datetime of trade close",
+    "sample": {
+      "2024-04-11T17:15:00Z": 312.59,
+      "2024-04-15T15:00:00Z": -767.3106,
+      "2024-04-23T15:00:00Z": 643.175
+    }
+  },
+  "statistics_values": {
+    "Total Orders": "126",
+    "Average Win": "0.39%",
+    "Average Loss": "-0.33%",
+    "Compounding Annual Return": "5.489%",
+    "Drawdown": "1.400%",
+    "Expectancy": "0.525",
+    "Start Equity": "100000",
+    "End Equity": "111274.73",
+    "Net Profit": "11.275%",
+    "Sharpe Ratio": "-0.679",
+    "Sortino Ratio": "-0.427",
+    "Probabilistic Sharpe Ratio": "86.309%",
+    "Loss Rate": "30%",
+    "Win Rate": "70%",
+    "Profit-Loss Ratio": "1.18",
+    "Alpha": "0",
+    "Beta": "0",
+    "Annual Standard Deviation": "0.025",
+    "Annual Variance": "0.001",
+    "Information Ratio": "1.511",
+    "Tracking Error": "0.025",
+    "Treynor Ratio": "0",
+    "Total Fees": "$126.03",
+    "Estimated Strategy Capacity": "$53000000.00",
+    "Lowest Capacity Asset": "SPY R735QTJ8XC9X",
+    "Portfolio Turnover": "17.16%",
+    "Drawdown Recovery": "113"
+  }
+}

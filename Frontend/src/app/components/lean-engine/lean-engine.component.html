@@ -25,6 +25,40 @@
 
   @if (!strategiesLoading() && strategies().length > 0) {
     <section class="config-card">
+            @if (paramEntries().length > 0) {
+        <div class="params-card">
+          <h3>Parameters</h3>
+          <div class="form-grid">
+            @for (entry of paramEntries(); track entry.name) {
+              <label class="field">
+                <span class="label">
+                  {{ entry.prop.title || entry.name }}
+                  @if (entry.prop.description) {
+                    <span class="hint" [title]="entry.prop.description">?</span>
+                  }
+                </span>
+                <input
+                  [type]="
+                    entry.prop.type === 'integer' || entry.prop.type === 'number'
+                      ? 'number'
+                      : 'text'
+                  "
+                  [value]="paramValues()[entry.name] ?? ''"
+                  (input)="
+                    onParamChange(
+                      entry.name,
+                      $any($event.target).value,
+                      entry.prop.type
+                    )
+                  "
+                  [attr.min]="entry.prop.minimum ?? null"
+                  [attr.max]="entry.prop.maximum ?? null"
+                />
+              </label>
+            }
+          </div>
+        </div>
+      }
       <div class="form-grid">
         <label class="field">
           <span class="label">
@@ -181,40 +215,7 @@ size="small"
         <div class="strategy-description">{{ strategy.description }}</div>
       }
 
-      @if (paramEntries().length > 0) {
-        <div class="params-card">
-          <h3>Parameters</h3>
-          <div class="form-grid">
-            @for (entry of paramEntries(); track entry.name) {
-              <label class="field">
-                <span class="label">
-                  {{ entry.prop.title || entry.name }}
-                  @if (entry.prop.description) {
-                    <span class="hint" [title]="entry.prop.description">?</span>
-                  }
-                </span>
-                <input
-                  [type]="
-                    entry.prop.type === 'integer' || entry.prop.type === 'number'
-                      ? 'number'
-                      : 'text'
-                  "
-                  [value]="paramValues()[entry.name] ?? ''"
-                  (input)="
-                    onParamChange(
-                      entry.name,
-                      $any($event.target).value,
-                      entry.prop.type
-                    )
-                  "
-                  [attr.min]="entry.prop.minimum ?? null"
-                  [attr.max]="entry.prop.maximum ?? null"
-                />
-              </label>
-            }
-          </div>
-        </div>
-      }
+
 
       <div class="actions">
         <button
