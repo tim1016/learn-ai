@@ -12,21 +12,22 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dc_field
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field, ValidationError
 
 from app.engine.data.availability import (
     AvailabilityReport,
+    Resolution,
     check_availability,
     ensure_range,
 )
-from app.engine.data.lean_format import LeanMinuteDataReader
+from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
@@ -83,11 +84,39 @@ class SpyEmaCrossoverParams(StrategyParamsBase):
     """
 
 
+class EmaCrossoverSymbolParams(StrategyParamsBase):
+    """Parametrized variant of the SPY EMA crossover rule set.
+
+    Shares the exact indicator / gap / RSI logic as SpyEmaCrossoverAlgorithm
+    but lets the user pick the ticker. Defaults to QQQ so the registry
+    entry "qqq_ema_crossover" reads naturally; other symbols (IWM, etc.)
+    can be substituted without touching code as long as the data has been
+    fetched into the cache first.
+    """
+
+    symbol: str = Field("QQQ", min_length=1, max_length=20)
+
+
 class SmaCrossoverParams(StrategyParamsBase):
     symbol: str = Field("SPY", min_length=1, max_length=20)
     short_window: int = Field(10, ge=2, le=500)
     long_window: int = Field(30, ge=3, le=1000)
     resolution_minutes: int = Field(15, ge=1, le=1440)
+
+
+class DailySmaCrossoverParams(StrategyParamsBase):
+    """Daily-resolution SMA crossover — no ``resolution_minutes`` field.
+
+    The bar cadence is fixed to 1 day by the registry's build function
+    (which sets ``resolution_minutes=1440`` on the underlying algorithm)
+    because the strategy runs directly against LEAN daily zips. Window
+    sizes are in *days* here: a 50/200 is the classic long-term golden
+    cross.
+    """
+
+    symbol: str = Field("AAPL", min_length=1, max_length=20)
+    short_window: int = Field(50, ge=2, le=500)
+    long_window: int = Field(200, ge=3, le=1000)
 
 
 class RsiMeanReversionParams(StrategyParamsBase):
@@ -104,6 +133,11 @@ class StrategyRegistration:
     description: str
     param_schema: type[StrategyParamsBase]
     build: "Callable[[StrategyParamsBase], Strategy]"
+    # Which data resolutions the strategy can run against. Defaults to
+    # minute-only because every currently-ported strategy consolidates
+    # minute bars via a ``TradeBarConsolidator``. Daily-native strategies
+    # explicitly declare ``{"daily"}``.
+    supported_resolutions: set[str] = dc_field(default_factory=lambda: {"minute"})
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -116,6 +150,21 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         param_schema=SpyEmaCrossoverParams,
         build=lambda _p: SpyEmaCrossoverAlgorithm(),
+    ),
+    "qqq_ema_crossover": StrategyRegistration(
+        display_name="QQQ EMA Crossover (SPY rules, QQQ data)",
+        description=(
+            "Identical 15-minute EMA(5)/EMA(10) crossover with Wilders "
+            "RSI(14) filter as the LEAN-parity SPY strategy — same "
+            "indicators, same gap/RSI thresholds, same 5-bar hold — "
+            "but run against a configurable symbol (default QQQ). Data "
+            "must already be in the reference mount or the Polygon "
+            "cache; enable auto-fetch if not."
+        ),
+        param_schema=EmaCrossoverSymbolParams,
+        build=lambda p: SpyEmaCrossoverAlgorithm(
+            symbol=p.symbol,  # type: ignore[attr-defined]
+        ),
     ),
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",
@@ -131,6 +180,28 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             long_window=p.long_window,  # type: ignore[attr-defined]
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
+    ),
+    "daily_sma_crossover": StrategyRegistration(
+        display_name="Daily SMA Crossover",
+        description=(
+            "Long-term golden-cross / death-cross run against LEAN daily "
+            "bars (one zip per symbol under equity/usa/daily/). Defaults "
+            "to the classic 50/200 on AAPL. The underlying algorithm is "
+            "the same SmaCrossoverAlgorithm used for intraday — only the "
+            "bar cadence differs, which is handled by the data reader."
+        ),
+        param_schema=DailySmaCrossoverParams,
+        build=lambda p: SmaCrossoverAlgorithm(
+            symbol=p.symbol,  # type: ignore[attr-defined]
+            short_window=p.short_window,  # type: ignore[attr-defined]
+            long_window=p.long_window,  # type: ignore[attr-defined]
+            # 1440 min = 1 day. TradeBarConsolidator is reference-rounded
+            # to midnight ET and passes daily bars through 1:1 as long as
+            # consecutive inputs are separated by >= 1 day, which is
+            # always true for LEAN daily zip rows.
+            resolution_minutes=1440,
+        ),
+        supported_resolutions={"daily"},
     ),
     "rsi_mean_reversion": StrategyRegistration(
         display_name="RSI Mean Reversion",
@@ -215,13 +286,22 @@ class EngineBacktestRequest(BaseModel):
     # corresponding ``StrategyParamsBase`` subclass in the registry. Left
     # untyped here because the schema varies per strategy.
     params: dict[str, Any] = Field(default_factory=dict)
+    # Data resolution the engine will read. ``"minute"`` feeds
+    # ``LeanMinuteDataReader`` (the Phase 1 default, used by every
+    # intraday strategy that consolidates up to 15m/1h/etc.).
+    # ``"daily"`` feeds ``LeanDailyDataReader`` and is reserved for
+    # strategies that declare themselves daily-native.
+    resolution: Literal["minute", "daily"] = Field(
+        "minute",
+        description="Data resolution: 'minute' (default) or 'daily'",
+    )
     # When true, the router will materialize any missing data for the
     # run's symbol + date range into the cache root before starting the
     # engine. Defaults to false so the SPY fixture path (which should
     # always hit the reference mount) is never accidentally fetched.
     auto_fetch: bool = Field(
         False,
-        description="Fetch missing minute data from Polygon into the cache before running",
+        description="Fetch missing data from Polygon into the cache before running",
     )
 
 
@@ -322,6 +402,9 @@ class StrategyInfo(BaseModel):
     # JSON Schema for the strategy's parameter model — the frontend renders
     # the parameter form dynamically from this.
     params_schema: dict[str, Any]
+    # Data resolutions this strategy accepts. The Engine Lab uses this to
+    # filter the strategy dropdown once the user picks a resolution.
+    supported_resolutions: list[str] = Field(default_factory=list)
 
 
 @router.get("/strategies", response_model=list[StrategyInfo])
@@ -341,6 +424,7 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 display_name=reg.display_name,
                 description=reg.description,
                 params_schema=reg.param_schema.model_json_schema(),
+                supported_resolutions=sorted(reg.supported_resolutions),
             )
         )
     return result
@@ -354,6 +438,10 @@ class LeanExportRequest(BaseModel):
     from_date: str = Field(..., description="YYYY-MM-DD (inclusive)")
     to_date: str = Field(..., description="YYYY-MM-DD (inclusive)")
     adjusted: bool = Field(True, description="Apply split/dividend adjustments")
+    resolution: Literal["minute", "daily"] = Field(
+        "minute",
+        description="Resolution to fetch: 'minute' (per-day zips) or 'daily' (one zip per symbol)",
+    )
 
 
 class LeanExportResponse(BaseModel):
@@ -391,6 +479,7 @@ def export_polygon_to_lean(request: LeanExportRequest) -> LeanExportResponse:
             from_date=request.from_date,
             to_date=request.to_date,
             adjusted=request.adjusted,
+            resolution=request.resolution,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("[ENGINE] LEAN export failed for %s", request.symbol)
@@ -418,6 +507,7 @@ class AvailabilityResponse(BaseModel):
     symbol: str
     start: str
     end: str
+    resolution: str
     expected_days: int
     available_days: int
     is_complete: bool
@@ -442,6 +532,10 @@ def get_data_availability(
     symbol: str = Query(..., min_length=1, max_length=20),
     start: str = Query(..., description="YYYY-MM-DD (inclusive)"),
     end: str = Query(..., description="YYYY-MM-DD (inclusive)"),
+    resolution: Literal["minute", "daily"] = Query(
+        "minute",
+        description="Resolution to check: 'minute' (per-day zips) or 'daily'",
+    ),
 ) -> AvailabilityResponse:
     """Report how many trading days are already on disk for a symbol.
 
@@ -465,6 +559,7 @@ def get_data_availability(
         symbol=symbol,
         start=start_date,
         end=end_date,
+        resolution=resolution,
     )
     data = report.to_dict()
     return AvailabilityResponse(**data)
@@ -485,6 +580,20 @@ def run_engine_backtest(request: EngineBacktestRequest) -> EngineBacktestRespons
             detail=(
                 f"Unknown strategy '{request.strategy_name}'. "
                 f"Registered: {sorted(_STRATEGY_REGISTRY)}"
+            ),
+        )
+
+    # Strategies declare which resolutions they accept. Reject up-front so
+    # the user gets a clear 400 instead of a cryptic mismatch deep inside
+    # the engine when a daily-only strategy is run against minute data (or
+    # vice versa).
+    if request.resolution not in registration.supported_resolutions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Strategy '{request.strategy_name}' does not support "
+                f"resolution '{request.resolution}'. Supported: "
+                f"{sorted(registration.supported_resolutions)}"
             ),
         )
 
@@ -534,6 +643,7 @@ def run_engine_backtest(request: EngineBacktestRequest) -> EngineBacktestRespons
                     start=_parse_iso_date(start_override, "start_date"),
                     end=_parse_iso_date(end_override, "end_date"),
                     polygon=polygon,
+                    resolution=request.resolution,
                 )
             except HTTPException:
                 raise
@@ -559,7 +669,14 @@ def run_engine_backtest(request: EngineBacktestRequest) -> EngineBacktestRespons
                     error=f"auto_fetch failed: {exc}",
                 )
 
-    reader = LeanMinuteDataReader(data_roots)
+    # Pick the reader class to match the requested resolution. Both
+    # readers share the same ``iter_bars(symbol, start, end)`` contract so
+    # the engine loop is unchanged — only the bar cadence differs.
+    reader: LeanMinuteDataReader | LeanDailyDataReader
+    if request.resolution == "daily":
+        reader = LeanDailyDataReader(data_roots)
+    else:
+        reader = LeanMinuteDataReader(data_roots)
     engine = BacktestEngine(
         data_source=reader,
         fill_model=FillModel(

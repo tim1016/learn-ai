@@ -137,7 +137,26 @@
       outline: none;
       border-color: #3b82f6;
     }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
   }
+
+  .field-hint {
+    margin-top: 0.25rem;
+    color: #f59e0b;
+    font-size: 0.75rem;
+  }
+}
+
+.availability-resolution {
+  margin-left: 0.375rem;
+  color: #9ca3af;
+  font-weight: 400;
+  font-size: 0.8125rem;
+  text-transform: capitalize;
 }
 
 .strategy-description {

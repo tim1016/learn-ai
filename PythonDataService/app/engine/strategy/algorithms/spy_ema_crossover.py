@@ -67,8 +67,13 @@ class _OpenTrade:
 
 
 class SpyEmaCrossoverAlgorithm(Strategy):
-    def __init__(self) -> None:
+    def __init__(self, symbol: str = "SPY") -> None:
         super().__init__()
+        # The symbol is parameterized (default SPY) so the exact same
+        # rule set can be re-used against other tickers like QQQ without
+        # duplicating the algorithm. The SPY default keeps the LEAN
+        # bit-exact parity test unchanged.
+        self._symbol_name = symbol.upper()
         self._symbol: str = ""
         self._ema5: ExponentialMovingAverage | None = None
         self._ema10: ExponentialMovingAverage | None = None
@@ -96,7 +101,7 @@ class SpyEmaCrossoverAlgorithm(Strategy):
         self.set_cash(100000)
 
         assert self.ctx is not None
-        self._symbol = self.ctx.add_equity("SPY")
+        self._symbol = self.ctx.add_equity(self._symbol_name)
 
         # Indicators (updated manually in the handler).
         self._ema5 = ExponentialMovingAverage("EMA5", 5)

@@ -16,7 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from app.engine.data.lean_format import LeanMinuteDataReader
+from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode, OrderEvent
@@ -37,7 +37,7 @@ class BacktestResult:
 class BacktestEngine:
     def __init__(
         self,
-        data_source: LeanMinuteDataReader,
+        data_source: LeanMinuteDataReader | LeanDailyDataReader,
         fill_model: Optional[FillModel] = None,
     ) -> None:
         self.data_source = data_source

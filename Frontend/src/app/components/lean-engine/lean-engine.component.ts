@@ -29,7 +29,11 @@ interface StrategyInfo {
   display_name: string;
   description: string;
   params_schema: ParamsSchema;
+  /** Which on-disk LEAN resolutions this strategy can run against. */
+  supported_resolutions: string[];
 }
+
+type EngineResolution = "minute" | "daily";
 
 interface ParamsSchema {
   title?: string;
@@ -82,6 +86,7 @@ interface DataAvailability {
   symbol: string;
   start: string;
   end: string;
+  resolution: string;
   expected_days: number;
   available_days: number;
   is_complete: boolean;
@@ -112,6 +117,7 @@ export class LeanEngineComponent implements OnInit {
   /** Mutable parameter values keyed by field name — shaped by the picked schema. */
   readonly paramValues = signal<Record<string, unknown>>({});
 
+  readonly resolution = signal<EngineResolution>("minute");
   readonly fillMode = signal<"signal_bar_close" | "next_bar_open">("signal_bar_close");
   readonly startDate = signal<string>("");
   readonly endDate = signal<string>("");
@@ -141,6 +147,18 @@ export class LeanEngineComponent implements OnInit {
     return "SPY";
   });
 
+  /** Strategies filtered down to those that support the currently-selected
+   *  engine resolution. The filter is applied at the registry level on the
+   *  backend too, but mirroring it here keeps the dropdown honest: picking
+   *  "Daily" should never let the user select a minute-only strategy and
+   *  then eat a 400 at submit time. */
+  readonly availableStrategies = computed<StrategyInfo[]>(() => {
+    const res = this.resolution();
+    return this.strategies().filter((s) =>
+      (s.supported_resolutions ?? ["minute"]).includes(res)
+    );
+  });
+
   readonly selectedStrategy = computed(() => {
     const name = this.selectedStrategyName();
     if (!name) return null;
@@ -165,11 +183,27 @@ export class LeanEngineComponent implements OnInit {
       const symbol = this.effectiveSymbol();
       const start = this.startDate();
       const end = this.endDate();
+      const resolution = this.resolution();
       if (!symbol || !start || !end) {
         this.availability.set(null);
         return;
       }
-      void this.checkAvailability(symbol, start, end);
+      void this.checkAvailability(symbol, start, end, resolution);
+    });
+
+    // When the resolution changes, the current strategy selection may no
+    // longer be valid (e.g. switching to daily while "SPY EMA crossover"
+    // is selected). Rebind to the first strategy that supports the newly
+    // chosen resolution so the form stays usable.
+    effect(() => {
+      const available = this.availableStrategies();
+      const current = this.selectedStrategyName();
+      if (available.length === 0) {
+        return;
+      }
+      if (!current || !available.some((s) => s.name === current)) {
+        this.onStrategyChange(available[0].name);
+      }
     });
   }
 
@@ -183,13 +217,14 @@ export class LeanEngineComponent implements OnInit {
   async checkAvailability(
     symbol: string,
     start: string,
-    end: string
+    end: string,
+    resolution: EngineResolution
   ): Promise<void> {
     this.availabilityLoading.set(true);
     this.availabilityError.set(null);
     try {
       const url = `${this.apiBase}/data/availability`;
-      const params = { symbol, start, end };
+      const params = { symbol, start, end, resolution };
       const report = await firstValueFrom(
         this.http.get<DataAvailability>(url, { params })
       );
@@ -214,9 +249,15 @@ export class LeanEngineComponent implements OnInit {
       const url = `${this.apiBase}/strategies`;
       const list = await firstValueFrom(this.http.get<StrategyInfo[]>(url));
       this.strategies.set(list);
-      // Auto-select the first strategy so the form has something to render.
-      if (list.length > 0) {
-        this.onStrategyChange(list[0].name);
+      // Auto-select the first strategy compatible with the current
+      // resolution so the form has something to render. The resolution
+      // effect would pick this up too, but selecting here avoids a
+      // one-frame flicker on initial load.
+      const first = list.find((s) =>
+        (s.supported_resolutions ?? ["minute"]).includes(this.resolution())
+      );
+      if (first) {
+        this.onStrategyChange(first.name);
       }
     } catch (err) {
       this.strategiesError.set(
@@ -279,6 +320,7 @@ export class LeanEngineComponent implements OnInit {
       initial_cash: this.initialCash(),
       params: this.paramValues(),
       auto_fetch: this.autoFetch(),
+      resolution: this.resolution(),
     };
     if (this.startDate()) body["start_date"] = this.startDate();
     if (this.endDate()) body["end_date"] = this.endDate();
