@@ -177,7 +177,6 @@ export interface BacktestTradeForChart {
     DatePicker, SharedModule, Tooltip, AutoComplete,
     LineChartComponent,
     ReplayControlsComponent, ReplayChartComponent,
-    StrategyLabChartComponent,
     BacktestResultsComponent,
   ],
   templateUrl: './strategy-lab.component.html',
