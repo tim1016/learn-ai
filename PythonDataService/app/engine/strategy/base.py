@@ -16,6 +16,8 @@ from app.engine.consolidators.trade_bar_consolidator import TradeBarConsolidator
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import OrderEvent
 from app.engine.execution.portfolio import Portfolio
+from app.engine.framework.insight import Insight
+from app.engine.framework.insight_manager import InsightManager
 
 
 @dataclass
@@ -74,6 +76,10 @@ class StrategyContext:
     # Logged messages for debugging / trade logs.
     log_lines: list[str] = field(default_factory=list)
     current_time: datetime | None = None
+    # Consolidated bars captured for charting (one list per consolidator).
+    consolidated_bars: list[TradeBar] = field(default_factory=list)
+    # Insight manager — tracks structured predictions and scores them.
+    insight_manager: InsightManager = field(default_factory=InsightManager)
 
     def add_equity(self, symbol: str) -> str:
         symbol = symbol.upper()
@@ -95,6 +101,7 @@ class StrategyContext:
             ctx.current_time = bar.end_time
             ctx.portfolio.update_reference_price(bar.symbol, bar.close)
             consolidator._last_fired_bar = bar  # type: ignore[attr-defined]
+            ctx.consolidated_bars.append(bar)
             handler(bar)
 
         consolidator.on_data_consolidated = _on_emit
@@ -120,6 +127,22 @@ class StrategyContext:
     def liquidate(self, symbol: str) -> None:
         assert self.current_time is not None
         self.portfolio.liquidate(symbol.upper(), self.current_time)
+
+    def emit_insight(self, insight: Insight) -> None:
+        """Register a structured prediction.
+
+        Sets the insight's generated_time to the current bar time and
+        records the current reference price. Strategies that don't emit
+        insights continue to work exactly as before — this is purely
+        additive.
+        """
+        if self.current_time is not None:
+            insight.generated_time = self.current_time
+            insight.close_time = self.current_time + insight.period
+        price = self.portfolio.reference_price.get(
+            insight.symbol, Decimal(0)
+        )
+        self.insight_manager.add(insight, price)
 
 
 class Strategy(ABC):

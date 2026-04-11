@@ -18,6 +18,8 @@ import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 import { EngineResultsComponent, EngineResultData } from "./engine-results/engine-results.component";
 import { EngineHistoryComponent } from "./engine-history/engine-history.component";
 import { LeanEngineDocsComponent } from "./lean-engine-docs/lean-engine-docs.component";
+import { EngineChartComponent, ChartBar, EngineTradeForChart, EquityCurvePoint } from "./engine-chart/engine-chart.component";
+import { InsightPanelComponent } from "./insight-panel/insight-panel.component";
 
 /**
  * LEAN Engine — Phase 2 first cut.
@@ -85,6 +87,10 @@ interface EngineBacktestResponse {
   lean_statistics: any | null;
   trades: EngineTrade[];
   log_lines: string[];
+  equity_curve?: Array<{ timestamp: string; equity: number; cash: number; holdings_value: number }>;
+  chart_bars?: Array<{ t: number; o: number; h: number; l: number; c: number; v: number }>;
+  insights?: Array<Record<string, any>>;
+  insight_summary?: Record<string, any>;
   error?: string;
 }
 
@@ -107,6 +113,7 @@ interface DataAvailability {
     CommonModule, FormsModule, RouterModule, ButtonModule,
     Tabs, TabList, Tab, TabPanel, TabPanels,
     EngineResultsComponent, EngineHistoryComponent, LeanEngineDocsComponent,
+    EngineChartComponent, InsightPanelComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./lean-engine.component.html",
@@ -178,6 +185,31 @@ export class LeanEngineComponent implements OnInit {
   readonly running = signal(false);
   readonly result = signal<EngineBacktestResponse | null>(null);
   readonly runError = signal<string | null>(null);
+
+  // Computed chart data derived from backtest result
+  readonly chartBars = computed<ChartBar[]>(() => {
+    return this.result()?.chart_bars ?? [];
+  });
+  readonly chartTrades = computed<EngineTradeForChart[]>(() => {
+    const r = this.result();
+    if (!r?.trades) return [];
+    return r.trades.map(t => ({
+      entry_time: t.entry_time,
+      exit_time: t.exit_time,
+      entry_price: t.entry_price,
+      exit_price: t.exit_price,
+      pnl_pts: t.pnl_pts,
+      result: t.result,
+    }));
+  });
+  readonly equityCurve = computed<EquityCurvePoint[]>(() => {
+    return (this.result()?.equity_curve ?? []).map(pt => ({
+      timestamp: pt.timestamp,
+      equity: pt.equity,
+    }));
+  });
+  readonly insights = computed(() => this.result()?.insights ?? []);
+  readonly insightSummary = computed(() => this.result()?.insight_summary ?? {});
 
   // ------------------------------------------------------------------
   // Dynamic data layer state — availability + on-demand fetch
@@ -600,6 +632,10 @@ export class LeanEngineComponent implements OnInit {
           indicators: {},
         })),
         log_lines: [],
+        equity_curve: [],
+        chart_bars: [],
+        insights: [],
+        insight_summary: {},
       });
       this.activeTab.set("1"); // Switch to Results tab
     } catch (err: any) {

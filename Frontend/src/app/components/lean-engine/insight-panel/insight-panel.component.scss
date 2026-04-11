@@ -1,0 +1,225 @@
+:host {
+  display: block;
+  margin-top: 16px;
+}
+
+.insight-panel {
+  background: #161922;
+  border: 1px solid #2a2e3e;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  cursor: pointer;
+  user-select: none;
+  background: rgba(255, 255, 255, 0.02);
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #e0e4ec;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .panel-icon {
+    font-size: 18px;
+  }
+
+  .badge {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(91, 141, 239, 0.15);
+    color: #5b8def;
+  }
+
+  .collapse-toggle {
+    color: #8892a8;
+    font-size: 14px;
+  }
+}
+
+// KPI row
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1px;
+  background: #2a2e3e;
+  border-top: 1px solid #2a2e3e;
+  border-bottom: 1px solid #2a2e3e;
+}
+
+.kpi {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 12px;
+  background: #161922;
+
+  .kpi-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: #e0e4ec;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .kpi-label {
+    font-size: 11px;
+    color: #8892a8;
+    margin-top: 4px;
+    text-align: center;
+  }
+}
+
+// Sub-sections
+.sub-section {
+  padding: 16px;
+  border-top: 1px solid #2a2e3e;
+
+  h4 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #c8d0e0;
+  }
+
+  .sub-desc {
+    margin: 0 0 12px;
+    font-size: 12px;
+    color: #8892a8;
+    line-height: 1.5;
+  }
+}
+
+// Data tables
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+
+  th, td {
+    padding: 6px 10px;
+    text-align: left;
+    border-bottom: 1px solid #2a2e3e;
+  }
+
+  th {
+    color: #8892a8;
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  td {
+    color: #c8d0e0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &.compact td, &.compact th {
+    padding: 4px 8px;
+  }
+}
+
+.detail-table {
+  .mono {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 11px;
+  }
+
+  .tag-cell {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: #8892a8;
+  }
+
+  td.up { color: #00c896; }
+  td.down { color: #e5334e; }
+}
+
+.table-scroll {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.table-toggle {
+  cursor: pointer;
+  user-select: none;
+
+  h4 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .toggle-icon {
+    font-size: 12px;
+    color: #8892a8;
+  }
+
+  &:hover h4 {
+    color: #e0e4ec;
+  }
+}
+
+// Hour-of-day grid
+.hour-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hour-cell {
+  display: grid;
+  grid-template-columns: 48px 1fr 50px 40px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+
+  .hour-label {
+    color: #8892a8;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hour-bar-bg {
+    height: 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .hour-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+    min-width: 2px;
+  }
+
+  .hour-pct {
+    text-align: right;
+    color: #c8d0e0;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hour-count {
+    color: #8892a8;
+    font-size: 11px;
+  }
+}

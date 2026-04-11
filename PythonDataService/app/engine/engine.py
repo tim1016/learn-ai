@@ -44,6 +44,10 @@ class BacktestResult:
     # consolidated (or raw daily) bar that was actually iterated.
     bars: list[TradeBar] = field(default_factory=list)
     equity_curve: list[EquitySnapshot] = field(default_factory=list)
+    # Phase 1: Insight tracking — all insights emitted during the backtest,
+    # scored after their prediction period expires.
+    insights: list = field(default_factory=list)
+    insight_summary: dict = field(default_factory=dict)
 
 
 class BacktestEngine:
@@ -155,6 +159,13 @@ class BacktestEngine:
                         # Defer until the next minute bar.
                         pending_fills.append((order, signal_bar))
 
+            # ----- Score any expired insights against current prices.
+            current_prices = {
+                sym: portfolio.reference_price.get(sym, Decimal(0))
+                for sym in ctx.symbols
+            }
+            ctx.insight_manager.step(minute_bar.end_time, current_prices)
+
             equity_curve.append(EquitySnapshot(
                 timestamp=minute_bar.end_time,
                 equity=portfolio.total_value(),
@@ -168,6 +179,28 @@ class BacktestEngine:
         # 3. Finalize.
         # ------------------------------------------------------------------
         strategy.on_end_of_algorithm()
+
+        # Score any remaining active insights with the final prices.
+        if previous_minute_bar is not None:
+            final_prices = {
+                sym: portfolio.reference_price.get(sym, Decimal(0))
+                for sym in ctx.symbols
+            }
+            # Force-expire active insights so they all get scored.
+            for insight in ctx.insight_manager.get_active_insights(
+                previous_minute_bar.end_time
+            ):
+                if not insight.score.is_final_score:
+                    insight.reference_value_final = final_prices.get(
+                        insight.symbol, Decimal(0)
+                    )
+                    from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
+                    DefaultInsightScoreFunction().score(insight)
+                    insight.score.finalize(previous_minute_bar.end_time)
+
+        # Build insight summary.
+        insight_summary = ctx.insight_manager.get_summary()
+
         final_equity = portfolio.total_value()
         return BacktestResult(
             initial_cash=portfolio.initial_cash,
@@ -178,6 +211,8 @@ class BacktestEngine:
             log_lines=list(ctx.log_lines),
             bars=retained_bars,
             equity_curve=equity_curve,
+            insights=ctx.insight_manager.all_insights,
+            insight_summary=insight_summary.to_dict(),
         )
 
     # ------------------------------------------------------------------

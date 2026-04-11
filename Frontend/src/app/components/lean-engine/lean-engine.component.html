@@ -218,7 +218,23 @@
           }
 
           @if (result(); as r) {
+            <!-- Price chart + equity curve -->
+            <app-engine-chart
+              [chartBars]="chartBars()"
+              [trades]="chartTrades()"
+              [equityCurve]="equityCurve()"
+            />
+
+            <!-- Summary stats + trade table -->
             <app-engine-results [result]="r" [symbol]="effectiveSymbol()" />
+
+            <!-- Insight analysis (only shown when insights exist) -->
+            @if (insights().length > 0) {
+              <app-insight-panel
+                [insights]="insights()"
+                [summary]="insightSummary()"
+              />
+            }
           } @else {
             <div class="empty-tab">
               <i class="pi pi-play"></i>

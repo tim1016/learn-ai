@@ -338,6 +338,13 @@ class EngineBacktestResponse(BaseModel):
     trades: list[EngineTradeResponse] = []
     log_lines: list[str] = []
     equity_curve: list[dict] = Field(default_factory=list)
+    # Consolidated OHLCV bars for the price chart (15-min or daily depending
+    # on the strategy's consolidator). Much smaller than the full minute-bar
+    # stream retained in BacktestResult.bars.
+    chart_bars: list[dict] = Field(default_factory=list)
+    # Phase 1: Insight tracking — per-prediction scoring and aggregate analytics.
+    insights: list[dict] = Field(default_factory=list)
+    insight_summary: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
 
 
@@ -822,6 +829,22 @@ def run_engine_backtest(
         for s in result.equity_curve
     ]
 
+    # ── Serialize consolidated bars for charting ──
+    chart_bars_dicts = [
+        {
+            "t": int(b.time.timestamp() * 1000),
+            "o": float(b.open),
+            "h": float(b.high),
+            "l": float(b.low),
+            "c": float(b.close),
+            "v": int(b.volume),
+        }
+        for b in (strategy.ctx.consolidated_bars if strategy.ctx else [])
+    ]
+
+    # ── Serialize insights ──
+    insights_dicts = [i.to_dict() for i in result.insights]
+
     response = EngineBacktestResponse(
         success=True,
         strategy_name=request.strategy_name,
@@ -839,6 +862,9 @@ def run_engine_backtest(
         trades=formatted,
         log_lines=result.log_lines,
         equity_curve=equity_curve_dicts,
+        chart_bars=chart_bars_dicts,
+        insights=insights_dicts,
+        insight_summary=result.insight_summary,
     )
 
     # ── Auto-save to .NET backend (fire-and-forget) ──────────────

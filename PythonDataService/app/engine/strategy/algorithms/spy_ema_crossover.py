@@ -37,6 +37,7 @@ from typing import Optional
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
+from app.engine.framework.insight import Insight, InsightDirection
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import LoggedTrade, Strategy
@@ -184,6 +185,29 @@ class SpyEmaCrossoverAlgorithm(Strategy):
                 self.ctx.set_holdings(self._symbol, Decimal(1))
                 self._in_position = True
                 self._bars_until_exit = 5
+
+                # ── Emit Insight (Phase 1) ──
+                # Dual-mode: the strategy still trades via set_holdings()
+                # as before. The insight records a structured prediction
+                # that the InsightManager will score after the period.
+                rsi_float = float(rsi_val)
+                # Confidence derived from RSI position in the 50-70 band.
+                # Peak confidence at RSI=60 (center of the band).
+                rsi_position = (rsi_float - 50.0) / 20.0  # 0.0 at 50, 1.0 at 70
+                confidence = 0.5 + 0.3 * (1.0 - abs(rsi_position - 0.5))
+
+                self.ctx.emit_insight(Insight.price(
+                    symbol=self._symbol,
+                    direction=InsightDirection.UP,
+                    period=timedelta(minutes=15 * 5),  # 5 bars × 15 min
+                    magnitude=float(ema_gap / bar.close),
+                    confidence=round(confidence, 4),
+                    source_model=f"EmaCross_5_10_RSI14",
+                    tag=(
+                        f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} "
+                        f"RSI={rsi_val:.2f} Gap={ema_gap:.4f}"
+                    ),
+                ))
 
                 self.ctx.log(
                     f"ENTRY SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "

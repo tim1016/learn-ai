@@ -1,0 +1,175 @@
+@if (summaryData; as s) {
+  <section class="insight-panel">
+    <div class="panel-header" (click)="toggleCollapse()">
+      <h3>
+        <span class="panel-icon">🎯</span>
+        Insight Analysis
+        <span class="badge">{{ s.scored_insights }} scored</span>
+      </h3>
+      <span class="collapse-toggle">{{ collapsed() ? '▸' : '▾' }}</span>
+    </div>
+
+    @if (!collapsed()) {
+      <!-- KPI Row -->
+      <div class="kpi-row">
+        <div class="kpi">
+          <span class="kpi-value" [style.color]="scoreColor(s.direction_accuracy)">
+            {{ pct(s.direction_accuracy) }}
+          </span>
+          <span class="kpi-label">Direction Accuracy</span>
+        </div>
+        <div class="kpi">
+          <span class="kpi-value">{{ pct(s.avg_magnitude_score) }}</span>
+          <span class="kpi-label">Avg Magnitude Score</span>
+        </div>
+        <div class="kpi">
+          <span class="kpi-value">{{ pct(s.avg_confidence_emitted) }}</span>
+          <span class="kpi-label">Avg Confidence Emitted</span>
+        </div>
+        <div class="kpi">
+          <span class="kpi-value" [style.color]="s.magnitude_bias > 0.001 ? '#ffc107' : s.magnitude_bias < -0.001 ? '#e5334e' : '#00c896'">
+            {{ biasLabel(s.magnitude_bias) }}
+          </span>
+          <span class="kpi-label">Magnitude Bias ({{ (s.magnitude_bias * 100).toFixed(3) }}%)</span>
+        </div>
+      </div>
+
+      <!-- Confidence Calibration -->
+      @if (calibrationRows.length > 0) {
+        <div class="sub-section">
+          <h4>Confidence Calibration</h4>
+          <p class="sub-desc">
+            How well does the strategy's stated confidence match actual accuracy?
+            A well-calibrated model has accuracy ≈ confidence for each bucket.
+          </p>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Confidence Bucket</th>
+                <th>Count</th>
+                <th>Correct</th>
+                <th>Actual Accuracy</th>
+                <th>Gap</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of calibrationRows; track row.bucket) {
+                <tr>
+                  <td>{{ row.bucket }}</td>
+                  <td>{{ row.count }}</td>
+                  <td>{{ row.correct }}</td>
+                  <td [style.color]="scoreColor(row.accuracy)">{{ pct(row.accuracy) }}</td>
+                  <td>{{ calibrationGap(row) }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+
+      <!-- Accuracy by Hour -->
+      @if (hourlyRows.length > 0) {
+        <div class="sub-section">
+          <h4>Accuracy by Hour of Day</h4>
+          <div class="hour-grid">
+            @for (row of hourlyRows; track row.hour) {
+              <div class="hour-cell" [title]="row.correct + '/' + row.count + ' correct'">
+                <span class="hour-label">{{ row.hour }}:00</span>
+                <div class="hour-bar-bg">
+                  <div
+                    class="hour-bar-fill"
+                    [style.width.%]="row.accuracy * 100"
+                    [style.background]="scoreColor(row.accuracy)">
+                  </div>
+                </div>
+                <span class="hour-pct">{{ pct(row.accuracy) }}</span>
+                <span class="hour-count">({{ row.count }})</span>
+              </div>
+            }
+          </div>
+        </div>
+      }
+
+      <!-- Accuracy by Quarter -->
+      @if (quarterlyRows.length > 0) {
+        <div class="sub-section">
+          <h4>Accuracy by Quarter</h4>
+          <table class="data-table compact">
+            <thead>
+              <tr>
+                <th>Quarter</th>
+                <th>Predictions</th>
+                <th>Correct</th>
+                <th>Accuracy</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of quarterlyRows; track row.quarter) {
+                <tr>
+                  <td>{{ row.quarter }}</td>
+                  <td>{{ row.count }}</td>
+                  <td>{{ row.correct }}</td>
+                  <td [style.color]="scoreColor(row.accuracy)">{{ pct(row.accuracy) }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+
+      <!-- Insight Detail Table (expandable) -->
+      <div class="sub-section">
+        <div class="table-toggle" (click)="toggleTable()">
+          <h4>
+            Individual Predictions
+            <span class="toggle-icon">{{ showTable() ? '▾' : '▸' }}</span>
+          </h4>
+        </div>
+
+        @if (showTable()) {
+          <div class="table-scroll">
+            <table class="data-table detail-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Symbol</th>
+                  <th>Direction</th>
+                  <th>Confidence</th>
+                  <th>Magnitude</th>
+                  <th>Entry Price</th>
+                  <th>Final Price</th>
+                  <th>Return</th>
+                  <th>Dir Score</th>
+                  <th>Mag Score</th>
+                  <th>Tag</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (ins of insightRecords; track ins.id) {
+                  <tr>
+                    <td class="mono">{{ formatTime(ins.generated_time) }}</td>
+                    <td>{{ ins.symbol }}</td>
+                    <td [class]="ins.direction">{{ directionLabel(ins.direction) }}</td>
+                    <td>{{ ins.confidence !== null ? pct(ins.confidence) : '—' }}</td>
+                    <td>{{ ins.magnitude !== null ? (ins.magnitude * 100).toFixed(3) + '%' : '—' }}</td>
+                    <td class="mono">{{ ins.reference_value.toFixed(2) }}</td>
+                    <td class="mono">{{ ins.reference_value_final.toFixed(2) }}</td>
+                    <td class="mono"
+                      [style.color]="ins.reference_value_final > ins.reference_value ? '#00c896' : '#e5334e'">
+                      {{ ins.reference_value > 0 ? (((ins.reference_value_final - ins.reference_value) / ins.reference_value) * 100).toFixed(3) + '%' : '—' }}
+                    </td>
+                    <td [style.color]="scoreColor(ins.score.direction)">
+                      {{ ins.score.direction.toFixed(1) }}
+                    </td>
+                    <td>{{ ins.score.magnitude.toFixed(2) }}</td>
+                    <td class="tag-cell" [title]="ins.tag">{{ ins.tag }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      </div>
+    }
+  </section>
+}

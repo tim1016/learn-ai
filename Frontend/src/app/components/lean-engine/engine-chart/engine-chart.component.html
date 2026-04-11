@@ -1,0 +1,40 @@
+@if (hasData() || hasEquity()) {
+  <div class="chart-wrapper">
+    <!-- Tab switcher -->
+    <div class="chart-tabs">
+      <button
+        class="chart-tab"
+        [class.active]="activeView() === 'price'"
+        (click)="setView('price')"
+        [disabled]="!hasData()">
+        Price Chart
+      </button>
+      <button
+        class="chart-tab"
+        [class.active]="activeView() === 'equity'"
+        (click)="setView('equity')"
+        [disabled]="!hasEquity()">
+        Equity Curve
+      </button>
+    </div>
+
+    <!-- Price chart -->
+    <div
+      class="chart-panel"
+      [style.display]="activeView() === 'price' ? 'block' : 'none'">
+      <div #priceChart class="chart-container"></div>
+    </div>
+
+    <!-- Equity curve -->
+    <div
+      class="chart-panel"
+      [style.display]="activeView() === 'equity' ? 'block' : 'none'">
+      <div #equityChart class="chart-container equity-container"></div>
+    </div>
+  </div>
+} @else {
+  <div class="chart-empty">
+    <span class="empty-icon">📊</span>
+    <p>Run a backtest to see the price chart and equity curve.</p>
+  </div>
+}
