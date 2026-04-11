@@ -140,6 +140,40 @@ public interface IPolygonService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Price a single option via the QuantLib engine for validation.
+    /// </summary>
+    Task<QuantLibPriceResponse> QuantLibPriceAsync(
+        decimal spot,
+        decimal strike,
+        decimal riskFreeRate,
+        decimal volatility,
+        string expirationDate,
+        string optionType,
+        string? evaluationDate = null,
+        decimal dividendYield = 0m,
+        string engine = "analytic_bs",
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Price a multi-leg strategy via the QuantLib engine for validation.
+    /// </summary>
+    Task<QuantLibStrategyResponse> QuantLibStrategyAsync(
+        decimal spot,
+        List<StrategyLegInput> legs,
+        string expirationDate,
+        decimal riskFreeRate = 0.05m,
+        string? evaluationDate = null,
+        decimal dividendYield = 0m,
+        string engine = "analytic_bs",
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Check QuantLib availability and list engines.
+    /// </summary>
+    Task<QuantLibStatusResponse> QuantLibStatusAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Expose the underlying HttpClient for ad-hoc calls to the Python service.
     /// Used by rule-based backtest and other passthrough mutations.
     /// </summary>

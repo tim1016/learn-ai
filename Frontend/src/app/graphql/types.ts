@@ -390,6 +390,58 @@ export interface StrategyAnalyzeResult {
   error: string | null;
 }
 
+// ------------------------------------------------------------------
+// Pricing Engine Toggle
+// ------------------------------------------------------------------
+
+export type PricingEngineType = 'legacy' | 'quantlib';
+export type QuantLibEngine = 'analytic_bs' | 'binomial_crr' | 'binomial_jr' | 'binomial_lr' | 'finite_diff' | 'monte_carlo';
+
+export interface QuantLibStatusResult {
+  available: boolean;
+  version: string | null;
+  engines: string[];
+}
+
+export interface QuantLibPriceResult {
+  success: boolean;
+  engine: string;
+  price: number;
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+  rho: number;
+  d1: number | null;
+  d2: number | null;
+  error: string | null;
+}
+
+export interface QuantLibLegResult {
+  engine: string;
+  price: number;
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+  rho: number;
+  d1: number | null;
+  d2: number | null;
+}
+
+export interface QuantLibStrategyResult {
+  success: boolean;
+  engine: string;
+  netPrice: number;
+  netDelta: number;
+  netGamma: number;
+  netTheta: number;
+  netVega: number;
+  netRho: number;
+  legs: QuantLibLegResult[];
+  error: string | null;
+}
+
 // Chart enhancement types
 export type GreekType = 'delta' | 'gamma' | 'theta' | 'vega' | 'rho';
 

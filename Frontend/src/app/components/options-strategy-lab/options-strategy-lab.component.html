@@ -1,7 +1,36 @@
 <div class="strategy-lab-page">
   <header class="page-header">
-    <h1><i class="pi pi-calculator"></i> Options Strategy Lab</h1>
-    <p class="subtitle">Analyze payoff, probability of profit, and expected value</p>
+    <div class="header-row">
+      <div>
+        <h1><i class="pi pi-calculator"></i> Options Strategy Lab</h1>
+        <p class="subtitle">Analyze payoff, probability of profit, and expected value</p>
+      </div>
+      <div class="engine-toggle">
+        <label class="engine-label">Pricing Engine</label>
+        <p-selectButton
+          [options]="pricingEngineOptions"
+          [ngModel]="pricingEngine()"
+          (ngModelChange)="onPricingEngineChange($event)"
+          optionLabel="label"
+          optionValue="value"
+          size="small"
+        />
+        @if (pricingEngine() === 'quantlib') {
+          <p-select
+            [options]="quantlibEngineOptions"
+            [ngModel]="quantlibEngine()"
+            (ngModelChange)="quantlibEngine.set($event)"
+            optionLabel="label"
+            optionValue="value"
+            placeholder="QuantLib Engine"
+            styleClass="ql-engine-select"
+          />
+          @if (quantlibAvailable() === false) {
+            <span class="ql-unavailable"><i class="pi pi-exclamation-triangle"></i> QuantLib not installed</span>
+          }
+        }
+      </div>
+    </div>
   </header>
 
   <!-- Step 1: Ticker + Load Chain -->

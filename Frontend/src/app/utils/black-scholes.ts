@@ -1,6 +1,14 @@
 /**
- * Client-side Black-Scholes pricing and Greeks.
+ * [LEGACY] Client-side Black-Scholes pricing and Greeks.
  * Pure math — zero dependencies.
+ *
+ * This module uses the Abramowitz & Stegun (1964) rational approximation
+ * for the normal CDF (|error| < 1.5e-7).  It remains the default "Legacy"
+ * pricing engine in the UI.  The new QuantLib engine (server-side, compiled
+ * C++ via SWIG) is available as a validation / comparison engine and can
+ * be toggled via the pricing-engine switch in Strategy Lab / Strategy Builder.
+ *
+ * @module legacy-black-scholes
  */
 
 export interface LegParams {

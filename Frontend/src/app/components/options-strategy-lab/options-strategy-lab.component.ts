@@ -13,10 +13,12 @@ import { ProgressSpinner } from 'primeng/progressspinner';
 import { InputNumber } from 'primeng/inputnumber';
 import { ToggleSwitch } from 'primeng/toggleswitch';
 import { MarketDataService } from '../../services/market-data.service';
+import { QuantLibService } from '../../services/quantlib.service';
 import {
   SnapshotUnderlyingResult, SnapshotContractResult,
   StrategyAnalyzeResult, StrategyLegInput, PayoffPoint,
   GreekType, WhatIfScenario, ChartCurveData, GreekCurvePoint,
+  PricingEngineType, QuantLibPriceResult, QuantLibEngine,
 } from '../../graphql/types';
 import {
   strategyPnlAtPrice, strategyGreekAtPrice, LegParams, GreekName,
@@ -56,6 +58,28 @@ interface StrategyTemplate {
 })
 export class OptionsStrategyLabComponent {
   private marketDataService = inject(MarketDataService);
+  private quantlibService = inject(QuantLibService);
+
+  // Pricing engine toggle: 'legacy' (client-side A&S BS) vs 'quantlib' (server-side C++ QuantLib)
+  pricingEngine = signal<PricingEngineType>('legacy');
+  quantlibEngine = signal<QuantLibEngine>('analytic_bs');
+  quantlibAvailable = signal<boolean | null>(null);
+  quantlibLoading = signal(false);
+  quantlibGreeks = signal<QuantLibPriceResult | null>(null);
+
+  readonly pricingEngineOptions = [
+    { label: 'Legacy (A&S BS)', value: 'legacy' as PricingEngineType },
+    { label: 'QuantLib (C++)', value: 'quantlib' as PricingEngineType },
+  ];
+
+  readonly quantlibEngineOptions = [
+    { label: 'Analytic BS', value: 'analytic_bs' as QuantLibEngine },
+    { label: 'Binomial CRR', value: 'binomial_crr' as QuantLibEngine },
+    { label: 'Binomial JR', value: 'binomial_jr' as QuantLibEngine },
+    { label: 'Binomial LR', value: 'binomial_lr' as QuantLibEngine },
+    { label: 'Finite Diff', value: 'finite_diff' as QuantLibEngine },
+    { label: 'Monte Carlo', value: 'monte_carlo' as QuantLibEngine },
+  ];
 
   // Step 1: Ticker + expirations + chain filters
   ticker = signal('SPY');
@@ -813,10 +837,67 @@ export class OptionsStrategyLabComponent {
       }
 
       this.analysisResult.set(result);
+
+      // If QuantLib engine is selected, also fetch QuantLib Greeks for comparison
+      if (this.pricingEngine() === 'quantlib') {
+        await this.fetchQuantLibGreeks();
+      }
     } catch (err: any) {
       this.error.set(err.message || 'Analysis failed');
     } finally {
       this.analyzing.set(false);
+    }
+  }
+
+  // ----- QuantLib integration -----
+
+  async checkQuantLibStatus(): Promise<void> {
+    try {
+      const status = await this.quantlibService.checkStatus();
+      this.quantlibAvailable.set(status.available);
+    } catch {
+      this.quantlibAvailable.set(false);
+    }
+  }
+
+  async fetchQuantLibGreeks(): Promise<void> {
+    const spot = this.spotPrice();
+    const expiration = this.selectedExpiration();
+    const enabledLegs = this.legs().filter(l => l.enabled);
+    if (!expiration || spot === 0 || enabledLegs.length === 0) return;
+
+    this.quantlibLoading.set(true);
+    try {
+      const result = await this.quantlibService.priceStrategy({
+        spot,
+        legs: enabledLegs.map(l => ({
+          strike: l.strike,
+          optionType: l.optionType,
+          position: l.position,
+          premium: l.premium,
+          iv: l.iv,
+          quantity: l.quantity,
+        })),
+        expirationDate: expiration,
+        riskFreeRate: this.riskFreeRate(),
+        engine: this.quantlibEngine(),
+      });
+
+      if (result.success && result.legs.length > 0) {
+        // Store the first leg's result for single-option diagnostics
+        this.quantlibGreeks.set(result.legs[0] as any);
+      }
+    } catch (err: any) {
+      console.error('[QuantLib] Error fetching Greeks:', err);
+    } finally {
+      this.quantlibLoading.set(false);
+    }
+  }
+
+  onPricingEngineChange(engine: PricingEngineType): void {
+    this.pricingEngine.set(engine);
+    if (engine === 'quantlib' && this.quantlibAvailable() === null) {
+      this.checkQuantLibStatus();
     }
   }
 

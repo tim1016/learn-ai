@@ -29,6 +29,16 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.Configure<PolygonServiceOptions>(
     builder.Configuration.GetSection(PolygonServiceOptions.SectionName));
 
+// Shared Polly policies — generous thresholds to avoid tripping circuit on transient Polygon hiccups
+var retryPolicy = HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
+var circuitBreakerPolicy = HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .CircuitBreakerAsync(
+        handledEventsAllowedBeforeBreaking: 15,
+        durationOfBreak: TimeSpan.FromSeconds(15));
+
 // Add HttpClient with Polly for resilience (testable with mocked HttpClient)
 builder.Services.AddHttpClient<IPolygonService, PolygonService>(client =>
 {
@@ -36,12 +46,8 @@ builder.Services.AddHttpClient<IPolygonService, PolygonService>(client =>
     client.BaseAddress = new Uri(baseUrl);
     client.Timeout = TimeSpan.FromSeconds(120);
 })
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+.AddPolicyHandler(retryPolicy)
+.AddPolicyHandler(circuitBreakerPolicy);
 
 // Add HttpClient for SanitizationService (same Python service, same resilience policies)
 builder.Services.AddHttpClient<ISanitizationService, SanitizationService>(client =>
@@ -50,12 +56,8 @@ builder.Services.AddHttpClient<ISanitizationService, SanitizationService>(client
     client.BaseAddress = new Uri(baseUrl);
     client.Timeout = TimeSpan.FromSeconds(120);
 })
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+.AddPolicyHandler(retryPolicy)
+.AddPolicyHandler(circuitBreakerPolicy);
 
 // Add HttpClient for TechnicalAnalysisService (same Python service, same resilience policies)
 builder.Services.AddHttpClient<ITechnicalAnalysisService, TechnicalAnalysisService>(client =>
@@ -64,12 +66,8 @@ builder.Services.AddHttpClient<ITechnicalAnalysisService, TechnicalAnalysisServi
     client.BaseAddress = new Uri(baseUrl);
     client.Timeout = TimeSpan.FromSeconds(120);
 })
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+.AddPolicyHandler(retryPolicy)
+.AddPolicyHandler(circuitBreakerPolicy);
 
 // Add HttpClient for ResearchService (same Python service, 600s timeout for large dataset research)
 builder.Services.AddHttpClient<IResearchService, ResearchService>(client =>
@@ -78,12 +76,8 @@ builder.Services.AddHttpClient<IResearchService, ResearchService>(client =>
     client.BaseAddress = new Uri(baseUrl);
     client.Timeout = TimeSpan.FromSeconds(600);
 })
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
-.AddPolicyHandler(HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+.AddPolicyHandler(retryPolicy)
+.AddPolicyHandler(circuitBreakerPolicy);
 
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();

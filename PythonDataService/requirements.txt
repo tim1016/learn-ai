@@ -22,3 +22,4 @@ pandas_market_calendars
 httpx==0.28.1
 python-multipart==0.0.20
 reportlab>=4.0
+QuantLib>=1.35

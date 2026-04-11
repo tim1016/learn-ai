@@ -570,5 +570,123 @@ public class PolygonService : IPolygonService
         }
     }
 
+    public async Task<QuantLibPriceResponse> QuantLibPriceAsync(
+        decimal spot,
+        decimal strike,
+        decimal riskFreeRate,
+        decimal volatility,
+        string expirationDate,
+        string optionType,
+        string? evaluationDate = null,
+        decimal dividendYield = 0m,
+        string engine = "analytic_bs",
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation(
+                "[QuantLib] Pricing {OptionType} S={Spot} K={Strike} σ={Vol} exp={Exp} engine={Engine}",
+                optionType, spot, strike, volatility, expirationDate, engine);
+
+            var request = new
+            {
+                spot = (double)spot,
+                strike = (double)strike,
+                risk_free_rate = (double)riskFreeRate,
+                volatility = (double)volatility,
+                expiration_date = expirationDate,
+                option_type = optionType,
+                evaluation_date = evaluationDate,
+                dividend_yield = (double)dividendYield,
+                engine,
+            };
+
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/quantlib/price", request, cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<QuantLibPriceResponse>(
+                _jsonOptions, cancellationToken);
+
+            return result ?? throw new HttpRequestException("Null response from QuantLib price endpoint");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[QuantLib] Error pricing option");
+            throw;
+        }
+    }
+
+    public async Task<QuantLibStrategyResponse> QuantLibStrategyAsync(
+        decimal spot,
+        List<StrategyLegInput> legs,
+        string expirationDate,
+        decimal riskFreeRate = 0.05m,
+        string? evaluationDate = null,
+        decimal dividendYield = 0m,
+        string engine = "analytic_bs",
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation(
+                "[QuantLib] Pricing {LegCount}-leg strategy at S={Spot} engine={Engine}",
+                legs.Count, spot, engine);
+
+            var request = new
+            {
+                spot = (double)spot,
+                legs = legs.Select(l => new
+                {
+                    strike = (double)l.Strike,
+                    option_type = l.OptionType,
+                    position = l.Position,
+                    iv = (double)l.Iv,
+                    premium = (double)l.Premium,
+                    quantity = l.Quantity,
+                    expiration_date = expirationDate,
+                }),
+                risk_free_rate = (double)riskFreeRate,
+                evaluation_date = evaluationDate,
+                dividend_yield = (double)dividendYield,
+                engine,
+            };
+
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/quantlib/strategy", request, cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<QuantLibStrategyResponse>(
+                _jsonOptions, cancellationToken);
+
+            return result ?? throw new HttpRequestException("Null response from QuantLib strategy endpoint");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[QuantLib] Error pricing strategy");
+            throw;
+        }
+    }
+
+    public async Task<QuantLibStatusResponse> QuantLibStatusAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync("/api/quantlib/status", cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<QuantLibStatusResponse>(
+                _jsonOptions, cancellationToken);
+
+            return result ?? throw new HttpRequestException("Null response from QuantLib status endpoint");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[QuantLib] Error checking status");
+            return new QuantLibStatusResponse { Available = false, Engines = [] };
+        }
+    }
+
     public HttpClient GetHttpClient() => _httpClient;
 }

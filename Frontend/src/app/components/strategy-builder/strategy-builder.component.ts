@@ -9,12 +9,16 @@ import { InputText } from 'primeng/inputtext';
 import { Button } from 'primeng/button';
 import { Tooltip } from 'primeng/tooltip';
 import { Skeleton } from 'primeng/skeleton';
+import { SelectButton } from 'primeng/selectbutton';
+import { Select } from 'primeng/select';
 import { MarketDataService } from '../../services/market-data.service';
+import { QuantLibService } from '../../services/quantlib.service';
 import {
   SnapshotUnderlyingResult, SnapshotContractResult,
   StrategyAnalyzeResult, StrategyLegInput, PayoffPoint,
   GreekType, WhatIfScenario, ChartCurveData, GreekCurvePoint,
   StockTickerSnapshot,
+  PricingEngineType, QuantLibPriceResult, QuantLibEngine,
 } from '../../graphql/types';
 import {
   strategyPnlAtPrice, strategyGreekAtPrice, LegParams, GreekName,
@@ -68,7 +72,7 @@ interface StrategyTemplate {
   standalone: true,
   imports: [
     FormsModule, DecimalPipe,
-    InputText, Button, Tooltip, Skeleton,
+    InputText, Button, Tooltip, Skeleton, SelectButton, Select,
     ExpirationRibbonComponent, PayoffChartComponent,
   ],
   templateUrl: './strategy-builder.component.html',
@@ -77,6 +81,28 @@ interface StrategyTemplate {
 })
 export class StrategyBuilderComponent implements OnInit, OnDestroy {
   private marketDataService = inject(MarketDataService);
+  private quantlibService = inject(QuantLibService);
+
+  // Pricing engine toggle: 'legacy' (client-side A&S BS) vs 'quantlib' (server-side C++ QuantLib)
+  pricingEngine = signal<PricingEngineType>('legacy');
+  quantlibEngine = signal<QuantLibEngine>('analytic_bs');
+  quantlibAvailable = signal<boolean | null>(null);
+  quantlibLoading = signal(false);
+  quantlibGreeks = signal<QuantLibPriceResult | null>(null);
+
+  readonly pricingEngineOptions: { label: string; value: PricingEngineType }[] = [
+    { label: 'Legacy (A&S BS)', value: 'legacy' },
+    { label: 'QuantLib (C++)', value: 'quantlib' },
+  ];
+
+  readonly quantlibEngineOptions: { label: string; value: QuantLibEngine }[] = [
+    { label: 'Analytic BS', value: 'analytic_bs' },
+    { label: 'Binomial CRR', value: 'binomial_crr' },
+    { label: 'Binomial JR', value: 'binomial_jr' },
+    { label: 'Binomial LR', value: 'binomial_lr' },
+    { label: 'Finite Diff', value: 'finite_diff' },
+    { label: 'Monte Carlo', value: 'monte_carlo' },
+  ];
 
   // ── Input & Loading ───────────────────────────────────────
   ticker = signal('SPY');
@@ -865,6 +891,57 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
     const el = document.querySelector('[data-atm="true"]');
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  // ----- QuantLib integration -----
+
+  async checkQuantLibStatus(): Promise<void> {
+    try {
+      const status = await this.quantlibService.checkStatus();
+      this.quantlibAvailable.set(status.available);
+    } catch {
+      this.quantlibAvailable.set(false);
+    }
+  }
+
+  async fetchQuantLibGreeks(): Promise<void> {
+    const spot = this.spotPrice();
+    const expiration = this.selectedExpiration();
+    const enabledLegs = this.legs().filter(l => l.enabled);
+    if (!expiration || spot === 0 || enabledLegs.length === 0) return;
+
+    this.quantlibLoading.set(true);
+    try {
+      const result = await this.quantlibService.priceStrategy({
+        spot,
+        legs: enabledLegs.map(l => ({
+          strike: l.strike,
+          optionType: l.optionType,
+          position: l.position,
+          premium: l.premium,
+          iv: l.iv,
+          quantity: l.quantity,
+        })),
+        expirationDate: expiration,
+        riskFreeRate: this.riskFreeRate(),
+        engine: this.quantlibEngine(),
+      });
+
+      if (result.success && result.legs.length > 0) {
+        this.quantlibGreeks.set(result.legs[0] as any);
+      }
+    } catch (err: any) {
+      console.error('[QuantLib] Error fetching Greeks:', err);
+    } finally {
+      this.quantlibLoading.set(false);
+    }
+  }
+
+  onPricingEngineChange(engine: PricingEngineType): void {
+    this.pricingEngine.set(engine);
+    if (engine === 'quantlib' && this.quantlibAvailable() === null) {
+      this.checkQuantLibStatus();
     }
   }
 }

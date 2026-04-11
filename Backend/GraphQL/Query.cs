@@ -1089,6 +1089,134 @@ public class Query
     }
 
     #endregion
+
+    #region QuantLib Validation Queries
+
+    /// <summary>
+    /// Check QuantLib availability and list supported pricing engines.
+    /// </summary>
+    [GraphQLName("quantlibStatus")]
+    public async Task<QuantLibStatusResult> QuantLibStatus(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger)
+    {
+        try
+        {
+            var response = await polygonService.QuantLibStatusAsync();
+            return new QuantLibStatusResult
+            {
+                Available = response.Available,
+                Version = response.Version,
+                Engines = response.Engines,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[QuantLib] Error checking status");
+            return new QuantLibStatusResult { Available = false };
+        }
+    }
+
+    /// <summary>
+    /// Price a single option via QuantLib for validation against legacy BS.
+    /// Returns theoretical price and all five Greeks.
+    /// </summary>
+    [GraphQLName("quantlibPrice")]
+    public async Task<QuantLibPriceResult> QuantLibPrice(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        decimal spot,
+        decimal strike,
+        decimal volatility,
+        string expirationDate,
+        string optionType,
+        decimal riskFreeRate = 0.05m,
+        string? evaluationDate = null,
+        decimal dividendYield = 0m,
+        string engine = "analytic_bs")
+    {
+        try
+        {
+            var response = await polygonService.QuantLibPriceAsync(
+                spot, strike, riskFreeRate, volatility, expirationDate,
+                optionType, evaluationDate, dividendYield, engine);
+
+            return new QuantLibPriceResult
+            {
+                Success = response.Success,
+                Engine = response.Engine,
+                Price = response.Price,
+                Delta = response.Delta,
+                Gamma = response.Gamma,
+                Theta = response.Theta,
+                Vega = response.Vega,
+                Rho = response.Rho,
+                D1 = response.D1,
+                D2 = response.D2,
+                Error = response.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[QuantLib] Error pricing option");
+            return new QuantLibPriceResult { Success = false, Error = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// Price a multi-leg strategy via QuantLib for validation.
+    /// </summary>
+    [GraphQLName("quantlibStrategy")]
+    public async Task<QuantLibStrategyResult> QuantLibStrategy(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        decimal spot,
+        List<StrategyLegInput> legs,
+        string expirationDate,
+        decimal riskFreeRate = 0.05m,
+        string? evaluationDate = null,
+        decimal dividendYield = 0m,
+        string engine = "analytic_bs")
+    {
+        try
+        {
+            var response = await polygonService.QuantLibStrategyAsync(
+                spot, legs, expirationDate, riskFreeRate,
+                evaluationDate, dividendYield, engine);
+
+            return new QuantLibStrategyResult
+            {
+                Success = response.Success,
+                Engine = response.Engine,
+                NetPrice = response.NetPrice,
+                NetDelta = response.NetDelta,
+                NetGamma = response.NetGamma,
+                NetTheta = response.NetTheta,
+                NetVega = response.NetVega,
+                NetRho = response.NetRho,
+                Legs = response.Legs.Select(l => new QuantLibLegResultGql
+                {
+                    Engine = l.Engine,
+                    Price = l.Price,
+                    Delta = l.Delta,
+                    Gamma = l.Gamma,
+                    Theta = l.Theta,
+                    Vega = l.Vega,
+                    Rho = l.Rho,
+                    D1 = l.D1,
+                    D2 = l.D2,
+                }).ToList(),
+                Error = response.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[QuantLib] Error pricing strategy");
+            return new QuantLibStrategyResult { Success = false, Error = ex.Message };
+        }
+    }
+
+    #endregion
 }
 
 public class OptionsChainSnapshotResult
@@ -1378,5 +1506,58 @@ public class StrategyAnalyzeResult
     public List<decimal> Breakevens { get; set; } = [];
     public List<PayoffPointResult> Curve { get; set; } = [];
     public StrategyGreeksResult Greeks { get; set; } = new();
+    public string? Error { get; set; }
+}
+
+// ------------------------------------------------------------------
+// QuantLib Validation result types
+// ------------------------------------------------------------------
+
+public class QuantLibStatusResult
+{
+    public bool Available { get; set; }
+    public string? Version { get; set; }
+    public List<string> Engines { get; set; } = [];
+}
+
+public class QuantLibPriceResult
+{
+    public bool Success { get; set; }
+    public string Engine { get; set; } = "";
+    public decimal Price { get; set; }
+    public decimal Delta { get; set; }
+    public decimal Gamma { get; set; }
+    public decimal Theta { get; set; }
+    public decimal Vega { get; set; }
+    public decimal Rho { get; set; }
+    public decimal? D1 { get; set; }
+    public decimal? D2 { get; set; }
+    public string? Error { get; set; }
+}
+
+public class QuantLibLegResultGql
+{
+    public string Engine { get; set; } = "";
+    public decimal Price { get; set; }
+    public decimal Delta { get; set; }
+    public decimal Gamma { get; set; }
+    public decimal Theta { get; set; }
+    public decimal Vega { get; set; }
+    public decimal Rho { get; set; }
+    public decimal? D1 { get; set; }
+    public decimal? D2 { get; set; }
+}
+
+public class QuantLibStrategyResult
+{
+    public bool Success { get; set; }
+    public string Engine { get; set; } = "";
+    public decimal NetPrice { get; set; }
+    public decimal NetDelta { get; set; }
+    public decimal NetGamma { get; set; }
+    public decimal NetTheta { get; set; }
+    public decimal NetVega { get; set; }
+    public decimal NetRho { get; set; }
+    public List<QuantLibLegResultGql> Legs { get; set; } = [];
     public string? Error { get; set; }
 }
