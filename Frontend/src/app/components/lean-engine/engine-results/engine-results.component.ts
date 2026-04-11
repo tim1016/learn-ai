@@ -95,6 +95,21 @@ export class EngineResultsComponent {
 
   leanStats = computed(() => this.result().lean_statistics ?? null);
 
+  totalFees = computed(() => this.result().total_fees ?? 0);
+
+  feePerTrade = computed(() => {
+    const r = this.result();
+    if (r.total_trades === 0) return 0;
+    return r.total_fees / r.total_trades;
+  });
+
+  feeDragPct = computed(() => {
+    const r = this.result();
+    const grossProfit = r.net_profit + r.total_fees;
+    if (grossProfit <= 0) return 0;
+    return r.total_fees / grossProfit;
+  });
+
   get timezoneOptions(): { value: string; label: string }[] {
     const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const base = [

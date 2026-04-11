@@ -128,6 +128,15 @@
                   [ngModel]="initialCash()" (ngModelChange)="initialCash.set($event)" />
               </label>
 
+              <label class="field">
+                <span class="label">
+                  Commission / order
+                  <span class="hint" title="Fee charged per filled order. $1.00 matches LEAN's InteractiveBrokers model.">?</span>
+                </span>
+                <input type="number" min="0" step="0.01"
+                  [ngModel]="commissionPerOrder()" (ngModelChange)="commissionPerOrder.set($event)" />
+              </label>
+
               <label class="field checkbox-field">
                 <input type="checkbox" [ngModel]="autoFetch()" (ngModelChange)="autoFetch.set($event)" />
                 <span class="label">

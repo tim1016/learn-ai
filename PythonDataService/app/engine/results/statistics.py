@@ -15,10 +15,23 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Iterable, Protocol, Sequence
 
 TRADING_DAYS_PER_YEAR = 252
+
+
+@dataclass(frozen=True)
+class EquityPoint:
+    timestamp: datetime
+    equity: float
+
+
+@dataclass(frozen=True)
+class ValidationError:
+    code: str
+    message: str
 
 
 class _TradeLike(Protocol):
@@ -64,6 +77,7 @@ class PortfolioStatistics:
     sharpe_ratio: float | None
     sortino_ratio: float | None
     calmar_ratio: float | None
+    cagr: float | None
     mae_pct: float | None  # Maximum Adverse Excursion — needs intra-trade data
     mfe_pct: float | None  # Maximum Favorable Excursion — needs intra-trade data
 
@@ -72,6 +86,10 @@ class PortfolioStatistics:
 # Trade-level statistics
 # ---------------------------------------------------------------------------
 def compute_trade_statistics(trades: Sequence[_TradeLike]) -> TradeStatistics:
+    errors = validate_trade_log(trades)
+    if errors:
+        raise ValueError("; ".join(f"{e.code}: {e.message}" for e in errors))
+
     total = len(trades)
     if total == 0:
         return TradeStatistics(
@@ -187,13 +205,132 @@ def _sortino(returns: Sequence[float], periods_per_year: int) -> float | None:
     return (mean / downside_std) * math.sqrt(periods_per_year)
 
 
+def _resample_to_daily(points: Sequence[EquityPoint]) -> list[float]:
+    if not points:
+        return []
+    daily_values: dict[datetime, float] = {}
+    for point in points:
+        date_key = point.timestamp.date()
+        daily_values[date_key] = point.equity
+    return list(daily_values.values())
+
+
+def _daily_returns(daily_equity: Sequence[float]) -> list[float]:
+    if len(daily_equity) < 2:
+        return []
+    return [(daily_equity[i] / daily_equity[i - 1]) - 1.0 for i in range(1, len(daily_equity))]
+
+
+def validate_trade_log(trades: Sequence[_TradeLike]) -> list[ValidationError]:
+    errors: list[ValidationError] = []
+    for i, trade in enumerate(trades):
+        if hasattr(trade, "entry_time") and hasattr(trade, "exit_time"):
+            if trade.entry_time is not None and trade.exit_time is not None and trade.entry_time >= trade.exit_time:
+                errors.append(ValidationError(
+                    code="invalid_trade_times",
+                    message=f"Trade {i}: entry_time >= exit_time",
+                ))
+        if hasattr(trade, "pnl_pct"):
+            if math.isnan(float(trade.pnl_pct)):
+                errors.append(ValidationError(
+                    code="nan_pnl_pct",
+                    message=f"Trade {i}: pnl_pct is NaN",
+                ))
+        if hasattr(trade, "indicators"):
+            indicators = getattr(trade, "indicators", None) or {}
+            for ind_name, ind_val in indicators.items():
+                try:
+                    if math.isnan(float(ind_val)):
+                        errors.append(ValidationError(
+                            code="nan_indicator",
+                            message=f"Trade {i}: indicator {ind_name} is NaN",
+                        ))
+                except (TypeError, ValueError):
+                    pass
+    if trades:
+        winning = sum(1 for t in trades if float(t.pnl_pct) > 0)
+        win_rate = winning / len(trades)
+        if not (0 <= win_rate <= 1):
+            errors.append(ValidationError(
+                code="invalid_win_rate",
+                message=f"Computed win_rate {win_rate} not in [0, 1]",
+            ))
+    return errors
+
+
+def validate_equity_curve(curve: Sequence[float]) -> list[ValidationError]:
+    errors: list[ValidationError] = []
+    if len(curve) < 1:
+        errors.append(ValidationError(
+            code="empty_curve",
+            message="Equity curve has no points",
+        ))
+        return errors
+    for i, value in enumerate(curve):
+        if math.isnan(value):
+            errors.append(ValidationError(
+                code="nan_equity",
+                message=f"Equity point {i}: value is NaN",
+            ))
+        if value < 0:
+            errors.append(ValidationError(
+                code="negative_equity",
+                message=f"Equity point {i}: value is negative ({value})",
+            ))
+    return errors
+
+
+def validate_statistics(stats: dict[str, float | int | None]) -> list[ValidationError]:
+    errors: list[ValidationError] = []
+    if "win_rate" in stats and stats["win_rate"] is not None:
+        wr = float(stats["win_rate"])
+        if not (0 <= wr <= 1):
+            errors.append(ValidationError(
+                code="invalid_win_rate_bounds",
+                message=f"win_rate {wr} not in [0, 1]",
+            ))
+    if "max_drawdown_pct" in stats and stats["max_drawdown_pct"] is not None:
+        mdd = float(stats["max_drawdown_pct"])
+        if not (0 <= mdd <= 1):
+            errors.append(ValidationError(
+                code="invalid_max_drawdown_bounds",
+                message=f"max_drawdown_pct {mdd} not in [0, 1]",
+            ))
+    if "profit_factor" in stats and stats["profit_factor"] is not None:
+        pf = float(stats["profit_factor"])
+        if pf < 0:
+            errors.append(ValidationError(
+                code="negative_profit_factor",
+                message=f"profit_factor {pf} is negative",
+            ))
+    if "sharpe_ratio" in stats and stats["sharpe_ratio"] is not None:
+        sr = float(stats["sharpe_ratio"])
+        if math.isnan(sr):
+            errors.append(ValidationError(
+                code="nan_sharpe",
+                message="sharpe_ratio is NaN",
+            ))
+    if "sortino_ratio" in stats and stats["sortino_ratio"] is not None:
+        sort = float(stats["sortino_ratio"])
+        if math.isnan(sort):
+            errors.append(ValidationError(
+                code="nan_sortino",
+                message="sortino_ratio is NaN",
+            ))
+    return errors
+
+
 def compute_portfolio_statistics(
     initial_cash: float,
     final_equity: float,
     trades: Sequence[_TradeLike],
     trading_days: int | None = None,
+    equity_curve: Sequence[EquityPoint] | None = None,
 ) -> PortfolioStatistics:
-    """Compute equity-curve metrics from an all-in per-trade equity curve.
+    """Compute equity-curve metrics from equity curve or per-trade returns.
+
+    When ``equity_curve`` is provided, uses the true equity curve for metrics.
+    Otherwise falls back to rebuilding an all-in per-trade equity curve.
 
     ``trading_days`` should be the number of distinct trading days the
     backtest covered. If omitted, Sharpe/Sortino/Calmar fall back to
@@ -203,27 +340,44 @@ def compute_portfolio_statistics(
     net_profit = final_equity - initial_cash
     net_profit_pct = (net_profit / initial_cash) if initial_cash > 0 else 0.0
 
-    curve = _equity_curve_from_trades(initial_cash, trades)
-    max_dd = _max_drawdown(curve)
-    returns = _returns_from_curve(curve)
+    cagr: float | None = None
 
-    # Annualization: if we know the number of trading days, treat each
-    # trade as a period of (days / trades) days and scale from there.
-    if trading_days and len(trades) > 0:
-        periods_per_year = max(1, int(round(TRADING_DAYS_PER_YEAR * len(trades) / trading_days)))
+    if equity_curve:
+        curve = [float(p.equity) for p in equity_curve]
+        max_dd = _max_drawdown(curve)
+
+        daily_equity = _resample_to_daily(equity_curve)
+        daily_rets = _daily_returns(daily_equity)
+        sharpe = _sharpe(daily_rets, TRADING_DAYS_PER_YEAR)
+        sortino = _sortino(daily_rets, TRADING_DAYS_PER_YEAR)
+
+        calmar: float | None = None
+        if max_dd > 0 and trading_days and trading_days > 0:
+            years = trading_days / TRADING_DAYS_PER_YEAR
+            if years > 0 and initial_cash > 0 and final_equity > 0:
+                ann_return = (final_equity / initial_cash) ** (1 / years) - 1
+                calmar = ann_return / max_dd
+                cagr = ann_return
     else:
-        periods_per_year = TRADING_DAYS_PER_YEAR  # pessimistic fallback
+        curve = _equity_curve_from_trades(initial_cash, trades)
+        max_dd = _max_drawdown(curve)
+        returns = _returns_from_curve(curve)
 
-    sharpe = _sharpe(returns, periods_per_year)
-    sortino = _sortino(returns, periods_per_year)
+        if trading_days and len(trades) > 0:
+            periods_per_year = max(1, int(round(TRADING_DAYS_PER_YEAR * len(trades) / trading_days)))
+        else:
+            periods_per_year = TRADING_DAYS_PER_YEAR
 
-    # Calmar: annualized return / max drawdown.
-    calmar: float | None = None
-    if max_dd > 0 and trading_days and trading_days > 0:
-        years = trading_days / TRADING_DAYS_PER_YEAR
-        if years > 0 and initial_cash > 0 and final_equity > 0:
-            ann_return = (final_equity / initial_cash) ** (1 / years) - 1
-            calmar = ann_return / max_dd
+        sharpe = _sharpe(returns, periods_per_year)
+        sortino = _sortino(returns, periods_per_year)
+
+        calmar: float | None = None
+        if max_dd > 0 and trading_days and trading_days > 0:
+            years = trading_days / TRADING_DAYS_PER_YEAR
+            if years > 0 and initial_cash > 0 and final_equity > 0:
+                ann_return = (final_equity / initial_cash) ** (1 / years) - 1
+                calmar = ann_return / max_dd
+                cagr = ann_return
 
     return PortfolioStatistics(
         net_profit=net_profit,
@@ -232,6 +386,7 @@ def compute_portfolio_statistics(
         sharpe_ratio=sharpe,
         sortino_ratio=sortino,
         calmar_ratio=calmar,
+        cagr=cagr,
         mae_pct=None,
         mfe_pct=None,
     )
@@ -242,6 +397,7 @@ def summarize(
     final_equity: float,
     trades: Sequence[_TradeLike],
     trading_days: int | None = None,
+    equity_curve: Sequence[EquityPoint] | None = None,
 ) -> dict[str, float | int | None]:
     """Convenience wrapper returning a flat dict of all metrics.
 
@@ -253,8 +409,9 @@ def summarize(
         final_equity=final_equity,
         trades=trades,
         trading_days=trading_days,
+        equity_curve=equity_curve,
     )
-    return {
+    result = {
         # Trade-level
         "total_trades": ts.total_trades,
         "winning_trades": ts.winning_trades,
@@ -275,6 +432,13 @@ def summarize(
         "sharpe_ratio": ps.sharpe_ratio,
         "sortino_ratio": ps.sortino_ratio,
         "calmar_ratio": ps.calmar_ratio,
+        "cagr": ps.cagr,
         "mae_pct": ps.mae_pct,
         "mfe_pct": ps.mfe_pct,
     }
+    import logging
+    logger = logging.getLogger(__name__)
+    stat_errors = validate_statistics(result)
+    for error in stat_errors:
+        logger.warning("[STATS] %s: %s", error.code, error.message)
+    return result

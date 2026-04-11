@@ -25,6 +25,14 @@ from app.engine.strategy.base import Strategy, StrategyContext
 
 
 @dataclass
+class EquitySnapshot:
+    timestamp: datetime
+    equity: Decimal
+    cash: Decimal
+    holdings_value: Decimal
+
+
+@dataclass
 class BacktestResult:
     initial_cash: Decimal
     final_equity: Decimal
@@ -35,6 +43,7 @@ class BacktestResult:
     # Retained bar data for LEAN statistics computation. Each entry is a
     # consolidated (or raw daily) bar that was actually iterated.
     bars: list[TradeBar] = field(default_factory=list)
+    equity_curve: list[EquitySnapshot] = field(default_factory=list)
 
 
 class BacktestEngine:
@@ -70,6 +79,7 @@ class BacktestEngine:
 
         order_events: list[OrderEvent] = []
         retained_bars: list[TradeBar] = []
+        equity_curve: list[EquitySnapshot] = []
 
         # ------------------------------------------------------------------
         # 2. Main loop over minute bars.
@@ -145,6 +155,12 @@ class BacktestEngine:
                         # Defer until the next minute bar.
                         pending_fills.append((order, signal_bar))
 
+            equity_curve.append(EquitySnapshot(
+                timestamp=minute_bar.end_time,
+                equity=portfolio.total_value(),
+                cash=portfolio.cash,
+                holdings_value=portfolio.total_value() - portfolio.cash,
+            ))
             retained_bars.append(minute_bar)
             previous_minute_bar = minute_bar
 
@@ -161,6 +177,7 @@ class BacktestEngine:
             order_events=order_events,
             log_lines=list(ctx.log_lines),
             bars=retained_bars,
+            equity_curve=equity_curve,
         )
 
     # ------------------------------------------------------------------

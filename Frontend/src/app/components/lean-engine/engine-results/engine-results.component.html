@@ -39,6 +39,31 @@
   </div>
 </div>
 
+<!-- Fee Breakdown -->
+<div class="fee-breakdown">
+  <h3>Fee Analysis</h3>
+  <div class="hero-metrics">
+    <div class="hero-card">
+      <span class="hero-label">Total Fees</span>
+      <span class="hero-value">{{ formatCurrency(totalFees()) }}</span>
+    </div>
+    <div class="hero-card">
+      <span class="hero-label">Fee / Trade</span>
+      <span class="hero-value">{{ formatCurrency(feePerTrade()) }}</span>
+      <span class="hero-sub">per round trip</span>
+    </div>
+    <div class="hero-card">
+      <span class="hero-label">Fee Drag</span>
+      <span class="hero-value">{{ formatPct(feeDragPct()) }}</span>
+      <span class="hero-sub">of gross profit</span>
+    </div>
+    <div class="hero-card" [class.positive]="r.net_profit + totalFees() > 0" [class.negative]="r.net_profit + totalFees() <= 0">
+      <span class="hero-label">Gross Profit</span>
+      <span class="hero-value">{{ formatCurrency(r.net_profit + totalFees()) }}</span>
+    </div>
+  </div>
+</div>
+
 <!-- LEAN Statistics Dashboard -->
 @if (leanStats(); as lean) {
   <app-lean-statistics [stats]="lean" />

@@ -337,6 +337,7 @@ class EngineBacktestResponse(BaseModel):
     lean_statistics: LeanStatisticsResponse | None = None
     trades: list[EngineTradeResponse] = []
     log_lines: list[str] = []
+    equity_curve: list[dict] = Field(default_factory=list)
     error: str | None = None
 
 
@@ -733,11 +734,18 @@ def run_engine_backtest(
             # Rough: 252 trading days per 365 calendar days.
             trading_days = max(1, int(round(delta * 252 / 365)))
 
+    from app.engine.results.statistics import EquityPoint
+    equity_points = [
+        EquityPoint(timestamp=s.timestamp, equity=float(s.equity))
+        for s in result.equity_curve
+    ] if result.equity_curve else None
+
     stats = summarize(
         initial_cash=float(result.initial_cash),
         final_equity=float(result.final_equity),
         trades=trades,
         trading_days=trading_days,
+        equity_curve=equity_points,
     )
 
     # ── LEAN-parity statistics ──────────────────────────────────────
@@ -804,6 +812,16 @@ def run_engine_backtest(
         except Exception:
             logger.exception("[ENGINE] LEAN statistics computation failed — returning without")
 
+    equity_curve_dicts = [
+        {
+            "timestamp": s.timestamp.isoformat(),
+            "equity": float(s.equity),
+            "cash": float(s.cash),
+            "holdings_value": float(s.holdings_value),
+        }
+        for s in result.equity_curve
+    ]
+
     response = EngineBacktestResponse(
         success=True,
         strategy_name=request.strategy_name,
@@ -820,6 +838,7 @@ def run_engine_backtest(
         lean_statistics=lean_stats_resp,
         trades=formatted,
         log_lines=result.log_lines,
+        equity_curve=equity_curve_dicts,
     )
 
     # ── Auto-save to .NET backend (fire-and-forget) ──────────────

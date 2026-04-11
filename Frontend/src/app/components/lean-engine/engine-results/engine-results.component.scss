@@ -231,3 +231,16 @@ table {
   font-size: 0.65rem;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
+
+// ─── Fee Breakdown ────────────────────────────────────
+.fee-breakdown {
+  margin-top: 1rem;
+
+  h3 {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary, #888);
+    margin-bottom: 0.5rem;
+  }
+}

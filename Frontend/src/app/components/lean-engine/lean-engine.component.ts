@@ -139,6 +139,7 @@ export class LeanEngineComponent implements OnInit {
   // Timezone used for rendering entry_time / exit_time in the trades table
   // AND for the CSV download — whatever the table shows is what the file gets.
   readonly selectedTimezone = signal<string>("UTC");
+  readonly commissionPerOrder = signal<number>(1.0);
 
   /** Curated list of commonly useful zones, plus the browser's detected local
    *  zone (only appended if it isn't already in the curated list). */
@@ -374,6 +375,7 @@ export class LeanEngineComponent implements OnInit {
       strategy_name: name,
       fill_mode: this.fillMode(),
       initial_cash: this.initialCash(),
+      commission_per_order: this.commissionPerOrder(),
       params: this.paramValues(),
       auto_fetch: this.autoFetch(),
       resolution: this.resolution(),
