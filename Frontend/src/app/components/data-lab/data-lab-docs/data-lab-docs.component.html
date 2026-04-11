@@ -130,6 +130,42 @@
             </div>
           </p-accordionheader>
           <p-accordioncontent>
+pod
+            <!-- Quick Info Card -->
+            <div class="quick-info-card">
+              <div class="quick-info-header">
+                <i class="pi pi-bolt"></i> Quick Info
+              </div>
+              <div class="quick-info-body">
+                <div class="qi-row">
+                  <span class="qi-label">Why use it</span>
+                  <span class="qi-value">{{ ind.quickWhy }}</span>
+                </div>
+                <div class="qi-row analogy-row">
+                  <span class="qi-label">Think of it as</span>
+                  <span class="qi-value qi-analogy">{{ ind.quickAnalogy }}</span>
+                </div>
+                <div class="qi-row">
+                  <span class="qi-label">Trading impact</span>
+                  <span class="qi-value">{{ ind.quickImpact }}</span>
+                </div>
+                @if (ind.checkQuestion) {
+                  <div class="qi-row qi-check">
+                    <span class="qi-label">Test yourself</span>
+                    <span class="qi-value">
+                      <span class="qi-question">{{ ind.checkQuestion }}</span>
+                      <span class="qi-answer">{{ ind.checkAnswer }}</span>
+                    </span>
+                  </div>
+                }
+              </div>
+              <div class="quick-info-footer">
+                <span class="qi-ref"><i class="pi pi-bookmark"></i> {{ ind.professionalRef }}</span>
+                <span class="qi-delay"><i class="pi pi-clock"></i> {{ ind.timeframeBehavior }}</span>
+              </div>
+            </div>
+
+            <!-- Technical Deep Dive -->
             <div class="indicator-detail">
               <div class="subsection-title"><i class="pi pi-percentage"></i> Formula</div>
               <div class="formula-block" [appKatex]="ind.formulaLatex" [displayMode]="true"></div>
@@ -210,6 +246,42 @@
             </div>
           </p-accordionheader>
           <p-accordioncontent>
+
+            <!-- Quick Info Card -->
+            <div class="quick-info-card">
+              <div class="quick-info-header">
+                <i class="pi pi-bolt"></i> Quick Info
+              </div>
+              <div class="quick-info-body">
+                <div class="qi-row">
+                  <span class="qi-label">Why use it</span>
+                  <span class="qi-value">{{ ind.quickWhy }}</span>
+                </div>
+                <div class="qi-row analogy-row">
+                  <span class="qi-label">Think of it as</span>
+                  <span class="qi-value qi-analogy">{{ ind.quickAnalogy }}</span>
+                </div>
+                <div class="qi-row">
+                  <span class="qi-label">Trading impact</span>
+                  <span class="qi-value">{{ ind.quickImpact }}</span>
+                </div>
+                @if (ind.checkQuestion) {
+                  <div class="qi-row qi-check">
+                    <span class="qi-label">Test yourself</span>
+                    <span class="qi-value">
+                      <span class="qi-question">{{ ind.checkQuestion }}</span>
+                      <span class="qi-answer">{{ ind.checkAnswer }}</span>
+                    </span>
+                  </div>
+                }
+              </div>
+              <div class="quick-info-footer">
+                <span class="qi-ref"><i class="pi pi-bookmark"></i> {{ ind.professionalRef }}</span>
+                <span class="qi-delay"><i class="pi pi-clock"></i> {{ ind.timeframeBehavior }}</span>
+              </div>
+            </div>
+
+            <!-- Technical Deep Dive -->
             <div class="indicator-detail">
               <div class="subsection-title"><i class="pi pi-percentage"></i> Formula</div>
               <div class="formula-block" [appKatex]="ind.formulaLatex" [displayMode]="true"></div>

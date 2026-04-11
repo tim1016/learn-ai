@@ -15,6 +15,7 @@ import { DataLabChartComponent, ChartIndicatorEntry } from './data-lab-chart/dat
 import { DataLabSessionService, DataLabSessionSummary, DataLabSessionChartSnapshot } from '../../services/data-lab-session.service';
 import { MarketMonitorService } from '../../services/market-monitor.service';
 import { MarketHolidayEvent } from '../../models/market-monitor';
+import { IndicatorTooltipComponent } from '../../shared/indicator-tooltip/indicator-tooltip.component';
 import {
   getDisabledHolidayDates,
   buildHolidayMap,
@@ -123,7 +124,7 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
 @Component({
   selector: 'app-data-lab',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, DataLabChartComponent, DatePicker, SharedModule, Tooltip],
+  imports: [CommonModule, FormsModule, RouterModule, DataLabChartComponent, DatePicker, SharedModule, Tooltip, IndicatorTooltipComponent],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

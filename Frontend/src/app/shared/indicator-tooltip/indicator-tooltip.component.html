@@ -1,0 +1,73 @@
+<div class="tooltip-trigger">
+  <ng-content></ng-content>
+</div>
+
+@if (visible()) {
+  <div class="tooltip-panel"
+       [class.above]="showAbove()"
+       [class.below]="!showAbove()"
+       [style.left.px]="panelLeft()"
+       [style.top.px]="panelTop()"
+       [style.bottom.px]="panelBottom()">
+
+    @if (doc(); as info) {
+      <!-- ── Rich tooltip (has doc entry) ── -->
+      <div class="tooltip-header">
+        <span class="tooltip-title">{{ info.displayName }}</span>
+        <span class="panel-badge" [class.overlay]="info.panelType === 'overlay'"
+              [class.sub-panel]="info.panelType === 'sub-panel'">
+          {{ info.panelType === 'overlay' ? 'Chart Overlay' : 'Sub-Panel' }}
+        </span>
+      </div>
+
+      <div class="tooltip-section">
+        <span class="section-label">Why use it</span>
+        <p class="section-text">{{ info.why }}</p>
+      </div>
+
+      <div class="tooltip-section analogy">
+        <span class="section-label">Think of it as</span>
+        <p class="section-text">{{ info.analogy }}</p>
+      </div>
+
+      <div class="tooltip-section">
+        <span class="section-label">Trading impact</span>
+        <p class="section-text">{{ info.impact }}</p>
+      </div>
+
+    } @else {
+      <!-- ── Fallback tooltip (no doc entry) ── -->
+      <div class="tooltip-header">
+        <span class="tooltip-title">{{ displayName() }}</span>
+      </div>
+
+      @if (fallbackDescription()) {
+        <div class="tooltip-section">
+          <p class="section-text">{{ fallbackDescription() }}</p>
+        </div>
+      }
+    }
+
+    <!-- Parameters (shown for both rich and fallback) -->
+    @if (paramDocs().length) {
+      <div class="tooltip-section params-section">
+        <span class="section-label">Parameters</span>
+        <div class="param-list">
+          @for (p of paramDocs(); track p.name) {
+            <div class="param-item">
+              <code class="param-name">{{ p.name }}</code>
+              <span class="param-desc">{{ p.description }}</span>
+            </div>
+          }
+        </div>
+      </div>
+    }
+
+    <!-- Footer link with anchor -->
+    <div class="tooltip-footer">
+      <a [routerLink]="['/data-lab-docs']" [fragment]="docsFragment()" class="docs-link">
+        Full documentation &rarr;
+      </a>
+    </div>
+  </div>
+}

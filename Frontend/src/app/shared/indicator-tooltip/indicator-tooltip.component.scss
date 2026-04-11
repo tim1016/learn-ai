@@ -1,0 +1,203 @@
+// ═══════════════════════════════════════════════════════════
+// Indicator Tooltip — Dark Theme
+// Uses position: fixed so it escapes overflow: hidden ancestors
+// ═══════════════════════════════════════════════════════════
+
+$bg-tooltip:     #1a1d2e;
+$bg-section:     #141725;
+$border-tooltip: #2d3148;
+$text-primary:   #e2e8f0;
+$text-secondary: #8892a8;
+$text-muted:     #5a6178;
+$accent:         #3b82f6;
+$accent-dim:     rgba(59, 130, 246, 0.12);
+$overlay-badge:  #00c896;
+$subpanel-badge: #a78bfa;
+
+:host {
+  display: inline-flex;
+  position: relative;
+}
+
+.tooltip-trigger {
+  display: inline-flex;
+  align-items: center;
+  cursor: help;
+}
+
+// ─── Panel (fixed position) ─────────────────────────────
+
+.tooltip-panel {
+  position: fixed;
+  z-index: 10000;
+  width: 340px;
+  max-height: 420px;
+  overflow-y: auto;
+  background: $bg-tooltip;
+  border: 1px solid $border-tooltip;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
+  padding: 0.85rem 1rem;
+  pointer-events: auto;
+  animation: tooltipFadeIn 0.15s ease-out;
+
+  // Scrollbar styling
+  &::-webkit-scrollbar {
+    width: 4px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: $border-tooltip;
+    border-radius: 4px;
+  }
+}
+
+@keyframes tooltipFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+// ─── Header ─────────────────────────────────────────────
+
+.tooltip-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid $border-tooltip;
+}
+
+.tooltip-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: $text-primary;
+  line-height: 1.3;
+  flex: 1;
+}
+
+.panel-badge {
+  flex-shrink: 0;
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  white-space: nowrap;
+
+  &.overlay {
+    background: rgba($overlay-badge, 0.12);
+    color: $overlay-badge;
+  }
+
+  &.sub-panel {
+    background: rgba($subpanel-badge, 0.12);
+    color: $subpanel-badge;
+  }
+}
+
+// ─── Sections ───────────────────────────────────────────
+
+.tooltip-section {
+  margin-bottom: 0.55rem;
+
+  &:last-of-type {
+    margin-bottom: 0.4rem;
+  }
+}
+
+.section-label {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: $text-muted;
+  margin-bottom: 0.2rem;
+}
+
+.section-text {
+  font-size: 0.8rem;
+  color: $text-secondary;
+  line-height: 1.55;
+  margin: 0;
+}
+
+// Analogy gets a subtle highlight
+.analogy {
+  background: $bg-section;
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  border-left: 2px solid $accent;
+
+  .section-label {
+    color: $accent;
+  }
+
+  .section-text {
+    color: $text-primary;
+    font-style: italic;
+    font-size: 0.78rem;
+  }
+}
+
+// ─── Parameters ─────────────────────────────────────────
+
+.params-section {
+  background: $bg-section;
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+}
+
+.param-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.param-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.param-name {
+  flex-shrink: 0;
+  font-family: ui-monospace, 'SFMono-Regular', monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: $accent;
+  background: $accent-dim;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.param-desc {
+  font-size: 0.74rem;
+  color: $text-secondary;
+  line-height: 1.45;
+}
+
+// ─── Footer ─────────────────────────────────────────────
+
+.tooltip-footer {
+  margin-top: 0.5rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid $border-tooltip;
+  text-align: right;
+}
+
+.docs-link {
+  font-size: 0.72rem;
+  color: $accent;
+  text-decoration: none;
+  font-weight: 500;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
