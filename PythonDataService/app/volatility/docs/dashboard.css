@@ -1,0 +1,474 @@
+/* ============================================================================
+   IV Dashboard — Dark Theme Styles
+   ============================================================================ */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    font-size: 14px;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    overflow: hidden;
+}
+
+/* ============================================================================
+   Control Bar
+   ============================================================================ */
+
+.control-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    background: #16213e;
+    border-bottom: 1px solid #2d3561;
+    flex-wrap: wrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.control-group label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #a0a0a0;
+    min-width: 60px;
+}
+
+.control-group input,
+.control-group select {
+    padding: 6px 10px;
+    background: #0f3460;
+    color: #e0e0e0;
+    border: 1px solid #2d3561;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+    transition: border-color 0.2s, background-color 0.2s;
+}
+
+.control-group input:focus,
+.control-group select:focus {
+    outline: none;
+    border-color: #00d4ff;
+    background: #1a4d6d;
+}
+
+.control-group input::placeholder {
+    color: #606080;
+}
+
+.btn {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.btn-primary {
+    background: #00d4ff;
+    color: #1a1a2e;
+}
+
+.btn-primary:hover {
+    background: #00e5ff;
+    box-shadow: 0 2px 8px rgba(0, 212, 255, 0.3);
+}
+
+.btn-primary:active {
+    transform: scale(0.98);
+}
+
+.btn-secondary {
+    background: #0f3460;
+    color: #e0e0e0;
+    border: 1px solid #2d3561;
+}
+
+.btn-secondary:hover {
+    background: #1a4d6d;
+    border-color: #00d4ff;
+}
+
+.file-upload-wrapper {
+    position: relative;
+}
+
+/* Health Badge */
+.health-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 80px;
+    padding: 6px 12px;
+    border-radius: 20px;
+    background: #0f3460;
+    border: 1px solid #2d3561;
+    margin-left: auto;
+}
+
+.health-score {
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+}
+
+.health-badge.score-high {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: #22c55e;
+    color: #22c55e;
+}
+
+.health-badge.score-medium {
+    background: rgba(234, 179, 8, 0.15);
+    border-color: #eab308;
+    color: #eab308;
+}
+
+.health-badge.score-low {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: #ef4444;
+    color: #ef4444;
+}
+
+/* ============================================================================
+   Main Dashboard Grid
+   ============================================================================ */
+
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+    gap: 12px;
+    padding: 12px;
+    height: calc(100vh - 60px - 40px);
+    overflow: hidden;
+}
+
+/* 2×2 on medium screens */
+@media (max-width: 1600px) {
+    .dashboard-grid {
+        grid-template-columns: repeat(2, 1fr);
+        grid-template-rows: repeat(3, 1fr);
+    }
+}
+
+/* Stack on small screens */
+@media (max-width: 900px) {
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto;
+        height: calc(100vh - 100px - 40px);
+        overflow-y: auto;
+    }
+}
+
+/* ============================================================================
+   Panel Container
+   ============================================================================ */
+
+.panel {
+    display: flex;
+    flex-direction: column;
+    background: #16213e;
+    border: 1px solid #2d3561;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+}
+
+.panel-header {
+    padding: 10px 14px;
+    background: #0f3460;
+    border-bottom: 1px solid #2d3561;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #00d4ff;
+}
+
+.panel-content {
+    flex: 1;
+    overflow: auto;
+    padding: 0;
+    position: relative;
+}
+
+.panel-content.empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #606080;
+    font-size: 13px;
+}
+
+/* ============================================================================
+   Plotly Integration
+   ============================================================================ */
+
+.plotly-container {
+    width: 100%;
+    height: 100%;
+}
+
+.js-plotly-plot {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* ============================================================================
+   Status Bar
+   ============================================================================ */
+
+.status-bar {
+    display: flex;
+    align-items: center;
+    padding: 8px 16px;
+    background: #16213e;
+    border-top: 1px solid #2d3561;
+    height: 40px;
+    font-size: 12px;
+    color: #a0a0a0;
+}
+
+#status-message {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#status-message::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #606080;
+}
+
+#status-message.info::before {
+    background: #00d4ff;
+}
+
+#status-message.success::before {
+    background: #22c55e;
+}
+
+#status-message.error::before {
+    background: #ef4444;
+}
+
+/* ============================================================================
+   Diagnostics Panel (HTML Tables)
+   ============================================================================ */
+
+.diagnostics-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.diagnostics-table th {
+    padding: 8px 10px;
+    text-align: left;
+    background: #0f3460;
+    color: #00d4ff;
+    font-weight: 700;
+    border-bottom: 1px solid #2d3561;
+    white-space: nowrap;
+}
+
+.diagnostics-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #2d356133;
+    vertical-align: middle;
+}
+
+.diagnostics-table tbody tr:hover {
+    background: #1a4d6d33;
+}
+
+.diagnostics-card {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 12px 14px;
+    background: #0f3460;
+    border-bottom: 1px solid #2d3561;
+}
+
+.diagnostics-card-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.diagnostics-card-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #a0a0a0;
+    font-weight: 600;
+}
+
+.diagnostics-card-value {
+    font-size: 14px;
+    font-weight: 700;
+    color: #e0e0e0;
+}
+
+.diagnostics-warnings {
+    padding: 12px 14px;
+    border-top: 1px solid #2d3561;
+}
+
+.diagnostics-warnings-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #eab308;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.diagnostics-warnings-list {
+    list-style: none;
+    padding: 0;
+}
+
+.diagnostics-warnings-list li {
+    padding: 4px 0;
+    font-size: 12px;
+    color: #e0a000;
+    word-break: break-word;
+}
+
+.diagnostics-warnings-list li::before {
+    content: '⚠ ';
+    margin-right: 4px;
+}
+
+/* ============================================================================
+   Loading & Error States
+   ============================================================================ */
+
+.loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: #a0a0a0;
+}
+
+.loading::after {
+    content: '';
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid #606080;
+    border-top-color: #00d4ff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ============================================================================
+   Scrollbar Styling
+   ============================================================================ */
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0f3460;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #2d3561;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #3d4571;
+}
+
+/* ============================================================================
+   Responsive Adjustments
+   ============================================================================ */
+
+@media (max-width: 1024px) {
+    .control-bar {
+        gap: 12px;
+        padding: 10px 12px;
+    }
+
+    .control-group label {
+        display: none;
+    }
+
+    .btn {
+        padding: 6px 12px;
+        font-size: 12px;
+    }
+
+    .health-badge {
+        min-width: 70px;
+    }
+}
+
+@media (max-width: 768px) {
+    body {
+        font-size: 12px;
+    }
+
+    .control-bar {
+        gap: 8px;
+        padding: 8px;
+    }
+
+    .control-group input,
+    .control-group select {
+        padding: 5px 8px;
+        font-size: 12px;
+    }
+
+    .panel-header {
+        padding: 8px 10px;
+        font-size: 12px;
+    }
+
+    .diagnostics-card {
+        grid-template-columns: 1fr;
+    }
+
+    .status-bar {
+        padding: 6px 12px;
+        height: 36px;
+        font-size: 11px;
+    }
+}

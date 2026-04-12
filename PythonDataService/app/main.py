@@ -1,12 +1,11 @@
 """FastAPI application entry point"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import logging
 
 from app.config import settings
-from app.routers import aggregates, sanitize, indicators, options, snapshot, market_monitor, tickers, strategy, research, dataset, data_quality, chart, rule_based_backtest, backtest, validation_study, engine, quantlib_options
+from app.routers import aggregates, sanitize, indicators, options, snapshot, market_monitor, tickers, strategy, research, dataset, data_quality, volatility
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -33,9 +32,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# GZip middleware for large chart responses
-app.add_middleware(GZipMiddleware, minimum_size=1000)
-
 # CORS middleware for C# backend
 app.add_middleware(
     CORSMiddleware,
@@ -57,12 +53,7 @@ app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
-app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
-app.include_router(rule_based_backtest.router, prefix="/api/backtest/rule-based", tags=["rule-based-backtest"])
-app.include_router(backtest.router, prefix="/api/backtest", tags=["backtest"])
-app.include_router(validation_study.router, prefix="/api/validation-study", tags=["validation-study"])
-app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
-app.include_router(quantlib_options.router, prefix="/api/quantlib", tags=["quantlib"])
+app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
 
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)

@@ -1,0 +1,118 @@
+# Implied Volatility Surface Module
+
+> Production-grade implied volatility surface construction using QuantLib for the PythonDataService.
+
+## Module Overview
+
+This module converts raw option chain data (strike, time-to-maturity, market price) into a queryable implied volatility surface. It lives under `app/volatility/` in the PythonDataService FastAPI application.
+
+## Architecture
+
+Files:
+- `solver.py` — QuantLib-based IV solver with Brent fallback
+- `fitting.py` — Smile fitting: variance interpolation, SABR, SVI
+- `surface.py` — Surface builder + cross-expiry interpolation
+- `models.py` — Pydantic request/response schemas
+- `example.py` — Runnable example with synthetic data
+- `../routers/volatility.py` — FastAPI endpoints
+
+## IV Solver
+
+The solver finds sigma such that BS(sigma) = market_price.
+
+Primary: QuantLib VanillaOption.impliedVolatility() with AnalyticEuropeanEngine.
+Fallback: scipy brentq root-finder on the BS formula, bracketed in [0.005, 5.0].
+
+Input guards:
+- TTM < 1/365 → EXPIRED
+- price < 0.001 → PRICE_TOO_LOW
+- price < intrinsic → INTRINSIC_VIOLATION
+- S <= 0 or K <= 0 → INPUT_ERROR
+
+## Surface Fitting Methods
+
+### 1. Variance Interpolation (method="variance")
+Non-parametric. Linear interpolation on total variance w(K) = sigma^2 * T.
+Best for dense, liquid chains. No parametric assumptions.
+
+### 2. SABR (method="sabr")
+Hagan et al. (2002) stochastic-alpha-beta-rho model.
+Parameters: alpha (>0, ATM vol level), beta (fixed, typically 0.5), rho ((-1,1), skew), nu (>0, vol-of-vol).
+Fitted via least-squares on the Hagan approximation formula.
+
+SABR dynamics:
+  dF = alpha * F^beta * dW1
+  dalpha = nu * alpha * dW2
+  corr(dW1, dW2) = rho * dt
+
+### 3. SVI (method="svi")
+Gatheral's Stochastic Volatility Inspired parameterisation.
+Total variance: w(k) = a + b * [rho*(k-m) + sqrt((k-m)^2 + sigma^2)]
+where k = ln(K/F) is log-moneyness.
+
+Parameters: a (variance level), b (>=0, wing slope), rho ((-1,1), skew), m (horizontal shift), sigma (>0, vertex smoothness).
+
+Butterfly no-arb constraint: a + b*sigma*sqrt(1-rho^2) >= 0.
+
+## Surface Builder
+
+Three stages:
+1. IV solving: each option record → implied vol via solver
+2. Per-expiry fitting: group by TTM, fit each slice with chosen method
+3. Cross-expiry interpolation: variance-time weighted between nearest slices
+
+Cross-expiry interpolation formula:
+  w(K,T) = (1-lambda)*w(K,T_lo) + lambda*w(K,T_hi)
+  lambda = (T - T_lo) / (T_hi - T_lo)
+  sigma(K,T) = sqrt(w(K,T) / T)
+
+This preserves calendar-spread no-arbitrage by construction.
+
+## API Endpoints
+
+### POST /api/volatility/build
+Build surface from option chain. Input: ticker, spot, rate, method, options[]. Returns: fitted_params, diagnostics, surface_id.
+
+### POST /api/volatility/query/{surface_id}
+Query vol at specific (strike, ttm) points.
+
+### POST /api/volatility/grid/{surface_id}
+Evaluate surface on regular grid for visualization.
+
+## Arbitrage Checks
+
+After fitting, each slice is tested for:
+- Butterfly: d^2w/dk^2 >= 0 (convexity of total variance in log-moneyness)
+- Calendar: w(k,T1) <= w(k,T2) for T1 <= T2
+
+## Recommended Defaults
+
+- method: "svi" (best for equity skew)
+- min_contracts_per_slice: 5
+- sabr_beta: 0.5
+- rate: use actual risk-free rate (SOFR)
+
+## Common Failure Cases
+
+- Bad data: filter by open_interest > 10, bid-ask spread < 20%
+- Sparse strikes: use "variance" for < 5 strikes per expiry
+- Near-expiry: T < 1 day rejected; T < 7 days may be unstable
+- Deep OTM/ITM: near-zero prices or intrinsic violations
+
+## Dependencies
+
+- QuantLib >= 1.30 (SWIG Python bindings)
+- scipy >= 1.14.0
+- numpy >= 2.2.0
+- pandas >= 2.2.0
+- pydantic >= 2.5.0
+
+## Usage Example
+
+```python
+from app.volatility.surface import VolSurfaceBuilder, SurfaceMethod
+
+builder = VolSurfaceBuilder(spot=100.0, rate=0.05)
+surface = builder.build(option_records, method=SurfaceMethod.SVI)
+vol = surface.volatility(strike=105.0, ttm=0.25)
+```

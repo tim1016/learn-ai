@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IV Dashboard — Volatility Surface Explorer</title>
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+    <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+    <!-- Control Bar -->
+    <div class="control-bar">
+        <div class="control-group">
+            <label for="ticker-input">Ticker</label>
+            <input type="text" id="ticker-input" placeholder="SPY" value="SPY" maxlength="10">
+        </div>
+
+        <div class="control-group">
+            <label for="date-input">Date</label>
+            <input type="date" id="date-input">
+        </div>
+
+        <div class="control-group">
+            <label for="method-dropdown">Method</label>
+            <select id="method-dropdown">
+                <option value="svi">SVI</option>
+                <option value="sabr">SABR</option>
+                <option value="variance">Variance</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="axis-dropdown">Axis</label>
+            <select id="axis-dropdown">
+                <option value="log_moneyness">Log-Moneyness</option>
+                <option value="moneyness">Moneyness</option>
+                <option value="strike">Strike</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="mode-dropdown">Mode</label>
+            <select id="mode-dropdown">
+                <option value="auto">Auto</option>
+                <option value="build">Build</option>
+                <option value="cached">Cached</option>
+            </select>
+        </div>
+
+        <button id="build-btn" class="btn btn-primary">Build</button>
+
+        <div class="control-group file-upload-wrapper">
+            <input type="file" id="csv-upload" accept=".csv" style="display: none;">
+            <button id="csv-btn" class="btn btn-secondary">CSV Upload</button>
+        </div>
+
+        <div class="control-group">
+            <label for="export-dropdown">Export</label>
+            <select id="export-dropdown">
+                <option value="">— Select Format —</option>
+                <option value="json">JSON</option>
+                <option value="csv">CSV</option>
+                <option value="parquet">Parquet</option>
+            </select>
+        </div>
+
+        <div class="health-badge" id="health-badge">
+            <span class="health-score">—</span>
+        </div>
+    </div>
+
+    <!-- Main Grid -->
+    <div class="dashboard-grid">
+        <div class="panel" id="surface-panel">
+            <div class="panel-header">Surface</div>
+            <div class="panel-content" id="surface-chart"></div>
+        </div>
+
+        <div class="panel" id="smiles-panel">
+            <div class="panel-header">Smiles</div>
+            <div class="panel-content" id="smiles-chart"></div>
+        </div>
+
+        <div class="panel" id="scatter-panel">
+            <div class="panel-header">Market vs Fit</div>
+            <div class="panel-content" id="scatter-chart"></div>
+        </div>
+
+        <div class="panel" id="term-panel">
+            <div class="panel-header">Term Structure</div>
+            <div class="panel-content" id="term-chart"></div>
+        </div>
+
+        <div class="panel" id="diagnostics-panel">
+            <div class="panel-header">Diagnostics</div>
+            <div class="panel-content" id="diagnostics-content"></div>
+        </div>
+
+        <div class="panel" id="rejection-panel">
+            <div class="panel-header">Rejections</div>
+            <div class="panel-content" id="rejections-chart"></div>
+        </div>
+    </div>
+
+    <!-- Status Bar -->
+    <div class="status-bar" id="status-bar">
+        <span id="status-message">Ready</span>
+    </div>
+
+    <script src="sample_data.js"></script>
+    <script src="dashboard_panels.js"></script>
+    <script src="dashboard.js"></script>
+</body>
+</html>

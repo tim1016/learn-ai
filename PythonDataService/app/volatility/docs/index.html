@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Implied Volatility Surface — Documentation</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body, {delimiters: [{left: '$$', right: '$$', display: true}, {left: '$', right: '$', display: false}]});">
+  </script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --fg: #c9d1d9;
+      --accent: #58a6ff;
+      --code-bg: #161b22;
+      --border: #30363d;
+      --heading: #f0f6fc;
+      --success: #3fb950;
+      --warn: #d29922;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.7;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+    h1, h2, h3 { color: var(--heading); margin-top: 2.5rem; margin-bottom: 0.8rem; }
+    h1 { font-size: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    h2 { font-size: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+    h3 { font-size: 1.2rem; }
+    p { margin: 0.8rem 0; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      background: var(--code-bg);
+      padding: 0.15em 0.4em;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem;
+      overflow-x: auto;
+      margin: 1rem 0;
+    }
+    pre code { background: none; padding: 0; }
+    .katex-display { margin: 1.5rem 0; overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.8rem;
+      text-align: left;
+    }
+    th { background: var(--code-bg); color: var(--heading); }
+    .badge {
+      display: inline-block;
+      padding: 0.15em 0.5em;
+      border-radius: 4px;
+      font-size: 0.8em;
+      font-weight: 600;
+    }
+    .badge-ok { background: rgba(63,185,80,0.2); color: var(--success); }
+    .badge-warn { background: rgba(210,153,34,0.2); color: var(--warn); }
+    nav {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem 1.5rem;
+      margin: 1.5rem 0;
+    }
+    nav ul { list-style: none; }
+    nav li { padding: 0.2rem 0; }
+    nav a { font-size: 0.95rem; }
+    .param-table td:first-child { font-weight: 600; white-space: nowrap; }
+  </style>
+</head>
+<body>
+
+<h1>Implied Volatility Surface Module</h1>
+<p>
+  Production-grade implied volatility surface construction using
+  <a href="https://www.quantlib.org/">QuantLib</a>.
+  Deterministic, validated, and ready for API integration.
+</p>
+
+<nav>
+  <strong>Contents</strong>
+  <ul>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#iv-solver">1. Implied Volatility Solver</a></li>
+    <li><a href="#variance">2. Variance Interpolation</a></li>
+    <li><a href="#sabr">3. SABR Model</a></li>
+    <li><a href="#svi">4. SVI Parameterisation</a></li>
+    <li><a href="#surface-builder">5. Surface Builder</a></li>
+    <li><a href="#api">6. API Endpoints</a></li>
+    <li><a href="#arbitrage">7. Arbitrage Checks</a></li>
+    <li><a href="#defaults">8. Recommended Defaults</a></li>
+    <li><a href="#failure-modes">9. Common Failure Cases</a></li>
+  </ul>
+</nav>
+
+<!-- ───────────────────────────────────────────────────────────── -->
+<h2 id="overview">Overview</h2>
+<p>
+  This module converts raw option chain data (strike, time-to-maturity,
+  market price) into a queryable implied volatility surface. It supports
+  three fitting methods:
+</p>
+<table>
+  <tr><th>Method</th><th>Type</th><th>Best for</th><th>Speed</th></tr>
+  <tr>
+    <td>Variance interpolation</td><td>Non-parametric</td>
+    <td>Dense, liquid chains</td><td><span class="badge badge-ok">Fast</span></td>
+  </tr>
+  <tr>
+    <td>SABR</td><td>Parametric (4 params)</td>
+    <td>Rates, FX, moderate skew</td><td><span class="badge badge-ok">Fast</span></td>
+  </tr>
+  <tr>
+    <td>SVI</td><td>Parametric (5 params)</td>
+    <td>Equities, strong skew</td><td><span class="badge badge-warn">Medium</span></td>
+  </tr>
+</table>
+
+<!-- ───────────────────────────────────────────────────────────── -->
+<h2 id="iv-solver">1. Implied Volatility Solver</h2>
+<p>
+  The IV solver finds the volatility $\sigma$ such that the
+  Black-Scholes-Merton model price matches the observed market price.
+</p>
+
+<h3>Black-Scholes-Merton Model</h3>
+<p>For a European call option:</p>
+$$C = S_0 \, e^{-qT} \, \Phi(d_1) - K \, e^{-rT} \, \Phi(d_2)$$
+<p>where</p>
+$$d_1 = \frac{\ln(S_0/K) + (r - q + \tfrac{1}{2}\sigma^2)T}{\sigma\sqrt{T}}, \qquad d_2 = d_1 - \sigma\sqrt{T}$$
+<p>and $\Phi(\cdot)$ is the standard normal CDF.</p>
+
+<h3>Solver Strategy</h3>
+<p>
+  <strong>Primary:</strong> QuantLib's <code>VanillaOption.impliedVolatility()</code>
+  using the <code>AnalyticEuropeanEngine</code> with a
+  <code>BlackScholesMertonProcess</code>.
+</p>
+<p>
+  <strong>Fallback:</strong> Scipy's <code>brentq</code> root-finder on the
+  BS pricing function, bracketed between $\sigma \in [0.005, 5.0]$.
+</p>
+
+<h3>Input Guards</h3>
+<table class="param-table">
+  <tr><th>Guard</th><th>Condition</th><th>Status returned</th></tr>
+  <tr><td>Expired</td><td>$T &lt; 1/365$</td><td><code>EXPIRED</code></td></tr>
+  <tr><td>Price too low</td><td>$V_{\text{mkt}} &lt; 0.001$</td><td><code>PRICE_TOO_LOW</code></td></tr>
+  <tr><td>Intrinsic violation</td><td>$V_{\text{mkt}} &lt; \max(S - Ke^{-rT}, 0)$</td><td><code>INTRINSIC_VIOLATION</code></td></tr>
+  <tr><td>Invalid inputs</td><td>$S \leq 0$ or $K \leq 0$</td><td><code>INPUT_ERROR</code></td></tr>
+</table>
+
+<!-- ───────────────────────────────────────────────────────────── -->
+<h2 id="variance">2. Variance Interpolation</h2>
+<p>
+  The simplest method: linear interpolation on <em>total implied variance</em>
+  $w(K) = \sigma^2(K) \cdot T$ as a function of strike. This ensures that
+  calendar-spread no-arbitrage is preserved when interpolating between
+  expiries.
+</p>
+$$\sigma_{\text{interp}}(K, T) = \sqrt{\frac{w(K, T)}{T}}$$
+<p>
+  where $w$ is linearly interpolated in both the strike and time dimensions.
+</p>
+<p>
+  <strong>Pros:</strong> Exact recovery at input strikes, no parametric assumptions.<br>
+  <strong>Cons:</strong> Extrapolation outside the strike range is flat (no smile wings).
+  Requires dense data.
+</p>
+
+<!-- ───────────────────────────────────────────────────────────── -->
+<h2 id="sabr">3. SABR Model</h2>
+<p>
+  The SABR (Stochastic Alpha Beta Rho) model describes the forward price
+  and its volatility as correlated diffusions:
+</p>
+$$dF_t = \alpha_t \, F_t^\beta \, dW_1, \qquad d\alpha_t = \nu \, \alpha_t \, dW_2$$
+$$dW_1 \cdot dW_2 = \rho \, dt$$
+
+<h3>Hagan Approximation (2002)</h3>
+<p>The implied volatility approximation for $K \neq F$:</p>
+$$\sigma_B(K, F) = \frac{\alpha}{(FK)^{(1-\beta)/2} \left[1 + \frac{(1-\beta)^2}{24}\ln^2\frac{F}{K} + \frac{(1-\beta)^4}{1920}\ln^4\frac{F}{K}\right]} \cdot \frac{z}{x(z)} \cdot \left[1 + \left(\frac{(1-\beta)^2}{24}\frac{\alpha^2}{(FK)^{1-\beta}} + \frac{\rho\beta\nu\alpha}{4(FK)^{(1-\beta)/2}} + \frac{2-3\rho^2}{24}\nu^2\right)T\right]$$
+<p>where $z = \frac{\nu}{\alpha}(FK)^{(1-\beta)/2}\ln\frac{F}{K}$ and $x(z) = \ln\frac{\sqrt{1-2\rho z + z^2}+z-\rho}{1-\rho}$.</p>
+
+<h3>Parameters</h3>
+<table class="param-table">
+  <tr><th>Parameter</th><th>Symbol</th><th>Range</th><th>Meaning</th></tr>
+  <tr><td>alpha</td><td>$\alpha$</td><td>$&gt; 0$</td><td>ATM vol level</td></tr>
+  <tr><td>beta</td><td>$\beta$</td><td>$[0, 1]$</td><td>CEV exponent (fixed; 0.5 for rates, 1.0 for equities)</td></tr>
+  <tr><td>rho</td><td>$\rho$</td><td>$(-1, 1)$</td><td>Correlation (controls skew)</td></tr>
+  <tr><td>nu</td><td>$\nu$</td><td>$&gt; 0$</td><td>Vol-of-vol (controls smile curvature)</td></tr>
+</table>
+
+<p><strong>Recommended default:</strong> $\beta = 0.5$ for equities. Fix $\beta$ and calibrate $(\alpha, \rho, \nu)$ via least-squares.</p>
+
+<!-- ───────────────────────────────────────────────────────────── -->
+<h2 id="svi">4. SVI Parameterisation</h2>
+<p>
+  Gatheral's Stochastic Volatility Inspired (SVI) model parameterises
+  <em>total implied variance</em> $w(k) = \sigma^2(k) \cdot T$ as a function
+  of log-moneyness $k = \ln(K/F)$:
+</p>
+$$w(k) = a + b\left[\rho(k - m) + \sqrt{(k-m)^2 + \sigma^2}\right]$$
+
+<h3>Parameters</h3>
+<table class="param-table">
+  <tr><th>Parameter</th><th>Range</th><th>Meaning</th></tr>
+  <tr><td>$a$</td><td>$\mathbb{R}$</td><td>Overall variance level</td></tr>
+  <tr><td>$b$</td><td>$\geq 0$</td><td>Slope of the wings</td></tr>
+  <tr><td>$\rho$</td><td>$(-1, 1)$</td><td>Skew (rotation of the smile)</td></tr>
+  <tr><td>$m$</td><td>$\mathbb{R}$</td><td>Horizontal translation</td></tr>
+  <tr><td>$\sigma$</td><td>$&gt; 0$</td><td>Smoothness at the vertex</td></tr>
+</table>
+
+<h3>No-Arbitrage Constraints</h3>
+<p><strong>Butterfly condition:</strong></p>
+$$a + b\sigma\sqrt{1-\rho^2} \geq 0$$
+<p>This ensures $w(k) \geq 0$ for all $k$, preventing negative implied variance.</p>
+
+<p><strong>Pros:</strong> Excellent fit for equity smiles; 5 parameters capture skew and kurtosis.<br>
+<strong>Cons:</strong> Not a stochastic model (just a parameterisation); needs careful initialisation.</p>
+
+<!-- ───────────────────────────────────────────────────────────── -->
+<h2 id="surface-builder">5. Surface Builder</h2>
+<p>The <code>VolSurfaceBuilder</code> assembles a full surface in three stages:</p>
+
+<h3>Stage 1: IV Solving</h3>
+<p>Each option record $(K_i, T_j, V_{\text{mkt}})$ is passed through the solver to obtain $\sigma_{\text{imp}}(K_i, T_j)$.</p>
+
+<h3>Stage 2: Per-Expiry Fitting</h3>
+<p>
+  Records are grouped by expiry $T_j$. Each group forms a <em>smile slice</em>
+  that is fitted with the chosen method. Slices with fewer than
+  <code>min_contracts_per_slice</code> points are discarded.
+</p>
+
+<h3>Stage 3: Cross-Expiry Interpolation</h3>
+<p>
+  For queries at arbitrary $(K, T)$, the surface interpolates between the
+  two nearest fitted slices using variance-time weighting:
+</p>
+$$w(K, T) = (1-\lambda)\,w(K, T_{\text{lo}}) + \lambda\,w(K, T_{\text{hi}})$$
+$$\lambda = \frac{T - T_{\text{lo}}}{T_{\text{hi}} - T_{\text{lo}}}$$
+$$\sigma(K, T) = \sqrt{\frac{w(K,T)}{T}}$$
+<p>
+  This preserves the calendar-spread no-arbitrage condition $w(K, T_1) \leq w(K, T_2)$
+  for $T_1 \leq T_2$, provided individual slices are monotone in total variance.
+</p>
+
+<!-- ───────────────────────────────────────────────────────────── -->
+<h2 id="api">6. API Endpoints</h2>
+
+<h3><code>POST /api/volatility/build</code></h3>
+<p>Build an IV surface from option chain data.</p>
+<pre><code>{
+  "ticker": "AAPL",
+  "spot": 185.50,
+  "rate": 0.053,
+  "method": "svi",
+  "options": [
+    {"strike": 180, "ttm": 0.0822, "option_price": 7.20, "is_call": true},
+    {"strike": 185, "ttm": 0.0822, "option_price": 4.50, "is_call": true},
+    ...
+  ]
+}</code></pre>
+<p>Returns: fitted parameters, diagnostics, arbitrage checks, and a <code>surface_id</code> for subsequent queries.</p>
+
+<h3><code>POST /api/volatility/query/{surface_id}</code></h3>
+<p>Query the surface at specific (strike, TTM) points.</p>
+<pre><code>{
+  "queries": [
+    {"strike": 185, "ttm": 0.25},
+    {"strike": 190, "ttm": 0.5}
+  ]
+}</code></pre>
+
+<h3><code>POST /api/volatility/grid/{surface_id}</code></h3>
+<p>Evaluate the surface on a regular strike &times; TTM grid for plotting.</p>
+
+<!-- ───────────────────────────────────────────────────────────── -->
+<h2 id="arbitrage">7. Arbitrage Checks</h2>
+<p>After fitting, each smile slice is tested for:</p>
+
+<h3>Butterfly Arbitrage</h3>
+<p>
+  The second derivative of total variance with respect to log-moneyness
+  must be non-negative (convexity of the call price surface):
+</p>
+$$\frac{\partial^2 w}{\partial k^2} \geq 0$$
+<p>Violations indicate the smile has a concave region where a butterfly spread would have negative cost.</p>
+
+<h3>Calendar Spread Arbitrage</h3>
+<p>Total variance must be non-decreasing in time:</p>
+$$w(k, T_1) \leq w(k, T_2) \quad \text{for } T_1 \leq T_2$$
+<p>The variance-time interpolation method ensures this by construction.</p>
+
+<!-- ───────────────────────────────────────────────────────────── -->
+<h2 id="defaults">8. Recommended Defaults</h2>
+<table>
+  <tr><th>Setting</th><th>Default</th><th>Rationale</th></tr>
+  <tr><td>Method</td><td><code>svi</code></td><td>Best fit for equity skew; 5 params capture skew + curvature</td></tr>
+  <tr><td>min_contracts_per_slice</td><td>5</td><td>Below 5, parametric fits are under-determined</td></tr>
+  <tr><td>sabr_beta</td><td>0.5</td><td>Standard for equity options; 1.0 for log-normal FX</td></tr>
+  <tr><td>rate</td><td>0.05</td><td>Override with actual risk-free rate (SOFR, Treasury)</td></tr>
+</table>
+
+<!-- ───────────────────────────────────────────────────────────── -->
+<h2 id="failure-modes">9. Common Failure Cases</h2>
+
+<h3>Bad Data</h3>
+<p>
+  Stale quotes, wide bid-ask spreads, and illiquid deep-OTM options produce
+  IV solver failures. Filter records by <code>open_interest &gt; 10</code>
+  and <code>bid-ask spread &lt; 20%</code> before building.
+</p>
+
+<h3>Sparse Strikes</h3>
+<p>
+  With fewer than 5 strikes per expiry, parametric fits (SABR, SVI) are
+  under-determined. Use <code>variance</code> interpolation for sparse data,
+  or relax <code>min_contracts_per_slice</code>.
+</p>
+
+<h3>Near-Expiry Options</h3>
+<p>
+  Options with $T &lt; 1$ day are rejected by the solver. Options with
+  $T &lt; 7$ days have high gamma and may produce unstable IVs.
+</p>
+
+<h3>Deep OTM / ITM</h3>
+<p>
+  Deep OTM options have near-zero prices, making IV recovery ill-conditioned.
+  Deep ITM options may violate intrinsic value bounds in illiquid markets.
+  Both are flagged with appropriate status codes.
+</p>
+
+</body>
+</html>

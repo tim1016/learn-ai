@@ -1,0 +1,320 @@
+"""
+QuantLib-based Implied Volatility Solver
+=========================================
+
+Uses QuantLib's ``VanillaOption.impliedVolatility()`` as the primary solver,
+with a custom Brent root-finder as fallback for edge cases where the QuantLib
+solver fails to converge.
+
+Design goals
+------------
+- Deterministic: same inputs → same IV every time.
+- Robust: handles deep OTM / ITM, near-expiry, and sparse-data edge cases.
+- Transparent: every solve attempt returns a typed result with diagnostics.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
+import QuantLib as ql
+from scipy.optimize import brentq
+
+logger = logging.getLogger(__name__)
+
+# ── Constants ────────────────────────────────────────────────────────────────
+
+MIN_IV: float = 0.005          # 0.5 %  floor
+MAX_IV: float = 5.0            # 500 %  ceiling
+DEFAULT_IV_GUESS: float = 0.25
+QUANTLIB_MAX_ITER: int = 200
+QUANTLIB_TOLERANCE: float = 1e-8
+MIN_TIME_TO_EXPIRY: float = 1.0 / 365.0   # 1 calendar day
+MIN_OPTION_PRICE: float = 0.001            # reject near-zero premiums
+
+
+class SolveStatus(str, Enum):
+    OK = "ok"
+    QUANTLIB_OK = "quantlib_ok"
+    BRENT_FALLBACK = "brent_fallback"
+    INTRINSIC_VIOLATION = "intrinsic_violation"
+    PRICE_TOO_LOW = "price_too_low"
+    EXPIRED = "expired"
+    CONVERGENCE_FAILURE = "convergence_failure"
+    INPUT_ERROR = "input_error"
+
+
+@dataclass(frozen=True)
+class ImpliedVolResult:
+    """Result of a single IV solve attempt."""
+
+    iv: Optional[float]
+    status: SolveStatus
+    iterations: int = 0
+    message: str = ""
+    option_price: float = 0.0
+    intrinsic: float = 0.0
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _intrinsic_value(
+    spot: float,
+    strike: float,
+    is_call: bool,
+    rate: float,
+    ttm: float,
+) -> float:
+    """Discounted intrinsic value for a European option."""
+    df = math.exp(-rate * ttm)
+    if is_call:
+        return max(spot - strike * df, 0.0)
+    return max(strike * df - spot, 0.0)
+
+
+def _build_ql_process(
+    spot: float,
+    rate: float,
+    dividend: float,
+    vol_guess: float,
+    eval_date: ql.Date,
+) -> ql.BlackScholesMertonProcess:
+    """Construct a BSM process for QuantLib pricing / IV solving."""
+    day_count = ql.Actual365Fixed()
+    calendar = ql.NullCalendar()
+
+    spot_handle = ql.QuoteHandle(ql.SimpleQuote(spot))
+    rate_ts = ql.YieldTermStructureHandle(
+        ql.FlatForward(eval_date, ql.QuoteHandle(ql.SimpleQuote(rate)), day_count)
+    )
+    div_ts = ql.YieldTermStructureHandle(
+        ql.FlatForward(eval_date, ql.QuoteHandle(ql.SimpleQuote(dividend)), day_count)
+    )
+    vol_ts = ql.BlackVolTermStructureHandle(
+        ql.BlackConstantVol(eval_date, calendar, ql.QuoteHandle(ql.SimpleQuote(vol_guess)), day_count)
+    )
+    return ql.BlackScholesMertonProcess(spot_handle, div_ts, rate_ts, vol_ts)
+
+
+# ── Primary solver ───────────────────────────────────────────────────────────
+
+def implied_volatility(
+    option_price: float,
+    spot: float,
+    strike: float,
+    ttm: float,
+    rate: float = 0.05,
+    dividend: float = 0.0,
+    is_call: bool = True,
+    vol_guess: float = DEFAULT_IV_GUESS,
+) -> ImpliedVolResult:
+    """
+    Solve for implied volatility using QuantLib, with Brent fallback.
+
+    Parameters
+    ----------
+    option_price : float
+        Observed market price of the option.
+    spot : float
+        Current price of the underlying.
+    strike : float
+        Option strike price.
+    ttm : float
+        Time to maturity in years (must be > 0).
+    rate : float
+        Continuously-compounded risk-free rate.
+    dividend : float
+        Continuously-compounded dividend yield.
+    is_call : bool
+        True for call, False for put.
+    vol_guess : float
+        Initial volatility guess for the solver.
+
+    Returns
+    -------
+    ImpliedVolResult
+        Dataclass with ``iv``, ``status``, and diagnostics.
+    """
+    # ── Input guards ─────────────────────────────────────────────────────
+    if spot <= 0 or strike <= 0:
+        return ImpliedVolResult(
+            iv=None,
+            status=SolveStatus.INPUT_ERROR,
+            message=f"spot={spot}, strike={strike} must be positive",
+        )
+
+    if ttm < MIN_TIME_TO_EXPIRY:
+        return ImpliedVolResult(
+            iv=None,
+            status=SolveStatus.EXPIRED,
+            message=f"ttm={ttm:.6f} below minimum {MIN_TIME_TO_EXPIRY}",
+        )
+
+    intrinsic = _intrinsic_value(spot, strike, is_call, rate, ttm)
+
+    if option_price < MIN_OPTION_PRICE:
+        return ImpliedVolResult(
+            iv=None,
+            status=SolveStatus.PRICE_TOO_LOW,
+            message=f"option_price={option_price} < {MIN_OPTION_PRICE}",
+            option_price=option_price,
+            intrinsic=intrinsic,
+        )
+
+    if option_price < intrinsic - 1e-6:
+        return ImpliedVolResult(
+            iv=None,
+            status=SolveStatus.INTRINSIC_VIOLATION,
+            message=f"price={option_price:.4f} < intrinsic={intrinsic:.4f}",
+            option_price=option_price,
+            intrinsic=intrinsic,
+        )
+
+    # ── QuantLib solve ───────────────────────────────────────────────────
+    try:
+        eval_date = ql.Date(15, 1, 2020)  # arbitrary anchor for determinism
+        ql.Settings.instance().evaluationDate = eval_date
+
+        option_type = ql.Option.Call if is_call else ql.Option.Put
+        payoff = ql.PlainVanillaPayoff(option_type, strike)
+
+        # Compute expiry date from TTM
+        expiry_serial = eval_date.serialNumber() + int(round(ttm * 365))
+        expiry_date = ql.Date(expiry_serial)
+        exercise = ql.EuropeanExercise(expiry_date)
+
+        option = ql.VanillaOption(payoff, exercise)
+
+        process = _build_ql_process(spot, rate, dividend, vol_guess, eval_date)
+        option.setPricingEngine(ql.AnalyticEuropeanEngine(process))
+
+        iv = option.impliedVolatility(
+            option_price,
+            process,
+            QUANTLIB_TOLERANCE,
+            QUANTLIB_MAX_ITER,
+            MIN_IV,
+            MAX_IV,
+        )
+
+        if math.isfinite(iv) and MIN_IV <= iv <= MAX_IV:
+            return ImpliedVolResult(
+                iv=iv,
+                status=SolveStatus.QUANTLIB_OK,
+                option_price=option_price,
+                intrinsic=intrinsic,
+            )
+
+    except RuntimeError as exc:
+        logger.debug("QuantLib solver failed for S=%.2f K=%.2f: %s", spot, strike, exc)
+    except Exception as exc:
+        logger.warning("Unexpected QuantLib error: %s", exc)
+
+    # ── Brent fallback ───────────────────────────────────────────────────
+    return _brent_fallback(
+        option_price=option_price,
+        spot=spot,
+        strike=strike,
+        ttm=ttm,
+        rate=rate,
+        dividend=dividend,
+        is_call=is_call,
+        intrinsic=intrinsic,
+    )
+
+
+def _brent_fallback(
+    option_price: float,
+    spot: float,
+    strike: float,
+    ttm: float,
+    rate: float,
+    dividend: float,
+    is_call: bool,
+    intrinsic: float,
+) -> ImpliedVolResult:
+    """Scipy Brent root-finding fallback when QuantLib fails."""
+
+    def _bs_price_for_vol(sigma: float) -> float:
+        """Black-Scholes price as a function of vol, for root finding."""
+        d1 = (
+            math.log(spot / strike)
+            + (rate - dividend + 0.5 * sigma * sigma) * ttm
+        ) / (sigma * math.sqrt(ttm))
+        d2 = d1 - sigma * math.sqrt(ttm)
+
+        df = math.exp(-rate * ttm)
+        fwd = spot * math.exp((rate - dividend) * ttm)
+
+        from scipy.stats import norm
+
+        if is_call:
+            return fwd * norm.cdf(d1) * math.exp(-rate * ttm) - strike * df * norm.cdf(d2)
+        return strike * df * norm.cdf(-d2) - fwd * math.exp(-rate * ttm) * norm.cdf(-d1)
+
+    def objective(sigma: float) -> float:
+        return _bs_price_for_vol(sigma) - option_price
+
+    try:
+        iv, result = brentq(
+            objective,
+            MIN_IV,
+            MAX_IV,
+            xtol=1e-10,
+            rtol=1e-10,
+            maxiter=200,
+            full_output=True,
+        )
+        if math.isfinite(iv) and MIN_IV <= iv <= MAX_IV:
+            return ImpliedVolResult(
+                iv=iv,
+                status=SolveStatus.BRENT_FALLBACK,
+                iterations=result.iterations,
+                option_price=option_price,
+                intrinsic=intrinsic,
+                message="Brent fallback succeeded",
+            )
+    except (ValueError, RuntimeError) as exc:
+        logger.debug("Brent fallback also failed: %s", exc)
+
+    return ImpliedVolResult(
+        iv=None,
+        status=SolveStatus.CONVERGENCE_FAILURE,
+        message="Both QuantLib and Brent solvers failed to converge",
+        option_price=option_price,
+        intrinsic=intrinsic,
+    )
+
+
+# ── Batch solver ─────────────────────────────────────────────────────────────
+
+def solve_iv_chain(
+    records: list[dict],
+    spot: float,
+    rate: float = 0.05,
+    dividend: float = 0.0,
+) -> list[dict]:
+    """
+    Solve IV for an entire option chain.
+
+    Each record dict must contain: strike, ttm, option_price, is_call.
+    Returns a new list of dicts with ``iv`` and ``iv_status`` appended.
+    """
+    results: list[dict] = []
+    for rec in records:
+        res = implied_volatility(
+            option_price=rec["option_price"],
+            spot=spot,
+            strike=rec["strike"],
+            ttm=rec["ttm"],
+            rate=rate,
+            dividend=dividend,
+            is_call=rec["is_call"],
+        )
+        out = {**rec, "iv": res.iv, "iv_status": res.status.value}
+        results.append(out)
+    return results
