@@ -33,6 +33,13 @@ Before listing gaps, here's what's already built and can be leveraged:
 - `FillOrderAsync` already accepts `multiplier` and optional `OptionLegInput` with Greeks snapshots
 - Position tracking with multiplier-aware cost basis and PnL (`AvgCostBasis × NetQuantity × Multiplier`)
 
+**Massive MCP (Starter Plan):**
+- Built-in analytical Black-Scholes functions: `bs_price`, `bs_delta`, `bs_gamma`, `bs_vega`, `bs_theta`, `bs_rho` — applied as column-level post-processing on any data query
+- Technical functions: `ema`, `sma`, `simple_return`, `log_return`, `cumulative_return`, `sharpe_ratio`
+- All functions take standard inputs (S, K, T, r, sigma for Greeks; column + window for technicals)
+- **No options chain endpoints, no IV data, no snapshots** on the starter plan — you supply `sigma` (IV) from another source (Polygon or estimated)
+- Best suited for: bulk scenario analysis on tabular data, enriching Massive query results with Greeks, ad-hoc research
+
 **Frontend (Angular):**
 - `OptionsChainComponent` — full chain viewer with Greeks, IV, OI, bid/ask, ATM highlighting, expiration ribbon
 - `OptionsStrategyLabComponent` — multi-leg builder with templates (Bull Call Spread, Bear Put Spread, etc.), payoff chart, What-If scenarios, time decay analysis
@@ -193,15 +200,15 @@ This is clean because one QuantLib `price_option()` call gives you **both** the 
 
 **What exists:** Dynamic form generation from Pydantic `params_schema` with JSON Schema support.
 
-**What V1 needs:** ~20 new parameters in logical groups, enum dropdowns, conditional visibility.
+**What V1 needs:** ~20 new parameters in logical groups, enum dropdowns, conditional visibility. Notably this includes `pricing_mode` (MARKET_PREFERRED / QUANTLIB_ONLY / MARKET_REQUIRED) and `pricing_engine` (analytic_bs / binomial_crr / etc.) as top-level strategy settings.
 
-**What already works:** Pydantic v2 JSON Schema supports `enum` types (renders as dropdown), `title` and `description` (renders as labels/tooltips). The frontend form generator already handles numbers, booleans, and strings.
+**What already works:** Pydantic v2 JSON Schema supports `enum` types (renders as dropdown), `title` and `description` (renders as labels/tooltips). The frontend form generator already handles numbers, booleans, and strings. The QuantLib pricer already defines a `PricingEngine` enum with 6 engines.
 
 **Gaps:**
 - Conditional visibility (show bull call delta targets only when `spread_type == BULL_CALL`) — not supported by the current form generator
 - Logical grouping with section headers — would need JSON Schema `allOf` or a custom `x-group` extension
 
-**V1 pragmatic approach:** Show all parameters flat (both bull call and bull put delta targets visible regardless of spread_type). It's not pretty but it works. Add grouping in a follow-up.
+**V1 pragmatic approach:** Show all parameters flat (both bull call and bull put delta targets visible regardless of spread_type). The `pricing_mode` and `pricing_engine` dropdowns work out of the box as Pydantic enums. Add grouping in a follow-up.
 
 **Effort:** Small for the flat approach. Medium if you want proper grouping/conditional fields.
 
@@ -260,35 +267,101 @@ This is not a code challenge — it's an **interpretation challenge**. A 75-minu
 
 ---
 
-## Architectural Decision: Consolidating on QuantLib
+## Architectural Decision: Configurable Pricing Mode — Market Data, QuantLib, or Hybrid
 
-**Current state:** The codebase has three parallel pricing implementations:
+**Core principle: The pricing source should be a strategy-level configuration, not a hardcoded hierarchy.**
 
-1. **QuantLib pricer** (`quantlib_pricer.py`) — full BSM process, 6 engines, all Greeks + rho, dividend yield, d1/d2 diagnostics. Used by `/api/quantlib/*` endpoints.
-2. **Legacy BS solver** (`bs_solver.py`) — hand-rolled BS formula, IV solver. Used by the IV builder pipeline.
-3. **Legacy strategy engine** (`strategy_engine.py`) — hand-rolled BS Greeks, POP, EV, payoff curves. Used by `/api/strategy/analyze`.
+There are legitimate reasons to prefer each approach:
 
-Additionally, `contract_finder.py` has its own `_bs_delta()` function (5 lines of manual BS delta).
+- **Real market data** gives you actual supply/demand dynamics, real skew, real bid/ask — the most realistic backtest. But it's only available for recent dates (live snapshot) or requires significant data caching (historical aggs), and market Greeks from Polygon can occasionally be stale or inconsistent.
+- **QuantLib-only** gives you deterministic, reproducible results with a consistent model. Every run produces identical Greeks and prices. It supports dividend yield, multiple pricing engines (analytic BS, binomial, finite difference, Monte Carlo), and is fully self-contained — no API calls per bar. This is ideal for validating mechanics, debugging, and comparing engine behaviors across runs.
+- **Hybrid** (prefer market, fall back to QuantLib) gives you the best available data at each point in time, but results may not be perfectly reproducible if market data availability changes between runs.
 
-**Recommendation: Lean into QuantLib as the single pricing authority for the engine.**
+**The pricing mode should be a configurable enum on the strategy:**
 
-The backtest engine should use QuantLib's `price_option()` for all option pricing and Greeks. This means:
+```
+pricing_mode:
+  MARKET_PREFERRED  — Use real market data when available, QuantLib when not
+  QUANTLIB_ONLY     — Use QuantLib for all pricing and Greeks (deterministic, no API dependency)
+  MARKET_REQUIRED   — Use real market data only; skip trade if unavailable (strictest)
+```
 
-- **Strike selection** in the engine uses QuantLib delta, not the hand-rolled `_bs_delta()` from contract_finder
-- **Fill prices** come from QuantLib's NPV, not from a separate BS calculation
-- **Entry/exit Greeks** (for logging) come from the same QuantLib call that produces the price — no extra computation
-- **Strategy-level Greeks** use QuantLib's `price_strategy()` for aggregate net delta/gamma/theta/vega
+**The data sources available to the engine:**
 
-**What this doesn't replace (yet):**
-- The IV builder pipeline still needs `bs_solver.py` for *implied volatility solving* (QuantLib has `ql.ImpliedVolatility` but it's not exposed through `quantlib_pricer.py` yet — worth adding)
-- The strategy analyze endpoint (`/api/strategy/analyze`) uses `strategy_engine.py` for POP, EV, payoff curves — these are distribution-level computations that QuantLib doesn't directly provide, so the legacy engine stays for now
-- Live option chain snapshots from Polygon still provide the real-market Greeks for the chain viewer UI
+| Source | When Available | What It Provides |
+|--------|---------------|-----------------|
+| Polygon live snapshot | Current/recent dates | Real Greeks, IV, bid/ask, OI, volume — full liquidity picture |
+| Polygon historical option aggs | Any past date, per-contract | Real OHLCV prices, but no Greeks/IV/OI |
+| Polygon contract listing + QuantLib | Any past date (contract metadata only) | Theoretical prices and Greeks from QuantLib given spot + IV estimate |
+| QuantLib standalone | Always (no external data needed) | Full theoretical pricing and Greeks from inputs alone |
+
+**How each mode resolves data:**
+
+**`MARKET_PREFERRED` (recommended default for production backtests):**
+1. Try Polygon live snapshot → real Greeks, bid/ask, OI, volume. Delta targeting uses market delta. Fills use market bid/ask.
+2. Fall back to Polygon historical option aggs → real prices, QuantLib Greeks (from solved IV).
+3. Fall back to contract listing + QuantLib synthetic → theoretical everything.
+4. Log the source tier used per trade for transparency.
+
+**`QUANTLIB_ONLY` (recommended default for V1 development and validation):**
+1. Use `list_options_contracts(as_of_date=...)` to know which contracts existed at the signal date.
+2. Price every contract with QuantLib's `price_option()` using spot from the equity bar + IV estimate from `OptionsIvSnapshot` or a flat assumption.
+3. All Greeks come from QuantLib. Fill prices are QuantLib NPV ± configurable half-spread.
+4. Fully deterministic. No per-bar API calls. Same result every run.
+
+**`MARKET_REQUIRED` (for high-fidelity backtests):**
+1. Only use real market data. If the snapshot or historical aggs aren't available for this date, skip the trade.
+2. Logs "NO TRADE: market data unavailable" — counts toward skipped signals.
+3. Most conservative, but trade count may be lower.
+
+**How QuantLib is used in each mode:**
+
+| Mode | Pricing | Greeks | Fill Prices | IV |
+|------|---------|--------|-------------|-----|
+| `MARKET_PREFERRED` | Market when available, QuantLib fallback | Market when available, QuantLib fallback | Market bid/ask when available, QuantLib NPV ± spread fallback | Market IV when available, solved or estimated fallback |
+| `QUANTLIB_ONLY` | QuantLib always | QuantLib always | QuantLib NPV ± configurable spread | Estimated from `OptionsIvSnapshot` or flat assumption |
+| `MARKET_REQUIRED` | Market only | Market only | Market bid/ask only | Market IV only |
+
+The strategy doesn't need to know which source was used internally. The `ChainResolver` returns the same `OptionChainSnapshot` dataclass regardless of mode, with a `source` field indicating provenance ("live", "historical_aggs", "quantlib_synthetic") for logging and trust assessment.
+
+**Current state of the codebase — four pricing sources:**
+
+1. **Polygon market data** — real-market Greeks, IV, bid/ask, OI, volume from live snapshots. The ground truth when available.
+2. **QuantLib pricer** (`quantlib_pricer.py`) — full BSM process, 6 engines (Analytic BS, Binomial CRR/JR/LR, Finite Diff, Monte Carlo), all Greeks + rho, dividend yield, d1/d2 diagnostics. Used by `/api/quantlib/*` endpoints.
+3. **Massive MCP BS functions** — `bs_price`, `bs_delta`, `bs_gamma`, `bs_vega`, `bs_theta`, `bs_rho`. Column-level analytical BS functions that run as post-processing on Massive data queries. Same closed-form math as QuantLib's `AnalyticEuropeanEngine`. No options chain endpoints or IV data — you supply `sigma`.
+4. **Legacy hand-rolled BS** — `bs_solver.py` (pricing + IV solver), `strategy_engine.py` (Greeks, POP, EV, payoff curves), `contract_finder.py`'s `_bs_delta()`.
+
+**Recommended roles for each source:**
+
+| Source | Role | When to Use |
+|--------|------|-------------|
+| **Polygon market data** | Observed pricing authority | Live/recent backtests, paper trading, production. Real Greeks, IV, bid/ask. |
+| **QuantLib** | Model pricing authority (engine) | Backtest engine pricing and Greeks. Supports exotic engines (binomial, FD, MC), dividend yield, full BSM process. The engine's `QUANTLIB_ONLY` mode uses this exclusively. Also used for IV solving (new `implied_volatility()` function). |
+| **Massive BS functions** | Scenario analysis & data pipeline enrichment | What-if analysis on Massive query results (e.g., "what's the delta of every SPY call at these strikes given 20% vol?"). Ad-hoc research queries where you want Greeks computed inline on tabular data without calling the Python service. Not for the engine's hot path. |
+| **Legacy BS** | Existing consumers only (deprecation path) | `bs_solver.py` stays for IV builder until QuantLib IV solver is ready. `strategy_engine.py` stays for POP/EV/payoff curves. `_bs_delta()` in contract_finder replaced by QuantLib in engine context. |
+
+**Why QuantLib for the engine, not Massive BS functions:**
+
+Massive's `bs_*` functions and QuantLib's `AnalyticEuropeanEngine` produce identical results — they're the same closed-form Black-Scholes math. The difference is operational:
+
+- **QuantLib** runs locally in the Python process, supports 6 pricing engines (not just analytical), handles dividend yield, and will gain IV solving. It's the right tool for the engine's inner loop where you need sub-millisecond pricing, engine switching, and full control.
+- **Massive BS functions** run as column transforms on Massive data queries. They're ideal for bulk enrichment of tabular data (e.g., computing Greeks across an entire option chain in a single query). They're the right tool for research/analysis workflows where you're already in the Massive data pipeline.
+
+Both should coexist. They serve different use cases and neither replaces the other.
+
+**Consolidation plan:**
+
+- QuantLib becomes the engine's model pricing authority — all theoretical pricing and Greeks in the backtest engine go through QuantLib
+- Massive BS functions become the research/analysis pricing tool — use them for ad-hoc queries, scenario analysis, and data pipeline enrichment
+- Polygon market data remains the observed pricing authority — real market data takes precedence when available and the pricing mode allows it
+- Legacy BS implementations are on a deprecation path: `bs_solver.py` stays until QuantLib IV solver ships; `strategy_engine.py` stays for POP/EV/payoff curves; `_bs_delta()` replaced by QuantLib in engine context
 
 **Consolidation tasks for V1:**
-1. Add an `implied_volatility()` function to `quantlib_pricer.py` using QuantLib's root-finding (replaces `bs_solver.py` over time)
-2. Create an engine-facing `OptionPricer` wrapper that calls `quantlib_pricer.price_option()` and returns a clean dataclass with price + all Greeks
-3. Use this wrapper in the new strategy for both strike selection (delta targeting) and fill pricing
-4. Log QuantLib-computed Greeks in the trade's indicators bag for every entry
+1. Add `implied_volatility()` to `quantlib_pricer.py` using QuantLib's root-finding (enables solving IV from real option prices — needed for `MARKET_PREFERRED` tier 2)
+2. Create `engine/options/chain_resolver.py` — the mode-aware data resolver. In `QUANTLIB_ONLY` mode it skips all market data calls. In `MARKET_PREFERRED` it tries live → historical → synthetic. In `MARKET_REQUIRED` it only uses market data or skips.
+3. Create `engine/options/pricer.py` — thin wrapper that accepts a contract + market state, returns a unified dataclass with price + all Greeks. In `QUANTLIB_ONLY` mode, Greeks always come from QuantLib. In `MARKET_PREFERRED`, market Greeks are used when present, QuantLib fills gaps.
+4. Add `pricing_mode` (enum) and `pricing_engine` (enum, defaults to `analytic_bs`) to the strategy's Pydantic params schema
+5. Log the pricing mode, engine, and per-trade data source in every trade's indicators bag
 
 ---
 
@@ -296,10 +369,11 @@ The backtest engine should use QuantLib's `price_option()` for all option pricin
 
 | Priority | Challenge | Effort | What Already Exists |
 |----------|-----------|--------|---------------------|
-| **P0 — QuantLib Integration + Data Bridge** | | | |
-| | QuantLib consolidation (new) | **Small** | `quantlib_pricer.py` exists. Need thin engine-facing wrapper + IV solver. |
-| | #1 Option chain data for engine | **Medium** | `list_options_contracts(as_of_date)` + QuantLib synthetic pricing = no massive data download needed for V1. |
-| | #5 Option fill prices | **Small** | QuantLib `price_option()` gives price + Greeks in one call. Add spread simulation. |
+| **P0 — Data Resolution + Pricing** | | | |
+| | ChainResolver (mode-aware) | **Medium** | Live snapshot, `list_options_contracts(as_of_date)`, QuantLib pricer all exist. Need resolver that respects `pricing_mode` config: `QUANTLIB_ONLY`, `MARKET_PREFERRED`, or `MARKET_REQUIRED`. |
+| | QuantLib IV solver | **Small** | `quantlib_pricer.py` exists. Add `implied_volatility()` — needed for `MARKET_PREFERRED` mode (solve IV from real prices → QuantLib Greeks). |
+| | #1 Option chain data for engine | **Medium** | Three pricing modes available. V1 defaults to `QUANTLIB_ONLY` for deterministic development; switch to `MARKET_PREFERRED` for production backtests. |
+| | #5 Option fill prices | **Small** | `QUANTLIB_ONLY`: NPV ± configurable spread. `MARKET_PREFERRED`/`MARKET_REQUIRED`: real bid/ask when available. |
 | **P1 — Engine Core** | | | |
 | | #2 Multi-leg trade model | **Small** | `indicators` bag already supports dynamic fields. Convention decision. |
 | | #3 Spread PnL calculation | **Small** | Strategy subclass override. Stats engine works unchanged. |
@@ -319,33 +393,44 @@ The backtest engine should use QuantLib's `price_option()` for all option pricin
 
 ## Revised Recommended Approach
 
-With QuantLib, the architecture simplifies significantly. The original "massive data problem" (Challenge #1) shrinks because QuantLib can synthesize option prices and Greeks from just the underlying's price, a volatility estimate, and the contract's strike/expiration. You don't need historical option bar data for V1.
+The architecture now follows a clear principle: **real market data when available, QuantLib when not.** The `ChainResolver` abstraction means the strategy doesn't care where the data comes from — it gets the same dataclass either way, and the source is logged for transparency.
 
-**Phase 1 — QuantLib engine wrapper (the new critical path):**
+**Phase 1 — ChainResolver + Pricer (the critical path):**
 
-1. Create `engine/options/pricer.py` — thin wrapper around `quantlib_pricer.price_option()` that accepts a contract (strike, expiration, type) + market state (spot, IV, rate, eval_date) and returns a dataclass with price, delta, gamma, theta, vega. This is the single pricing authority for the engine.
-2. Add `implied_volatility()` to `quantlib_pricer.py` using QuantLib's root-finding, so the IV builder can migrate off `bs_solver.py` over time.
-3. Create `engine/options/chain_builder.py` — at entry signal time, calls `PolygonClientService.list_options_contracts(as_of_date=signal_date)` to get available strikes/expirations, then uses the QuantLib pricer to compute theoretical prices and Greeks for each. Returns a filtered chain ready for strike selection.
+1. Create `engine/options/chain_resolver.py` — the mode-aware resolver:
+   - Accepts `pricing_mode` (QUANTLIB_ONLY / MARKET_PREFERRED / MARKET_REQUIRED) and `pricing_engine` (analytic_bs, binomial_crr, etc.)
+   - `QUANTLIB_ONLY`: Fetches contract metadata from Polygon (`list_options_contracts`), prices everything with QuantLib. No market Greeks used even if available. Deterministic, fast, zero per-bar API calls.
+   - `MARKET_PREFERRED`: Tries live snapshot → historical aggs + QuantLib IV solver → QuantLib synthetic. Uses real Greeks/prices when available, QuantLib fills gaps.
+   - `MARKET_REQUIRED`: Only uses real market data. Skips trade if unavailable.
+   - All modes return the same `OptionChainSnapshot` dataclass with a `source` field per contract.
+2. Create `engine/options/pricer.py` — thin wrapper over QuantLib and/or market data. In `QUANTLIB_ONLY` mode, always calls `quantlib_pricer.price_option()`. In `MARKET_PREFERRED`, passes through market Greeks when present, calls QuantLib otherwise.
+3. Add `implied_volatility()` to `quantlib_pricer.py` using QuantLib's root-finding — needed for `MARKET_PREFERRED` tier 2 (solve IV from historical option prices, then compute Greeks via QuantLib).
+4. Port `contract_finder.py`'s filtering logic (liquidity, DTE, delta targeting) into the engine namespace, using the pricer for delta rather than the hand-rolled `_bs_delta()`.
 
-**Phase 2 — Strategy class (can start in parallel):**
+**Phase 2 — Strategy class (can start in parallel with Phase 1):**
 
 Build `SpyEmaCrossoverOptionsStrategy` inheriting from the base. It reuses the same signal engine (EMA crossover + RSI) and adds:
 - `OpenSpread` state model (from the V1 spec)
-- On entry signal: call chain_builder → filter by DTE/liquidity → select strikes by QuantLib delta → compute net debit/credit → log trade with full leg detail in indicators bag
-- On exit: reprice legs via QuantLib with updated spot and DTE → compute exit credit/debit → log PnL
+- On entry signal: call `ChainResolver` → filter by DTE/liquidity → select strikes by delta (real or QuantLib) → fill at bid/ask (real) or theoretical ± spread (synthetic) → log trade with full leg detail + data source in indicators bag
+- On exit: resolve prices again with updated spot and DTE → compute exit credit/debit → log PnL
 - Timed exit countdown (bars_remaining)
 
 **Phase 3 — Frontend polish:**
-Dynamic indicator rendering handles most of it. Add column formatting for option-specific fields, signal markers on charts, flat config form. The existing Options Strategy Lab patterns can inform the UI.
+Dynamic indicator rendering handles most of it. Add column formatting for option-specific fields (including a "data source" indicator so you can see which trades used real vs. synthetic data), signal markers on charts, flat config form. The existing Options Strategy Lab patterns can inform the UI.
 
 **Phase 4 — Validation:**
 - Cross-check engine trades against `/api/quantlib/strategy` endpoint (independent QuantLib call path)
+- Run the same backtest in `QUANTLIB_ONLY` and `MARKET_PREFERRED` modes — compare trade-by-trade Greeks and PnL to quantify how much the model diverges from market reality
+- For trades with real market data: compare QuantLib theoretical Greeks against market Greeks to gauge model accuracy per strike/DTE bucket
 - Verify signal parity with equity strategy (same 63 entry/exit bars)
 - Unit test each component: delta selection, liquidity filter, spread construction, PnL math
-- Compare QuantLib Greeks against legacy `strategy_engine.py` Greeks for sanity
 
-**What QuantLib unlocks for V2+:**
-- Switch from flat IV to a proper volatility surface (QuantLib supports `BlackVarianceSurface`)
-- Use binomial or finite-diff engines for American-style options
-- Add dividend yield modeling for more accurate SPY pricing
-- Monte Carlo simulations for exotic strategies
+**What this architecture unlocks for V2+:**
+- **`MARKET_PREFERRED` becomes the default** as you build up cached option data — progressively more trades use real data
+- `QUANTLIB_ONLY` mode stays valuable for reproducible research, model comparison, and development
+- The `pricing_engine` parameter lets you compare analytic BS vs. binomial vs. finite-diff results on the same backtest — the QuantLib engine enum is already defined with 6 options
+- QuantLib upgrades to volatility surfaces (`BlackVarianceSurface`) improve `QUANTLIB_ONLY` accuracy without changing the strategy
+- Binomial/finite-diff engines for American-style options
+- The `source` field in trade logs becomes a data quality metric — you can measure how much of your backtest relied on real vs. modeled data
+- Paper trading / live trading uses `MARKET_REQUIRED`, and the same strategy class works without changes
+- A/B testing model accuracy: run `QUANTLIB_ONLY` vs. `MARKET_PREFERRED` on the same date range, diff per-trade Greeks and PnL

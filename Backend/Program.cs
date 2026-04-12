@@ -40,11 +40,12 @@ var circuitBreakerPolicy = HttpPolicyExtensions
         durationOfBreak: TimeSpan.FromSeconds(15));
 
 // Add HttpClient with Polly for resilience (testable with mocked HttpClient)
+// 300s timeout to accommodate heavy endpoints like /api/quantlib/compare (100 pts × 7 engines)
 builder.Services.AddHttpClient<IPolygonService, PolygonService>(client =>
 {
     var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
     client.BaseAddress = new Uri(baseUrl);
-    client.Timeout = TimeSpan.FromSeconds(120);
+    client.Timeout = TimeSpan.FromSeconds(300);
 })
 .AddPolicyHandler(retryPolicy)
 .AddPolicyHandler(circuitBreakerPolicy);

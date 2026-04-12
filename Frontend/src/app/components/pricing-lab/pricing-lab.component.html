@@ -1,0 +1,532 @@
+<div class="pricing-lab bg-slate-900 text-slate-200 min-h-screen px-4 py-3">
+  <!-- Header -->
+  <div class="flex items-center gap-3 mb-4 flex-wrap">
+    <h1 class="text-lg font-bold text-white shrink-0 flex items-center gap-2">
+      <i class="pi pi-chart-bar text-purple-400"></i>
+      Pricing Lab
+    </h1>
+
+    <input
+      pInputText
+      [ngModel]="ticker()"
+      (ngModelChange)="ticker.set($event)"
+      placeholder="Ticker"
+      class="w-24"
+      (keyup.enter)="fetchExpirations()"
+    />
+    <p-button
+      label="Load"
+      icon="pi pi-search"
+      [loading]="expirationsLoading()"
+      (onClick)="fetchExpirations()"
+      severity="info"
+      size="small"
+    />
+
+    @if (underlying(); as u) {
+      <div class="flex items-center gap-2 border-l border-slate-700 pl-3">
+        <span class="text-white font-bold">{{ u.ticker }}</span>
+        <span class="text-slate-100 font-semibold">{{ u.price | number:'1.2-2' }}</span>
+      </div>
+    }
+
+    <!-- Docs toggle -->
+    <p-button
+      [label]="showDocs() ? 'Hide Docs' : 'Documentation'"
+      [icon]="showDocs() ? 'pi pi-times' : 'pi pi-book'"
+      (onClick)="showDocs.set(!showDocs())"
+      severity="secondary"
+      size="small"
+      [outlined]="true"
+      class="ml-auto"
+    />
+  </div>
+
+  <!-- ═══ INSTRUCTIONS CARD (always visible before results) ═══ -->
+  @if (!serverResult() && !compareLoading()) {
+    <div class="instructions-card mb-4">
+      <div class="flex items-center gap-2 mb-2">
+        <i class="pi pi-info-circle text-blue-400"></i>
+        <strong class="text-white text-sm">Quick Start</strong>
+      </div>
+      <div class="instructions-steps">
+        <div class="step">
+          <span class="step-num">1</span>
+          <span>Enter a ticker (e.g. <strong>SPY</strong>) and click <strong>Load</strong></span>
+        </div>
+        <div class="step">
+          <span class="step-num">2</span>
+          <span>Pick an <strong>expiration</strong>, choose <strong>Calls</strong> or <strong>Puts</strong>, then select a <strong>strike</strong></span>
+        </div>
+        <div class="step">
+          <span class="step-num">3</span>
+          <span>Comparison runs automatically — or adjust parameters and click <strong>Compare</strong></span>
+        </div>
+        <div class="step">
+          <span class="step-num">4</span>
+          <span>Toggle <strong>Metric</strong> (Price/Delta/Gamma/Theta/Vega/Rho) and <strong>Models</strong> to customize the view</span>
+        </div>
+      </div>
+      <p class="text-xs text-slate-500 mt-2">
+        Click <strong>Documentation</strong> at any time for detailed methodology, model descriptions, and interpretation guidance.
+      </p>
+    </div>
+  }
+
+  <!-- ═══ STATUS MESSAGE BAR ═══ -->
+  @if (statusMessage(); as msg) {
+    <div class="status-bar mb-3" [class]="'status-bar status-' + msg.type">
+      @switch (msg.type) {
+        @case ('info') { <i class="pi pi-info-circle"></i> }
+        @case ('warn') { <i class="pi pi-exclamation-triangle"></i> }
+        @case ('error') { <i class="pi pi-times-circle"></i> }
+        @case ('success') { <i class="pi pi-check-circle"></i> }
+      }
+      <span>{{ msg.text }}</span>
+      <button class="status-dismiss" (click)="statusMessage.set(null)">
+        <i class="pi pi-times"></i>
+      </button>
+    </div>
+  }
+
+  <!-- Expiration + Contract picker row -->
+  @if (availableExpirations().length) {
+    <div class="flex items-end gap-3 mb-4 flex-wrap">
+      <!-- Expiration -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide font-medium">Expiration</label>
+        <p-select
+          [options]="availableExpirations()"
+          [ngModel]="selectedExpiration()"
+          (ngModelChange)="onExpirationChange($event)"
+          placeholder="Select expiration"
+          class="min-w-[160px]"
+        />
+      </div>
+
+      <!-- Call / Put toggle -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide font-medium">Type</label>
+        <p-selectButton
+          [options]="contractTypeOptions"
+          [ngModel]="contractTypeFilter()"
+          (ngModelChange)="contractTypeFilter.set($event)"
+          optionLabel="label"
+          optionValue="value"
+          size="small"
+        />
+      </div>
+
+      <!-- Contract selector -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide font-medium">Contract</label>
+        @if (chainLoading()) {
+          <p-skeleton width="200px" height="34px" />
+        } @else {
+          <p-select
+            [options]="filteredContracts()"
+            [ngModel]="selectedContract()"
+            (ngModelChange)="onContractSelect($event)"
+            optionLabel="label"
+            optionValue="value"
+            placeholder="Select strike"
+            class="min-w-[200px]"
+            [filter]="true"
+            filterBy="label"
+          />
+        }
+      </div>
+
+      <!-- Risk-free rate -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide font-medium">Risk-Free Rate</label>
+        <input
+          pInputText
+          type="number"
+          step="0.01"
+          [ngModel]="riskFreeRate()"
+          (ngModelChange)="riskFreeRate.set($event)"
+          class="w-20 text-sm"
+        />
+      </div>
+
+      <!-- Spot range -->
+      <div class="flex flex-col gap-1">
+        <label class="text-xs text-slate-400 uppercase tracking-wide font-medium">Range %</label>
+        <input
+          pInputText
+          type="number"
+          step="5"
+          min="5"
+          max="50"
+          [ngModel]="spotRangePct()"
+          (ngModelChange)="spotRangePct.set($event)"
+          class="w-16 text-sm"
+        />
+      </div>
+
+      <!-- Re-run -->
+      @if (selectedContract()) {
+        <p-button
+          label="Compare"
+          icon="pi pi-refresh"
+          [loading]="compareLoading()"
+          (onClick)="runComparison()"
+          severity="help"
+          size="small"
+        />
+      }
+    </div>
+  }
+
+  <!-- Selected contract info -->
+  @if (selectedContract(); as c) {
+    <div class="contract-info mb-4">
+      <span class="text-sm text-slate-300">
+        <strong class="text-white">{{ c.contractType === 'call' ? 'CALL' : 'PUT' }}</strong>
+        Strike: <strong>${{ c.strikePrice | number:'1.2-2' }}</strong>
+        &middot; IV: <strong>{{ (c.impliedVolatility ?? 0) * 100 | number:'1.1-1' }}%</strong>
+        @if (c.lastQuote?.midpoint; as mid) {
+          &middot; Mid: <strong>${{ mid | number:'1.2-2' }}</strong>
+        }
+        @if (serverResult(); as r) {
+          &middot; T: <strong>{{ r.timeToExpiryYears | number:'1.4-4' }} yr</strong>
+        }
+      </span>
+    </div>
+  }
+
+  <!-- Model visibility toggles + metric selector -->
+  @if (serverResult()) {
+    <div class="flex items-start gap-6 mb-3 flex-wrap">
+      <!-- Metric toggle -->
+      <div class="flex flex-col gap-1">
+        <span class="text-xs text-slate-400 uppercase tracking-wide font-medium">Metric</span>
+        <p-selectButton
+          [options]="metricOptions"
+          [ngModel]="selectedMetric()"
+          (ngModelChange)="selectedMetric.set($event)"
+          optionLabel="label"
+          optionValue="value"
+          size="small"
+        />
+      </div>
+
+      <!-- Diff reference selector -->
+      <div class="flex flex-col gap-1">
+        <span class="text-xs text-slate-400 uppercase tracking-wide font-medium">Diff Reference</span>
+        <p-select
+          [options]="diffReferenceOptions"
+          [ngModel]="diffReference()"
+          (ngModelChange)="diffReference.set($event)"
+          optionLabel="label"
+          optionValue="value"
+          class="min-w-[200px]"
+        />
+      </div>
+
+      <!-- Model visibility checkboxes -->
+      <div class="flex flex-col gap-1">
+        <span class="text-xs text-slate-400 uppercase tracking-wide font-medium">Models</span>
+        <div class="model-toggles">
+          @for (m of models; track m.key) {
+            <label class="model-toggle" (click)="toggleModel(m.key)">
+              <span class="model-swatch" [style.background]="m.color"></span>
+              <span class="model-label" [class.dimmed]="!isModelVisible(m.key)">{{ m.shortLabel }}</span>
+            </label>
+          }
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- Main comparison chart -->
+  <div class="chart-card mb-4">
+    <div class="chart-header">
+      <span class="chart-title">Model Comparison — {{ selectedMetric() | titlecase }}</span>
+      <div class="chart-legend">
+        @for (m of models; track m.key) {
+          @if (isModelVisible(m.key)) {
+            <span class="legend-item">
+              <span class="legend-swatch" [style.background]="m.color"></span>
+              {{ m.shortLabel }}
+            </span>
+          }
+        }
+      </div>
+    </div>
+    <div class="chart-outer" style="height: 420px">
+      <div #chartContainer class="chart-canvas"></div>
+      <div #tooltip class="chart-tooltip"></div>
+      @if (!serverResult() && !compareLoading()) {
+        <div class="empty-overlay">
+          <i class="pi pi-chart-bar"></i>
+          <p>Select a contract to compare pricing models</p>
+        </div>
+      }
+      @if (compareLoading()) {
+        <div class="empty-overlay">
+          <i class="pi pi-spin pi-spinner"></i>
+          <p>Computing pricing curves across all engines... This may take 30-60 seconds.</p>
+        </div>
+      }
+    </div>
+  </div>
+
+  <!-- Difference chart — always in DOM so viewChild works, hidden when no data -->
+  <div class="chart-card mb-4" [class.hidden-chart]="!serverResult()">
+    <div class="chart-header">
+      <span class="chart-title">
+        Difference ({{ diffReference() }} minus Others)
+        @if (diffScaleFactor() > 1) {
+          <span class="text-xs text-slate-400 ml-2">
+            Y-axis scaled &times;{{ diffScaleFactor() | number:'1.0-0' }}
+          </span>
+        }
+      </span>
+    </div>
+    <div class="chart-outer" style="height: 260px">
+      <div #diffChartContainer class="chart-canvas"></div>
+    </div>
+  </div>
+
+  <!-- Summary stats -->
+  @if (summaryStats(); as stats) {
+    @if (stats.length) {
+      <div class="stats-grid mb-4">
+        @for (s of stats; track s.key) {
+          <div class="stat-card">
+            <span class="stat-label">{{ diffReference() }} vs {{ s.label }}</span>
+            <span class="stat-value">Max: {{ s.maxDiff.toExponential(3) }}</span>
+            <span class="stat-sub">Avg: {{ s.avgDiff.toExponential(3) }}</span>
+          </div>
+        }
+      </div>
+    }
+  }
+
+  <!-- ═══ DOCUMENTATION PANEL ═══ -->
+  @if (showDocs()) {
+    <div class="docs-panel mb-4">
+      <div class="docs-header">
+        <h2 class="text-base font-bold text-white flex items-center gap-2">
+          <i class="pi pi-book text-purple-400"></i>
+          Pricing Lab — Documentation
+        </h2>
+      </div>
+
+      <div class="docs-content">
+        <!-- What this is -->
+        <section class="docs-section">
+          <h3>What Is the Pricing Lab?</h3>
+          <p>
+            The Pricing Lab is a <strong>validation study</strong> for option pricing. It computes the theoretical
+            price and Greeks (Delta, Gamma, Theta, Vega, Rho) for a single option contract using <strong>8
+            independent pricing models</strong> across a range of underlying spot prices. By overlaying all
+            curves on one chart, you can visually verify that the models agree — and investigate where and
+            why they diverge.
+          </p>
+        </section>
+
+        <!-- Step-by-step testing -->
+        <section class="docs-section">
+          <h3>Testing Steps</h3>
+          <p>
+            <strong>Step 1 — Load a ticker:</strong> Enter the underlying symbol (e.g., SPY, AAPL, QQQ) and click
+            <strong>Load</strong>. This fetches all available option expirations from the market data API.
+          </p>
+          <p>
+            <strong>Step 2 — Pick a contract:</strong> Choose an expiration date, select Calls or Puts, then pick
+            a strike from the dropdown. The dropdown shows strike price and implied volatility (IV) for each contract.
+            Contracts with higher IV will produce larger price values. The comparison begins automatically when you
+            select a contract.
+          </p>
+          <p>
+            <strong>Step 3 — Read the comparison chart:</strong> The top chart overlays all 8 models. If lines overlap
+            perfectly, the models agree. Use the <strong>Metric</strong> toggle to switch between Price, Delta, Gamma,
+            Theta, Vega, and Rho. Hover over the chart to see exact values for each model at any spot price.
+          </p>
+          <p>
+            <strong>Step 4 — Read the difference chart:</strong> The bottom chart shows the numerical difference between
+            a reference model and every other model. Choose which model is the reference via the <strong>Diff Reference</strong>
+            dropdown. When all models agree closely (differences &lt; 0.001), the y-axis auto-scales with a multiplier
+            (e.g., &times;10,000) so tiny differences become visible.
+          </p>
+          <p>
+            <strong>Step 5 — Adjust parameters:</strong> Change the <strong>Risk-Free Rate</strong> (default 5%) or
+            <strong>Range %</strong> (how far above/below the current spot price to plot, default &plusmn;20%).
+            Click <strong>Compare</strong> to re-run with updated parameters.
+          </p>
+          <p>
+            <strong>Step 6 — Toggle models:</strong> Click the model chips (LBS, PyBS, QL-A, CRR, JR, LR, FD, MC)
+            to show/hide individual models. Crossed-out labels = hidden. This helps isolate specific model pairs.
+          </p>
+        </section>
+
+        <!-- What was done -->
+        <section class="docs-section">
+          <h3>What Was Implemented</h3>
+          <p>
+            The Pricing Lab evaluates a single European option at 100 evenly-spaced spot prices (from
+            spot &times; (1 &minus; range%) to spot &times; (1 + range%)). For each spot price, every pricing model
+            computes: the option <strong>price</strong> (NPV), and all five first-order <strong>Greeks</strong>.
+          </p>
+          <p>
+            The <strong>Legacy BS</strong> model runs entirely in the browser (client-side JavaScript). All other
+            models are computed on the server via a single GraphQL query (<code>pricingModelComparison</code>) that
+            calls the Python data service endpoint <code>POST /api/quantlib/compare</code>. This endpoint returns
+            curves for Python BS and all 6 QuantLib engines in one response.
+          </p>
+          <p>
+            If any individual engine fails for a given contract (e.g., numerical instability), that engine is
+            skipped gracefully while others continue — the comparison is never all-or-nothing.
+          </p>
+        </section>
+
+        <!-- The 8 models -->
+        <section class="docs-section">
+          <h3>The 8 Pricing Models</h3>
+          <div class="model-docs-grid">
+            @for (m of models; track m.key) {
+              <div class="model-doc-card">
+                <div class="model-doc-header">
+                  <span class="model-swatch-lg" [style.background]="m.color"></span>
+                  <strong>{{ m.label }}</strong>
+                  <span class="text-xs text-slate-500 ml-1">({{ m.source }})</span>
+                </div>
+                <p class="model-doc-desc">{{ m.description }}</p>
+                <p class="model-doc-lib"><strong>Library:</strong> {{ m.library }}</p>
+              </div>
+            }
+          </div>
+        </section>
+
+        <!-- Mathematical calculations -->
+        <section class="docs-section">
+          <h3>Mathematical Calculations</h3>
+          <p>
+            <strong>Black-Scholes closed-form:</strong> For a European call,
+            C = S&middot;N(d1) &minus; K&middot;e<sup>&minus;rT</sup>&middot;N(d2), where
+            d1 = [ln(S/K) + (r + &sigma;&sup2;/2)T] / (&sigma;&radic;T) and d2 = d1 &minus; &sigma;&radic;T.
+            The three analytic models (Legacy BS, Python BS, QuantLib Analytic BS) all use this formula — they
+            differ only in how N(x) (the standard normal CDF) is computed.
+          </p>
+          <p>
+            <strong>Legacy BS normCdf:</strong> Uses the Abramowitz &amp; Stegun (1964) polynomial approximation
+            (formula 7.1.26) with 5 coefficients. Maximum absolute error |&epsilon;| &lt; 1.5&times;10<sup>&minus;7</sup>.
+            This is the same implementation used in the live option chain pricing.
+          </p>
+          <p>
+            <strong>Python BS normCdf:</strong> Uses <code>scipy.stats.norm.cdf</code> which provides full
+            IEEE 754 double-precision accuracy (~15 significant digits).
+          </p>
+          <p>
+            <strong>QuantLib Analytic BS:</strong> Uses <code>AnalyticEuropeanEngine</code> with a
+            <code>GeneralizedBlackScholesProcess</code>. The CDF is computed via the C++ error function
+            implementation, also at full double precision.
+          </p>
+          <p>
+            <strong>Binomial trees (CRR, JR, LR):</strong> Discretize the stock price evolution into a recombining
+            tree. CRR uses u = e<sup>&sigma;&radic;&Delta;t</sup>, d = 1/u. JR uses drift-adjusted
+            u = e<sup>(r &minus; &sigma;&sup2;/2)&Delta;t + &sigma;&radic;&Delta;t</sup>. LR uses the Peizer-Pratt
+            inversion for transition probabilities, achieving faster convergence. The comparison uses 201 time steps
+            (the single-option endpoint uses 801).
+          </p>
+          <p>
+            <strong>Finite Differences:</strong> Solves the Black-Scholes PDE numerically on a 201&times;200
+            space&times;time grid using the Crank-Nicolson scheme (second-order accurate in both space and time).
+            The single-option endpoint uses an 801&times;800 grid for higher accuracy.
+          </p>
+          <p>
+            <strong>Monte Carlo:</strong> Simulates pseudorandom price paths under the risk-neutral measure
+            (geometric Brownian motion). Uses seed=42 for reproducibility. The comparison uses tolerance=0.02
+            (the single-option endpoint uses 0.001). Stochastic noise in the MC curve is expected and
+            intentional — it demonstrates the probabilistic nature of the method.
+          </p>
+        </section>
+
+        <!-- Greeks -->
+        <section class="docs-section">
+          <h3>Greeks Calculations &amp; Conventions</h3>
+          <p>
+            <strong>Delta</strong> = &part;V/&part;S — sensitivity to underlying price. Range: [0, 1] for calls,
+            [&minus;1, 0] for puts. Computed analytically where possible.
+          </p>
+          <p>
+            <strong>Gamma</strong> = &part;&sup2;V/&part;S&sup2; — rate of change of delta. Always positive for
+            vanilla options. Highest near ATM and expiration.
+          </p>
+          <p>
+            <strong>Theta</strong> = &part;V/&part;t — time decay. Reported <strong>per calendar day</strong>
+            (annual value &divide; 365). Usually negative for long options (the option loses value as time passes).
+          </p>
+          <p>
+            <strong>Vega</strong> = &part;V/&part;&sigma; — sensitivity to implied volatility. Reported
+            <strong>per 1% IV move</strong> (annual value &divide; 100). Highest for ATM, long-dated options.
+          </p>
+          <p>
+            <strong>Rho</strong> = &part;V/&part;r — sensitivity to the risk-free rate. Reported
+            <strong>per 1% rate move</strong> (annual value &divide; 100).
+          </p>
+          <p>
+            For engines without analytic Greek support (Monte Carlo, Finite Differences), Greeks are computed via
+            <strong>numeric finite differencing</strong> (bump-and-revalue): &Delta; &asymp; [V(S+h) &minus; V(S&minus;h)] / 2h.
+            In the comparison endpoint, theta, vega, and rho may fall back to 0 for slow engines to keep
+            computation time reasonable.
+          </p>
+        </section>
+
+        <!-- Interpreting results -->
+        <section class="docs-section">
+          <h3>How to Interpret Results</h3>
+          <p>
+            <strong>Analytic models agree?</strong> The three BS variants (Legacy, Python, QuantLib) should produce
+            near-identical curves. Differences arise purely from normal CDF precision. If max difference
+            is &lt; 1&times;10<sup>&minus;5</sup>, the implementations are validated.
+          </p>
+          <p>
+            <strong>Binomial models converge?</strong> CRR, JR, and LR should be very close to the analytic
+            price. Small oscillations (especially CRR) are expected due to tree discretization. LR typically
+            converges fastest. If you see large differences, the option may have extreme parameters
+            (very short expiry, very deep ITM/OTM).
+          </p>
+          <p>
+            <strong>FD matches analytic?</strong> Finite differences should closely match BS for European options.
+            Its real value is for American options or exotic payoffs where closed-form solutions don't exist.
+          </p>
+          <p>
+            <strong>MC has noise?</strong> Expected. Monte Carlo produces a noisy curve because each spot
+            point is a separate simulation. The noise band width depends on the tolerance parameter. With
+            tol=0.02 (comparison mode), expect &plusmn;0.02 noise around the true price.
+          </p>
+          <p>
+            <strong>Red flags:</strong> If any model diverges significantly (e.g., &gt;$0.10 for price or
+            &gt;0.01 for delta), investigate the contract parameters. Extreme IV (&gt;200%), very short
+            expiry (&lt;1 day), or deep ITM/OTM contracts can stress numerical methods.
+          </p>
+        </section>
+
+        <!-- Architecture -->
+        <section class="docs-section">
+          <h3>System Architecture</h3>
+          <p>
+            <strong>Frontend (Angular):</strong> Computes Legacy BS client-side using <code>black-scholes.ts</code>
+            (Abramowitz &amp; Stegun normCdf polynomial). Sends a single GraphQL query for all server-side models.
+            Charts rendered with <code>lightweight-charts</code> v5 (TradingView).
+          </p>
+          <p>
+            <strong>Backend (.NET / Hot Chocolate):</strong> GraphQL resolver <code>pricingModelComparison</code>
+            proxies the request to the Python data service via <code>POST /api/quantlib/compare</code>.
+            Uses <code>JsonNamingPolicy.SnakeCaseLower</code> for Python interop. Timeout: 300 seconds.
+          </p>
+          <p>
+            <strong>Data Service (Python / FastAPI):</strong> Endpoint <code>/api/quantlib/compare</code> iterates
+            all engines for each spot price. Python BS uses <code>scipy.stats.norm</code>. QuantLib engines
+            use compiled C++ via SWIG Python bindings (<code>QuantLib-Python</code>). Graceful degradation:
+            if one engine fails, others continue.
+          </p>
+        </section>
+      </div>
+    </div>
+  }
+</div>

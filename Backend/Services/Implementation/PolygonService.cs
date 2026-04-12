@@ -688,5 +688,56 @@ public class PolygonService : IPolygonService
         }
     }
 
+    public async Task<PricingCompareResponse> PricingCompareAsync(
+        decimal spot,
+        decimal strike,
+        decimal volatility,
+        string expirationDate,
+        string optionType,
+        decimal riskFreeRate = 0.05m,
+        decimal dividendYield = 0m,
+        string? evaluationDate = null,
+        decimal? spotMin = null,
+        decimal? spotMax = null,
+        int numPoints = 100,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation(
+                "[PricingCompare] Comparing models for {OptionType} S={Spot} K={Strike} σ={Vol} exp={Exp}",
+                optionType, spot, strike, volatility, expirationDate);
+
+            var request = new
+            {
+                spot = (double)spot,
+                strike = (double)strike,
+                volatility = (double)volatility,
+                expiration_date = expirationDate,
+                option_type = optionType,
+                risk_free_rate = (double)riskFreeRate,
+                dividend_yield = (double)dividendYield,
+                evaluation_date = evaluationDate,
+                spot_min = spotMin.HasValue ? (double?)spotMin.Value : null,
+                spot_max = spotMax.HasValue ? (double?)spotMax.Value : null,
+                num_points = numPoints,
+            };
+
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/quantlib/compare", request, cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<PricingCompareResponse>(
+                _jsonOptions, cancellationToken);
+
+            return result ?? throw new HttpRequestException("Null response from pricing compare endpoint");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[PricingCompare] Error comparing pricing models");
+            throw;
+        }
+    }
+
     public HttpClient GetHttpClient() => _httpClient;
 }

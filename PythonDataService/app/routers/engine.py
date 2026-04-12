@@ -54,6 +54,9 @@ from app.engine.strategy.algorithms.sma_crossover import SmaCrossoverAlgorithm
 from app.engine.strategy.algorithms.spy_ema_crossover import (
     SpyEmaCrossoverAlgorithm,
 )
+from app.engine.strategy.algorithms.spy_ema_crossover_options import (
+    SpyEmaCrossoverOptionsAlgorithm,
+)
 from app.engine.strategy.base import Strategy
 
 router = APIRouter()
@@ -131,6 +134,54 @@ class RsiMeanReversionParams(StrategyParamsBase):
     oversold: float = Field(30.0, gt=0, lt=100)
     overbought: float = Field(70.0, gt=0, lt=100)
     resolution_minutes: int = Field(15, ge=1, le=1440)
+
+
+class EmaCrossoverOptionsParams(StrategyParamsBase):
+    """EMA crossover options spread strategy parameters.
+
+    Same signal engine as the equity EMA crossover, but trades bull call
+    or bull put spreads on the underlying's option chain instead.
+    """
+
+    # Signal parameters (same defaults as equity strategy)
+    symbol: str = Field("SPY", min_length=1, max_length=20)
+    ema_fast_period: int = Field(5, ge=2, le=200)
+    ema_slow_period: int = Field(10, ge=3, le=500)
+    rsi_period: int = Field(14, ge=2, le=200)
+    ema_gap_min: float = Field(0.20, ge=0)
+    rsi_min: float = Field(50.0, ge=0, lt=100)
+    rsi_max: float = Field(70.0, gt=0, le=100)
+    timeframe_minutes: int = Field(15, ge=1, le=1440)
+    bars_to_hold: int = Field(5, ge=1, le=200)
+
+    # Options parameters
+    spread_type: str = Field(
+        "BULL_CALL",
+        description="BULL_CALL or BULL_PUT",
+    )
+    min_dte: int = Field(7, ge=0, le=365)
+    max_dte: int = Field(30, ge=1, le=365)
+    long_call_delta_target: float = Field(0.60, ge=0, le=1)
+    short_call_delta_target: float = Field(0.30, ge=0, le=1)
+    short_put_delta_target: float = Field(-0.30, ge=-1, le=0)
+    long_put_delta_target: float = Field(-0.15, ge=-1, le=0)
+    min_open_interest: int = Field(100, ge=0)
+    min_volume: int = Field(10, ge=0)
+    max_bid_ask_spread_pct: float = Field(0.20, ge=0, le=1)
+    contracts_per_trade: int = Field(1, ge=1, le=100)
+    max_positions: int = Field(1, ge=1, le=10)
+    contract_multiplier: int = Field(100, ge=1)
+
+    # Pricing parameters
+    pricing_mode: str = Field(
+        "quantlib_only",
+        description="quantlib_only, market_preferred, or market_required",
+    )
+    pricing_engine: str = Field("analytic_bs")
+    risk_free_rate: float = Field(0.05, ge=0, le=1)
+    dividend_yield: float = Field(0.0, ge=0, le=1)
+    default_iv: float = Field(0.20, ge=0.01, le=5.0)
+    half_spread_pct: float = Field(0.01, ge=0, le=0.5)
 
 
 @dataclass
@@ -213,6 +264,70 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             oversold=p.oversold,  # type: ignore[attr-defined]
             overbought=p.overbought,  # type: ignore[attr-defined]
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
+        ),
+    ),
+    "ema_crossover_options": StrategyRegistration(
+        display_name="EMA Crossover Options",
+        description=(
+            "This strategy uses the exact same EMA crossover signal as the equity version "
+            "— same entry times, same exit times, same 5-bar hold — but instead of buying "
+            "the stock, it opens an options spread on each signal. "
+            "\n\n"
+            "HOW IT WORKS: Every 15-minute bar, EMA(5) and EMA(10) are computed. When "
+            "EMA(5) crosses above EMA(10) with at least a 0.20 gap and RSI(14) is between "
+            "50-70, the signal fires. The strategy then builds a bull call spread (or bull "
+            "put spread, configurable) by selecting two option contracts by delta targeting: "
+            "a long leg near 0.60 delta and a short leg near 0.30 delta. The spread is held "
+            "for exactly 5 bars (75 minutes) and then closed. "
+            "\n\n"
+            "BULL CALL SPREAD: Buy the lower-strike call (higher delta, more expensive), "
+            "sell the higher-strike call (lower delta, cheaper). You pay a net debit. "
+            "Max profit = spread width minus debit. Max loss = the debit paid. Profits "
+            "when the underlying moves up. "
+            "\n\n"
+            "BULL PUT SPREAD: Sell the higher-strike put, buy the lower-strike put. You "
+            "receive a net credit. Max profit = the credit received. Max loss = spread "
+            "width minus credit. Also profits when the underlying stays flat or moves up. "
+            "\n\n"
+            "PRICING: In QuantLib-only mode (default), option prices and Greeks are computed "
+            "synthetically using Black-Scholes via QuantLib — no market data needed, fast to "
+            "backtest. Market-preferred mode uses real Polygon option snapshots when available, "
+            "falling back to QuantLib. Market-required mode only trades when real data exists. "
+            "\n\n"
+            "TRADE PARITY: Signal timing is identical to the equity EMA Crossover strategy. "
+            "Every entry and exit bar matches 1:1. The only difference is what is traded — "
+            "a defined-risk options spread instead of the underlying stock."
+        ),
+        param_schema=EmaCrossoverOptionsParams,
+        build=lambda p: SpyEmaCrossoverOptionsAlgorithm(
+            symbol=p.symbol,  # type: ignore[attr-defined]
+            ema_fast_period=p.ema_fast_period,  # type: ignore[attr-defined]
+            ema_slow_period=p.ema_slow_period,  # type: ignore[attr-defined]
+            rsi_period=p.rsi_period,  # type: ignore[attr-defined]
+            ema_gap_min=p.ema_gap_min,  # type: ignore[attr-defined]
+            rsi_min=p.rsi_min,  # type: ignore[attr-defined]
+            rsi_max=p.rsi_max,  # type: ignore[attr-defined]
+            timeframe_minutes=p.timeframe_minutes,  # type: ignore[attr-defined]
+            bars_to_hold=p.bars_to_hold,  # type: ignore[attr-defined]
+            spread_type=p.spread_type,  # type: ignore[attr-defined]
+            min_dte=p.min_dte,  # type: ignore[attr-defined]
+            max_dte=p.max_dte,  # type: ignore[attr-defined]
+            long_call_delta_target=p.long_call_delta_target,  # type: ignore[attr-defined]
+            short_call_delta_target=p.short_call_delta_target,  # type: ignore[attr-defined]
+            short_put_delta_target=p.short_put_delta_target,  # type: ignore[attr-defined]
+            long_put_delta_target=p.long_put_delta_target,  # type: ignore[attr-defined]
+            min_open_interest=p.min_open_interest,  # type: ignore[attr-defined]
+            min_volume=p.min_volume,  # type: ignore[attr-defined]
+            max_bid_ask_spread_pct=p.max_bid_ask_spread_pct,  # type: ignore[attr-defined]
+            contracts_per_trade=p.contracts_per_trade,  # type: ignore[attr-defined]
+            max_positions=p.max_positions,  # type: ignore[attr-defined]
+            contract_multiplier=p.contract_multiplier,  # type: ignore[attr-defined]
+            pricing_mode=p.pricing_mode,  # type: ignore[attr-defined]
+            pricing_engine=p.pricing_engine,  # type: ignore[attr-defined]
+            risk_free_rate=p.risk_free_rate,  # type: ignore[attr-defined]
+            dividend_yield=p.dividend_yield,  # type: ignore[attr-defined]
+            default_iv=p.default_iv,  # type: ignore[attr-defined]
+            half_spread_pct=p.half_spread_pct,  # type: ignore[attr-defined]
         ),
     ),
 }

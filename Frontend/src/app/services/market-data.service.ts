@@ -8,7 +8,7 @@ import {
   StockSnapshotsResult, MarketMoversResult, UnifiedSnapshotResult,
   TrackedTickersResult, TickerDetailResult, RelatedTickersResult,
   StrategyAnalyzeResult, StrategyLegInput, FetchProgress,
-  IndicatorTableResult, RuleBasedBacktestResult,
+  IndicatorTableResult, RuleBasedBacktestResult, PricingCompareResult,
 } from '../graphql/types';
 import { environment } from '../../environments/environment';
 
@@ -497,6 +497,52 @@ interface AnalyzeOptionsStrategyResponse {
   errors?: { message: string }[];
 }
 
+const PRICING_MODEL_COMPARISON_QUERY = `
+  query PricingModelComparison(
+    $spot: Decimal!
+    $strike: Decimal!
+    $volatility: Decimal!
+    $expirationDate: String!
+    $optionType: String!
+    $riskFreeRate: Decimal = 0.05
+    $dividendYield: Decimal = 0
+    $evaluationDate: String
+    $spotMin: Decimal
+    $spotMax: Decimal
+    $numPoints: Int = 100
+  ) {
+    pricingModelComparison(
+      spot: $spot
+      strike: $strike
+      volatility: $volatility
+      expirationDate: $expirationDate
+      optionType: $optionType
+      riskFreeRate: $riskFreeRate
+      dividendYield: $dividendYield
+      evaluationDate: $evaluationDate
+      spotMin: $spotMin
+      spotMax: $spotMax
+      numPoints: $numPoints
+    ) {
+      success
+      strike
+      optionType
+      expirationDate
+      timeToExpiryYears
+      models {
+        model
+        points { spot price delta gamma theta vega rho }
+      }
+      error
+    }
+  }
+`;
+
+interface PricingModelComparisonResponse {
+  data: { pricingModelComparison: PricingCompareResult };
+  errors?: { message: string }[];
+}
+
 const GENERATE_INDICATOR_TABLE_QUERY = `
   query GenerateIndicatorTable(
     $ticker: String!
@@ -945,6 +991,46 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.analyzeOptionsStrategy)
+      );
+  }
+
+  comparePricingModels(params: {
+    spot: number;
+    strike: number;
+    volatility: number;
+    expirationDate: string;
+    optionType: string;
+    riskFreeRate?: number;
+    dividendYield?: number;
+    evaluationDate?: string;
+    spotMin?: number;
+    spotMax?: number;
+    numPoints?: number;
+  }): Observable<PricingCompareResult> {
+    return this.http
+      .post<PricingModelComparisonResponse>(GRAPHQL_URL, {
+        query: PRICING_MODEL_COMPARISON_QUERY,
+        variables: {
+          spot: params.spot,
+          strike: params.strike,
+          volatility: params.volatility,
+          expirationDate: params.expirationDate,
+          optionType: params.optionType,
+          riskFreeRate: params.riskFreeRate ?? 0.05,
+          dividendYield: params.dividendYield ?? 0,
+          evaluationDate: params.evaluationDate ?? null,
+          spotMin: params.spotMin ?? null,
+          spotMax: params.spotMax ?? null,
+          numPoints: params.numPoints ?? 100,
+        },
+      })
+      .pipe(
+        tap(response => {
+          if (response.errors?.length) {
+            throw new Error(response.errors.map(e => e.message).join(', '));
+          }
+        }),
+        map(response => response.data.pricingModelComparison),
       );
   }
 }

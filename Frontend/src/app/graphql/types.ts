@@ -467,6 +467,35 @@ export interface GreekCurvePoint {
 }
 
 // ------------------------------------------------------------------
+// Pricing Model Comparison
+// ------------------------------------------------------------------
+
+export interface PricingPoint {
+  spot: number;
+  price: number;
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+  rho: number;
+}
+
+export interface PricingModelCurve {
+  model: string;
+  points: PricingPoint[];
+}
+
+export interface PricingCompareResult {
+  success: boolean;
+  strike: number;
+  optionType: string;
+  expirationDate: string;
+  timeToExpiryYears: number;
+  models: PricingModelCurve[];
+  error: string | null;
+}
+
+// ------------------------------------------------------------------
 // Indicator Table (TradingView-style)
 // ------------------------------------------------------------------
 

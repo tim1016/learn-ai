@@ -195,7 +195,7 @@
             }
 
             @if (selectedStrategy(); as strategy) {
-              <div class="strategy-description">{{ strategy.description }}</div>
+              <div class="strategy-description" [style.white-space]="'pre-line'">{{ strategy.description }}</div>
             }
 
             <div class="actions">

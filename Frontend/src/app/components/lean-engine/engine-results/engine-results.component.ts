@@ -165,6 +165,51 @@ export class EngineResultsComponent {
     return Object.entries(trade.indicators).map(([key, value]) => ({ key, value }));
   }
 
+  isOptionsIndicators(trade: EngineTrade): boolean {
+    return 'spread_type' in trade.indicators;
+  }
+
+  private static readonly SIGNAL_KEYS = new Set(['ema5', 'ema10', 'rsi']);
+  private static readonly SPREAD_KEYS = new Set([
+    'spread_type', 'expiration_dte', 'spread_width',
+    'underlying_entry', 'underlying_exit', 'pricing_mode',
+  ]);
+  private static readonly LONG_LEG_KEYS = new Set([
+    'long_strike', 'long_entry', 'long_exit', 'long_delta',
+  ]);
+  private static readonly SHORT_LEG_KEYS = new Set([
+    'short_strike', 'short_entry', 'short_exit', 'short_delta',
+  ]);
+  private static readonly PNL_KEYS = new Set([
+    'dollar_pnl', 'max_profit', 'max_loss',
+  ]);
+
+  groupedIndicators(trade: EngineTrade): {
+    signal: { key: string; value: number }[];
+    spread: { key: string; value: number }[];
+    longLeg: { key: string; value: number }[];
+    shortLeg: { key: string; value: number }[];
+    pnl: { key: string; value: number }[];
+  } {
+    const signal: { key: string; value: number }[] = [];
+    const spread: { key: string; value: number }[] = [];
+    const longLeg: { key: string; value: number }[] = [];
+    const shortLeg: { key: string; value: number }[] = [];
+    const pnl: { key: string; value: number }[] = [];
+
+    for (const [key, value] of Object.entries(trade.indicators)) {
+      const entry = { key, value };
+      if (EngineResultsComponent.SIGNAL_KEYS.has(key)) signal.push(entry);
+      else if (EngineResultsComponent.SPREAD_KEYS.has(key)) spread.push(entry);
+      else if (EngineResultsComponent.LONG_LEG_KEYS.has(key)) longLeg.push(entry);
+      else if (EngineResultsComponent.SHORT_LEG_KEYS.has(key)) shortLeg.push(entry);
+      else if (EngineResultsComponent.PNL_KEYS.has(key)) pnl.push(entry);
+      else spread.push(entry); // fallback: anything unknown goes to spread group
+    }
+
+    return { signal, spread, longLeg, shortLeg, pnl };
+  }
+
   downloadTradesCsv(): void {
     const r = this.result();
     const header = '#,Entry Time,Entry Price,Exit Time,Exit Price,PnL (pts),PnL %,Result,Signal,Indicators';

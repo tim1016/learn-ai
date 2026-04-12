@@ -130,11 +130,50 @@
                 </td>
                 <td class="signal-cell">{{ t.signal_reason }}</td>
                 <td>
-                  <div class="indicators">
-                    @for (ind of tradeIndicatorEntries(t); track ind.key) {
-                      <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
-                    }
-                  </div>
+                  @if (isOptionsIndicators(t)) {
+                    @let g = groupedIndicators(t);
+                    <div class="options-indicators">
+                      <div class="ind-group">
+                        <span class="ind-group-label">Signal</span>
+                        @for (ind of g.signal; track ind.key) {
+                          <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
+                        }
+                      </div>
+                      <div class="ind-group">
+                        <span class="ind-group-label">Spread</span>
+                        @for (ind of g.spread; track ind.key) {
+                          <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
+                        }
+                      </div>
+                      <div class="ind-group">
+                        <span class="ind-group-label">Long Leg</span>
+                        @for (ind of g.longLeg; track ind.key) {
+                          <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
+                        }
+                      </div>
+                      <div class="ind-group">
+                        <span class="ind-group-label">Short Leg</span>
+                        @for (ind of g.shortLeg; track ind.key) {
+                          <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
+                        }
+                      </div>
+                      <div class="ind-group">
+                        <span class="ind-group-label">PnL</span>
+                        @for (ind of g.pnl; track ind.key) {
+                          <span class="indicator-chip"
+                            [class.positive-chip]="ind.key === 'dollar_pnl' && ind.value > 0"
+                            [class.negative-chip]="ind.key === 'dollar_pnl' && ind.value < 0"
+                          >{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
+                        }
+                      </div>
+                    </div>
+                  } @else {
+                    <div class="indicators">
+                      @for (ind of tradeIndicatorEntries(t); track ind.key) {
+                        <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
+                      }
+                    </div>
+                  }
                 </td>
               </tr>
             }

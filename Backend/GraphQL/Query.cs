@@ -1217,6 +1217,68 @@ public class Query
     }
 
     #endregion
+
+    #region Pricing Model Comparison
+
+    /// <summary>
+    /// Compare pricing models (Legacy JS BS, Python BS, QuantLib BS) across a spot range.
+    /// Returns price and Greek curves for each model to plot side-by-side.
+    /// </summary>
+    [GraphQLName("pricingModelComparison")]
+    public async Task<PricingCompareResult> PricingModelComparison(
+        [Service] IPolygonService polygonService,
+        [Service] ILogger<Query> logger,
+        decimal spot,
+        decimal strike,
+        decimal volatility,
+        string expirationDate,
+        string optionType,
+        decimal riskFreeRate = 0.05m,
+        decimal dividendYield = 0m,
+        string? evaluationDate = null,
+        decimal? spotMin = null,
+        decimal? spotMax = null,
+        int numPoints = 100)
+    {
+        try
+        {
+            var response = await polygonService.PricingCompareAsync(
+                spot, strike, volatility, expirationDate, optionType,
+                riskFreeRate, dividendYield, evaluationDate,
+                spotMin, spotMax, numPoints);
+
+            return new PricingCompareResult
+            {
+                Success = response.Success,
+                Strike = response.Strike,
+                OptionType = response.OptionType,
+                ExpirationDate = response.ExpirationDate,
+                TimeToExpiryYears = response.TimeToExpiryYears,
+                Models = response.Models.Select(m => new PricingModelCurveResult
+                {
+                    Model = m.Model,
+                    Points = m.Points.Select(p => new PricingPointGql
+                    {
+                        Spot = p.Spot,
+                        Price = p.Price,
+                        Delta = p.Delta,
+                        Gamma = p.Gamma,
+                        Theta = p.Theta,
+                        Vega = p.Vega,
+                        Rho = p.Rho,
+                    }).ToList(),
+                }).ToList(),
+                Error = response.Error,
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[PricingCompare] Error comparing pricing models");
+            return new PricingCompareResult { Success = false, Error = ex.Message };
+        }
+    }
+
+    #endregion
 }
 
 public class OptionsChainSnapshotResult
@@ -1559,5 +1621,37 @@ public class QuantLibStrategyResult
     public decimal NetVega { get; set; }
     public decimal NetRho { get; set; }
     public List<QuantLibLegResultGql> Legs { get; set; } = [];
+    public string? Error { get; set; }
+}
+
+// ------------------------------------------------------------------
+// Pricing model comparison result types
+// ------------------------------------------------------------------
+
+public class PricingPointGql
+{
+    public decimal Spot { get; set; }
+    public decimal Price { get; set; }
+    public decimal Delta { get; set; }
+    public decimal Gamma { get; set; }
+    public decimal Theta { get; set; }
+    public decimal Vega { get; set; }
+    public decimal Rho { get; set; }
+}
+
+public class PricingModelCurveResult
+{
+    public string Model { get; set; } = "";
+    public List<PricingPointGql> Points { get; set; } = [];
+}
+
+public class PricingCompareResult
+{
+    public bool Success { get; set; }
+    public decimal Strike { get; set; }
+    public string OptionType { get; set; } = "";
+    public string ExpirationDate { get; set; } = "";
+    public decimal TimeToExpiryYears { get; set; }
+    public List<PricingModelCurveResult> Models { get; set; } = [];
     public string? Error { get; set; }
 }

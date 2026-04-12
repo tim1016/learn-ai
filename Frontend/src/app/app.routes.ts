@@ -87,6 +87,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "pricing-lab",
+    loadComponent: () =>
+      import("./components/pricing-lab/pricing-lab.component").then(
+        (m) => m.PricingLabComponent
+      ),
+  },
+  {
     path: "options-history",
     loadComponent: () =>
       import("./components/options-history/options-history.component").then(

@@ -230,6 +230,32 @@ table {
   border-radius: 4px;
   font-size: 0.65rem;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
+
+  &.positive-chip { background: rgba($bull, 0.15); color: $bull; }
+  &.negative-chip { background: rgba($bear, 0.15); color: $bear; }
+}
+
+.options-indicators {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.ind-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.ind-group-label {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: $text-secondary;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  min-width: 4.5rem;
+  opacity: 0.7;
 }
 
 // ─── Fee Breakdown ────────────────────────────────────

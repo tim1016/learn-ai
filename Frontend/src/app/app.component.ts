@@ -51,6 +51,7 @@ export class AppComponent {
         { label: "Strategy Builder", icon: "pi pi-th-large", routerLink: "/strategy-builder" },
         { label: "Options Strategy Lab", icon: "pi pi-calculator", routerLink: "/options-strategy-lab" },
         { label: "Options History", icon: "pi pi-history", routerLink: "/options-history" },
+        { label: "Pricing Lab", icon: "pi pi-chart-bar", routerLink: "/pricing-lab" },
         { label: "Snapshots", icon: "pi pi-camera", routerLink: "/snapshots" },
       ],
     },

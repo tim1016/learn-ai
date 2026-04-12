@@ -174,6 +174,23 @@ public interface IPolygonService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Compare pricing models (Python BS, QuantLib BS) across a spot price range.
+    /// </summary>
+    Task<PricingCompareResponse> PricingCompareAsync(
+        decimal spot,
+        decimal strike,
+        decimal volatility,
+        string expirationDate,
+        string optionType,
+        decimal riskFreeRate = 0.05m,
+        decimal dividendYield = 0m,
+        string? evaluationDate = null,
+        decimal? spotMin = null,
+        decimal? spotMax = null,
+        int numPoints = 100,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Expose the underlying HttpClient for ad-hoc calls to the Python service.
     /// Used by rule-based backtest and other passthrough mutations.
     /// </summary>

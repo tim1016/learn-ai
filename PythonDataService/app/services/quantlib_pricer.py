@@ -294,6 +294,104 @@ def _numeric_rho(spot, strike, r, vol, exp_date, opt_type, eval_d, div_y, engine
 
 
 # ---------------------------------------------------------------------------
+# Implied volatility solver
+# ---------------------------------------------------------------------------
+
+def implied_volatility(
+    market_price: float,
+    spot: float,
+    strike: float,
+    risk_free_rate: float,
+    expiration_date: date,
+    option_type: str,
+    evaluation_date: Optional[date] = None,
+    dividend_yield: float = 0.0,
+    min_vol: float = 0.01,
+    max_vol: float = 5.0,
+    tolerance: float = 1e-6,
+    max_iterations: int = 100,
+) -> Optional[float]:
+    """Solve for implied volatility using QuantLib's bisection.
+
+    Given a market price, finds the volatility that makes the QuantLib
+    analytical BS price match the observed price.  Uses a bracketed
+    bisection approach for robustness (no Newton-Raphson divergence).
+
+    Returns None if:
+    - QuantLib is not installed
+    - The option is expired (T <= 0)
+    - The market price is below intrinsic value
+    - No solution is found within bounds
+
+    This replaces ``bs_solver.implied_volatility`` for callers that want
+    to stay on the QuantLib pricing path.
+    """
+    _ensure_ql()
+
+    eval_d = evaluation_date or date.today()
+    ql_eval = _ql_date(eval_d)
+    ql.Settings.instance().evaluationDate = ql_eval
+    ql_expiry = _ql_date(expiration_date)
+    t_years = ql.Actual365Fixed().yearFraction(ql_eval, ql_expiry)
+
+    if t_years <= 0:
+        return None
+
+    # Intrinsic value check
+    if option_type == "call":
+        intrinsic = max(spot - strike, 0)
+    else:
+        intrinsic = max(strike - spot, 0)
+    if market_price < intrinsic - tolerance:
+        return None
+
+    # Bisection: find vol in [min_vol, max_vol] where price(vol) == market_price
+    lo, hi = min_vol, max_vol
+
+    def _price_at_vol(vol: float) -> float:
+        result = price_option(
+            spot=spot,
+            strike=strike,
+            risk_free_rate=risk_free_rate,
+            volatility=vol,
+            expiration_date=expiration_date,
+            option_type=option_type,
+            evaluation_date=eval_d,
+            dividend_yield=dividend_yield,
+            engine=PricingEngine.ANALYTIC_BS,
+        )
+        return result.price
+
+    price_lo = _price_at_vol(lo)
+    price_hi = _price_at_vol(hi)
+
+    # Check bounds
+    if market_price < price_lo or market_price > price_hi:
+        logger.debug(
+            "[QuantLib IV] Price %.4f outside bounds [%.4f, %.4f] for vol [%.4f, %.4f]",
+            market_price, price_lo, price_hi, lo, hi,
+        )
+        return None
+
+    for _ in range(max_iterations):
+        mid = (lo + hi) / 2.0
+        price_mid = _price_at_vol(mid)
+
+        if abs(price_mid - market_price) < tolerance:
+            return round(mid, 8)
+
+        if price_mid < market_price:
+            lo = mid
+        else:
+            hi = mid
+
+        if hi - lo < tolerance * 0.01:
+            return round((lo + hi) / 2.0, 8)
+
+    return round((lo + hi) / 2.0, 8)
+
+
+# ---------------------------------------------------------------------------
 # Multi-leg strategy pricing
 # ---------------------------------------------------------------------------
 
