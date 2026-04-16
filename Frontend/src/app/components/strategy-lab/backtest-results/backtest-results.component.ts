@@ -9,7 +9,6 @@ import {
   ChartIndicatorResult,
 } from '../strategy-lab-chart/strategy-lab-chart.component';
 import { LeanStatisticsComponent } from '../lean-statistics/lean-statistics.component';
-import type { LeanStatistics } from '../strategy-lab.component';
 
 export interface BacktestTradeDisplay {
   trade_number: number;

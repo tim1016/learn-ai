@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { firstValueFrom } from 'rxjs';
-import { ResearchService, ResearchResult, ResearchExperiment, SignalEngineResult, SignalExperiment } from './research.service';
+import { ResearchService, ResearchResult, ResearchExperiment, SignalExperiment } from './research.service';
 import { environment } from '../../environments/environment';
 
 describe('ResearchService', () => {

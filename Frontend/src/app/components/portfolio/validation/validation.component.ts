@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, finalize, of } from 'rxjs';
 import { PortfolioService } from '../../../services/portfolio.service';
-import { ValidationSuiteResult, ValidationTestResult } from '../../../graphql/portfolio-types';
+import { ValidationSuiteResult } from '../../../graphql/portfolio-types';
 
 @Component({
   selector: 'app-validation',

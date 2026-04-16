@@ -27,7 +27,7 @@ export class MarketMonitorService {
       );
   }
 
-  getHolidays(limit: number = 20): Observable<MarketHolidayEvent[]> {
+  getHolidays(limit = 20): Observable<MarketHolidayEvent[]> {
     if (!this.holidaysCache$) {
       this.holidaysCache$ = this.http
         .get<MarketHolidaysResponse>(

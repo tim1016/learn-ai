@@ -74,55 +74,49 @@ export class StockAggregateStore {
    * If data is cached and fresh, returns immediately
    * Otherwise fetches from service and caches result
    */
-  getOrFetch(
+  async getOrFetch(
     ticker: string,
     fromDate: string,
     toDate: string,
-    timespan: string = 'day',
-    multiplier: number = 1,
-    forceRefresh: boolean = false,
-    adjusted: boolean = true
+    timespan = 'day',
+    multiplier = 1,
+    forceRefresh = false,
+    adjusted = true
   ): Promise<{ aggregates: StockAggregate[] }> {
-    return new Promise(async (resolve, reject) => {
-      try {
-        // Check cache first if not forcing refresh
-        if (!forceRefresh) {
-          const cached = this.getCached(ticker, fromDate, toDate, timespan, multiplier);
-          if (cached) {
-            return resolve({ aggregates: cached });
-          }
-        }
-
-        // Fetch from service
-        const result = await this.marketDataService.getOrFetchStockAggregates(
-          ticker,
-          fromDate,
-          toDate,
-          timespan,
-          multiplier,
-          forceRefresh,
-          adjusted
-        ).toPromise();
-
-        if (!result) {
-          return reject(new Error('Empty response from market data service'));
-        }
-
-        // Cache the result
-        this.setCached(
-          ticker,
-          fromDate,
-          toDate,
-          timespan,
-          multiplier,
-          result.aggregates
-        );
-
-        resolve(result);
-      } catch (error) {
-        reject(error);
+    // Check cache first if not forcing refresh
+    if (!forceRefresh) {
+      const cached = this.getCached(ticker, fromDate, toDate, timespan, multiplier);
+      if (cached) {
+        return { aggregates: cached };
       }
-    });
+    }
+
+    // Fetch from service
+    const result = await this.marketDataService.getOrFetchStockAggregates(
+      ticker,
+      fromDate,
+      toDate,
+      timespan,
+      multiplier,
+      forceRefresh,
+      adjusted
+    ).toPromise();
+
+    if (!result) {
+      throw new Error('Empty response from market data service');
+    }
+
+    // Cache the result
+    this.setCached(
+      ticker,
+      fromDate,
+      toDate,
+      timespan,
+      multiplier,
+      result.aggregates
+    );
+
+    return result;
   }
 
   /**

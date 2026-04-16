@@ -55,10 +55,10 @@
       <div class="flex items-center gap-3 ml-2 border-l border-slate-700 pl-3">
         <span class="text-white font-bold">{{ snap.ticker }}</span>
         @if (snap.day; as day) {
-          @if (day.close != null) {
+          @if (day.close !== null) {
             <span class="text-slate-100 font-semibold">{{ day.close | number:'1.2-2' }}</span>
           }
-          @if (snap.todaysChange != null) {
+          @if (snap.todaysChange !== null) {
             <span
               class="text-xs font-semibold px-1.5 py-0.5 rounded"
               [class]="snap.todaysChange >= 0

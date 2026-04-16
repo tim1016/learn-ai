@@ -30,7 +30,6 @@ import { ReplayIndicatorService } from '../../services/replay-indicator.service'
 import { ReplayStrategyService } from '../../services/replay-strategy.service';
 import { StockAggregate } from '../../graphql/types';
 import {
-  StrategyLabChartComponent,
   ChartBar,
   ChartIndicatorResult,
 } from './strategy-lab-chart/strategy-lab-chart.component';

@@ -190,8 +190,8 @@
                   <td>{{ row.time }}</td>
                   <td>{{ formatNum(row.csvValue) }}</td>
                   <td>{{ formatNum(row.ourValue) }}</td>
-                  <td>{{ row.diff != null ? row.diff.toExponential(4) : '—' }}</td>
-                  <td>{{ row.pctDiff != null ? row.pctDiff.toFixed(6) + '%' : '—' }}</td>
+                  <td>{{ row.diff !== null ? row.diff.toExponential(4) : '—' }}</td>
+                  <td>{{ row.pctDiff !== null ? row.pctDiff.toFixed(6) + '%' : '—' }}</td>
                 </tr>
               }
             </tbody>

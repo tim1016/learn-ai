@@ -218,7 +218,7 @@ export class OptionsHistoryComponent {
         : prevTo;
 
       const batchSize = 30;
-      const ohlcResults: Array<{ aggregates?: StockAggregate[] | null }> = [];
+      const ohlcResults: { aggregates?: StockAggregate[] | null }[] = [];
       for (let bi = 0; bi < tickerEntries.length; bi += batchSize) {
         const batchEntries = tickerEntries.slice(bi, bi + batchSize);
         const progress = Math.min(bi + batchSize, tickerEntries.length);

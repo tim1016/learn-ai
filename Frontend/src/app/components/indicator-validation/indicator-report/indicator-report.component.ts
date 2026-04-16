@@ -7,7 +7,7 @@ import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import {
-  createChart, IChartApi, ISeriesApi,
+  createChart, IChartApi,
   CandlestickSeries, LineSeries, HistogramSeries,
   CandlestickData, LineData, HistogramData, UTCTimestamp,
 } from 'lightweight-charts';

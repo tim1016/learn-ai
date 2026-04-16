@@ -15,7 +15,7 @@ import { firstValueFrom } from "rxjs";
 import { environment } from "../../../environments/environment";
 import { ButtonModule } from "primeng/button";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
-import { EngineResultsComponent, EngineResultData } from "./engine-results/engine-results.component";
+import { EngineResultsComponent } from "./engine-results/engine-results.component";
 import { EngineHistoryComponent } from "./engine-history/engine-history.component";
 import { LeanEngineDocsComponent } from "./lean-engine-docs/lean-engine-docs.component";
 import { EngineChartComponent, ChartBar, EngineTradeForChart, EquityCurvePoint } from "./engine-chart/engine-chart.component";
@@ -87,9 +87,9 @@ interface EngineBacktestResponse {
   lean_statistics: any | null;
   trades: EngineTrade[];
   log_lines: string[];
-  equity_curve?: Array<{ timestamp: string; equity: number; cash: number; holdings_value: number }>;
-  chart_bars?: Array<{ t: number; o: number; h: number; l: number; c: number; v: number }>;
-  insights?: Array<Record<string, any>>;
+  equity_curve?: { timestamp: string; equity: number; cash: number; holdings_value: number }[];
+  chart_bars?: { t: number; o: number; h: number; l: number; c: number; v: number }[];
+  insights?: Record<string, any>[];
   insight_summary?: Record<string, any>;
   error?: string;
 }
@@ -169,7 +169,7 @@ export class LeanEngineComponent implements OnInit {
    *  flipping between the two pages sees the same shortcuts. ``days`` is
    *  a count of calendar days back from yesterday; labels are kept short
    *  to fit a single inline row. */
-  readonly rangePresets: ReadonlyArray<{ label: string; days: number }> = [
+  readonly rangePresets: readonly { label: string; days: number }[] = [
     { label: "1D", days: 1 },
     { label: "7D", days: 7 },
     { label: "15D", days: 15 },
@@ -514,7 +514,7 @@ export class LeanEngineComponent implements OnInit {
     return `${local}${sign}${offH}:${offM}`;
   }
 
-  tradeIndicatorEntries(trade: EngineTrade): Array<{ key: string; value: number }> {
+  tradeIndicatorEntries(trade: EngineTrade): { key: string; value: number }[] {
     return Object.entries(trade.indicators).map(([key, value]) => ({ key, value }));
   }
 
@@ -597,7 +597,7 @@ export class LeanEngineComponent implements OnInit {
       // Parse LEAN statistics from JSON blob if present
       let leanStats = null;
       if (detail.leanStatisticsJson) {
-        try { leanStats = JSON.parse(detail.leanStatisticsJson); } catch {}
+        try { leanStats = JSON.parse(detail.leanStatisticsJson); } catch { /* invalid JSON, keep null */ }
       }
       // Construct an EngineBacktestResponse-shaped object for the results component
       this.result.set({

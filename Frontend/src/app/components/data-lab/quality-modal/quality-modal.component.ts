@@ -1,8 +1,8 @@
 import {
-  Component, input, output, ChangeDetectionStrategy, computed,
+  Component, input, output, ChangeDetectionStrategy,
 } from '@angular/core';
-import { CommonModule, DatePipe } from '@angular/common';
-import { QualityReport, GapDetail } from '../data-lab-chart/data-lab-chart.component';
+import { CommonModule } from '@angular/common';
+import { QualityReport } from '../data-lab-chart/data-lab-chart.component';
 
 @Component({
   selector: 'app-quality-modal',
@@ -14,7 +14,7 @@ import { QualityReport, GapDetail } from '../data-lab-chart/data-lab-chart.compo
 })
 export class QualityModalComponent {
   quality = input.required<QualityReport>();
-  closed = output<void>();
+  closed = output();
 
   /** Format a ms epoch as a readable ET datetime string. */
   formatTs(ms: number): string {

@@ -4,8 +4,7 @@ import { Observable, map, tap } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
   Account, AccountResult, PortfolioState, PortfolioValuation,
-  PortfolioSnapshot, DrawdownPoint, PortfolioMetrics, Position,
-  PortfolioTrade, RiskRule, RiskRuleResult, DollarDeltaResult,
+  PortfolioSnapshot, DrawdownPoint, PortfolioMetrics, Position, RiskRule, RiskRuleResult, DollarDeltaResult,
   RiskViolation, ScenarioResult, ReconciliationReport,
   StrategyPnLResult, AlphaAttribution, StrategyAllocation,
   SnapshotResultGql, TradeResult, RebuildResult, ImportResult,

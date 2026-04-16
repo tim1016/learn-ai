@@ -5,7 +5,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, finalize, of, forkJoin } from 'rxjs';
-import { createChart, IChartApi, ISeriesApi, LineSeries, AreaSeries, UTCTimestamp, HistogramSeries } from 'lightweight-charts';
+import { createChart, IChartApi, AreaSeries, UTCTimestamp, HistogramSeries } from 'lightweight-charts';
 import { PortfolioService } from '../../../services/portfolio.service';
 import { PortfolioSnapshot, DrawdownPoint, PortfolioMetrics } from '../../../graphql/portfolio-types';
 

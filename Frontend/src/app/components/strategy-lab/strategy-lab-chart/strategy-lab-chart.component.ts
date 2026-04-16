@@ -1,5 +1,5 @@
 import {
-  Component, signal, computed, input, output,
+  Component, signal, computed, input,
   viewChild, ElementRef, AfterViewInit, OnDestroy,
   ChangeDetectionStrategy, effect,
 } from '@angular/core';
@@ -180,7 +180,7 @@ export class StrategyLabChartComponent implements AfterViewInit, OnDestroy {
   private mainChart: IChartApi | null = null;
   private candleSeries: ISeriesApi<'Candlestick'> | null = null;
   private volumeSeries: ISeriesApi<'Histogram'> | null = null;
-  private overlaySeries: Map<string, ISeriesApi<'Line'>> = new Map();
+  private overlaySeries = new Map<string, ISeriesApi<'Line'>>();
   private subPanels: SubPanel[] = [];
   private markersPlugin: ISeriesMarkersPluginApi<any> | null = null;
   private resizeObserver: ResizeObserver | null = null;

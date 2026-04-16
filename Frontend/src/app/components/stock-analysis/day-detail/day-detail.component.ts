@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { MarketDataService } from '../../../services/market-data.service';
-import { StockAggregate, OptionsContract } from '../../../graphql/types';
+import { StockAggregate } from '../../../graphql/types';
 import { LineChartComponent } from '../../market-data/line-chart/line-chart.component';
 import { VolumeChartComponent } from '../../market-data/volume-chart/volume-chart.component';
 import { AtmMethod, SelectedContract } from '../models';

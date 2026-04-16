@@ -554,7 +554,11 @@ export class DataLabComponent {
   toggleCategory(catName: string): void {
     this.expandedCategories.update(set => {
       const next = new Set(set);
-      next.has(catName) ? next.delete(catName) : next.add(catName);
+      if (next.has(catName)) {
+        next.delete(catName);
+      } else {
+        next.add(catName);
+      }
       return next;
     });
   }

@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { catchError, of } from 'rxjs';
+import { catchError } from 'rxjs';
 import { MarketDataService } from '../../services/market-data.service';
 import { StockAggregate } from '../../graphql/types';
 import { LineChartComponent } from '../market-data/line-chart/line-chart.component';

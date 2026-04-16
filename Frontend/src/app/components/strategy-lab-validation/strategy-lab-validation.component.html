@@ -372,7 +372,7 @@
             <td>{{ bar.volume | number }}</td>
             @for (col of barTableColumns; track col) {
               @if (col !== 'timestamp' && col !== 'open' && col !== 'high' && col !== 'low' && col !== 'close' && col !== 'volume') {
-                <td>{{ bar[col] != null ? (bar[col] | number:'1.2-4') : '-' }}</td>
+                <td>{{ bar[col] !== null ? (bar[col] | number:'1.2-4') : '-' }}</td>
               }
             }
           </tr>

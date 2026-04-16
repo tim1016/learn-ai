@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, signal, inject, DestroyRef, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, signal, inject, DestroyRef, computed, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
@@ -31,7 +31,7 @@ import { catchError, finalize, of } from 'rxjs';
   styleUrls: ['./portfolio.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class PortfolioComponent {
+export class PortfolioComponent implements OnInit {
   private portfolioService = inject(PortfolioService);
   private destroyRef = inject(DestroyRef);
 

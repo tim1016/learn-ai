@@ -600,10 +600,10 @@ export class MarketDataService {
     ticker: string,
     fromDate: string,
     toDate: string,
-    timespan: string = 'day',
-    multiplier: number = 1,
-    forceRefresh: boolean = false,
-    adjusted: boolean = true
+    timespan = 'day',
+    multiplier = 1,
+    forceRefresh = false,
+    adjusted = true
   ): Observable<SmartAggregatesResult> {
     return this.http
       .post<GraphQLResponse>(GRAPHQL_URL, {
@@ -634,8 +634,8 @@ export class MarketDataService {
   checkCachedRanges(
     ticker: string,
     ranges: { fromDate: string; toDate: string }[],
-    timespan: string = 'day',
-    multiplier: number = 1
+    timespan = 'day',
+    multiplier = 1
   ): Observable<CachedRangeResult[]> {
     return this.http
       .post<CheckCachedRangesResponse>(GRAPHQL_URL, {
@@ -718,8 +718,8 @@ export class MarketDataService {
     fromDate: string,
     toDate: string,
     indicators: { name: string; window: number }[],
-    timespan: string = 'day',
-    multiplier: number = 1
+    timespan = 'day',
+    multiplier = 1
   ): Observable<CalculateIndicatorsResult> {
     return this.http
       .post<CalculateIndicatorsResponse>(GRAPHQL_URL, {
@@ -803,7 +803,7 @@ export class MarketDataService {
       );
   }
 
-  getUnifiedSnapshot(tickers?: string[], limit: number = 10): Observable<UnifiedSnapshotResult> {
+  getUnifiedSnapshot(tickers?: string[], limit = 10): Observable<UnifiedSnapshotResult> {
     return this.http
       .post<UnifiedSnapshotResponseGql>(GRAPHQL_URL, {
         query: GET_UNIFIED_SNAPSHOT_QUERY,
@@ -872,10 +872,10 @@ export class MarketDataService {
     strategyName: string,
     fromDate: string,
     toDate: string,
-    timespan: string = 'minute',
-    multiplier: number = 1,
-    parametersJson: string = '{}',
-    filterRth: boolean = true
+    timespan = 'minute',
+    multiplier = 1,
+    parametersJson = '{}',
+    filterRth = true
   ): Observable<BacktestResult> {
     return this.http
       .post<RunBacktestResponse>(GRAPHQL_URL, {
@@ -895,8 +895,8 @@ export class MarketDataService {
   runBacktestFromCsvBars(
     strategyName: string,
     bars: { timestamp: number; open: number; high: number; low: number; close: number; volume: number }[],
-    parametersJson: string = '{}',
-    filterRth: boolean = false
+    parametersJson = '{}',
+    filterRth = false
   ): Observable<BacktestResult> {
     return this.http
       .post<RunBacktestFromCsvResponse>(GRAPHQL_URL, {
@@ -917,10 +917,10 @@ export class MarketDataService {
     ticker: string,
     fromDate: string,
     toDate: string,
-    multiplier: number = 15,
-    timespan: string = 'minute',
-    filterRth: boolean = true,
-    parametersJson: string = '{}',
+    multiplier = 15,
+    timespan = 'minute',
+    filterRth = true,
+    parametersJson = '{}',
   ): Observable<RuleBasedBacktestResult> {
     return this.http
       .post<RunRuleBasedBacktestResponse>(GRAPHQL_URL, {
@@ -977,7 +977,7 @@ export class MarketDataService {
     legs: StrategyLegInput[],
     expirationDate: string,
     spotPrice: number,
-    riskFreeRate: number = 0.043
+    riskFreeRate = 0.043
   ): Observable<StrategyAnalyzeResult> {
     return this.http
       .post<AnalyzeOptionsStrategyResponse>(GRAPHQL_URL, {

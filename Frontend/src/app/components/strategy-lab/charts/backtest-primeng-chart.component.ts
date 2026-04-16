@@ -1,5 +1,5 @@
 import {
-  Component, input, computed, effect, signal,
+  Component, input, computed,
   ChangeDetectionStrategy
 } from '@angular/core';
 import { UIChart } from 'primeng/chart';

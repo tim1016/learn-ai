@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, ElementRef, inject, viewChildren, signal } from '@angular/core';
+import { Component, ChangeDetectionStrategy, ElementRef, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { Accordion, AccordionContent, AccordionHeader, AccordionPanel } from 'primeng/accordion';

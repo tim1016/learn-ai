@@ -32,10 +32,10 @@
       <div class="flex items-center gap-3 ml-3 border-l border-slate-700 pl-3">
         <span class="text-white font-bold text-base">{{ snap.ticker }}</span>
         @if (snap.day; as day) {
-          @if (day.close != null) {
+          @if (day.close !== null) {
             <span class="text-slate-100 font-semibold">{{ day.close | number:'1.2-2' }}</span>
           }
-          @if (snap.todaysChange != null) {
+          @if (snap.todaysChange !== null) {
             <span
               class="text-xs font-semibold px-1.5 py-0.5 rounded"
               [class]="snap.todaysChange >= 0
@@ -47,10 +47,10 @@
             </span>
           }
           <div class="flex items-center gap-2 text-[11px] text-slate-400">
-            @if (day.open != null) { <span>O {{ day.open | number:'1.2-2' }}</span> }
-            @if (day.high != null) { <span>H {{ day.high | number:'1.2-2' }}</span> }
-            @if (day.low != null) { <span>L {{ day.low | number:'1.2-2' }}</span> }
-            @if (day.volume != null) { <span>Vol {{ day.volume | number:'1.0-0' }}</span> }
+            @if (day.open !== null) { <span>O {{ day.open | number:'1.2-2' }}</span> }
+            @if (day.high !== null) { <span>H {{ day.high | number:'1.2-2' }}</span> }
+            @if (day.low !== null) { <span>L {{ day.low | number:'1.2-2' }}</span> }
+            @if (day.volume !== null) { <span>Vol {{ day.volume | number:'1.0-0' }}</span> }
           </div>
         }
       </div>
@@ -397,7 +397,7 @@
                 <div class="text-slate-100 font-semibold text-sm">
                   {{ formatPrice(q.bid) }} / {{ formatPrice(q.ask) }}
                 </div>
-                @if (q.midpoint != null) {
+                @if (q.midpoint !== null) {
                   <div class="text-slate-500 text-[10px] mt-0.5">Mid {{ formatPrice(q.midpoint) }}</div>
                 }
               } @else {
@@ -453,7 +453,7 @@
               <span class="text-slate-500 text-[10px] uppercase tracking-wider">Last Trade</span>
               <div class="flex items-center gap-3 text-sm">
                 <span class="text-slate-100 font-semibold">{{ formatPrice(t.price) }}</span>
-                @if (t.size != null) {
+                @if (t.size !== null) {
                   <span class="text-slate-400 text-xs">Size: {{ formatNumber(t.size) }}</span>
                 }
               </div>

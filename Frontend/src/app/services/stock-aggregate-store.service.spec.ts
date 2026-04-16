@@ -2,7 +2,6 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { StockAggregateStore } from './stock-aggregate-store.service';
-import { MarketDataService } from './market-data.service';
 import { createMockAggregate } from '../../testing/factories/market-data.factory';
 
 describe('StockAggregateStore', () => {

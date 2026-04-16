@@ -8,7 +8,6 @@ import {
   createChart, IChartApi, ISeriesApi,
   CandlestickSeries, CandlestickData,
   HistogramSeries, HistogramData,
-  LineSeries, LineData,
   AreaSeries, AreaData,
   UTCTimestamp,
   createSeriesMarkers, ISeriesMarkersPluginApi,

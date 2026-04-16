@@ -1,7 +1,6 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  computed,
   input,
   signal,
 } from '@angular/core';
@@ -88,14 +87,14 @@ export class InsightPanelComponent {
     return this.summaryData?.confidence_calibration ?? [];
   }
 
-  get hourlyRows(): Array<{ hour: number; count: number; correct: number; accuracy: number }> {
+  get hourlyRows(): { hour: number; count: number; correct: number; accuracy: number }[] {
     const byHour = this.summaryData?.accuracy_by_hour ?? {};
     return Object.entries(byHour)
       .map(([h, data]) => ({ hour: Number(h), ...data }))
       .sort((a, b) => a.hour - b.hour);
   }
 
-  get quarterlyRows(): Array<{ quarter: string; count: number; correct: number; accuracy: number }> {
+  get quarterlyRows(): { quarter: string; count: number; correct: number; accuracy: number }[] {
     const byQ = this.summaryData?.accuracy_by_quarter ?? {};
     return Object.entries(byQ)
       .map(([q, data]) => ({ quarter: q, ...data }))

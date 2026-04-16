@@ -11,8 +11,7 @@ import {
   CandlestickSeries, CandlestickData,
   HistogramSeries, HistogramData,
   LineSeries, LineData,
-  UTCTimestamp, ITimeScaleApi,
-  LogicalRange,
+  UTCTimestamp,
 } from 'lightweight-charts';
 import { environment } from '../../../../environments/environment';
 import { QualityModalComponent } from '../quality-modal/quality-modal.component';
@@ -242,7 +241,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   private mainChart: IChartApi | null = null;
   private candleSeries: ISeriesApi<'Candlestick'> | null = null;
   private volumeSeries: ISeriesApi<'Histogram'> | null = null;
-  private overlaySeries: Map<string, ISeriesApi<'Line'>> = new Map();
+  private overlaySeries = new Map<string, ISeriesApi<'Line'>>();
   private subPanels: SubPanel[] = [];
   private resizeObserver: ResizeObserver | null = null;
   private _isSyncing = false;
@@ -261,8 +260,6 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     if (est === undefined) return tf;
     return `${tf} — ~${est.toLocaleString()} bars`;
   }
-
-  constructor() {}
 
   ngAfterViewInit(): void {
     this.createMainChart();
