@@ -25,7 +25,7 @@ export class AppComponent {
         { label: "Technical Analysis", icon: "pi pi-wave-pulse", routerLink: "/technical-analysis" },
         { label: "Stock Analysis", icon: "pi pi-search", routerLink: "/stock-analysis" },
         { label: "Snapshots", icon: "pi pi-camera", routerLink: "/snapshots" },
-        { label: "Strategy Lab", icon: "pi pi-wrench", routerLink: "/strategy-lab" },
+        { label: "Strategy Lab (deprecated)", icon: "pi pi-wrench", routerLink: "/strategy-lab" },
         { label: "Strategy Validation", icon: "pi pi-check-square", routerLink: "/strategy-lab-validation" },
         { label: "Strategy Docs", icon: "pi pi-book", routerLink: "/strategy-docs" },
         { label: "Indicator Validation", icon: "pi pi-verified", routerLink: "/indicator-validation" },
