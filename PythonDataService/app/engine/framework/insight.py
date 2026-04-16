@@ -17,6 +17,7 @@ Key design decisions vs LEAN's C# implementation:
   - InsightScore uses a write-once pattern: scores can be updated until
     finalized, then become immutable (matching LEAN's behavior).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

@@ -1,18 +1,31 @@
 """FastAPI application entry point"""
+
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-import logging
 
 from app.config import settings
-from app.routers import aggregates, sanitize, indicators, options, snapshot, market_monitor, tickers, strategy, research, dataset, data_quality, volatility, engine
+from app.routers import (
+    aggregates,
+    data_quality,
+    dataset,
+    engine,
+    indicators,
+    market_monitor,
+    options,
+    research,
+    sanitize,
+    snapshot,
+    strategy,
+    tickers,
+    volatility,
+)
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -29,7 +42,7 @@ app = FastAPI(
     title="Polygon Data Service",
     description="Data fetching and sanitization service for Polygon.io market data",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # CORS middleware for C# backend
@@ -69,9 +82,4 @@ async def health_check():
 @app.get("/")
 async def root():
     """Root endpoint with API info"""
-    return {
-        "service": "Polygon Data Service",
-        "version": "1.0.0",
-        "docs": "/docs",
-        "health": "/health"
-    }
+    return {"service": "Polygon Data Service", "version": "1.0.0", "docs": "/docs", "health": "/health"}

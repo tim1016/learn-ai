@@ -4,6 +4,7 @@ LEAN uses `decimal` throughout for prices to avoid float drift over long
 indicator recursions. We mirror this with `Decimal` for prices while keeping
 volume as an int and timestamps as timezone-aware datetimes.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

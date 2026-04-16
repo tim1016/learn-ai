@@ -22,14 +22,15 @@ Run with::
     cd PythonDataService
     python -m app.engine.tests.test_sma_crossover_parity
 """
+
 from __future__ import annotations
 
 import math
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Iterator
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -68,9 +69,7 @@ def _generate_closes(num_bars: int) -> list[float]:
     return closes
 
 
-def _build_minute_bars(
-    closes: list[float], start: datetime
-) -> list[TradeBar]:
+def _build_minute_bars(closes: list[float], start: datetime) -> list[TradeBar]:
     """Produce minute bars whose 15-minute consolidated closes equal ``closes``.
 
     Trick: place one bar at each 15-minute boundary carrying the desired close.
@@ -121,9 +120,7 @@ class _FakeDataReader:
 
     bars: list[TradeBar]
 
-    def iter_bars(
-        self, symbol: str, start: date, end: date
-    ) -> Iterator[TradeBar]:
+    def iter_bars(self, symbol: str, start: date, end: date) -> Iterator[TradeBar]:
         for b in self.bars:
             if start <= b.time.date() <= end:
                 yield b
@@ -167,9 +164,7 @@ class _ReferenceTrade:
         return "WIN" if self.exit_price > self.entry_price else "LOSS"
 
 
-def _reference_sma_crossover(
-    closes: list[float], short_window: int, long_window: int
-) -> list[_ReferenceTrade]:
+def _reference_sma_crossover(closes: list[float], short_window: int, long_window: int) -> list[_ReferenceTrade]:
     """Inline reimplementation of the legacy SMA crossover rule.
 
     Uses ``pandas.Series.rolling(window).mean()`` which produces identical
@@ -303,14 +298,11 @@ def run_parity_test() -> None:
     # Also sanity-check: the new engine must produce at least a handful of
     # trades against this input, otherwise the test is silently vacuous.
     if len(new_results) < 3:
-        print(
-            f"FAIL: too few trades ({len(new_results)}) — test is vacuous"
-        )
+        print(f"FAIL: too few trades ({len(new_results)}) — test is vacuous")
         sys.exit(1)
 
     print(
-        f"PASS: new engine reproduces the SMA crossover rule "
-        f"({len(new_results)} trades, identical win/loss sequence)"
+        f"PASS: new engine reproduces the SMA crossover rule ({len(new_results)} trades, identical win/loss sequence)"
     )
 
 

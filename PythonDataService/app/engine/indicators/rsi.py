@@ -17,11 +17,11 @@ Critical reproducibility details:
   * Edge case: if ``round(avg_loss, 10) == 0``, RSI = 100.
   * Formula: ``RS = avg_gain / avg_loss``; ``RSI = 100 - 100 / (1 + RS)``.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from app.engine.indicators.base import Indicator
 
@@ -32,9 +32,9 @@ class RelativeStrengthIndex(Indicator):
         super().__init__(name, period)
         self._period_dec = Decimal(period)
         self._period_minus_1 = Decimal(period - 1)
-        self._prev_input: Optional[Decimal] = None
-        self._avg_gain: Optional[Decimal] = None
-        self._avg_loss: Optional[Decimal] = None
+        self._prev_input: Decimal | None = None
+        self._avg_gain: Decimal | None = None
+        self._avg_loss: Decimal | None = None
         # Initial accumulators for the warmup window.
         self._gain_sum: Decimal = Decimal(0)
         self._loss_sum: Decimal = Decimal(0)
@@ -45,9 +45,7 @@ class RelativeStrengthIndex(Indicator):
         # RSI(period) needs period+1 samples (for period deltas).
         return self.samples >= self.period + 1
 
-    def _compute_next_value(
-        self, time: datetime, value: Decimal
-    ) -> Optional[Decimal]:
+    def _compute_next_value(self, time: datetime, value: Decimal) -> Decimal | None:
         prev = self._prev_input
         self._prev_input = value
         if prev is None:
@@ -78,12 +76,8 @@ class RelativeStrengthIndex(Indicator):
             # Wilders smoothing:
             #   avg_new = (avg_old * (period - 1) + sample) / period
             assert self._avg_gain is not None and self._avg_loss is not None
-            self._avg_gain = (
-                self._avg_gain * self._period_minus_1 + gain
-            ) / self._period_dec
-            self._avg_loss = (
-                self._avg_loss * self._period_minus_1 + loss
-            ) / self._period_dec
+            self._avg_gain = (self._avg_gain * self._period_minus_1 + gain) / self._period_dec
+            self._avg_loss = (self._avg_loss * self._period_minus_1 + loss) / self._period_dec
 
         # Compute RSI from the current averages.
         assert self._avg_gain is not None and self._avg_loss is not None

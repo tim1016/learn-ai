@@ -33,6 +33,7 @@ Run with::
     cd PythonDataService
     python -m app.engine.tests.test_daily_sma_crossover_end_to_end
 """
+
 from __future__ import annotations
 
 import sys
@@ -42,11 +43,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from app.engine.data.lean_format import LeanDailyDataReader  # noqa: E402
-from app.engine.engine import BacktestEngine  # noqa: E402
-from app.engine.execution.fill_model import FillModel  # noqa: E402
-from app.engine.execution.order import FillMode  # noqa: E402
-from app.engine.strategy.algorithms.sma_crossover import (  # noqa: E402
+from app.engine.data.lean_format import LeanDailyDataReader
+from app.engine.engine import BacktestEngine
+from app.engine.execution.fill_model import FillModel
+from app.engine.execution.order import FillMode
+from app.engine.strategy.algorithms.sma_crossover import (
     SmaCrossoverAlgorithm,
 )
 
@@ -57,15 +58,31 @@ LEAN_DATA_ROOT = Path("/sessions/ecstatic-hopeful-volta/mnt/Lean/Data")
 EXPECTED_TRADE_COUNT = 11
 EXPECTED_WIN_COUNT = 5
 EXPECTED_RESULTS = [
-    "LOSS", "LOSS", "LOSS", "WIN", "LOSS",
-    "WIN", "WIN", "WIN", "LOSS", "LOSS", "WIN",
+    "LOSS",
+    "LOSS",
+    "LOSS",
+    "WIN",
+    "LOSS",
+    "WIN",
+    "WIN",
+    "WIN",
+    "LOSS",
+    "LOSS",
+    "WIN",
 ]
 # Entry / exit dates uniquely identify the trades even if prices drift.
 EXPECTED_ENTRY_DATES = [
-    date(2018, 2, 27), date(2018, 4, 19), date(2018, 5, 9),
-    date(2018, 7, 17), date(2018, 10, 2),
-    date(2019, 1, 30), date(2019, 6, 18), date(2019, 8, 22),
-    date(2020, 4, 16), date(2020, 10, 13), date(2020, 11, 17),
+    date(2018, 2, 27),
+    date(2018, 4, 19),
+    date(2018, 5, 9),
+    date(2018, 7, 17),
+    date(2018, 10, 2),
+    date(2019, 1, 30),
+    date(2019, 6, 18),
+    date(2019, 8, 22),
+    date(2020, 4, 16),
+    date(2020, 10, 13),
+    date(2020, 11, 17),
 ]
 
 
@@ -107,30 +124,25 @@ def run_end_to_end() -> None:
             f"{t.exit_time.date()} @ {t.exit_price:>8.2f}  "
             f"PnL={t.pnl_pts:>8.2f}  {t.result}"
         )
-    print(
-        f"final equity: ${float(result.final_equity):,.2f}  "
-        f"net profit: ${float(result.net_profit):,.2f}"
-    )
+    print(f"final equity: ${float(result.final_equity):,.2f}  net profit: ${float(result.net_profit):,.2f}")
 
     # ------------------------------------------------------------------ #
     # Assertions
     # ------------------------------------------------------------------ #
     if len(trades) != EXPECTED_TRADE_COUNT:
-        print(
-            f"FAIL: expected {EXPECTED_TRADE_COUNT} trades, got {len(trades)}"
-        )
+        print(f"FAIL: expected {EXPECTED_TRADE_COUNT} trades, got {len(trades)}")
         sys.exit(1)
 
     actual_results = [t.result for t in trades]
     if actual_results != EXPECTED_RESULTS:
-        print(f"FAIL: result sequence mismatch")
+        print("FAIL: result sequence mismatch")
         print(f"  expected: {EXPECTED_RESULTS}")
         print(f"  actual:   {actual_results}")
         sys.exit(1)
 
     actual_entry_dates = [t.entry_time.date() for t in trades]
     if actual_entry_dates != EXPECTED_ENTRY_DATES:
-        print(f"FAIL: entry date sequence mismatch")
+        print("FAIL: entry date sequence mismatch")
         print(f"  expected: {EXPECTED_ENTRY_DATES}")
         print(f"  actual:   {actual_entry_dates}")
         sys.exit(1)

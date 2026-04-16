@@ -11,13 +11,15 @@ All ratio calculations are annualized using 252 trading days per year.
 The functions accept ``Decimal`` or ``float`` inputs interchangeably and
 return ``float`` so the results are JSON-friendly.
 """
+
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Iterable, Protocol, Sequence
+from typing import Protocol
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -141,9 +143,7 @@ def compute_trade_statistics(trades: Sequence[_TradeLike]) -> TradeStatistics:
 # ---------------------------------------------------------------------------
 # Equity-curve statistics
 # ---------------------------------------------------------------------------
-def _equity_curve_from_trades(
-    initial_equity: float, trades: Sequence[_TradeLike]
-) -> list[float]:
+def _equity_curve_from_trades(initial_equity: float, trades: Sequence[_TradeLike]) -> list[float]:
     """Rebuild a per-trade equity curve assuming all-in on each trade.
 
     This matches the SPY EMA crossover's ``SetHoldings(1.0)`` behavior.
@@ -224,59 +224,77 @@ def _daily_returns(daily_equity: Sequence[float]) -> list[float]:
 def validate_trade_log(trades: Sequence[_TradeLike]) -> list[ValidationError]:
     errors: list[ValidationError] = []
     for i, trade in enumerate(trades):
-        if hasattr(trade, "entry_time") and hasattr(trade, "exit_time"):
-            if trade.entry_time is not None and trade.exit_time is not None and trade.entry_time >= trade.exit_time:
-                errors.append(ValidationError(
+        if (
+            hasattr(trade, "entry_time")
+            and hasattr(trade, "exit_time")
+            and trade.entry_time is not None
+            and trade.exit_time is not None
+            and trade.entry_time >= trade.exit_time
+        ):
+            errors.append(
+                ValidationError(
                     code="invalid_trade_times",
                     message=f"Trade {i}: entry_time >= exit_time",
-                ))
-        if hasattr(trade, "pnl_pct"):
-            if math.isnan(float(trade.pnl_pct)):
-                errors.append(ValidationError(
+                )
+            )
+        if hasattr(trade, "pnl_pct") and math.isnan(float(trade.pnl_pct)):
+            errors.append(
+                ValidationError(
                     code="nan_pnl_pct",
                     message=f"Trade {i}: pnl_pct is NaN",
-                ))
+                )
+            )
         if hasattr(trade, "indicators"):
             indicators = getattr(trade, "indicators", None) or {}
             for ind_name, ind_val in indicators.items():
                 try:
                     if math.isnan(float(ind_val)):
-                        errors.append(ValidationError(
-                            code="nan_indicator",
-                            message=f"Trade {i}: indicator {ind_name} is NaN",
-                        ))
+                        errors.append(
+                            ValidationError(
+                                code="nan_indicator",
+                                message=f"Trade {i}: indicator {ind_name} is NaN",
+                            )
+                        )
                 except (TypeError, ValueError):
                     pass
     if trades:
         winning = sum(1 for t in trades if float(t.pnl_pct) > 0)
         win_rate = winning / len(trades)
         if not (0 <= win_rate <= 1):
-            errors.append(ValidationError(
-                code="invalid_win_rate",
-                message=f"Computed win_rate {win_rate} not in [0, 1]",
-            ))
+            errors.append(
+                ValidationError(
+                    code="invalid_win_rate",
+                    message=f"Computed win_rate {win_rate} not in [0, 1]",
+                )
+            )
     return errors
 
 
 def validate_equity_curve(curve: Sequence[float]) -> list[ValidationError]:
     errors: list[ValidationError] = []
     if len(curve) < 1:
-        errors.append(ValidationError(
-            code="empty_curve",
-            message="Equity curve has no points",
-        ))
+        errors.append(
+            ValidationError(
+                code="empty_curve",
+                message="Equity curve has no points",
+            )
+        )
         return errors
     for i, value in enumerate(curve):
         if math.isnan(value):
-            errors.append(ValidationError(
-                code="nan_equity",
-                message=f"Equity point {i}: value is NaN",
-            ))
+            errors.append(
+                ValidationError(
+                    code="nan_equity",
+                    message=f"Equity point {i}: value is NaN",
+                )
+            )
         if value < 0:
-            errors.append(ValidationError(
-                code="negative_equity",
-                message=f"Equity point {i}: value is negative ({value})",
-            ))
+            errors.append(
+                ValidationError(
+                    code="negative_equity",
+                    message=f"Equity point {i}: value is negative ({value})",
+                )
+            )
     return errors
 
 
@@ -285,38 +303,48 @@ def validate_statistics(stats: dict[str, float | int | None]) -> list[Validation
     if "win_rate" in stats and stats["win_rate"] is not None:
         wr = float(stats["win_rate"])
         if not (0 <= wr <= 1):
-            errors.append(ValidationError(
-                code="invalid_win_rate_bounds",
-                message=f"win_rate {wr} not in [0, 1]",
-            ))
+            errors.append(
+                ValidationError(
+                    code="invalid_win_rate_bounds",
+                    message=f"win_rate {wr} not in [0, 1]",
+                )
+            )
     if "max_drawdown_pct" in stats and stats["max_drawdown_pct"] is not None:
         mdd = float(stats["max_drawdown_pct"])
         if not (0 <= mdd <= 1):
-            errors.append(ValidationError(
-                code="invalid_max_drawdown_bounds",
-                message=f"max_drawdown_pct {mdd} not in [0, 1]",
-            ))
+            errors.append(
+                ValidationError(
+                    code="invalid_max_drawdown_bounds",
+                    message=f"max_drawdown_pct {mdd} not in [0, 1]",
+                )
+            )
     if "profit_factor" in stats and stats["profit_factor"] is not None:
         pf = float(stats["profit_factor"])
         if pf < 0:
-            errors.append(ValidationError(
-                code="negative_profit_factor",
-                message=f"profit_factor {pf} is negative",
-            ))
+            errors.append(
+                ValidationError(
+                    code="negative_profit_factor",
+                    message=f"profit_factor {pf} is negative",
+                )
+            )
     if "sharpe_ratio" in stats and stats["sharpe_ratio"] is not None:
         sr = float(stats["sharpe_ratio"])
         if math.isnan(sr):
-            errors.append(ValidationError(
-                code="nan_sharpe",
-                message="sharpe_ratio is NaN",
-            ))
+            errors.append(
+                ValidationError(
+                    code="nan_sharpe",
+                    message="sharpe_ratio is NaN",
+                )
+            )
     if "sortino_ratio" in stats and stats["sortino_ratio"] is not None:
         sort = float(stats["sortino_ratio"])
         if math.isnan(sort):
-            errors.append(ValidationError(
-                code="nan_sortino",
-                message="sortino_ratio is NaN",
-            ))
+            errors.append(
+                ValidationError(
+                    code="nan_sortino",
+                    message="sortino_ratio is NaN",
+                )
+            )
     return errors
 
 
@@ -364,7 +392,7 @@ def compute_portfolio_statistics(
         returns = _returns_from_curve(curve)
 
         if trading_days and len(trades) > 0:
-            periods_per_year = max(1, int(round(TRADING_DAYS_PER_YEAR * len(trades) / trading_days)))
+            periods_per_year = max(1, round(TRADING_DAYS_PER_YEAR * len(trades) / trading_days))
         else:
             periods_per_year = TRADING_DAYS_PER_YEAR
 
@@ -437,6 +465,7 @@ def summarize(
         "mfe_pct": ps.mfe_pct,
     }
     import logging
+
     logger = logging.getLogger(__name__)
     stat_errors = validate_statistics(result)
     for error in stat_errors:

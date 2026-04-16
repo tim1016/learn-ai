@@ -1,7 +1,9 @@
 """Shared test fixtures and helpers"""
+
 import os
+
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 # Patch env before importing app
 os.environ.setdefault("POLYGON_API_KEY", "test-key-for-testing")
@@ -28,12 +30,14 @@ def make_sample_bars(count: int = 30) -> list[dict]:
     base_price = 150.0
     for i in range(count):
         price = base_price + i * 0.5
-        bars.append({
-            "timestamp": 1704067200000 + i * 86400000,  # daily from 2024-01-01
-            "open": price,
-            "high": price + 2.0,
-            "low": price - 1.0,
-            "close": price + 1.0,
-            "volume": 1000000.0 + i * 10000,
-        })
+        bars.append(
+            {
+                "timestamp": 1704067200000 + i * 86400000,  # daily from 2024-01-01
+                "open": price,
+                "high": price + 2.0,
+                "low": price - 1.0,
+                "close": price + 1.0,
+                "volume": 1000000.0 + i * 10000,
+            }
+        )
     return bars

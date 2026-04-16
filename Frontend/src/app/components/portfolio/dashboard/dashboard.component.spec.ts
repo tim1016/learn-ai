@@ -262,7 +262,7 @@ describe('DashboardComponent', () => {
     flushDashboardLoad();
 
     const dashboard = getDashboard();
-    dashboard.tradeTickerId.set(1);
+    dashboard.tradeSymbol.set('AAPL');
     dashboard.tradeSide.set('Buy');
     dashboard.tradeQty.set(50);
     dashboard.tradePrice.set(175);
@@ -273,7 +273,7 @@ describe('DashboardComponent', () => {
     const req = httpMock.expectOne(GRAPHQL_URL);
     expect(req.request.body.query).toContain('recordTrade');
     expect(req.request.body.variables.accountId).toBe('acc-1');
-    expect(req.request.body.variables.tickerId).toBe(1);
+    expect(req.request.body.variables.symbol).toBe('AAPL');
     expect(req.request.body.variables.side).toBe('Buy');
     expect(req.request.body.variables.quantity).toBe(50);
     expect(req.request.body.variables.price).toBe(175);
@@ -297,7 +297,7 @@ describe('DashboardComponent', () => {
     flushDashboardLoad();
 
     const dashboard = getDashboard();
-    dashboard.tradeTickerId.set(0);
+    dashboard.tradeSymbol.set('');
     dashboard.tradePrice.set(100);
     dashboard.recordTrade();
 
@@ -310,7 +310,7 @@ describe('DashboardComponent', () => {
     flushDashboardLoad();
 
     const dashboard = getDashboard();
-    dashboard.tradeTickerId.set(1);
+    dashboard.tradeSymbol.set('AAPL');
     dashboard.tradePrice.set(0);
     dashboard.recordTrade();
 
@@ -322,7 +322,7 @@ describe('DashboardComponent', () => {
     flushDashboardLoad();
 
     const dashboard = getDashboard();
-    dashboard.tradeTickerId.set(1);
+    dashboard.tradeSymbol.set('AAPL');
     dashboard.tradePrice.set(175);
     dashboard.recordTrade();
 
@@ -357,7 +357,7 @@ describe('DashboardComponent', () => {
     flushDashboardLoad();
 
     const dashboard = getDashboard();
-    dashboard.tradeTickerId.set(1);
+    dashboard.tradeSymbol.set('AAPL');
     dashboard.tradePrice.set(175);
     dashboard.recordTrade();
 

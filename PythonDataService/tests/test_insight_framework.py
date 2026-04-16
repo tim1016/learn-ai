@@ -6,6 +6,7 @@ Validates the LEAN-ported prediction-tracking system end-to-end:
   - DefaultInsightScoreFunction direction + magnitude scoring
   - InsightManager add/step/summary pipeline
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -20,7 +21,7 @@ from app.engine.framework.insight import (
     InsightScoreType,
     InsightType,
 )
-from app.engine.framework.insight_manager import InsightManager, InsightSummary
+from app.engine.framework.insight_manager import InsightManager
 from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
 
 
@@ -209,16 +210,12 @@ class TestDefaultInsightScorer:
 
     def test_magnitude_scoring_perfect(self):
         # Predicted 0.4% move, actual was exactly 0.4%.
-        i = self._make_scored_insight(
-            InsightDirection.UP, Decimal("500"), Decimal("502"), magnitude=0.004
-        )
+        i = self._make_scored_insight(InsightDirection.UP, Decimal("500"), Decimal("502"), magnitude=0.004)
         assert i.score.magnitude == pytest.approx(1.0, abs=0.01)
 
     def test_magnitude_scoring_partial(self):
         # Predicted 1% move, actual was 0.5%.
-        i = self._make_scored_insight(
-            InsightDirection.UP, Decimal("500"), Decimal("502.5"), magnitude=0.01
-        )
+        i = self._make_scored_insight(InsightDirection.UP, Decimal("500"), Decimal("502.5"), magnitude=0.01)
         # score = 1 - |0.01 - 0.005| / max(0.01, 0.005) = 1 - 0.005/0.01 = 0.5
         assert i.score.magnitude == pytest.approx(0.5, abs=0.01)
 
@@ -245,18 +242,31 @@ class TestInsightManager:
         t0 = datetime(2024, 6, 1, 10, 0)
 
         # Insight 1: UP prediction, price goes up → correct
-        i1 = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30),
-                           generated_time=t0, magnitude=0.002, confidence=0.7)
+        i1 = Insight.price(
+            "SPY", InsightDirection.UP, timedelta(minutes=30), generated_time=t0, magnitude=0.002, confidence=0.7
+        )
         mgr.add(i1, Decimal("500"))
 
         # Insight 2: UP prediction, price goes down → wrong
-        i2 = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30),
-                           generated_time=t0 + timedelta(minutes=60), magnitude=0.003, confidence=0.6)
+        i2 = Insight.price(
+            "SPY",
+            InsightDirection.UP,
+            timedelta(minutes=30),
+            generated_time=t0 + timedelta(minutes=60),
+            magnitude=0.003,
+            confidence=0.6,
+        )
         mgr.add(i2, Decimal("505"))
 
         # Insight 3: UP prediction, price goes up → correct
-        i3 = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30),
-                           generated_time=t0 + timedelta(minutes=120), magnitude=0.001, confidence=0.8)
+        i3 = Insight.price(
+            "SPY",
+            InsightDirection.UP,
+            timedelta(minutes=30),
+            generated_time=t0 + timedelta(minutes=120),
+            magnitude=0.001,
+            confidence=0.8,
+        )
         mgr.add(i3, Decimal("503"))
 
         return mgr, [i1, i2, i3]
@@ -271,8 +281,7 @@ class TestInsightManager:
     def test_step_scores_expired_insights(self):
         mgr = InsightManager()
         t0 = datetime(2024, 6, 1, 10, 0)
-        i = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30),
-                          generated_time=t0, confidence=0.7)
+        i = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30), generated_time=t0, confidence=0.7)
         mgr.add(i, Decimal("500"))
 
         # Before expiration — nothing scored.
@@ -289,8 +298,7 @@ class TestInsightManager:
     def test_step_does_not_rescore_finalized(self):
         mgr = InsightManager()
         t0 = datetime(2024, 6, 1, 10, 0)
-        i = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30),
-                          generated_time=t0)
+        i = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30), generated_time=t0)
         mgr.add(i, Decimal("500"))
 
         # Score once.
@@ -304,10 +312,8 @@ class TestInsightManager:
     def test_get_active_insights(self):
         mgr = InsightManager()
         t0 = datetime(2024, 6, 1, 10, 0)
-        i1 = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30),
-                           generated_time=t0)
-        i2 = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=60),
-                           generated_time=t0)
+        i1 = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30), generated_time=t0)
+        i2 = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=60), generated_time=t0)
         mgr.add(i1, Decimal("500"))
         mgr.add(i2, Decimal("500"))
 
@@ -316,7 +322,7 @@ class TestInsightManager:
         assert active[0].id == i2.id
 
     def test_get_summary_direction_accuracy(self):
-        mgr, insights = self._make_manager_with_insights()
+        mgr, _insights = self._make_manager_with_insights()
         t_end = datetime(2024, 6, 1, 14, 0)
 
         # Score all: i1 up (correct), i2 up (wrong), i3 up (correct)

@@ -1,7 +1,9 @@
 """Strategy registry — maps strategy names to run functions and indicator definitions."""
+
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import pandas as pd
 
@@ -13,7 +15,6 @@ from app.services.strategies import (
     sma_crossover,
 )
 from app.services.strategies.common import StrategyResult
-
 
 StrategyRunFn = Callable[[pd.DataFrame, dict], StrategyResult]
 

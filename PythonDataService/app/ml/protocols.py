@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Protocol
+from typing import Any, Protocol
 
 
 class MarketDataProvider(Protocol):
@@ -17,4 +17,4 @@ class MarketDataProvider(Protocol):
         to_date: str,
         timespan: str = "day",
         multiplier: int = 1,
-    ) -> List[Dict[str, Any]]: ...
+    ) -> list[dict[str, Any]]: ...

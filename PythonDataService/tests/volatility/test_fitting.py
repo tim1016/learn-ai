@@ -10,9 +10,7 @@ import numpy as np
 import pytest
 
 from app.volatility.fitting import (
-    ArbitrageReport,
     FitMethod,
-    FitResult,
     SmileSlice,
     check_smile_arbitrage,
     fit_sabr,
@@ -39,7 +37,7 @@ def skewed_smile() -> SmileSlice:
     forward = 100.5
     strikes = np.linspace(80, 120, 20)
     log_m = np.log(strikes / forward)
-    ivs = 0.25 - 0.12 * log_m + 0.03 * log_m ** 2
+    ivs = 0.25 - 0.12 * log_m + 0.03 * log_m**2
     return SmileSlice(
         strikes=strikes,
         ivs=ivs,
@@ -49,14 +47,13 @@ def skewed_smile() -> SmileSlice:
 
 
 class TestVarianceInterp:
-
     def test_exact_recovery_at_input_strikes(self, flat_smile: SmileSlice) -> None:
         """Interpolation should exactly recover input vols at known strikes."""
         fit = fit_variance_interp(flat_smile)
         assert fit.success
         assert fit.method == FitMethod.VARIANCE
 
-        for k, iv in zip(flat_smile.strikes, flat_smile.ivs):
+        for k, iv in zip(flat_smile.strikes, flat_smile.ivs, strict=False):
             recovered = fit.volatility(float(k))
             assert abs(recovered - iv) < 1e-10
 
@@ -79,7 +76,6 @@ class TestVarianceInterp:
 
 
 class TestSABR:
-
     def test_fits_flat_smile(self, flat_smile: SmileSlice) -> None:
         """SABR should fit a flat smile with low RMSE."""
         fit = fit_sabr(flat_smile)
@@ -111,7 +107,6 @@ class TestSABR:
 
 
 class TestSVI:
-
     def test_fits_flat_smile(self, flat_smile: SmileSlice) -> None:
         """SVI should fit a flat smile with low RMSE."""
         fit = fit_svi(flat_smile)
@@ -149,7 +144,6 @@ class TestSVI:
 
 
 class TestArbitrageCheck:
-
     def test_flat_smile_passes(self, flat_smile: SmileSlice) -> None:
         """Flat smile should pass all arbitrage checks."""
         fit = fit_variance_interp(flat_smile)

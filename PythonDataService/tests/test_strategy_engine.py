@@ -1,29 +1,30 @@
 """Tests for the options strategy analysis engine."""
+
 from __future__ import annotations
 
 import math
 
 import pytest
 
-from app.models.strategy import StrategyLeg, StrategyAnalyzeRequest
+from app.models.strategy import StrategyAnalyzeRequest, StrategyLeg
 from app.services.strategy_engine import (
+    analyze_strategy,
+    compute_d2,
+    compute_expected_value,
+    compute_max_profit_loss,
     compute_payoff_at_expiry,
     compute_payoff_curve,
-    find_breakevens,
-    compute_max_profit_loss,
-    weighted_iv,
-    interpolate_iv_at_price,
-    compute_d2,
     compute_pop,
-    compute_expected_value,
     compute_strategy_cost,
-    analyze_strategy,
+    find_breakevens,
+    interpolate_iv_at_price,
+    weighted_iv,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 def _leg(strike: float, opt_type: str, pos: str, premium: float, iv: float = 0.25, qty: int = 1) -> StrategyLeg:
     return StrategyLeg(strike=strike, option_type=opt_type, position=pos, premium=premium, iv=iv, quantity=qty)
@@ -56,6 +57,7 @@ def long_straddle() -> list[StrategyLeg]:
 # ---------------------------------------------------------------------------
 # Payoff at expiry
 # ---------------------------------------------------------------------------
+
 
 class TestPayoffAtExpiry:
     def test_single_long_call(self):
@@ -102,6 +104,7 @@ class TestPayoffAtExpiry:
 # Strategy cost
 # ---------------------------------------------------------------------------
 
+
 class TestStrategyCost:
     def test_bull_call_spread_debit(self):
         assert compute_strategy_cost(bull_call_spread()) == pytest.approx(3.0)
@@ -113,6 +116,7 @@ class TestStrategyCost:
 # ---------------------------------------------------------------------------
 # Breakevens
 # ---------------------------------------------------------------------------
+
 
 class TestBreakevens:
     def test_bull_call_spread_single_breakeven(self):
@@ -136,6 +140,7 @@ class TestBreakevens:
 # Max profit / loss
 # ---------------------------------------------------------------------------
 
+
 class TestMaxProfitLoss:
     def test_bull_call_spread(self):
         max_p, max_l = compute_max_profit_loss(bull_call_spread(), 102, 0.30)
@@ -151,6 +156,7 @@ class TestMaxProfitLoss:
 # ---------------------------------------------------------------------------
 # Weighted IV
 # ---------------------------------------------------------------------------
+
 
 class TestWeightedIV:
     def test_equal_premiums(self):
@@ -181,6 +187,7 @@ class TestWeightedIV:
 # d2 computation
 # ---------------------------------------------------------------------------
 
+
 class TestD2:
     def test_atm(self):
         d2 = compute_d2(spot=100, strike=100, r=0.05, sigma=0.20, t=1.0)
@@ -197,6 +204,7 @@ class TestD2:
 # ---------------------------------------------------------------------------
 # Probability of Profit
 # ---------------------------------------------------------------------------
+
 
 class TestPOP:
     def test_returns_between_0_and_1(self):
@@ -226,6 +234,7 @@ class TestPOP:
 # Expected Value
 # ---------------------------------------------------------------------------
 
+
 class TestExpectedValue:
     def test_is_finite(self):
         ev = compute_expected_value(bull_call_spread(), 102, 0.043, 30)
@@ -239,6 +248,7 @@ class TestExpectedValue:
 # ---------------------------------------------------------------------------
 # Payoff curve
 # ---------------------------------------------------------------------------
+
 
 class TestPayoffCurve:
     def test_default_length(self):
@@ -255,6 +265,7 @@ class TestPayoffCurve:
 # ---------------------------------------------------------------------------
 # Full analyze_strategy
 # ---------------------------------------------------------------------------
+
 
 class TestAnalyzeStrategy:
     def test_bull_call_spread_full(self):
@@ -295,6 +306,7 @@ class TestAnalyzeStrategy:
 # ---------------------------------------------------------------------------
 # IV interpolation
 # ---------------------------------------------------------------------------
+
 
 class TestInterpolateIV:
     def test_at_strike_returns_that_iv(self):
@@ -355,6 +367,7 @@ class TestInterpolateIV:
 # ---------------------------------------------------------------------------
 # Iron condor strategy (4 legs) — edge case coverage
 # ---------------------------------------------------------------------------
+
 
 def iron_condor() -> list[StrategyLeg]:
     """Short 95P@$2 / Long 90P@$0.50 / Short 105C@$2 / Long 110C@$0.50
@@ -499,21 +512,25 @@ class TestBearPutSpread:
 # Greeks edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestGreeks:
     def test_long_call_positive_delta(self):
         from app.services.strategy_engine import compute_strategy_greeks
+
         legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
         greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
         assert greeks.delta > 0
 
     def test_short_call_negative_delta(self):
         from app.services.strategy_engine import compute_strategy_greeks
+
         legs = [_leg(100, "call", "short", 5.0, iv=0.25)]
         greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
         assert greeks.delta < 0
 
     def test_straddle_near_zero_delta(self):
         from app.services.strategy_engine import compute_strategy_greeks
+
         legs = long_straddle()
         greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
         # ATM straddle is roughly delta neutral
@@ -521,18 +538,21 @@ class TestGreeks:
 
     def test_straddle_positive_gamma(self):
         from app.services.strategy_engine import compute_strategy_greeks
+
         legs = long_straddle()
         greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
         assert greeks.gamma > 0  # long options = long gamma
 
     def test_straddle_negative_theta(self):
         from app.services.strategy_engine import compute_strategy_greeks
+
         legs = long_straddle()
         greeks = compute_strategy_greeks(legs, spot=100, r=0.043, days_to_expiry=30)
         assert greeks.theta < 0  # long options = time decay
 
     def test_quantity_multiplier(self):
         from app.services.strategy_engine import compute_strategy_greeks
+
         single = [_leg(100, "call", "long", 5.0, iv=0.25, qty=1)]
         double = [_leg(100, "call", "long", 5.0, iv=0.25, qty=2)]
         g1 = compute_strategy_greeks(single, spot=100, r=0.043, days_to_expiry=30)
@@ -542,12 +562,14 @@ class TestGreeks:
 
     def test_at_expiry_call_itm_delta_one(self):
         from app.services.strategy_engine import compute_strategy_greeks
+
         legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
         greeks = compute_strategy_greeks(legs, spot=110, r=0.043, days_to_expiry=0)
         assert greeks.delta == pytest.approx(1.0, abs=0.001)
 
     def test_at_expiry_zero_gamma(self):
         from app.services.strategy_engine import compute_strategy_greeks
+
         legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
         greeks = compute_strategy_greeks(legs, spot=110, r=0.043, days_to_expiry=0)
         assert greeks.gamma == 0.0
@@ -556,6 +578,7 @@ class TestGreeks:
 # ---------------------------------------------------------------------------
 # Edge cases: input validation
 # ---------------------------------------------------------------------------
+
 
 class TestAnalyzeStrategyValidation:
     def test_invalid_option_type_rejected(self):

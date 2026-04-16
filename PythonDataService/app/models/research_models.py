@@ -1,4 +1,5 @@
 """Pydantic v2 models for research endpoint request/response."""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

@@ -23,6 +23,7 @@ Keeping this logic behind a small service keeps the router thin and lets
 the engine tests exercise availability checks without needing a live
 Polygon client.
 """
+
 from __future__ import annotations
 
 import logging
@@ -101,9 +102,7 @@ def _read_daily_dates(zip_path: Path) -> set[date]:
                     except ValueError:
                         continue
     except (zipfile.BadZipFile, KeyError) as exc:
-        logger.warning(
-            "[AVAILABILITY] Failed reading daily zip %s: %s", zip_path, exc
-        )
+        logger.warning("[AVAILABILITY] Failed reading daily zip %s: %s", zip_path, exc)
     return dates
 
 
@@ -133,10 +132,7 @@ class AvailabilityReport:
             "available_days": self.available_days,
             "is_complete": self.is_complete,
             "missing_days": [d.isoformat() for d in self.missing_days],
-            "sources": {
-                root: [d.isoformat() for d in dates]
-                for root, dates in self.sources.items()
-            },
+            "sources": {root: [d.isoformat() for d in dates] for root, dates in self.sources.items()},
         }
 
 
@@ -181,8 +177,7 @@ def check_availability(
         # contributes; then walk expected weekdays assigning each to the
         # first root that has it.
         per_root_dates: list[tuple[Path, set[date]]] = [
-            (root, _read_daily_dates(_daily_zip_path(root, symbol)))
-            for root in roots
+            (root, _read_daily_dates(_daily_zip_path(root, symbol))) for root in roots
         ]
         for trading_date in expected:
             for root, root_dates in per_root_dates:
@@ -191,9 +186,7 @@ def check_availability(
                     found.add(trading_date)
                     break
     else:
-        raise ValueError(
-            f"Unsupported resolution {resolution!r}; expected 'minute' or 'daily'"
-        )
+        raise ValueError(f"Unsupported resolution {resolution!r}; expected 'minute' or 'daily'")
 
     missing = [d for d in expected if d not in found]
 

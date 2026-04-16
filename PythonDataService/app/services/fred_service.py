@@ -5,6 +5,7 @@ to arbitrary DTE for use in Black-Scholes pricing.
 
 Tenors: DTB4WK (4-week), DTB3 (3-month), DTB6 (6-month), DTB1YR (1-year)
 """
+
 from __future__ import annotations
 
 import logging
@@ -236,7 +237,9 @@ def prefetch_rate_cache(start_date: str, end_date: str) -> int:
     # so that get_risk_free_rate() for any date in range hits cache
     sorted_cached = sorted(_rate_cache.keys())
     if sorted_cached:
-        from datetime import datetime as dt_cls, timedelta as td_cls
+        from datetime import datetime as dt_cls
+        from datetime import timedelta as td_cls
+
         d = dt_cls.strptime(start_date, "%Y-%m-%d")
         end_d = dt_cls.strptime(end_date, "%Y-%m-%d")
         last_rates: dict[int, float] | None = None

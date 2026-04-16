@@ -6,6 +6,7 @@ Run once (or whenever the LEAN reference output changes):
         --lean-log /sessions/ecstatic-hopeful-volta/mnt/Lean/Launcher/bin/Debug/SpyEmaCrossoverAlgorithm-log.txt \
         --output app/engine/tests/fixtures/spy_lean_trades.csv
 """
+
 from __future__ import annotations
 
 import argparse

@@ -7,12 +7,12 @@ inputs. Before that, ``current_value`` is the mean of all samples seen so far
 (this matches LEAN, where the SMA uses a rolling window that also reports a
 value during warmup).
 """
+
 from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from app.engine.indicators.base import Indicator
 
@@ -23,9 +23,7 @@ class SimpleMovingAverage(Indicator):
         self._window: deque[Decimal] = deque(maxlen=period)
         self._sum: Decimal = Decimal(0)
 
-    def _compute_next_value(
-        self, time: datetime, value: Decimal
-    ) -> Optional[Decimal]:
+    def _compute_next_value(self, time: datetime, value: Decimal) -> Decimal | None:
         if len(self._window) == self.period:
             # Maxlen is already at period, popping is handled by deque,
             # but we track _sum manually for precision.

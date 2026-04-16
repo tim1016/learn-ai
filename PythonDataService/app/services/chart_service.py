@@ -8,6 +8,7 @@ Timestamps are stored/served in UTC epoch milliseconds.
 Exchange timezone (US/Eastern) is used ONLY for session masking
 and resample boundary alignment.
 """
+
 from __future__ import annotations
 
 import json
@@ -15,23 +16,21 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, date as date_type
-from typing import Any, Dict, List, Optional, Tuple
-
-import numpy as np
-import pandas as pd
-import pandas_ta as ta
-import pandas_market_calendars as mcal
+from datetime import datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.services.polygon_client import PolygonClientService
+import pandas as pd
+import pandas_market_calendars as mcal
+
 from app.services.dataset_service import (
-    fetch_bars_chunked,
-    calculate_dynamic_indicators,
-    estimate_max_lookback,
-    compute_warmup_start_date,
     INDICATOR_CONFIGS,
+    calculate_dynamic_indicators,
+    compute_warmup_start_date,
+    estimate_max_lookback,
+    fetch_bars_chunked,
 )
+from app.services.polygon_client import PolygonClientService
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +45,8 @@ _MAX_BARS = 10_000
 # EMA gets multiple default lengths for the ribbon.
 _EMA_RIBBON_LENGTHS = [5, 10, 20, 30, 40, 50, 100, 200]
 
-ALL_CHART_INDICATORS: List[Dict[str, Any]] = [
-    {"name": "ema", "params": {"length": length}}
-    for length in _EMA_RIBBON_LENGTHS
+ALL_CHART_INDICATORS: list[dict[str, Any]] = [
+    {"name": "ema", "params": {"length": length}} for length in _EMA_RIBBON_LENGTHS
 ] + [
     {"name": name, "params": {p["name"]: p["default"] for p in params_list}}
     for name, params_list in INDICATOR_CONFIGS.items()
@@ -56,31 +54,54 @@ ALL_CHART_INDICATORS: List[Dict[str, Any]] = [
 ]
 
 # Indicators visible by default when compute_all_indicators is used.
-DEFAULT_VISIBLE_INDICATORS: frozenset[str] = frozenset({
-    "ema", "bbands", "supertrend", "macd", "rsi", "adx",
-})
+DEFAULT_VISIBLE_INDICATORS: frozenset[str] = frozenset(
+    {
+        "ema",
+        "bbands",
+        "supertrend",
+        "macd",
+        "rsi",
+        "adx",
+    }
+)
 
 # Timeframe definitions: (label, pandas resample rule, minutes per bar)
-TIMEFRAME_DEFS: Dict[str, Dict[str, Any]] = {
-    "1m":  {"rule": "1min",  "minutes": 1},
-    "5m":  {"rule": "5min",  "minutes": 5},
+TIMEFRAME_DEFS: dict[str, dict[str, Any]] = {
+    "1m": {"rule": "1min", "minutes": 1},
+    "5m": {"rule": "5min", "minutes": 5},
     "15m": {"rule": "15min", "minutes": 15},
     "30m": {"rule": "30min", "minutes": 30},
-    "1h":  {"rule": "1h",    "minutes": 60},
-    "4h":  {"rule": "4h",    "minutes": 240},
-    "1D":  {"rule": "1D",    "minutes": 390},
-    "1W":  {"rule": "1W",    "minutes": 1950},
-    "1M":  {"rule": "1ME",   "minutes": 8190},
+    "1h": {"rule": "1h", "minutes": 60},
+    "4h": {"rule": "4h", "minutes": 240},
+    "1D": {"rule": "1D", "minutes": 390},
+    "1W": {"rule": "1W", "minutes": 1950},
+    "1M": {"rule": "1ME", "minutes": 8190},
 }
 
 # Indicator → panel mapping
-_OVERLAY_INDICATORS = frozenset({
-    "ema", "sma", "dema", "tema", "wma", "hma", "kama", "zlma", "rma", "alma",
-    "bbands", "supertrend", "vwap", "psar", "kc", "donchian",
-})
+_OVERLAY_INDICATORS = frozenset(
+    {
+        "ema",
+        "sma",
+        "dema",
+        "tema",
+        "wma",
+        "hma",
+        "kama",
+        "zlma",
+        "rma",
+        "alma",
+        "bbands",
+        "supertrend",
+        "vwap",
+        "psar",
+        "kc",
+        "donchian",
+    }
+)
 
 # Fixed color palette per indicator type
-_INDICATOR_COLORS: Dict[str, str] = {
+_INDICATOR_COLORS: dict[str, str] = {
     "ema": "#2196F3",
     "sma": "#FF9800",
     "dema": "#00BCD4",
@@ -101,7 +122,7 @@ _INDICATOR_COLORS: Dict[str, str] = {
 }
 
 # Reference lines for oscillators
-_INDICATOR_REFS: Dict[str, List[float]] = {
+_INDICATOR_REFS: dict[str, list[float]] = {
     "rsi": [30.0, 70.0],
     "stoch": [20.0, 80.0],
     "cci": [-100.0, 100.0],
@@ -126,7 +147,7 @@ class LRUTTLCache:
         self._max_size = max_size
         self._ttl = ttl_seconds
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         entry = self._store.get(key)
         if entry is None:
             return None
@@ -158,16 +179,12 @@ _indicator_cache = LRUTTLCache(max_size=256, ttl_seconds=900)
 _nyse = mcal.get_calendar("NYSE")
 
 
-def _get_trading_schedule(
-    from_date: str, to_date: str
-) -> pd.DataFrame:
+def _get_trading_schedule(from_date: str, to_date: str) -> pd.DataFrame:
     """Return NYSE trading schedule (market_open, market_close) for the range."""
     return _nyse.schedule(start_date=from_date, end_date=to_date)
 
 
-def _count_trading_minutes(
-    from_date: str, to_date: str, session: str
-) -> int:
+def _count_trading_minutes(from_date: str, to_date: str, session: str) -> int:
     """Count actual trading minutes using NYSE calendar."""
     schedule = _get_trading_schedule(from_date, to_date)
     if schedule.empty:
@@ -185,21 +202,17 @@ def _count_trading_minutes(
         return len(schedule) * 960
 
 
-def estimate_bars_per_timeframe(
-    from_date: str, to_date: str, session: str
-) -> Dict[str, int]:
+def estimate_bars_per_timeframe(from_date: str, to_date: str, session: str) -> dict[str, int]:
     """Estimate bar count for each timeframe using NYSE calendar."""
     trading_mins = _count_trading_minutes(from_date, to_date, session)
-    result: Dict[str, int] = {}
+    result: dict[str, int] = {}
     for tf, tf_def in TIMEFRAME_DEFS.items():
         mins = tf_def["minutes"]
         result[tf] = max(1, trading_mins // mins) if trading_mins > 0 else 0
     return result
 
 
-def get_allowed_timeframes(
-    from_date: str, to_date: str, session: str
-) -> Tuple[List[str], Dict[str, int], str]:
+def get_allowed_timeframes(from_date: str, to_date: str, session: str) -> tuple[list[str], dict[str, int], str]:
     """
     Return (allowed_timeframes, estimated_bars_per_tf, recommended_tf).
     Allowed = estimated bars <= _MAX_BARS.
@@ -223,7 +236,7 @@ def get_allowed_timeframes(
 # ──────────────────────────────────────────────
 # Canonical cache key helpers
 # ──────────────────────────────────────────────
-def _canonical_indicator_key(indicators: List[Dict[str, Any]]) -> str:
+def _canonical_indicator_key(indicators: list[dict[str, Any]]) -> str:
     """Produce a stable string key from indicator specs."""
     normalized = []
     for ind in sorted(indicators, key=lambda x: x.get("name", "")):
@@ -235,14 +248,18 @@ def _canonical_indicator_key(indicators: List[Dict[str, Any]]) -> str:
 
 
 def _resample_cache_key(
-    ticker: str, from_date: str, to_date: str,
-    timeframe: str, session: str, forward_fill: bool,
+    ticker: str,
+    from_date: str,
+    to_date: str,
+    timeframe: str,
+    session: str,
+    forward_fill: bool,
     adjusted: bool = True,
 ) -> str:
     return f"{ticker}|{from_date}|{to_date}|{timeframe}|{session}|{forward_fill}|{adjusted}"
 
 
-def _indicator_cache_key(resample_key: str, indicators: List[Dict[str, Any]]) -> str:
+def _indicator_cache_key(resample_key: str, indicators: list[dict[str, Any]]) -> str:
     return f"{resample_key}||{_canonical_indicator_key(indicators)}"
 
 
@@ -252,9 +269,10 @@ def _indicator_cache_key(resample_key: str, indicators: List[Dict[str, Any]]) ->
 @dataclass
 class GapDetail:
     """Single intra-session gap."""
-    before_ts: int          # ms epoch of bar before the gap
-    after_ts: int           # ms epoch of bar after the gap
-    duration_minutes: int   # gap duration in minutes
+
+    before_ts: int  # ms epoch of bar before the gap
+    after_ts: int  # ms epoch of bar after the gap
+    duration_minutes: int  # gap duration in minutes
     classification: str = "unknown"  # overnight | weekend | session_boundary | unexpected
 
 
@@ -268,8 +286,8 @@ class QualityReport:
     session_coverage_pct: float = 0.0
     synthetic_bars: int = 0
     resampled_bar_count: int = 0
-    gap_details: List[GapDetail] = field(default_factory=list)
-    missing_session_dates: List[str] = field(default_factory=list)
+    gap_details: list[GapDetail] = field(default_factory=list)
+    missing_session_dates: list[str] = field(default_factory=list)
     # Processing detail metrics
     flat_bars_detected: int = 0
     ohlc_violations_detected: int = 0
@@ -286,10 +304,12 @@ def _classify_gap(before_ts: int, after_ts: int) -> str:
     # Weekend: gap spans Friday→Monday (or crosses weekend days)
     if before_dt.weekday() == 4 and after_dt.weekday() == 0:
         return "weekend"
-    if any(
-        (before_date + timedelta(days=d)).weekday() in (5, 6)
-        for d in range(1, (after_date - before_date).days + 1)
-    ) and before_date != after_date:
+    if (
+        any(
+            (before_date + timedelta(days=d)).weekday() in (5, 6) for d in range(1, (after_date - before_date).days + 1)
+        )
+        and before_date != after_date
+    ):
         return "weekend"
 
     # Different dates (non-weekend): overnight gap
@@ -299,8 +319,8 @@ def _classify_gap(before_ts: int, after_ts: int) -> str:
     # Same date: check if it's a session boundary (RTH open/close transition)
     before_mins = before_dt.hour * 60 + before_dt.minute
     after_mins = after_dt.hour * 60 + after_dt.minute
-    rth_open = 9 * 60 + 30   # 09:30
-    rth_close = 16 * 60       # 16:00
+    rth_open = 9 * 60 + 30  # 09:30
+    rth_close = 16 * 60  # 16:00
 
     # Pre-market → RTH boundary
     if before_mins < rth_open and after_mins >= rth_open:
@@ -314,12 +334,12 @@ def _classify_gap(before_ts: int, after_ts: int) -> str:
 
 
 def _preprocess_minute_bars(
-    bars: List[Dict[str, Any]],
+    bars: list[dict[str, Any]],
     from_date: str,
     to_date: str,
     session: str,
     forward_fill: bool,
-) -> Tuple[pd.DataFrame, QualityReport]:
+) -> tuple[pd.DataFrame, QualityReport]:
     """
     Preprocess raw 1-minute bars:
     1. Sort by timestamp
@@ -348,10 +368,7 @@ def _preprocess_minute_bars(
     # Detect flat bars and OHLC violations (count only, don't remove)
     if not df.empty:
         flat_mask = (
-            (df["volume"] == 0)
-            & (df["open"] == df["high"])
-            & (df["high"] == df["low"])
-            & (df["low"] == df["close"])
+            (df["volume"] == 0) & (df["open"] == df["high"]) & (df["high"] == df["low"]) & (df["low"] == df["close"])
         )
         quality.flat_bars_detected = int(flat_mask.sum())
 
@@ -413,10 +430,14 @@ def _preprocess_minute_bars(
                 after_ts = int(df.at[idx, "timestamp"])
                 dur = int((after_ts - before_ts) / 60_000)
                 classification = _classify_gap(before_ts, after_ts)
-                quality.gap_details.append(GapDetail(
-                    before_ts=before_ts, after_ts=after_ts,
-                    duration_minutes=dur, classification=classification,
-                ))
+                quality.gap_details.append(
+                    GapDetail(
+                        before_ts=before_ts,
+                        after_ts=after_ts,
+                        duration_minutes=dur,
+                        classification=classification,
+                    )
+                )
 
     # Session coverage
     expected_mins = _count_trading_minutes(from_date, to_date, session)
@@ -443,9 +464,7 @@ def _preprocess_minute_bars(
     return df, quality
 
 
-def _forward_fill_bars(
-    df: pd.DataFrame, schedule: pd.DataFrame, session: str
-) -> pd.DataFrame:
+def _forward_fill_bars(df: pd.DataFrame, schedule: pd.DataFrame, session: str) -> pd.DataFrame:
     """Forward-fill missing minute bars. Synthetic bars: OHLC=prev close, volume=0."""
     if df.empty or schedule.empty:
         return df
@@ -468,7 +487,7 @@ def _forward_fill_bars(
         _epoch = pd.Timestamp("1970-01-01", tz="UTC")
         minute_ts = ((minute_range.tz_convert("UTC") - _epoch).total_seconds() * 1000).astype("int64")
 
-        day_mask = (df["_dt_et"].dt.date == open_t.date())
+        day_mask = df["_dt_et"].dt.date == open_t.date()
         day_df = df[day_mask].copy()
 
         template = pd.DataFrame({"timestamp": minute_ts})
@@ -507,9 +526,7 @@ def _forward_fill_bars(
 # ──────────────────────────────────────────────
 # OHLCV Resampling
 # ──────────────────────────────────────────────
-def _resample_bars(
-    df: pd.DataFrame, timeframe: str, session: str
-) -> pd.DataFrame:
+def _resample_bars(df: pd.DataFrame, timeframe: str, session: str) -> pd.DataFrame:
     """
     Resample 1-minute bars to target timeframe.
 
@@ -543,7 +560,7 @@ def _resample_bars(
             # Pre-market starts at 4:00 — no offset needed
             offset = timedelta(minutes=0)
 
-    agg_dict: Dict[str, Any] = {
+    agg_dict: dict[str, Any] = {
         "open": "first",
         "high": "max",
         "low": "min",
@@ -575,9 +592,7 @@ def _resample_bars(
 
     # Convert back to UTC epoch ms timestamps
     _epoch = pd.Timestamp("1970-01-01", tz="UTC")
-    resampled["timestamp"] = (
-        (resampled.index.tz_convert("UTC") - _epoch).total_seconds() * 1000
-    ).astype("int64")
+    resampled["timestamp"] = ((resampled.index.tz_convert("UTC") - _epoch).total_seconds() * 1000).astype("int64")
 
     resampled = resampled.reset_index(drop=True)
     return resampled
@@ -588,8 +603,8 @@ def _resample_bars(
 # ──────────────────────────────────────────────
 def _compute_indicators(
     df: pd.DataFrame,
-    indicators: List[Dict[str, Any]],
-) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
+    indicators: list[dict[str, Any]],
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """
     Compute indicators on resampled OHLCV DataFrame.
     Returns (enriched_df, column_meta).
@@ -605,19 +620,19 @@ def _compute_indicators(
 # ──────────────────────────────────────────────
 def _format_indicator_results(
     df: pd.DataFrame,
-    column_meta: List[Dict[str, Any]],
-    indicators_requested: List[Dict[str, Any]],
+    column_meta: list[dict[str, Any]],
+    indicators_requested: list[dict[str, Any]],
     compute_all_indicators: bool = False,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Format indicator columns into the structured response schema.
     Each indicator becomes an entry with id, panel, type, color, data, and optional refs.
     When compute_all_indicators is True, each entry also gets a 'default_visible' flag.
     """
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     # Group column_meta by indicator name + params
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for meta in column_meta:
         key = f"{meta['indicator']}|{meta['params']}"
         grouped.setdefault(key, []).append(meta)
@@ -659,16 +674,18 @@ def _format_indicator_results(
                     series_key = "macd"
                 macd_data[series_key] = [
                     {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
-                    for t, v in zip(timestamps, values)
+                    for t, v in zip(timestamps, values, strict=False)
                 ]
-            results.append({
-                "id": ind_id,
-                "panel": "macd",
-                "type": "macd",
-                "color": base_color,
-                "data": macd_data,
-                "refs": [],
-            })
+            results.append(
+                {
+                    "id": ind_id,
+                    "panel": "macd",
+                    "type": "macd",
+                    "color": base_color,
+                    "data": macd_data,
+                    "refs": [],
+                }
+            )
 
         elif name == "bbands":
             # Upper, middle, lower as separate series
@@ -678,14 +695,41 @@ def _format_indicator_results(
                 values = df[col].tolist()
                 series_data = [
                     {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
-                    for t, v in zip(timestamps, values)
+                    for t, v in zip(timestamps, values, strict=False)
                 ]
                 if "bbu" in col:
-                    results.append({"id": f"{ind_id}_upper", "panel": "main", "type": "line", "color": "#BDBDBD", "data": series_data, "refs": []})
+                    results.append(
+                        {
+                            "id": f"{ind_id}_upper",
+                            "panel": "main",
+                            "type": "line",
+                            "color": "#BDBDBD",
+                            "data": series_data,
+                            "refs": [],
+                        }
+                    )
                 elif "bbm" in col:
-                    results.append({"id": f"{ind_id}_middle", "panel": "main", "type": "line", "color": "#9E9E9E", "data": series_data, "refs": []})
+                    results.append(
+                        {
+                            "id": f"{ind_id}_middle",
+                            "panel": "main",
+                            "type": "line",
+                            "color": "#9E9E9E",
+                            "data": series_data,
+                            "refs": [],
+                        }
+                    )
                 elif "bbl" in col:
-                    results.append({"id": f"{ind_id}_lower", "panel": "main", "type": "line", "color": "#BDBDBD", "data": series_data, "refs": []})
+                    results.append(
+                        {
+                            "id": f"{ind_id}_lower",
+                            "panel": "main",
+                            "type": "line",
+                            "color": "#BDBDBD",
+                            "data": series_data,
+                            "refs": [],
+                        }
+                    )
 
         elif name == "supertrend":
             timestamps = df["timestamp"].tolist()
@@ -694,12 +738,30 @@ def _format_indicator_results(
                 values = df[col].tolist()
                 series_data = [
                     {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
-                    for t, v in zip(timestamps, values)
+                    for t, v in zip(timestamps, values, strict=False)
                 ]
                 if "supertl" in col:
-                    results.append({"id": f"{ind_id}_up", "panel": "main", "type": "line", "color": "#4CAF50", "data": series_data, "refs": []})
+                    results.append(
+                        {
+                            "id": f"{ind_id}_up",
+                            "panel": "main",
+                            "type": "line",
+                            "color": "#4CAF50",
+                            "data": series_data,
+                            "refs": [],
+                        }
+                    )
                 elif "superts" in col:
-                    results.append({"id": f"{ind_id}_down", "panel": "main", "type": "line", "color": "#F44336", "data": series_data, "refs": []})
+                    results.append(
+                        {
+                            "id": f"{ind_id}_down",
+                            "panel": "main",
+                            "type": "line",
+                            "color": "#F44336",
+                            "data": series_data,
+                            "refs": [],
+                        }
+                    )
 
         elif name == "stoch":
             timestamps = df["timestamp"].tolist()
@@ -708,12 +770,30 @@ def _format_indicator_results(
                 values = df[col].tolist()
                 series_data = [
                     {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
-                    for t, v in zip(timestamps, values)
+                    for t, v in zip(timestamps, values, strict=False)
                 ]
                 if "stochk" in col:
-                    results.append({"id": f"{ind_id}_k", "panel": "stoch", "type": "line", "color": "#2196F3", "data": series_data, "refs": [20.0, 80.0]})
+                    results.append(
+                        {
+                            "id": f"{ind_id}_k",
+                            "panel": "stoch",
+                            "type": "line",
+                            "color": "#2196F3",
+                            "data": series_data,
+                            "refs": [20.0, 80.0],
+                        }
+                    )
                 elif "stochd" in col:
-                    results.append({"id": f"{ind_id}_d", "panel": "stoch", "type": "line", "color": "#FF9800", "data": series_data, "refs": []})
+                    results.append(
+                        {
+                            "id": f"{ind_id}_d",
+                            "panel": "stoch",
+                            "type": "line",
+                            "color": "#FF9800",
+                            "data": series_data,
+                            "refs": [],
+                        }
+                    )
 
         elif name == "adx":
             timestamps = df["timestamp"].tolist()
@@ -722,14 +802,41 @@ def _format_indicator_results(
                 values = df[col].tolist()
                 series_data = [
                     {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
-                    for t, v in zip(timestamps, values)
+                    for t, v in zip(timestamps, values, strict=False)
                 ]
                 if "dmp" in col:
-                    results.append({"id": f"{ind_id}_di_plus", "panel": "adx", "type": "line", "color": "#4CAF50", "data": series_data, "refs": []})
+                    results.append(
+                        {
+                            "id": f"{ind_id}_di_plus",
+                            "panel": "adx",
+                            "type": "line",
+                            "color": "#4CAF50",
+                            "data": series_data,
+                            "refs": [],
+                        }
+                    )
                 elif "dmn" in col:
-                    results.append({"id": f"{ind_id}_di_minus", "panel": "adx", "type": "line", "color": "#F44336", "data": series_data, "refs": []})
+                    results.append(
+                        {
+                            "id": f"{ind_id}_di_minus",
+                            "panel": "adx",
+                            "type": "line",
+                            "color": "#F44336",
+                            "data": series_data,
+                            "refs": [],
+                        }
+                    )
                 else:
-                    results.append({"id": ind_id, "panel": "adx", "type": "line", "color": "#7C3AED", "data": series_data, "refs": [25.0]})
+                    results.append(
+                        {
+                            "id": ind_id,
+                            "panel": "adx",
+                            "type": "line",
+                            "color": "#7C3AED",
+                            "data": series_data,
+                            "refs": [25.0],
+                        }
+                    )
 
         else:
             # Single-series indicator (RSI, OBV, EMA, SMA, etc.)
@@ -739,16 +846,18 @@ def _format_indicator_results(
             values = df[col].tolist()
             series_data = [
                 {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
-                for t, v in zip(timestamps, values)
+                for t, v in zip(timestamps, values, strict=False)
             ]
-            results.append({
-                "id": ind_id,
-                "panel": panel,
-                "type": "line",
-                "color": base_color,
-                "data": series_data,
-                "refs": refs,
-            })
+            results.append(
+                {
+                    "id": ind_id,
+                    "panel": panel,
+                    "type": "line",
+                    "color": base_color,
+                    "data": series_data,
+                    "refs": refs,
+                }
+            )
 
     # Tag each result with default_visible when using compute_all_indicators
     if compute_all_indicators:
@@ -773,10 +882,10 @@ def get_chart_data(
     timeframe: str,
     session: str = "rth",
     forward_fill: bool = False,
-    indicators: Optional[List[Dict[str, Any]]] = None,
+    indicators: list[dict[str, Any]] | None = None,
     compute_all_indicators: bool = False,
     adjusted: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Main entry point: fetch 1m bars, preprocess, resample, compute indicators.
     Uses two-layer caching.
@@ -835,9 +944,7 @@ def get_chart_data(
             }
 
         # Preprocess
-        df_preprocessed, quality = _preprocess_minute_bars(
-            bars, from_date, to_date, session, forward_fill
-        )
+        df_preprocessed, quality = _preprocess_minute_bars(bars, from_date, to_date, session, forward_fill)
         if df_preprocessed.empty:
             return {
                 "error_code": "NO_DATA",
@@ -867,7 +974,7 @@ def get_chart_data(
         _resample_cache.put(resample_key, (df_resampled.copy(), quality))
 
     # ── Layer 2: Indicator computation (cached) ──
-    indicator_results: List[Dict[str, Any]] = []
+    indicator_results: list[dict[str, Any]] = []
     cache_hit_indicators = False
 
     if indicators:
@@ -877,9 +984,9 @@ def get_chart_data(
         if cached_ind is not None:
             indicator_results = cached_ind
             cache_hit_indicators = True
-            logger.info(f"[CHART] Cache HIT for indicators")
+            logger.info("[CHART] Cache HIT for indicators")
         else:
-            logger.info(f"[CHART] Cache MISS for indicators, computing...")
+            logger.info("[CHART] Cache MISS for indicators, computing...")
             df_with_ind, col_meta = _compute_indicators(df_resampled, indicators)
             indicator_results = _format_indicator_results(df_with_ind, col_meta, indicators, compute_all_indicators)
             _indicator_cache.put(ind_key, indicator_results)
@@ -887,7 +994,7 @@ def get_chart_data(
     # ── Build response ──
     bars_out = []
     for _, row in df_resampled.iterrows():
-        bar: Dict[str, Any] = {
+        bar: dict[str, Any] = {
             "t": int(row["timestamp"]),
             "o": round(float(row["open"]), 6) if pd.notna(row["open"]) else None,
             "h": round(float(row["high"]), 6) if pd.notna(row["high"]) else None,

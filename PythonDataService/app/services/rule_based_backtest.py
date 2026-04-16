@@ -3,11 +3,12 @@
 Supports composable entry conditions (EMA crossover, RSI band, ADX filter, gap filter)
 and multiple exit modes (fixed candles, indicator-based).
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -87,13 +88,16 @@ def run_rule_based_backtest(
     min_ema_gap = params.get("min_ema_gap", 0.20)
     rsi_min = params.get("rsi_min", 50.0)
     rsi_max = params.get("rsi_max", 70.0)
-    adx_min = params.get("adx_min", None)
+    adx_min = params.get("adx_min")
     exit_bars = params.get("exit_bars", 5)
 
     strategy_name = params.get("strategy_name", "ema_crossover_rsi")
 
     result = RuleBasedBacktestResult(
-        success=False, ticker=ticker, strategy_name=strategy_name, parameters=params,
+        success=False,
+        ticker=ticker,
+        strategy_name=strategy_name,
+        parameters=params,
     )
 
     if len(bars) < max(fast_period, slow_period, rsi_period, adx_period) + 10:
@@ -162,26 +166,28 @@ def run_rule_based_backtest(
             cum_pnl_pct += pnl_pct
             trade_num += 1
 
-            trades.append(RuleBasedTrade(
-                trade_number=trade_num,
-                trade_type="Buy",
-                entry_timestamp=entry_ts,
-                exit_timestamp=exit_ts,
-                entry_price=entry_price,
-                exit_price=exit_price,
-                pnl=pnl_pts,
-                pnl_pct=pnl_pct,
-                cumulative_pnl_pct=cum_pnl_pct,
-                signal_reason=(
-                    f"EMA({fast_period}) crossed above EMA({slow_period}), "
-                    f"gap={row['ema_gap']:.4f}, RSI={row['rsi']:.2f}"
-                ),
-                ema_fast=round(float(row["ema_fast"]), 4),
-                ema_slow=round(float(row["ema_slow"]), 4),
-                ema_gap=round(float(row["ema_gap"]), 4),
-                rsi=round(float(row["rsi"]), 2),
-                adx=round(float(row["adx"]), 2) if not pd.isna(row.get("adx", np.nan)) else None,
-            ))
+            trades.append(
+                RuleBasedTrade(
+                    trade_number=trade_num,
+                    trade_type="Buy",
+                    entry_timestamp=entry_ts,
+                    exit_timestamp=exit_ts,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    pnl=pnl_pts,
+                    pnl_pct=pnl_pct,
+                    cumulative_pnl_pct=cum_pnl_pct,
+                    signal_reason=(
+                        f"EMA({fast_period}) crossed above EMA({slow_period}), "
+                        f"gap={row['ema_gap']:.4f}, RSI={row['rsi']:.2f}"
+                    ),
+                    ema_fast=round(float(row["ema_fast"]), 4),
+                    ema_slow=round(float(row["ema_slow"]), 4),
+                    ema_gap=round(float(row["ema_gap"]), 4),
+                    rsi=round(float(row["rsi"]), 2),
+                    adx=round(float(row["adx"]), 2) if not pd.isna(row.get("adx", np.nan)) else None,
+                )
+            )
 
             # Jump past exit to avoid overlapping trades
             i = exit_idx + 1
@@ -246,7 +252,7 @@ def _compute_max_drawdown(cum_pnl: list[float]) -> float:
 def _format_timestamp(ts) -> str:
     """Convert a timestamp (ms epoch or datetime) to ISO 8601."""
     if isinstance(ts, (int, float, np.integer, np.floating)):
-        return datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M")
     if isinstance(ts, datetime):
         return ts.strftime("%Y-%m-%d %H:%M")
     if isinstance(ts, str):

@@ -4,6 +4,7 @@ Divides feature values into N bins (default 5) and computes the mean
 forward return in each bin.  A useful predictive feature should show
 monotonically increasing (or decreasing) mean returns across quantiles.
 """
+
 from __future__ import annotations
 
 import logging
@@ -105,7 +106,11 @@ def compute_quantile_analysis(
 
     logger.info(
         "[Research] Quantile: %d bins, mono_ratio=%.2f (inc=%.2f dec=%.2f), pass=%s",
-        len(bins), best_ratio, mono_ratio, dec_ratio, is_mono,
+        len(bins),
+        best_ratio,
+        mono_ratio,
+        dec_ratio,
+        is_mono,
     )
 
     return QuantileResult(

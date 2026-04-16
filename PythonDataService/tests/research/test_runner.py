@@ -1,7 +1,6 @@
 """Tests for the research experiment orchestrator."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from app.research.config import ResearchConfig
 from app.research.runner import run_feature_research

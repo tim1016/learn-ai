@@ -1,6 +1,19 @@
 {
   "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
     "prettier": "^3.8.0",
     "prettier-plugin-sql": "^0.19.2"
+  },
+  "scripts": {
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "Frontend/src/**/*.{ts,html}": "npx eslint --fix",
+    "PythonDataService/**/*.py": [
+      "ruff check --fix",
+      "ruff format"
+    ],
+    "Backend/**/*.cs": "dotnet format podman.sln --include"
   }
 }

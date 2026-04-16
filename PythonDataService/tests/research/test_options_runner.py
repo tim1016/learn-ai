@@ -1,14 +1,12 @@
 """Tests for options research runner — integration with IC pipeline using synthetic IV data."""
-from __future__ import annotations
 
-import math
-from datetime import datetime, timedelta
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from app.research.options_runner import run_options_feature_research, _compute_daily_forward_return
+from app.research.options_runner import _compute_daily_forward_return, run_options_feature_research
 
 
 def _make_synthetic_data(
@@ -28,14 +26,16 @@ def _make_synthetic_data(
     for i, dt in enumerate(dates):
         ts = int(dt.timestamp() * 1000)
         c = float(close[i])
-        stock_bars.append({
-            "timestamp": ts,
-            "open": c * 0.999,
-            "high": c * 1.005,
-            "low": c * 0.995,
-            "close": c,
-            "volume": float(np.random.randint(100000, 1000000)),
-        })
+        stock_bars.append(
+            {
+                "timestamp": ts,
+                "open": c * 0.999,
+                "high": c * 1.005,
+                "low": c * 0.995,
+                "close": c,
+                "volume": float(np.random.randint(100000, 1000000)),
+            }
+        )
 
     # IV data — slight negative correlation with returns for realism
     iv = np.full(n_days, iv_mean, dtype=float)
@@ -46,13 +46,15 @@ def _make_synthetic_data(
 
     iv_data = []
     for i, dt in enumerate(dates):
-        iv_data.append({
-            "date": dt.strftime("%Y-%m-%d"),
-            "atm_iv": float(iv[i]),
-            "iv_otm_put": float(iv[i] * 1.15),
-            "iv_otm_call": float(iv[i] * 0.90),
-            "stock_close": float(close[i]),
-        })
+        iv_data.append(
+            {
+                "date": dt.strftime("%Y-%m-%d"),
+                "atm_iv": float(iv[i]),
+                "iv_otm_put": float(iv[i] * 1.15),
+                "iv_otm_call": float(iv[i] * 0.90),
+                "stock_close": float(close[i]),
+            }
+        )
 
     return iv_data, stock_bars
 
@@ -189,13 +191,17 @@ class TestOptionsRunner:
         """IV data with too many missing values should fail diagnostics."""
         dates = pd.bdate_range(start="2024-01-01", periods=50)
         iv_data = [
-            {"date": dt.strftime("%Y-%m-%d"), "atm_iv": None, "iv_otm_put": None,
-             "iv_otm_call": None, "stock_close": 100.0}
+            {
+                "date": dt.strftime("%Y-%m-%d"),
+                "atm_iv": None,
+                "iv_otm_put": None,
+                "iv_otm_call": None,
+                "stock_close": 100.0,
+            }
             for dt in dates
         ]
         stock_bars = [
-            {"timestamp": int(dt.timestamp() * 1000), "open": 100, "high": 105,
-             "low": 95, "close": 100, "volume": 1000}
+            {"timestamp": int(dt.timestamp() * 1000), "open": 100, "high": 105, "low": 95, "close": 100, "volume": 1000}
             for dt in dates
         ]
 
@@ -209,7 +215,11 @@ class TestOptionsRunner:
         )
 
         assert report.error is not None
-        assert "diagnostics" in report.error.lower() or "missing" in report.error.lower() or "valid" in report.error.lower()
+        assert (
+            "diagnostics" in report.error.lower()
+            or "missing" in report.error.lower()
+            or "valid" in report.error.lower()
+        )
 
     def test_report_has_stationarity(self):
         """Report should include stationarity test results."""

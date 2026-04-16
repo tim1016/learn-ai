@@ -1,11 +1,11 @@
 """Tests for IV series diagnostics."""
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
-from app.research.options.diagnostics import run_iv_diagnostics, MAX_MISSING_PCT
+from app.research.options.diagnostics import MAX_MISSING_PCT, run_iv_diagnostics
 
 
 def _make_iv_df(
@@ -32,12 +32,14 @@ def _make_iv_df(
         for i in range(min(discontinuities, n_days - 1)):
             iv[i + 1] = iv[i] * 2.0  # 100% change
 
-    return pd.DataFrame({
-        "date": dates.strftime("%Y-%m-%d"),
-        "iv_30d_atm": iv,
-        "dte_low": np.full(n_days, 25),
-        "dte_high": np.full(n_days, 35),
-    })
+    return pd.DataFrame(
+        {
+            "date": dates.strftime("%Y-%m-%d"),
+            "iv_30d_atm": iv,
+            "dte_low": np.full(n_days, 25),
+            "dte_high": np.full(n_days, 35),
+        }
+    )
 
 
 class TestIvDiagnostics:

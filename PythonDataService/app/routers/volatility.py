@@ -20,18 +20,14 @@ Endpoints:
 from __future__ import annotations
 
 import csv
-import hashlib
 import io
-import json
 import logging
 import math
 import time
 from datetime import datetime, timedelta
-from typing import Optional
 
-import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from app.volatility.analytics import (
     compute_health_score,
@@ -49,6 +45,7 @@ from app.volatility.conventions import (
     ttm_to_dte,
 )
 from app.volatility.models import (
+    ArbitrageDetail,
     BatchSummaryRequest,
     BatchSummaryResponse,
     BuildFromCsvRequest,
@@ -58,21 +55,16 @@ from app.volatility.models import (
     DataFiltersModel,
     DiagnosticsResponse,
     FitParamsResponse,
-    MatrixGridRequest,
-    MatrixGridResponse,
     GridMetaModel,
-    OptionRecord,
-    OptionTypeEnum,
+    MatrixGridResponse,
     RejectionBreakdown,
-    ArbitrageDetail,
     SliceDiagnosticsResponse,
-    SmilesResponse,
-    SmileSliceResponse,
     SmilePointModel,
-    MarketPointModel,
-    SurfaceMethodEnum,
+    SmileSliceResponse,
+    SmilesResponse,
     SurfaceBuildRequest,
     SurfaceBuildSummary,
+    SurfaceMethodEnum,
 )
 from app.volatility.surface import (
     SurfaceMethod,
@@ -132,7 +124,7 @@ def _cache_surface_in_memory(surface_id: str, surface: VolSurface) -> None:
     _surfaces[surface_id] = surface
 
 
-def _try_load_surface_cached(surface_id: str) -> Optional[VolSurface]:
+def _try_load_surface_cached(surface_id: str) -> VolSurface | None:
     """Try to load surface from memory cache first, then disk cache."""
     if surface_id in _surfaces:
         return _surfaces[surface_id]
@@ -195,16 +187,18 @@ def _parse_csv_to_records(
             dte = (expiry_dt - eval_dt).days
             ttm = dte_to_ttm(dte)
 
-            records.append({
-                "strike": strike,
-                "ttm": ttm,
-                "option_price": mid,
-                "is_call": option_type == "call",
-                "bid": bid,
-                "ask": ask,
-                "open_interest": oi,
-                "volume": vol,
-            })
+            records.append(
+                {
+                    "strike": strike,
+                    "ttm": ttm,
+                    "option_price": mid,
+                    "is_call": option_type == "call",
+                    "bid": bid,
+                    "ask": ask,
+                    "open_interest": oi,
+                    "volume": vol,
+                }
+            )
         except (ValueError, KeyError) as e:
             logger.warning("[IV Surface] Skipped CSV row: %s", e)
             continue
@@ -293,17 +287,9 @@ def _build_diagnostics_response(
             rejection_by_reason[w] = rejection_by_reason.get(w, 0) + 1
 
     arbitrage_detail = ArbitrageDetail(
-        calendar_violations=sum(
-            s.arbitrage.calendar_violations if s.arbitrage else 0
-            for s in diag.slices
-        ),
-        butterfly_violations=sum(
-            s.arbitrage.butterfly_violations if s.arbitrage else 0
-            for s in diag.slices
-        ),
-        severity="none" if health.arbitrage_score >= 80 else (
-            "high" if health.arbitrage_score < 40 else "moderate"
-        ),
+        calendar_violations=sum(s.arbitrage.calendar_violations if s.arbitrage else 0 for s in diag.slices),
+        butterfly_violations=sum(s.arbitrage.butterfly_violations if s.arbitrage else 0 for s in diag.slices),
+        severity="none" if health.arbitrage_score >= 80 else ("high" if health.arbitrage_score < 40 else "moderate"),
         worst_slices=[],
     )
 
@@ -359,7 +345,7 @@ async def build_surface(request: SurfaceBuildRequest) -> SurfaceBuildSummary:
         logger.error("[IV Surface] Build failed: %s", e)
         raise HTTPException(
             status_code=422,
-            detail=f"Surface build failed: {str(e)}",
+            detail=f"Surface build failed: {e!s}",
         )
 
     if not surface.diagnostics.valid:
@@ -454,6 +440,7 @@ async def build_from_ticker(request: BuildFromTickerRequest) -> SurfaceBuildSumm
 
     try:
         from app.volatility.data_loader import OptionChainLoader
+
         loader = OptionChainLoader()
         records = loader.fetch_and_filter(
             ticker=request.ticker,
@@ -473,7 +460,7 @@ async def build_from_ticker(request: BuildFromTickerRequest) -> SurfaceBuildSumm
         logger.error("[IV Surface] Failed to fetch chain: %s", e)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch chain: {str(e)}",
+            detail=f"Failed to fetch chain: {e!s}",
         )
 
     if not records:
@@ -482,7 +469,7 @@ async def build_from_ticker(request: BuildFromTickerRequest) -> SurfaceBuildSumm
             detail="No option contracts after filtering",
         )
 
-    conv = SurfaceConventions(
+    SurfaceConventions(
         rate=request.conventions.rate,
         dividend_yield=request.conventions.dividend_yield,
         day_count=request.conventions.day_count,
@@ -502,7 +489,7 @@ async def build_from_ticker(request: BuildFromTickerRequest) -> SurfaceBuildSumm
         logger.error("[IV Surface] Build failed: %s", e)
         raise HTTPException(
             status_code=422,
-            detail=f"Surface build failed: {str(e)}",
+            detail=f"Surface build failed: {e!s}",
         )
 
     if not surface.diagnostics.valid:
@@ -554,7 +541,7 @@ async def build_from_csv(request: BuildFromCsvRequest) -> SurfaceBuildSummary:
         logger.error("[IV Surface] CSV parsing failed: %s", e)
         raise HTTPException(
             status_code=422,
-            detail=f"CSV parsing failed: {str(e)}",
+            detail=f"CSV parsing failed: {e!s}",
         )
 
     if not records:
@@ -579,7 +566,7 @@ async def build_from_csv(request: BuildFromCsvRequest) -> SurfaceBuildSummary:
         logger.error("[IV Surface] Build failed: %s", e)
         raise HTTPException(
             status_code=422,
-            detail=f"Surface build failed: {str(e)}",
+            detail=f"Surface build failed: {e!s}",
         )
 
     if not surface.diagnostics.valid:
@@ -619,7 +606,7 @@ async def get_grid(
     surface_id: str,
     axis: str = Query("log_moneyness", regex="^(log_moneyness|moneyness|strike)$"),
     n_strikes: int = Query(50, ge=10, le=500),
-    dte_days: Optional[str] = Query(None, description="Comma-separated DTE days"),
+    dte_days: str | None = Query(None, description="Comma-separated DTE days"),
 ) -> MatrixGridResponse:
     """
     Retrieve IV grid for a surface as a matrix (x, y, z).
@@ -641,7 +628,6 @@ async def get_grid(
         n_strikes,
     )
 
-    diag = surface.diagnostics
     ttm_list = [fit.ttm for fit in surface.fits]
 
     if dte_days:
@@ -667,7 +653,7 @@ async def get_grid(
         logger.error("[IV Surface] Grid evaluation failed: %s", e)
         raise HTTPException(
             status_code=500,
-            detail=f"Grid evaluation failed: {str(e)}",
+            detail=f"Grid evaluation failed: {e!s}",
         )
 
     df = df.sort_values(["ttm", "strike"])
@@ -687,7 +673,7 @@ async def get_grid(
 
     y_vals = [ttm_to_dte(t) for t in ttm_unique]
 
-    z_matrix: list[list[Optional[float]]] = []
+    z_matrix: list[list[float | None]] = []
     for t in ttm_unique:
         row = []
         for k in strike_unique:
@@ -699,15 +685,9 @@ async def get_grid(
                 row.append(None)
         z_matrix.append(row)
 
-    forwards = [
-        surface.spot * math.exp((surface.rate - surface.dividend) * t)
-        for t in ttm_unique
-    ]
+    forwards = [surface.spot * math.exp((surface.rate - surface.dividend) * t) for t in ttm_unique]
 
-    expiry_dates = [
-        (datetime.now() + timedelta(days=dte)).strftime("%Y-%m-%d")
-        for dte in y_vals
-    ]
+    expiry_dates = [(datetime.now() + timedelta(days=dte)).strftime("%Y-%m-%d") for dte in y_vals]
 
     meta = GridMetaModel(
         spot=surface.spot,
@@ -767,7 +747,7 @@ async def get_smiles(
         for k in strikes:
             try:
                 iv = surface.volatility(k, ttm)
-                if not (iv != iv):
+                if iv == iv:
                     x = _get_x_coord(k, forward, surface.spot, axis)
                     fitted_points.append(SmilePointModel(x=x, iv=iv))
             except (ValueError, RuntimeError):
@@ -780,14 +760,16 @@ async def get_smiles(
                 if abs(k.ttm - ttm) < 1e-6:
                     pass
 
-        slices.append(SmileSliceResponse(
-            ttm=ttm,
-            dte_days=dte,
-            expiry_date=expiry_date,
-            forward=forward,
-            fitted=fitted_points,
-            market=market_points,
-        ))
+        slices.append(
+            SmileSliceResponse(
+                ttm=ttm,
+                dte_days=dte,
+                expiry_date=expiry_date,
+                forward=forward,
+                fitted=fitted_points,
+                market=market_points,
+            )
+        )
 
     return SmilesResponse(
         x_label=axis,
@@ -840,18 +822,22 @@ async def query_surface(surface_id: str, queries: list[dict]) -> dict:
             strike = float(q["strike"])
             ttm = float(q["ttm"])
             iv = surface.volatility(strike, ttm)
-            results.append({
-                "strike": strike,
-                "ttm": ttm,
-                "iv": float(iv) if not (iv != iv) else None,
-            })
+            results.append(
+                {
+                    "strike": strike,
+                    "ttm": ttm,
+                    "iv": float(iv) if iv == iv else None,
+                }
+            )
         except (ValueError, RuntimeError, KeyError) as e:
-            results.append({
-                "strike": q.get("strike"),
-                "ttm": q.get("ttm"),
-                "iv": None,
-                "error": str(e),
-            })
+            results.append(
+                {
+                    "strike": q.get("strike"),
+                    "ttm": q.get("ttm"),
+                    "iv": None,
+                    "error": str(e),
+                }
+            )
 
     return {"results": results}
 
@@ -960,17 +946,19 @@ async def batch_summary(request: BatchSummaryRequest) -> BatchSummaryResponse:
 
             health = compute_health_score(cached)
 
-            summaries.append(DailySummary(
-                date=date_str,
-                surface_id=surface_id,
-                atm_iv=atm_iv,
-                rr_25d=rr_25d,
-                bf_25d=bf_25d,
-                skew_slope=skew_slope,
-                n_contracts=cached.diagnostics.n_total_solved,
-                health_score=health.total,
-                cached=True,
-            ))
+            summaries.append(
+                DailySummary(
+                    date=date_str,
+                    surface_id=surface_id,
+                    atm_iv=atm_iv,
+                    rr_25d=rr_25d,
+                    bf_25d=bf_25d,
+                    skew_slope=skew_slope,
+                    n_contracts=cached.diagnostics.n_total_solved,
+                    health_score=health.total,
+                    cached=True,
+                )
+            )
         elif request.mode != "cached":
             logger.info("[IV Surface] Batch summary: skipping %s (no cache)", date_str)
 

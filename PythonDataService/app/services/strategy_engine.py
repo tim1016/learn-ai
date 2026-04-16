@@ -3,21 +3,22 @@
 All probability math lives here — Black-Scholes lognormal model
 for POP (Probability of Profit) and EV (Expected Value).
 """
+
 from __future__ import annotations
 
-import math
 import logging
+import math
 from datetime import date, datetime
 
 import numpy as np
-from scipy.stats import norm, lognorm
+from scipy.stats import lognorm, norm
 
 from app.models.strategy import (
-    StrategyLeg,
+    GreeksResult,
+    PayoffPoint,
     StrategyAnalyzeRequest,
     StrategyAnalyzeResponse,
-    PayoffPoint,
-    GreeksResult,
+    StrategyLeg,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,9 +121,7 @@ def weighted_iv(legs: list[StrategyLeg]) -> float:
     if total_weight <= 0:
         return sum(leg.iv for leg in valid_legs) / len(valid_legs)
 
-    return sum(
-        leg.iv * leg.premium * leg.quantity for leg in valid_legs
-    ) / total_weight
+    return sum(leg.iv * leg.premium * leg.quantity for leg in valid_legs) / total_weight
 
 
 def interpolate_iv_at_price(legs: list[StrategyLeg], price: float) -> float:
@@ -209,7 +208,7 @@ def compute_pop(
 
     # Build regions: (-inf, BE1), (BE1, BE2), ..., (BEn, +inf)
     # Determine which regions are profitable
-    boundaries = [0.0] + breakevens + [float("inf")]
+    boundaries = [0.0, *breakevens, float("inf")]
     pop = 0.0
 
     for i in range(len(boundaries) - 1):
@@ -329,12 +328,10 @@ def compute_leg_greeks(
 
     if leg.option_type == "call":
         delta = n_d1
-        theta = (-(spot * n_prime_d1 * sigma) / (2 * sqrt_t)
-                 - r * leg.strike * discount * norm.cdf(d2)) / 365.0
+        theta = (-(spot * n_prime_d1 * sigma) / (2 * sqrt_t) - r * leg.strike * discount * norm.cdf(d2)) / 365.0
     else:
         delta = n_d1 - 1.0
-        theta = (-(spot * n_prime_d1 * sigma) / (2 * sqrt_t)
-                 + r * leg.strike * discount * norm.cdf(-d2)) / 365.0
+        theta = (-(spot * n_prime_d1 * sigma) / (2 * sqrt_t) + r * leg.strike * discount * norm.cdf(-d2)) / 365.0
 
     gamma = n_prime_d1 / (spot * sigma * sqrt_t)
     vega = spot * n_prime_d1 * sqrt_t / 100.0  # per 1% IV move
@@ -394,7 +391,10 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
     try:
         logger.info(
             "[Strategy Engine] Analyzing %d-leg strategy for %s, spot=%.2f, expiry=%s",
-            len(request.legs), request.symbol, request.spot_price, request.expiration_date,
+            len(request.legs),
+            request.symbol,
+            request.spot_price,
+            request.expiration_date,
         )
 
         # Days to expiry
@@ -411,29 +411,23 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
             request.curve_points,
         )
 
-        breakevens = find_breakevens(
-            request.legs, request.spot_price, request.price_range_pct
-        )
+        breakevens = find_breakevens(request.legs, request.spot_price, request.price_range_pct)
 
-        max_profit, max_loss = compute_max_profit_loss(
-            request.legs, request.spot_price, request.price_range_pct
-        )
+        max_profit, max_loss = compute_max_profit_loss(request.legs, request.spot_price, request.price_range_pct)
 
-        pop = compute_pop(
-            request.legs, request.spot_price, request.risk_free_rate, days_to_expiry
-        )
+        pop = compute_pop(request.legs, request.spot_price, request.risk_free_rate, days_to_expiry)
 
-        ev = compute_expected_value(
-            request.legs, request.spot_price, request.risk_free_rate, days_to_expiry
-        )
+        ev = compute_expected_value(request.legs, request.spot_price, request.risk_free_rate, days_to_expiry)
 
-        greeks = compute_strategy_greeks(
-            request.legs, request.spot_price, request.risk_free_rate, days_to_expiry
-        )
+        greeks = compute_strategy_greeks(request.legs, request.spot_price, request.risk_free_rate, days_to_expiry)
 
         logger.info(
             "[Strategy Engine] Result: POP=%.2f%%, EV=%.2f, MaxProfit=%.2f, MaxLoss=%.2f, Greeks=%s",
-            pop * 100, ev, max_profit, max_loss, greeks,
+            pop * 100,
+            ev,
+            max_profit,
+            max_loss,
+            greeks,
         )
 
         return StrategyAnalyzeResponse(

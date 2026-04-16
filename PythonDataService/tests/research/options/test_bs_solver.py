@@ -1,9 +1,8 @@
 """Tests for Black-Scholes IV solver."""
+
 from __future__ import annotations
 
 import math
-
-import pytest
 
 from app.research.options.bs_solver import bs_price, bs_vega, implied_volatility
 
@@ -122,15 +121,15 @@ class TestImpliedVolatility:
 
     def test_reject_low_dte(self):
         """T < 7/365 should return None (gamma distortion)."""
-        price = bs_price(S=100, K=100, T=5/365, r=0.05, sigma=0.20, option_type="call")
-        assert implied_volatility(price, S=100, K=100, T=5/365, r=0.05, option_type="call") is None
+        price = bs_price(S=100, K=100, T=5 / 365, r=0.05, sigma=0.20, option_type="call")
+        assert implied_volatility(price, S=100, K=100, T=5 / 365, r=0.05, option_type="call") is None
 
     def test_reject_extreme_iv(self):
         """IV outside [0.05, 3.0] should be rejected."""
         # Very low IV - price very close to intrinsic
         # Very high IV options - can't really get above 300% with reasonable params
         # Test with a price that would require IV > 3.0
-        iv = implied_volatility(50.0, S=100, K=100, T=30/365, r=0.05, option_type="call")
+        iv = implied_volatility(50.0, S=100, K=100, T=30 / 365, r=0.05, option_type="call")
         # This should be None because the IV would be unreasonably high
         # or it might solve but be > 3.0
         assert iv is None or iv <= 3.0
@@ -144,15 +143,15 @@ class TestImpliedVolatility:
     def test_high_vol_stock(self):
         """Test solver with high-vol stock (e.g. TSLA-like: sigma=0.80)."""
         sigma = 0.80
-        price = bs_price(S=250, K=250, T=30/365, r=0.043, sigma=sigma, option_type="call")
-        iv = implied_volatility(price, S=250, K=250, T=30/365, r=0.043, option_type="call")
+        price = bs_price(S=250, K=250, T=30 / 365, r=0.043, sigma=sigma, option_type="call")
+        iv = implied_volatility(price, S=250, K=250, T=30 / 365, r=0.043, option_type="call")
         assert iv is not None
         assert abs(iv - sigma) < 1e-4
 
     def test_low_vol_stock(self):
         """Test solver with low-vol stock (e.g. utility: sigma=0.12)."""
         sigma = 0.12
-        price = bs_price(S=50, K=50, T=60/365, r=0.043, sigma=sigma, option_type="call")
-        iv = implied_volatility(price, S=50, K=50, T=60/365, r=0.043, option_type="call")
+        price = bs_price(S=50, K=50, T=60 / 365, r=0.043, sigma=sigma, option_type="call")
+        iv = implied_volatility(price, S=50, K=50, T=60 / 365, r=0.043, option_type="call")
         assert iv is not None
         assert abs(iv - sigma) < 1e-4

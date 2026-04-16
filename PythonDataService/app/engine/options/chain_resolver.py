@@ -11,6 +11,7 @@ Resolves option chain data using one of three pricing modes:
 The strategy sees a uniform ``ResolvedChain`` regardless of which source
 was used. Each ``PricedContract`` carries a ``source`` tag for logging.
 """
+
 from __future__ import annotations
 
 import logging
@@ -18,13 +19,11 @@ import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Optional
 
 from app.engine.options.pricer import (
     OptionGreeks,
     PricedContract,
     PricingMode,
-    SpreadType,
     price_contract,
 )
 
@@ -35,6 +34,7 @@ logger = logging.getLogger(__name__)
 # Resolved chain — what the strategy receives
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ResolvedChain:
     """A filtered, priced option chain for one underlying at one point in time.
@@ -42,6 +42,7 @@ class ResolvedChain:
     Contains all contracts that survived DTE and basic validity filtering.
     The strategy applies further filters (liquidity, delta targeting) on top.
     """
+
     underlying: str
     underlying_price: float
     evaluation_date: date
@@ -66,6 +67,7 @@ class ResolvedChain:
 # ---------------------------------------------------------------------------
 # Liquidity and DTE filters (ported from contract_finder.py)
 # ---------------------------------------------------------------------------
+
 
 def passes_liquidity_filter(
     contract: PricedContract,
@@ -105,7 +107,7 @@ def select_expiration(
     chain: ResolvedChain,
     min_dte: int = 7,
     max_dte: int = 30,
-) -> Optional[date]:
+) -> date | None:
     """Select the nearest valid expiration within the DTE window.
 
     Returns the closest expiration that satisfies min_dte <= DTE <= max_dte,
@@ -129,7 +131,7 @@ def select_expiration(
 def select_by_delta(
     contracts: list[PricedContract],
     target_delta: float,
-) -> Optional[PricedContract]:
+) -> PricedContract | None:
     """Select the contract with delta closest to the target.
 
     Tie-breaker: highest open interest, then smallest bid-ask spread.
@@ -153,6 +155,7 @@ def select_by_delta(
 # ---------------------------------------------------------------------------
 # Chain resolver
 # ---------------------------------------------------------------------------
+
 
 class ChainResolver:
     """Resolves option chains using the configured pricing mode.
@@ -185,8 +188,8 @@ class ChainResolver:
         min_dte: int = 7,
         max_dte: int = 30,
         strike_range_pct: float = 0.15,
-        iv_override: Optional[float] = None,
-    ) -> Optional[ResolvedChain]:
+        iv_override: float | None = None,
+    ) -> ResolvedChain | None:
         """Resolve an option chain for the given underlying and date.
 
         Args:
@@ -204,30 +207,48 @@ class ChainResolver:
         """
         if self.pricing_mode == PricingMode.QUANTLIB_ONLY:
             return self._resolve_quantlib_only(
-                underlying, underlying_price, evaluation_date,
-                min_dte, max_dte, strike_range_pct, iv_override,
+                underlying,
+                underlying_price,
+                evaluation_date,
+                min_dte,
+                max_dte,
+                strike_range_pct,
+                iv_override,
             )
         elif self.pricing_mode == PricingMode.MARKET_PREFERRED:
             # Try market data first, fall back to QuantLib
             chain = self._resolve_market(
-                underlying, underlying_price, evaluation_date,
-                min_dte, max_dte, strike_range_pct,
+                underlying,
+                underlying_price,
+                evaluation_date,
+                min_dte,
+                max_dte,
+                strike_range_pct,
             )
             if chain is not None and len(chain.contracts) > 0:
                 return chain
             logger.info(
-                "[ChainResolver] Market data unavailable for %s on %s, "
-                "falling back to QuantLib synthetic",
-                underlying, evaluation_date,
+                "[ChainResolver] Market data unavailable for %s on %s, falling back to QuantLib synthetic",
+                underlying,
+                evaluation_date,
             )
             return self._resolve_quantlib_only(
-                underlying, underlying_price, evaluation_date,
-                min_dte, max_dte, strike_range_pct, iv_override,
+                underlying,
+                underlying_price,
+                evaluation_date,
+                min_dte,
+                max_dte,
+                strike_range_pct,
+                iv_override,
             )
         elif self.pricing_mode == PricingMode.MARKET_REQUIRED:
             return self._resolve_market(
-                underlying, underlying_price, evaluation_date,
-                min_dte, max_dte, strike_range_pct,
+                underlying,
+                underlying_price,
+                evaluation_date,
+                min_dte,
+                max_dte,
+                strike_range_pct,
             )
         else:
             raise ValueError(f"Unknown pricing mode: {self.pricing_mode}")
@@ -244,7 +265,7 @@ class ChainResolver:
         min_dte: int,
         max_dte: int,
         strike_range_pct: float,
-        iv_override: Optional[float] = None,
+        iv_override: float | None = None,
     ) -> ResolvedChain:
         """Build a synthetic chain using a strike grid and QuantLib pricing.
 
@@ -302,7 +323,7 @@ class ChainResolver:
         min_dte: int,
         max_dte: int,
         strike_range_pct: float,
-    ) -> Optional[ResolvedChain]:
+    ) -> ResolvedChain | None:
         """Attempt to resolve using real market data.
 
         Tries the Polygon live snapshot endpoint. For historical dates,
@@ -312,6 +333,7 @@ class ChainResolver:
         """
         try:
             from app.services.polygon_client import PolygonClientService
+
             client = PolygonClientService()
 
             # Try to fetch contract metadata for this date
@@ -402,9 +424,7 @@ class ChainResolver:
                         underlying=underlying,
                     )
 
-                if contract.theoretical_price > 0.001 or (
-                    contract.bid is not None and contract.bid > 0
-                ):
+                if contract.theoretical_price > 0.001 or (contract.bid is not None and contract.bid > 0):
                     contracts.append(contract)
 
             source = "live" if snap_by_ticker else "quantlib_synthetic"

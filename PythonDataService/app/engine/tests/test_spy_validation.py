@@ -16,11 +16,12 @@ Run with::
     cd PythonDataService
     python -m app.engine.tests.test_spy_validation
 """
+
 from __future__ import annotations
 
 import csv
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -100,13 +101,9 @@ def run_validation() -> None:
             diffs.append(f"exit_time: {act.exit_time} != {exp_exit}")
 
         if _fmt(act.entry_price, 2) != exp["entry_price"]:
-            diffs.append(
-                f"entry_price: {_fmt(act.entry_price, 2)} != {exp['entry_price']}"
-            )
+            diffs.append(f"entry_price: {_fmt(act.entry_price, 2)} != {exp['entry_price']}")
         if _fmt(act.exit_price, 2) != exp["exit_price"]:
-            diffs.append(
-                f"exit_price: {_fmt(act.exit_price, 2)} != {exp['exit_price']}"
-            )
+            diffs.append(f"exit_price: {_fmt(act.exit_price, 2)} != {exp['exit_price']}")
         if _fmt(act.ema5, 4) != exp["ema5"]:
             diffs.append(f"ema5: {_fmt(act.ema5, 4)} != {exp['ema5']}")
         if _fmt(act.ema10, 4) != exp["ema10"]:
@@ -114,26 +111,18 @@ def run_validation() -> None:
         if _fmt(act.rsi, 2) != exp["rsi"]:
             diffs.append(f"rsi: {_fmt(act.rsi, 2)} != {exp['rsi']}")
         if _fmt(act.pnl_pts, 2) != exp["pnl_pts"]:
-            diffs.append(
-                f"pnl_pts: {_fmt(act.pnl_pts, 2)} != {exp['pnl_pts']}"
-            )
+            diffs.append(f"pnl_pts: {_fmt(act.pnl_pts, 2)} != {exp['pnl_pts']}")
         if _fmt(act.pnl_pct, 6) != exp["pnl_pct"]:
-            diffs.append(
-                f"pnl_pct: {_fmt(act.pnl_pct, 6)} != {exp['pnl_pct']}"
-            )
+            diffs.append(f"pnl_pct: {_fmt(act.pnl_pct, 6)} != {exp['pnl_pct']}")
         if act.result != exp["result"]:
             diffs.append(f"result: {act.result} != {exp['result']}")
 
         if diffs:
-            mismatches.append(
-                f"Trade #{trade_no} ({exp['entry']}): " + "; ".join(diffs)
-            )
+            mismatches.append(f"Trade #{trade_no} ({exp['entry']}): " + "; ".join(diffs))
 
     # Extra or missing trades
     if len(actual_trades) != len(fixture):
-        mismatches.append(
-            f"COUNT MISMATCH: engine={len(actual_trades)} expected={len(fixture)}"
-        )
+        mismatches.append(f"COUNT MISMATCH: engine={len(actual_trades)} expected={len(fixture)}")
 
     # ------------------------------------------------------------------
     # Report
@@ -154,15 +143,9 @@ def run_validation() -> None:
         e = fixture[0]
         print()
         print("First engine trade:")
-        print(
-            f"  entry={a.entry_time} price={a.entry_price} "
-            f"ema5={a.ema5} ema10={a.ema10} rsi={a.rsi}"
-        )
+        print(f"  entry={a.entry_time} price={a.entry_price} ema5={a.ema5} ema10={a.ema10} rsi={a.rsi}")
         print("First fixture trade:")
-        print(
-            f"  entry={e['entry']} price={e['entry_price']} "
-            f"ema5={e['ema5']} ema10={e['ema10']} rsi={e['rsi']}"
-        )
+        print(f"  entry={e['entry']} price={e['entry_price']} ema5={e['ema5']} ema10={e['ema10']} rsi={e['rsi']}")
 
 
 if __name__ == "__main__":

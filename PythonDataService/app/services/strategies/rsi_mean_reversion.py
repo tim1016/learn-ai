@@ -2,6 +2,7 @@
 
 Ported from Backend/Services/Implementation/BacktestService.cs RunRsiMeanReversion.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -50,8 +51,10 @@ def run(df: pd.DataFrame, params: dict) -> StrategyResult:
         elif in_position and rsi_val > overbought:
             trade_num += 1
             t = make_trade(
-                trade_num, "Buy",
-                df.iloc[entry_idx], df.iloc[i],
+                trade_num,
+                "Buy",
+                df.iloc[entry_idx],
+                df.iloc[i],
                 cum_pnl_pct,
                 f"RSI({window}) crossed above {overbought}",
                 {"rsi": round(float(rsi_val), 2)},
@@ -64,8 +67,10 @@ def run(df: pd.DataFrame, params: dict) -> StrategyResult:
     if in_position:
         trade_num += 1
         t = make_trade(
-            trade_num, "Buy",
-            df.iloc[entry_idx], df.iloc[-1],
+            trade_num,
+            "Buy",
+            df.iloc[entry_idx],
+            df.iloc[-1],
             cum_pnl_pct,
             "Position closed at end of period",
         )

@@ -3,6 +3,7 @@
 Adapted from the stock feature runner for daily-frequency options signals.
 Supports multiple target types: directional, volatility, absolute return.
 """
+
 from __future__ import annotations
 
 import logging
@@ -99,17 +100,24 @@ def run_options_feature_research(
     try:
         logger.info(
             "[Options Research] Starting: %s %s [%s to %s] (%d IV points, target=%s)",
-            ticker, feature_name, start_date, end_date, len(iv_data), target_type,
+            ticker,
+            feature_name,
+            start_date,
+            end_date,
+            len(iv_data),
+            target_type,
         )
 
         # Step 0: IV diagnostics — validate data before research
         iv_df = pd.DataFrame(iv_data)
         if "atm_iv" in iv_df.columns and "iv_30d_atm" not in iv_df.columns:
-            iv_df = iv_df.rename(columns={
-                "atm_iv": "iv_30d_atm",
-                "iv_otm_put": "iv_30d_put",
-                "iv_otm_call": "iv_30d_call",
-            })
+            iv_df = iv_df.rename(
+                columns={
+                    "atm_iv": "iv_30d_atm",
+                    "iv_otm_put": "iv_30d_put",
+                    "iv_otm_call": "iv_30d_call",
+                }
+            )
 
         diagnostics = run_iv_diagnostics(iv_df)
         if not diagnostics.valid:
@@ -119,9 +127,7 @@ def run_options_feature_research(
         # Minimum data requirement (lower for daily vs minute data)
         min_daily_points = 30
         if len(iv_df) < min_daily_points:
-            raise ValueError(
-                f"Not enough IV data points: {len(iv_df)} < {min_daily_points}"
-            )
+            raise ValueError(f"Not enough IV data points: {len(iv_df)} < {min_daily_points}")
 
         report.bars_used = len(iv_df)
 
@@ -137,9 +143,7 @@ def run_options_feature_research(
         # Merge on date
         merged = stock_df.merge(iv_df, on="date", how="inner", suffixes=("_stock", "_iv"))
         if len(merged) < min_daily_points:
-            raise ValueError(
-                f"Not enough aligned data after merge: {len(merged)} < {min_daily_points}"
-            )
+            raise ValueError(f"Not enough aligned data after merge: {len(merged)} < {min_daily_points}")
 
         # Recompute target on merged data
         close = merged["close"].astype(float) if "close" in merged.columns else merged["close_stock"].astype(float)
@@ -157,14 +161,22 @@ def run_options_feature_research(
             raise ValueError("Target return series failed validation")
 
         # Step 2: Compute options feature
-        iv_aligned = merged[["iv_30d_atm", "iv_30d_put", "iv_30d_call"]].copy() if "iv_30d_atm" in merged.columns else merged.rename(columns={
-            "atm_iv": "iv_30d_atm", "iv_otm_put": "iv_30d_put", "iv_otm_call": "iv_30d_call"
-        })[["iv_30d_atm", "iv_30d_put", "iv_30d_call"]].copy()
+        iv_aligned = (
+            merged[["iv_30d_atm", "iv_30d_put", "iv_30d_call"]].copy()
+            if "iv_30d_atm" in merged.columns
+            else merged.rename(
+                columns={"atm_iv": "iv_30d_atm", "iv_otm_put": "iv_30d_put", "iv_otm_call": "iv_30d_call"}
+            )[["iv_30d_atm", "iv_30d_put", "iv_30d_call"]].copy()
+        )
         iv_aligned.index = merged.index
 
         stock_for_vrp = None
         if feature_name == "vrp_5":
-            stock_for_vrp = merged[["close"]].copy() if "close" in merged.columns else merged[["close_stock"]].rename(columns={"close_stock": "close"}).copy()
+            stock_for_vrp = (
+                merged[["close"]].copy()
+                if "close" in merged.columns
+                else merged[["close_stock"]].rename(columns={"close_stock": "close"}).copy()
+            )
             stock_for_vrp.index = merged.index
 
         # Resolve VRP feature name based on target type (namespace isolation)
@@ -173,9 +185,7 @@ def run_options_feature_research(
             resolved_feature = "vrp_5_forward"
 
         compute_mode = "research" if target_type != "directional" else "signal"
-        feature_values = OptionsFeatures.compute_feature(
-            resolved_feature, iv_aligned, stock_for_vrp, mode=compute_mode
-        )
+        feature_values = OptionsFeatures.compute_feature(resolved_feature, iv_aligned, stock_for_vrp, mode=compute_mode)
 
         # Step 3: Information Coefficient (daily)
         timestamps = merged["timestamp"].values if "timestamp" in merged.columns else merged["timestamp_stock"].values
@@ -225,18 +235,20 @@ def run_options_feature_research(
         if len(ic_result.daily_ic_values) >= 2:
             # For daily options data, create synthetic bars for robustness
             daily_bars = []
-            for i, row in merged.iterrows():
+            for _i, row in merged.iterrows():
                 ts = row.get("timestamp", row.get("timestamp_stock", 0))
                 c = row.get("close", row.get("close_stock", 0))
                 v = row.get("volume", row.get("volume_stock", 0))
-                daily_bars.append({
-                    "timestamp": int(ts),
-                    "open": float(c),
-                    "high": float(c),
-                    "low": float(c),
-                    "close": float(c),
-                    "volume": float(v) if v else 0.0,
-                })
+                daily_bars.append(
+                    {
+                        "timestamp": int(ts),
+                        "open": float(c),
+                        "high": float(c),
+                        "low": float(c),
+                        "close": float(c),
+                        "volume": float(v) if v else 0.0,
+                    }
+                )
             report.robustness = compute_robustness(
                 daily_ic_values=ic_result.daily_ic_values,
                 daily_ic_dates=ic_result.daily_ic_dates,
@@ -255,9 +267,15 @@ def run_options_feature_research(
         logger.info(
             "[Options Research] Complete: %s %s (target=%s) — passed=%s "
             "(IC=%.4f, NW-t=%.2f, NW-p=%.4f, stationary=%s, monotonic=%s)",
-            ticker, feature_name, target_type, report.passed_validation,
-            report.mean_ic, report.nw_t_stat, report.nw_p_value,
-            report.is_stationary, report.is_monotonic,
+            ticker,
+            feature_name,
+            target_type,
+            report.passed_validation,
+            report.mean_ic,
+            report.nw_t_stat,
+            report.nw_p_value,
+            report.is_stationary,
+            report.is_monotonic,
         )
 
     except Exception as e:

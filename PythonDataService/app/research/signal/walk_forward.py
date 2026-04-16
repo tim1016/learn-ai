@@ -1,4 +1,5 @@
 """Walk-forward validation with rolling train/test windows."""
+
 from __future__ import annotations
 
 import logging
@@ -9,11 +10,11 @@ import numpy as np
 import pandas as pd
 from scipy import stats as scipy_stats
 
+from app.research.features.ta_features import TechnicalFeatures
 from app.research.signal.backtest import run_backtest
 from app.research.signal.config import SignalConfig
 from app.research.signal.regime import compute_bar_regime_gate
-from app.research.signal.standardize import apply_threshold_filter, compute_train_zscore
-from app.research.features.ta_features import TechnicalFeatures
+from app.research.signal.standardize import apply_threshold_filter
 from app.research.target import compute_15min_forward_return
 
 logger = logging.getLogger(__name__)
@@ -153,6 +154,7 @@ def run_walk_forward(
             train_signal = apply_threshold_filter(z_all[train_mask], threshold)
             train_returns = forward_returns[train_mask]
             from app.research.signal.backtest import run_backtest as _run_bt
+
             bt = _run_bt(train_signal, train_returns, config.default_cost_bps)
             if bt.net_sharpe > best_train_sharpe:
                 best_train_sharpe = bt.net_sharpe
@@ -171,7 +173,9 @@ def run_walk_forward(
         test_timestamps = fold_df["timestamp"][test_mask]
 
         oos_bt = run_backtest(
-            test_signal, test_returns, config.default_cost_bps,
+            test_signal,
+            test_returns,
+            config.default_cost_bps,
             timestamps=test_timestamps,
             include_series=True,
         )

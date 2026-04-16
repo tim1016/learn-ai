@@ -48,12 +48,7 @@ class TestHealthScore:
         """Total is approximately the average of the 4 components."""
         score = compute_health_score(built_surface)
 
-        avg = (
-            score.convergence_score
-            + score.rmse_score
-            + score.rejection_score
-            + score.arbitrage_score
-        ) / 4.0
+        avg = (score.convergence_score + score.rmse_score + score.rejection_score + score.arbitrage_score) / 4.0
 
         assert abs(score.total - avg) < 1.0  # Allow rounding tolerance
 
@@ -161,9 +156,7 @@ class TestFindDeltaStrike:
             surface_vol = built_surface.volatility(result.strike, ttm)
             assert abs(result.iv - surface_vol) < 0.001  # Within 0.1%
 
-    def test_find_delta_strike_invalid_delta_returns_none(
-        self, built_surface: VolSurface
-    ) -> None:
+    def test_find_delta_strike_invalid_delta_returns_none(self, built_surface: VolSurface) -> None:
         """|delta| > 1 returns None."""
         ttm = 90 / 365
 
@@ -200,9 +193,7 @@ class TestPutCallParityForward:
         else:
             pytest.skip("No matched call/put pairs in test data")
 
-    def test_put_call_parity_forward_reasonable(
-        self, spot: float, rate: float, flat_vol_chain: list[dict]
-    ) -> None:
+    def test_put_call_parity_forward_reasonable(self, spot: float, rate: float, flat_vol_chain: list[dict]) -> None:
         """Implied forwards are close to S * exp(r*T) for flat vol."""
         forwards = compute_put_call_parity_forward(flat_vol_chain)
 
@@ -215,9 +206,7 @@ class TestPutCallParityForward:
         else:
             pytest.skip("No matched call/put pairs in test data")
 
-    def test_put_call_parity_forward_multiple_expiries(
-        self, skewed_chain: list[dict]
-    ) -> None:
+    def test_put_call_parity_forward_multiple_expiries(self, skewed_chain: list[dict]) -> None:
         """Multiple expiries produce multiple forward estimates if data allows."""
         forwards = compute_put_call_parity_forward(skewed_chain)
 

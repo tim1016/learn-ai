@@ -20,6 +20,7 @@ entire history:
 See Lean/Common/Data/Market/TradeBar.cs (_scaleFactor = 1/10000m) and
 Lean/Common/Util/LeanData.cs (GenerateZipFilePath / GenerateZipEntryName).
 """
+
 from __future__ import annotations
 
 import io
@@ -158,10 +159,7 @@ class LeanMinuteDataReader:
             return []
         with zipfile.ZipFile(zip_path) as zf:
             # LEAN's filename convention: {YYYYMMDD}_{symbol}_minute_trade.csv
-            expected = (
-                f"{trading_date.strftime('%Y%m%d')}_"
-                f"{symbol.lower()}_minute_trade.csv"
-            )
+            expected = f"{trading_date.strftime('%Y%m%d')}_{symbol.lower()}_minute_trade.csv"
             # Fall back to the first file in the archive if the name differs.
             names = zf.namelist()
             name = expected if expected in names else names[0]
@@ -414,15 +412,10 @@ def write_lean_day_zip(
     Returns:
         Path to the written zip file.
     """
-    out_dir = (
-        Path(output_root) / "equity" / "usa" / "minute" / symbol.lower()
-    )
+    out_dir = Path(output_root) / "equity" / "usa" / "minute" / symbol.lower()
     out_dir.mkdir(parents=True, exist_ok=True)
     zip_path = out_dir / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
-    csv_name = (
-        f"{trading_date.strftime('%Y%m%d')}_"
-        f"{symbol.lower()}_minute_trade.csv"
-    )
+    csv_name = f"{trading_date.strftime('%Y%m%d')}_{symbol.lower()}_minute_trade.csv"
     midnight = datetime(
         trading_date.year,
         trading_date.month,

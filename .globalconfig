@@ -1,0 +1,19 @@
+is_global = true
+
+# .NET analyzer severity configuration
+# These rules apply to all projects in the solution
+
+# CA1014: Mark assemblies with CLSCompliantAttribute — not needed for web APIs
+dotnet_diagnostic.CA1014.severity = none
+
+# CA1062: Validate arguments of public methods — too noisy with DI/middleware
+dotnet_diagnostic.CA1062.severity = none
+
+# CA1822: Mark members as static — conflicts with Hot Chocolate resolver patterns
+dotnet_diagnostic.CA1822.severity = none
+
+# CA2007: Do not directly await a Task — ASP.NET Core has SynchronizationContext
+dotnet_diagnostic.CA2007.severity = none
+
+# IDE0058: Expression value is never used — noisy with builder patterns
+dotnet_diagnostic.IDE0058.severity = suggestion

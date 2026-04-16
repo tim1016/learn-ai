@@ -8,41 +8,32 @@ This endpoint is intentionally separate from the existing
 ``/api/backtest`` pipeline so both can coexist while the new engine is
 being rolled out.
 """
+
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field as dc_field
+from collections.abc import Callable
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 import httpx
-
+import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from pydantic import BaseModel, Field, ValidationError
 
-import pandas as pd
-
 from app.engine.data.availability import (
     AvailabilityReport,
-    Resolution,
     check_availability,
     ensure_range,
 )
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
-from app.services.strategies.common import TradeRecord
-from app.services.strategies.lean_statistics import compute_lean_statistics
-from app.routers.backtest import (
-    LeanPortfolioStatsResponse,
-    LeanTradeStatsResponse,
-    LeanRuntimeStatsResponse,
-    LeanStatisticsResponse,
-)
 from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
@@ -58,6 +49,14 @@ from app.engine.strategy.algorithms.spy_ema_crossover_options import (
     SpyEmaCrossoverOptionsAlgorithm,
 )
 from app.engine.strategy.base import Strategy
+from app.routers.backtest import (
+    LeanPortfolioStatsResponse,
+    LeanRuntimeStatsResponse,
+    LeanStatisticsResponse,
+    LeanTradeStatsResponse,
+)
+from app.services.strategies.common import TradeRecord
+from app.services.strategies.lean_statistics import compute_lean_statistics
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -189,7 +188,7 @@ class StrategyRegistration:
     display_name: str
     description: str
     param_schema: type[StrategyParamsBase]
-    build: "Callable[[StrategyParamsBase], Strategy]"
+    build: Callable[[StrategyParamsBase], Strategy]
     # Which data resolutions the strategy can run against. Defaults to
     # minute-only because every currently-ported strategy consolidates
     # minute bars via a ``TradeBarConsolidator``. Daily-native strategies
@@ -602,7 +601,7 @@ def export_polygon_to_lean(request: LeanExportRequest) -> LeanExportResponse:
             adjusted=request.adjusted,
             resolution=request.resolution,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("[ENGINE] LEAN export failed for %s", request.symbol)
         return LeanExportResponse(
             success=False,
@@ -702,10 +701,7 @@ def run_engine_backtest(
     if registration is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"Unknown strategy '{request.strategy_name}'. "
-                f"Registered: {sorted(_STRATEGY_REGISTRY)}"
-            ),
+            detail=(f"Unknown strategy '{request.strategy_name}'. Registered: {sorted(_STRATEGY_REGISTRY)}"),
         )
 
     # Strategies declare which resolutions they accept. Reject up-front so
@@ -772,7 +768,7 @@ def run_engine_backtest(
                 )
             except HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.exception(
                     "[ENGINE] auto_fetch failed for %s %s..%s",
                     symbol,
@@ -823,7 +819,7 @@ def run_engine_backtest(
 
     try:
         result = engine.run(strategy)
-    except Exception as exc:  # noqa: BLE001 — router must return JSON error
+    except Exception as exc:
         logger.exception("[ENGINE] Backtest failed for %s", request.strategy_name)
         return EngineBacktestResponse(
             success=False,
@@ -854,13 +850,15 @@ def run_engine_backtest(
         delta = (strategy.end_date.date() - strategy.start_date.date()).days
         if delta > 0:
             # Rough: 252 trading days per 365 calendar days.
-            trading_days = max(1, int(round(delta * 252 / 365)))
+            trading_days = max(1, round(delta * 252 / 365))
 
     from app.engine.results.statistics import EquityPoint
-    equity_points = [
-        EquityPoint(timestamp=s.timestamp, equity=float(s.equity))
-        for s in result.equity_curve
-    ] if result.equity_curve else None
+
+    equity_points = (
+        [EquityPoint(timestamp=s.timestamp, equity=float(s.equity)) for s in result.equity_curve]
+        if result.equity_curve
+        else None
+    )
 
     stats = summarize(
         initial_cash=float(result.initial_cash),
@@ -905,9 +903,7 @@ def run_engine_backtest(
                         pnl_pct=float(t.pnl_pct),
                         cumulative_pnl_pct=cum_pnl,
                         signal_reason=getattr(t, "signal_reason", "") or "",
-                        indicator_snapshot={
-                            k: float(v) for k, v in (getattr(t, "indicators", None) or {}).items()
-                        },
+                        indicator_snapshot={k: float(v) for k, v in (getattr(t, "indicators", None) or {}).items()},
                     )
                 )
 
@@ -920,6 +916,7 @@ def run_engine_backtest(
             )
 
             from dataclasses import asdict as _dc_asdict
+
             lean_stats_resp = LeanStatisticsResponse(
                 portfolio=LeanPortfolioStatsResponse(**_dc_asdict(lean_stats.portfolio)),
                 trade=LeanTradeStatsResponse(**_dc_asdict(lean_stats.trade)),
@@ -1075,8 +1072,6 @@ def _save_study_sync(
             if resp.status_code < 300:
                 logger.info("[ENGINE] Study saved (id=%s)", resp.json().get("id"))
             else:
-                logger.warning(
-                    "[ENGINE] Study save failed: %s %s", resp.status_code, resp.text[:200]
-                )
+                logger.warning("[ENGINE] Study save failed: %s %s", resp.status_code, resp.text[:200])
     except Exception:
         logger.exception("[ENGINE] Study save request failed — study not persisted")

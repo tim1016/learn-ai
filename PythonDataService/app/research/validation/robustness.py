@@ -3,6 +3,7 @@
 Computes rolling window stability metrics, regime segmentation,
 and train/test split to detect regime bias and overfitting.
 """
+
 from __future__ import annotations
 
 import logging
@@ -177,10 +178,12 @@ def compute_monthly_ic_breakdown(
     if len(daily_ic_values) < MIN_MONTHS_FOR_ANALYSIS:
         return [], 0.0, 0.0, 0.0, 0.0, "Unknown"
 
-    df = pd.DataFrame({
-        "ic": daily_ic_values,
-        "date": pd.to_datetime(daily_ic_dates),
-    })
+    df = pd.DataFrame(
+        {
+            "ic": daily_ic_values,
+            "date": pd.to_datetime(daily_ic_dates),
+        }
+    )
     df["month"] = df["date"].dt.to_period("M").astype(str)
 
     monthly: list[MonthlyICBreakdown] = []
@@ -189,12 +192,14 @@ def compute_monthly_ic_breakdown(
         if len(ics) < MIN_MONTHLY_OBSERVATIONS:
             continue
         mean_ic, t_stat = _compute_ic_stats(ics)
-        monthly.append(MonthlyICBreakdown(
-            month=str(month_str),
-            mean_ic=mean_ic,
-            t_stat=t_stat,
-            observation_count=len(ics),
-        ))
+        monthly.append(
+            MonthlyICBreakdown(
+                month=str(month_str),
+                mean_ic=mean_ic,
+                t_stat=t_stat,
+                observation_count=len(ics),
+            )
+        )
 
     if not monthly:
         return [], 0.0, 0.0, 0.0, 0.0, "Unknown"
@@ -212,7 +217,10 @@ def compute_monthly_ic_breakdown(
 
     logger.info(
         "[Robustness] Monthly: %d months, %.0f%% positive, %.0f%% significant, label=%s",
-        total, pct_positive * 100, pct_significant * 100, label,
+        total,
+        pct_positive * 100,
+        pct_significant * 100,
+        label,
     )
 
     return monthly, pct_positive, pct_significant, best_month_ic, worst_month_ic, label
@@ -291,10 +299,12 @@ def compute_regime_analysis(
     daily_summary["date_str"] = daily_summary["date"].astype(str)
 
     # Build IC lookup
-    ic_df = pd.DataFrame({
-        "date_str": daily_ic_dates,
-        "ic": daily_ic_values,
-    })
+    ic_df = pd.DataFrame(
+        {
+            "date_str": daily_ic_dates,
+            "ic": daily_ic_values,
+        }
+    )
 
     merged = ic_df.merge(daily_summary, on="date_str", how="inner")
 
@@ -316,12 +326,14 @@ def compute_regime_analysis(
             regime_ics = merged.loc[mask, "ic"].values
             if len(regime_ics) >= MIN_REGIME_OBSERVATIONS:
                 mean_ic, t_stat = _compute_ic_stats(regime_ics)
-                vol_regimes.append(RegimeICResult(
-                    regime_label=label,
-                    mean_ic=mean_ic,
-                    t_stat=t_stat,
-                    observation_count=len(regime_ics),
-                ))
+                vol_regimes.append(
+                    RegimeICResult(
+                        regime_label=label,
+                        mean_ic=mean_ic,
+                        t_stat=t_stat,
+                        observation_count=len(regime_ics),
+                    )
+                )
 
     # --- Trend Regimes ---
     trend_regimes: list[RegimeICResult] = []
@@ -341,16 +353,19 @@ def compute_regime_analysis(
             regime_ics = merged_sorted.loc[merged_sorted["trend"] == label, "ic"].values
             if len(regime_ics) >= MIN_REGIME_OBSERVATIONS:
                 mean_ic, t_stat = _compute_ic_stats(regime_ics)
-                trend_regimes.append(RegimeICResult(
-                    regime_label=label,
-                    mean_ic=mean_ic,
-                    t_stat=t_stat,
-                    observation_count=len(regime_ics),
-                ))
+                trend_regimes.append(
+                    RegimeICResult(
+                        regime_label=label,
+                        mean_ic=mean_ic,
+                        t_stat=t_stat,
+                        observation_count=len(regime_ics),
+                    )
+                )
 
     logger.info(
         "[Robustness] Regimes: %d vol regimes, %d trend regimes",
-        len(vol_regimes), len(trend_regimes),
+        len(vol_regimes),
+        len(trend_regimes),
     )
 
     return vol_regimes, trend_regimes
@@ -393,9 +408,8 @@ def compute_train_test_split(
     train_mean_ic, train_t_stat = _compute_ic_stats(train_ics)
     test_mean_ic, test_t_stat = _compute_ic_stats(test_ics)
 
-    overfit_flag = (
-        (abs(train_mean_ic) > 2 * abs(test_mean_ic) and abs(train_mean_ic) > 0.005)
-        or (abs(train_t_stat) > 1.65 and abs(test_t_stat) < 1.0)
+    overfit_flag = (abs(train_mean_ic) > 2 * abs(test_mean_ic) and abs(train_mean_ic) > 0.005) or (
+        abs(train_t_stat) > 1.65 and abs(test_t_stat) < 1.0
     )
 
     # OOS Retention: |IC_test| / |IC_train|
@@ -408,9 +422,15 @@ def compute_train_test_split(
     logger.info(
         "[Robustness] Train/Test: train IC=%.4f (t=%.2f, %d days), "
         "test IC=%.4f (t=%.2f, %d days), overfit=%s, OOS retention=%.1f%% (%s)",
-        train_mean_ic, train_t_stat, len(train_ics),
-        test_mean_ic, test_t_stat, len(test_ics), overfit_flag,
-        oos_retention * 100, oos_label,
+        train_mean_ic,
+        train_t_stat,
+        len(train_ics),
+        test_mean_ic,
+        test_t_stat,
+        len(test_ics),
+        overfit_flag,
+        oos_retention * 100,
+        oos_label,
     )
 
     return TrainTestSplit(
@@ -484,10 +504,12 @@ def compute_structural_breaks(
     if len(daily_ic_values) < 10:
         return []
 
-    df = pd.DataFrame({
-        "ic": daily_ic_values,
-        "date": pd.to_datetime(daily_ic_dates),
-    })
+    df = pd.DataFrame(
+        {
+            "ic": daily_ic_values,
+            "date": pd.to_datetime(daily_ic_dates),
+        }
+    )
     df["month"] = df["date"].dt.to_period("M")
 
     months = sorted(df["month"].unique())
@@ -509,21 +531,26 @@ def compute_structural_breaks(
         if len(before_ics) < 5 or len(after_ics) < 5:
             continue
 
-        t_stat_val, p_val = stats.ttest_ind(before_ics, after_ics, equal_var=False)
+        t_stat_val, _p_val = stats.ttest_ind(before_ics, after_ics, equal_var=False)
 
         if np.isnan(t_stat_val):
             continue
 
-        breaks.append(StructuralBreakPoint(
-            date=str(mid),
-            ic_before=float(np.mean(before_ics)),
-            ic_after=float(np.mean(after_ics)),
-            t_stat=float(t_stat_val),
-            significant=abs(t_stat_val) > 2.0,
-        ))
+        breaks.append(
+            StructuralBreakPoint(
+                date=str(mid),
+                ic_before=float(np.mean(before_ics)),
+                ic_after=float(np.mean(after_ics)),
+                t_stat=float(t_stat_val),
+                significant=abs(t_stat_val) > 2.0,
+            )
+        )
 
-    logger.info("[Robustness] Structural breaks: %d tested, %d significant",
-                len(breaks), sum(1 for b in breaks if b.significant))
+    logger.info(
+        "[Robustness] Structural breaks: %d tested, %d significant",
+        len(breaks),
+        sum(1 for b in breaks if b.significant),
+    )
 
     return breaks
 
@@ -570,7 +597,9 @@ def compute_robustness(
 
     # Regime analysis
     result.volatility_regimes, result.trend_regimes = compute_regime_analysis(
-        daily_ic_values, daily_ic_dates, bars,
+        daily_ic_values,
+        daily_ic_dates,
+        bars,
     )
 
     # Train/Test split
@@ -583,8 +612,8 @@ def compute_robustness(
         expected_sign = float(np.sign(np.mean(daily_ic_values)))
 
     if result.monthly_breakdown:
-        result.pct_sign_consistent_months, result.sign_consistent_stability_label = (
-            _compute_sign_consistency(result.monthly_breakdown, expected_sign)
+        result.pct_sign_consistent_months, result.sign_consistent_stability_label = _compute_sign_consistency(
+            result.monthly_breakdown, expected_sign
         )
 
     # Structural break detection

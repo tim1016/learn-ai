@@ -25,6 +25,7 @@ Bars outside regular trading hours are kept — callers that want
 RTH-only data should filter upstream. This matches LEAN's behavior,
 which stores the full session and filters at the consolidator.
 """
+
 from __future__ import annotations
 
 import logging
@@ -36,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.engine.data.lean_format import write_lean_day_zip, write_lean_daily_zip
+from app.engine.data.lean_format import write_lean_daily_zip, write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
 
 logger = logging.getLogger(__name__)
@@ -264,6 +265,4 @@ def export_polygon_range_to_lean(
         written = export_polygon_daily_bars_to_lean(output_root, symbol, bars)
         return [written] if written is not None else []
 
-    raise ValueError(
-        f"Unsupported resolution {resolution!r}; expected 'minute' or 'daily'"
-    )
+    raise ValueError(f"Unsupported resolution {resolution!r}; expected 'minute' or 'daily'")

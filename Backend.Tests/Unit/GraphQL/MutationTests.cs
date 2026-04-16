@@ -12,7 +12,7 @@ public class MutationTests
     {
         var serviceMock = new Mock<IMarketDataService>();
         serviceMock.Setup(s => s.FetchAndStoreAggregatesAsync(
-                "AAPL", 1, "day", "2026-01-01", "2026-01-31", default))
+                "AAPL", 1, "day", "2026-01-01", "2026-01-31", It.IsAny<bool>(), default))
             .ReturnsAsync(new List<StockAggregate>
             {
                 new() { Open = 150m, High = 155m, Low = 148m, Close = 153m, Volume = 1_000_000m, Timespan = "day" },
@@ -35,7 +35,7 @@ public class MutationTests
         var serviceMock = new Mock<IMarketDataService>();
         serviceMock.Setup(s => s.FetchAndStoreAggregatesAsync(
                 It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(),
-                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new Exception("Polygon API timeout"));
 
         var mutation = new Mutation();
@@ -54,7 +54,7 @@ public class MutationTests
         var serviceMock = new Mock<IMarketDataService>();
         serviceMock.Setup(s => s.FetchAndStoreAggregatesAsync(
                 It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(),
-                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<StockAggregate>());
 
         var mutation = new Mutation();

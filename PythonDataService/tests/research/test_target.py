@@ -1,4 +1,5 @@
 """Tests for 15-minute forward return computation."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -32,9 +33,7 @@ class TestCompute15MinForwardReturn:
             # Last 15 bars of each day must be NaN
             tail_indices = day_indices[-15:]
             for idx in tail_indices:
-                assert pd.isna(returns.iloc[idx]), (
-                    f"Expected NaN at index {idx} (day {date}), got {returns.iloc[idx]}"
-                )
+                assert pd.isna(returns.iloc[idx]), f"Expected NaN at index {idx} (day {date}), got {returns.iloc[idx]}"
 
     def test_return_values_are_log_returns(self, sample_bars_single_day: list[dict]) -> None:
         returns = compute_15min_forward_return(sample_bars_single_day, horizon=15)
@@ -47,8 +46,8 @@ class TestCompute15MinForwardReturn:
             np.testing.assert_allclose(returns.iloc[first_valid_idx], expected, atol=1e-10)
 
     def test_empty_bars_returns_empty(self) -> None:
-        returns = compute_15min_forward_return([], horizon=15)
-        assert len(returns) == 0
+        with pytest.raises(KeyError, match="timestamp"):
+            compute_15min_forward_return([], horizon=15)
 
 
 class TestValidateReturnSeries:

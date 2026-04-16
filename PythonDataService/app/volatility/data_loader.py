@@ -16,14 +16,14 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Optional
+from dataclasses import dataclass
+from datetime import datetime
+
+from fastapi import HTTPException, status
 
 from app.services.polygon_client import PolygonClientService
 from app.volatility.cache import DataFilters
 from app.volatility.conventions import dte_to_ttm
-from fastapi import HTTPException, status
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +78,7 @@ class OptionChainLoader:
             HTTPException: If spot price or contracts cannot be fetched
         """
         logger.info(
-            "[ChainLoader] Fetching chain for %s on %s with filters: "
-            "DTE=[%d, %d], min_OI=%d, max_spread=%.1f%%",
+            "[ChainLoader] Fetching chain for %s on %s with filters: DTE=[%d, %d], min_OI=%d, max_spread=%.1f%%",
             ticker,
             date,
             filters.min_dte,
@@ -165,9 +164,7 @@ class OptionChainLoader:
 
             spot = aggs[0].get("close")
             if not spot or spot <= 0:
-                logger.error(
-                    f"[ChainLoader] Invalid spot price for {ticker} on {date}: {spot}"
-                )
+                logger.error(f"[ChainLoader] Invalid spot price for {ticker} on {date}: {spot}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid spot price for {ticker} on {date}: {spot}",
@@ -179,10 +176,10 @@ class OptionChainLoader:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"[ChainLoader] Error fetching spot price: {str(e)}", exc_info=True)
+            logger.error(f"[ChainLoader] Error fetching spot price: {e!s}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to fetch spot price for {ticker}: {str(e)}",
+                detail=f"Failed to fetch spot price for {ticker}: {e!s}",
             )
 
     def _fetch_contracts(self, ticker: str, date: str) -> list[dict]:
@@ -213,12 +210,12 @@ class OptionChainLoader:
 
         except Exception as e:
             logger.error(
-                f"[ChainLoader] Error fetching contracts for {ticker}: {str(e)}",
+                f"[ChainLoader] Error fetching contracts for {ticker}: {e!s}",
                 exc_info=True,
             )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to fetch options contracts for {ticker}: {str(e)}",
+                detail=f"Failed to fetch options contracts for {ticker}: {e!s}",
             )
 
     def _apply_filters(
@@ -253,9 +250,7 @@ class OptionChainLoader:
         eval_dt = datetime.strptime(eval_date, "%Y-%m-%d")
 
         for contract in raw_contracts:
-            rejection_reason = self._check_contract(
-                contract, eval_dt, spot, filters, day_count
-            )
+            rejection_reason = self._check_contract(contract, eval_dt, spot, filters, day_count)
 
             if rejection_reason is None:
                 record = self._contract_to_record(contract, eval_dt, day_count)
@@ -265,8 +260,7 @@ class OptionChainLoader:
                 rejection_reasons[rejection_reason] = rejection_reasons.get(rejection_reason, 0) + 1
 
         logger.debug(
-            f"[ChainLoader] Applied filters: {len(records)} accepted, "
-            f"{sum(rejection_reasons.values())} rejected"
+            f"[ChainLoader] Applied filters: {len(records)} accepted, {sum(rejection_reasons.values())} rejected"
         )
 
         return records, rejection_reasons
@@ -278,7 +272,7 @@ class OptionChainLoader:
         spot: float,
         filters: DataFilters,
         day_count: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Check if contract passes all filters.
 
@@ -290,7 +284,7 @@ class OptionChainLoader:
             return "missing_expiration"
 
         try:
-            exp_dt = datetime.strptime(expiration_date, "%Y-%m-%d")
+            datetime.strptime(expiration_date, "%Y-%m-%d")
         except (ValueError, TypeError):
             return "invalid_expiration_format"
 
@@ -312,7 +306,7 @@ class OptionChainLoader:
         contract: dict,
         eval_dt: datetime,
         day_count: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         Convert raw contract to record format expected by VolSurfaceBuilder.
 
@@ -348,7 +342,7 @@ class OptionChainLoader:
                 return None
 
             if not expiration_date:
-                logger.debug(f"[ChainLoader] Skipping contract with missing expiration")
+                logger.debug("[ChainLoader] Skipping contract with missing expiration")
                 return None
 
             dte = self._compute_dte(expiration_date, eval_dt.strftime("%Y-%m-%d"))
@@ -368,10 +362,7 @@ class OptionChainLoader:
             mid_price = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else 0.0
 
             if mid_price <= 0:
-                logger.debug(
-                    f"[ChainLoader] Skipping contract with invalid pricing: "
-                    f"bid={bid}, ask={ask}"
-                )
+                logger.debug(f"[ChainLoader] Skipping contract with invalid pricing: bid={bid}, ask={ask}")
                 return None
 
             open_interest = contract.get("open_interest", 0)
@@ -394,10 +385,7 @@ class OptionChainLoader:
             }
 
         except Exception as e:
-            logger.debug(
-                f"[ChainLoader] Error converting contract to record: {str(e)}, "
-                f"contract={contract}"
-            )
+            logger.debug(f"[ChainLoader] Error converting contract to record: {e!s}, contract={contract}")
             return None
 
     def _compute_dte(self, expiration_date: str, eval_date: str) -> int:
@@ -418,7 +406,5 @@ class OptionChainLoader:
             dte = delta.days
             return max(dte, 0)
         except (ValueError, TypeError) as e:
-            logger.warning(
-                f"[ChainLoader] Error computing DTE for {expiration_date} vs {eval_date}: {e}"
-            )
+            logger.warning(f"[ChainLoader] Error computing DTE for {expiration_date} vs {eval_date}: {e}")
             return 0

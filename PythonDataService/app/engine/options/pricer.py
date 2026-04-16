@@ -11,14 +11,14 @@ When ``PricingMode.MARKET_PREFERRED``, market-observed values are used
 where present and QuantLib fills the gaps.
 When ``PricingMode.MARKET_REQUIRED``, only real market data is accepted.
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
-from enum import Enum
-from typing import Optional
+from enum import StrEnum
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +27,16 @@ logger = logging.getLogger(__name__)
 # Enums
 # ---------------------------------------------------------------------------
 
-class PricingMode(str, Enum):
+
+class PricingMode(StrEnum):
     """How the engine resolves option prices and Greeks."""
+
     QUANTLIB_ONLY = "quantlib_only"
     MARKET_PREFERRED = "market_preferred"
     MARKET_REQUIRED = "market_required"
 
 
-class SpreadType(str, Enum):
+class SpreadType(StrEnum):
     BULL_CALL = "BULL_CALL"
     BULL_PUT = "BULL_PUT"
 
@@ -43,13 +45,15 @@ class SpreadType(str, Enum):
 # Result types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class OptionGreeks:
     """Greeks snapshot for a single option contract."""
+
     delta: float
     gamma: float
     theta: float  # per calendar day
-    vega: float   # per 1% IV move
+    vega: float  # per 1% IV move
     rho: float = 0.0
 
 
@@ -60,18 +64,19 @@ class PricedContract:
     Populated by either QuantLib or market data depending on pricing mode.
     The ``source`` field records provenance for logging and trust assessment.
     """
-    symbol: str                   # e.g., "O:SPY240419C00520000"
-    underlying: str               # e.g., "SPY"
+
+    symbol: str  # e.g., "O:SPY240419C00520000"
+    underlying: str  # e.g., "SPY"
     strike: Decimal
     expiration: date
-    option_type: str              # "call" or "put"
-    theoretical_price: float      # QuantLib NPV or market mid
-    bid: Optional[float] = None   # real bid (None if synthetic)
-    ask: Optional[float] = None   # real ask (None if synthetic)
+    option_type: str  # "call" or "put"
+    theoretical_price: float  # QuantLib NPV or market mid
+    bid: float | None = None  # real bid (None if synthetic)
+    ask: float | None = None  # real ask (None if synthetic)
     implied_volatility: float = 0.0
     greeks: OptionGreeks = field(default_factory=lambda: OptionGreeks(0, 0, 0, 0))
-    open_interest: Optional[int] = None
-    volume: Optional[int] = None
+    open_interest: int | None = None
+    volume: int | None = None
     source: str = "quantlib_synthetic"  # "live", "historical_aggs", "quantlib_synthetic"
 
     @property
@@ -106,6 +111,7 @@ class PricedContract:
 # QuantLib pricing
 # ---------------------------------------------------------------------------
 
+
 def _price_with_quantlib(
     spot: float,
     strike: float,
@@ -114,7 +120,7 @@ def _price_with_quantlib(
     volatility: float,
     risk_free_rate: float = 0.05,
     dividend_yield: float = 0.0,
-    evaluation_date: Optional[date] = None,
+    evaluation_date: date | None = None,
     engine: str = "analytic_bs",
 ) -> tuple[float, OptionGreeks]:
     """Price a single option via QuantLib and return (price, greeks).

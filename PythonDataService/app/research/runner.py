@@ -2,10 +2,11 @@
 
 Coordinates: data → feature → target → IC → stationarity → quantiles → report.
 """
+
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 
 import pandas as pd
 
@@ -100,13 +101,15 @@ def run_feature_research(
     try:
         logger.info(
             "[Research] Starting: %s %s [%s to %s] (%d bars)",
-            ticker, feature_name, start_date, end_date, len(bars),
+            ticker,
+            feature_name,
+            start_date,
+            end_date,
+            len(bars),
         )
 
         if len(bars) < config.min_series_length:
-            raise ValueError(
-                f"Not enough bars: {len(bars)} < {config.min_series_length} minimum"
-            )
+            raise ValueError(f"Not enough bars: {len(bars)} < {config.min_series_length} minimum")
 
         report.bars_used = len(bars)
         df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
@@ -180,11 +183,15 @@ def run_feature_research(
         )
 
         logger.info(
-            "[Research] Complete: %s %s — passed=%s (IC=%.4f, t=%.2f, p=%.4f, "
-            "stationary=%s, monotonic=%s)",
-            ticker, feature_name, report.passed_validation,
-            report.mean_ic, report.ic_t_stat, report.ic_p_value,
-            report.is_stationary, report.is_monotonic,
+            "[Research] Complete: %s %s — passed=%s (IC=%.4f, t=%.2f, p=%.4f, stationary=%s, monotonic=%s)",
+            ticker,
+            feature_name,
+            report.passed_validation,
+            report.mean_ic,
+            report.ic_t_stat,
+            report.ic_p_value,
+            report.is_stationary,
+            report.is_monotonic,
         )
 
     except Exception as e:

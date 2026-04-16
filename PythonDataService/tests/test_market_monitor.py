@@ -1,12 +1,15 @@
 """Tests for market monitor endpoints and PolygonMarketMonitor class"""
-import pytest
-from unittest.mock import patch, MagicMock
-from app.services.market_monitor import PolygonMarketMonitor
 
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from app.services.market_monitor import PolygonMarketMonitor
 
 # ---------------------------------------------------------------------------
 # Unit tests for PolygonMarketMonitor class
 # ---------------------------------------------------------------------------
+
 
 class TestPolygonMarketMonitor:
     """Tests for the PolygonMarketMonitor service class"""
@@ -79,10 +82,22 @@ class TestPolygonMarketMonitor:
             {"date": "2026-05-25", "name": "Memorial Day", "status": "closed", "exchange": "NYSE"},
             {"date": "2026-05-25", "name": "Memorial Day", "status": "closed", "exchange": "NASDAQ"},
             {"date": "2026-05-25", "name": "Memorial Day", "status": "closed", "exchange": "OTC"},
-            {"date": "2026-07-03", "name": "Independence Day", "status": "early-close",
-             "exchange": "NYSE", "open": "2026-07-03T09:30:00-04:00", "close": "2026-07-03T13:00:00-04:00"},
-            {"date": "2026-07-03", "name": "Independence Day", "status": "early-close",
-             "exchange": "NASDAQ", "open": "2026-07-03T09:30:00-04:00", "close": "2026-07-03T13:00:00-04:00"},
+            {
+                "date": "2026-07-03",
+                "name": "Independence Day",
+                "status": "early-close",
+                "exchange": "NYSE",
+                "open": "2026-07-03T09:30:00-04:00",
+                "close": "2026-07-03T13:00:00-04:00",
+            },
+            {
+                "date": "2026-07-03",
+                "name": "Independence Day",
+                "status": "early-close",
+                "exchange": "NASDAQ",
+                "open": "2026-07-03T09:30:00-04:00",
+                "close": "2026-07-03T13:00:00-04:00",
+            },
         ]
 
         result = monitor.get_upcoming_events(limit=5)
@@ -98,7 +113,7 @@ class TestPolygonMarketMonitor:
     def test_get_upcoming_events_respects_limit(self):
         monitor = self._make_monitor()
         monitor.client.get_market_holidays.return_value = [
-            {"date": f"2026-0{i+1}-01", "name": f"Holiday {i+1}", "status": "closed", "exchange": "NYSE"}
+            {"date": f"2026-0{i + 1}-01", "name": f"Holiday {i + 1}", "status": "closed", "exchange": "NYSE"}
             for i in range(10)
         ]
 
@@ -223,12 +238,15 @@ async def test_market_holidays_limit_param(client):
 @pytest.mark.anyio
 async def test_market_dashboard_endpoint(client):
     """GET /api/market/dashboard should return combined status + holidays"""
-    with patch(
-        "app.routers.market_monitor.monitor.get_current_market_state",
-        return_value=MOCK_MARKET_STATE,
-    ), patch(
-        "app.routers.market_monitor.monitor.get_upcoming_events",
-        return_value=MOCK_HOLIDAYS,
+    with (
+        patch(
+            "app.routers.market_monitor.monitor.get_current_market_state",
+            return_value=MOCK_MARKET_STATE,
+        ),
+        patch(
+            "app.routers.market_monitor.monitor.get_upcoming_events",
+            return_value=MOCK_HOLIDAYS,
+        ),
     ):
         response = await client.get("/api/market/dashboard")
 

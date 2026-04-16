@@ -1,23 +1,23 @@
 """Dataset generation service: chunked OHLCV fetch + dynamic pandas-ta indicator calculation"""
+
 from __future__ import annotations
 
-import io
 import csv
 import inspect
+import io
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
-import pandas_ta as ta
 import pandas_market_calendars as mcal
+import pandas_ta as ta
 
 from app.services.polygon_client import PolygonClientService
 
 logger = logging.getLogger(__name__)
-
-from zoneinfo import ZoneInfo
 
 _POLYGON_MAX_BARS = 50_000
 _MINUTES_PER_DAY = 450
@@ -29,7 +29,7 @@ _RTH_START_HOUR, _RTH_START_MIN = 9, 30
 _RTH_END_HOUR, _RTH_END_MIN = 16, 0
 
 # Default indicator configurations matching TradingView standard setup
-DEFAULT_INDICATORS: List[Dict[str, Any]] = [
+DEFAULT_INDICATORS: list[dict[str, Any]] = [
     {"name": "ema", "params": {"length": 5}},
     {"name": "ema", "params": {"length": 10}},
     {"name": "ema", "params": {"length": 20}},
@@ -44,7 +44,7 @@ DEFAULT_INDICATORS: List[Dict[str, Any]] = [
 ]
 
 # Configurable parameters for key indicators
-INDICATOR_CONFIGS: Dict[str, List[Dict[str, Any]]] = {
+INDICATOR_CONFIGS: dict[str, list[dict[str, Any]]] = {
     "ema": [{"name": "length", "type": "int", "default": 10, "min": 1, "max": 500, "description": "Lookback period"}],
     "sma": [{"name": "length", "type": "int", "default": 20, "min": 1, "max": 500, "description": "Lookback period"}],
     "dema": [{"name": "length", "type": "int", "default": 10, "min": 1, "max": 500, "description": "Lookback period"}],
@@ -61,7 +61,14 @@ INDICATOR_CONFIGS: Dict[str, List[Dict[str, Any]]] = {
     ],
     "supertrend": [
         {"name": "length", "type": "int", "default": 10, "min": 1, "max": 100, "description": "ATR period"},
-        {"name": "multiplier", "type": "float", "default": 3.0, "min": 0.5, "max": 10.0, "description": "ATR multiplier"},
+        {
+            "name": "multiplier",
+            "type": "float",
+            "default": 3.0,
+            "min": 0.5,
+            "max": 10.0,
+            "description": "ATR multiplier",
+        },
     ],
     "rsi": [{"name": "length", "type": "int", "default": 14, "min": 1, "max": 100, "description": "Lookback period"}],
     "macd": [
@@ -69,29 +76,68 @@ INDICATOR_CONFIGS: Dict[str, List[Dict[str, Any]]] = {
         {"name": "slow", "type": "int", "default": 26, "min": 1, "max": 200, "description": "Slow EMA period"},
         {"name": "signal", "type": "int", "default": 9, "min": 1, "max": 50, "description": "Signal EMA period"},
     ],
-    "adx": [{"name": "length", "type": "int", "default": 14, "min": 1, "max": 100, "description": "DI/ADX smoothing period"}],
+    "adx": [
+        {"name": "length", "type": "int", "default": 14, "min": 1, "max": 100, "description": "DI/ADX smoothing period"}
+    ],
     "atr": [{"name": "length", "type": "int", "default": 14, "min": 1, "max": 100, "description": "ATR period"}],
     "stoch": [
         {"name": "k", "type": "int", "default": 14, "min": 1, "max": 100, "description": "%K lookback period"},
         {"name": "d", "type": "int", "default": 3, "min": 1, "max": 50, "description": "%D smoothing period"},
     ],
-    "stochrsi": [{"name": "length", "type": "int", "default": 14, "min": 1, "max": 100, "description": "RSI lookback period"}],
+    "stochrsi": [
+        {"name": "length", "type": "int", "default": 14, "min": 1, "max": 100, "description": "RSI lookback period"}
+    ],
     "cci": [{"name": "length", "type": "int", "default": 14, "min": 1, "max": 100, "description": "Lookback period"}],
     "willr": [{"name": "length", "type": "int", "default": 14, "min": 1, "max": 100, "description": "Lookback period"}],
     "roc": [{"name": "length", "type": "int", "default": 10, "min": 1, "max": 100, "description": "Lookback period"}],
     "mom": [{"name": "length", "type": "int", "default": 10, "min": 1, "max": 100, "description": "Lookback period"}],
     "donchian": [
-        {"name": "lower_length", "type": "int", "default": 20, "min": 1, "max": 200, "description": "Lower channel period"},
-        {"name": "upper_length", "type": "int", "default": 20, "min": 1, "max": 200, "description": "Upper channel period"},
+        {
+            "name": "lower_length",
+            "type": "int",
+            "default": 20,
+            "min": 1,
+            "max": 200,
+            "description": "Lower channel period",
+        },
+        {
+            "name": "upper_length",
+            "type": "int",
+            "default": 20,
+            "min": 1,
+            "max": 200,
+            "description": "Upper channel period",
+        },
     ],
     "kc": [
         {"name": "length", "type": "int", "default": 20, "min": 1, "max": 200, "description": "EMA period"},
         {"name": "scalar", "type": "float", "default": 1.5, "min": 0.5, "max": 5.0, "description": "ATR multiplier"},
     ],
     "psar": [
-        {"name": "af0", "type": "float", "default": 0.02, "min": 0.001, "max": 0.1, "description": "Initial acceleration factor"},
-        {"name": "af", "type": "float", "default": 0.02, "min": 0.001, "max": 0.1, "description": "Acceleration factor step"},
-        {"name": "max_af", "type": "float", "default": 0.2, "min": 0.05, "max": 1.0, "description": "Maximum acceleration factor"},
+        {
+            "name": "af0",
+            "type": "float",
+            "default": 0.02,
+            "min": 0.001,
+            "max": 0.1,
+            "description": "Initial acceleration factor",
+        },
+        {
+            "name": "af",
+            "type": "float",
+            "default": 0.02,
+            "min": 0.001,
+            "max": 0.1,
+            "description": "Acceleration factor step",
+        },
+        {
+            "name": "max_af",
+            "type": "float",
+            "default": 0.2,
+            "min": 0.05,
+            "max": 1.0,
+            "description": "Maximum acceleration factor",
+        },
     ],
     "aroon": [{"name": "length", "type": "int", "default": 25, "min": 1, "max": 100, "description": "Lookback period"}],
     "natr": [{"name": "length", "type": "int", "default": 14, "min": 1, "max": 100, "description": "ATR period"}],
@@ -106,20 +152,34 @@ INDICATOR_CONFIGS: Dict[str, List[Dict[str, Any]]] = {
     ],
     "fisher": [{"name": "length", "type": "int", "default": 9, "min": 1, "max": 100, "description": "Lookback period"}],
     "squeeze": [
-        {"name": "bb_length", "type": "int", "default": 20, "min": 1, "max": 200, "description": "Bollinger Bands period"},
-        {"name": "kc_length", "type": "int", "default": 20, "min": 1, "max": 200, "description": "Keltner Channel period"},
+        {
+            "name": "bb_length",
+            "type": "int",
+            "default": 20,
+            "min": 1,
+            "max": 200,
+            "description": "Bollinger Bands period",
+        },
+        {
+            "name": "kc_length",
+            "type": "int",
+            "default": 20,
+            "min": 1,
+            "max": 200,
+            "description": "Keltner Channel period",
+        },
     ],
 }
 
 
-def get_indicator_configs() -> Dict[str, List[Dict[str, Any]]]:
+def get_indicator_configs() -> dict[str, list[dict[str, Any]]]:
     """Return configurable parameters for each indicator."""
     return INDICATOR_CONFIGS
 
 
-def list_available_indicators() -> Dict[str, List[Dict[str, str]]]:
+def list_available_indicators() -> dict[str, list[dict[str, str]]]:
     """Return all pandas-ta indicators grouped by category with descriptions."""
-    categories: Dict[str, List[Dict[str, str]]] = {}
+    categories: dict[str, list[dict[str, str]]] = {}
     for cat_name, indicator_names in ta.Category.items():
         items = []
         for name in sorted(indicator_names):
@@ -145,7 +205,7 @@ def fetch_bars_chunked(
     timespan: str = "minute",
     multiplier: int = 1,
     adjusted: bool = True,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Fetch OHLCV bars for a long date range by splitting into chunks."""
     start = datetime.strptime(from_date, "%Y-%m-%d")
     end = datetime.strptime(to_date, "%Y-%m-%d")
@@ -155,7 +215,7 @@ def fetch_bars_chunked(
     effective_bpd = _bars_per_day.get(timespan, 450) // max(1, multiplier)
     days_per_chunk = max(1, _POLYGON_MAX_BARS // max(1, effective_bpd))
 
-    all_bars: List[Dict[str, Any]] = []
+    all_bars: list[dict[str, Any]] = []
     chunk_start = start
     chunk_idx = 0
 
@@ -167,7 +227,9 @@ def fetch_bars_chunked(
             f"{chunk_start.strftime('%Y-%m-%d')} to {chunk_end.strftime('%Y-%m-%d')}"
         )
         bars = polygon.fetch_aggregates(
-            ticker=ticker, multiplier=multiplier, timespan=timespan,
+            ticker=ticker,
+            multiplier=multiplier,
+            timespan=timespan,
             from_date=chunk_start.strftime("%Y-%m-%d"),
             to_date=chunk_end.strftime("%Y-%m-%d"),
             adjusted=adjusted,
@@ -178,7 +240,7 @@ def fetch_bars_chunked(
 
     total_raw = len(all_bars)
     seen: set[int] = set()
-    unique_bars: List[Dict[str, Any]] = []
+    unique_bars: list[dict[str, Any]] = []
     for bar in all_bars:
         ts = bar["timestamp"]
         if ts not in seen:
@@ -189,18 +251,12 @@ def fetch_bars_chunked(
     # Chunk boundary verification
     chunk_overlaps = total_raw - len(unique_bars)
     if chunk_overlaps > 0:
-        logger.info(
-            f"[CHUNK MERGE] Removed {chunk_overlaps} overlapping bars at chunk boundaries"
-        )
+        logger.info(f"[CHUNK MERGE] Removed {chunk_overlaps} overlapping bars at chunk boundaries")
     if len(unique_bars) > 1:
         timestamps = [b["timestamp"] for b in unique_bars]
-        non_mono = sum(
-            1 for i in range(1, len(timestamps)) if timestamps[i] <= timestamps[i - 1]
-        )
+        non_mono = sum(1 for i in range(1, len(timestamps)) if timestamps[i] <= timestamps[i - 1])
         if non_mono > 0:
-            logger.warning(
-                f"[CHUNK MERGE] {non_mono} non-monotonic timestamps after dedup — re-sorting"
-            )
+            logger.warning(f"[CHUNK MERGE] {non_mono} non-monotonic timestamps after dedup — re-sorting")
             unique_bars.sort(key=lambda b: b["timestamp"])
 
     logger.info(f"Total unique {multiplier}{timespan} bars: {len(unique_bars)}")
@@ -221,9 +277,7 @@ def filter_session(df: pd.DataFrame, session: str) -> pd.DataFrame:
     rth_end = _RTH_END_HOUR * 60 + _RTH_END_MIN  # 960
 
     mask = (
-        (time_minutes >= rth_start)
-        & (time_minutes < rth_end)
-        & (dt_et.dt.dayofweek < 5)  # Mon-Fri
+        (time_minutes >= rth_start) & (time_minutes < rth_end) & (dt_et.dt.dayofweek < 5)  # Mon-Fri
     )
     before = len(df)
     df = df[mask].reset_index(drop=True)
@@ -251,7 +305,9 @@ def forward_fill_gaps(df: pd.DataFrame, session: str) -> pd.DataFrame:
             continue  # skip weekends
 
         if session == "rth":
-            start = datetime.combine(date, datetime.min.time().replace(hour=_RTH_START_HOUR, minute=_RTH_START_MIN, tzinfo=_ET))
+            start = datetime.combine(
+                date, datetime.min.time().replace(hour=_RTH_START_HOUR, minute=_RTH_START_MIN, tzinfo=_ET)
+            )
             end = datetime.combine(date, datetime.min.time().replace(hour=_RTH_END_HOUR, minute=0, tzinfo=_ET))
         else:
             # Extended: 04:00 - 20:00 ET (typical Polygon range)
@@ -304,18 +360,15 @@ def compute_warmup_start_date(
     bars_per_day = {"minute": 390, "hour": 7, "day": 1}
     bpd = bars_per_day.get(timespan, 390) * multiplier
     warmup_days = max(1, (warmup_bars // bpd) + 2)
-    return (
-        datetime.strptime(from_date, "%Y-%m-%d") - timedelta(days=warmup_days)
-    ).strftime("%Y-%m-%d")
+    return (datetime.strptime(from_date, "%Y-%m-%d") - timedelta(days=warmup_days)).strftime("%Y-%m-%d")
 
 
-def estimate_max_lookback(indicator_entries: List[Dict[str, Any]]) -> int:
+def estimate_max_lookback(indicator_entries: list[dict[str, Any]]) -> int:
     """Scan indicator_entries for the largest lookback parameter."""
     lookback = 0
     for entry in indicator_entries:
         params = entry.get("params", {})
-        for key in ("length", "slow", "k", "bb_length", "kc_length",
-                     "lower_length", "upper_length"):
+        for key in ("length", "slow", "k", "bb_length", "kc_length", "lower_length", "upper_length"):
             val = params.get(key, 0)
             if isinstance(val, (int, float)):
                 lookback = max(lookback, int(val))
@@ -323,7 +376,7 @@ def estimate_max_lookback(indicator_entries: List[Dict[str, Any]]) -> int:
 
 
 def indicator_table_params_to_entries(
-    ema_periods: List[int],
+    ema_periods: list[int],
     bb_length: int = 20,
     bb_std: float = 2.0,
     supertrend_length: int = 10,
@@ -333,9 +386,9 @@ def indicator_table_params_to_entries(
     macd_slow: int = 26,
     macd_signal: int = 9,
     adx_length: int = 14,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Convert fixed indicator-table params into dynamic indicator_entries."""
-    entries: List[Dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
     for period in sorted(ema_periods):
         entries.append({"name": "ema", "params": {"length": period}})
     entries.append({"name": "bbands", "params": {"length": bb_length, "std": bb_std}})
@@ -347,7 +400,9 @@ def indicator_table_params_to_entries(
 
 
 def _tag_session_column(
-    df: pd.DataFrame, from_date: str, to_date: str,
+    df: pd.DataFrame,
+    from_date: str,
+    to_date: str,
 ) -> pd.DataFrame:
     """Tag each bar with session type: 'rth', 'pre', or 'post' using NYSE calendar."""
     if df.empty:
@@ -374,14 +429,14 @@ def _tag_session_column(
 
 
 def preprocess_and_calculate(
-    bars: List[Dict[str, Any]],
-    indicator_entries: List[Dict[str, Any]],
+    bars: list[dict[str, Any]],
+    indicator_entries: list[dict[str, Any]],
     session: str = "extended",
     forward_fill: bool = False,
-    trim_from_ts: Optional[int] = None,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
+    trim_from_ts: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """
     Shared preprocessing pipeline:
       1. Sort and deduplicate bars
@@ -403,7 +458,7 @@ def preprocess_and_calculate(
     if forward_fill:
         df = forward_fill_gaps(df, session)
 
-    column_meta: List[Dict[str, Any]] = []
+    column_meta: list[dict[str, Any]] = []
     if indicator_entries:
         df, column_meta = calculate_dynamic_indicators(df, indicator_entries)
 
@@ -417,10 +472,10 @@ def preprocess_and_calculate(
 
 def rename_to_indicator_table_columns(
     df: pd.DataFrame,
-    column_meta: List[Dict[str, Any]],
+    column_meta: list[dict[str, Any]],
 ) -> pd.DataFrame:
     """Rename pandas-ta raw column names to the indicator-table API contract."""
-    rename_map: Dict[str, str] = {}
+    rename_map: dict[str, str] = {}
     for m in column_meta:
         col = m["column"]
         ind = m["indicator"]
@@ -464,14 +519,14 @@ def rename_to_indicator_table_columns(
 
 def calculate_dynamic_indicators(
     df: pd.DataFrame,
-    indicator_entries: List[Dict[str, Any]],
-) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
+    indicator_entries: list[dict[str, Any]],
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """
     Calculate selected pandas-ta indicators on a DataFrame with OHLCV columns.
     indicator_entries: list of {"name": "ema", "params": {"length": 20}}
     Returns the enriched DataFrame and column metadata list.
     """
-    column_meta: List[Dict[str, Any]] = []
+    column_meta: list[dict[str, Any]] = []
 
     for entry in indicator_entries:
         ind_name = entry.get("name", "")
@@ -498,10 +553,14 @@ def calculate_dynamic_indicators(
             elif _needs_param(param_names, "volume"):
                 args = [df["volume"]]
 
-            kwargs: Dict[str, Any] = {**params}
-            if "volume" in param_names and "volume" not in [p for p in param_names[:len(args)]]:
-                if len(args) > 0 and "volume" not in kwargs:
-                    kwargs["volume"] = df["volume"]
+            kwargs: dict[str, Any] = {**params}
+            if (
+                "volume" in param_names
+                and "volume" not in [p for p in param_names[: len(args)]]
+                and len(args) > 0
+                and "volume" not in kwargs
+            ):
+                kwargs["volume"] = df["volume"]
 
             result = fn(*args, **kwargs)
             if result is None:
@@ -514,24 +573,30 @@ def calculate_dynamic_indicators(
                 for col in result.columns:
                     clean = col.lower().replace(" ", "_")
                     df[clean] = result[col]
-                    column_meta.append({
-                        "column": clean,
-                        "indicator": ind_name,
-                        "params": param_str,
-                        "library": "pandas-ta",
-                    })
+                    column_meta.append(
+                        {
+                            "column": clean,
+                            "indicator": ind_name,
+                            "params": param_str,
+                            "library": "pandas-ta",
+                        }
+                    )
             elif isinstance(result, pd.Series):
                 col_name = f"{ind_name}_{param_str.replace(', ', '_').replace('=', '')}" if params else ind_name
                 col_name = col_name.lower().replace(" ", "_")
                 df[col_name] = result
-                column_meta.append({
-                    "column": col_name,
-                    "indicator": ind_name,
-                    "params": param_str,
-                    "library": "pandas-ta",
-                })
+                column_meta.append(
+                    {
+                        "column": col_name,
+                        "indicator": ind_name,
+                        "params": param_str,
+                        "library": "pandas-ta",
+                    }
+                )
 
-            logger.info(f"Calculated {ind_name}({param_str}): +{len(result.columns) if isinstance(result, pd.DataFrame) else 1} columns")
+            logger.info(
+                f"Calculated {ind_name}({param_str}): +{len(result.columns) if isinstance(result, pd.DataFrame) else 1} columns"
+            )
 
         except Exception as e:
             logger.error(f"Error calculating {ind_name}: {e}", exc_info=True)
@@ -540,11 +605,11 @@ def calculate_dynamic_indicators(
     return df, column_meta
 
 
-def build_csv_bytes(df: pd.DataFrame, columns: List[str]) -> bytes:
+def build_csv_bytes(df: pd.DataFrame, columns: list[str]) -> bytes:
     """Serialize a DataFrame to CSV bytes with unix_ts and iso_time columns first."""
     output = io.StringIO()
     writer = csv.writer(output)
-    header = ["unix_ts", "iso_time"] + columns
+    header = ["unix_ts", "iso_time", *columns]
     writer.writerow(header)
 
     for _, row in df.iterrows():
@@ -560,8 +625,8 @@ def build_metadata_json(
     from_date: str,
     to_date: str,
     bar_count: int,
-    column_meta: List[Dict[str, Any]],
-    ohlcv_cols: List[str],
+    column_meta: list[dict[str, Any]],
+    ohlcv_cols: list[str],
     session: str = "extended",
     forward_fill: bool = True,
     raw_bar_count: int = 0,
@@ -569,8 +634,18 @@ def build_metadata_json(
 ) -> bytes:
     """Generate CSV metadata JSON describing every column and its calculation."""
     base_columns = [
-        {"column": "unix_ts", "type": "int", "description": "Unix timestamp in milliseconds (UTC)", "source": "Polygon.io"},
-        {"column": "iso_time", "type": "string", "description": "ISO 8601 datetime (UTC)", "source": "Derived from unix_ts"},
+        {
+            "column": "unix_ts",
+            "type": "int",
+            "description": "Unix timestamp in milliseconds (UTC)",
+            "source": "Polygon.io",
+        },
+        {
+            "column": "iso_time",
+            "type": "string",
+            "description": "ISO 8601 datetime (UTC)",
+            "source": "Derived from unix_ts",
+        },
     ]
     for col in ohlcv_cols:
         desc_map = {
@@ -582,32 +657,38 @@ def build_metadata_json(
             "vwap": "Volume-weighted average price for the minute bar",
             "transactions": "Number of transactions in the minute bar",
         }
-        base_columns.append({
-            "column": col,
-            "type": "float" if col != "transactions" else "int",
-            "description": desc_map.get(col, col),
-            "source": "Polygon.io REST API (list_aggs)",
-        })
+        base_columns.append(
+            {
+                "column": col,
+                "type": "float" if col != "transactions" else "int",
+                "description": desc_map.get(col, col),
+                "source": "Polygon.io REST API (list_aggs)",
+            }
+        )
 
     # Session column (added by _tag_session_column)
-    base_columns.append({
-        "column": "session",
-        "type": "string",
-        "description": "Trading session: rth (regular 09:30-16:00 ET), pre (pre-market), or post (after-hours)",
-        "source": "Derived from NYSE calendar",
-    })
+    base_columns.append(
+        {
+            "column": "session",
+            "type": "string",
+            "description": "Trading session: rth (regular 09:30-16:00 ET), pre (pre-market), or post (after-hours)",
+            "source": "Derived from NYSE calendar",
+        }
+    )
 
     indicator_columns = []
     for meta in column_meta:
         desc = _describe_indicator_column(meta["indicator"], meta["column"], meta["params"])
-        indicator_columns.append({
-            "column": meta["column"],
-            "type": "float",
-            "indicator": meta["indicator"],
-            "parameters": meta["params"],
-            "library": meta["library"],
-            "description": desc,
-        })
+        indicator_columns.append(
+            {
+                "column": meta["column"],
+                "type": "float",
+                "indicator": meta["indicator"],
+                "parameters": meta["params"],
+                "library": meta["library"],
+                "description": desc,
+            }
+        )
 
     metadata = {
         "dataset": {
@@ -634,9 +715,13 @@ def build_metadata_json(
         "columns": base_columns + indicator_columns,
         "processing": {
             "session_filter": session,
-            "session_description": "Regular Trading Hours 09:30-16:00 ET" if session == "rth" else "Extended hours (pre-market + RTH + after-hours)",
+            "session_description": "Regular Trading Hours 09:30-16:00 ET"
+            if session == "rth"
+            else "Extended hours (pre-market + RTH + after-hours)",
             "forward_fill": forward_fill,
-            "forward_fill_description": "Missing minute bars filled with previous close (volume=0)" if forward_fill else "No fill — raw Polygon data with gaps",
+            "forward_fill_description": "Missing minute bars filled with previous close (volume=0)"
+            if forward_fill
+            else "No fill — raw Polygon data with gaps",
             "raw_bars_from_polygon": raw_bar_count,
             "bars_after_processing": filled_bar_count or bar_count,
             "bars_added_by_fill": (filled_bar_count - raw_bar_count) if forward_fill and filled_bar_count else 0,
@@ -659,7 +744,7 @@ def build_metadata_json(
     return json.dumps(metadata, indent=2).encode("utf-8")
 
 
-_INDICATOR_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
+_INDICATOR_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "ema": {
         "": "Exponential Moving Average — weighted moving average giving more weight to recent prices",
     },
@@ -722,8 +807,8 @@ def _describe_indicator_column(indicator: str, column: str, params: str) -> str:
 
 
 def build_metadata_csv(
-    column_meta: List[Dict[str, Any]],
-    ohlcv_cols: List[str],
+    column_meta: list[dict[str, Any]],
+    ohlcv_cols: list[str],
 ) -> bytes:
     """Generate a CSV describing every column in the dataset."""
     output = io.StringIO()
@@ -752,23 +837,22 @@ def build_metadata_csv(
 
     for meta in column_meta:
         desc = _describe_indicator_column(meta["indicator"], meta["column"], meta["params"])
-        writer.writerow([
-            meta["column"],
-            "float",
-            "pandas-ta",
-            meta["indicator"],
-            meta["params"],
-            desc,
-        ])
+        writer.writerow(
+            [
+                meta["column"],
+                "float",
+                "pandas-ta",
+                meta["indicator"],
+                meta["params"],
+                desc,
+            ]
+        )
 
     return output.getvalue().encode("utf-8")
 
 
-def _needs_param(param_names: List[str], *required: str) -> bool:
-    for req in required:
-        if not any(req in p for p in param_names[:5]):
-            return False
-    return True
+def _needs_param(param_names: list[str], *required: str) -> bool:
+    return all(any(req in p for p in param_names[:5]) for req in required)
 
 
 def _fmt(val: Any) -> str:
@@ -790,7 +874,7 @@ def build_metadata_kv_csv(
     multiplier: int = 1,
     raw_bar_count: int = 0,
     filled_bar_count: int = 0,
-    column_meta: Optional[List[Dict[str, Any]]] = None,
+    column_meta: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Generate a simple key-value CSV with dataset metadata."""
     import zipfile as _zf  # noqa: F401 — just to verify import
@@ -829,9 +913,9 @@ def build_metadata_kv_csv(
 
 def build_zip_bytes(
     df: pd.DataFrame,
-    columns: List[str],
-    column_meta: List[Dict[str, Any]],
-    ohlcv_cols: List[str],
+    columns: list[str],
+    column_meta: list[dict[str, Any]],
+    ohlcv_cols: list[str],
     ticker: str,
     from_date: str,
     to_date: str,
@@ -841,7 +925,7 @@ def build_zip_bytes(
     multiplier: int = 1,
     raw_bar_count: int = 0,
     filled_bar_count: int = 0,
-    trades_csv_bytes: Optional[bytes] = None,
+    trades_csv_bytes: bytes | None = None,
 ) -> bytes:
     """Pack dataset.csv, metadata.csv, columns.csv into a ZIP. Optionally include trades.csv."""
     import zipfile

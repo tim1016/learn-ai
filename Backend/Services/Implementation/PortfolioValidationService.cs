@@ -138,18 +138,30 @@ public class PortfolioValidationService : IPortfolioValidationService
         // BUY 100 AAPL @ 150, BUY 50 AAPL @ 155, SELL 120 AAPL @ 160
         await portfolioService.RecordTradeAsync(new RecordTradeInput
         {
-            AccountId = accountId, Symbol = "AAPL", Side = OrderSide.Buy,
-            Quantity = 100, Price = 150, Fees = 0,
+            AccountId = accountId,
+            Symbol = "AAPL",
+            Side = OrderSide.Buy,
+            Quantity = 100,
+            Price = 150,
+            Fees = 0,
         }, ct);
         await portfolioService.RecordTradeAsync(new RecordTradeInput
         {
-            AccountId = accountId, Symbol = "AAPL", Side = OrderSide.Buy,
-            Quantity = 50, Price = 155, Fees = 0,
+            AccountId = accountId,
+            Symbol = "AAPL",
+            Side = OrderSide.Buy,
+            Quantity = 50,
+            Price = 155,
+            Fees = 0,
         }, ct);
         await portfolioService.RecordTradeAsync(new RecordTradeInput
         {
-            AccountId = accountId, Symbol = "AAPL", Side = OrderSide.Sell,
-            Quantity = 120, Price = 160, Fees = 0,
+            AccountId = accountId,
+            Symbol = "AAPL",
+            Side = OrderSide.Sell,
+            Quantity = 120,
+            Price = 160,
+            Fees = 0,
         }, ct);
 
         var position = await db.Positions
@@ -180,7 +192,10 @@ public class PortfolioValidationService : IPortfolioValidationService
         {
             assertions.Add(new ValidationAssertion
             {
-                Label = "Lot Count", Expected = "2", Actual = lots.Count.ToString(), Passed = false,
+                Label = "Lot Count",
+                Expected = "2",
+                Actual = lots.Count.ToString(),
+                Passed = false,
             });
         }
 
@@ -212,8 +227,12 @@ public class PortfolioValidationService : IPortfolioValidationService
         {
             await portfolioService.RecordTradeAsync(new RecordTradeInput
             {
-                AccountId = accountId, Symbol = symbol, Side = side,
-                Quantity = qty, Price = price, Fees = 0,
+                AccountId = accountId,
+                Symbol = symbol,
+                Side = side,
+                Quantity = qty,
+                Price = price,
+                Fees = 0,
             }, ct);
         }
 
@@ -250,7 +269,10 @@ public class PortfolioValidationService : IPortfolioValidationService
             {
                 assertions.Add(new ValidationAssertion
                 {
-                    Label = $"{symbol} exists post-rebuild", Expected = "true", Actual = "false", Passed = false,
+                    Label = $"{symbol} exists post-rebuild",
+                    Expected = "true",
+                    Actual = "false",
+                    Passed = false,
                 });
                 continue;
             }
@@ -286,8 +308,12 @@ public class PortfolioValidationService : IPortfolioValidationService
         // BUY 100 TEST3 @ 200, fee = 5
         await portfolioService.RecordTradeAsync(new RecordTradeInput
         {
-            AccountId = accountId, Symbol = "TEST3", Side = OrderSide.Buy,
-            Quantity = 100, Price = 200, Fees = 5,
+            AccountId = accountId,
+            Symbol = "TEST3",
+            Side = OrderSide.Buy,
+            Quantity = 100,
+            Price = 200,
+            Fees = 5,
         }, ct);
 
         db.ChangeTracker.Clear();
@@ -297,8 +323,12 @@ public class PortfolioValidationService : IPortfolioValidationService
         // SELL 100 TEST3 @ 210, fee = 5
         await portfolioService.RecordTradeAsync(new RecordTradeInput
         {
-            AccountId = accountId, Symbol = "TEST3", Side = OrderSide.Sell,
-            Quantity = 100, Price = 210, Fees = 5,
+            AccountId = accountId,
+            Symbol = "TEST3",
+            Side = OrderSide.Sell,
+            Quantity = 100,
+            Price = 210,
+            Fees = 5,
         }, ct);
 
         db.ChangeTracker.Clear();
@@ -320,8 +350,12 @@ public class PortfolioValidationService : IPortfolioValidationService
     {
         await portfolioService.RecordTradeAsync(new RecordTradeInput
         {
-            AccountId = accountId, Symbol = "TEST4", Side = OrderSide.Buy,
-            Quantity = 100, Price = 900, Fees = 0,
+            AccountId = accountId,
+            Symbol = "TEST4",
+            Side = OrderSide.Buy,
+            Quantity = 100,
+            Price = 900,
+            Fees = 0,
         }, ct);
 
         var prices = new Dictionary<string, decimal> { ["TEST4"] = 950 };
@@ -340,7 +374,10 @@ public class PortfolioValidationService : IPortfolioValidationService
         {
             assertions.Add(new ValidationAssertion
             {
-                Label = "TEST4 position found", Expected = "true", Actual = "false", Passed = false,
+                Label = "TEST4 position found",
+                Expected = "true",
+                Actual = "false",
+                Passed = false,
             });
         }
 
@@ -470,8 +507,12 @@ public class PortfolioValidationService : IPortfolioValidationService
         // Buy a large position that exceeds 30% of equity
         await portfolioService.RecordTradeAsync(new RecordTradeInput
         {
-            AccountId = accountId, Symbol = "TEST8", Side = OrderSide.Buy,
-            Quantity = 500, Price = 200, Fees = 0,
+            AccountId = accountId,
+            Symbol = "TEST8",
+            Side = OrderSide.Buy,
+            Quantity = 500,
+            Price = 200,
+            Fees = 0,
         }, ct);
 
         // Evaluate rules with a price that makes position large
@@ -667,8 +708,12 @@ public class PortfolioValidationService : IPortfolioValidationService
 
             await portfolioService.RecordTradeAsync(new RecordTradeInput
             {
-                AccountId = stressId, Symbol = symbol, Side = side,
-                Quantity = qty, Price = price, Fees = 0,
+                AccountId = stressId,
+                Symbol = symbol,
+                Side = side,
+                Quantity = qty,
+                Price = price,
+                Fees = 0,
             }, ct);
         }
 

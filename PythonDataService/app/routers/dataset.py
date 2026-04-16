@@ -1,26 +1,28 @@
 """API endpoints for dataset generation: chunked OHLCV + dynamic indicator calculation + CSV export"""
+
 from __future__ import annotations
 
-from datetime import datetime
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
 import io
 import logging
+from datetime import datetime
 
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
+
+from app.models.requests import DatasetGenerationRequest
 from app.services.dataset_service import (
-    list_available_indicators,
-    get_indicator_configs,
-    fetch_bars_chunked,
+    build_csv_bytes,
+    build_metadata_csv,
+    build_metadata_json,
+    build_zip_bytes,
     compute_warmup_start_date,
     estimate_max_lookback,
+    fetch_bars_chunked,
+    get_indicator_configs,
+    list_available_indicators,
     preprocess_and_calculate,
-    build_csv_bytes,
-    build_metadata_json,
-    build_metadata_csv,
-    build_zip_bytes,
 )
 from app.services.polygon_client import PolygonClientService
-from app.models.requests import DatasetGenerationRequest
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -37,18 +39,23 @@ def _fetch_and_process(request: DatasetGenerationRequest):
     if request.warmup and request.indicator_entries:
         max_lookback = estimate_max_lookback(request.indicator_entries)
         fetch_from = compute_warmup_start_date(
-            request.from_date, max_lookback,
-            timespan=request.timespan, multiplier=request.multiplier,
+            request.from_date,
+            max_lookback,
+            timespan=request.timespan,
+            multiplier=request.multiplier,
         )
         trim_from_ts = int(datetime.strptime(request.from_date, "%Y-%m-%d").timestamp() * 1000)
         logger.info(
-            f"[DATASET] Warm-up: fetching from {fetch_from} "
-            f"(requested {request.from_date}, lookback={max_lookback})"
+            f"[DATASET] Warm-up: fetching from {fetch_from} (requested {request.from_date}, lookback={max_lookback})"
         )
 
     bars = fetch_bars_chunked(
-        polygon_client, request.ticker, fetch_from, request.to_date,
-        timespan=request.timespan, multiplier=request.multiplier,
+        polygon_client,
+        request.ticker,
+        fetch_from,
+        request.to_date,
+        timespan=request.timespan,
+        multiplier=request.multiplier,
         adjusted=request.adjusted,
     )
     if not bars:
@@ -80,10 +87,12 @@ async def get_available_indicators():
         for cat, items in categories_raw.items():
             cat_items = []
             for item in items:
-                cat_items.append({
-                    **item,
-                    "configurable_params": configs.get(item["name"], []),
-                })
+                cat_items.append(
+                    {
+                        **item,
+                        "configurable_params": configs.get(item["name"], []),
+                    }
+                )
             categories[cat] = cat_items
 
         total = sum(len(items) for items in categories.values())
@@ -268,10 +277,7 @@ async def generate_validation_report(
         our_bytes = await our_csv.read()
         tv_bytes = await tv_csv.read()
 
-        logger.info(
-            f"[VALIDATION] Comparing {len(our_bytes)} bytes (ours) "
-            f"vs {len(tv_bytes)} bytes (TV) for {ticker}"
-        )
+        logger.info(f"[VALIDATION] Comparing {len(our_bytes)} bytes (ours) vs {len(tv_bytes)} bytes (TV) for {ticker}")
 
         report_md = gen_report(our_bytes, tv_bytes, ticker)
 
@@ -281,7 +287,7 @@ async def generate_validation_report(
         logger.error(f"[VALIDATION] Error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Validation report failed: {str(e)}",
+            detail=f"Validation report failed: {e!s}",
         )
 
 

@@ -1,8 +1,9 @@
 """API endpoint for rule-based configurable backtesting."""
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
@@ -81,22 +82,22 @@ class RuleBasedBacktestResponse(BaseModel):
     error: str | None = None
 
 
-RTH_OPEN_MINUTES = 9 * 60 + 30   # 9:30 AM
-RTH_CLOSE_MINUTES = 16 * 60       # 4:00 PM
+RTH_OPEN_MINUTES = 9 * 60 + 30  # 9:30 AM
+RTH_CLOSE_MINUTES = 16 * 60  # 4:00 PM
 
 
 def _filter_rth(bars: list[dict]) -> list[dict]:
     """Filter bars to Regular Trading Hours (9:30 AM - 4:00 PM ET).
     Polygon timestamps are in ms UTC; convert to ET for filtering."""
     from zoneinfo import ZoneInfo
-    from datetime import timezone
+
     eastern = ZoneInfo("America/New_York")
     filtered = []
     for bar in bars:
         ts_ms = bar.get("t") or bar.get("timestamp")
         if ts_ms is None:
             continue
-        dt_utc = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+        dt_utc = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
         dt_et = dt_utc.astimezone(eastern)
         minutes = dt_et.hour * 60 + dt_et.minute
         if RTH_OPEN_MINUTES <= minutes < RTH_CLOSE_MINUTES:
@@ -110,8 +111,12 @@ async def run_backtest(request: RuleBasedBacktestRequest):
     try:
         logger.info(
             "[RuleBasedBacktest] %s %s×%s from %s to %s, params=%s",
-            request.ticker, request.multiplier, request.timespan,
-            request.from_date, request.to_date, request.parameters,
+            request.ticker,
+            request.multiplier,
+            request.timespan,
+            request.from_date,
+            request.to_date,
+            request.parameters,
         )
 
         raw_bars = polygon_client.fetch_aggregates(
@@ -177,7 +182,9 @@ async def run_backtest(request: RuleBasedBacktestRequest):
 
         logger.info(
             "[RuleBasedBacktest] Done: %d trades, win_rate=%.1f%%, total_pnl=%.4f%%",
-            result.total_trades, result.win_rate * 100, result.total_pnl_pct * 100,
+            result.total_trades,
+            result.win_rate * 100,
+            result.total_pnl_pct * 100,
         )
 
         return RuleBasedBacktestResponse(
@@ -207,7 +214,7 @@ async def run_backtest(request: RuleBasedBacktestRequest):
         logger.error("[RuleBasedBacktest] Error: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Rule-based backtest failed: {str(e)}",
+            detail=f"Rule-based backtest failed: {e!s}",
         )
 
 
@@ -217,22 +224,26 @@ def _normalize_bars(raw_bars: list[dict]) -> list[dict]:
     for bar in raw_bars:
         if isinstance(bar, dict):
             ts = bar.get("t") or bar.get("timestamp")
-            normalized.append({
-                "timestamp": ts,
-                "open": bar.get("o") or bar.get("open"),
-                "high": bar.get("h") or bar.get("high"),
-                "low": bar.get("l") or bar.get("low"),
-                "close": bar.get("c") or bar.get("close"),
-                "volume": bar.get("v") or bar.get("volume", 0),
-            })
+            normalized.append(
+                {
+                    "timestamp": ts,
+                    "open": bar.get("o") or bar.get("open"),
+                    "high": bar.get("h") or bar.get("high"),
+                    "low": bar.get("l") or bar.get("low"),
+                    "close": bar.get("c") or bar.get("close"),
+                    "volume": bar.get("v") or bar.get("volume", 0),
+                }
+            )
         else:
             # Polygon SDK objects
-            normalized.append({
-                "timestamp": getattr(bar, "timestamp", None) or getattr(bar, "t", None),
-                "open": getattr(bar, "open", None) or getattr(bar, "o", None),
-                "high": getattr(bar, "high", None) or getattr(bar, "h", None),
-                "low": getattr(bar, "low", None) or getattr(bar, "l", None),
-                "close": getattr(bar, "close", None) or getattr(bar, "c", None),
-                "volume": getattr(bar, "volume", None) or getattr(bar, "v", 0),
-            })
+            normalized.append(
+                {
+                    "timestamp": getattr(bar, "timestamp", None) or getattr(bar, "t", None),
+                    "open": getattr(bar, "open", None) or getattr(bar, "o", None),
+                    "high": getattr(bar, "high", None) or getattr(bar, "h", None),
+                    "low": getattr(bar, "low", None) or getattr(bar, "l", None),
+                    "close": getattr(bar, "close", None) or getattr(bar, "c", None),
+                    "volume": getattr(bar, "volume", None) or getattr(bar, "v", 0),
+                }
+            )
     return normalized

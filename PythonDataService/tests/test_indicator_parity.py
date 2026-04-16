@@ -3,12 +3,12 @@
 These tests ensure the wiring in calculate_dynamic_indicators correctly passes
 parameters to pandas-ta and that column naming/extraction is consistent.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
-import pytest
 
 from app.services.dataset_service import calculate_dynamic_indicators
 
@@ -31,14 +31,16 @@ def _make_realistic_bars(count: int = 500, seed: int = 42) -> pd.DataFrame:
     lows = np.minimum(lows, np.minimum(opens, closes))
 
     base_ts = 1704067200000  # 2024-01-01 00:00 UTC in ms
-    return pd.DataFrame({
-        "timestamp": [base_ts + i * 60_000 for i in range(count)],
-        "open": opens,
-        "high": highs,
-        "low": lows,
-        "close": closes,
-        "volume": rng.uniform(10_000, 500_000, count),
-    })
+    return pd.DataFrame(
+        {
+            "timestamp": [base_ts + i * 60_000 for i in range(count)],
+            "open": opens,
+            "high": highs,
+            "low": lows,
+            "close": closes,
+            "volume": rng.uniform(10_000, 500_000, count),
+        }
+    )
 
 
 def test_ema_parity():
@@ -97,11 +99,11 @@ def test_macd_parity():
         col = m["column"]
         # Match by prefix: macd_ -> MACD_, macds_ -> MACDs_, macdh_ -> MACDh_
         if col.startswith("macdh"):
-            exp_col = [c for c in expected.columns if c.startswith("MACDh_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("MACDh_"))
         elif col.startswith("macds"):
-            exp_col = [c for c in expected.columns if c.startswith("MACDs_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("MACDs_"))
         else:
-            exp_col = [c for c in expected.columns if c.startswith("MACD_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("MACD_"))
 
         pd.testing.assert_series_equal(
             result_df[col].dropna().reset_index(drop=True),
@@ -126,15 +128,15 @@ def test_bbands_parity():
         col = m["column"]
         # Match lower/mid/upper bands by prefix
         if col.startswith("bbl"):
-            exp_col = [c for c in expected.columns if c.startswith("BBL_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("BBL_"))
         elif col.startswith("bbm"):
-            exp_col = [c for c in expected.columns if c.startswith("BBM_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("BBM_"))
         elif col.startswith("bbu"):
-            exp_col = [c for c in expected.columns if c.startswith("BBU_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("BBU_"))
         elif col.startswith("bbb"):
-            exp_col = [c for c in expected.columns if c.startswith("BBB_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("BBB_"))
         elif col.startswith("bbp"):
-            exp_col = [c for c in expected.columns if c.startswith("BBP_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("BBP_"))
         else:
             continue
 
@@ -160,13 +162,13 @@ def test_supertrend_parity():
     for m in st_meta:
         col = m["column"]
         if col.startswith("supertl"):
-            exp_col = [c for c in expected.columns if c.startswith("SUPERTl_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("SUPERTl_"))
         elif col.startswith("superts"):
-            exp_col = [c for c in expected.columns if c.startswith("SUPERTs_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("SUPERTs_"))
         elif col.startswith("supertd"):
-            exp_col = [c for c in expected.columns if c.startswith("SUPERTd_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("SUPERTd_"))
         elif col.startswith("supert_"):
-            exp_col = [c for c in expected.columns if c.startswith("SUPERT_")][0]
+            exp_col = next(c for c in expected.columns if c.startswith("SUPERT_"))
         else:
             continue
 

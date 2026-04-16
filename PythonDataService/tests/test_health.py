@@ -1,4 +1,5 @@
 """Tests for health and root endpoints"""
+
 import pytest
 
 

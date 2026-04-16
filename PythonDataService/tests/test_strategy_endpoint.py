@@ -1,4 +1,5 @@
 """Tests for the /api/strategy/analyze endpoint (router-level integration)."""
+
 from __future__ import annotations
 
 import math
@@ -6,10 +7,10 @@ import math
 import pytest
 from httpx import AsyncClient
 
-
 # ---------------------------------------------------------------------------
 # Bull call spread (basic debit spread)
 # ---------------------------------------------------------------------------
+
 
 class TestStrategyEndpoint:
     @pytest.mark.asyncio
@@ -17,10 +18,8 @@ class TestStrategyEndpoint:
         payload = {
             "symbol": "AAPL",
             "legs": [
-                {"strike": 100, "option_type": "call", "position": "long",
-                 "premium": 5.0, "iv": 0.25, "quantity": 1},
-                {"strike": 105, "option_type": "call", "position": "short",
-                 "premium": 2.0, "iv": 0.23, "quantity": 1},
+                {"strike": 100, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
+                {"strike": 105, "option_type": "call", "position": "short", "premium": 2.0, "iv": 0.23, "quantity": 1},
             ],
             "expiration_date": "2026-12-31",
             "spot_price": 102,
@@ -47,14 +46,10 @@ class TestStrategyEndpoint:
         payload = {
             "symbol": "SPY",
             "legs": [
-                {"strike": 90, "option_type": "put", "position": "long",
-                 "premium": 0.50, "iv": 0.35, "quantity": 1},
-                {"strike": 95, "option_type": "put", "position": "short",
-                 "premium": 2.0, "iv": 0.30, "quantity": 1},
-                {"strike": 105, "option_type": "call", "position": "short",
-                 "premium": 2.0, "iv": 0.25, "quantity": 1},
-                {"strike": 110, "option_type": "call", "position": "long",
-                 "premium": 0.50, "iv": 0.22, "quantity": 1},
+                {"strike": 90, "option_type": "put", "position": "long", "premium": 0.50, "iv": 0.35, "quantity": 1},
+                {"strike": 95, "option_type": "put", "position": "short", "premium": 2.0, "iv": 0.30, "quantity": 1},
+                {"strike": 105, "option_type": "call", "position": "short", "premium": 2.0, "iv": 0.25, "quantity": 1},
+                {"strike": 110, "option_type": "call", "position": "long", "premium": 0.50, "iv": 0.22, "quantity": 1},
             ],
             "expiration_date": "2026-12-31",
             "spot_price": 100,
@@ -74,6 +69,7 @@ class TestStrategyEndpoint:
 # Validation: Pydantic model enforcement
 # ---------------------------------------------------------------------------
 
+
 class TestStrategyEndpointValidation:
     @pytest.mark.asyncio
     async def test_missing_legs_returns_422(self, client: AsyncClient):
@@ -91,8 +87,14 @@ class TestStrategyEndpointValidation:
         payload = {
             "symbol": "AAPL",
             "legs": [
-                {"strike": 100, "option_type": "butterfly", "position": "long",
-                 "premium": 5.0, "iv": 0.25, "quantity": 1},
+                {
+                    "strike": 100,
+                    "option_type": "butterfly",
+                    "position": "long",
+                    "premium": 5.0,
+                    "iv": 0.25,
+                    "quantity": 1,
+                },
             ],
             "expiration_date": "2026-12-31",
             "spot_price": 100,
@@ -105,8 +107,14 @@ class TestStrategyEndpointValidation:
         payload = {
             "symbol": "AAPL",
             "legs": [
-                {"strike": 100, "option_type": "call", "position": "neutral",
-                 "premium": 5.0, "iv": 0.25, "quantity": 1},
+                {
+                    "strike": 100,
+                    "option_type": "call",
+                    "position": "neutral",
+                    "premium": 5.0,
+                    "iv": 0.25,
+                    "quantity": 1,
+                },
             ],
             "expiration_date": "2026-12-31",
             "spot_price": 100,
@@ -119,8 +127,7 @@ class TestStrategyEndpointValidation:
         payload = {
             "symbol": "AAPL",
             "legs": [
-                {"strike": -10, "option_type": "call", "position": "long",
-                 "premium": 5.0, "iv": 0.25, "quantity": 1},
+                {"strike": -10, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
             ],
             "expiration_date": "2026-12-31",
             "spot_price": 100,
@@ -133,8 +140,7 @@ class TestStrategyEndpointValidation:
         payload = {
             "symbol": "AAPL",
             "legs": [
-                {"strike": 100, "option_type": "call", "position": "long",
-                 "premium": 5.0, "iv": 0.25, "quantity": 1},
+                {"strike": 100, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
             ],
             "expiration_date": "2026-12-31",
             "spot_price": 0,
@@ -146,8 +152,7 @@ class TestStrategyEndpointValidation:
     async def test_missing_symbol_returns_422(self, client: AsyncClient):
         payload = {
             "legs": [
-                {"strike": 100, "option_type": "call", "position": "long",
-                 "premium": 5.0, "iv": 0.25, "quantity": 1},
+                {"strike": 100, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
             ],
             "expiration_date": "2026-12-31",
             "spot_price": 100,
@@ -160,8 +165,7 @@ class TestStrategyEndpointValidation:
         payload = {
             "symbol": "AAPL",
             "legs": [
-                {"strike": 100, "option_type": "call", "position": "long",
-                 "premium": 5.0, "iv": 0.25, "quantity": 1},
+                {"strike": 100, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
             ],
             "expiration_date": "2026-12-31",
             "spot_price": 100,

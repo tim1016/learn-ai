@@ -1,10 +1,11 @@
 """Validation service: compare pandas-ta generated data against TradingView CSV exports."""
+
 from __future__ import annotations
 
 import io
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import pandas as pd
 
@@ -43,10 +44,13 @@ def generate_validation_report(
     else:
         # Positional alignment
         min_len = min(len(our_df), len(tv_df))
-        merged = pd.concat([
-            our_df.head(min_len).add_suffix("_ours"),
-            tv_df.head(min_len).add_suffix("_tv"),
-        ], axis=1)
+        merged = pd.concat(
+            [
+                our_df.head(min_len).add_suffix("_ours"),
+                tv_df.head(min_len).add_suffix("_tv"),
+            ],
+            axis=1,
+        )
         align_method = "positional"
 
     matched_rows = len(merged)
@@ -57,8 +61,8 @@ def generate_validation_report(
     common_fields = _find_common_fields(our_ind_cols, tv_ind_cols, merged.columns.tolist())
 
     # Per-field analysis
-    field_reports: List[Dict[str, Any]] = []
-    all_divergence_points: List[Dict[str, Any]] = []
+    field_reports: list[dict[str, Any]] = []
+    all_divergence_points: list[dict[str, Any]] = []
 
     for our_col, tv_col, display_name in common_fields:
         if our_col not in merged.columns or tv_col not in merged.columns:
@@ -71,12 +75,14 @@ def generate_validation_report(
         valid_count = int(both_valid.sum())
 
         if valid_count == 0:
-            field_reports.append({
-                "field": display_name,
-                "valid_pairs": 0,
-                "our_nans": int(our_vals.isna().sum()),
-                "tv_nans": int(tv_vals.isna().sum()),
-            })
+            field_reports.append(
+                {
+                    "field": display_name,
+                    "valid_pairs": 0,
+                    "our_nans": int(our_vals.isna().sum()),
+                    "tv_nans": int(tv_vals.isna().sum()),
+                }
+            )
             continue
 
         diff = (our_vals[both_valid] - tv_vals[both_valid]).abs()
@@ -96,35 +102,39 @@ def generate_validation_report(
         top_idx = pct_diff.nlargest(5).index
         for idx in top_idx:
             ts_col = "unix_ts" if "unix_ts" in merged.columns else "unix_ts_ours"
-            ts_val = merged.loc[idx, ts_col] if ts_col in merged.columns else idx
+            merged.loc[idx, ts_col] if ts_col in merged.columns else idx
             iso_col = "iso_time" if "iso_time" in merged.columns else "iso_time_ours"
             iso_val = merged.loc[idx, iso_col] if iso_col in merged.columns else ""
 
-            all_divergence_points.append({
-                "field": display_name,
-                "timestamp": str(iso_val),
-                "our_value": float(our_vals.loc[idx]) if pd.notna(our_vals.loc[idx]) else None,
-                "tv_value": float(tv_vals.loc[idx]) if pd.notna(tv_vals.loc[idx]) else None,
-                "abs_diff": float(diff.loc[idx]),
-                "pct_diff": float(pct_diff.loc[idx]),
-            })
+            all_divergence_points.append(
+                {
+                    "field": display_name,
+                    "timestamp": str(iso_val),
+                    "our_value": float(our_vals.loc[idx]) if pd.notna(our_vals.loc[idx]) else None,
+                    "tv_value": float(tv_vals.loc[idx]) if pd.notna(tv_vals.loc[idx]) else None,
+                    "abs_diff": float(diff.loc[idx]),
+                    "pct_diff": float(pct_diff.loc[idx]),
+                }
+            )
 
-        field_reports.append({
-            "field": display_name,
-            "valid_pairs": valid_count,
-            "our_nans": int(our_vals.isna().sum()),
-            "tv_nans": int(tv_vals.isna().sum()),
-            "exact": exact_count,
-            "close": close_count,
-            "ok": ok_count,
-            "divergent": bad_count,
-            "exact_pct": round(exact_count / valid_count * 100, 2),
-            "close_pct": round((exact_count + close_count) / valid_count * 100, 2),
-            "mean_abs_diff": mean_abs_diff,
-            "max_abs_diff": max_abs_diff,
-            "mean_pct_diff": mean_pct_diff,
-            "max_pct_diff": max_pct_diff,
-        })
+        field_reports.append(
+            {
+                "field": display_name,
+                "valid_pairs": valid_count,
+                "our_nans": int(our_vals.isna().sum()),
+                "tv_nans": int(tv_vals.isna().sum()),
+                "exact": exact_count,
+                "close": close_count,
+                "ok": ok_count,
+                "divergent": bad_count,
+                "exact_pct": round(exact_count / valid_count * 100, 2),
+                "close_pct": round((exact_count + close_count) / valid_count * 100, 2),
+                "mean_abs_diff": mean_abs_diff,
+                "max_abs_diff": max_abs_diff,
+                "mean_pct_diff": mean_pct_diff,
+                "max_pct_diff": max_pct_diff,
+            }
+        )
 
     # Sort divergence points by pct_diff descending
     all_divergence_points.sort(key=lambda x: x["pct_diff"], reverse=True)
@@ -147,10 +157,10 @@ def generate_validation_report(
 
 
 def _find_common_fields(
-    our_cols: List[str],
-    tv_cols: List[str],
-    merged_cols: List[str],
-) -> List[Tuple[str, str, str]]:
+    our_cols: list[str],
+    tv_cols: list[str],
+    merged_cols: list[str],
+) -> list[tuple[str, str, str]]:
     """Find matching field pairs between our data and TradingView data."""
     pairs = []
 
@@ -186,34 +196,34 @@ def _build_markdown(
     tv_total: int,
     matched_rows: int,
     align_method: str,
-    field_reports: List[Dict[str, Any]],
-    top_divergences: List[Dict[str, Any]],
-    our_cols: List[str],
-    tv_cols: List[str],
+    field_reports: list[dict[str, Any]],
+    top_divergences: list[dict[str, Any]],
+    our_cols: list[str],
+    tv_cols: list[str],
 ) -> str:
     """Build the full markdown validation report."""
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
     lines = [
         f"# Validation Report — {ticker}",
-        f"",
+        "",
         f"**Generated:** {now}  ",
-        f"**Comparison:** pandas-ta (Polygon.io) vs TradingView CSV export  ",
+        "**Comparison:** pandas-ta (Polygon.io) vs TradingView CSV export  ",
         f"**Alignment:** {align_method}  ",
-        f"",
-        f"---",
-        f"",
-        f"## 1. Row Alignment Summary",
-        f"",
-        f"| Metric | Value |",
-        f"|--------|-------|",
+        "",
+        "---",
+        "",
+        "## 1. Row Alignment Summary",
+        "",
+        "| Metric | Value |",
+        "|--------|-------|",
         f"| pandas-ta rows | {our_total:,} |",
         f"| TradingView rows | {tv_total:,} |",
         f"| Matched (aligned) rows | {matched_rows:,} |",
         f"| Unmatched pandas-ta rows | {our_total - matched_rows:,} |",
         f"| Unmatched TradingView rows | {tv_total - matched_rows:,} |",
         f"| Match rate | {matched_rows / max(our_total, 1) * 100:.1f}% |",
-        f"",
+        "",
     ]
 
     # Overall grade
@@ -231,26 +241,26 @@ def _build_markdown(
         overall_ok_pct = 0
 
     lines += [
-        f"## 2. Overall Accuracy",
-        f"",
-        f"| Classification | Count | Percentage |",
-        f"|---------------|------:|----------:|",
-        f"| Exact match (< {_EXACT}%) | {total_exact:,} | {total_exact / max(total_valid,1) * 100:.2f}% |",
-        f"| Close match (< {_CLOSE}%) | {total_close:,} | {total_close / max(total_valid,1) * 100:.2f}% |",
-        f"| Acceptable (< {_OK}%) | {total_ok:,} | {total_ok / max(total_valid,1) * 100:.2f}% |",
-        f"| **Divergent (≥ {_OK}%)** | **{total_bad:,}** | **{total_bad / max(total_valid,1) * 100:.2f}%** |",
+        "## 2. Overall Accuracy",
+        "",
+        "| Classification | Count | Percentage |",
+        "|---------------|------:|----------:|",
+        f"| Exact match (< {_EXACT}%) | {total_exact:,} | {total_exact / max(total_valid, 1) * 100:.2f}% |",
+        f"| Close match (< {_CLOSE}%) | {total_close:,} | {total_close / max(total_valid, 1) * 100:.2f}% |",
+        f"| Acceptable (< {_OK}%) | {total_ok:,} | {total_ok / max(total_valid, 1) * 100:.2f}% |",
+        f"| **Divergent (≥ {_OK}%)** | **{total_bad:,}** | **{total_bad / max(total_valid, 1) * 100:.2f}%** |",
         f"| **Total compared** | **{total_valid:,}** | |",
-        f"",
+        "",
         f"> **Overall grade:** {_grade(overall_exact_pct, overall_ok_pct)}",
-        f"",
+        "",
     ]
 
     # Per-field table
     lines += [
-        f"## 3. Per-Field Accuracy",
-        f"",
-        f"| Field | Pairs | Exact | Close | OK | Divergent | Mean %Diff | Max %Diff | Max |Diff| |",
-        f"|-------|------:|------:|------:|---:|----------:|-----------:|----------:|----------:|",
+        "## 3. Per-Field Accuracy",
+        "",
+        "| Field | Pairs | Exact | Close | OK | Divergent | Mean %Diff | Max %Diff | Max |Diff| |",
+        "|-------|------:|------:|------:|---:|----------:|-----------:|----------:|----------:|",
     ]
 
     for r in sorted(field_reports, key=lambda x: x.get("max_pct_diff", 0), reverse=True):
@@ -274,12 +284,12 @@ def _build_markdown(
     # Top divergence hotspots
     if top_divergences:
         lines += [
-            f"## 4. Top Divergence Hotspots",
-            f"",
-            f"These are the individual data points with the largest percentage difference.",
-            f"",
-            f"| # | Field | Timestamp | pandas-ta | TradingView | |Diff| | %Diff |",
-            f"|--:|-------|-----------|----------:|------------:|------:|------:|",
+            "## 4. Top Divergence Hotspots",
+            "",
+            "These are the individual data points with the largest percentage difference.",
+            "",
+            "| # | Field | Timestamp | pandas-ta | TradingView | |Diff| | %Diff |",
+            "|--:|-------|-----------|----------:|------------:|------:|------:|",
         ]
         for i, d in enumerate(top_divergences, 1):
             our_v = f"{d['our_value']:.4f}" if d["our_value"] is not None else "NaN"
@@ -291,25 +301,25 @@ def _build_markdown(
 
     # Known behaviors
     lines += [
-        f"## 5. Known Divergence Causes",
-        f"",
-        f"| Cause | Impact | Explanation |",
-        f"|-------|--------|-------------|",
-        f"| **Polygon 07:00 ET bar contamination** | High | Late settlement trades inflate close by $4-6 at 07:00-07:02 ET. TradingView filters these. Poisons all downstream EMAs — longer periods recover more slowly. |",
-        f"| **Data feed difference** | Medium | Polygon uses consolidated tape; TradingView uses Cboe BZX composite. Close prices may differ by $0.01+. |",
-        f"| **Missing minute bars** | Medium | Polygon doesn't return zero-trade minutes. Forward-fill option mitigates this for indicator continuity. |",
-        f"| **Session mismatch** | High | If TradingView chart is RTH-only but data includes extended hours, bars won't align. Use session='rth' to match. |",
-        f"| **Supertrend split bands** | Expected | `supertl` is NaN during downtrends, `superts` during uptrends — by design. Compare `supert` (main line) and `supertd` (direction) instead. |",
-        f"| **VWAP definition** | Expected | Polygon VWAP is daily rolling (not per-bar) — routinely outside single bar's H/L range. |",
-        f"",
-        f"## 6. Columns in Each Dataset",
-        f"",
+        "## 5. Known Divergence Causes",
+        "",
+        "| Cause | Impact | Explanation |",
+        "|-------|--------|-------------|",
+        "| **Polygon 07:00 ET bar contamination** | High | Late settlement trades inflate close by $4-6 at 07:00-07:02 ET. TradingView filters these. Poisons all downstream EMAs — longer periods recover more slowly. |",
+        "| **Data feed difference** | Medium | Polygon uses consolidated tape; TradingView uses Cboe BZX composite. Close prices may differ by $0.01+. |",
+        "| **Missing minute bars** | Medium | Polygon doesn't return zero-trade minutes. Forward-fill option mitigates this for indicator continuity. |",
+        "| **Session mismatch** | High | If TradingView chart is RTH-only but data includes extended hours, bars won't align. Use session='rth' to match. |",
+        "| **Supertrend split bands** | Expected | `supertl` is NaN during downtrends, `superts` during uptrends — by design. Compare `supert` (main line) and `supertd` (direction) instead. |",
+        "| **VWAP definition** | Expected | Polygon VWAP is daily rolling (not per-bar) — routinely outside single bar's H/L range. |",
+        "",
+        "## 6. Columns in Each Dataset",
+        "",
         f"**pandas-ta indicators ({len(our_cols)}):** {', '.join(our_cols[:30])}{'...' if len(our_cols) > 30 else ''}  ",
         f"**TradingView indicators ({len(tv_cols)}):** {', '.join(tv_cols[:30])}{'...' if len(tv_cols) > 30 else ''}  ",
-        f"",
-        f"---",
-        f"",
-        f"*Report generated by Data Lab validation engine. Calculation library: pandas-ta.*",
+        "",
+        "---",
+        "",
+        "*Report generated by Data Lab validation engine. Calculation library: pandas-ta.*",
     ]
 
     return "\n".join(lines)

@@ -3,6 +3,7 @@
 Endpoints for running feature validation experiments and retrieving
 documentation metadata for the Angular information panel.
 """
+
 from __future__ import annotations
 
 import logging
@@ -42,13 +43,13 @@ from app.models.research_models import (
     WalkForwardResultResponse,
     WalkForwardWindowResponse,
 )
+from app.research.batch_runner import run_cross_sectional_study
 from app.research.config import ResearchConfig
 from app.research.documentation.formulas import get_all_documentation
 from app.research.features.registry import get_feature_metadata, list_available_features
 from app.research.options.diagnostics import run_iv_diagnostics
 from app.research.options.iv_builder import build_iv_history
 from app.research.options_runner import run_options_feature_research
-from app.research.batch_runner import run_cross_sectional_study
 from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
@@ -110,7 +111,8 @@ async def run_feature_research_endpoint(
                 sign_consistent_stability_label=rob.sign_consistent_stability_label,
                 rolling_t_stat=[
                     RollingTStatPointResponse(
-                        month=r.month, t_stat_smoothed=r.t_stat_smoothed,
+                        month=r.month,
+                        t_stat_smoothed=r.t_stat_smoothed,
                     )
                     for r in rob.rolling_t_stat
                 ],
@@ -146,7 +148,9 @@ async def run_feature_research_endpoint(
                     overfit_flag=rob.train_test.overfit_flag,
                     oos_retention=rob.train_test.oos_retention,
                     oos_retention_label=rob.train_test.oos_retention_label,
-                ) if rob.train_test else None,
+                )
+                if rob.train_test
+                else None,
                 structural_breaks=[
                     StructuralBreakPointResponse(
                         date=b.date,
@@ -176,9 +180,7 @@ async def run_feature_research_endpoint(
             kpss_pvalue=report.kpss_pvalue,
             is_stationary=report.is_stationary,
             passed_validation=report.passed_validation,
-            quantile_bins=[
-                QuantileBinResponse(**bin_dict) for bin_dict in report.quantile_bins
-            ],
+            quantile_bins=[QuantileBinResponse(**bin_dict) for bin_dict in report.quantile_bins],
             is_monotonic=report.is_monotonic,
             monotonicity_ratio=report.monotonicity_ratio,
             ic_values=report.ic_values,
@@ -296,7 +298,9 @@ async def run_signal_engine_endpoint(
                     t_stat=wf.alpha_decay.t_stat,
                     p_value=wf.alpha_decay.p_value,
                     r_squared=wf.alpha_decay.r_squared,
-                ) if wf.alpha_decay else None,
+                )
+                if wf.alpha_decay
+                else None,
             )
 
         # Map graduation
@@ -324,7 +328,9 @@ async def run_signal_engine_endpoint(
                     sharpe_values_by_threshold=g.parameter_stability.sharpe_values_by_threshold,
                     stability_score=g.parameter_stability.stability_score,
                     stability_label=g.parameter_stability.stability_label,
-                ) if g.parameter_stability else None,
+                )
+                if g.parameter_stability
+                else None,
             )
 
         # Map diagnostics
@@ -573,8 +579,10 @@ async def run_options_feature_endpoint(
             robustness_response = RobustnessResponse(
                 monthly_breakdown=[
                     MonthlyICBreakdownResponse(
-                        month=m.month, mean_ic=m.mean_ic,
-                        t_stat=m.t_stat, observation_count=m.observation_count,
+                        month=m.month,
+                        mean_ic=m.mean_ic,
+                        t_stat=m.t_stat,
+                        observation_count=m.observation_count,
                     )
                     for m in rob.monthly_breakdown
                 ],
@@ -587,21 +595,26 @@ async def run_options_feature_endpoint(
                 sign_consistent_stability_label=rob.sign_consistent_stability_label,
                 rolling_t_stat=[
                     RollingTStatPointResponse(
-                        month=r.month, t_stat_smoothed=r.t_stat_smoothed,
+                        month=r.month,
+                        t_stat_smoothed=r.t_stat_smoothed,
                     )
                     for r in rob.rolling_t_stat
                 ],
                 volatility_regimes=[
                     RegimeICResponse(
-                        regime_label=r.regime_label, mean_ic=r.mean_ic,
-                        t_stat=r.t_stat, observation_count=r.observation_count,
+                        regime_label=r.regime_label,
+                        mean_ic=r.mean_ic,
+                        t_stat=r.t_stat,
+                        observation_count=r.observation_count,
                     )
                     for r in rob.volatility_regimes
                 ],
                 trend_regimes=[
                     RegimeICResponse(
-                        regime_label=r.regime_label, mean_ic=r.mean_ic,
-                        t_stat=r.t_stat, observation_count=r.observation_count,
+                        regime_label=r.regime_label,
+                        mean_ic=r.mean_ic,
+                        t_stat=r.t_stat,
+                        observation_count=r.observation_count,
                     )
                     for r in rob.trend_regimes
                 ],
@@ -619,11 +632,15 @@ async def run_options_feature_endpoint(
                     overfit_flag=rob.train_test.overfit_flag,
                     oos_retention=rob.train_test.oos_retention,
                     oos_retention_label=rob.train_test.oos_retention_label,
-                ) if rob.train_test else None,
+                )
+                if rob.train_test
+                else None,
                 structural_breaks=[
                     StructuralBreakPointResponse(
-                        date=b.date, ic_before=b.ic_before,
-                        ic_after=b.ic_after, t_stat=b.t_stat,
+                        date=b.date,
+                        ic_before=b.ic_before,
+                        ic_after=b.ic_after,
+                        t_stat=b.t_stat,
                         significant=b.significant,
                     )
                     for b in rob.structural_breaks
@@ -647,9 +664,7 @@ async def run_options_feature_endpoint(
             kpss_pvalue=report.kpss_pvalue,
             is_stationary=report.is_stationary,
             passed_validation=report.passed_validation,
-            quantile_bins=[
-                QuantileBinResponse(**bin_dict) for bin_dict in report.quantile_bins
-            ],
+            quantile_bins=[QuantileBinResponse(**bin_dict) for bin_dict in report.quantile_bins],
             is_monotonic=report.is_monotonic,
             monotonicity_ratio=report.monotonicity_ratio,
             ic_values=report.ic_values,

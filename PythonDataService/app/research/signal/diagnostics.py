@@ -1,4 +1,5 @@
 """Signal diagnostics, data sufficiency, and effective sample size."""
+
 from __future__ import annotations
 
 import math
@@ -168,7 +169,7 @@ def compute_effective_sample_size(returns: pd.Series) -> EffectiveSampleSize:
         raw_n=n,
         effective_n=n_eff,
         autocorrelation_lag1=rho1,
-        independent_bets=int(math.floor(n_eff)),
+        independent_bets=math.floor(n_eff),
         max_lag_used=last_lag_used,
         rho_sum=rho_sum,
     )

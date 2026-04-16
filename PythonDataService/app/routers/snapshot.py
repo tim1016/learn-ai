@@ -1,33 +1,35 @@
 """API endpoints for snapshots (options chain + stock snapshots)"""
-from fastapi import APIRouter, HTTPException, status
+
 import logging
 
-from app.services.polygon_client import PolygonClientService
+from fastapi import APIRouter, HTTPException, status
+
 from app.models.requests import (
+    MarketMoversRequest,
     OptionsChainSnapshotRequest,
     StockSnapshotRequest,
     StockSnapshotsRequest,
-    MarketMoversRequest,
     UnifiedSnapshotRequest,
 )
 from app.models.responses import (
+    DaySnapshot,
+    GreeksSnapshot,
+    LastQuoteSnapshot,
+    LastTradeSnapshot,
+    MarketMoversResponse,
+    MinuteBar,
     OptionsChainSnapshotResponse,
     OptionsContractSnapshotItem,
-    UnderlyingSnapshot,
-    GreeksSnapshot,
-    DaySnapshot,
-    LastTradeSnapshot,
-    LastQuoteSnapshot,
+    SnapshotBar,
     StockSnapshotResponse,
     StockSnapshotsResponse,
     StockTickerSnapshot,
-    SnapshotBar,
-    MinuteBar,
-    MarketMoversResponse,
-    UnifiedSnapshotResponse,
+    UnderlyingSnapshot,
     UnifiedSnapshotItem,
+    UnifiedSnapshotResponse,
     UnifiedSnapshotSession,
 )
+from app.services.polygon_client import PolygonClientService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -53,27 +55,29 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
             expiration_date=request.expiration_date,
         )
 
-        underlying = UnderlyingSnapshot(**result['underlying'])
+        underlying = UnderlyingSnapshot(**result["underlying"])
 
         contracts = []
-        for c in result['contracts']:
-            greeks = GreeksSnapshot(**c['greeks']) if c.get('greeks') else None
-            day = DaySnapshot(**c['day']) if c.get('day') else None
-            last_trade = LastTradeSnapshot(**c['last_trade']) if c.get('last_trade') else None
-            last_quote = LastQuoteSnapshot(**c['last_quote']) if c.get('last_quote') else None
-            contracts.append(OptionsContractSnapshotItem(
-                ticker=c.get('ticker'),
-                contract_type=c.get('contract_type'),
-                strike_price=c.get('strike_price'),
-                expiration_date=c.get('expiration_date'),
-                break_even_price=c.get('break_even_price'),
-                implied_volatility=c.get('implied_volatility'),
-                open_interest=c.get('open_interest'),
-                greeks=greeks,
-                day=day,
-                last_trade=last_trade,
-                last_quote=last_quote,
-            ))
+        for c in result["contracts"]:
+            greeks = GreeksSnapshot(**c["greeks"]) if c.get("greeks") else None
+            day = DaySnapshot(**c["day"]) if c.get("day") else None
+            last_trade = LastTradeSnapshot(**c["last_trade"]) if c.get("last_trade") else None
+            last_quote = LastQuoteSnapshot(**c["last_quote"]) if c.get("last_quote") else None
+            contracts.append(
+                OptionsContractSnapshotItem(
+                    ticker=c.get("ticker"),
+                    contract_type=c.get("contract_type"),
+                    strike_price=c.get("strike_price"),
+                    expiration_date=c.get("expiration_date"),
+                    break_even_price=c.get("break_even_price"),
+                    implied_volatility=c.get("implied_volatility"),
+                    open_interest=c.get("open_interest"),
+                    greeks=greeks,
+                    day=day,
+                    last_trade=last_trade,
+                    last_quote=last_quote,
+                )
+            )
 
         logger.info(f"[Snapshot] Returning {len(contracts)} contracts for {request.underlying_ticker}")
 
@@ -85,26 +89,25 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
         )
 
     except Exception as e:
-        logger.error(f"[Snapshot] Error fetching chain snapshot: {str(e)}", exc_info=True)
+        logger.error(f"[Snapshot] Error fetching chain snapshot: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch options chain snapshot: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch options chain snapshot: {e!s}"
         )
 
 
 def _build_ticker_snapshot(data: dict) -> StockTickerSnapshot:
     """Convert a raw polygon_client snapshot dict into a StockTickerSnapshot model."""
-    day = data.get('day')
-    prev_day = data.get('prev_day')
-    minute = data.get('min')
+    day = data.get("day")
+    prev_day = data.get("prev_day")
+    minute = data.get("min")
     return StockTickerSnapshot(
-        ticker=data.get('ticker'),
+        ticker=data.get("ticker"),
         day=SnapshotBar(**day) if day else None,
         prev_day=SnapshotBar(**prev_day) if prev_day else None,
         min=MinuteBar(**minute) if minute else None,
-        todays_change=data.get('todays_change'),
-        todays_change_percent=data.get('todays_change_percent'),
-        updated=data.get('updated'),
+        todays_change=data.get("todays_change"),
+        todays_change_percent=data.get("todays_change_percent"),
+        updated=data.get("updated"),
     )
 
 
@@ -121,10 +124,9 @@ async def get_stock_snapshot(request: StockSnapshotRequest):
         return StockSnapshotResponse(success=True, snapshot=snapshot)
 
     except Exception as e:
-        logger.error(f"[Snapshot] Error fetching ticker snapshot: {str(e)}", exc_info=True)
+        logger.error(f"[Snapshot] Error fetching ticker snapshot: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch stock snapshot: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch stock snapshot: {e!s}"
         )
 
 
@@ -142,10 +144,9 @@ async def get_stock_snapshots(request: StockSnapshotsRequest):
         return StockSnapshotsResponse(success=True, snapshots=snapshots, count=len(snapshots))
 
     except Exception as e:
-        logger.error(f"[Snapshot] Error fetching market snapshots: {str(e)}", exc_info=True)
+        logger.error(f"[Snapshot] Error fetching market snapshots: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch market snapshots: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch market snapshots: {e!s}"
         )
 
 
@@ -162,10 +163,9 @@ async def get_market_movers(request: MarketMoversRequest):
         return MarketMoversResponse(success=True, tickers=tickers, count=len(tickers))
 
     except Exception as e:
-        logger.error(f"[Snapshot] Error fetching market movers: {str(e)}", exc_info=True)
+        logger.error(f"[Snapshot] Error fetching market movers: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch market movers: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch market movers: {e!s}"
         )
 
 
@@ -182,21 +182,22 @@ async def get_unified_snapshots(request: UnifiedSnapshotRequest):
 
         items = []
         for r in results:
-            session_data = r.get('session')
-            items.append(UnifiedSnapshotItem(
-                ticker=r.get('ticker'),
-                type=r.get('type'),
-                market_status=r.get('market_status'),
-                name=r.get('name'),
-                session=UnifiedSnapshotSession(**session_data) if session_data else None,
-            ))
+            session_data = r.get("session")
+            items.append(
+                UnifiedSnapshotItem(
+                    ticker=r.get("ticker"),
+                    type=r.get("type"),
+                    market_status=r.get("market_status"),
+                    name=r.get("name"),
+                    session=UnifiedSnapshotSession(**session_data) if session_data else None,
+                )
+            )
 
         logger.info(f"[Snapshot] Returning {len(items)} unified snapshots")
         return UnifiedSnapshotResponse(success=True, results=items, count=len(items))
 
     except Exception as e:
-        logger.error(f"[Snapshot] Error fetching unified snapshots: {str(e)}", exc_info=True)
+        logger.error(f"[Snapshot] Error fetching unified snapshots: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch unified snapshots: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch unified snapshots: {e!s}"
         )

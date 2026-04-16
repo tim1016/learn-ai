@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 from scipy.optimize import brentq
@@ -34,11 +33,11 @@ class SkewMetrics:
     ttm: float
     dte_days: int
     atm_iv: float
-    rr_25d: Optional[float]
-    bf_25d: Optional[float]
+    rr_25d: float | None
+    bf_25d: float | None
     skew_slope: float
-    call_25d: Optional[DeltaStrikeResult]
-    put_25d: Optional[DeltaStrikeResult]
+    call_25d: DeltaStrikeResult | None
+    put_25d: DeltaStrikeResult | None
 
 
 @dataclass
@@ -70,10 +69,7 @@ def _bs_delta(
     if ttm <= 0 or iv <= 0:
         return float("nan")
 
-    d1 = (
-        math.log(spot / strike)
-        + (rate - dividend + 0.5 * iv * iv) * ttm
-    ) / (iv * math.sqrt(ttm))
+    d1 = (math.log(spot / strike) + (rate - dividend + 0.5 * iv * iv) * ttm) / (iv * math.sqrt(ttm))
 
     from scipy.stats import norm
 
@@ -92,7 +88,7 @@ def find_delta_strike(
     target_delta: float,
     is_call: bool,
     bracket_width: float = 0.5,
-) -> Optional[DeltaStrikeResult]:
+) -> DeltaStrikeResult | None:
     """
     Find strike K where bs_delta(S, K, T, r, σ(K)) = target_delta.
 
@@ -183,7 +179,7 @@ def compute_skew_metrics(
     Returns:
         SkewMetrics dataclass with ATM IV, 25D RR, 25D BF, and skew slope.
     """
-    dte_days = int(round(ttm * 365))
+    dte_days = round(ttm * 365)
     forward = surface.spot * math.exp((surface.rate - surface.dividend) * ttm)
 
     atm_iv = surface.volatility(forward, ttm)
@@ -293,14 +289,7 @@ def compute_health_score(surface) -> HealthScore:
     arbitrage_score -= 15 * total_calendar_violations
     arbitrage_score = max(0.0, arbitrage_score)
 
-    total_score = int(
-        round(
-            0.25 * convergence_score
-            + 0.25 * rmse_score
-            + 0.25 * rejection_score
-            + 0.25 * arbitrage_score
-        )
-    )
+    total_score = round(0.25 * convergence_score + 0.25 * rmse_score + 0.25 * rejection_score + 0.25 * arbitrage_score)
     total_score = max(0, min(100, total_score))
 
     return HealthScore(

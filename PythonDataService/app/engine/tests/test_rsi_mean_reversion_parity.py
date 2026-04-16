@@ -23,14 +23,15 @@ Run with::
     cd PythonDataService
     python -m app.engine.tests.test_rsi_mean_reversion_parity
 """
+
 from __future__ import annotations
 
 import math
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Iterator
 from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
@@ -68,9 +69,7 @@ def _generate_closes(num_bars: int) -> list[float]:
     return closes
 
 
-def _build_minute_bars(
-    closes: list[float], start: datetime
-) -> list[TradeBar]:
+def _build_minute_bars(closes: list[float], start: datetime) -> list[TradeBar]:
     """Place each synthetic close on a 15-minute boundary so the consolidator
     emits it as a completed bar on the next input. Same trick as the SMA
     parity test — see that file's comments for the full rationale."""
@@ -111,9 +110,7 @@ def _build_minute_bars(
 class _FakeDataReader:
     bars: list[TradeBar]
 
-    def iter_bars(
-        self, symbol: str, start: date, end: date
-    ) -> Iterator[TradeBar]:
+    def iter_bars(self, symbol: str, start: date, end: date) -> Iterator[TradeBar]:
         for b in self.bars:
             if start <= b.time.date() <= end:
                 yield b
@@ -252,9 +249,7 @@ def run_parity_test() -> None:
     new_results = [t.result for t in new_trades]
 
     # --- Reference implementation of the legacy rule -----------------------
-    ref_trades = _reference_rsi_mean_reversion(
-        closes, WINDOW, OVERSOLD, OVERBOUGHT
-    )
+    ref_trades = _reference_rsi_mean_reversion(closes, WINDOW, OVERSOLD, OVERBOUGHT)
     ref_results = [t.result for t in ref_trades]
 
     # --- Normalize: drop the reference's trailing auto-close trade if
@@ -281,9 +276,7 @@ def run_parity_test() -> None:
         sys.exit(1)
 
     if len(new_results) < 2:
-        print(
-            f"FAIL: too few trades ({len(new_results)}) — test is vacuous"
-        )
+        print(f"FAIL: too few trades ({len(new_results)}) — test is vacuous")
         sys.exit(1)
 
     print(

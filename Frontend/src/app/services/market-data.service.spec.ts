@@ -43,6 +43,7 @@ describe('MarketDataService', () => {
         timespan: 'hour',
         multiplier: 4,
         forceRefresh: false,
+        adjusted: true,
       });
       req.flush({ data: { getOrFetchStockAggregates: { ticker: 'MSFT', aggregates: [], summary: null } } });
     });
@@ -95,6 +96,7 @@ describe('MarketDataService', () => {
         timespan: 'minute',
         multiplier: 1,
         parametersJson: '{}',
+        filterRth: true,
       });
       req.flush({
         data: {

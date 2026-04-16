@@ -129,9 +129,14 @@ public class QueryTests
         context.StockAggregates.Add(new StockAggregate
         {
             TickerId = ticker.Id,
-            Open = 150m, High = 155m, Low = 148m, Close = 153m, Volume = 1_000_000m,
+            Open = 150m,
+            High = 155m,
+            Low = 148m,
+            Close = 153m,
+            Volume = 1_000_000m,
             Timestamp = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc),
-            Timespan = "day", Multiplier = 1,
+            Timespan = "day",
+            Multiplier = 1,
         });
         await context.SaveChangesAsync();
 
@@ -320,9 +325,15 @@ public class QueryTests
 
         context.StockAggregates.Add(new StockAggregate
         {
-            TickerId = ticker.Id, Open = 150m, High = 155m, Low = 148m, Close = 153m,
-            Volume = 1_000_000m, Timestamp = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc),
-            Timespan = "day", Multiplier = 1,
+            TickerId = ticker.Id,
+            Open = 150m,
+            High = 155m,
+            Low = 148m,
+            Close = 153m,
+            Volume = 1_000_000m,
+            Timestamp = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc),
+            Timespan = "day",
+            Multiplier = 1,
         });
         await context.SaveChangesAsync();
 
@@ -358,9 +369,15 @@ public class QueryTests
 
         context.StockAggregates.Add(new StockAggregate
         {
-            TickerId = ticker.Id, Open = 150m, High = 155m, Low = 148m, Close = 153m,
-            Volume = 1_000_000m, Timestamp = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc),
-            Timespan = "day", Multiplier = 1,
+            TickerId = ticker.Id,
+            Open = 150m,
+            High = 155m,
+            Low = 148m,
+            Close = 153m,
+            Volume = 1_000_000m,
+            Timestamp = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc),
+            Timespan = "day",
+            Multiplier = 1,
         });
         await context.SaveChangesAsync();
 

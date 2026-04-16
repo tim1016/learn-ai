@@ -1,12 +1,14 @@
 """API endpoints for data quality analysis: cleanup pipeline with before/after reporting"""
+
 from __future__ import annotations
+
+import io
+import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-import io
-import logging
-from typing import Any, Dict, List, Optional
 
 from app.services.data_quality_service import analyze, get_cached_csv, get_pipeline_docs
 from app.services.polygon_client import PolygonClientService
@@ -18,12 +20,13 @@ polygon_client = PolygonClientService()
 
 class DataQualityRequest(BaseModel):
     """Request schema for data quality analysis"""
+
     ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")
     from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
     to_date: str = Field(..., description="End date (YYYY-MM-DD)")
     volume_fix: str = Field("round", description="How to fix fractional volume: 'round', 'drop', or 'nullify'")
     recompute_indicators: bool = Field(True, description="Whether to recompute indicators from scratch")
-    indicator_entries: List[Dict[str, Any]] = Field(
+    indicator_entries: list[dict[str, Any]] = Field(
         default=[],
         description="List of indicator entries, each with 'name' and optional 'params' dict",
     )

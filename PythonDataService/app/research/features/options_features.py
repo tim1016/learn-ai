@@ -116,8 +116,7 @@ class OptionsFeatures:
                 raise ValueError("VRP requires stock_data (daily OHLCV)")
             if mode == "research":
                 raise ValueError(
-                    "vrp_5 uses trailing RV only. Use vrp_5_forward for research mode "
-                    "with forward-looking RV."
+                    "vrp_5 uses trailing RV only. Use vrp_5_forward for research mode with forward-looking RV."
                 )
             return OptionsFeatures.compute_vrp(iv_data, stock_data, mode="signal")
         elif feature_name == "vrp_5_forward":
@@ -125,8 +124,7 @@ class OptionsFeatures:
                 raise ValueError("VRP requires stock_data (daily OHLCV)")
             if mode == "signal":
                 raise ValueError(
-                    "vrp_5_forward uses forward-looking RV and must NOT be used in signal mode. "
-                    "Use vrp_5 instead."
+                    "vrp_5_forward uses forward-looking RV and must NOT be used in signal mode. Use vrp_5 instead."
                 )
             return OptionsFeatures.compute_vrp(iv_data, stock_data, mode="research")
         else:

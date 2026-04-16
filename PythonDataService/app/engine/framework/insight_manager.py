@@ -10,12 +10,12 @@ The InsightManager is the central hub for insight lifecycle management:
 The manager is attached to ``StrategyContext`` so strategies can emit
 insights through ``ctx.emit_insight()``.
 """
+
 from __future__ import annotations
 
-import math
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 
 from app.engine.framework.insight import Insight, InsightDirection
@@ -127,19 +127,14 @@ class InsightManager:
         return newly_scored
 
     def get_active_insights(
-        self, utc_time: datetime, symbol: str | None = None,
+        self,
+        utc_time: datetime,
+        symbol: str | None = None,
     ) -> list[Insight]:
         """Return insights whose prediction period has not yet elapsed."""
         if symbol:
-            return [
-                i for i in self._insights_by_symbol.get(symbol, [])
-                if i.is_active(utc_time)
-            ]
-        return [
-            i for ilist in self._insights_by_symbol.values()
-            for i in ilist
-            if i.is_active(utc_time)
-        ]
+            return [i for i in self._insights_by_symbol.get(symbol, []) if i.is_active(utc_time)]
+        return [i for ilist in self._insights_by_symbol.values() for i in ilist if i.is_active(utc_time)]
 
     def get_scored_insights(self) -> list[Insight]:
         """Return all insights that have been scored (finalized)."""
@@ -164,20 +159,15 @@ class InsightManager:
 
         # ── Average magnitude score ──
         mag_scores = [i.score.magnitude for i in scored if i.magnitude is not None]
-        summary.avg_magnitude_score = (
-            sum(mag_scores) / len(mag_scores) if mag_scores else 0.0
-        )
+        summary.avg_magnitude_score = sum(mag_scores) / len(mag_scores) if mag_scores else 0.0
 
         # ── Average confidence emitted ──
         confidences = [i.confidence for i in scored if i.confidence is not None]
-        summary.avg_confidence_emitted = (
-            sum(confidences) / len(confidences) if confidences else 0.0
-        )
+        summary.avg_confidence_emitted = sum(confidences) / len(confidences) if confidences else 0.0
 
         # ── Confidence calibration (buckets of 0.1) ──
         buckets: list[ConfidenceBucket] = [
-            ConfidenceBucket(bucket_low=i / 10, bucket_high=(i + 1) / 10)
-            for i in range(10)
+            ConfidenceBucket(bucket_low=i / 10, bucket_high=(i + 1) / 10) for i in range(10)
         ]
         for insight in scored:
             if insight.confidence is not None:
@@ -197,10 +187,8 @@ class InsightManager:
             hour_stats[hour]["count"] += 1
             if insight.score.direction > 0.5:
                 hour_stats[hour]["correct"] += 1
-        for hour, stats in hour_stats.items():
-            stats["accuracy"] = round(
-                stats["correct"] / stats["count"] if stats["count"] > 0 else 0.0, 4
-            )
+        for _hour, stats in hour_stats.items():
+            stats["accuracy"] = round(stats["correct"] / stats["count"] if stats["count"] > 0 else 0.0, 4)
         summary.accuracy_by_hour = dict(sorted(hour_stats.items()))
 
         # ── Accuracy by quarter ──
@@ -212,10 +200,8 @@ class InsightManager:
             quarter_stats[q]["count"] += 1
             if insight.score.direction > 0.5:
                 quarter_stats[q]["correct"] += 1
-        for q, stats in quarter_stats.items():
-            stats["accuracy"] = round(
-                stats["correct"] / stats["count"] if stats["count"] > 0 else 0.0, 4
-            )
+        for _q, stats in quarter_stats.items():
+            stats["accuracy"] = round(stats["correct"] / stats["count"] if stats["count"] > 0 else 0.0, 4)
         summary.accuracy_by_quarter = dict(sorted(quarter_stats.items()))
 
         # ── Magnitude bias (avg predicted - actual) ──
@@ -223,8 +209,7 @@ class InsightManager:
         for insight in scored:
             if insight.magnitude is not None and insight.reference_value != 0:
                 actual_return = float(
-                    (insight.reference_value_final - insight.reference_value)
-                    / insight.reference_value
+                    (insight.reference_value_final - insight.reference_value) / insight.reference_value
                 )
                 # Compare predicted direction-adjusted magnitude vs actual
                 predicted_signed = (

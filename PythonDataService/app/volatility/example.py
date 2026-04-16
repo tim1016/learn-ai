@@ -13,12 +13,9 @@ Run:
 from __future__ import annotations
 
 import math
-import sys
 
 import numpy as np
-import pandas as pd
 
-from app.volatility.solver import implied_volatility
 from app.volatility.surface import SurfaceMethod, VolSurfaceBuilder
 
 
@@ -52,13 +49,11 @@ def generate_synthetic_chain(
         for k in strikes:
             # Synthetic vol with skew: vol = base + skew * log(K/F) / sqrt(T)
             log_m = math.log(k / forward)
-            vol = base_vol + skew * log_m + 0.02 * log_m ** 2  # skew + smile
+            vol = base_vol + skew * log_m + 0.02 * log_m**2  # skew + smile
             vol = max(vol, 0.05)
 
             # Price via BS
-            d1 = (math.log(spot / k) + (rate + 0.5 * vol ** 2) * ttm) / (
-                vol * math.sqrt(ttm)
-            )
+            d1 = (math.log(spot / k) + (rate + 0.5 * vol**2) * ttm) / (vol * math.sqrt(ttm))
             d2 = d1 - vol * math.sqrt(ttm)
 
             is_call = k >= forward  # OTM calls above forward
@@ -94,8 +89,7 @@ def main() -> None:
 
     # ── Generate data ────────────────────────────────────────────────────
     records = generate_synthetic_chain(spot=spot, rate=rate)
-    print(f"\nGenerated {len(records)} option records across "
-          f"{len(set(r['ttm'] for r in records))} expiries\n")
+    print(f"\nGenerated {len(records)} option records across {len(set(r['ttm'] for r in records))} expiries\n")
 
     # ── Build surfaces with all three methods ────────────────────────────
     builder = VolSurfaceBuilder(spot=spot, rate=rate, eval_date="2026-04-12")
@@ -118,19 +112,19 @@ def main() -> None:
                 print(f"    {k}: {v:.6f}" if isinstance(v, float) else f"    {k}: {v}")
 
         # Query at a few points
-        print(f"\n  Sample queries:")
+        print("\n  Sample queries:")
         for k in [90.0, 95.0, 100.0, 105.0, 110.0]:
             for t in [0.25, 0.5]:
                 try:
                     iv = surface.volatility(k, t)
-                    print(f"    K={k:6.1f}  T={t:.2f}  IV={iv:.4f}  ({iv*100:.1f}%)")
+                    print(f"    K={k:6.1f}  T={t:.2f}  IV={iv:.4f}  ({iv * 100:.1f}%)")
                 except (ValueError, RuntimeError) as e:
                     print(f"    K={k:6.1f}  T={t:.2f}  ERROR: {e}")
 
     # ── Plot (if matplotlib available) ───────────────────────────────────
     try:
         import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — required for 3D projection
 
         surface = builder.build(records, method=SurfaceMethod.SVI)
         df = surface.to_grid(strike_range=(85, 115), n_strikes=40)

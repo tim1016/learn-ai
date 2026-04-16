@@ -201,7 +201,7 @@ describe('PortfolioComponent', () => {
 
     const el = fixture.nativeElement as HTMLElement;
     const tabs = el.querySelectorAll('p-tab');
-    expect(tabs.length).toBe(7);
+    expect(tabs.length).toBe(9);
   });
 
   it('should show empty state when no accounts', () => {

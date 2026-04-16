@@ -4,6 +4,7 @@ Every LaTeX string, variable definition, worked example, and interpretation
 is stored here so the Angular UI can display them transparently.
 No black-box computations allowed.
 """
+
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
@@ -136,8 +137,7 @@ VALIDATION_DOCUMENTATION = {
             "sigma_IC": "Standard deviation of daily ICs",
         },
         "interpretation": (
-            "IC > 0.02 with |t| > 2 suggests meaningful predictive signal. "
-            "Most features will have IC near zero."
+            "IC > 0.02 with |t| > 2 suggests meaningful predictive signal. Most features will have IC near zero."
         ),
     },
     "adf_test": {
