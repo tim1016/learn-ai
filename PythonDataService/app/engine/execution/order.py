@@ -1,4 +1,5 @@
 """Order and OrderEvent types."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

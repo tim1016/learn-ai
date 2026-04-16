@@ -10,11 +10,11 @@ Critical reproducibility details:
 LEAN internally feeds the warmup samples to an embedded SMA and uses the
 SMA's ``Current.Value`` as the initial EMA. We replicate that behavior.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 from app.engine.indicators.base import Indicator
 from app.engine.indicators.sma import SimpleMovingAverage
@@ -28,9 +28,7 @@ class ExponentialMovingAverage(Indicator):
         self._one_minus_k: Decimal = Decimal(1) - self.k
         self._sma = SimpleMovingAverage(f"{name}_seed_sma", period)
 
-    def _compute_next_value(
-        self, time: datetime, value: Decimal
-    ) -> Optional[Decimal]:
+    def _compute_next_value(self, time: datetime, value: Decimal) -> Decimal | None:
         if self.samples <= self.period:
             # Warmup: feed the SMA. Until we reach the period sample, the
             # EMA value should simply be the current SMA (matches LEAN's

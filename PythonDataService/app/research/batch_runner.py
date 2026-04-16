@@ -3,6 +3,7 @@
 Tests the same feature across multiple tickers to determine
 if the effect is cross-sectionally consistent.
 """
+
 from __future__ import annotations
 
 import logging
@@ -52,7 +53,9 @@ def run_cross_sectional_study(
     for i, ticker in enumerate(tickers):
         logger.info(
             "[Batch] Processing ticker %d/%d: %s",
-            i + 1, len(tickers), ticker,
+            i + 1,
+            len(tickers),
+            ticker,
         )
 
         result: dict[str, Any] = {
@@ -137,7 +140,9 @@ def run_cross_sectional_study(
 
             logger.info(
                 "[Batch] %s: IC=%.4f, passed=%s",
-                ticker, research_report.mean_ic, research_report.passed_validation,
+                ticker,
+                research_report.mean_ic,
+                research_report.passed_validation,
             )
 
         except Exception as e:
@@ -150,10 +155,7 @@ def run_cross_sectional_study(
     report.ticker_results = ticker_results
     report.tickers_tested = len(tickers)
     report.tickers_passed = sum(1 for r in ticker_results if r["passed_validation"])
-    report.pass_rate = (
-        report.tickers_passed / report.tickers_tested
-        if report.tickers_tested > 0 else 0.0
-    )
+    report.pass_rate = report.tickers_passed / report.tickers_tested if report.tickers_tested > 0 else 0.0
     report.cross_sectional_consistent = report.pass_rate >= CROSS_SECTIONAL_THRESHOLD
     report.aggregate_ic = float(np.mean(ic_values)) if ic_values else 0.0
 

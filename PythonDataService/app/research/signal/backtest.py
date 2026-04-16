@@ -1,4 +1,5 @@
 """Backtesting engine: position sizing, cost modeling, performance metrics."""
+
 from __future__ import annotations
 
 import logging
@@ -130,7 +131,9 @@ def run_backtest_grid(
 
         for cost in cost_bps_options:
             bt = run_backtest(
-                signal, forward_returns, cost,
+                signal,
+                forward_returns,
+                cost,
                 bars_per_day=bars_per_day,
                 timestamps=timestamps,
                 include_series=False,
@@ -149,7 +152,9 @@ def run_backtest_grid(
         if regime_gate is not None:
             signal = signal * regime_gate
         best_bt = run_backtest(
-            signal, forward_returns, best_cost,
+            signal,
+            forward_returns,
+            best_cost,
             bars_per_day=bars_per_day,
             timestamps=timestamps,
             include_series=True,

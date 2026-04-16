@@ -1,9 +1,9 @@
 """Tests for Information Coefficient calculation."""
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from app.research.validation.ic import (
     _andrews_lag,
@@ -156,7 +156,7 @@ class TestNeweyWest:
         """Helpers should handle small arrays gracefully."""
         small = np.array([0.01, 0.02])
 
-        nw_t, nw_p = _compute_newey_west_t_stat(small)
+        _nw_t, _nw_p = _compute_newey_west_t_stat(small)
         effective = _compute_effective_sample_size(small)
 
         assert effective == 2.0  # Too small for correction
@@ -196,7 +196,7 @@ class TestAndrewsLag:
         ic = np.zeros(200)
         ic[0] = rng.normal(0.02, 0.05)
         for i in range(1, 200):
-            ic[i] = 0.5 * ic[i-1] + rng.normal(0.01, 0.03)
+            ic[i] = 0.5 * ic[i - 1] + rng.normal(0.01, 0.03)
 
         # With min_lag=5, effective N should be less than actual N
         eff = _compute_effective_sample_size(ic, min_lag=5)

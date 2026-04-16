@@ -1,13 +1,14 @@
 """Signal engine orchestrator — converts validated features into tradable signals."""
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
 
-import numpy as np
 import pandas as pd
 from scipy.stats import skew as scipy_skew
 
+from app.research.features.ta_features import TechnicalFeatures
 from app.research.signal.backtest import BacktestResult, run_backtest_grid
 from app.research.signal.config import SignalConfig
 from app.research.signal.diagnostics import (
@@ -22,8 +23,6 @@ from app.research.signal.graduation import GraduationResult, evaluate_graduation
 from app.research.signal.regime import compute_bar_regime_gate, compute_daily_regime_labels
 from app.research.signal.standardize import apply_threshold_filter, compute_train_zscore
 from app.research.signal.walk_forward import WalkForwardResult, run_walk_forward
-from app.research.features.ta_features import TechnicalFeatures
-from app.research.features.registry import OPTIONS_FEATURES
 from app.research.target import compute_15min_forward_return, validate_return_series
 
 logger = logging.getLogger(__name__)
@@ -92,14 +91,16 @@ def run_signal_engine(
     try:
         logger.info(
             "[Signal] Starting: %s %s [%s to %s] (%d bars)",
-            ticker, feature_name, start_date, end_date, len(bars),
+            ticker,
+            feature_name,
+            start_date,
+            end_date,
+            len(bars),
         )
 
         # Validate minimum data
         if len(bars) < config.min_bars_for_signal:
-            raise ValueError(
-                f"Not enough bars: {len(bars)} < {config.min_bars_for_signal} minimum"
-            )
+            raise ValueError(f"Not enough bars: {len(bars)} < {config.min_bars_for_signal} minimum")
 
         report.bars_used = len(bars)
         df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
@@ -129,7 +130,9 @@ def run_signal_engine(
             regime_gated_signal = threshold_signal * regime_gate
 
         report.signal_diagnostics = compute_signal_diagnostics(
-            z_scores, threshold_signal, regime_gated_signal,
+            z_scores,
+            threshold_signal,
+            regime_gated_signal,
         )
 
         # Step 4: Regime coverage
@@ -168,7 +171,8 @@ def run_signal_engine(
             if regime_gate is not None:
                 best_signal = best_signal * regime_gate
             report.signal_behavior = _compute_signal_behavior(
-                best_signal, forward_returns,
+                best_signal,
+                forward_returns,
             )
 
         # Step 5c: Methodology metadata
@@ -225,7 +229,8 @@ def run_signal_engine(
 
         logger.info(
             "[Signal] Complete: %s %s — grade=%s, status=%s",
-            ticker, feature_name,
+            ticker,
+            feature_name,
             report.graduation.overall_grade if report.graduation else "N/A",
             report.graduation.status_label if report.graduation else "N/A",
         )
@@ -238,7 +243,8 @@ def run_signal_engine(
 
 
 def _compute_signal_behavior(
-    signal: pd.Series, forward_returns: pd.Series,
+    signal: pd.Series,
+    forward_returns: pd.Series,
 ) -> SignalBehaviorMetrics:
     """Compute signal behavior metrics on active bars."""
     active_mask = signal != 0
@@ -267,9 +273,7 @@ def _generate_research_log(report: SignalEngineReport, config: SignalConfig) -> 
 
     if report.backtest_grid:
         best = max(report.backtest_grid, key=lambda r: r.net_sharpe)
-        parts.append(
-            f"Net Sharpe: {best.net_sharpe:.2f} ({best.cost_bps:.0f}bps cost)."
-        )
+        parts.append(f"Net Sharpe: {best.net_sharpe:.2f} ({best.cost_bps:.0f}bps cost).")
         parts.append(f"Turnover: {best.annualized_turnover:.1f}x/year.")
 
     if report.walk_forward and report.walk_forward.windows:

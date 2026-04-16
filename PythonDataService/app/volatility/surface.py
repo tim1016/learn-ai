@@ -17,15 +17,13 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional, Sequence
+from enum import StrEnum
 
 import numpy as np
 import pandas as pd
 
 from app.volatility.fitting import (
     ArbitrageReport,
-    FitMethod,
     FitResult,
     SmileSlice,
     check_smile_arbitrage,
@@ -33,12 +31,12 @@ from app.volatility.fitting import (
     fit_svi,
     fit_variance_interp,
 )
-from app.volatility.solver import implied_volatility, ImpliedVolResult, SolveStatus
+from app.volatility.solver import SolveStatus, implied_volatility
 
 logger = logging.getLogger(__name__)
 
 
-class SurfaceMethod(str, Enum):
+class SurfaceMethod(StrEnum):
     VARIANCE = "variance"
     SABR = "sabr"
     SVI = "svi"
@@ -54,7 +52,7 @@ class SliceDiagnostics:
     n_failed: int
     fit_method: str
     fit_rmse: float
-    arbitrage: Optional[ArbitrageReport] = None
+    arbitrage: ArbitrageReport | None = None
 
 
 @dataclass
@@ -131,23 +129,21 @@ class VolSurface:
         vol_hi = fit_hi.volatility(strike)
 
         # Linear interpolation in total variance space
-        w_lo = vol_lo ** 2 * t_lo
-        w_hi = vol_hi ** 2 * t_hi
+        w_lo = vol_lo**2 * t_lo
+        w_hi = vol_hi**2 * t_hi
 
         alpha = (ttm - t_lo) / (t_hi - t_lo)
         w_interp = w_lo * (1 - alpha) + w_hi * alpha
 
         if w_interp < 0:
-            raise ValueError(
-                f"Negative interpolated variance at K={strike}, T={ttm}"
-            )
+            raise ValueError(f"Negative interpolated variance at K={strike}, T={ttm}")
         return math.sqrt(w_interp / ttm)
 
     def to_grid(
         self,
         strike_range: tuple[float, float],
         n_strikes: int = 50,
-        ttm_list: Optional[list[float]] = None,
+        ttm_list: list[float] | None = None,
     ) -> pd.DataFrame:
         """
         Evaluate surface on a regular grid.
@@ -174,6 +170,7 @@ class VolSurface:
 # ═══════════════════════════════════════════════════════════════════════════
 #  Builder
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class VolSurfaceBuilder:
     """
@@ -272,14 +269,11 @@ class VolSurfaceBuilder:
 
             if len(strikes) < self.min_contracts_per_slice:
                 diag.warnings.append(
-                    f"Expiry T={ttm:.4f}: only {len(strikes)} solved IVs "
-                    f"(min {self.min_contracts_per_slice}), skipping"
+                    f"Expiry T={ttm:.4f}: only {len(strikes)} solved IVs (min {self.min_contracts_per_slice}), skipping"
                 )
                 continue
 
-            forward = self.spot * math.exp(
-                (self.rate - self.dividend) * ttm
-            )
+            forward = self.spot * math.exp((self.rate - self.dividend) * ttm)
             solved_groups[ttm] = SmileSlice(
                 strikes=np.array(strikes),
                 ivs=np.array(ivs),
@@ -323,9 +317,7 @@ class VolSurfaceBuilder:
             diag.slices.append(slice_diag)
 
             if not arb.passed:
-                diag.warnings.append(
-                    f"Expiry T={ttm:.4f}: {arb.butterfly_violations} butterfly violations"
-                )
+                diag.warnings.append(f"Expiry T={ttm:.4f}: {arb.butterfly_violations} butterfly violations")
 
         logger.info(
             "[IV Surface] Built %s surface: %d expiries, %d/%d contracts solved",
@@ -356,25 +348,15 @@ class VolSurfaceBuilder:
         Records must contain ``bid`` and ``ask`` fields.
         Returns (bid_surface, ask_surface).
         """
-        bid_records = [
-            {**r, "option_price": r["bid"]}
-            for r in records
-            if r.get("bid", 0) > 0
-        ]
-        ask_records = [
-            {**r, "option_price": r["ask"]}
-            for r in records
-            if r.get("ask", 0) > 0
-        ]
+        bid_records = [{**r, "option_price": r["bid"]} for r in records if r.get("bid", 0) > 0]
+        ask_records = [{**r, "option_price": r["ask"]} for r in records if r.get("ask", 0) > 0]
         bid_surface = self.build(bid_records, method)
         ask_surface = self.build(ask_records, method)
         return bid_surface, ask_surface
 
     # ── Private helpers ──────────────────────────────────────────────────
 
-    def _group_by_expiry(
-        self, records: list[dict]
-    ) -> dict[float, list[dict]]:
+    def _group_by_expiry(self, records: list[dict]) -> dict[float, list[dict]]:
         """Group records by TTM, rounding to avoid float noise."""
         groups: dict[float, list[dict]] = {}
         for rec in records:
@@ -382,9 +364,7 @@ class VolSurfaceBuilder:
             groups.setdefault(ttm, []).append(rec)
         return groups
 
-    def _fit_slice(
-        self, smile: SmileSlice, method: SurfaceMethod
-    ) -> FitResult:
+    def _fit_slice(self, smile: SmileSlice, method: SurfaceMethod) -> FitResult:
         """Dispatch to the appropriate fitter."""
         if method == SurfaceMethod.SABR:
             return fit_sabr(smile, beta=self.sabr_beta)

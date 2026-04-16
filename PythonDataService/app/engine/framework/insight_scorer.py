@@ -14,6 +14,7 @@ Scoring methodology:
     1.0 - |predicted - actual| / max(|predicted|, |actual|). If no
     magnitude was predicted, magnitude score stays at 0.0.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -55,10 +56,7 @@ class DefaultInsightScoreFunction(InsightScoreFunction):
         if insight.reference_value == 0:
             return
 
-        actual_return = float(
-            (insight.reference_value_final - insight.reference_value)
-            / insight.reference_value
-        )
+        actual_return = float((insight.reference_value_final - insight.reference_value) / insight.reference_value)
 
         # ── Direction scoring ──
         if insight.direction == InsightDirection.UP:

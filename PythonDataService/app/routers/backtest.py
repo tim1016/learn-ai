@@ -3,6 +3,7 @@
 Provides /api/backtest/run (JSON response with chart data) and
 /api/backtest/generate-zip (ZIP download with dataset + trades).
 """
+
 from __future__ import annotations
 
 import logging
@@ -13,24 +14,23 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.services.polygon_client import PolygonClientService
-from app.services.dataset_service import (
-    fetch_bars_chunked,
-    calculate_dynamic_indicators,
-    estimate_max_lookback,
-    compute_warmup_start_date,
-    build_zip_bytes,
-)
 from app.services.chart_service import (
-    _preprocess_minute_bars,
-    _format_indicator_results,
-    _resample_bars,
-    QualityReport,
     TIMEFRAME_DEFS,
+    _format_indicator_results,
+    _preprocess_minute_bars,
+    _resample_bars,
 )
-from app.services.strategies.registry import get_strategy, list_strategies
+from app.services.dataset_service import (
+    build_zip_bytes,
+    calculate_dynamic_indicators,
+    compute_warmup_start_date,
+    estimate_max_lookback,
+    fetch_bars_chunked,
+)
+from app.services.polygon_client import PolygonClientService
 from app.services.strategies.common import StrategyResult
-from app.services.strategies.lean_statistics import compute_lean_statistics, LeanStatistics
+from app.services.strategies.lean_statistics import compute_lean_statistics
+from app.services.strategies.registry import get_strategy, list_strategies
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -66,6 +66,7 @@ class BacktestTradeResponse(BaseModel):
 
 class LeanPortfolioStatsResponse(BaseModel):
     """LEAN PortfolioStatistics — 25 fields matching PS.cs exactly."""
+
     average_win_rate: float = 0.0
     average_loss_rate: float = 0.0
     profit_loss_ratio: float = 0.0
@@ -95,6 +96,7 @@ class LeanPortfolioStatsResponse(BaseModel):
 
 class LeanTradeStatsResponse(BaseModel):
     """LEAN TradeStatistics — key fields matching TS.cs."""
+
     start_date_time: str = ""
     end_date_time: str = ""
     total_number_of_trades: int = 0
@@ -124,6 +126,7 @@ class LeanTradeStatsResponse(BaseModel):
 
 class LeanRuntimeStatsResponse(BaseModel):
     """LEAN runtimeStatistics — 5 key fields."""
+
     equity: float = 0.0
     fees: float = 0.0
     net_profit: float = 0.0
@@ -133,6 +136,7 @@ class LeanRuntimeStatsResponse(BaseModel):
 
 class LeanStatisticsResponse(BaseModel):
     """Full LEAN statistics suite."""
+
     portfolio: LeanPortfolioStatsResponse = Field(default_factory=LeanPortfolioStatsResponse)
     trade: LeanTradeStatsResponse = Field(default_factory=LeanTradeStatsResponse)
     runtime: LeanRuntimeStatsResponse = Field(default_factory=LeanRuntimeStatsResponse)
@@ -209,7 +213,8 @@ def _run_backtest_pipeline(request: BacktestRequest) -> BacktestResponse:
 
     if not raw_bars:
         return BacktestResponse(
-            success=False, ticker=ticker,
+            success=False,
+            ticker=ticker,
             strategy_name=request.strategy_name,
             parameters=request.parameters,
             error="No bars returned from Polygon",
@@ -217,14 +222,18 @@ def _run_backtest_pipeline(request: BacktestRequest) -> BacktestResponse:
 
     # Preprocess: session filter, forward-fill, quality checks
     df, quality = _preprocess_minute_bars(
-        raw_bars, request.from_date, request.to_date,
-        request.session, request.forward_fill,
+        raw_bars,
+        request.from_date,
+        request.to_date,
+        request.session,
+        request.forward_fill,
     )
     rth_bar_count = len(df)
 
     if df.empty or len(df) < 10:
         return BacktestResponse(
-            success=False, ticker=ticker,
+            success=False,
+            ticker=ticker,
             strategy_name=request.strategy_name,
             parameters=request.parameters,
             source_bars=source_bar_count,
@@ -244,6 +253,7 @@ def _run_backtest_pipeline(request: BacktestRequest) -> BacktestResponse:
     # Trim warmup bars (keep only from requested start date forward)
     if request.warmup and fetch_from != request.from_date:
         from datetime import datetime
+
         trim_ts = int(datetime.strptime(request.from_date, "%Y-%m-%d").timestamp() * 1000)
         df = df[df["timestamp"] >= trim_ts].reset_index(drop=True)
         df_with_indicators = df_with_indicators[df_with_indicators["timestamp"] >= trim_ts].reset_index(drop=True)
@@ -255,7 +265,8 @@ def _run_backtest_pipeline(request: BacktestRequest) -> BacktestResponse:
 
     if not strategy_result.success:
         return BacktestResponse(
-            success=False, ticker=ticker,
+            success=False,
+            ticker=ticker,
             strategy_name=request.strategy_name,
             parameters=request.parameters,
             source_bars=source_bar_count,
@@ -290,7 +301,9 @@ def _run_backtest_pipeline(request: BacktestRequest) -> BacktestResponse:
 
     # Format indicator results for chart rendering
     chart_indicators = _format_indicator_results(
-        df_with_indicators, column_meta, indicator_entries,
+        df_with_indicators,
+        column_meta,
+        indicator_entries,
     )
 
     # Format trades
@@ -318,6 +331,7 @@ def _run_backtest_pipeline(request: BacktestRequest) -> BacktestResponse:
 
     # Build LEAN statistics response
     from dataclasses import asdict as _dc_asdict
+
     lean_port = lean_stats.portfolio
     lean_trade = lean_stats.trade
     lean_stats_resp = LeanStatisticsResponse(
@@ -369,9 +383,12 @@ async def run_backtest(request: BacktestRequest):
     try:
         logger.info(
             "[BACKTEST] %s strategy=%s %s×%s from %s to %s",
-            request.ticker, request.strategy_name,
-            request.multiplier, request.timespan,
-            request.from_date, request.to_date,
+            request.ticker,
+            request.strategy_name,
+            request.multiplier,
+            request.timespan,
+            request.from_date,
+            request.to_date,
         )
         return _run_backtest_pipeline(request)
 
@@ -384,22 +401,25 @@ async def run_backtest(request: BacktestRequest):
         logger.error("[BACKTEST] Error: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Backtest failed: {str(e)}",
+            detail=f"Backtest failed: {e!s}",
         )
 
 
 @router.post("/generate-zip")
 async def generate_backtest_zip(request: BacktestRequest):
     """Run a backtest and return a ZIP with dataset.csv, metadata.csv, columns.csv, trades.csv."""
-    import io
     import csv
+    import io
 
     try:
         logger.info(
             "[BACKTEST ZIP] %s strategy=%s %s×%s from %s to %s",
-            request.ticker, request.strategy_name,
-            request.multiplier, request.timespan,
-            request.from_date, request.to_date,
+            request.ticker,
+            request.strategy_name,
+            request.multiplier,
+            request.timespan,
+            request.from_date,
+            request.to_date,
         )
         result = _run_backtest_pipeline(request)
 
@@ -412,24 +432,44 @@ async def generate_backtest_zip(request: BacktestRequest):
         # Build trades CSV
         trades_buf = io.StringIO()
         writer = csv.writer(trades_buf)
-        writer.writerow([
-            "trade_number", "trade_type", "entry_timestamp", "exit_timestamp",
-            "entry_price", "exit_price", "pnl", "pnl_pct",
-            "cumulative_pnl_pct", "signal_reason",
-        ])
+        writer.writerow(
+            [
+                "trade_number",
+                "trade_type",
+                "entry_timestamp",
+                "exit_timestamp",
+                "entry_price",
+                "exit_price",
+                "pnl",
+                "pnl_pct",
+                "cumulative_pnl_pct",
+                "signal_reason",
+            ]
+        )
         for t in result.trades:
-            writer.writerow([
-                t.trade_number, t.trade_type, t.entry_timestamp, t.exit_timestamp,
-                f"{t.entry_price:.6f}", f"{t.exit_price:.6f}",
-                f"{t.pnl:.6f}", f"{t.pnl_pct:.6f}",
-                f"{t.cumulative_pnl_pct:.6f}", t.signal_reason,
-            ])
+            writer.writerow(
+                [
+                    t.trade_number,
+                    t.trade_type,
+                    t.entry_timestamp,
+                    t.exit_timestamp,
+                    f"{t.entry_price:.6f}",
+                    f"{t.exit_price:.6f}",
+                    f"{t.pnl:.6f}",
+                    f"{t.pnl_pct:.6f}",
+                    f"{t.cumulative_pnl_pct:.6f}",
+                    t.signal_reason,
+                ]
+            )
         trades_csv_bytes = trades_buf.getvalue().encode("utf-8")
 
         # Build DataFrame from chart_bars for dataset.csv
         import pandas as pd
+
         bars_df = pd.DataFrame(result.chart_bars)
-        bars_df.rename(columns={"t": "timestamp", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}, inplace=True)
+        bars_df.rename(
+            columns={"t": "timestamp", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}, inplace=True
+        )
         data_cols = ["open", "high", "low", "close", "volume"]
         if "session" in bars_df.columns:
             data_cols.append("session")
@@ -471,7 +511,7 @@ async def generate_backtest_zip(request: BacktestRequest):
         logger.error("[BACKTEST ZIP] Error: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Backtest ZIP failed: {str(e)}",
+            detail=f"Backtest ZIP failed: {e!s}",
         )
 
 

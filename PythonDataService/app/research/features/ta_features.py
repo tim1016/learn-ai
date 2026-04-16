@@ -1,4 +1,5 @@
 """Phase 1 feature computation using pandas-ta (no TA-Lib C dependency)."""
+
 from __future__ import annotations
 
 import logging

@@ -35,9 +35,7 @@ def bs_price(
     is_call: bool,
 ) -> float:
     """Reference Black-Scholes price for test data generation."""
-    d1 = (math.log(spot / strike) + (rate + 0.5 * vol ** 2) * ttm) / (
-        vol * math.sqrt(ttm)
-    )
+    d1 = (math.log(spot / strike) + (rate + 0.5 * vol**2) * ttm) / (vol * math.sqrt(ttm))
     d2 = d1 - vol * math.sqrt(ttm)
     df = math.exp(-rate * ttm)
     if is_call:
@@ -83,7 +81,7 @@ def skewed_chain(spot: float, rate: float) -> list[dict]:
 
         for k in strikes:
             log_m = math.log(k / forward)
-            vol = 0.25 - 0.12 * log_m + 0.03 * log_m ** 2
+            vol = 0.25 - 0.12 * log_m + 0.03 * log_m**2
             vol = max(vol, 0.05)
 
             is_call = k >= forward

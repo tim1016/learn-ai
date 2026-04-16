@@ -5,9 +5,10 @@ Ported from Backend/Services/Implementation/BacktestService.cs RunMomentumRsiSto
 Entry: RSI in band + price > fast SMA > slow SMA + %K > %D
 Exit: N minutes before last bar of trading day, or end of period.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -17,7 +18,6 @@ from app.services.strategies.common import (
     StrategyResult,
     TradeRecord,
     compute_metrics,
-    format_timestamp,
     make_trade,
 )
 
@@ -56,14 +56,14 @@ def run(df: pd.DataFrame, params: dict) -> StrategyResult:
     # Pre-compute last bar per trading day (by date portion of timestamp)
     def _get_day(ts):
         if isinstance(ts, (int, float, np.integer, np.floating)):
-            return datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).date()
+            return datetime.fromtimestamp(int(ts) / 1000, tz=UTC).date()
         if isinstance(ts, datetime):
             return ts.date()
         return None
 
     df["_day"] = df["timestamp"].apply(_get_day)
     last_bar_by_day: dict = {}
-    for idx, row in df.iterrows():
+    for _idx, row in df.iterrows():
         day = row["_day"]
         if day is not None:
             ts = row["timestamp"]
@@ -87,22 +87,34 @@ def run(df: pd.DataFrame, params: dict) -> StrategyResult:
             is_eod = False
             if day_last is not None:
                 # Convert both to comparable ms
-                ts_val = int(ts) if isinstance(ts, (int, float)) else int(ts.timestamp() * 1000) if isinstance(ts, datetime) else 0
-                dl_val = int(day_last) if isinstance(day_last, (int, float)) else int(day_last.timestamp() * 1000) if isinstance(day_last, datetime) else 0
+                ts_val = (
+                    int(ts)
+                    if isinstance(ts, (int, float))
+                    else int(ts.timestamp() * 1000)
+                    if isinstance(ts, datetime)
+                    else 0
+                )
+                dl_val = (
+                    int(day_last)
+                    if isinstance(day_last, (int, float))
+                    else int(day_last.timestamp() * 1000)
+                    if isinstance(day_last, datetime)
+                    else 0
+                )
                 is_eod = ts_val >= dl_val - exit_minutes * 60 * 1000
 
             is_last = i == len(df) - 1
 
             if is_eod or is_last:
                 trade_num += 1
-                reason = (
-                    f"EOD exit {exit_minutes}min before close"
-                    if is_eod else "Position closed at end of period"
-                )
+                reason = f"EOD exit {exit_minutes}min before close" if is_eod else "Position closed at end of period"
                 t = make_trade(
-                    trade_num, "Buy",
-                    df.iloc[entry_idx], row,
-                    cum_pnl_pct, reason,
+                    trade_num,
+                    "Buy",
+                    df.iloc[entry_idx],
+                    row,
+                    cum_pnl_pct,
+                    reason,
                 )
                 cum_pnl_pct = t.cumulative_pnl_pct
                 trades.append(t)

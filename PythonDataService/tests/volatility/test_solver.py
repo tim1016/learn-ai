@@ -10,7 +10,6 @@ import pytest
 from scipy.stats import norm
 
 from app.volatility.solver import (
-    ImpliedVolResult,
     SolveStatus,
     implied_volatility,
     solve_iv_chain,
@@ -27,11 +26,8 @@ def bs_price(
 ) -> float:
     """Reference Black-Scholes price for test data generation."""
     import math
-    from scipy.stats import norm
 
-    d1 = (math.log(spot / strike) + (rate + 0.5 * vol ** 2) * ttm) / (
-        vol * math.sqrt(ttm)
-    )
+    d1 = (math.log(spot / strike) + (rate + 0.5 * vol**2) * ttm) / (vol * math.sqrt(ttm))
     d2 = d1 - vol * math.sqrt(ttm)
     df = math.exp(-rate * ttm)
     if is_call:
@@ -82,12 +78,8 @@ class TestImpliedVolatility:
         tol = max(vol * 0.005, 0.005)
         assert abs(result.iv - vol) < tol, f"Expected {vol}, got {result.iv}"
 
-    @pytest.mark.parametrize(
-        "moneyness", [0.70, 0.80, 0.90, 1.00, 1.10, 1.20, 1.30]
-    )
-    def test_range_of_strikes(
-        self, spot: float, rate: float, moneyness: float
-    ) -> None:
+    @pytest.mark.parametrize("moneyness", [0.70, 0.80, 0.90, 1.00, 1.10, 1.20, 1.30])
+    def test_range_of_strikes(self, spot: float, rate: float, moneyness: float) -> None:
         """IV solver should handle ITM through OTM options."""
         vol = 0.30
         ttm = 0.5
@@ -98,9 +90,7 @@ class TestImpliedVolatility:
         if price < 0.001:
             pytest.skip("Price too low for reliable recovery")
 
-        result = implied_volatility(
-            price, spot, strike, ttm, rate, is_call=is_call
-        )
+        result = implied_volatility(price, spot, strike, ttm, rate, is_call=is_call)
 
         assert result.iv is not None
         assert abs(result.iv - vol) < 1e-3
@@ -137,10 +127,7 @@ class TestImpliedVolatility:
         ttm = 0.5
         price = bs_price(spot, spot, ttm, rate, vol, is_call=True)
 
-        results = [
-            implied_volatility(price, spot, spot, ttm, rate)
-            for _ in range(10)
-        ]
+        results = [implied_volatility(price, spot, spot, ttm, rate) for _ in range(10)]
         ivs = [r.iv for r in results]
         assert len(set(ivs)) == 1, f"Non-deterministic: {ivs}"
 

@@ -2,6 +2,7 @@
 
 Adapts the existing run_rule_based_backtest() to the unified strategy interface.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -30,25 +31,27 @@ def run(df: pd.DataFrame, params: dict) -> StrategyResult:
     # Map RuleBasedTrade -> TradeRecord
     trades: list[TradeRecord] = []
     for t in rb_result.trades:
-        trades.append(TradeRecord(
-            trade_number=t.trade_number,
-            trade_type=t.trade_type,
-            entry_timestamp=t.entry_timestamp,
-            exit_timestamp=t.exit_timestamp,
-            entry_price=t.entry_price,
-            exit_price=t.exit_price,
-            pnl=t.pnl,
-            pnl_pct=t.pnl_pct,
-            cumulative_pnl_pct=t.cumulative_pnl_pct,
-            signal_reason=t.signal_reason,
-            indicator_snapshot={
-                "ema_fast": t.ema_fast,
-                "ema_slow": t.ema_slow,
-                "ema_gap": t.ema_gap,
-                "rsi": t.rsi,
-                "adx": t.adx,
-            },
-        ))
+        trades.append(
+            TradeRecord(
+                trade_number=t.trade_number,
+                trade_type=t.trade_type,
+                entry_timestamp=t.entry_timestamp,
+                exit_timestamp=t.exit_timestamp,
+                entry_price=t.entry_price,
+                exit_price=t.exit_price,
+                pnl=t.pnl,
+                pnl_pct=t.pnl_pct,
+                cumulative_pnl_pct=t.cumulative_pnl_pct,
+                signal_reason=t.signal_reason,
+                indicator_snapshot={
+                    "ema_fast": t.ema_fast,
+                    "ema_slow": t.ema_slow,
+                    "ema_gap": t.ema_gap,
+                    "rsi": t.rsi,
+                    "adx": t.adx,
+                },
+            )
+        )
 
     result.trades = trades
     result.success = True

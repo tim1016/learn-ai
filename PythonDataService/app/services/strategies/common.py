@@ -1,8 +1,9 @@
 """Shared types and utilities for strategy implementations."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -114,7 +115,7 @@ def _compute_max_drawdown(cum_pnl: list[float]) -> float:
 def format_timestamp(ts) -> str:
     """Convert a timestamp (ms epoch or datetime) to ISO 8601."""
     if isinstance(ts, (int, float, np.integer, np.floating)):
-        return datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M")
     if isinstance(ts, datetime):
         return ts.strftime("%Y-%m-%d %H:%M")
     if isinstance(ts, str):

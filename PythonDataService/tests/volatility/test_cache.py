@@ -9,9 +9,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pandas as pd
-import pytest
-
 from app.volatility.cache import (
     SCHEMA_VERSION,
     DataFilters,
@@ -46,12 +43,8 @@ class TestSurfaceIdComputation:
         filters = DataFilters(min_dte=7, max_dte=365)
         n_options = 100
 
-        id_aapl = compute_surface_id(
-            "AAPL", date, method, conventions, filters, n_options
-        )
-        id_msft = compute_surface_id(
-            "MSFT", date, method, conventions, filters, n_options
-        )
+        id_aapl = compute_surface_id("AAPL", date, method, conventions, filters, n_options)
+        id_msft = compute_surface_id("MSFT", date, method, conventions, filters, n_options)
 
         assert id_aapl != id_msft
 

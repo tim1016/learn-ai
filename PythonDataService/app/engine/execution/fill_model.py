@@ -14,11 +14,11 @@ Two modes are supported:
   ``GetBestEffortTradeBar`` returns the next available bar whose ``EndTime``
   is strictly after the order time.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import (
@@ -53,8 +53,8 @@ class FillModel:
         self,
         order: Order,
         signal_bar: TradeBar,
-        next_bar: Optional[TradeBar] = None,
-    ) -> Optional[OrderEvent]:
+        next_bar: TradeBar | None = None,
+    ) -> OrderEvent | None:
         """Attempt to fill a market order.
 
         Args:
@@ -69,9 +69,7 @@ class FillModel:
             produced (e.g., NEXT_BAR_OPEN awaiting the following bar).
         """
         if order.order_type != OrderType.MARKET:
-            raise NotImplementedError(
-                f"fill_model only supports MARKET orders, got {order.order_type}"
-            )
+            raise NotImplementedError(f"fill_model only supports MARKET orders, got {order.order_type}")
 
         if self.mode == FillMode.SIGNAL_BAR_CLOSE:
             fill_price = signal_bar.close

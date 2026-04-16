@@ -5,13 +5,13 @@ theoretical prices and Greeks (delta, gamma, theta, vega, rho) for European
 vanilla options.  Supports multiple pricing engines so the frontend can
 compare results side-by-side with the legacy Abramowitz & Stegun JS pricer.
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
-from enum import Enum
-from typing import List, Optional
+from enum import StrEnum
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +23,13 @@ try:
 except ImportError:
     _QL_AVAILABLE = False
     logger.warning(
-        "[QuantLib] QuantLib not installed — quantlib pricing will be unavailable. "
-        "Install with: pip install QuantLib"
+        "[QuantLib] QuantLib not installed — quantlib pricing will be unavailable. Install with: pip install QuantLib"
     )
 
 
-class PricingEngine(str, Enum):
+class PricingEngine(StrEnum):
     """Available QuantLib pricing engines."""
+
     ANALYTIC_BS = "analytic_bs"
     BINOMIAL_CRR = "binomial_crr"
     BINOMIAL_JR = "binomial_jr"
@@ -41,21 +41,23 @@ class PricingEngine(str, Enum):
 @dataclass
 class GreeksResult:
     """Single-option pricing result with all Greeks."""
+
     engine: str
     price: float
     delta: float
     gamma: float
     theta: float  # per calendar day
-    vega: float   # per 1% IV move
-    rho: float    # per 1% rate move
+    vega: float  # per 1% IV move
+    rho: float  # per 1% rate move
     # Optional diagnostics
-    d1: Optional[float] = None
-    d2: Optional[float] = None
+    d1: float | None = None
+    d2: float | None = None
 
 
 @dataclass
 class StrategyGreeksResult:
     """Multi-leg strategy pricing result."""
+
     engine: str
     net_price: float
     net_delta: float
@@ -63,17 +65,15 @@ class StrategyGreeksResult:
     net_theta: float
     net_vega: float
     net_rho: float
-    legs: List[GreeksResult]
+    legs: list[GreeksResult]
 
 
 def _ensure_ql() -> None:
     if not _QL_AVAILABLE:
-        raise RuntimeError(
-            "QuantLib is not installed. Run: pip install QuantLib"
-        )
+        raise RuntimeError("QuantLib is not installed. Run: pip install QuantLib")
 
 
-def _ql_date(d: date) -> "ql.Date":
+def _ql_date(d: date) -> ql.Date:
     """Convert Python date → QuantLib Date."""
     return ql.Date(d.day, d.month, d.year)
 
@@ -83,16 +83,12 @@ def _build_process(
     risk_free_rate: float,
     dividend_yield: float,
     volatility: float,
-    eval_date: "ql.Date",
-) -> "ql.BlackScholesMertonProcess":
+    eval_date: ql.Date,
+) -> ql.BlackScholesMertonProcess:
     """Construct a BSM process from scalar market data."""
     spot_handle = ql.QuoteHandle(ql.SimpleQuote(spot))
-    flat_rf = ql.YieldTermStructureHandle(
-        ql.FlatForward(eval_date, risk_free_rate, ql.Actual365Fixed())
-    )
-    flat_div = ql.YieldTermStructureHandle(
-        ql.FlatForward(eval_date, dividend_yield, ql.Actual365Fixed())
-    )
+    flat_rf = ql.YieldTermStructureHandle(ql.FlatForward(eval_date, risk_free_rate, ql.Actual365Fixed()))
+    flat_div = ql.YieldTermStructureHandle(ql.FlatForward(eval_date, dividend_yield, ql.Actual365Fixed()))
     flat_vol = ql.BlackVolTermStructureHandle(
         ql.BlackConstantVol(eval_date, ql.TARGET(), volatility, ql.Actual365Fixed())
     )
@@ -100,8 +96,8 @@ def _build_process(
 
 
 def _attach_engine(
-    option: "ql.VanillaOption",
-    process: "ql.BlackScholesMertonProcess",
+    option: ql.VanillaOption,
+    process: ql.BlackScholesMertonProcess,
     engine: PricingEngine,
 ) -> None:
     """Attach the requested pricing engine to the option."""
@@ -114,13 +110,12 @@ def _attach_engine(
     elif engine == PricingEngine.BINOMIAL_LR:
         option.setPricingEngine(ql.BinomialVanillaEngine(process, "LR", 801))
     elif engine == PricingEngine.FINITE_DIFF:
-        option.setPricingEngine(
-            ql.FdBlackScholesVanillaEngine(process, 801, 800)
-        )
+        option.setPricingEngine(ql.FdBlackScholesVanillaEngine(process, 801, 800))
     elif engine == PricingEngine.MONTE_CARLO:
         option.setPricingEngine(
             ql.MCEuropeanEngine(
-                process, "pseudorandom",
+                process,
+                "pseudorandom",
                 timeSteps=1,
                 requiredTolerance=0.001,
                 seed=42,
@@ -137,7 +132,7 @@ def price_option(
     volatility: float,
     expiration_date: date,
     option_type: str,
-    evaluation_date: Optional[date] = None,
+    evaluation_date: date | None = None,
     dividend_yield: float = 0.0,
     engine: PricingEngine = PricingEngine.ANALYTIC_BS,
 ) -> GreeksResult:
@@ -172,8 +167,13 @@ def price_option(
         return GreeksResult(
             engine=engine.value,
             price=intrinsic,
-            delta=1.0 if (option_type == "call" and spot > strike) else (-1.0 if option_type == "put" and spot < strike else 0.0),
-            gamma=0.0, theta=0.0, vega=0.0, rho=0.0,
+            delta=1.0
+            if (option_type == "call" and spot > strike)
+            else (-1.0 if option_type == "put" and spot < strike else 0.0),
+            gamma=0.0,
+            theta=0.0,
+            vega=0.0,
+            rho=0.0,
         )
 
     ql_type = ql.Option.Call if option_type == "call" else ql.Option.Put
@@ -191,36 +191,49 @@ def price_option(
     try:
         delta = option.delta()
     except RuntimeError:
-        delta = _numeric_delta(spot, strike, risk_free_rate, volatility, expiration_date, option_type, eval_d, dividend_yield, engine)
+        delta = _numeric_delta(
+            spot, strike, risk_free_rate, volatility, expiration_date, option_type, eval_d, dividend_yield, engine
+        )
 
     try:
         gamma = option.gamma()
     except RuntimeError:
-        gamma = _numeric_gamma(spot, strike, risk_free_rate, volatility, expiration_date, option_type, eval_d, dividend_yield, engine)
+        gamma = _numeric_gamma(
+            spot, strike, risk_free_rate, volatility, expiration_date, option_type, eval_d, dividend_yield, engine
+        )
 
     try:
         theta_annual = option.theta()
         theta_daily = theta_annual / 365.0
     except RuntimeError:
-        theta_daily = _numeric_theta(spot, strike, risk_free_rate, volatility, expiration_date, option_type, eval_d, dividend_yield, engine)
+        theta_daily = _numeric_theta(
+            spot, strike, risk_free_rate, volatility, expiration_date, option_type, eval_d, dividend_yield, engine
+        )
 
     try:
         vega_raw = option.vega()
         vega_pct = vega_raw / 100.0  # per 1% IV move
     except RuntimeError:
-        vega_pct = _numeric_vega(spot, strike, risk_free_rate, volatility, expiration_date, option_type, eval_d, dividend_yield, engine)
+        vega_pct = _numeric_vega(
+            spot, strike, risk_free_rate, volatility, expiration_date, option_type, eval_d, dividend_yield, engine
+        )
 
     try:
         rho_raw = option.rho()
         rho_pct = rho_raw / 100.0  # per 1% rate move
     except RuntimeError:
-        rho_pct = _numeric_rho(spot, strike, risk_free_rate, volatility, expiration_date, option_type, eval_d, dividend_yield, engine)
+        rho_pct = _numeric_rho(
+            spot, strike, risk_free_rate, volatility, expiration_date, option_type, eval_d, dividend_yield, engine
+        )
 
     # d1/d2 for diagnostic comparison with legacy
     import math
+
     d1 = d2 = None
     if volatility > 0 and t_years > 0 and spot > 0 and strike > 0:
-        d1 = (math.log(spot / strike) + (risk_free_rate - dividend_yield + 0.5 * volatility ** 2) * t_years) / (volatility * math.sqrt(t_years))
+        d1 = (math.log(spot / strike) + (risk_free_rate - dividend_yield + 0.5 * volatility**2) * t_years) / (
+            volatility * math.sqrt(t_years)
+        )
         d2 = d1 - volatility * math.sqrt(t_years)
 
     return GreeksResult(
@@ -269,7 +282,7 @@ def _numeric_gamma(spot, strike, r, vol, exp_date, opt_type, eval_d, div_y, engi
     up = _reprice(spot + bump, strike, r, vol, exp_date, opt_type, eval_d, div_y, engine)
     mid = _reprice(spot, strike, r, vol, exp_date, opt_type, eval_d, div_y, engine)
     down = _reprice(spot - bump, strike, r, vol, exp_date, opt_type, eval_d, div_y, engine)
-    return (up - 2 * mid + down) / (bump ** 2)
+    return (up - 2 * mid + down) / (bump**2)
 
 
 def _numeric_theta(spot, strike, r, vol, exp_date, opt_type, eval_d, div_y, engine) -> float:
@@ -297,6 +310,7 @@ def _numeric_rho(spot, strike, r, vol, exp_date, opt_type, eval_d, div_y, engine
 # Implied volatility solver
 # ---------------------------------------------------------------------------
 
+
 def implied_volatility(
     market_price: float,
     spot: float,
@@ -304,13 +318,13 @@ def implied_volatility(
     risk_free_rate: float,
     expiration_date: date,
     option_type: str,
-    evaluation_date: Optional[date] = None,
+    evaluation_date: date | None = None,
     dividend_yield: float = 0.0,
     min_vol: float = 0.01,
     max_vol: float = 5.0,
     tolerance: float = 1e-6,
     max_iterations: int = 100,
-) -> Optional[float]:
+) -> float | None:
     """Solve for implied volatility using QuantLib's bisection.
 
     Given a market price, finds the volatility that makes the QuantLib
@@ -369,7 +383,11 @@ def implied_volatility(
     if market_price < price_lo or market_price > price_hi:
         logger.debug(
             "[QuantLib IV] Price %.4f outside bounds [%.4f, %.4f] for vol [%.4f, %.4f]",
-            market_price, price_lo, price_hi, lo, hi,
+            market_price,
+            price_lo,
+            price_hi,
+            lo,
+            hi,
         )
         return None
 
@@ -395,11 +413,12 @@ def implied_volatility(
 # Multi-leg strategy pricing
 # ---------------------------------------------------------------------------
 
+
 def price_strategy(
     spot: float,
     legs: list[dict],
     risk_free_rate: float,
-    evaluation_date: Optional[date] = None,
+    evaluation_date: date | None = None,
     dividend_yield: float = 0.0,
     engine: PricingEngine = PricingEngine.ANALYTIC_BS,
 ) -> StrategyGreeksResult:

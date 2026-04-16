@@ -1,27 +1,26 @@
 """Data quality pipeline: 7-step cleanup for minute OHLCV data with before/after reporting"""
+
 from __future__ import annotations
 
-import io
 import csv
+import io
 import logging
 import uuid
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Any
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
 import pandas_market_calendars as mcal
 
-from zoneinfo import ZoneInfo
-
-from app.services.polygon_client import PolygonClientService
 from app.services.dataset_service import (
-    fetch_bars_chunked,
     calculate_dynamic_indicators,
     compute_warmup_start_date,
     estimate_max_lookback,
+    fetch_bars_chunked,
 )
+from app.services.polygon_client import PolygonClientService
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,7 @@ _ET = ZoneInfo("US/Eastern")
 _CORE_COLS = {"timestamp", "open", "high", "low", "close", "volume", "vwap", "transactions"}
 
 # In-memory cache for download tokens (token -> bytes)
-_download_cache: Dict[str, Tuple[bytes, float]] = {}
+_download_cache: dict[str, tuple[bytes, float]] = {}
 _CACHE_TTL_SECONDS = 1800  # 30 minutes
 
 
@@ -47,7 +46,7 @@ def _df_to_csv_bytes(df: pd.DataFrame) -> bytes:
     writer = csv.writer(buf)
 
     data_cols = [c for c in df.columns if c not in ("timestamp", "_dt_et", "_date")]
-    header = ["unix_ts", "iso_time"] + data_cols
+    header = ["unix_ts", "iso_time", *data_cols]
     writer.writerow(header)
 
     for _, row in df.iterrows():
@@ -66,7 +65,7 @@ def _fmt(v: Any) -> str:
     return str(v)
 
 
-def _compute_summary(df: pd.DataFrame) -> Dict[str, Any]:
+def _compute_summary(df: pd.DataFrame) -> dict[str, Any]:
     """Compute quality metrics for a dataframe."""
     dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     dt_et = dt_utc.dt.tz_convert(_ET)
@@ -92,9 +91,13 @@ def _compute_summary(df: pd.DataFrame) -> Dict[str, Any]:
         vwap_lo = int((df["vwap"] < df["low"]).sum())
 
     ohlc_violations = int(
-        ((df["high"] < df["open"]) | (df["high"] < df["close"])
-         | (df["low"] > df["open"]) | (df["low"] > df["close"])
-         | (df["high"] < df["low"])).sum()
+        (
+            (df["high"] < df["open"])
+            | (df["high"] < df["close"])
+            | (df["low"] > df["open"])
+            | (df["low"] > df["close"])
+            | (df["high"] < df["low"])
+        ).sum()
     )
     dupes = int(df["timestamp"].duplicated().sum())
     weekend = int((dt_et.dt.dayofweek >= 5).sum())
@@ -136,9 +139,7 @@ def _compute_summary(df: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
-def step1_session_filter(
-    df: pd.DataFrame, from_date: str, to_date: str
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def step1_session_filter(df: pd.DataFrame, from_date: str, to_date: str) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Filter to valid NYSE RTH minutes using pandas_market_calendars."""
     bars_before = len(df)
 
@@ -179,9 +180,7 @@ def step1_session_filter(
     }
 
 
-def step2_fix_volume(
-    df: pd.DataFrame, method: str = "round"
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def step2_fix_volume(df: pd.DataFrame, method: str = "round") -> tuple[pd.DataFrame, dict[str, Any]]:
     """Fix fractional volume values."""
     bars_before = len(df)
     frac_mask = df["volume"] != df["volume"].astype("int64")
@@ -212,14 +211,12 @@ def step2_fix_volume(
     }
 
 
-def step3_recompute_vwap(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def step3_recompute_vwap(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Replace vendor VWAP with session-reset VWAP."""
     bars_before = len(df)
     vwap_violations_before = 0
     if "vwap" in df.columns:
-        vwap_violations_before = int(
-            ((df["vwap"] > df["high"]) | (df["vwap"] < df["low"])).sum()
-        )
+        vwap_violations_before = int(((df["vwap"] > df["high"]) | (df["vwap"] < df["low"])).sum())
 
     # Compute trading date in ET
     dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
@@ -234,9 +231,7 @@ def step3_recompute_vwap(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]
 
     df["vwap"] = np.where(cum_vol > 0, cum_tp_vol / cum_vol, np.nan)
 
-    vwap_violations_after = int(
-        ((df["vwap"] > df["high"]) | (df["vwap"] < df["low"])).sum()
-    )
+    vwap_violations_after = int(((df["vwap"] > df["high"]) | (df["vwap"] < df["low"])).sum())
 
     logger.info(f"[DQ STEP 3] VWAP recomputed: violations {vwap_violations_before} → {vwap_violations_after}")
 
@@ -255,14 +250,10 @@ def step3_recompute_vwap(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]
     }
 
 
-def step4_remove_flat_bars(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def step4_remove_flat_bars(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Remove zero-volume flat bars (O=H=L=C, vol=0)."""
     bars_before = len(df)
-    flat_mask = (
-        (df["volume"] == 0)
-        & (df["open"] == df["close"])
-        & (df["high"] == df["low"])
-    )
+    flat_mask = (df["volume"] == 0) & (df["open"] == df["close"]) & (df["high"] == df["low"])
     removed = int(flat_mask.sum())
     df = df[~flat_mask].reset_index(drop=True)
 
@@ -280,7 +271,7 @@ def step4_remove_flat_bars(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, An
     }
 
 
-def step5_ohlc_integrity(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def step5_ohlc_integrity(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Enforce OHLC rules, sort, deduplicate."""
     bars_before = len(df)
 
@@ -290,9 +281,7 @@ def step5_ohlc_integrity(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]
 
     # Enforce high/low
     ohlc_cols = df[["open", "high", "low", "close"]]
-    corrections = int(
-        ((df["high"] != ohlc_cols.max(axis=1)) | (df["low"] != ohlc_cols.min(axis=1))).sum()
-    )
+    corrections = int(((df["high"] != ohlc_cols.max(axis=1)) | (df["low"] != ohlc_cols.min(axis=1))).sum())
     df["high"] = ohlc_cols.max(axis=1)
     df["low"] = ohlc_cols.min(axis=1)
 
@@ -313,7 +302,7 @@ def step5_ohlc_integrity(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]
     }
 
 
-def step6_normalize_tz(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def step6_normalize_tz(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Convert timestamps to NY timezone and derive trading date."""
     bars_before = len(df)
 
@@ -348,12 +337,12 @@ def step6_normalize_tz(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
 def step7_recompute_indicators(
     df: pd.DataFrame,
-    indicator_entries: List[Dict[str, Any]],
+    indicator_entries: list[dict[str, Any]],
     polygon: PolygonClientService,
     ticker: str,
     from_date: str,
     warmup_days: int = 10,
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Drop all indicator columns and recompute with proper warmup."""
     bars_before = len(df)
 
@@ -418,8 +407,8 @@ def analyze(
     to_date: str,
     volume_fix: str = "round",
     recompute_indicators: bool = True,
-    indicator_entries: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
+    indicator_entries: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Run the full 7-step cleanup pipeline and return before/after report."""
 
     logger.info(f"[DQ] Starting analysis for {ticker}: {from_date} to {to_date}")
@@ -437,7 +426,7 @@ def analyze(
     raw_df = df.copy()
 
     # Run pipeline steps
-    steps: List[Dict[str, Any]] = []
+    steps: list[dict[str, Any]] = []
 
     df, s1 = step1_session_filter(df, from_date, to_date)
     steps.append(s1)
@@ -458,9 +447,7 @@ def analyze(
     steps.append(s6)
 
     if recompute_indicators and indicator_entries:
-        df, s7 = step7_recompute_indicators(
-            df, indicator_entries, polygon, ticker, from_date
-        )
+        df, s7 = step7_recompute_indicators(df, indicator_entries, polygon, ticker, from_date)
         steps.append(s7)
 
     # Compute clean summary
@@ -475,9 +462,7 @@ def analyze(
     _download_cache[raw_token] = (_df_to_csv_bytes(raw_df), now)
     _download_cache[clean_token] = (_df_to_csv_bytes(df), now)
 
-    logger.info(
-        f"[DQ] Analysis complete: {raw_summary['total_bars']} raw → {clean_summary['total_bars']} clean"
-    )
+    logger.info(f"[DQ] Analysis complete: {raw_summary['total_bars']} raw → {clean_summary['total_bars']} clean")
 
     return {
         "ticker": ticker,
@@ -491,7 +476,7 @@ def analyze(
     }
 
 
-def get_cached_csv(token: str) -> Optional[bytes]:
+def get_cached_csv(token: str) -> bytes | None:
     """Retrieve cached CSV bytes by download token."""
     _evict_stale_cache()
     entry = _download_cache.get(token)
@@ -500,7 +485,7 @@ def get_cached_csv(token: str) -> Optional[bytes]:
     return entry[0]
 
 
-def get_pipeline_docs() -> List[Dict[str, Any]]:
+def get_pipeline_docs() -> list[dict[str, Any]]:
     """Return documentation for each cleanup step."""
     return [
         {

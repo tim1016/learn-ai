@@ -1,17 +1,18 @@
 """Tests for FRED Treasury rate service."""
+
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
 from app.services.fred_service import (
-    _interpolate_rate,
-    _parse_latest_rate,
-    get_risk_free_rate,
-    clear_cache,
     FALLBACK_RATE,
     TENOR_MAP,
+    _interpolate_rate,
+    _parse_latest_rate,
+    clear_cache,
+    get_risk_free_rate,
 )
 
 

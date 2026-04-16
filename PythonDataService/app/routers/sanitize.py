@@ -1,6 +1,8 @@
 """Standalone sanitization endpoint for arbitrary market data"""
-from fastapi import APIRouter
+
 import logging
+
+from fastapi import APIRouter
 
 from app.models.requests import SanitizeRequest
 from app.models.responses import SanitizeResponse
@@ -28,16 +30,7 @@ async def sanitize_data(request: SanitizeRequest):
             f"[Sanitize] Complete: {result['summary']['cleaned_count']}/{result['summary']['original_count']} records retained"
         )
 
-        return SanitizeResponse(
-            success=True,
-            data=result['data'],
-            summary=result['summary']
-        )
+        return SanitizeResponse(success=True, data=result["data"], summary=result["summary"])
     except Exception as e:
-        logger.error(f"[Sanitize] Error: {str(e)}")
-        return SanitizeResponse(
-            success=False,
-            data=[],
-            summary={},
-            error=str(e)
-        )
+        logger.error(f"[Sanitize] Error: {e!s}")
+        return SanitizeResponse(success=False, data=[], summary={}, error=str(e))

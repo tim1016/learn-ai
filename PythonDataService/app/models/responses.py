@@ -1,247 +1,277 @@
 """Pydantic response schemas"""
+
+from typing import Any
+
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
 
 
 class SanitizedDataResponse(BaseModel):
     """Standard response schema for sanitized data"""
+
     success: bool
-    data: List[Dict[str, Any]]
-    summary: Dict[str, Any]
+    data: list[dict[str, Any]]
+    summary: dict[str, Any]
     ticker: str
     data_type: str
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class SanitizeResponse(BaseModel):
     """Response schema for the standalone /api/sanitize endpoint"""
+
     success: bool
-    data: List[Dict[str, Any]]
-    summary: Dict[str, Any]
-    error: Optional[str] = None
+    data: list[dict[str, Any]]
+    summary: dict[str, Any]
+    error: str | None = None
 
 
 class IndicatorDataPoint(BaseModel):
     """A single indicator value at a timestamp"""
+
     timestamp: int
-    value: Optional[float] = None
-    signal: Optional[float] = None
-    histogram: Optional[float] = None
-    upper: Optional[float] = None
-    lower: Optional[float] = None
+    value: float | None = None
+    signal: float | None = None
+    histogram: float | None = None
+    upper: float | None = None
+    lower: float | None = None
 
 
 class IndicatorResult(BaseModel):
     """Result for a single indicator calculation"""
+
     name: str
     window: int
-    data: List[IndicatorDataPoint]
+    data: list[IndicatorDataPoint]
 
 
 class OptionsContractItem(BaseModel):
     """A single options contract"""
+
     ticker: str
-    underlying_ticker: Optional[str] = None
-    contract_type: Optional[str] = None
-    strike_price: Optional[float] = None
-    expiration_date: Optional[str] = None
-    exercise_style: Optional[str] = None
-    shares_per_contract: Optional[float] = None
-    primary_exchange: Optional[str] = None
+    underlying_ticker: str | None = None
+    contract_type: str | None = None
+    strike_price: float | None = None
+    expiration_date: str | None = None
+    exercise_style: str | None = None
+    shares_per_contract: float | None = None
+    primary_exchange: str | None = None
 
 
 class OptionsContractsResponse(BaseModel):
     """Response schema for options contracts listing"""
+
     success: bool
-    contracts: List[OptionsContractItem] = []
+    contracts: list[OptionsContractItem] = []
     count: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class OptionsExpirationsResponse(BaseModel):
     """Response schema for unique options expiration dates"""
+
     success: bool
-    expirations: List[str] = []
+    expirations: list[str] = []
     count: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class GreeksSnapshot(BaseModel):
     """Greeks for an options contract snapshot"""
-    delta: Optional[float] = None
-    gamma: Optional[float] = None
-    theta: Optional[float] = None
-    vega: Optional[float] = None
+
+    delta: float | None = None
+    gamma: float | None = None
+    theta: float | None = None
+    vega: float | None = None
 
 
 class DaySnapshot(BaseModel):
     """Day OHLCV for an options contract snapshot"""
-    open: Optional[float] = None
-    high: Optional[float] = None
-    low: Optional[float] = None
-    close: Optional[float] = None
-    volume: Optional[float] = None
-    vwap: Optional[float] = None
+
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: float | None = None
+    vwap: float | None = None
 
 
 class LastTradeSnapshot(BaseModel):
     """Last trade for an options contract snapshot"""
-    price: Optional[float] = None
-    size: Optional[float] = None
-    exchange: Optional[int] = None
-    conditions: Optional[list[int]] = None
-    sip_timestamp: Optional[int] = None
-    timeframe: Optional[str] = None
+
+    price: float | None = None
+    size: float | None = None
+    exchange: int | None = None
+    conditions: list[int] | None = None
+    sip_timestamp: int | None = None
+    timeframe: str | None = None
 
 
 class LastQuoteSnapshot(BaseModel):
     """Last quote (bid/ask) for an options contract snapshot"""
-    bid: Optional[float] = None
-    ask: Optional[float] = None
-    bid_size: Optional[float] = None
-    ask_size: Optional[float] = None
-    midpoint: Optional[float] = None
-    timeframe: Optional[str] = None
-    last_updated: Optional[int] = None
+
+    bid: float | None = None
+    ask: float | None = None
+    bid_size: float | None = None
+    ask_size: float | None = None
+    midpoint: float | None = None
+    timeframe: str | None = None
+    last_updated: int | None = None
 
 
 class OptionsContractSnapshotItem(BaseModel):
     """A single options contract snapshot with greeks and day data"""
-    ticker: Optional[str] = None
-    contract_type: Optional[str] = None
-    strike_price: Optional[float] = None
-    expiration_date: Optional[str] = None
-    break_even_price: Optional[float] = None
-    implied_volatility: Optional[float] = None
-    open_interest: Optional[float] = None
-    greeks: Optional[GreeksSnapshot] = None
-    day: Optional[DaySnapshot] = None
-    last_trade: Optional[LastTradeSnapshot] = None
-    last_quote: Optional[LastQuoteSnapshot] = None
+
+    ticker: str | None = None
+    contract_type: str | None = None
+    strike_price: float | None = None
+    expiration_date: str | None = None
+    break_even_price: float | None = None
+    implied_volatility: float | None = None
+    open_interest: float | None = None
+    greeks: GreeksSnapshot | None = None
+    day: DaySnapshot | None = None
+    last_trade: LastTradeSnapshot | None = None
+    last_quote: LastQuoteSnapshot | None = None
 
 
 class UnderlyingSnapshot(BaseModel):
     """Underlying asset info from snapshot"""
+
     ticker: str
-    price: Optional[float] = 0
-    change: Optional[float] = 0
-    change_percent: Optional[float] = 0
+    price: float | None = 0
+    change: float | None = 0
+    change_percent: float | None = 0
 
 
 class OptionsChainSnapshotResponse(BaseModel):
     """Response schema for options chain snapshot"""
+
     success: bool
-    underlying: Optional[UnderlyingSnapshot] = None
-    contracts: List[OptionsContractSnapshotItem] = []
+    underlying: UnderlyingSnapshot | None = None
+    contracts: list[OptionsContractSnapshotItem] = []
     count: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class CalculateIndicatorsResponse(BaseModel):
     """Response from indicator calculation"""
+
     success: bool
     ticker: str
-    indicators: List[IndicatorResult] = []
-    error: Optional[str] = None
+    indicators: list[IndicatorResult] = []
+    error: str | None = None
 
 
 # ------------------------------------------------------------------
 # Stock Snapshot responses (v2 & v3)
 # ------------------------------------------------------------------
 
+
 class SnapshotBar(BaseModel):
     """OHLCV bar from a snapshot (day or prev_day)"""
-    open: Optional[float] = None
-    high: Optional[float] = None
-    low: Optional[float] = None
-    close: Optional[float] = None
-    volume: Optional[float] = None
-    vwap: Optional[float] = None
+
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: float | None = None
+    vwap: float | None = None
 
 
 class MinuteBar(SnapshotBar):
     """Most recent minute bar with accumulated volume and timestamp"""
-    accumulated_volume: Optional[float] = None
-    timestamp: Optional[int] = None
+
+    accumulated_volume: float | None = None
+    timestamp: int | None = None
 
 
 class StockTickerSnapshot(BaseModel):
     """Snapshot data for a single stock ticker (v2 API)"""
-    ticker: Optional[str] = None
-    day: Optional[SnapshotBar] = None
-    prev_day: Optional[SnapshotBar] = None
-    min: Optional[MinuteBar] = None
-    todays_change: Optional[float] = None
-    todays_change_percent: Optional[float] = None
-    updated: Optional[int] = None
+
+    ticker: str | None = None
+    day: SnapshotBar | None = None
+    prev_day: SnapshotBar | None = None
+    min: MinuteBar | None = None
+    todays_change: float | None = None
+    todays_change_percent: float | None = None
+    updated: int | None = None
 
 
 class StockSnapshotResponse(BaseModel):
     """Response for a single stock ticker snapshot"""
+
     success: bool
-    snapshot: Optional[StockTickerSnapshot] = None
-    error: Optional[str] = None
+    snapshot: StockTickerSnapshot | None = None
+    error: str | None = None
 
 
 class StockSnapshotsResponse(BaseModel):
     """Response for multiple stock ticker snapshots"""
+
     success: bool
-    snapshots: List[StockTickerSnapshot] = []
+    snapshots: list[StockTickerSnapshot] = []
     count: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class MarketMoversResponse(BaseModel):
     """Response for top market movers (gainers/losers)"""
+
     success: bool
-    tickers: List[StockTickerSnapshot] = []
+    tickers: list[StockTickerSnapshot] = []
     count: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class UnifiedSnapshotSession(BaseModel):
     """Session data from unified v3 snapshot"""
-    price: Optional[float] = None
-    change: Optional[float] = None
-    change_percent: Optional[float] = None
-    open: Optional[float] = None
-    close: Optional[float] = None
-    high: Optional[float] = None
-    low: Optional[float] = None
-    previous_close: Optional[float] = None
-    volume: Optional[float] = None
+
+    price: float | None = None
+    change: float | None = None
+    change_percent: float | None = None
+    open: float | None = None
+    close: float | None = None
+    high: float | None = None
+    low: float | None = None
+    previous_close: float | None = None
+    volume: float | None = None
 
 
 class UnifiedSnapshotItem(BaseModel):
     """A single item from the unified v3 snapshot"""
-    ticker: Optional[str] = None
-    type: Optional[str] = None
-    market_status: Optional[str] = None
-    name: Optional[str] = None
-    session: Optional[UnifiedSnapshotSession] = None
+
+    ticker: str | None = None
+    type: str | None = None
+    market_status: str | None = None
+    name: str | None = None
+    session: UnifiedSnapshotSession | None = None
 
 
 class UnifiedSnapshotResponse(BaseModel):
     """Response for unified v3 snapshots"""
+
     success: bool
-    results: List[UnifiedSnapshotItem] = []
+    results: list[UnifiedSnapshotItem] = []
     count: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ------------------------------------------------------------------
 # Market Monitor responses
 # ------------------------------------------------------------------
 
+
 class ExchangeStatus(BaseModel):
     """Status of individual exchanges"""
-    nyse: Optional[str] = None
-    nasdaq: Optional[str] = None
-    otc: Optional[str] = None
+
+    nyse: str | None = None
+    nasdaq: str | None = None
+    otc: str | None = None
 
 
 class MarketStatusResponse(BaseModel):
     """Current market status response"""
+
     success: bool
     market: str = "unknown"
     exchanges: ExchangeStatus = ExchangeStatus()
@@ -249,150 +279,168 @@ class MarketStatusResponse(BaseModel):
     after_hours: bool = False
     server_time: str = ""
     server_time_readable: str = "N/A"
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class MarketHolidayEvent(BaseModel):
     """A single upcoming market holiday event"""
-    date: Optional[str] = None
-    name: Optional[str] = None
-    status: Optional[str] = None
-    open: Optional[str] = None
-    close: Optional[str] = None
-    exchanges: List[str] = []
+
+    date: str | None = None
+    name: str | None = None
+    status: str | None = None
+    open: str | None = None
+    close: str | None = None
+    exchanges: list[str] = []
 
 
 class MarketHolidaysResponse(BaseModel):
     """Upcoming market holidays response"""
+
     success: bool
-    events: List[MarketHolidayEvent] = []
+    events: list[MarketHolidayEvent] = []
     count: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class MarketDashboardResponse(BaseModel):
     """Combined market status + holidays for the dashboard"""
+
     success: bool
-    status: Optional[MarketStatusResponse] = None
-    holidays: Optional[MarketHolidaysResponse] = None
-    error: Optional[str] = None
+    status: MarketStatusResponse | None = None
+    holidays: MarketHolidaysResponse | None = None
+    error: str | None = None
 
 
 # ------------------------------------------------------------------
 # Ticker Reference responses
 # ------------------------------------------------------------------
 
+
 class TickerInfo(BaseModel):
     """Basic ticker info from the reference API"""
+
     ticker: str
     name: str = ""
     market: str = ""
     type: str = ""
     active: bool = True
-    primary_exchange: Optional[str] = None
-    currency_name: Optional[str] = None
+    primary_exchange: str | None = None
+    currency_name: str | None = None
 
 
 class TickerListResponse(BaseModel):
     """Response for batch ticker info lookup"""
+
     success: bool
-    tickers: List[TickerInfo] = []
+    tickers: list[TickerInfo] = []
     count: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class TickerAddress(BaseModel):
     """Company address from ticker details"""
-    address1: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
-    postal_code: Optional[str] = None
+
+    address1: str | None = None
+    city: str | None = None
+    state: str | None = None
+    postal_code: str | None = None
 
 
 class TickerDetailResponse(BaseModel):
     """Response for detailed ticker overview"""
+
     success: bool
     ticker: str = ""
     name: str = ""
-    description: Optional[str] = None
-    market_cap: Optional[float] = None
-    homepage_url: Optional[str] = None
-    total_employees: Optional[int] = None
-    list_date: Optional[str] = None
-    sic_description: Optional[str] = None
-    primary_exchange: Optional[str] = None
-    type: Optional[str] = None
-    weighted_shares_outstanding: Optional[float] = None
-    address: Optional[TickerAddress] = None
-    error: Optional[str] = None
+    description: str | None = None
+    market_cap: float | None = None
+    homepage_url: str | None = None
+    total_employees: int | None = None
+    list_date: str | None = None
+    sic_description: str | None = None
+    primary_exchange: str | None = None
+    type: str | None = None
+    weighted_shares_outstanding: float | None = None
+    address: TickerAddress | None = None
+    error: str | None = None
 
 
 class RelatedTickersResponse(BaseModel):
     """Response for related companies lookup"""
+
     success: bool
     ticker: str = ""
-    related: List[str] = []
-    error: Optional[str] = None
+    related: list[str] = []
+    error: str | None = None
 
 
 # ------------------------------------------------------------------
 # Indicator Table responses (TradingView-style)
 # ------------------------------------------------------------------
 
+
 class IndicatorTableRow(BaseModel):
     """A single row from the full indicator table"""
+
     time: int
-    open: Optional[float] = None
-    high: Optional[float] = None
-    low: Optional[float] = None
-    close: Optional[float] = None
-    volume: Optional[float] = None
-    bb_basis: Optional[float] = None
-    bb_upper: Optional[float] = None
-    bb_lower: Optional[float] = None
-    supertrend_up: Optional[float] = None
-    supertrend_down: Optional[float] = None
-    rsi: Optional[float] = None
-    rsi_ma: Optional[float] = None
-    macd: Optional[float] = None
-    macd_signal: Optional[float] = None
-    macd_histogram: Optional[float] = None
-    adx: Optional[float] = None
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: float | None = None
+    bb_basis: float | None = None
+    bb_upper: float | None = None
+    bb_lower: float | None = None
+    supertrend_up: float | None = None
+    supertrend_down: float | None = None
+    rsi: float | None = None
+    rsi_ma: float | None = None
+    macd: float | None = None
+    macd_signal: float | None = None
+    macd_histogram: float | None = None
+    adx: float | None = None
 
 
 class IndicatorTableResponse(BaseModel):
     """Response containing the full indicator table"""
+
     success: bool
     ticker: str
     row_count: int = 0
-    columns: List[str] = []
-    rows: List[Dict[str, Any]] = []
-    error: Optional[str] = None
+    columns: list[str] = []
+    rows: list[dict[str, Any]] = []
+    error: str | None = None
 
 
 # ------------------------------------------------------------------
 # Available Indicators & Dataset Generation
 # ------------------------------------------------------------------
 
+
 class IndicatorInfo(BaseModel):
     """Metadata for a single pandas-ta indicator"""
+
     name: str
     category: str
     description: str
 
+
 class AvailableIndicatorsResponse(BaseModel):
     """All available pandas-ta indicators grouped by category"""
+
     success: bool
-    categories: Dict[str, List[IndicatorInfo]] = {}
+    categories: dict[str, list[IndicatorInfo]] = {}
     total: int = 0
-    error: Optional[str] = None
+    error: str | None = None
+
 
 class DatasetGenerationResponse(BaseModel):
     """Response for dataset generation (non-CSV JSON mode)"""
+
     success: bool
     ticker: str
     row_count: int = 0
     bar_count: int = 0
-    columns: List[str] = []
-    indicators_calculated: List[str] = []
-    error: Optional[str] = None
+    columns: list[str] = []
+    indicators_calculated: list[str] = []
+    error: str | None = None

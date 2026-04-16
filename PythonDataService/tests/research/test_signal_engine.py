@@ -1,13 +1,13 @@
 """Tests for the signal engine pipeline."""
+
 from __future__ import annotations
 
 import datetime
 
 import numpy as np
 import pandas as pd
-import pytest
 
-from app.research.signal.backtest import BacktestResult, run_backtest, run_backtest_grid
+from app.research.signal.backtest import BacktestResult, run_backtest
 from app.research.signal.config import SignalConfig
 from app.research.signal.diagnostics import (
     compute_data_sufficiency,
@@ -41,21 +41,23 @@ def _generate_multi_month_bars(
         for day in range(1, days_per_month + 1):
             if day > 28:
                 continue
-            dt = datetime.datetime(year, month, day, 14, 30, tzinfo=datetime.timezone.utc)
+            dt = datetime.datetime(year, month, day, 14, 30, tzinfo=datetime.UTC)
             day_start_ms = int(dt.timestamp() * 1000)
 
             for bar_idx in range(bars_per_day):
                 noise = rng.normal(0, 0.3)
                 trend = month_idx * 0.5 + rng.normal(0, 0.1)
                 price = base_price + trend + noise
-                bars.append({
-                    "timestamp": day_start_ms + bar_idx * 60_000,
-                    "open": round(price - 0.05, 4),
-                    "high": round(price + 0.3, 4),
-                    "low": round(price - 0.3, 4),
-                    "close": round(price, 4),
-                    "volume": round(1_000_000 + rng.normal(0, 50_000), 2),
-                })
+                bars.append(
+                    {
+                        "timestamp": day_start_ms + bar_idx * 60_000,
+                        "open": round(price - 0.05, 4),
+                        "high": round(price + 0.3, 4),
+                        "low": round(price - 0.3, 4),
+                        "close": round(price, 4),
+                        "volume": round(1_000_000 + rng.normal(0, 50_000), 2),
+                    }
+                )
 
     return bars
 
@@ -119,7 +121,7 @@ class TestRegimeGate:
     def test_low_vol_sideways_passes(self) -> None:
         """Low vol + sideways days should have gate = 1."""
         bars = _generate_multi_month_bars(n_months=6)
-        df = pd.DataFrame(bars)
+        pd.DataFrame(bars)
         daily = compute_daily_regime_labels(bars)
 
         # Check some regimes are classified
@@ -261,14 +263,13 @@ class TestGraduation:
     def test_all_pass_grade_a(self) -> None:
         """All criteria passing should produce grade A."""
         grid = [
-            BacktestResult(threshold=1.0, cost_bps=2.0, net_sharpe=1.5,
-                           max_drawdown=0.05, annualized_turnover=3.0),
-            BacktestResult(threshold=1.5, cost_bps=2.0, net_sharpe=1.3,
-                           max_drawdown=0.04, annualized_turnover=2.5),
+            BacktestResult(threshold=1.0, cost_bps=2.0, net_sharpe=1.5, max_drawdown=0.05, annualized_turnover=3.0),
+            BacktestResult(threshold=1.5, cost_bps=2.0, net_sharpe=1.3, max_drawdown=0.04, annualized_turnover=2.5),
         ]
         wf = WalkForwardResult(
-            windows=[type('W', (), {'oos_net_sharpe': 0.8, 'oos_net_return': 0.01, 'test_bars': 500})()
-                     for _ in range(5)],
+            windows=[
+                type("W", (), {"oos_net_sharpe": 0.8, "oos_net_return": 0.01, "test_bars": 500})() for _ in range(5)
+            ],
             mean_oos_sharpe=0.8,
             pct_windows_positive_sharpe=0.8,
             pct_windows_profitable=0.8,
@@ -276,8 +277,12 @@ class TestGraduation:
             oos_sharpe_trend_slope=0.0,
         )
         regime_cov = {
-            "Low Vol": 50, "Normal Vol": 50, "High Vol": 50,
-            "Trending Up": 30, "Sideways": 40, "Trending Down": 30,
+            "Low Vol": 50,
+            "Normal Vol": 50,
+            "High Vol": 50,
+            "Trending Up": 30,
+            "Sideways": 40,
+            "Trending Down": 30,
         }
 
         result = evaluate_graduation(wf, grid, regime_cov, None, None)
@@ -297,8 +302,7 @@ class TestGraduation:
 
     def test_high_drawdown_fails(self) -> None:
         """High drawdown should fail."""
-        grid = [BacktestResult(threshold=1.0, cost_bps=2.0, net_sharpe=1.0,
-                               max_drawdown=0.25)]
+        grid = [BacktestResult(threshold=1.0, cost_bps=2.0, net_sharpe=1.0, max_drawdown=0.25)]
 
         result = evaluate_graduation(None, grid, {}, None, None)
 
@@ -308,8 +312,7 @@ class TestGraduation:
 
     def test_failure_reasons_populated(self) -> None:
         """Failed criteria should have non-empty failure reasons."""
-        grid = [BacktestResult(threshold=1.0, cost_bps=2.0, net_sharpe=0.3,
-                               max_drawdown=0.25)]
+        grid = [BacktestResult(threshold=1.0, cost_bps=2.0, net_sharpe=0.3, max_drawdown=0.25)]
 
         result = evaluate_graduation(None, grid, {}, None, None)
 
@@ -371,8 +374,12 @@ class TestDataSufficiency:
             walk_forward_folds=5,
             effective_oos_bars=1000,
             regime_coverage={
-                "Low Vol": 50, "Normal Vol": 60, "High Vol": 40,
-                "Sideways": 30, "Trending Up": 0, "Trending Down": 20,
+                "Low Vol": 50,
+                "Normal Vol": 60,
+                "High Vol": 40,
+                "Sideways": 30,
+                "Trending Up": 0,
+                "Trending Down": 20,
             },
         )
 

@@ -1,7 +1,6 @@
 """Tests for options feature computation."""
-from __future__ import annotations
 
-import math
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
@@ -13,11 +12,13 @@ from app.research.features.options_features import OptionsFeatures
 def _make_iv_df(n: int = 100, seed: int = 42) -> pd.DataFrame:
     """Create synthetic IV data for testing."""
     np.random.seed(seed)
-    return pd.DataFrame({
-        "iv_30d_atm": np.random.uniform(0.15, 0.35, n),
-        "iv_30d_put": np.random.uniform(0.18, 0.40, n),
-        "iv_30d_call": np.random.uniform(0.12, 0.30, n),
-    })
+    return pd.DataFrame(
+        {
+            "iv_30d_atm": np.random.uniform(0.15, 0.35, n),
+            "iv_30d_put": np.random.uniform(0.18, 0.40, n),
+            "iv_30d_call": np.random.uniform(0.12, 0.30, n),
+        }
+    )
 
 
 def _make_stock_df(n: int = 100, seed: int = 42) -> pd.DataFrame:
@@ -99,51 +100,61 @@ class TestLogSkew:
 
     def test_positive_when_put_higher(self):
         """Positive skew when put IV > call IV."""
-        df = pd.DataFrame({
-            "iv_30d_atm": [0.25],
-            "iv_30d_put": [0.30],
-            "iv_30d_call": [0.20],
-        })
+        df = pd.DataFrame(
+            {
+                "iv_30d_atm": [0.25],
+                "iv_30d_put": [0.30],
+                "iv_30d_call": [0.20],
+            }
+        )
         result = OptionsFeatures.compute_log_skew(df)
         assert result.iloc[0] > 0  # ln(0.30/0.20) > 0
 
     def test_negative_when_call_higher(self):
         """Negative skew when call IV > put IV."""
-        df = pd.DataFrame({
-            "iv_30d_atm": [0.25],
-            "iv_30d_put": [0.20],
-            "iv_30d_call": [0.30],
-        })
+        df = pd.DataFrame(
+            {
+                "iv_30d_atm": [0.25],
+                "iv_30d_put": [0.20],
+                "iv_30d_call": [0.30],
+            }
+        )
         result = OptionsFeatures.compute_log_skew(df)
         assert result.iloc[0] < 0  # ln(0.20/0.30) < 0
 
     def test_zero_when_equal(self):
         """Zero skew when put IV == call IV."""
-        df = pd.DataFrame({
-            "iv_30d_atm": [0.25],
-            "iv_30d_put": [0.25],
-            "iv_30d_call": [0.25],
-        })
+        df = pd.DataFrame(
+            {
+                "iv_30d_atm": [0.25],
+                "iv_30d_put": [0.25],
+                "iv_30d_call": [0.25],
+            }
+        )
         result = OptionsFeatures.compute_log_skew(df)
         assert abs(result.iloc[0]) < 1e-10
 
     def test_nan_when_zero_iv(self):
         """NaN when either IV is zero."""
-        df = pd.DataFrame({
-            "iv_30d_atm": [0.25],
-            "iv_30d_put": [0.0],
-            "iv_30d_call": [0.25],
-        })
+        df = pd.DataFrame(
+            {
+                "iv_30d_atm": [0.25],
+                "iv_30d_put": [0.0],
+                "iv_30d_call": [0.25],
+            }
+        )
         result = OptionsFeatures.compute_log_skew(df)
         assert pd.isna(result.iloc[0])
 
     def test_nan_when_missing(self):
         """NaN when either IV is NaN."""
-        df = pd.DataFrame({
-            "iv_30d_atm": [0.25],
-            "iv_30d_put": [np.nan],
-            "iv_30d_call": [0.25],
-        })
+        df = pd.DataFrame(
+            {
+                "iv_30d_atm": [0.25],
+                "iv_30d_put": [np.nan],
+                "iv_30d_call": [0.25],
+            }
+        )
         result = OptionsFeatures.compute_log_skew(df)
         assert pd.isna(result.iloc[0])
 
@@ -153,12 +164,20 @@ class TestLogSkew:
         If put=0.30, call=0.20 gives skew S1, and put=0.60, call=0.40
         gives skew S2, then S1 == S2 (scale invariance of log ratio).
         """
-        df1 = pd.DataFrame({
-            "iv_30d_atm": [0.25], "iv_30d_put": [0.30], "iv_30d_call": [0.20],
-        })
-        df2 = pd.DataFrame({
-            "iv_30d_atm": [0.50], "iv_30d_put": [0.60], "iv_30d_call": [0.40],
-        })
+        df1 = pd.DataFrame(
+            {
+                "iv_30d_atm": [0.25],
+                "iv_30d_put": [0.30],
+                "iv_30d_call": [0.20],
+            }
+        )
+        df2 = pd.DataFrame(
+            {
+                "iv_30d_atm": [0.50],
+                "iv_30d_put": [0.60],
+                "iv_30d_call": [0.40],
+            }
+        )
         skew1 = OptionsFeatures.compute_log_skew(df1).iloc[0]
         skew2 = OptionsFeatures.compute_log_skew(df2).iloc[0]
         assert abs(skew1 - skew2) < 1e-10

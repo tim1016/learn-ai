@@ -17,12 +17,12 @@ validated by ``test_rsi_mean_reversion_parity`` against the legacy module.
 Parameters are constructor kwargs so the router's strategy registry can build
 instances from a user-supplied ``RsiMeanReversionParams`` Pydantic model.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Optional
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
@@ -75,8 +75,7 @@ class RsiMeanReversionAlgorithm(Strategy):
             raise ValueError("window must be >= 2")
         if not 0 < oversold < overbought < 100:
             raise ValueError(
-                "require 0 < oversold < overbought < 100 "
-                f"(got oversold={oversold}, overbought={overbought})"
+                f"require 0 < oversold < overbought < 100 (got oversold={oversold}, overbought={overbought})"
             )
         if resolution_minutes <= 0:
             raise ValueError("resolution_minutes must be > 0")
@@ -91,8 +90,8 @@ class RsiMeanReversionAlgorithm(Strategy):
         self._rsi: RelativeStrengthIndex | None = None
 
         self._in_position: bool = False
-        self._pending_entry: Optional[_PendingEntry] = None
-        self._open_trade: Optional[_OpenTrade] = None
+        self._pending_entry: _PendingEntry | None = None
+        self._open_trade: _OpenTrade | None = None
 
         self.trade_log: list[LoggedTrade] = []
 
@@ -160,9 +159,7 @@ class RsiMeanReversionAlgorithm(Strategy):
         if event.direction == Direction.LONG:
             if self._pending_entry is None:
                 if self.ctx is not None:
-                    self.ctx.log(
-                        f"WARN: LONG fill at {event.time} with no pending entry"
-                    )
+                    self.ctx.log(f"WARN: LONG fill at {event.time} with no pending entry")
                 return
             self._open_trade = _OpenTrade(
                 entry_time=event.time,
@@ -195,10 +192,7 @@ class RsiMeanReversionAlgorithm(Strategy):
                     indicators={
                         f"rsi_{self._window}": entry.entry_rsi,
                     },
-                    signal_reason=(
-                        f"RSI({self._window}) crossed above "
-                        f"overbought({self._overbought})"
-                    ),
+                    signal_reason=(f"RSI({self._window}) crossed above overbought({self._overbought})"),
                 )
             )
             if self.ctx is not None:

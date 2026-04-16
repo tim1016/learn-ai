@@ -7,6 +7,7 @@ Formula
 Cross-day contamination is prevented by masking any forward return
 that would span across trading-day boundaries.
 """
+
 from __future__ import annotations
 
 import logging

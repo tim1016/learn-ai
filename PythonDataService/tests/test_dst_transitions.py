@@ -6,15 +6,15 @@ Fall back (EDT→EST): 2024-11-03 at 2:00 AM
 These tests ensure RTH session filtering and tagging produce correct results
 when the UTC↔ET offset changes mid-day.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import pytest
 
-from app.services.dataset_service import filter_session, _tag_session_column
+from app.services.dataset_service import _tag_session_column, filter_session
 
 _ET = ZoneInfo("US/Eastern")
 _UTC = ZoneInfo("UTC")
@@ -33,14 +33,16 @@ def _make_minute_bars(date_str: str, start_hour_utc: int, end_hour_utc: int) -> 
         current += timedelta(minutes=1)
 
     n = len(timestamps)
-    return pd.DataFrame({
-        "timestamp": timestamps,
-        "open": [150.0] * n,
-        "high": [151.0] * n,
-        "low": [149.0] * n,
-        "close": [150.5] * n,
-        "volume": [10000.0] * n,
-    })
+    return pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [150.0] * n,
+            "high": [151.0] * n,
+            "low": [149.0] * n,
+            "close": [150.5] * n,
+            "volume": [10000.0] * n,
+        }
+    )
 
 
 def test_spring_forward_rth_filter():
@@ -57,7 +59,7 @@ def test_spring_forward_rth_filter():
 
     # Verify all remaining bars fall within RTH in ET
     dt_utc = pd.to_datetime(filtered["timestamp"], unit="ms", utc=True)
-    dt_et = dt_utc.dt.tz_convert(_ET)
+    dt_utc.dt.tz_convert(_ET)
 
     # All bars should be on weekday (Sunday 2024-03-10 is a Sunday — market closed!)
     # Actually 2024-03-10 is a Sunday, so RTH filter should return 0 bars.

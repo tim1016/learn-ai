@@ -785,28 +785,41 @@ public class Query
 
     private static StockTickerSnapshotResult MapTickerSnapshot(
         Backend.Models.DTOs.PolygonResponses.StockTickerSnapshotDto dto) => new()
-    {
-        Ticker = dto.Ticker,
-        Day = dto.Day != null ? new SnapshotBarResult
         {
-            Open = dto.Day.Open, High = dto.Day.High, Low = dto.Day.Low,
-            Close = dto.Day.Close, Volume = dto.Day.Volume, Vwap = dto.Day.Vwap,
-        } : null,
-        PrevDay = dto.PrevDay != null ? new SnapshotBarResult
-        {
-            Open = dto.PrevDay.Open, High = dto.PrevDay.High, Low = dto.PrevDay.Low,
-            Close = dto.PrevDay.Close, Volume = dto.PrevDay.Volume, Vwap = dto.PrevDay.Vwap,
-        } : null,
-        Min = dto.Min != null ? new MinuteBarResult
-        {
-            Open = dto.Min.Open, High = dto.Min.High, Low = dto.Min.Low,
-            Close = dto.Min.Close, Volume = dto.Min.Volume, Vwap = dto.Min.Vwap,
-            AccumulatedVolume = dto.Min.AccumulatedVolume, Timestamp = dto.Min.Timestamp,
-        } : null,
-        TodaysChange = dto.TodaysChange,
-        TodaysChangePercent = dto.TodaysChangePercent,
-        Updated = dto.Updated,
-    };
+            Ticker = dto.Ticker,
+            Day = dto.Day != null ? new SnapshotBarResult
+            {
+                Open = dto.Day.Open,
+                High = dto.Day.High,
+                Low = dto.Day.Low,
+                Close = dto.Day.Close,
+                Volume = dto.Day.Volume,
+                Vwap = dto.Day.Vwap,
+            } : null,
+            PrevDay = dto.PrevDay != null ? new SnapshotBarResult
+            {
+                Open = dto.PrevDay.Open,
+                High = dto.PrevDay.High,
+                Low = dto.PrevDay.Low,
+                Close = dto.PrevDay.Close,
+                Volume = dto.PrevDay.Volume,
+                Vwap = dto.PrevDay.Vwap,
+            } : null,
+            Min = dto.Min != null ? new MinuteBarResult
+            {
+                Open = dto.Min.Open,
+                High = dto.Min.High,
+                Low = dto.Min.Low,
+                Close = dto.Min.Close,
+                Volume = dto.Min.Volume,
+                Vwap = dto.Min.Vwap,
+                AccumulatedVolume = dto.Min.AccumulatedVolume,
+                Timestamp = dto.Min.Timestamp,
+            } : null,
+            TodaysChange = dto.TodaysChange,
+            TodaysChangePercent = dto.TodaysChangePercent,
+            Updated = dto.Updated,
+        };
 
     /// <summary>
     /// Analyze an options strategy: payoff curve, POP, EV, max profit/loss, breakevens.

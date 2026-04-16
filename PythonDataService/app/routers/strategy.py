@@ -1,4 +1,5 @@
 """API endpoints for options strategy analysis"""
+
 from __future__ import annotations
 
 import logging
@@ -18,17 +19,19 @@ async def analyze_options_strategy(request: StrategyAnalyzeRequest) -> StrategyA
     try:
         logger.info(
             "[Strategy] Analyzing %d-leg strategy for %s",
-            len(request.legs), request.symbol,
+            len(request.legs),
+            request.symbol,
         )
         result = analyze_strategy(request)
         logger.info(
             "[Strategy] Analysis complete: POP=%.2f%%, EV=%.2f",
-            result.pop * 100, result.expected_value,
+            result.pop * 100,
+            result.expected_value,
         )
         return result
     except Exception as e:
         logger.error("[Strategy] Error: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Strategy analysis failed: {str(e)}",
+            detail=f"Strategy analysis failed: {e!s}",
         )

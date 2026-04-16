@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -71,14 +70,14 @@ def run_iv_diagnostics(iv_data_df: pd.DataFrame) -> IvDiagnosticsReport:
     iv_series = iv_data_df[iv_col].astype(float)
     valid_mask = iv_series.notna() & (iv_series > 0)
     report.valid_iv_days = int(valid_mask.sum())
-    report.missing_pct = round(
-        (1 - report.valid_iv_days / report.total_trading_days) * 100, 2
-    ) if report.total_trading_days > 0 else 100.0
+    report.missing_pct = (
+        round((1 - report.valid_iv_days / report.total_trading_days) * 100, 2)
+        if report.total_trading_days > 0
+        else 100.0
+    )
 
     if report.missing_pct > MAX_MISSING_PCT:
-        report.warnings.append(
-            f"Missing data too high: {report.missing_pct:.1f}% (max {MAX_MISSING_PCT}%)"
-        )
+        report.warnings.append(f"Missing data too high: {report.missing_pct:.1f}% (max {MAX_MISSING_PCT}%)")
 
     # Gaps (consecutive missing days)
     missing_runs = (~valid_mask).astype(int)
@@ -106,9 +105,7 @@ def run_iv_diagnostics(iv_data_df: pd.DataFrame) -> IvDiagnosticsReport:
         discontinuity_mask = iv_changes > MAX_DAY_OVER_DAY_IV_CHANGE
         report.discontinuities = int(discontinuity_mask.sum())
         if report.discontinuities > 0:
-            report.warnings.append(
-                f"{report.discontinuities} day(s) with >50% IV change (possible data errors)"
-            )
+            report.warnings.append(f"{report.discontinuities} day(s) with >50% IV change (possible data errors)")
 
     # DTE spikes (check for large DTE jumps indicating interpolation instability)
     if "dte_low" in iv_data_df.columns and "dte_high" in iv_data_df.columns:
@@ -129,9 +126,7 @@ def run_iv_diagnostics(iv_data_df: pd.DataFrame) -> IvDiagnosticsReport:
 
         report.dte_spikes = dte_spikes_low + dte_spikes_high
         if report.dte_spikes > 5:
-            report.warnings.append(
-                f"{report.dte_spikes} DTE spikes detected (interpolation bracket instability)"
-            )
+            report.warnings.append(f"{report.dte_spikes} DTE spikes detected (interpolation bracket instability)")
 
     # Final validity determination
     # Discontinuity threshold at 10%: real market data has IV spikes around
@@ -148,9 +143,6 @@ def run_iv_diagnostics(iv_data_df: pd.DataFrame) -> IvDiagnosticsReport:
             f"{report.missing_pct:.1f}% missing, mean IV={report.iv_mean:.4f}"
         )
     else:
-        logger.warning(
-            f"[IV DIAGNOSTICS] FAILED — {len(report.warnings)} warnings: "
-            + "; ".join(report.warnings)
-        )
+        logger.warning(f"[IV DIAGNOSTICS] FAILED — {len(report.warnings)} warnings: " + "; ".join(report.warnings))
 
     return report

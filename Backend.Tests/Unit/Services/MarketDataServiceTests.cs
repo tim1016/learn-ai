@@ -77,8 +77,13 @@ public class MarketDataServiceTests
         var aggregate = new StockAggregate
         {
             TickerId = ticker.Id,
-            Open = 150m, High = 155m, Low = 148m, Close = 153m,
-            Volume = 1_000_000m, Timespan = "day", Multiplier = 1,
+            Open = 150m,
+            High = 155m,
+            Low = 148m,
+            Close = 153m,
+            Volume = 1_000_000m,
+            Timespan = "day",
+            Multiplier = 1,
             Timestamp = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc)
         };
         context.StockAggregates.Add(aggregate);
@@ -129,7 +134,9 @@ public class MarketDataServiceTests
             ],
             Summary = new DataSummary
             {
-                OriginalCount = 2, CleanedCount = 2, RemovedCount = 0
+                OriginalCount = 2,
+                CleanedCount = 2,
+                RemovedCount = 0
             }
         };
 
@@ -164,8 +171,13 @@ public class MarketDataServiceTests
         var existingAggregate = new StockAggregate
         {
             TickerId = ticker.Id,
-            Open = 100m, High = 105m, Low = 98m, Close = 102m,
-            Volume = 500_000m, Timespan = "day", Multiplier = 1,
+            Open = 100m,
+            High = 105m,
+            Low = 98m,
+            Close = 102m,
+            Volume = 500_000m,
+            Timespan = "day",
+            Multiplier = 1,
             Timestamp = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc)
         };
         context.StockAggregates.Add(existingAggregate);
@@ -283,8 +295,13 @@ public class MarketDataServiceTests
         context.StockAggregates.Add(new StockAggregate
         {
             TickerId = ticker.Id,
-            Open = 300m, High = 305m, Low = 298m, Close = 303m,
-            Volume = 800_000m, Timespan = "day", Multiplier = 1,
+            Open = 300m,
+            High = 305m,
+            Low = 298m,
+            Close = 303m,
+            Volume = 800_000m,
+            Timespan = "day",
+            Multiplier = 1,
             Timestamp = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc)
         });
         await context.SaveChangesAsync();
@@ -352,8 +369,13 @@ public class MarketDataServiceTests
         context.StockAggregates.Add(new StockAggregate
         {
             TickerId = ticker.Id,
-            Open = 100m, High = 105m, Low = 98m, Close = 102m,
-            Volume = 500_000m, Timespan = "day", Multiplier = 1,
+            Open = 100m,
+            High = 105m,
+            Low = 98m,
+            Close = 102m,
+            Volume = 500_000m,
+            Timespan = "day",
+            Multiplier = 1,
             Timestamp = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc)
         });
         await context.SaveChangesAsync();

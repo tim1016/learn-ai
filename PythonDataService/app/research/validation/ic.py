@@ -11,6 +11,7 @@ Formulas
     t_NW = mean_IC / sqrt(NW_var / N)   (Newey-West HAC corrected)
     N_eff = N / (1 + 2 * sum(rho_k))    (effective sample size)
 """
+
 from __future__ import annotations
 
 import logging
@@ -39,7 +40,8 @@ class ICResult:
 
 
 def _compute_newey_west_t_stat(
-    ic_array: np.ndarray, min_lag: int = 0,
+    ic_array: np.ndarray,
+    min_lag: int = 0,
 ) -> tuple[float, float]:
     """Compute Newey-West HAC-corrected t-stat for the IC series.
 
@@ -87,7 +89,7 @@ def _compute_newey_west_t_stat(
 
 def _andrews_lag(n: int) -> int:
     """Andrews (1991) automatic bandwidth selection for Bartlett kernel."""
-    return max(1, int(math.floor(4 * (n / 100) ** (2 / 9))))
+    return max(1, math.floor(4 * (n / 100) ** (2 / 9)))
 
 
 def _compute_effective_sample_size(ic_array: np.ndarray, min_lag: int = 0) -> float:
@@ -139,16 +141,19 @@ def _compute_rolling_ic(
     Instead of grouping by day (cross-sectional), compute Spearman rank
     correlation within rolling windows of ``rolling_window`` observations.
     """
-    df = pd.DataFrame({
-        "feature": feature_values.values,
-        "target": target_returns.values,
-        "timestamp": timestamps_ms.values,
-    }).dropna(subset=["feature", "target"])
+    df = pd.DataFrame(
+        {
+            "feature": feature_values.values,
+            "target": target_returns.values,
+            "timestamp": timestamps_ms.values,
+        }
+    ).dropna(subset=["feature", "target"])
 
     if len(df) < rolling_window:
         logger.warning(
             "[Research] Not enough data for rolling IC (%d < %d)",
-            len(df), rolling_window,
+            len(df),
+            rolling_window,
         )
         return ICResult(mean_ic=0.0, ic_t_stat=0.0, ic_p_value=1.0)
 
@@ -175,9 +180,7 @@ def _compute_rolling_ic(
 
         rolling_ics.append(float(corr))
         mid_ts = int(window["timestamp"].iloc[rolling_window // 2])
-        rolling_dates.append(
-            str(pd.to_datetime(mid_ts, unit="ms").date())
-        )
+        rolling_dates.append(str(pd.to_datetime(mid_ts, unit="ms").date()))
 
     if len(rolling_ics) < 2:
         logger.warning(
@@ -202,10 +205,15 @@ def _compute_rolling_ic(
     effective_n = _compute_effective_sample_size(ic_array, min_lag=min_nw_lag)
 
     logger.info(
-        "[Research] Rolling IC (w=%d): mean=%.4f, t=%.4f (NW=%.4f), "
-        "p=%.4f (NW=%.4f), windows=%d (effective=%.0f)",
-        rolling_window, mean_ic, t_stat, nw_t_stat,
-        p_value, nw_p_value, n, effective_n,
+        "[Research] Rolling IC (w=%d): mean=%.4f, t=%.4f (NW=%.4f), p=%.4f (NW=%.4f), windows=%d (effective=%.0f)",
+        rolling_window,
+        mean_ic,
+        t_stat,
+        nw_t_stat,
+        p_value,
+        nw_p_value,
+        n,
+        effective_n,
     )
 
     return ICResult(
@@ -253,8 +261,12 @@ def compute_information_coefficient(
     """
     if rolling_window is not None:
         return _compute_rolling_ic(
-            feature_values, target_returns, timestamps_ms,
-            correlation_method, rolling_window, min_nw_lag,
+            feature_values,
+            target_returns,
+            timestamps_ms,
+            correlation_method,
+            rolling_window,
+            min_nw_lag,
         )
 
     df = pd.DataFrame(
@@ -308,9 +320,14 @@ def compute_information_coefficient(
     effective_n = _compute_effective_sample_size(ic_array, min_lag=min_nw_lag)
 
     logger.info(
-        "[Research] IC: mean=%.4f, t=%.4f (NW=%.4f), p=%.4f (NW=%.4f), "
-        "days=%d (effective=%.0f)",
-        mean_ic, t_stat, nw_t_stat, p_value, nw_p_value, n, effective_n,
+        "[Research] IC: mean=%.4f, t=%.4f (NW=%.4f), p=%.4f (NW=%.4f), days=%d (effective=%.0f)",
+        mean_ic,
+        t_stat,
+        nw_t_stat,
+        p_value,
+        nw_p_value,
+        n,
+        effective_n,
     )
 
     return ICResult(

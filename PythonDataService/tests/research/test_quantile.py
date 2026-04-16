@@ -1,9 +1,9 @@
 """Tests for quantile analysis."""
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from app.research.validation.quantile import compute_quantile_analysis
 

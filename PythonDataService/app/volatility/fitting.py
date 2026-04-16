@@ -20,18 +20,17 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Callable, Optional, Sequence
+from enum import StrEnum
 
 import numpy as np
-import QuantLib as ql
 from scipy.optimize import least_squares
 
 logger = logging.getLogger(__name__)
 
 
-class FitMethod(str, Enum):
+class FitMethod(StrEnum):
     VARIANCE = "variance"
     SABR = "sabr"
     SVI = "svi"
@@ -39,14 +38,15 @@ class FitMethod(str, Enum):
 
 # ── Data containers ──────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class SmileSlice:
     """IV data for a single expiry."""
 
-    strikes: np.ndarray       # shape (N,)
-    ivs: np.ndarray           # shape (N,)  — implied vols (annualised)
-    ttm: float                # time-to-maturity in years
-    forward: float            # forward price F = S * exp((r - q) * T)
+    strikes: np.ndarray  # shape (N,)
+    ivs: np.ndarray  # shape (N,)  — implied vols (annualised)
+    ttm: float  # time-to-maturity in years
+    forward: float  # forward price F = S * exp((r - q) * T)
 
     def __post_init__(self) -> None:
         assert len(self.strikes) == len(self.ivs), "strikes/ivs length mismatch"
@@ -64,9 +64,7 @@ class FitResult:
     residual_rmse: float = 0.0
     success: bool = True
     message: str = ""
-    _vol_fn: Optional[Callable[[float], float]] = field(
-        default=None, repr=False, compare=False
-    )
+    _vol_fn: Callable[[float], float] | None = field(default=None, repr=False, compare=False)
 
     def volatility(self, strike: float) -> float:
         """Query fitted vol at a given strike."""
@@ -81,6 +79,7 @@ class FitResult:
 # ═══════════════════════════════════════════════════════════════════════════
 #  1.  SABR
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def _sabr_vol(
     strike: float,
@@ -102,31 +101,26 @@ def _sabr_vol(
         # ATM formula
         fk_beta = forward ** (1.0 - beta)
         term1 = alpha / fk_beta
-        a = ((1.0 - beta) ** 2 / 24.0) * alpha ** 2 / (forward ** (2.0 - 2.0 * beta))
+        a = ((1.0 - beta) ** 2 / 24.0) * alpha**2 / (forward ** (2.0 - 2.0 * beta))
         b = 0.25 * rho * beta * nu * alpha / (forward ** (1.0 - beta))
-        c = (2.0 - 3.0 * rho ** 2) / 24.0 * nu ** 2
+        c = (2.0 - 3.0 * rho**2) / 24.0 * nu**2
         return term1 * (1.0 + (a + b + c) * ttm)
 
     log_fk = math.log(forward / strike)
     fk_beta_mid = (fk) ** ((1.0 - beta) / 2.0)
     z = (nu / alpha) * fk_beta_mid * log_fk
-    x_z = math.log((math.sqrt(1.0 - 2.0 * rho * z + z ** 2) + z - rho) / (1.0 - rho))
+    x_z = math.log((math.sqrt(1.0 - 2.0 * rho * z + z**2) + z - rho) / (1.0 - rho))
 
     if abs(x_z) < eps:
         x_z = 1.0
 
     prefix = alpha / (
-        fk_beta_mid
-        * (
-            1.0
-            + (1.0 - beta) ** 2 / 24.0 * log_fk ** 2
-            + (1.0 - beta) ** 4 / 1920.0 * log_fk ** 4
-        )
+        fk_beta_mid * (1.0 + (1.0 - beta) ** 2 / 24.0 * log_fk**2 + (1.0 - beta) ** 4 / 1920.0 * log_fk**4)
     )
 
-    a = ((1.0 - beta) ** 2 / 24.0) * alpha ** 2 / (fk ** (1.0 - beta))
+    a = ((1.0 - beta) ** 2 / 24.0) * alpha**2 / (fk ** (1.0 - beta))
     b = 0.25 * rho * beta * nu * alpha / (fk_beta_mid)
-    c = (2.0 - 3.0 * rho ** 2) / 24.0 * nu ** 2
+    c = (2.0 - 3.0 * rho**2) / 24.0 * nu**2
 
     return prefix * (z / x_z) * (1.0 + (a + b + c) * ttm)
 
@@ -153,10 +147,7 @@ def fit_sabr(
         alpha, rho, nu = params
         if alpha <= 0 or nu <= 0 or abs(rho) >= 1:
             return np.full(len(strikes), 1e6)
-        model_vols = np.array([
-            _sabr_vol(k, forward, ttm, alpha, beta, rho, nu)
-            for k in strikes
-        ])
+        model_vols = np.array([_sabr_vol(k, forward, ttm, alpha, beta, rho, nu) for k in strikes])
         return model_vols - market_vols
 
     result = least_squares(
@@ -168,7 +159,7 @@ def fit_sabr(
     )
 
     alpha_fit, rho_fit, nu_fit = result.x
-    rmse = float(np.sqrt(np.mean(result.fun ** 2)))
+    rmse = float(np.sqrt(np.mean(result.fun**2)))
 
     def vol_fn(k: float) -> float:
         return _sabr_vol(k, forward, ttm, alpha_fit, beta, rho_fit, nu_fit)
@@ -193,6 +184,7 @@ def fit_sabr(
 #  2.  SVI  (Gatheral raw parameterisation)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def _svi_total_variance(
     k: float,
     a: float,
@@ -214,7 +206,7 @@ def _svi_total_variance(
 
 def fit_svi(
     smile: SmileSlice,
-    initial_params: Optional[dict[str, float]] = None,
+    initial_params: dict[str, float] | None = None,
 ) -> FitResult:
     """
     Fit SVI raw parameterisation to a smile slice.
@@ -228,7 +220,7 @@ def fit_svi(
     market_vols = smile.ivs
 
     log_moneyness = np.log(strikes / forward)
-    market_total_var = (market_vols ** 2) * ttm
+    market_total_var = (market_vols**2) * ttm
 
     # Default initial guess
     if initial_params is None:
@@ -246,12 +238,9 @@ def fit_svi(
         if b_p <= 0 or sigma_p <= 0 or abs(rho_p) >= 1:
             return np.full(len(strikes), 1e6)
         # Butterfly arbitrage constraint: a + b * sigma * sqrt(1 - rho^2) >= 0
-        if a_p + b_p * sigma_p * math.sqrt(1.0 - rho_p ** 2) < 0:
+        if a_p + b_p * sigma_p * math.sqrt(1.0 - rho_p**2) < 0:
             return np.full(len(strikes), 1e6)
-        model_var = np.array([
-            _svi_total_variance(k, a_p, b_p, rho_p, m_p, sigma_p)
-            for k in log_moneyness
-        ])
+        model_var = np.array([_svi_total_variance(k, a_p, b_p, rho_p, m_p, sigma_p) for k in log_moneyness])
         return model_var - market_total_var
 
     x0 = [
@@ -274,7 +263,7 @@ def fit_svi(
     )
 
     a_f, b_f, rho_f, m_f, sigma_f = result.x
-    rmse = float(np.sqrt(np.mean(result.fun ** 2)))
+    rmse = float(np.sqrt(np.mean(result.fun**2)))
 
     def vol_fn(strike: float) -> float:
         k = math.log(strike / forward)
@@ -304,6 +293,7 @@ def fit_svi(
 #  3.  Variance interpolation (non-parametric)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def fit_variance_interp(smile: SmileSlice) -> FitResult:
     """
     Build a simple variance-time interpolation for a single expiry slice.
@@ -313,7 +303,7 @@ def fit_variance_interp(smile: SmileSlice) -> FitResult:
     constraints better than interpolating vol directly.
     """
     strikes = smile.strikes
-    total_var = (smile.ivs ** 2) * smile.ttm
+    total_var = (smile.ivs**2) * smile.ttm
     ttm = smile.ttm
 
     sorted_idx = np.argsort(strikes)
@@ -339,6 +329,7 @@ def fit_variance_interp(smile: SmileSlice) -> FitResult:
 # ═══════════════════════════════════════════════════════════════════════════
 #  Arbitrage checks
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 @dataclass
 class ArbitrageReport:
@@ -370,7 +361,7 @@ def check_smile_arbitrage(
 
     # Compute total variance at each strike
     total_vars: list[float] = []
-    for k_val, strike in zip(log_k, strikes):
+    for _k_val, strike in zip(log_k, strikes, strict=False):
         try:
             v = fit.volatility(strike)
             w = v * v * ttm
@@ -392,18 +383,10 @@ def check_smile_arbitrage(
             dk2 = log_k[i + 1] - log_k[i]
             if dk1 <= 0 or dk2 <= 0:
                 continue
-            d2w = (
-                (w_arr[i + 1] - w_arr[i]) / dk2
-                - (w_arr[i] - w_arr[i - 1]) / dk1
-            ) / (0.5 * (dk1 + dk2))
+            d2w = ((w_arr[i + 1] - w_arr[i]) / dk2 - (w_arr[i] - w_arr[i - 1]) / dk1) / (0.5 * (dk1 + dk2))
             if d2w < -1e-6:
                 report.butterfly_violations += 1
-                report.details.append(
-                    f"Butterfly violation at K={strikes[i]:.2f}: d2w/dk2={d2w:.6f}"
-                )
+                report.details.append(f"Butterfly violation at K={strikes[i]:.2f}: d2w/dk2={d2w:.6f}")
 
-    report.passed = (
-        report.negative_variance == 0
-        and report.butterfly_violations == 0
-    )
+    report.passed = report.negative_variance == 0 and report.butterfly_violations == 0
     return report

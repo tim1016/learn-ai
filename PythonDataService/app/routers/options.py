@@ -1,10 +1,12 @@
 """API endpoints for options contract data"""
-from fastapi import APIRouter, HTTPException, status
+
 import logging
 
-from app.services.polygon_client import PolygonClientService
+from fastapi import APIRouter, HTTPException, status
+
 from app.models.requests import OptionsContractsRequest, OptionsExpirationsRequest
-from app.models.responses import OptionsContractsResponse, OptionsContractItem, OptionsExpirationsResponse
+from app.models.responses import OptionsContractItem, OptionsContractsResponse, OptionsExpirationsResponse
+from app.services.polygon_client import PolygonClientService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -25,9 +27,11 @@ async def list_options_contracts(request: OptionsContractsRequest):
     - **limit**: Maximum number of results (default 100)
     """
     try:
-        logger.info(f"[Options] Request: underlying={request.underlying_ticker}, "
-                     f"as_of={request.as_of_date}, type={request.contract_type}, "
-                     f"strike=[{request.strike_price_gte}, {request.strike_price_lte}]")
+        logger.info(
+            f"[Options] Request: underlying={request.underlying_ticker}, "
+            f"as_of={request.as_of_date}, type={request.contract_type}, "
+            f"strike=[{request.strike_price_gte}, {request.strike_price_lte}]"
+        )
 
         raw_contracts = polygon_client.list_options_contracts(
             underlying_ticker=request.underlying_ticker,
@@ -53,10 +57,9 @@ async def list_options_contracts(request: OptionsContractsRequest):
         )
 
     except Exception as e:
-        logger.error(f"[Options] Error listing contracts: {str(e)}", exc_info=True)
+        logger.error(f"[Options] Error listing contracts: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list options contracts: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list options contracts: {e!s}"
         )
 
 
@@ -90,8 +93,7 @@ async def list_options_expirations(request: OptionsExpirationsRequest):
         )
 
     except Exception as e:
-        logger.error(f"[Options] Error listing expirations: {str(e)}", exc_info=True)
+        logger.error(f"[Options] Error listing expirations: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list options expirations: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list options expirations: {e!s}"
         )

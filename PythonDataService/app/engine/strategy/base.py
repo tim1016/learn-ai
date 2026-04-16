@@ -4,13 +4,14 @@ Roughly analogous to LEAN's ``QCAlgorithm`` base class. Subclasses override
 ``initialize`` (to configure indicators, consolidators, dates) and event
 callbacks (``on_bar``, ``on_order_event``, ``on_end``).
 """
+
 from __future__ import annotations
 
 from abc import ABC
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Callable
 
 from app.engine.consolidators.trade_bar_consolidator import TradeBarConsolidator
 from app.engine.data.trade_bar import TradeBar
@@ -68,9 +69,9 @@ class StrategyContext:
 
     portfolio: Portfolio
     # Map of symbol -> list of (period, consolidator, handler).
-    _consolidators: dict[
-        str, list[tuple[timedelta, TradeBarConsolidator, Callable[[TradeBar], None]]]
-    ] = field(default_factory=dict)
+    _consolidators: dict[str, list[tuple[timedelta, TradeBarConsolidator, Callable[[TradeBar], None]]]] = field(
+        default_factory=dict
+    )
     # Symbols the strategy subscribed to.
     symbols: list[str] = field(default_factory=list)
     # Logged messages for debugging / trade logs.
@@ -94,6 +95,7 @@ class StrategyContext:
         handler: Callable[[TradeBar], None],
     ) -> TradeBarConsolidator:
         consolidator = TradeBarConsolidator(period)
+
         # Wrap handler so the consolidator's emission also records the
         # strategy's ``current_time`` for convenience and stashes the last
         # fired bar on the consolidator (used by the engine for fills).
@@ -106,9 +108,7 @@ class StrategyContext:
 
         consolidator.on_data_consolidated = _on_emit
         consolidator._last_fired_bar = None  # type: ignore[attr-defined]
-        self._consolidators.setdefault(symbol.upper(), []).append(
-            (period, consolidator, handler)
-        )
+        self._consolidators.setdefault(symbol.upper(), []).append((period, consolidator, handler))
         return consolidator
 
     def get_consolidators(self, symbol: str) -> list[TradeBarConsolidator]:
@@ -118,9 +118,7 @@ class StrategyContext:
         self.log_lines.append(message)
 
     # Convenience proxies to portfolio
-    def set_holdings(
-        self, symbol: str, fraction: Decimal | float
-    ) -> None:
+    def set_holdings(self, symbol: str, fraction: Decimal | float) -> None:
         assert self.current_time is not None
         self.portfolio.set_holdings(symbol.upper(), fraction, self.current_time)
 
@@ -139,9 +137,7 @@ class StrategyContext:
         if self.current_time is not None:
             insight.generated_time = self.current_time
             insight.close_time = self.current_time + insight.period
-        price = self.portfolio.reference_price.get(
-            insight.symbol, Decimal(0)
-        )
+        price = self.portfolio.reference_price.get(insight.symbol, Decimal(0))
         self.insight_manager.add(insight, price)
 
 
@@ -170,9 +166,7 @@ class Strategy(ABC):
         from zoneinfo import ZoneInfo
 
         # End of day, inclusive.
-        self.end_date = datetime(
-            year, month, day, 23, 59, 59, tzinfo=ZoneInfo("America/New_York")
-        )
+        self.end_date = datetime(year, month, day, 23, 59, 59, tzinfo=ZoneInfo("America/New_York"))
 
     def set_cash(self, amount: float | int | Decimal) -> None:
         self.initial_cash = Decimal(str(amount))

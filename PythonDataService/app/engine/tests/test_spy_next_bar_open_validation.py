@@ -26,11 +26,12 @@ Run with::
     cd PythonDataService
     python -m app.engine.tests.test_spy_next_bar_open_validation
 """
+
 from __future__ import annotations
 
 import csv
 import json
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from app.engine.data.lean_format import LeanMinuteDataReader
@@ -96,12 +97,10 @@ def compare_to_baseline(trades: list) -> list[str]:
     mismatches: list[str] = []
 
     if len(trades) != len(baseline):
-        mismatches.append(
-            f"count: engine produced {len(trades)} trades, baseline has {len(baseline)}"
-        )
+        mismatches.append(f"count: engine produced {len(trades)} trades, baseline has {len(baseline)}")
         return mismatches
 
-    for i, (engine_trade, baseline_row) in enumerate(zip(trades, baseline), start=1):
+    for i, (engine_trade, baseline_row) in enumerate(zip(trades, baseline, strict=False), start=1):
         checks = [
             (
                 "entry_time",
@@ -124,10 +123,7 @@ def compare_to_baseline(trades: list) -> list[str]:
             else:
                 ok = engine_val == baseline_val
             if not ok:
-                mismatches.append(
-                    f"Trade #{i} ({baseline_row['entry']}): {name}: "
-                    f"{engine_val} != {baseline_val}"
-                )
+                mismatches.append(f"Trade #{i} ({baseline_row['entry']}): {name}: {engine_val} != {baseline_val}")
     return mismatches
 
 
@@ -136,16 +132,16 @@ def compare_to_baseline(trades: list) -> list[str]:
 # ---------------------------------------------------------------------------
 # Per-metric tolerance (absolute or relative as noted in comments).
 _LEAN_TOLERANCES: dict[str, float] = {
-    "final_equity": 0.005,       # 0.5% relative
-    "net_profit": 0.02,          # 2% relative — net profit is more sensitive
-    "total_fees": 0.0,           # exact — commission model is deterministic
-    "total_trades": 0.0,         # exact
-    "winning_trades": 2.0,       # absolute: +/- 2 trades allowed
+    "final_equity": 0.005,  # 0.5% relative
+    "net_profit": 0.02,  # 2% relative — net profit is more sensitive
+    "total_fees": 0.0,  # exact — commission model is deterministic
+    "total_trades": 0.0,  # exact
+    "winning_trades": 2.0,  # absolute: +/- 2 trades allowed
     "losing_trades": 2.0,
-    "win_rate": 0.05,            # absolute: +/- 5 percentage points
-    "profit_factor": 0.10,       # 10% relative
-    "max_drawdown_pct": 0.005,   # absolute: +/- 0.5 percentage points
-    "sharpe_ratio": 0.15,        # absolute
+    "win_rate": 0.05,  # absolute: +/- 5 percentage points
+    "profit_factor": 0.10,  # 10% relative
+    "max_drawdown_pct": 0.005,  # absolute: +/- 0.5 percentage points
+    "sharpe_ratio": 0.15,  # absolute
 }
 
 
@@ -162,9 +158,7 @@ def _within_tolerance(key: str, engine_val: float, lean_val: float) -> bool:
     return abs(engine_val - lean_val) <= tol
 
 
-def compare_to_lean_reference(
-    engine_stats: dict, engine_equity: float, engine_trades: int
-) -> tuple[bool, list[str]]:
+def compare_to_lean_reference(engine_stats: dict, engine_equity: float, engine_trades: int) -> tuple[bool, list[str]]:
     """Compare engine NEXT_BAR_OPEN output to LEAN's reference stats.
 
     Returns (passed, messages). If the fixture file does not exist,
@@ -208,9 +202,7 @@ def compare_to_lean_reference(
         lean_val = float(lean[key])
         ok = _within_tolerance(key, engine_val, lean_val)
         status = "OK " if ok else "FAIL"
-        mismatches.append(
-            f"  [{status}] {key}: engine={engine_val}  lean={lean_val}  tol={_LEAN_TOLERANCES[key]}"
-        )
+        mismatches.append(f"  [{status}] {key}: engine={engine_val}  lean={lean_val}  tol={_LEAN_TOLERANCES[key]}")
         if not ok:
             pass  # keep the report contiguous
 
@@ -224,10 +216,7 @@ def compare_to_lean_reference(
 def run_validation() -> bool:
     print("Running SPY NEXT_BAR_OPEN backtest...")
     trades, initial_cash, final_equity, total_fees = run_engine_next_bar_open()
-    print(
-        f"Engine: {len(trades)} trades, final_equity=${final_equity:,.2f}, "
-        f"fees=${total_fees:.2f}"
-    )
+    print(f"Engine: {len(trades)} trades, final_equity=${final_equity:,.2f}, fees=${total_fees:.2f}")
 
     # --- Part 1: regression vs baseline ---
     print("\n[1/2] Regression check against committed baseline...")
@@ -274,7 +263,6 @@ def run_validation() -> bool:
 
 if __name__ == "__main__":
     import sys
-    import os
 
     if "--refresh-baseline" in sys.argv:
         # Regenerate the baseline CSV from the current engine output.
@@ -282,24 +270,37 @@ if __name__ == "__main__":
         BASELINE_CSV.parent.mkdir(parents=True, exist_ok=True)
         with BASELINE_CSV.open("w", newline="") as f:
             w = csv.writer(f)
-            w.writerow([
-                "trade_no", "entry", "entry_price", "exit", "exit_price",
-                "ema5", "ema10", "rsi", "pnl_pts", "pnl_pct", "result",
-            ])
+            w.writerow(
+                [
+                    "trade_no",
+                    "entry",
+                    "entry_price",
+                    "exit",
+                    "exit_price",
+                    "ema5",
+                    "ema10",
+                    "rsi",
+                    "pnl_pts",
+                    "pnl_pct",
+                    "result",
+                ]
+            )
             for i, t in enumerate(trades, start=1):
-                w.writerow([
-                    i,
-                    t.entry_time.strftime("%Y-%m-%d %H:%M"),
-                    _fmt(t.entry_price, 4),
-                    t.exit_time.strftime("%Y-%m-%d %H:%M"),
-                    _fmt(t.exit_price, 4),
-                    _fmt(t.ema5, 6),
-                    _fmt(t.ema10, 6),
-                    _fmt(t.rsi, 6),
-                    _fmt(t.pnl_pts, 6),
-                    _fmt(t.pnl_pct, 8),
-                    t.result,
-                ])
+                w.writerow(
+                    [
+                        i,
+                        t.entry_time.strftime("%Y-%m-%d %H:%M"),
+                        _fmt(t.entry_price, 4),
+                        t.exit_time.strftime("%Y-%m-%d %H:%M"),
+                        _fmt(t.exit_price, 4),
+                        _fmt(t.ema5, 6),
+                        _fmt(t.ema10, 6),
+                        _fmt(t.rsi, 6),
+                        _fmt(t.pnl_pts, 6),
+                        _fmt(t.pnl_pct, 8),
+                        t.result,
+                    ]
+                )
         print(f"Refreshed baseline at {BASELINE_CSV} with {len(trades)} trades")
         sys.exit(0)
 

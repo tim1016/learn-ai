@@ -19,15 +19,20 @@ _SEMAPHORE = asyncio.Semaphore(5)
 MIN_VOLUME = 50
 MIN_OPEN_INTEREST = 100
 MAX_SPREAD_RATIO = 0.10  # 10% bid-ask spread / mid
-OTM_OFFSET_PCT = 0.05    # Fallback: 5% OTM for skew contracts
+OTM_OFFSET_PCT = 0.05  # Fallback: 5% OTM for skew contracts
 TARGET_DELTA_PUT = -0.25  # Target delta for OTM put (25Δ)
 TARGET_DELTA_CALL = 0.25  # Target delta for OTM call (25Δ)
-DEFAULT_IV = 0.25         # Default IV for delta estimation when not available
-DEFAULT_RFR = 0.043       # Default risk-free rate for delta estimation
+DEFAULT_IV = 0.25  # Default IV for delta estimation when not available
+DEFAULT_RFR = 0.043  # Default risk-free rate for delta estimation
 
 
 def _bs_delta(
-    S: float, K: float, T: float, r: float, sigma: float, option_type: str,
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    sigma: float,
+    option_type: str,
 ) -> float:
     """Black-Scholes delta for strike selection."""
     if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
@@ -65,10 +70,7 @@ def _find_otm_put_by_delta(
 
     return min(
         puts,
-        key=lambda c: abs(
-            _bs_delta(stock_close, c["strike_price"], T, rfr, iv_estimate, "put")
-            - TARGET_DELTA_PUT
-        ),
+        key=lambda c: abs(_bs_delta(stock_close, c["strike_price"], T, rfr, iv_estimate, "put") - TARGET_DELTA_PUT),
     )
 
 
@@ -91,10 +93,7 @@ def _find_otm_call_by_delta(
 
     return min(
         calls,
-        key=lambda c: abs(
-            _bs_delta(stock_close, c["strike_price"], T, rfr, iv_estimate, "call")
-            - TARGET_DELTA_CALL
-        ),
+        key=lambda c: abs(_bs_delta(stock_close, c["strike_price"], T, rfr, iv_estimate, "call") - TARGET_DELTA_CALL),
     )
 
 
@@ -181,7 +180,7 @@ def _find_bracket_expiries(
     """
     target_date = trade_date + timedelta(days=30)
     search_start = trade_date + timedelta(days=20)  # At least 20 DTE
-    search_end = trade_date + timedelta(days=45)    # At most 45 DTE
+    search_end = trade_date + timedelta(days=45)  # At most 45 DTE
 
     trade_date_str = trade_date.strftime("%Y-%m-%d")
 
@@ -290,7 +289,7 @@ def find_bracket_contracts(
         trade_date = datetime.strptime(date_str, "%Y-%m-%d")
 
         if i % 50 == 0:
-            logger.info(f"[CONTRACT FINDER] Processing date {i+1}/{len(filtered_dates)}: {date_str}")
+            logger.info(f"[CONTRACT FINDER] Processing date {i + 1}/{len(filtered_dates)}: {date_str}")
 
         # Find bracket expiries (cacheable by month)
         cache_key = f"{underlying}:{trade_date.strftime('%Y-%m')}"

@@ -2,6 +2,7 @@
 
 Ported from Backend/Services/Implementation/BacktestService.cs RunSmaCrossover.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -11,7 +12,6 @@ from app.services.strategies.common import (
     StrategyResult,
     TradeRecord,
     compute_metrics,
-    format_timestamp,
     make_trade,
 )
 
@@ -55,8 +55,10 @@ def run(df: pd.DataFrame, params: dict) -> StrategyResult:
         elif in_position and prev_short >= prev_long and curr_short < curr_long:
             trade_num += 1
             t = make_trade(
-                trade_num, "Buy",
-                df.iloc[entry_idx], df.iloc[i],
+                trade_num,
+                "Buy",
+                df.iloc[entry_idx],
+                df.iloc[i],
                 cum_pnl_pct,
                 f"SMA({short_window}) crossed below SMA({long_window})",
                 {"sma_short": round(float(curr_short), 4), "sma_long": round(float(curr_long), 4)},
@@ -69,8 +71,10 @@ def run(df: pd.DataFrame, params: dict) -> StrategyResult:
     if in_position:
         trade_num += 1
         t = make_trade(
-            trade_num, "Buy",
-            df.iloc[entry_idx], df.iloc[-1],
+            trade_num,
+            "Buy",
+            df.iloc[entry_idx],
+            df.iloc[-1],
             cum_pnl_pct,
             "Position closed at end of period",
         )

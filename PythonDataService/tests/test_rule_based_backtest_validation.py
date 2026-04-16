@@ -7,24 +7,154 @@ with RSI(14) 50–70 filter, min EMA gap ≥ 0.20, and 5-candle (75 min) fixed e
 This test runs the engine on mock bars constructed from the spreadsheet's entry/exit
 data and verifies the metrics match within tolerance.
 """
+
 from __future__ import annotations
 
 import pandas as pd
 import pytest
-from pathlib import Path
 
 # Reference data from the spreadsheet (all 50 trades)
 REFERENCE_TRADES = [
-    {"n": 1,  "entry": "2025-01-17 14:30", "exit": "2025-01-17 15:45", "entry_price": 596.12, "exit_price": 598.16, "ema5": 593.6086, "ema10": 593.1214, "ema_gap": 0.4872, "rsi": 67.07, "adx": 18.45, "pnl_pts": 2.04,  "result": "WIN"},
-    {"n": 2,  "entry": "2025-01-21 14:30", "exit": "2025-01-21 15:45", "entry_price": 600.18, "exit_price": 600.37, "ema5": 598.7461, "ema10": 598.5459, "ema_gap": 0.2003, "rsi": 69.94, "adx": 20.69, "pnl_pts": 0.19,  "result": "WIN"},
-    {"n": 3,  "entry": "2025-01-29 20:15", "exit": "2025-01-30 15:00", "entry_price": 603.35, "exit_price": 603.70, "ema5": 602.2309, "ema10": 602.0153, "ema_gap": 0.2156, "rsi": 55.67, "adx": 20.07, "pnl_pts": 0.35,  "result": "WIN"},
-    {"n": 4,  "entry": "2025-02-04 15:00", "exit": "2025-02-04 16:15", "entry_price": 600.45, "exit_price": 601.98, "ema5": 599.1874, "ema10": 598.9099, "ema_gap": 0.2775, "rsi": 56.60, "adx": 18.05, "pnl_pts": 1.53,  "result": "WIN"},
-    {"n": 5,  "entry": "2025-02-06 20:45", "exit": "2025-02-07 15:30", "entry_price": 606.34, "exit_price": 604.47, "ema5": 605.1861, "ema10": 604.9632, "ema_gap": 0.2229, "rsi": 64.02, "adx": 22.89, "pnl_pts": -1.87, "result": "LOSS"},
-    {"n": 6,  "entry": "2025-03-05 17:30", "exit": "2025-03-05 18:45", "entry_price": 579.18, "exit_price": 581.46, "ema5": 577.5447, "ema10": 577.1871, "ema_gap": 0.3576, "rsi": 52.63, "adx": 23.13, "pnl_pts": 2.29,  "result": "WIN"},
-    {"n": 7,  "entry": "2025-03-07 18:00", "exit": "2025-03-07 19:15", "entry_price": 573.45, "exit_price": 576.58, "ema5": 570.7672, "ema10": 570.2524, "ema_gap": 0.5148, "rsi": 55.75, "adx": 22.63, "pnl_pts": 3.12,  "result": "WIN"},
-    {"n": 8,  "entry": "2025-03-11 18:15", "exit": "2025-03-11 19:30", "entry_price": 558.44, "exit_price": 559.51, "ema5": 556.3322, "ema10": 555.8832, "ema_gap": 0.4490, "rsi": 52.66, "adx": 28.70, "pnl_pts": 1.07,  "result": "WIN"},
-    {"n": 9,  "entry": "2025-03-14 13:30", "exit": "2025-03-14 14:45", "entry_price": 558.22, "exit_price": 560.28, "ema5": 553.9872, "ema10": 553.3057, "ema_gap": 0.6815, "rsi": 62.80, "adx": 25.80, "pnl_pts": 2.06,  "result": "WIN"},
-    {"n": 10, "entry": "2025-03-21 19:45", "exit": "2025-03-24 14:30", "entry_price": 564.19, "exit_price": 572.84, "ema5": 562.9422, "ema10": 562.6636, "ema_gap": 0.2786, "rsi": 57.02, "adx": 11.65, "pnl_pts": 8.65,  "result": "WIN"},
+    {
+        "n": 1,
+        "entry": "2025-01-17 14:30",
+        "exit": "2025-01-17 15:45",
+        "entry_price": 596.12,
+        "exit_price": 598.16,
+        "ema5": 593.6086,
+        "ema10": 593.1214,
+        "ema_gap": 0.4872,
+        "rsi": 67.07,
+        "adx": 18.45,
+        "pnl_pts": 2.04,
+        "result": "WIN",
+    },
+    {
+        "n": 2,
+        "entry": "2025-01-21 14:30",
+        "exit": "2025-01-21 15:45",
+        "entry_price": 600.18,
+        "exit_price": 600.37,
+        "ema5": 598.7461,
+        "ema10": 598.5459,
+        "ema_gap": 0.2003,
+        "rsi": 69.94,
+        "adx": 20.69,
+        "pnl_pts": 0.19,
+        "result": "WIN",
+    },
+    {
+        "n": 3,
+        "entry": "2025-01-29 20:15",
+        "exit": "2025-01-30 15:00",
+        "entry_price": 603.35,
+        "exit_price": 603.70,
+        "ema5": 602.2309,
+        "ema10": 602.0153,
+        "ema_gap": 0.2156,
+        "rsi": 55.67,
+        "adx": 20.07,
+        "pnl_pts": 0.35,
+        "result": "WIN",
+    },
+    {
+        "n": 4,
+        "entry": "2025-02-04 15:00",
+        "exit": "2025-02-04 16:15",
+        "entry_price": 600.45,
+        "exit_price": 601.98,
+        "ema5": 599.1874,
+        "ema10": 598.9099,
+        "ema_gap": 0.2775,
+        "rsi": 56.60,
+        "adx": 18.05,
+        "pnl_pts": 1.53,
+        "result": "WIN",
+    },
+    {
+        "n": 5,
+        "entry": "2025-02-06 20:45",
+        "exit": "2025-02-07 15:30",
+        "entry_price": 606.34,
+        "exit_price": 604.47,
+        "ema5": 605.1861,
+        "ema10": 604.9632,
+        "ema_gap": 0.2229,
+        "rsi": 64.02,
+        "adx": 22.89,
+        "pnl_pts": -1.87,
+        "result": "LOSS",
+    },
+    {
+        "n": 6,
+        "entry": "2025-03-05 17:30",
+        "exit": "2025-03-05 18:45",
+        "entry_price": 579.18,
+        "exit_price": 581.46,
+        "ema5": 577.5447,
+        "ema10": 577.1871,
+        "ema_gap": 0.3576,
+        "rsi": 52.63,
+        "adx": 23.13,
+        "pnl_pts": 2.29,
+        "result": "WIN",
+    },
+    {
+        "n": 7,
+        "entry": "2025-03-07 18:00",
+        "exit": "2025-03-07 19:15",
+        "entry_price": 573.45,
+        "exit_price": 576.58,
+        "ema5": 570.7672,
+        "ema10": 570.2524,
+        "ema_gap": 0.5148,
+        "rsi": 55.75,
+        "adx": 22.63,
+        "pnl_pts": 3.12,
+        "result": "WIN",
+    },
+    {
+        "n": 8,
+        "entry": "2025-03-11 18:15",
+        "exit": "2025-03-11 19:30",
+        "entry_price": 558.44,
+        "exit_price": 559.51,
+        "ema5": 556.3322,
+        "ema10": 555.8832,
+        "ema_gap": 0.4490,
+        "rsi": 52.66,
+        "adx": 28.70,
+        "pnl_pts": 1.07,
+        "result": "WIN",
+    },
+    {
+        "n": 9,
+        "entry": "2025-03-14 13:30",
+        "exit": "2025-03-14 14:45",
+        "entry_price": 558.22,
+        "exit_price": 560.28,
+        "ema5": 553.9872,
+        "ema10": 553.3057,
+        "ema_gap": 0.6815,
+        "rsi": 62.80,
+        "adx": 25.80,
+        "pnl_pts": 2.06,
+        "result": "WIN",
+    },
+    {
+        "n": 10,
+        "entry": "2025-03-21 19:45",
+        "exit": "2025-03-24 14:30",
+        "entry_price": 564.19,
+        "exit_price": 572.84,
+        "ema5": 562.9422,
+        "ema10": 562.6636,
+        "ema_gap": 0.2786,
+        "rsi": 57.02,
+        "adx": 11.65,
+        "pnl_pts": 8.65,
+        "result": "WIN",
+    },
 ]
 
 REFERENCE_SUMMARY = {
@@ -106,13 +236,12 @@ def _build_synthetic_bars_for_trade(trade: dict, fast_period: int = 5, slow_peri
       2. The exit is exactly exit_bars candles later
       3. PnL math is correct
     """
-    import time
 
     # We need enough bars for indicator warm-up + crossover + exit
     # Use ~50 warm-up bars + entry + 5 exit bars
     num_warmup = max(fast_period, slow_period, 14) + 30  # extra buffer for RSI warm-up
     exit_bars = 5
-    total_bars = num_warmup + 1 + exit_bars
+    num_warmup + 1 + exit_bars
 
     # Parse entry timestamp to epoch ms
     entry_dt = pd.Timestamp(trade["entry"])
@@ -126,14 +255,16 @@ def _build_synthetic_bars_for_trade(trade: dict, fast_period: int = 5, slow_peri
     for i in range(num_warmup - 5):
         ts = base_ts - (num_warmup - i) * interval_ms
         price = base_price + i * 0.02  # slow uptrend
-        bars.append({
-            "timestamp": ts,
-            "open": price - 0.05,
-            "high": price + 0.10,
-            "low": price - 0.10,
-            "close": price,
-            "volume": 100000,
-        })
+        bars.append(
+            {
+                "timestamp": ts,
+                "open": price - 0.05,
+                "high": price + 0.10,
+                "low": price - 0.10,
+                "close": price,
+                "volume": 100000,
+            }
+        )
 
     # Phase 2: Transition bars — price jumps up to create fresh crossover
     for i in range(5):
@@ -141,44 +272,51 @@ def _build_synthetic_bars_for_trade(trade: dict, fast_period: int = 5, slow_peri
         ts = base_ts - (num_warmup - idx) * interval_ms
         # Rapidly increase price to make EMA_fast cross above EMA_slow
         price = trade["entry_price"] - 2.0 + i * 0.6
-        bars.append({
-            "timestamp": ts,
-            "open": price - 0.1,
-            "high": price + 0.15,
-            "low": price - 0.15,
-            "close": price,
-            "volume": 150000,
-        })
+        bars.append(
+            {
+                "timestamp": ts,
+                "open": price - 0.1,
+                "high": price + 0.15,
+                "low": price - 0.15,
+                "close": price,
+                "volume": 150000,
+            }
+        )
 
     # Phase 3: Entry bar — at the entry_price
-    bars.append({
-        "timestamp": base_ts,
-        "open": trade["entry_price"] - 0.1,
-        "high": trade["entry_price"] + 0.2,
-        "low": trade["entry_price"] - 0.2,
-        "close": trade["entry_price"],
-        "volume": 200000,
-    })
+    bars.append(
+        {
+            "timestamp": base_ts,
+            "open": trade["entry_price"] - 0.1,
+            "high": trade["entry_price"] + 0.2,
+            "low": trade["entry_price"] - 0.2,
+            "close": trade["entry_price"],
+            "volume": 200000,
+        }
+    )
 
     # Phase 4: Bars between entry and exit (4 bars), then the exit bar
     price_step = (trade["exit_price"] - trade["entry_price"]) / exit_bars
     for j in range(1, exit_bars + 1):
         ts = base_ts + j * interval_ms
         price = trade["entry_price"] + j * price_step
-        bars.append({
-            "timestamp": ts,
-            "open": price - 0.05,
-            "high": price + 0.15,
-            "low": price - 0.15,
-            "close": price if j < exit_bars else trade["exit_price"],
-            "volume": 120000,
-        })
+        bars.append(
+            {
+                "timestamp": ts,
+                "open": price - 0.05,
+                "high": price + 0.15,
+                "low": price - 0.15,
+                "close": price if j < exit_bars else trade["exit_price"],
+                "volume": 120000,
+            }
+        )
 
     return bars
 
 
 try:
     import pandas_ta  # noqa: F401
+
     HAS_PANDAS_TA = True
 except ImportError:
     HAS_PANDAS_TA = False
@@ -192,7 +330,7 @@ def test_engine_pnl_calculation_matches_reference():
         entry = trade["entry_price"]
         exit_p = trade["exit_price"]
         expected_pnl = exit_p - entry
-        expected_pnl_pct = expected_pnl / entry
+        expected_pnl / entry
 
         # Verify the formula
         assert abs(expected_pnl - trade["pnl_pts"]) < 0.02, (
@@ -230,14 +368,16 @@ def test_engine_exit_timing():
             # Continue up slightly
             price = 600.0 - 45 * 0.05 + 5 * 1.0 + (i - 50) * 0.1
 
-        bars.append({
-            "timestamp": ts,
-            "open": price - 0.05,
-            "high": price + 0.15,
-            "low": price - 0.15,
-            "close": price,
-            "volume": 100000,
-        })
+        bars.append(
+            {
+                "timestamp": ts,
+                "open": price - 0.05,
+                "high": price + 0.15,
+                "low": price - 0.15,
+                "close": price,
+                "volume": 100000,
+            }
+        )
 
     params = {
         "fast_ema_period": 5,
@@ -245,7 +385,7 @@ def test_engine_exit_timing():
         "rsi_period": 14,
         "adx_period": 14,
         "min_ema_gap": 0.01,  # Low threshold to ensure we get a trade
-        "rsi_min": 0,         # Wide RSI range to not filter
+        "rsi_min": 0,  # Wide RSI range to not filter
         "rsi_max": 100,
         "exit_bars": exit_bars,
     }
@@ -288,15 +428,18 @@ def test_engine_no_overlapping_trades():
         ts = base_ts + i * interval_ms
         # Oscillating price to create multiple crossovers
         import math
+
         price = 580.0 + 5.0 * math.sin(i * 0.15) + i * 0.02
-        bars.append({
-            "timestamp": ts,
-            "open": price - 0.1,
-            "high": price + 0.2,
-            "low": price - 0.2,
-            "close": price,
-            "volume": 100000,
-        })
+        bars.append(
+            {
+                "timestamp": ts,
+                "open": price - 0.1,
+                "high": price + 0.2,
+                "low": price - 0.2,
+                "close": price,
+                "volume": 100000,
+            }
+        )
 
     params = {
         "fast_ema_period": 5,
@@ -317,7 +460,7 @@ def test_engine_no_overlapping_trades():
         prev_exit = result.trades[i - 1].exit_timestamp
         curr_entry = result.trades[i].entry_timestamp
         assert curr_entry > prev_exit, (
-            f"Trade {i+1} entry ({curr_entry}) should be after trade {i} exit ({prev_exit})"
+            f"Trade {i + 1} entry ({curr_entry}) should be after trade {i} exit ({prev_exit})"
         )
 
 
@@ -335,15 +478,18 @@ def test_engine_indicator_snapshots_populated():
     for i in range(num_bars):
         ts = base_ts + i * interval_ms
         import math
+
         price = 580.0 + 3.0 * math.sin(i * 0.12) + i * 0.03
-        bars.append({
-            "timestamp": ts,
-            "open": price - 0.05,
-            "high": price + 0.15,
-            "low": price - 0.15,
-            "close": price,
-            "volume": 100000,
-        })
+        bars.append(
+            {
+                "timestamp": ts,
+                "open": price - 0.05,
+                "high": price + 0.15,
+                "low": price - 0.15,
+                "close": price,
+                "volume": 100000,
+            }
+        )
 
     params = {
         "fast_ema_period": 5,

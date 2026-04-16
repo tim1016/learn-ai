@@ -1,4 +1,5 @@
 """Tests for IV builder — constant-maturity interpolation and quality filters."""
+
 from __future__ import annotations
 
 import math
@@ -6,13 +7,13 @@ import math
 import pytest
 
 from app.research.options.iv_builder import (
+    MAX_IV,
+    MIN_IV,
+    MIN_OPTION_PRICE,
+    TARGET_DTE,
+    _get_option_price,
     _interpolate_iv,
     _normalize_iv_fallback,
-    _get_option_price,
-    MIN_OPTION_PRICE,
-    MIN_IV,
-    MAX_IV,
-    TARGET_DTE,
 )
 
 
@@ -144,7 +145,7 @@ class TestGetOptionPrice:
 
     def test_rejects_below_min_price(self):
         bar = {"close": 0.01, "volume": 200}
-        price, source = _get_option_price(bar)
+        price, _source = _get_option_price(bar)
         assert price is None
 
     def test_rejects_zero_bid(self):
@@ -157,7 +158,7 @@ class TestGetOptionPrice:
     def test_uses_c_field_alias(self):
         """Support 'c' as alias for 'close'."""
         bar = {"c": 3.00, "v": 200}
-        price, source = _get_option_price(bar)
+        price, _source = _get_option_price(bar)
         assert price == 3.00
 
 

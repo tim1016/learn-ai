@@ -9,18 +9,18 @@ Every formula matches the C# implementation in Lean/Common/Statistics/:
 
 Reference: docs/spy-lean-output/verify.py and source-map.md
 """
+
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from statistics import mean, median
+from datetime import UTC, datetime
+from statistics import mean
 
 import numpy as np
 import pandas as pd
 
 from .common import TradeRecord
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Math helpers (matching MathNet.Numerics and LEAN's Statistics.cs)
@@ -48,7 +48,7 @@ def _covariance(xs: list[float], ys: list[float]) -> float:
         return 0.0
     mx = sum(xs) / n
     my = sum(ys) / n
-    return sum((a - mx) * (b - my) for a, b in zip(xs, ys)) / (n - 1)
+    return sum((a - mx) * (b - my) for a, b in zip(xs, ys, strict=False)) / (n - 1)
 
 
 def _skewness(xs: list[float]) -> float:
@@ -84,38 +84,57 @@ def _normal_cdf(x: float) -> float:
 
 def _inv_normal_cdf(mu: float, sigma: float, p: float) -> float:
     """Inverse normal CDF (Acklam approximation), matching LEAN's VaR."""
-    a = [-3.969683028665376e+01, 2.209460984245205e+02,
-         -2.759285104469687e+02, 1.383577518672690e+02,
-         -3.066479806614716e+01, 2.506628277459239e+00]
-    b = [-5.447609879822406e+01, 1.615858368580409e+02,
-         -1.556989798598866e+02, 6.680131188771972e+01,
-         -1.328068155288572e+01]
-    c = [-7.784894002430293e-03, -3.223964580411365e-01,
-         -2.400758277161838e+00, -2.549732539343734e+00,
-         4.374664141464968e+00, 2.938163982698783e+00]
-    dd = [7.784695709041462e-03, 3.224671290700398e-01,
-          2.445134137142996e+00, 3.754408661907416e+00]
+    a = [
+        -3.969683028665376e01,
+        2.209460984245205e02,
+        -2.759285104469687e02,
+        1.383577518672690e02,
+        -3.066479806614716e01,
+        2.506628277459239e00,
+    ]
+    b = [
+        -5.447609879822406e01,
+        1.615858368580409e02,
+        -1.556989798598866e02,
+        6.680131188771972e01,
+        -1.328068155288572e01,
+    ]
+    c = [
+        -7.784894002430293e-03,
+        -3.223964580411365e-01,
+        -2.400758277161838e00,
+        -2.549732539343734e00,
+        4.374664141464968e00,
+        2.938163982698783e00,
+    ]
+    dd = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e00, 3.754408661907416e00]
     plow = 0.02425
     phigh = 1 - plow
     if p < plow:
         q = math.sqrt(-2 * math.log(p))
-        x = (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / \
-            ((((dd[0]*q+dd[1])*q+dd[2])*q+dd[3])*q+1)
+        x = (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((dd[0] * q + dd[1]) * q + dd[2]) * q + dd[3]) * q + 1
+        )
     elif p <= phigh:
         q = p - 0.5
         r = q * q
-        x = (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / \
-            (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1)
+        x = (
+            (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5])
+            * q
+            / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
+        )
     else:
         q = math.sqrt(-2 * math.log(1 - p))
-        x = -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / \
-             ((((dd[0]*q+dd[1])*q+dd[2])*q+dd[3])*q+1)
+        x = -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((dd[0] * q + dd[1]) * q + dd[2]) * q + dd[3]) * q + 1
+        )
     return mu + sigma * x
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # Build daily equity curve from bar data + trades
 # ═══════════════════════════════════════════════════════════════════════
+
 
 def build_daily_equity(
     df: pd.DataFrame,
@@ -142,7 +161,7 @@ def build_daily_equity(
     for _, row in df.iterrows():
         ts = row["timestamp"]
         if isinstance(ts, (int, float)):
-            dt = datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc)
+            dt = datetime.fromtimestamp(int(ts) / 1000, tz=UTC)
         else:
             dt = ts
         date_str = dt.strftime("%Y-%m-%d")
@@ -163,9 +182,11 @@ def build_daily_equity(
 # Portfolio Statistics (LEAN PortfolioStatistics.cs)
 # ═══════════════════════════════════════════════════════════════════════
 
+
 @dataclass
 class LeanPortfolioStatistics:
     """All 25 fields from LEAN's PortfolioStatistics, computed identically."""
+
     # Rates (PS.cs 36–69, 262–277)
     average_win_rate: float = 0.0
     average_loss_rate: float = 0.0
@@ -209,6 +230,7 @@ class LeanPortfolioStatistics:
 @dataclass
 class LeanTradeStatistics:
     """Key fields from LEAN's TradeStatistics (TS.cs), computed identically."""
+
     start_date_time: str = ""
     end_date_time: str = ""
     total_number_of_trades: int = 0
@@ -240,6 +262,7 @@ class LeanTradeStatistics:
 @dataclass
 class LeanStatistics:
     """Combines portfolio + trade statistics + runtime."""
+
     portfolio: LeanPortfolioStatistics = field(default_factory=LeanPortfolioStatistics)
     trade: LeanTradeStatistics = field(default_factory=LeanTradeStatistics)
     # Runtime statistics snapshot
@@ -321,13 +344,8 @@ def compute_lean_statistics(
 
     port.average_win_rate = total_win_return / n_wins if n_wins else 0.0
     port.average_loss_rate = total_loss_return / n_losses if n_losses else 0.0
-    port.profit_loss_ratio = (
-        port.average_win_rate / abs(port.average_loss_rate)
-        if port.average_loss_rate != 0 else 0.0
-    )
-    port.expectancy = (
-        port.win_rate * port.profit_loss_ratio - port.loss_rate
-    )
+    port.profit_loss_ratio = port.average_win_rate / abs(port.average_loss_rate) if port.average_loss_rate != 0 else 0.0
+    port.expectancy = port.win_rate * port.profit_loss_ratio - port.loss_rate
 
     # ─── Net profit (PS.cs 281) ───
     port.total_net_profit = (port.end_equity / port.start_equity) - 1.0
@@ -335,9 +353,7 @@ def compute_lean_statistics(
     # ─── CAGR (PS.cs 285, S.cs 38–48) — uses 365 calendar days ───
     years = (end_date - start_date).days / 365.0
     if years > 0 and port.start_equity > 0:
-        port.compounding_annual_return = (
-            (port.end_equity / port.start_equity) ** (1.0 / years) - 1.0
-        )
+        port.compounding_annual_return = (port.end_equity / port.start_equity) ** (1.0 / years) - 1.0
 
     # ─── Drawdown (PS.cs 318, S.cs 261–314) ───
     peak = -math.inf
@@ -376,9 +392,7 @@ def compute_lean_statistics(
     # ─── Sharpe ratio (PS.cs 294, S.cs 148–164) ───
     annual_perf = mean(daily_perf) * TRADING_DAYS_PER_YEAR
     if port.annual_standard_deviation > 1e-12:
-        port.sharpe_ratio = (
-            (annual_perf - risk_free_rate) / port.annual_standard_deviation
-        )
+        port.sharpe_ratio = (annual_perf - risk_free_rate) / port.annual_standard_deviation
 
     # ─── Sortino ratio (PS.cs 297, S.cs 188–191) ───
     downside = [x for x in daily_perf if x < 0]
@@ -394,10 +408,8 @@ def compute_lean_statistics(
     sr_bench = 1.0 / math.sqrt(TRADING_DAYS_PER_YEAR)
     sk = _skewness(daily_perf)
     ku = _kurtosis(daily_perf)
-    denom = math.sqrt(max(1e-18, 1.0 - sk * sr_obs + ((ku - 1) / 4.0) * sr_obs ** 2))
-    port.probabilistic_sharpe_ratio = _normal_cdf(
-        (sr_obs - sr_bench) * math.sqrt(n - 1) / denom
-    )
+    denom = math.sqrt(max(1e-18, 1.0 - sk * sr_obs + ((ku - 1) / 4.0) * sr_obs**2))
+    port.probabilistic_sharpe_ratio = _normal_cdf((sr_obs - sr_bench) * math.sqrt(n - 1) / denom)
 
     # ─── Beta (PS.cs 300) ───
     bvar = _variance(bench_perf)
@@ -409,7 +421,7 @@ def compute_lean_statistics(
         port.alpha = annual_perf - (risk_free_rate + port.beta * (bench_ann - risk_free_rate))
 
     # ─── Tracking Error (PS.cs 304, S.cs 123–138) ───
-    diff = [a - b for a, b in zip(daily_perf, bench_perf)]
+    diff = [a - b for a, b in zip(daily_perf, bench_perf, strict=False)]
     port.tracking_error = math.sqrt(_variance(diff) * TRADING_DAYS_PER_YEAR) if diff else 0.0
 
     # ─── Information Ratio (PS.cs 306) ───

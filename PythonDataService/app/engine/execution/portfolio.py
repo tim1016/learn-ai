@@ -5,12 +5,13 @@ supports LEAN-style ``set_holdings(symbol, fraction)`` which translates a
 target portfolio weight into a market order for the right number of shares
 at the symbol's current reference price.
 """
+
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Iterable
 
 from app.engine.execution.order import (
     Direction,
@@ -116,8 +117,7 @@ class Portfolio:
         price = self.reference_price.get(symbol)
         if price is None:
             raise RuntimeError(
-                f"Cannot set_holdings on {symbol}: no reference price. "
-                "Did the strategy receive a bar first?"
+                f"Cannot set_holdings on {symbol}: no reference price. Did the strategy receive a bar first?"
             )
         current_pos = self.get_position(symbol)
         portfolio_value = self.total_value()
@@ -132,9 +132,7 @@ class Portfolio:
         pos = self.get_position(symbol)
         if pos.quantity == 0:
             return None
-        return self.submit_market_order(
-            symbol, -pos.quantity, time, tag="Liquidate"
-        )
+        return self.submit_market_order(symbol, -pos.quantity, time, tag="Liquidate")
 
     # ------------------------------------------------------------------
     # Fill application
@@ -149,8 +147,7 @@ class Portfolio:
             new_qty = pos.quantity + fill_qty
             if new_qty != 0:
                 pos.average_price = (
-                    pos.average_price * Decimal(pos.quantity)
-                    + fill_price * Decimal(fill_qty)
+                    pos.average_price * Decimal(pos.quantity) + fill_price * Decimal(fill_qty)
                 ) / Decimal(new_qty)
             pos.quantity = new_qty
         else:

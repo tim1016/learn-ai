@@ -1,16 +1,17 @@
 """API endpoints for chart data: resampled OHLCV + indicators with caching."""
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.services.chart_service import (
-    get_chart_data,
-    get_allowed_timeframes,
     TIMEFRAME_DEFS,
+    get_allowed_timeframes,
+    get_chart_data,
 )
 from app.services.dataset_service import INDICATOR_CONFIGS
 
@@ -23,19 +24,21 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────
 class ChartIndicatorEntry(BaseModel):
     """Single indicator specification."""
+
     name: str = Field(..., min_length=1, description="Indicator name (e.g. 'ema', 'rsi', 'macd')")
-    params: Dict[str, Any] = Field(default_factory=dict, description="Indicator parameters")
+    params: dict[str, Any] = Field(default_factory=dict, description="Indicator parameters")
 
 
 class ChartDataRequest(BaseModel):
     """Request for chart data with resampled bars and indicators."""
+
     ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")
     from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
     to_date: str = Field(..., description="End date (YYYY-MM-DD)")
     timeframe: str = Field("1D", description="Timeframe: 1m, 5m, 15m, 30m, 1h, 4h, 1D, 1W, 1M")
     session: str = Field("rth", description="'rth' for regular trading hours, 'extended' for all hours")
     forward_fill: bool = Field(False, description="Fill missing bars with previous close (volume=0)")
-    indicators: List[ChartIndicatorEntry] = Field(
+    indicators: list[ChartIndicatorEntry] = Field(
         default_factory=list,
         description="Indicators to compute on resampled bars",
     )
@@ -48,6 +51,7 @@ class ChartDataRequest(BaseModel):
 
 class AllowedTimeframesRequest(BaseModel):
     """Request for allowed timeframes given a date range."""
+
     ticker: str = Field(..., min_length=1, max_length=20)
     from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
     to_date: str = Field(..., description="End date (YYYY-MM-DD)")
@@ -75,10 +79,7 @@ async def chart_data(request: ChartDataRequest):
     """
     try:
         # Convert indicators to dict format
-        indicator_dicts = [
-            {"name": ind.name, "params": ind.params}
-            for ind in request.indicators
-        ]
+        indicator_dicts = [{"name": ind.name, "params": ind.params} for ind in request.indicators]
 
         result = get_chart_data(
             ticker=request.ticker,
@@ -138,9 +139,7 @@ async def allowed_timeframes(request: AllowedTimeframesRequest):
     Frontend should use this as the source of truth for timeframe availability.
     """
     try:
-        allowed, estimates, recommended = get_allowed_timeframes(
-            request.from_date, request.to_date, request.session
-        )
+        allowed, estimates, recommended = get_allowed_timeframes(request.from_date, request.to_date, request.session)
         return {
             "allowed_timeframes": allowed,
             "estimated_bars_per_timeframe": estimates,
@@ -157,12 +156,7 @@ async def allowed_timeframes(request: AllowedTimeframesRequest):
 @router.get("/timeframes")
 async def list_timeframes():
     """Return all supported timeframes with metadata."""
-    return {
-        "timeframes": [
-            {"key": key, "minutes": val["minutes"]}
-            for key, val in TIMEFRAME_DEFS.items()
-        ]
-    }
+    return {"timeframes": [{"key": key, "minutes": val["minutes"]} for key, val in TIMEFRAME_DEFS.items()]}
 
 
 @router.get("/available-indicators")
@@ -172,11 +166,27 @@ async def list_chart_indicators():
         "indicators": {
             name: {
                 "params": configs,
-                "panel": "main" if name in {
-                    "ema", "sma", "dema", "tema", "wma", "hma", "kama",
-                    "zlma", "rma", "alma", "bbands", "supertrend", "vwap",
-                    "psar", "kc", "donchian",
-                } else name,
+                "panel": "main"
+                if name
+                in {
+                    "ema",
+                    "sma",
+                    "dema",
+                    "tema",
+                    "wma",
+                    "hma",
+                    "kama",
+                    "zlma",
+                    "rma",
+                    "alma",
+                    "bbands",
+                    "supertrend",
+                    "vwap",
+                    "psar",
+                    "kc",
+                    "donchian",
+                }
+                else name,
             }
             for name, configs in INDICATOR_CONFIGS.items()
         }

@@ -1,16 +1,21 @@
 """Tests for the /api/indicators/calculate endpoint"""
+
 import pytest
+
 from tests.conftest import make_sample_bars
 
 
 @pytest.mark.anyio
 async def test_calculate_sma_returns_success(client):
     bars = make_sample_bars(30)
-    response = await client.post("/api/indicators/calculate", json={
-        "ticker": "AAPL",
-        "bars": bars,
-        "indicators": [{"name": "sma", "window": 10}],
-    })
+    response = await client.post(
+        "/api/indicators/calculate",
+        json={
+            "ticker": "AAPL",
+            "bars": bars,
+            "indicators": [{"name": "sma", "window": 10}],
+        },
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
@@ -24,15 +29,18 @@ async def test_calculate_sma_returns_success(client):
 @pytest.mark.anyio
 async def test_calculate_multiple_indicators(client):
     bars = make_sample_bars(30)
-    response = await client.post("/api/indicators/calculate", json={
-        "ticker": "MSFT",
-        "bars": bars,
-        "indicators": [
-            {"name": "sma", "window": 5},
-            {"name": "ema", "window": 10},
-            {"name": "rsi", "window": 14},
-        ],
-    })
+    response = await client.post(
+        "/api/indicators/calculate",
+        json={
+            "ticker": "MSFT",
+            "bars": bars,
+            "indicators": [
+                {"name": "sma", "window": 5},
+                {"name": "ema", "window": 10},
+                {"name": "rsi", "window": 14},
+            ],
+        },
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
@@ -46,30 +54,39 @@ async def test_calculate_multiple_indicators(client):
 @pytest.mark.anyio
 async def test_calculate_invalid_indicator_name(client):
     bars = make_sample_bars(10)
-    response = await client.post("/api/indicators/calculate", json={
-        "ticker": "AAPL",
-        "bars": bars,
-        "indicators": [{"name": "invalid_indicator", "window": 10}],
-    })
+    response = await client.post(
+        "/api/indicators/calculate",
+        json={
+            "ticker": "AAPL",
+            "bars": bars,
+            "indicators": [{"name": "invalid_indicator", "window": 10}],
+        },
+    )
     assert response.status_code == 422  # Pydantic validation error
 
 
 @pytest.mark.anyio
 async def test_calculate_empty_bars_rejected(client):
-    response = await client.post("/api/indicators/calculate", json={
-        "ticker": "AAPL",
-        "bars": [],
-        "indicators": [{"name": "sma", "window": 10}],
-    })
+    response = await client.post(
+        "/api/indicators/calculate",
+        json={
+            "ticker": "AAPL",
+            "bars": [],
+            "indicators": [{"name": "sma", "window": 10}],
+        },
+    )
     assert response.status_code == 422
 
 
 @pytest.mark.anyio
 async def test_calculate_empty_indicators_rejected(client):
     bars = make_sample_bars(10)
-    response = await client.post("/api/indicators/calculate", json={
-        "ticker": "AAPL",
-        "bars": bars,
-        "indicators": [],
-    })
+    response = await client.post(
+        "/api/indicators/calculate",
+        json={
+            "ticker": "AAPL",
+            "bars": bars,
+            "indicators": [],
+        },
+    )
     assert response.status_code == 422

@@ -1,18 +1,12 @@
 """Tests for contract finder — delta-based strike selection."""
+
 from __future__ import annotations
-
-import math
-
-import pytest
-from scipy.stats import norm
 
 from app.research.options.contract_finder import (
     _bs_delta,
     _find_atm_strike,
-    _find_otm_put_by_delta,
     _find_otm_call_by_delta,
-    TARGET_DELTA_PUT,
-    TARGET_DELTA_CALL,
+    _find_otm_put_by_delta,
 )
 
 
@@ -21,28 +15,28 @@ class TestBsDelta:
 
     def test_atm_call_delta_near_half(self):
         """ATM call delta should be close to 0.5."""
-        delta = _bs_delta(S=100, K=100, T=30/365, r=0.04, sigma=0.25, option_type="call")
+        delta = _bs_delta(S=100, K=100, T=30 / 365, r=0.04, sigma=0.25, option_type="call")
         assert 0.45 <= delta <= 0.60
 
     def test_atm_put_delta_near_minus_half(self):
         """ATM put delta should be close to -0.5."""
-        delta = _bs_delta(S=100, K=100, T=30/365, r=0.04, sigma=0.25, option_type="put")
+        delta = _bs_delta(S=100, K=100, T=30 / 365, r=0.04, sigma=0.25, option_type="put")
         assert -0.60 <= delta <= -0.45
 
     def test_deep_otm_put_delta_near_zero(self):
         """Deep OTM put should have delta near 0."""
-        delta = _bs_delta(S=100, K=70, T=30/365, r=0.04, sigma=0.25, option_type="put")
+        delta = _bs_delta(S=100, K=70, T=30 / 365, r=0.04, sigma=0.25, option_type="put")
         assert -0.05 <= delta <= 0.0
 
     def test_deep_itm_call_delta_near_one(self):
         """Deep ITM call should have delta near 1."""
-        delta = _bs_delta(S=100, K=70, T=30/365, r=0.04, sigma=0.25, option_type="call")
+        delta = _bs_delta(S=100, K=70, T=30 / 365, r=0.04, sigma=0.25, option_type="call")
         assert delta >= 0.95
 
     def test_put_call_delta_relationship(self):
         """Call delta - Put delta = 1 (approximately, for same strike)."""
-        call_d = _bs_delta(S=100, K=100, T=30/365, r=0.04, sigma=0.25, option_type="call")
-        put_d = _bs_delta(S=100, K=100, T=30/365, r=0.04, sigma=0.25, option_type="put")
+        call_d = _bs_delta(S=100, K=100, T=30 / 365, r=0.04, sigma=0.25, option_type="call")
+        put_d = _bs_delta(S=100, K=100, T=30 / 365, r=0.04, sigma=0.25, option_type="put")
         assert abs((call_d - put_d) - 1.0) < 0.01
 
     def test_zero_time_returns_zero(self):
@@ -54,10 +48,7 @@ class TestDeltaBasedStrikeSelection:
     """Test delta-based OTM put/call selection."""
 
     def _make_contracts(self, strikes: list[float], contract_type: str) -> list[dict]:
-        return [
-            {"strike_price": k, "contract_type": contract_type, "ticker": f"O:TEST{k}"}
-            for k in strikes
-        ]
+        return [{"strike_price": k, "contract_type": contract_type, "ticker": f"O:TEST{k}"} for k in strikes]
 
     def test_otm_put_selects_25_delta(self):
         """Should select the put closest to -0.25 delta."""
@@ -100,7 +91,9 @@ class TestFindAtmStrike:
 
     def test_selects_closest_to_spot(self):
         contracts = [
-            {"strike_price": 95}, {"strike_price": 100}, {"strike_price": 105},
+            {"strike_price": 95},
+            {"strike_price": 100},
+            {"strike_price": 105},
         ]
         result = _find_atm_strike(contracts, stock_close=101)
         assert result["strike_price"] == 100

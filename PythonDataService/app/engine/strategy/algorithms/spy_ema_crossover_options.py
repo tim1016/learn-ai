@@ -17,21 +17,20 @@ Key design decisions:
   * The strategy manages its own cash accounting (entry debit/credit,
     exit debit/credit, multiplier).
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Optional
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.execution.order import Direction, OrderEvent
+from app.engine.execution.order import OrderEvent
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.options.chain_resolver import (
     ChainResolver,
-    ResolvedChain,
     passes_liquidity_filter,
     select_by_delta,
     select_expiration,
@@ -51,9 +50,11 @@ logger = logging.getLogger(__name__)
 # Spread state model (from V1 spec §11)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class OpenSpread:
     """State of an active spread position."""
+
     entry_time: datetime
     spread_type: SpreadType
     expiration: date
@@ -67,7 +68,7 @@ class OpenSpread:
     short_entry_price: float
 
     # Net entry cost and countdown
-    entry_net: float          # positive = debit, negative = credit
+    entry_net: float  # positive = debit, negative = credit
     bars_remaining: int
 
     # Underlying price at entry (for context logging)
@@ -103,6 +104,7 @@ class OpenSpread:
 # ---------------------------------------------------------------------------
 # Strategy
 # ---------------------------------------------------------------------------
+
 
 class SpyEmaCrossoverOptionsAlgorithm(Strategy):
     """Options spread overlay on the EMA crossover signal engine."""
@@ -198,7 +200,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
         self._bars_until_exit: int = 0
 
         # Spread state (set only when chain resolution succeeds)
-        self._open_spread: Optional[OpenSpread] = None
+        self._open_spread: OpenSpread | None = None
         self._signal_count: int = 0
         self._skip_count: int = 0
 
@@ -214,13 +216,16 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
         self._symbol = self.ctx.add_equity(self._symbol_name)
 
         self._ema_fast = ExponentialMovingAverage(
-            f"EMA{self._ema_fast_period}", self._ema_fast_period,
+            f"EMA{self._ema_fast_period}",
+            self._ema_fast_period,
         )
         self._ema_slow = ExponentialMovingAverage(
-            f"EMA{self._ema_slow_period}", self._ema_slow_period,
+            f"EMA{self._ema_slow_period}",
+            self._ema_slow_period,
         )
         self._rsi = RelativeStrengthIndex(
-            f"RSI{self._rsi_period}", self._rsi_period,
+            f"RSI{self._rsi_period}",
+            self._rsi_period,
         )
 
         self._prev_ema_fast_above_slow = False
@@ -253,9 +258,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
             if self._ema_fast.is_ready and self._ema_slow.is_ready:
                 assert self._ema_fast.current_value is not None
                 assert self._ema_slow.current_value is not None
-                self._prev_ema_fast_above_slow = (
-                    self._ema_fast.current_value > self._ema_slow.current_value
-                )
+                self._prev_ema_fast_above_slow = self._ema_fast.current_value > self._ema_slow.current_value
             else:
                 self._prev_ema_fast_above_slow = False
             return
@@ -280,10 +283,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
                 else:
                     # Signal fired but chain resolution failed — nothing
                     # to close, just release the position lock.
-                    self.ctx.log(
-                        f"POSITION RELEASED (no spread): "
-                        f"{bar.end_time.strftime('%Y-%m-%d %H:%M')}"
-                    )
+                    self.ctx.log(f"POSITION RELEASED (no spread): {bar.end_time.strftime('%Y-%m-%d %H:%M')}")
                 self._in_position = False
         else:
             # Entry check — same logic as equity strategy
@@ -352,8 +352,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
 
         # Apply liquidity filters
         liquid_contracts = [
-            c for c in exp_contracts
-            if passes_liquidity_filter(c, self._min_oi, self._min_vol, self._max_spread_pct)
+            c for c in exp_contracts if passes_liquidity_filter(c, self._min_oi, self._min_vol, self._max_spread_pct)
         ]
 
         if len(liquid_contracts) < 2:
@@ -362,8 +361,8 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
             return
 
         # Select legs based on spread type
-        long_leg: Optional[PricedContract] = None
-        short_leg: Optional[PricedContract] = None
+        long_leg: PricedContract | None = None
+        short_leg: PricedContract | None = None
 
         if self._spread_type == SpreadType.BULL_CALL:
             calls = [c for c in liquid_contracts if c.option_type == "call"]
@@ -374,8 +373,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
             if long_leg and short_leg and long_leg.strike >= short_leg.strike:
                 self._skip_count += 1
                 self.ctx.log(
-                    f"  NO TRADE: invalid strike relationship "
-                    f"(long={long_leg.strike} >= short={short_leg.strike})"
+                    f"  NO TRADE: invalid strike relationship (long={long_leg.strike} >= short={short_leg.strike})"
                 )
                 return
 
@@ -388,8 +386,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
             if long_leg and short_leg and long_leg.strike >= short_leg.strike:
                 self._skip_count += 1
                 self.ctx.log(
-                    f"  NO TRADE: invalid strike relationship "
-                    f"(long={long_leg.strike} >= short={short_leg.strike})"
+                    f"  NO TRADE: invalid strike relationship (long={long_leg.strike} >= short={short_leg.strike})"
                 )
                 return
 
@@ -435,9 +432,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
         # Update Portfolio cash to reflect the capital deployed.
         # Bull call: debit paid (entry_net > 0 → cash decreases)
         # Bull put: credit received (entry_net < 0 → cash increases)
-        capital_deployed = Decimal(str(round(
-            entry_net * self._multiplier * self._contracts_per_trade, 2
-        )))
+        capital_deployed = Decimal(str(round(entry_net * self._multiplier * self._contracts_per_trade, 2)))
         self.ctx.portfolio.cash -= capital_deployed
 
         self.ctx.log(
@@ -514,7 +509,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
         dollar_pnl = pnl_per_contract * self._multiplier * self._contracts_per_trade
 
         # PnL % relative to capital at risk (max loss)
-        capital_at_risk = spread.max_loss * self._multiplier * self._contracts_per_trade
+        spread.max_loss * self._multiplier * self._contracts_per_trade
         pnl_pct = Decimal(str(pnl_per_contract)) / Decimal(str(spread.max_loss)) if spread.max_loss > 0 else Decimal(0)
 
         result = "WIN" if pnl_per_contract >= 0 else "LOSS"
@@ -522,59 +517,61 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
         # Return capital + PnL to Portfolio cash.
         # On entry we deducted entry_net * multiplier * contracts.
         # On exit we receive exit_net * multiplier * contracts back.
-        exit_proceeds = Decimal(str(round(
-            exit_net * self._multiplier * self._contracts_per_trade, 2
-        )))
+        exit_proceeds = Decimal(str(round(exit_net * self._multiplier * self._contracts_per_trade, 2)))
         self.ctx.portfolio.cash += exit_proceeds
 
         # Log the trade
-        self.trade_log.append(LoggedTrade(
-            entry_time=spread.entry_time,
-            entry_price=Decimal(str(round(spread.entry_net, 4))),
-            exit_time=bar.end_time,
-            exit_price=Decimal(str(round(exit_net, 4))),
-            pnl_pts=Decimal(str(round(pnl_per_contract, 4))),
-            pnl_pct=pnl_pct,
-            result=result,
-            indicators={
-                # Signal indicators
-                "ema5": spread.ema5,
-                "ema10": spread.ema10,
-                "rsi": spread.rsi,
-                # Spread metadata
-                "spread_type": Decimal(1 if spread.spread_type == SpreadType.BULL_CALL else 2),
-                "expiration_dte": Decimal(str((spread.expiration - spread.entry_time.date()).days)),
-                "spread_width": Decimal(str(spread.spread_width)),
-                # Long leg
-                "long_strike": spread.long_leg.strike,
-                "long_entry": Decimal(str(round(spread.long_entry_price, 4))),
-                "long_exit": Decimal(str(round(long_exit, 4))),
-                "long_delta": Decimal(str(round(spread.long_leg.greeks.delta, 4))),
-                # Short leg
-                "short_strike": spread.short_leg.strike,
-                "short_entry": Decimal(str(round(spread.short_entry_price, 4))),
-                "short_exit": Decimal(str(round(short_exit, 4))),
-                "short_delta": Decimal(str(round(spread.short_leg.greeks.delta, 4))),
-                # Underlying
-                "underlying_entry": Decimal(str(round(spread.underlying_entry_price, 2))),
-                "underlying_exit": Decimal(str(round(underlying_price, 2))),
-                # PnL detail
-                "dollar_pnl": Decimal(str(round(dollar_pnl, 2))),
-                "max_profit": Decimal(str(round(spread.max_profit, 4))),
-                "max_loss": Decimal(str(round(spread.max_loss, 4))),
-                # Data source
-                "pricing_mode": Decimal(
-                    1 if self._pricing_mode == PricingMode.QUANTLIB_ONLY
-                    else 2 if self._pricing_mode == PricingMode.MARKET_PREFERRED
-                    else 3
+        self.trade_log.append(
+            LoggedTrade(
+                entry_time=spread.entry_time,
+                entry_price=Decimal(str(round(spread.entry_net, 4))),
+                exit_time=bar.end_time,
+                exit_price=Decimal(str(round(exit_net, 4))),
+                pnl_pts=Decimal(str(round(pnl_per_contract, 4))),
+                pnl_pct=pnl_pct,
+                result=result,
+                indicators={
+                    # Signal indicators
+                    "ema5": spread.ema5,
+                    "ema10": spread.ema10,
+                    "rsi": spread.rsi,
+                    # Spread metadata
+                    "spread_type": Decimal(1 if spread.spread_type == SpreadType.BULL_CALL else 2),
+                    "expiration_dte": Decimal(str((spread.expiration - spread.entry_time.date()).days)),
+                    "spread_width": Decimal(str(spread.spread_width)),
+                    # Long leg
+                    "long_strike": spread.long_leg.strike,
+                    "long_entry": Decimal(str(round(spread.long_entry_price, 4))),
+                    "long_exit": Decimal(str(round(long_exit, 4))),
+                    "long_delta": Decimal(str(round(spread.long_leg.greeks.delta, 4))),
+                    # Short leg
+                    "short_strike": spread.short_leg.strike,
+                    "short_entry": Decimal(str(round(spread.short_entry_price, 4))),
+                    "short_exit": Decimal(str(round(short_exit, 4))),
+                    "short_delta": Decimal(str(round(spread.short_leg.greeks.delta, 4))),
+                    # Underlying
+                    "underlying_entry": Decimal(str(round(spread.underlying_entry_price, 2))),
+                    "underlying_exit": Decimal(str(round(underlying_price, 2))),
+                    # PnL detail
+                    "dollar_pnl": Decimal(str(round(dollar_pnl, 2))),
+                    "max_profit": Decimal(str(round(spread.max_profit, 4))),
+                    "max_loss": Decimal(str(round(spread.max_loss, 4))),
+                    # Data source
+                    "pricing_mode": Decimal(
+                        1
+                        if self._pricing_mode == PricingMode.QUANTLIB_ONLY
+                        else 2
+                        if self._pricing_mode == PricingMode.MARKET_PREFERRED
+                        else 3
+                    ),
+                },
+                signal_reason=(
+                    f"{spread.spread_type.value} "
+                    f"{spread.long_leg.strike}/{spread.short_leg.strike} "
+                    f"exp={spread.expiration}"
                 ),
-            },
-            signal_reason=(
-                f"{spread.spread_type.value} "
-                f"{spread.long_leg.strike}/{spread.short_leg.strike} "
-                f"exp={spread.expiration}"
-            ),
-        ))
+            )
+        )
 
         self.ctx.log(
             f"EXIT SPREAD: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
@@ -582,7 +579,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
             f"long_exit={long_exit:.2f} short_exit={short_exit:.2f} "
             f"net_exit={exit_net:.2f} "
             f"PnL/contract={pnl_per_contract:.2f} "
-            f"$PnL={dollar_pnl:.2f} ({float(pnl_pct)*100:.2f}%) {result}"
+            f"$PnL={dollar_pnl:.2f} ({float(pnl_pct) * 100:.2f}%) {result}"
         )
 
         self._open_spread = None
@@ -609,11 +606,10 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
                 f"{self._open_spread.long_leg.strike}/{self._open_spread.short_leg.strike})"
             )
             # Use the last reference price
-            last_price = self.ctx.portfolio.reference_price.get(
-                self._symbol_name, Decimal(0)
-            )
+            last_price = self.ctx.portfolio.reference_price.get(self._symbol_name, Decimal(0))
             if last_price > 0:
                 from app.engine.data.trade_bar import TradeBar as TB
+
                 synthetic_bar = TB(
                     symbol=self._symbol_name,
                     time=self.ctx.current_time or datetime.now(),

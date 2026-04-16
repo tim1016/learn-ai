@@ -1,18 +1,15 @@
 """Tests for IV Pipeline Empirical Validation Study."""
-from __future__ import annotations
 
-import math
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from app.research.validation.iv_pipeline_study import (
     StudyReport,
     TickerResult,
     _compute_realized_vol,
     print_report,
-    run_iv_pipeline_study,
 )
 
 
@@ -95,23 +92,25 @@ class TestStudyReport:
             tickers=["SPY"],
             start_date="2024-01-01",
             end_date="2024-12-31",
-            results=[TickerResult(
-                ticker="SPY",
-                n_obs=200,
-                mean_iv=0.18,
-                mean_rv=0.14,
-                vrp_mean=0.04,
-                vrp_t_stat=3.5,
-                vrp_p_value=0.001,
-                pct_iv_gt_rv=0.75,
-                iv_fwd_rv_corr=0.65,
-                iv_fwd_rv_p=0.0001,
-                iv_fwd_rv_r2=0.42,
-                quintile_abs_ret=[0.01, 0.015, 0.02, 0.025, 0.035],
-                quintile_monotonic=True,
-                spearman_iv_absret=0.35,
-                spearman_iv_absret_p=0.001,
-            )],
+            results=[
+                TickerResult(
+                    ticker="SPY",
+                    n_obs=200,
+                    mean_iv=0.18,
+                    mean_rv=0.14,
+                    vrp_mean=0.04,
+                    vrp_t_stat=3.5,
+                    vrp_p_value=0.001,
+                    pct_iv_gt_rv=0.75,
+                    iv_fwd_rv_corr=0.65,
+                    iv_fwd_rv_p=0.0001,
+                    iv_fwd_rv_r2=0.42,
+                    quintile_abs_ret=[0.01, 0.015, 0.02, 0.025, 0.035],
+                    quintile_monotonic=True,
+                    spearman_iv_absret=0.35,
+                    spearman_iv_absret_p=0.001,
+                )
+            ],
             fact1_pass=True,
             fact2_pass=True,
             fact3_pass=True,

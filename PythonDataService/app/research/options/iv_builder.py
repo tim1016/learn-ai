@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from app.research.options.bs_solver import RISK_FREE_RATE, implied_volatility
@@ -27,10 +26,14 @@ MAX_FFILL_DAYS = 2
 
 
 _CONTRACT_COLUMNS = [
-    "low_dte_atm_contract", "low_dte_atm_put_contract",
-    "low_dte_put_contract", "low_dte_call_contract",
-    "high_dte_atm_contract", "high_dte_atm_put_contract",
-    "high_dte_put_contract", "high_dte_call_contract",
+    "low_dte_atm_contract",
+    "low_dte_atm_put_contract",
+    "low_dte_put_contract",
+    "low_dte_call_contract",
+    "high_dte_atm_contract",
+    "high_dte_atm_put_contract",
+    "high_dte_put_contract",
+    "high_dte_call_contract",
 ]
 
 _PREFETCH_WORKERS = 5
@@ -175,9 +178,7 @@ def _derive_iv_for_contract(
     return iv, source
 
 
-def _interpolate_iv(
-    iv_low: float, dte_low: int, iv_high: float, dte_high: int
-) -> float:
+def _interpolate_iv(iv_low: float, dte_low: int, iv_high: float, dte_high: int) -> float:
     """30-day constant-maturity variance-time interpolation."""
     if dte_high == dte_low:
         return (iv_low + iv_high) / 2
@@ -237,10 +238,8 @@ def build_iv_history(
         return pd.DataFrame()
 
     # Step 2: Find bracket contracts for each trading day
-    logger.info(f"[IV BUILDER] Finding bracket contracts...")
-    bracket_df = find_bracket_contracts(
-        underlying, start_date, end_date, polygon_client, stock_bars
-    )
+    logger.info("[IV BUILDER] Finding bracket contracts...")
+    bracket_df = find_bracket_contracts(underlying, start_date, end_date, polygon_client, stock_bars)
 
     if bracket_df.empty:
         logger.error(f"[IV BUILDER] No bracket contracts found for {underlying}")
@@ -292,15 +291,11 @@ def build_iv_history(
 
         if low_atm and dte_low and dte_low >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, low_atm, date_str)
-            iv_call_low_atm, src = _derive_iv_for_contract(
-                bar, low_atm, stock_close, dte_low, "call", rfr
-            )
+            iv_call_low_atm, src = _derive_iv_for_contract(bar, low_atm, stock_close, dte_low, "call", rfr)
             iv_put_low_atm = None
             if low_atm_put:
                 bar_p = _lookup_bar(bars_by_contract, low_atm_put, date_str)
-                iv_put_low_atm, _ = _derive_iv_for_contract(
-                    bar_p, low_atm_put, stock_close, dte_low, "put", rfr
-                )
+                iv_put_low_atm, _ = _derive_iv_for_contract(bar_p, low_atm_put, stock_close, dte_low, "put", rfr)
             # Synthetic forward: average call/put IV; fall back to call-only
             if iv_call_low_atm is not None and iv_put_low_atm is not None:
                 iv_atm_low = (iv_call_low_atm + iv_put_low_atm) / 2
@@ -311,15 +306,11 @@ def build_iv_history(
 
         if high_atm and dte_high and dte_high >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, high_atm, date_str)
-            iv_call_high_atm, src = _derive_iv_for_contract(
-                bar, high_atm, stock_close, dte_high, "call", rfr
-            )
+            iv_call_high_atm, src = _derive_iv_for_contract(bar, high_atm, stock_close, dte_high, "call", rfr)
             iv_put_high_atm = None
             if high_atm_put:
                 bar_p = _lookup_bar(bars_by_contract, high_atm_put, date_str)
-                iv_put_high_atm, _ = _derive_iv_for_contract(
-                    bar_p, high_atm_put, stock_close, dte_high, "put", rfr
-                )
+                iv_put_high_atm, _ = _derive_iv_for_contract(bar_p, high_atm_put, stock_close, dte_high, "put", rfr)
             if iv_call_high_atm is not None and iv_put_high_atm is not None:
                 iv_atm_high = (iv_call_high_atm + iv_put_high_atm) / 2
             else:
@@ -343,15 +334,11 @@ def build_iv_history(
 
         if low_put and dte_low and dte_low >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, low_put, date_str)
-            iv_put_low, _ = _derive_iv_for_contract(
-                bar, low_put, stock_close, dte_low, "put", rfr
-            )
+            iv_put_low, _ = _derive_iv_for_contract(bar, low_put, stock_close, dte_low, "put", rfr)
 
         if high_put and dte_high and dte_high >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, high_put, date_str)
-            iv_put_high, _ = _derive_iv_for_contract(
-                bar, high_put, stock_close, dte_high, "put", rfr
-            )
+            iv_put_high, _ = _derive_iv_for_contract(bar, high_put, stock_close, dte_high, "put", rfr)
 
         if iv_put_low is not None and iv_put_high is not None:
             result["iv_30d_put"] = _interpolate_iv(iv_put_low, dte_low, iv_put_high, dte_high)
@@ -368,15 +355,11 @@ def build_iv_history(
 
         if low_call and dte_low and dte_low >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, low_call, date_str)
-            iv_call_low, _ = _derive_iv_for_contract(
-                bar, low_call, stock_close, dte_low, "call", rfr
-            )
+            iv_call_low, _ = _derive_iv_for_contract(bar, low_call, stock_close, dte_low, "call", rfr)
 
         if high_call and dte_high and dte_high >= MIN_DTE_DAYS:
             bar = _lookup_bar(bars_by_contract, high_call, date_str)
-            iv_call_high, _ = _derive_iv_for_contract(
-                bar, high_call, stock_close, dte_high, "call", rfr
-            )
+            iv_call_high, _ = _derive_iv_for_contract(bar, high_call, stock_close, dte_high, "call", rfr)
 
         if iv_call_low is not None and iv_call_high is not None:
             result["iv_30d_call"] = _interpolate_iv(iv_call_low, dte_low, iv_call_high, dte_high)
@@ -422,7 +405,7 @@ def build_iv_history(
     total_count = len(df)
     logger.info(
         f"[IV BUILDER] Complete: {valid_count}/{total_count} days with valid ATM IV "
-        f"({valid_count/total_count*100:.1f}% coverage)"
+        f"({valid_count / total_count * 100:.1f}% coverage)"
     )
 
     return df

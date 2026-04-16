@@ -5,30 +5,26 @@ catch accidental regressions in the math. The snapshot test uses a
 frozen set of synthetic trades and equity points to assert the full
 statistics dict matches expected values.
 """
+
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Sequence
-
-import pytest
 
 from app.engine.results.statistics import (
     EquityPoint,
-    ValidationError,
+    _daily_returns,
+    _max_drawdown,
+    _resample_to_daily,
+    _sharpe,
+    _sortino,
     compute_portfolio_statistics,
     compute_trade_statistics,
     summarize,
     validate_equity_curve,
     validate_statistics,
     validate_trade_log,
-    _daily_returns,
-    _max_drawdown,
-    _resample_to_daily,
-    _sharpe,
-    _sortino,
 )
 
 
@@ -50,15 +46,31 @@ def _make_trades() -> list[FakeTrade]:
     base = datetime(2024, 1, 2, 10, 0)
     return [
         FakeTrade(Decimal("2.50"), Decimal("0.0125"), "WIN", base, base + timedelta(hours=2)),
-        FakeTrade(Decimal("-1.00"), Decimal("-0.005"), "LOSS", base + timedelta(days=1), base + timedelta(days=1, hours=1)),
-        FakeTrade(Decimal("3.00"), Decimal("0.015"), "WIN", base + timedelta(days=2), base + timedelta(days=2, hours=3)),
-        FakeTrade(Decimal("1.50"), Decimal("0.0075"), "WIN", base + timedelta(days=3), base + timedelta(days=3, hours=1)),
-        FakeTrade(Decimal("-2.00"), Decimal("-0.01"), "LOSS", base + timedelta(days=4), base + timedelta(days=4, hours=2)),
+        FakeTrade(
+            Decimal("-1.00"), Decimal("-0.005"), "LOSS", base + timedelta(days=1), base + timedelta(days=1, hours=1)
+        ),
+        FakeTrade(
+            Decimal("3.00"), Decimal("0.015"), "WIN", base + timedelta(days=2), base + timedelta(days=2, hours=3)
+        ),
+        FakeTrade(
+            Decimal("1.50"), Decimal("0.0075"), "WIN", base + timedelta(days=3), base + timedelta(days=3, hours=1)
+        ),
+        FakeTrade(
+            Decimal("-2.00"), Decimal("-0.01"), "LOSS", base + timedelta(days=4), base + timedelta(days=4, hours=2)
+        ),
         FakeTrade(Decimal("4.00"), Decimal("0.02"), "WIN", base + timedelta(days=7), base + timedelta(days=7, hours=1)),
-        FakeTrade(Decimal("-0.50"), Decimal("-0.0025"), "LOSS", base + timedelta(days=8), base + timedelta(days=8, hours=2)),
-        FakeTrade(Decimal("1.00"), Decimal("0.005"), "WIN", base + timedelta(days=9), base + timedelta(days=9, hours=1)),
-        FakeTrade(Decimal("2.00"), Decimal("0.01"), "WIN", base + timedelta(days=10), base + timedelta(days=10, hours=3)),
-        FakeTrade(Decimal("-1.50"), Decimal("-0.0075"), "LOSS", base + timedelta(days=11), base + timedelta(days=11, hours=1)),
+        FakeTrade(
+            Decimal("-0.50"), Decimal("-0.0025"), "LOSS", base + timedelta(days=8), base + timedelta(days=8, hours=2)
+        ),
+        FakeTrade(
+            Decimal("1.00"), Decimal("0.005"), "WIN", base + timedelta(days=9), base + timedelta(days=9, hours=1)
+        ),
+        FakeTrade(
+            Decimal("2.00"), Decimal("0.01"), "WIN", base + timedelta(days=10), base + timedelta(days=10, hours=3)
+        ),
+        FakeTrade(
+            Decimal("-1.50"), Decimal("-0.0075"), "LOSS", base + timedelta(days=11), base + timedelta(days=11, hours=1)
+        ),
     ]
 
 
@@ -66,14 +78,20 @@ def _make_equity_curve(initial: float = 100_000.0) -> list[EquityPoint]:
     """Synthetic daily equity curve over ~12 trading days."""
     base = datetime(2024, 1, 2, 16, 0)
     values = [
-        100_000.0, 100_500.0, 100_200.0, 101_000.0, 101_400.0,
-        100_800.0, 101_500.0, 102_000.0, 101_700.0, 102_200.0,
-        102_800.0, 102_300.0,
+        100_000.0,
+        100_500.0,
+        100_200.0,
+        101_000.0,
+        101_400.0,
+        100_800.0,
+        101_500.0,
+        102_000.0,
+        101_700.0,
+        102_200.0,
+        102_800.0,
+        102_300.0,
     ]
-    return [
-        EquityPoint(timestamp=base + timedelta(days=i), equity=v)
-        for i, v in enumerate(values)
-    ]
+    return [EquityPoint(timestamp=base + timedelta(days=i), equity=v) for i, v in enumerate(values)]
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +311,9 @@ class TestValidateTradeLog:
 
     def test_bad_times(self) -> None:
         t = FakeTrade(
-            Decimal("1"), Decimal("0.01"), "WIN",
+            Decimal("1"),
+            Decimal("0.01"),
+            "WIN",
             entry_time=datetime(2024, 1, 2, 12, 0),
             exit_time=datetime(2024, 1, 2, 10, 0),  # before entry
         )
@@ -308,7 +328,9 @@ class TestValidateTradeLog:
 
     def test_nan_indicator(self) -> None:
         t = FakeTrade(
-            Decimal("1"), Decimal("0.01"), "WIN",
+            Decimal("1"),
+            Decimal("0.01"),
+            "WIN",
             indicators={"ema": float("nan")},
         )
         errors = validate_trade_log([t])

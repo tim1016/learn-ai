@@ -1,4 +1,5 @@
 """Bar-level regime classification for signal gating."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -20,11 +21,7 @@ def compute_daily_regime_labels(
     bar_df["date"] = pd.to_datetime(bar_df["timestamp"], unit="ms").dt.date
     bar_df["log_return"] = np.log(bar_df["close"] / bar_df["close"].shift(1))
 
-    daily = (
-        bar_df.groupby("date")
-        .agg(close=("close", "last"), realized_vol=("log_return", "std"))
-        .reset_index()
-    )
+    daily = bar_df.groupby("date").agg(close=("close", "last"), realized_vol=("log_return", "std")).reset_index()
 
     # Volatility regimes: tercile split
     vol_series = daily["realized_vol"].dropna()

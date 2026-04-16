@@ -21,10 +21,7 @@ class StationarityResult:
     @property
     def summary(self) -> str:
         status = "STATIONARY" if self.is_stationary else "NON-STATIONARY"
-        return (
-            f"{status} | ADF p={self.adf_pvalue:.4f}, "
-            f"KPSS p={self.kpss_pvalue:.4f}"
-        )
+        return f"{status} | ADF p={self.adf_pvalue:.4f}, KPSS p={self.kpss_pvalue:.4f}"
 
 
 def run_stationarity_tests(
@@ -71,6 +68,7 @@ def run_stationarity_tests(
 
     # KPSS test (suppress UserWarning about p-value bounds)
     import warnings
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=UserWarning)
         kpss_result = kpss(series, regression="c", nlags="auto")
@@ -97,8 +95,7 @@ def run_stationarity_tests(
         logger.info(f"[ML] Stationarity: {result.summary}")
     else:
         logger.warning(
-            f"[ML] Stationarity: {result.summary} — "
-            "Consider using log returns or differencing to achieve stationarity."
+            f"[ML] Stationarity: {result.summary} — Consider using log returns or differencing to achieve stationarity."
         )
 
     return result

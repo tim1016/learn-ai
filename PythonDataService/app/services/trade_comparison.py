@@ -1,8 +1,9 @@
 """Trade comparison service — matches reproduced trades against reference trades."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -46,7 +47,7 @@ def _parse_ts(ts_str: str) -> float:
     """Parse a timestamp string to epoch seconds. Handles ISO 8601 and common formats."""
     for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
         try:
-            dt = datetime.strptime(ts_str.strip(), fmt).replace(tzinfo=timezone.utc)
+            dt = datetime.strptime(ts_str.strip(), fmt).replace(tzinfo=UTC)
             return dt.timestamp()
         except ValueError:
             continue
@@ -70,17 +71,21 @@ def match_trades(
     """
     our_parsed = []
     for t in our_trades:
-        our_parsed.append({
-            **t,
-            "_entry_epoch": _parse_ts(t["entry_timestamp"]),
-        })
+        our_parsed.append(
+            {
+                **t,
+                "_entry_epoch": _parse_ts(t["entry_timestamp"]),
+            }
+        )
 
     ref_parsed = []
     for t in ref_trades:
-        ref_parsed.append({
-            **t,
-            "_entry_epoch": _parse_ts(t["entry_time"]),
-        })
+        ref_parsed.append(
+            {
+                **t,
+                "_entry_epoch": _parse_ts(t["entry_time"]),
+            }
+        )
 
     our_parsed.sort(key=lambda x: x["_entry_epoch"])
     ref_parsed.sort(key=lambda x: x["_entry_epoch"])
@@ -106,78 +111,84 @@ def match_trades(
         if best_idx >= 0:
             used_ours.add(best_idx)
             our = our_parsed[best_idx]
-            comparisons.append(TradeComparison(
-                trade_num=trade_num,
-                ref_entry_time=ref.get("entry_time"),
-                our_entry_time=our.get("entry_timestamp"),
-                ref_exit_time=ref.get("exit_time"),
-                our_exit_time=our.get("exit_timestamp"),
-                ref_entry_price=ref.get("entry_price"),
-                our_entry_price=our.get("entry_price"),
-                ref_exit_price=ref.get("exit_price"),
-                our_exit_price=our.get("exit_price"),
-                ref_pnl=ref.get("pnl"),
-                our_pnl=our.get("pnl"),
-                ref_pnl_pct=ref.get("pnl_pct"),
-                our_pnl_pct=our.get("pnl_pct"),
-                entry_price_delta=round(our["entry_price"] - ref["entry_price"], 4),
-                exit_price_delta=round(our["exit_price"] - ref["exit_price"], 4),
-                pnl_delta=round(our["pnl"] - ref["pnl"], 4),
-                pnl_pct_delta=round(our["pnl_pct"] - ref["pnl_pct"], 6),
-                timestamp_delta_s=round(best_delta, 0),
-                matched=True,
-                source="matched",
-            ))
+            comparisons.append(
+                TradeComparison(
+                    trade_num=trade_num,
+                    ref_entry_time=ref.get("entry_time"),
+                    our_entry_time=our.get("entry_timestamp"),
+                    ref_exit_time=ref.get("exit_time"),
+                    our_exit_time=our.get("exit_timestamp"),
+                    ref_entry_price=ref.get("entry_price"),
+                    our_entry_price=our.get("entry_price"),
+                    ref_exit_price=ref.get("exit_price"),
+                    our_exit_price=our.get("exit_price"),
+                    ref_pnl=ref.get("pnl"),
+                    our_pnl=our.get("pnl"),
+                    ref_pnl_pct=ref.get("pnl_pct"),
+                    our_pnl_pct=our.get("pnl_pct"),
+                    entry_price_delta=round(our["entry_price"] - ref["entry_price"], 4),
+                    exit_price_delta=round(our["exit_price"] - ref["exit_price"], 4),
+                    pnl_delta=round(our["pnl"] - ref["pnl"], 4),
+                    pnl_pct_delta=round(our["pnl_pct"] - ref["pnl_pct"], 6),
+                    timestamp_delta_s=round(best_delta, 0),
+                    matched=True,
+                    source="matched",
+                )
+            )
         else:
-            comparisons.append(TradeComparison(
+            comparisons.append(
+                TradeComparison(
+                    trade_num=trade_num,
+                    ref_entry_time=ref.get("entry_time"),
+                    our_entry_time=None,
+                    ref_exit_time=ref.get("exit_time"),
+                    our_exit_time=None,
+                    ref_entry_price=ref.get("entry_price"),
+                    our_entry_price=None,
+                    ref_exit_price=ref.get("exit_price"),
+                    our_exit_price=None,
+                    ref_pnl=ref.get("pnl"),
+                    our_pnl=None,
+                    ref_pnl_pct=ref.get("pnl_pct"),
+                    our_pnl_pct=None,
+                    entry_price_delta=None,
+                    exit_price_delta=None,
+                    pnl_delta=None,
+                    pnl_pct_delta=None,
+                    timestamp_delta_s=None,
+                    matched=False,
+                    source="extra_ref",
+                )
+            )
+
+    for j, our in enumerate(our_parsed):
+        if j in used_ours:
+            continue
+        trade_num += 1
+        comparisons.append(
+            TradeComparison(
                 trade_num=trade_num,
-                ref_entry_time=ref.get("entry_time"),
-                our_entry_time=None,
-                ref_exit_time=ref.get("exit_time"),
-                our_exit_time=None,
-                ref_entry_price=ref.get("entry_price"),
-                our_entry_price=None,
-                ref_exit_price=ref.get("exit_price"),
-                our_exit_price=None,
-                ref_pnl=ref.get("pnl"),
-                our_pnl=None,
-                ref_pnl_pct=ref.get("pnl_pct"),
-                our_pnl_pct=None,
+                ref_entry_time=None,
+                our_entry_time=our.get("entry_timestamp"),
+                ref_exit_time=None,
+                our_exit_time=our.get("exit_timestamp"),
+                ref_entry_price=None,
+                our_entry_price=our.get("entry_price"),
+                ref_exit_price=None,
+                our_exit_price=our.get("exit_price"),
+                ref_pnl=None,
+                our_pnl=our.get("pnl"),
+                ref_pnl_pct=None,
+                our_pnl_pct=our.get("pnl_pct"),
                 entry_price_delta=None,
                 exit_price_delta=None,
                 pnl_delta=None,
                 pnl_pct_delta=None,
                 timestamp_delta_s=None,
                 matched=False,
-                source="extra_ref",
-            ))
-
-    for j, our in enumerate(our_parsed):
-        if j in used_ours:
-            continue
-        trade_num += 1
-        comparisons.append(TradeComparison(
-            trade_num=trade_num,
-            ref_entry_time=None,
-            our_entry_time=our.get("entry_timestamp"),
-            ref_exit_time=None,
-            our_exit_time=our.get("exit_timestamp"),
-            ref_entry_price=None,
-            our_entry_price=our.get("entry_price"),
-            ref_exit_price=None,
-            our_exit_price=our.get("exit_price"),
-            ref_pnl=None,
-            our_pnl=our.get("pnl"),
-            ref_pnl_pct=None,
-            our_pnl_pct=our.get("pnl_pct"),
-            entry_price_delta=None,
-            exit_price_delta=None,
-            pnl_delta=None,
-            pnl_pct_delta=None,
-            timestamp_delta_s=None,
-            matched=False,
-            source="extra_ours",
-        ))
+                source="extra_ours",
+            )
+        )
 
     matched = [c for c in comparisons if c.matched]
     extra_ref = [c for c in comparisons if c.source == "extra_ref"]

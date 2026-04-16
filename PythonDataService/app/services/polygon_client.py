@@ -1,8 +1,10 @@
 """Wrapper around Polygon.io REST client with error handling"""
-from polygon import RESTClient
-from typing import List, Dict, Any, Optional
+
 import logging
 from datetime import datetime
+from typing import Any
+
+from polygon import RESTClient
 
 from app.config import settings
 
@@ -24,7 +26,7 @@ class PolygonClientService:
         to_date: str,
         limit: int = 50000,
         adjusted: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch aggregate bars (OHLCV) from Polygon"""
         try:
             logger.info(f"Fetching aggregates for {ticker}: {from_date} to {to_date} (adjusted={adjusted})")
@@ -40,70 +42,65 @@ class PolygonClientService:
                 adjusted=adjusted,
             ):
                 # Convert to dict for serialization
-                aggs.append({
-                    'timestamp': agg.timestamp,
-                    'open': agg.open,
-                    'high': agg.high,
-                    'low': agg.low,
-                    'close': agg.close,
-                    'volume': agg.volume,
-                    'vwap': agg.vwap if hasattr(agg, 'vwap') else None,
-                    'transactions': agg.transactions if hasattr(agg, 'transactions') else None,
-                })
+                aggs.append(
+                    {
+                        "timestamp": agg.timestamp,
+                        "open": agg.open,
+                        "high": agg.high,
+                        "low": agg.low,
+                        "close": agg.close,
+                        "volume": agg.volume,
+                        "vwap": agg.vwap if hasattr(agg, "vwap") else None,
+                        "transactions": agg.transactions if hasattr(agg, "transactions") else None,
+                    }
+                )
 
             logger.info(f"Fetched {len(aggs)} aggregates for {ticker}")
             return aggs
 
         except Exception as e:
-            logger.error(f"Error fetching aggregates for {ticker}: {str(e)}")
+            logger.error(f"Error fetching aggregates for {ticker}: {e!s}")
             raise
 
-    def fetch_trades(
-        self,
-        ticker: str,
-        timestamp: Optional[str] = None,
-        limit: int = 50000
-    ) -> List[Dict[str, Any]]:
+    def fetch_trades(self, ticker: str, timestamp: str | None = None, limit: int = 50000) -> list[dict[str, Any]]:
         """Fetch real-time trades from Polygon"""
         try:
             logger.info(f"Fetching trades for {ticker}")
 
             trades = []
-            for trade in self.client.list_trades(
-                ticker=ticker,
-                timestamp=timestamp,
-                limit=limit
-            ):
-                trades.append({
-                    'timestamp': trade.sip_timestamp if hasattr(trade, 'sip_timestamp') else trade.timestamp,
-                    'price': trade.price,
-                    'size': trade.size,
-                    'exchange': trade.exchange if hasattr(trade, 'exchange') else None,
-                    'conditions': trade.conditions if hasattr(trade, 'conditions') else None,
-                    'sequence_number': trade.sequence_number if hasattr(trade, 'sequence_number') else None,
-                    'trade_id': trade.id if hasattr(trade, 'id') else None,
-                })
+            for trade in self.client.list_trades(ticker=ticker, timestamp=timestamp, limit=limit):
+                trades.append(
+                    {
+                        "timestamp": trade.sip_timestamp if hasattr(trade, "sip_timestamp") else trade.timestamp,
+                        "price": trade.price,
+                        "size": trade.size,
+                        "exchange": trade.exchange if hasattr(trade, "exchange") else None,
+                        "conditions": trade.conditions if hasattr(trade, "conditions") else None,
+                        "sequence_number": trade.sequence_number if hasattr(trade, "sequence_number") else None,
+                        "trade_id": trade.id if hasattr(trade, "id") else None,
+                    }
+                )
 
             logger.info(f"Fetched {len(trades)} trades for {ticker}")
             return trades
 
         except Exception as e:
-            logger.error(f"Error fetching trades for {ticker}: {str(e)}")
+            logger.error(f"Error fetching trades for {ticker}: {e!s}")
             raise
 
     def list_options_contracts(
         self,
         underlying_ticker: str,
-        as_of_date: Optional[str] = None,
-        contract_type: Optional[str] = None,
-        strike_price_gte: Optional[float] = None,
-        strike_price_lte: Optional[float] = None,
-        expiration_date: Optional[str] = None,
-        expiration_date_gte: Optional[str] = None,
-        expiration_date_lte: Optional[str] = None,
-        expired: Optional[bool] = None,
-        limit: int = 100
-    ) -> List[Dict[str, Any]]:
+        as_of_date: str | None = None,
+        contract_type: str | None = None,
+        strike_price_gte: float | None = None,
+        strike_price_lte: float | None = None,
+        expiration_date: str | None = None,
+        expiration_date_gte: str | None = None,
+        expiration_date_lte: str | None = None,
+        expired: bool | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
         """List options contracts from Polygon for a given underlying ticker"""
         try:
             logger.info(f"Listing options contracts for {underlying_ticker}, as_of={as_of_date}")
@@ -123,16 +120,18 @@ class PolygonClientService:
                 expired=expired,
                 limit=page_size,
             ):
-                contracts.append({
-                    'ticker': c.ticker,
-                    'underlying_ticker': c.underlying_ticker,
-                    'contract_type': c.contract_type,
-                    'strike_price': c.strike_price,
-                    'expiration_date': c.expiration_date,
-                    'exercise_style': getattr(c, 'exercise_style', None),
-                    'shares_per_contract': getattr(c, 'shares_per_contract', None),
-                    'primary_exchange': getattr(c, 'primary_exchange', None),
-                })
+                contracts.append(
+                    {
+                        "ticker": c.ticker,
+                        "underlying_ticker": c.underlying_ticker,
+                        "contract_type": c.contract_type,
+                        "strike_price": c.strike_price,
+                        "expiration_date": c.expiration_date,
+                        "exercise_style": getattr(c, "exercise_style", None),
+                        "shares_per_contract": getattr(c, "shares_per_contract", None),
+                        "primary_exchange": getattr(c, "primary_exchange", None),
+                    }
+                )
                 if len(contracts) >= limit:
                     logger.info(f"Reached max {limit} contracts for {underlying_ticker}, stopping pagination")
                     break
@@ -141,16 +140,16 @@ class PolygonClientService:
             return contracts
 
         except Exception as e:
-            logger.error(f"Error listing options contracts for {underlying_ticker}: {str(e)}")
+            logger.error(f"Error listing options contracts for {underlying_ticker}: {e!s}")
             raise
 
     def list_options_expirations(
         self,
         underlying_ticker: str,
-        contract_type: Optional[str] = None,
-        expiration_date_gte: Optional[str] = None,
-        expiration_date_lte: Optional[str] = None,
-    ) -> List[str]:
+        contract_type: str | None = None,
+        expiration_date_gte: str | None = None,
+        expiration_date_lte: str | None = None,
+    ) -> list[str]:
         """Fetch unique expiration dates for an underlying ticker.
 
         Breaks the date range into ~30-day windows and fires all window
@@ -160,10 +159,11 @@ class PolygonClientService:
         A permanently-failing window is skipped so the remaining windows
         still return data.
         """
-        import requests as _requests
-        from datetime import datetime, timedelta
-        from concurrent.futures import ThreadPoolExecutor, as_completed
         import time
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from datetime import datetime, timedelta
+
+        import requests as _requests
 
         MAX_RETRIES = 3
         BASE_DELAY = 2.0  # seconds
@@ -173,21 +173,21 @@ class PolygonClientService:
             window_dates: set[str] = set()
             for attempt in range(MAX_RETRIES):
                 try:
-                    params: Dict[str, Any] = {
-                        'underlying_ticker': underlying_ticker,
-                        'contract_type': effective_type,
-                        'expiration_date.gte': w_start_str,
-                        'expiration_date.lte': w_end_str,
-                        'limit': 1000,
-                        'apiKey': settings.POLYGON_API_KEY,
+                    params: dict[str, Any] = {
+                        "underlying_ticker": underlying_ticker,
+                        "contract_type": effective_type,
+                        "expiration_date.gte": w_start_str,
+                        "expiration_date.lte": w_end_str,
+                        "limit": 1000,
+                        "apiKey": settings.POLYGON_API_KEY,
                     }
                     resp = _requests.get(
-                        'https://api.polygon.io/v3/reference/options/contracts',
+                        "https://api.polygon.io/v3/reference/options/contracts",
                         params=params,
                         timeout=30,
                     )
                     if resp.status_code in (502, 503, 504):
-                        delay = BASE_DELAY * (2 ** attempt)
+                        delay = BASE_DELAY * (2**attempt)
                         logger.warning(
                             f"[Expirations] Window {w_start_str}..{w_end_str}: "
                             f"HTTP {resp.status_code}, retry {attempt + 1}/{MAX_RETRIES} "
@@ -198,14 +198,14 @@ class PolygonClientService:
 
                     resp.raise_for_status()
                     data = resp.json()
-                    for r in data.get('results', []):
-                        exp = r.get('expiration_date')
+                    for r in data.get("results", []):
+                        exp = r.get("expiration_date")
                         if exp:
                             window_dates.add(exp)
                     return window_dates
 
                 except (_requests.exceptions.ReadTimeout, _requests.exceptions.ConnectionError) as exc:
-                    delay = BASE_DELAY * (2 ** attempt)
+                    delay = BASE_DELAY * (2**attempt)
                     logger.warning(
                         f"[Expirations] Window {w_start_str}..{w_end_str}: "
                         f"{type(exc).__name__}, retry {attempt + 1}/{MAX_RETRIES} in {delay:.1f}s"
@@ -213,25 +213,23 @@ class PolygonClientService:
                     time.sleep(delay)
 
             logger.error(
-                f"[Expirations] Window {w_start_str}..{w_end_str}: "
-                f"failed after {MAX_RETRIES} retries, skipping"
+                f"[Expirations] Window {w_start_str}..{w_end_str}: failed after {MAX_RETRIES} retries, skipping"
             )
             return window_dates
 
         try:
             logger.info(
-                f"Listing expirations for {underlying_ticker}, "
-                f"range=[{expiration_date_gte}, {expiration_date_lte}]"
+                f"Listing expirations for {underlying_ticker}, range=[{expiration_date_gte}, {expiration_date_lte}]"
             )
 
-            today = datetime.now().strftime('%Y-%m-%d')
-            start = datetime.strptime(expiration_date_gte or today, '%Y-%m-%d')
+            today = datetime.now().strftime("%Y-%m-%d")
+            start = datetime.strptime(expiration_date_gte or today, "%Y-%m-%d")
             end = datetime.strptime(
-                expiration_date_lte or (datetime.now() + timedelta(days=180)).strftime('%Y-%m-%d'),
-                '%Y-%m-%d',
+                expiration_date_lte or (datetime.now() + timedelta(days=180)).strftime("%Y-%m-%d"),
+                "%Y-%m-%d",
             )
 
-            effective_type = contract_type or 'call'
+            effective_type = contract_type or "call"
 
             # Build list of (window_start, window_end) pairs
             windows: list[tuple[str, str]] = []
@@ -239,7 +237,7 @@ class PolygonClientService:
             window_start = start
             while window_start <= end:
                 window_end = min(window_start + timedelta(days=window_days - 1), end)
-                windows.append((window_start.strftime('%Y-%m-%d'), window_end.strftime('%Y-%m-%d')))
+                windows.append((window_start.strftime("%Y-%m-%d"), window_end.strftime("%Y-%m-%d")))
                 window_start = window_end + timedelta(days=1)
 
             logger.info(f"[Expirations] Firing {len(windows)} window requests concurrently")
@@ -247,30 +245,24 @@ class PolygonClientService:
             # Fire all windows in parallel
             dates: set[str] = set()
             with ThreadPoolExecutor(max_workers=len(windows)) as pool:
-                futures = {
-                    pool.submit(_fetch_window, ws, we, effective_type): (ws, we)
-                    for ws, we in windows
-                }
+                futures = {pool.submit(_fetch_window, ws, we, effective_type): (ws, we) for ws, we in windows}
                 for future in as_completed(futures):
                     dates.update(future.result())
 
             result = sorted(dates)
-            logger.info(
-                f"Found {len(result)} unique expirations for {underlying_ticker} "
-                f"({len(windows)} windows)"
-            )
+            logger.info(f"Found {len(result)} unique expirations for {underlying_ticker} ({len(windows)} windows)")
             return result
 
         except Exception as e:
-            err_msg = str(e).replace(settings.POLYGON_API_KEY, '***')
+            err_msg = str(e).replace(settings.POLYGON_API_KEY, "***")
             logger.error(f"Error listing expirations for {underlying_ticker}: {err_msg}")
             raise
 
     def list_snapshot_options_chain(
         self,
         underlying_asset: str,
-        expiration_date: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        expiration_date: str | None = None,
+    ) -> dict[str, Any]:
         """Fetch snapshot of options chain for an underlying asset.
 
         Args:
@@ -281,90 +273,98 @@ class PolygonClientService:
         try:
             # Default to today's date to avoid fetching thousands of contracts
             if expiration_date is None:
-                expiration_date = datetime.now().strftime('%Y-%m-%d')
+                expiration_date = datetime.now().strftime("%Y-%m-%d")
 
             logger.info(f"Fetching options chain snapshot for {underlying_asset}, expiration={expiration_date}")
 
             contracts = []
             underlying_info = None
 
-            params: Dict[str, Any] = {}
+            params: dict[str, Any] = {}
             if expiration_date:
-                params['expiration_date'] = expiration_date
+                params["expiration_date"] = expiration_date
 
             for snapshot in self.client.list_snapshot_options_chain(
                 underlying_asset=underlying_asset,
                 params=params if params else None,
             ):
                 # Capture underlying asset info from first result
-                if underlying_info is None and hasattr(snapshot, 'underlying_asset'):
+                if underlying_info is None and hasattr(snapshot, "underlying_asset"):
                     ua = snapshot.underlying_asset
                     underlying_info = {
-                        'ticker': getattr(ua, 'ticker', None) or underlying_asset,
-                        'price': getattr(ua, 'price', None) or 0,
-                        'change': getattr(ua, 'change_to_break_even', None) or 0,
-                        'change_percent': getattr(ua, 'change_to_break_even', None) or 0,
+                        "ticker": getattr(ua, "ticker", None) or underlying_asset,
+                        "price": getattr(ua, "price", None) or 0,
+                        "change": getattr(ua, "change_to_break_even", None) or 0,
+                        "change_percent": getattr(ua, "change_to_break_even", None) or 0,
                     }
 
-                greeks = getattr(snapshot, 'greeks', None)
-                day = getattr(snapshot, 'day', None)
-                details = getattr(snapshot, 'details', None)
-                last_trade = getattr(snapshot, 'last_trade', None)
-                last_quote = getattr(snapshot, 'last_quote', None)
+                greeks = getattr(snapshot, "greeks", None)
+                day = getattr(snapshot, "day", None)
+                details = getattr(snapshot, "details", None)
+                last_trade = getattr(snapshot, "last_trade", None)
+                last_quote = getattr(snapshot, "last_quote", None)
 
                 contract = {
-                    'ticker': getattr(details, 'ticker', None) if details else None,
-                    'contract_type': getattr(details, 'contract_type', None) if details else None,
-                    'strike_price': getattr(details, 'strike_price', None) if details else None,
-                    'expiration_date': getattr(details, 'expiration_date', None) if details else None,
-                    'break_even_price': getattr(snapshot, 'break_even_price', None),
-                    'implied_volatility': getattr(snapshot, 'implied_volatility', None),
-                    'open_interest': getattr(snapshot, 'open_interest', None),
-                    'greeks': {
-                        'delta': getattr(greeks, 'delta', None),
-                        'gamma': getattr(greeks, 'gamma', None),
-                        'theta': getattr(greeks, 'theta', None),
-                        'vega': getattr(greeks, 'vega', None),
-                    } if greeks else None,
-                    'day': {
-                        'open': getattr(day, 'open', None),
-                        'high': getattr(day, 'high', None),
-                        'low': getattr(day, 'low', None),
-                        'close': getattr(day, 'close', None),
-                        'volume': getattr(day, 'volume', None),
-                        'vwap': getattr(day, 'vwap', None),
-                    } if day else None,
-                    'last_trade': {
-                        'price': getattr(last_trade, 'price', None),
-                        'size': getattr(last_trade, 'size', None),
-                        'exchange': getattr(last_trade, 'exchange', None),
-                        'conditions': getattr(last_trade, 'conditions', None),
-                        'sip_timestamp': getattr(last_trade, 'sip_timestamp', None),
-                        'timeframe': getattr(last_trade, 'timeframe', None),
-                    } if last_trade else None,
-                    'last_quote': {
-                        'bid': getattr(last_quote, 'bid', None),
-                        'ask': getattr(last_quote, 'ask', None),
-                        'bid_size': getattr(last_quote, 'bid_size', None),
-                        'ask_size': getattr(last_quote, 'ask_size', None),
-                        'midpoint': getattr(last_quote, 'midpoint', None),
-                        'timeframe': getattr(last_quote, 'timeframe', None),
-                        'last_updated': getattr(last_quote, 'last_updated', None),
-                    } if last_quote else None,
+                    "ticker": getattr(details, "ticker", None) if details else None,
+                    "contract_type": getattr(details, "contract_type", None) if details else None,
+                    "strike_price": getattr(details, "strike_price", None) if details else None,
+                    "expiration_date": getattr(details, "expiration_date", None) if details else None,
+                    "break_even_price": getattr(snapshot, "break_even_price", None),
+                    "implied_volatility": getattr(snapshot, "implied_volatility", None),
+                    "open_interest": getattr(snapshot, "open_interest", None),
+                    "greeks": {
+                        "delta": getattr(greeks, "delta", None),
+                        "gamma": getattr(greeks, "gamma", None),
+                        "theta": getattr(greeks, "theta", None),
+                        "vega": getattr(greeks, "vega", None),
+                    }
+                    if greeks
+                    else None,
+                    "day": {
+                        "open": getattr(day, "open", None),
+                        "high": getattr(day, "high", None),
+                        "low": getattr(day, "low", None),
+                        "close": getattr(day, "close", None),
+                        "volume": getattr(day, "volume", None),
+                        "vwap": getattr(day, "vwap", None),
+                    }
+                    if day
+                    else None,
+                    "last_trade": {
+                        "price": getattr(last_trade, "price", None),
+                        "size": getattr(last_trade, "size", None),
+                        "exchange": getattr(last_trade, "exchange", None),
+                        "conditions": getattr(last_trade, "conditions", None),
+                        "sip_timestamp": getattr(last_trade, "sip_timestamp", None),
+                        "timeframe": getattr(last_trade, "timeframe", None),
+                    }
+                    if last_trade
+                    else None,
+                    "last_quote": {
+                        "bid": getattr(last_quote, "bid", None),
+                        "ask": getattr(last_quote, "ask", None),
+                        "bid_size": getattr(last_quote, "bid_size", None),
+                        "ask_size": getattr(last_quote, "ask_size", None),
+                        "midpoint": getattr(last_quote, "midpoint", None),
+                        "timeframe": getattr(last_quote, "timeframe", None),
+                        "last_updated": getattr(last_quote, "last_updated", None),
+                    }
+                    if last_quote
+                    else None,
                 }
                 contracts.append(contract)
 
             if underlying_info is None:
-                underlying_info = {'ticker': underlying_asset, 'price': 0, 'change': 0, 'change_percent': 0}
+                underlying_info = {"ticker": underlying_asset, "price": 0, "change": 0, "change_percent": 0}
 
             # Fallback: if underlying price is 0/None, fetch from stock snapshot
-            if not underlying_info.get('price'):
+            if not underlying_info.get("price"):
                 try:
                     stock_snap = self.get_stock_snapshot(underlying_asset)
-                    day = stock_snap.get('day', {})
-                    prev_day = stock_snap.get('prev_day', {})
-                    price = day.get('close') or prev_day.get('close') or 0
-                    underlying_info['price'] = price
+                    day = stock_snap.get("day", {})
+                    prev_day = stock_snap.get("prev_day", {})
+                    price = day.get("close") or prev_day.get("close") or 0
+                    underlying_info["price"] = price
                     if price:
                         logger.info(f"Enriched underlying price from stock snapshot: {price}")
                 except Exception as enrich_err:
@@ -372,15 +372,15 @@ class PolygonClientService:
 
             logger.info(f"Fetched {len(contracts)} options chain snapshots for {underlying_asset}")
             return {
-                'underlying': underlying_info,
-                'contracts': contracts,
+                "underlying": underlying_info,
+                "contracts": contracts,
             }
 
         except Exception as e:
-            logger.error(f"Error fetching options chain snapshot for {underlying_asset}: {str(e)}")
+            logger.error(f"Error fetching options chain snapshot for {underlying_asset}: {e!s}")
             raise
 
-    def get_stock_snapshot(self, ticker: str) -> Dict[str, Any]:
+    def get_stock_snapshot(self, ticker: str) -> dict[str, Any]:
         """Fetch snapshot for a single stock ticker (v2 API)."""
         try:
             logger.info(f"Fetching stock snapshot for {ticker}")
@@ -392,13 +392,13 @@ class PolygonClientService:
             return result
 
         except Exception as e:
-            logger.error(f"Error fetching stock snapshot for {ticker}: {str(e)}")
+            logger.error(f"Error fetching stock snapshot for {ticker}: {e!s}")
             raise
 
     def get_stock_snapshots(
         self,
-        tickers: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+        tickers: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Fetch snapshots for multiple stock tickers (v2 API).
 
         Args:
@@ -415,10 +415,10 @@ class PolygonClientService:
             return results
 
         except Exception as e:
-            logger.error(f"Error fetching stock snapshots: {str(e)}")
+            logger.error(f"Error fetching stock snapshots: {e!s}")
             raise
 
-    def get_market_movers(self, direction: str) -> List[Dict[str, Any]]:
+    def get_market_movers(self, direction: str) -> list[dict[str, Any]]:
         """Fetch top market movers — gainers or losers (v2 API).
 
         Args:
@@ -434,14 +434,14 @@ class PolygonClientService:
             return results
 
         except Exception as e:
-            logger.error(f"Error fetching market movers ({direction}): {str(e)}")
+            logger.error(f"Error fetching market movers ({direction}): {e!s}")
             raise
 
     def get_unified_snapshots(
         self,
-        tickers: Optional[List[str]] = None,
+        tickers: list[str] | None = None,
         limit: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch unified snapshots via the v3 API.
 
         Args:
@@ -456,75 +456,79 @@ class PolygonClientService:
                 ticker_any_of=tickers,
                 limit=limit,
             ):
-                session = getattr(snapshot, 'session', None)
-                results.append({
-                    'ticker': getattr(snapshot, 'ticker', None),
-                    'type': getattr(snapshot, 'type', None),
-                    'market_status': getattr(snapshot, 'market_status', None),
-                    'name': getattr(snapshot, 'name', None),
-                    'session': {
-                        'price': getattr(session, 'price', None),
-                        'change': getattr(session, 'change', None),
-                        'change_percent': getattr(session, 'change_percent', None),
-                        'open': getattr(session, 'open', None),
-                        'close': getattr(session, 'close', None),
-                        'high': getattr(session, 'high', None),
-                        'low': getattr(session, 'low', None),
-                        'previous_close': getattr(session, 'previous_close', None),
-                        'volume': getattr(session, 'volume', None),
-                    } if session else None,
-                })
+                session = getattr(snapshot, "session", None)
+                results.append(
+                    {
+                        "ticker": getattr(snapshot, "ticker", None),
+                        "type": getattr(snapshot, "type", None),
+                        "market_status": getattr(snapshot, "market_status", None),
+                        "name": getattr(snapshot, "name", None),
+                        "session": {
+                            "price": getattr(session, "price", None),
+                            "change": getattr(session, "change", None),
+                            "change_percent": getattr(session, "change_percent", None),
+                            "open": getattr(session, "open", None),
+                            "close": getattr(session, "close", None),
+                            "high": getattr(session, "high", None),
+                            "low": getattr(session, "low", None),
+                            "previous_close": getattr(session, "previous_close", None),
+                            "volume": getattr(session, "volume", None),
+                        }
+                        if session
+                        else None,
+                    }
+                )
 
             logger.info(f"Fetched {len(results)} unified snapshots")
             return results
 
         except Exception as e:
-            logger.error(f"Error fetching unified snapshots: {str(e)}")
+            logger.error(f"Error fetching unified snapshots: {e!s}")
             raise
 
     @staticmethod
-    def _serialize_bar(bar: Any) -> Optional[Dict[str, Any]]:
+    def _serialize_bar(bar: Any) -> dict[str, Any] | None:
         """Serialize an Agg or MinuteSnapshot bar to a dict."""
         if bar is None:
             return None
         return {
-            'open': getattr(bar, 'open', None),
-            'high': getattr(bar, 'high', None),
-            'low': getattr(bar, 'low', None),
-            'close': getattr(bar, 'close', None),
-            'volume': getattr(bar, 'volume', None),
-            'vwap': getattr(bar, 'vwap', None),
+            "open": getattr(bar, "open", None),
+            "high": getattr(bar, "high", None),
+            "low": getattr(bar, "low", None),
+            "close": getattr(bar, "close", None),
+            "volume": getattr(bar, "volume", None),
+            "vwap": getattr(bar, "vwap", None),
         }
 
     @staticmethod
-    def _serialize_minute_bar(bar: Any) -> Optional[Dict[str, Any]]:
+    def _serialize_minute_bar(bar: Any) -> dict[str, Any] | None:
         """Serialize a MinuteSnapshot bar with accumulated volume and timestamp."""
         if bar is None:
             return None
         return {
-            'open': getattr(bar, 'open', None),
-            'high': getattr(bar, 'high', None),
-            'low': getattr(bar, 'low', None),
-            'close': getattr(bar, 'close', None),
-            'volume': getattr(bar, 'volume', None),
-            'vwap': getattr(bar, 'vwap', None),
-            'accumulated_volume': getattr(bar, 'accumulated_volume', None),
-            'timestamp': getattr(bar, 'timestamp', None),
+            "open": getattr(bar, "open", None),
+            "high": getattr(bar, "high", None),
+            "low": getattr(bar, "low", None),
+            "close": getattr(bar, "close", None),
+            "volume": getattr(bar, "volume", None),
+            "vwap": getattr(bar, "vwap", None),
+            "accumulated_volume": getattr(bar, "accumulated_volume", None),
+            "timestamp": getattr(bar, "timestamp", None),
         }
 
-    def _serialize_ticker_snapshot(self, snapshot: Any) -> Dict[str, Any]:
+    def _serialize_ticker_snapshot(self, snapshot: Any) -> dict[str, Any]:
         """Convert a TickerSnapshot to a serializable dict."""
         return {
-            'ticker': getattr(snapshot, 'ticker', None),
-            'day': self._serialize_bar(getattr(snapshot, 'day', None)),
-            'prev_day': self._serialize_bar(getattr(snapshot, 'prev_day', None)),
-            'min': self._serialize_minute_bar(getattr(snapshot, 'min', None)),
-            'todays_change': getattr(snapshot, 'todays_change', None),
-            'todays_change_percent': getattr(snapshot, 'todays_change_percent', None),
-            'updated': getattr(snapshot, 'updated', None),
+            "ticker": getattr(snapshot, "ticker", None),
+            "day": self._serialize_bar(getattr(snapshot, "day", None)),
+            "prev_day": self._serialize_bar(getattr(snapshot, "prev_day", None)),
+            "min": self._serialize_minute_bar(getattr(snapshot, "min", None)),
+            "todays_change": getattr(snapshot, "todays_change", None),
+            "todays_change_percent": getattr(snapshot, "todays_change_percent", None),
+            "updated": getattr(snapshot, "updated", None),
         }
 
-    def list_tickers(self, tickers: List[str]) -> List[Dict[str, Any]]:
+    def list_tickers(self, tickers: list[str]) -> list[dict[str, Any]]:
         """Fetch basic info for a list of stock tickers from Polygon reference API.
 
         Uses GET /v3/reference/tickers with limit=1000, then filters to requested tickers.
@@ -535,26 +539,28 @@ class PolygonClientService:
 
             results = []
             for t in self.client.list_tickers(market="stocks", active=True, limit=1000):
-                symbol = getattr(t, 'ticker', None)
+                symbol = getattr(t, "ticker", None)
                 if symbol and symbol in ticker_set:
-                    results.append({
-                        'ticker': symbol,
-                        'name': getattr(t, 'name', None) or '',
-                        'market': getattr(t, 'market', None) or '',
-                        'type': getattr(t, 'type', None) or '',
-                        'active': getattr(t, 'active', True),
-                        'primary_exchange': getattr(t, 'primary_exchange', None),
-                        'currency_name': getattr(t, 'currency_name', None),
-                    })
+                    results.append(
+                        {
+                            "ticker": symbol,
+                            "name": getattr(t, "name", None) or "",
+                            "market": getattr(t, "market", None) or "",
+                            "type": getattr(t, "type", None) or "",
+                            "active": getattr(t, "active", True),
+                            "primary_exchange": getattr(t, "primary_exchange", None),
+                            "currency_name": getattr(t, "currency_name", None),
+                        }
+                    )
 
             logger.info(f"[Tickers] Found {len(results)}/{len(ticker_set)} tickers")
             return results
 
         except Exception as e:
-            logger.error(f"[Tickers] Error fetching ticker list: {str(e)}")
+            logger.error(f"[Tickers] Error fetching ticker list: {e!s}")
             raise
 
-    def get_ticker_details(self, ticker: str) -> Dict[str, Any]:
+    def get_ticker_details(self, ticker: str) -> dict[str, Any]:
         """Fetch detailed overview for a single ticker from Polygon.
 
         Uses GET /v3/reference/tickers/{ticker}.
@@ -564,35 +570,37 @@ class PolygonClientService:
 
             details = self.client.get_ticker_details(ticker)
 
-            address = getattr(details, 'address', None)
+            address = getattr(details, "address", None)
             result = {
-                'ticker': getattr(details, 'ticker', ticker),
-                'name': getattr(details, 'name', None) or '',
-                'description': getattr(details, 'description', None),
-                'market_cap': getattr(details, 'market_cap', None),
-                'homepage_url': getattr(details, 'homepage_url', None),
-                'total_employees': getattr(details, 'total_employees', None),
-                'list_date': getattr(details, 'list_date', None),
-                'sic_description': getattr(details, 'sic_description', None),
-                'primary_exchange': getattr(details, 'primary_exchange', None),
-                'type': getattr(details, 'type', None),
-                'weighted_shares_outstanding': getattr(details, 'weighted_shares_outstanding', None),
-                'address': {
-                    'address1': getattr(address, 'address1', None),
-                    'city': getattr(address, 'city', None),
-                    'state': getattr(address, 'state', None),
-                    'postal_code': getattr(address, 'postal_code', None),
-                } if address else None,
+                "ticker": getattr(details, "ticker", ticker),
+                "name": getattr(details, "name", None) or "",
+                "description": getattr(details, "description", None),
+                "market_cap": getattr(details, "market_cap", None),
+                "homepage_url": getattr(details, "homepage_url", None),
+                "total_employees": getattr(details, "total_employees", None),
+                "list_date": getattr(details, "list_date", None),
+                "sic_description": getattr(details, "sic_description", None),
+                "primary_exchange": getattr(details, "primary_exchange", None),
+                "type": getattr(details, "type", None),
+                "weighted_shares_outstanding": getattr(details, "weighted_shares_outstanding", None),
+                "address": {
+                    "address1": getattr(address, "address1", None),
+                    "city": getattr(address, "city", None),
+                    "state": getattr(address, "state", None),
+                    "postal_code": getattr(address, "postal_code", None),
+                }
+                if address
+                else None,
             }
 
             logger.info(f"[Tickers] Fetched details for {ticker}")
             return result
 
         except Exception as e:
-            logger.error(f"[Tickers] Error fetching details for {ticker}: {str(e)}")
+            logger.error(f"[Tickers] Error fetching details for {ticker}: {e!s}")
             raise
 
-    def get_related_companies(self, ticker: str) -> List[str]:
+    def get_related_companies(self, ticker: str) -> list[str]:
         """Fetch related company tickers from Polygon.
 
         Uses GET /v1/related-companies/{ticker}.
@@ -601,38 +609,34 @@ class PolygonClientService:
             logger.info(f"[Tickers] Fetching related companies for {ticker}")
 
             response = self.client.get_related_companies(ticker)
-            related = [
-                getattr(r, 'ticker', None)
-                for r in (response or [])
-                if getattr(r, 'ticker', None)
-            ]
+            related = [getattr(r, "ticker", None) for r in (response or []) if getattr(r, "ticker", None)]
 
             logger.info(f"[Tickers] Found {len(related)} related companies for {ticker}")
             return related
 
         except Exception as e:
-            logger.error(f"[Tickers] Error fetching related companies for {ticker}: {str(e)}")
+            logger.error(f"[Tickers] Error fetching related companies for {ticker}: {e!s}")
             raise
 
     def fetch_technical_indicator(
         self,
         ticker: str,
         indicator_type: str,  # sma, ema, rsi, macd
-        timestamp: Optional[str] = None,
+        timestamp: str | None = None,
         timespan: str = "day",
         window: int = 50,
-        **kwargs
-    ) -> Dict[str, Any]:
+        **kwargs,
+    ) -> dict[str, Any]:
         """Fetch technical indicators from Polygon"""
         try:
             logger.info(f"Fetching {indicator_type.upper()} for {ticker}")
 
             # Map indicator types to client methods
             indicator_methods = {
-                'sma': self.client.get_sma,
-                'ema': self.client.get_ema,
-                'rsi': self.client.get_rsi,
-                'macd': self.client.get_macd,
+                "sma": self.client.get_sma,
+                "ema": self.client.get_ema,
+                "rsi": self.client.get_rsi,
+                "macd": self.client.get_macd,
             }
 
             if indicator_type.lower() not in indicator_methods:
@@ -641,26 +645,20 @@ class PolygonClientService:
             method = indicator_methods[indicator_type.lower()]
 
             # Call appropriate method
-            result = method(
-                ticker=ticker,
-                timestamp=timestamp,
-                timespan=timespan,
-                window=window,
-                **kwargs
-            )
+            result = method(ticker=ticker, timestamp=timestamp, timespan=timespan, window=window, **kwargs)
 
             # Convert to serializable format
             return {
-                'ticker': ticker,
-                'indicator_type': indicator_type,
-                'timestamp': result.timestamp if hasattr(result, 'timestamp') else None,
-                'values': result.values if hasattr(result, 'values') else None,
-                'metadata': {
-                    'timespan': timespan,
-                    'window': window,
-                }
+                "ticker": ticker,
+                "indicator_type": indicator_type,
+                "timestamp": result.timestamp if hasattr(result, "timestamp") else None,
+                "values": result.values if hasattr(result, "values") else None,
+                "metadata": {
+                    "timespan": timespan,
+                    "window": window,
+                },
             }
 
         except Exception as e:
-            logger.error(f"Error fetching {indicator_type} for {ticker}: {str(e)}")
+            logger.error(f"Error fetching {indicator_type} for {ticker}: {e!s}")
             raise

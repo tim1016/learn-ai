@@ -28,12 +28,12 @@ Trade logging:
   and stashed in ``_pending_entry``, because they describe the decision
   that triggered the entry — not the state at fill time.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Optional
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
@@ -90,8 +90,8 @@ class SpyEmaCrossoverAlgorithm(Strategy):
         #   signal time     → _pending_entry (indicator snapshot)
         #   entry fill      → _open_trade    (entry price/time from fill)
         #   exit fill       → _LoggedTrade appended to trade_log
-        self._pending_entry: Optional[_PendingEntry] = None
-        self._open_trade: Optional[_OpenTrade] = None
+        self._pending_entry: _PendingEntry | None = None
+        self._open_trade: _OpenTrade | None = None
 
         self.trade_log: list[LoggedTrade] = []
 
@@ -138,9 +138,7 @@ class SpyEmaCrossoverAlgorithm(Strategy):
             if self._ema5.is_ready and self._ema10.is_ready:
                 assert self._ema5.current_value is not None
                 assert self._ema10.current_value is not None
-                self._prev_ema5_above_ema10 = (
-                    self._ema5.current_value > self._ema10.current_value
-                )
+                self._prev_ema5_above_ema10 = self._ema5.current_value > self._ema10.current_value
             else:
                 self._prev_ema5_above_ema10 = False
             return
@@ -164,10 +162,7 @@ class SpyEmaCrossoverAlgorithm(Strategy):
                 # will come from the resulting fill event in
                 # ``on_order_event``.
                 self.ctx.liquidate(self._symbol)
-                self.ctx.log(
-                    f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
-                    f"Close={bar.close:.2f}"
-                )
+                self.ctx.log(f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
                 self._in_position = False
         else:
             # Entry check.
@@ -179,9 +174,7 @@ class SpyEmaCrossoverAlgorithm(Strategy):
                 # Stash the indicator snapshot — it describes the
                 # decision that triggered the entry, so it must be
                 # captured here (not at fill time).
-                self._pending_entry = _PendingEntry(
-                    ema5=ema5_val, ema10=ema10_val, rsi=rsi_val
-                )
+                self._pending_entry = _PendingEntry(ema5=ema5_val, ema10=ema10_val, rsi=rsi_val)
                 self.ctx.set_holdings(self._symbol, Decimal(1))
                 self._in_position = True
                 self._bars_until_exit = 5
@@ -196,18 +189,17 @@ class SpyEmaCrossoverAlgorithm(Strategy):
                 rsi_position = (rsi_float - 50.0) / 20.0  # 0.0 at 50, 1.0 at 70
                 confidence = 0.5 + 0.3 * (1.0 - abs(rsi_position - 0.5))
 
-                self.ctx.emit_insight(Insight.price(
-                    symbol=self._symbol,
-                    direction=InsightDirection.UP,
-                    period=timedelta(minutes=15 * 5),  # 5 bars × 15 min
-                    magnitude=float(ema_gap / bar.close),
-                    confidence=round(confidence, 4),
-                    source_model=f"EmaCross_5_10_RSI14",
-                    tag=(
-                        f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} "
-                        f"RSI={rsi_val:.2f} Gap={ema_gap:.4f}"
-                    ),
-                ))
+                self.ctx.emit_insight(
+                    Insight.price(
+                        symbol=self._symbol,
+                        direction=InsightDirection.UP,
+                        period=timedelta(minutes=15 * 5),  # 5 bars × 15 min
+                        magnitude=float(ema_gap / bar.close),
+                        confidence=round(confidence, 4),
+                        source_model="EmaCross_5_10_RSI14",
+                        tag=(f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} RSI={rsi_val:.2f} Gap={ema_gap:.4f}"),
+                    )
+                )
 
                 self.ctx.log(
                     f"ENTRY SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
@@ -237,9 +229,7 @@ class SpyEmaCrossoverAlgorithm(Strategy):
                 # Defensive: a LONG fill without a pending entry means
                 # state is out of sync. Log and skip.
                 if self.ctx is not None:
-                    self.ctx.log(
-                        f"WARN: LONG fill at {event.time} with no pending entry"
-                    )
+                    self.ctx.log(f"WARN: LONG fill at {event.time} with no pending entry")
                 return
             self._open_trade = _OpenTrade(
                 entry_time=event.time,

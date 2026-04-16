@@ -1,21 +1,21 @@
 """QuantLib-backed option pricing endpoints for validation against legacy BS."""
+
 from __future__ import annotations
 
+import logging
 import math
 from datetime import date
-from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
-import logging
 
+from app.research.options.bs_solver import bs_price as scipy_bs_price
 from app.services.quantlib_pricer import (
+    _QL_AVAILABLE,
     PricingEngine,
     price_option,
     price_strategy,
-    _QL_AVAILABLE,
 )
-from app.research.options.bs_solver import bs_price as scipy_bs_price
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -25,21 +25,27 @@ logger = logging.getLogger(__name__)
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 
+
 class QuantLibPriceRequest(BaseModel):
     """Price a single European option via QuantLib."""
+
     spot: float = Field(..., gt=0, description="Current underlying price")
     strike: float = Field(..., gt=0, description="Strike price")
     risk_free_rate: float = Field(0.05, description="Annualized risk-free rate")
     volatility: float = Field(..., gt=0, description="Annualized IV (decimal, e.g. 0.20)")
     expiration_date: str = Field(..., description="Expiration date YYYY-MM-DD")
     option_type: str = Field(..., pattern="^(call|put)$", description="call or put")
-    evaluation_date: Optional[str] = Field(None, description="Pricing date (default: today)")
+    evaluation_date: str | None = Field(None, description="Pricing date (default: today)")
     dividend_yield: float = Field(0.0, ge=0, description="Continuous dividend yield")
-    engine: str = Field("analytic_bs", description="Pricing engine: analytic_bs, binomial_crr, binomial_jr, binomial_lr, finite_diff, monte_carlo")
+    engine: str = Field(
+        "analytic_bs",
+        description="Pricing engine: analytic_bs, binomial_crr, binomial_jr, binomial_lr, finite_diff, monte_carlo",
+    )
 
 
 class QuantLibGreeksResponse(BaseModel):
     """Single option pricing result."""
+
     success: bool
     engine: str
     price: float
@@ -48,9 +54,9 @@ class QuantLibGreeksResponse(BaseModel):
     theta: float
     vega: float
     rho: float
-    d1: Optional[float] = None
-    d2: Optional[float] = None
-    error: Optional[str] = None
+    d1: float | None = None
+    d2: float | None = None
+    error: str | None = None
 
 
 class StrategyLegInput(BaseModel):
@@ -65,10 +71,11 @@ class StrategyLegInput(BaseModel):
 
 class QuantLibStrategyRequest(BaseModel):
     """Price a multi-leg strategy via QuantLib."""
+
     spot: float = Field(..., gt=0)
-    legs: List[StrategyLegInput]
+    legs: list[StrategyLegInput]
     risk_free_rate: float = Field(0.05)
-    evaluation_date: Optional[str] = Field(None)
+    evaluation_date: str | None = Field(None)
     dividend_yield: float = Field(0.0, ge=0)
     engine: str = Field("analytic_bs")
 
@@ -81,8 +88,8 @@ class StrategyLegResult(BaseModel):
     theta: float
     vega: float
     rho: float
-    d1: Optional[float] = None
-    d2: Optional[float] = None
+    d1: float | None = None
+    d2: float | None = None
 
 
 class QuantLibStrategyResponse(BaseModel):
@@ -94,19 +101,20 @@ class QuantLibStrategyResponse(BaseModel):
     net_theta: float
     net_vega: float
     net_rho: float
-    legs: List[StrategyLegResult]
-    error: Optional[str] = None
+    legs: list[StrategyLegResult]
+    error: str | None = None
 
 
 class QuantLibStatusResponse(BaseModel):
     available: bool
-    version: Optional[str] = None
-    engines: List[str]
+    version: str | None = None
+    engines: list[str]
 
 
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.get("/status", response_model=QuantLibStatusResponse)
 async def quantlib_status():
@@ -114,6 +122,7 @@ async def quantlib_status():
     version = None
     if _QL_AVAILABLE:
         import QuantLib as ql
+
         version = ql.__version__
     return QuantLibStatusResponse(
         available=_QL_AVAILABLE,
@@ -127,8 +136,14 @@ async def quantlib_price(request: QuantLibPriceRequest):
     """Price a single European option and return all Greeks."""
     if not _QL_AVAILABLE:
         return QuantLibGreeksResponse(
-            success=False, engine=request.engine,
-            price=0, delta=0, gamma=0, theta=0, vega=0, rho=0,
+            success=False,
+            engine=request.engine,
+            price=0,
+            delta=0,
+            gamma=0,
+            theta=0,
+            vega=0,
+            rho=0,
             error="QuantLib not installed",
         )
     try:
@@ -164,8 +179,14 @@ async def quantlib_price(request: QuantLibPriceRequest):
     except Exception as e:
         logger.error(f"[QuantLib] Error pricing option: {e}", exc_info=True)
         return QuantLibGreeksResponse(
-            success=False, engine=request.engine,
-            price=0, delta=0, gamma=0, theta=0, vega=0, rho=0,
+            success=False,
+            engine=request.engine,
+            price=0,
+            delta=0,
+            gamma=0,
+            theta=0,
+            vega=0,
+            rho=0,
             error=str(e),
         )
 
@@ -175,9 +196,16 @@ async def quantlib_strategy(request: QuantLibStrategyRequest):
     """Price a multi-leg options strategy and return aggregate Greeks."""
     if not _QL_AVAILABLE:
         return QuantLibStrategyResponse(
-            success=False, engine=request.engine,
-            net_price=0, net_delta=0, net_gamma=0, net_theta=0, net_vega=0, net_rho=0,
-            legs=[], error="QuantLib not installed",
+            success=False,
+            engine=request.engine,
+            net_price=0,
+            net_delta=0,
+            net_gamma=0,
+            net_theta=0,
+            net_vega=0,
+            net_rho=0,
+            legs=[],
+            error="QuantLib not installed",
         )
     try:
         engine = PricingEngine(request.engine)
@@ -207,9 +235,15 @@ async def quantlib_strategy(request: QuantLibStrategyRequest):
 
         leg_results = [
             StrategyLegResult(
-                engine=lr.engine, price=lr.price,
-                delta=lr.delta, gamma=lr.gamma, theta=lr.theta,
-                vega=lr.vega, rho=lr.rho, d1=lr.d1, d2=lr.d2,
+                engine=lr.engine,
+                price=lr.price,
+                delta=lr.delta,
+                gamma=lr.gamma,
+                theta=lr.theta,
+                vega=lr.vega,
+                rho=lr.rho,
+                d1=lr.d1,
+                d2=lr.d2,
             )
             for lr in result.legs
         ]
@@ -229,9 +263,16 @@ async def quantlib_strategy(request: QuantLibStrategyRequest):
     except Exception as e:
         logger.error(f"[QuantLib] Error pricing strategy: {e}", exc_info=True)
         return QuantLibStrategyResponse(
-            success=False, engine=request.engine,
-            net_price=0, net_delta=0, net_gamma=0, net_theta=0, net_vega=0, net_rho=0,
-            legs=[], error=str(e),
+            success=False,
+            engine=request.engine,
+            net_price=0,
+            net_delta=0,
+            net_gamma=0,
+            net_theta=0,
+            net_vega=0,
+            net_rho=0,
+            legs=[],
+            error=str(e),
         )
 
 
@@ -239,8 +280,10 @@ async def quantlib_strategy(request: QuantLibStrategyRequest):
 # Pricing model comparison endpoint
 # ---------------------------------------------------------------------------
 
+
 class PricingCompareRequest(BaseModel):
     """Compare pricing models across a range of underlying prices."""
+
     spot: float = Field(..., gt=0, description="Current underlying price")
     strike: float = Field(..., gt=0, description="Strike price")
     volatility: float = Field(..., gt=0, description="Annualized IV (decimal)")
@@ -248,14 +291,15 @@ class PricingCompareRequest(BaseModel):
     option_type: str = Field(..., pattern="^(call|put)$")
     risk_free_rate: float = Field(0.05)
     dividend_yield: float = Field(0.0, ge=0)
-    evaluation_date: Optional[str] = Field(None)
-    spot_min: Optional[float] = Field(None, description="Range start (default: spot * 0.80)")
-    spot_max: Optional[float] = Field(None, description="Range end (default: spot * 1.20)")
+    evaluation_date: str | None = Field(None)
+    spot_min: float | None = Field(None, description="Range start (default: spot * 0.80)")
+    spot_max: float | None = Field(None, description="Range end (default: spot * 1.20)")
     num_points: int = Field(100, ge=10, le=500, description="Number of data points")
 
 
 class PricingPointResult(BaseModel):
     """Single data point for one model at one spot price."""
+
     spot: float
     price: float
     delta: float
@@ -267,23 +311,30 @@ class PricingPointResult(BaseModel):
 
 class PricingModelCurve(BaseModel):
     """Full curve for one pricing model."""
+
     model: str
-    points: List[PricingPointResult]
+    points: list[PricingPointResult]
 
 
 class PricingCompareResponse(BaseModel):
     """Comparison results for all pricing models."""
+
     success: bool
     strike: float
     option_type: str
     expiration_date: str
     time_to_expiry_years: float
-    models: List[PricingModelCurve]
-    error: Optional[str] = None
+    models: list[PricingModelCurve]
+    error: str | None = None
 
 
 def _scipy_bs_greeks(
-    S: float, K: float, T: float, r: float, sigma: float, option_type: str,
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    sigma: float,
+    option_type: str,
 ) -> dict:
     """Compute price + Greeks using the scipy-based BS solver (Python analytical)."""
     from scipy.stats import norm as sp_norm
@@ -293,7 +344,7 @@ def _scipy_bs_greeks(
         d_val = 1.0 if (option_type == "call" and S > K) else (-1.0 if option_type == "put" and S < K else 0.0)
         return {"price": intrinsic, "delta": d_val, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
 
-    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
     d2 = d1 - sigma * math.sqrt(T)
     discount = math.exp(-r * T)
     sqrt_t = math.sqrt(T)
@@ -342,8 +393,12 @@ def _price_option_for_compare(
       average). Still shows curve shape; noise band is the point.
     """
     import QuantLib as ql
+
     from app.services.quantlib_pricer import (
-        _ensure_ql, _ql_date, _build_process, GreeksResult,
+        GreeksResult,
+        _build_process,
+        _ensure_ql,
+        _ql_date,
     )
 
     _ensure_ql()
@@ -357,9 +412,12 @@ def _price_option_for_compare(
 
     if t_years <= 0:
         intrinsic = max(spot - strike, 0) if option_type == "call" else max(strike - spot, 0)
-        d_val = 1.0 if (option_type == "call" and spot > strike) else (-1.0 if option_type == "put" and spot < strike else 0.0)
-        return GreeksResult(engine=engine.value, price=intrinsic, delta=d_val,
-                            gamma=0.0, theta=0.0, vega=0.0, rho=0.0)
+        d_val = (
+            1.0
+            if (option_type == "call" and spot > strike)
+            else (-1.0 if option_type == "put" and spot < strike else 0.0)
+        )
+        return GreeksResult(engine=engine.value, price=intrinsic, delta=d_val, gamma=0.0, theta=0.0, vega=0.0, rho=0.0)
 
     ql_type = ql.Option.Call if option_type == "call" else ql.Option.Put
     payoff = ql.PlainVanillaPayoff(ql_type, strike)
@@ -380,10 +438,15 @@ def _price_option_for_compare(
     elif engine == PricingEngine.FINITE_DIFF:
         option.setPricingEngine(ql.FdBlackScholesVanillaEngine(process, 201, 200))
     elif engine == PricingEngine.MONTE_CARLO:
-        option.setPricingEngine(ql.MCEuropeanEngine(
-            process, "pseudorandom", timeSteps=1,
-            requiredTolerance=0.02, seed=42,
-        ))
+        option.setPricingEngine(
+            ql.MCEuropeanEngine(
+                process,
+                "pseudorandom",
+                timeSteps=1,
+                requiredTolerance=0.02,
+                seed=42,
+            )
+        )
     else:
         raise ValueError(f"Unknown engine: {engine}")
 
@@ -397,16 +460,34 @@ def _price_option_for_compare(
     except RuntimeError:
         # Numeric delta: (P(S+h) - P(S-h)) / (2h)
         delta_v = _quick_numeric_greek(
-            process, payoff, exercise, engine, spot, bump, "delta",
-            risk_free_rate, dividend_yield, volatility, ql_eval,
+            process,
+            payoff,
+            exercise,
+            engine,
+            spot,
+            bump,
+            "delta",
+            risk_free_rate,
+            dividend_yield,
+            volatility,
+            ql_eval,
         )
 
     try:
         gamma_v = option.gamma()
     except RuntimeError:
         gamma_v = _quick_numeric_greek(
-            process, payoff, exercise, engine, spot, bump, "gamma",
-            risk_free_rate, dividend_yield, volatility, ql_eval,
+            process,
+            payoff,
+            exercise,
+            engine,
+            spot,
+            bump,
+            "gamma",
+            risk_free_rate,
+            dividend_yield,
+            volatility,
+            ql_eval,
         )
 
     try:
@@ -428,18 +509,32 @@ def _price_option_for_compare(
         rho_v = 0.0  # Skip numeric rho for speed in compare mode
 
     return GreeksResult(
-        engine=engine.value, price=npv,
-        delta=delta_v, gamma=gamma_v,
-        theta=theta_v, vega=vega_v, rho=rho_v,
+        engine=engine.value,
+        price=npv,
+        delta=delta_v,
+        gamma=gamma_v,
+        theta=theta_v,
+        vega=vega_v,
+        rho=rho_v,
     )
 
 
 def _quick_numeric_greek(
-    process, payoff, exercise, engine, spot, bump, greek_type,
-    risk_free_rate, dividend_yield, volatility, ql_eval,
+    process,
+    payoff,
+    exercise,
+    engine,
+    spot,
+    bump,
+    greek_type,
+    risk_free_rate,
+    dividend_yield,
+    volatility,
+    ql_eval,
 ):
     """Fast numeric delta/gamma via bump-and-revalue without full option rebuild."""
     import QuantLib as ql
+
     from app.services.quantlib_pricer import _build_process
 
     def _reprice(s):
@@ -454,9 +549,15 @@ def _quick_numeric_greek(
         elif engine == PricingEngine.FINITE_DIFF:
             opt.setPricingEngine(ql.FdBlackScholesVanillaEngine(p, 101, 100))
         elif engine == PricingEngine.MONTE_CARLO:
-            opt.setPricingEngine(ql.MCEuropeanEngine(
-                p, "pseudorandom", timeSteps=1, requiredTolerance=0.05, seed=42,
-            ))
+            opt.setPricingEngine(
+                ql.MCEuropeanEngine(
+                    p,
+                    "pseudorandom",
+                    timeSteps=1,
+                    requiredTolerance=0.05,
+                    seed=42,
+                )
+            )
         return opt.NPV()
 
     p_up = _reprice(spot + bump)
@@ -466,7 +567,7 @@ def _quick_numeric_greek(
         return (p_up - p_dn) / (2 * bump)
     elif greek_type == "gamma":
         p_mid = _reprice(spot)
-        return (p_up - 2 * p_mid + p_dn) / (bump ** 2)
+        return (p_up - 2 * p_mid + p_dn) / (bump**2)
     return 0.0
 
 
@@ -495,9 +596,13 @@ async def pricing_compare(request: PricingCompareRequest):
         T = delta_days / 365.0
         if T <= 0:
             return PricingCompareResponse(
-                success=False, strike=request.strike, option_type=request.option_type,
-                expiration_date=request.expiration_date, time_to_expiry_years=0,
-                models=[], error="Option has expired",
+                success=False,
+                strike=request.strike,
+                option_type=request.option_type,
+                expiration_date=request.expiration_date,
+                time_to_expiry_years=0,
+                models=[],
+                error="Option has expired",
             )
 
         spot_min = request.spot_min or request.spot * 0.80
@@ -506,17 +611,23 @@ async def pricing_compare(request: PricingCompareRequest):
 
         spots = [round(spot_min + i * step, 4) for i in range(request.num_points)]
 
-        models: List[PricingModelCurve] = []
+        models: list[PricingModelCurve] = []
 
         # ── Model 1: Python analytical BS (scipy.stats.norm) ──
-        python_bs_points: List[PricingPointResult] = []
+        python_bs_points: list[PricingPointResult] = []
         for s in spots:
             g = _scipy_bs_greeks(s, request.strike, T, request.risk_free_rate, request.volatility, request.option_type)
-            python_bs_points.append(PricingPointResult(
-                spot=s, price=round(g["price"], 6), delta=round(g["delta"], 6),
-                gamma=round(g["gamma"], 6), theta=round(g["theta"], 6),
-                vega=round(g["vega"], 6), rho=round(g["rho"], 6),
-            ))
+            python_bs_points.append(
+                PricingPointResult(
+                    spot=s,
+                    price=round(g["price"], 6),
+                    delta=round(g["delta"], 6),
+                    gamma=round(g["gamma"], 6),
+                    theta=round(g["theta"], 6),
+                    vega=round(g["vega"], 6),
+                    rho=round(g["rho"], 6),
+                )
+            )
         models.append(PricingModelCurve(model="python_bs", points=python_bs_points))
 
         # ── QuantLib engines (all 6) ──
@@ -534,14 +645,13 @@ async def pricing_compare(request: PricingCompareRequest):
         ]
 
         if _QL_AVAILABLE:
-            import QuantLib as ql
-
             for engine_enum, model_name in ql_engines:
-                engine_points: List[PricingPointResult] = []
+                engine_points: list[PricingPointResult] = []
                 try:
                     for s in spots:
                         result = _price_option_for_compare(
-                            spot=s, strike=request.strike,
+                            spot=s,
+                            strike=request.strike,
                             risk_free_rate=request.risk_free_rate,
                             volatility=request.volatility,
                             expiration_date=exp_d,
@@ -550,19 +660,24 @@ async def pricing_compare(request: PricingCompareRequest):
                             dividend_yield=request.dividend_yield,
                             engine=engine_enum,
                         )
-                        engine_points.append(PricingPointResult(
-                            spot=s, price=round(result.price, 6),
-                            delta=round(result.delta, 6),
-                            gamma=round(result.gamma, 6),
-                            theta=round(result.theta, 6),
-                            vega=round(result.vega, 6),
-                            rho=round(result.rho, 6),
-                        ))
+                        engine_points.append(
+                            PricingPointResult(
+                                spot=s,
+                                price=round(result.price, 6),
+                                delta=round(result.delta, 6),
+                                gamma=round(result.gamma, 6),
+                                theta=round(result.theta, 6),
+                                vega=round(result.vega, 6),
+                                rho=round(result.rho, 6),
+                            )
+                        )
                     models.append(PricingModelCurve(model=model_name, points=engine_points))
                     logger.info("[PricingCompare] Engine %s: %d points OK", model_name, len(engine_points))
                 except Exception as eng_err:
                     logger.warning(
-                        "[PricingCompare] Engine %s failed: %s", model_name, eng_err,
+                        "[PricingCompare] Engine %s failed: %s",
+                        model_name,
+                        eng_err,
                     )
                     # Skip this engine but continue with others
 
@@ -578,7 +693,11 @@ async def pricing_compare(request: PricingCompareRequest):
     except Exception as e:
         logger.error(f"[PricingCompare] Error: {e}", exc_info=True)
         return PricingCompareResponse(
-            success=False, strike=request.strike, option_type=request.option_type,
-            expiration_date=request.expiration_date, time_to_expiry_years=0,
-            models=[], error=str(e),
+            success=False,
+            strike=request.strike,
+            option_type=request.option_type,
+            expiration_date=request.expiration_date,
+            time_to_expiry_years=0,
+            models=[],
+            error=str(e),
         )

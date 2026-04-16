@@ -1,11 +1,12 @@
 """Feature registry with metadata for documentation and UI display."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class FeatureName(str, Enum):
+class FeatureName(StrEnum):
     """Supported features."""
 
     MOMENTUM_5M = "momentum_5m"

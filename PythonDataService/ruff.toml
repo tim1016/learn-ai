@@ -1,0 +1,42 @@
+# Ruff linter + formatter configuration
+# Docs: https://docs.astral.sh/ruff/configuration/
+
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort (import sorting)
+    "UP",   # pyupgrade (modernize syntax)
+    "B",    # flake8-bugbear (common bugs)
+    "SIM",  # flake8-simplify
+    "RUF",  # Ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long — handled by formatter
+    "E741",   # ambiguous variable name — common in math/finance code (l, O, I)
+    "B008",   # do not perform function call in argument defaults — FastAPI Depends() pattern
+    "B027",   # empty method without abstract decorator — used for base-class hooks
+    "RUF001", # ambiguous unicode character in string — math symbols
+    "RUF002", # ambiguous unicode character in docstring — math symbols
+    "RUF003", # ambiguous unicode character in comment — math symbols
+    "RUF012", # mutable class variables — common in Pydantic models
+    "SIM108", # use ternary instead of if-else — readability preference
+    "B024",   # abstract base class without abstract methods — used for base-class pattern
+    "B904",   # raise-without-from-inside-except — too noisy, revisit later
+]
+
+[lint.per-file-ignores]
+"tests/**/*.py" = [
+    "B011",  # assert False — valid in tests
+    "B017",  # assert-raises broad exception — acceptable in tests
+]
+
+[lint.isort]
+known-first-party = ["app"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

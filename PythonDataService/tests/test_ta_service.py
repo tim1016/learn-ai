@@ -1,13 +1,12 @@
 """Unit tests for TechnicalAnalysisService"""
+
 from app.services.ta_service import TechnicalAnalysisService
 from tests.conftest import make_sample_bars
 
 
 def test_sma_returns_correct_structure():
     bars = make_sample_bars(30)
-    results = TechnicalAnalysisService.calculate_indicators(
-        bars, [{"name": "sma", "window": 10}]
-    )
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "sma", "window": 10}])
 
     assert len(results) == 1
     assert results[0]["name"] == "sma"
@@ -23,9 +22,7 @@ def test_sma_returns_correct_structure():
 
 def test_ema_returns_correct_structure():
     bars = make_sample_bars(30)
-    results = TechnicalAnalysisService.calculate_indicators(
-        bars, [{"name": "ema", "window": 10}]
-    )
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "ema", "window": 10}])
 
     assert len(results) == 1
     assert results[0]["name"] == "ema"
@@ -35,9 +32,7 @@ def test_ema_returns_correct_structure():
 
 def test_rsi_values_in_valid_range():
     bars = make_sample_bars(50)
-    results = TechnicalAnalysisService.calculate_indicators(
-        bars, [{"name": "rsi", "window": 14}]
-    )
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "rsi", "window": 14}])
 
     assert len(results) == 1
     assert results[0]["name"] == "rsi"
@@ -49,18 +44,14 @@ def test_rsi_values_in_valid_range():
 
 def test_unknown_indicator_is_skipped():
     bars = make_sample_bars(30)
-    results = TechnicalAnalysisService.calculate_indicators(
-        bars, [{"name": "unknown_indicator", "window": 10}]
-    )
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "unknown_indicator", "window": 10}])
 
     assert len(results) == 0
 
 
 def test_macd_returns_three_components():
     bars = make_sample_bars(50)
-    results = TechnicalAnalysisService.calculate_indicators(
-        bars, [{"name": "macd", "window": 26}]
-    )
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "macd", "window": 26}])
 
     assert len(results) == 1
     assert results[0]["name"] == "macd"
@@ -74,9 +65,7 @@ def test_macd_returns_three_components():
 
 def test_stoch_returns_k_and_d_lines():
     bars = make_sample_bars(50)
-    results = TechnicalAnalysisService.calculate_indicators(
-        bars, [{"name": "stoch", "window": 14}]
-    )
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "stoch", "window": 14}])
 
     assert len(results) == 1
     assert results[0]["name"] == "stoch"
@@ -90,9 +79,7 @@ def test_stoch_returns_k_and_d_lines():
 
 def test_stoch_values_in_valid_range():
     bars = make_sample_bars(50)
-    results = TechnicalAnalysisService.calculate_indicators(
-        bars, [{"name": "stoch", "window": 14}]
-    )
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "stoch", "window": 14}])
 
     for point in results[0]["data"]:
         assert 0 <= point["value"] <= 100, f"%K out of range: {point['value']}"
@@ -102,9 +89,7 @@ def test_stoch_values_in_valid_range():
 
 def test_stoch_has_signal_line():
     bars = make_sample_bars(50)
-    results = TechnicalAnalysisService.calculate_indicators(
-        bars, [{"name": "stoch", "window": 14}]
-    )
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "stoch", "window": 14}])
 
     signals = [p for p in results[0]["data"] if p.get("signal") is not None]
     assert len(signals) > 0, "Stochastic should have %D (signal) values"
@@ -112,9 +97,7 @@ def test_stoch_has_signal_line():
 
 def test_stoch_custom_window():
     bars = make_sample_bars(50)
-    results = TechnicalAnalysisService.calculate_indicators(
-        bars, [{"name": "stoch", "window": 5}]
-    )
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "stoch", "window": 5}])
 
     assert results[0]["window"] == 5
     assert len(results[0]["data"]) > 0
@@ -123,10 +106,11 @@ def test_stoch_custom_window():
 def test_multiple_indicators_calculated():
     bars = make_sample_bars(30)
     results = TechnicalAnalysisService.calculate_indicators(
-        bars, [
+        bars,
+        [
             {"name": "sma", "window": 5},
             {"name": "ema", "window": 10},
-        ]
+        ],
     )
 
     assert len(results) == 2
@@ -137,11 +121,12 @@ def test_multiple_indicators_calculated():
 def test_stoch_with_other_indicators():
     bars = make_sample_bars(50)
     results = TechnicalAnalysisService.calculate_indicators(
-        bars, [
+        bars,
+        [
             {"name": "rsi", "window": 14},
             {"name": "stoch", "window": 14},
             {"name": "macd", "window": 26},
-        ]
+        ],
     )
 
     assert len(results) == 3
@@ -155,20 +140,34 @@ def test_stoch_with_other_indicators():
 # Indicator Table (generate_indicator_table) tests
 # ------------------------------------------------------------------
 
+
 def test_generate_indicator_table_returns_all_columns():
     bars = make_sample_bars(250)
-    rows = TechnicalAnalysisService.generate_indicator_table(
-        bars, ema_periods=[5, 10, 20]
-    )
+    rows = TechnicalAnalysisService.generate_indicator_table(bars, ema_periods=[5, 10, 20])
 
     assert len(rows) == 250
     row = rows[-1]
     expected_keys = [
-        'time', 'open', 'high', 'low', 'close', 'volume',
-        'bb_basis', 'bb_upper', 'bb_lower',
-        'supertrend_up', 'supertrend_down',
-        'ema_5', 'ema_10', 'ema_20',
-        'rsi', 'rsi_ma', 'macd', 'macd_histogram', 'macd_signal', 'adx',
+        "time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "bb_basis",
+        "bb_upper",
+        "bb_lower",
+        "supertrend_up",
+        "supertrend_down",
+        "ema_5",
+        "ema_10",
+        "ema_20",
+        "rsi",
+        "rsi_ma",
+        "macd",
+        "macd_histogram",
+        "macd_signal",
+        "adx",
     ]
     for key in expected_keys:
         assert key in row, f"Missing key: {key}"
@@ -176,34 +175,31 @@ def test_generate_indicator_table_returns_all_columns():
 
 def test_generate_indicator_table_nan_replaced_with_none():
     bars = make_sample_bars(30)
-    rows = TechnicalAnalysisService.generate_indicator_table(
-        bars, ema_periods=[5, 10]
-    )
+    rows = TechnicalAnalysisService.generate_indicator_table(bars, ema_periods=[5, 10])
 
     # First row should have None for indicators that need warmup
     first = rows[0]
-    assert first['bb_basis'] is None  # BB needs 20 bars
-    assert first['adx'] is None       # ADX needs warmup
+    assert first["bb_basis"] is None  # BB needs 20 bars
+    assert first["adx"] is None  # ADX needs warmup
     # No NaN should leak through
     for row in rows:
         for k, v in row.items():
             if isinstance(v, float):
                 import math
+
                 assert not math.isnan(v), f"NaN found in row for key {k}"
 
 
 def test_generate_indicator_table_ema_values_populated():
     bars = make_sample_bars(250)
-    rows = TechnicalAnalysisService.generate_indicator_table(
-        bars, ema_periods=[5, 10, 20, 50]
-    )
+    rows = TechnicalAnalysisService.generate_indicator_table(bars, ema_periods=[5, 10, 20, 50])
 
     # Last row should have all EMAs populated
     last = rows[-1]
-    assert last['ema_5'] is not None
-    assert last['ema_10'] is not None
-    assert last['ema_20'] is not None
-    assert last['ema_50'] is not None
+    assert last["ema_5"] is not None
+    assert last["ema_10"] is not None
+    assert last["ema_20"] is not None
+    assert last["ema_50"] is not None
 
 
 def test_generate_indicator_table_rsi_range():
@@ -211,8 +207,8 @@ def test_generate_indicator_table_rsi_range():
     rows = TechnicalAnalysisService.generate_indicator_table(bars)
 
     for row in rows:
-        if row['rsi'] is not None:
-            assert 0 <= row['rsi'] <= 100, f"RSI out of range: {row['rsi']}"
+        if row["rsi"] is not None:
+            assert 0 <= row["rsi"] <= 100, f"RSI out of range: {row['rsi']}"
 
 
 def test_generate_indicator_table_supertrend_exclusive():
@@ -221,8 +217,7 @@ def test_generate_indicator_table_supertrend_exclusive():
     rows = TechnicalAnalysisService.generate_indicator_table(bars)
 
     for row in rows:
-        up = row.get('supertrend_up')
-        down = row.get('supertrend_down')
+        up = row.get("supertrend_up")
+        down = row.get("supertrend_down")
         # At most one should be populated
-        assert not (up is not None and down is not None), \
-            "Supertrend up and down should not both be present"
+        assert not (up is not None and down is not None), "Supertrend up and down should not both be present"

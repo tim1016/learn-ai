@@ -1,7 +1,6 @@
 """Application configuration loaded from environment variables"""
+
 from pydantic_settings import BaseSettings
-from pydantic import field_validator
-from typing import List, Union
 
 
 class Settings(BaseSettings):
@@ -22,7 +21,7 @@ class Settings(BaseSettings):
 
     def get_allowed_origins(self) -> list[str]:
         """Parse ALLOWED_ORIGINS into a list"""
-        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(',')]
+        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",")]
 
     # Data sanitization settings
     MAX_NULL_PERCENTAGE: float = 0.1  # 10% max nulls allowed

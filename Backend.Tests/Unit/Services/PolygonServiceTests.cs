@@ -89,8 +89,11 @@ public class PolygonServiceTests
     {
         var response = new AggregateResponse
         {
-            Success = true, Ticker = "AAPL", DataType = "aggregates",
-            Data = [], Summary = new DataSummary()
+            Success = true,
+            Ticker = "AAPL",
+            DataType = "aggregates",
+            Data = [],
+            Summary = new DataSummary()
         };
         var handler = CreateHandler(HttpStatusCode.OK, response);
         var service = CreateService(handler);
@@ -110,8 +113,11 @@ public class PolygonServiceTests
     {
         var response = new TradeResponse
         {
-            Success = true, Ticker = "AAPL", DataType = "trades",
-            Data = [], Summary = new DataSummary { CleanedCount = 0 }
+            Success = true,
+            Ticker = "AAPL",
+            DataType = "trades",
+            Data = [],
+            Summary = new DataSummary { CleanedCount = 0 }
         };
         var handler = CreateHandler(HttpStatusCode.OK, response);
         var service = CreateService(handler);
@@ -126,7 +132,10 @@ public class PolygonServiceTests
     {
         var response = new TradeResponse
         {
-            Success = false, Ticker = "BAD", DataType = "trades", Error = "No trades found"
+            Success = false,
+            Ticker = "BAD",
+            DataType = "trades",
+            Error = "No trades found"
         };
         var handler = CreateHandler(HttpStatusCode.OK, response);
         var service = CreateService(handler);
@@ -214,8 +223,11 @@ public class PolygonServiceTests
     {
         var response = new AggregateResponse
         {
-            Success = true, Ticker = "AAPL", DataType = "aggregates",
-            Data = [], Summary = new DataSummary()
+            Success = true,
+            Ticker = "AAPL",
+            DataType = "aggregates",
+            Data = [],
+            Summary = new DataSummary()
         };
         var handler = CreateHandler(HttpStatusCode.OK, response);
         var service = CreateService(handler);

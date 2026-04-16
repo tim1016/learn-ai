@@ -1,14 +1,16 @@
 """API endpoints for technical indicator calculation"""
+
 from __future__ import annotations
 
-from datetime import datetime
-from fastapi import APIRouter, HTTPException, status
 import logging
+from datetime import datetime
+
 import pandas as pd
 import pandas_ta as ta
+from fastapi import APIRouter, HTTPException, status
 
-from app.services.ta_service import TechnicalAnalysisService
-from app.services.polygon_client import PolygonClientService
+from app.models.requests import CalculateIndicatorsRequest, IndicatorTableRequest
+from app.models.responses import CalculateIndicatorsResponse, IndicatorTableResponse
 from app.services.dataset_service import (
     compute_warmup_start_date,
     estimate_max_lookback,
@@ -16,8 +18,8 @@ from app.services.dataset_service import (
     preprocess_and_calculate,
     rename_to_indicator_table_columns,
 )
-from app.models.requests import CalculateIndicatorsRequest, IndicatorTableRequest
-from app.models.responses import CalculateIndicatorsResponse, IndicatorTableResponse
+from app.services.polygon_client import PolygonClientService
+from app.services.ta_service import TechnicalAnalysisService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,8 +33,7 @@ async def calculate_indicators(request: CalculateIndicatorsRequest):
     """Calculate technical indicators from OHLCV data."""
     try:
         logger.info(
-            f"[TA] Calculating {len(request.indicators)} indicators "
-            f"for {request.ticker} ({len(request.bars)} bars)"
+            f"[TA] Calculating {len(request.indicators)} indicators for {request.ticker} ({len(request.bars)} bars)"
         )
 
         bars_dicts = [bar.model_dump() for bar in request.bars]
@@ -40,17 +41,12 @@ async def calculate_indicators(request: CalculateIndicatorsRequest):
 
         results = ta_service.calculate_indicators(bars_dicts, indicator_dicts)
 
-        return CalculateIndicatorsResponse(
-            success=True,
-            ticker=request.ticker,
-            indicators=results
-        )
+        return CalculateIndicatorsResponse(success=True, ticker=request.ticker, indicators=results)
 
     except Exception as e:
-        logger.error(f"[TA] Error calculating indicators: {str(e)}", exc_info=True)
+        logger.error(f"[TA] Error calculating indicators: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to calculate indicators: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to calculate indicators: {e!s}"
         )
 
 
@@ -84,7 +80,10 @@ async def generate_indicator_table(request: IndicatorTableRequest):
         max_lookback = max(max_lookback, request.rsi_length + request.rsi_ma_length)
 
         warmup_start = compute_warmup_start_date(
-            request.from_date, max_lookback, request.timespan, request.multiplier,
+            request.from_date,
+            max_lookback,
+            request.timespan,
+            request.multiplier,
         )
 
         logger.info(
@@ -134,10 +133,7 @@ async def generate_indicator_table(request: IndicatorTableRequest):
 
         # Convert to list of dicts, NaN → None
         raw_rows = df.to_dict(orient="records")
-        rows = [
-            {k: (None if isinstance(v, float) and pd.isna(v) else v) for k, v in row.items()}
-            for row in raw_rows
-        ]
+        rows = [{k: (None if isinstance(v, float) and pd.isna(v) else v) for k, v in row.items()} for row in raw_rows]
 
         columns = list(rows[0].keys()) if rows else []
 
@@ -152,8 +148,7 @@ async def generate_indicator_table(request: IndicatorTableRequest):
         )
 
     except Exception as e:
-        logger.error(f"[TA] Error generating indicator table: {str(e)}", exc_info=True)
+        logger.error(f"[TA] Error generating indicator table: {e!s}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate indicator table: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to generate indicator table: {e!s}"
         )

@@ -8,13 +8,12 @@ Designed to reproduce LEAN's backtest semantics bit-exactly for the
 SpyEmaCrossoverAlgorithm. See docs/lean-engine-implementation-plan.md §2
 for the reproducibility details this engine guarantees.
 """
+
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
 
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
@@ -54,7 +53,7 @@ class BacktestEngine:
     def __init__(
         self,
         data_source: LeanMinuteDataReader | LeanDailyDataReader,
-        fill_model: Optional[FillModel] = None,
+        fill_model: FillModel | None = None,
     ) -> None:
         self.data_source = data_source
         self.fill_model = fill_model or FillModel(mode=FillMode.SIGNAL_BAR_CLOSE)
@@ -69,13 +68,9 @@ class BacktestEngine:
         strategy.initialize()
 
         if strategy.start_date is None or strategy.end_date is None:
-            raise RuntimeError(
-                "Strategy must call set_start_date and set_end_date in initialize()"
-            )
+            raise RuntimeError("Strategy must call set_start_date and set_end_date in initialize()")
         if not ctx.symbols:
-            raise RuntimeError(
-                "Strategy must call ctx.add_equity() in initialize() for at least one symbol"
-            )
+            raise RuntimeError("Strategy must call ctx.add_equity() in initialize() for at least one symbol")
 
         # Now that initialize has run, reset portfolio cash to the configured amount.
         portfolio.initial_cash = strategy.initial_cash
@@ -97,9 +92,7 @@ class BacktestEngine:
         # support would require merging streams by time — out of scope for
         # Phase 1.
         if len(ctx.symbols) != 1:
-            raise NotImplementedError(
-                "Phase 1 engine supports a single symbol only"
-            )
+            raise NotImplementedError("Phase 1 engine supports a single symbol only")
         symbol = ctx.symbols[0]
 
         # Keep a "previous minute bar" so that a NEXT_BAR_OPEN fill can use
@@ -115,9 +108,7 @@ class BacktestEngine:
             if pending_fills and self.fill_model.mode == FillMode.NEXT_BAR_OPEN:
                 still_pending: list[tuple[object, TradeBar]] = []
                 for order, signal_bar in pending_fills:
-                    event = self.fill_model.fill_market_order(
-                        order, signal_bar, next_bar=minute_bar
-                    )
+                    event = self.fill_model.fill_market_order(order, signal_bar, next_bar=minute_bar)
                     if event is None:
                         still_pending.append((order, signal_bar))
                     else:
@@ -130,11 +121,10 @@ class BacktestEngine:
             #       when a bar fires. The strategy may submit orders inside those
             #       handlers; we drain those immediately below.
             consolidators = ctx.get_consolidators(symbol)
-            fired_any = False
             for consolidator in consolidators:
                 fired = consolidator.update(minute_bar)
                 if fired is not None:
-                    fired_any = True
+                    pass
 
             # ----- Drain any pending orders the strategy just submitted.
             if portfolio.pending_orders:
@@ -143,14 +133,10 @@ class BacktestEngine:
                 # this gets ambiguous, but Phase 1 uses one consolidator.
                 assert len(consolidators) == 1
                 signal_bar = self._last_fired(consolidators[0])
-                assert signal_bar is not None, (
-                    "Strategy submitted an order but no consolidated bar was available"
-                )
+                assert signal_bar is not None, "Strategy submitted an order but no consolidated bar was available"
                 for order in portfolio.drain_pending():
                     if self.fill_model.mode == FillMode.SIGNAL_BAR_CLOSE:
-                        event = self.fill_model.fill_market_order(
-                            order, signal_bar, next_bar=None
-                        )
+                        event = self.fill_model.fill_market_order(order, signal_bar, next_bar=None)
                         assert event is not None
                         portfolio.apply_fill(event)
                         order_events.append(event)
@@ -160,18 +146,17 @@ class BacktestEngine:
                         pending_fills.append((order, signal_bar))
 
             # ----- Score any expired insights against current prices.
-            current_prices = {
-                sym: portfolio.reference_price.get(sym, Decimal(0))
-                for sym in ctx.symbols
-            }
+            current_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
             ctx.insight_manager.step(minute_bar.end_time, current_prices)
 
-            equity_curve.append(EquitySnapshot(
-                timestamp=minute_bar.end_time,
-                equity=portfolio.total_value(),
-                cash=portfolio.cash,
-                holdings_value=portfolio.total_value() - portfolio.cash,
-            ))
+            equity_curve.append(
+                EquitySnapshot(
+                    timestamp=minute_bar.end_time,
+                    equity=portfolio.total_value(),
+                    cash=portfolio.cash,
+                    holdings_value=portfolio.total_value() - portfolio.cash,
+                )
+            )
             retained_bars.append(minute_bar)
             previous_minute_bar = minute_bar
 
@@ -182,19 +167,13 @@ class BacktestEngine:
 
         # Score any remaining active insights with the final prices.
         if previous_minute_bar is not None:
-            final_prices = {
-                sym: portfolio.reference_price.get(sym, Decimal(0))
-                for sym in ctx.symbols
-            }
+            final_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
             # Force-expire active insights so they all get scored.
-            for insight in ctx.insight_manager.get_active_insights(
-                previous_minute_bar.end_time
-            ):
+            for insight in ctx.insight_manager.get_active_insights(previous_minute_bar.end_time):
                 if not insight.score.is_final_score:
-                    insight.reference_value_final = final_prices.get(
-                        insight.symbol, Decimal(0)
-                    )
+                    insight.reference_value_final = final_prices.get(insight.symbol, Decimal(0))
                     from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
+
                     DefaultInsightScoreFunction().score(insight)
                     insight.score.finalize(previous_minute_bar.end_time)
 

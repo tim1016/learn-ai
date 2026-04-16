@@ -1,12 +1,13 @@
 """Pydantic models for options strategy analysis"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional
 
 
 class StrategyLeg(BaseModel):
     """A single option leg in a strategy."""
+
     strike: float = Field(..., gt=0, description="Strike price")
     option_type: str = Field(..., description="'call' or 'put'")
     position: str = Field(..., description="'long' or 'short'")
@@ -31,6 +32,7 @@ class StrategyLeg(BaseModel):
 
 class StrategyAnalyzeRequest(BaseModel):
     """Request to analyze an options strategy."""
+
     symbol: str = Field(..., min_length=1, max_length=20, description="Underlying ticker symbol")
     legs: list[StrategyLeg] = Field(..., min_length=1, max_length=8, description="Strategy legs")
     expiration_date: str = Field(..., description="Expiration date (YYYY-MM-DD)")
@@ -42,12 +44,14 @@ class StrategyAnalyzeRequest(BaseModel):
 
 class PayoffPoint(BaseModel):
     """Single point on the payoff curve."""
+
     price: float
     pnl: float
 
 
 class GreeksResult(BaseModel):
     """Aggregate Greeks for the entire strategy."""
+
     delta: float = 0
     gamma: float = 0
     theta: float = 0
@@ -56,6 +60,7 @@ class GreeksResult(BaseModel):
 
 class StrategyAnalyzeResponse(BaseModel):
     """Full strategy analysis result."""
+
     success: bool
     symbol: str = ""
     spot_price: float = 0
@@ -67,4 +72,4 @@ class StrategyAnalyzeResponse(BaseModel):
     breakevens: list[float] = []
     curve: list[PayoffPoint] = []
     greeks: GreeksResult = GreeksResult()
-    error: Optional[str] = None
+    error: str | None = None

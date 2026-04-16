@@ -5,6 +5,7 @@ Ported from Backend/Services/Implementation/BacktestService.cs RunRsiReversal.
 When RSI crosses below oversold: close short, open long (RsiLE).
 When RSI crosses above overbought: close long, open short (RsiSE).
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -51,8 +52,10 @@ def run(df: pd.DataFrame, params: dict) -> StrategyResult:
             if position_type == "Short":
                 trade_num += 1
                 t = make_trade(
-                    trade_num, "Sell",
-                    df.iloc[entry_idx], df.iloc[i],
+                    trade_num,
+                    "Sell",
+                    df.iloc[entry_idx],
+                    df.iloc[i],
                     cum_pnl_pct,
                     f"RsiLE: RSI({window}) crossed below {oversold}",
                     {"rsi": round(float(curr_rsi), 2)},
@@ -68,8 +71,10 @@ def run(df: pd.DataFrame, params: dict) -> StrategyResult:
             if position_type == "Long":
                 trade_num += 1
                 t = make_trade(
-                    trade_num, "Buy",
-                    df.iloc[entry_idx], df.iloc[i],
+                    trade_num,
+                    "Buy",
+                    df.iloc[entry_idx],
+                    df.iloc[i],
                     cum_pnl_pct,
                     f"RsiSE: RSI({window}) crossed above {overbought}",
                     {"rsi": round(float(curr_rsi), 2)},
@@ -85,8 +90,10 @@ def run(df: pd.DataFrame, params: dict) -> StrategyResult:
         trade_type = "Buy" if position_type == "Long" else "Sell"
         trade_num += 1
         t = make_trade(
-            trade_num, trade_type,
-            df.iloc[entry_idx], df.iloc[-1],
+            trade_num,
+            trade_type,
+            df.iloc[entry_idx],
+            df.iloc[-1],
             cum_pnl_pct,
             "Position closed at end of period",
         )

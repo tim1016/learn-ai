@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import math
+
 from scipy.optimize import brentq
 from scipy.stats import norm
-
 
 RISK_FREE_RATE = 0.043  # Static fallback — prefer get_risk_free_rate() for dynamic rates
 
 
-def bs_price(
-    S: float, K: float, T: float, r: float, sigma: float, option_type: str
-) -> float:
+def bs_price(S: float, K: float, T: float, r: float, sigma: float, option_type: str) -> float:
     """Standard Black-Scholes European option price.
 
     Args:

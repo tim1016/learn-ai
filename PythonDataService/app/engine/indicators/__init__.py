@@ -6,8 +6,8 @@ from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.indicators.sma import SimpleMovingAverage
 
 __all__ = [
-    "Indicator",
     "ExponentialMovingAverage",
-    "SimpleMovingAverage",
+    "Indicator",
     "RelativeStrengthIndex",
+    "SimpleMovingAverage",
 ]

@@ -5,6 +5,7 @@ Endpoints:
 - POST /export-csv → ZIP with CSVs (bars, trades, comparison, columns, metadata)
 - POST /report     → Markdown validation report
 """
+
 from __future__ import annotations
 
 import csv
@@ -13,7 +14,7 @@ import json
 import logging
 import zipfile
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -182,25 +183,31 @@ def _parse_minute_csv(content: bytes) -> list[dict]:
                 val = row["timestamp"]
                 ts = int(val) if float(val) > 1e9 else int(float(val) * 1000)
             elif "iso_time" in row:
-                dt = datetime.strptime(row["iso_time"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                dt = datetime.strptime(row["iso_time"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=UTC)
                 ts = int(dt.timestamp() * 1000)
             elif "time" in row:
                 time_str = row["time"].strip()
-                dt = pd.Timestamp(time_str).tz_convert("UTC") if pd.Timestamp(time_str).tzinfo else pd.Timestamp(time_str, tz="UTC")
+                dt = (
+                    pd.Timestamp(time_str).tz_convert("UTC")
+                    if pd.Timestamp(time_str).tzinfo
+                    else pd.Timestamp(time_str, tz="UTC")
+                )
                 ts = int(dt.timestamp() * 1000)
             else:
                 continue
 
             # Handle case-insensitive column names
             row_lower = {k.lower(): v for k, v in row.items()}
-            bars.append({
-                "timestamp": ts,
-                "open": float(row_lower["open"]),
-                "high": float(row_lower["high"]),
-                "low": float(row_lower["low"]),
-                "close": float(row_lower["close"]),
-                "volume": float(row_lower.get("volume", 0)),
-            })
+            bars.append(
+                {
+                    "timestamp": ts,
+                    "open": float(row_lower["open"]),
+                    "high": float(row_lower["high"]),
+                    "low": float(row_lower["low"]),
+                    "close": float(row_lower["close"]),
+                    "volume": float(row_lower.get("volume", 0)),
+                }
+            )
         except (ValueError, KeyError):
             continue
 
@@ -249,16 +256,17 @@ def _run_validation_pipeline(
 
     # Determine date range from data
     timestamps = [b["timestamp"] for b in raw_bars]
-    from_date = datetime.fromtimestamp(min(timestamps) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
-    to_date = datetime.fromtimestamp(max(timestamps) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+    from_date = datetime.fromtimestamp(min(timestamps) / 1000, tz=UTC).strftime("%Y-%m-%d")
+    to_date = datetime.fromtimestamp(max(timestamps) / 1000, tz=UTC).strftime("%Y-%m-%d")
 
     # 2. Preprocess: RTH filter, forward-fill
-    df, quality = _preprocess_minute_bars(raw_bars, from_date, to_date, "rth", True)
+    df, _quality = _preprocess_minute_bars(raw_bars, from_date, to_date, "rth", True)
     rth_count = len(df)
 
     if df.empty or len(df) < 50:
         return ValidationStudyResponse(
-            success=False, source_bars=source_count,
+            success=False,
+            source_bars=source_count,
             error=f"Only {len(df)} bars after RTH filter — need at least 50",
         )
 
@@ -277,8 +285,11 @@ def _run_validation_pipeline(
 
     if not strategy_result.success:
         return ValidationStudyResponse(
-            success=False, source_bars=source_count, rth_bars=rth_count,
-            resampled_bars=resampled_count, error=strategy_result.error,
+            success=False,
+            source_bars=source_count,
+            rth_bars=rth_count,
+            resampled_bars=resampled_count,
+            error=strategy_result.error,
         )
 
     # 6. Match trades
@@ -325,7 +336,7 @@ def _run_validation_pipeline(
             "volume": int(row.get("volume", 0)),
         }
         # Add indicator columns if present
-        for col in ["ema_fast", "ema_slow", "ema_gap", "rsi", "adx"]:
+        for _col in ["ema_fast", "ema_slow", "ema_gap", "rsi", "adx"]:
             # The rule-based engine computes these internally; check df_with_ind for pandas-ta columns
             pass
 
@@ -439,9 +450,19 @@ async def export_validation_csv(
             # 2. Reproduced trades CSV
             trades_csv = _build_csv(
                 [_trade_row(t) for t in result.trades],
-                ["trade_number", "trade_type", "entry_timestamp", "exit_timestamp",
-                 "entry_price", "exit_price", "pnl", "pnl_pct", "cumulative_pnl_pct",
-                 "signal_reason", "result"],
+                [
+                    "trade_number",
+                    "trade_type",
+                    "entry_timestamp",
+                    "exit_timestamp",
+                    "entry_price",
+                    "exit_price",
+                    "pnl",
+                    "pnl_pct",
+                    "cumulative_pnl_pct",
+                    "signal_reason",
+                    "result",
+                ],
             )
             zf.writestr("reproduced_trades.csv", trades_csv)
 
@@ -449,17 +470,28 @@ async def export_validation_csv(
             if ref_trades:
                 ref_csv = _build_csv(
                     ref_trades,
-                    ["entry_time", "exit_time", "entry_price", "exit_price",
-                     "pnl", "pnl_pct", "result"],
+                    ["entry_time", "exit_time", "entry_price", "exit_price", "pnl", "pnl_pct", "result"],
                 )
                 zf.writestr("reference_trades.csv", ref_csv)
 
             # 4. Comparison CSV
             comp_csv = _build_csv(
                 [asdict(c) if isinstance(c, TradeComparison) else c.model_dump() for c in result.comparisons],
-                ["trade_num", "ref_entry_time", "our_entry_time", "ref_entry_price",
-                 "our_entry_price", "ref_exit_price", "our_exit_price", "ref_pnl",
-                 "our_pnl", "pnl_delta", "timestamp_delta_s", "matched", "source"],
+                [
+                    "trade_num",
+                    "ref_entry_time",
+                    "our_entry_time",
+                    "ref_entry_price",
+                    "our_entry_price",
+                    "ref_exit_price",
+                    "our_exit_price",
+                    "ref_pnl",
+                    "our_pnl",
+                    "pnl_delta",
+                    "timestamp_delta_s",
+                    "matched",
+                    "source",
+                ],
             )
             zf.writestr("comparison.csv", comp_csv)
 
@@ -562,6 +594,7 @@ async def generate_validation_pdf(
 # Helpers
 # ──────────────────────────────────────────────
 
+
 def _build_csv(rows: list[dict], columns: list[str]) -> str:
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
@@ -573,7 +606,7 @@ def _build_csv(rows: list[dict], columns: list[str]) -> str:
 
 def _bar_row(bar: dict) -> dict:
     ts = bar.get("timestamp", 0)
-    iso = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if ts else ""
+    iso = datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ") if ts else ""
     return {**bar, "iso_time": iso}
 
 
@@ -596,8 +629,8 @@ def _trade_row(t: ValidationTradeResponse) -> dict:
 def _build_markdown_report(result: ValidationStudyResponse, ref_trades: list[dict]) -> str:
     lines: list[str] = []
     lines.append("# Strategy Validation Report")
-    lines.append(f"\n**Generated:** {datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
-    lines.append(f"**Strategy:** EMA Crossover RSI (SPY 15-Min Long)")
+    lines.append(f"\n**Generated:** {datetime.now(tz=UTC).strftime('%Y-%m-%d %H:%M UTC')}")
+    lines.append("**Strategy:** EMA Crossover RSI (SPY 15-Min Long)")
 
     # Strategy Rules
     lines.append("\n## Strategy Rules")
@@ -616,8 +649,8 @@ def _build_markdown_report(result: ValidationStudyResponse, ref_trades: list[dic
 
     # Data Pipeline
     lines.append("\n## Data Pipeline")
-    lines.append(f"| Step | Count |")
-    lines.append(f"|------|-------|")
+    lines.append("| Step | Count |")
+    lines.append("|------|-------|")
     lines.append(f"| Source 1-min bars | {result.source_bars:,} |")
     lines.append(f"| After RTH filter | {result.rth_bars:,} |")
     lines.append(f"| Resampled 15-min bars | {result.resampled_bars:,} |")
@@ -639,14 +672,30 @@ def _build_markdown_report(result: ValidationStudyResponse, ref_trades: list[dic
 
     ref = result.reference_summary
     if ref:
-        lines.append(f"| Total Trades | {result.total_trades} | {ref.total_trades} | {result.total_trades - ref.total_trades} |")
-        lines.append(f"| Winning Trades | {result.winning_trades} | {ref.winning_trades} | {result.winning_trades - ref.winning_trades} |")
-        lines.append(f"| Losing Trades | {result.losing_trades} | {ref.losing_trades} | {result.losing_trades - ref.losing_trades} |")
-        lines.append(f"| Win Rate | {result.win_rate:.1%} | {ref.win_rate:.1%} | {(result.win_rate - ref.win_rate):.1%} |")
-        lines.append(f"| Total PnL % | {result.total_pnl_pct:.4%} | {ref.total_pnl_pct:.4%} | {(result.total_pnl_pct - ref.total_pnl_pct):.4%} |")
-        lines.append(f"| Avg Win % | {result.avg_win_pct:.4%} | {ref.avg_win_pct:.4%} | {(result.avg_win_pct - ref.avg_win_pct):.4%} |")
-        lines.append(f"| Avg Loss % | {result.avg_loss_pct:.4%} | {ref.avg_loss_pct:.4%} | {(result.avg_loss_pct - ref.avg_loss_pct):.4%} |")
-        lines.append(f"| Profit Factor | {result.profit_factor:.2f} | {ref.profit_factor:.2f} | {result.profit_factor - ref.profit_factor:.2f} |")
+        lines.append(
+            f"| Total Trades | {result.total_trades} | {ref.total_trades} | {result.total_trades - ref.total_trades} |"
+        )
+        lines.append(
+            f"| Winning Trades | {result.winning_trades} | {ref.winning_trades} | {result.winning_trades - ref.winning_trades} |"
+        )
+        lines.append(
+            f"| Losing Trades | {result.losing_trades} | {ref.losing_trades} | {result.losing_trades - ref.losing_trades} |"
+        )
+        lines.append(
+            f"| Win Rate | {result.win_rate:.1%} | {ref.win_rate:.1%} | {(result.win_rate - ref.win_rate):.1%} |"
+        )
+        lines.append(
+            f"| Total PnL % | {result.total_pnl_pct:.4%} | {ref.total_pnl_pct:.4%} | {(result.total_pnl_pct - ref.total_pnl_pct):.4%} |"
+        )
+        lines.append(
+            f"| Avg Win % | {result.avg_win_pct:.4%} | {ref.avg_win_pct:.4%} | {(result.avg_win_pct - ref.avg_win_pct):.4%} |"
+        )
+        lines.append(
+            f"| Avg Loss % | {result.avg_loss_pct:.4%} | {ref.avg_loss_pct:.4%} | {(result.avg_loss_pct - ref.avg_loss_pct):.4%} |"
+        )
+        lines.append(
+            f"| Profit Factor | {result.profit_factor:.2f} | {ref.profit_factor:.2f} | {result.profit_factor - ref.profit_factor:.2f} |"
+        )
     else:
         lines.append(f"| Total Trades | {result.total_trades} | - | - |")
         lines.append(f"| Win Rate | {result.win_rate:.1%} | - | - |")
@@ -660,8 +709,8 @@ def _build_markdown_report(result: ValidationStudyResponse, ref_trades: list[dic
     if result.match_stats:
         ms = result.match_stats
         lines.append("\n## Trade Matching Summary")
-        lines.append(f"| Metric | Value |")
-        lines.append(f"|--------|-------|")
+        lines.append("| Metric | Value |")
+        lines.append("|--------|-------|")
         lines.append(f"| Reference Trades | {ms.total_ref} |")
         lines.append(f"| Reproduced Trades | {ms.total_ours} |")
         lines.append(f"| Matched | {ms.matched_count} |")
@@ -675,16 +724,22 @@ def _build_markdown_report(result: ValidationStudyResponse, ref_trades: list[dic
         # Verdict
         lines.append("\n## Verdict")
         if ms.match_rate >= 0.9:
-            lines.append(f"**VALIDATED** — {ms.matched_count}/{ms.total_ref} trades matched ({ms.match_rate:.0%}). "
-                         "Strategy reproduction is consistent with the reference study.")
+            lines.append(
+                f"**VALIDATED** — {ms.matched_count}/{ms.total_ref} trades matched ({ms.match_rate:.0%}). "
+                "Strategy reproduction is consistent with the reference study."
+            )
         elif ms.match_rate >= 0.7:
-            lines.append(f"**PARTIALLY VALIDATED** — {ms.matched_count}/{ms.total_ref} trades matched ({ms.match_rate:.0%}). "
-                         "Most trades reproduced correctly; discrepancies likely due to data source or "
-                         "resampling differences.")
+            lines.append(
+                f"**PARTIALLY VALIDATED** — {ms.matched_count}/{ms.total_ref} trades matched ({ms.match_rate:.0%}). "
+                "Most trades reproduced correctly; discrepancies likely due to data source or "
+                "resampling differences."
+            )
         else:
-            lines.append(f"**DIVERGENT** — Only {ms.matched_count}/{ms.total_ref} trades matched ({ms.match_rate:.0%}). "
-                         "Significant differences between reference and reproduced results. "
-                         "Investigate data source, indicator computation, or strategy parameters.")
+            lines.append(
+                f"**DIVERGENT** — Only {ms.matched_count}/{ms.total_ref} trades matched ({ms.match_rate:.0%}). "
+                "Significant differences between reference and reproduced results. "
+                "Investigate data source, indicator computation, or strategy parameters."
+            )
 
     # Trade-by-trade comparison
     if result.comparisons:
@@ -698,7 +753,9 @@ def _build_markdown_report(result: ValidationStudyResponse, ref_trades: list[dic
             our_pnl = f"${c.our_pnl:.2f}" if c.our_pnl is not None else "-"
             delta = f"${c.pnl_delta:.2f}" if c.pnl_delta is not None else "-"
             match_icon = "yes" if c.matched else "no"
-            lines.append(f"| {c.trade_num} | {ref_entry} | {our_entry} | {ref_pnl} | {our_pnl} | {delta} | {match_icon} |")
+            lines.append(
+                f"| {c.trade_num} | {ref_entry} | {our_entry} | {ref_pnl} | {our_pnl} | {delta} | {match_icon} |"
+            )
 
     # Reproduced trade log
     lines.append("\n## Reproduced Trade Log")
@@ -722,32 +779,41 @@ def _build_pdf_report(result: ValidationStudyResponse) -> bytes:
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import inch
     from reportlab.platypus import (
-        Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
     )
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
-        buf, pagesize=letter,
-        leftMargin=0.6 * inch, rightMargin=0.6 * inch,
-        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+        buf,
+        pagesize=letter,
+        leftMargin=0.6 * inch,
+        rightMargin=0.6 * inch,
+        topMargin=0.6 * inch,
+        bottomMargin=0.6 * inch,
     )
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("Title2", parent=styles["Title"], fontSize=18, spaceAfter=6)
     h1 = ParagraphStyle("H1", parent=styles["Heading1"], fontSize=14, spaceBefore=16, spaceAfter=8)
-    h2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12, spaceBefore=12, spaceAfter=6)
+    ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12, spaceBefore=12, spaceAfter=6)
     body = ParagraphStyle("Body2", parent=styles["Normal"], fontSize=9, leading=12)
-    small = ParagraphStyle("Small", parent=styles["Normal"], fontSize=8, leading=10, textColor=colors.HexColor("#555555"))
+    small = ParagraphStyle(
+        "Small", parent=styles["Normal"], fontSize=8, leading=10, textColor=colors.HexColor("#555555")
+    )
 
     story: list = []
 
     # Header
     story.append(Paragraph("Strategy Validation Report", title_style))
-    story.append(Paragraph(
-        f"<b>Strategy:</b> EMA Crossover RSI &mdash; SPY 15-Min Long &nbsp;&nbsp;|&nbsp;&nbsp;"
-        f"<b>Generated:</b> {datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
-        small,
-    ))
+    story.append(
+        Paragraph(
+            f"<b>Strategy:</b> EMA Crossover RSI &mdash; SPY 15-Min Long &nbsp;&nbsp;|&nbsp;&nbsp;"
+            f"<b>Generated:</b> {datetime.now(tz=UTC).strftime('%Y-%m-%d %H:%M UTC')}",
+            small,
+        )
+    )
     story.append(Spacer(1, 12))
 
     # Strategy Rules
@@ -779,22 +845,49 @@ def _build_pdf_report(result: ValidationStudyResponse) -> bytes:
     if ref:
         metrics_data = [
             ["Metric", "Reproduced", "Reference", "Delta"],
-            ["Total Trades", str(result.total_trades), str(ref.total_trades),
-             str(result.total_trades - ref.total_trades)],
-            ["Winning", str(result.winning_trades), str(ref.winning_trades),
-             str(result.winning_trades - ref.winning_trades)],
-            ["Losing", str(result.losing_trades), str(ref.losing_trades),
-             str(result.losing_trades - ref.losing_trades)],
-            ["Win Rate", f"{result.win_rate:.1%}", f"{ref.win_rate:.1%}",
-             f"{(result.win_rate - ref.win_rate):.1%}"],
-            ["Total PnL %", f"{result.total_pnl_pct:.4%}", f"{ref.total_pnl_pct:.4%}",
-             f"{(result.total_pnl_pct - ref.total_pnl_pct):.4%}"],
-            ["Avg Win %", f"{result.avg_win_pct:.4%}", f"{ref.avg_win_pct:.4%}",
-             f"{(result.avg_win_pct - ref.avg_win_pct):.4%}"],
-            ["Avg Loss %", f"{result.avg_loss_pct:.4%}", f"{ref.avg_loss_pct:.4%}",
-             f"{(result.avg_loss_pct - ref.avg_loss_pct):.4%}"],
-            ["Profit Factor", f"{result.profit_factor:.2f}", f"{ref.profit_factor:.2f}",
-             f"{result.profit_factor - ref.profit_factor:+.2f}"],
+            [
+                "Total Trades",
+                str(result.total_trades),
+                str(ref.total_trades),
+                str(result.total_trades - ref.total_trades),
+            ],
+            [
+                "Winning",
+                str(result.winning_trades),
+                str(ref.winning_trades),
+                str(result.winning_trades - ref.winning_trades),
+            ],
+            [
+                "Losing",
+                str(result.losing_trades),
+                str(ref.losing_trades),
+                str(result.losing_trades - ref.losing_trades),
+            ],
+            ["Win Rate", f"{result.win_rate:.1%}", f"{ref.win_rate:.1%}", f"{(result.win_rate - ref.win_rate):.1%}"],
+            [
+                "Total PnL %",
+                f"{result.total_pnl_pct:.4%}",
+                f"{ref.total_pnl_pct:.4%}",
+                f"{(result.total_pnl_pct - ref.total_pnl_pct):.4%}",
+            ],
+            [
+                "Avg Win %",
+                f"{result.avg_win_pct:.4%}",
+                f"{ref.avg_win_pct:.4%}",
+                f"{(result.avg_win_pct - ref.avg_win_pct):.4%}",
+            ],
+            [
+                "Avg Loss %",
+                f"{result.avg_loss_pct:.4%}",
+                f"{ref.avg_loss_pct:.4%}",
+                f"{(result.avg_loss_pct - ref.avg_loss_pct):.4%}",
+            ],
+            [
+                "Profit Factor",
+                f"{result.profit_factor:.2f}",
+                f"{ref.profit_factor:.2f}",
+                f"{result.profit_factor - ref.profit_factor:+.2f}",
+            ],
             ["Max Drawdown", f"{result.max_drawdown_pct:.4%}", "-", "-"],
             ["Sharpe Ratio", f"{result.sharpe_ratio:.4f}", "-", "-"],
         ]
@@ -834,16 +927,22 @@ def _build_pdf_report(result: ValidationStudyResponse) -> bytes:
         # Verdict
         story.append(Paragraph("Verdict", h1))
         if ms.match_rate >= 0.9:
-            verdict = (f"<b>VALIDATED</b> &mdash; {ms.matched_count}/{ms.total_ref} trades matched "
-                       f"({ms.match_rate:.0%}). Strategy reproduction is consistent with the reference study.")
+            verdict = (
+                f"<b>VALIDATED</b> &mdash; {ms.matched_count}/{ms.total_ref} trades matched "
+                f"({ms.match_rate:.0%}). Strategy reproduction is consistent with the reference study."
+            )
             verdict_color = colors.HexColor("#166534")
         elif ms.match_rate >= 0.7:
-            verdict = (f"<b>PARTIALLY VALIDATED</b> &mdash; {ms.matched_count}/{ms.total_ref} trades matched "
-                       f"({ms.match_rate:.0%}). Most trades reproduced correctly.")
+            verdict = (
+                f"<b>PARTIALLY VALIDATED</b> &mdash; {ms.matched_count}/{ms.total_ref} trades matched "
+                f"({ms.match_rate:.0%}). Most trades reproduced correctly."
+            )
             verdict_color = colors.HexColor("#92400e")
         else:
-            verdict = (f"<b>DIVERGENT</b> &mdash; {ms.matched_count}/{ms.total_ref} trades matched "
-                       f"({ms.match_rate:.0%}). Significant differences found.")
+            verdict = (
+                f"<b>DIVERGENT</b> &mdash; {ms.matched_count}/{ms.total_ref} trades matched "
+                f"({ms.match_rate:.0%}). Significant differences found."
+            )
             verdict_color = colors.HexColor("#991b1b")
 
         verdict_style = ParagraphStyle("Verdict", parent=body, fontSize=10, textColor=verdict_color, leading=14)
@@ -856,21 +955,25 @@ def _build_pdf_report(result: ValidationStudyResponse) -> bytes:
         comp_header = ["#", "Ref Entry", "Our Entry", "Ref PnL", "Our PnL", "Delta", "Match"]
         comp_rows = [comp_header]
         for c in result.comparisons:
-            comp_rows.append([
-                str(c.trade_num),
-                c.ref_entry_time or "-",
-                c.our_entry_time or "-",
-                f"${c.ref_pnl:.2f}" if c.ref_pnl is not None else "-",
-                f"${c.our_pnl:.2f}" if c.our_pnl is not None else "-",
-                f"${c.pnl_delta:.2f}" if c.pnl_delta is not None else "-",
-                "Yes" if c.matched else "No",
-            ])
-        story.append(_pdf_table(
-            comp_rows,
-            col_widths=[0.4 * inch, 1.3 * inch, 1.3 * inch, 0.8 * inch, 0.8 * inch, 0.7 * inch, 0.5 * inch],
-            font_size=7,
-            row_colors=True,
-        ))
+            comp_rows.append(
+                [
+                    str(c.trade_num),
+                    c.ref_entry_time or "-",
+                    c.our_entry_time or "-",
+                    f"${c.ref_pnl:.2f}" if c.ref_pnl is not None else "-",
+                    f"${c.our_pnl:.2f}" if c.our_pnl is not None else "-",
+                    f"${c.pnl_delta:.2f}" if c.pnl_delta is not None else "-",
+                    "Yes" if c.matched else "No",
+                ]
+            )
+        story.append(
+            _pdf_table(
+                comp_rows,
+                col_widths=[0.4 * inch, 1.3 * inch, 1.3 * inch, 0.8 * inch, 0.8 * inch, 0.7 * inch, 0.5 * inch],
+                font_size=7,
+                row_colors=True,
+            )
+        )
         story.append(Spacer(1, 12))
 
     # Reproduced Trade Log
@@ -878,23 +981,37 @@ def _build_pdf_report(result: ValidationStudyResponse) -> bytes:
     trade_header = ["#", "Entry Time", "Exit Time", "Entry $", "Exit $", "PnL", "PnL %", "Cum %", "Result"]
     trade_rows = [trade_header]
     for t in result.trades:
-        trade_rows.append([
-            str(t.trade_number),
-            t.entry_timestamp,
-            t.exit_timestamp,
-            f"${t.entry_price:.2f}",
-            f"${t.exit_price:.2f}",
-            f"${t.pnl:.2f}",
-            f"{t.pnl_pct:.3%}",
-            f"{t.cumulative_pnl_pct:.3%}",
-            "WIN" if t.pnl > 0 else "LOSS",
-        ])
-    story.append(_pdf_table(
-        trade_rows,
-        col_widths=[0.35 * inch, 1.15 * inch, 1.15 * inch, 0.7 * inch, 0.7 * inch, 0.6 * inch, 0.7 * inch, 0.7 * inch, 0.55 * inch],
-        font_size=7,
-        row_colors=True,
-    ))
+        trade_rows.append(
+            [
+                str(t.trade_number),
+                t.entry_timestamp,
+                t.exit_timestamp,
+                f"${t.entry_price:.2f}",
+                f"${t.exit_price:.2f}",
+                f"${t.pnl:.2f}",
+                f"{t.pnl_pct:.3%}",
+                f"{t.cumulative_pnl_pct:.3%}",
+                "WIN" if t.pnl > 0 else "LOSS",
+            ]
+        )
+    story.append(
+        _pdf_table(
+            trade_rows,
+            col_widths=[
+                0.35 * inch,
+                1.15 * inch,
+                1.15 * inch,
+                0.7 * inch,
+                0.7 * inch,
+                0.6 * inch,
+                0.7 * inch,
+                0.7 * inch,
+                0.55 * inch,
+            ],
+            font_size=7,
+            row_colors=True,
+        )
+    )
 
     doc.build(story)
     return buf.getvalue()
@@ -905,10 +1022,9 @@ def _pdf_table(
     col_widths: list | None = None,
     font_size: int = 8,
     row_colors: bool = False,
-) -> Table:
+) -> Table:  # noqa: F821 — Table is imported inside function body
     """Create a styled reportlab Table."""
     from reportlab.lib import colors
-    from reportlab.lib.units import inch
     from reportlab.platypus import Table, TableStyle
 
     t = Table(data, colWidths=col_widths, repeatRows=1)

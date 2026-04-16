@@ -17,9 +17,8 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional
+from dataclasses import dataclass
+from enum import StrEnum
 
 import QuantLib as ql
 from scipy.optimize import brentq
@@ -28,16 +27,16 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-MIN_IV: float = 0.005          # 0.5 %  floor
-MAX_IV: float = 5.0            # 500 %  ceiling
+MIN_IV: float = 0.005  # 0.5 %  floor
+MAX_IV: float = 5.0  # 500 %  ceiling
 DEFAULT_IV_GUESS: float = 0.25
 QUANTLIB_MAX_ITER: int = 200
 QUANTLIB_TOLERANCE: float = 1e-8
-MIN_TIME_TO_EXPIRY: float = 1.0 / 365.0   # 1 calendar day
-MIN_OPTION_PRICE: float = 0.001            # reject near-zero premiums
+MIN_TIME_TO_EXPIRY: float = 1.0 / 365.0  # 1 calendar day
+MIN_OPTION_PRICE: float = 0.001  # reject near-zero premiums
 
 
-class SolveStatus(str, Enum):
+class SolveStatus(StrEnum):
     OK = "ok"
     QUANTLIB_OK = "quantlib_ok"
     BRENT_FALLBACK = "brent_fallback"
@@ -52,7 +51,7 @@ class SolveStatus(str, Enum):
 class ImpliedVolResult:
     """Result of a single IV solve attempt."""
 
-    iv: Optional[float]
+    iv: float | None
     status: SolveStatus
     iterations: int = 0
     message: str = ""
@@ -61,6 +60,7 @@ class ImpliedVolResult:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def _intrinsic_value(
     spot: float,
@@ -88,12 +88,8 @@ def _build_ql_process(
     calendar = ql.NullCalendar()
 
     spot_handle = ql.QuoteHandle(ql.SimpleQuote(spot))
-    rate_ts = ql.YieldTermStructureHandle(
-        ql.FlatForward(eval_date, ql.QuoteHandle(ql.SimpleQuote(rate)), day_count)
-    )
-    div_ts = ql.YieldTermStructureHandle(
-        ql.FlatForward(eval_date, ql.QuoteHandle(ql.SimpleQuote(dividend)), day_count)
-    )
+    rate_ts = ql.YieldTermStructureHandle(ql.FlatForward(eval_date, ql.QuoteHandle(ql.SimpleQuote(rate)), day_count))
+    div_ts = ql.YieldTermStructureHandle(ql.FlatForward(eval_date, ql.QuoteHandle(ql.SimpleQuote(dividend)), day_count))
     vol_ts = ql.BlackVolTermStructureHandle(
         ql.BlackConstantVol(eval_date, calendar, ql.QuoteHandle(ql.SimpleQuote(vol_guess)), day_count)
     )
@@ -101,6 +97,7 @@ def _build_ql_process(
 
 
 # ── Primary solver ───────────────────────────────────────────────────────────
+
 
 def implied_volatility(
     option_price: float,
@@ -183,7 +180,7 @@ def implied_volatility(
         payoff = ql.PlainVanillaPayoff(option_type, strike)
 
         # Compute expiry date from TTM
-        expiry_serial = eval_date.serialNumber() + int(round(ttm * 365))
+        expiry_serial = eval_date.serialNumber() + round(ttm * 365)
         expiry_date = ql.Date(expiry_serial)
         exercise = ql.EuropeanExercise(expiry_date)
 
@@ -241,10 +238,7 @@ def _brent_fallback(
 
     def _bs_price_for_vol(sigma: float) -> float:
         """Black-Scholes price as a function of vol, for root finding."""
-        d1 = (
-            math.log(spot / strike)
-            + (rate - dividend + 0.5 * sigma * sigma) * ttm
-        ) / (sigma * math.sqrt(ttm))
+        d1 = (math.log(spot / strike) + (rate - dividend + 0.5 * sigma * sigma) * ttm) / (sigma * math.sqrt(ttm))
         d2 = d1 - sigma * math.sqrt(ttm)
 
         df = math.exp(-rate * ttm)
@@ -291,6 +285,7 @@ def _brent_fallback(
 
 
 # ── Batch solver ─────────────────────────────────────────────────────────────
+
 
 def solve_iv_chain(
     records: list[dict],

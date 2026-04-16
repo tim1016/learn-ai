@@ -1,8 +1,8 @@
 """Tests for robustness analysis module."""
+
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from app.research.validation.robustness import (
     compute_monthly_ic_breakdown,
@@ -63,21 +63,24 @@ def _generate_multi_month_bars(
                 continue
             # Compute epoch ms for the start of this day (approximate)
             import datetime
-            dt = datetime.datetime(year, month, day, 14, 30, tzinfo=datetime.timezone.utc)
+
+            dt = datetime.datetime(year, month, day, 14, 30, tzinfo=datetime.UTC)
             day_start_ms = int(dt.timestamp() * 1000)
 
             for bar_idx in range(bars_per_day):
                 noise = rng.normal(0, 0.3)
                 trend = month_idx * 0.5 + rng.normal(0, 0.1)
                 price = base_price + trend + noise
-                bars.append({
-                    "timestamp": day_start_ms + bar_idx * 60_000,
-                    "open": round(price - 0.05, 4),
-                    "high": round(price + 0.3, 4),
-                    "low": round(price - 0.3, 4),
-                    "close": round(price, 4),
-                    "volume": round(1_000_000 + rng.normal(0, 50_000), 2),
-                })
+                bars.append(
+                    {
+                        "timestamp": day_start_ms + bar_idx * 60_000,
+                        "open": round(price - 0.05, 4),
+                        "high": round(price + 0.3, 4),
+                        "low": round(price - 0.3, 4),
+                        "close": round(price, 4),
+                        "volume": round(1_000_000 + rng.normal(0, 50_000), 2),
+                    }
+                )
 
     return bars
 
@@ -121,7 +124,7 @@ class TestMonthlyICBreakdown:
     def test_stability_label_noise(self) -> None:
         # Use a strongly negative base so most months are negative
         ic_values, ic_dates = _generate_multi_month_ic(n_months=10, base_ic=-0.04, seed=99)
-        _, pct_positive, _, _, _, label = compute_monthly_ic_breakdown(ic_values, ic_dates)
+        _, _pct_positive, _, _, _, label = compute_monthly_ic_breakdown(ic_values, ic_dates)
 
         assert label in ("Noise", "Weak")
 
@@ -134,8 +137,9 @@ class TestMonthlyICBreakdown:
         assert worst == min(mean_ics)
 
     def test_insufficient_data_returns_empty(self) -> None:
-        monthly, pct_pos, pct_sig, best, worst, label = compute_monthly_ic_breakdown(
-            [0.01], ["2024-01-01"],
+        monthly, _pct_pos, _pct_sig, _best, _worst, label = compute_monthly_ic_breakdown(
+            [0.01],
+            ["2024-01-01"],
         )
 
         assert monthly == []
@@ -236,7 +240,9 @@ class TestRegimeAnalysis:
 
     def test_insufficient_ic_data(self) -> None:
         vol, trend = compute_regime_analysis(
-            [0.01, 0.02], ["2024-01-01", "2024-01-02"], [],
+            [0.01, 0.02],
+            ["2024-01-01", "2024-01-02"],
+            [],
         )
 
         assert vol == []

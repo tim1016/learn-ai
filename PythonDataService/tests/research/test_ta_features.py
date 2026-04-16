@@ -1,12 +1,12 @@
 """Tests for technical analysis feature computation."""
+
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
+from app.research.features.registry import OPTIONS_FEATURES, list_available_features
 from app.research.features.ta_features import TechnicalFeatures
-from app.research.features.registry import FeatureName, list_available_features, OPTIONS_FEATURES
 
 
 class TestMomentum5m:
@@ -68,6 +68,8 @@ class TestFeatureDispatcher:
             assert len(result) == len(sample_bars_single_day)
 
     def test_unknown_feature_raises(self) -> None:
-        bars = [{"timestamp": i * 1000, "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1e6} for i in range(50)]
+        bars = [
+            {"timestamp": i * 1000, "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1e6} for i in range(50)
+        ]
         with pytest.raises(ValueError, match="Unknown feature"):
             TechnicalFeatures.compute_feature("nonexistent_feature", bars)

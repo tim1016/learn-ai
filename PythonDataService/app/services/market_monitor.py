@@ -1,9 +1,11 @@
 """Market status and holiday monitoring using Polygon.io Reference Data APIs"""
+
+import logging
+from datetime import datetime
+from typing import Any
+
 from polygon import RESTClient
 from polygon.exceptions import AuthError, BadResponse
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timezone
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +24,7 @@ class PolygonMarketMonitor:
     # ------------------------------------------------------------------
     # Current market state
     # ------------------------------------------------------------------
-    def get_current_market_state(self) -> Dict[str, Any]:
+    def get_current_market_state(self) -> dict[str, Any]:
         """Return the live status of NYSE, NASDAQ, and the overall market.
 
         Returns:
@@ -54,9 +56,11 @@ class PolygonMarketMonitor:
                 "server_time": server_time_str,
                 "server_time_readable": readable,
             }
-            logger.info(f"[MarketMonitor] Market={result['market']}, "
-                        f"NYSE={result['exchanges'].get('nyse')}, "
-                        f"NASDAQ={result['exchanges'].get('nasdaq')}")
+            logger.info(
+                f"[MarketMonitor] Market={result['market']}, "
+                f"NYSE={result['exchanges'].get('nyse')}, "
+                f"NASDAQ={result['exchanges'].get('nasdaq')}"
+            )
             return result
 
         except AuthError:
@@ -72,7 +76,7 @@ class PolygonMarketMonitor:
     # ------------------------------------------------------------------
     # Upcoming holidays / events
     # ------------------------------------------------------------------
-    def get_upcoming_events(self, limit: int = 5) -> List[Dict[str, Any]]:
+    def get_upcoming_events(self, limit: int = 5) -> list[dict[str, Any]]:
         """Return the next *limit* unique market holiday events.
 
         Polygon returns one entry per exchange per holiday (NYSE, NASDAQ, OTC).
@@ -98,7 +102,7 @@ class PolygonMarketMonitor:
                 return []
 
             # De-duplicate across exchanges
-            events_map: Dict[str, Dict[str, Any]] = {}
+            events_map: dict[str, dict[str, Any]] = {}
             for h in raw_holidays:
                 key = f"{h.get('date')}|{h.get('name')}"
                 exchange = h.get("exchange", "")
@@ -210,7 +214,7 @@ class PolygonMarketMonitor:
         return mapping.get(raw.lower(), raw.title())
 
     @staticmethod
-    def _error_response(message: str) -> Dict[str, Any]:
+    def _error_response(message: str) -> dict[str, Any]:
         return {
             "market": "unknown",
             "exchanges": {},

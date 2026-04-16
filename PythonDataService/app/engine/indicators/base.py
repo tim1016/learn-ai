@@ -12,12 +12,12 @@ LEAN's IndicatorBase deduplicates updates with identical timestamps. We do
 the same: a repeated timestamp does not increment ``samples`` and does not
 recompute the value.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
 
 
 class Indicator(ABC):
@@ -32,21 +32,21 @@ class Indicator(ABC):
         self.name = name
         self.period = period
         self.samples: int = 0
-        self._current_value: Optional[Decimal] = None
-        self._current_time: Optional[datetime] = None
-        self._previous_value: Optional[Decimal] = None
-        self._previous_time: Optional[datetime] = None
+        self._current_value: Decimal | None = None
+        self._current_time: datetime | None = None
+        self._previous_value: Decimal | None = None
+        self._previous_time: datetime | None = None
 
     @property
-    def current_value(self) -> Optional[Decimal]:
+    def current_value(self) -> Decimal | None:
         return self._current_value
 
     @property
-    def current_time(self) -> Optional[datetime]:
+    def current_time(self) -> datetime | None:
         return self._current_time
 
     @property
-    def previous_value(self) -> Optional[Decimal]:
+    def previous_value(self) -> Decimal | None:
         return self._previous_value
 
     @property
@@ -83,9 +83,7 @@ class Indicator(ABC):
         self._reset_state()
 
     @abstractmethod
-    def _compute_next_value(
-        self, time: datetime, value: Decimal
-    ) -> Optional[Decimal]:
+    def _compute_next_value(self, time: datetime, value: Decimal) -> Decimal | None:
         """Compute and return the new indicator value, or None."""
         raise NotImplementedError
 

@@ -19,7 +19,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 import QuantLib
@@ -79,9 +79,7 @@ def compute_surface_id(
         "n_options": n_options,
     }
 
-    hash_bytes = hashlib.sha256(
-        json.dumps(hash_input, sort_keys=True).encode("utf-8")
-    ).digest()
+    hash_bytes = hashlib.sha256(json.dumps(hash_input, sort_keys=True).encode("utf-8")).digest()
     hash_hex = hash_bytes.hex()
 
     return hash_hex[:20]
@@ -131,10 +129,7 @@ class SurfaceCache:
         smiles_path = self.smiles_dir / f"{surface_id}.json"
         diagnostics_path = self.diagnostics_dir / f"{surface_id}.json"
 
-        return all(
-            p.exists()
-            for p in [meta_path, grid_path, smiles_path, diagnostics_path]
-        )
+        return all(p.exists() for p in [meta_path, grid_path, smiles_path, diagnostics_path])
 
     def is_valid(self, surface_id: str) -> bool:
         """
@@ -216,9 +211,7 @@ class SurfaceCache:
 
         logger.debug(f"Wrote smiles to {smiles_path}")
 
-    def write_diagnostics(
-        self, surface_id: str, diagnostics: dict[str, Any]
-    ) -> None:
+    def write_diagnostics(self, surface_id: str, diagnostics: dict[str, Any]) -> None:
         """
         Write surface diagnostics as JSON.
 
@@ -248,7 +241,7 @@ class SurfaceCache:
             return None
 
         try:
-            with open(meta_path, "r") as f:
+            with open(meta_path) as f:
                 return json.load(f)
         except Exception as e:
             logger.error(f"Failed to read meta from {meta_path}: {e}")
@@ -292,7 +285,7 @@ class SurfaceCache:
             return None
 
         try:
-            with open(smiles_path, "r") as f:
+            with open(smiles_path) as f:
                 return json.load(f)
         except Exception as e:
             logger.error(f"Failed to read smiles from {smiles_path}: {e}")
@@ -314,7 +307,7 @@ class SurfaceCache:
             return None
 
         try:
-            with open(diagnostics_path, "r") as f:
+            with open(diagnostics_path) as f:
                 return json.load(f)
         except Exception as e:
             logger.error(f"Failed to read diagnostics from {diagnostics_path}: {e}")

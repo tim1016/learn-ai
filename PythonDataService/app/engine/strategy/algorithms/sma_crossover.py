@@ -22,12 +22,12 @@ data flow. Parity against the legacy strategy is exercised by
 "same set of winning vs losing trades on the same input data", not bit-exact
 prices.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
-from typing import Optional
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
@@ -43,7 +43,7 @@ class _PendingEntry:
 
 @dataclass
 class _OpenTrade:
-    entry_time: "datetime"  # type: ignore[name-defined]
+    entry_time: datetime  # type: ignore[name-defined]
     entry_price: Decimal
     sma_short: Decimal
     sma_long: Decimal
@@ -97,11 +97,11 @@ class SmaCrossoverAlgorithm(Strategy):
         # Previous-bar crossover state — starts unknown so the first bar that
         # produces two ready SMAs only seeds the state, it does not trigger an
         # entry.
-        self._prev_short_above_long: Optional[bool] = None
+        self._prev_short_above_long: bool | None = None
 
         self._in_position: bool = False
-        self._pending_entry: Optional[_PendingEntry] = None
-        self._open_trade: Optional[_OpenTrade] = None
+        self._pending_entry: _PendingEntry | None = None
+        self._open_trade: _OpenTrade | None = None
 
         self.trade_log: list[LoggedTrade] = []
 
@@ -177,9 +177,7 @@ class SmaCrossoverAlgorithm(Strategy):
                 self._in_position = False
         else:
             if fresh_golden_cross:
-                self._pending_entry = _PendingEntry(
-                    sma_short=short_val, sma_long=long_val
-                )
+                self._pending_entry = _PendingEntry(sma_short=short_val, sma_long=long_val)
                 self.ctx.set_holdings(self._symbol, Decimal(1))
                 self._in_position = True
                 self.ctx.log(
@@ -198,9 +196,7 @@ class SmaCrossoverAlgorithm(Strategy):
         if event.direction == Direction.LONG:
             if self._pending_entry is None:
                 if self.ctx is not None:
-                    self.ctx.log(
-                        f"WARN: LONG fill at {event.time} with no pending entry"
-                    )
+                    self.ctx.log(f"WARN: LONG fill at {event.time} with no pending entry")
                 return
             self._open_trade = _OpenTrade(
                 entry_time=event.time,
@@ -236,10 +232,7 @@ class SmaCrossoverAlgorithm(Strategy):
                         f"sma_{self._short_window}": entry.sma_short,
                         f"sma_{self._long_window}": entry.sma_long,
                     },
-                    signal_reason=(
-                        f"SMA({self._short_window}) crossed below "
-                        f"SMA({self._long_window})"
-                    ),
+                    signal_reason=(f"SMA({self._short_window}) crossed below SMA({self._long_window})"),
                 )
             )
             if self.ctx is not None:

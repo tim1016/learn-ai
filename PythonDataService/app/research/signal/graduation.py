@@ -1,4 +1,5 @@
 """Graduation criteria evaluation for signal promotion."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -90,8 +91,7 @@ def evaluate_graduation(
     c2.label = _pass_label(c2.passed, max_dd, 0.15, 0.20, invert=True)
     if not c2.passed:
         c2.failure_reason = (
-            f"Max Drawdown = {max_dd * 100:.1f}% exceeds 15% threshold. "
-            "Consider tighter threshold or shorter holding."
+            f"Max Drawdown = {max_dd * 100:.1f}% exceeds 15% threshold. Consider tighter threshold or shorter holding."
         )
     criteria.append(c2)
 
@@ -124,8 +124,7 @@ def evaluate_graduation(
     c4.label = "Pass" if c4.passed else ("Marginal" if regimes_covered >= 3 else "Fail")
     if not c4.passed:
         c4.failure_reason = (
-            f"Only {regimes_covered}/6 regimes covered. "
-            "Need more data spanning different market conditions."
+            f"Only {regimes_covered}/6 regimes covered. Need more data spanning different market conditions."
         )
     criteria.append(c4)
 
@@ -171,7 +170,8 @@ def evaluate_graduation(
 
 
 def _find_best_insample(
-    grid: list[BacktestResult], default_cost: float,
+    grid: list[BacktestResult],
+    default_cost: float,
 ) -> BacktestResult | None:
     """Find the best result at default cost."""
     candidates = [r for r in grid if abs(r.cost_bps - default_cost) < 0.01]
@@ -183,7 +183,8 @@ def _find_best_insample(
 
 
 def _compute_parameter_stability(
-    grid: list[BacktestResult], default_cost: float,
+    grid: list[BacktestResult],
+    default_cost: float,
 ) -> ParameterStability:
     """Assess how sensitive Sharpe is to threshold choice."""
     candidates = [r for r in grid if abs(r.cost_bps - default_cost) < 0.01]
@@ -225,7 +226,10 @@ def _compute_parameter_stability(
 
 
 def _pass_label(
-    passed: bool, value: float, threshold: float, marginal: float,
+    passed: bool,
+    value: float,
+    threshold: float,
+    marginal: float,
     invert: bool = False,
 ) -> str:
     """Determine Pass/Fail/Marginal label."""
@@ -269,9 +273,11 @@ def _compute_status_label(
         return "Degrading"
 
     # Robust Alpha
-    if (overall_passed
-            and param_stability.stability_label == "Stable"
-            and walk_forward.pct_windows_positive_sharpe >= 0.70):
+    if (
+        overall_passed
+        and param_stability.stability_label == "Stable"
+        and walk_forward.pct_windows_positive_sharpe >= 0.70
+    ):
         return "Robust Alpha"
 
     # Conditional Alpha

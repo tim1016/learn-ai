@@ -40,8 +40,11 @@ public class LstmServiceTests
 
         var config = new LstmTrainingConfigDto
         {
-            Ticker = "AAPL", FromDate = "2025-01-01", ToDate = "2025-12-31",
-            Epochs = 50, SequenceLength = 60
+            Ticker = "AAPL",
+            FromDate = "2025-01-01",
+            ToDate = "2025-12-31",
+            Epochs = 50,
+            SequenceLength = 60
         };
 
         var result = await service.StartTrainingAsync(config);
@@ -57,7 +60,9 @@ public class LstmServiceTests
 
         var config = new LstmTrainingConfigDto
         {
-            Ticker = "AAPL", FromDate = "2025-01-01", ToDate = "2025-12-31"
+            Ticker = "AAPL",
+            FromDate = "2025-01-01",
+            ToDate = "2025-12-31"
         };
 
         await Assert.ThrowsAsync<HttpRequestException>(
@@ -81,8 +86,11 @@ public class LstmServiceTests
 
         var config = new LstmValidationConfigDto
         {
-            Ticker = "MSFT", FromDate = "2025-01-01", ToDate = "2025-12-31",
-            Folds = 5, Epochs = 20
+            Ticker = "MSFT",
+            FromDate = "2025-01-01",
+            ToDate = "2025-12-31",
+            Folds = 5,
+            Epochs = 20
         };
 
         var result = await service.StartValidationAsync(config);

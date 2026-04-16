@@ -1,16 +1,20 @@
 """API endpoints for ticker reference data (list, details, related companies)"""
+
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
 import logging
 
-from app.services.polygon_client import PolygonClientService
-from app.models.requests import TickerListRequest, TickerDetailRequest, RelatedTickersRequest
+from fastapi import APIRouter, HTTPException, status
+
+from app.models.requests import RelatedTickersRequest, TickerDetailRequest, TickerListRequest
 from app.models.responses import (
-    TickerListResponse, TickerInfo,
-    TickerDetailResponse, TickerAddress,
     RelatedTickersResponse,
+    TickerAddress,
+    TickerDetailResponse,
+    TickerInfo,
+    TickerListResponse,
 )
+from app.services.polygon_client import PolygonClientService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -32,10 +36,10 @@ async def list_tickers(request: TickerListRequest) -> TickerListResponse:
         return TickerListResponse(success=True, tickers=tickers, count=len(tickers))
 
     except Exception as e:
-        logger.error(f"[Tickers] Error listing tickers: {str(e)}", exc_info=True)
+        logger.error(f"[Tickers] Error listing tickers: {e!s}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list tickers: {str(e)}",
+            detail=f"Failed to list tickers: {e!s}",
         )
 
 
@@ -47,30 +51,30 @@ async def get_ticker_details(request: TickerDetailRequest) -> TickerDetailRespon
 
         raw = polygon_client.get_ticker_details(request.ticker)
 
-        addr_raw = raw.get('address')
+        addr_raw = raw.get("address")
         address = TickerAddress(**addr_raw) if addr_raw else None
 
         return TickerDetailResponse(
             success=True,
-            ticker=raw.get('ticker', request.ticker),
-            name=raw.get('name', ''),
-            description=raw.get('description'),
-            market_cap=raw.get('market_cap'),
-            homepage_url=raw.get('homepage_url'),
-            total_employees=raw.get('total_employees'),
-            list_date=raw.get('list_date'),
-            sic_description=raw.get('sic_description'),
-            primary_exchange=raw.get('primary_exchange'),
-            type=raw.get('type'),
-            weighted_shares_outstanding=raw.get('weighted_shares_outstanding'),
+            ticker=raw.get("ticker", request.ticker),
+            name=raw.get("name", ""),
+            description=raw.get("description"),
+            market_cap=raw.get("market_cap"),
+            homepage_url=raw.get("homepage_url"),
+            total_employees=raw.get("total_employees"),
+            list_date=raw.get("list_date"),
+            sic_description=raw.get("sic_description"),
+            primary_exchange=raw.get("primary_exchange"),
+            type=raw.get("type"),
+            weighted_shares_outstanding=raw.get("weighted_shares_outstanding"),
             address=address,
         )
 
     except Exception as e:
-        logger.error(f"[Tickers] Error fetching details for {request.ticker}: {str(e)}", exc_info=True)
+        logger.error(f"[Tickers] Error fetching details for {request.ticker}: {e!s}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch ticker details: {str(e)}",
+            detail=f"Failed to fetch ticker details: {e!s}",
         )
 
 
@@ -89,8 +93,8 @@ async def get_related_tickers(request: RelatedTickersRequest) -> RelatedTickersR
         )
 
     except Exception as e:
-        logger.error(f"[Tickers] Error fetching related for {request.ticker}: {str(e)}", exc_info=True)
+        logger.error(f"[Tickers] Error fetching related for {request.ticker}: {e!s}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch related tickers: {str(e)}",
+            detail=f"Failed to fetch related tickers: {e!s}",
         )

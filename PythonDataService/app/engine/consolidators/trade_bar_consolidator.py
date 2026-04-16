@@ -19,11 +19,11 @@ Key behaviors reproduced from LEAN:
     its ``volume`` is the sum, and its ``end_time`` is the ``end_time`` of
     the last contained input bar.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Optional
 
 from app.engine.data.trade_bar import TradeBar
 
@@ -39,7 +39,6 @@ def _floor_to_period(dt: datetime, period: timedelta) -> datetime:
     delta = dt - epoch
     period_seconds = int(period.total_seconds())
     delta_seconds = int(delta.total_seconds())
-    micros = delta.microseconds
     # Floor by whole seconds (LEAN periods we care about are whole seconds).
     floored_seconds = (delta_seconds // period_seconds) * period_seconds
     return epoch + timedelta(seconds=floored_seconds)
@@ -61,11 +60,11 @@ class TradeBarConsolidator:
         if period.total_seconds() <= 0:
             raise ValueError("period must be positive")
         self.period = period
-        self.on_data_consolidated: Optional[Callable[[TradeBar], None]] = None
-        self._working: Optional[dict] = None
-        self._last_emit: Optional[datetime] = None
+        self.on_data_consolidated: Callable[[TradeBar], None] | None = None
+        self._working: dict | None = None
+        self._last_emit: datetime | None = None
 
-    def update(self, bar: TradeBar) -> Optional[TradeBar]:
+    def update(self, bar: TradeBar) -> TradeBar | None:
         """Feed a new input bar.
 
         Returns a consolidated bar if one fired as a result of this input,
@@ -74,7 +73,7 @@ class TradeBarConsolidator:
         previously-working bar that just got closed out.
         """
         rounded_start = _floor_to_period(bar.time, self.period)
-        fired: Optional[TradeBar] = None
+        fired: TradeBar | None = None
 
         # Does this input bar trigger the working bar to fire?
         if self._working is not None:
@@ -84,9 +83,7 @@ class TradeBarConsolidator:
             # LEAN check (PeriodCountConsolidatorBase):
             #   data.Time - _workingBar.Time >= _period && GetRoundedBarTime(data) > _lastEmit
             time_diff = bar.time - working_start
-            if time_diff >= self.period and (
-                self._last_emit is None or rounded_start > self._last_emit
-            ):
+            if time_diff >= self.period and (self._last_emit is None or rounded_start > self._last_emit):
                 fired = self._emit_working()
 
         # Start a new working bar if needed
@@ -134,7 +131,7 @@ class TradeBarConsolidator:
         self._working = None
         return fired
 
-    def scan(self, current_time: datetime) -> Optional[TradeBar]:
+    def scan(self, current_time: datetime) -> TradeBar | None:
         """Optionally close out the working bar at end-of-stream.
 
         Note: LEAN does not normally emit partial bars — the working bar is
