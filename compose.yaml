@@ -90,6 +90,32 @@ services:
     networks:
       - app-network
 
+  frontend:
+    build: ./Frontend
+    container_name: my-frontend
+    restart: always
+    ports:
+      - "4200:4200"
+    volumes:
+      - ./Frontend/src:/app/src:z
+      - ./Frontend/proxy.conf.json:/app/proxy.conf.json:z
+    command: ["npx", "ng", "serve", "--host", "0.0.0.0", "--poll", "2000", "--proxy-config", "proxy.conf.json"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4200"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app-network
+
 volumes:
   pgdata:
 
