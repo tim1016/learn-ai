@@ -1,0 +1,52 @@
+language: en-US
+tone_instructions: >
+  Be direct and technical. This is a solo-developer trading/market-data project.
+  Focus on correctness, performance, and security — skip boilerplate suggestions.
+
+early_access: true
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  sequence_diagrams: true
+  changed_files_summary: true
+  labeling_instructions: []
+  path_filters:
+    - "!**/package-lock.json"
+    - "!**/node_modules/**"
+    - "!**/.angular/**"
+    - "!**/dist/**"
+    - "!**/bin/**"
+    - "!**/obj/**"
+  path_instructions:
+    - path: "Frontend/src/**/*.ts"
+      instructions: >
+        Angular 21 with signals (signal(), computed(), input(), output(), inject()).
+        All components standalone with OnPush change detection.
+        Modern control flow (@if, @for with track, @switch).
+        Use takeUntilDestroyed() for RxJS cleanup.
+        Prefer T[] over Array<T>. Strict equality only.
+    - path: "Frontend/src/**/*.html"
+      instructions: >
+        Angular templates using modern control flow (@if, @for, @switch, @let).
+        PrimeNG components + Tailwind CSS utilities.
+        Keep templates under ~80 lines.
+    - path: "Backend/**/*.cs"
+      instructions: >
+        .NET 10 with Hot Chocolate v15 GraphQL. Use async/await with CancellationToken.
+        PascalCase for classes/methods, _camelCase for private fields.
+        Use [GraphQLName()] to control field naming (HC v15 strips "Get" prefix).
+        Return early / guard clause pattern. AsNoTracking() for read-only queries.
+    - path: "PythonDataService/**/*.py"
+      instructions: >
+        FastAPI with async route handlers. Type hints on all signatures.
+        Pydantic v2 models for request/response schemas.
+        snake_case for functions/variables. Use router pattern with app.include_router().
+
+chat:
+  auto_reply: true
