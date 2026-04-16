@@ -4,6 +4,7 @@
 pytest
 pytest-asyncio
 pytest-cov
+pyarrow
 
 # Linting & Formatting
 ruff>=0.8

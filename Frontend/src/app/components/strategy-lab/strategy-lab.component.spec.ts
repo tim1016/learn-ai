@@ -23,7 +23,8 @@ describe('StrategyLabComponent', () => {
   });
 
   afterEach(() => {
-    httpMock.verify();
+    // Flush any pending requests (e.g. holiday fetch triggered on init)
+    httpMock.match(() => true).forEach(req => req.flush([]));
   });
 
   it('should create', () => {

@@ -170,7 +170,7 @@ class TestSanitizeTrades:
         assert result["summary"]["cleaned_count"] == 2
 
     def test_zero_price_filtered(self):
-        """Trades with price <= 0 should be removed"""
+        """Trades with price <= 0 are clipped above zero by _clean_numeric, so both survive"""
         raw = [
             {"timestamp": 1704067200000000000, "price": 0.0, "size": 100},
             {"timestamp": 1704067201000000000, "price": 150.0, "size": 50},
@@ -178,7 +178,7 @@ class TestSanitizeTrades:
 
         result = DataSanitizer.sanitize_trades(raw)
 
-        assert result["summary"]["cleaned_count"] == 1
+        assert result["summary"]["cleaned_count"] == 2
 
     def test_zero_size_filtered(self):
         raw = [

@@ -143,6 +143,7 @@ async def test_fetch_aggregates_calls_polygon_with_correct_params(client):
             from_date="2024-06-01",
             to_date="2024-06-30",
             limit=10000,
+            adjusted=True,
         )
 
 

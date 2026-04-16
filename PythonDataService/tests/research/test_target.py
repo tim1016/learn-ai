@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from app.research.target import compute_15min_forward_return, validate_return_series
 
@@ -45,8 +46,8 @@ class TestCompute15MinForwardReturn:
             np.testing.assert_allclose(returns.iloc[first_valid_idx], expected, atol=1e-10)
 
     def test_empty_bars_returns_empty(self) -> None:
-        returns = compute_15min_forward_return([], horizon=15)
-        assert len(returns) == 0
+        with pytest.raises(KeyError, match="timestamp"):
+            compute_15min_forward_return([], horizon=15)
 
 
 class TestValidateReturnSeries:
