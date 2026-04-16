@@ -160,12 +160,12 @@ describe('PortfolioService', () => {
 
   describe('recordTrade', () => {
     it('should send mutation with all parameters', () => {
-      service.recordTrade('acc-1', 42, 'Buy', 100, 155.50, 1.25, 'Stock', 1).subscribe();
+      service.recordTrade('acc-1', 'AAPL', 'Buy', 100, 155.50, 1.25, 'Stock', 1).subscribe();
 
       const req = httpMock.expectOne(GRAPHQL_URL);
       expect(req.request.body.variables).toEqual({
         accountId: 'acc-1',
-        tickerId: 42,
+        symbol: 'AAPL',
         side: 'Buy',
         quantity: 100,
         price: 155.50,
@@ -185,7 +185,7 @@ describe('PortfolioService', () => {
     });
 
     it('should use default values for fees, assetType, multiplier', () => {
-      service.recordTrade('acc-1', 10, 'Sell', 50, 200).subscribe();
+      service.recordTrade('acc-1', 'MSFT', 'Sell', 50, 200).subscribe();
 
       const req = httpMock.expectOne(GRAPHQL_URL);
       expect(req.request.body.variables.fees).toBe(0);
@@ -202,7 +202,7 @@ describe('PortfolioService', () => {
     });
 
     it('should map successful trade result', async () => {
-      const promise = firstValueFrom(service.recordTrade('acc-1', 1, 'Buy', 100, 150));
+      const promise = firstValueFrom(service.recordTrade('acc-1', 'AAPL', 'Buy', 100, 150));
 
       httpMock.expectOne(GRAPHQL_URL).flush({
         data: {
