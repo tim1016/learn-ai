@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from app.config import settings
-from app.routers import aggregates, sanitize, indicators, options, snapshot, market_monitor, tickers, strategy, research, dataset, data_quality, volatility
+from app.routers import aggregates, sanitize, indicators, options, snapshot, market_monitor, tickers, strategy, research, dataset, data_quality, volatility, engine
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -54,6 +54,7 @@ app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
 app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
+app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
 
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)

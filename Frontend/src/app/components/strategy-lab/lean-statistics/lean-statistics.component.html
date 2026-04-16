@@ -8,7 +8,7 @@
       @for (item of returnMetrics; track item.label) {
         <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
           <span class="kpi-label">{{ item.label }}</span>
-          <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+          <span class=  "kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
           <span class="kpi-source">{{ item.source }}</span>
         </div>
       }
