@@ -236,7 +236,7 @@ public class PolygonServiceTests
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            service.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-01", "2026-01-31", cts.Token));
+            service.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-01", "2026-01-31", true, cts.Token));
     }
 
     #endregion

@@ -98,7 +98,7 @@ public class MarketDataServiceTests
         _polygonServiceMock.Verify(
             p => p.FetchAggregatesAsync(It.IsAny<string>(), It.IsAny<int>(),
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(),
-                It.IsAny<CancellationToken>()),
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -142,7 +142,7 @@ public class MarketDataServiceTests
 
         _polygonServiceMock
             .Setup(p => p.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-15", "2026-01-16",
-                It.IsAny<CancellationToken>()))
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(aggregateResponse);
 
         var result = await service.FetchAndStoreAggregatesAsync(
@@ -203,7 +203,7 @@ public class MarketDataServiceTests
 
         _polygonServiceMock
             .Setup(p => p.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-15", "2026-01-15",
-                It.IsAny<CancellationToken>()))
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(aggregateResponse);
 
         var result = await service.FetchAndStoreAggregatesAsync(
@@ -234,7 +234,7 @@ public class MarketDataServiceTests
 
         _polygonServiceMock
             .Setup(p => p.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-15", "2026-01-16",
-                It.IsAny<CancellationToken>()))
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(emptyResponse);
 
         var result = await service.FetchAndStoreAggregatesAsync(
@@ -269,7 +269,7 @@ public class MarketDataServiceTests
         _polygonServiceMock
             .Setup(p => p.FetchAggregatesAsync(
                 "O:AAPL260117C00150000", It.IsAny<int>(), It.IsAny<string>(),
-                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(aggregateResponse);
 
         await service.FetchAndStoreAggregatesAsync(
@@ -332,7 +332,7 @@ public class MarketDataServiceTests
 
         _polygonServiceMock
             .Setup(p => p.FetchAggregatesAsync("MSFT", 1, "day", "2026-01-15", "2026-01-16",
-                It.IsAny<CancellationToken>()))
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(response);
 
         var result = await service.FetchAndStoreAggregatesAsync(
@@ -400,7 +400,7 @@ public class MarketDataServiceTests
 
         _polygonServiceMock
             .Setup(p => p.FetchAggregatesAsync("GOOG", 1, "day", "2026-01-01", "2026-01-31",
-                It.IsAny<CancellationToken>()))
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(freshResponse);
 
         var result = await service.GetOrFetchAggregatesAsync(
@@ -409,7 +409,7 @@ public class MarketDataServiceTests
         // Should have called polygon despite cached data
         _polygonServiceMock.Verify(
             p => p.FetchAggregatesAsync("GOOG", 1, "day", "2026-01-01", "2026-01-31",
-                It.IsAny<CancellationToken>()),
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Once);
 
         Assert.Single(result.Aggregates);
@@ -446,7 +446,7 @@ public class MarketDataServiceTests
 
         _polygonServiceMock
             .Setup(p => p.FetchAggregatesAsync("NVDA", 1, "day", "2026-01-15", "2026-01-15",
-                It.IsAny<CancellationToken>()))
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(response);
 
         var result = await service.GetOrFetchAggregatesAsync(
@@ -457,7 +457,7 @@ public class MarketDataServiceTests
 
         _polygonServiceMock.Verify(
             p => p.FetchAggregatesAsync("NVDA", 1, "day", "2026-01-15", "2026-01-15",
-                It.IsAny<CancellationToken>()),
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -482,7 +482,7 @@ public class MarketDataServiceTests
 
         _polygonServiceMock
             .Setup(p => p.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-15", "2026-01-16",
-                It.IsAny<CancellationToken>()))
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(nullDataResponse);
 
         var result = await service.FetchAndStoreAggregatesAsync(
@@ -514,7 +514,7 @@ public class MarketDataServiceTests
 
         _polygonServiceMock
             .Setup(p => p.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-15", "2026-01-16",
-                It.IsAny<CancellationToken>()))
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Service unavailable"));
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>

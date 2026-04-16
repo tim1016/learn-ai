@@ -149,7 +149,7 @@ public class PortfolioServiceTests
         var input = new RecordTradeInput
         {
             AccountId = account.Id,
-            TickerId = ticker.Id,
+            Symbol = ticker.Symbol,
             Side = OrderSide.Buy,
             Quantity = 100,
             Price = 150m,
@@ -187,7 +187,7 @@ public class PortfolioServiceTests
         var input = new RecordTradeInput
         {
             AccountId = account.Id,
-            TickerId = ticker.Id,
+            Symbol = ticker.Symbol,
             Side = OrderSide.Buy,
             Quantity = 10,
             Price = 5.00m,
@@ -232,7 +232,7 @@ public class PortfolioServiceTests
         var input = new RecordTradeInput
         {
             AccountId = account.Id,
-            TickerId = ticker.Id,
+            Symbol = ticker.Symbol,
             Side = OrderSide.Buy,
             Quantity = 100,
             Price = 150m,

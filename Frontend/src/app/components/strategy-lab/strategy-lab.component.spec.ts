@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideRouter } from '@angular/router';
 import { StrategyLabComponent } from './strategy-lab.component';
 import { environment } from '../../../environments/environment';
 
@@ -13,18 +14,20 @@ describe('StrategyLabComponent', () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
       imports: [StrategyLabComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
     }).compileComponents();
 
+    httpMock = TestBed.inject(HttpTestingController);
     fixture = TestBed.createComponent(StrategyLabComponent);
     component = fixture.componentInstance;
-    httpMock = TestBed.inject(HttpTestingController);
     fixture.detectChanges();
   });
 
   afterEach(() => {
-    // Flush any pending requests (e.g. holiday fetch triggered on init)
-    httpMock.match(() => true).forEach(req => req.flush([]));
+    if (httpMock) {
+      // Flush any pending requests (e.g. holiday fetch triggered on init)
+      httpMock.match(() => true).forEach(req => req.flush([]));
+    }
   });
 
   it('should create', () => {
@@ -44,8 +47,8 @@ describe('StrategyLabComponent', () => {
     expect(component.result()).toBeNull();
   });
 
-  it('should send backtest request to Python service', () => {
-    component.runBacktest();
+  it('should send backtest request to Python service', async () => {
+    const promise = component.runBacktest();
     expect(component.loading()).toBe(true);
 
     const req = httpMock.expectOne(`${environment.pythonServiceUrl}/api/backtest/run`);
@@ -71,13 +74,14 @@ describe('StrategyLabComponent', () => {
       trades: [], error: null,
     });
 
+    await promise;
     expect(component.loading()).toBe(false);
     expect(component.result()?.total_pnl_pts).toBe(15.5);
     expect(component.error()).toBeNull();
   });
 
-  it('should handle backtest error response', () => {
-    component.runBacktest();
+  it('should handle backtest error response', async () => {
+    const promise = component.runBacktest();
 
     const req = httpMock.expectOne(`${environment.pythonServiceUrl}/api/backtest/run`);
     req.flush({
@@ -94,17 +98,19 @@ describe('StrategyLabComponent', () => {
       trades: [],
     });
 
+    await promise;
     expect(component.loading()).toBe(false);
     expect(component.error()).toBe('No aggregates found');
     expect(component.result()).toBeNull();
   });
 
-  it('should handle HTTP error', () => {
-    component.runBacktest();
+  it('should handle HTTP error', async () => {
+    const promise = component.runBacktest();
 
     const req = httpMock.expectOne(`${environment.pythonServiceUrl}/api/backtest/run`);
     req.error(new ProgressEvent('error'), { status: 500, statusText: 'Server Error' });
 
+    await promise;
     expect(component.loading()).toBe(false);
     expect(component.error()).toBeTruthy();
   });
@@ -131,7 +137,8 @@ describe('StrategyLabComponent', () => {
     expect(values).toContain('rsi_mean_reversion');
   });
 
-  it('should show SMA params by default', () => {
+  it('should show SMA params when strategy params panel is toggled open', () => {
+    component.showStrategyParams.set(true);
     fixture.detectChanges();
     const labels = fixture.nativeElement.textContent;
     expect(labels).toContain('Short Window');
