@@ -32,6 +32,11 @@
         <p-tab value="3">
           <i class="pi pi-book"></i> Docs
         </p-tab>
+        @if (replayEnabled) {
+          <p-tab value="4" [disabled]="!selectedStudyForReplay()">
+            <i class="pi pi-play-circle"></i> Replay
+          </p-tab>
+        }
       </p-tablist>
 
       <p-tabpanels>
@@ -278,13 +283,23 @@
 
         <!-- ═══ History Tab ═══ -->
         <p-tabpanel value="2">
-          <app-engine-history (studySelected)="onStudySelected($event)" />
+          <app-engine-history
+            (studySelected)="onStudySelected($event)"
+            (replayRequested)="onReplayRequested($event)"
+          />
         </p-tabpanel>
 
         <!-- ═══ Docs Tab ═══ -->
         <p-tabpanel value="3">
           <app-lean-engine-docs />
         </p-tabpanel>
+
+        <!-- ═══ Replay Tab (feature-flagged) ═══ -->
+        @if (replayEnabled) {
+          <p-tabpanel value="4">
+            <app-engine-replay [study]="selectedStudyForReplay()" />
+          </p-tabpanel>
+        }
       </p-tabpanels>
     </p-tabs>
   }

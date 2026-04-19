@@ -16,11 +16,12 @@ import { environment } from "../../../environments/environment";
 import { ButtonModule } from "primeng/button";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 import { EngineResultsComponent } from "./engine-results/engine-results.component";
-import { EngineHistoryComponent } from "./engine-history/engine-history.component";
+import { EngineHistoryComponent, StudyListItem } from "./engine-history/engine-history.component";
 import { LeanEngineDocsComponent } from "./lean-engine-docs/lean-engine-docs.component";
 import { EngineChartComponent, ChartBar, EngineTradeForChart, EquityCurvePoint } from "./engine-chart/engine-chart.component";
 import { InsightPanelComponent } from "./insight-panel/insight-panel.component";
 import { TvCompatPanelComponent } from "./tv-compat-panel/tv-compat-panel.component";
+import { EngineReplayComponent } from "./engine-replay/engine-replay.component";
 
 // Severity for pre-flight: re-declared locally so we don't import the panel's types.
 type PreflightSeverity = "ok" | "warning" | "blocking";
@@ -127,7 +128,7 @@ interface DataAvailability {
     Tabs, TabList, Tab, TabPanel, TabPanels,
     EngineResultsComponent, EngineHistoryComponent, LeanEngineDocsComponent,
     EngineChartComponent, InsightPanelComponent,
-    TvCompatPanelComponent,
+    TvCompatPanelComponent, EngineReplayComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./lean-engine.component.html",
@@ -197,6 +198,17 @@ export class LeanEngineComponent implements OnInit {
   readonly activeTab = signal<string>("0");
 
   readonly running = signal(false);
+
+  // ------------------------------------------------------------------
+  // Replay (feature-flagged port of strategy-lab replay)
+  // ------------------------------------------------------------------
+  readonly replayEnabled = (environment as { flags?: { replayInLeanEngine?: boolean } }).flags?.replayInLeanEngine === true;
+  readonly selectedStudyForReplay = signal<StudyListItem | null>(null);
+
+  onReplayRequested(study: StudyListItem): void {
+    this.selectedStudyForReplay.set(study);
+    this.activeTab.set("4");
+  }
 
   // ------------------------------------------------------------------
   // TV-compatibility pre-flight

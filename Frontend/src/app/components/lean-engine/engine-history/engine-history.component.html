@@ -63,6 +63,7 @@
           </th>
           <th>Params</th>
           <th>Notes</th>
+          <th class="action-col"></th>
         </tr>
       </thead>
       <tbody>
@@ -97,6 +98,16 @@
               } @else {
                 <span class="notes-text">{{ s.notes || '—' }}</span>
               }
+            </td>
+            <td class="action-cell">
+              <button
+                type="button"
+                class="replay-btn"
+                title="Replay this run bar-by-bar"
+                (click)="onReplayClick(s, $event)"
+              >
+                <i class="pi pi-play"></i> Replay
+              </button>
             </td>
           </tr>
         }

@@ -8,4 +8,7 @@ export const environment = {
   backendUrl: 'http://localhost:5000/graphql',
   polygonProxyUrl: 'http://localhost:5000/api/polygon', // Backend proxy endpoint
   pythonServiceUrl: 'http://localhost:8000',
+  flags: {
+    replayInLeanEngine: true,
+  },
 };

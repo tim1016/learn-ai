@@ -1,0 +1,138 @@
+@if (!study()) {
+  <div class="empty-state">
+    <i class="pi pi-play-circle"></i>
+    <p>Open the <strong>History</strong> tab and click <strong>▶ Replay</strong> on a past run to step through it bar-by-bar.</p>
+  </div>
+} @else {
+  @if (header(); as h) {
+    <div class="replay-header">
+      <div class="replay-meta">
+        <span class="symbol">{{ h.symbol }}</span>
+        <span class="strategy">{{ h.strategy }}</span>
+        <span class="range">{{ h.range }}</span>
+        <span class="timespan">{{ h.timespan }}</span>
+      </div>
+      @if (loading()) {
+        <span class="status loading">Loading bars…</span>
+      } @else if (overlayLoading()) {
+        <span class="status loading">Loading indicators & trades…</span>
+      } @else if (dataLoaded()) {
+        <span class="status ok">Ready — press play</span>
+      }
+    </div>
+  }
+
+  @if (error(); as err) {
+    <div class="error-notice">{{ err }}</div>
+  }
+
+  @if (dataLoaded()) {
+    <!-- Indicator legend: current value at the current bar -->
+    @if (currentIndicatorValues().length > 0) {
+      <div class="indicator-legend">
+        @for (ind of currentIndicatorValues(); track ind.label) {
+          <span class="indicator-chip">
+            <span class="label">{{ ind.label }}</span>
+            <span class="value">
+              {{ ind.value === null ? '—' : ind.value.toFixed(2) }}
+            </span>
+          </span>
+        }
+        @if (currentBar(); as bar) {
+          <span class="indicator-chip time">
+            <span class="label">CLOSE</span>
+            <span class="value">{{ bar.close.toFixed(2) }}</span>
+          </span>
+          <span class="indicator-chip time">
+            <span class="label">TIME</span>
+            <span class="value">{{ bar.timestamp | date:'MMM d, HH:mm' }}</span>
+          </span>
+        }
+      </div>
+    }
+
+    <!-- Event announcement — flashes on entry / exit bars -->
+    @if (currentEvent(); as ev) {
+      <div class="event-banner" [class.entry]="ev.kind === 'entry'" [class.exit]="ev.kind === 'exit'">
+        <i class="pi" [class.pi-arrow-up]="ev.kind === 'entry'" [class.pi-arrow-down]="ev.kind === 'exit'"></i>
+        <span class="kind">{{ ev.kind === 'entry' ? 'ENTRY' : 'EXIT' }}</span>
+        <span class="sep">·</span>
+        <span>Trade #{{ ev.trade.tradeNumber }} {{ ev.trade.tradeType }}</span>
+        <span class="sep">·</span>
+        <span>{{ (ev.kind === 'entry' ? ev.trade.entryPrice : ev.trade.exitPrice).toFixed(2) }}</span>
+        @if (ev.kind === 'exit') {
+          <span class="sep">·</span>
+          <span class="pnl" [class.positive]="ev.trade.pnl >= 0" [class.negative]="ev.trade.pnl < 0">
+            {{ ev.trade.pnl >= 0 ? '+' : '' }}{{ ev.trade.pnl.toFixed(2) }}
+          </span>
+        }
+      </div>
+    }
+
+    <!-- Main two-column layout: chart | trade ledger -->
+    <div class="replay-layout">
+      <div class="chart-col">
+        <app-replay-chart
+          [data]="visibleBars()"
+          [ticker]="header()?.symbol ?? ''"
+          [indicators]="visibleIndicators()"
+          [visibleTrades]="visibleTrades()"
+          [activePosition]="activePosition()"
+        />
+        <app-replay-controls />
+      </div>
+
+      <aside class="ledger-col">
+        <h4 class="ledger-title">
+          Trades
+          <span class="count">{{ tradeLedger().length }}</span>
+        </h4>
+
+        @if (tradeLedger().length === 0) {
+          <p class="ledger-empty">No trades yet — play forward to populate.</p>
+        } @else {
+          <div class="ledger-scroll">
+            <table class="ledger-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Side</th>
+                  <th>Entry</th>
+                  <th>Exit</th>
+                  <th class="num">P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (row of tradeLedger(); track row.tradeNumber) {
+                  <tr [class.open]="row.status === 'open'">
+                    <td>{{ row.tradeNumber }}</td>
+                    <td class="side">{{ row.type }}</td>
+                    <td class="ts">
+                      <div>{{ row.entryTime | date:'MMM d, HH:mm' }}</div>
+                      <div class="price">{{ row.entryPrice.toFixed(2) }}</div>
+                    </td>
+                    <td class="ts">
+                      @if (row.status === 'open') {
+                        <div class="open-tag">OPEN</div>
+                      } @else {
+                        <div>{{ row.exitTime | date:'MMM d, HH:mm' }}</div>
+                        <div class="price">{{ row.exitPrice.toFixed(2) }}</div>
+                      }
+                    </td>
+                    <td class="num" [class.positive]="row.pnl >= 0 && row.status === 'closed'" [class.negative]="row.pnl < 0 && row.status === 'closed'">
+                      @if (row.status === 'closed') {
+                        {{ row.pnl >= 0 ? '+' : '' }}{{ row.pnl.toFixed(2) }}
+                      } @else {
+                        —
+                      }
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      </aside>
+    </div>
+  }
+}

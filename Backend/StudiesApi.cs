@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Backend.Data;
 using Backend.Models.MarketData;
@@ -87,8 +88,8 @@ public static class StudiesApi
                 execution.Trades.Add(new BacktestTrade
                 {
                     TradeType = t.TradeType ?? "Buy",
-                    EntryTimestamp = DateTime.Parse(t.EntryTimestamp),
-                    ExitTimestamp = DateTime.Parse(t.ExitTimestamp),
+                    EntryTimestamp = ParseUtc(t.EntryTimestamp),
+                    ExitTimestamp = ParseUtc(t.ExitTimestamp),
                     EntryPrice = t.EntryPrice,
                     ExitPrice = t.ExitPrice,
                     PnL = t.PnL,
@@ -286,6 +287,15 @@ public static class StudiesApi
 
         return Results.NoContent();
     }
+
+    // Npgsql rejects DateTime values with Kind=Unspecified for `timestamp with
+    // time zone` columns. Incoming trade timestamps from the Python engine are
+    // UTC ISO-8601 strings; normalize kind here.
+    private static DateTime ParseUtc(string s) =>
+        DateTime.Parse(
+            s,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
 }
 
 // ── Request / Response DTOs ──────────────────────────────────────

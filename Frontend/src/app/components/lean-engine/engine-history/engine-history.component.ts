@@ -73,6 +73,9 @@ export class EngineHistoryComponent implements OnInit {
   /** Emits when user clicks a row to load a past study. */
   studySelected = output<number>();
 
+  /** Emits when user clicks the Replay button on a row. */
+  replayRequested = output<StudyListItem>();
+
   /** ID of the row currently being edited for notes. */
   editingNotesId = signal<number | null>(null);
   editingNotesValue = signal('');
@@ -124,6 +127,11 @@ export class EngineHistoryComponent implements OnInit {
 
   onRowClick(study: StudyListItem): void {
     this.studySelected.emit(study.id);
+  }
+
+  onReplayClick(study: StudyListItem, event: MouseEvent): void {
+    event.stopPropagation();
+    this.replayRequested.emit(study);
   }
 
   startEditNotes(study: StudyListItem, event: MouseEvent): void {

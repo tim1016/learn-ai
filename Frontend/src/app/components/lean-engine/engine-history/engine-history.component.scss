@@ -13,6 +13,32 @@
   p { margin: 0; }
 }
 
+.action-col { width: 90px; }
+
+.action-cell {
+  text-align: right;
+
+  .replay-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.8rem;
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    border-radius: 4px;
+    cursor: pointer;
+    color: #1e293b;
+
+    &:hover {
+      background: #e2e8f0;
+      border-color: #94a3b8;
+    }
+
+    .pi { font-size: 0.75rem; }
+  }
+}
+
 .error-notice {
   background: rgba($bear, 0.08);
   border: 1px solid rgba($bear, 0.25);
