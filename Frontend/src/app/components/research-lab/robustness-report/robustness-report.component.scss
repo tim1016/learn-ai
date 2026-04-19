@@ -1,3 +1,5 @@
+@use '../../../../styles/tokens' as *;
+
 :host {
   display: block;
 }
@@ -9,7 +11,7 @@
 .section-title {
   font-size: 1rem;
   font-weight: 700;
-  color: #1e293b;
+  color: $text-primary;
   display: flex;
   align-items: center;
   margin: 0;
@@ -24,13 +26,13 @@
 .metric-card {
   padding: 1rem 1.25rem;
   border-radius: 8px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: $bg-surface;
+  border: 1px solid $border;
 
   .metric-label {
     font-size: 0.8rem;
     font-weight: 600;
-    color: #64748b;
+    color: $text-muted;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     display: flex;
@@ -38,7 +40,7 @@
 
     i {
       font-size: 0.75rem;
-      color: #94a3b8;
+      color: $text-muted;
       cursor: help;
     }
   }
@@ -46,14 +48,14 @@
   .metric-value {
     font-size: 1.5rem;
     font-weight: 700;
-    color: #1e293b;
+    color: $text-primary;
     margin-top: 0.25rem;
     line-height: 1.3;
   }
 
   .metric-sub {
     font-size: 0.75rem;
-    color: #94a3b8;
+    color: $text-muted;
     margin-top: 0.15rem;
   }
 }
@@ -62,8 +64,8 @@
 .chart-container {
   padding: 1.25rem;
   border-radius: 10px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: $bg-surface;
+  border: 1px solid $border;
   height: 380px;
   position: relative;
 
@@ -80,22 +82,22 @@
   border: 1px solid;
 
   &.train {
-    background: #f0f9ff;
-    border-color: #bae6fd;
+    background: rgba($accent, 0.08);
+    border-color: rgba($accent, 0.2);
 
     .split-label {
-      color: #0369a1;
-      background: #e0f2fe;
+      color: $accent;
+      background: rgba($accent, 0.12);
     }
   }
 
   &.test {
-    background: #faf5ff;
-    border-color: #e9d5ff;
+    background: rgba(168, 85, 247, 0.08);
+    border-color: rgba(168, 85, 247, 0.2);
 
     .split-label {
       color: #7c3aed;
-      background: #f3e8ff;
+      background: rgba(168, 85, 247, 0.12);
     }
   }
 
@@ -111,7 +113,7 @@
 
   .split-dates {
     font-size: 0.8rem;
-    color: #64748b;
+    color: $text-muted;
     margin-bottom: 0.75rem;
   }
 
@@ -127,7 +129,7 @@
     .split-metric-label {
       font-size: 0.7rem;
       font-weight: 600;
-      color: #94a3b8;
+      color: $text-muted;
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
@@ -135,7 +137,7 @@
     .split-metric-value {
       font-size: 1.2rem;
       font-weight: 700;
-      color: #1e293b;
+      color: $text-primary;
     }
   }
 }
@@ -144,15 +146,15 @@
 .overfit-warning {
   padding: 0.75rem 1rem;
   border-radius: 8px;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #b91c1c;
+  background: rgba($bear, 0.1);
+  border: 1px solid rgba($bear, 0.3);
+  color: $bear;
   font-size: 0.85rem;
   display: flex;
   align-items: center;
 
   i {
-    color: #dc2626;
+    color: $bear;
     font-size: 1rem;
   }
 }
@@ -161,7 +163,7 @@
 .regime-subtitle {
   font-size: 0.85rem;
   font-weight: 600;
-  color: #475569;
+  color: $text-secondary;
   margin: 0 0 0.5rem 0;
 }
 
@@ -171,13 +173,13 @@
   align-items: center;
   padding: 1rem 1.25rem;
   border-radius: 8px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  color: #64748b;
+  background: $bg-elevated;
+  border: 1px solid $border;
+  color: $text-muted;
   font-size: 0.85rem;
 
   i {
-    color: #94a3b8;
+    color: $text-muted;
     font-size: 1rem;
   }
 }
@@ -191,7 +193,7 @@
   .method-label {
     font-size: 0.8rem;
     font-weight: 600;
-    color: #64748b;
+    color: $text-muted;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     white-space: nowrap;
@@ -202,13 +204,13 @@
 .oos-retention-card {
   padding: 1rem 1.25rem;
   border-radius: 8px;
-  background: #fefce8;
-  border: 1px solid #fef08a;
+  background: rgba($warn, 0.08);
+  border: 1px solid rgba($warn, 0.2);
 
   .metric-label {
     font-size: 0.8rem;
     font-weight: 600;
-    color: #64748b;
+    color: $text-muted;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     display: flex;
@@ -216,7 +218,7 @@
 
     i {
       font-size: 0.75rem;
-      color: #94a3b8;
+      color: $text-muted;
       cursor: help;
     }
   }
@@ -224,7 +226,7 @@
   .metric-value {
     font-size: 1.5rem;
     font-weight: 700;
-    color: #1e293b;
+    color: $text-primary;
   }
 }
 
@@ -244,7 +246,7 @@
 .coverage-count {
   font-size: 0.8rem;
   font-weight: 600;
-  color: #64748b;
+  color: $text-muted;
 }
 
 .regime-timeline {
@@ -264,28 +266,28 @@
     transition: box-shadow 0.15s;
     cursor: help;
 
-    &:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08); }
+    &:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
 
     &.covered {
-      background: #ecfdf5;
-      border: 1px solid #a7f3d0;
+      background: rgba($bull, 0.12);
+      border: 1px solid rgba($bull, 0.3);
 
-      .regime-label { color: #166534; }
-      .regime-days { color: #16a34a; }
+      .regime-label { color: $bull; }
+      .regime-days { color: $bull; }
     }
 
     &.missing {
       background: repeating-linear-gradient(
         45deg,
-        #fef2f2,
-        #fef2f2 4px,
-        #fff5f5 4px,
-        #fff5f5 8px
+        rgba($bear, 0.08),
+        rgba($bear, 0.08) 4px,
+        rgba($bear, 0.12) 4px,
+        rgba($bear, 0.12) 8px
       );
-      border: 1px dashed #fca5a5;
+      border: 1px dashed rgba($bear, 0.3);
 
-      .regime-label { color: #991b1b; }
-      .regime-gap { color: #dc2626; }
+      .regime-label { color: $bear; }
+      .regime-gap { color: $bear; }
     }
 
     .regime-label {

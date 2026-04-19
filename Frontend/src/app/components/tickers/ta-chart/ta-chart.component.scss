@@ -1,16 +1,18 @@
+@use '../../../../styles/tokens' as *;
+
 .chart-container { width: 100%; height: 400px; }
     .rsi-container { width: 100%; height: 200px; }
     .oscillator-container { width: 100%; height: 200px; }
     .chart-section {
       margin-bottom: 16px;
       padding: 16px;
-      background: #fff;
-      border: 1px solid #e9ecef;
+      background: $bg-surface;
+      border: 1px solid $border-light;
       border-radius: 8px;
     }
     .chart-section h4 {
       margin: 0 0 12px 0;
-      color: #555;
+      color: $text-secondary;
       font-size: 14px;
       text-transform: uppercase;
       letter-spacing: 0.3px;

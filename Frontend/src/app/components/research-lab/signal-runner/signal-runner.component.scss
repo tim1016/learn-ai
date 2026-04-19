@@ -1,58 +1,270 @@
-:host {
-  display: block;
+@use '../../../../styles/tokens' as *;
+
+.preflight-root {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 4px 0 24px;
+  max-width: 1100px;
+
+  header h3 {
+    margin: 0 0 4px;
+    font-size: 18px;
+    font-weight: 600;
+    color: $text-primary;
+  }
+  .subtitle {
+    margin: 0;
+    color: $text-secondary;
+    font-size: 13px;
+  }
 }
 
-.collapsed-summary {
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  background: $bg-elevated;
+  border: 1px solid $border;
+  border-radius: 8px;
+  padding: 14px 16px;
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    color: $text-secondary;
+
+    &.full { grid-column: 1 / -1; }
+    &.inline {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      grid-column: 1 / -1;
+    }
+
+    input[type='text'],
+    input[type='date'],
+    input[type='number'],
+    select {
+      padding: 5px 8px;
+      border: 1px solid $border;
+      border-radius: 6px;
+      background: $bg-surface;
+      font-size: 13px;
+    }
+  }
+
+  @media (max-width: 780px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.indicators {
+  border: 1px solid $border;
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: $bg-surface;
+
+  h4 {
+    margin: 0 0 4px;
+    font-size: 14px;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  .indicator-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+    font-size: 13px;
+
+    th, td {
+      padding: 5px 8px;
+      text-align: left;
+      border-bottom: 1px solid $border;
+    }
+    th {
+      background: $bg-elevated;
+      font-weight: 600;
+      color: $text-primary;
+    }
+    .add-row td {
+      background: $bg-hover;
+      border-bottom: none;
+    }
+    select, input {
+      padding: 4px 6px;
+      border: 1px solid $border;
+      border-radius: 4px;
+      background: $bg-surface;
+      font-size: 13px;
+    }
+  }
+
+  .btn-mini {
+    padding: 3px 10px;
+    font-size: 12px;
+    border: 1px solid $border;
+    border-radius: 5px;
+    background: $bg-surface;
+    cursor: pointer;
+    &:hover { background: $bg-hover; }
+    &.primary {
+      background: $accent;
+      color: #fff;
+      border-color: $accent;
+      &:hover { background: $accent-hover; }
+    }
+  }
+}
+
+.run-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1.25rem;
-  border-radius: 8px;
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
-  margin-bottom: 1.5rem;
+  gap: 12px;
 
-  .summary-content {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-
-    .summary-text {
-      font-size: 0.95rem;
-      font-weight: 600;
-      color: #166534;
+  .btn {
+    border: none;
+    border-radius: 6px;
+    padding: 8px 18px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    &.btn-primary {
+      background: $accent;
+      color: #fff;
+      &:hover:not(:disabled) { background: $accent-hover; }
+      &:disabled { opacity: 0.6; cursor: wait; }
     }
   }
-
-  .summary-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
+  .error {
+    color: $bear;
+    font-size: 13px;
   }
 }
 
-.form-section {
-  padding: 1.25rem;
+.verdict-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
   border-radius: 8px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  margin-bottom: 1.5rem;
+  border: 1px solid;
+
+  &[data-severity='ok'] {
+    background: rgba($bull, 0.1);
+    border-color: rgba($bull, 0.3);
+    .big-icon { color: $bull; }
+    .verdict-title { color: $bull; }
+  }
+  &[data-severity='warning'] {
+    background: rgba($warn, 0.08);
+    border-color: rgba($warn, 0.2);
+    .big-icon { color: $warn; }
+    .verdict-title { color: $warn; }
+  }
+  &[data-severity='blocking'] {
+    background: rgba($bear, 0.1);
+    border-color: rgba($bear, 0.3);
+    .big-icon { color: $bear; }
+    .verdict-title { color: $bear; }
+  }
+
+  .big-icon {
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1;
+    min-width: 40px;
+    text-align: center;
+  }
+  .verdict-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .verdict-title {
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .verdict-summary {
+    font-size: 13px;
+    color: $text-secondary;
+  }
 }
 
-.fetch-progress {
-  max-width: 480px;
+.checks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
-  .progress-bar {
-    height: 8px;
-    background: #e9ecef;
-    border-radius: 4px;
-    overflow: hidden;
+.check-row {
+  display: flex;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid;
+  border-radius: 8px;
+  align-items: flex-start;
 
-    .progress-fill {
-      height: 100%;
-      background: #007bff;
-      border-radius: 4px;
-      transition: width 0.4s ease;
-    }
+  &[data-severity='ok'] {
+    background: rgba($bull, 0.08);
+    border-color: rgba($bull, 0.3);
+    .check-icon { background: $bull; }
+  }
+  &[data-severity='warning'] {
+    background: rgba($warn, 0.08);
+    border-color: rgba($warn, 0.2);
+    .check-icon { background: $warn; }
+  }
+  &[data-severity='blocking'] {
+    background: rgba($bear, 0.08);
+    border-color: rgba($bear, 0.3);
+    .check-icon { background: $bear; }
+  }
+
+  .check-icon {
+    min-width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    color: #fff;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    margin-top: 2px;
+  }
+  .check-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .check-label {
+    font-weight: 600;
+    font-size: 13.5px;
+    color: $text-primary;
+  }
+  .check-message {
+    font-size: 13px;
+    color: $text-secondary;
+    line-height: 1.45;
+  }
+  .check-fix {
+    font-size: 12.5px;
+    color: $text-secondary;
+    background: $bg-elevated;
+    border-left: 3px solid $accent;
+    padding: 4px 8px;
+    border-radius: 0 4px 4px 0;
+    b { color: $accent; }
+  }
+  .check-docs {
+    font-size: 12px;
+    color: $accent;
+    text-decoration: none;
+    &:hover { text-decoration: underline; }
   }
 }

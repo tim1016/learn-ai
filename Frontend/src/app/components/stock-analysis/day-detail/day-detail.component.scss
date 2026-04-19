@@ -1,3 +1,5 @@
+@use '../../../../styles/tokens' as *;
+
 .day-detail-page {
   padding: 20px;
   max-width: 1400px;
@@ -8,7 +10,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #1976d2;
+  color: $accent;
   text-decoration: none;
   font-size: 14px;
   margin-bottom: 16px;
@@ -23,12 +25,12 @@
 }
 
 h1 {
-  color: #2c3e50;
+  color: $text-primary;
   margin-bottom: 4px;
 }
 
 .subtitle {
-  color: #7f8c8d;
+  color: $text-secondary;
   margin-bottom: 24px;
   margin-top: 0;
 }
@@ -37,9 +39,9 @@ h1 {
 .options-loading {
   padding: 24px;
   text-align: center;
-  color: #1565c0;
+  color: $accent;
   font-size: 14px;
-  background: #e3f2fd;
+  background: rgba(59, 130, 246, 0.12);
   border-radius: 8px;
   margin-bottom: 20px;
 }
@@ -47,9 +49,9 @@ h1 {
 .error-state {
   padding: 24px;
   text-align: center;
-  color: #c0392b;
+  color: $bear;
   font-size: 14px;
-  background: #fde8e8;
+  background: rgba(229, 51, 78, 0.12);
   border-radius: 8px;
 }
 
@@ -57,7 +59,7 @@ h1 {
   margin-bottom: 32px;
 
   h2 {
-    color: #2c3e50;
+    color: $text-primary;
     font-size: 18px;
     margin: 0 0 4px 0;
   }
@@ -65,7 +67,7 @@ h1 {
 
 .section-info {
   font-size: 13px;
-  color: #888;
+  color: $text-secondary;
   margin: 0 0 12px 0;
 }
 
@@ -73,11 +75,11 @@ h1 {
   margin-bottom: 32px;
 
   h2 {
-    color: #2c3e50;
+    color: $text-primary;
     font-size: 18px;
     margin: 0 0 16px 0;
     padding-bottom: 8px;
-    border-bottom: 2px solid #e9ecef;
+    border-bottom: 2px solid $border-light;
   }
 }
 
@@ -91,7 +93,7 @@ h1 {
   gap: 8px;
   font-size: 14px;
   font-weight: 500;
-  color: #333;
+  color: $text-primary;
   margin: 0 0 8px 0;
 }
 
@@ -105,43 +107,43 @@ h1 {
   letter-spacing: 0.5px;
 
   &.call {
-    background: #e8f5e9;
-    color: #2e7d32;
+    background: rgba(0, 200, 150, 0.12);
+    color: $bull;
   }
 
   &.put {
-    background: #fde8e8;
-    color: #c0392b;
+    background: rgba(229, 51, 78, 0.12);
+    color: $bear;
   }
 }
 
 .contract-ticker {
   font-size: 11px;
-  color: #aaa;
+  color: $text-muted;
   font-family: monospace;
 }
 
 .bar-count {
   font-size: 12px;
-  color: #999;
+  color: $text-muted;
   margin-left: auto;
 }
 
 .no-data {
   padding: 40px;
   text-align: center;
-  color: #bbb;
+  color: $text-muted;
   font-size: 13px;
-  background: #fafafa;
+  background: $bg-elevated;
   border-radius: 8px;
 }
 
 .no-options-msg {
   padding: 24px;
   text-align: center;
-  color: #999;
+  color: $text-secondary;
   font-size: 14px;
-  background: #f8f9fa;
+  background: $bg-surface;
   border-radius: 8px;
   margin-top: 20px;
 }

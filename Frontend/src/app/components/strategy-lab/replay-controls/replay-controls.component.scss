@@ -1,10 +1,12 @@
+@use '../../../../styles/tokens' as *;
+
 .replay-controls {
   display: flex;
   align-items: center;
   gap: 16px;
   padding: 12px 16px;
-  background: #f8f9fa;
-  border: 1px solid #e9ecef;
+  background: $bg-surface;
+  border: 1px solid $border-light;
   border-radius: 8px;
   margin-bottom: 16px;
   flex-wrap: wrap;
@@ -18,19 +20,20 @@
 .transport-btn {
   width: 36px;
   height: 36px;
-  border: 1px solid #ddd;
+  border: 1px solid $border;
   border-radius: 6px;
-  background: white;
+  background: $bg-elevated;
   font-size: 16px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.15s;
+  color: $text-primary;
 
   &:hover:not(:disabled) {
-    background: #e3f2fd;
-    border-color: #1976d2;
+    background: $bg-hover;
+    border-color: $accent;
   }
 
   &:disabled {
@@ -40,18 +43,18 @@
 
   &.play-btn {
     width: 44px;
-    background: #1976d2;
+    background: $accent;
     color: white;
-    border-color: #1976d2;
+    border-color: $accent;
     font-size: 18px;
 
     &:hover:not(:disabled) {
-      background: #1565c0;
+      background: $accent-hover;
     }
 
     &:disabled {
-      background: #90caf9;
-      border-color: #90caf9;
+      background: rgba(59, 130, 246, 0.4);
+      border-color: rgba(59, 130, 246, 0.4);
     }
   }
 }
@@ -59,7 +62,7 @@
 .speed-selector {
   display: flex;
   gap: 2px;
-  background: #e9ecef;
+  background: $border-light;
   border-radius: 6px;
   padding: 2px;
 }
@@ -71,18 +74,18 @@
   background: transparent;
   font-size: 12px;
   font-weight: 600;
-  color: #666;
+  color: $text-secondary;
   cursor: pointer;
   transition: all 0.15s;
 
   &:hover:not(.active) {
-    background: #dee2e6;
+    background: $border;
   }
 
   &.active {
-    background: white;
-    color: #1976d2;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    background: $bg-surface;
+    color: $accent;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   }
 }
 
@@ -94,7 +97,7 @@
 .timeline-slider {
   width: 100%;
   cursor: pointer;
-  accent-color: #1976d2;
+  accent-color: $accent;
 
   &:disabled {
     cursor: not-allowed;
@@ -112,10 +115,10 @@
 .bar-counter {
   font-size: 13px;
   font-weight: 600;
-  color: #2c3e50;
+  color: $text-primary;
 }
 
 .bar-timestamp {
   font-size: 11px;
-  color: #7f8c8d;
+  color: $text-secondary;
 }

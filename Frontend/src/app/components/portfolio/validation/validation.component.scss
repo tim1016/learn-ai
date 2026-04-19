@@ -1,3 +1,5 @@
+@use '../../../styles/tokens' as *;
+
 :host {
   display: block;
 }
@@ -18,13 +20,13 @@
   h3 {
     font-size: 1.25rem;
     font-weight: 700;
-    color: #1e293b;
+    color: $text-primary;
     margin: 0 0 0.25rem;
   }
 
   .description {
     font-size: 0.85rem;
-    color: #64748b;
+    color: $text-muted;
     line-height: 1.5;
     max-width: 600px;
     margin: 0;
@@ -52,11 +54,11 @@
 }
 
 .btn-primary {
-  background: #2563eb;
+  background: $accent;
   color: #fff;
 
   &:hover:not(:disabled) {
-    background: #1d4ed8;
+    background: $accent-hover;
   }
 }
 
@@ -67,21 +69,21 @@
 
 .btn-outline {
   background: transparent;
-  border: 1px solid #cbd5e1;
-  color: #475569;
+  border: 1px solid $border;
+  color: $text-secondary;
 
   &:hover {
-    background: #f1f5f9;
+    background: $bg-hover;
   }
 }
 
 .btn-outline-warn {
   background: transparent;
-  border: 1px solid #f59e0b;
-  color: #92400e;
+  border: 1px solid $warn;
+  color: $warn;
 
   &:hover {
-    background: #fffbeb;
+    background: rgba($warn, 0.08);
   }
 }
 
@@ -91,10 +93,10 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.6rem 1rem;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
+  background: rgba($bear, 0.12);
+  border: 1px solid rgba($bear, 0.3);
   border-radius: 6px;
-  color: #991b1b;
+  color: $bear;
   font-size: 0.85rem;
   margin-bottom: 1rem;
 
@@ -102,7 +104,7 @@
     margin-left: auto;
     background: none;
     border: none;
-    color: #991b1b;
+    color: $bear;
     cursor: pointer;
     font-size: 1rem;
   }
@@ -112,7 +114,7 @@
 .running-indicator {
   text-align: center;
   padding: 2rem 1rem;
-  color: #475569;
+  color: $text-secondary;
 
   p {
     margin: 0.5rem 0 0;
@@ -121,14 +123,14 @@
 
   .hint {
     font-size: 0.8rem;
-    color: #94a3b8;
+    color: $text-muted;
   }
 }
 
 .spinner-bar {
   width: 200px;
   height: 3px;
-  background: #e2e8f0;
+  background: $border;
   border-radius: 2px;
   margin: 0 auto 1rem;
   position: relative;
@@ -141,7 +143,7 @@
     left: -40%;
     width: 40%;
     height: 100%;
-    background: #2563eb;
+    background: $accent;
     border-radius: 2px;
     animation: slide 1.2s ease-in-out infinite;
   }
@@ -165,18 +167,18 @@
   align-items: center;
   gap: 0.75rem;
   padding: 1rem;
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: $bg-surface;
+  border: 1px solid $border;
   border-radius: 8px;
 
   &.all-pass {
-    border-color: #86efac;
-    background: #f0fdf4;
+    border-color: rgba($bull, 0.3);
+    background: rgba($bull, 0.08);
   }
 
   &.has-fail {
-    border-color: #fca5a5;
-    background: #fef2f2;
+    border-color: rgba($bear, 0.3);
+    background: rgba($bear, 0.08);
   }
 }
 
@@ -184,11 +186,11 @@
   font-size: 1.5rem;
 
   .pi-check-circle {
-    color: #16a34a;
+    color: $bull;
   }
 
   .pi-exclamation-circle {
-    color: #dc2626;
+    color: $bear;
   }
 }
 
@@ -200,21 +202,21 @@
 .summary-value {
   font-size: 1.3rem;
   font-weight: 700;
-  color: #1e293b;
+  color: $text-primary;
 }
 
 .summary-label {
   font-size: 0.75rem;
-  color: #64748b;
+  color: $text-muted;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .fail-text {
-  color: #dc2626;
+  color: $bear;
 
   &.zero {
-    color: #16a34a;
+    color: $bull;
   }
 }
 
@@ -236,13 +238,13 @@
   font-weight: 500;
 
   &.cat-pass {
-    background: #dcfce7;
-    color: #166534;
+    background: rgba($bull, 0.12);
+    color: $bull;
   }
 
   &.cat-fail {
-    background: #fee2e2;
-    color: #991b1b;
+    background: rgba($bear, 0.12);
+    color: $bear;
   }
 }
 
@@ -265,17 +267,17 @@
 }
 
 .test-card {
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: $bg-surface;
+  border: 1px solid $border;
   border-radius: 8px;
   overflow: hidden;
 
   &.test-pass {
-    border-left: 3px solid #16a34a;
+    border-left: 3px solid $bull;
   }
 
   &.test-fail {
-    border-left: 3px solid #dc2626;
+    border-left: 3px solid $bear;
   }
 }
 
@@ -288,7 +290,7 @@
   user-select: none;
 
   &:hover {
-    background: #f8fafc;
+    background: $bg-hover;
   }
 }
 
@@ -297,12 +299,12 @@
 }
 
 .pass-icon {
-  color: #16a34a;
+  color: $bull;
   font-size: 1.1rem;
 }
 
 .fail-icon {
-  color: #dc2626;
+  color: $bear;
   font-size: 1.1rem;
 }
 
@@ -314,14 +316,14 @@
 .test-name {
   display: block;
   font-weight: 600;
-  color: #1e293b;
+  color: $text-primary;
   font-size: 0.9rem;
 }
 
 .test-num {
   font-family: ui-monospace, monospace;
   font-size: 0.78rem;
-  color: #64748b;
+  color: $text-muted;
   margin-right: 0.4rem;
 }
 
@@ -336,8 +338,8 @@
   font-size: 0.7rem;
   padding: 0.1rem 0.45rem;
   border-radius: 9999px;
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: rgba($accent, 0.12);
+  color: $accent;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -345,29 +347,29 @@
 
 .test-duration {
   font-size: 0.78rem;
-  color: #94a3b8;
+  color: $text-muted;
   font-family: ui-monospace, monospace;
 }
 
 .test-assertion-count {
   font-size: 0.78rem;
-  color: #94a3b8;
+  color: $text-muted;
 }
 
 .test-expand {
   flex-shrink: 0;
-  color: #94a3b8;
+  color: $text-muted;
 }
 
 // ─── Test Detail ─────────────────────────────────────────
 .test-detail {
   padding: 0 1rem 1rem;
-  border-top: 1px solid #f1f5f9;
+  border-top: 1px solid $border-light;
 }
 
 .test-objective {
   font-size: 0.85rem;
-  color: #475569;
+  color: $text-secondary;
   margin: 0.75rem 0;
   font-style: italic;
 }
@@ -377,9 +379,9 @@
   align-items: flex-start;
   gap: 0.5rem;
   padding: 0.6rem 0.8rem;
-  background: #fef2f2;
+  background: rgba($bear, 0.1);
   border-radius: 6px;
-  color: #991b1b;
+  color: $bear;
   font-size: 0.82rem;
   margin-bottom: 0.75rem;
   font-family: ui-monospace, monospace;
@@ -395,27 +397,27 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 0.82rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid $border;
   border-radius: 6px;
   overflow: hidden;
 
   thead {
-    background: #f8fafc;
+    background: $bg-elevated;
 
     th {
       padding: 0.45rem 0.6rem;
       text-align: left;
       font-weight: 600;
-      color: #475569;
+      color: $text-secondary;
       font-size: 0.75rem;
       text-transform: uppercase;
       letter-spacing: 0.04em;
-      border-bottom: 1px solid #e2e8f0;
+      border-bottom: 1px solid $border;
     }
   }
 
   tbody tr {
-    border-bottom: 1px solid #f1f5f9;
+    border-bottom: 1px solid $border-light;
 
     &:last-child {
       border-bottom: none;
@@ -424,7 +426,7 @@
 
   td {
     padding: 0.4rem 0.6rem;
-    color: #334155;
+    color: $text-secondary;
     vertical-align: top;
   }
 
@@ -435,18 +437,18 @@
 }
 
 .pass-icon-sm {
-  color: #16a34a;
+  color: $bull;
   font-size: 0.85rem;
 }
 
 .fail-icon-sm {
-  color: #dc2626;
+  color: $bear;
   font-size: 0.85rem;
 }
 
 .assertion-label {
   font-weight: 500;
-  color: #334155;
+  color: $text-secondary;
   font-family: ui-monospace, monospace;
   font-size: 0.8rem;
 }
@@ -454,12 +456,12 @@
 .assertion-value {
   font-family: ui-monospace, monospace;
   font-size: 0.8rem;
-  color: #475569;
+  color: $text-secondary;
 
   &.mismatch {
-    color: #dc2626;
+    color: $bear;
     font-weight: 600;
-    background: #fef2f2;
+    background: rgba($bear, 0.1);
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
   }
@@ -467,15 +469,15 @@
 
 .row-pass {
   &:hover {
-    background: #f0fdf4;
+    background: rgba($bull, 0.05);
   }
 }
 
 .row-fail {
-  background: #fff5f5;
+  background: rgba($bear, 0.05);
 
   &:hover {
-    background: #fef2f2;
+    background: rgba($bear, 0.08);
   }
 }
 
@@ -483,19 +485,19 @@
 .validation-footer {
   margin-top: 1.5rem;
   padding-top: 0.75rem;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid $border;
 }
 
 .footer-note {
   font-size: 0.78rem;
-  color: #94a3b8;
+  color: $text-muted;
 
   code {
     font-family: ui-monospace, monospace;
     font-size: 0.75rem;
-    background: #f1f5f9;
+    background: $bg-elevated;
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
-    color: #475569;
+    color: $text-secondary;
   }
 }

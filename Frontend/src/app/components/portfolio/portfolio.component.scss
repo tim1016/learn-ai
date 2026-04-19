@@ -1,3 +1,5 @@
+@use '../../styles/tokens' as *;
+
 .portfolio-page {
   max-width: 1400px;
   margin: 0 auto;
@@ -12,7 +14,7 @@
   gap: 1rem;
   margin-bottom: 1rem;
 
-  h2 { margin: 0; font-size: 1.5rem; }
+  h2 { margin: 0; font-size: 1.5rem; color: $text-primary; }
 }
 
 .account-selector {
@@ -20,12 +22,20 @@
   align-items: center;
   gap: 0.5rem;
 
-  label { font-weight: 600; }
+  label { font-weight: 600; color: $text-secondary; }
   select {
     padding: 0.4rem 0.6rem;
-    border: 1px solid #ccc;
-    border-radius: 4px;
+    border: 1px solid $border;
+    border-radius: $radius;
+    background: $bg-elevated;
+    color: $text-primary;
     min-width: 280px;
+    font-size: 0.875rem;
+
+    &:focus {
+      outline: none;
+      border-color: $accent;
+    }
   }
 }
 
@@ -35,14 +45,22 @@
   gap: 0.5rem;
   margin-bottom: 1rem;
   padding: 0.75rem;
-  background: #f8f9fa;
-  border-radius: 6px;
-  border: 1px solid #dee2e6;
+  background: $bg-elevated;
+  border-radius: $radius;
+  border: 1px solid $border;
 
   input, select {
     padding: 0.4rem 0.6rem;
-    border: 1px solid #ccc;
-    border-radius: 4px;
+    border: 1px solid $border;
+    border-radius: $radius;
+    background: $bg-elevated;
+    color: $text-primary;
+    font-size: 0.875rem;
+
+    &:focus {
+      outline: none;
+      border-color: $accent;
+    }
   }
   input[type="text"] { min-width: 180px; }
   input[type="number"] { width: 130px; }
@@ -51,23 +69,34 @@
 .btn {
   padding: 0.4rem 0.8rem;
   border: none;
-  border-radius: 4px;
+  border-radius: $radius;
   cursor: pointer;
   font-size: 0.875rem;
   font-weight: 500;
-  transition: background 0.15s;
+  transition: all $t-ui;
 
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
+  &:disabled { opacity: 0.55; cursor: not-allowed; }
 }
-.btn-primary { background: #007bff; color: #fff; &:hover:not(:disabled) { background: #0069d9; } }
-.btn-outline { background: transparent; border: 1px solid #6c757d; color: #6c757d; &:hover { background: #f8f9fa; } }
+.btn-primary {
+  background: $accent;
+  color: #fff;
+  &:hover:not(:disabled) { background: $accent-hover; }
+  &:active:not(:disabled) { transform: scale(0.98); }
+}
+.btn-outline {
+  background: transparent;
+  border: 1px solid $border;
+  color: $text-secondary;
+  &:hover:not(:disabled) { background: $bg-hover; color: $text-primary; }
+}
 .btn-sm { padding: 0.25rem 0.6rem; font-size: 0.8rem; }
 
 .error-banner {
-  background: #f8d7da;
-  color: #721c24;
+  background: rgba($bear, 0.1);
+  border: 1px solid rgba($bear, 0.3);
+  color: #fca5a5;
   padding: 0.5rem 1rem;
-  border-radius: 4px;
+  border-radius: $radius;
   margin-bottom: 1rem;
   display: flex;
   align-items: center;
@@ -76,7 +105,7 @@
   button {
     background: none;
     border: none;
-    color: #721c24;
+    color: #fca5a5;
     font-size: 1.2rem;
     cursor: pointer;
   }
@@ -85,7 +114,7 @@
 .empty-state {
   text-align: center;
   padding: 3rem;
-  color: #6c757d;
+  color: $text-muted;
 }
 
-.text-muted { color: #6c757d; }
+.text-muted { color: $text-muted; }

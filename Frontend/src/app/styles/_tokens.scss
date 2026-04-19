@@ -1,8 +1,14 @@
 // ═══════════════════════════════════════════════════════════
-// Shared Design Tokens — Dark Mode Theme
-// Single source of truth for Strategy Lab & related components
+// Quant Trading Lab — Design Tokens
+// Dark mode financial interface. Charcoal canvas, high-contrast
+// data, semantic bull/bear colors, blue accent.
+//
+// SCSS variables: used in component stylesheets via @use
+// CSS custom properties (:root): consumed by global styles,
+//   inline styles, and JavaScript
 // ═══════════════════════════════════════════════════════════
 
+// ── Canvas & Surfaces ──────────────────────────────────────
 $bg-canvas:    #0f1117;
 $bg-surface:   #161922;
 $bg-elevated:  #1c1f2e;
@@ -10,12 +16,136 @@ $bg-hover:     #232738;
 $border:       #2a2e3e;
 $border-light: #353a4d;
 
+// ── Text ───────────────────────────────────────────────────
 $text-primary:   #e2e8f0;
 $text-secondary: #8892a8;
 $text-muted:     #5a6178;
 
+// ── Brand / Accent ─────────────────────────────────────────
 $accent:       #3b82f6;
 $accent-hover: #2563eb;
-$bull:         #00c896;
-$bear:         #e5334e;
-$warn:         #f59e0b;
+
+// ── Semantic: Market ───────────────────────────────────────
+$bull: #00c896;
+$bear: #e5334e;
+$warn: #f59e0b;
+
+// ── Type ───────────────────────────────────────────────────
+$font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, "Helvetica Neue", Arial, sans-serif;
+$font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Fira Code", monospace;
+
+// ── Radii ──────────────────────────────────────────────────
+$radius-sm:   4px;
+$radius:      6px;
+$radius-md:   8px;
+$radius-lg:   10px;
+$radius-pill: 9999px;
+
+// ── Shadow ─────────────────────────────────────────────────
+$shadow-card: 0 1px 3px rgba(0, 0, 0, 0.2);
+$shadow-pop:  0 4px 12px rgba(0, 0, 0, 0.4);
+
+// ── Transitions ────────────────────────────────────────────
+$t-fast: 0.1s;
+$t-ui:   0.15s;
+
+// ── Layout ─────────────────────────────────────────────────
+$container-md: 1200px;
+$container-lg: 1400px;
+
+// ═══════════════════════════════════════════════════════════
+// CSS Custom Properties
+// Emitted globally so components, inline styles, and JS can
+// reference var(--token-name) without importing this file.
+// ═══════════════════════════════════════════════════════════
+:root {
+  // Canvas & Surfaces
+  --bg-canvas:      #{$bg-canvas};
+  --bg-surface:     #{$bg-surface};
+  --bg-elevated:    #{$bg-elevated};
+  --bg-hover:       #{$bg-hover};
+  --border:         #{$border};
+  --border-light:   #{$border-light};
+
+  // Text
+  --text-primary:   #{$text-primary};
+  --text-secondary: #{$text-secondary};
+  --text-muted:     #{$text-muted};
+
+  // Brand / Accent
+  --accent:         #{$accent};
+  --accent-hover:   #{$accent-hover};
+  --accent-soft:    rgba(59, 130, 246, 0.15);
+
+  // Semantic: Market
+  --bull:           #{$bull};
+  --bull-soft:      rgba(0, 200, 150, 0.12);
+  --bear:           #{$bear};
+  --bear-soft:      rgba(229, 51, 78, 0.12);
+  --warn:           #{$warn};
+  --warn-soft:      rgba(245, 158, 11, 0.12);
+
+  // ITM / OTM / ATM (options chain)
+  --itm-call-bg:    rgba(6, 78, 59, 0.45);
+  --itm-call-text:  #d1fae5;
+  --itm-put-bg:     rgba(127, 29, 29, 0.45);
+  --itm-put-text:   #fecaca;
+  --otm-text:       #475569;
+  --atm-line:       rgba(245, 158, 11, 0.8);
+  --atm-badge-bg:   #f59e0b;
+  --atm-badge-text: #0f172a;
+
+  // Radii
+  --radius-sm:      #{$radius-sm};
+  --radius:         #{$radius};
+  --radius-md:      #{$radius-md};
+  --radius-lg:      #{$radius-lg};
+  --radius-pill:    #{$radius-pill};
+
+  // Shadow
+  --shadow-card:    #{$shadow-card};
+  --shadow-pop:     #{$shadow-pop};
+  --shadow-atm:     0 2px 8px rgba(0, 0, 0, 0.5);
+
+  // Spacing scale (4px grid)
+  --space-1:  0.25rem;
+  --space-2:  0.5rem;
+  --space-3:  0.75rem;
+  --space-4:  1rem;
+  --space-5:  1.25rem;
+  --space-6:  1.5rem;
+  --space-8:  2rem;
+
+  // Type families
+  --font-sans: #{$font-sans};
+  --font-mono: #{$font-mono};
+
+  // Type scale
+  --fs-xxs:  0.65rem;
+  --fs-xs:   0.72rem;
+  --fs-sm:   0.82rem;
+  --fs-base: 0.88rem;
+  --fs-md:   1rem;
+  --fs-lg:   1.1rem;
+  --fs-xl:   1.4rem;
+  --fs-h2:   1.6rem;
+  --fs-h1:   1.75rem;
+
+  // Weights
+  --fw-regular: 400;
+  --fw-medium:  500;
+  --fw-semi:    600;
+  --fw-bold:    700;
+
+  // Letter-spacing
+  --ls-tight: -0.02em;
+  --ls-caps:  0.05em;
+
+  // Transitions
+  --t-fast: #{$t-fast};
+  --t-ui:   #{$t-ui};
+
+  // Layout
+  --container-md: #{$container-md};
+  --container-lg: #{$container-lg};
+}

@@ -1,6 +1,12 @@
 @import "tailwindcss";
 @import "katex/dist/katex.min.css";
 
+/* ═══════════════════════════════════════════════════════════
+   Quant Trading Lab — Global Styles
+   Dark canvas, semantic market colors, system sans stack.
+   CSS custom properties mirror _tokens.scss SCSS vars.
+   ═══════════════════════════════════════════════════════════ */
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -9,48 +15,75 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
-    Ubuntu, sans-serif;
-  background-color: #f5f5f5;
-  color: #333;
+    Ubuntu, "Helvetica Neue", Arial, sans-serif;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  line-height: 1.6;
+  font-size: 0.88rem;
+}
+
+h1, h2 {
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  margin-bottom: 0;
+}
+
+h3 {
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+
+p {
+  color: var(--text-secondary);
   line-height: 1.6;
 }
 
+/* ── Global utility classes from design system ── */
+.positive { color: var(--bull); font-weight: 600; }
+.negative { color: var(--bear); font-weight: 600; }
+.muted    { color: var(--text-muted); }
 
-
-
-h1,
-h2 {
-  color: #2c3e50;
-  margin-bottom: 20px;
+.mono, code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Fira Code", monospace;
+  font-size: 0.8rem;
+  background: var(--bg-elevated);
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  color: var(--text-primary);
 }
 
+/* ── Card (dark surface) ── */
 .card {
-  background: white;
-  border-radius: 8px;
-  padding: 20px;
-  margin-bottom: 15px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .card h3 {
-  color: #34495e;
-  margin-bottom: 10px;
+  color: var(--text-primary);
+  margin-bottom: 0.75rem;
 }
 
 .card p {
-  color: #7f8c8d;
+  color: var(--text-secondary);
   margin-bottom: 5px;
 }
 
+/* ── Legacy utilities (kept for compatibility) ── */
 .loading {
   text-align: center;
   padding: 40px;
-  color: #7f8c8d;
+  color: var(--text-muted);
 }
 
 .error {
-  background-color: #fee;
-  color: #c00;
+  background-color: rgba(229, 51, 78, 0.12);
+  border: 1px solid rgba(229, 51, 78, 0.3);
+  color: #fca5a5;
   padding: 15px;
   border-radius: 8px;
   margin-bottom: 15px;
@@ -64,21 +97,22 @@ h2 {
 
 .tag {
   display: inline-block;
-  background-color: #3498db;
-  color: white;
+  background-color: var(--accent-soft, rgba(59, 130, 246, 0.15));
+  color: var(--accent, #3b82f6);
   padding: 3px 10px;
-  border-radius: 15px;
-  font-size: 0.85em;
+  border-radius: 9999px;
+  font-size: 0.72rem;
+  font-weight: 600;
   margin-right: 5px;
   margin-top: 5px;
 }
 
-/* Page Guide — collapsible "Getting Started" sections */
+/* ── Page Guide — collapsible "How to use this page" ── */
 .page-guide {
   margin-bottom: 20px;
-  border: 1px solid #e0e7ef;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #f0f6ff;
+  background: var(--bg-surface);
   overflow: hidden;
 }
 
@@ -87,7 +121,7 @@ h2 {
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
-  color: #1565c0;
+  color: var(--accent);
   user-select: none;
   list-style: none;
   display: flex;
@@ -103,6 +137,7 @@ h2 {
   content: "\25B6";
   font-size: 10px;
   transition: transform 0.15s;
+  color: var(--text-muted);
 }
 
 .page-guide[open] summary::before {
@@ -112,8 +147,9 @@ h2 {
 .page-guide .guide-content {
   padding: 0 16px 14px;
   font-size: 13px;
-  color: #444;
+  color: var(--text-secondary);
   line-height: 1.7;
+  border-top: 1px solid var(--border);
 }
 
 .page-guide .guide-content ol,
@@ -127,30 +163,31 @@ h2 {
 }
 
 .page-guide .guide-content strong {
-  color: #2c3e50;
+  color: var(--text-primary);
 }
 
 .page-guide .guide-content code {
-  background: #e3ecf5;
+  background: var(--bg-elevated);
   padding: 1px 5px;
   border-radius: 3px;
   font-size: 12px;
-  color: #1a237e;
+  color: var(--text-primary);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 .page-guide .guide-content .guide-tip {
   margin-top: 8px;
   padding: 8px 12px;
-  background: #e8f5e9;
-  border-left: 3px solid #43a047;
+  background: rgba(0, 200, 150, 0.08);
+  border-left: 3px solid var(--bull);
   border-radius: 0 4px 4px 0;
   font-size: 12px;
-  color: #2e7d32;
+  color: var(--bull);
 }
 
 .page-guide .guide-content h4 {
   font-size: 13px;
   font-weight: 700;
-  color: #2c3e50;
+  color: var(--text-primary);
   margin: 10px 0 4px;
 }

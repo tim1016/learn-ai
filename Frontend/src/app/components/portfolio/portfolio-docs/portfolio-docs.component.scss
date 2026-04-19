@@ -1,3 +1,5 @@
+@use '../../../styles/tokens' as *;
+
 :host {
   display: block;
 }
@@ -20,32 +22,32 @@
   h3 {
     font-size: 1.25rem;
     font-weight: 700;
-    color: #1e293b;
+    color: $text-primary;
     margin: 0;
   }
 
   .section-icon {
     font-size: 1.1rem;
-    color: #2563eb;
+    color: $accent;
   }
 }
 
 .section-description {
   font-size: 0.875rem;
-  color: #64748b;
+  color: $text-muted;
   margin-bottom: 1rem;
 }
 
 .doc-card {
   padding: 1.25rem;
   border-radius: 8px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: $bg-surface;
+  border: 1px solid $border;
 
   h4 {
     font-size: 1.05rem;
     font-weight: 600;
-    color: #1e293b;
+    color: $text-primary;
     margin-bottom: 1rem;
   }
 }
@@ -56,8 +58,8 @@
 
 // ─── Formula Block ───────────────────────────────────────
 .formula-block {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: $bg-elevated;
+  border: 1px solid $border;
   border-radius: 6px;
   padding: 1rem 1.5rem;
   margin: 0.75rem 0;
@@ -71,7 +73,7 @@
   .label {
     font-size: 0.8rem;
     font-weight: 600;
-    color: #64748b;
+    color: $text-muted;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     display: block;
@@ -111,23 +113,23 @@
     gap: 0.5rem;
     padding: 0.5rem 0;
     font-size: 0.85rem;
-    color: #334155;
+    color: $text-secondary;
 
     i {
-      color: #3b82f6;
+      color: $accent;
       font-size: 0.7rem;
       margin-top: 4px;
     }
 
     strong {
       display: block;
-      color: #1e293b;
+      color: $text-primary;
       margin-bottom: 0.15rem;
     }
 
     .pipeline-detail {
       display: block;
-      color: #64748b;
+      color: $text-muted;
       font-size: 0.8rem;
       line-height: 1.5;
     }
@@ -140,37 +142,37 @@
   gap: 0.75rem;
   padding: 0.75rem 1rem;
   border-radius: 6px;
-  background: #eff6ff;
-  border-left: 3px solid #2563eb;
+  background: rgba($accent, 0.1);
+  border-left: 3px solid $accent;
   font-size: 0.85rem;
-  color: #334155;
+  color: $text-secondary;
 
   i {
-    color: #2563eb;
+    color: $accent;
     margin-top: 2px;
   }
 
   strong {
     display: block;
     margin-bottom: 0.25rem;
-    color: #1e293b;
+    color: $text-primary;
   }
 
   code {
     font-family: ui-monospace, monospace;
     font-size: 0.8rem;
-    background: #dbeafe;
+    background: rgba($accent, 0.15);
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
-    color: #1e40af;
+    color: $accent;
   }
 
   &.warn {
-    background: #fffbeb;
-    border-left-color: #d97706;
+    background: rgba($warn, 0.08);
+    border-left-color: $warn;
 
     i {
-      color: #d97706;
+      color: $warn;
     }
   }
 }
@@ -180,14 +182,14 @@
   gap: 0.75rem;
   padding: 0.75rem 1rem;
   border-radius: 6px;
-  background: #fefce8;
-  border-left: 3px solid #ca8a04;
+  background: rgba($warn, 0.08);
+  border-left: 3px solid $warn;
   font-size: 0.85rem;
-  color: #334155;
+  color: $text-secondary;
   margin-top: 0.75rem;
 
   i {
-    color: #ca8a04;
+    color: $warn;
     margin-top: 2px;
     font-size: 1rem;
   }
@@ -195,7 +197,7 @@
   strong {
     display: block;
     margin-bottom: 0.25rem;
-    color: #854d0e;
+    color: $warn;
   }
 
   span {
@@ -208,14 +210,14 @@
   gap: 0.75rem;
   padding: 0.85rem 1rem;
   border-radius: 6px;
-  background: #eef2ff;
-  border-left: 3px solid #6366f1;
+  background: rgba($accent, 0.08);
+  border-left: 3px solid $accent;
   font-size: 0.85rem;
-  color: #334155;
+  color: $text-secondary;
   margin-bottom: 1rem;
 
   i {
-    color: #6366f1;
+    color: $accent;
     margin-top: 2px;
     font-size: 1rem;
   }
@@ -223,7 +225,7 @@
   strong {
     display: block;
     margin-bottom: 0.25rem;
-    color: #3730a3;
+    color: $accent;
   }
 
   span {
@@ -233,10 +235,10 @@
   code {
     font-family: ui-monospace, monospace;
     font-size: 0.8rem;
-    background: #e0e7ff;
+    background: rgba($accent, 0.12);
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
-    color: #3730a3;
+    color: $accent;
   }
 }
 
@@ -249,22 +251,22 @@
 
   .feature-name {
     font-weight: 600;
-    color: #1e293b;
+    color: $text-primary;
   }
 
   .feature-badge {
     font-size: 0.7rem;
     padding: 0.15rem 0.5rem;
     border-radius: 9999px;
-    background: #dbeafe;
-    color: #1d4ed8;
+    background: rgba($accent, 0.15);
+    color: $accent-hover;
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.05em;
 
     &.high-impact {
-      background: #fef3c7;
-      color: #92400e;
+      background: rgba($warn, 0.12);
+      color: $warn;
     }
   }
 }
@@ -281,7 +283,7 @@
 
   i {
     font-size: 0.85rem;
-    color: #d97706;
+    color: $warn;
   }
 }
 
@@ -295,19 +297,19 @@
 .driver-card {
   padding: 0.75rem 1rem;
   border-radius: 6px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: $bg-elevated;
+  border: 1px solid $border;
 
   h5 {
     font-size: 0.9rem;
     font-weight: 600;
-    color: #334155;
+    color: $text-secondary;
     margin: 0 0 0.35rem;
   }
 
   p {
     font-size: 0.85rem;
-    color: #475569;
+    color: $text-muted;
     line-height: 1.65;
     margin: 0;
   }
@@ -321,17 +323,17 @@
   margin-top: 0.5rem;
   border-radius: 6px;
   overflow: hidden;
-  border: 1px solid #e2e8f0;
+  border: 1px solid $border;
 
   thead {
-    background: #f1f5f9;
+    background: $bg-elevated;
 
     th {
       padding: 0.6rem 0.75rem;
       text-align: left;
       font-weight: 600;
-      color: #334155;
-      border-bottom: 1px solid #e2e8f0;
+      color: $text-secondary;
+      border-bottom: 1px solid $border;
       font-size: 0.8rem;
       text-transform: uppercase;
       letter-spacing: 0.04em;
@@ -339,37 +341,37 @@
   }
 
   tbody tr {
-    border-bottom: 1px solid #f1f5f9;
+    border-bottom: 1px solid $border-light;
 
     &:last-child {
       border-bottom: none;
     }
 
     &:hover {
-      background: #f8fafc;
+      background: $bg-hover;
     }
   }
 
   td {
     padding: 0.55rem 0.75rem;
-    color: #475569;
+    color: $text-muted;
     line-height: 1.5;
     vertical-align: top;
   }
 
   .question-cell {
     font-weight: 500;
-    color: #334155;
+    color: $text-secondary;
     white-space: nowrap;
   }
 
   code {
     font-family: ui-monospace, monospace;
     font-size: 0.8rem;
-    background: #f1f5f9;
+    background: $bg-elevated;
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
-    color: #334155;
+    color: $text-secondary;
   }
 }
 
@@ -389,5 +391,5 @@
 // ─── KaTeX Overrides ─────────────────────────────────────
 :host ::ng-deep .katex {
   font-size: 1.1em;
-  color: #1e293b;
+  color: $text-primary;
 }

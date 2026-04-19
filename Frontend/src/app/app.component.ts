@@ -7,9 +7,101 @@ import { MenuItem } from "primeng/api";
   selector: "app-root",
   standalone: true,
   imports: [RouterOutlet, Menubar],
+  styles: [`
+    :host {
+      display: block;
+      min-height: 100vh;
+      background: var(--bg-canvas);
+      color: var(--text-primary);
+    }
+
+    .nav-shell {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      padding: 0 1.5rem;
+      height: 52px;
+      gap: 0.5rem;
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-right: 1.5rem;
+      text-decoration: none;
+      flex-shrink: 0;
+    }
+
+    .nav-brand-wordmark {
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: -0.01em;
+      color: var(--text-primary);
+    }
+
+    .nav-brand-wordmark .slash {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .nav-menubar {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .nav-status {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: default;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      flex-shrink: 0;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 9999px;
+      background: var(--bull);
+      flex-shrink: 0;
+    }
+
+    .page-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1.5rem 1rem;
+    }
+  `],
   template: `
-    <p-menubar [model]="items()" />
-    <div class="px-4">
+    <div class="nav-shell">
+      <a class="nav-brand" href="/">
+        <svg width="18" height="22" viewBox="0 0 22 26" aria-hidden="true">
+          <rect x="9" y="0" width="4" height="26" fill="#5a6178"/>
+          <rect x="4" y="5" width="14" height="14" fill="#00c896" rx="1"/>
+        </svg>
+        <span class="nav-brand-wordmark">quant<span class="slash">/</span>lab</span>
+      </a>
+      <div class="nav-menubar">
+        <p-menubar [model]="items()" />
+      </div>
+      <div class="nav-status">
+        <span class="status-dot"></span>
+        polygon · live
+      </div>
+    </div>
+    <div class="page-container">
       <router-outlet />
     </div>
   `,

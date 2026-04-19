@@ -1,9 +1,12 @@
+@use '../../styles/tokens' as *;
+
 .indicator-validation {
   padding: 1rem;
 
   h2 {
     margin-bottom: 0;
-    color: #e0e0e0;
+    color: $text-primary;
+    letter-spacing: -0.02em;
   }
 }
 
@@ -19,17 +22,12 @@
     align-items: center;
     gap: 0.35rem;
     font-size: 0.85rem;
-    color: #4a9eff;
+    color: $accent;
     text-decoration: none;
     font-weight: 500;
 
-    &:hover {
-      text-decoration: underline;
-    }
-
-    i {
-      font-size: 0.8rem;
-    }
+    &:hover { text-decoration: underline; }
+    i { font-size: 0.8rem; }
   }
 }
 
@@ -46,20 +44,27 @@
     gap: 0.25rem;
 
     label {
-      font-size: 0.8rem;
-      color: #aaa;
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: $text-muted;
     }
 
     input {
       padding: 0.4rem 0.6rem;
-      border: 1px solid #555;
-      border-radius: 4px;
-      background: #2a2a2a;
-      color: #e0e0e0;
+      border: 1px solid $border;
+      border-radius: $radius;
+      background: $bg-elevated;
+      color: $text-primary;
       font-size: 0.9rem;
 
-      &[type='text'] {
-        width: 80px;
+      &[type='text'] { width: 80px; }
+
+      &:focus {
+        outline: none;
+        border-color: $accent;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
       }
     }
   }
@@ -67,20 +72,17 @@
   button {
     padding: 0.5rem 1.2rem;
     border: none;
-    border-radius: 4px;
-    background: #4a9eff;
+    border-radius: $radius;
+    background: $accent;
     color: white;
     cursor: pointer;
     font-size: 0.9rem;
+    font-weight: 500;
+    transition: all $t-ui;
 
-    &:hover:not(:disabled) {
-      background: #3a8eef;
-    }
-
-    &:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
+    &:hover:not(:disabled) { background: $accent-hover; }
+    &:active:not(:disabled) { transform: scale(0.98); }
+    &:disabled { opacity: 0.55; cursor: not-allowed; }
   }
 }
 
@@ -92,59 +94,52 @@
 
   .file-label {
     padding: 0.4rem 0.8rem;
-    border: 1px dashed #666;
-    border-radius: 4px;
+    border: 1px dashed $border-light;
+    border-radius: $radius;
     cursor: pointer;
-    color: #ccc;
+    color: $text-secondary;
     font-size: 0.85rem;
 
-    input[type='file'] {
-      display: none;
-    }
-
-    &:hover {
-      border-color: #4a9eff;
-    }
+    input[type='file'] { display: none; }
+    &:hover { border-color: $accent; color: $accent; }
   }
 
-  .file-name {
-    color: #8bc34a;
-    font-size: 0.85rem;
-  }
+  .file-name { color: $bull; font-size: 0.85rem; }
 }
 
 .error-msg {
-  color: #ff6b6b;
-  background: rgba(255, 107, 107, 0.1);
+  color: #fca5a5;
+  background: rgba($bear, 0.1);
+  border-left: 3px solid $bear;
   padding: 0.5rem 1rem;
-  border-radius: 4px;
+  border-radius: $radius;
   margin-bottom: 1rem;
 }
 
 .tabs {
   display: flex;
-  gap: 0;
   margin-bottom: 0.5rem;
+  border-bottom: 1px solid $border;
 
   button {
     padding: 0.5rem 1rem;
-    border: 1px solid #555;
-    border-bottom: none;
-    background: #1e1e1e;
-    color: #aaa;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: $text-muted;
     cursor: pointer;
     font-size: 0.85rem;
+    margin-bottom: -1px;
+    transition: color $t-ui, border-color $t-ui;
 
     &.active {
-      background: #2a2a2a;
-      color: #fff;
-      border-bottom: 2px solid #4a9eff;
+      color: $accent;
+      border-bottom-color: $accent;
     }
 
-    &:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
+    &:hover:not(.active):not(:disabled) { color: $text-primary; }
+
+    &:disabled { opacity: 0.4; cursor: not-allowed; }
   }
 }
 
@@ -154,20 +149,19 @@
   gap: 0.5rem;
   margin-bottom: 0.5rem;
   font-size: 0.85rem;
-  color: #aaa;
+  color: $text-muted;
 
   button {
     padding: 0.3rem 0.6rem;
-    border: 1px solid #555;
-    border-radius: 3px;
-    background: #2a2a2a;
-    color: #ccc;
+    border: 1px solid $border;
+    border-radius: $radius-sm;
+    background: $bg-elevated;
+    color: $text-secondary;
     cursor: pointer;
+    transition: all $t-ui;
 
-    &:disabled {
-      opacity: 0.3;
-      cursor: not-allowed;
-    }
+    &:hover:not(:disabled) { background: $bg-hover; color: $text-primary; }
+    &:disabled { opacity: 0.3; cursor: not-allowed; }
   }
 }
 
@@ -179,29 +173,31 @@
   flex-wrap: wrap;
 
   label {
-    color: #475569;
+    color: $text-secondary;
     font-size: 0.85rem;
     font-weight: 500;
   }
 
   select {
     padding: 0.3rem 0.5rem;
-    border: 1px solid #cbd5e1;
-    border-radius: 4px;
-    background: #ffffff;
-    color: #1e293b;
+    border: 1px solid $border;
+    border-radius: $radius;
+    background: $bg-elevated;
+    color: $text-primary;
     font-size: 0.85rem;
+
+    &:focus { outline: none; border-color: $accent; }
   }
 
   .summary-stats {
     display: flex;
     gap: 1rem;
     font-size: 0.8rem;
-    color: #1e293b;
-    background: #f1f5f9;
+    color: $text-secondary;
+    background: $bg-elevated;
     padding: 0.3rem 0.8rem;
-    border-radius: 4px;
-    border: 1px solid #e2e8f0;
+    border-radius: $radius;
+    border: 1px solid $border;
   }
 }
 
@@ -214,55 +210,54 @@
     width: 100%;
     border-collapse: collapse;
     font-size: 0.78rem;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-family: $font-mono;
+    font-variant-numeric: tabular-nums;
 
     th, td {
       padding: 0.35rem 0.6rem;
-      border: 1px solid #e2e8f0;
+      border: 1px solid $border;
       white-space: nowrap;
       text-align: right;
     }
 
     th {
-      background: #f1f5f9;
-      color: #334155;
+      background: $bg-canvas;
+      color: $text-muted;
       position: sticky;
       top: 0;
       z-index: 1;
-      font-weight: 600;
+      font-weight: 700;
       text-transform: uppercase;
       font-size: 0.72rem;
       letter-spacing: 0.04em;
     }
 
     td {
-      color: #1e293b;
-      background: #ffffff;
+      color: $text-primary;
+      background: $bg-surface;
     }
 
-    tbody tr:hover td {
-      background: #f8fafc;
-    }
+    tbody tr:hover td { background: $bg-hover; }
   }
 }
 
 // Comparison diff highlighting
 tr.match-exact td {
-  background: #dcfce7;
-  color: #166534;
+  background: rgba($bull, 0.12);
+  color: $bull;
 }
 
 tr.match-close td {
-  background: #d1fae5;
-  color: #065f46;
+  background: rgba($bull, 0.08);
+  color: lighten($bull, 10%);
 }
 
 tr.match-ok td {
-  background: #fef3c7;
-  color: #92400e;
+  background: rgba($warn, 0.1);
+  color: $warn;
 }
 
 tr.match-bad td {
-  background: #fee2e2;
-  color: #991b1b;
+  background: rgba($bear, 0.12);
+  color: $bear;
 }

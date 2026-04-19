@@ -1,268 +1,60 @@
-.preflight-root {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 4px 0 24px;
-  max-width: 1100px;
+@use '../../../../styles/tokens' as *;
 
-  header h3 {
-    margin: 0 0 4px;
-    font-size: 18px;
-    font-weight: 600;
-    color: #111827;
-  }
-  .subtitle {
-    margin: 0;
-    color: #4b5563;
-    font-size: 13px;
-  }
+:host {
+  display: block;
 }
 
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  background: #fbfbfc;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 14px 16px;
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 13px;
-    color: #374151;
-
-    &.full { grid-column: 1 / -1; }
-    &.inline {
-      flex-direction: row;
-      align-items: center;
-      gap: 8px;
-      grid-column: 1 / -1;
-    }
-
-    input[type='text'],
-    input[type='date'],
-    input[type='number'],
-    select {
-      padding: 5px 8px;
-      border: 1px solid #d1d5db;
-      border-radius: 6px;
-      background: #fff;
-      font-size: 13px;
-    }
-  }
-
-  @media (max-width: 780px) {
-    grid-template-columns: 1fr;
-  }
-}
-
-.indicators {
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 14px 16px;
-  background: #ffffff;
-
-  h4 {
-    margin: 0 0 4px;
-    font-size: 14px;
-    font-weight: 600;
-    color: #111827;
-  }
-
-  .indicator-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 10px;
-    font-size: 13px;
-
-    th, td {
-      padding: 5px 8px;
-      text-align: left;
-      border-bottom: 1px solid #e5e7eb;
-    }
-    th {
-      background: #f9fafb;
-      font-weight: 600;
-      color: #1f2937;
-    }
-    .add-row td {
-      background: #f3f4f6;
-      border-bottom: none;
-    }
-    select, input {
-      padding: 4px 6px;
-      border: 1px solid #d1d5db;
-      border-radius: 4px;
-      background: #fff;
-      font-size: 13px;
-    }
-  }
-
-  .btn-mini {
-    padding: 3px 10px;
-    font-size: 12px;
-    border: 1px solid #d1d5db;
-    border-radius: 5px;
-    background: #fff;
-    cursor: pointer;
-    &:hover { background: #f3f4f6; }
-    &.primary {
-      background: #1976d2;
-      color: #fff;
-      border-color: #1976d2;
-      &:hover { background: #1565c0; }
-    }
-  }
-}
-
-.run-row {
+.collapsed-summary {
   display: flex;
   align-items: center;
-  gap: 12px;
-
-  .btn {
-    border: none;
-    border-radius: 6px;
-    padding: 8px 18px;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    &.btn-primary {
-      background: #0d47a1;
-      color: #fff;
-      &:hover:not(:disabled) { background: #0b3c87; }
-      &:disabled { opacity: 0.6; cursor: wait; }
-    }
-  }
-  .error {
-    color: #991b1b;
-    font-size: 13px;
-  }
-}
-
-.verdict-banner {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 16px 20px;
+  justify-content: space-between;
+  padding: 0.75rem 1.25rem;
   border-radius: 8px;
-  border: 1px solid;
+  background: rgba($bull, 0.1);
+  border: 1px solid rgba($bull, 0.3);
+  margin-bottom: 1.5rem;
 
-  &[data-severity='ok'] {
-    background: #ecfdf5;
-    border-color: #a7f3d0;
-    .big-icon { color: #065f46; }
-    .verdict-title { color: #065f46; }
-  }
-  &[data-severity='warning'] {
-    background: #fffbea;
-    border-color: #fcd34d;
-    .big-icon { color: #92400e; }
-    .verdict-title { color: #92400e; }
-  }
-  &[data-severity='blocking'] {
-    background: #fef2f2;
-    border-color: #fecaca;
-    .big-icon { color: #991b1b; }
-    .verdict-title { color: #991b1b; }
-  }
-
-  .big-icon {
-    font-size: 32px;
-    font-weight: 700;
-    line-height: 1;
-    min-width: 40px;
-    text-align: center;
-  }
-  .verdict-text {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .verdict-title {
-    font-size: 15px;
-    font-weight: 600;
-  }
-  .verdict-summary {
-    font-size: 13px;
-    color: #374151;
-  }
-}
-
-.checks-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.check-row {
-  display: flex;
-  gap: 14px;
-  padding: 12px 14px;
-  border: 1px solid;
-  border-radius: 8px;
-  align-items: flex-start;
-
-  &[data-severity='ok'] {
-    background: #f6fdf9;
-    border-color: #d1fae5;
-    .check-icon { background: #10b981; }
-  }
-  &[data-severity='warning'] {
-    background: #fefce8;
-    border-color: #fde68a;
-    .check-icon { background: #f59e0b; }
-  }
-  &[data-severity='blocking'] {
-    background: #fef6f6;
-    border-color: #fecaca;
-    .check-icon { background: #ef4444; }
-  }
-
-  .check-icon {
-    min-width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    color: #fff;
-    font-weight: 700;
+  .summary-content {
     display: flex;
     align-items: center;
-    justify-content: center;
-    font-size: 13px;
-    margin-top: 2px;
+    gap: 0.75rem;
+
+    .summary-text {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: $bull;
+    }
   }
-  .check-body {
-    flex: 1;
+
+  .summary-actions {
     display: flex;
-    flex-direction: column;
-    gap: 4px;
+    align-items: center;
+    gap: 0.25rem;
   }
-  .check-label {
-    font-weight: 600;
-    font-size: 13.5px;
-    color: #111827;
-  }
-  .check-message {
-    font-size: 13px;
-    color: #374151;
-    line-height: 1.45;
-  }
-  .check-fix {
-    font-size: 12.5px;
-    color: #111827;
-    background: #ffffff;
-    border-left: 3px solid #1976d2;
-    padding: 4px 8px;
-    border-radius: 0 4px 4px 0;
-    b { color: #0d47a1; }
-  }
-  .check-docs {
-    font-size: 12px;
-    color: #1976d2;
-    text-decoration: none;
-    &:hover { text-decoration: underline; }
+}
+
+.form-section {
+  padding: 1.25rem;
+  border-radius: 8px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  margin-bottom: 1.5rem;
+}
+
+.fetch-progress {
+  max-width: 480px;
+
+  .progress-bar {
+    height: 8px;
+    background: $border;
+    border-radius: 4px;
+    overflow: hidden;
+
+    .progress-fill {
+      height: 100%;
+      background: $accent;
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
   }
 }

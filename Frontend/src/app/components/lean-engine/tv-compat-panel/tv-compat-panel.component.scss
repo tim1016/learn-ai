@@ -1,13 +1,15 @@
+@use '../../../styles/tokens' as *;
+
 .tv-compat-root {
   display: flex;
   flex-direction: column;
   gap: 14px;
   margin: 14px 0;
   padding: 16px 18px;
-  background: linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%);
-  border: 1px solid #c7dbf2;
+  background: linear-gradient(180deg, rgba($accent, 0.1) 0%, $bg-elevated 100%);
+  border: 1px solid $border;
   border-radius: 10px;
-  color: #111827;
+  color: $text-primary;
 }
 
 .master-row {
@@ -27,9 +29,9 @@
   user-select: none;
 
   input[type='checkbox'] {
-    width: 18px; height: 18px; cursor: pointer; accent-color: #0d47a1;
+    width: 18px; height: 18px; cursor: pointer; accent-color: $accent;
   }
-  .master-label b { color: #0d47a1; font-size: 15px; }
+  .master-label b { color: $accent; font-size: 15px; }
   .badge {
     margin-left: 10px;
     font-size: 11px;
@@ -39,28 +41,28 @@
     text-transform: uppercase;
     letter-spacing: .03em;
   }
-  .badge.ok { background: #d1fae5; color: #065f46; }
-  .badge.warn { background: #fef3c7; color: #92400e; }
+  .badge.ok { background: rgba($bull, 0.12); color: $bull; }
+  .badge.warn { background: rgba($warn, 0.12); color: $warn; }
 }
 
 .study-link {
   font-size: 13px;
-  color: #0d47a1;
+  color: $accent;
   text-decoration: none;
   font-weight: 500;
   &:hover { text-decoration: underline; }
 }
 
 .advanced-warn {
-  background: #fef2f2;
-  border-left: 4px solid #ef4444;
+  background: rgba($bear, 0.1);
+  border-left: 4px solid $bear;
   padding: 10px 14px;
   border-radius: 0 6px 6px 0;
   font-size: 13px;
-  color: #1f2937;
+  color: $text-secondary;
 
-  b { color: #991b1b; }
-  a { color: #1976d2; text-decoration: underline; }
+  b { color: #fca5a5; }
+  a { color: $accent; text-decoration: underline; }
 }
 
 .settings-grid {
@@ -71,35 +73,35 @@
   .field {
     display: flex; flex-direction: column; gap: 4px;
     padding: 10px 12px;
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
+    background: $bg-surface;
+    border: 1px solid $border;
     border-radius: 8px;
     font-size: 13px;
   }
   .label-row {
     display: flex; align-items: center; gap: 6px;
-    font-weight: 600; color: #1f2937;
+    font-weight: 600; color: $text-secondary;
   }
   .lock { font-size: 12px; }
-  .hint { color: #6b7280; font-size: 12px; line-height: 1.4; }
+  .hint { color: $text-muted; font-size: 12px; line-height: 1.4; }
 
   select, input {
     padding: 5px 8px;
-    border: 1px solid #d1d5db;
+    border: 1px solid $border;
     border-radius: 5px;
-    background: #fff;
+    background: $bg-surface;
     font-size: 13px;
-    color: #111827;
+    color: $text-primary;
 
     &:disabled {
-      background: #f3f4f6;
-      color: #6b7280;
+      background: $bg-elevated;
+      color: $text-muted;
       cursor: not-allowed;
     }
   }
 
   &.locked .field {
-    background: #f9fafb;
+    background: $bg-elevated;
   }
 
   @media (max-width: 760px) {
@@ -108,25 +110,25 @@
 }
 
 .preflight-panel {
-  border: 1px solid #e5e7eb;
+  border: 1px solid $border;
   border-radius: 8px;
-  background: #ffffff;
+  background: $bg-surface;
   padding: 12px 14px;
 
   .preflight-header {
     display: flex; justify-content: space-between; align-items: baseline;
     margin-bottom: 8px;
 
-    h4 { margin: 0; font-size: 14px; font-weight: 600; color: #111827; }
-    .preflight-loading { font-size: 12px; color: #6b7280; font-style: italic; }
+    h4 { margin: 0; font-size: 14px; font-weight: 600; color: $text-primary; }
+    .preflight-loading { font-size: 12px; color: $text-muted; font-style: italic; }
   }
 
   .preflight-error {
-    color: #991b1b; font-size: 13px;
-    background: #fef2f2; padding: 8px 10px; border-radius: 4px;
+    color: #fca5a5; font-size: 13px;
+    background: rgba($bear, 0.1); padding: 8px 10px; border-radius: 4px;
   }
   .preflight-empty {
-    color: #6b7280; font-size: 12.5px; font-style: italic;
+    color: $text-muted; font-size: 12.5px; font-style: italic;
   }
 }
 
@@ -136,16 +138,16 @@
   margin-bottom: 10px;
 
   &[data-severity='ok'] {
-    background: #ecfdf5; color: #065f46;
-    .verdict-icon { background: #10b981; }
+    background: rgba($bull, 0.12); color: $bull;
+    .verdict-icon { background: $bull; }
   }
   &[data-severity='warning'] {
-    background: #fef3c7; color: #92400e;
-    .verdict-icon { background: #f59e0b; }
+    background: rgba($warn, 0.12); color: $warn;
+    .verdict-icon { background: $warn; }
   }
   &[data-severity='blocking'] {
-    background: #fef2f2; color: #991b1b;
-    .verdict-icon { background: #ef4444; }
+    background: rgba($bear, 0.1); color: #fca5a5;
+    .verdict-icon { background: $bear; }
   }
 
   .verdict-icon {
@@ -169,9 +171,9 @@
   border: 1px solid;
   font-size: 12.5px;
 
-  &[data-severity='ok']       { background: #f6fdf9; border-color: #d1fae5; .check-icon { background: #10b981; } }
-  &[data-severity='warning']  { background: #fefce8; border-color: #fde68a; .check-icon { background: #f59e0b; } }
-  &[data-severity='blocking'] { background: #fef6f6; border-color: #fecaca; .check-icon { background: #ef4444; } }
+  &[data-severity='ok']       { background: rgba($bull, 0.08); border-color: rgba($bull, 0.3); .check-icon { background: $bull; } }
+  &[data-severity='warning']  { background: rgba($warn, 0.08); border-color: rgba($warn, 0.3); .check-icon { background: $warn; } }
+  &[data-severity='blocking'] { background: rgba($bear, 0.08); border-color: rgba($bear, 0.3); .check-icon { background: $bear; } }
 
   .check-icon {
     min-width: 20px; height: 20px; border-radius: 50%;
@@ -180,14 +182,14 @@
     font-size: 11px; margin-top: 1px;
   }
   .check-body { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-  .check-label { font-weight: 600; color: #111827; }
-  .check-message { color: #374151; line-height: 1.4; }
+  .check-label { font-weight: 600; color: $text-primary; }
+  .check-message { color: $text-secondary; line-height: 1.4; }
   .check-fix {
     margin-top: 4px;
-    background: #fff; padding: 4px 8px;
-    border-left: 2px solid #1976d2;
+    background: $bg-surface; padding: 4px 8px;
+    border-left: 2px solid $accent;
     border-radius: 0 4px 4px 0;
-    color: #111827;
-    b { color: #0d47a1; }
+    color: $text-primary;
+    b { color: $accent; }
   }
 }

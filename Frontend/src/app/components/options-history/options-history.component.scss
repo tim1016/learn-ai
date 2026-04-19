@@ -1,3 +1,5 @@
+@use '../../styles/tokens' as *;
+
 .options-history {
   padding: 20px;
   max-width: 1500px;
@@ -5,12 +7,13 @@
 }
 
 h1 {
-  color: #2c3e50;
+  color: $text-primary;
   margin-bottom: 4px;
+  letter-spacing: -0.02em;
 }
 
 .subtitle {
-  color: #7f8c8d;
+  color: $text-secondary;
   margin-top: 0;
   margin-bottom: 20px;
 }
@@ -28,62 +31,66 @@ h1 {
     gap: 4px;
 
     label {
-      font-size: 12px;
-      font-weight: 600;
-      color: #555;
+      font-size: 11px;
+      font-weight: 700;
+      color: $text-muted;
       text-transform: uppercase;
-      letter-spacing: 0.3px;
+      letter-spacing: 0.05em;
     }
 
     input, select {
       padding: 8px 12px;
-      border: 1px solid #ddd;
-      border-radius: 6px;
+      border: 1px solid $border;
+      border-radius: $radius;
       font-size: 14px;
+      background: $bg-elevated;
+      color: $text-primary;
+
+      &:focus {
+        outline: none;
+        border-color: $accent;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+      }
     }
 
-    input {
-      width: 160px;
-    }
+    input { width: 160px; }
   }
 
   .form-group-button {
     button {
       padding: 8px 24px;
-      background: #1976d2;
+      background: $accent;
       color: white;
       border: none;
-      border-radius: 6px;
+      border-radius: $radius;
       cursor: pointer;
       font-size: 14px;
       font-weight: 500;
       height: 37px;
+      transition: all $t-ui;
 
-      &:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
-
-      &:hover:not(:disabled) {
-        background: #1565c0;
-      }
+      &:disabled { opacity: 0.55; cursor: not-allowed; }
+      &:hover:not(:disabled) { background: $accent-hover; }
+      &:active:not(:disabled) { transform: scale(0.98); }
     }
   }
 }
 
 .error-message {
   padding: 12px;
-  background: #fde8e8;
-  color: #c0392b;
-  border-radius: 6px;
+  background: rgba($bear, 0.1);
+  border: 1px solid rgba($bear, 0.3);
+  color: #fca5a5;
+  border-radius: $radius;
   margin-bottom: 16px;
 }
 
 .loading {
   padding: 12px;
-  background: #e3f2fd;
-  color: #1565c0;
-  border-radius: 6px;
+  background: rgba($accent, 0.08);
+  border: 1px solid rgba($accent, 0.25);
+  color: $accent;
+  border-radius: $radius;
   margin-bottom: 16px;
 }
 
@@ -92,17 +99,19 @@ h1 {
   align-items: center;
   gap: 20px;
   padding: 16px 20px;
-  background: #f8f9fa;
-  border-radius: 8px;
+  background: $bg-surface;
+  border-radius: $radius-md;
   margin-bottom: 16px;
-  border: 1px solid #e9ecef;
+  border: 1px solid $border;
+  box-shadow: $shadow-card;
   flex-wrap: wrap;
 
   .summary-ticker {
     font-size: 22px;
     font-weight: 700;
-    color: #2c3e50;
-    letter-spacing: 0.5px;
+    color: $text-primary;
+    font-family: $font-mono;
+    letter-spacing: 0.02em;
   }
 
   .summary-item {
@@ -113,34 +122,24 @@ h1 {
 
   .summary-label {
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
-    color: #7f8c8d;
-    letter-spacing: 0.3px;
+    color: $text-muted;
+    letter-spacing: 0.05em;
   }
 
   .summary-value {
     font-size: 16px;
     font-weight: 600;
-    color: #333;
+    color: $text-primary;
+    font-variant-numeric: tabular-nums;
   }
 
-  .atm-highlight {
-    .summary-value {
-      color: #e65100;
-    }
-  }
+  .atm-highlight .summary-value { color: $warn; }
 
-  .summary-note {
-    font-size: 11px;
-    color: #999;
-  }
+  .summary-note { font-size: 11px; color: $text-muted; }
 
-  .summary-count {
-    margin-left: auto;
-    font-size: 13px;
-    color: #7f8c8d;
-  }
+  .summary-count { margin-left: auto; font-size: 13px; color: $text-muted; }
 }
 
 .chain-table-wrapper {
@@ -153,62 +152,58 @@ h1 {
   border-collapse: collapse;
   font-size: 12px;
   white-space: nowrap;
+  font-family: $font-mono;
+  font-variant-numeric: tabular-nums;
 
   th, td {
     padding: 6px 8px;
     text-align: right;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid $border;
   }
 
   thead tr:first-child th {
     padding: 8px;
     font-size: 13px;
     font-weight: 700;
-    border-bottom: 2px solid #ddd;
+    border-bottom: 2px solid $border-light;
+    background: $bg-canvas;
   }
 
   thead tr:nth-child(2) th {
-    font-size: 11px;
-    font-weight: 600;
-    color: #888;
+    font-size: 10px;
+    font-weight: 700;
+    color: $text-muted;
     text-transform: uppercase;
+    letter-spacing: 0.05em;
     padding: 4px 8px;
-    border-bottom: 2px solid #e0e0e0;
+    border-bottom: 1px solid $border;
+    background: $bg-canvas;
   }
 
-  .call-header {
-    color: #2e7d32;
-    text-align: center;
-  }
-
-  .put-header {
-    color: #c0392b;
-    text-align: center;
-  }
+  .call-header { color: $bull; text-align: center; }
+  .put-header  { color: $bear; text-align: center; }
 
   .strike-header {
     text-align: center;
-    color: #333;
-    background: #f8f9fa;
+    color: $text-muted;
+    background: $bg-canvas;
   }
 
   .strike-cell {
     text-align: center;
     font-weight: 700;
-    color: #333;
-    background: #f8f9fa;
-    border-left: 2px solid #e0e0e0;
-    border-right: 2px solid #e0e0e0;
+    color: $text-primary;
+    background: $bg-elevated;
+    border-left: 2px solid $border;
+    border-right: 2px solid $border;
   }
 
   .atm-strike {
-    background: #fff3e0;
-    color: #e65100;
+    background: rgba($warn, 0.1);
+    color: $warn;
   }
 
-  .strike-number {
-    font-size: 13px;
-  }
+  .strike-number { font-size: 13px; }
 
   .strike-links {
     display: flex;
@@ -222,65 +217,47 @@ h1 {
     font-weight: 600;
     text-decoration: none;
     padding: 1px 5px;
-    border-radius: 3px;
+    border-radius: $radius-sm;
 
     &.call-link {
-      color: #2e7d32;
-      background: #e8f5e9;
-
-      &:hover {
-        background: #c8e6c9;
-      }
+      color: $bull;
+      background: rgba($bull, 0.12);
+      &:hover { background: rgba($bull, 0.2); }
     }
 
     &.put-link {
-      color: #c0392b;
-      background: #fde8e8;
-
-      &:hover {
-        background: #f5c6cb;
-      }
+      color: $bear;
+      background: rgba($bear, 0.12);
+      &:hover { background: rgba($bear, 0.2); }
     }
   }
 
-  .price-cell {
-    font-weight: 600;
-  }
+  .price-cell { font-weight: 600; }
 
   .atm-row {
-    background: #fff8e1;
+    border-top: 2px solid rgba($warn, 0.8);
+    border-bottom: 2px solid rgba($warn, 0.8);
+    background: rgba($warn, 0.06);
   }
 
-  .positive {
-    color: #2e7d32;
-    font-weight: 600;
-  }
-
-  .negative {
-    color: #c0392b;
-    font-weight: 600;
-  }
+  .positive { color: $bull; font-weight: 600; }
+  .negative { color: $bear; font-weight: 600; }
 
   .clickable-cell {
     cursor: pointer;
-
-    &:hover {
-      background: #e3f2fd;
-    }
+    &:hover { background: $bg-hover; }
   }
 
-  .detail-row {
-    td {
-      padding: 0;
-      border-bottom: 2px solid #1976d2;
-    }
+  .detail-row td {
+    padding: 0;
+    border-bottom: 2px solid $accent;
   }
 }
 
 .detail-panel {
   padding: 16px 20px;
-  background: #fafafa;
-  border-top: 2px solid #1976d2;
+  background: $bg-elevated;
+  border-top: 2px solid $accent;
 
   .detail-header {
     display: flex;
@@ -292,79 +269,53 @@ h1 {
   .detail-ticker {
     font-size: 14px;
     font-weight: 700;
-    color: #1976d2;
-    font-family: monospace;
+    color: $accent;
+    font-family: $font-mono;
   }
 
-  .detail-date {
-    font-size: 13px;
-    color: #7f8c8d;
-  }
-
-  .detail-loading {
-    padding: 20px;
-    text-align: center;
-    color: #1565c0;
-  }
+  .detail-date { font-size: 13px; color: $text-muted; }
+  .detail-loading { padding: 20px; text-align: center; color: $accent; }
 
   .detail-charts {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 16px;
 
-    .chart-section:last-child {
-      grid-column: 1 / -1;
-    }
+    .chart-section:last-child { grid-column: 1 / -1; }
   }
 
   .chart-label {
     font-size: 12px;
     font-weight: 600;
-    color: #555;
+    color: $text-secondary;
     margin-bottom: 4px;
-    font-family: monospace;
+    font-family: $font-mono;
   }
 
-  .chart-section {
-    min-width: 0;
-  }
+  .chart-section { min-width: 0; }
 
-  .detail-stats {
-    margin-top: 8px;
-    font-size: 12px;
-    color: #7f8c8d;
-  }
-
-  .detail-empty {
-    padding: 20px;
-    text-align: center;
-    color: #999;
-  }
+  .detail-stats { margin-top: 8px; font-size: 12px; color: $text-muted; }
+  .detail-empty { padding: 20px; text-align: center; color: $text-muted; }
 }
 
 .stock-chart-section {
   margin-bottom: 16px;
   padding: 12px 16px;
-  background: #fff;
-  border: 1px solid #e9ecef;
-  border-radius: 8px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: $radius-md;
+  box-shadow: $shadow-card;
 
   .stock-chart-label {
     font-size: 13px;
     font-weight: 600;
-    color: #333;
+    color: $text-secondary;
     margin-bottom: 8px;
-    font-family: monospace;
+    font-family: $font-mono;
   }
 }
 
-.click-hint {
-  text-align: center;
-  font-size: 12px;
-  color: #999;
-  margin-top: 4px;
-  margin-bottom: 16px;
-}
+.click-hint { text-align: center; font-size: 12px; color: $text-muted; margin-top: 4px; margin-bottom: 16px; }
 
 .scan-results {
   margin-top: 8px;
@@ -374,19 +325,14 @@ h1 {
     cursor: pointer;
     font-size: 13px;
     font-weight: 600;
-    color: #555;
+    color: $text-secondary;
     padding: 8px 0;
 
-    &:hover {
-      color: #1976d2;
-    }
+    &:hover { color: $accent; }
   }
 }
 
-.scan-table-wrapper {
-  overflow-x: auto;
-  margin-top: 8px;
-}
+.scan-table-wrapper { overflow-x: auto; margin-top: 8px; }
 
 .scan-table {
   width: 100%;
@@ -396,44 +342,25 @@ h1 {
   th, td {
     padding: 4px 8px;
     text-align: left;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid $border;
   }
 
   th {
-    font-weight: 600;
-    color: #888;
+    font-weight: 700;
+    color: $text-muted;
     text-transform: uppercase;
     font-size: 10px;
-    border-bottom: 2px solid #e0e0e0;
+    letter-spacing: 0.04em;
+    border-bottom: 2px solid $border-light;
+    background: $bg-canvas;
   }
 
-  .scan-strike {
-    font-weight: 700;
-    color: #333;
-  }
+  .scan-strike { font-weight: 700; color: $text-primary; }
+  .scan-ticker { font-family: $font-mono; font-size: 10px; color: $text-muted; }
+  .scan-yes { color: $bull; font-weight: 600; }
+  .scan-no  { color: $text-muted; }
 
-  .scan-ticker {
-    font-family: monospace;
-    font-size: 10px;
-    color: #666;
-  }
+  .scan-selected { background: rgba($bull, 0.06); }
 
-  .scan-yes {
-    color: #2e7d32;
-    font-weight: 600;
-  }
-
-  .scan-no {
-    color: #bbb;
-  }
-
-  .scan-selected {
-    background: #e8f5e9;
-  }
-
-  .scan-atm {
-    .scan-strike {
-      color: #e65100;
-    }
-  }
+  .scan-atm .scan-strike { color: $warn; }
 }

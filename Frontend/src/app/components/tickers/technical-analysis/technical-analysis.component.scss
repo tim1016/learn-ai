@@ -1,3 +1,5 @@
+@use '../../../../styles/tokens' as *;
+
 .ta-dashboard {
       padding: 20px;
       max-width: 1200px;
@@ -5,7 +7,7 @@
     }
 
     .subtitle {
-      color: #7f8c8d;
+      color: $text-secondary;
       margin-bottom: 24px;
       margin-top: -12px;
     }
@@ -21,31 +23,37 @@
     .search-form input[type="text"],
     .search-form input:not([type]) {
       padding: 8px 12px;
-      border: 1px solid #ddd;
+      border: 1px solid $border;
       border-radius: 4px;
       font-size: 14px;
       width: 140px;
+      background: $bg-elevated;
+      color: $text-primary;
     }
 
     .search-form input[type="date"] {
       padding: 8px 12px;
-      border: 1px solid #ddd;
+      border: 1px solid $border;
       border-radius: 4px;
       font-size: 14px;
+      background: $bg-elevated;
+      color: $text-primary;
     }
 
     .search-form select {
       padding: 8px 12px;
-      border: 1px solid #ddd;
+      border: 1px solid $border;
       border-radius: 4px;
       font-size: 14px;
+      background: $bg-elevated;
+      color: $text-primary;
     }
 
     .search-form button {
       padding: 8px 20px;
-      background: #2c3e50;
-      color: white;
-      border: none;
+      background: $bg-elevated;
+      color: $text-primary;
+      border: 1px solid $border;
       border-radius: 4px;
       cursor: pointer;
       font-size: 14px;
@@ -53,7 +61,7 @@
     }
 
     .search-form button:hover:not(:disabled) {
-      background: #34495e;
+      background: $bg-hover;
     }
 
     .search-form button:disabled {
@@ -66,7 +74,7 @@
       gap: 24px;
       margin-bottom: 20px;
       padding: 12px 16px;
-      background: #f8f9fa;
+      background: $bg-surface;
       border-radius: 6px;
       flex-wrap: wrap;
     }
@@ -83,17 +91,19 @@
       gap: 6px;
       font-weight: 500;
       font-size: 14px;
-      color: #2c3e50;
+      color: $text-primary;
       cursor: pointer;
     }
 
     .window-input {
       width: 60px;
       padding: 4px 8px;
-      border: 1px solid #ddd;
+      border: 1px solid $border;
       border-radius: 4px;
       font-size: 13px;
       text-align: center;
+      background: $bg-elevated;
+      color: $text-primary;
     }
 
     .window-input:disabled {
@@ -102,8 +112,8 @@
 
     .error-message {
       padding: 12px 16px;
-      background: #fde8e8;
-      color: #c0392b;
+      background: rgba(229, 51, 78, 0.12);
+      color: $bear;
       border-radius: 6px;
       margin-bottom: 16px;
     }
@@ -111,14 +121,14 @@
     .loading {
       text-align: center;
       padding: 40px;
-      color: #7f8c8d;
+      color: $text-secondary;
       font-size: 16px;
     }
 
     .info-message {
       padding: 10px 16px;
-      background: #e8f5e9;
-      color: #2e7d32;
+      background: rgba(0, 200, 150, 0.12);
+      color: $bull;
       border-radius: 6px;
       margin-bottom: 16px;
       font-size: 14px;
@@ -126,5 +136,5 @@
 
     .chart-area h3 {
       margin-bottom: 16px;
-      color: #2c3e50;
+      color: $text-primary;
     }

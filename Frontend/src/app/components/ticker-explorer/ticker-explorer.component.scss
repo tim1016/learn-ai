@@ -1,3 +1,5 @@
+@use '../../styles/tokens' as *;
+
 .ticker-explorer {
   padding: 20px;
   max-width: 1400px;
@@ -5,12 +7,12 @@
 }
 
 h1 {
-  color: #2c3e50;
+  color: $text-primary;
   margin-bottom: 4px;
 }
 
 .subtitle {
-  color: #7f8c8d;
+  color: $text-secondary;
   margin-top: 0;
   margin-bottom: 20px;
 }
@@ -22,15 +24,17 @@ h1 {
 
   input {
     padding: 8px 12px;
-    border: 1px solid #ddd;
+    border: 1px solid $border;
     border-radius: 6px;
     font-size: 14px;
     width: 180px;
+    background: $bg-elevated;
+    color: $text-primary;
   }
 
   button {
     padding: 8px 20px;
-    background: #1976d2;
+    background: $accent;
     color: white;
     border: none;
     border-radius: 6px;
@@ -46,16 +50,16 @@ h1 {
 
 .error-message {
   padding: 12px;
-  background: #fde8e8;
-  color: #c0392b;
+  background: rgba(229, 51, 78, 0.12);
+  color: $bear;
   border-radius: 6px;
   margin-bottom: 16px;
 }
 
 .loading {
   padding: 12px;
-  background: #e3f2fd;
-  color: #1565c0;
+  background: rgba(59, 130, 246, 0.12);
+  color: $accent;
   border-radius: 6px;
   margin-bottom: 16px;
 }
@@ -65,22 +69,22 @@ h1 {
   align-items: center;
   gap: 16px;
   padding: 16px 20px;
-  background: #f8f9fa;
+  background: $bg-surface;
   border-radius: 8px;
   margin-bottom: 16px;
-  border: 1px solid #e9ecef;
+  border: 1px solid $border-light;
 }
 
 .underlying-ticker {
   font-size: 20px;
   font-weight: 700;
-  color: #2c3e50;
+  color: $text-primary;
 }
 
 .underlying-price {
   font-size: 20px;
   font-weight: 600;
-  color: #333;
+  color: $text-primary;
 }
 
 .underlying-change {
@@ -90,19 +94,19 @@ h1 {
   border-radius: 4px;
 
   &.positive {
-    color: #2e7d32;
-    background: #e8f5e9;
+    color: $bull;
+    background: rgba(0, 200, 150, 0.12);
   }
 
   &.negative {
-    color: #c0392b;
-    background: #fde8e8;
+    color: $bear;
+    background: rgba(229, 51, 78, 0.12);
   }
 }
 
 .contract-count {
   font-size: 13px;
-  color: #7f8c8d;
+  color: $text-secondary;
   margin-left: auto;
 }
 
@@ -115,14 +119,16 @@ h1 {
   label {
     font-size: 13px;
     font-weight: 600;
-    color: #555;
+    color: $text-secondary;
   }
 
   select {
     padding: 6px 10px;
-    border: 1px solid #ddd;
+    border: 1px solid $border;
     border-radius: 6px;
     font-size: 13px;
+    background: $bg-elevated;
+    color: $text-primary;
   }
 }
 
@@ -135,57 +141,58 @@ h1 {
   border-collapse: collapse;
   font-size: 12px;
   white-space: nowrap;
+  color: $text-primary;
 
   th, td {
     padding: 6px 8px;
     text-align: right;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid $border-light;
   }
 
   thead tr:first-child th {
     padding: 8px;
     font-size: 13px;
     font-weight: 700;
-    border-bottom: 2px solid #ddd;
+    border-bottom: 2px solid $border;
   }
 
   thead tr:nth-child(2) th {
     font-size: 11px;
     font-weight: 600;
-    color: #888;
+    color: $text-muted;
     text-transform: uppercase;
     padding: 4px 8px;
-    border-bottom: 2px solid #e0e0e0;
+    border-bottom: 2px solid $border;
   }
 
   .call-header {
-    color: #2e7d32;
+    color: $bull;
     text-align: center;
   }
 
   .put-header {
-    color: #c0392b;
+    color: $bear;
     text-align: center;
   }
 
   .strike-header {
     text-align: center;
-    color: #333;
-    background: #f8f9fa;
+    color: $text-primary;
+    background: $bg-surface;
   }
 
   .strike-cell {
     text-align: center;
     font-weight: 700;
-    color: #333;
-    background: #f8f9fa;
-    border-left: 2px solid #e0e0e0;
-    border-right: 2px solid #e0e0e0;
+    color: $text-primary;
+    background: $bg-surface;
+    border-left: 2px solid $border;
+    border-right: 2px solid $border;
   }
 
   .atm-strike {
-    background: #fff3e0;
-    color: #e65100;
+    background: rgba(245, 158, 11, 0.12);
+    color: $warn;
   }
 
   .price-cell {
@@ -193,18 +200,18 @@ h1 {
   }
 
   .atm-row {
-    background: #fff8e1;
+    background: rgba(245, 158, 11, 0.08);
   }
 
   .itm-call td:nth-child(-n+6) {
-    background: rgba(46, 125, 50, 0.04);
+    background: rgba(0, 200, 150, 0.08);
   }
 
   .itm-put td:nth-child(n+8) {
-    background: rgba(192, 57, 43, 0.04);
+    background: rgba(229, 51, 78, 0.08);
   }
 
   tbody tr:hover {
-    background: #e3f2fd;
+    background: $bg-hover;
   }
 }

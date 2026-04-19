@@ -1,3 +1,5 @@
+@use '../../../../styles/tokens' as *;
+
 :host {
   display: block;
 }
@@ -15,17 +17,17 @@
   h3 {
     font-size: 1.25rem;
     font-weight: 700;
-    color: #1e293b;
+    color: $text-primary;
     margin: 0;
   }
 
   .section-icon {
     font-size: 1.1rem;
-    color: #2563eb;
+    color: $accent;
   }
 
   .limitations-icon {
-    color: #d97706;
+    color: $warn;
   }
 
   .references-icon {
@@ -35,31 +37,31 @@
 
 .section-description {
   font-size: 0.875rem;
-  color: #64748b;
+  color: $text-muted;
   margin-bottom: 1rem;
 }
 
 .doc-card {
   padding: 1.25rem;
   border-radius: 8px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: $bg-surface;
+  border: 1px solid $border;
 
   h4 {
     font-size: 1.05rem;
     font-weight: 600;
-    color: #1e293b;
+    color: $text-primary;
     margin-bottom: 1rem;
   }
 }
 
 .highlight-card {
-  border-left: 3px solid #2563eb;
+  border-left: 3px solid $accent;
 }
 
 .formula-block {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: $bg-elevated;
+  border: 1px solid $border;
   border-radius: 6px;
   padding: 1rem 1.5rem;
   margin: 0.75rem 0;
@@ -67,7 +69,7 @@
   overflow-x: auto;
 
   &.hypothesis {
-    background: #f1f5f9;
+    background: $bg-elevated;
     padding: 0.75rem 1.5rem;
     font-size: 0.9em;
   }
@@ -79,7 +81,7 @@
   .label {
     font-size: 0.8rem;
     font-weight: 600;
-    color: #64748b;
+    color: $text-muted;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     display: block;
@@ -89,19 +91,19 @@
   .variable-item {
     padding: 0.2rem 0 0.2rem 1rem;
     font-size: 0.9rem;
-    color: #374151;
+    color: $text-secondary;
 
     &::before {
       content: "\2022";
       margin-right: 0.5rem;
-      color: #94a3b8;
+      color: $text-muted;
     }
   }
 }
 
 .interpretation {
   font-size: 0.9rem;
-  color: #475569;
+  color: $text-secondary;
   line-height: 1.7;
   margin: 0.5rem 0;
 }
@@ -111,7 +113,7 @@
   margin: 1rem 0;
   padding: 0.75rem 1rem;
   border-radius: 6px;
-  background: #f1f5f9;
+  background: $bg-elevated;
 
   .pipeline-stage {
     display: flex;
@@ -119,10 +121,10 @@
     gap: 0.5rem;
     padding: 0.35rem 0;
     font-size: 0.85rem;
-    color: #334155;
+    color: $text-secondary;
 
     i {
-      color: #3b82f6;
+      color: $accent;
       font-size: 0.7rem;
     }
   }
@@ -134,20 +136,20 @@
   gap: 0.75rem;
   padding: 0.75rem 1rem;
   border-radius: 6px;
-  background: #eff6ff;
-  border-left: 3px solid #2563eb;
+  background: rgba($accent, 0.08);
+  border-left: 3px solid $accent;
   font-size: 0.85rem;
-  color: #334155;
+  color: $text-secondary;
 
   i {
-    color: #2563eb;
+    color: $accent;
     margin-top: 2px;
   }
 
   strong {
     display: block;
     margin-bottom: 0.25rem;
-    color: #1e293b;
+    color: $text-primary;
   }
 
   ul {
@@ -160,11 +162,11 @@
   }
 
   &.warn {
-    background: #fffbeb;
-    border-left-color: #d97706;
+    background: rgba($warn, 0.08);
+    border-left-color: $warn;
 
     i {
-      color: #d97706;
+      color: $warn;
     }
   }
 }
@@ -174,14 +176,14 @@
   gap: 0.75rem;
   padding: 0.75rem 1rem;
   border-radius: 6px;
-  background: #fefce8;
-  border-left: 3px solid #ca8a04;
+  background: rgba($warn, 0.08);
+  border-left: 3px solid $warn;
   font-size: 0.85rem;
-  color: #334155;
+  color: $text-secondary;
   margin-top: 0.75rem;
 
   i {
-    color: #ca8a04;
+    color: $warn;
     margin-top: 2px;
     font-size: 1rem;
   }
@@ -189,7 +191,7 @@
   strong {
     display: block;
     margin-bottom: 0.25rem;
-    color: #854d0e;
+    color: $warn;
   }
 
   span {
@@ -202,10 +204,10 @@
   gap: 0.75rem;
   padding: 0.85rem 1rem;
   border-radius: 6px;
-  background: #eef2ff;
+  background: rgba(99, 102, 241, 0.08);
   border-left: 3px solid #6366f1;
   font-size: 0.85rem;
-  color: #334155;
+  color: $text-secondary;
   margin-bottom: 1rem;
 
   i {
@@ -217,7 +219,7 @@
   strong {
     display: block;
     margin-bottom: 0.25rem;
-    color: #3730a3;
+    color: #6366f1;
   }
 
   span {
@@ -232,17 +234,17 @@
   margin-top: 0.75rem;
   padding: 0.5rem 0.75rem;
   border-radius: 4px;
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
+  background: rgba($bull, 0.1);
+  border: 1px solid rgba($bull, 0.3);
   font-size: 0.85rem;
-  color: #166534;
+  color: $bull;
 
   i {
-    color: #16a34a;
+    color: $bull;
   }
 
   strong {
-    color: #15803d;
+    color: $bull;
   }
 }
 
@@ -255,15 +257,15 @@
 
   .feature-name {
     font-weight: 600;
-    color: #1e293b;
+    color: $text-primary;
   }
 
   .feature-badge {
     font-size: 0.7rem;
     padding: 0.15rem 0.5rem;
     border-radius: 9999px;
-    background: #dbeafe;
-    color: #1d4ed8;
+    background: rgba($accent, 0.12);
+    color: $accent;
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -274,7 +276,7 @@
 .subsection-title {
   font-size: 0.95rem;
   font-weight: 600;
-  color: #1e293b;
+  color: $text-primary;
   margin: 1rem 0 0.5rem;
   display: flex;
   align-items: center;
@@ -282,7 +284,7 @@
 
   i {
     font-size: 0.85rem;
-    color: #2563eb;
+    color: $accent;
   }
 }
 
@@ -290,20 +292,20 @@
 .driver-card {
   padding: 0.75rem 1rem;
   border-radius: 6px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: $bg-elevated;
+  border: 1px solid $border;
   margin-bottom: 0.5rem;
 
   h5 {
     font-size: 0.9rem;
     font-weight: 600;
-    color: #334155;
+    color: $text-secondary;
     margin: 0 0 0.35rem;
   }
 
   p {
     font-size: 0.85rem;
-    color: #475569;
+    color: $text-secondary;
     line-height: 1.65;
     margin: 0;
   }
@@ -322,7 +324,7 @@
     align-items: center;
     gap: 0.75rem;
     padding: 0.4rem 0.75rem;
-    border-bottom: 1px solid #f1f5f9;
+    border-bottom: 1px solid $border-light;
 
     &:last-child {
       border-bottom: none;
@@ -331,13 +333,13 @@
     .regime-label {
       font-weight: 600;
       font-size: 0.85rem;
-      color: #1e293b;
+      color: $text-primary;
       min-width: 120px;
     }
 
     .regime-rule {
       font-size: 0.85rem;
-      color: #64748b;
+      color: $text-muted;
     }
   }
 }
@@ -351,12 +353,12 @@
   padding: 0.5rem 0;
 
   .assumption-label {
-    color: #64748b;
+    color: $text-muted;
     font-weight: 600;
   }
 
   .assumption-value {
-    color: #334155;
+    color: $text-secondary;
   }
 }
 
@@ -367,12 +369,12 @@
 
   li {
     font-size: 0.85rem;
-    color: #475569;
+    color: $text-secondary;
     line-height: 1.65;
     padding: 0.2rem 0;
 
     &::marker {
-      color: #2563eb;
+      color: $accent;
       font-weight: 600;
     }
   }
@@ -387,10 +389,10 @@
     font-size: 0.85rem;
     line-height: 1.65;
     padding: 0.15rem 0;
-    color: #475569;
+    color: $text-secondary;
 
     &::marker {
-      color: #2563eb;
+      color: $accent;
     }
   }
 }
@@ -403,17 +405,17 @@
   margin-top: 0.5rem;
   border-radius: 6px;
   overflow: hidden;
-  border: 1px solid #e2e8f0;
+  border: 1px solid $border;
 
   thead {
-    background: #f1f5f9;
+    background: $bg-elevated;
 
     th {
       padding: 0.6rem 0.75rem;
       text-align: left;
       font-weight: 600;
-      color: #334155;
-      border-bottom: 1px solid #e2e8f0;
+      color: $text-secondary;
+      border-bottom: 1px solid $border;
       font-size: 0.8rem;
       text-transform: uppercase;
       letter-spacing: 0.04em;
@@ -421,27 +423,27 @@
   }
 
   tbody tr {
-    border-bottom: 1px solid #f1f5f9;
+    border-bottom: 1px solid $border-light;
 
     &:last-child {
       border-bottom: none;
     }
 
     &:hover {
-      background: #f8fafc;
+      background: $bg-hover;
     }
   }
 
   td {
     padding: 0.55rem 0.75rem;
-    color: #475569;
+    color: $text-secondary;
     line-height: 1.5;
     vertical-align: top;
   }
 
   .question-cell {
     font-weight: 500;
-    color: #334155;
+    color: $text-secondary;
     white-space: nowrap;
     width: 20%;
   }
@@ -456,20 +458,20 @@
   .bp-card {
     padding: 1rem 1.25rem;
     border-radius: 8px;
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-top: 3px solid #3b82f6;
+    background: $bg-surface;
+    border: 1px solid $border;
+    border-top: 3px solid $accent;
 
     h4 {
       font-size: 0.95rem;
       font-weight: 700;
-      color: #1e293b;
+      color: $text-primary;
       margin: 0 0 0.5rem 0;
     }
 
     p {
       font-size: 0.85rem;
-      color: #475569;
+      color: $text-secondary;
       line-height: 1.6;
       margin: 0;
     }
@@ -485,20 +487,20 @@
   .limitation-card {
     padding: 0.75rem 1rem;
     border-radius: 8px;
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-left: 3px solid #d97706;
+    background: $bg-surface;
+    border: 1px solid $border;
+    border-left: 3px solid $warn;
 
     h5 {
       font-size: 0.9rem;
       font-weight: 600;
-      color: #92400e;
+      color: $warn;
       margin: 0 0 0.35rem;
     }
 
     p {
       font-size: 0.8rem;
-      color: #475569;
+      color: $text-secondary;
       line-height: 1.6;
       margin: 0;
     }
@@ -513,7 +515,7 @@
 
   li {
     padding: 0.5rem 0;
-    border-bottom: 1px solid #f1f5f9;
+    border-bottom: 1px solid $border-light;
     font-size: 0.85rem;
 
     &:last-child {
@@ -523,13 +525,13 @@
     .ref-citation {
       display: block;
       font-weight: 600;
-      color: #334155;
+      color: $text-secondary;
       font-style: italic;
     }
 
     .ref-relevance {
       display: block;
-      color: #64748b;
+      color: $text-muted;
       margin-top: 0.15rem;
       line-height: 1.5;
     }
@@ -545,7 +547,7 @@
 
   .detail-label {
     font-weight: 600;
-    color: #64748b;
+    color: $text-muted;
   }
 }
 
@@ -556,7 +558,7 @@
   .chain-label {
     font-size: 0.8rem;
     font-weight: 600;
-    color: #64748b;
+    color: $text-muted;
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -580,7 +582,7 @@
     top: 0;
     bottom: 0;
     width: 2px;
-    background: #cbd5e1;
+    background: $border;
   }
 
   .timeline-step {
@@ -594,9 +596,9 @@
       width: 14px;
       height: 14px;
       border-radius: 50%;
-      background: #3b82f6;
-      border: 2px solid #ffffff;
-      box-shadow: 0 0 0 2px #3b82f6;
+      background: $accent;
+      border: 2px solid $bg-canvas;
+      box-shadow: 0 0 0 2px $accent;
       flex-shrink: 0;
       margin-left: -1.5rem;
       margin-top: 2px;
@@ -611,13 +613,13 @@
       .timeline-time {
         font-size: 0.8rem;
         font-weight: 700;
-        color: #1e293b;
+        color: $text-primary;
         font-family: ui-monospace, monospace;
       }
 
       .timeline-action {
         font-size: 0.85rem;
-        color: #475569;
+        color: $text-secondary;
         line-height: 1.5;
       }
     }
@@ -626,7 +628,7 @@
 
 // ─── Code Block (pseudo-code) ────────────────────────────
 .code-block {
-  background: #1e293b;
+  background: $bg-canvas;
   border-radius: 6px;
   padding: 1rem 1.25rem;
   margin: 0.75rem 0;
@@ -635,7 +637,7 @@
   .code-line {
     font-family: ui-monospace, 'JetBrains Mono', 'Fira Code', monospace;
     font-size: 0.8rem;
-    color: #e2e8f0;
+    color: $text-primary;
     line-height: 1.7;
     white-space: pre;
   }
@@ -652,10 +654,10 @@
   .audit-category {
     font-size: 0.9rem;
     font-weight: 700;
-    color: #1e293b;
+    color: $text-primary;
     margin: 0 0 0.5rem;
     padding-bottom: 0.25rem;
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid $border;
   }
 
   .audit-item {
@@ -664,10 +666,10 @@
     gap: 0.5rem;
     padding: 0.3rem 0;
     font-size: 0.85rem;
-    color: #475569;
+    color: $text-secondary;
 
     i {
-      color: #16a34a;
+      color: $bull;
       font-size: 0.8rem;
       margin-top: 2px;
       flex-shrink: 0;
@@ -678,8 +680,8 @@
 // ─── Hypothesis Template ─────────────────────────────────
 .template-text {
   font-style: italic;
-  color: #64748b !important;
-  border-left: 2px solid #94a3b8;
+  color: $text-muted !important;
+  border-left: 2px solid $text-muted;
   padding-left: 0.75rem;
 }
 
@@ -698,7 +700,7 @@
   display: flex;
   gap: 1rem;
   padding: 1rem 0;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid $border;
 
   &:last-child {
     border-bottom: none;
@@ -725,13 +727,13 @@
     h4 {
       font-size: 0.95rem;
       font-weight: 700;
-      color: #1e293b;
+      color: $text-primary;
       margin: 0 0 0.25rem;
     }
 
     p {
       font-size: 0.85rem;
-      color: #475569;
+      color: $text-secondary;
       margin: 0;
       line-height: 1.5;
     }
@@ -745,5 +747,5 @@
 // ─── KaTeX Overrides ──────────────────────────────────────
 :host ::ng-deep .katex {
   font-size: 1.1em;
-  color: #1e293b;
+  color: $text-primary;
 }

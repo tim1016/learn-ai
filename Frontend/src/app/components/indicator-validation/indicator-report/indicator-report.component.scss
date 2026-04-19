@@ -1,3 +1,5 @@
+@use '../../../styles/tokens' as *;
+
 .indicator-report {
   padding: 1rem;
 }
@@ -11,7 +13,7 @@
 
   h2 {
     margin: 0;
-    color: #e0e0e0;
+    color: $text-primary;
   }
 
   .back-link {
@@ -19,7 +21,7 @@
     align-items: center;
     gap: 0.35rem;
     font-size: 0.85rem;
-    color: #4a9eff;
+    color: $accent;
     text-decoration: none;
     font-weight: 500;
 
@@ -48,15 +50,15 @@
 
     label {
       font-size: 0.8rem;
-      color: #aaa;
+      color: $text-muted;
     }
 
     input {
       padding: 0.4rem 0.6rem;
-      border: 1px solid #555;
+      border: 1px solid $border;
       border-radius: 4px;
-      background: #2a2a2a;
-      color: #e0e0e0;
+      background: $bg-surface;
+      color: $text-primary;
       font-size: 0.9rem;
 
       &[type='text'] {
@@ -69,13 +71,13 @@
     padding: 0.5rem 1.2rem;
     border: none;
     border-radius: 4px;
-    background: #4a9eff;
+    background: $accent;
     color: white;
     cursor: pointer;
     font-size: 0.9rem;
 
     &:hover:not(:disabled) {
-      background: #3a8eef;
+      background: $accent-hover;
     }
 
     &:disabled {
@@ -95,10 +97,10 @@
     align-items: center;
     gap: 0.4rem;
     padding: 0.4rem 0.8rem;
-    border: 1px dashed #666;
+    border: 1px dashed $border;
     border-radius: 4px;
     cursor: pointer;
-    color: #ccc;
+    color: $text-secondary;
     font-size: 0.85rem;
 
     input[type='file'] {
@@ -107,19 +109,19 @@
 
     &:hover {
       border-color: #4a9eff;
-      color: #4a9eff;
+      color: $accent;
     }
   }
 
   .file-name {
-    color: #8bc34a;
+    color: $bull;
     font-size: 0.85rem;
   }
 }
 
 .error-msg {
-  color: #ff6b6b;
-  background: rgba(255, 107, 107, 0.1);
+  color: #fca5a5;
+  background: rgba($bear, 0.1);
   padding: 0.5rem 1rem;
   border-radius: 4px;
   margin-bottom: 1rem;
@@ -131,7 +133,7 @@
   gap: 1.5rem;
   margin-bottom: 1rem;
   font-size: 0.85rem;
-  color: #bbb;
+  color: $text-secondary;
 }
 
 .legend-item {
@@ -147,15 +149,15 @@
   border-radius: 2px;
 
   &.pandas-ta {
-    background: #26a69a;
+    background: $bull;
   }
 
   &.tradingview {
     height: 2px;
     background: repeating-linear-gradient(
       90deg,
-      #2962FF 0px,
-      #2962FF 4px,
+      $accent 0px,
+      $accent 4px,
       transparent 4px,
       transparent 8px
     );
@@ -171,8 +173,8 @@
 }
 
 .chart-panel {
-  background: #1a1a2e;
-  border: 1px solid #2a2a3e;
+  background: $bg-surface;
+  border: 1px solid $border;
   border-radius: 6px;
   overflow: hidden;
 }
@@ -181,9 +183,9 @@
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
   font-weight: 600;
-  color: #c8c8d0;
-  background: #22223a;
-  border-bottom: 1px solid #2a2a3e;
+  color: $text-secondary;
+  background: $bg-elevated;
+  border-bottom: 1px solid $border;
 }
 
 .chart-container {
@@ -195,12 +197,12 @@
   margin-top: 1rem;
 
   h3 {
-    color: #1e293b;
+    color: $text-primary;
     margin: 0 0 0.25rem;
   }
 
   .stats-subtitle {
-    color: #64748b;
+    color: $text-muted;
     font-size: 0.85rem;
     margin: 0 0 0.75rem;
   }
@@ -218,13 +220,13 @@
 
   th, td {
     padding: 0.5rem 0.7rem;
-    border: 1px solid #e2e8f0;
+    border: 1px solid $border;
     text-align: right;
   }
 
   th {
-    background: #f1f5f9;
-    color: #334155;
+    background: $bg-elevated;
+    color: $text-secondary;
     position: sticky;
     top: 0;
     font-weight: 600;
@@ -234,18 +236,18 @@
   }
 
   td {
-    color: #1e293b;
-    background: #ffffff;
+    color: $text-primary;
+    background: $bg-surface;
   }
 
   .field-name {
     text-align: left;
     font-weight: 600;
-    color: #0f172a;
+    color: $text-primary;
   }
 
   tbody tr:hover td {
-    background: #f8fafc;
+    background: $bg-hover;
   }
 }
 
@@ -261,21 +263,21 @@
 }
 
 .grade-exact {
-  background: #dcfce7;
-  color: #166534;
+  background: rgba($bull, 0.12);
+  color: $bull;
 }
 
 .grade-close {
-  background: #d1fae5;
-  color: #065f46;
+  background: rgba($bull, 0.12);
+  color: $bull;
 }
 
 .grade-ok {
-  background: #fef3c7;
-  color: #92400e;
+  background: rgba($warn, 0.12);
+  color: $warn;
 }
 
 .grade-bad {
-  background: #fee2e2;
-  color: #991b1b;
+  background: rgba($bear, 0.1);
+  color: #fca5a5;
 }

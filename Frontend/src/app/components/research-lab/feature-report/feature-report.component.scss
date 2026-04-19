@@ -1,3 +1,5 @@
+@use '../../../../styles/tokens' as *;
+
 :host {
   display: block;
 }
@@ -8,8 +10,8 @@
   gap: 1rem;
   padding: 1.25rem 1.5rem;
   border-radius: 10px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: $bg-elevated;
+  border: 1px solid $border;
   margin-bottom: 1.5rem;
 
   .grade-dimension {
@@ -17,12 +19,12 @@
     text-align: center;
     padding: 0.75rem;
     border-radius: 8px;
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
+    background: $bg-surface;
+    border: 1px solid $border;
     cursor: help;
     transition: box-shadow 0.15s;
 
-    &:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    &:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
 
     .grade-letter {
       font-size: 2rem;
@@ -33,7 +35,7 @@
     .grade-label {
       font-size: 0.7rem;
       font-weight: 600;
-      color: #64748b;
+      color: $text-muted;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       margin-top: 0.25rem;
@@ -45,24 +47,24 @@
 .exploratory-banner {
   padding: 1rem 1.25rem;
   border-radius: 8px;
-  background: #fefce8;
-  border: 1px solid #fef08a;
+  background: rgba($warn, 0.08);
+  border: 1px solid rgba($warn, 0.2);
   margin-bottom: 1rem;
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
 
-  i { color: #ca8a04; font-size: 1.2rem; margin-top: 2px; }
+  i { color: $warn; font-size: 1.2rem; margin-top: 2px; }
 
   .exploratory-title {
     font-weight: 700;
-    color: #854d0e;
+    color: $warn;
     font-size: 0.95rem;
   }
 
   .exploratory-text {
     font-size: 0.85rem;
-    color: #92400e;
+    color: $text-secondary;
     line-height: 1.5;
   }
 }
@@ -77,9 +79,9 @@
   border: 1px solid;
   margin-bottom: 1rem;
 
-  &.severity-success { background: #f0fdf4; border-color: #bbf7d0; }
-  &.severity-warn { background: #fffbeb; border-color: #fef08a; }
-  &.severity-danger { background: #fef2f2; border-color: #fecaca; }
+  &.severity-success { background: rgba($bull, 0.1); border-color: rgba($bull, 0.3); }
+  &.severity-warn { background: rgba($warn, 0.08); border-color: rgba($warn, 0.2); }
+  &.severity-danger { background: rgba($bear, 0.1); border-color: rgba($bear, 0.3); }
 
   .badge-stats {
     display: flex;
@@ -91,26 +93,26 @@
   .badge-stat {
     font-weight: 700;
     font-size: 1.1rem;
-    color: #1e293b;
+    color: $text-primary;
   }
 
   .badge-label {
     font-size: 0.65rem;
     font-weight: 600;
-    color: #94a3b8;
+    color: $text-muted;
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
 
   .badge-separator {
-    color: #e2e8f0;
+    color: $border;
     font-size: 1.2rem;
     font-weight: 300;
   }
 
-  .severity-text-success { color: #16a34a; }
-  .severity-text-warn { color: #d97706; }
-  .severity-text-danger { color: #dc2626; }
+  .severity-text-success { color: $bull; }
+  .severity-text-warn { color: $warn; }
+  .severity-text-danger { color: $bear; }
 }
 
 // ─── Verdict Banner ───────────────────────────────────────
@@ -121,30 +123,30 @@
   border: 1px solid;
 
   &.success {
-    background: #f0fdf4;
-    border-color: #bbf7d0;
-    .verdict-icon { color: #16a34a; }
-    .verdict-title { color: #166534; }
-    .verdict-text { color: #15803d; }
-    .verdict-tier-desc { color: #16a34a; }
+    background: rgba($bull, 0.1);
+    border-color: rgba($bull, 0.3);
+    .verdict-icon { color: $bull; }
+    .verdict-title { color: $bull; }
+    .verdict-text { color: $bull; }
+    .verdict-tier-desc { color: $bull; }
   }
 
   &.warn {
-    background: #fffbeb;
-    border-color: #fef08a;
-    .verdict-icon { color: #d97706; }
-    .verdict-title { color: #92400e; }
-    .verdict-text { color: #a16207; }
-    .verdict-tier-desc { color: #ca8a04; }
+    background: rgba($warn, 0.08);
+    border-color: rgba($warn, 0.2);
+    .verdict-icon { color: $warn; }
+    .verdict-title { color: $warn; }
+    .verdict-text { color: $warn; }
+    .verdict-tier-desc { color: $warn; }
   }
 
   &.info {
-    background: #eff6ff;
-    border-color: #bfdbfe;
-    .verdict-icon { color: #2563eb; }
-    .verdict-title { color: #1e40af; }
-    .verdict-text { color: #1d4ed8; }
-    .verdict-tier-desc { color: #3b82f6; }
+    background: rgba($accent, 0.08);
+    border-color: rgba($accent, 0.2);
+    .verdict-icon { color: $accent; }
+    .verdict-title { color: $accent; }
+    .verdict-text { color: $accent; }
+    .verdict-tier-desc { color: $accent; }
   }
 
   .verdict-header {
@@ -186,7 +188,7 @@
   .method-label {
     font-size: 0.8rem;
     font-weight: 600;
-    color: #64748b;
+    color: $text-muted;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     white-space: nowrap;
@@ -197,13 +199,13 @@
 .metric-card {
   padding: 1rem 1.25rem;
   border-radius: 8px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: $bg-surface;
+  border: 1px solid $border;
 
   .metric-label {
     font-size: 0.8rem;
     font-weight: 600;
-    color: #64748b;
+    color: $text-muted;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     display: flex;
@@ -211,7 +213,7 @@
 
     i {
       font-size: 0.75rem;
-      color: #94a3b8;
+      color: $text-muted;
       cursor: help;
     }
   }
@@ -219,14 +221,14 @@
   .metric-value {
     font-size: 1.5rem;
     font-weight: 700;
-    color: #1e293b;
+    color: $text-primary;
     margin-top: 0.25rem;
     line-height: 1.3;
   }
 
   .metric-sub {
     font-size: 0.75rem;
-    color: #94a3b8;
+    color: $text-muted;
     margin-top: 0.15rem;
   }
 }
@@ -235,8 +237,8 @@
 .chart-container {
   padding: 1.25rem;
   border-radius: 10px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: $bg-surface;
+  border: 1px solid $border;
   height: 380px;
   position: relative;
 
@@ -250,13 +252,13 @@
 .table-title {
   font-size: 1rem;
   font-weight: 700;
-  color: #1e293b;
+  color: $text-primary;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
 
   i {
-    color: #3b82f6;
+    color: $accent;
     font-size: 0.95rem;
   }
 }
@@ -265,7 +267,7 @@
 .cost-section {
   padding-top: 0.5rem;
 
-  .table-title i { color: #059669; }
+  .table-title i { color: $bull; }
 
   .cost-slider-container {
     display: flex;
@@ -276,7 +278,7 @@
   .cost-value {
     font-weight: 700;
     font-size: 0.9rem;
-    color: #1e293b;
+    color: $text-primary;
     min-width: 50px;
   }
 
@@ -288,12 +290,12 @@
 
   .cost-note {
     font-size: 0.8rem;
-    color: #64748b;
+    color: $text-muted;
     display: flex;
     align-items: flex-start;
     gap: 0.25rem;
 
-    i { color: #94a3b8; font-size: 0.75rem; margin-top: 2px; }
+    i { color: $text-muted; font-size: 0.75rem; margin-top: 2px; }
   }
 }
 
@@ -306,12 +308,12 @@
   padding: 0.5rem 0;
 
   .assumption-label {
-    color: #64748b;
+    color: $text-muted;
     font-weight: 600;
   }
 
   .assumption-value {
-    color: #334155;
+    color: $text-secondary;
   }
 }
 
@@ -319,8 +321,8 @@
 .falsification-box {
   padding: 1rem 1.25rem;
   border-radius: 10px;
-  background: #fdf4ff;
-  border: 1px solid #f0abfc;
+  background: rgba(168, 85, 247, 0.08);
+  border: 1px solid rgba(168, 85, 247, 0.2);
 
   .table-title i { color: #a855f7; }
 
@@ -329,12 +331,12 @@
     align-items: flex-start;
     gap: 0.5rem;
     padding: 0.5rem 0;
-    border-bottom: 1px solid #f5d0fe;
+    border-bottom: 1px solid rgba(168, 85, 247, 0.15);
 
     &:last-child { border-bottom: none; }
 
     i {
-      color: #16a34a;
+      color: $bull;
       font-size: 0.85rem;
       margin-top: 2px;
     }
@@ -342,25 +344,25 @@
     .kill-label {
       font-weight: 700;
       font-size: 0.85rem;
-      color: #86198f;
+      color: #a855f7;
       min-width: 130px;
       flex-shrink: 0;
     }
 
     .kill-desc {
       font-size: 0.8rem;
-      color: #6b21a8;
+      color: $text-secondary;
     }
 
     &.triggered {
-      i { color: #dc2626; }
-      .kill-label { color: #dc2626; }
+      i { color: $bear; }
+      .kill-label { color: $bear; }
     }
 
     &.untestable {
-      i { color: #d97706; }
-      .kill-label { color: #d97706; }
-      .kill-desc { color: #92400e; }
+      i { color: $warn; }
+      .kill-label { color: $warn; }
+      .kill-desc { color: $text-secondary; }
     }
   }
 }
@@ -371,14 +373,14 @@
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   border-radius: 8px;
-  background: #fefce8;
-  border: 1px solid #fde68a;
+  background: rgba($warn, 0.08);
+  border: 1px solid rgba($warn, 0.2);
   font-size: 0.8rem;
-  color: #854d0e;
+  color: $warn;
   line-height: 1.5;
 
   i {
-    color: #d97706;
+    color: $warn;
     margin-top: 2px;
     flex-shrink: 0;
   }
@@ -392,10 +394,10 @@
     gap: 0.5rem;
     padding: 0.4rem 0;
     font-size: 0.85rem;
-    color: #64748b;
+    color: $text-muted;
 
     i {
-      color: #f59e0b;
+      color: $warn;
       font-size: 0.8rem;
       margin-top: 3px;
       flex-shrink: 0;
@@ -406,7 +408,7 @@
 // ─── Robustness Section ───────────────────────────────────
 .robustness-divider {
   height: 1px;
-  background: #e2e8f0;
+  background: $border;
   margin-bottom: 1.5rem;
 }
 
@@ -421,13 +423,13 @@
   margin-top: 1rem;
   padding: 0.6rem 1rem;
   border-radius: 6px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: $bg-elevated;
+  border: 1px solid $border;
   font-size: 0.85rem;
-  color: #64748b;
+  color: $text-muted;
 
   i {
-    color: #3b82f6;
+    color: $accent;
     font-size: 0.9rem;
   }
 }

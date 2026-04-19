@@ -1,3 +1,5 @@
+@use '../../../styles/tokens' as *;
+
 :host { display: block; }
 
 .data-lab-docs {
@@ -8,11 +10,11 @@
 
 .page-header {
   margin-bottom: 2rem;
-  h1 { font-size: 1.75rem; font-weight: 700; color: #1e293b; margin: 0 0 0.25rem; }
-  .subtitle { color: #64748b; font-size: 0.95rem; margin: 0 0 0.75rem; }
+  h1 { font-size: 1.75rem; font-weight: 700; color: $text-primary; margin: 0 0 0.25rem; }
+  .subtitle { color: $text-muted; font-size: 0.95rem; margin: 0 0 0.75rem; }
   .back-link {
     display: inline-flex; align-items: center; gap: 0.35rem;
-    font-size: 0.85rem; color: #2563eb; text-decoration: none; font-weight: 500;
+    font-size: 0.85rem; color: $accent; text-decoration: none; font-weight: 500;
     &:hover { text-decoration: underline; }
     i { font-size: 0.75rem; }
   }
@@ -22,85 +24,85 @@
 
 .section-header {
   display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;
-  h3 { font-size: 1.25rem; font-weight: 700; color: #1e293b; margin: 0; }
-  .section-icon { font-size: 1.1rem; color: #2563eb; }
+  h3 { font-size: 1.25rem; font-weight: 700; color: $text-primary; margin: 0; }
+  .section-icon { font-size: 1.1rem; color: $accent; }
 }
 
 .section-description {
-  font-size: 0.875rem; color: #64748b; margin-bottom: 1rem; line-height: 1.7;
+  font-size: 0.875rem; color: $text-muted; margin-bottom: 1rem; line-height: 1.7;
   code {
     font-family: ui-monospace, monospace; font-size: 0.8rem;
-    background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 3px; color: #334155;
+    background: $bg-elevated; padding: 0.1rem 0.3rem; border-radius: 3px; color: $text-secondary;
   }
-  a { color: #2563eb; }
+  a { color: $accent; }
 }
 
 .doc-card {
-  padding: 1.25rem; border-radius: 8px; background: #ffffff; border: 1px solid #e2e8f0;
-  h4 { font-size: 1.05rem; font-weight: 600; color: #1e293b; margin-bottom: 1rem; }
+  padding: 1.25rem; border-radius: 8px; background: $bg-surface; border: 1px solid $border;
+  h4 { font-size: 1.05rem; font-weight: 600; color: $text-primary; margin-bottom: 1rem; }
 }
-.highlight-card { border-left: 3px solid #2563eb; }
+.highlight-card { border-left: 3px solid $accent; }
 
 .pipeline-flow {
-  margin: 1rem 0; padding: 0.75rem 1rem; border-radius: 6px; background: #f1f5f9;
+  margin: 1rem 0; padding: 0.75rem 1rem; border-radius: 6px; background: $bg-elevated;
   .pipeline-stage {
     display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.5rem 0;
-    font-size: 0.85rem; color: #334155;
-    i { color: #3b82f6; font-size: 0.7rem; margin-top: 4px; }
-    strong { display: block; color: #1e293b; margin-bottom: 0.15rem; }
-    .pipeline-detail { display: block; color: #64748b; font-size: 0.8rem; line-height: 1.5; }
+    font-size: 0.85rem; color: $text-secondary;
+    i { color: $accent; font-size: 0.7rem; margin-top: 4px; }
+    strong { display: block; color: $text-primary; margin-bottom: 0.15rem; }
+    .pipeline-detail { display: block; color: $text-muted; font-size: 0.8rem; line-height: 1.5; }
   }
 }
 
 .params-table {
   width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 0.5rem;
-  border-radius: 6px; overflow: hidden; border: 1px solid #e2e8f0;
+  border-radius: 6px; overflow: hidden; border: 1px solid $border;
   thead {
-    background: #f1f5f9;
+    background: $bg-elevated;
     th {
-      padding: 0.6rem 0.75rem; text-align: left; font-weight: 600; color: #334155;
-      border-bottom: 1px solid #e2e8f0; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 0.6rem 0.75rem; text-align: left; font-weight: 600; color: $text-secondary;
+      border-bottom: 1px solid $border; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em;
     }
   }
   tbody tr {
-    border-bottom: 1px solid #f1f5f9;
+    border-bottom: 1px solid $border-light;
     &:last-child { border-bottom: none; }
-    &:hover { background: #f8fafc; }
+    &:hover { background: $bg-hover; }
   }
-  td { padding: 0.55rem 0.75rem; color: #475569; line-height: 1.5; vertical-align: top; }
-  .param-name { font-weight: 500; color: #334155; white-space: nowrap; }
+  td { padding: 0.55rem 0.75rem; color: $text-muted; line-height: 1.5; vertical-align: top; }
+  .param-name { font-weight: 500; color: $text-secondary; white-space: nowrap; }
   code {
     font-family: ui-monospace, monospace; font-size: 0.8rem;
-    background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 3px; color: #334155;
+    background: $bg-elevated; padding: 0.1rem 0.3rem; border-radius: 3px; color: $text-secondary;
   }
 }
 
 .formula-block {
-  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
+  background: $bg-elevated; border: 1px solid $border; border-radius: 6px;
   padding: 1rem 1.5rem; margin: 0.75rem 0; text-align: center; overflow-x: auto;
 }
 
 .interpretation {
-  font-size: 0.9rem; color: #475569; line-height: 1.7; margin: 0.5rem 0;
+  font-size: 0.9rem; color: $text-muted; line-height: 1.7; margin: 0.5rem 0;
   code {
     font-family: ui-monospace, monospace; font-size: 0.8rem;
-    background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 3px; color: #334155;
+    background: $bg-elevated; padding: 0.1rem 0.3rem; border-radius: 3px; color: $text-secondary;
   }
 }
 
 .feature-header {
   display: flex; align-items: center; gap: 0.75rem; width: 100%;
-  .feature-name { font-weight: 600; color: #1e293b; }
+  .feature-name { font-weight: 600; color: $text-primary; }
   .feature-badge {
     font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 9999px;
-    background: #dbeafe; color: #1d4ed8; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;
+    background: rgba($accent, 0.15); color: $accent-hover; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;
   }
 }
 
 .subsection-title {
-  font-size: 0.95rem; font-weight: 600; color: #1e293b; margin: 1rem 0 0.5rem;
+  font-size: 0.95rem; font-weight: 600; color: $text-primary; margin: 1rem 0 0.5rem;
   display: flex; align-items: center; gap: 0.4rem;
-  i { font-size: 0.85rem; color: #d97706; }
+  i { font-size: 0.85rem; color: $warn; }
 }
 
 .indicator-detail { padding: 0.5rem 0; }
@@ -108,7 +110,7 @@
 .column-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.25rem; }
 .column-chip {
   font-family: ui-monospace, monospace; font-size: 0.75rem;
-  background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af;
+  background: rgba($accent, 0.1); border: 1px solid rgba($accent, 0.3); color: $accent;
   padding: 0.2rem 0.5rem; border-radius: 4px;
 }
 
@@ -116,12 +118,12 @@
   display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem;
 }
 .impl-item {
-  padding: 0.75rem 1rem; border-radius: 6px; background: #f8fafc; border: 1px solid #e2e8f0;
-  h5 { font-size: 0.9rem; font-weight: 600; color: #334155; margin: 0 0 0.35rem; }
-  p { font-size: 0.85rem; color: #475569; line-height: 1.65; margin: 0; }
+  padding: 0.75rem 1rem; border-radius: 6px; background: $bg-elevated; border: 1px solid $border;
+  h5 { font-size: 0.9rem; font-weight: 600; color: $text-secondary; margin: 0 0 0.35rem; }
+  p { font-size: 0.85rem; color: $text-muted; line-height: 1.65; margin: 0; }
   code {
     font-family: ui-monospace, monospace; font-size: 0.8rem;
-    background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 3px; color: #334155;
+    background: $bg-elevated; padding: 0.1rem 0.3rem; border-radius: 3px; color: $text-secondary;
   }
 }
 
@@ -130,39 +132,39 @@
 }
 .validation-item {
   display: flex; align-items: flex-start; gap: 0.5rem;
-  font-size: 0.85rem; color: #334155; line-height: 1.6;
-  i { color: #16a34a; margin-top: 3px; font-size: 0.8rem; }
+  font-size: 0.85rem; color: $text-secondary; line-height: 1.6;
+  i { color: $bull; margin-top: 3px; font-size: 0.8rem; }
 }
 
 .interpretation-list {
   margin: 0.5rem 0; padding-left: 1.25rem; list-style: disc;
   li {
-    font-size: 0.875rem; color: #475569; line-height: 1.7; margin-bottom: 0.15rem;
+    font-size: 0.875rem; color: $text-muted; line-height: 1.7; margin-bottom: 0.15rem;
   }
 }
 
 .data-notes {
   margin: 0.5rem 0; padding: 0.6rem 0.75rem 0.6rem 1.75rem;
-  background: #fffbeb; border-left: 3px solid #f59e0b; border-radius: 0 4px 4px 0;
+  background: rgba($warn, 0.08); border-left: 3px solid $warn; border-radius: 0 4px 4px 0;
   list-style: disc;
   li {
-    font-size: 0.825rem; color: #92400e; line-height: 1.65; margin-bottom: 0.15rem;
+    font-size: 0.825rem; color: $warn; line-height: 1.65; margin-bottom: 0.15rem;
     code {
       font-family: ui-monospace, monospace; font-size: 0.78rem;
-      background: rgba(245, 158, 11, 0.12); padding: 0.1rem 0.3rem; border-radius: 3px; color: #78350f;
+      background: rgba($warn, 0.12); padding: 0.1rem 0.3rem; border-radius: 3px; color: $warn;
     }
   }
 }
 
 .caveat-chip {
   display: inline-flex; align-items: center; margin-left: 0.35rem;
-  i { font-size: 0.75rem; color: #f59e0b; }
+  i { font-size: 0.75rem; color: $warn; }
 }
 
 .caveat-chip-inline {
   display: inline-flex; align-items: center; vertical-align: middle;
-  padding: 0.1rem 0.25rem; border-radius: 3px; background: #fffbeb;
-  i { font-size: 0.7rem; color: #f59e0b; }
+  padding: 0.1rem 0.25rem; border-radius: 3px; background: rgba($warn, 0.08);
+  i { font-size: 0.7rem; color: $warn; }
 }
 
 .related-chips {
@@ -170,33 +172,33 @@
 }
 .related-link {
   font-family: ui-monospace, monospace; font-size: 0.75rem;
-  background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534;
+  background: rgba($bull, 0.08); border: 1px solid rgba($bull, 0.3); color: $bull;
   padding: 0.2rem 0.5rem; border-radius: 4px;
   cursor: pointer; transition: background 0.15s, border-color 0.15s;
-  &:hover { background: #dcfce7; border-color: #86efac; }
+  &:hover { background: rgba($bull, 0.12); border-color: rgba($bull, 0.5); }
 }
 
 .caveat-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.75rem;
 }
 .caveat-card {
-  padding: 0.75rem 1rem; border-radius: 6px; background: #fffbeb; border: 1px solid #fde68a;
+  padding: 0.75rem 1rem; border-radius: 6px; background: rgba($warn, 0.08); border: 1px solid rgba($warn, 0.3);
   .caveat-card-header {
     display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.35rem;
-    i { font-size: 0.85rem; color: #d97706; }
-    strong { font-size: 0.85rem; color: #78350f; }
+    i { font-size: 0.85rem; color: $warn; }
+    strong { font-size: 0.85rem; color: $warn; }
   }
-  p { font-size: 0.8rem; color: #92400e; line-height: 1.6; margin: 0; }
+  p { font-size: 0.8rem; color: $warn; line-height: 1.6; margin: 0; }
 }
 
 .mb-4 { margin-bottom: 1rem; }
 
-:host ::ng-deep .katex { font-size: 1.1em; color: #1e293b; }
+:host ::ng-deep .katex { font-size: 1.1em; color: $text-primary; }
 
 // ─── Quick Info Card ────────────────────────────────────
 .quick-info-card {
-  background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
-  border: 1px solid #bfdbfe;
+  background: linear-gradient(135deg, rgba($accent, 0.1) 0%, rgba($accent, 0.05) 100%);
+  border: 1px solid $border;
   border-radius: 10px;
   margin-bottom: 1.25rem;
   overflow: hidden;
@@ -207,11 +209,11 @@
   align-items: center;
   gap: 0.4rem;
   padding: 0.55rem 1rem;
-  background: rgba(59, 130, 246, 0.08);
-  border-bottom: 1px solid #bfdbfe;
+  background: rgba($accent, 0.12);
+  border-bottom: 1px solid $border;
   font-size: 0.78rem;
   font-weight: 700;
-  color: #1d4ed8;
+  color: $accent-hover;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 
@@ -238,23 +240,23 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #64748b;
+  color: $text-muted;
   padding-top: 1px;
 }
 
 .qi-value {
   font-size: 0.85rem;
-  color: #334155;
+  color: $text-secondary;
   line-height: 1.55;
 }
 
 .qi-analogy {
   font-style: italic;
-  color: #1e40af;
-  background: rgba(59, 130, 246, 0.06);
+  color: $accent;
+  background: rgba($accent, 0.08);
   padding: 0.35rem 0.55rem;
   border-radius: 6px;
-  border-left: 2px solid #3b82f6;
+  border-left: 2px solid $accent;
 }
 
 .analogy-row {
@@ -263,12 +265,12 @@
 
 // Check for Understanding
 .qi-check {
-  background: #fffbeb;
-  border: 1px solid #fde68a;
+  background: rgba($warn, 0.08);
+  border: 1px solid rgba($warn, 0.3);
   border-radius: 6px;
   padding: 0.5rem 0.65rem;
 
-  .qi-label { color: #92400e; }
+  .qi-label { color: $warn; }
 
   .qi-value {
     display: flex;
@@ -279,7 +281,7 @@
 
 .qi-question {
   font-weight: 500;
-  color: #78350f;
+  color: $warn;
   font-size: 0.83rem;
 
   &::before {
@@ -290,7 +292,7 @@
 
 .qi-answer {
   font-size: 0.8rem;
-  color: #166534;
+  color: $bull;
   font-weight: 600;
 
   &::before {
@@ -303,8 +305,8 @@
   display: flex;
   gap: 1.25rem;
   padding: 0.55rem 1rem;
-  border-top: 1px solid #bfdbfe;
-  background: rgba(59, 130, 246, 0.04);
+  border-top: 1px solid $border;
+  background: rgba($accent, 0.05);
   flex-wrap: wrap;
 }
 
@@ -313,10 +315,10 @@
   align-items: center;
   gap: 0.35rem;
   font-size: 0.75rem;
-  color: #64748b;
+  color: $text-muted;
   line-height: 1.5;
 
-  i { font-size: 0.7rem; color: #94a3b8; }
+  i { font-size: 0.7rem; color: $text-muted; }
 }
 
 .qi-ref { flex: 1; min-width: 180px; }

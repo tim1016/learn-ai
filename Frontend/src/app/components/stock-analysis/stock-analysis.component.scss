@@ -1,3 +1,5 @@
+@use '../../../../styles/tokens' as *;
+
 .stock-analysis-dashboard {
   padding: 20px;
   max-width: 1400px;
@@ -5,12 +7,12 @@
 }
 
 h1 {
-  color: #2c3e50;
+  color: $text-primary;
   margin-bottom: 4px;
 }
 
 .subtitle {
-  color: #7f8c8d;
+  color: $text-secondary;
   margin-bottom: 24px;
   margin-top: 0;
 }
@@ -32,31 +34,37 @@ h1 {
   label {
     font-size: 12px;
     font-weight: 500;
-    color: #555;
+    color: $text-secondary;
     text-transform: uppercase;
     letter-spacing: 0.5px;
   }
 
   input[type="text"] {
     padding: 8px 12px;
-    border: 1px solid #ddd;
+    border: 1px solid $border;
     border-radius: 4px;
     font-size: 14px;
     width: 120px;
+    background: $bg-elevated;
+    color: $text-primary;
   }
 
   input[type="date"] {
     padding: 8px 12px;
-    border: 1px solid #ddd;
+    border: 1px solid $border;
     border-radius: 4px;
     font-size: 14px;
+    background: $bg-elevated;
+    color: $text-primary;
   }
 
   input[type="number"] {
     padding: 8px 12px;
-    border: 1px solid #ddd;
+    border: 1px solid $border;
     border-radius: 4px;
     font-size: 14px;
+    background: $bg-elevated;
+    color: $text-primary;
   }
 }
 
@@ -78,20 +86,23 @@ h1 {
     text-transform: none;
     cursor: pointer;
     white-space: nowrap;
+    color: $text-primary;
   }
 
   input[type="checkbox"] {
     width: 16px;
     height: 16px;
     cursor: pointer;
+    accent-color: $accent;
   }
 
   .atm-select {
     padding: 6px 10px;
-    border: 1px solid #ddd;
+    border: 1px solid $border;
     border-radius: 4px;
     font-size: 13px;
-    background: white;
+    background: $bg-elevated;
+    color: $text-primary;
   }
 }
 
@@ -104,16 +115,16 @@ h1 {
 
 .analyze-btn {
   padding: 8px 24px;
-  background: #2c3e50;
-  color: white;
-  border: none;
+  background: $bg-elevated;
+  color: $text-primary;
+  border: 1px solid $border;
   border-radius: 4px;
   cursor: pointer;
   font-size: 14px;
   font-weight: 500;
 
   &:hover:not(:disabled) {
-    background: #34495e;
+    background: $bg-hover;
   }
 
   &:disabled {
@@ -124,7 +135,7 @@ h1 {
 
 .refresh-btn {
   padding: 8px 20px;
-  background: #1976d2;
+  background: $accent;
   color: white;
   border: none;
   border-radius: 4px;
@@ -133,7 +144,7 @@ h1 {
   font-weight: 500;
 
   &:hover:not(:disabled) {
-    background: #1565c0;
+    background: $accent-hover;
   }
 
   &:disabled {
@@ -144,7 +155,7 @@ h1 {
 
 .stop-btn {
   padding: 8px 20px;
-  background: #ef5350;
+  background: $bear;
   color: white;
   border: none;
   border-radius: 4px;
@@ -153,13 +164,13 @@ h1 {
   font-weight: 500;
 
   &:hover {
-    background: #c62828;
+    background: rgba(229, 51, 78, 0.8);
   }
 }
 
 .info-note {
   font-size: 13px;
-  color: #999;
+  color: $text-muted;
   margin-bottom: 20px;
 }
 
@@ -167,9 +178,9 @@ h1 {
 .progress-section {
   margin-bottom: 20px;
   padding: 16px;
-  background: #f8f9fa;
+  background: $bg-surface;
   border-radius: 8px;
-  border: 1px solid #e9ecef;
+  border: 1px solid $border-light;
 }
 
 .progress-header {
@@ -179,33 +190,33 @@ h1 {
   margin-bottom: 8px;
   font-weight: 500;
   font-size: 14px;
-  color: #2c3e50;
+  color: $text-primary;
 }
 
 .bar-count {
-  color: #555;
+  color: $text-secondary;
 }
 
 .cached-count {
-  color: #f57f17;
+  color: $warn;
   margin-left: 4px;
 }
 
 .error-count {
-  color: #ef5350;
+  color: $bear;
   margin-left: 4px;
 }
 
 .progress-bar-track {
   height: 12px;
-  background: #e9ecef;
+  background: $border-light;
   border-radius: 6px;
   overflow: hidden;
 }
 
 .progress-bar-fill {
   height: 100%;
-  background: #26a69a;
+  background: $bull;
   border-radius: 6px;
   transition: width 0.3s ease;
 }
@@ -213,7 +224,7 @@ h1 {
 .progress-dates {
   margin-top: 8px;
   font-size: 13px;
-  color: #666;
+  color: $text-secondary;
 }
 
 // Charts
@@ -222,7 +233,7 @@ h1 {
 
   h3 {
     margin-bottom: 16px;
-    color: #2c3e50;
+    color: $text-primary;
   }
 }
 
@@ -231,7 +242,7 @@ h1 {
 
   h4 {
     margin: 0 0 8px 0;
-    color: #555;
+    color: $text-secondary;
     font-size: 14px;
   }
 }
@@ -239,22 +250,22 @@ h1 {
 .chunk-filter-label {
   font-size: 14px;
   font-weight: 400;
-  color: #f57f17;
+  color: $warn;
   margin-left: 8px;
 }
 
 .show-all-btn {
   margin-left: 8px;
   padding: 4px 12px;
-  background: #f5f5f5;
-  border: 1px solid #ddd;
+  background: $bg-surface;
+  border: 1px solid $border;
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
-  color: #555;
+  color: $text-secondary;
 
   &:hover {
-    background: #e0e0e0;
+    background: $bg-elevated;
   }
 }
 

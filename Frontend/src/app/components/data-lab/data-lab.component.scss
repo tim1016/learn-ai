@@ -1,26 +1,7 @@
 // ═══════════════════════════════════════════════════════════
 // Data Lab — Full Dark Mode Theme
-// Matches chart component: charcoal canvas, high-contrast
-// financial data, vibrant indicators on dark background
 // ═══════════════════════════════════════════════════════════
-
-// ── Design Tokens (synced with chart component) ──
-$bg-canvas:    #0f1117;
-$bg-surface:   #161922;
-$bg-elevated:  #1c1f2e;
-$bg-hover:     #232738;
-$border:       #2a2e3e;
-$border-light: #353a4d;
-
-$text-primary:   #e2e8f0;
-$text-secondary: #8892a8;
-$text-muted:     #5a6178;
-
-$accent:  #3b82f6;
-$accent-hover: #2563eb;
-$bull:    #00c896;
-$bear:    #e5334e;
-$warn:    #f59e0b;
+@use '../../styles/tokens' as *;
 
 :host {
   display: block;
@@ -196,7 +177,7 @@ $warn:    #f59e0b;
   .presets-label {
     font-size: 0.72rem;
     font-weight: 600;
-    color: #64748b;
+    color: $text-muted;
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -204,19 +185,25 @@ $warn:    #f59e0b;
 
 .preset-btn {
   padding: 0.25rem 0.6rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 5px;
-  background: #f8fafc;
-  color: #475569;
+  border: 1px solid $border;
+  border-radius: $radius-pill;
+  background: transparent;
+  color: $text-muted;
   font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: all $t-ui;
 
   &:hover {
-    background: #dbeafe;
-    border-color: #bfdbfe;
-    color: #1d4ed8;
+    background: $accent;
+    border-color: $accent;
+    color: #fff;
+  }
+
+  &.active {
+    background: $accent;
+    border-color: $accent;
+    color: #fff;
   }
 }
 
@@ -230,13 +217,13 @@ $warn:    #f59e0b;
   border-radius: 50%;
 
   &.closed {
-    background-color: #ffebee;
-    color: #c62828;
+    background-color: rgba($bear, 0.15);
+    color: $bear;
   }
 
   &.early-close {
-    background-color: #fff8e1;
-    color: #f57f17;
+    background-color: rgba($warn, 0.15);
+    color: $warn;
   }
 }
 
@@ -246,7 +233,7 @@ $warn:    #f59e0b;
   justify-content: center;
   padding: 0.4rem 0;
   font-size: 0.72rem;
-  color: #64748b;
+  color: $text-muted;
 }
 
 .legend-item {
@@ -260,8 +247,8 @@ $warn:    #f59e0b;
   height: 8px;
   border-radius: 50%;
 
-  &.closed { background: #c62828; }
-  &.early-close { background: #f57f17; }
+  &.closed { background: $bear; }
+  &.early-close { background: $warn; }
 }
 
 .btn-primary, .btn-secondary {
@@ -330,17 +317,17 @@ $warn:    #f59e0b;
     .multiplier-input {
       width: 55px;
       padding: 0.35rem 0.5rem;
-      border: 1px solid #cbd5e1;
-      border-radius: 5px;
-      background: #f8fafc;
-      color: #1e293b;
+      border: 1px solid $border;
+      border-radius: $radius;
+      background: $bg-elevated;
+      color: $text-primary;
       font-size: 0.82rem;
-      &:focus { outline: none; border-color: #2563eb; }
+      &:focus { outline: none; border-color: $accent; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
     }
 
     .option-hint {
       font-size: 0.72rem;
-      color: #94a3b8;
+      color: $text-muted;
     }
   }
 }
