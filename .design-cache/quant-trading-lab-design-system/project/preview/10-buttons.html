@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_base.css"><style>
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+button{font-family:inherit;font-size:13px;font-weight:600;padding:8px 18px;border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;border:none}
+.primary{background:#3b82f6;color:#fff}
+.primary:hover{background:#2563eb}
+.secondary{background:#1c1f2e;color:#8892a8;border:1px solid #2a2e3e}
+.secondary:hover{background:#232738;color:#e2e8f0}
+.ghost{background:transparent;color:#8892a8}
+.ghost:hover{background:#232738;color:#e2e8f0}
+.preset{padding:3px 11px;font-size:11px;border-radius:12px;border:1px solid #2a2e3e;background:transparent;color:#5a6178;font-weight:500}
+.preset.active{background:#3b82f6;border-color:#3b82f6;color:#fff}
+.preset:hover:not(.active){border-color:#8892a8;color:#8892a8}
+.pi{font-size:11px}
+</style></head><body><div class="card-root">
+<div class="row">
+<button class="primary"><i class="pi pi-play"></i>Run Backtest</button>
+<button class="secondary">Reset</button>
+<button class="ghost">Cancel</button>
+</div>
+<div class="row" style="margin-bottom:0">
+<button class="preset">1D</button>
+<button class="preset">1W</button>
+<button class="preset active">1M</button>
+<button class="preset">3M</button>
+<button class="preset">YTD</button>
+<button class="preset">1Y</button>
+</div>
+</div></body></html>

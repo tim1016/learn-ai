@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Quant Trading Lab — Workbench</title>
+  <link rel="stylesheet" href="../../colors_and_type.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/primeicons@7.0.0/primeicons.css">
+  <style>
+    html, body { margin: 0; padding: 0; background: var(--bg-canvas); color: var(--text-primary); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+    .page { max-width: 1400px; margin: 0 auto; padding: 24px; }
+    code { font-family: var(--font-mono); font-size: 0.92em; }
+    h1, h2, h3, p { margin: 0; }
+    * { box-sizing: border-box; }
+    ::selection { background: rgba(59,130,246,0.3); }
+  </style>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" src="Primitives.jsx"></script>
+  <script type="text/babel" src="TopNav.jsx"></script>
+  <script type="text/babel" src="StrategyLab.jsx"></script>
+  <script type="text/babel" src="OptionsChain.jsx"></script>
+  <script type="text/babel" src="PortfolioDashboard.jsx"></script>
+  <script type="text/babel">
+    const { useState } = React;
+    const App = () => {
+      const [page, setPage] = useState('Strategy Lab');
+      const surfaces = {
+        'Strategy Lab': <StrategyLab />,
+        'Options Chain': <OptionsChain />,
+        'Dashboard': <PortfolioDashboard />,
+      };
+      const view = surfaces[page] || (
+        <div style={{ padding: 60, textAlign: 'center', color: 'var(--text-muted)' }}>
+          <i className="pi pi-wrench" style={{ fontSize: 32, marginBottom: 12 }} /><br/>
+          <strong style={{ color: 'var(--text-primary)', fontSize: 16 }}>{page}</strong>
+          <p style={{ marginTop: 8, fontSize: 13 }}>This surface is not mocked. Try Strategy Lab, Options Chain, or Dashboard.</p>
+        </div>
+      );
+      return (
+        <>
+          <TopNav current={page} onNavigate={setPage} />
+          <div className="page">{view}</div>
+        </>
+      );
+    };
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

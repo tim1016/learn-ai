@@ -1,0 +1,181 @@
+/* ═══════════════════════════════════════════════════════════
+   Quant Trading Lab — Design Tokens
+   Dark mode financial interface. Charcoal canvas, high-contrast
+   data, semantic bull/bear colors, blue accent.
+   Source of truth: Frontend/src/app/styles/_tokens.scss + SCSS partials
+   ═══════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Canvas & Surfaces (dark-first) ── */
+  --bg-canvas:      #0f1117;
+  --bg-surface:     #161922;
+  --bg-elevated:    #1c1f2e;
+  --bg-hover:       #232738;
+  --border:         #2a2e3e;
+  --border-light:   #353a4d;
+
+  /* ── Text ── */
+  --text-primary:   #e2e8f0;
+  --text-secondary: #8892a8;
+  --text-muted:     #5a6178;
+
+  /* ── Brand / Accent ── */
+  --accent:         #3b82f6;   /* blue-500 */
+  --accent-hover:   #2563eb;   /* blue-600 */
+  --accent-soft:    rgba(59, 130, 246, 0.15);
+
+  /* ── Semantic: Market ── */
+  --bull:           #00c896;   /* profit / buy / up */
+  --bull-soft:      rgba(0, 200, 150, 0.12);
+  --bear:           #e5334e;   /* loss / sell / down */
+  --bear-soft:      rgba(229, 51, 78, 0.12);
+  --warn:           #f59e0b;   /* caution / ATM / partial */
+  --warn-soft:      rgba(245, 158, 11, 0.12);
+
+  /* ── ITM / OTM / ATM (options chain) ── */
+  --itm-call-bg:    rgba(6, 78, 59, 0.45);
+  --itm-call-text:  #d1fae5;
+  --itm-put-bg:     rgba(127, 29, 29, 0.45);
+  --itm-put-text:   #fecaca;
+  --otm-text:       #475569;
+  --atm-line:       rgba(245, 158, 11, 0.8);
+  --atm-badge-bg:   #f59e0b;
+  --atm-badge-text: #0f172a;
+
+  /* ── Radii ── */
+  --radius-sm:      4px;
+  --radius:         6px;
+  --radius-md:      8px;
+  --radius-lg:      10px;
+  --radius-pill:    9999px;
+
+  /* ── Shadow ── */
+  --shadow-card:    0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-pop:     0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-atm:     0 2px 8px rgba(0, 0, 0, 0.5);
+
+  /* ── Spacing scale (rem-based, 4px grid) ── */
+  --space-1:  0.25rem;  /*  4px */
+  --space-2:  0.5rem;   /*  8px */
+  --space-3:  0.75rem;  /* 12px */
+  --space-4:  1rem;     /* 16px */
+  --space-5:  1.25rem;  /* 20px */
+  --space-6:  1.5rem;   /* 24px */
+  --space-8:  2rem;     /* 32px */
+
+  /* ── Type families ── */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               Oxygen, Ubuntu, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Fira Code", monospace;
+
+  /* ── Type scale (compact financial UI — data density matters) ── */
+  --fs-xxs:  0.65rem;  /* 10.4px — eyebrow labels, uppercase tags */
+  --fs-xs:   0.72rem;  /* 11.5px — captions, micro labels */
+  --fs-sm:   0.82rem;  /* 13.1px — secondary UI text */
+  --fs-base: 0.88rem;  /* 14.1px — form inputs, body */
+  --fs-md:   1rem;     /* 16px   — section headings */
+  --fs-lg:   1.1rem;   /* 17.6px — stat values */
+  --fs-xl:   1.4rem;   /* 22.4px — hero metric values */
+  --fs-h2:   1.6rem;   /* 25.6px — page title */
+  --fs-h1:   1.75rem;  /* 28px   — top-level page title */
+
+  /* ── Weights ── */
+  --fw-regular: 400;
+  --fw-medium:  500;
+  --fw-semi:    600;
+  --fw-bold:    700;
+
+  /* ── Letter-spacing ── */
+  --ls-tight:   -0.02em;  /* large display */
+  --ls-caps:    0.05em;   /* uppercase eyebrow */
+
+  /* ── Transitions ── */
+  --t-fast: 0.1s;
+  --t-ui:   0.15s;
+
+  /* ── Layout ── */
+  --container-md: 1200px;
+  --container-lg: 1400px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Semantic type styles
+   ═══════════════════════════════════════════════════════════ */
+
+.h1, h1 {
+  font-family: var(--font-sans);
+  font-size: var(--fs-h1);
+  font-weight: var(--fw-semi);
+  color: var(--text-primary);
+  letter-spacing: var(--ls-tight);
+  margin: 0 0 var(--space-1);
+}
+
+.h2, h2 {
+  font-family: var(--font-sans);
+  font-size: var(--fs-h2);
+  font-weight: var(--fw-bold);
+  color: var(--text-primary);
+  letter-spacing: var(--ls-tight);
+  margin: 0;
+}
+
+.h3, h3 {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semi);
+  color: var(--text-primary);
+  margin: 0 0 var(--space-3);
+}
+
+.subtitle {
+  font-size: var(--fs-base);
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* Eyebrow — tiny uppercase label above a section / field / stat */
+.eyebrow, .stat-label, .label {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-caps);
+}
+
+/* Stat value — bold, tabular numerals for financial readouts */
+.stat-value {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-bold);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-value {
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-bold);
+  color: var(--text-primary);
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Body */
+p, .body {
+  font-size: var(--fs-base);
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* Inline code / monospace readouts (tickers, params, greeks) */
+code, .mono {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  background: var(--bg-elevated);
+  padding: 0.1rem 0.3rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+
+/* Semantic colorways */
+.positive { color: var(--bull); font-weight: var(--fw-semi); }
+.negative { color: var(--bear); font-weight: var(--fw-semi); }
+.muted    { color: var(--text-muted); }

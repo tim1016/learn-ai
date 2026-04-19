@@ -1,416 +1,239 @@
 <div class="data-lab-docs">
 
-  <div class="page-header">
-    <h1>Data Lab — Calculation Reference</h1>
-    <p class="subtitle">CSV column definitions, indicator formulas, library attribution, and validation methodology</p>
-    <a routerLink="/data-lab" class="back-link">
-      <i class="pi pi-arrow-left"></i> Back to Data Lab
-    </a>
-  </div>
-
-  <!-- 1. Overview -->
-  <div class="doc-section">
-    <div class="section-header">
-      <i class="pi pi-compass section-icon"></i>
-      <h3>Overview</h3>
+  <header class="page-header">
+    <div class="header-top">
+      <div>
+        <div class="eyebrow">Data Lab Docs</div>
+        <h1>Calculation Reference</h1>
+        <p class="subtitle">Indicator formulas, library attribution, CSV columns, validation methodology.</p>
+      </div>
+      <a routerLink="/data-lab" class="back-link">
+        <i class="pi pi-arrow-left"></i> Back to Data Lab
+      </a>
     </div>
-    <p class="section-description">
-      Data Lab generates a single CSV file containing minute-by-minute OHLCV data from
-      <strong>Polygon.io</strong> with configurable technical indicators calculated by the
-      <strong>pandas-ta</strong> library. A companion metadata JSON file documents every column.
-    </p>
+  </header>
 
-    <div class="doc-card highlight-card mb-4">
-      <h4>Pipeline</h4>
-      <div class="pipeline-flow">
-        <div class="pipeline-stage">
-          <i class="pi pi-chevron-right"></i>
-          <div>
-            <strong>Polygon.io REST API</strong>
-            <span class="pipeline-detail">Fetches 1-minute OHLCV bars in ~111-day chunks (max 50,000 bars per request). Auto-paginates and de-duplicates. Prices are split/dividend-adjusted by default (configurable via the "Split &amp; dividend adjusted" checkbox).</span>
-          </div>
-        </div>
-        <div class="pipeline-stage">
-          <i class="pi pi-chevron-right"></i>
-          <div>
-            <strong>pandas-ta Calculation</strong>
-            <span class="pipeline-detail">Each selected indicator is applied to the full DataFrame. Column names follow pandas-ta conventions (e.g. EMA_10, MACD_12_26_9).</span>
-          </div>
-        </div>
-        <div class="pipeline-stage">
-          <i class="pi pi-chevron-right"></i>
-          <div>
-            <strong>CSV + Metadata Export</strong>
-            <span class="pipeline-detail">Single CSV file with unix_ts + iso_time as first two columns. Metadata JSON describes every column with source, library, and parameters.</span>
-          </div>
+  <div class="workbench">
+    <!-- ── Sidebar ─────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="sidebar-meta">
+          <span>{{ allIndicators.length }} indicators</span>
+          <span class="dot-sep">&middot;</span>
+          <span>pandas-ta</span>
         </div>
       </div>
-    </div>
-  </div>
 
-  <!-- 1b. Split & Dividend Adjustment -->
-  <div class="doc-section">
-    <div class="section-header">
-      <i class="pi pi-sync section-icon"></i>
-      <h3>Split &amp; Dividend Adjustment</h3>
-    </div>
-    <div class="doc-card">
-      <p>
-        By default, all OHLCV prices are adjusted for historical stock splits and dividend
-        distributions (matching the Polygon.io API default of <code>adjusted=true</code>).
-        This means historical prices are retroactively modified so that price series are
-        continuous across corporate actions &mdash; a $100 stock that does a 2-for-1 split
-        will show $50 for all pre-split bars.
-      </p>
-      <p>
-        <strong>Why this is the default:</strong> Adjusted prices produce continuous series
-        that are essential for accurate technical indicator calculations (EMAs, RSI, MACD, etc.)
-        and meaningful backtesting. Without adjustment, a split or dividend would appear as a
-        sudden price gap, distorting every indicator that relies on price history.
-      </p>
-      <p>
-        <strong>When to use unadjusted data:</strong> Uncheck "Split &amp; dividend adjusted"
-        if you need raw exchange prices &mdash; for example, when verifying trade executions at
-        historical prices, when your indicator logic handles adjustments separately, or when
-        analysing the raw tape for microstructure research.
-      </p>
-    </div>
-  </div>
-
-  <!-- 2. Base CSV Columns -->
-  <div class="doc-section">
-    <div class="section-header">
-      <i class="pi pi-table section-icon"></i>
-      <h3>Base CSV Columns (always present)</h3>
-    </div>
-    <table class="params-table">
-      <thead>
-        <tr>
-          <th>Column</th>
-          <th>Type</th>
-          <th>Description</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (col of csvBaseColumns; track col.column) {
-          <tr>
-            <td class="param-name"><code>{{ col.column }}</code></td>
-            <td>{{ col.type }}</td>
-            <td>{{ col.description }}</td>
-          </tr>
+      <div class="search">
+        <i class="pi pi-search search-icon"></i>
+        <input
+          type="text"
+          class="search-input"
+          placeholder="Search name or description…"
+          [value]="query()"
+          (input)="onSearchInput($event)"
+          aria-label="Search indicators"
+        />
+        @if (query()) {
+          <button type="button" class="search-clear" (click)="clearSearch()" aria-label="Clear search">
+            <i class="pi pi-times"></i>
+          </button>
         }
-      </tbody>
-    </table>
-  </div>
-
-  <!-- 3. Overlay Indicators -->
-  <div class="doc-section">
-    <div class="section-header">
-      <i class="pi pi-chart-line section-icon"></i>
-      <h3>Overlay Indicators (drawn on price chart)</h3>
-    </div>
-    <p class="section-description">
-      These indicators render directly on the price chart as lines or bands.
-      All formulas are implemented by the <code>pandas-ta</code> library
-      (<a href="https://github.com/twopirllc/pandas-ta" target="_blank">github.com/twopirllc/pandas-ta</a>).
-    </p>
-
-    <p-accordion [multiple]="true">
-      @for (ind of overlayIndicators; track ind.name) {
-        <p-accordionpanel [attr.id]="'ind-' + ind.name">
-          <p-accordionheader>
-            <div class="feature-header">
-              <span class="feature-name">{{ ind.displayName }}</span>
-              <span class="feature-badge">{{ ind.outputColumns.length }} col{{ ind.outputColumns.length > 1 ? 's' : '' }}</span>
-              @if (hasCriticalCaveat(ind)) {
-                <span class="caveat-chip" title="Has important data caveats — see Data Notes">
-                  <i class="pi pi-exclamation-triangle"></i>
-                </span>
-              }
-            </div>
-          </p-accordionheader>
-          <p-accordioncontent>
-pod
-            <!-- Quick Info Card -->
-            <div class="quick-info-card">
-              <div class="quick-info-header">
-                <i class="pi pi-bolt"></i> Quick Info
-              </div>
-              <div class="quick-info-body">
-                <div class="qi-row">
-                  <span class="qi-label">Why use it</span>
-                  <span class="qi-value">{{ ind.quickWhy }}</span>
-                </div>
-                <div class="qi-row analogy-row">
-                  <span class="qi-label">Think of it as</span>
-                  <span class="qi-value qi-analogy">{{ ind.quickAnalogy }}</span>
-                </div>
-                <div class="qi-row">
-                  <span class="qi-label">Trading impact</span>
-                  <span class="qi-value">{{ ind.quickImpact }}</span>
-                </div>
-                @if (ind.checkQuestion) {
-                  <div class="qi-row qi-check">
-                    <span class="qi-label">Test yourself</span>
-                    <span class="qi-value">
-                      <span class="qi-question">{{ ind.checkQuestion }}</span>
-                      <span class="qi-answer">{{ ind.checkAnswer }}</span>
-                    </span>
-                  </div>
-                }
-              </div>
-              <div class="quick-info-footer">
-                <span class="qi-ref"><i class="pi pi-bookmark"></i> {{ ind.professionalRef }}</span>
-                <span class="qi-delay"><i class="pi pi-clock"></i> {{ ind.timeframeBehavior }}</span>
-              </div>
-            </div>
-
-            <!-- Technical Deep Dive -->
-            <div class="indicator-detail">
-              <div class="subsection-title"><i class="pi pi-percentage"></i> Formula</div>
-              <div class="formula-block" [appKatex]="ind.formulaLatex" [displayMode]="true"></div>
-
-              <div class="subsection-title"><i class="pi pi-info-circle"></i> Description</div>
-              <p class="interpretation">{{ ind.description }}</p>
-
-              <div class="subsection-title"><i class="pi pi-lightbulb"></i> Interpretation</div>
-              <ul class="interpretation-list">
-                @for (item of ind.interpretation; track item) {
-                  <li>{{ item }}</li>
-                }
-              </ul>
-
-              <div class="subsection-title"><i class="pi pi-clock"></i> Recommended Timeframes</div>
-              <p class="interpretation">{{ ind.recommendedTimeframes }}</p>
-
-              <div class="subsection-title"><i class="pi pi-cog"></i> Default Parameters</div>
-              <p class="interpretation"><code>{{ ind.defaultParams }}</code></p>
-
-              <div class="subsection-title"><i class="pi pi-table"></i> Output Columns</div>
-              <div class="column-chips">
-                @for (col of ind.outputColumns; track col) {
-                  <code class="column-chip">{{ col }}</code>
-                }
-              </div>
-
-              @if (ind.dataNotes.length) {
-                <div class="subsection-title"><i class="pi pi-exclamation-triangle"></i> Data Notes</div>
-                <ul class="data-notes">
-                  @for (note of ind.dataNotes; track note) {
-                    <li>{{ note }}</li>
-                  }
-                </ul>
-              }
-
-              @if (ind.relatedIndicators.length) {
-                <div class="subsection-title"><i class="pi pi-link"></i> Related Indicators</div>
-                <div class="related-chips">
-                  @for (rel of ind.relatedIndicators; track rel) {
-                    <button class="related-link" (click)="scrollToIndicator(rel)">{{ getDisplayName(rel) }}</button>
-                  }
-                </div>
-              }
-
-              <div class="subsection-title"><i class="pi pi-box"></i> Library</div>
-              <p class="interpretation"><code>{{ ind.library }}</code></p>
-            </div>
-          </p-accordioncontent>
-        </p-accordionpanel>
-      }
-    </p-accordion>
-  </div>
-
-  <!-- 4. Sub-Panel Indicators -->
-  <div class="doc-section">
-    <div class="section-header">
-      <i class="pi pi-chart-bar section-icon"></i>
-      <h3>Sub-Panel Indicators (separate synced pane)</h3>
-    </div>
-    <p class="section-description">
-      These indicators render in their own panel below the price chart, with axes synced to the time axis.
-      Multi-output indicators (e.g. MACD line + signal + histogram) share a single sub-panel.
-    </p>
-
-    <p-accordion [multiple]="true">
-      @for (ind of subPanelIndicators; track ind.name) {
-        <p-accordionpanel [attr.id]="'ind-' + ind.name">
-          <p-accordionheader>
-            <div class="feature-header">
-              <span class="feature-name">{{ ind.displayName }}</span>
-              <span class="feature-badge">{{ ind.outputColumns.length }} col{{ ind.outputColumns.length > 1 ? 's' : '' }}</span>
-              @if (hasCriticalCaveat(ind)) {
-                <span class="caveat-chip" title="Has important data caveats — see Data Notes">
-                  <i class="pi pi-exclamation-triangle"></i>
-                </span>
-              }
-            </div>
-          </p-accordionheader>
-          <p-accordioncontent>
-
-            <!-- Quick Info Card -->
-            <div class="quick-info-card">
-              <div class="quick-info-header">
-                <i class="pi pi-bolt"></i> Quick Info
-              </div>
-              <div class="quick-info-body">
-                <div class="qi-row">
-                  <span class="qi-label">Why use it</span>
-                  <span class="qi-value">{{ ind.quickWhy }}</span>
-                </div>
-                <div class="qi-row analogy-row">
-                  <span class="qi-label">Think of it as</span>
-                  <span class="qi-value qi-analogy">{{ ind.quickAnalogy }}</span>
-                </div>
-                <div class="qi-row">
-                  <span class="qi-label">Trading impact</span>
-                  <span class="qi-value">{{ ind.quickImpact }}</span>
-                </div>
-                @if (ind.checkQuestion) {
-                  <div class="qi-row qi-check">
-                    <span class="qi-label">Test yourself</span>
-                    <span class="qi-value">
-                      <span class="qi-question">{{ ind.checkQuestion }}</span>
-                      <span class="qi-answer">{{ ind.checkAnswer }}</span>
-                    </span>
-                  </div>
-                }
-              </div>
-              <div class="quick-info-footer">
-                <span class="qi-ref"><i class="pi pi-bookmark"></i> {{ ind.professionalRef }}</span>
-                <span class="qi-delay"><i class="pi pi-clock"></i> {{ ind.timeframeBehavior }}</span>
-              </div>
-            </div>
-
-            <!-- Technical Deep Dive -->
-            <div class="indicator-detail">
-              <div class="subsection-title"><i class="pi pi-percentage"></i> Formula</div>
-              <div class="formula-block" [appKatex]="ind.formulaLatex" [displayMode]="true"></div>
-
-              <div class="subsection-title"><i class="pi pi-info-circle"></i> Description</div>
-              <p class="interpretation">{{ ind.description }}</p>
-
-              <div class="subsection-title"><i class="pi pi-lightbulb"></i> Interpretation</div>
-              <ul class="interpretation-list">
-                @for (item of ind.interpretation; track item) {
-                  <li>{{ item }}</li>
-                }
-              </ul>
-
-              <div class="subsection-title"><i class="pi pi-clock"></i> Recommended Timeframes</div>
-              <p class="interpretation">{{ ind.recommendedTimeframes }}</p>
-
-              <div class="subsection-title"><i class="pi pi-cog"></i> Default Parameters</div>
-              <p class="interpretation"><code>{{ ind.defaultParams }}</code></p>
-
-              <div class="subsection-title"><i class="pi pi-table"></i> Output Columns</div>
-              <div class="column-chips">
-                @for (col of ind.outputColumns; track col) {
-                  <code class="column-chip">{{ col }}</code>
-                }
-              </div>
-
-              @if (ind.dataNotes.length) {
-                <div class="subsection-title"><i class="pi pi-exclamation-triangle"></i> Data Notes</div>
-                <ul class="data-notes">
-                  @for (note of ind.dataNotes; track note) {
-                    <li>{{ note }}</li>
-                  }
-                </ul>
-              }
-
-              @if (ind.relatedIndicators.length) {
-                <div class="subsection-title"><i class="pi pi-link"></i> Related Indicators</div>
-                <div class="related-chips">
-                  @for (rel of ind.relatedIndicators; track rel) {
-                    <button class="related-link" (click)="scrollToIndicator(rel)">{{ getDisplayName(rel) }}</button>
-                  }
-                </div>
-              }
-
-              <div class="subsection-title"><i class="pi pi-box"></i> Library</div>
-              <p class="interpretation"><code>{{ ind.library }}</code></p>
-            </div>
-          </p-accordioncontent>
-        </p-accordionpanel>
-      }
-    </p-accordion>
-  </div>
-
-  <!-- 5. Data Caveats -->
-  <div class="doc-section">
-    <div class="section-header">
-      <i class="pi pi-shield section-icon"></i>
-      <h3>Known Data Caveats</h3>
-    </div>
-    <p class="section-description">
-      These are common pitfalls when working with technical indicator data. Indicators flagged with
-      <span class="caveat-chip-inline"><i class="pi pi-exclamation-triangle"></i></span> in the sections above
-      are affected by one or more of these caveats.
-    </p>
-    <div class="caveat-grid">
-      @for (caveat of dataCaveats; track caveat.label) {
-        <div class="caveat-card">
-          <div class="caveat-card-header">
-            <i class="pi {{ caveat.icon }}"></i>
-            <strong>{{ caveat.label }}</strong>
-          </div>
-          <p>{{ caveat.text }}</p>
-        </div>
-      }
-    </div>
-  </div>
-
-  <!-- 6. Metadata JSON -->
-  <div class="doc-section">
-    <div class="section-header">
-      <i class="pi pi-file section-icon"></i>
-      <h3>CSV Metadata File</h3>
-    </div>
-    <p class="section-description">
-      The metadata JSON file accompanies the CSV and documents every column.
-      Download it alongside the CSV using the "Metadata JSON" button in Data Lab.
-    </p>
-    <div class="doc-card">
-      <h4>Metadata Structure</h4>
-      <div class="impl-grid">
-        <div class="impl-item">
-          <h5>dataset</h5>
-          <p>Ticker, date range, timespan, bar count, generation timestamp</p>
-        </div>
-        <div class="impl-item">
-          <h5>data_source</h5>
-          <p>Polygon.io provider details, API version, chunking strategy</p>
-        </div>
-        <div class="impl-item">
-          <h5>calculation_engine</h5>
-          <p>Library name (<code>pandas-ta</code>), version, GitHub URL</p>
-        </div>
-        <div class="impl-item">
-          <h5>columns[]</h5>
-          <p>Array of every CSV column with: name, type, description, source/library, parameters used</p>
-        </div>
-        <div class="impl-item">
-          <h5>notes[]</h5>
-          <p>Precision, NaN handling, timestamp convention, de-duplication</p>
-        </div>
       </div>
-    </div>
-  </div>
 
-  <!-- 7. Validation -->
-  <div class="doc-section">
-    <div class="section-header">
-      <i class="pi pi-check-circle section-icon"></i>
-      <h3>Data Validation</h3>
-    </div>
-    <div class="validation-list">
-      @for (note of validationNotes; track note) {
-        <div class="validation-item">
-          <i class="pi pi-check"></i>
-          <span>{{ note }}</span>
-        </div>
+      <div class="panel-filter" role="tablist" aria-label="Panel filter">
+        <button
+          type="button"
+          role="tab"
+          [attr.aria-selected]="panelFilter() === 'all'"
+          [class.active]="panelFilter() === 'all'"
+          (click)="setPanelFilter('all')">All</button>
+        <button
+          type="button"
+          role="tab"
+          [attr.aria-selected]="panelFilter() === 'overlay'"
+          [class.active]="panelFilter() === 'overlay'"
+          (click)="setPanelFilter('overlay')">Overlay</button>
+        <button
+          type="button"
+          role="tab"
+          [attr.aria-selected]="panelFilter() === 'sub'"
+          [class.active]="panelFilter() === 'sub'"
+          (click)="setPanelFilter('sub')">Sub-panel</button>
+      </div>
+
+      <nav class="indicator-list" aria-label="Indicator list">
+        @for (ind of filteredIndicators(); track ind.name) {
+          <button
+            type="button"
+            class="ind-item"
+            [class.active]="ind.name === activeId()"
+            [attr.aria-current]="ind.name === activeId() ? 'page' : null"
+            (click)="selectIndicator(ind.name)">
+            <code class="ind-name">{{ ind.name.toUpperCase() }}</code>
+            <span class="ind-full">{{ ind.displayName }}</span>
+            <span class="ind-dots">
+              @if (hasDelayFlag(ind)) {
+                <span class="dot dot-delay" title="Affected by 15-min feed delay"></span>
+              }
+              @if (hasCriticalCaveat(ind)) {
+                <span class="dot dot-caveat" title="Has important data caveats"></span>
+              }
+            </span>
+          </button>
+        }
+        @if (filteredIndicators().length === 0) {
+          <div class="empty-state">No indicators match "{{ query() }}"</div>
+        }
+      </nav>
+
+      <div class="legend">
+        <span class="legend-item"><span class="dot dot-delay"></span> delay</span>
+        <span class="legend-item"><span class="dot dot-caveat"></span> caveat</span>
+      </div>
+    </aside>
+
+    <!-- ── Main pane ─────────────────────────────────── -->
+    <main class="main-pane">
+      @if (activeIndicator(); as ind) {
+        <app-data-lab-docs-card
+          [indicator]="ind"
+          [activeTab]="activeTab()"
+          (activeTabChange)="activeTab.set($event)"
+          (relatedClick)="onRelatedClick($event)" />
+
+        <nav class="pager" aria-label="Indicator navigation">
+          <button
+            type="button"
+            class="pager-btn"
+            [disabled]="!prevIndicator()"
+            (click)="goPrev()">
+            <i class="pi pi-arrow-left"></i>
+            <span class="pager-label">
+              @if (prevIndicator(); as p) {
+                <span class="pager-eyebrow">Previous</span>
+                <span class="pager-name">{{ p.displayName }}</span>
+              } @else {
+                <span class="pager-eyebrow">Start of list</span>
+              }
+            </span>
+          </button>
+          <button
+            type="button"
+            class="pager-btn pager-next"
+            [disabled]="!nextIndicator()"
+            (click)="goNext()">
+            <span class="pager-label">
+              @if (nextIndicator(); as n) {
+                <span class="pager-eyebrow">Next</span>
+                <span class="pager-name">{{ n.displayName }}</span>
+              } @else {
+                <span class="pager-eyebrow">End of list</span>
+              }
+            </span>
+            <i class="pi pi-arrow-right"></i>
+          </button>
+        </nav>
+      } @else {
+        <div class="empty-pane">Select an indicator.</div>
       }
-    </div>
-  </div>
 
+      <!-- Page-level reference sections (overview, base columns, caveats, validation) -->
+      <section class="guide-section" id="guide-overview">
+        <header class="guide-header">
+          <span class="guide-eyebrow">Guide</span>
+          <h2>Pipeline overview</h2>
+        </header>
+        <p class="guide-subtitle">
+          Data Lab generates a single CSV file containing minute-by-minute OHLCV data from
+          <strong>Polygon.io</strong> with configurable technical indicators calculated by the
+          <strong>pandas-ta</strong> library. A companion metadata JSON file documents every column.
+        </p>
+        <div class="pipeline-flow">
+          <div class="pipeline-stage">
+            <i class="pi pi-chevron-right"></i>
+            <div>
+              <strong>Polygon.io REST API</strong>
+              <span class="pipeline-detail">Fetches 1-minute OHLCV bars in ~111-day chunks (max 50,000 bars per request). Auto-paginates and de-duplicates. Prices are split/dividend-adjusted by default.</span>
+            </div>
+          </div>
+          <div class="pipeline-stage">
+            <i class="pi pi-chevron-right"></i>
+            <div>
+              <strong>pandas-ta calculation</strong>
+              <span class="pipeline-detail">Each selected indicator is applied to the full DataFrame. Column names follow pandas-ta conventions (e.g. EMA_10, MACD_12_26_9).</span>
+            </div>
+          </div>
+          <div class="pipeline-stage">
+            <i class="pi pi-chevron-right"></i>
+            <div>
+              <strong>CSV + metadata export</strong>
+              <span class="pipeline-detail">Single CSV file with unix_ts + iso_time as first two columns. Metadata JSON describes every column with source, library, and parameters.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="guide-section" id="guide-base-columns">
+        <header class="guide-header">
+          <span class="guide-eyebrow">Guide</span>
+          <h2>Base CSV columns (always present)</h2>
+        </header>
+        <table class="ref-table">
+          <thead>
+            <tr>
+              <th>Column</th>
+              <th>Type</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (col of csvBaseColumns; track col.column) {
+              <tr>
+                <td><code>{{ col.column }}</code></td>
+                <td>{{ col.type }}</td>
+                <td>{{ col.description }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </section>
+
+      <section class="guide-section" id="guide-caveats">
+        <header class="guide-header">
+          <span class="guide-eyebrow">Guide</span>
+          <h2>Known data caveats</h2>
+        </header>
+        <p class="guide-subtitle">
+          Common pitfalls when working with indicator data. Indicators affected by these are marked with a caveat dot in the sidebar.
+        </p>
+        <div class="caveat-grid">
+          @for (caveat of dataCaveats; track caveat.label) {
+            <div class="caveat-card">
+              <div class="caveat-card-header">
+                <i class="pi {{ caveat.icon }}"></i>
+                <strong>{{ caveat.label }}</strong>
+              </div>
+              <p>{{ caveat.text }}</p>
+            </div>
+          }
+        </div>
+      </section>
+
+      <section class="guide-section" id="guide-validation">
+        <header class="guide-header">
+          <span class="guide-eyebrow">Guide</span>
+          <h2>Data validation</h2>
+        </header>
+        <ul class="validation-list">
+          @for (note of validationNotes; track note) {
+            <li>
+              <i class="pi pi-check"></i>
+              <span>{{ note }}</span>
+            </li>
+          }
+        </ul>
+      </section>
+    </main>
+  </div>
 </div>

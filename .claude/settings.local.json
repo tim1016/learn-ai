@@ -25,7 +25,12 @@
       "WebFetch(domain:polygon.io)",
       "Read(//c/Users/inkan/**)",
       "mcp__Claude_Preview__preview_start",
-      "mcp__pdf-viewer__display_pdf"
+      "mcp__pdf-viewer__display_pdf",
+      "WebFetch(domain:api.anthropic.com)",
+      "Bash(mkdir -p /tmp/design)",
+      "Read(//tmp/**)",
+      "Bash(gunzip -c \"/c/Users/inkan/.claude/projects/C--Users-inkan-learn-ai/c08ea016-174c-4ef2-bf97-b74b7e644afa/tool-results/webfetch-1776621102972-002f4w.bin\")",
+      "Bash(tar -xvf -)"
     ]
   }
 }

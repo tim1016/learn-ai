@@ -1,0 +1,16 @@
+@import url("../colors_and_type.css");
+@import url("https://cdn.jsdelivr.net/npm/primeicons@7.0.0/primeicons.css");
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+.card-root {
+  padding: 20px 24px;
+  min-height: 110px;
+  box-sizing: border-box;
+}

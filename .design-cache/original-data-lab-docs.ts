@@ -1,144 +1,41 @@
-import { ChangeDetectionStrategy, Component, HostListener, computed, effect, inject, signal } from '@angular/core';
+import { Component, ChangeDetectionStrategy, ElementRef, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ActivatedRoute, Router, RouterModule } from '@angular/router';
-import { toSignal } from '@angular/core/rxjs-interop';
-import { DataLabDocsCardComponent, IndicatorDoc, IndicatorTab } from './data-lab-docs-card/data-lab-docs-card.component';
+import { RouterModule } from '@angular/router';
+import { Accordion, AccordionContent, AccordionHeader, AccordionPanel } from 'primeng/accordion';
+import { KatexDirective } from '../../../shared/katex.directive';
 
-type PanelFilter = 'all' | 'overlay' | 'sub';
+interface IndicatorDoc {
+  name: string;
+  displayName: string;
+  formulaLatex: string;
+  description: string;
+  library: string;
+  outputColumns: string[];
+  defaultParams: string;
+  interpretation: string[];
+  recommendedTimeframes: string;
+  dataNotes: string[];
+  relatedIndicators: string[];
+  panelType: 'overlay' | 'sub-panel';
+  quickWhy: string;
+  quickAnalogy: string;
+  quickImpact: string;
+  checkQuestion?: string;
+  checkAnswer?: string;
+  professionalRef: string;
+  timeframeBehavior: string;
+}
 
 @Component({
   selector: 'app-data-lab-docs',
   standalone: true,
-  imports: [CommonModule, RouterModule, DataLabDocsCardComponent],
+  imports: [CommonModule, RouterModule, Accordion, AccordionContent, AccordionHeader, AccordionPanel, KatexDirective],
   templateUrl: './data-lab-docs.component.html',
   styleUrls: ['./data-lab-docs.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class DataLabDocsComponent {
-  private route = inject(ActivatedRoute);
-  private router = inject(Router);
-
-  protected query = signal('');
-  protected panelFilter = signal<PanelFilter>('all');
-  protected activeId = signal<string>('ema');
-  protected activeTab = signal<IndicatorTab>('explain');
-
-  private fragment = toSignal(this.route.fragment);
-
-  constructor() {
-    effect(() => {
-      const f = this.fragment();
-      if (!f) return;
-      const m = /^ind-([a-z0-9_-]+)(?:\/(explain|math|use))?$/i.exec(f);
-      if (!m) return;
-      const id = m[1].toLowerCase();
-      const tab = (m[2] as IndicatorTab) ?? 'explain';
-      if (this.allIndicators.some(i => i.name === id)) {
-        this.activeId.set(id);
-        this.activeTab.set(tab);
-      }
-    });
-
-    effect(() => {
-      const id = this.activeId();
-      const tab = this.activeTab();
-      const currentFragment = this.fragment();
-      const desired = tab === 'explain' ? `ind-${id}` : `ind-${id}/${tab}`;
-      if (currentFragment !== desired) {
-        this.router.navigate([], {
-          relativeTo: this.route,
-          fragment: desired,
-          replaceUrl: true,
-        });
-      }
-    });
-  }
-
-  protected filteredIndicators = computed<IndicatorDoc[]>(() => {
-    const q = this.query().trim().toLowerCase();
-    const panel = this.panelFilter();
-    return this.allIndicators.filter(ind => {
-      if (panel === 'overlay' && ind.panelType !== 'overlay') return false;
-      if (panel === 'sub' && ind.panelType !== 'sub-panel') return false;
-      if (q === '') return true;
-      const hay = `${ind.name} ${ind.displayName} ${ind.description}`.toLowerCase();
-      return hay.includes(q);
-    });
-  });
-
-  protected activeIndicator = computed<IndicatorDoc | undefined>(() =>
-    this.allIndicators.find(i => i.name === this.activeId())
-  );
-
-  protected activeIndexInFilter = computed(() => {
-    const list = this.filteredIndicators();
-    return list.findIndex(i => i.name === this.activeId());
-  });
-
-  protected prevIndicator = computed<IndicatorDoc | undefined>(() => {
-    const list = this.filteredIndicators();
-    const idx = this.activeIndexInFilter();
-    return idx > 0 ? list[idx - 1] : undefined;
-  });
-
-  protected nextIndicator = computed<IndicatorDoc | undefined>(() => {
-    const list = this.filteredIndicators();
-    const idx = this.activeIndexInFilter();
-    return idx >= 0 && idx < list.length - 1 ? list[idx + 1] : undefined;
-  });
-
-  protected hasDelayFlag(ind: IndicatorDoc): boolean {
-    const s = `${ind.timeframeBehavior} ${ind.dataNotes.join(' ')}`.toLowerCase();
-    return /15[- ]?minute delay|real[- ]?time|scalp/.test(s);
-  }
-
-  protected hasCriticalCaveat(ind: IndicatorDoc): boolean {
-    return ind.dataNotes.some(n =>
-      /volume-dependent|session boundary|drift heavily|extended hours/i.test(n)
-    );
-  }
-
-  protected selectIndicator(name: string): void {
-    this.activeId.set(name);
-  }
-
-  protected onRelatedClick(name: string): void {
-    if (this.allIndicators.some(i => i.name === name)) {
-      this.activeId.set(name);
-    }
-  }
-
-  protected setPanelFilter(p: PanelFilter): void {
-    this.panelFilter.set(p);
-  }
-
-  protected onSearchInput(event: Event): void {
-    const val = (event.target as HTMLInputElement).value;
-    this.query.set(val);
-  }
-
-  protected clearSearch(): void {
-    this.query.set('');
-  }
-
-  protected goPrev(): void {
-    const p = this.prevIndicator();
-    if (p) this.activeId.set(p.name);
-  }
-
-  protected goNext(): void {
-    const n = this.nextIndicator();
-    if (n) this.activeId.set(n.name);
-  }
-
-  @HostListener('document:keydown', ['$event'])
-  onKeydown(ev: KeyboardEvent): void {
-    const target = ev.target as HTMLElement | null;
-    if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
-    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
-    if (ev.key === 'ArrowLeft') { this.goPrev(); ev.preventDefault(); }
-    else if (ev.key === 'ArrowRight') { this.goNext(); ev.preventDefault(); }
-  }
+  private el = inject(ElementRef);
 
   allIndicators: IndicatorDoc[] = [
     // ═══════════════════════════════════════════════════════════
@@ -153,20 +50,20 @@ export class DataLabDocsComponent {
       outputColumns: ['ema_{length}'],
       defaultParams: 'length = 5, 10, 20, 30, 40, 50, 100, 200',
       interpretation: [
-        'Price above EMA \u2014 bullish bias',
-        'Price below EMA \u2014 bearish bias',
+        'Price above EMA → bullish bias',
+        'Price below EMA → bearish bias',
         'EMA crossovers (fast vs slow) generate trend signals',
-        'Multiple EMAs form a "ribbon" \u2014 fanning = strong trend, converging = consolidation',
+        'Multiple EMAs form a "ribbon" — fanning = strong trend, converging = consolidation',
       ],
-      recommendedTimeframes: '1m\u20131D+ (all timeframes)',
+      recommendedTimeframes: '1m–1D+ (all timeframes)',
       dataNotes: [
         'Requires `length` warmup bars before producing valid values',
-        'Sensitive to missing candles \u2014 EMA drifts if gaps exist',
+        'Sensitive to missing candles — EMA drifts if gaps exist',
       ],
       relatedIndicators: ['sma', 'dema', 'tema'],
       panelType: 'overlay',
       quickWhy: 'Find the "current heartbeat" of a stock. Reacts faster to recent news than a standard average.',
-      quickAnalogy: 'Driving a car and looking mostly at the 50 feet behind you \u2014 it tells you about the turn you just made, not the road from five miles ago.',
+      quickAnalogy: 'Driving a car and looking mostly at the 50 feet behind you — it tells you about the turn you just made, not the road from five miles ago.',
       quickImpact: 'Spots trend changes early. If price stays above this line, the trend\'s "pulse" is healthy.',
       checkQuestion: 'If a stock suddenly crashes today, which line will drop faster: the SMA or the EMA?',
       checkAnswer: 'The EMA',
@@ -1048,6 +945,9 @@ export class DataLabDocsComponent {
     },
   ];
 
+  overlayIndicators = this.allIndicators.filter(i => i.panelType === 'overlay');
+  subPanelIndicators = this.allIndicators.filter(i => i.panelType === 'sub-panel');
+
   csvBaseColumns = [
     { column: 'unix_ts', type: 'int', description: 'Unix timestamp in milliseconds (UTC)' },
     { column: 'iso_time', type: 'string', description: 'ISO 8601 datetime string (UTC)' },
@@ -1078,4 +978,25 @@ export class DataLabDocsComponent {
     { icon: 'pi-sync', label: 'Resampling', text: 'Ensure OHLCV resample logic is consistent with TradingView (especially volume aggregation).' },
     { icon: 'pi-moon', label: 'RTH vs Extended', text: 'Volume-based indicators behave very differently in extended hours due to thin volume.' },
   ];
+
+  hasCriticalCaveat(ind: IndicatorDoc): boolean {
+    return ind.dataNotes.some(n =>
+      n.includes('Volume-dependent') ||
+      n.includes('session boundary') ||
+      n.includes('drift heavily') ||
+      n.includes('extended hours')
+    );
+  }
+
+  getDisplayName(name: string): string {
+    const ind = this.allIndicators.find(i => i.name === name);
+    return ind?.displayName ?? name.toUpperCase();
+  }
+
+  scrollToIndicator(name: string): void {
+    const el = this.el.nativeElement.querySelector(`#ind-${name}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
 }

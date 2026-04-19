@@ -1,0 +1,430 @@
+@use '../../../../styles/tokens' as *;
+
+:host { display: block; }
+
+.after-card {
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: $radius-md;
+  overflow: hidden;
+}
+
+/* ── Header ─────────────────────────────────────── */
+.ac-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1rem;
+  align-items: start;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid $border;
+}
+
+.ac-title-wrap { min-width: 0; }
+
+.ac-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: $text-muted;
+  margin-bottom: 4px;
+}
+
+.ac-eyebrow .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: $accent;
+}
+
+.ac-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: $text-primary;
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.ac-title .ticker {
+  font-family: $font-mono;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: $text-muted;
+  padding: 2px 8px;
+  background: $bg-elevated;
+  border: 1px solid $border;
+  border-radius: $radius-sm;
+  letter-spacing: 0;
+}
+
+.ac-tagline {
+  font-size: 0.82rem;
+  color: $text-secondary;
+  margin: 0.5rem 0 0;
+  max-width: 64ch;
+  line-height: 1.55;
+}
+
+.ac-metatags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  max-width: 280px;
+}
+
+.mt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  font-family: $font-mono;
+  padding: 3px 8px;
+  border-radius: $radius-pill;
+  background: $bg-elevated;
+  color: $text-secondary;
+  border: 1px solid $border;
+  white-space: nowrap;
+}
+.mt.panel  { color: $accent; border-color: rgba($accent, 0.3); background: rgba($accent, 0.15); }
+.mt.caveat { color: $warn; border-color: rgba($warn, 0.3); background: rgba($warn, 0.12); }
+.mt.cols   { color: $text-primary; }
+.mt.delay  { color: $bear; border-color: rgba($bear, 0.3); background: rgba($bear, 0.12); }
+
+/* ── Spec strip ─────────────────────────────────── */
+.spec-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid $border;
+  background: $bg-canvas;
+}
+
+.spec-strip .spec {
+  padding: 0.75rem 1.25rem;
+  border-right: 1px solid $border;
+  min-width: 0;
+}
+.spec-strip .spec:last-child { border-right: 0; }
+
+.spec-strip .spec .sl {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: $text-muted;
+  margin-bottom: 4px;
+}
+.spec-strip .spec .sv {
+  display: block;
+  font-family: $font-mono;
+  font-size: 0.82rem;
+  color: $text-primary;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── PrimeNG Tabs overrides (scoped to card) ────── */
+.ac-tabs-host {
+  display: block;
+}
+:host ::ng-deep .ac-tabs-host .p-tabs {
+  background: transparent;
+}
+:host ::ng-deep .ac-tabs-host .p-tablist {
+  background: $bg-canvas;
+  border-bottom: 1px solid $border;
+  padding: 0 1.5rem;
+}
+:host ::ng-deep .ac-tabs-host .p-tab {
+  background: transparent;
+  border: 0;
+  color: $text-muted;
+  font-size: 0.82rem;
+  font-weight: 500;
+  padding: 0.75rem 1rem;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color $t-ui;
+}
+:host ::ng-deep .ac-tabs-host .p-tab:hover { color: $text-secondary; }
+:host ::ng-deep .ac-tabs-host .p-tab-active {
+  color: $text-primary;
+  border-bottom-color: $accent;
+  background: transparent;
+}
+:host ::ng-deep .ac-tabs-host .p-tabpanels {
+  background: transparent;
+  padding: 0;
+}
+:host ::ng-deep .ac-tabs-host .p-tabpanel {
+  padding: 1.25rem 1.5rem;
+}
+
+/* ── Explain tab ────────────────────────────────── */
+.explain-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.ex-card {
+  padding: 1rem;
+  background: $bg-elevated;
+  border: 1px solid $border;
+  border-radius: $radius;
+}
+.ex-card .ex-lbl {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: $text-muted;
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ex-card .ex-lbl .tiny-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: $accent;
+}
+.ex-card.analogy .ex-lbl .tiny-dot { background: $bull; }
+.ex-card.impact  .ex-lbl .tiny-dot { background: $warn; }
+.ex-card.why     .ex-lbl .tiny-dot { background: $accent; }
+.ex-card.check   .ex-lbl .tiny-dot { background: $bear; }
+
+.ex-card .ex-body {
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: $text-primary;
+}
+.ex-card.analogy .ex-body { font-style: italic; color: $text-secondary; }
+
+.ex-card.check { grid-column: 1 / -1; }
+.ex-card.check .q-row {
+  font-size: 0.82rem;
+  color: $text-primary;
+  margin-bottom: 0.5rem;
+}
+.ex-card.check .reveal {
+  appearance: none;
+  background: transparent;
+  border: 1px dashed $border-light;
+  color: $text-muted;
+  font-family: inherit;
+  font-size: 0.82rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: $radius-sm;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: color $t-ui, background $t-ui, border-color $t-ui;
+}
+.ex-card.check .reveal:hover {
+  color: $text-primary;
+  background: $bg-canvas;
+}
+.ex-card.check .reveal.revealed {
+  color: $bull;
+  border-style: solid;
+  border-color: rgba($bull, 0.3);
+  background: rgba($bull, 0.12);
+  font-weight: 600;
+}
+
+.attrib {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid $border;
+  display: flex;
+  gap: 1.5rem;
+  font-size: 0.72rem;
+  color: $text-muted;
+  flex-wrap: wrap;
+}
+.attrib strong { color: $text-secondary; font-weight: 500; }
+
+/* ── Math tab ───────────────────────────────────── */
+.formula-wrap {
+  background: $bg-elevated;
+  border: 1px solid $border;
+  border-radius: $radius;
+  padding: 1.25rem;
+  text-align: center;
+  overflow-x: auto;
+  margin: 0 0 1rem;
+}
+:host ::ng-deep .formula-wrap .katex { color: $text-primary; font-size: 1.05em; }
+
+.spec-grid {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  row-gap: 0;
+  border-top: 1px solid $border;
+  margin: 0;
+}
+.spec-grid > dt,
+.spec-grid > dd {
+  padding: 0.75rem;
+  border-bottom: 1px solid $border;
+  margin: 0;
+}
+.spec-grid > dt {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: $text-muted;
+  padding-left: 0;
+}
+.spec-grid > dd {
+  font-size: 0.82rem;
+  color: $text-primary;
+  line-height: 1.55;
+}
+.spec-grid > dd code {
+  font-family: $font-mono;
+  font-size: 0.78rem;
+  background: $bg-elevated;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid $border;
+  color: $text-primary;
+}
+.spec-grid .col-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* ── Use-it tab ─────────────────────────────────── */
+.interp-list {
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid $border;
+}
+.interp-list li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.75rem;
+  border-bottom: 1px solid $border;
+  font-size: 0.82rem;
+  color: $text-primary;
+}
+.interp-list li .sig {
+  font-family: $font-mono;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: $radius-sm;
+  background: $bg-elevated;
+  color: $text-secondary;
+  border: 1px solid $border;
+  white-space: nowrap;
+  min-width: 90px;
+  text-align: center;
+}
+.interp-list li .sig.sig-bull    { background: rgba($bull, 0.12); color: $bull; border-color: rgba($bull, 0.3); }
+.interp-list li .sig.sig-bear    { background: rgba($bear, 0.12); color: $bear; border-color: rgba($bear, 0.3); }
+.interp-list li .sig.sig-warn    { background: rgba($warn, 0.12); color: $warn; border-color: rgba($warn, 0.3); }
+.interp-list li .sig.sig-neutral { /* default */ }
+.interp-list li .sig-body {
+  color: $text-secondary;
+  line-height: 1.55;
+}
+
+.related-block {
+  padding: 1rem;
+  background: $bg-elevated;
+  border-radius: $radius;
+  font-size: 0.82rem;
+  color: $text-secondary;
+  line-height: 1.65;
+  margin-bottom: 1rem;
+}
+.related-block strong {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: $text-muted;
+  margin-bottom: 0.5rem;
+}
+.related-block a {
+  color: $accent;
+  font-family: $font-mono;
+  font-size: 0.72rem;
+  padding: 1px 6px;
+  background: rgba($accent, 0.15);
+  border-radius: $radius-sm;
+  text-decoration: none;
+  border: 1px solid rgba($accent, 0.25);
+  margin-right: 4px;
+  transition: background $t-ui;
+}
+.related-block a:hover { background: rgba($accent, 0.25); }
+.related-block .sep { color: $text-muted; font-family: $font-mono; font-size: 0.72rem; }
+
+.caveats {
+  border-top: 1px solid $border;
+  padding-top: 1rem;
+}
+.caveats h4 {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: $text-muted;
+  margin: 0 0 0.75rem;
+}
+.caveat-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.75rem 0;
+  border-bottom: 1px dashed $border;
+  font-size: 0.82rem;
+  color: $text-secondary;
+  line-height: 1.6;
+}
+.caveat-row:last-child { border-bottom: 0; }
+.caveat-row .cv-sev {
+  font-family: $font-mono;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: $radius-sm;
+  min-width: 72px;
+  text-align: center;
+}
+.caveat-row .cv-sev.cv-info { background: rgba($accent, 0.15); color: $accent; border: 1px solid rgba($accent, 0.25); }
+.caveat-row .cv-sev.cv-warn { background: rgba($warn, 0.12);   color: $warn;   border: 1px solid rgba($warn, 0.25); }
+.caveat-row .cv-sev.cv-risk { background: rgba($bear, 0.12);   color: $bear;   border: 1px solid rgba($bear, 0.25); }
+
+/* ── Responsive ─────────────────────────────────── */
+@media (max-width: 900px) {
+  .ac-head { grid-template-columns: 1fr; }
+  .ac-metatags { justify-content: flex-start; max-width: 100%; }
+  .spec-strip { grid-template-columns: repeat(2, 1fr); }
+  .spec-strip .spec:nth-child(2) { border-right: 0; }
+  .spec-strip .spec:nth-child(1), .spec-strip .spec:nth-child(2) { border-bottom: 1px solid $border; }
+  .explain-grid { grid-template-columns: 1fr; }
+  .spec-grid { grid-template-columns: 1fr; }
+  .spec-grid > dt { padding-bottom: 0; border-bottom: 0; }
+}

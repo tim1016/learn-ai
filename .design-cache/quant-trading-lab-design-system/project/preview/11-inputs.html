@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_base.css"><style>
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px 16px}
+.f{display:flex;flex-direction:column;gap:5px}
+label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#5a6178}
+input,select{background:#1c1f2e;border:1px solid #2a2e3e;color:#e2e8f0;padding:7px 10px;border-radius:6px;font-size:13px;font-family:inherit}
+input:focus,.focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+.cbx{display:flex;gap:8px;align-items:center;font-size:13px;color:#8892a8;margin-top:18px}
+input[type=checkbox]{accent-color:#3b82f6;width:14px;height:14px;padding:0}
+</style></head><body><div class="card-root"><div class="grid">
+<div class="f"><label>Ticker</label><input value="SPY"></div>
+<div class="f"><label>From</label><input value="2024-01-01" class="focus"></div>
+<div class="f"><label>Timespan</label><select><option>Daily</option></select></div>
+<div class="f"><label>EMA Period</label><input value="12"></div>
+<div class="f"><label>RSI Period</label><input value="14"></div>
+<label class="cbx"><input type="checkbox" checked>Include pre-market bars</label>
+</div></div></body></html>

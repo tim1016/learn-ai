@@ -1,0 +1,164 @@
+@let ind = indicator();
+
+<article class="after-card" [id]="'ind-' + ind.name">
+
+  <!-- ── Header ─────────────────────────────────────── -->
+  <header class="ac-head">
+    <div class="ac-title-wrap">
+      <div class="ac-eyebrow">
+        <span class="dot"></span>
+        {{ breadcrumb() }}
+      </div>
+      <h2 class="ac-title">
+        {{ ind.displayName }}
+        <span class="ticker">{{ tickerCode() }}</span>
+      </h2>
+      <p class="ac-tagline">{{ ind.description }}</p>
+    </div>
+
+    <div class="ac-metatags">
+      <span class="mt panel">{{ panelLabel() }}</span>
+      <span class="mt cols">{{ colCountLabel() }}</span>
+      @if (hasWarmup()) {
+        <span class="mt caveat" title="Needs warmup bars">Warmup</span>
+      }
+      @if (hasDelay()) {
+        <span class="mt delay" title="Affected by 15-min feed delay">15-min delay</span>
+      }
+    </div>
+  </header>
+
+  <!-- ── Spec strip ─────────────────────────────────── -->
+  <div class="spec-strip">
+    <div class="spec">
+      <span class="sl">Library</span>
+      <span class="sv" [title]="ind.library">{{ ind.library }}</span>
+    </div>
+    <div class="spec">
+      <span class="sl">Default</span>
+      <span class="sv" [title]="ind.defaultParams">{{ ind.defaultParams }}</span>
+    </div>
+    <div class="spec">
+      <span class="sl">Output</span>
+      <span class="sv" [title]="ind.outputColumns.join(', ')">{{ ind.outputColumns.join(', ') }}</span>
+    </div>
+    <div class="spec">
+      <span class="sl">Best on</span>
+      <span class="sv" [title]="ind.recommendedTimeframes">{{ ind.recommendedTimeframes }}</span>
+    </div>
+  </div>
+
+  <!-- ── Tabs ───────────────────────────────────────── -->
+  <p-tabs [value]="activeTab()" (valueChange)="onTabChange($event)" class="ac-tabs-host">
+    <p-tablist>
+      <p-tab value="explain">Explain</p-tab>
+      <p-tab value="math">Math &amp; spec</p-tab>
+      <p-tab value="use">How to use it</p-tab>
+    </p-tablist>
+    <p-tabpanels>
+      <!-- Explain -->
+      <p-tabpanel value="explain">
+        <div class="explain-grid">
+          <div class="ex-card why">
+            <div class="ex-lbl"><span class="tiny-dot"></span> Why use it</div>
+            <div class="ex-body">{{ ind.quickWhy }}</div>
+          </div>
+          <div class="ex-card impact">
+            <div class="ex-lbl"><span class="tiny-dot"></span> Trading impact</div>
+            <div class="ex-body">{{ ind.quickImpact }}</div>
+          </div>
+          <div class="ex-card analogy">
+            <div class="ex-lbl"><span class="tiny-dot"></span> Think of it as</div>
+            <div class="ex-body">{{ ind.quickAnalogy }}</div>
+          </div>
+          @if (ind.checkQuestion) {
+            <div class="ex-card check">
+              <div class="ex-lbl"><span class="tiny-dot"></span> Check yourself</div>
+              <div class="q-row">{{ ind.checkQuestion }}</div>
+              <button
+                type="button"
+                class="reveal"
+                [class.revealed]="revealed()"
+                (click)="toggleReveal()">
+                @if (revealed()) {
+                  {{ ind.checkAnswer }}
+                } @else {
+                  Click to reveal answer &rarr;
+                }
+              </button>
+            </div>
+          }
+        </div>
+
+        <div class="attrib">
+          <div><strong>Origin</strong><br>{{ ind.professionalRef }}</div>
+          <div><strong>Timeframe behaviour</strong><br>{{ ind.timeframeBehavior }}</div>
+        </div>
+      </p-tabpanel>
+
+      <!-- Math & spec -->
+      <p-tabpanel value="math">
+        <div class="formula-wrap" [appKatex]="ind.formulaLatex" [displayMode]="true"></div>
+
+        <dl class="spec-grid">
+          <dt>Library</dt>
+          <dd><code>{{ ind.library }}</code></dd>
+
+          <dt>Parameters</dt>
+          <dd><code>{{ ind.defaultParams }}</code></dd>
+
+          <dt>Output columns</dt>
+          <dd>
+            <div class="col-list">
+              @for (col of ind.outputColumns; track col) {
+                <code>{{ col }}</code>
+              }
+            </div>
+          </dd>
+
+          <dt>Timeframes</dt>
+          <dd>{{ ind.recommendedTimeframes }}</dd>
+
+          <dt>Panel</dt>
+          <dd>{{ panelLabel() }} &mdash; {{ colCountLabel() }}</dd>
+        </dl>
+      </p-tabpanel>
+
+      <!-- How to use it -->
+      <p-tabpanel value="use">
+        @if (ind.interpretation.length) {
+          <ul class="interp-list">
+            @for (item of ind.interpretation; track item) {
+              <li>
+                <span class="sig" [class]="'sig-' + signalTone(item)">{{ signalLabel(item) }}</span>
+                <span class="sig-body">{{ signalBody(item) }}</span>
+              </li>
+            }
+          </ul>
+        }
+
+        @if (ind.relatedIndicators.length) {
+          <div class="related-block">
+            <strong>Related indicators</strong>
+            @for (rel of ind.relatedIndicators; track rel; let last = $last) {
+              <a href="#" (click)="onRelatedClick(rel, $event)">{{ rel.toUpperCase() }}</a>@if (!last) {<span class="sep">, </span>}
+            }
+          </div>
+        }
+
+        @if (caveats().length) {
+          <section class="caveats">
+            <h4>Data caveats that change how you read this</h4>
+            @for (row of caveats(); track $index) {
+              <div class="caveat-row">
+                <span class="cv-sev" [class]="'cv-' + row.severity">{{ severityLabel(row.severity) }}</span>
+                <span>{{ row.text }}</span>
+              </div>
+            }
+          </section>
+        }
+      </p-tabpanel>
+    </p-tabpanels>
+  </p-tabs>
+
+</article>
