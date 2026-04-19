@@ -20,6 +20,14 @@ import { EngineHistoryComponent } from "./engine-history/engine-history.componen
 import { LeanEngineDocsComponent } from "./lean-engine-docs/lean-engine-docs.component";
 import { EngineChartComponent, ChartBar, EngineTradeForChart, EquityCurvePoint } from "./engine-chart/engine-chart.component";
 import { InsightPanelComponent } from "./insight-panel/insight-panel.component";
+import { TvCompatPanelComponent } from "./tv-compat-panel/tv-compat-panel.component";
+
+// Severity for pre-flight: re-declared locally so we don't import the panel's types.
+type PreflightSeverity = "ok" | "warning" | "blocking";
+interface PreflightSnapshot {
+  overall: PreflightSeverity;
+  summary: string;
+}
 
 /**
  * LEAN Engine — Phase 2 first cut.
@@ -38,6 +46,11 @@ interface StrategyInfo {
   params_schema: ParamsSchema;
   /** Which on-disk LEAN resolutions this strategy can run against. */
   supported_resolutions: string[];
+  /** Short pseudocode snippet of the entry/exit rules. May be empty. */
+  algorithm_pseudocode?: string;
+  /** Parity-critical gotchas surfaced from the validation studies.
+   *  Render as a bullet list under the strategy description. */
+  gotchas?: string[];
 }
 
 type EngineResolution = "minute" | "daily";
@@ -114,6 +127,7 @@ interface DataAvailability {
     Tabs, TabList, Tab, TabPanel, TabPanels,
     EngineResultsComponent, EngineHistoryComponent, LeanEngineDocsComponent,
     EngineChartComponent, InsightPanelComponent,
+    TvCompatPanelComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./lean-engine.component.html",
@@ -183,6 +197,43 @@ export class LeanEngineComponent implements OnInit {
   readonly activeTab = signal<string>("0");
 
   readonly running = signal(false);
+
+  // ------------------------------------------------------------------
+  // TV-compatibility pre-flight
+  // ------------------------------------------------------------------
+  /** Latest snapshot from the embedded TvCompatPanel. Null until first emission. */
+  readonly preflight = signal<PreflightSnapshot | null>(null);
+  /** Run button is disabled while pre-flight reports `blocking`. */
+  readonly preflightBlocks = computed(() => this.preflight()?.overall === "blocking");
+  /** Indicators the current strategy uses — fed to the pre-flight panel. */
+  readonly strategyIndicators = computed<readonly { name: string; length: number }[]>(() => {
+    const name = this.selectedStrategyName();
+    // Hard-coded canonical mapping for the three reference strategies. Once
+    // strategies expose a metadata endpoint, read it from there instead.
+    if (name === "SpyEmaCrossover" || name === "spy_ema_crossover") {
+      return [{ name: "ema", length: 5 }, { name: "ema", length: 10 }, { name: "rsi", length: 14 }];
+    }
+    if (name === "RsiMeanReversion" || name === "rsi_mean_reversion") {
+      return [{ name: "rsi", length: 14 }];
+    }
+    if (name === "SmaCrossover" || name === "sma_crossover") {
+      return [{ name: "sma", length: 50 }, { name: "sma", length: 200 }];
+    }
+    // Fallback — unknown strategy, provide a safe conservative indicator so
+    // pre-flight still runs and surfaces session/warmup feedback.
+    return [{ name: "ema", length: 200 }];
+  });
+  /** Timeframe value passed to the pre-flight — derived from resolution. */
+  readonly preflightTimeframe = computed<"5m" | "15m" | "1h">(() => {
+    // The lean-engine currently supports minute + daily. Map to the pre-flight
+    // timeframes; when lean-engine adds 5m/1h explicitly, update this.
+    const res = this.resolution();
+    return res === "daily" ? "1h" : "15m";
+  });
+
+  onPreflightUpdate(snapshot: PreflightSnapshot | null): void {
+    this.preflight.set(snapshot);
+  }
   readonly result = signal<EngineBacktestResponse | null>(null);
   readonly runError = signal<string | null>(null);
 

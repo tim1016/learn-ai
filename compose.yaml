@@ -31,6 +31,10 @@ services:
       - ./PythonDataService/app:/app/app:z
       - ../Lean/Data:/lean-data:ro,z
       - ./PythonDataService/lean-cache:/lean-cache:z
+      # Divergence study artifacts (dashboard HTML + matrix CSV) live here.
+      # Mounted so /research/data-divergence/* can serve host-built files and
+      # rebuilds persist across container restarts.
+      - ./PythonDataService/cache:/app/cache:z
     environment:
       - POLYGON_API_KEY=${POLYGON_API_KEY}
       - FRED_API_KEY=${FRED_API_KEY}
@@ -99,17 +103,25 @@ services:
     volumes:
       - ./Frontend/src:/app/src:z
       - ./Frontend/proxy.conf.json:/app/proxy.conf.json:z
+    environment:
+      # Angular 21's esbuild compiler runs worker threads; default Node heap
+      # caps them at ~512MB which is not enough for this project's bundle
+      # (primeng + apollo + chart.js + lightweight-charts + katex). Raise the
+      # old-space limit so workers don't hit ERR_WORKER_OUT_OF_MEMORY.
+      - NODE_OPTIONS=--max-old-space-size=3584
     command: ["npx", "ng", "serve", "--host", "0.0.0.0", "--poll", "2000", "--proxy-config", "proxy.conf.json"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4200"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      # Initial Angular compile on a cold container takes 60–90s; give it
+      # room before the first healthcheck fires.
+      start_period: 120s
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 4G
     depends_on:
       backend:
         condition: service_healthy

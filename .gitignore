@@ -42,3 +42,6 @@ nul
 # Polygon-sourced LEAN cache (populated at runtime by the engine)
 PythonDataService/lean-cache/
 !PythonDataService/lean-cache/.gitkeep
+
+# Derived analytics cache (parquet) — regenerated from Polygon data
+PythonDataService/cache/

@@ -1,0 +1,185 @@
+<div class="tv-compat-root">
+  <!-- Master toggle -->
+  <header class="master-row">
+    <label class="master-toggle"
+           [title]="isLocked()
+             ? 'When ON, all settings below are locked to TradingView-compatible defaults. Click to unlock and override individual settings.'
+             : 'When OFF, you can override safe defaults — but trades may diverge from TradingView. See the validation study.'">
+      <input type="checkbox"
+             [checked]="tvCompatible()"
+             (change)="toggleTvCompatible()">
+      <span class="master-label">
+        <b>TradingView-compatible mode</b>
+        @if (tvCompatible()) {
+          <span class="badge ok">ON — settings locked</span>
+        } @else {
+          <span class="badge warn">OFF — Advanced mode</span>
+        }
+      </span>
+    </label>
+
+    <a class="study-link" [routerLink]="researchLabTvTab"
+       title="Open the TradingView vs Polygon divergence study">
+      View validation study →
+    </a>
+  </header>
+
+  @if (!tvCompatible()) {
+    <div class="advanced-warn">
+      <b>Advanced mode is on.</b> Backtest results may diverge from what
+      a TradingView user would see. The
+      <a [routerLink]="researchLabTvTab">divergence dashboard</a>
+      quantifies the cost: under the current learn-ai default behavior,
+      Strategy 1 aligns with TradingView on only ~15% of trades. Click the
+      master toggle to restore safe defaults.
+    </div>
+  }
+
+  <!-- Locked-settings grid -->
+  <section class="settings-grid" [class.locked]="isLocked()">
+    <label class="field">
+      <span class="label-row">
+        <span>Session filter</span>
+        @if (isLocked()) { <span class="lock" title="Locked by TradingView-compatible mode">🔒</span> }
+      </span>
+      <select [ngModel]="sessionFilter()"
+              (ngModelChange)="sessionFilter.set($event)"
+              [disabled]="isLocked()">
+        <option value="rth_only">Regular trading hours only (09:30–16:00 ET)</option>
+        <option value="full_session">Full session (pre-market + RTH + after-hours)</option>
+      </select>
+      <span class="hint">
+        TradingView's default chart shows RTH only. Full-session bars contaminate indicator values.
+      </span>
+    </label>
+
+    <label class="field">
+      <span class="label-row">
+        <span>Price adjustment</span>
+        @if (isLocked()) { <span class="lock" title="Locked by TradingView-compatible mode">🔒</span> }
+      </span>
+      <select [ngModel]="priceAdjustment()"
+              (ngModelChange)="priceAdjustment.set($event)"
+              [disabled]="isLocked()">
+        <option value="unadjusted">Unadjusted (what an executing trader actually pays)</option>
+        <option value="split_only">Split-adjusted only (Polygon default)</option>
+        <option value="split_and_dividend">Split + dividend adjusted (TradingView chart default)</option>
+      </select>
+      <span class="hint">
+        Backtests should use unadjusted prices because that's what the executing strategy actually trades at.
+      </span>
+    </label>
+
+    <label class="field">
+      <span class="label-row">
+        <span>Warmup buffer (days before start date)</span>
+        @if (isLocked()) { <span class="lock" title="Locked by TradingView-compatible mode">🔒</span> }
+      </span>
+      <input type="number" min="0" step="5"
+             [ngModel]="warmupDays()"
+             (ngModelChange)="warmupDays.set(+$event)"
+             [disabled]="isLocked()">
+      <span class="hint">
+        Long-period indicators like EMA(200) need ~38 RTH trading days to converge from a cold start.
+        90 days covers all canonical indicators safely.
+      </span>
+    </label>
+
+    <label class="field">
+      <span class="label-row">
+        <span>Indicator periods</span>
+        @if (isLocked()) { <span class="lock" title="Locked by TradingView-compatible mode">🔒</span> }
+      </span>
+      <select [ngModel]="indicatorPeriodsCanonical()"
+              (ngModelChange)="indicatorPeriodsCanonical.set($event === 'true' || $event === true)"
+              [disabled]="isLocked()">
+        <option [ngValue]="true">Canonical only (EMA 5/10/20/50/100/200, RSI 14, etc.)</option>
+        <option [ngValue]="false">Allow custom periods</option>
+      </select>
+      <span class="hint">
+        Non-canonical periods are valid but no TradingView reference values exist to validate them.
+      </span>
+    </label>
+
+    <label class="field">
+      <span class="label-row">
+        <span>Bar timestamp convention</span>
+        @if (isLocked()) { <span class="lock" title="Locked by TradingView-compatible mode">🔒</span> }
+      </span>
+      <select [ngModel]="barTimestamp()"
+              (ngModelChange)="barTimestamp.set($event)"
+              [disabled]="isLocked()">
+        <option value="bar_open">Bar open time (matches TradingView labels)</option>
+        <option value="bar_close">Bar close time (current engine internal default)</option>
+      </select>
+      <span class="hint">
+        TV labels every bar by its open time. Using bar.end_time causes a 15-min display offset in trade logs.
+      </span>
+    </label>
+
+    <label class="field">
+      <span class="label-row">
+        <span>RSI / oscillator price source</span>
+        @if (isLocked()) { <span class="lock" title="Locked by TradingView-compatible mode">🔒</span> }
+      </span>
+      <select [ngModel]="rsiSource()"
+              (ngModelChange)="rsiSource.set($event)"
+              [disabled]="isLocked()">
+        <option value="close">close (Pine ta.* default)</option>
+        <option value="hlc3">hlc3 (some chart presets)</option>
+      </select>
+      <span class="hint">
+        TradingView's Pine ta.rsi() uses the source you pass; default in our reference is close.
+      </span>
+    </label>
+  </section>
+
+  <!-- Inline pre-flight panel -->
+  <section class="preflight-panel">
+    <div class="preflight-header">
+      <h4>Pre-flight check (live)</h4>
+      @if (preflightLoading()) {
+        <span class="preflight-loading">Re-running…</span>
+      }
+    </div>
+
+    @if (preflightError(); as err) {
+      <div class="preflight-error">
+        Could not run pre-flight: {{ err }}
+      </div>
+    } @else if (preflightResult(); as result) {
+      <div class="preflight-verdict" [attr.data-severity]="result.overall">
+        <span class="verdict-icon">{{ iconFor(result.overall) }}</span>
+        <div>
+          <div class="verdict-headline">
+            @switch (result.overall) {
+              @case ('ok')       { Ready to run — all checks passed. }
+              @case ('warning')  { Ready to run, but review warnings. }
+              @case ('blocking') { Run is blocked — fix the issues below. }
+            }
+          </div>
+          <div class="verdict-summary">{{ result.summary }}</div>
+        </div>
+      </div>
+
+      <ul class="check-list">
+        @for (c of result.checks; track c.id) {
+          <li class="check-item" [attr.data-severity]="c.status">
+            <span class="check-icon">{{ iconFor(c.status) }}</span>
+            <div class="check-body">
+              <div class="check-label">{{ c.label }}</div>
+              <div class="check-message">{{ c.message }}</div>
+              @if (c.fix_hint) {
+                <div class="check-fix"><b>Fix:</b> {{ c.fix_hint }}</div>
+              }
+            </div>
+          </li>
+        }
+      </ul>
+    } @else {
+      <div class="preflight-empty">
+        Form is loading. Pre-flight will run as soon as a strategy is selected.
+      </div>
+    }
+  </section>
+</div>

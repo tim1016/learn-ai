@@ -196,16 +196,49 @@
 
             @if (selectedStrategy(); as strategy) {
               <div class="strategy-description" [style.white-space]="'pre-line'">{{ strategy.description }}</div>
+
+              @if (strategy.algorithm_pseudocode) {
+                <details class="strategy-algorithm">
+                  <summary>Algorithm</summary>
+                  <pre class="strategy-pseudocode">{{ strategy.algorithm_pseudocode }}</pre>
+                </details>
+              }
+
+              @if (strategy.gotchas && strategy.gotchas.length > 0) {
+                <details class="strategy-gotchas">
+                  <summary>Gotchas ({{ strategy.gotchas.length }})</summary>
+                  <ul>
+                    @for (g of strategy.gotchas; track g) {
+                      <li>{{ g }}</li>
+                    }
+                  </ul>
+                </details>
+              }
             }
+
+            <!-- TradingView-compatibility panel: safe defaults + live pre-flight -->
+            <app-tv-compat-panel
+              [strategyName]="selectedStrategyName()"
+              [symbol]="effectiveSymbol()"
+              [timeframe]="preflightTimeframe()"
+              [startDate]="startDate()"
+              [endDate]="endDate()"
+              [indicators]="strategyIndicators()"
+              (preflightStatus)="onPreflightUpdate($event)" />
 
             <div class="actions">
               <button
                 type="button"
                 class="run-btn"
-                [disabled]="running() || !selectedStrategyName()"
+                [disabled]="running() || !selectedStrategyName() || preflightBlocks()"
+                [title]="preflightBlocks()
+                  ? 'Pre-flight has blocking issues. See the panel above.'
+                  : 'Run the backtest with the current configuration.'"
                 (click)="run(); activeTab.set('1')"
               >
-                {{ running() ? "Running…" : "Run backtest" }}
+                @if (running()) { Running… }
+                @else if (preflightBlocks()) { Run blocked — fix pre-flight }
+                @else { Run backtest }
               </button>
             </div>
           </section>

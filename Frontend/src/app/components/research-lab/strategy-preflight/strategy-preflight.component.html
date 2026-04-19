@@ -1,0 +1,159 @@
+<div class="preflight-root">
+  <header>
+    <h3>Strategy pre-flight check</h3>
+    <p class="subtitle">
+      Before running a backtest, validate that your strategy configuration
+      will produce trades comparable to what a TradingView chart user would
+      see. Issues here map one-to-one with items in the
+      <code>tv-polygon-validation-gotchas.md</code> catalog.
+    </p>
+  </header>
+
+  <section class="form-grid">
+    <label class="field">
+      <span>Strategy name</span>
+      <input type="text" [ngModel]="strategyName()"
+             (ngModelChange)="strategyName.set($event)">
+    </label>
+    <label class="field">
+      <span>Symbol</span>
+      <input type="text" [ngModel]="symbol()"
+             (ngModelChange)="symbol.set($event)">
+    </label>
+    <label class="field">
+      <span>Timeframe</span>
+      <select [ngModel]="timeframe()" (ngModelChange)="timeframe.set($event)">
+        @for (tf of timeframes; track tf) {
+          <option [value]="tf">{{ tf }}</option>
+        }
+      </select>
+    </label>
+    <label class="field">
+      <span>Trading start date</span>
+      <input type="date" [ngModel]="startDate()"
+             (ngModelChange)="startDate.set($event)">
+    </label>
+    <label class="field">
+      <span>Trading end date</span>
+      <input type="date" [ngModel]="endDate()"
+             (ngModelChange)="endDate.set($event)">
+    </label>
+    <label class="field">
+      <span>Warmup buffer (calendar days before start)</span>
+      <input type="number" min="0" step="1"
+             [ngModel]="warmupDays()"
+             (ngModelChange)="warmupDays.set(+$event)">
+    </label>
+    <label class="field full">
+      <span>Session filter</span>
+      <select [ngModel]="sessionFilter()"
+              (ngModelChange)="sessionFilter.set($event)">
+        @for (opt of sessionFilterOptions; track opt.value) {
+          <option [value]="opt.value">{{ opt.label }}</option>
+        }
+      </select>
+    </label>
+    <label class="field inline">
+      <input type="checkbox" [ngModel]="dividendAdjustment()"
+             (ngModelChange)="dividendAdjustment.set($event)">
+      <span>Prices will be dividend-adjusted (rare for backtests)</span>
+    </label>
+  </section>
+
+  <section class="indicators">
+    <h4>Indicators your strategy uses</h4>
+    <p class="subtitle">
+      Each indicator's period determines how much warmup data is needed and
+      whether canonical TradingView defaults apply.
+    </p>
+    <table class="indicator-table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Period</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (ind of indicators(); track $index) {
+          <tr>
+            <td>{{ ind.name }}</td>
+            <td>{{ ind.length }}</td>
+            <td>
+              <button type="button" class="btn-mini"
+                      (click)="removeIndicator($index)">Remove</button>
+            </td>
+          </tr>
+        }
+        <tr class="add-row">
+          <td>
+            <select [ngModel]="newIndicatorName()"
+                    (ngModelChange)="newIndicatorName.set($event)">
+              @for (t of indicatorTypes; track t) {
+                <option [value]="t">{{ t }}</option>
+              }
+            </select>
+          </td>
+          <td>
+            <input type="number" min="1" step="1"
+                   [ngModel]="newIndicatorLength()"
+                   (ngModelChange)="newIndicatorLength.set(+$event)">
+          </td>
+          <td>
+            <button type="button" class="btn-mini primary"
+                    (click)="addIndicator()">Add</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="run-row">
+    <button type="button" class="btn btn-primary"
+            [disabled]="!canRun()"
+            (click)="runPreflight()">
+      @if (isLoading()) { Running checks… } @else { Run pre-flight checks }
+    </button>
+    @if (errorMessage(); as msg) {
+      <span class="error">{{ msg }}</span>
+    }
+  </section>
+
+  @if (verdictBanner(); as v) {
+    <div class="verdict-banner" [attr.data-severity]="v.severity">
+      <span class="big-icon">{{ iconFor(v.severity) }}</span>
+      <div class="verdict-text">
+        <div class="verdict-title">
+          @switch (v.severity) {
+            @case ('ok')       { Ready to run — all checks passed. }
+            @case ('warning')  { Ready to run, but review warnings below. }
+            @case ('blocking') { DO NOT run — blocking issues must be fixed first. }
+          }
+        </div>
+        <div class="verdict-summary">{{ v.text }}</div>
+      </div>
+    </div>
+
+    <section class="checks-list">
+      @for (check of result()?.checks; track check.id) {
+        <article class="check-row" [attr.data-severity]="check.status">
+          <div class="check-icon">{{ iconFor(check.status) }}</div>
+          <div class="check-body">
+            <div class="check-label">{{ check.label }}</div>
+            <div class="check-message">{{ check.message }}</div>
+            @if (check.fix_hint) {
+              <div class="check-fix"><b>Fix:</b> {{ check.fix_hint }}</div>
+            }
+            @if (check.docs_link) {
+              <a class="check-docs"
+                 [href]="'/' + check.docs_link"
+                 target="_blank" rel="noopener">
+                Open gotchas doc →
+              </a>
+            }
+          </div>
+        </article>
+      }
+    </section>
+  }
+</div>

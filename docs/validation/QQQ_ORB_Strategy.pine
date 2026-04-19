@@ -1,0 +1,165 @@
+//@version=5
+// -----------------------------------------------------------------------------
+// QQQ Opening Range Breakout — Cross-System Validation Port
+// Pine Script v5 port of Engine Lab `orb` strategy with symbol=QQQ
+// (PythonDataService/app/engine/strategy/algorithms/spy_orb.py — the algorithm
+//  is symbol-parameterized, so the same rules apply to QQQ unchanged).
+//
+// Run parameters this script mirrors:
+//   symbol            : QQQ  (TradingView: NASDAQ:QQQ)
+//   resolution        : 15-min, consolidated from 1-min in Engine Lab
+//   initial_cash      : 100,000
+//   commission        : $1 per order, cash flat
+//   fill_mode         : signal_bar_close  → process_orders_on_close = true
+//   start / end date  : 2025-04-17 → 2026-04-17 (matches the SPY EMA
+//                       validation window for narrative alignment).
+//
+// Strategy rules (bit-identical to Engine Lab):
+//   * Opening range = first 3 RTH 15-min bars (9:30–10:15 ET).
+//   * Entry = first bar AFTER the ORB completes whose close > ORB_high,
+//             provided the ORB range as a % of price is in [0.30%, 1.50%]
+//             AND no trade has fired yet today.
+//   * Position = 100% of equity, long.
+//   * Exit = exactly 5 bars after entry (75 minutes), market-close.
+//
+// Gotchas carried forward from the SPY EMA validation study (2026-04-18):
+//   1. Pine v5 rejects line-continuations that begin with `and` — boolean
+//      compound conditions are inlined on a single line.
+//   2. process_orders_on_close=true is required for signal_bar_close parity.
+//   3. RTH session filter uses exchange-aware `time()` with a weekday mask so
+//      DST transitions and weekends are handled automatically.
+//   4. TradingView renders timestamps in the viewer's LOCAL timezone
+//      (Central Time for this author) while Engine Lab writes proper UTC in
+//      bar.end_time. Cross-system timestamp diffs must normalize to a single
+//      reference frame — this is expected, not a bug.
+//
+// Gotchas fixed specifically in this port (were present in SPY_ORB_Strategy.pine):
+//   A. New-day reset is keyed on the FIRST RTH BAR of each session, not on
+//      calendar midnight. Prevents extended-hours bars from polluting the
+//      opening range if the chart is set to "ETH".
+//   B. Date window uses explicit fixed inputs, not a moving `timenow - N years`
+//      window. Makes the backtest reproducible beyond the report date.
+//   C. initial_capital and commission are declared in strategy() so Net P&L
+//      numbers match the Engine Lab run.
+// -----------------------------------------------------------------------------
+
+strategy(
+     title                    = "QQQ Opening Range Breakout (Engine Lab port)",
+     shorttitle               = "QQQ ORB",
+     overlay                  = true,
+     initial_capital          = 100000,
+     default_qty_type         = strategy.percent_of_equity,
+     default_qty_value        = 100,
+     commission_type          = strategy.commission.cash_per_order,
+     commission_value         = 1.0,
+     process_orders_on_close  = true,
+     pyramiding               = 0,
+     calc_on_every_tick       = false,
+     calc_on_order_fills      = false)
+
+// ─────────────────────────── Inputs ───────────────────────────
+orbBars     = input.int(3,   "Opening Range Bars (15-min)", minval=1, maxval=6, group="ORB")
+holdBars    = input.int(5,   "Hold Period (bars)",          minval=1,           group="Exit")
+minRangePct = input.float(0.30, "Min ORB Range % of Price", minval=0.0, step=0.05, group="Range Filter")
+maxRangePct = input.float(1.50, "Max ORB Range % of Price", minval=0.1, step=0.05, group="Range Filter")
+
+useDateFilter = input.bool(true, "Apply date window",                     group="Backtest Window")
+startDate     = input.time(timestamp("2025-04-17T00:00:00+00:00"), "Start", group="Backtest Window")
+endDate       = input.time(timestamp("2026-04-17T23:59:59+00:00"), "End",   group="Backtest Window")
+
+// ─────────────────────────── Timeframe sanity check ───────────────────────────
+var bool _tfWarned = false
+if timeframe.period != "15" and not _tfWarned
+    _tfWarned := true
+    label.new(bar_index, high,
+              "Apply this script on a 15-MINUTE chart\n(current TF = " + timeframe.period + ")",
+              color=color.red, textcolor=color.white,
+              style=label.style_label_down, yloc=yloc.abovebar)
+
+// ─────────────────────────── Session / date filters ───────────────────────────
+// Session membership — returns na if the current bar falls outside the
+// 9:30–16:00 ET window.  NOTE: Pine's `time(tf, session, tz)` returns the
+// CURRENT BAR'S timestamp when in session (not the session's start
+// timestamp), so it cannot be used to detect "first bar of session" via
+// change detection — that was a bug in earlier versions of this script.
+inSession = not na(time(timeframe.period, "0930-1600", "America/New_York"))
+inDates   = not useDateFilter or (time >= startDate and time <= endDate)
+
+// First bar of each RTH session — reliable on both RTH-only and ETH charts.
+// Keyed on the exchange-day timestamp `time("D")` (which is ET for NASDAQ),
+// gated on inSession so that on ETH charts the reset happens at the 9:30
+// bar, not at the 4am pre-market bar.
+dayTs = time("D")
+var int lastDayTs = na
+isFirstRthBar = inSession and (na(lastDayTs) or dayTs != lastDayTs)
+
+// ─────────────────────────── Daily ORB state ───────────────────────────
+var float orbHigh     = na
+var float orbLow      = na
+var int   barOfDay    = 0
+var bool  orbComplete = false
+var bool  orbValid    = false
+var bool  tradedToday = false
+var int   entryBar    = na
+
+if isFirstRthBar
+    lastDayTs   := dayTs
+    orbHigh     := high
+    orbLow      := low
+    barOfDay    := 1
+    orbComplete := false
+    orbValid    := false
+    tradedToday := false
+else if inSession
+    barOfDay := barOfDay + 1
+    if barOfDay <= orbBars
+        orbHigh := math.max(nz(orbHigh, high), high)
+        orbLow  := math.min(nz(orbLow,  low),  low)
+    if barOfDay == orbBars
+        orbComplete := true
+        rangePct    = (orbHigh - orbLow) / orbLow * 100.0
+        orbValid   := rangePct >= minRangePct and rangePct <= maxRangePct
+
+// ─────────────────────────── Entry / exit logic ───────────────────────────
+canEnter    = inSession and inDates and orbComplete and orbValid and barOfDay > orbBars and not tradedToday and strategy.position_size == 0
+entrySignal = canEnter and close > orbHigh
+
+if entrySignal
+    strategy.entry("Long", strategy.long)
+    entryBar    := bar_index
+    tradedToday := true
+
+exitDue = not na(entryBar) and bar_index >= entryBar + holdBars and strategy.position_size > 0
+
+if exitDue
+    strategy.close("Long", comment="TimeExit")
+    entryBar := na
+
+// Safety flatten if still long when the window ends.
+if strategy.position_size > 0 and useDateFilter and time > endDate
+    strategy.close("Long", comment="EndOfWindow")
+    entryBar := na
+
+// ─────────────────────────── Plots ───────────────────────────
+// ORB high / low — only drawn after the range is complete and we're past it.
+plot(orbComplete and barOfDay > orbBars ? orbHigh : na, "ORB High", color=color.new(color.green, 20), linewidth=2, style=plot.style_linebr)
+plot(orbComplete and barOfDay > orbBars ? orbLow  : na, "ORB Low",  color=color.new(color.red,   20), linewidth=2, style=plot.style_linebr)
+
+plotshape(entrySignal,
+     title    = "Entry",
+     style    = shape.triangleup,
+     location = location.belowbar,
+     color    = color.new(color.green, 0),
+     size     = size.small,
+     text     = "E")
+
+plotshape(exitDue,
+     title    = "Exit",
+     style    = shape.triangledown,
+     location = location.abovebar,
+     color    = color.new(color.red, 0),
+     size     = size.small,
+     text     = "X")
+
+// Background shade during the ORB formation window.
+bgcolor(inSession and barOfDay > 0 and barOfDay <= orbBars ? color.new(color.blue, 92) : na, title="ORB formation window")

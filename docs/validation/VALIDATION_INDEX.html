@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Strategy Validation — Artifact Index</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1a2540;
+    --panel-2: #22346b;
+    --text: #e2e8f0;
+    --text-muted: #94a3b8;
+    --accent: #4a6fb0;
+    --accent-2: #2e8b57;
+    --warn: #c0392b;
+    --code-bg: #0b1226;
+    --border: #2a3a5a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+  }
+  .container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 48px 32px 96px;
+  }
+  header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 24px;
+    margin-bottom: 32px;
+  }
+  header h1 {
+    margin: 0 0 8px;
+    font-size: 28px;
+    color: #fff;
+  }
+  header p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 15px;
+  }
+  .status {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: rgba(46,139,87,0.15);
+    color: #7cd3a0;
+    border: 1px solid rgba(46,139,87,0.4);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    margin-top: 10px;
+    text-transform: uppercase;
+  }
+  section {
+    margin-top: 40px;
+  }
+  section h2 {
+    font-size: 17px;
+    margin: 0 0 14px;
+    color: #cbd5e1;
+    border-left: 3px solid var(--accent);
+    padding-left: 10px;
+    letter-spacing: 0.3px;
+  }
+  section.primary h2 {
+    border-left-color: var(--accent-2);
+  }
+  ul.files {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  ul.files li {
+    margin-bottom: 10px;
+    padding: 12px 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    transition: border-color 0.15s ease;
+  }
+  ul.files li:hover {
+    border-color: var(--accent);
+  }
+  ul.files a {
+    color: #7ea8e0;
+    text-decoration: none;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  ul.files a:hover { text-decoration: underline; }
+  ul.files .note {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin-top: 20px;
+  }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px;
+  }
+  .stat .v {
+    font-size: 22px;
+    color: #fff;
+    font-weight: 600;
+  }
+  .stat .l {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    margin-top: 4px;
+  }
+  .stat.good .v { color: #7cd3a0; }
+  .stat.warn .v { color: #ffb547; }
+  footer {
+    margin-top: 56px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    background: var(--code-bg);
+    padding: 2px 5px;
+    border-radius: 3px;
+    color: #7ea8e0;
+  }
+  .kicker {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="kicker">Validation index</div>
+  <h1>Strategy Cross-System Validation — Artifact Hub</h1>
+  <p>Engine Lab (Python) vs TradingView (Pine v5). Generated 2026-04-18. All files below open directly from the <code>learn-ai</code> workspace.</p>
+  <span class="status">Validated · Patched · Regression-tested</span>
+</header>
+
+<section>
+  <h2>Current status</h2>
+  <div class="stats">
+    <div class="stat good"><div class="v">100 %</div><div class="l">SPY EMA direction agreement (matched pairs)</div></div>
+    <div class="stat good"><div class="v">96.4 %</div><div class="l">SPY ORB direction agreement</div></div>
+    <div class="stat"><div class="v">88.6 %</div><div class="l">QQQ ORB direction agreement</div></div>
+    <div class="stat good"><div class="v">0</div><div class="l">Multi-day-entry violations (post-patch)</div></div>
+    <div class="stat"><div class="v">$0.00</div><div class="l">Median per-trade price drift</div></div>
+    <div class="stat good"><div class="v">2 / 2</div><div class="l">Regression tests passing</div></div>
+  </div>
+</section>
+
+<section class="primary">
+  <h2>Validation reports (PDFs)</h2>
+  <ul class="files">
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/ORB_Cross_System_Validation_Report.pdf">ORB_Cross_System_Validation_Report.pdf</a>
+      <span class="note">★ Latest consolidated report — QQQ + SPY post-patch, 22 pages, includes both paired trade tables and the artifact index. Primary reference going forward.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/SPY_EMA_Crossover_Validation_Report.pdf">SPY_EMA_Crossover_Validation_Report.pdf</a>
+      <span class="note">First validation report — SPY EMA 5/10 + RSI crossover. Established the methodology and documented the CT-vs-ET + bar-start-vs-bar-end timestamp conventions referenced by every subsequent report.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/QQQ_ORB_Validation_Report.pdf">QQQ_ORB_Validation_Report.pdf</a>
+      <span class="note">Pre-patch QQQ ORB report. Superseded by the consolidated report; retained for the historical record of how the <code>_traded_today</code> defect was discovered.</span>
+    </li>
+  </ul>
+</section>
+
+<section>
+  <h2>Pine Script sources</h2>
+  <ul class="files">
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/QQQ_ORB_Strategy.pine">QQQ_ORB_Strategy.pine</a>
+      <span class="note">Production ORB Pine Script, applied to NASDAQ:QQQ and AMEX:SPY 15-min charts.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/QQQ_ORB_Strategy_Debug.pine">QQQ_ORB_Strategy_Debug.pine</a>
+      <span class="note">Diagnostic variant with a live on-chart info table. Used to locate the Pine session-change detection bug that was producing zero ORBs.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/SPY_EMA_Crossover_RSI.pine">SPY_EMA_Crossover_RSI.pine</a>
+      <span class="note">Pine v5 port of the EMA 5/10 + RSI(14) crossover strategy.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/SPY_ORB_Strategy.pine">SPY_ORB_Strategy.pine</a>
+      <span class="note">Legacy SPY ORB Pine. Reference for the <code>tradedToday</code> flag that was missing from the Python port until the 2026-04-18 patch.</span>
+    </li>
+  </ul>
+</section>
+
+<section>
+  <h2>Engine Lab code changes</h2>
+  <ul class="files">
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/PythonDataService/app/engine/strategy/algorithms/spy_orb.py">PythonDataService/app/engine/strategy/algorithms/spy_orb.py</a>
+      <span class="note">Patched with <code>_traded_today</code> flag: init, reset_day, entry-branch guard. One-trade-per-day parity with Pine restored.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/PythonDataService/app/engine/tests/test_spy_orb_one_trade_per_day.py">PythonDataService/app/engine/tests/test_spy_orb_one_trade_per_day.py</a>
+      <span class="note">Regression test. Verified to FAIL against simulated pre-patch code and PASS against post-patch code.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/PythonDataService/app/routers/engine.py">PythonDataService/app/routers/engine.py</a>
+      <span class="note">Registered the <code>orb</code> strategy. Extended <code>StrategyRegistration</code> and <code>StrategyInfo</code> with <code>algorithm_pseudocode</code> and <code>gotchas</code>; populated both fields for all six strategies.</span>
+    </li>
+  </ul>
+</section>
+
+<section>
+  <h2>Frontend changes (Angular)</h2>
+  <ul class="files">
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/Frontend/src/app/components/lean-engine/lean-engine.component.ts">Frontend/src/app/components/lean-engine/lean-engine.component.ts</a>
+      <span class="note">Extended <code>StrategyInfo</code> TypeScript interface with the two new optional fields.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/Frontend/src/app/components/lean-engine/lean-engine.component.html">Frontend/src/app/components/lean-engine/lean-engine.component.html</a>
+      <span class="note">Renders collapsible &lt;details&gt; sections for the algorithm pseudocode (blue stripe) and gotchas list (red stripe) under the strategy description.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/Frontend/src/app/components/lean-engine/lean-engine.component.scss">Frontend/src/app/components/lean-engine/lean-engine.component.scss</a>
+      <span class="note">Styles for the new sections.</span>
+    </li>
+  </ul>
+</section>
+
+<section>
+  <h2>Trade CSVs — inputs</h2>
+  <ul class="files">
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/uploads/SPY_ema_crossover_trades%20%281%29.csv">SPY_ema_crossover_trades (1).csv</a>
+      <span class="note">Engine Lab — SPY EMA crossover — 39 trades — 2025-04-17 → 2026-04-17.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/uploads/SPY_EMA+RSI_AMEX_SPY_2026-04-18.csv">SPY_EMA+RSI_AMEX_SPY_2026-04-18.csv</a>
+      <span class="note">TradingView — SPY EMA crossover — 38 trades — AMEX:SPY export.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/uploads/QQQ_orb_trades.csv">QQQ_orb_trades.csv</a>
+      <span class="note">Engine Lab — QQQ ORB — pre-patch — 417 trades. Used to surface the <code>_traded_today</code> defect.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/uploads/QQQ_orb_trades%20%282%29.csv">QQQ_orb_trades (2).csv</a>
+      <span class="note">Engine Lab — QQQ ORB — post-patch — 145 trades. Zero multi-day-entry violations.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/uploads/QQQ_ORB_NASDAQ_QQQ_2026-04-18.csv">QQQ_ORB_NASDAQ_QQQ_2026-04-18.csv</a>
+      <span class="note">TradingView — QQQ ORB — 137 trades — NASDAQ:QQQ export.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/uploads/SPY_orb_trades%20%282%29.csv">SPY_orb_trades (2).csv</a>
+      <span class="note">Engine Lab — SPY ORB — post-patch — 113 trades.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/uploads/QQQ_ORB_AMEX_SPY_2026-04-18.csv">QQQ_ORB_AMEX_SPY_2026-04-18.csv</a>
+      <span class="note">TradingView — SPY ORB — 116 trades. (Filename retains the Pine script's &quot;QQQ ORB&quot; title even though the data is SPY; the script is symbol-agnostic.)</span>
+    </li>
+  </ul>
+</section>
+
+<section>
+  <h2>Paired comparison CSVs — diff outputs</h2>
+  <ul class="files">
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/ema_crossover_trade_comparison.csv">ema_crossover_trade_comparison.csv</a>
+      <span class="note">SPY EMA paired diff — 36 matched pairs, 100 % direction agreement.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/qqq_orb_trade_comparison.csv">qqq_orb_trade_comparison.csv</a>
+      <span class="note">QQQ ORB paired diff — pre-patch (filtered to first-per-day for apples-to-apples).</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/qqq_orb_post_patch_comparison.csv">qqq_orb_post_patch_comparison.csv</a>
+      <span class="note">QQQ ORB paired diff — post-patch — 123 matched pairs, 88.6 % direction agreement.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/learn-ai/spy_orb_post_patch_comparison.csv">spy_orb_post_patch_comparison.csv</a>
+      <span class="note">SPY ORB paired diff — 112 matched pairs, 96.4 % direction agreement.</span>
+    </li>
+  </ul>
+</section>
+
+<section>
+  <h2>Memory notes (auto-memory)</h2>
+  <ul class="files">
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/.auto-memory/orb_strategy_overview.md">orb_strategy_overview.md</a>
+      <span class="note">Updated with pre-patch and post-patch metrics, and a reference to the regression test.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/.auto-memory/ema_divergence_root_cause.md">ema_divergence_root_cause.md</a>
+      <span class="note">The memory that claimed a $1.50–$4.00 TV vs Polygon feed gap — contradicted by the SPY EMA validation's sub-penny finding. Needs an update in a future session.</span>
+    </li>
+    <li>
+      <a href="computer:///sessions/practical-cool-archimedes/mnt/.auto-memory/lean_engine_reproducibility.md">lean_engine_reproducibility.md</a>
+      <span class="note">Reference list of LEAN reproducibility traps — EMA seeding, Wilders RSI, Decimal arithmetic, ROUND_HALF_UP. Mirrored into the new strategy-registry <code>gotchas</code> field.</span>
+    </li>
+  </ul>
+</section>
+
+<footer>
+  <p>Generated by the validation pipeline. To refresh this index after new work, re-run <code>build_orb_consolidated_pdf.py</code> and regenerate <code>VALIDATION_INDEX.html</code>. The <code>computer://</code> links open each file in the Cowork workspace.</p>
+</footer>
+
+</div>
+</body>
+</html>

@@ -13,3 +13,6 @@ requests>=2.28
 python-multipart==0.0.20
 reportlab>=4.0
 QuantLib>=1.35
+# Used by app.research.divergence.dashboard to render the TV vs Polygon
+# data-divergence dashboard (iframe target in the research lab).
+plotly>=5.20,<7

@@ -1,0 +1,87 @@
+//@version=5
+strategy("SPY Opening Range Breakout", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100, process_orders_on_close=true)
+
+// ============================================================
+// STRATEGY: Pure Price-Action Opening Range Breakout
+// ZERO warmup — each day is independent. No indicators.
+// Easy to validate: ORB high/low are exact price levels.
+// ============================================================
+
+// --- Parameters ---
+orbBars     = input.int(3,    "Opening Range Bars (15-min)",  minval=1, maxval=6)
+holdBars    = input.int(5,    "Hold Period (bars)",           minval=1)
+minRangePct = input.float(0.30, "Min Range % of Price",      minval=0.0, step=0.05)
+maxRangePct = input.float(1.50, "Max Range % of Price",      minval=0.1, step=0.10)
+
+// --- Lookback Filter ---
+lookbackYears = input.int(2, "Lookback Years", minval=1)
+startDate = timestamp(year(timenow) - lookbackYears, month(timenow), dayofmonth(timenow), 0, 0)
+inDateRange = time >= startDate
+
+// --- RTH Filter (9:30-16:00 ET) ---
+inRegularHours = not na(time(timeframe.period, "0930-1600", "America/New_York"))
+
+// --- Session Detection ---
+// Detect new trading day
+isNewDay = ta.change(time("D")) != 0
+
+// --- Opening Range Tracking ---
+var float orbHigh = na
+var float orbLow  = na
+var int   barOfDay = 0
+var bool  orbComplete = false
+var bool  orbValid = false
+var bool  tradedToday = false  // ONE trade per day — critical for cross-system validation
+
+if isNewDay
+    orbHigh := high
+    orbLow  := low
+    barOfDay := 1
+    orbComplete := false
+    orbValid := false
+    tradedToday := false
+else if inRegularHours
+    barOfDay := barOfDay + 1
+    if barOfDay <= orbBars
+        // Still building the opening range
+        orbHigh := math.max(nz(orbHigh, high), high)
+        orbLow  := math.min(nz(orbLow, low), low)
+
+    if barOfDay == orbBars
+        // ORB is now complete — validate range size
+        orbComplete := true
+        float rangePct = (orbHigh - orbLow) / orbLow * 100
+        orbValid := rangePct >= minRangePct and rangePct <= maxRangePct
+
+// --- Entry Logic ---
+// After ORB is complete, look for a bar that CLOSES above ORB high
+// ONE trade per day only — prevents re-entry after exit while still above ORB high
+bool canEnter = orbComplete and orbValid and barOfDay > orbBars and inRegularHours and inDateRange and not tradedToday
+bool entrySignal = canEnter and strategy.position_size == 0 and close > orbHigh
+
+// --- Track entry bar for hold period ---
+var int entryBarIndex = na
+
+if entrySignal
+    strategy.entry("Long", strategy.long)
+    entryBarIndex := bar_index
+    tradedToday := true
+
+// --- Exit after holdBars ---
+bool exitSignal = not na(entryBarIndex) and bar_index >= entryBarIndex + holdBars
+
+if exitSignal
+    strategy.close("Long")
+    entryBarIndex := na
+
+// --- Plots ---
+// Opening range lines (only visible after ORB is complete)
+plot(orbComplete and barOfDay > orbBars ? orbHigh : na, "ORB High", color=color.new(color.green, 30), linewidth=2, style=plot.style_linebr)
+plot(orbComplete and barOfDay > orbBars ? orbLow : na,  "ORB Low",  color=color.new(color.red, 30),   linewidth=2, style=plot.style_linebr)
+
+// Entry/exit markers
+plotshape(entrySignal, style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.small, title="Entry")
+plotshape(exitSignal,  style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.small, title="Exit")
+
+// --- Background: shade the opening range formation period ---
+bgcolor(inRegularHours and barOfDay <= orbBars ? color.new(color.blue, 90) : na, title="ORB Formation")

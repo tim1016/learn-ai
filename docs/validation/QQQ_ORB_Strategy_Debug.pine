@@ -1,0 +1,191 @@
+//@version=5
+// -----------------------------------------------------------------------------
+// QQQ Opening Range Breakout — DIAGNOSTIC VERSION
+//
+// This is the same strategy as QQQ_ORB_Strategy.pine, with added on-chart
+// instrumentation so we can see WHY trades are / aren't firing:
+//   * Hard runtime.error if the chart isn't on a 15-minute timeframe.
+//   * Always-visible ORB high/low lines (even during formation).
+//   * Info table in the top-right with live state.
+//   * Plot shapes that mark:
+//       - Bars where the ORB just completed (regardless of validity)
+//       - Bars where the range was REJECTED (too small or too large)
+//       - Bars where an entry was POSSIBLE but we were already in a trade
+//         or had already traded today
+//   * Counters for total ORBs completed / valid / rejected and total entries.
+//
+// Once you confirm what the chart shows, the matching production script is
+// QQQ_ORB_Strategy.pine (same rules, no diagnostics).
+// -----------------------------------------------------------------------------
+
+strategy(
+     title                    = "QQQ ORB — DEBUG",
+     shorttitle               = "QQQ ORB DEBUG",
+     overlay                  = true,
+     initial_capital          = 100000,
+     default_qty_type         = strategy.percent_of_equity,
+     default_qty_value        = 100,
+     commission_type          = strategy.commission.cash_per_order,
+     commission_value         = 1.0,
+     process_orders_on_close  = true,
+     pyramiding               = 0)
+
+// ─────────────────────────── Inputs ───────────────────────────
+orbBars     = input.int(3,    "Opening Range Bars (15-min)",   minval=1, maxval=6, group="ORB")
+holdBars    = input.int(5,    "Hold Period (bars)",            minval=1,           group="Exit")
+minRangePct = input.float(0.30, "Min ORB Range % of Price", minval=0.0, step=0.05, group="Range Filter")
+maxRangePct = input.float(1.50, "Max ORB Range % of Price", minval=0.1, step=0.05, group="Range Filter")
+
+useDateFilter = input.bool(true, "Apply date window",                              group="Backtest Window")
+startDate     = input.time(timestamp("2025-04-17T00:00:00+00:00"), "Start",        group="Backtest Window")
+endDate       = input.time(timestamp("2026-04-17T23:59:59+00:00"), "End",          group="Backtest Window")
+
+// ─────────────────────────── HARD timeframe check ───────────────────────────
+// Refuses to run on anything other than 15-minute bars so it's impossible
+// to misdiagnose mis-timeframed runs as "strategy has no trades".
+if timeframe.period != "15"
+    runtime.error("QQQ ORB DEBUG requires a 15-MINUTE chart. Current timeframe = " + timeframe.period + ".  Switch the chart to 15m and reload.")
+
+// ─────────────────────────── Session / date filters ───────────────────────────
+// Session membership.  Pine's `time(tf, session, tz)` returns the CURRENT
+// bar's timestamp when in session (not the session start), so it can't be
+// used with change-detection — earlier versions of this script had that bug.
+inSession = not na(time(timeframe.period, "0930-1600", "America/New_York"))
+inDates   = not useDateFilter or (time >= startDate and time <= endDate)
+
+// First RTH bar of each new exchange day.  Keyed on `time("D")` which
+// changes once per ET calendar day; gated on inSession so the reset happens
+// at 9:30 even on ETH charts.
+dayTs = time("D")
+var int lastDayTs = na
+isFirstRthBar = inSession and (na(lastDayTs) or dayTs != lastDayTs)
+
+// ─────────────────────────── Daily ORB state ───────────────────────────
+var float orbHigh     = na
+var float orbLow      = na
+var int   barOfDay    = 0
+var bool  orbComplete = false
+var bool  orbValid    = false
+var bool  tradedToday = false
+var int   entryBar    = na
+var float lastRangePct = na
+var int   rangeTooSmallCount = 0
+var int   rangeTooLargeCount = 0
+var int   orbValidCount      = 0
+var int   orbCompleteCount   = 0
+var int   entryCount         = 0
+var int   tradingDaysCount   = 0
+var bool  justCompletedOrb   = false
+var bool  justRejectedSmall  = false
+var bool  justRejectedLarge  = false
+
+// Reset per-bar flags
+justCompletedOrb  := false
+justRejectedSmall := false
+justRejectedLarge := false
+
+if isFirstRthBar
+    lastDayTs        := dayTs
+    orbHigh          := high
+    orbLow           := low
+    barOfDay         := 1
+    orbComplete      := false
+    orbValid         := false
+    tradedToday      := false
+    lastRangePct     := na
+    tradingDaysCount := tradingDaysCount + 1
+else if inSession
+    barOfDay := barOfDay + 1
+    if barOfDay <= orbBars
+        orbHigh := math.max(nz(orbHigh, high), high)
+        orbLow  := math.min(nz(orbLow,  low),  low)
+    if barOfDay == orbBars
+        orbComplete := true
+        rangePct     = (orbHigh - orbLow) / orbLow * 100.0
+        lastRangePct := rangePct
+        orbValid    := rangePct >= minRangePct and rangePct <= maxRangePct
+        orbCompleteCount := orbCompleteCount + 1
+        justCompletedOrb := true
+        if rangePct < minRangePct
+            rangeTooSmallCount := rangeTooSmallCount + 1
+            justRejectedSmall  := true
+        else if rangePct > maxRangePct
+            rangeTooLargeCount := rangeTooLargeCount + 1
+            justRejectedLarge  := true
+        else
+            orbValidCount := orbValidCount + 1
+
+// ─────────────────────────── Entry / exit logic ───────────────────────────
+canEnter    = inSession and inDates and orbComplete and orbValid and barOfDay > orbBars and not tradedToday and strategy.position_size == 0
+entrySignal = canEnter and close > orbHigh
+
+if entrySignal
+    strategy.entry("Long", strategy.long)
+    entryBar    := bar_index
+    tradedToday := true
+    entryCount  := entryCount + 1
+
+exitDue = not na(entryBar) and bar_index >= entryBar + holdBars and strategy.position_size > 0
+if exitDue
+    strategy.close("Long", comment="TimeExit")
+    entryBar := na
+
+if strategy.position_size > 0 and useDateFilter and time > endDate
+    strategy.close("Long", comment="EndOfWindow")
+    entryBar := na
+
+// ─────────────────────────── Plots ───────────────────────────
+// Always-visible ORB lines (not just after completion) so you can see
+// the range being built.
+plot(inSession and not na(orbHigh) ? orbHigh : na, "ORB High", color=color.new(color.green, 20), linewidth=2, style=plot.style_linebr)
+plot(inSession and not na(orbLow)  ? orbLow  : na, "ORB Low",  color=color.new(color.red,   20), linewidth=2, style=plot.style_linebr)
+
+// Diagnostic shapes
+plotshape(justCompletedOrb  and orbValid,           title="ORB Complete (valid)",   style=shape.diamond,     location=location.abovebar, color=color.new(color.blue,   0), size=size.tiny)
+plotshape(justRejectedSmall,                        title="ORB rejected — too small", style=shape.xcross,    location=location.abovebar, color=color.new(color.orange, 0), size=size.tiny, text="S")
+plotshape(justRejectedLarge,                        title="ORB rejected — too large", style=shape.xcross,    location=location.abovebar, color=color.new(color.purple, 0), size=size.tiny, text="L")
+plotshape(entrySignal,                              title="Entry", style=shape.triangleup,   location=location.belowbar, color=color.new(color.green, 0), size=size.small, text="E")
+
+// ORB formation window shading
+bgcolor(inSession and barOfDay > 0 and barOfDay <= orbBars ? color.new(color.blue, 92) : na, title="ORB formation")
+
+// ─────────────────────────── Diagnostic table (top-right) ───────────────────────────
+var table infoTable = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80), border_width=1, border_color=color.gray)
+
+if barstate.islast
+    table.cell(infoTable, 0, 0,  "Diagnostic",       text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 60))
+    table.cell(infoTable, 1, 0,  "Value",            text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 60))
+
+    table.cell(infoTable, 0, 1,  "timeframe.period", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 1,  timeframe.period,   text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 2,  "in RTH session",   text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 2,  inSession ? "yes" : "no", text_color=inSession ? color.lime : color.red, text_size=size.small)
+
+    table.cell(infoTable, 0, 3,  "barOfDay",         text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 3,  str.tostring(barOfDay), text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 4,  "orbHigh / orbLow", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 4,  (na(orbHigh) ? "—" : str.tostring(orbHigh, "#.##")) + " / " + (na(orbLow) ? "—" : str.tostring(orbLow, "#.##")), text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 5,  "last rangePct",    text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 5,  na(lastRangePct) ? "—" : str.tostring(lastRangePct, "#.####") + "%",
+               text_color=na(lastRangePct) ? color.gray : (lastRangePct >= minRangePct and lastRangePct <= maxRangePct ? color.lime : color.orange), text_size=size.small)
+
+    table.cell(infoTable, 0, 6,  "Trading days",     text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 6,  str.tostring(tradingDaysCount), text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 7,  "ORBs completed",   text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 7,  str.tostring(orbCompleteCount), text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 8,  "  valid",          text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 8,  str.tostring(orbValidCount), text_color=color.lime, text_size=size.small)
+
+    table.cell(infoTable, 0, 9,  "  rejected: too small", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 9,  str.tostring(rangeTooSmallCount), text_color=color.orange, text_size=size.small)
+
+    table.cell(infoTable, 0, 10, "  rejected: too large", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 10, str.tostring(rangeTooLargeCount), text_color=color.purple, text_size=size.small)
+
+    table.cell(infoTable, 0, 11, "ENTRIES FIRED",    text_color=color.white, text_size=size.small, bgcolor=color.new(color.green, 60))
+    table.cell(infoTable, 1, 11, str.tostring(entryCount), text_color=color.white, text_size=size.small, bgcolor=color.new(color.green, 60))

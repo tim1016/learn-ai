@@ -266,6 +266,69 @@
   color: $text-secondary;
 }
 
+// ─── Strategy Algorithm & Gotchas ─────────────────────
+// Both sections use <details>/<summary> to collapse by default.
+// The summary line is the clickable header.
+.strategy-algorithm,
+.strategy-gotchas {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: $bg-elevated;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: $text-secondary;
+
+  > summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: $text-primary;
+    padding: 0.25rem 0;
+    list-style: none;
+    user-select: none;
+
+    &::before {
+      content: "▸ ";
+      display: inline-block;
+      transition: transform 0.15s ease;
+    }
+  }
+
+  &[open] > summary::before {
+    content: "▾ ";
+  }
+
+  ul {
+    margin: 0.5rem 0 0 0;
+    padding-left: 1.25rem;
+
+    li {
+      margin-bottom: 0.5rem;
+      line-height: 1.45;
+    }
+  }
+}
+
+.strategy-algorithm {
+  border-left: 3px solid #4a6fb0; // blue stripe
+}
+
+.strategy-gotchas {
+  border-left: 3px solid #c0392b; // red stripe — these are traps
+}
+
+.strategy-pseudocode {
+  margin: 0.5rem 0 0 0;
+  padding: 0.6rem 0.8rem;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: $text-primary;
+  white-space: pre;
+  overflow-x: auto;
+}
+
 // ─── Actions ──────────────────────────────────────────
 .actions {
   display: flex;

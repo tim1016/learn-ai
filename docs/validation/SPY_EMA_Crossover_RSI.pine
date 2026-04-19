@@ -1,0 +1,135 @@
+//@version=5
+// -----------------------------------------------------------------------------
+// SPY EMA 5/10 Crossover with RSI Filter
+// Pine Script port of Engine Lab `ema_crossover` strategy
+// (PythonDataService/app/engine/strategy/algorithms/spy_ema_crossover.py,
+//  which itself is a line-for-line port of LEAN's SpyEmaCrossoverAlgorithm.cs).
+//
+// Run parameters this script mirrors:
+//   symbol            : SPY
+//   resolution        : 15-min (consolidated from 1-min in Engine Lab)
+//   initial_cash      : 100000
+//   commission        : $1 per order, cash
+//   fill_mode         : signal_bar_close  → process_orders_on_close = true
+//   start / end date  : 2025-04-17 → 2026-04-17
+//
+// Entry rules:
+//   * Fresh crossover: EMA5 crosses up through EMA10 this bar
+//   * Gap filter:      (EMA5 - EMA10) >= 0.20
+//   * RSI filter:      50 <= RSI(14, Wilders) <= 70
+// Position:
+//   * All-in on the signal bar close (SetHoldings 1.0 ≈ 100% equity)
+// Exit:
+//   * After exactly 5 consolidated bars held (75 minutes), market-close.
+//
+// Known divergence vs Engine Lab (see memory: ema_divergence_root_cause.md):
+//   * TV (AMEX:SPY) prices are systematically $1.50–$4.00 below Polygon.
+//   * EMA recursion amplifies the per-bar feed difference.
+//   * Pine's EMA warmup seeds from `close[0]`, LEAN/Engine Lab seeds from
+//     SMA of the first N samples. First ~10 bars will differ even if feeds
+//     were identical. After warmup the recurrence dominates.
+//   Direction-agreement is the useful metric here, not exact signal match.
+// -----------------------------------------------------------------------------
+
+strategy(
+     title                    = "SPY EMA 5/10 Crossover + RSI (Engine Lab port)",
+     shorttitle               = "SPY EMA+RSI",
+     overlay                  = true,
+     initial_capital          = 100000,
+     default_qty_type         = strategy.percent_of_equity,
+     default_qty_value        = 100,
+     commission_type          = strategy.commission.cash_per_order,
+     commission_value         = 1.0,
+     process_orders_on_close  = true,
+     pyramiding               = 0,
+     calc_on_every_tick       = false,
+     calc_on_order_fills      = false)
+
+// ───────────────────────────── Inputs ─────────────────────────────
+emaFastLen = input.int(5,  "EMA Fast Length", minval=1, group="Indicators")
+emaSlowLen = input.int(10, "EMA Slow Length", minval=1, group="Indicators")
+rsiLen     = input.int(14, "RSI Length",      minval=1, group="Indicators")
+
+rsiLow     = input.float(50.0, "RSI Lower Bound", group="Entry Filters")
+rsiHigh    = input.float(70.0, "RSI Upper Bound", group="Entry Filters")
+gapMin     = input.float(0.20, "Min EMA Gap ($)", step=0.05, group="Entry Filters")
+
+holdBars   = input.int(5, "Hold N 15-min Bars (exit)", minval=1, group="Exit")
+
+useDateFilter = input.bool(true, "Apply date window", group="Backtest Window")
+startDate     = input.time(timestamp("2025-04-17T00:00:00+00:00"), "Start", group="Backtest Window")
+endDate       = input.time(timestamp("2026-04-17T23:59:59+00:00"), "End",   group="Backtest Window")
+
+rthOnly = input.bool(true, "Regular trading hours only (9:30–16:00 ET)", group="Backtest Window")
+sess    = "0930-1600:23456"
+
+// ────────────────── Timeframe sanity check ──────────────────
+// Engine Lab consolidates 1-min to 15-min. Apply this script on a 15-min chart.
+var bool _tfWarned = false
+if timeframe.period != "15" and not _tfWarned
+    _tfWarned := true
+    label.new(bar_index, high,
+              "Apply this script on a 15-MINUTE chart\n(current TF = " + timeframe.period + ")",
+              color=color.red, textcolor=color.white,
+              style=label.style_label_down, yloc=yloc.abovebar)
+
+// ───────────────────────────── Indicators ─────────────────────────────
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+rsiVal  = ta.rsi(close, rsiLen)
+
+// Crossover memory — updated every bar (warmup included), mirroring
+// the Engine Lab behaviour where `_prev_ema5_above_ema10` is maintained
+// during the warmup branch too.
+var bool prevFastAbove = false
+fastAbove = emaFast > emaSlow
+
+// ───────────────────────────── Filters ─────────────────────────────
+inDates   = not useDateFilter or (time >= startDate and time <= endDate)
+inSession = not rthOnly or not na(time(timeframe.period, sess, "America/New_York"))
+
+// ───────────────────────────── Signal logic ─────────────────────────────
+freshCross = fastAbove and not prevFastAbove
+emaGap     = emaFast - emaSlow
+gapOK      = emaGap >= gapMin
+rsiOK      = rsiVal >= rsiLow and rsiVal <= rsiHigh
+
+canEnter = strategy.position_size == 0 and inDates and inSession and freshCross and gapOK and rsiOK
+
+// ───────────────────────────── Orders ─────────────────────────────
+var int barsHeld = 0
+
+// Entry — position_size reads 0 on the entry bar; fill happens at the bar
+// close because process_orders_on_close = true.
+if canEnter
+    strategy.entry("Long", strategy.long)
+    barsHeld := 0
+
+// Hold-clock — increments only on bars where we are actually long
+// (i.e. the bar AFTER the entry fill and onward), matching Engine Lab's
+// `bars_until_exit` decrement that happens on subsequent in_position bars.
+if strategy.position_size > 0
+    barsHeld += 1
+    if barsHeld >= holdBars
+        strategy.close("Long", comment="TimeExit")
+        barsHeld := 0
+
+// Safety flatten if the backtest window ends while long.
+if strategy.position_size > 0 and useDateFilter and time > endDate
+    strategy.close("Long", comment="EndOfWindow")
+    barsHeld := 0
+
+// Roll the crossover state forward — last statement of every bar.
+prevFastAbove := fastAbove
+
+// ───────────────────────────── Plots ─────────────────────────────
+plot(emaFast, "EMA Fast", color=color.new(color.orange, 0), linewidth=2)
+plot(emaSlow, "EMA Slow", color=color.new(color.blue,   0), linewidth=2)
+
+plotshape(canEnter,
+          title="Entry Signal", style=shape.triangleup,
+          location=location.belowbar, size=size.tiny,
+          color=color.new(color.green, 0), text="E")
+
+// Optional: show RSI value at entry in the data window.
+plotchar(canEnter ? rsiVal : na, "RSI at Entry", "", location=location.top, color=color.gray)
