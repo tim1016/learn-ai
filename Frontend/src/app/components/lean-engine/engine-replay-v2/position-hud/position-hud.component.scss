@@ -1,0 +1,127 @@
+:host {
+  display: block;
+}
+
+.hud {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9) 0%, rgba(15, 23, 42, 0.75) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  min-height: 170px;
+
+  &.long  { border-left: 3px solid #22c55e; }
+  &.short { border-left: 3px solid #f87171; }
+  &.flat  { border-left: 3px solid #64748b; }
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.side-pill {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.2);
+  color: #cbd5e1;
+
+  .long  & { background: rgba(34, 197, 94, 0.18); color: #4ade80; }
+  .short & { background: rgba(248, 113, 113, 0.18); color: #f87171; }
+}
+
+.bars-held {
+  font-size: 10px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.rows {
+  display: grid;
+  gap: 4px;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12px;
+
+  .lbl { color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; }
+  .val { color: #e2e8f0; font-weight: 500; }
+  .val.small { font-size: 10px; color: #94a3b8; }
+}
+
+footer {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(100, 116, 139, 0.08);
+
+  &.positive {
+    background: rgba(34, 197, 94, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.25);
+  }
+
+  &.negative {
+    background: rgba(248, 113, 113, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.25);
+  }
+
+  .pnl-label {
+    font-size: 10px;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .pnl-values {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .pnl-abs {
+    font-size: 18px;
+    font-weight: 700;
+    color: #e2e8f0;
+  }
+
+  &.positive .pnl-abs { color: #4ade80; }
+  &.negative .pnl-abs { color: #f87171; }
+
+  .pnl-pct {
+    font-size: 11px;
+    color: #94a3b8;
+  }
+}
+
+.flat-body {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 10px 0;
+
+  .flat-dot {
+    width: 10px; height: 10px;
+    background: #475569;
+    border-radius: 999px;
+    box-shadow: 0 0 0 4px rgba(71, 85, 105, 0.25);
+  }
+
+  .flat-label {
+    font-size: 11px;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+}

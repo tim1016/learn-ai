@@ -1,0 +1,52 @@
+<div class="hud" [class.flat]="pos().side === 'flat'"
+     [class.long]="pos().side === 'long'"
+     [class.short]="pos().side === 'short'">
+  <header>
+    <span class="side-pill">{{ sideLabel() }}</span>
+    @if (pos().side !== 'flat') {
+      <span class="bars-held">{{ pos().barsHeld }} bar{{ pos().barsHeld === 1 ? '' : 's' }}</span>
+    }
+  </header>
+
+  @if (pos().side === 'flat') {
+    <div class="flat-body">
+      <div class="flat-dot"></div>
+      <div class="flat-label">No open position</div>
+    </div>
+  } @else {
+    <div class="rows">
+      <div class="row">
+        <span class="lbl">Entry</span>
+        <span class="val">{{ pos().entryPrice! | number:'1.2-2' }}</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Now</span>
+        <span class="val">
+          @if (bar(); as b) {
+            {{ b.close | number:'1.2-2' }}
+          } @else { — }
+        </span>
+      </div>
+      <div class="row">
+        <span class="lbl">Since</span>
+        <span class="val small">{{ pos().entryTime | date:'MMM d, HH:mm' }}</span>
+      </div>
+    </div>
+
+    <footer [class.positive]="pnlClass() === 'positive'" [class.negative]="pnlClass() === 'negative'">
+      <span class="pnl-label">Floating P&amp;L</span>
+      <div class="pnl-values">
+        <span class="pnl-abs">
+          @if (pos().floatingPnl !== null) {
+            {{ pos().floatingPnl! >= 0 ? '+' : '' }}{{ pos().floatingPnl! | number:'1.2-2' }}
+          } @else { — }
+        </span>
+        @if (pos().floatingPnlPct !== null) {
+          <span class="pnl-pct">
+            {{ pos().floatingPnlPct! >= 0 ? '+' : '' }}{{ pos().floatingPnlPct! | number:'1.2-2' }}%
+          </span>
+        }
+      </div>
+    </footer>
+  }
+</div>
