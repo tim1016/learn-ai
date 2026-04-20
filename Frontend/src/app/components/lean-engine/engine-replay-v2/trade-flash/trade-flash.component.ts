@@ -17,15 +17,30 @@ export class TradeFlashComponent {
 
   readonly flash = this.svc.flashEvent;
 
-  readonly pnlClass = computed(() => {
+  readonly kindClass = computed(() => {
     const ev = this.flash();
     if (!ev) return '';
-    return ev.trade.pnl >= 0 ? 'gain' : 'loss';
+    switch (ev.kind) {
+      case 'buy-entry':  return 'buy';
+      case 'sell-entry': return 'sell';
+      case 'exit':       return ev.trade.pnl >= 0 ? 'gain' : 'loss';
+      case 'unwind':     return 'unwind';
+    }
   });
 
   readonly label = computed(() => {
     const ev = this.flash();
     if (!ev) return '';
-    return ev.kind === 'exit' ? 'EXIT' : 'UNWIND';
+    switch (ev.kind) {
+      case 'buy-entry':  return 'BUY';
+      case 'sell-entry': return 'SELL';
+      case 'exit':       return 'EXIT';
+      case 'unwind':     return 'UNWIND';
+    }
+  });
+
+  readonly isEntry = computed(() => {
+    const ev = this.flash();
+    return ev ? (ev.kind === 'buy-entry' || ev.kind === 'sell-entry') : false;
   });
 }

@@ -53,65 +53,55 @@
   font-size: 13px;
 }
 
-.v2-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  gap: 12px;
-  align-items: start;
-
-  @media (max-width: 1000px) {
-    grid-template-columns: 1fr;
-  }
-}
-
-.chart-col {
+.chart-area {
   display: grid;
   gap: 10px;
-  min-width: 0;
 }
 
 .chart-stack {
   position: relative;
 }
 
-.side-col {
-  display: grid;
-  gap: 12px;
-}
+/* ── Trade history panel (always visible, full-width at bottom) ───── */
 
-.trade-log {
+.trade-history {
+  margin-top: 18px;
   background: rgba(15, 23, 42, 0.7);
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 10px;
-  padding: 10px 12px;
+  padding: 14px 16px;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
-.log-title {
-  margin: 0 0 10px;
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: #94a3b8;
+.th-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 6px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
 
-  .count {
-    background: rgba(148, 163, 184, 0.15);
-    padding: 1px 9px;
-    border-radius: 999px;
-    font-size: 10px;
+  h4 {
+    margin: 0;
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
     color: #cbd5e1;
+    font-weight: 700;
+  }
+
+  .th-count {
+    font-size: 10px;
+    color: #64748b;
+    letter-spacing: 0.05em;
   }
 }
 
-.log-empty {
+.th-empty {
   display: grid;
   justify-items: center;
-  gap: 6px;
-  padding: 24px 0;
+  gap: 8px;
+  padding: 28px 0;
   text-align: center;
 
   .empty-dot {
@@ -129,17 +119,17 @@
   }
 
   .empty-sub {
-    font-size: 10px;
+    font-size: 11px;
     color: #64748b;
   }
 }
 
-.log-scroll {
-  max-height: 420px;
+.th-scroll {
+  max-height: 320px;
   overflow-y: auto;
 }
 
-.trade-log table {
+.trade-history table {
   width: 100%;
   border-collapse: collapse;
   font-size: 11px;
@@ -149,28 +139,34 @@
     font-weight: 600;
     letter-spacing: 0.05em;
     color: #64748b;
-    padding: 4px 6px;
+    padding: 6px 10px;
     border-bottom: 1px solid rgba(148, 163, 184, 0.15);
     text-transform: uppercase;
     font-size: 9px;
     position: sticky;
     top: 0;
     background: rgba(15, 23, 42, 0.95);
+    z-index: 1;
 
     &.num { text-align: right; }
+    &.th-num { width: 36px; }
   }
 
   td {
-    padding: 6px;
+    padding: 6px 10px;
     border-bottom: 1px solid rgba(148, 163, 184, 0.06);
     color: #cbd5e1;
-    vertical-align: top;
+    vertical-align: middle;
 
-    &.idx { color: #64748b; font-size: 10px; }
+    &.th-num { color: #64748b; font-size: 10px; width: 36px; }
     &.num { text-align: right; font-variant-numeric: tabular-nums; }
+
     &.ts .time { font-size: 10px; color: #cbd5e1; }
     &.ts .price { font-size: 10px; color: #94a3b8; }
+
     &.pnl .pnl-value { font-weight: 700; font-size: 12px; }
+    &.pnl .pnl-value.live { color: #fbbf24; }
+    &.pnl .pnl-pending { color: #475569; }
   }
 
   .side-pill {
@@ -185,28 +181,38 @@
     &.short { background: rgba(248, 113, 113, 0.14); color: #f87171; }
   }
 
-  .open-tag {
+  .status-badge {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 9px;
     font-weight: 700;
     letter-spacing: 0.1em;
-    color: #fbbf24;
+
+    &.open     { color: #fbbf24; background: rgba(251, 191, 36, 0.12); }
+    &.closed   { color: #64748b; background: rgba(100, 116, 139, 0.12); }
+    &.upcoming { color: #475569; background: rgba(71, 85, 105, 0.2); }
+
+    .pulse {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #fbbf24;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
   }
 
-  .pulse {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: #fbbf24;
-    animation: pulse 1.4s ease-in-out infinite;
+  tr {
+    cursor: pointer;
+    transition: background 0.12s;
+
+    &:hover td { background: rgba(148, 163, 184, 0.05); }
+    &.open td { background: rgba(251, 191, 36, 0.05); }
+    &.upcoming td { opacity: 0.4; }
+    &.win .pnl-value { color: #4ade80; }
+    &.loss .pnl-value { color: #f87171; }
   }
-
-  tr.open td { background: rgba(251, 191, 36, 0.06); }
-  tr.open .pnl-value { color: #fbbf24; }
-
-  tr.win .pnl-value { color: #4ade80; }
-  tr.loss .pnl-value { color: #f87171; }
 }
 
 @keyframes pulse {

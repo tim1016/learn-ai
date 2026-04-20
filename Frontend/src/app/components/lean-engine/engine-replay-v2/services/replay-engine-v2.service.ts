@@ -55,6 +55,8 @@ export interface PositionState {
 }
 
 export type FlashEvent =
+  | { kind: 'buy-entry'; trade: TradeWithNumber; timestamp: number }
+  | { kind: 'sell-entry'; trade: TradeWithNumber; timestamp: number }
   | { kind: 'exit'; trade: TradeWithNumber; timestamp: number }
   | { kind: 'unwind'; trade: TradeWithNumber; timestamp: number };
 
@@ -395,10 +397,21 @@ export class ReplayEngineV2Service {
     const forward = nextIdx > prevIdx;
 
     for (const t of this._trades()) {
-      // Exit crossing in either direction
+      // Exit crossing in either direction takes priority over entry, since
+      // it carries the P&L payload the user wants to see.
       if (t.exitMs > lo && t.exitMs <= hi) {
         this.fireFlash({
           kind: forward ? 'exit' : 'unwind',
+          trade: t,
+          timestamp: Date.now(),
+        });
+        return;
+      }
+      // Entry crossing only on forward; reverse "un-enter" is noise.
+      if (forward && t.entryMs > lo && t.entryMs <= hi) {
+        const isShort = /short/i.test(t.tradeType);
+        this.fireFlash({
+          kind: isShort ? 'sell-entry' : 'buy-entry',
           trade: t,
           timestamp: Date.now(),
         });

@@ -49,28 +49,36 @@ export class EngineReplayV2Component {
   readonly trades = this.svc.trades;
   readonly currentMs = this.svc.currentMs;
 
-  /** Trade log rows: only entries whose entry bar has been reached during
-   *  playback. The currently-active trade appears as status='open' with a
-   *  live floating P&L; completed trades show the final exit price and P&L. */
+  /** Full trade history, always visible. Each row is tagged by status so the
+   *  UI can style reached/open/upcoming differently and highlight the
+   *  currently-open trade with a live floating P&L. */
   readonly tradeLog = computed(() => {
     const now = this.svc.currentMs();
     const active = this.svc.activePosition();
     const floating = this.svc.position();
-    return this.svc.trades()
-      .filter(t => t.entryMs <= now)
-      .map(t => {
-        const isOpen = active !== null && active.tradeNumber === t.tradeNumber;
-        return {
-          tradeNumber: t.tradeNumber,
-          tradeType: t.tradeType,
-          entryTimestamp: t.entryTimestamp,
-          entryPrice: t.entryPrice,
-          exitTimestamp: isOpen ? null : t.exitTimestamp,
-          exitPrice: isOpen ? null : t.exitPrice,
-          pnl: isOpen ? (floating.floatingPnl ?? 0) : t.pnl,
-          status: isOpen ? 'open' as const : 'closed' as const,
-        };
-      });
+    return this.svc.trades().map(t => {
+      const isOpen = active !== null && active.tradeNumber === t.tradeNumber;
+      const entryReached = t.entryMs <= now;
+      const exitReached = t.exitMs <= now;
+      const status: 'upcoming' | 'open' | 'closed' = !entryReached
+        ? 'upcoming'
+        : isOpen
+        ? 'open'
+        : 'closed';
+      return {
+        tradeNumber: t.tradeNumber,
+        tradeType: t.tradeType,
+        entryTimestamp: t.entryTimestamp,
+        entryPrice: t.entryPrice,
+        exitTimestamp: t.exitTimestamp,
+        exitPrice: t.exitPrice,
+        // Live floating P&L for the currently-open trade; final P&L once closed.
+        pnl: isOpen ? (floating.floatingPnl ?? 0) : t.pnl,
+        status,
+        entryReached,
+        exitReached,
+      };
+    });
   });
 
   constructor() {

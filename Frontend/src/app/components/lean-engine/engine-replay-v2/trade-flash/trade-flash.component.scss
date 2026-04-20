@@ -12,8 +12,11 @@
   pointer-events: none;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  &[data-kind="gain"] { --glow: 34, 197, 94; --accent: #4ade80; }
-  &[data-kind="loss"] { --glow: 248, 113, 113; --accent: #f87171; }
+  &[data-kind="gain"]   { --glow: 34, 197, 94;  --accent: #4ade80; }
+  &[data-kind="loss"]   { --glow: 248, 113, 113;--accent: #f87171; }
+  &[data-kind="buy"]    { --glow: 34, 197, 94;  --accent: #4ade80; }
+  &[data-kind="sell"]   { --glow: 248, 113, 113;--accent: #f87171; }
+  &[data-kind="unwind"] { --glow: 251, 191, 36; --accent: #fbbf24; }
 }
 
 .ring {

@@ -27,81 +27,96 @@
   }
 
   @if (dataLoaded()) {
-    <div class="v2-layout">
-      <div class="chart-col">
-        <div class="chart-stack">
-          <app-replay-chart-v2 />
-          <app-trade-flash />
-        </div>
-        <app-replay-controls-v2 />
-        <app-signal-strip />
+    <div class="chart-area">
+      <div class="chart-stack">
+        <app-replay-chart-v2 />
+        <app-trade-flash />
       </div>
-
-      <aside class="side-col">
-        <div class="trade-log">
-          <h4 class="log-title">
-            <span>Trade Log</span>
-            <span class="count">{{ tradeLog().length }}</span>
-          </h4>
-
-          @if (tradeLog().length === 0) {
-            <div class="log-empty">
-              <div class="empty-dot"></div>
-              <div class="empty-text">No trades executed yet</div>
-              <div class="empty-sub">Press play to begin the replay</div>
-            </div>
-          } @else {
-            <div class="log-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Side</th>
-                    <th>Entry</th>
-                    <th>Exit</th>
-                    <th class="num">P&amp;L</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (t of tradeLog(); track t.tradeNumber) {
-                    <tr
-                      [class.open]="t.status === 'open'"
-                      [class.win]="t.status === 'closed' && t.pnl >= 0"
-                      [class.loss]="t.status === 'closed' && t.pnl < 0">
-                      <td class="idx">{{ t.tradeNumber }}</td>
-                      <td class="side">
-                        <span class="side-pill" [class.long]="!isShort(t.tradeType)" [class.short]="isShort(t.tradeType)">
-                          {{ isShort(t.tradeType) ? 'SELL' : 'BUY' }}
-                        </span>
-                      </td>
-                      <td class="ts">
-                        <div class="time">{{ t.entryTimestamp | date:'MMM d, HH:mm' }}</div>
-                        <div class="price">{{ t.entryPrice | number:'1.2-2' }}</div>
-                      </td>
-                      <td class="ts">
-                        @if (t.status === 'open') {
-                          <div class="open-tag">
-                            <span class="pulse"></span>OPEN
-                          </div>
-                          <div class="price">live</div>
-                        } @else {
-                          <div class="time">{{ t.exitTimestamp | date:'MMM d, HH:mm' }}</div>
-                          <div class="price">{{ t.exitPrice | number:'1.2-2' }}</div>
-                        }
-                      </td>
-                      <td class="num pnl">
-                        <span class="pnl-value">
-                          {{ t.pnl >= 0 ? '+' : '' }}{{ t.pnl | number:'1.2-2' }}
-                        </span>
-                      </td>
-                    </tr>
-                  }
-                </tbody>
-              </table>
-            </div>
-          }
-        </div>
-      </aside>
+      <app-replay-controls-v2 />
+      <app-signal-strip />
     </div>
+
+    <section class="trade-history">
+      <header class="th-head">
+        <h4>Trade History</h4>
+        <span class="th-count">{{ tradeLog().length }} trade{{ tradeLog().length === 1 ? '' : 's' }} in this run</span>
+      </header>
+
+      @if (tradeLog().length === 0) {
+        <div class="th-empty">
+          <div class="empty-dot"></div>
+          <div class="empty-text">No trades placed in this run</div>
+          <div class="empty-sub">The strategy did not signal any entries over the backtest window.</div>
+        </div>
+      } @else {
+        <div class="th-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th class="th-num">#</th>
+                <th>Side</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th class="num">P&amp;L</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (t of tradeLog(); track t.tradeNumber) {
+                <tr
+                  [class.upcoming]="t.status === 'upcoming'"
+                  [class.open]="t.status === 'open'"
+                  [class.win]="t.status === 'closed' && t.pnl >= 0"
+                  [class.loss]="t.status === 'closed' && t.pnl < 0"
+                  (click)="onRowClick(t.entryTimestamp)">
+                  <td class="th-num">{{ t.tradeNumber }}</td>
+                  <td>
+                    <span class="side-pill" [class.long]="!isShort(t.tradeType)" [class.short]="isShort(t.tradeType)">
+                      {{ isShort(t.tradeType) ? 'SELL' : 'BUY' }}
+                    </span>
+                  </td>
+                  <td class="ts">
+                    <div class="time">{{ t.entryTimestamp | date:'MMM d, HH:mm' }}</div>
+                    <div class="price">{{ t.entryPrice | number:'1.2-2' }}</div>
+                  </td>
+                  <td class="ts">
+                    <div class="time">{{ t.exitTimestamp | date:'MMM d, HH:mm' }}</div>
+                    <div class="price">{{ t.exitPrice | number:'1.2-2' }}</div>
+                  </td>
+                  <td class="num pnl">
+                    @if (t.status === 'open') {
+                      <span class="pnl-value live">
+                        {{ t.pnl >= 0 ? '+' : '' }}{{ t.pnl | number:'1.2-2' }}
+                      </span>
+                    } @else if (t.status === 'closed') {
+                      <span class="pnl-value">
+                        {{ t.pnl >= 0 ? '+' : '' }}{{ t.pnl | number:'1.2-2' }}
+                      </span>
+                    } @else {
+                      <span class="pnl-pending">—</span>
+                    }
+                  </td>
+                  <td>
+                    @switch (t.status) {
+                      @case ('open') {
+                        <span class="status-badge open">
+                          <span class="pulse"></span>OPEN
+                        </span>
+                      }
+                      @case ('closed') {
+                        <span class="status-badge closed">CLOSED</span>
+                      }
+                      @default {
+                        <span class="status-badge upcoming">UPCOMING</span>
+                      }
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
   }
 }
