@@ -1,0 +1,58 @@
+<div class="transport">
+  <div class="transport-left">
+    <button type="button" class="tb" (click)="stepBack()" aria-label="Step back">◁</button>
+
+    <button type="button" class="tb play" (click)="togglePlay()" [class.playing]="isPlaying()" aria-label="Play / Pause">
+      @if (isPlaying()) { ‖ } @else { ▶ }
+    </button>
+
+    <button type="button" class="tb" (click)="stepFwd()" aria-label="Step forward">▷</button>
+  </div>
+
+  <div class="transport-mid">
+    <button type="button" class="dir-toggle" (click)="toggleDirection()"
+      [class.reverse]="!isForward()" aria-label="Toggle direction">
+      <span class="dir-icon">{{ directionLabel(svc.direction()) }}</span>
+      <span class="dir-label">{{ isForward() ? 'FWD' : 'REV' }}</span>
+    </button>
+
+    <div class="speed-group" role="group" aria-label="Speed">
+      @for (s of speeds; track s) {
+        <button type="button" class="speed-btn" [class.active]="svc.playbackSpeed() === s" (click)="setSpeed(s)">
+          {{ s }}×
+        </button>
+      }
+    </div>
+
+    <div class="window-group" role="group" aria-label="Window">
+      <span class="wlbl">WIN</span>
+      @for (opt of windowOptions; track opt[0]) {
+        <button type="button" class="window-btn"
+          [class.active]="svc.windowSize() === opt[1]" (click)="setWindow(opt[1])">
+          {{ opt[0] }}
+        </button>
+      }
+    </div>
+  </div>
+
+  <div class="transport-right">
+    <div class="time-readout">
+      <span class="time">
+        @if (currentTime(); as t) { {{ t | date:'MMM d, HH:mm' }} } @else { — }
+      </span>
+      <span class="idx">{{ indexLabel() }}</span>
+    </div>
+  </div>
+</div>
+
+<div class="minimap" #minimap (click)="onMinimapClick($event)">
+  <div class="minimap-track"></div>
+  <div class="minimap-window"
+    [style.left.%]="windowBracket().leftPct"
+    [style.width.%]="windowBracket().widthPct"></div>
+  @for (pip of tradePips(); track $index) {
+    <div class="minimap-pip" [class.win]="pip.kind === 'win'" [class.loss]="pip.kind === 'loss'"
+      [style.left.%]="pip.xPct"></div>
+  }
+  <div class="minimap-cursor" [style.left.%]="cursorPct()"></div>
+</div>
