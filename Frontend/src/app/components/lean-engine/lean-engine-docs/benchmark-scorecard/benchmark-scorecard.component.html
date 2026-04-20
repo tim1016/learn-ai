@@ -1,0 +1,49 @@
+@if (!hasResult()) {
+  <div class="scorecard-empty">
+    <i class="pi pi-chart-bar"></i>
+    <p>
+      Run a backtest from the <strong>Setup</strong> tab to see this strategy
+      graded against 2025–26 institutional hurdles.
+    </p>
+  </div>
+} @else {
+  <div class="scorecard" [attr.data-grade]="overallGrade()">
+    <header class="scorecard-summary">
+      <span class="dot" [attr.data-grade]="overallGrade()"></span>
+      <div>
+        <div class="summary-label">Overall verdict</div>
+        <div class="summary-text">{{ overallSummary() }}</div>
+      </div>
+    </header>
+
+    <div class="metric-grid">
+      @for (m of scored(); track m.key) {
+        <div class="metric-card" [attr.data-grade]="m.grade">
+          <div class="metric-head">
+            <span class="metric-name">{{ m.label }}</span>
+            <span class="metric-dot" [attr.data-grade]="m.grade"></span>
+          </div>
+          <div class="metric-value">{{ m.display }}</div>
+          <div class="metric-target">Target: {{ m.target }}</div>
+          <div class="metric-verdict">{{ m.verdict }}</div>
+          @if (m.note) {
+            <div class="metric-note">
+              <i class="pi pi-info-circle"></i>
+              <span>{{ m.note }}</span>
+            </div>
+          }
+        </div>
+      }
+    </div>
+
+    <footer class="scorecard-footer">
+      <i class="pi pi-info-circle"></i>
+      <span>
+        Grades follow the Forensic Analysis thresholds: green = clears the floor,
+        amber = caution band, red = fails the threshold, violet = suspiciously
+        strong (check for overfitting). Probabilistic Sharpe is not yet computed
+        by this engine — tracked as a follow-up.
+      </span>
+    </footer>
+  </div>
+}

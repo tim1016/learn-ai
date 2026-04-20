@@ -1,9 +1,13 @@
-import { ChangeDetectionStrategy, Component } from "@angular/core";
+import { ChangeDetectionStrategy, Component, input, signal } from "@angular/core";
 import { CommonModule } from "@angular/common";
 import { RouterModule } from "@angular/router";
 import { AccordionModule } from "primeng/accordion";
 import { DividerModule } from "primeng/divider";
 import { KatexDirective } from "../../../shared/katex.directive";
+import {
+  BenchmarkScorecardComponent,
+  ScorecardResultLike,
+} from "./benchmark-scorecard/benchmark-scorecard.component";
 
 interface PipelineStep {
   n: number;
@@ -54,6 +58,26 @@ interface GlossaryEntry {
   definition: string;
 }
 
+interface MetricDecision {
+  metric: string;
+  source: string;
+  targetRange: string;
+  skepticalAbove: string;
+  action: string;
+}
+
+interface CalibrationConcept {
+  name: string;
+  summary: string;
+  reading: string;
+  action: string;
+}
+
+interface CopyBlock {
+  title: string;
+  body: string;
+}
+
 /**
  * Engine documentation page. Walks through the data pipeline, indicator
  * math, statistics formulas, fill models, bit-exact invariants, a worked
@@ -69,12 +93,34 @@ interface GlossaryEntry {
     AccordionModule,
     DividerModule,
     KatexDirective,
+    BenchmarkScorecardComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./lean-engine-docs.component.html",
   styleUrls: ["./lean-engine-docs.component.scss"],
 })
 export class LeanEngineDocsComponent {
+  /** Live backtest result from the parent. When null, the scorecard renders
+   *  an empty state and nudges the user to run a backtest first. */
+  readonly result = input<ScorecardResultLike | null>(null);
+
+  /** Short-lived feedback for the "Copy" buttons on the journal + prompt
+   *  blocks. Keyed by block key so multiple buttons can show state
+   *  independently. */
+  readonly copiedKey = signal<string | null>(null);
+
+  async copyToClipboard(key: string, text: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+      this.copiedKey.set(key);
+      setTimeout(() => {
+        if (this.copiedKey() === key) this.copiedKey.set(null);
+      }, 1600);
+    } catch {
+      // Clipboard API can fail in insecure contexts. Fail-soft.
+      this.copiedKey.set(null);
+    }
+  }
   // ------------------------------------------------------------------
   // Pipeline walkthrough
   // ------------------------------------------------------------------
@@ -604,4 +650,262 @@ export class LeanEngineDocsComponent {
         "without mixing them.",
     },
   ];
+
+  // ------------------------------------------------------------------
+  // Metric → Decision guide
+  // Institutional targets + skepticism thresholds for 2025–26 systematic
+  // equity strategies. Rows are the same metrics rendered in the live
+  // scorecard so the two stay in lockstep.
+  // ------------------------------------------------------------------
+  readonly metricDecisions: MetricDecision[] = [
+    {
+      metric: "Sharpe Ratio (Portfolio)",
+      source: "PortfolioStatistics — samples the continuous equity curve",
+      targetRange: "1.0 – 2.0",
+      skepticalAbove: "> 3.0 (likely overfit or look-ahead bias)",
+      action:
+        "Below 1.0: strategy is not professionally viable. 1.0–2.0: deploy "
+        + "at standard size. 2.0–3.0: elite, but run out-of-sample and walk-"
+        + "forward. Above 3.0: assume something is wrong until proven otherwise.",
+    },
+    {
+      metric: "Trade Sharpe",
+      source: "TradeStatistics — only active-trade windows",
+      targetRange: "Divergence from Portfolio Sharpe < 3.0",
+      skepticalAbove: "Gap > 3.0",
+      action:
+        "Trade Sharpe > Portfolio Sharpe is expected when the strategy is "
+        + "flat much of the time. A gap > 3.0 signals sequencing risk — short "
+        + "bursts of performance interrupted by long idle periods.",
+    },
+    {
+      metric: "Sortino Ratio",
+      source: "PortfolioStatistics — downside-only deviation",
+      targetRange: "≥ 1.5",
+      skepticalAbove: "> 3.0",
+      action:
+        "If Sortino < Sharpe meaningfully, the return distribution is "
+        + "negatively skewed — a few large losers hide inside otherwise "
+        + "stable volatility. Investigate tail events in the trade log.",
+    },
+    {
+      metric: "Profit Factor",
+      source: "TradeStatistics — gross wins / gross losses",
+      targetRange: "1.75 – 3.0",
+      skepticalAbove: "> 4.0",
+      action:
+        "PF < 1.0: losing system. 1.0–1.75: marginal. 1.75–3.0: healthy. "
+        + "3.0–4.0: elite. > 4.0: almost always doesn't survive out-of-sample.",
+    },
+    {
+      metric: "Win Rate",
+      source: "TradeStatistics — wins / total trades",
+      targetRange: "55% – 75% (mean-reversion) · 30% – 50% (trend)",
+      skepticalAbove: "> 85% (any archetype)",
+      action:
+        "Must be paired with payoff ratio. A 40% win rate with 3× payoff "
+        + "beats a 70% win rate with 0.4× payoff. > 85% is a data leak red flag.",
+    },
+    {
+      metric: "Max Drawdown",
+      source: "PortfolioStatistics — peak-to-trough fraction",
+      targetRange: "< 15%",
+      skepticalAbove: "< 2% over multi-year windows (too clean)",
+      action:
+        "15–20% is the institutional tolerance band. Above 20% typically "
+        + "fails risk-committee review. Very shallow drawdowns over long "
+        + "windows suggest the strategy hasn't seen a real regime shift yet.",
+    },
+    {
+      metric: "Expectancy (per trade)",
+      source: "TradeStatistics — average PnL % per trade",
+      targetRange: "> 0 after fees and slippage",
+      skepticalAbove: "—",
+      action:
+        "Recompute expectancy with realistic per-order costs (0.5–2 bps on "
+        + "SPY). If expectancy flips negative under cost stress, the edge "
+        + "won't survive live deployment.",
+    },
+    {
+      metric: "Probabilistic Sharpe Ratio (PSR)",
+      source: "Statistics.cs — CDF on the estimated σ of Sharpe",
+      targetRange: "> 95%",
+      skepticalAbove: "—",
+      action:
+        "Accounts for sample size, skew, and kurtosis. Short windows with "
+        + "high Sharpe often have low PSR — the Sharpe is real for the "
+        + "window, but statistically indistinguishable from noise. Not yet "
+        + "computed by this engine (tracked as a follow-up).",
+    },
+    {
+      metric: "Recovery Time",
+      source: "Equity curve — bars from drawdown trough back to prior peak",
+      targetRange: "Shorter is better; contextual to drawdown depth",
+      skepticalAbove: "—",
+      action:
+        "Long recovery after a shallow drawdown points to a \"staircase\" "
+        + "equity curve — long flat periods between bursts. Investor "
+        + "patience becomes a risk factor of its own.",
+    },
+  ];
+
+  // ------------------------------------------------------------------
+  // Alpha insight calibration — interpretation guide
+  // Paired with the Insights tab; this section is the reading guide.
+  // ------------------------------------------------------------------
+  readonly calibrationConcepts: CalibrationConcept[] = [
+    {
+      name: "Calibration Gap",
+      summary:
+        "Signed difference between a confidence bucket's emitted probability "
+        + "and its observed accuracy on the same trades.",
+      reading:
+        "Accuracy > Confidence → underconfident (safe but leaves alpha on "
+        + "the table). Accuracy < Confidence → overconfident (dangerous; "
+        + "drives position-sizing errors under Kelly).",
+      action:
+        "Plot predicted-vs-actual on a reliability diagram with a y = x "
+        + "reference line. Points below the line are overconfident, points "
+        + "above are underconfident.",
+    },
+    {
+      name: "Expected Calibration Error (ECE)",
+      summary:
+        "Weighted average of |accuracy − confidence| across buckets, weighted "
+        + "by the sample size in each bucket.",
+      reading:
+        "ECE above 0.10 means confidence scores are not usable as "
+        + "probabilities for position sizing. ECE below 0.05 is production-"
+        + "grade.",
+      action:
+        "If ECE is high, recalibrate with Platt scaling or isotonic "
+        + "regression before wiring confidence into a Kelly sizer.",
+    },
+    {
+      name: "Magnitude Bias",
+      summary:
+        "Signed mean of (actual move − predicted move). Tells you whether "
+        + "the alpha model systematically under- or over-estimates move size.",
+      reading:
+        "Negative bias = the model underestimates volatility (safer, but "
+        + "the EMAs may be lagging). Positive bias = the model overshoots "
+        + "(risk of fat-tail blowups when sizing is move-scaled).",
+      action:
+        "If the strategy uses predicted magnitude for sizing, correct the "
+        + "bias with an offset or switch to a volatility-targeted sizer.",
+    },
+    {
+      name: "Temporal Accuracy (by hour of day)",
+      summary:
+        "Hit-rate of directional signals stratified by local-time hour.",
+      reading:
+        "Hours at or near 0% accuracy are regime failures — typically "
+        + "EMAs getting whipsawed around open or close. Hours with <40% "
+        + "accuracy are effectively coin-flips minus fees.",
+      action:
+        "Add a participation filter that suppresses new entries during "
+        + "the failing hours. Consider the same for minute-of-hour effects "
+        + "if the data supports it.",
+    },
+  ];
+
+  // ------------------------------------------------------------------
+  // Research journal template — copyable markdown
+  // ------------------------------------------------------------------
+  readonly researchJournalTemplate: CopyBlock = {
+    title: "Research Journal (copyable markdown)",
+    body:
+`# Strategy: <name>
+## 1. Thesis
+- **Cause → effect**: <what market behavior does the strategy exploit?>
+- **Expected edge**: <directional, mean-reversion, momentum, statistical-arb?>
+- **Archetype win-rate / payoff profile expected**: <e.g. 65% win, 0.9× payoff>
+
+## 2. Backtest metadata
+- Engine version / commit: <git SHA>
+- Strategy + params (JSON):
+\`\`\`json
+{ "name": "spy_ema_crossover", "params": { "ema_fast": 5, "ema_slow": 10 } }
+\`\`\`
+- Resolution: <minute / daily>
+- Date range: <YYYY-MM-DD → YYYY-MM-DD>
+- Fill model: <signal_bar_close | next_bar_open>
+- Commission / slippage: <$ or bps>
+
+## 3. Results vs Buy-and-Hold
+| Metric | Strategy | Buy-and-Hold | Delta |
+| ------ | -------- | ------------ | ----- |
+| CAGR | | | |
+| Sharpe | | | |
+| Max Drawdown | | | |
+| Win Rate | — | — | — |
+
+## 4. Forensic log — 5 largest losers
+For each: timestamp, entry/exit, indicator snapshot, was this a **process win**
+(correct execution of a losing signal) or an **execution error** (fill model,
+data gap, parameter bug)?
+
+## 5. Parameter sensitivity
+- Heatmap of Sharpe across (ema_fast, ema_slow) ∈ <range>
+- Stable plateau? Or fragile peak?
+- Any parameter within 1 step of the chosen one that halves Sharpe?
+
+## 6. Red flags surfaced by scorecard
+- <e.g. Profit Factor > 4 — overfit risk>
+- <e.g. hour 15:00 ET accuracy = 0% — add participation filter>
+
+## 7. Decision
+- Deploy / iterate / park
+- If deploy: size, stop-loss, max-drawdown kill-switch
+`,
+  };
+
+  // ------------------------------------------------------------------
+  // LLM forensic audit prompt — copyable
+  // ------------------------------------------------------------------
+  readonly llmAuditPrompt: CopyBlock = {
+    title: "LLM forensic audit prompt (copyable)",
+    body:
+`# Role: Lead Quantitative Auditor (Institutional Strategy Desk)
+# Task: Forensic statistical audit of the provided LEAN-compatible backtest.
+
+## Context
+Strategy: <name>
+Window: <start → end>
+Resolution: <minute | daily>
+
+Metrics:
+- Net Profit ($ / %): <values>
+- CAGR: <value>
+- Portfolio Sharpe: <value>
+- Trade Sharpe: <value>
+- Sortino: <value>
+- Profit Factor: <value>
+- Expectancy (per trade %): <value>
+- Win Rate: <value>
+- Max Drawdown: <value>
+- Recovery Time: <value>
+- Confidence bucket accuracy: <table or dict>
+- Accuracy by hour of day: <table or dict>
+
+## Evaluation Criteria
+1. **Discrepancy Detection** — flag contradictions between summary and
+   detailed stats (e.g. drawdown in summary ≠ drawdown from equity curve).
+2. **Robustness Check** — reconcile Portfolio Sharpe vs Trade Sharpe; gap
+   > 3.0 → flag sequencing risk.
+3. **Calibration Audit** — which buckets are overconfident (acc < conf) vs
+   underconfident (acc > conf)? Suggest position-sizing adjustments.
+4. **Temporal Integrity** — identify hours with <40% accuracy and recommend
+   no-trade windows.
+5. **Institutional Scoring** — 1–10 production-readiness score using the
+   Sharpe > 1.0 hurdle and the skepticism thresholds (Sharpe > 3, PF > 4,
+   win rate > 85%).
+
+## Output
+- Executive Summary (narrative, ≤ 5 sentences)
+- Risk Scorecard (table)
+- Identified Red Flags (narrative)
+- Optimization Roadmap (3–5 actionable steps)
+`,
+  };
 }

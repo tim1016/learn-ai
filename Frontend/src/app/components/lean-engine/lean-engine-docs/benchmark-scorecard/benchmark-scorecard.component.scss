@@ -1,0 +1,175 @@
+@use '../../../../styles/tokens' as *;
+
+$skeptical: #a855f7;
+
+:host {
+  display: block;
+}
+
+.scorecard-empty {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px dashed $border-light;
+  border-radius: 8px;
+  background: $bg-surface;
+  color: $text-muted;
+
+  i {
+    font-size: 1.25rem;
+    color: $accent;
+  }
+
+  p {
+    margin: 0;
+    font-size: 0.9375rem;
+    line-height: 1.5;
+  }
+}
+
+.scorecard {
+  border-radius: 8px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  padding: 1.25rem 1.5rem;
+}
+
+.scorecard-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid $border-light;
+  margin-bottom: 1rem;
+
+  .summary-label {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: $text-muted;
+  }
+
+  .summary-text {
+    font-size: 0.9375rem;
+    color: $text-primary;
+    margin-top: 0.125rem;
+  }
+}
+
+.dot {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+
+  &[data-grade="green"] { background: $bull; box-shadow: 0 0 6px rgba($bull, 0.6); }
+  &[data-grade="amber"] { background: $warn; box-shadow: 0 0 6px rgba($warn, 0.6); }
+  &[data-grade="red"]   { background: $bear; box-shadow: 0 0 6px rgba($bear, 0.6); }
+  &[data-grade="skeptical"] { background: $skeptical; box-shadow: 0 0 6px rgba($skeptical, 0.6); }
+  &[data-grade="na"]    { background: $text-muted; }
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.metric-card {
+  border: 1px solid $border;
+  border-left: 3px solid $border-light;
+  border-radius: 6px;
+  padding: 0.875rem 1rem;
+  background: $bg-elevated;
+
+  &[data-grade="green"]     { border-left-color: $bull; }
+  &[data-grade="amber"]     { border-left-color: $warn; }
+  &[data-grade="red"]       { border-left-color: $bear; }
+  &[data-grade="skeptical"] { border-left-color: $skeptical; }
+  &[data-grade="na"]        { border-left-color: $text-muted; }
+}
+
+.metric-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.metric-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: $text-muted;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metric-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+
+  &[data-grade="green"] { background: $bull; }
+  &[data-grade="amber"] { background: $warn; }
+  &[data-grade="red"]   { background: $bear; }
+  &[data-grade="skeptical"] { background: $skeptical; }
+  &[data-grade="na"]    { background: $text-muted; }
+}
+
+.metric-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: $text-primary;
+  font-family: $font-mono;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.metric-target {
+  font-size: 0.75rem;
+  color: $text-muted;
+  margin-top: 0.125rem;
+}
+
+.metric-verdict {
+  font-size: 0.8125rem;
+  color: $text-secondary;
+  line-height: 1.45;
+  margin-top: 0.5rem;
+}
+
+.metric-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  color: $warn;
+  margin-top: 0.5rem;
+
+  i {
+    margin-top: 0.125rem;
+    font-size: 0.75rem;
+    flex-shrink: 0;
+  }
+}
+
+.scorecard-footer {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 0.875rem;
+  border-top: 1px solid $border-light;
+  font-size: 0.75rem;
+  color: $text-muted;
+  line-height: 1.5;
+
+  i {
+    margin-top: 0.125rem;
+    color: $accent;
+    flex-shrink: 0;
+  }
+}

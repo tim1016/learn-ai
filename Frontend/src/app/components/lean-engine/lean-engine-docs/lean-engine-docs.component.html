@@ -209,6 +209,59 @@
     </div>
   </section>
 
+  <!-- ═══ 3a. Live benchmark scorecard ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-gauge section-icon"></i>
+      <h3>3a. Live benchmark scorecard</h3>
+    </div>
+    <p class="section-description">
+      Grades the most recent backtest against 2025–26 institutional hurdles.
+      Green clears the floor, amber sits in the caution band, red fails the
+      threshold, violet is suspiciously strong and should be stress-tested
+      for overfitting.
+    </p>
+    <app-benchmark-scorecard [result]="result()" />
+  </section>
+
+  <!-- ═══ 3b. Metric → Decision guide ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-compass section-icon"></i>
+      <h3>3b. Metric → Decision guide</h3>
+    </div>
+    <p class="section-description">
+      Each row pairs a metric with its institutional target range, the
+      threshold above which the value becomes suspicious, and what to do
+      when the strategy lands outside the target band.
+    </p>
+    <div class="doc-card">
+      <table class="decision-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Target range</th>
+            <th>Skeptical above</th>
+            <th>What to do</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (d of metricDecisions; track d.metric) {
+            <tr>
+              <td class="metric-cell">
+                <strong>{{ d.metric }}</strong>
+                <span class="source">{{ d.source }}</span>
+              </td>
+              <td class="range-cell"><code>{{ d.targetRange }}</code></td>
+              <td class="skeptical-cell"><code>{{ d.skepticalAbove }}</code></td>
+              <td class="action-cell">{{ d.action }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </section>
+
   <!-- ═══ 4. Fill models ═══ -->
   <section class="doc-section">
     <div class="section-header">
@@ -341,11 +394,35 @@
     </div>
   </section>
 
-  <!-- ═══ 7. Glossary ═══ -->
+  <!-- ═══ 7. Reading the Alpha Insights ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-sparkles section-icon"></i>
+      <h3>7. Reading the Alpha Insights</h3>
+    </div>
+    <p class="section-description">
+      The Insights tab reports calibration and magnitude metrics on the
+      directional signals the alpha model emits. These are the four
+      concepts you need to interpret it.
+    </p>
+    <div class="doc-card">
+      @for (c of calibrationConcepts; track c.name; let last = $last) {
+        <div class="calibration-row">
+          <h4>{{ c.name }}</h4>
+          <p class="interpretation"><strong>What it is:</strong> {{ c.summary }}</p>
+          <p class="interpretation"><strong>How to read it:</strong> {{ c.reading }}</p>
+          <p class="interpretation"><strong>What to do:</strong> {{ c.action }}</p>
+        </div>
+        @if (!last) { <p-divider /> }
+      }
+    </div>
+  </section>
+
+  <!-- ═══ 8. Glossary ═══ -->
   <section class="doc-section">
     <div class="section-header">
       <i class="pi pi-book section-icon"></i>
-      <h3>7. Glossary</h3>
+      <h3>8. Glossary</h3>
     </div>
     <div class="doc-card">
       <dl class="glossary">
@@ -354,6 +431,56 @@
           <dd>{{ g.definition }}</dd>
         }
       </dl>
+    </div>
+  </section>
+
+  <!-- ═══ 9. Research journal template ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-clipboard section-icon"></i>
+      <h3>9. Research journal template</h3>
+    </div>
+    <p class="section-description">
+      A living document per strategy. Copy this markdown into a new Google
+      Doc / Notion page when you start iterating on a thesis, and update it
+      after every meaningful parameter change.
+    </p>
+    <div class="doc-card copy-block-card">
+      <div class="copy-block-head">
+        <span class="copy-block-title">{{ researchJournalTemplate.title }}</span>
+        <button type="button" class="copy-btn"
+          (click)="copyToClipboard('journal', researchJournalTemplate.body)">
+          <i class="pi" [class.pi-copy]="copiedKey() !== 'journal'"
+                       [class.pi-check]="copiedKey() === 'journal'"></i>
+          <span>{{ copiedKey() === 'journal' ? 'Copied' : 'Copy' }}</span>
+        </button>
+      </div>
+      <pre class="copy-block-body">{{ researchJournalTemplate.body }}</pre>
+    </div>
+  </section>
+
+  <!-- ═══ 10. LLM forensic audit prompt ═══ -->
+  <section class="doc-section">
+    <div class="section-header">
+      <i class="pi pi-comments section-icon"></i>
+      <h3>10. LLM forensic audit prompt</h3>
+    </div>
+    <p class="section-description">
+      Paste this into a reasoning-capable model alongside the metrics block
+      of a backtest to get a structured second opinion. Designed to surface
+      contradictions, sequencing risk, miscalibration, and regime failures.
+    </p>
+    <div class="doc-card copy-block-card">
+      <div class="copy-block-head">
+        <span class="copy-block-title">{{ llmAuditPrompt.title }}</span>
+        <button type="button" class="copy-btn"
+          (click)="copyToClipboard('audit', llmAuditPrompt.body)">
+          <i class="pi" [class.pi-copy]="copiedKey() !== 'audit'"
+                       [class.pi-check]="copiedKey() === 'audit'"></i>
+          <span>{{ copiedKey() === 'audit' ? 'Copied' : 'Copy' }}</span>
+        </button>
+      </div>
+      <pre class="copy-block-body">{{ llmAuditPrompt.body }}</pre>
     </div>
   </section>
 </div>
