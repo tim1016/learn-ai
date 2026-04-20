@@ -3,6 +3,7 @@ import {
   ElementRef, viewChild,
 } from '@angular/core';
 import { DatePipe } from '@angular/common';
+import { Tooltip } from 'primeng/tooltip';
 import {
   ReplayEngineV2Service, Direction, WindowSize,
 } from '../services/replay-engine-v2.service';
@@ -20,7 +21,7 @@ interface WindowBracket {
 @Component({
   selector: 'app-replay-controls-v2',
   standalone: true,
-  imports: [DatePipe],
+  imports: [DatePipe, Tooltip],
   templateUrl: './replay-controls-v2.component.html',
   styleUrls: ['./replay-controls-v2.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

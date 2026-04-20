@@ -78,7 +78,21 @@
   .dir-icon { font-size: 13px; }
 }
 
-.speed-group, .window-group {
+.pill-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.group-label {
+  font-size: 9px;
+  color: #64748b;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.pills {
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -86,13 +100,6 @@
   border-radius: 6px;
   background: rgba(30, 41, 59, 0.6);
   border: 1px solid rgba(148, 163, 184, 0.15);
-}
-
-.wlbl {
-  padding: 0 6px;
-  font-size: 9px;
-  color: #64748b;
-  letter-spacing: 0.1em;
 }
 
 .speed-btn, .window-btn {

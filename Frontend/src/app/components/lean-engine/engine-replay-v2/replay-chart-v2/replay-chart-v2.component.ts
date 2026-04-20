@@ -177,7 +177,7 @@ export class ReplayChartV2Component {
         lineWidth: 2,
         title: `${ind.name.toUpperCase()}(${ind.window})`,
         priceLineVisible: false,
-        lastValueVisible: false,
+        lastValueVisible: true,
       });
       const data: LineData[] = ind.data.map(p => ({
         time: (p.timestamp / 1000) as UTCTimestamp,
@@ -194,22 +194,23 @@ export class ReplayChartV2Component {
     const nowMs = this.svc.currentMs();
     const out: SeriesMarker<Time>[] = [];
     for (const t of trades) {
+      const isShort = /short/i.test(t.tradeType);
       if (t.entryMs <= nowMs) {
         out.push({
           time: (t.entryMs / 1000) as UTCTimestamp,
-          position: 'belowBar',
-          color: /short/i.test(t.tradeType) ? '#f87171' : '#38bdf8',
-          shape: 'arrowUp',
-          text: `#${t.tradeNumber} ${t.tradeType.toUpperCase()}`,
+          position: isShort ? 'aboveBar' : 'belowBar',
+          color: isShort ? '#f87171' : '#22c55e',
+          shape: isShort ? 'arrowDown' : 'arrowUp',
+          text: isShort ? `SELL #${t.tradeNumber}` : `BUY #${t.tradeNumber}`,
         });
       }
       if (t.exitMs <= nowMs) {
         out.push({
           time: (t.exitMs / 1000) as UTCTimestamp,
-          position: 'aboveBar',
-          color: t.pnl >= 0 ? '#22c55e' : '#ef4444',
-          shape: 'arrowDown',
-          text: `${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}`,
+          position: isShort ? 'belowBar' : 'aboveBar',
+          color: t.pnl >= 0 ? '#4ade80' : '#ef4444',
+          shape: 'circle',
+          text: `CLOSE ${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}`,
         });
       }
     }

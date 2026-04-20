@@ -39,6 +39,7 @@ export class SignalStripComponent {
 
   readonly sparkWidth = SPARK_W;
   readonly sparkHeight = SPARK_H;
+  readonly viewBox = `0 0 ${SPARK_W} ${SPARK_H}`;
 }
 
 function buildPath(values: number[]): string {

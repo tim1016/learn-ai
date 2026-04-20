@@ -38,40 +38,61 @@
       </div>
 
       <aside class="side-col">
-        <app-position-hud />
-
-        <div class="ledger">
-          <h4 class="ledger-title">
-            Trades <span class="count">{{ trades().length }}</span>
+        <div class="trade-log">
+          <h4 class="log-title">
+            <span>Trade Log</span>
+            <span class="count">{{ tradeLog().length }}</span>
           </h4>
-          @if (trades().length === 0) {
-            <p class="ledger-empty">No trades in this run.</p>
+
+          @if (tradeLog().length === 0) {
+            <div class="log-empty">
+              <div class="empty-dot"></div>
+              <div class="empty-text">No trades executed yet</div>
+              <div class="empty-sub">Press play to begin the replay</div>
+            </div>
           } @else {
-            <div class="ledger-scroll">
+            <div class="log-scroll">
               <table>
                 <thead>
                   <tr>
                     <th>#</th>
                     <th>Side</th>
+                    <th>Entry</th>
+                    <th>Exit</th>
                     <th class="num">P&amp;L</th>
                   </tr>
                 </thead>
                 <tbody>
-                  @for (t of trades(); track t.tradeNumber) {
-                    @let reached = t.exitMs <= currentMs();
-                    <tr [class.reached]="reached"
-                        [class.upcoming]="!reached"
-                        (click)="onRowClick(t.entryTimestamp)">
-                      <td>{{ t.tradeNumber }}</td>
-                      <td class="side">{{ t.tradeType }}</td>
-                      <td class="num"
-                          [class.positive]="reached && t.pnl >= 0"
-                          [class.negative]="reached && t.pnl < 0">
-                        @if (reached) {
-                          {{ t.pnl >= 0 ? '+' : '' }}{{ t.pnl | number:'1.2-2' }}
+                  @for (t of tradeLog(); track t.tradeNumber) {
+                    <tr
+                      [class.open]="t.status === 'open'"
+                      [class.win]="t.status === 'closed' && t.pnl >= 0"
+                      [class.loss]="t.status === 'closed' && t.pnl < 0">
+                      <td class="idx">{{ t.tradeNumber }}</td>
+                      <td class="side">
+                        <span class="side-pill" [class.long]="!isShort(t.tradeType)" [class.short]="isShort(t.tradeType)">
+                          {{ isShort(t.tradeType) ? 'SELL' : 'BUY' }}
+                        </span>
+                      </td>
+                      <td class="ts">
+                        <div class="time">{{ t.entryTimestamp | date:'MMM d, HH:mm' }}</div>
+                        <div class="price">{{ t.entryPrice | number:'1.2-2' }}</div>
+                      </td>
+                      <td class="ts">
+                        @if (t.status === 'open') {
+                          <div class="open-tag">
+                            <span class="pulse"></span>OPEN
+                          </div>
+                          <div class="price">live</div>
                         } @else {
-                          <span class="pending">…</span>
+                          <div class="time">{{ t.exitTimestamp | date:'MMM d, HH:mm' }}</div>
+                          <div class="price">{{ t.exitPrice | number:'1.2-2' }}</div>
                         }
+                      </td>
+                      <td class="num pnl">
+                        <span class="pnl-value">
+                          {{ t.pnl >= 0 ? '+' : '' }}{{ t.pnl | number:'1.2-2' }}
+                        </span>
                       </td>
                     </tr>
                   }

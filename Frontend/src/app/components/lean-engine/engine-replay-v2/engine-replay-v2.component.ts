@@ -9,7 +9,6 @@ import { ReplayEngineV2Service } from './services/replay-engine-v2.service';
 import { ReplayChartV2Component } from './replay-chart-v2/replay-chart-v2.component';
 import { ReplayControlsV2Component } from './replay-controls-v2/replay-controls-v2.component';
 import { SignalStripComponent } from './signal-strip/signal-strip.component';
-import { PositionHudComponent } from './position-hud/position-hud.component';
 import { TradeFlashComponent } from './trade-flash/trade-flash.component';
 
 @Component({
@@ -18,7 +17,7 @@ import { TradeFlashComponent } from './trade-flash/trade-flash.component';
   imports: [
     DatePipe, DecimalPipe,
     ReplayChartV2Component, ReplayControlsV2Component,
-    SignalStripComponent, PositionHudComponent, TradeFlashComponent,
+    SignalStripComponent, TradeFlashComponent,
   ],
   providers: [ReplayEngineV2Service],
   templateUrl: './engine-replay-v2.component.html',
@@ -50,12 +49,40 @@ export class EngineReplayV2Component {
   readonly trades = this.svc.trades;
   readonly currentMs = this.svc.currentMs;
 
+  /** Trade log rows: only entries whose entry bar has been reached during
+   *  playback. The currently-active trade appears as status='open' with a
+   *  live floating P&L; completed trades show the final exit price and P&L. */
+  readonly tradeLog = computed(() => {
+    const now = this.svc.currentMs();
+    const active = this.svc.activePosition();
+    const floating = this.svc.position();
+    return this.svc.trades()
+      .filter(t => t.entryMs <= now)
+      .map(t => {
+        const isOpen = active !== null && active.tradeNumber === t.tradeNumber;
+        return {
+          tradeNumber: t.tradeNumber,
+          tradeType: t.tradeType,
+          entryTimestamp: t.entryTimestamp,
+          entryPrice: t.entryPrice,
+          exitTimestamp: isOpen ? null : t.exitTimestamp,
+          exitPrice: isOpen ? null : t.exitPrice,
+          pnl: isOpen ? (floating.floatingPnl ?? 0) : t.pnl,
+          status: isOpen ? 'open' as const : 'closed' as const,
+        };
+      });
+  });
+
   constructor() {
     effect(() => {
       const s = this.study();
       if (s) this.loadForStudy(s);
       else this.svc.reset();
     });
+  }
+
+  isShort(tradeType: string): boolean {
+    return /short/i.test(tradeType);
   }
 
   onRowClick(entryTs: string): void {
