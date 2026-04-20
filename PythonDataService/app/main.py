@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers import (
     aggregates,
+    chart,
     data_quality,
     dataset,
     engine,
@@ -69,6 +70,7 @@ app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
 app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
 app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
+app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
 # /research/data-divergence/* — dashboard + matrix endpoints. The router
 # carries its own prefix so we mount it bare.
 app.include_router(research_divergence.router)

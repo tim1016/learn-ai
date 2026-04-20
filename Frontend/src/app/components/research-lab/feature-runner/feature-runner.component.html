@@ -114,6 +114,10 @@
         </div>
       </div>
 
+      @if (rangeWarning(); as warn) {
+        <p-message severity="warn" [text]="warn" styleClass="w-full mb-3" />
+      }
+
       <div class="mb-4">
         <p-button
           label="Run Feature Research"

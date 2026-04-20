@@ -72,12 +72,44 @@ export class FeatureRunnerComponent {
     { label: 'Day', value: 'day' },
   ];
 
+  // ── Range guard ─────────────────────────────────────
+  // Minute-resolution research at 2 years exceeds ~200k bars, which overruns
+  // the backend→python keep-alive window and makes Polly retry for the full
+  // 10-minute HttpClient timeout before failing the GraphQL mutation. Cap
+  // minute studies to 180 calendar days; hour at 3 years; day unrestricted.
+  private readonly MAX_DAYS_BY_TIMESPAN: Readonly<Record<string, number>> = {
+    minute: 180,
+    hour: 1095,
+    day: Number.POSITIVE_INFINITY,
+  };
+
+  readonly maxRangeDays = computed<number>(() =>
+    this.MAX_DAYS_BY_TIMESPAN[this.timespan()] ?? 180,
+  );
+
+  readonly rangeDays = computed<number | null>(() => {
+    const from = Date.parse(this.fromDate());
+    const to = Date.parse(this.toDate());
+    if (Number.isNaN(from) || Number.isNaN(to) || to < from) return null;
+    return Math.round((to - from) / 86_400_000);
+  });
+
+  readonly rangeWarning = computed<string | null>(() => {
+    const days = this.rangeDays();
+    if (days === null) return null;
+    const cap = this.maxRangeDays();
+    if (days <= cap) return null;
+    const capLabel = Number.isFinite(cap) ? `${cap} days` : 'no cap';
+    return `${this.timespan()}-resolution research is capped at ${capLabel} (you selected ${days} days). Long minute-bar requests don't survive the backend→python connection window. Shorten the range, or switch to an hourly/daily timespan.`;
+  });
+
   canRun = computed(() => {
     return (
       this.ticker().trim().length > 0 &&
       this.featureName().trim().length > 0 &&
       this.fromDate().trim().length > 0 &&
       this.toDate().trim().length > 0 &&
+      this.rangeWarning() === null &&
       !this.loading()
     );
   });

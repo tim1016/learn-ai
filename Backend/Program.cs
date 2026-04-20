@@ -70,14 +70,18 @@ builder.Services.AddHttpClient<ITechnicalAnalysisService, TechnicalAnalysisServi
 .AddPolicyHandler(retryPolicy)
 .AddPolicyHandler(circuitBreakerPolicy);
 
-// Add HttpClient for ResearchService (same Python service, 600s timeout for large dataset research)
+// Add HttpClient for ResearchService — no retry policy.
+// Research requests are expensive (minutes long, hundreds of MB payloads).
+// If the first attempt fails, retrying burns another 3-10 minutes doing the
+// same work with the same outcome. Fail fast and surface the error to the
+// user instead. Circuit-breaker is retained so a truly-broken python service
+// short-circuits cleanly.
 builder.Services.AddHttpClient<IResearchService, ResearchService>(client =>
 {
     var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
     client.BaseAddress = new Uri(baseUrl);
     client.Timeout = TimeSpan.FromSeconds(600);
 })
-.AddPolicyHandler(retryPolicy)
 .AddPolicyHandler(circuitBreakerPolicy);
 
 // Register business services (testable via interfaces)
