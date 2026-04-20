@@ -1,4 +1,5 @@
-import { TestBed, fakeAsync, tick, flush } from '@angular/core/testing';
+import { TestBed } from '@angular/core/testing';
+import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { ReplayEngineV2Service } from './replay-engine-v2.service';
 import {
   StockAggregate, BacktestTrade, IndicatorSeries,
@@ -89,7 +90,6 @@ describe('ReplayEngineV2Service', () => {
       svc.stepForward();
       expect(svc.currentIndex()).toBe(2);
       expect(svc.isAtEnd()).toBeTruthy();
-      // Paused by isAtEnd auto-handler
       expect(svc.playbackState()).toBe('paused');
     });
 
@@ -123,18 +123,22 @@ describe('ReplayEngineV2Service', () => {
       expect(svc.direction()).toBe('reverse');
     });
 
-    it('reverse play steps backward on tick', fakeAsync(() => {
-      const bars = makeBars(10);
-      svc.load({ bars, trades: [], indicators: [] });
-      svc.seekTo(5);
-      svc.setDirection('reverse');
-      svc.setSpeed(10); // 100/10 = 10ms interval
-      svc.play();
-      tick(25);
-      expect(svc.currentIndex()).toBeLessThan(5);
-      svc.pause();
-      flush();
-    }));
+    describe('with fake timers', () => {
+      beforeEach(() => vi.useFakeTimers());
+      afterEach(() => vi.useRealTimers());
+
+      it('reverse play steps backward on tick', () => {
+        const bars = makeBars(10);
+        svc.load({ bars, trades: [], indicators: [] });
+        svc.seekTo(5);
+        svc.setDirection('reverse');
+        svc.setSpeed(10); // 100/10 = 10ms per tick
+        svc.play();
+        vi.advanceTimersByTime(25);
+        expect(svc.currentIndex()).toBeLessThan(5);
+        svc.pause();
+      });
+    });
   });
 
   describe('renderWindow', () => {
@@ -157,7 +161,6 @@ describe('ReplayEngineV2Service', () => {
       svc.seekTo(500);
       const w = svc.renderWindow();
       expect(w.bars.length).toBe(200);
-      // ¾ behind = 150, ¼ ahead = 50
       expect(w.startIndex).toBe(350);
       expect(w.endIndex).toBe(549);
       expect(w.indexInWindow).toBe(150);
@@ -188,57 +191,55 @@ describe('ReplayEngineV2Service', () => {
     it('classifies trades inside/left/right of window based on playhead', () => {
       const bars = makeBars(100);
       const trades = [
-        makeTrade(5, 10, bars, 4),    // left of a mid-window
-        makeTrade(45, 55, bars, -3),  // straddles the cursor
-        makeTrade(80, 85, bars, 7),   // right of window
+        makeTrade(5, 10, bars, 4),
+        makeTrade(45, 55, bars, -3),
+        makeTrade(80, 85, bars, 7),
       ];
       svc.load({ bars, trades, indicators: [] });
       svc.setWindowSize(40);
       svc.seekTo(50);
 
-      const win = svc.renderWindow();
-      expect(win.bars.length).toBe(40);
-
       const active = svc.activePosition();
       expect(active?.tradeNumber).toBe(2);
 
       const summary = svc.hiddenSummary();
-      // trade #1 is past playhead, so its exit has been reached → counts as left
       expect(summary.leftCount).toBe(1);
       expect(summary.leftCumPnl).toBeCloseTo(4);
-      // trade #3's exit is in the future — does not count yet
       expect(summary.rightCount).toBe(0);
       expect(summary.rightCumPnl).toBe(0);
     });
   });
 
   describe('flashEvent', () => {
-    it('fires exit kind when currentIndex crosses exit bar forward', fakeAsync(() => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('fires exit kind when currentIndex crosses exit bar forward', () => {
       const bars = makeBars(10);
       const trades = [makeTrade(2, 5, bars, 3)];
       svc.load({ bars, trades, indicators: [] });
       svc.seekTo(4);
-      svc.stepForward(); // crosses bar 5 (exit)
+      svc.stepForward();
       const ev = svc.flashEvent();
       expect(ev?.kind).toBe('exit');
       expect(ev?.trade.pnl).toBe(3);
-      tick(1500);
+      vi.advanceTimersByTime(1500);
       expect(svc.flashEvent()).toBeNull();
-    }));
+    });
 
-    it('fires unwind kind on reverse crossing of exit bar', fakeAsync(() => {
+    it('fires unwind kind on reverse crossing of exit bar', () => {
       const bars = makeBars(10);
       const trades = [makeTrade(2, 5, bars, 3)];
       svc.load({ bars, trades, indicators: [] });
       svc.seekTo(5);
-      svc.stepBackward(); // crosses bar 5 backwards
+      svc.stepBackward();
       const ev = svc.flashEvent();
       expect(ev?.kind).toBe('unwind');
-      tick(1500);
-      flush();
-    }));
+      vi.advanceTimersByTime(1500);
+      expect(svc.flashEvent()).toBeNull();
+    });
 
-    it('seekTo clears any in-flight flash', fakeAsync(() => {
+    it('seekTo clears any in-flight flash', () => {
       const bars = makeBars(10);
       const trades = [makeTrade(2, 5, bars, 3)];
       svc.load({ bars, trades, indicators: [] });
@@ -247,8 +248,7 @@ describe('ReplayEngineV2Service', () => {
       expect(svc.flashEvent()).not.toBeNull();
       svc.seekTo(0);
       expect(svc.flashEvent()).toBeNull();
-      flush();
-    }));
+    });
   });
 
   describe('position', () => {

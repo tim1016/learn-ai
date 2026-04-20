@@ -125,9 +125,9 @@ export class ReplayEngineV2Service {
         indexInWindow: idx,
       };
     }
-    // Right-biased centered window: ¾ behind, ¼ ahead
+    // Right-biased centered window: ¾ behind, ¼ ahead (current bar takes slot 0)
     const behind = Math.floor(size * 0.75);
-    const ahead = size - behind;
+    const ahead = Math.max(0, size - behind - 1);
     let start = Math.max(0, idx - behind);
     let end = Math.min(bars.length - 1, idx + ahead);
     // If we hit an edge, expand the other side to preserve window size
