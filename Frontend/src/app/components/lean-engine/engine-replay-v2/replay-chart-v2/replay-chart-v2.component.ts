@@ -127,20 +127,27 @@ export class ReplayChartV2Component {
       if (!this.chart || !entries.length) return;
       const { width } = entries[0].contentRect;
       this.chart.applyOptions({ width });
-      this.applyBarSpacing(width);
     });
     this.resizeObserver.observe(el);
   }
 
-  private applyBarSpacing(width: number): void {
+  private applyVisibleRange(): void {
     if (!this.chart) return;
+    const size = this.svc.windowSize();
     const win = this.window();
-    const count = win.bars.length;
-    if (count < 2) return;
-    // Reserve ~60px right gutter for price scale
-    const usable = Math.max(200, width - 60);
-    const spacing = Math.max(2, Math.min(24, usable / count));
-    this.chart.timeScale().applyOptions({ barSpacing: spacing });
+    const dataLen = win.bars.length;
+    if (dataLen === 0) return;
+    const ts = this.chart.timeScale();
+    if (size === 'all') {
+      ts.fitContent();
+      return;
+    }
+    // Lock visible logical range to exactly `size` units. Negative `from`
+    // lets the right edge stay pinned even before the window has filled.
+    const rightGutter = 3;
+    const from = dataLen - size;
+    const to = dataLen - 1 + rightGutter;
+    ts.setVisibleLogicalRange({ from, to });
   }
 
   private syncCandles(): void {
@@ -155,7 +162,7 @@ export class ReplayChartV2Component {
       open: b.open, high: b.high, low: b.low, close: b.close,
     }));
     this.candles.setData(data);
-    this.applyBarSpacing(this.container().nativeElement.clientWidth);
+    this.applyVisibleRange();
   }
 
   private syncIndicators(): void {
