@@ -1,0 +1,79 @@
+:host {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.flash-wrap {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  &[data-kind="gain"] { --glow: 34, 197, 94; --accent: #4ade80; }
+  &[data-kind="loss"] { --glow: 248, 113, 113; --accent: #f87171; }
+}
+
+.ring {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 60px; height: 60px;
+  border-radius: 50%;
+  border: 2px solid rgba(var(--glow), 0.9);
+  transform: translate(-50%, -50%) scale(1);
+  animation: ring-pulse 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.bubble {
+  position: relative;
+  display: inline-grid;
+  grid-template-rows: auto auto auto;
+  justify-items: center;
+  gap: 2px;
+  padding: 10px 16px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(var(--glow), 0.5);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 32px rgba(var(--glow), 0.45);
+  animation: bubble-drift 1.5s cubic-bezier(0.25, 1, 0.3, 1) forwards;
+  min-width: 140px;
+  text-align: center;
+
+  .tag {
+    font-size: 10px;
+    color: #94a3b8;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .amt {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: -0.01em;
+    line-height: 1;
+  }
+
+  .pct {
+    font-size: 11px;
+    color: var(--accent);
+    opacity: 0.8;
+  }
+}
+
+@keyframes ring-pulse {
+  0%   { transform: translate(-50%, -50%) scale(0.4); opacity: 0.95; border-width: 3px; }
+  60%  { opacity: 0.6; border-width: 2px; }
+  100% { transform: translate(-50%, -50%) scale(3.4); opacity: 0; border-width: 1px; }
+}
+
+@keyframes bubble-drift {
+  0%   { transform: translateY(6px) scale(0.92); opacity: 0; }
+  12%  { transform: translateY(0) scale(1.04); opacity: 1; }
+  25%  { transform: translateY(-4px) scale(1); opacity: 1; }
+  80%  { transform: translateY(-22px) scale(1); opacity: 0.95; }
+  100% { transform: translateY(-36px) scale(0.98); opacity: 0; }
+}
