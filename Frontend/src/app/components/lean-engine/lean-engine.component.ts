@@ -486,6 +486,12 @@ export class LeanEngineComponent implements OnInit {
       this.result.set(response);
       if (response.error) {
         this.runError.set(response.error);
+      } else if (response.success) {
+        // Jump to the Results tab so the user actually sees the output —
+        // matches the behavior of onStudySelected() when loading a past
+        // study, and makes the scorecard + hero cards the first thing
+        // they read after clicking Run.
+        this.activeTab.set("1");
       }
     } catch (err: any) {
       const detail = err?.error?.detail;

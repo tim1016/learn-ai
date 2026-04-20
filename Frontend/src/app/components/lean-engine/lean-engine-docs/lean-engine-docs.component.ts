@@ -30,6 +30,8 @@ interface StatisticDoc {
   description: string;
   codeRef: string;
   notes?: string;
+  /** Slug used as an HTML id so hero-card tooltips can deep-link here. */
+  anchor?: string;
 }
 
 interface FillModeDoc {
@@ -308,6 +310,7 @@ export class LeanEngineDocsComponent {
   readonly statistics: StatisticDoc[] = [
     {
       name: "Win rate",
+      anchor: "win-rate",
       formulaLatex:
         "\\text{Win Rate} = \\frac{N_{\\text{wins}}}{N_{\\text{trades}}}",
       description:
@@ -317,6 +320,7 @@ export class LeanEngineDocsComponent {
     },
     {
       name: "Profit factor",
+      anchor: "profit-factor",
       formulaLatex:
         "\\text{Profit Factor} = \\frac{\\sum_{t \\in \\text{wins}} |p_t|}" +
         "{\\sum_{t \\in \\text{losses}} |p_t|}",
@@ -328,6 +332,7 @@ export class LeanEngineDocsComponent {
     },
     {
       name: "Expectancy",
+      anchor: "expectancy",
       formulaLatex:
         "E[\\text{trade}] = \\frac{1}{N}\\sum_{t=1}^{N} p_t",
       description:
@@ -347,6 +352,7 @@ export class LeanEngineDocsComponent {
     },
     {
       name: "Max drawdown",
+      anchor: "max-drawdown",
       formulaLatex:
         "\\text{MaxDD} = \\max_{t}\\left( \\frac{\\text{peak}_t - E_t}" +
         "{\\text{peak}_t} \\right), \\quad \\text{peak}_t = \\max_{s \\le t} E_s",
@@ -359,6 +365,7 @@ export class LeanEngineDocsComponent {
     },
     {
       name: "Sharpe ratio (annualized)",
+      anchor: "sharpe",
       formulaLatex:
         "\\text{Sharpe} = \\frac{\\overline{r}}{\\sigma_r} \\cdot " +
         "\\sqrt{\\text{periods per year}}",
@@ -372,6 +379,7 @@ export class LeanEngineDocsComponent {
     },
     {
       name: "Sortino ratio (annualized)",
+      anchor: "sortino",
       formulaLatex:
         "\\text{Sortino} = \\frac{\\overline{r}}{\\sigma_d} \\cdot " +
         "\\sqrt{\\text{periods per year}}, \\quad " +

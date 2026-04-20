@@ -190,7 +190,7 @@
     </p>
     <div class="doc-card">
       @for (s of statistics; track s.name; let last = $last) {
-        <h4>{{ s.name }}</h4>
+        <h4 [attr.id]="s.anchor ?? null">{{ s.name }}</h4>
         <div class="formula-block">
           <span [appKatex]="s.formulaLatex" [displayMode]="true"></span>
         </div>

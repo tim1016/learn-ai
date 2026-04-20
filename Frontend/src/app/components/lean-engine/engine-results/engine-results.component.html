@@ -13,30 +13,123 @@
   </div>
 </div>
 
-<!-- Hero Metrics -->
-<div class="hero-metrics">
-  <div class="hero-card" [class.positive]="r.net_profit > 0" [class.negative]="r.net_profit <= 0">
+<!-- Production Readiness Score — top-of-page executive layer -->
+<app-readiness-score-card [result]="r" />
+
+<!-- Hero Metrics — graded against 2025-26 institutional hurdles.
+     Ordered by importance: outcome (net profit) → risk (drawdown) →
+     risk-adjusted return (sharpe/sortino) → edge quality (PF/win/expectancy). -->
+<div class="hero-metrics six-wide">
+  <!-- Net Profit -->
+  <div class="hero-card graded" [attr.data-band]="netProfitGrade().band"
+    [pTooltip]="tooltipBody('Net Profit', netProfitGrade().targetRange, netProfitGrade().subtitle)"
+    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
     <span class="hero-label">Net Profit</span>
     <span class="hero-value">{{ formatCurrency(r.net_profit) }}</span>
     <span class="hero-sub">{{ formatPct(r.net_profit / r.initial_cash) }}</span>
+    <span class="hero-verdict">{{ netProfitGrade().subtitle }}</span>
   </div>
-  <div class="hero-card negative">
+
+  <!-- Max Drawdown -->
+  <div class="hero-card graded" [attr.data-band]="maxDrawdownGrade().band"
+    [pTooltip]="tooltipBody('Max Drawdown', maxDrawdownGrade().targetRange, maxDrawdownGrade().subtitle)"
+    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
     <span class="hero-label">Max Drawdown</span>
     <span class="hero-value">{{ formatPct(r.statistics['max_drawdown_pct'] ?? 0) }}</span>
+    <span class="hero-sub">Peak-to-trough</span>
+    <span class="hero-verdict">{{ maxDrawdownGrade().subtitle }}</span>
   </div>
-  <div class="hero-card">
-    <span class="hero-label">Trades</span>
-    <span class="hero-value">{{ r.total_trades }}</span>
-    <span class="hero-sub">{{ r.winning_trades }}W / {{ r.losing_trades }}L</span>
+
+  <!-- Sharpe Ratio -->
+  <div class="hero-card graded" [attr.data-band]="sharpeGrade().band"
+    [pTooltip]="tooltipBody('Sharpe Ratio', sharpeGrade().targetRange, sharpeGrade().subtitle)"
+    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
+    <span class="hero-label">Sharpe</span>
+    <span class="hero-value">{{ formatNumber(r.statistics['sharpe_ratio'], 2) }}</span>
+    <span class="hero-sub">Risk-adjusted return</span>
+    <span class="hero-verdict">{{ sharpeGrade().subtitle }}</span>
   </div>
-  <div class="hero-card">
+
+  <!-- Sortino Ratio -->
+  <div class="hero-card graded" [attr.data-band]="sortinoGrade().band"
+    [pTooltip]="tooltipBody('Sortino Ratio', sortinoGrade().targetRange, sortinoGrade().subtitle)"
+    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
+    <span class="hero-label">Sortino</span>
+    <span class="hero-value">{{ formatNumber(r.statistics['sortino_ratio'], 2) }}</span>
+    <span class="hero-sub">Downside-only vol</span>
+    <span class="hero-verdict">{{ sortinoGrade().subtitle }}</span>
+  </div>
+
+  <!-- Profit Factor -->
+  <div class="hero-card graded" [attr.data-band]="profitFactorGrade().band"
+    [pTooltip]="tooltipBody('Profit Factor', profitFactorGrade().targetRange, profitFactorGrade().subtitle)"
+    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
+    <span class="hero-label">Profit Factor</span>
+    <span class="hero-value">{{ formatNumber(r.statistics['profit_factor'], 2) }}</span>
+    <span class="hero-sub">Gross wins / losses</span>
+    <span class="hero-verdict">{{ profitFactorGrade().subtitle }}</span>
+  </div>
+
+  <!-- Win Rate -->
+  <div class="hero-card graded" [attr.data-band]="winRateGrade().band"
+    [pTooltip]="tooltipBody('Win Rate', winRateGrade().targetRange, winRateGrade().subtitle)"
+    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
     <span class="hero-label">Win Rate</span>
     <span class="hero-value">{{ formatPct(r.win_rate) }}</span>
+    <span class="hero-sub">{{ r.winning_trades }}W / {{ r.losing_trades }}L · {{ r.total_trades }} trades</span>
+    <span class="hero-verdict">{{ winRateGrade().subtitle }}</span>
   </div>
+</div>
+
+<!-- Secondary metric row: expectancy + trades summary -->
+<div class="hero-metrics two-wide">
+  <div class="hero-card graded" [attr.data-band]="expectancyGrade().band"
+    [pTooltip]="tooltipBody('Expectancy (per trade)', expectancyGrade().targetRange, expectancyGrade().subtitle)"
+    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
+    <span class="hero-label">Expectancy / trade</span>
+    <span class="hero-value">{{ formatPct(r.statistics['expectancy_pct'] ?? 0) }}</span>
+    <span class="hero-sub">Average PnL per round trip</span>
+    <span class="hero-verdict">{{ expectancyGrade().subtitle }}</span>
+  </div>
+
   <div class="hero-card">
-    <span class="hero-label">Sharpe</span>
-    <span class="hero-value">{{ formatNumber(r.statistics['sharpe_ratio'] ?? 0, 3) }}</span>
+    <span class="hero-label">Trade Summary</span>
+    <span class="hero-value">{{ r.total_trades }}</span>
+    <span class="hero-sub">{{ r.winning_trades }} winning · {{ r.losing_trades }} losing</span>
+    <span class="hero-verdict">Sample size drives statistical confidence.</span>
   </div>
+</div>
+
+<!-- Trade-vs-Portfolio Sharpe divergence card.  Surfaced separately
+     from the hero row because it's a *relationship* between two other
+     metrics, not a standalone number. -->
+@let div = sharpeDivergence();
+<div class="divergence-card" [attr.data-band]="div.band">
+  <div class="divergence-head">
+    <div>
+      <span class="divergence-label">Trade Sharpe vs Portfolio Sharpe</span>
+      <span class="divergence-sub">Gap reveals sequencing risk — long flat periods between active bursts.</span>
+    </div>
+    @if (div.gap !== null) {
+      <div class="divergence-values">
+        <div class="dv-pair">
+          <span class="dv-label">Trade</span>
+          <span class="dv-value">{{ formatNumber(div.trade, 2) }}</span>
+        </div>
+        <div class="dv-minus">−</div>
+        <div class="dv-pair">
+          <span class="dv-label">Portfolio</span>
+          <span class="dv-value">{{ formatNumber(div.portfolio, 2) }}</span>
+        </div>
+        <div class="dv-equals">=</div>
+        <div class="dv-pair dv-gap">
+          <span class="dv-label">Gap</span>
+          <span class="dv-value">{{ div.gap.toFixed(2) }}</span>
+        </div>
+      </div>
+    }
+  </div>
+  <p class="divergence-verdict">{{ div.verdict }}</p>
 </div>
 
 <!-- Fee Breakdown -->

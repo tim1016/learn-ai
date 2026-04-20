@@ -23,7 +23,10 @@
         <p-tab value="0">
           <i class="pi pi-cog"></i> Configure
         </p-tab>
-        <p-tab value="1" [disabled]="!result()">
+        <!-- Always clickable — the empty-state inside the panel handles the
+             "no backtest run yet" case. Disabling this tab was preventing
+             navigation in some timing scenarios with PrimeNG 21. -->
+        <p-tab value="1">
           <i class="pi pi-chart-line"></i> Results
         </p-tab>
         <p-tab value="2">

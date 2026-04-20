@@ -18,27 +18,61 @@
 }
 
 // ─── Hero Metrics ─────────────────────────────────────
+$skeptical: #a855f7;
+
 .hero-metrics {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   gap: 10px;
   margin-bottom: 1.25rem;
 
-  @media (max-width: 768px) { grid-template-columns: repeat(2, 1fr); }
+  &.six-wide { grid-template-columns: repeat(6, 1fr); }
+  &.two-wide { grid-template-columns: repeat(2, 1fr); }
+
+  @media (max-width: 1024px) {
+    grid-template-columns: repeat(3, 1fr);
+    &.six-wide { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 768px) {
+    grid-template-columns: repeat(2, 1fr);
+    &.six-wide { grid-template-columns: repeat(2, 1fr); }
+    &.two-wide { grid-template-columns: 1fr; }
+  }
 }
 
 .hero-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 16px 8px;
+  padding: 14px 10px 12px;
   background: $bg-surface;
   border: 1px solid $border;
   border-radius: 10px;
   text-align: center;
+  cursor: default;
 
   &.positive { background: rgba($bull, 0.08); border-color: rgba($bull, 0.25); }
   &.negative { background: rgba($bear, 0.08); border-color: rgba($bear, 0.25); }
+
+  // Graded variants use a top border stripe as the traffic light.
+  // Using border-top (not border-left) so hero cards keep their centered
+  // vertical rhythm and the stripe is immediately visible above the label.
+  &.graded {
+    border-top: 3px solid $border-light;
+    padding-top: 11px;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+
+    &:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    }
+
+    &[data-band="green"]     { border-top-color: $bull; }
+    &[data-band="amber"]     { border-top-color: $warn; }
+    &[data-band="red"]       { border-top-color: $bear; }
+    &[data-band="skeptical"] { border-top-color: $skeptical; }
+    &[data-band="na"]        { border-top-color: $text-muted; }
+  }
 }
 
 .hero-label {
@@ -55,15 +89,130 @@
   font-weight: 700;
   color: $text-primary;
   line-height: 1.2;
+  font-family: $font-mono;
 
   .hero-card.positive & { color: $bull; }
   .hero-card.negative & { color: $bear; }
+  .hero-card.graded[data-band="green"] & { color: $bull; }
+  .hero-card.graded[data-band="amber"] & { color: $warn; }
+  .hero-card.graded[data-band="red"] & { color: $bear; }
+  .hero-card.graded[data-band="skeptical"] & { color: $skeptical; }
 }
 
 .hero-sub {
   font-size: 0.72rem;
   color: $text-secondary;
   margin-top: 4px;
+}
+
+// Plain-English verdict line — the "layman layer" of each metric.
+// Kept visually subtle so it doesn't compete with the number, but
+// always visible (no hover required) so non-experts don't miss it.
+.hero-verdict {
+  font-size: 0.72rem;
+  color: $text-secondary;
+  line-height: 1.35;
+  margin-top: 8px;
+  padding: 0 4px;
+  min-height: 1.8em; // keep cards height-consistent
+
+  .hero-card.graded[data-band="green"] & { color: mix($bull, $text-primary, 40%); }
+  .hero-card.graded[data-band="amber"] & { color: mix($warn, $text-primary, 40%); }
+  .hero-card.graded[data-band="red"] & { color: mix($bear, $text-primary, 40%); }
+  .hero-card.graded[data-band="skeptical"] & { color: mix($skeptical, $text-primary, 40%); }
+}
+
+// ─── Trade vs Portfolio Sharpe divergence card ────────
+.divergence-card {
+  padding: 14px 18px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 10px;
+  margin: 0.5rem 0 1.25rem;
+  border-left: 3px solid $border-light;
+
+  &[data-band="green"] { border-left-color: $bull; }
+  &[data-band="amber"] { border-left-color: $warn; }
+  &[data-band="red"]   { border-left-color: $bear; }
+  &[data-band="na"]    { border-left-color: $text-muted; opacity: 0.75; }
+}
+
+.divergence-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+
+  .divergence-label {
+    display: block;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: $text-muted;
+  }
+
+  .divergence-sub {
+    display: block;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    margin-top: 0.125rem;
+    line-height: 1.45;
+  }
+}
+
+.divergence-values {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: $font-mono;
+  flex-wrap: wrap;
+
+  .dv-pair {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    .dv-label {
+      font-size: 0.6875rem;
+      color: $text-muted;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .dv-value {
+      font-size: 1.125rem;
+      font-weight: 700;
+      color: $text-primary;
+    }
+
+    &.dv-gap .dv-value {
+      color: $text-primary;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: $bg-elevated;
+
+      .divergence-card[data-band="green"] & { color: $bull; background: rgba($bull, 0.12); }
+      .divergence-card[data-band="amber"] & { color: $warn; background: rgba($warn, 0.12); }
+      .divergence-card[data-band="red"]   & { color: $bear; background: rgba($bear, 0.14); }
+    }
+  }
+
+  .dv-minus, .dv-equals {
+    font-size: 1.125rem;
+    color: $text-muted;
+  }
+}
+
+.divergence-verdict {
+  margin: 0.625rem 0 0;
+  font-size: 0.8125rem;
+  color: $text-secondary;
+  line-height: 1.5;
+
+  .divergence-card[data-band="green"] & { color: $text-secondary; }
+  .divergence-card[data-band="amber"] & { color: $warn; }
+  .divergence-card[data-band="red"]   & { color: $bear; }
 }
 
 // ─── Trade Log Panel ──────────────────────────────────

@@ -1,0 +1,54 @@
+@if (!hasData()) {
+  <div class="diagram-empty">No calibration buckets to plot.</div>
+} @else {
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" class="reliability-svg">
+      <!-- Plot background -->
+      <rect [attr.x]="corner0" [attr.y]="corner0" [attr.width]="plotWidth" [attr.height]="plotWidth" class="plot-bg" />
+
+      <!-- Gridlines + tick labels -->
+      @for (g of gridlines; track g) {
+        <line [attr.x1]="gridX(g)" [attr.y1]="corner0" [attr.x2]="gridX(g)" [attr.y2]="corner1" class="gridline" />
+        <line [attr.x1]="corner0" [attr.y1]="gridY(g)" [attr.x2]="corner1" [attr.y2]="gridY(g)" class="gridline" />
+        <text [attr.x]="gridX(g)" [attr.y]="corner1 + 4" class="axis-tick" text-anchor="middle">{{ (g * 100).toFixed(0) }}</text>
+        <text [attr.x]="corner0 - 2" [attr.y]="gridY(g) + 1.2" class="axis-tick" text-anchor="end">{{ (g * 100).toFixed(0) }}</text>
+      }
+
+      <!-- Perfect calibration reference: y = x -->
+      <line [attr.x1]="corner0" [attr.y1]="corner1" [attr.x2]="corner1" [attr.y2]="corner0" class="reference-line" />
+      <text [attr.x]="corner1 - 1" [attr.y]="corner0 + 3" class="reference-label" text-anchor="end">Perfect</text>
+
+      <!-- Axis titles -->
+      <text x="50" y="99" class="axis-title" text-anchor="middle">Predicted confidence (%)</text>
+      <text x="2" y="50" class="axis-title" text-anchor="middle" transform="rotate(-90 2 50)">Actual accuracy (%)</text>
+
+      <!-- Data points -->
+      @for (p of points(); track p.bucket) {
+        <g class="point-group" [attr.data-bias]="p.bias">
+          <circle [attr.cx]="p.cx" [attr.cy]="p.cy" [attr.r]="p.radius" class="point">
+            <title>{{ tooltipFor(p) }}</title>
+          </circle>
+        </g>
+      }
+    </svg>
+
+    <!-- Legend -->
+    <div class="diagram-legend">
+      <div class="legend-item">
+        <span class="legend-swatch swatch-under"></span>
+        <span>Underconfident (accuracy &gt; confidence)</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch swatch-neutral"></span>
+        <span>Well-calibrated (&lt; 5 pp gap)</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch swatch-over"></span>
+        <span>Overconfident (accuracy &lt; confidence)</span>
+      </div>
+      <div class="legend-note">
+        Point size scales with sample count. Hover a point for exact numbers.
+      </div>
+    </div>
+  </div>
+}

@@ -1,10 +1,13 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  computed,
   input,
   signal,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { ReliabilityDiagramComponent } from './reliability-diagram/reliability-diagram.component';
+import { AccuracyHeatmapComponent } from './accuracy-heatmap/accuracy-heatmap.component';
 
 /**
  * InsightPanelComponent — displays per-prediction scoring analytics
@@ -61,7 +64,7 @@ interface InsightSummaryData {
 @Component({
   selector: 'app-insight-panel',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, ReliabilityDiagramComponent, AccuracyHeatmapComponent],
   templateUrl: './insight-panel.component.html',
   styleUrls: ['./insight-panel.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -72,6 +75,59 @@ export class InsightPanelComponent {
 
   collapsed = signal(false);
   showTable = signal(false);
+
+  // ── Derived calibration diagnostics ──
+  // Expected Calibration Error (ECE) = Σ (nᵢ/N) × |accuracyᵢ − confidenceᵢ|
+  // Institutional thresholds:
+  //   < 0.05  green — production-grade calibration
+  //   < 0.10  amber — usable with caution
+  //   ≥ 0.10  red   — confidence scores are not probabilities (Doc §32)
+  readonly ece = computed<number | null>(() => {
+    const rows = this.summaryData?.confidence_calibration ?? [];
+    if (rows.length === 0) return null;
+    const total = rows.reduce((acc, r) => acc + r.count, 0);
+    if (total === 0) return null;
+    let ece = 0;
+    for (const r of rows) {
+      const mid = bucketMid(r.bucket);
+      ece += (r.count / total) * Math.abs(r.accuracy - mid);
+    }
+    return ece;
+  });
+
+  readonly eceBand = computed<'green' | 'amber' | 'red' | 'na'>(() => {
+    const v = this.ece();
+    if (v === null) return 'na';
+    if (v < 0.05) return 'green';
+    if (v < 0.10) return 'amber';
+    return 'red';
+  });
+
+  readonly eceVerdict = computed<string>(() => {
+    const v = this.ece();
+    if (v === null) return 'No calibration buckets to score.';
+    if (v < 0.05) return 'Production-grade calibration — confidence scores usable as probabilities.';
+    if (v < 0.10) return 'Usable, but recalibration would improve Kelly sizing.';
+    return 'Confidence scores are not reliable probabilities — recalibrate before wiring into position sizing.';
+  });
+
+  readonly magnitudeBand = computed<'green' | 'amber' | 'red' | 'na'>(() => {
+    const bias = this.summaryData?.magnitude_bias;
+    if (typeof bias !== 'number') return 'na';
+    const mag = Math.abs(bias);
+    if (mag < 0.0005) return 'green';      // <0.05 pp absolute bias
+    if (mag < 0.002) return 'amber';       // <0.2 pp
+    return 'red';
+  });
+
+  readonly magnitudeVerdict = computed<string>(() => {
+    const bias = this.summaryData?.magnitude_bias;
+    if (typeof bias !== 'number') return 'Magnitude not scored.';
+    if (Math.abs(bias) < 0.0005) return 'Model predicts move magnitude accurately on average.';
+    const dir = bias > 0 ? 'over' : 'under';
+    const pp = Math.abs(bias * 100).toFixed(3);
+    return `Model ${dir}estimates moves by ~${pp} pp on average. ${bias < 0 ? 'Safer, but indicators may be lagging true volatility.' : 'Risk of fat-tail blowups if sizing scales with predicted magnitude.'}`;
+  });
 
   // Typed access
   get summaryData(): InsightSummaryData | null {
@@ -145,4 +201,10 @@ export class InsightPanelComponent {
     if (Math.abs(bias) < 0.0001) return 'Neutral';
     return bias > 0 ? 'Overestimates' : 'Underestimates';
   }
+}
+
+function bucketMid(bucket: string): number {
+  const parts = bucket.split('-').map(Number);
+  if (parts.length !== 2 || parts.some(Number.isNaN)) return 0.5;
+  return (parts[0] + parts[1]) / 2;
 }

@@ -1,0 +1,48 @@
+@if (!hasSamples()) {
+  <div class="heatmap-empty">No hourly samples available for this run.</div>
+} @else {
+  <div class="heatmap">
+    @for (c of cells(); track c.hour) {
+      <div
+        class="cell"
+        [attr.data-band]="c.band"
+        [class.worst]="c.isWorst"
+        [title]="c.tooltip"
+      >
+        <div class="cell-hour">{{ c.label }}</div>
+        <div class="cell-accuracy">
+          @if (c.accuracy !== null) {
+            {{ (c.accuracy * 100).toFixed(0) }}%
+          } @else {
+            <span class="no-data">—</span>
+          }
+        </div>
+        <div class="cell-count">n={{ c.count }}</div>
+      </div>
+    }
+  </div>
+
+  <div class="heatmap-legend">
+    <div class="legend-row">
+      <div class="legend-item"><span class="swatch green"></span>&ge; 55% accuracy</div>
+      <div class="legend-item"><span class="swatch amber"></span>40% – 55%</div>
+      <div class="legend-item"><span class="swatch red"></span>&lt; 40% (no-trade zone)</div>
+      <div class="legend-item"><span class="swatch empty"></span>No samples</div>
+    </div>
+    @if (noTradeZones().length > 0) {
+      <div class="no-trade-callout">
+        <i class="pi pi-exclamation-triangle"></i>
+        <div>
+          <strong>No-trade zones detected:</strong>
+          @for (z of noTradeZones(); track z.hour; let isLast = $last) {
+            <code>{{ z.label }} ({{ (z.accuracy ?? 0) * 100 | number: '1.0-1' }}%)</code>@if (!isLast) {<span>, </span>}
+          }
+          <p>
+            Signals during these hours are effectively coin-flips or worse.
+            Consider suppressing new entries here via a Scheduled Event.
+          </p>
+        </div>
+      </div>
+    }
+  </div>
+}

@@ -10,6 +10,29 @@
     </div>
 
     @if (!collapsed()) {
+      <!-- Traffic-light calibration chips — the "at a glance" layer for
+           non-experts. ECE gates whether confidence scores are usable
+           as probabilities; magnitude bias gates whether the alpha model
+           can be trusted to scale position size. -->
+      <div class="calibration-chips">
+        <div class="chip" [attr.data-band]="eceBand()">
+          <span class="chip-label">Expected Calibration Error</span>
+          <span class="chip-value">
+            @if (ece() !== null) { {{ (ece()! * 100).toFixed(2) }}% }
+            @else { — }
+          </span>
+          <span class="chip-verdict">{{ eceVerdict() }}</span>
+        </div>
+        <div class="chip" [attr.data-band]="magnitudeBand()">
+          <span class="chip-label">Magnitude Bias</span>
+          <span class="chip-value">
+            {{ biasLabel(s.magnitude_bias) }}
+            <small>({{ (s.magnitude_bias * 100).toFixed(3) }} pp)</small>
+          </span>
+          <span class="chip-verdict">{{ magnitudeVerdict() }}</span>
+        </div>
+      </div>
+
       <!-- KPI Row -->
       <div class="kpi-row">
         <div class="kpi">
@@ -27,66 +50,64 @@
           <span class="kpi-label">Avg Confidence Emitted</span>
         </div>
         <div class="kpi">
-          <span class="kpi-value" [style.color]="s.magnitude_bias > 0.001 ? '#ffc107' : s.magnitude_bias < -0.001 ? '#e5334e' : '#00c896'">
-            {{ biasLabel(s.magnitude_bias) }}
-          </span>
-          <span class="kpi-label">Magnitude Bias ({{ (s.magnitude_bias * 100).toFixed(3) }}%)</span>
+          <span class="kpi-value">{{ s.scored_insights }}</span>
+          <span class="kpi-label">Scored Predictions</span>
         </div>
       </div>
 
-      <!-- Confidence Calibration -->
+      <!-- Reliability diagram — interactive scatter of predicted confidence
+           vs observed accuracy with a y = x reference line. Replaces the
+           static calibration table; the underlying bucket data is still
+           shown in a collapsible details block for completeness. -->
       @if (calibrationRows.length > 0) {
         <div class="sub-section">
           <h4>Confidence Calibration</h4>
           <p class="sub-desc">
-            How well does the strategy's stated confidence match actual accuracy?
-            A well-calibrated model has accuracy ≈ confidence for each bucket.
+            Points above the diagonal are underconfident (safe — model's
+            actual accuracy exceeds its stated confidence). Points below
+            are overconfident (dangerous — model's confidence outruns
+            reality).
           </p>
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Confidence Bucket</th>
-                <th>Count</th>
-                <th>Correct</th>
-                <th>Actual Accuracy</th>
-                <th>Gap</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (row of calibrationRows; track row.bucket) {
+          <app-reliability-diagram [buckets]="calibrationRows" />
+
+          <details class="bucket-details">
+            <summary>Show bucket table</summary>
+            <table class="data-table">
+              <thead>
                 <tr>
-                  <td>{{ row.bucket }}</td>
-                  <td>{{ row.count }}</td>
-                  <td>{{ row.correct }}</td>
-                  <td [style.color]="scoreColor(row.accuracy)">{{ pct(row.accuracy) }}</td>
-                  <td>{{ calibrationGap(row) }}</td>
+                  <th>Confidence bucket</th>
+                  <th>Count</th>
+                  <th>Correct</th>
+                  <th>Actual accuracy</th>
+                  <th>Gap</th>
                 </tr>
-              }
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                @for (row of calibrationRows; track row.bucket) {
+                  <tr>
+                    <td>{{ row.bucket }}</td>
+                    <td>{{ row.count }}</td>
+                    <td>{{ row.correct }}</td>
+                    <td [style.color]="scoreColor(row.accuracy)">{{ pct(row.accuracy) }}</td>
+                    <td>{{ calibrationGap(row) }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </details>
         </div>
       }
 
-      <!-- Accuracy by Hour -->
+      <!-- Accuracy by hour of day -->
       @if (hourlyRows.length > 0) {
         <div class="sub-section">
           <h4>Accuracy by Hour of Day</h4>
-          <div class="hour-grid">
-            @for (row of hourlyRows; track row.hour) {
-              <div class="hour-cell" [title]="row.correct + '/' + row.count + ' correct'">
-                <span class="hour-label">{{ row.hour }}:00</span>
-                <div class="hour-bar-bg">
-                  <div
-                    class="hour-bar-fill"
-                    [style.width.%]="row.accuracy * 100"
-                    [style.background]="scoreColor(row.accuracy)">
-                  </div>
-                </div>
-                <span class="hour-pct">{{ pct(row.accuracy) }}</span>
-                <span class="hour-count">({{ row.count }})</span>
-              </div>
-            }
-          </div>
+          <p class="sub-desc">
+            Hours with &lt;40% accuracy are effectively coin-flips minus fees —
+            candidates for a participation filter that suppresses new entries
+            in those windows.
+          </p>
+          <app-accuracy-heatmap [rows]="hourlyRows" />
         </div>
       }
 

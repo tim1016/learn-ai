@@ -6,6 +6,11 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { TooltipModule } from 'primeng/tooltip';
 import { LeanStatisticsComponent } from '../../strategy-lab/lean-statistics/lean-statistics.component';
+import { ReadinessScoreCardComponent } from '../readiness-score-card/readiness-score-card.component';
+import {
+  gradeSharpe, gradeSortino, gradeProfitFactor, gradeWinRate,
+  gradeMaxDrawdown, gradeExpectancy, gradeNetProfit,
+} from '../metric-grade.util';
 
 // ── Shared types (mirrored from lean-engine) ──────────────────
 export interface LeanPortfolioStats {
@@ -81,7 +86,7 @@ export interface EngineResultData {
 @Component({
   selector: 'app-engine-results',
   standalone: true,
-  imports: [CommonModule, FormsModule, TooltipModule, LeanStatisticsComponent],
+  imports: [CommonModule, FormsModule, TooltipModule, LeanStatisticsComponent, ReadinessScoreCardComponent],
   templateUrl: './engine-results.component.html',
   styleUrls: ['./engine-results.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -109,6 +114,68 @@ export class EngineResultsComponent {
     if (grossProfit <= 0) return 0;
     return r.total_fees / grossProfit;
   });
+
+  // ── Hero-card grading — drives traffic-light stripes + plain-English subtitles
+  readonly netProfitGrade = computed(() => {
+    const r = this.result();
+    return gradeNetProfit(r.net_profit, r.initial_cash);
+  });
+  readonly maxDrawdownGrade = computed(() => {
+    const r = this.result();
+    return gradeMaxDrawdown(r.statistics['max_drawdown_pct']);
+  });
+  readonly sharpeGrade = computed(() => {
+    const r = this.result();
+    return gradeSharpe(r.statistics['sharpe_ratio']);
+  });
+  readonly sortinoGrade = computed(() => {
+    const r = this.result();
+    return gradeSortino(r.statistics['sortino_ratio']);
+  });
+  readonly profitFactorGrade = computed(() => {
+    const r = this.result();
+    return gradeProfitFactor(r.statistics['profit_factor']);
+  });
+  readonly winRateGrade = computed(() => gradeWinRate(this.result().win_rate));
+  readonly expectancyGrade = computed(() => {
+    const r = this.result();
+    return gradeExpectancy(r.statistics['expectancy_pct']);
+  });
+
+  // ── Trade vs Portfolio Sharpe divergence ──
+  // Trade Sharpe comes from TradeStatistics (per-trade round-trip returns),
+  // Portfolio Sharpe from PortfolioStatistics (continuous equity curve). A
+  // large gap means the strategy spends long periods flat and concentrates
+  // performance into short bursts — "sequencing risk". The doc flags gap >
+  // 3.0 as elevated.
+  readonly sharpeDivergence = computed(() => {
+    const r = this.result();
+    const portfolio = r.statistics['sharpe_ratio'] ?? r.lean_statistics?.portfolio?.sharpe_ratio ?? null;
+    const trade = r.lean_statistics?.trade?.sharpe_ratio ?? null;
+    if (typeof portfolio !== 'number' || typeof trade !== 'number') {
+      return { portfolio, trade, gap: null, band: 'na' as const, verdict: 'Trade Sharpe requires lean_statistics from the backtest.' };
+    }
+    const gap = trade - portfolio;
+    let band: 'green' | 'amber' | 'red';
+    let verdict: string;
+    if (gap < 1.0) { band = 'green'; verdict = 'Low sequencing risk — capital is active most of the time.'; }
+    else if (gap < 2.0) { band = 'green'; verdict = 'Modest sequencing risk.'; }
+    else if (gap < 3.0) { band = 'amber'; verdict = 'Capital spends meaningful time idle between active bursts.'; }
+    else if (gap < 5.0) { band = 'amber'; verdict = 'Elevated sequencing risk (gap > 3). Investor patience becomes a risk factor.'; }
+    else { band = 'red'; verdict = 'Severe sequencing risk — short performance bursts between long idle periods.'; }
+    return { portfolio, trade, gap, band, verdict };
+  });
+
+  /** Build a rich, multi-line tooltip body for a hero card. PrimeNG's
+   *  pTooltip renders newlines when [tooltipOptions]={ escape: false } but
+   *  for simplicity we emit plain text with \n — PrimeNG white-space-pre's it.
+   */
+  tooltipBody(label: string, target: string, subtitle: string): string {
+    // Single-line summary — PrimeNG's default tooltip is text-only. Rich
+    // multi-line bodies are handled in the Docs tab; this is just a quick
+    // hover-to-orient hint for laypeople scanning the card.
+    return `${label} · target ${target} · ${subtitle} See Docs tab for formula.`;
+  }
 
   get timezoneOptions(): { value: string; label: string }[] {
     const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;

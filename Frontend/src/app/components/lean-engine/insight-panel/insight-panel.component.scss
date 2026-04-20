@@ -3,6 +3,87 @@
   margin-top: 16px;
 }
 
+// ── Calibration chips (ECE + Magnitude Bias) ──────────
+$chip-bull: #00c896;
+$chip-warn: #f59e0b;
+$chip-bear: #e5334e;
+
+.calibration-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+  padding: 12px 16px 0;
+}
+
+.chip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #1c1f2e;
+  border: 1px solid #2a2e3e;
+  border-left: 3px solid #353a4d;
+
+  &[data-band="green"] { border-left-color: $chip-bull; }
+  &[data-band="amber"] { border-left-color: $chip-warn; }
+  &[data-band="red"]   { border-left-color: $chip-bear; }
+  &[data-band="na"]    { border-left-color: #5a6178; opacity: 0.7; }
+
+  .chip-label {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #8892a8;
+  }
+
+  .chip-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #e0e4ec;
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    line-height: 1.2;
+
+    small {
+      font-size: 0.75rem;
+      font-weight: 400;
+      color: #8892a8;
+      margin-left: 6px;
+    }
+  }
+
+  &[data-band="green"] .chip-value { color: $chip-bull; }
+  &[data-band="amber"] .chip-value { color: $chip-warn; }
+  &[data-band="red"]   .chip-value { color: $chip-bear; }
+
+  .chip-verdict {
+    font-size: 0.75rem;
+    color: #8892a8;
+    line-height: 1.45;
+    margin-top: 2px;
+  }
+}
+
+// ── Bucket details disclosure ─────────────────────────
+.bucket-details {
+  margin-top: 12px;
+
+  summary {
+    cursor: pointer;
+    font-size: 0.8125rem;
+    color: #3b82f6;
+    padding: 6px 0;
+    user-select: none;
+
+    &:hover { text-decoration: underline; }
+  }
+
+  table {
+    margin-top: 8px;
+  }
+}
+
 .insight-panel {
   background: #161922;
   border: 1px solid #2a2e3e;

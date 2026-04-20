@@ -1,0 +1,158 @@
+@use '../../../../styles/tokens' as *;
+
+:host {
+  display: block;
+}
+
+.heatmap-empty {
+  padding: 1rem;
+  text-align: center;
+  color: $text-muted;
+  font-size: 0.875rem;
+  border: 1px dashed $border-light;
+  border-radius: 6px;
+}
+
+.heatmap {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  gap: 2px;
+  padding: 0.5rem;
+  background: $bg-elevated;
+  border: 1px solid $border;
+  border-radius: 6px;
+
+  @media (max-width: 900px) {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+  }
+  @media (max-width: 500px) {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+.cell {
+  position: relative;
+  aspect-ratio: 1 / 1.05;
+  padding: 4px 2px;
+  border-radius: 4px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  text-align: center;
+  cursor: help;
+  transition: transform 0.1s ease;
+
+  &:hover { transform: scale(1.06); z-index: 1; }
+
+  // Accuracy bands.  Red is deliberately saturated so 0% cells (worst
+  // case) read as an immediate risk signal at a glance.
+  &[data-band="green"] { background: rgba($bull, 0.22); border-color: rgba($bull, 0.5); }
+  &[data-band="amber"] { background: rgba($warn, 0.22); border-color: rgba($warn, 0.5); }
+  &[data-band="red"]   { background: rgba($bear, 0.28); border-color: rgba($bear, 0.55); }
+  &[data-band="empty"] { background: $bg-surface; opacity: 0.55; }
+
+  // The single worst hour (if it's also in the red band) gets a bolder
+  // border so traders see the primary failure window instantly.
+  &.worst {
+    box-shadow: 0 0 0 2px $bear;
+  }
+}
+
+.cell-hour {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: $text-muted;
+  font-family: $font-mono;
+  letter-spacing: 0.02em;
+}
+
+.cell-accuracy {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: $text-primary;
+  font-family: $font-mono;
+
+  .no-data { color: $text-muted; }
+
+  .cell[data-band="green"] & { color: $bull; }
+  .cell[data-band="amber"] & { color: $warn; }
+  .cell[data-band="red"] & { color: $bear; }
+}
+
+.cell-count {
+  font-size: 0.625rem;
+  color: $text-muted;
+  font-family: $font-mono;
+}
+
+// ── Legend ──────────────────────────────────────────
+.heatmap-legend {
+  margin-top: 0.75rem;
+}
+
+.legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.75rem;
+  color: $text-secondary;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.swatch {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 3px;
+
+  &.green { background: rgba($bull, 0.5); border: 1px solid $bull; }
+  &.amber { background: rgba($warn, 0.5); border: 1px solid $warn; }
+  &.red   { background: rgba($bear, 0.5); border: 1px solid $bear; }
+  &.empty { background: $bg-surface; border: 1px solid $border; }
+}
+
+.no-trade-callout {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.625rem 0.875rem;
+  background: rgba($bear, 0.08);
+  border: 1px solid rgba($bear, 0.3);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  color: $text-secondary;
+  line-height: 1.5;
+
+  i {
+    color: $bear;
+    margin-top: 0.125rem;
+    flex-shrink: 0;
+  }
+
+  strong {
+    color: $text-primary;
+    margin-right: 0.25rem;
+  }
+
+  code {
+    background: rgba($bear, 0.15);
+    color: $bear;
+    padding: 0.125rem 0.375rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-family: $font-mono;
+  }
+
+  p {
+    margin: 0.375rem 0 0;
+    font-size: 0.75rem;
+    color: $text-muted;
+  }
+}

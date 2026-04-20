@@ -1,0 +1,123 @@
+@let rpt = report();
+
+<div class="readiness-card" [attr.data-band]="band()">
+  <div class="readiness-head">
+    <!-- Score ring -->
+    <div class="score-ring" [attr.data-band]="band()">
+      @if (hasScore()) {
+        <svg viewBox="0 0 110 110" width="110" height="110">
+          <circle cx="55" cy="55" r="48" class="ring-track" />
+          <circle
+            cx="55" cy="55" r="48"
+            class="ring-progress"
+            [attr.stroke-dasharray]="ringCircumference"
+            [attr.stroke-dashoffset]="ringOffset()"
+          />
+        </svg>
+        <div class="ring-center">
+          <div class="ring-value">{{ rpt.composite }}</div>
+          <div class="ring-denom">/ 100</div>
+        </div>
+      } @else {
+        <div class="score-empty">—</div>
+      }
+    </div>
+
+    <!-- Headline -->
+    <div class="readiness-headline">
+      <div class="headline-row">
+        <span class="headline-label">Production Readiness</span>
+        @if (rpt.grade) {
+          <span class="grade-chip" [ngClass]="gradeChipClass(rpt.grade)">
+            Grade {{ rpt.grade }}
+          </span>
+        }
+        @if (rpt.signal) {
+          <span class="signal-chip" [attr.data-band]="band()">{{ rpt.signal }}</span>
+        }
+      </div>
+      <p class="verdict">{{ rpt.verdict }}</p>
+
+      <button
+        type="button"
+        class="expand-toggle"
+        (click)="toggleExpanded()"
+        [attr.aria-expanded]="expanded()"
+      >
+        <i class="pi" [class.pi-chevron-down]="!expanded()" [class.pi-chevron-up]="expanded()"></i>
+        <span>{{ expanded() ? 'Hide' : 'Show' }} dimension breakdown</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Dimension strip (always visible, compact) -->
+  @if (hasScore() && rpt.dimensions.length > 0) {
+    <div class="dimension-strip">
+      @for (d of rpt.dimensions; track d.key) {
+        <div class="dim-pill" [attr.data-band]="dimensionBand(d.score)">
+          <div class="dim-label">{{ d.label }}</div>
+          <div class="dim-score">
+            @if (d.score !== null) {
+              <strong>{{ d.score }}</strong><span>/100</span>
+            } @else {
+              <span class="na-label">N/A</span>
+            }
+          </div>
+          <div class="dim-weight">{{ (d.weight * 100).toFixed(0) }}% weight</div>
+        </div>
+      }
+    </div>
+  }
+
+  <!-- Expanded detail: sub-scores per dimension -->
+  @if (expanded() && rpt.dimensions.length > 0) {
+    <div class="dimension-detail">
+      @for (d of rpt.dimensions; track d.key) {
+        <div class="dim-block" [attr.data-band]="dimensionBand(d.score)">
+          <div class="dim-block-head">
+            <div>
+              <div class="dim-block-label">{{ d.label }}</div>
+              <div class="dim-block-summary">{{ d.summary }}</div>
+            </div>
+            <div class="dim-block-score">
+              @if (d.score !== null) {
+                <strong>{{ d.score }}</strong><span>/100</span>
+              } @else {
+                <span class="na-label">Not graded — all sub-scores unavailable</span>
+              }
+              <div class="dim-block-weight">{{ (d.weight * 100).toFixed(0) }}% weight</div>
+            </div>
+          </div>
+          <ul class="sub-list">
+            @for (s of d.subScores; track s.key) {
+              <li class="sub-row" [class.sub-na]="s.score === null">
+                <div class="sub-main">
+                  <span class="sub-label">{{ s.label }}</span>
+                  <span class="sub-value">{{ s.display }}</span>
+                </div>
+                <div class="sub-side">
+                  @if (s.score !== null) {
+                    <span class="sub-points">{{ s.score }}/20</span>
+                  } @else {
+                    <span class="sub-na">N/A</span>
+                  }
+                </div>
+                <div class="sub-note">{{ s.note }}</div>
+              </li>
+            }
+          </ul>
+        </div>
+      }
+
+      @if (rpt.normalizedWeights) {
+        <div class="weight-note">
+          <i class="pi pi-info-circle"></i>
+          <span>
+            Some dimensions were unavailable and their weights were redistributed
+            proportionally across the graded ones.
+          </span>
+        </div>
+      }
+    </div>
+  }
+</div>
