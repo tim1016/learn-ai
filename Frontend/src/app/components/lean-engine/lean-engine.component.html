@@ -300,7 +300,7 @@
         <!-- ═══ Replay Tab (feature-flagged) ═══ -->
         @if (replayEnabled) {
           <p-tabpanel value="4">
-            <app-engine-replay [study]="selectedStudyForReplay()" />
+            <app-engine-replay-v2 [study]="selectedStudyForReplay()" />
           </p-tabpanel>
         }
       </p-tabpanels>

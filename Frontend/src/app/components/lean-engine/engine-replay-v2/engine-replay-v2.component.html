@@ -1,0 +1,86 @@
+@if (!study()) {
+  <div class="empty-state">
+    <i class="pi pi-play-circle"></i>
+    <p>Open the <strong>History</strong> tab and click <strong>▶ Replay</strong> on a past run to step through it bar-by-bar.</p>
+  </div>
+} @else {
+  @if (header(); as h) {
+    <div class="v2-header">
+      <div class="meta">
+        <span class="symbol">{{ h.symbol }}</span>
+        <span class="strategy">{{ h.strategy }}</span>
+        <span class="range">{{ h.range }}</span>
+        <span class="timespan">{{ h.timespan }}</span>
+      </div>
+      @if (loading()) {
+        <span class="status loading">Loading bars…</span>
+      } @else if (overlayLoading()) {
+        <span class="status loading">Loading indicators &amp; trades…</span>
+      } @else if (dataLoaded()) {
+        <span class="status ok">Ready — press play</span>
+      }
+    </div>
+  }
+
+  @if (error(); as err) {
+    <div class="error-notice">{{ err }}</div>
+  }
+
+  @if (dataLoaded()) {
+    <div class="v2-layout">
+      <div class="chart-col">
+        <div class="chart-stack">
+          <app-replay-chart-v2 />
+          <app-trade-flash />
+        </div>
+        <app-replay-controls-v2 />
+        <app-signal-strip />
+      </div>
+
+      <aside class="side-col">
+        <app-position-hud />
+
+        <div class="ledger">
+          <h4 class="ledger-title">
+            Trades <span class="count">{{ trades().length }}</span>
+          </h4>
+          @if (trades().length === 0) {
+            <p class="ledger-empty">No trades in this run.</p>
+          } @else {
+            <div class="ledger-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Side</th>
+                    <th class="num">P&amp;L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (t of trades(); track t.tradeNumber) {
+                    @let reached = t.exitMs <= currentMs();
+                    <tr [class.reached]="reached"
+                        [class.upcoming]="!reached"
+                        (click)="onRowClick(t.entryTimestamp)">
+                      <td>{{ t.tradeNumber }}</td>
+                      <td class="side">{{ t.tradeType }}</td>
+                      <td class="num"
+                          [class.positive]="reached && t.pnl >= 0"
+                          [class.negative]="reached && t.pnl < 0">
+                        @if (reached) {
+                          {{ t.pnl >= 0 ? '+' : '' }}{{ t.pnl | number:'1.2-2' }}
+                        } @else {
+                          <span class="pending">…</span>
+                        }
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          }
+        </div>
+      </aside>
+    </div>
+  }
+}
