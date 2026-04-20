@@ -1,0 +1,9 @@
+<div class="chart-wrap">
+  <div class="chart-host" #container></div>
+  @if (leftHiddenLabel()) {
+    <div class="edge-badge edge-left">{{ leftHiddenLabel() }}</div>
+  }
+  @if (rightHiddenLabel()) {
+    <div class="edge-badge edge-right">{{ rightHiddenLabel() }}</div>
+  }
+</div>
