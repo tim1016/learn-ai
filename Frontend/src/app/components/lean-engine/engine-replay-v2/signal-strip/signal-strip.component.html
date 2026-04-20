@@ -1,0 +1,41 @@
+@if (!empty()) {
+  <div class="strip" role="list">
+    @for (c of cards(); track c.card.name) {
+      <div class="card" role="listitem" [class.trend-up]="c.trendClass === 'up'" [class.trend-down]="c.trendClass === 'down'">
+        <header>
+          <span class="name">{{ c.card.name.toUpperCase() }}</span>
+          <span class="period">({{ c.card.window }})</span>
+        </header>
+
+        <div class="value-row">
+          <span class="value">
+            @if (c.card.currentValue === null) { — } @else { {{ c.card.currentValue | number:'1.2-2' }} }
+          </span>
+          @if (c.trendClass !== 'flat') {
+            <span class="arrow" [class.arrow-up]="c.trendClass === 'up'" [class.arrow-down]="c.trendClass === 'down'">
+              {{ c.trendClass === 'up' ? '▲' : '▼' }}
+            </span>
+          }
+        </div>
+
+        <svg class="spark" [attr.width]="sparkWidth" [attr.height]="sparkHeight" viewBox="0 0 {{ sparkWidth }} {{ sparkHeight }}" preserveAspectRatio="none">
+          @if (c.d) {
+            <path [attr.d]="c.d" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" />
+          }
+        </svg>
+
+        @if (active() && c.card.entryValue !== null) {
+          <footer>
+            <span class="entry-label">@entry</span>
+            <span class="entry-value">{{ c.card.entryValue | number:'1.2-2' }}</span>
+            @if (c.card.delta !== null) {
+              <span class="delta">
+                {{ c.card.delta >= 0 ? '+' : '' }}{{ c.card.delta | number:'1.2-2' }}
+              </span>
+            }
+          </footer>
+        }
+      </div>
+    }
+  </div>
+}
