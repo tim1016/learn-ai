@@ -125,21 +125,17 @@ export class ReplayEngineV2Service {
         indexInWindow: idx,
       };
     }
-    // Right-biased centered window: ¾ behind, ¼ ahead (current bar takes slot 0)
-    const behind = Math.floor(size * 0.75);
-    const ahead = Math.max(0, size - behind - 1);
-    let start = Math.max(0, idx - behind);
-    let end = Math.min(bars.length - 1, idx + ahead);
-    // If we hit an edge, expand the other side to preserve window size
-    if (end - start + 1 < size) {
-      if (start === 0) end = Math.min(bars.length - 1, size - 1);
-      else if (end === bars.length - 1) start = Math.max(0, bars.length - size);
-    }
+    // Right-anchored rolling window: the playhead always sits at the right
+    // edge. Bars scroll in from the right as the index advances, and old bars
+    // fall off the left once the cursor exceeds windowSize. This is the
+    // classic DVR / market-replay feel.
+    const end = idx;
+    const start = Math.max(0, idx - size + 1);
     return {
       bars: bars.slice(start, end + 1),
       startIndex: start,
       endIndex: end,
-      indexInWindow: idx - start,
+      indexInWindow: end - start,
     };
   });
 

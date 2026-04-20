@@ -154,36 +154,39 @@ describe('ReplayEngineV2Service', () => {
       expect(w.indexInWindow).toBe(25);
     });
 
-    it('right-biased centering with lookahead', () => {
+    it('right-anchored when the cursor is far enough along', () => {
       const bars = makeBars(1000);
       svc.load({ bars, trades: [], indicators: [] });
       svc.setWindowSize(200);
       svc.seekTo(500);
       const w = svc.renderWindow();
       expect(w.bars.length).toBe(200);
-      expect(w.startIndex).toBe(350);
-      expect(w.endIndex).toBe(549);
-      expect(w.indexInWindow).toBe(150);
+      expect(w.endIndex).toBe(500);
+      expect(w.startIndex).toBe(301);
+      expect(w.indexInWindow).toBe(199);
     });
 
-    it('expands opposite side when hitting the left edge', () => {
+    it('grows from the left when the cursor is below windowSize', () => {
       const bars = makeBars(1000);
       svc.load({ bars, trades: [], indicators: [] });
       svc.setWindowSize(200);
       svc.seekTo(10);
       const w = svc.renderWindow();
       expect(w.startIndex).toBe(0);
-      expect(w.bars.length).toBe(200);
-      expect(w.endIndex).toBe(199);
+      expect(w.endIndex).toBe(10);
+      expect(w.bars.length).toBe(11);
+      expect(w.indexInWindow).toBe(10);
     });
 
-    it('clamps window to available bars when total < windowSize', () => {
+    it('clamps to available bars when total < windowSize', () => {
       const bars = makeBars(50);
       svc.load({ bars, trades: [], indicators: [] });
       svc.setWindowSize(200);
       svc.seekTo(25);
       const w = svc.renderWindow();
-      expect(w.bars.length).toBe(50);
+      expect(w.bars.length).toBe(26);
+      expect(w.startIndex).toBe(0);
+      expect(w.endIndex).toBe(25);
     });
   });
 
