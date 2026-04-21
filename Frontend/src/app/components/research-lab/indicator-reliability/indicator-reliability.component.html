@@ -4,7 +4,7 @@
     <div>
       <h3 class="text-xl font-semibold text-gray-800">Indicator Reliability Analysis</h3>
       <p class="text-sm text-gray-500 mt-1">
-        Test if an indicator has predictive power on a specific ticker using Information Coefficient (IC).
+        Test if an indicator has predictive power using Information Coefficient (IC) with out-of-sample validation.
       </p>
     </div>
     @if (result() && formCollapsed()) {
@@ -19,6 +19,13 @@
       </button>
     }
   </div>
+
+  <!-- Time-Series IC Notice -->
+  <p-message
+    severity="info"
+    class="mb-4"
+    [text]="'This computes TIME-SERIES IC for a single asset. This is rank correlation between indicator values and future returns over time — NOT cross-sectional factor IC used in multi-asset factor models.'"
+  />
 
   <!-- Controls Panel -->
   @if (!formCollapsed()) {
@@ -188,7 +195,7 @@
     <div class="flex flex-col items-center justify-center py-12">
       <p-progressSpinner strokeWidth="4" />
       <p class="mt-4 text-gray-600">Analyzing indicator reliability...</p>
-      <p class="text-sm text-gray-400">This may take a moment for long date ranges</p>
+      <p class="text-sm text-gray-400">Computing IC, OOS validation, and random baseline ({{ result()?.random_simulations ?? 100 }} shuffles)</p>
     </div>
   }
 
@@ -201,67 +208,217 @@
   @if (result() && result()!.success && !loading()) {
     @let res = result()!;
 
+    <!-- Warnings -->
+    @if (res.warnings.length > 0) {
+      <div class="warnings-section mb-6">
+        @for (warning of res.warnings; track warning) {
+          <p-message severity="warn" [text]="warning" class="mb-2" />
+        }
+      </div>
+    }
+
+    <!-- Verdict Card -->
+    @if (res.verdict) {
+      @let v = res.verdict;
+      <div class="verdict-card p-4 bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
+        <div class="flex items-center justify-between mb-3">
+          <h4 class="text-md font-semibold text-gray-800">Signal Verdict</h4>
+          @if (v.horizon !== null) {
+            <span class="text-xs text-gray-500">Best horizon: {{ v.horizon }}-bar</span>
+          }
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <div class="text-xs text-gray-500 mb-1">Direction</div>
+            <p-tag [value]="v.direction" [severity]="getDirectionSeverity(v.direction)" />
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 mb-1">Strength</div>
+            <p-tag [value]="v.strength" [severity]="getStrengthSeverity(v.strength)" />
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 mb-1">Stability</div>
+            <p-tag [value]="v.stability" [severity]="getStabilitySeverity(v.stability)" />
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 mb-1">Tradeability</div>
+            <p-tag
+              [value]="v.tradeability"
+              [severity]="getTradeabilitySeverity(v.tradeability)"
+              pTooltip="Tradeability is estimated from IR proxy (coming in a later release). 'Unknown' means we haven't yet translated IC into a tradable Sharpe estimate."
+              tooltipPosition="top"
+            />
+          </div>
+        </div>
+      </div>
+    }
+
     <!-- Summary Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
       <div class="summary-card p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
-        <div class="text-sm text-gray-500">Bars Analyzed</div>
-        <div class="text-2xl font-bold text-gray-800">{{ res.bar_count | number }}</div>
+        <div class="text-sm text-gray-500">Total Bars</div>
+        <div class="text-xl font-bold text-gray-800">{{ res.bar_count | number }}</div>
       </div>
       <div class="summary-card p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
-        <div class="text-sm text-gray-500">Category</div>
-        <div class="text-lg font-semibold text-blue-600">{{ res.category ?? 'Unknown' }}</div>
+        <div class="text-sm text-gray-500">Train / Test Split</div>
+        <div class="text-lg font-semibold text-gray-800">
+          {{ res.train_bars | number }} / {{ res.test_bars | number }}
+        </div>
+        <div class="text-xs text-gray-400">70% / 30%</div>
       </div>
       <div class="summary-card p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
         <div class="text-sm text-gray-500">Best Horizon</div>
-        <div class="text-2xl font-bold text-green-600">
+        <div class="text-xl font-bold" [class.text-green-600]="res.best_horizon" [class.text-gray-400]="!res.best_horizon">
           @if (res.best_horizon) {
             {{ res.best_horizon }}-bar
           } @else {
-            None significant
+            None
           }
         </div>
       </div>
       <div class="summary-card p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
-        <div class="text-sm text-gray-500">Horizons Tested</div>
-        <div class="text-lg font-semibold text-gray-800">{{ res.results.length }}</div>
+        <div class="text-sm text-gray-500">FDR Significant</div>
+        <div class="text-xl font-bold" [class.text-green-600]="res.any_significant_after_fdr" [class.text-red-500]="!res.any_significant_after_fdr">
+          {{ res.any_significant_after_fdr ? 'Yes' : 'No' }}
+        </div>
+        <div class="text-xs text-gray-400">{{ res.num_horizons_tested }} tests corrected</div>
+      </div>
+      <div class="summary-card p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <div class="text-sm text-gray-500">Bonferroni Significant</div>
+        <div class="text-xl font-bold" [class.text-green-600]="res.any_significant_after_bonferroni" [class.text-red-500]="!res.any_significant_after_bonferroni">
+          {{ res.any_significant_after_bonferroni ? 'Yes' : 'No' }}
+        </div>
+        <div class="text-xs text-gray-400">Most conservative</div>
       </div>
     </div>
 
+    <!-- Random Baseline Card -->
+    @let bestRandom = getBestRandomResult();
+    @if (bestRandom) {
+      <div class="random-baseline-card p-4 bg-slate-50 rounded-lg border border-slate-200 mb-6">
+        <h4 class="text-md font-semibold text-gray-800 mb-2">Random Baseline Comparison</h4>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+          <div>
+            <span class="text-gray-500">Random IC:</span>
+            <span class="font-mono ml-2">{{ bestRandom.random_baseline_mean.toFixed(4) }} ± {{ bestRandom.random_baseline_std.toFixed(4) }}</span>
+            <span class="text-gray-400 ml-1">({{ res.random_simulations }} shuffles)</span>
+          </div>
+          <div>
+            <span class="text-gray-500">Your best IS IC ({{ bestRandom.horizon }}-bar):</span>
+            <span class="font-mono ml-2 font-semibold">{{ bestRandom.is_mean_ic.toFixed(4) }}</span>
+          </div>
+          <div>
+            <span class="text-gray-500">Z-score vs random:</span>
+            <span class="font-mono ml-2 font-bold" [class.text-green-600]="Math.abs(bestRandom.ic_vs_random_zscore) >= 2" [class.text-yellow-600]="Math.abs(bestRandom.ic_vs_random_zscore) < 2">
+              {{ formatZScore(bestRandom.ic_vs_random_zscore) }}
+            </span>
+            @if (Math.abs(bestRandom.ic_vs_random_zscore) >= 2) {
+              <span class="text-green-600 ml-2">Distinguishable from noise</span>
+            } @else {
+              <span class="text-yellow-600 ml-2">May be noise</span>
+            }
+          </div>
+        </div>
+      </div>
+    }
+
     <!-- IC Results Table -->
     <div class="results-section mb-6">
-      <h4 class="text-lg font-semibold text-gray-800 mb-3">IC by Forward Horizon (Raw Value)</h4>
+      <h4 class="text-lg font-semibold text-gray-800 mb-3">IC by Forward Horizon</h4>
       <p-table [value]="res.results" styleClass="p-datatable-sm p-datatable-striped" [scrollable]="true">
         <ng-template pTemplate="header">
           <tr>
-            <th>Horizon</th>
-            <th pTooltip="Mean Information Coefficient (Spearman rank correlation)">Mean IC</th>
-            <th pTooltip="Newey-West corrected t-statistic (accounts for autocorrelation)">NW t-Stat</th>
-            <th pTooltip="p-value (< 0.05 is significant)">p-value</th>
-            <th pTooltip="Effective sample size after autocorrelation adjustment">Eff. N</th>
-            <th>Verdict</th>
+            <th rowspan="2" class="align-bottom">Horizon</th>
+            <th colspan="4" class="text-center border-b border-gray-300">In-Sample (70%)</th>
+            <th colspan="3" class="text-center border-b border-gray-300">Out-of-Sample (30%)</th>
+            <th rowspan="2" class="align-bottom" pTooltip="Z-score vs random baseline">vs Random</th>
+          </tr>
+          <tr>
+            <th pTooltip="Mean Information Coefficient (Spearman)">IC</th>
+            <th pTooltip="Newey-West corrected t-statistic">NW t</th>
+            <th pTooltip="Raw p-value (before correction)">p (raw)</th>
+            <th pTooltip="FDR-corrected p-value (Benjamini-Hochberg)">p (FDR)</th>
+            <th pTooltip="Out-of-sample IC">IC</th>
+            <th pTooltip="OOS t-statistic">t-stat</th>
+            <th pTooltip="OOS magnitude vs IS: +X% stronger, -X% weaker. Same direction assumed.">OOS vs IS</th>
           </tr>
         </ng-template>
         <ng-template pTemplate="body" let-row>
-          <tr [class.bg-green-50]="isBestHorizon(row.horizon)">
+          <tr
+            [class.bg-green-50]="isBestHorizon(row.horizon)"
+            [class.non-best-row]="res.best_horizon !== null && !isBestHorizon(row.horizon)"
+          >
             <td class="font-medium">
               {{ row.horizon }}-bar
               @if (isBestHorizon(row.horizon)) {
                 <span class="ml-1 text-green-600 text-xs">(best)</span>
               }
             </td>
+            <!-- In-Sample -->
             <td>
-              <p-tag
-                [value]="formatIc(row.mean_ic)"
-                [severity]="getIcSeverity(row.mean_ic, row.nw_p_value ?? row.p_value)"
-              />
+              <div class="flex flex-col gap-1">
+                <p-tag [value]="formatIc(row.is_mean_ic)" [severity]="getIsSeverity(row)" />
+                <span class="text-[10px] text-gray-500 flex gap-2">
+                  <span>{{ row.strength_label }}</span>
+                  <span pTooltip="Effective sample size (autocorrelation-adjusted)">n<sub>eff</sub>={{ row.is_effective_n }}</span>
+                </span>
+              </div>
             </td>
-            <td>{{ (row.nw_t_stat ?? row.t_stat).toFixed(2) }}</td>
-            <td>{{ formatPValue(row.nw_p_value ?? row.p_value) }}</td>
-            <td>{{ row.effective_n }}</td>
-            <td class="text-sm">{{ row.interpretation }}</td>
+            <td>{{ (row.is_nw_t_stat ?? row.is_t_stat).toFixed(2) }}</td>
+            <td>{{ formatPValue(row.is_nw_p_value ?? row.is_p_value) }}</td>
+            <td>
+              <span [class.font-semibold]="row.fdr_p < 0.05" [class.text-green-600]="row.fdr_p < 0.05">
+                {{ formatPValue(row.fdr_p) }}
+              </span>
+            </td>
+            <!-- Out-of-Sample -->
+            <td>
+              @if (row.oos_mean_ic !== null) {
+                <p-tag [value]="formatIc(row.oos_mean_ic)" [severity]="getOosSeverity(row)" />
+              } @else {
+                <span class="text-gray-400">-</span>
+              }
+            </td>
+            <td>{{ row.oos_t_stat !== null ? row.oos_t_stat.toFixed(2) : '-' }}</td>
+            <td>
+              @if (row.retention_delta_pct !== null) {
+                <p-tag
+                  [value]="formatRetentionDelta(row.retention_delta_pct)"
+                  [severity]="getRetentionDeltaSeverity(row.retention_delta_pct)"
+                  [pTooltip]="'Raw ratio |OOS|/|IS| = ' + (row.oos_retention !== null ? row.oos_retention.toFixed(2) : '-')"
+                />
+              } @else {
+                <span class="text-gray-400">-</span>
+              }
+            </td>
+            <!-- Random -->
+            <td class="font-mono">
+              <span [class.text-green-600]="Math.abs(row.ic_vs_random_zscore) >= 2" [class.text-yellow-600]="Math.abs(row.ic_vs_random_zscore) < 2">
+                {{ formatZScore(row.ic_vs_random_zscore) }}
+              </span>
+            </td>
           </tr>
         </ng-template>
       </p-table>
+    </div>
+
+    <!-- Interpretation Legend -->
+    <div class="legend-section mb-6 p-4 bg-white rounded-lg border border-gray-200">
+      <h4 class="text-md font-semibold text-gray-800 mb-3">Interpretation Summary</h4>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        @for (row of res.results; track row.horizon) {
+          <div class="flex items-start gap-2">
+            <span class="font-medium text-gray-700 w-16">{{ row.horizon }}-bar:</span>
+            <div>
+              <span class="text-sm">IS: {{ row.is_interpretation }}</span>
+              @if (row.oos_interpretation) {
+                <span class="text-sm text-gray-400 mx-1">|</span>
+                <span class="text-sm">OOS: {{ row.oos_interpretation }}</span>
+              }
+            </div>
+          </div>
+        }
+      </div>
     </div>
 
     <!-- Slope IC Table (if requested) -->
@@ -271,34 +428,59 @@
         <p class="text-sm text-gray-500 mb-2">
           Tests if the indicator's rate of change is more predictive than its raw value.
         </p>
-        <p-table
-          [value]="res.slope_results"
-          styleClass="p-datatable-sm p-datatable-striped"
-          [scrollable]="true"
-        >
+        <p-table [value]="res.slope_results" styleClass="p-datatable-sm p-datatable-striped" [scrollable]="true">
           <ng-template pTemplate="header">
             <tr>
               <th>Horizon</th>
-              <th>Mean IC</th>
-              <th>NW t-Stat</th>
-              <th>p-value</th>
-              <th>Eff. N</th>
-              <th>Verdict</th>
+              <th>IS IC</th>
+              <th>IS NW t</th>
+              <th>IS p (FDR)</th>
+              <th>OOS IC</th>
+              <th>OOS vs IS</th>
+              <th pTooltip="Slope IC is materially stronger (>20%) than raw AND more significant">Adds value?</th>
+              <th pTooltip="Adds value AND OOS-validated (p<0.10 or retention>=60%). Dash = no OOS data yet.">Use this variant?</th>
             </tr>
           </ng-template>
           <ng-template pTemplate="body" let-row>
             <tr>
               <td class="font-medium">{{ row.horizon }}-bar</td>
               <td>
+                <div class="flex flex-col gap-1">
+                  <p-tag [value]="formatIc(row.is_mean_ic)" [severity]="getIsSeverity(row)" />
+                  <span class="text-[10px] text-gray-500">{{ row.strength_label }}</span>
+                </div>
+              </td>
+              <td>{{ (row.is_nw_t_stat ?? row.is_t_stat).toFixed(2) }}</td>
+              <td>{{ formatPValue(row.fdr_p) }}</td>
+              <td>
+                @if (row.oos_mean_ic !== null) {
+                  <p-tag [value]="formatIc(row.oos_mean_ic)" [severity]="getOosSeverity(row)" />
+                } @else {
+                  <span class="text-gray-400">-</span>
+                }
+              </td>
+              <td>
+                @if (row.retention_delta_pct !== null) {
+                  <p-tag
+                    [value]="formatRetentionDelta(row.retention_delta_pct)"
+                    [severity]="getRetentionDeltaSeverity(row.retention_delta_pct)"
+                  />
+                } @else {
+                  <span class="text-gray-400">-</span>
+                }
+              </td>
+              <td>
                 <p-tag
-                  [value]="formatIc(row.mean_ic)"
-                  [severity]="getIcSeverity(row.mean_ic, row.nw_p_value ?? row.p_value)"
+                  [value]="formatSlopeDecision(row.slope_adds_value)"
+                  [severity]="getSlopeDecisionSeverity(row.slope_adds_value)"
                 />
               </td>
-              <td>{{ (row.nw_t_stat ?? row.t_stat).toFixed(2) }}</td>
-              <td>{{ formatPValue(row.nw_p_value ?? row.p_value) }}</td>
-              <td>{{ row.effective_n }}</td>
-              <td class="text-sm">{{ row.interpretation }}</td>
+              <td>
+                <p-tag
+                  [value]="formatSlopeDecision(row.slope_recommended)"
+                  [severity]="getSlopeDecisionSeverity(row.slope_recommended)"
+                />
+              </td>
             </tr>
           </ng-template>
         </p-table>
@@ -308,9 +490,9 @@
     <!-- IC Time Series Chart -->
     @if (res.daily_ic_values.length > 0) {
       <div class="chart-section mb-6">
-        <h4 class="text-lg font-semibold text-gray-800 mb-3">Daily IC Time Series</h4>
+        <h4 class="text-lg font-semibold text-gray-800 mb-3">Daily IC Time Series (In-Sample Period)</h4>
         <p class="text-sm text-gray-500 mb-2">
-          Shows how the indicator's predictive power varies over time. Stable IC suggests robust signal.
+          Raw daily IC (light), 20-day rolling mean (bold), overall mean (dashed orange).
         </p>
         <div class="chart-container bg-white p-4 rounded-lg border border-gray-200" style="height: 350px">
           <canvas #icChart></canvas>
@@ -318,27 +500,91 @@
       </div>
     }
 
-    <!-- Interpretation Guide -->
-    <div class="interpretation-guide p-4 bg-gray-50 rounded-lg border border-gray-200">
-      <h4 class="text-md font-semibold text-gray-800 mb-2">How to Interpret</h4>
+    <!-- IC Decay Curve -->
+    @if (res.decay_curve && res.decay_curve.length > 0) {
+      <div class="chart-section mb-6">
+        <h4 class="text-lg font-semibold text-gray-800 mb-3">IC Decay Curve</h4>
+        <p class="text-sm text-gray-500 mb-2">
+          IC at every integer horizon (1..{{ res.decay_curve[res.decay_curve.length - 1].horizon }} bars) on the in-sample period, with 95% confidence band. Useful for locating where the signal peaks and dies.
+        </p>
+        <div class="chart-container bg-white p-4 rounded-lg border border-gray-200" style="height: 320px">
+          <canvas #decayChart></canvas>
+        </div>
+      </div>
+    }
+
+    <!-- Regime Panel -->
+    @if (res.regime_results && (res.regime_results.high_vol || res.regime_results.low_vol)) {
+      @let rr = res.regime_results;
+      <div class="regime-section mb-6">
+        <h4 class="text-lg font-semibold text-gray-800 mb-1">IC by Volatility Regime</h4>
+        <p class="text-sm text-gray-500 mb-3">
+          High vol = bars where rolling {{ rr.vol_window }}-bar realized vol is above the IS median. Answers "when does this signal work?"
+        </p>
+        <p-table
+          [value]="[
+            { regime: 'High Vol', points: rr.high_vol },
+            { regime: 'Low Vol', points: rr.low_vol }
+          ]"
+          styleClass="p-datatable-sm p-datatable-striped"
+          [scrollable]="true"
+        >
+          <ng-template pTemplate="header">
+            <tr>
+              <th>Regime</th>
+              @for (h of selectedHorizons(); track h) {
+                <th class="text-center">{{ h }}-bar IC</th>
+              }
+              <th>Bars</th>
+            </tr>
+          </ng-template>
+          <ng-template pTemplate="body" let-row>
+            <tr>
+              <td class="font-medium">{{ row.regime }}</td>
+              @if (row.points) {
+                @for (p of row.points; track p.horizon) {
+                  <td class="text-center">
+                    <div class="flex flex-col items-center gap-0.5">
+                      <span class="font-mono text-sm" [class.text-green-600]="Math.abs(p.mean_ic) >= 0.07" [class.text-gray-700]="Math.abs(p.mean_ic) < 0.07">
+                        {{ formatIc(p.mean_ic) }}
+                      </span>
+                      <span class="text-[10px] text-gray-400">t={{ p.t_stat.toFixed(2) }}, hit={{ (p.hit_rate * 100).toFixed(0) }}%</span>
+                    </div>
+                  </td>
+                }
+                <td class="text-sm text-gray-600">{{ row.points[0].bars_in_regime | number }}</td>
+              } @else {
+                <td [attr.colspan]="selectedHorizons().length + 1" class="text-center text-sm text-gray-400">
+                  Not enough bars in this regime (need ≥ 50)
+                </td>
+              }
+            </tr>
+          </ng-template>
+        </p-table>
+      </div>
+    }
+
+    <!-- Methodology Note -->
+    <div class="methodology-note p-4 bg-gray-50 rounded-lg border border-gray-200">
+      <h4 class="text-md font-semibold text-gray-800 mb-2">Methodology</h4>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600">
         <div>
-          <strong class="text-green-600">Strong Signal (IC >= 0.03, p < 0.05)</strong>
-          <p>Indicator shows statistically significant predictive power. Consider using at this horizon.</p>
+          <strong>Train/Test Split:</strong> Chronological 70/30 split. Train: {{ res.train_start }} to {{ res.train_end }}.
+          Test: {{ res.test_start }} to {{ res.test_end }}.
         </div>
         <div>
-          <strong class="text-yellow-600">Weak Signal (IC 0.01-0.03 or p 0.05-0.10)</strong>
-          <p>Some predictive content but may not survive transaction costs. Use with caution.</p>
+          <strong>Multiple Testing:</strong> {{ res.num_horizons_tested }} horizons tested. Bonferroni and FDR (Benjamini-Hochberg) corrections applied.
         </div>
         <div>
-          <strong class="text-red-600">Noise (IC < 0.01 or p >= 0.10)</strong>
-          <p>No detectable predictive power at this horizon. Try different parameters or horizons.</p>
+          <strong>Random Baseline:</strong> {{ res.random_simulations }} shuffled signals to establish noise floor.
         </div>
         <div>
-          <strong>Best Horizon</strong>
-          <p>The horizon with highest |IC| and statistical significance. Use this for trading decisions.</p>
+          <strong>OOS Retention:</strong> Ratio of |OOS IC| / |IS IC|. Values >= 60% indicate robust signal.
         </div>
       </div>
     </div>
   }
+
+  <!-- Access Math for template -->
+  @let Math = this.Math;
 </div>

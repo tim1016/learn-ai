@@ -37,6 +37,19 @@ class ICResult:
     nw_t_stat: float = 0.0
     nw_p_value: float = 1.0
     effective_n: float = 0.0
+    # Stability: fraction of daily ICs whose sign matches the mean IC sign.
+    # Measures directional consistency, not just "> 0".
+    hit_rate: float = 0.0
+    daily_ic_std: float = 0.0
+
+
+def _compute_hit_rate(ic_array: np.ndarray, mean_ic: float) -> float:
+    """Fraction of daily ICs whose sign matches the mean IC sign."""
+    if len(ic_array) == 0:
+        return 0.0
+    if mean_ic >= 0:
+        return float((ic_array > 0).sum() / len(ic_array))
+    return float((ic_array < 0).sum() / len(ic_array))
 
 
 def _compute_newey_west_t_stat(
@@ -203,6 +216,7 @@ def _compute_rolling_ic(
 
     nw_t_stat, nw_p_value = _compute_newey_west_t_stat(ic_array, min_lag=min_nw_lag)
     effective_n = _compute_effective_sample_size(ic_array, min_lag=min_nw_lag)
+    hit_rate = _compute_hit_rate(ic_array, mean_ic)
 
     logger.info(
         "[Research] Rolling IC (w=%d): mean=%.4f, t=%.4f (NW=%.4f), p=%.4f (NW=%.4f), windows=%d (effective=%.0f)",
@@ -225,6 +239,8 @@ def _compute_rolling_ic(
         nw_t_stat=nw_t_stat,
         nw_p_value=nw_p_value,
         effective_n=effective_n,
+        hit_rate=hit_rate,
+        daily_ic_std=std_ic,
     )
 
 
@@ -318,9 +334,10 @@ def compute_information_coefficient(
     # Newey-West corrected t-stat (accounts for serial correlation)
     nw_t_stat, nw_p_value = _compute_newey_west_t_stat(ic_array, min_lag=min_nw_lag)
     effective_n = _compute_effective_sample_size(ic_array, min_lag=min_nw_lag)
+    hit_rate = _compute_hit_rate(ic_array, mean_ic)
 
     logger.info(
-        "[Research] IC: mean=%.4f, t=%.4f (NW=%.4f), p=%.4f (NW=%.4f), days=%d (effective=%.0f)",
+        "[Research] IC: mean=%.4f, t=%.4f (NW=%.4f), p=%.4f (NW=%.4f), days=%d (effective=%.0f, hit=%.2f)",
         mean_ic,
         t_stat,
         nw_t_stat,
@@ -328,6 +345,7 @@ def compute_information_coefficient(
         nw_p_value,
         n,
         effective_n,
+        hit_rate,
     )
 
     return ICResult(
@@ -339,4 +357,6 @@ def compute_information_coefficient(
         nw_t_stat=nw_t_stat,
         nw_p_value=nw_p_value,
         effective_n=effective_n,
+        hit_rate=hit_rate,
+        daily_ic_std=std_ic,
     )

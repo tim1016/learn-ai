@@ -7,17 +7,34 @@ import pandas as pd
 import pytest
 
 from app.research.indicator_reliability import (
+    MAX_DECAY_HORIZON,
+    MIN_REGIME_BARS,
+    HorizonICAnalysis,
+    apply_multiple_testing_correction,
+    compute_direction_label,
     compute_forward_return,
-    compute_indicator_reliability,
+    compute_ic_decay_curve,
+    compute_indicator_reliability_with_oos,
+    compute_regime_ic,
+    compute_retention_delta_pct,
+    compute_slope_decisions,
+    compute_stability_label,
+    compute_strength_label,
     find_best_horizon,
     format_indicator_display_name,
     get_indicator_category,
-    HorizonICAnalysis,
+    split_by_volatility_regime,
 )
 
 
 def _create_test_df(n_bars: int = 500, seed: int = 42) -> pd.DataFrame:
-    """Create a test DataFrame with OHLCV + RSI-like indicator."""
+    """Create a test DataFrame with OHLCV + RSI-like indicator.
+
+    Uses a short synthetic intraday session (~60 bars/day) to guarantee
+    multi-day coverage even for small n_bars. This is what the daily-IC
+    group-by needs: without enough distinct dates it short-circuits to
+    effective_n=0 and the pipeline metrics collapse.
+    """
     np.random.seed(seed)
 
     # Generate random walk price
@@ -27,15 +44,14 @@ def _create_test_df(n_bars: int = 500, seed: int = 42) -> pd.DataFrame:
     low = close * (1 - np.abs(np.random.randn(n_bars)) * 0.002)
     open_ = low + (high - low) * np.random.rand(n_bars)
 
-    # Generate timestamps (1-minute bars during RTH)
+    # Generate timestamps — short sessions to force multi-day coverage.
     base_ts = pd.Timestamp("2024-01-02 09:30:00", tz="US/Eastern")
     timestamps = []
     current = base_ts
     for _ in range(n_bars):
         timestamps.append(int(current.timestamp() * 1000))
         current += pd.Timedelta(minutes=1)
-        # Skip to next day if past 16:00
-        if current.hour >= 16:
+        if current.hour >= 10 and current.minute >= 30:  # ~60 bars/day
             current = (current + pd.Timedelta(days=1)).replace(hour=9, minute=30)
 
     # Create mock RSI (slightly correlated with future returns for testing)
@@ -54,48 +70,66 @@ def _create_test_df(n_bars: int = 500, seed: int = 42) -> pd.DataFrame:
     )
 
 
+def _make_analysis(
+    horizon: int = 10,
+    is_mean_ic: float = 0.05,
+    fdr_p: float = 0.05,
+    oos_mean_ic: float | None = None,
+    oos_p_value: float | None = None,
+    oos_retention: float | None = None,
+    strength_label: str = "Weak",
+) -> HorizonICAnalysis:
+    """Build a HorizonICAnalysis with sensible defaults for tests."""
+    return HorizonICAnalysis(
+        horizon=horizon,
+        is_mean_ic=is_mean_ic,
+        is_t_stat=2.0,
+        is_p_value=0.05,
+        is_nw_t_stat=1.8,
+        is_nw_p_value=0.07,
+        is_effective_n=100,
+        oos_mean_ic=oos_mean_ic,
+        oos_t_stat=None if oos_mean_ic is None else 1.5,
+        oos_p_value=oos_p_value,
+        oos_effective_n=None if oos_mean_ic is None else 40,
+        oos_retention=oos_retention,
+        fdr_p=fdr_p,
+        strength_label=strength_label,
+    )
+
+
 class TestComputeForwardReturn:
     """Tests for compute_forward_return function."""
 
     def test_basic_forward_return(self):
-        """Test basic forward return calculation."""
         df = _create_test_df(100)
         fwd = compute_forward_return(df, horizon=5)
 
         assert len(fwd) == len(df)
-        # Last 5 bars should be NaN
         assert fwd.iloc[-5:].isna().all()
-        # Most others should have values
         assert fwd.iloc[:-10].notna().sum() > 0
 
     def test_variable_horizons(self):
-        """Test different horizon values."""
         df = _create_test_df(100)
 
         for horizon in [1, 5, 10, 15, 30]:
             fwd = compute_forward_return(df, horizon=horizon)
             assert len(fwd) == len(df)
-            # Last `horizon` bars should be NaN
             assert fwd.iloc[-horizon:].isna().all()
 
     def test_cross_day_masking(self):
-        """Test that returns spanning day boundaries are masked."""
-        df = _create_test_df(500)  # Multiple days
+        df = _create_test_df(500)
         fwd = compute_forward_return(df, horizon=15, mask_overnight=True)
-
-        # Should have NaN values where horizon crosses day boundary
-        # Not all values should be valid
         valid_count = fwd.notna().sum()
         assert valid_count < len(df) - 15
 
 
-class TestComputeIndicatorReliability:
-    """Tests for compute_indicator_reliability function."""
+class TestComputeIndicatorReliabilityWithOos:
+    """Tests for compute_indicator_reliability_with_oos (IS/OOS pipeline)."""
 
     def test_single_horizon(self):
-        """Test IC computation for a single horizon."""
         df = _create_test_df(500)
-        results, slope_results = compute_indicator_reliability(
+        results, slope_results, metadata = compute_indicator_reliability_with_oos(
             df=df,
             indicator_column="rsi_14",
             horizons=[10],
@@ -107,28 +141,37 @@ class TestComputeIndicatorReliability:
 
         r = results[0]
         assert r.horizon == 10
-        assert -1 <= r.mean_ic <= 1
-        assert r.effective_n > 0
-        assert isinstance(r.interpretation, str)
+        assert -1 <= r.is_mean_ic <= 1
+        assert r.is_effective_n > 0
+        assert r.strength_label in {"Noise", "Weak", "Moderate", "Strong"}
+        assert r.stability_label in {"Low", "Moderate", "High"}
+        assert r.direction_label in {"Mean-Reversion", "Momentum", "None"}
+        assert 0.0 <= r.is_hit_rate <= 1.0
 
-    def test_multiple_horizons(self):
-        """Test IC computation across multiple horizons."""
+        assert "train_bars" in metadata
+        assert "test_bars" in metadata
+
+    def test_multiple_horizons_apply_fdr(self):
         df = _create_test_df(500)
-        results, _ = compute_indicator_reliability(
+        results, _, _ = compute_indicator_reliability_with_oos(
             df=df,
             indicator_column="rsi_14",
             horizons=[1, 5, 10, 15, 30],
             include_slope=False,
         )
 
-        assert len(results) == 5
-        horizons = [r.horizon for r in results]
-        assert horizons == [1, 5, 10, 15, 30]
+        assert [r.horizon for r in results] == [1, 5, 10, 15, 30]
+        # Corrections are applied to the NW p-value (or standard p if NW unavailable).
+        # A corrected value is always >= the underlying raw value (correction can
+        # only make things more conservative, never less).
+        for r in results:
+            raw_p = r.is_nw_p_value if r.is_nw_p_value is not None else r.is_p_value
+            assert r.fdr_p >= raw_p - 1e-9
+            assert r.bonferroni_p >= raw_p - 1e-9
 
     def test_with_slope(self):
-        """Test IC computation including slope analysis."""
         df = _create_test_df(500)
-        results, slope_results = compute_indicator_reliability(
+        results, slope_results, _ = compute_indicator_reliability_with_oos(
             df=df,
             indicator_column="rsi_14",
             horizons=[5, 10],
@@ -138,31 +181,24 @@ class TestComputeIndicatorReliability:
         assert len(results) == 2
         assert slope_results is not None
         assert len(slope_results) == 2
+        # Slope flags are computed by the router; dataclass default is None here.
+        assert slope_results[0].slope_adds_value is None
 
-        # Slope IC should be different from raw IC
-        # (at least in general - could be similar by chance)
-        assert isinstance(slope_results[0].mean_ic, float)
-
-    def test_daily_ic_series(self):
-        """Test that daily IC values are returned."""
+    def test_retention_delta_populated_when_oos_present(self):
         df = _create_test_df(500)
-        results, _ = compute_indicator_reliability(
+        results, _, _ = compute_indicator_reliability_with_oos(
             df=df,
             indicator_column="rsi_14",
             horizons=[10],
-            include_slope=False,
         )
-
         r = results[0]
-        assert len(r.daily_ic_values) > 0
-        assert len(r.daily_ic_dates) == len(r.daily_ic_values)
+        if r.oos_mean_ic is not None and abs(r.is_mean_ic) > 1e-10:
+            assert r.retention_delta_pct is not None
 
     def test_missing_column_raises(self):
-        """Test that missing indicator column raises ValueError."""
         df = _create_test_df(100)
-
         with pytest.raises(ValueError, match="not found"):
-            compute_indicator_reliability(
+            compute_indicator_reliability_with_oos(
                 df=df,
                 indicator_column="nonexistent",
                 horizons=[10],
@@ -170,111 +206,188 @@ class TestComputeIndicatorReliability:
 
 
 class TestFindBestHorizon:
-    """Tests for find_best_horizon function."""
+    """Tests for find_best_horizon function (OOS-priority selection)."""
 
-    def test_finds_best(self):
-        """Test that best horizon is identified."""
+    def test_picks_oos_significant(self):
         results = [
-            HorizonICAnalysis(
-                horizon=1,
-                mean_ic=0.01,
-                t_stat=1.0,
-                p_value=0.32,
-                nw_t_stat=0.9,
-                nw_p_value=0.37,
-                effective_n=100,
-                interpretation="Noise",
-                daily_ic_values=[],
-                daily_ic_dates=[],
-            ),
-            HorizonICAnalysis(
+            _make_analysis(horizon=1, is_mean_ic=0.01, fdr_p=0.32),
+            _make_analysis(
                 horizon=10,
-                mean_ic=0.04,
-                t_stat=3.5,
-                p_value=0.001,
-                nw_t_stat=3.2,
-                nw_p_value=0.002,
-                effective_n=100,
-                interpretation="Strong",
-                daily_ic_values=[],
-                daily_ic_dates=[],
+                is_mean_ic=0.04,
+                fdr_p=0.001,
+                oos_mean_ic=0.03,
+                oos_p_value=0.02,
+                oos_retention=0.75,
             ),
-            HorizonICAnalysis(
-                horizon=30,
-                mean_ic=0.02,
-                t_stat=1.5,
-                p_value=0.14,
-                nw_t_stat=1.3,
-                nw_p_value=0.20,
-                effective_n=100,
-                interpretation="Weak",
-                daily_ic_values=[],
-                daily_ic_dates=[],
-            ),
+            _make_analysis(horizon=30, is_mean_ic=0.02, fdr_p=0.14),
         ]
+        assert find_best_horizon(results) == 10
 
-        best = find_best_horizon(results)
-        assert best == 10  # Horizon with highest |IC| and p < 0.10
-
-    def test_returns_none_if_no_significant(self):
-        """Test that None is returned if no horizon is significant."""
+    def test_falls_back_to_fdr_when_no_oos(self):
         results = [
-            HorizonICAnalysis(
-                horizon=5,
-                mean_ic=0.005,
-                t_stat=0.5,
-                p_value=0.62,
-                nw_t_stat=0.4,
-                nw_p_value=0.69,
-                effective_n=100,
-                interpretation="Noise",
-                daily_ic_values=[],
-                daily_ic_dates=[],
-            ),
+            _make_analysis(horizon=5, is_mean_ic=0.04, fdr_p=0.02),
+            _make_analysis(horizon=15, is_mean_ic=0.01, fdr_p=0.50),
         ]
+        assert find_best_horizon(results) == 5
 
-        best = find_best_horizon(results)
-        assert best is None
+    def test_returns_none_if_nothing_significant(self):
+        results = [_make_analysis(horizon=5, is_mean_ic=0.005, fdr_p=0.69)]
+        assert find_best_horizon(results) is None
+
+
+class TestMultipleTestingCorrection:
+    def test_bonferroni_and_fdr_preserve_order(self):
+        p_values = [0.01, 0.04, 0.20, 0.50]
+        bonferroni, fdr = apply_multiple_testing_correction(p_values)
+        # Bonferroni: p * n
+        assert bonferroni[0] == pytest.approx(0.04)
+        # Both corrections are >= raw p
+        for raw, b, f in zip(p_values, bonferroni, fdr):
+            assert b >= raw - 1e-9
+            assert f >= raw - 1e-9
+
+
+class TestVerdictLabels:
+    def test_strength_buckets(self):
+        assert compute_strength_label(0.005) == "Noise"
+        assert compute_strength_label(0.04) == "Weak"
+        assert compute_strength_label(0.10) == "Moderate"
+        assert compute_strength_label(0.20) == "Strong"
+
+    def test_stability_buckets(self):
+        assert compute_stability_label(0.50) == "Low"
+        assert compute_stability_label(0.55) == "Moderate"
+        assert compute_stability_label(0.60) == "High"
+
+    def test_direction_from_signed_ic(self):
+        assert compute_direction_label(-0.05) == "Mean-Reversion"
+        assert compute_direction_label(0.05) == "Momentum"
+        assert compute_direction_label(0.01) == "None"
+
+    def test_retention_delta_none_when_oos_missing(self):
+        assert compute_retention_delta_pct(0.10, None) is None
+
+    def test_retention_delta_is_percent_change(self):
+        assert compute_retention_delta_pct(0.10, 0.15) == pytest.approx(50.0)
+        assert compute_retention_delta_pct(0.10, 0.06) == pytest.approx(-40.0)
+
+
+class TestSlopeDecisions:
+    def test_slope_with_oos_validated(self):
+        raw = _make_analysis(is_mean_ic=0.05, fdr_p=0.05)
+        slope = _make_analysis(
+            is_mean_ic=0.09,
+            fdr_p=0.01,
+            oos_mean_ic=0.08,
+            oos_p_value=0.02,
+            oos_retention=0.8,
+        )
+        adds, recommended = compute_slope_decisions(raw, slope)
+        assert adds is True
+        assert recommended is True
+
+    def test_slope_weaker_than_raw(self):
+        raw = _make_analysis(is_mean_ic=0.10, fdr_p=0.02)
+        slope = _make_analysis(
+            is_mean_ic=0.03,
+            fdr_p=0.30,
+            oos_mean_ic=0.02,
+            oos_p_value=0.40,
+            oos_retention=0.5,
+        )
+        adds, recommended = compute_slope_decisions(raw, slope)
+        assert adds is False
+        assert recommended is False
+
+    def test_recommended_none_without_oos(self):
+        raw = _make_analysis(is_mean_ic=0.05, fdr_p=0.05)
+        slope = _make_analysis(is_mean_ic=0.10, fdr_p=0.02)
+        adds, recommended = compute_slope_decisions(raw, slope)
+        assert adds is True
+        assert recommended is None
 
 
 class TestFormatDisplayName:
-    """Tests for format_indicator_display_name function."""
-
     def test_rsi(self):
-        """Test RSI formatting."""
-        name = format_indicator_display_name("rsi", {"length": 14})
-        assert name == "RSI (14)"
+        assert format_indicator_display_name("rsi", {"length": 14}) == "RSI (14)"
 
     def test_macd(self):
-        """Test MACD formatting."""
-        name = format_indicator_display_name("macd", {"fast": 12, "slow": 26, "signal": 9})
+        name = format_indicator_display_name(
+            "macd", {"fast": 12, "slow": 26, "signal": 9}
+        )
         assert name == "MACD (12, 26, 9)"
 
     def test_ema(self):
-        """Test EMA formatting."""
-        name = format_indicator_display_name("ema", {"length": 20})
-        assert name == "EMA (20)"
+        assert format_indicator_display_name("ema", {"length": 20}) == "EMA (20)"
 
     def test_no_params(self):
-        """Test indicator with no params."""
-        name = format_indicator_display_name("obv", {})
-        assert name == "OBV"
+        assert format_indicator_display_name("obv", {}) == "OBV"
 
 
 class TestGetIndicatorCategory:
-    """Tests for get_indicator_category function."""
-
     def test_known_indicator(self):
-        """Test category lookup for known indicator."""
-        cat = get_indicator_category("rsi")
-        assert cat == "momentum"
+        assert get_indicator_category("rsi") == "momentum"
 
     def test_trend_indicator(self):
-        """Test category lookup for trend indicator."""
-        cat = get_indicator_category("ema")
-        assert cat == "overlap"
+        assert get_indicator_category("ema") == "overlap"
 
     def test_unknown_indicator(self):
-        """Test category lookup for unknown indicator."""
-        cat = get_indicator_category("not_an_indicator")
-        assert cat is None
+        assert get_indicator_category("not_an_indicator") is None
+
+
+class TestICDecayCurve:
+    def test_returns_one_point_per_horizon(self):
+        df = _create_test_df(500)
+        curve = compute_ic_decay_curve(df, "rsi_14", max_horizon=15)
+        assert len(curve) == 15
+        assert [p.horizon for p in curve] == list(range(1, 16))
+        for p in curve:
+            assert -1 <= p.ic <= 1
+            assert 0 <= p.p_value <= 1
+            assert p.ic_stderr >= 0
+
+    def test_clamps_to_max(self):
+        df = _create_test_df(500)
+        curve = compute_ic_decay_curve(df, "rsi_14", max_horizon=9999)
+        assert len(curve) == MAX_DECAY_HORIZON
+
+
+class TestVolatilityRegimeSplit:
+    def test_masks_are_disjoint_and_exclude_warmup(self):
+        df = _create_test_df(500)
+        high, low = split_by_volatility_regime(df, window=20)
+        assert len(high) == len(df)
+        assert not (high & low).any()
+        # First `window` bars have NaN rolling vol and must be excluded.
+        assert not high.iloc[:20].any()
+        assert not low.iloc[:20].any()
+
+    def test_balanced_split(self):
+        df = _create_test_df(500)
+        high, low = split_by_volatility_regime(df, window=20)
+        # Roughly balanced: neither bucket should be grossly dominant
+        assert 0.3 < high.sum() / (high.sum() + low.sum()) < 0.7
+
+
+class TestRegimeIC:
+    def test_returns_results_per_regime_with_required_fields(self):
+        df = _create_test_df(500)
+        results = compute_regime_ic(df, "rsi_14", horizons=[5, 10], window=20)
+
+        assert set(results.keys()) == {"high_vol", "low_vol"}
+        # Both buckets should have enough bars in this synthetic data
+        for regime, points in results.items():
+            assert points is not None, f"{regime} bucket unexpectedly empty"
+            assert len(points) == 2  # one per horizon
+            for p in points:
+                assert p.horizon in {5, 10}
+                assert p.bars_in_regime >= MIN_REGIME_BARS
+                assert -1 <= p.mean_ic <= 1
+                assert 0 <= p.hit_rate <= 1
+
+    def test_tiny_bucket_returns_none(self):
+        # Tiny frame — both regime buckets will be < 50 bars
+        df = _create_test_df(60)
+        results = compute_regime_ic(df, "rsi_14", horizons=[5], window=20)
+        assert results["high_vol"] is None
+        assert results["low_vol"] is None

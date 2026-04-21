@@ -32,15 +32,79 @@ Chart.register(...registerables);
 
 // ─── Interfaces ────────────────────────────────────────────
 
-interface HorizonICResult {
+type StrengthLabel = 'Noise' | 'Weak' | 'Moderate' | 'Strong';
+type StabilityLabel = 'Low' | 'Moderate' | 'High';
+type DirectionLabel = 'Mean-Reversion' | 'Momentum' | 'None';
+type TradeabilityLabel = 'Likely tradeable' | 'Marginal' | 'Unlikely' | 'Unknown';
+
+interface Verdict {
+  direction: DirectionLabel;
+  strength: StrengthLabel;
+  stability: StabilityLabel;
+  tradeability: TradeabilityLabel;
+  horizon: number | null;
+}
+
+interface DecayCurvePoint {
+  horizon: number;
+  ic: number;
+  p_value: number;
+  ic_stderr: number;
+}
+
+interface RegimeICPoint {
   horizon: number;
   mean_ic: number;
   t_stat: number;
   p_value: number;
-  nw_t_stat: number | null;
-  nw_p_value: number | null;
   effective_n: number;
-  interpretation: string;
+  hit_rate: number;
+  bars_in_regime: number;
+}
+
+interface RegimeResults {
+  high_vol: RegimeICPoint[] | null;
+  low_vol: RegimeICPoint[] | null;
+  vol_window: number;
+}
+
+interface HorizonICResult {
+  horizon: number;
+  // In-sample
+  is_mean_ic: number;
+  is_t_stat: number;
+  is_p_value: number;
+  is_nw_t_stat: number | null;
+  is_nw_p_value: number | null;
+  is_effective_n: number;
+  // Out-of-sample
+  oos_mean_ic: number | null;
+  oos_t_stat: number | null;
+  oos_p_value: number | null;
+  oos_effective_n: number | null;
+  oos_retention: number | null;
+  // Multiple testing
+  bonferroni_p: number;
+  fdr_p: number;
+  // Random baseline
+  random_baseline_mean: number;
+  random_baseline_std: number;
+  ic_vs_random_zscore: number;
+  // Interpretations (legacy)
+  is_interpretation: string;
+  oos_interpretation: string | null;
+  // Stability
+  is_hit_rate: number;
+  is_daily_ic_std: number;
+  // Verdict labels
+  strength_label: StrengthLabel;
+  stability_label: StabilityLabel;
+  direction_label: DirectionLabel;
+  // OOS delta as +% / -%, null if OOS missing
+  retention_delta_pct: number | null;
+  // Slope decision flags (populated on slope variant rows only)
+  slope_adds_value: boolean | null;
+  slope_recommended: boolean | null;
 }
 
 interface IndicatorReliabilityResponse {
@@ -53,11 +117,32 @@ interface IndicatorReliabilityResponse {
   start_date: string;
   end_date: string;
   bar_count: number;
+  // Train/test split
+  train_start: string | null;
+  train_end: string | null;
+  test_start: string | null;
+  test_end: string | null;
+  train_bars: number | null;
+  test_bars: number | null;
+  train_ratio: number;
+  // Results
   results: HorizonICResult[];
   slope_results: HorizonICResult[] | null;
   daily_ic_values: number[];
   daily_ic_dates: string[];
   best_horizon: number | null;
+  // Multiple testing
+  any_significant_after_bonferroni: boolean;
+  any_significant_after_fdr: boolean;
+  num_horizons_tested: number;
+  random_simulations: number;
+  // Top-line verdict
+  verdict: Verdict | null;
+  // P2 diagnostics
+  decay_curve: DecayCurvePoint[];
+  regime_results: RegimeResults | null;
+  // Warnings
+  warnings: string[];
   error: string | null;
 }
 
@@ -115,8 +200,16 @@ export class IndicatorReliabilityComponent {
   private destroyRef = inject(DestroyRef);
   private pythonUrl = environment.pythonServiceUrl;
 
+  // Expose Math for template use
+  protected readonly Math = Math;
+
   icChartCanvas = viewChild<ElementRef<HTMLCanvasElement>>('icChart');
+  decayChartCanvas = viewChild<ElementRef<HTMLCanvasElement>>('decayChart');
   private icChart: Chart | null = null;
+  private decayChart: Chart | null = null;
+
+  // Rolling window for the IC chart overlay (bars).
+  private readonly ROLLING_IC_WINDOW = 20;
 
   // Form inputs
   ticker = signal('AAPL');
@@ -184,6 +277,15 @@ export class IndicatorReliabilityComponent {
       const canvas = this.icChartCanvas();
       if (res && canvas && res.daily_ic_values.length > 0) {
         this.renderIcChart(canvas.nativeElement, res);
+      }
+    });
+
+    // Render decay curve chart when result changes
+    effect(() => {
+      const res = this.result();
+      const canvas = this.decayChartCanvas();
+      if (res && canvas && res.decay_curve && res.decay_curve.length > 0) {
+        this.renderDecayChart(canvas.nativeElement, res.decay_curve);
       }
     });
   }
@@ -300,28 +402,131 @@ export class IndicatorReliabilityComponent {
 
   // ─── Helpers for Display ─────────────────────────────────
 
-  getIcSeverity(meanIc: number, pValue: number): 'success' | 'warn' | 'danger' | 'info' {
-    const absIc = Math.abs(meanIc);
-    if (pValue >= 0.10) return 'danger';
-    if (absIc >= 0.03 && pValue < 0.05) return 'success';
-    if (absIc >= 0.02) return 'warn';
+  getIsSeverity(row: HorizonICResult): 'success' | 'warn' | 'danger' | 'info' {
+    if (row.fdr_p >= 0.10) return 'danger';
+    if (row.fdr_p < 0.05 && Math.abs(row.is_mean_ic) >= 0.03) return 'success';
+    if (row.fdr_p < 0.10) return 'warn';
     return 'info';
   }
 
-  formatIc(ic: number): string {
+  getOosSeverity(row: HorizonICResult): 'success' | 'warn' | 'danger' | 'info' {
+    if (row.oos_p_value === null) return 'info';
+    if (row.oos_p_value >= 0.10) return 'danger';
+    if (row.oos_retention !== null && row.oos_retention >= 0.6 && row.oos_p_value < 0.05)
+      return 'success';
+    if (row.oos_p_value < 0.10) return 'warn';
+    return 'info';
+  }
+
+  getRetentionSeverity(retention: number | null): 'success' | 'warn' | 'danger' | 'info' {
+    if (retention === null) return 'info';
+    if (retention >= 0.6) return 'success';
+    if (retention >= 0.4) return 'warn';
+    return 'danger';
+  }
+
+  formatIc(ic: number | null): string {
+    if (ic === null) return '-';
     return ic.toFixed(4);
   }
 
-  formatPValue(p: number): string {
+  formatPValue(p: number | null): string {
+    if (p === null) return '-';
     if (p < 0.001) return '<0.001';
     return p.toFixed(3);
+  }
+
+  formatRetention(r: number | null): string {
+    if (r === null) return '-';
+    return `${(r * 100).toFixed(0)}%`;
+  }
+
+  formatRetentionDelta(delta: number | null): string {
+    if (delta === null) return '-';
+    const sign = delta >= 0 ? '+' : '';
+    return `${sign}${delta.toFixed(0)}%`;
+  }
+
+  getRetentionDeltaSeverity(delta: number | null): 'success' | 'warn' | 'danger' | 'info' {
+    if (delta === null) return 'info';
+    if (delta >= -20) return 'success'; // OOS stronger, flat, or slightly weaker
+    if (delta >= -60) return 'warn';
+    return 'danger';
+  }
+
+  formatZScore(z: number): string {
+    return `${z >= 0 ? '+' : ''}${z.toFixed(1)}σ`;
+  }
+
+  getStrengthSeverity(label: StrengthLabel): 'success' | 'warn' | 'danger' | 'info' {
+    if (label === 'Strong') return 'success';
+    if (label === 'Moderate') return 'info';
+    if (label === 'Weak') return 'warn';
+    return 'danger'; // Noise
+  }
+
+  getStabilitySeverity(label: StabilityLabel): 'success' | 'warn' | 'danger' {
+    if (label === 'High') return 'success';
+    if (label === 'Moderate') return 'warn';
+    return 'danger';
+  }
+
+  getDirectionSeverity(label: DirectionLabel): 'info' | 'danger' {
+    return label === 'None' ? 'danger' : 'info';
+  }
+
+  getTradeabilitySeverity(
+    label: TradeabilityLabel,
+  ): 'success' | 'warn' | 'danger' | 'info' {
+    if (label === 'Likely tradeable') return 'success';
+    if (label === 'Marginal') return 'warn';
+    if (label === 'Unlikely') return 'danger';
+    return 'info';
+  }
+
+  getSlopeDecisionSeverity(flag: boolean | null): 'success' | 'danger' | 'info' {
+    if (flag === null) return 'info';
+    return flag ? 'success' : 'danger';
+  }
+
+  formatSlopeDecision(flag: boolean | null): string {
+    if (flag === null) return '-';
+    return flag ? 'YES' : 'NO';
   }
 
   isBestHorizon(horizon: number): boolean {
     return this.result()?.best_horizon === horizon;
   }
 
+  getBestRandomZScore(): number {
+    const res = this.result();
+    if (!res) return 0;
+    return Math.max(...res.results.map(r => Math.abs(r.ic_vs_random_zscore)));
+  }
+
+  getBestRandomResult(): HorizonICResult | null {
+    const res = this.result();
+    if (!res || res.results.length === 0) return null;
+    return res.results.reduce((best, curr) =>
+      Math.abs(curr.ic_vs_random_zscore) > Math.abs(best.ic_vs_random_zscore) ? curr : best,
+    );
+  }
+
   // ─── Chart Rendering ─────────────────────────────────────
+
+  /** Rolling mean with NaNs for the warmup period (first window-1 points). */
+  private rollingMean(values: number[], window: number): (number | null)[] {
+    const out: (number | null)[] = new Array(values.length).fill(null);
+    if (values.length < window) return out;
+    let sum = 0;
+    for (let i = 0; i < window; i++) sum += values[i];
+    out[window - 1] = sum / window;
+    for (let i = window; i < values.length; i++) {
+      sum += values[i] - values[i - window];
+      out[i] = sum / window;
+    }
+    return out;
+  }
 
   private renderIcChart(canvas: HTMLCanvasElement, res: IndicatorReliabilityResponse): void {
     if (this.icChart) this.icChart.destroy();
@@ -330,6 +535,7 @@ export class IndicatorReliabilityComponent {
       res.daily_ic_values.reduce((a, b) => a + b, 0) / res.daily_ic_values.length || 0;
     const meanLine = res.daily_ic_dates.map(() => meanIc);
     const zeroLine = res.daily_ic_dates.map(() => 0);
+    const rolling = this.rollingMean(res.daily_ic_values, this.ROLLING_IC_WINDOW);
 
     this.icChart = new Chart(canvas, {
       type: 'line',
@@ -337,15 +543,26 @@ export class IndicatorReliabilityComponent {
         labels: res.daily_ic_dates,
         datasets: [
           {
-            label: 'Daily IC',
+            label: 'Daily IC (In-Sample)',
             data: res.daily_ic_values,
-            borderColor: '#3b82f6',
-            backgroundColor: 'rgba(59, 130, 246, 0.08)',
+            borderColor: '#93c5fd',
+            backgroundColor: 'rgba(147, 197, 253, 0.15)',
             fill: true,
             tension: 0.3,
-            pointRadius: 2,
-            pointHoverRadius: 5,
-            borderWidth: 2,
+            pointRadius: 1,
+            pointHoverRadius: 4,
+            borderWidth: 1,
+          },
+          {
+            label: `${this.ROLLING_IC_WINDOW}-day Rolling Mean`,
+            data: rolling,
+            borderColor: '#1d4ed8',
+            backgroundColor: 'transparent',
+            fill: false,
+            tension: 0.25,
+            pointRadius: 0,
+            borderWidth: 2.5,
+            spanGaps: false,
           },
           {
             label: `Mean IC (${meanIc.toFixed(4)})`,
@@ -371,7 +588,7 @@ export class IndicatorReliabilityComponent {
         plugins: {
           title: {
             display: true,
-            text: `Daily IC Time Series (${res.display_name} at ${res.best_horizon ?? res.results[0]?.horizon ?? 10}-bar horizon)`,
+            text: `Daily IC Time Series — In-Sample Period (${res.train_start} to ${res.train_end})`,
             font: { size: 15, weight: 'bold' },
             color: '#1e293b',
             padding: { bottom: 16 },
@@ -404,7 +621,7 @@ export class IndicatorReliabilityComponent {
           y: {
             title: {
               display: true,
-              text: 'IC (Spearman \u03C1)',
+              text: 'IC (Spearman ρ)',
               font: { size: 13, weight: 'bold' },
               color: '#475569',
             },
@@ -424,6 +641,131 @@ export class IndicatorReliabilityComponent {
               maxRotation: 45,
               maxTicksLimit: 12,
             },
+            grid: { display: false },
+          },
+        },
+      },
+    });
+  }
+
+  private renderDecayChart(canvas: HTMLCanvasElement, curve: DecayCurvePoint[]): void {
+    if (this.decayChart) this.decayChart.destroy();
+
+    const labels = curve.map(p => `${p.horizon}`);
+    const ics = curve.map(p => p.ic);
+    const upper = curve.map(p => p.ic + 1.96 * p.ic_stderr);
+    const lower = curve.map(p => p.ic - 1.96 * p.ic_stderr);
+    const zero = curve.map(() => 0);
+
+    // Peak = horizon with max |IC|
+    let peakIdx = 0;
+    for (let i = 1; i < curve.length; i++) {
+      if (Math.abs(curve[i].ic) > Math.abs(curve[peakIdx].ic)) peakIdx = i;
+    }
+    const peakRadius = curve.map((_, i) => (i === peakIdx ? 6 : 0));
+    const peak = curve[peakIdx];
+
+    this.decayChart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Upper 95% CI',
+            data: upper,
+            borderColor: 'rgba(59, 130, 246, 0.25)',
+            backgroundColor: 'rgba(59, 130, 246, 0.12)',
+            borderWidth: 1,
+            pointRadius: 0,
+            fill: '+1', // fill to next dataset (lower bound)
+            tension: 0.2,
+          },
+          {
+            label: 'Lower 95% CI',
+            data: lower,
+            borderColor: 'rgba(59, 130, 246, 0.25)',
+            backgroundColor: 'rgba(59, 130, 246, 0.12)',
+            borderWidth: 1,
+            pointRadius: 0,
+            fill: false,
+            tension: 0.2,
+          },
+          {
+            label: 'IC',
+            data: ics,
+            borderColor: '#1d4ed8',
+            backgroundColor: 'transparent',
+            borderWidth: 2.5,
+            tension: 0.2,
+            pointRadius: peakRadius,
+            pointBackgroundColor: '#f59e0b',
+            pointBorderColor: '#b45309',
+            pointBorderWidth: 2,
+            fill: false,
+          },
+          {
+            label: 'Zero',
+            data: zero,
+            borderColor: '#cbd5e1',
+            borderDash: [3, 3],
+            pointRadius: 0,
+            borderWidth: 1,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          title: {
+            display: true,
+            text: `IC Decay Curve — Peak at ${peak.horizon}-bar (IC = ${peak.ic.toFixed(4)})`,
+            font: { size: 15, weight: 'bold' },
+            color: '#1e293b',
+            padding: { bottom: 16 },
+          },
+          legend: {
+            position: 'bottom',
+            labels: {
+              font: { size: 12 },
+              color: '#475569',
+              padding: 16,
+              usePointStyle: true,
+              filter: item =>
+                item.text !== 'Zero' &&
+                item.text !== 'Upper 95% CI' &&
+                item.text !== 'Lower 95% CI',
+            },
+          },
+          tooltip: {
+            backgroundColor: '#1e293b',
+            callbacks: {
+              label: ctx => {
+                if (ctx.dataset.label === 'Zero') return '';
+                return `${ctx.dataset.label}: ${Number(ctx.raw).toFixed(4)}`;
+              },
+            },
+          },
+        },
+        scales: {
+          y: {
+            title: {
+              display: true,
+              text: 'IC (Spearman ρ)',
+              font: { size: 13, weight: 'bold' },
+              color: '#475569',
+            },
+            ticks: { font: { size: 12 }, color: '#64748b' },
+            grid: { color: '#f1f5f9' },
+          },
+          x: {
+            title: {
+              display: true,
+              text: 'Forward horizon (bars)',
+              font: { size: 13, weight: 'bold' },
+              color: '#475569',
+            },
+            ticks: { font: { size: 11 }, color: '#64748b' },
             grid: { display: false },
           },
         },
