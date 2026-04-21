@@ -31,7 +31,8 @@
       "Read(//tmp/**)",
       "Bash(gunzip -c \"/c/Users/inkan/.claude/projects/C--Users-inkan-learn-ai/c08ea016-174c-4ef2-bf97-b74b7e644afa/tool-results/webfetch-1776621102972-002f4w.bin\")",
       "Bash(tar -xvf -)",
-      "mcp__claude_ai_Google_Drive__read_file_content"
+      "mcp__claude_ai_Google_Drive__read_file_content",
+      "Bash(echo \"EXIT: $?\")"
     ]
   }
 }

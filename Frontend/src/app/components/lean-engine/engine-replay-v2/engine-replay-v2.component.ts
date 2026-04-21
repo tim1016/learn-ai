@@ -2,14 +2,35 @@ import {
   Component, ChangeDetectionStrategy, inject, input, signal, computed, effect,
 } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
-import { forkJoin } from 'rxjs';
+import { HttpClient } from '@angular/common/http';
+import { Observable, forkJoin, map } from 'rxjs';
+import { environment } from '../../../../environments/environment';
 import { MarketDataService } from '../../../services/market-data.service';
+import { BacktestTrade } from '../../../graphql/types';
 import { StudyListItem } from '../engine-history/engine-history.component';
 import { ReplayEngineV2Service } from './services/replay-engine-v2.service';
 import { ReplayChartV2Component } from './replay-chart-v2/replay-chart-v2.component';
 import { ReplayControlsV2Component } from './replay-controls-v2/replay-controls-v2.component';
 import { SignalStripComponent } from './signal-strip/signal-strip.component';
 import { TradeFlashComponent } from './trade-flash/trade-flash.component';
+
+interface StudyDetailTrade {
+  tradeType: string;
+  entryTimestamp: string;
+  exitTimestamp: string;
+  entryPrice: number;
+  exitPrice: number;
+  // Minimal API's default camelCase policy lowercases only the first char,
+  // so `PnL` → `pnL` and `CumulativePnL` → `cumulativePnL`.
+  pnL: number;
+  cumulativePnL: number;
+  signalReason: string | null;
+}
+
+interface StudyDetailResponse {
+  id: number;
+  trades?: StudyDetailTrade[];
+}
 
 @Component({
   selector: 'app-engine-replay-v2',
@@ -26,6 +47,7 @@ import { TradeFlashComponent } from './trade-flash/trade-flash.component';
 })
 export class EngineReplayV2Component {
   private readonly marketData = inject(MarketDataService);
+  private readonly http = inject(HttpClient);
   readonly svc = inject(ReplayEngineV2Service);
 
   readonly study = input<StudyListItem | null>(null);
@@ -136,16 +158,18 @@ export class EngineReplayV2Component {
           const indicators$ = indicatorList.length
             ? this.marketData.calculateIndicators(ticker, s.startDate, s.endDate, indicatorList, timespan, multiplier)
             : null;
-          const backtest$ = this.marketData.runBacktest(
-            ticker, s.strategyName, s.startDate, s.endDate, timespan, multiplier,
-            s.parameters || '{}',
-          );
+          // Use the already-persisted trades from the study instead of re-running
+          // the backtest. Re-running routed through the legacy .NET rule-based
+          // switch, which doesn't know most engine strategies and silently
+          // returned zero trades — so the replay showed "NO TRADES" even when
+          // Results had them.
+          const study$ = this.fetchStudyTrades(s.id);
           if (indicators$) {
-            forkJoin({ indicators: indicators$, backtest: backtest$ }).subscribe({
-              next: ({ indicators, backtest }) => {
+            forkJoin({ indicators: indicators$, trades: study$ }).subscribe({
+              next: ({ indicators, trades }) => {
                 this.svc.load({
                   bars: aggregates,
-                  trades: (backtest.success && backtest.trades) ? backtest.trades : [],
+                  trades,
                   indicators: (indicators.success && indicators.indicators) ? indicators.indicators : [],
                 });
                 this.dataLoaded.set(true);
@@ -157,17 +181,16 @@ export class EngineReplayV2Component {
               },
             });
           } else {
-            backtest$.subscribe({
-              next: (backtest) => {
-                this.svc.load({
-                  bars: aggregates,
-                  trades: (backtest.success && backtest.trades) ? backtest.trades : [],
-                  indicators: [],
-                });
+            study$.subscribe({
+              next: (trades) => {
+                this.svc.load({ bars: aggregates, trades, indicators: [] });
                 this.dataLoaded.set(true);
                 this.overlayLoading.set(false);
               },
-              error: () => this.overlayLoading.set(false),
+              error: (err) => {
+                this.error.set(err?.message ?? 'Failed to load study trades');
+                this.overlayLoading.set(false);
+              },
             });
           }
         },
@@ -182,6 +205,26 @@ export class EngineReplayV2Component {
     return { timespan: (raw || 'minute').toLowerCase(), multiplier: 1 };
   }
 
+  /** Fetch the persisted trades for a study from the backend's studies API
+   *  and map them onto the BacktestTrade shape the replay engine expects.
+   *  Minimal API default JSON casing is camelCase, but the `PnL` property
+   *  serializes as `pnL` (lowercase first char only) — hence the remap. */
+  private fetchStudyTrades(studyId: number): Observable<BacktestTrade[]> {
+    const backendBase = (environment.backendUrl ?? 'http://localhost:5000').replace(/\/graphql$/, '');
+    return this.http
+      .get<StudyDetailResponse>(`${backendBase}/api/studies/${studyId}`)
+      .pipe(map(detail => (detail.trades ?? []).map(t => ({
+        tradeType: t.tradeType,
+        entryTimestamp: t.entryTimestamp,
+        exitTimestamp: t.exitTimestamp,
+        entryPrice: t.entryPrice,
+        exitPrice: t.exitPrice,
+        pnl: t.pnL,
+        cumulativePnl: t.cumulativePnL,
+        signalReason: t.signalReason ?? '',
+      }))));
+  }
+
   private indicatorsForStrategy(s: StudyListItem): { name: string; window: number }[] {
     const name = s.strategyName;
     const params = this.parseParams(s.parameters);
@@ -189,6 +232,12 @@ export class EngineReplayV2Component {
       return [
         { name: 'ema', window: Number(params['fast_period'] ?? 5) },
         { name: 'ema', window: Number(params['slow_period'] ?? 10) },
+      ];
+    }
+    if (name === 'ema_crossover' || name === 'ema_crossover_rsi') {
+      return [
+        { name: 'ema', window: Number(params['fast_ema_period'] ?? 5) },
+        { name: 'ema', window: Number(params['slow_ema_period'] ?? 10) },
       ];
     }
     if (name === 'SmaCrossover' || name === 'sma_crossover') {

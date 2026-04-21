@@ -1,28 +1,41 @@
+import { DecimalPipe, TitleCasePipe } from '@angular/common';
 import {
-  Component, signal, computed, effect, viewChild, ElementRef,
-  ChangeDetectionStrategy, OnDestroy, afterNextRender, inject, Injector,
+  afterNextRender,
+  ChangeDetectionStrategy,
+  Component,
+  computed, effect,
+  ElementRef,
+  inject, Injector,
+  OnDestroy,
+  signal,
+  viewChild,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { DecimalPipe, TitleCasePipe } from '@angular/common';
-import { firstValueFrom } from 'rxjs';
-import { InputText } from 'primeng/inputtext';
+import {
+  createChart,
+  CrosshairMode,
+  LineSeries, LineStyle,
+  type IChartApi, type ISeriesApi,
+  type MouseEventParams,
+  type UTCTimestamp,
+} from 'lightweight-charts';
 import { Button } from 'primeng/button';
+import { InputText } from 'primeng/inputtext';
 import { Select } from 'primeng/select';
 import { SelectButton } from 'primeng/selectbutton';
 import { Skeleton } from 'primeng/skeleton';
-import { Checkbox } from 'primeng/checkbox';
+import { firstValueFrom } from 'rxjs';
 import {
-  createChart, LineSeries, LineStyle, CrosshairMode,
-  type IChartApi, type ISeriesApi, type UTCTimestamp, type MouseEventParams,
-} from 'lightweight-charts';
+  GreekType,
+  PricingCompareResult, PricingPoint,
+  SnapshotContractResult,
+} from '../../graphql/types';
 import { MarketDataService } from '../../services/market-data.service';
 import {
-  SnapshotContractResult,
-  PricingCompareResult, PricingPoint,
-  GreekType,
-} from '../../graphql/types';
-import {
-  bsPrice, bsDelta, bsGamma, bsTheta, bsVega, bsRho,
+  bsDelta, bsGamma,
+  bsPrice,
+  bsRho,
+  bsTheta, bsVega,
 } from '../../utils/black-scholes';
 
 type ChartMetric = 'price' | GreekType;
@@ -108,7 +121,7 @@ export const MODEL_REGISTRY: ModelDef[] = [
 @Component({
   selector: 'app-pricing-lab',
   standalone: true,
-  imports: [FormsModule, DecimalPipe, TitleCasePipe, InputText, Button, Select, SelectButton, Skeleton, Checkbox],
+  imports: [FormsModule, DecimalPipe, TitleCasePipe, InputText, Button, Select, SelectButton, Skeleton],
   templateUrl: './pricing-lab.component.html',
   styleUrls: ['./pricing-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

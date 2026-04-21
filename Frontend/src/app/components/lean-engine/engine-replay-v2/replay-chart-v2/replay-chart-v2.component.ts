@@ -2,7 +2,6 @@ import {
   Component, ChangeDetectionStrategy, ElementRef, afterNextRender,
   inject, effect, DestroyRef, viewChild, computed,
 } from '@angular/core';
-import { DecimalPipe } from '@angular/common';
 import {
   createChart, IChartApi, ISeriesApi, CandlestickSeries, LineSeries,
   CandlestickData, LineData, UTCTimestamp, Time,
@@ -17,7 +16,6 @@ const INDICATOR_COLORS = ['#ff9f43', '#54a0ff', '#c56cf0', '#1dd1a1', '#ee5253']
 @Component({
   selector: 'app-replay-chart-v2',
   standalone: true,
-  imports: [DecimalPipe],
   templateUrl: './replay-chart-v2.component.html',
   styleUrls: ['./replay-chart-v2.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
