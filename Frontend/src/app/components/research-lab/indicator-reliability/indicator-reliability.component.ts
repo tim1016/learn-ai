@@ -27,6 +27,8 @@ import { TooltipModule } from 'primeng/tooltip';
 import { Checkbox } from 'primeng/checkbox';
 import { MultiSelect } from 'primeng/multiselect';
 import { Chart, registerables } from 'chart.js';
+import { InfoIconComponent } from '../../../shared/info-icon/info-icon.component';
+import { MethodologyDrawerService } from '../../../shared/methodology-drawer/methodology-drawer.service';
 
 Chart.register(...registerables);
 
@@ -203,12 +205,14 @@ interface HorizonOption {
     TooltipModule,
     Checkbox,
     MultiSelect,
+    InfoIconComponent,
   ],
 })
 export class IndicatorReliabilityComponent {
   private http = inject(HttpClient);
   private destroyRef = inject(DestroyRef);
   private pythonUrl = environment.pythonServiceUrl;
+  protected methodologyDrawer = inject(MethodologyDrawerService);
 
   // Expose Math for template use
   protected readonly Math = Math;

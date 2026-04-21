@@ -7,17 +7,27 @@
         Test if an indicator has predictive power using Information Coefficient (IC) with out-of-sample validation.
       </p>
     </div>
-    @if (result() && formCollapsed()) {
+    <div class="flex items-center gap-2">
       <button
-        pButton
-        label="New Analysis"
-        icon="pi pi-plus"
-        class="p-button-outlined p-button-sm"
-        (click)="newRun()"
+        type="button"
+        class="methodology-btn"
+        (click)="methodologyDrawer.open('1-context-and-scope')"
       >
-        <span class="sr-only">Start new analysis</span>
+        <i class="pi pi-book" aria-hidden="true"></i>
+        Methodology
       </button>
-    }
+      @if (result() && formCollapsed()) {
+        <button
+          pButton
+          label="New Analysis"
+          icon="pi pi-plus"
+          class="p-button-outlined p-button-sm"
+          (click)="newRun()"
+        >
+          <span class="sr-only">Start new analysis</span>
+        </button>
+      }
+    </div>
   </div>
 
   <!-- Controls Panel -->
@@ -241,24 +251,29 @@
 
           <!-- Verdict copy -->
           <div class="hero-copy">
-            <div class="eyebrow">Verdict · {{ res.display_name }} on <span class="mono">{{ res.ticker }}</span></div>
+            <div class="eyebrow">
+              Verdict · {{ res.display_name }} on <span class="mono">{{ res.ticker }}</span>
+              <app-info-icon refKey="verdictBucket" />
+            </div>
             <h2 class="hero-headline">
               <span [style.color]="getConfidenceColor()">{{ getVerdictVerb() }}</span>
               <span class="text-slate-400"> at </span>
               <span class="mono">{{ best.horizon }}-bar</span>
+              <app-info-icon refKey="confidenceScore" />
             </h2>
             <p class="hero-desc">
-              A <b>{{ (best.direction_label).toLowerCase() }}</b> signal.
-              Out-of-sample IC <b class="mono">{{ best.oos_mean_ic !== null ? best.oos_mean_ic.toFixed(3) : '—' }}</b>
+              A <b>{{ (best.direction_label).toLowerCase() }}</b><app-info-icon refKey="directionLabel" /> signal.
+              Out-of-sample IC <b class="mono">{{ best.oos_mean_ic !== null ? best.oos_mean_ic.toFixed(3) : '—' }}</b><app-info-icon refKey="heroOosIc" />
               @if (best.retention_delta_pct !== null) {
-                — <b [style.color]="best.retention_delta_pct >= -30 ? 'var(--bull)' : 'var(--warn)'">{{ best.retention_delta_pct >= 0 ? '+' : '' }}{{ best.retention_delta_pct.toFixed(0) }}% vs in-sample</b>,
+                — <b [style.color]="best.retention_delta_pct >= -30 ? 'var(--bull)' : 'var(--warn)'">{{ best.retention_delta_pct >= 0 ? '+' : '' }}{{ best.retention_delta_pct.toFixed(0) }}% vs in-sample</b><app-info-icon refKey="heroOosVsIs" />,
               }
-              beats random by <b class="mono">{{ Math.abs(best.ic_vs_random_zscore).toFixed(1) }}σ</b>.
+              beats random by <b class="mono">{{ Math.abs(best.ic_vs_random_zscore).toFixed(1) }}σ</b><app-info-icon refKey="heroZvsRandom" />.
             </p>
             <div class="reason-pills">
               @for (pill of getReasonPills(); track pill.label) {
                 <span class="reason-pill" [attr.data-kind]="pill.kind">{{ pill.label }}</span>
               }
+              <app-info-icon refKey="pillSingleAsset" />
             </div>
           </div>
 
@@ -287,17 +302,29 @@
         @let howCell = getHowCell();
 
         <div class="decision-cell">
-          <div class="decision-head"><span class="decision-num mono">01</span><span class="decision-q">When to trade</span></div>
+          <div class="decision-head">
+            <span class="decision-num mono">01</span>
+            <span class="decision-q">When to trade</span>
+            <app-info-icon refKey="whenCell" />
+          </div>
           <div class="decision-a">{{ whenCell?.answer ?? '—' }}</div>
           <div class="decision-detail">{{ whenCell?.detail ?? '' }}</div>
         </div>
         <div class="decision-cell">
-          <div class="decision-head"><span class="decision-num mono">02</span><span class="decision-q">Where it works</span></div>
+          <div class="decision-head">
+            <span class="decision-num mono">02</span>
+            <span class="decision-q">Where it works</span>
+            <app-info-icon refKey="whereCell" />
+          </div>
           <div class="decision-a">{{ whereCell?.answer ?? 'No regime split' }}</div>
           <div class="decision-detail">{{ whereCell?.detail ?? 'Not enough bars per regime.' }}</div>
         </div>
         <div class="decision-cell">
-          <div class="decision-head"><span class="decision-num mono">03</span><span class="decision-q">How to enter</span></div>
+          <div class="decision-head">
+            <span class="decision-num mono">03</span>
+            <span class="decision-q">How to enter</span>
+            <app-info-icon refKey="howCell" />
+          </div>
           <div class="decision-a">{{ howCell?.answer ?? '—' }}</div>
           <div class="decision-detail">{{ howCell?.detail ?? '' }}</div>
         </div>
@@ -311,7 +338,7 @@
         @if (res.decay_curve && res.decay_curve.length > 0) {
           <div class="panel">
             <header class="panel-header">
-              <div class="panel-title">IC across horizons</div>
+              <div class="panel-title">IC across horizons <app-info-icon refKey="decayCurvePanel" /></div>
               <div class="panel-subtitle">In-sample. Find where the signal peaks and dies.</div>
             </header>
             <div class="panel-body">
@@ -327,6 +354,7 @@
                       <span class="mono text-slate-400 text-xs">{{ h.horizon }}-bar</span>
                       @if (h.horizon === res.best_horizon) {
                         <span class="horizon-card-best-tag">BEST</span>
+                        <app-info-icon refKey="bestHorizonTag" />
                       }
                     </div>
                     <div class="horizon-card-ic mono" [style.color]="h.is_mean_ic < 0 ? 'var(--bear)' : 'var(--bull)'">
@@ -346,12 +374,12 @@
           @let rr = res.regime_results;
           <div class="panel">
             <header class="panel-header">
-              <div class="panel-title">Volatility regime crosscheck</div>
+              <div class="panel-title">Volatility regime crosscheck <app-info-icon refKey="regimePanel" /></div>
               <div class="panel-subtitle">High vol = above rolling {{ rr.vol_window }}-bar realized-vol median. When does this signal actually work?</div>
             </header>
             <div class="panel-body regime-grid">
               <div class="regime-col">
-                <div class="regime-head"><span class="regime-swatch high"></span><span class="eyebrow">High vol</span>@if (rr.high_vol?.[0]?.bars_in_regime; as bars) { <span class="mono text-slate-500 ml-auto">{{ bars | number }} bars</span> }</div>
+                <div class="regime-head"><span class="regime-swatch high"></span><span class="eyebrow">High vol</span><app-info-icon refKey="regimeRowHigh" />@if (rr.high_vol?.[0]?.bars_in_regime; as bars) { <span class="mono text-slate-500 ml-auto">{{ bars | number }} bars</span> }</div>
                 @if (rr.high_vol) {
                   @for (p of rr.high_vol; track p.horizon) {
                     <div class="regime-row" [class.is-best]="p.horizon === res.best_horizon">
@@ -365,7 +393,7 @@
                 }
               </div>
               <div class="regime-col">
-                <div class="regime-head"><span class="regime-swatch low"></span><span class="eyebrow">Low vol</span>@if (rr.low_vol?.[0]?.bars_in_regime; as bars) { <span class="mono text-slate-500 ml-auto">{{ bars | number }} bars</span> }</div>
+                <div class="regime-head"><span class="regime-swatch low"></span><span class="eyebrow">Low vol</span><app-info-icon refKey="regimeRowLow" />@if (rr.low_vol?.[0]?.bars_in_regime; as bars) { <span class="mono text-slate-500 ml-auto">{{ bars | number }} bars</span> }</div>
                 @if (rr.low_vol) {
                   @for (p of rr.low_vol; track p.horizon) {
                     <div class="regime-row" [class.is-best]="p.horizon === res.best_horizon">
@@ -387,16 +415,25 @@
       <div class="col-right">
         <div class="panel">
           <header class="panel-header">
-            <div class="panel-title">Decision checklist</div>
+            <div class="panel-title">Decision checklist <app-info-icon refKey="checklistPanel" /></div>
             <div class="panel-subtitle">5 tests — every one must pass to trade.</div>
           </header>
           <div class="panel-body">
             <div class="checklist">
-              @for (item of getChecklist(); track item.label) {
+              @for (item of getChecklist(); track item.label; let i = $index) {
                 <div class="checklist-item">
                   <span class="checklist-mark" [attr.data-pass]="item.pass">{{ item.pass ? '✓' : '✗' }}</span>
                   <div class="checklist-body">
-                    <div class="checklist-label">{{ item.label }}</div>
+                    <div class="checklist-label">
+                      {{ item.label }}
+                      @switch (i) {
+                        @case (0) { <app-info-icon refKey="checklistFdr" /> }
+                        @case (1) { <app-info-icon refKey="checklistBonferroni" /> }
+                        @case (2) { <app-info-icon refKey="checklistOosHolds" /> }
+                        @case (3) { <app-info-icon refKey="checklistBeatsRandom" /> }
+                        @case (4) { <app-info-icon refKey="checklistEconomicallyMeaningful" /> }
+                      }
+                    </div>
                     <div class="checklist-detail mono">{{ item.detail }}</div>
                   </div>
                 </div>
@@ -409,7 +446,7 @@
         @if (noise && best) {
           <div class="panel">
             <header class="panel-header">
-              <div class="panel-title">Random baseline</div>
+              <div class="panel-title">Random baseline <app-info-icon refKey="noiseFloorPanel" /></div>
               <div class="panel-subtitle">Noise floor from {{ res.random_simulations }} shuffles.</div>
             </header>
             <div class="panel-body">
@@ -439,7 +476,7 @@
         @if (res.daily_ic_values.length > 0) {
           <div class="panel">
             <header class="panel-header">
-              <div class="panel-title">Daily IC over time</div>
+              <div class="panel-title">Daily IC over time <app-info-icon refKey="dailyIcPanel" /></div>
               <div class="panel-subtitle">Raw (light) + 20-day rolling mean (bold).</div>
             </header>
             <div class="panel-body">
@@ -456,7 +493,7 @@
     @if (res.next_steps && res.next_steps.length > 0) {
       <div class="panel next-steps mt-4">
         <header class="panel-header">
-          <div class="panel-title">Suggested next steps</div>
+          <div class="panel-title">Suggested next steps <app-info-icon refKey="nextStepsPanel" /></div>
         </header>
         <div class="panel-body">
           <ul class="next-steps-list">
@@ -471,7 +508,7 @@
     <!-- Slope analysis (preserved for power users) -->
     @if (res.slope_results && res.slope_results.length > 0) {
       <details class="panel mt-4 slope-panel">
-        <summary class="panel-header"><span class="panel-title">Slope variant (indicator's rate of change)</span></summary>
+        <summary class="panel-header"><span class="panel-title">Slope variant (indicator's rate of change) <app-info-icon refKey="slopePanel" /></span></summary>
         <div class="panel-body">
           <p-table [value]="res.slope_results" styleClass="p-datatable-sm p-datatable-striped" [scrollable]="true">
             <ng-template pTemplate="header">

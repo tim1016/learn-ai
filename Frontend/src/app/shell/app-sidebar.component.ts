@@ -83,6 +83,7 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-search',
     items: [
       { label: 'Research Lab', route: '/research-lab' },
+      { label: 'Methodology', route: '/docs/indicator-reliability-methodology' },
     ],
   },
   {

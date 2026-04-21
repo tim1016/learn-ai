@@ -201,4 +201,11 @@ export const routes: Routes = [
         "./components/research-lab/signal-report-page/signal-report-page.component"
       ).then((m) => m.SignalReportPageComponent),
   },
+  {
+    path: "docs/indicator-reliability-methodology",
+    loadComponent: () =>
+      import("./components/docs/methodology-page.component").then(
+        (m) => m.MethodologyPageComponent
+      ),
+  },
 ];

@@ -16,6 +16,38 @@
     color: var(--text-muted);
   }
 
+  // "Methodology" button in the header — a muted outline so it doesn't
+  // compete with primary actions but is always one click away.
+  .methodology-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+
+    i { font-size: 0.78rem; color: var(--accent); }
+
+    &:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border-color: var(--border-light);
+    }
+  }
+
+  // Info icon sits flush with adjacent text.
+  app-info-icon {
+    display: inline-flex;
+    margin-left: 3px;
+    vertical-align: baseline;
+  }
+
   // ── Controls panel (light cosmetic tweaks for dark theme) ─────────
   .controls-panel {
     background: var(--bg-surface);

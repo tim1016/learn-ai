@@ -1,12 +1,13 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
+import { MethodologyDrawerComponent } from './shared/methodology-drawer/methodology-drawer.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, AppSidebarComponent],
+  imports: [RouterOutlet, AppSidebarComponent, MethodologyDrawerComponent],
   styles: [`
     :host {
       display: flex;
@@ -27,6 +28,7 @@ import { AppSidebarComponent } from './shell/app-sidebar.component';
     <main class="main">
       <router-outlet />
     </main>
+    <app-methodology-drawer />
   `,
 })
 export class AppComponent {}
