@@ -11,17 +11,23 @@ from app.research.indicator_reliability import (
     MIN_REGIME_BARS,
     HorizonICAnalysis,
     apply_multiple_testing_correction,
+    bars_per_year,
     compute_direction_label,
     compute_forward_return,
     compute_ic_decay_curve,
     compute_indicator_reliability_with_oos,
+    compute_ir_proxy,
+    compute_random_baseline_ic,
     compute_regime_ic,
     compute_retention_delta_pct,
     compute_slope_decisions,
     compute_stability_label,
     compute_strength_label,
+    compute_tradeability,
     find_best_horizon,
     format_indicator_display_name,
+    generate_info_footnotes,
+    generate_next_steps,
     get_indicator_category,
     split_by_volatility_regime,
 )
@@ -78,6 +84,7 @@ def _make_analysis(
     oos_p_value: float | None = None,
     oos_retention: float | None = None,
     strength_label: str = "Weak",
+    stability_label: str = "Moderate",
 ) -> HorizonICAnalysis:
     """Build a HorizonICAnalysis with sensible defaults for tests."""
     return HorizonICAnalysis(
@@ -95,6 +102,7 @@ def _make_analysis(
         oos_retention=oos_retention,
         fdr_p=fdr_p,
         strength_label=strength_label,
+        stability_label=stability_label,
     )
 
 
@@ -391,3 +399,140 @@ class TestRegimeIC:
         results = compute_regime_ic(df, "rsi_14", horizons=[5], window=20)
         assert results["high_vol"] is None
         assert results["low_vol"] is None
+
+
+class TestBarsPerYear:
+    def test_minute(self):
+        # 252 * 390 / 1 ≈ 98,280
+        assert bars_per_year("minute", 1) == pytest.approx(252 * 390)
+
+    def test_multiplier_scales_inversely(self):
+        # 5-minute bars: 1/5 as many bars per day
+        assert bars_per_year("minute", 5) == pytest.approx(252 * 390 / 5)
+
+    def test_day(self):
+        assert bars_per_year("day", 1) == pytest.approx(252)
+
+
+class TestIRProxy:
+    def test_zero_ic_yields_zero_ir(self):
+        ir, sharpe, breadth = compute_ir_proxy(0.0, 10, 252 * 390)
+        assert ir == 0.0
+        assert sharpe == 0.0
+        assert breadth > 0
+
+    def test_positive_ic_yields_positive_ir(self):
+        ir, sharpe, _ = compute_ir_proxy(0.05, 30, 252 * 390)
+        assert ir > 0
+        assert sharpe == ir
+
+    def test_negative_ic_yields_negative_ir(self):
+        ir, sharpe, _ = compute_ir_proxy(-0.05, 30, 252 * 390)
+        assert ir < 0
+        assert sharpe == ir
+
+    def test_longer_horizon_reduces_breadth(self):
+        _, _, breadth_short = compute_ir_proxy(0.05, 5, 252 * 390)
+        _, _, breadth_long = compute_ir_proxy(0.05, 50, 252 * 390)
+        assert breadth_short > breadth_long
+
+
+class TestTradeability:
+    def test_strong_and_stable_is_tradeable(self):
+        assert compute_tradeability(1.5, "High") == "Likely tradeable"
+
+    def test_strong_but_unstable_is_marginal(self):
+        # |sharpe| >= 1 but stability Low → bumped down to Marginal
+        assert compute_tradeability(1.5, "Low") == "Marginal"
+
+    def test_mid_range_is_marginal(self):
+        assert compute_tradeability(0.7, "High") == "Marginal"
+
+    def test_low_is_unlikely(self):
+        assert compute_tradeability(0.2, "High") == "Unlikely"
+
+    def test_uses_absolute_value(self):
+        # Negative IC → short the signal → still tradeable
+        assert compute_tradeability(-1.5, "High") == "Likely tradeable"
+
+
+class TestRandomBaselineReturnsDistribution:
+    def test_distribution_length_matches_n_simulations(self):
+        df = _create_test_df(500)
+        mean, std, dist = compute_random_baseline_ic(df, horizon=10, n_simulations=25)
+        assert len(dist) == 25
+        assert std >= 0
+        # Mean of the distribution should equal the returned mean
+        assert mean == pytest.approx(sum(dist) / len(dist), rel=1e-6)
+
+
+class TestNextSteps:
+    def _r(self, **kwargs) -> HorizonICAnalysis:
+        defaults = {"horizon": 10, "is_mean_ic": 0.05}
+        defaults.update(kwargs)
+        return _make_analysis(**defaults)
+
+    def test_flags_missing_oos(self):
+        results = [self._r(oos_mean_ic=None)]
+        steps = generate_next_steps(results, None, None, 10)
+        assert any("out-of-sample" in s.lower() for s in steps)
+
+    def test_suggests_threshold_when_strong_stable_validated(self):
+        results = [
+            self._r(
+                is_mean_ic=0.10,
+                strength_label="Strong",
+                stability_label="High",
+                oos_mean_ic=0.09,
+                oos_p_value=0.02,
+            )
+        ]
+        steps = generate_next_steps(results, None, None, 10)
+        assert any("threshold" in s.lower() for s in steps)
+
+    def test_no_best_horizon_returns_prompt(self):
+        results = [self._r()]
+        steps = generate_next_steps(results, None, None, None)
+        assert len(steps) >= 1
+        assert "significance" in steps[0].lower() or "cleared" in steps[0].lower()
+
+    def test_flags_oos_gap_when_is_strong_but_not_validated(self):
+        results = [
+            self._r(
+                is_mean_ic=0.08,
+                strength_label="Moderate",
+                stability_label="High",
+                oos_mean_ic=0.05,
+                oos_p_value=0.23,
+            )
+        ]
+        steps = generate_next_steps(results, None, None, 10)
+        combined = " ".join(steps).lower()
+        assert "validate" in combined or "out-of-sample" in combined
+
+    def test_caps_at_four_items(self):
+        # Engineer a scenario that triggers every rule
+        results = [
+            self._r(
+                is_mean_ic=0.05,
+                strength_label="Moderate",
+                stability_label="Low",  # triggers "try a longer horizon"
+                oos_mean_ic=None,  # triggers "collect more OOS"
+            )
+        ]
+        steps = generate_next_steps(results, None, None, 10)
+        assert len(steps) <= 4
+
+
+class TestInfoFootnotes:
+    def test_always_includes_single_asset_caveat(self):
+        notes = generate_info_footnotes([1])
+        assert any("single-asset" in n.lower() for n in notes)
+
+    def test_adds_overlap_caveat_for_multi_bar_horizons(self):
+        notes = generate_info_footnotes([1, 5, 10])
+        assert any("overlapping" in n.lower() for n in notes)
+
+    def test_no_overlap_caveat_for_horizon_one_only(self):
+        notes = generate_info_footnotes([1])
+        assert not any("overlapping" in n.lower() for n in notes)

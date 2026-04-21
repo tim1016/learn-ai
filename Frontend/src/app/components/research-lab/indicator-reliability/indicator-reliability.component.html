@@ -245,7 +245,7 @@
             <p-tag
               [value]="v.tradeability"
               [severity]="getTradeabilitySeverity(v.tradeability)"
-              pTooltip="Tradeability is estimated from IR proxy (coming in a later release). 'Unknown' means we haven't yet translated IC into a tradable Sharpe estimate."
+              [pTooltip]="v.tradeability_caveat ?? 'Based on IR proxy from IC — see methodology.'"
               tooltipPosition="top"
             />
           </div>
@@ -319,6 +319,12 @@
             }
           </div>
         </div>
+
+        @if (bestRandom.random_baseline_distribution.length > 0) {
+          <div class="mt-4" style="height: 220px">
+            <canvas #baselineHist></canvas>
+          </div>
+        }
       </div>
     }
 
@@ -332,6 +338,7 @@
             <th colspan="4" class="text-center border-b border-gray-300">In-Sample (70%)</th>
             <th colspan="3" class="text-center border-b border-gray-300">Out-of-Sample (30%)</th>
             <th rowspan="2" class="align-bottom" pTooltip="Z-score vs random baseline">vs Random</th>
+            <th rowspan="2" class="align-bottom" pTooltip="IR proxy = IC × √breadth, assuming unit vol and zero costs. Interpret as a rough upper bound on tradeable Sharpe.">Sharpe Proxy</th>
           </tr>
           <tr>
             <th pTooltip="Mean Information Coefficient (Spearman)">IC</th>
@@ -396,6 +403,14 @@
               <span [class.text-green-600]="Math.abs(row.ic_vs_random_zscore) >= 2" [class.text-yellow-600]="Math.abs(row.ic_vs_random_zscore) < 2">
                 {{ formatZScore(row.ic_vs_random_zscore) }}
               </span>
+            </td>
+            <!-- Sharpe Proxy -->
+            <td>
+              <p-tag
+                [value]="formatSharpe(row.sharpe_estimate)"
+                [severity]="getSharpeSeverity(row.sharpe_estimate)"
+                [pTooltip]="'Breadth = ' + row.breadth_per_year.toFixed(0) + ' bets/yr (bars_per_year / horizon)'"
+              />
             </td>
           </tr>
         </ng-template>
@@ -564,8 +579,20 @@
       </div>
     }
 
+    <!-- Next Steps -->
+    @if (res.next_steps && res.next_steps.length > 0) {
+      <div class="next-steps-card p-4 bg-blue-50 rounded-lg border border-blue-200 mb-6">
+        <h4 class="text-md font-semibold text-blue-900 mb-2">Suggested next steps</h4>
+        <ul class="list-disc list-inside text-sm text-blue-900 space-y-1">
+          @for (step of res.next_steps; track step) {
+            <li>{{ step }}</li>
+          }
+        </ul>
+      </div>
+    }
+
     <!-- Methodology Note -->
-    <div class="methodology-note p-4 bg-gray-50 rounded-lg border border-gray-200">
+    <div class="methodology-note p-4 bg-gray-50 rounded-lg border border-gray-200 mb-4">
       <h4 class="text-md font-semibold text-gray-800 mb-2">Methodology</h4>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600">
         <div>
@@ -583,6 +610,15 @@
         </div>
       </div>
     </div>
+
+    <!-- Honesty Footnotes -->
+    @if (res.info_footnotes && res.info_footnotes.length > 0) {
+      <div class="info-footnotes text-xs text-gray-400 space-y-0.5 mb-4 px-1">
+        @for (note of res.info_footnotes; track note) {
+          <div><i class="pi pi-info-circle mr-1" aria-hidden="true"></i>{{ note }}</div>
+        }
+      </div>
+    }
   }
 
   <!-- Access Math for template -->

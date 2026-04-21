@@ -14,16 +14,16 @@ TradeabilityLabel = Literal["Likely tradeable", "Marginal", "Unlikely", "Unknown
 
 
 class VerdictModel(BaseModel):
-    """Top-line verdict card summarizing the best-horizon analysis.
-
-    ``tradeability`` is "Unknown" until Tranche 3 wires the IR proxy.
-    """
+    """Top-line verdict card summarizing the best-horizon analysis."""
 
     direction: DirectionLabel
     strength: StrengthLabel
     stability: StabilityLabel
     tradeability: TradeabilityLabel = "Unknown"
     horizon: int | None = Field(None, description="Horizon the verdict is computed on")
+    tradeability_caveat: str | None = Field(
+        None, description="Plain-text caveat explaining what 'Tradeability' assumes"
+    )
 
 
 class IndicatorReliabilityRequest(BaseModel):
@@ -118,6 +118,22 @@ class HorizonICResult(BaseModel):
     )
     slope_recommended: bool | None = Field(
         None, description="True if slope adds value AND is OOS-validated"
+    )
+
+    # IR proxy (Tranche 3 economic layer)
+    annualized_ir: float = Field(0.0, description="IC * sqrt(breadth_per_year)")
+    sharpe_estimate: float = Field(
+        0.0, description="Sharpe proxy under unit-vol assumption (= annualized_ir)"
+    )
+    breadth_per_year: float = Field(
+        0.0, description="bars_per_year / horizon — independent bets per year"
+    )
+
+    # Full random-baseline distribution (typically populated only for the
+    # best horizon to keep payload compact).
+    random_baseline_distribution: list[float] = Field(
+        default_factory=list,
+        description="Raw IC values from N random-shuffle simulations",
     )
 
 
@@ -221,6 +237,16 @@ class IndicatorReliabilityResponse(BaseModel):
     )
     regime_results: RegimeResults | None = Field(
         None, description="IC conditioned on volatility regime (in-sample)"
+    )
+
+    # Tranche 3: economic layer & honesty
+    next_steps: list[str] = Field(
+        default_factory=list,
+        description="Rule-based suggestions for what to try next (2–4 items)",
+    )
+    info_footnotes: list[str] = Field(
+        default_factory=list,
+        description="Soft honesty caveats rendered as muted text, not alarms",
     )
 
     # Warnings

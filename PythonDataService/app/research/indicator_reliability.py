@@ -54,6 +54,9 @@ class HorizonICAnalysis:
     random_baseline_mean: float = 0.0
     random_baseline_std: float = 0.0
     ic_vs_random_zscore: float = 0.0
+    # Full random-baseline distribution (populated for all horizons; the router
+    # may choose to only serialize the best-horizon one to keep payload small).
+    random_baseline_distribution: list[float] = field(default_factory=list)
     # Interpretations (legacy free-text)
     is_interpretation: str = "Unknown"
     oos_interpretation: str | None = None
@@ -69,6 +72,10 @@ class HorizonICAnalysis:
     # Slope decision flags (only populated for slope variant, by the router)
     slope_adds_value: bool | None = None
     slope_recommended: bool | None = None
+    # IR proxy (populated by the router once bars_per_year is known)
+    annualized_ir: float = 0.0
+    sharpe_estimate: float = 0.0
+    breadth_per_year: float = 0.0
 
 
 # Bucket thresholds for verdict labels. Tuned to match human intuition for
@@ -189,8 +196,8 @@ def compute_random_baseline_ic(
     df: pd.DataFrame,
     horizon: int,
     n_simulations: int = RANDOM_SIMULATIONS,
-) -> tuple[float, float]:
-    """Compute mean and std of IC for random shuffled signals.
+) -> tuple[float, float, list[float]]:
+    """Compute mean, std, and full distribution of IC for random shuffled signals.
 
     Parameters
     ----------
@@ -204,14 +211,14 @@ def compute_random_baseline_ic(
     Returns
     -------
     tuple
-        (mean_random_ic, std_random_ic)
+        (mean_random_ic, std_random_ic, distribution_of_random_ics)
     """
     fwd_returns = compute_forward_return(df, horizon)
     valid_mask = fwd_returns.notna()
     n_valid = valid_mask.sum()
 
     if n_valid < 20:
-        return 0.0, 0.01  # Return small std to avoid division issues
+        return 0.0, 0.01, []  # small std avoids division issues; empty dist
 
     random_ics: list[float] = []
 
@@ -237,7 +244,7 @@ def compute_random_baseline_ic(
     if std_ic < 1e-10:
         std_ic = 0.01
 
-    return mean_ic, std_ic
+    return mean_ic, std_ic, random_ics
 
 
 def _interpret_ic_result(
@@ -449,7 +456,7 @@ def compute_indicator_reliability_with_oos(
             )
 
         # Random baseline (on train data)
-        random_mean, random_std = compute_random_baseline_ic(
+        random_mean, random_std, random_distribution = compute_random_baseline_ic(
             train_df, horizon, n_simulations=random_simulations
         )
         z_score = (is_ic.mean_ic - random_mean) / random_std if random_std > 1e-10 else 0.0
@@ -480,6 +487,7 @@ def compute_indicator_reliability_with_oos(
                 random_baseline_mean=random_mean,
                 random_baseline_std=random_std,
                 ic_vs_random_zscore=z_score,
+                random_baseline_distribution=random_distribution,
                 is_interpretation=is_interpretation,
                 oos_interpretation=oos_interpretation,
                 is_hit_rate=is_ic.hit_rate,
@@ -859,3 +867,166 @@ def compute_regime_ic(
         regime_results[name] = points
 
     return regime_results
+
+
+# ─── Tranche 3: IR proxy, tradeability, next-steps ─────────────────────────
+
+# Equity markets: 252 trading days * 390 minutes/day = 98280 minute bars/year.
+_BARS_PER_TRADING_DAY = {
+    "minute": 390,
+    "hour": 6.5,
+    "day": 1,
+    "week": 0.2,  # 1 bar per 5 trading days
+    "month": 1 / 21,
+}
+_TRADING_DAYS_PER_YEAR = 252
+
+
+def bars_per_year(timespan: str, multiplier: int) -> float:
+    """Approximate number of bars per trading year for the given timespan."""
+    per_day = _BARS_PER_TRADING_DAY.get(timespan.lower(), 1)
+    mult = max(int(multiplier), 1)
+    return float(_TRADING_DAYS_PER_YEAR * per_day / mult)
+
+
+def compute_ir_proxy(
+    mean_ic: float,
+    horizon: int,
+    bars_per_year_val: float,
+) -> tuple[float, float, float]:
+    """IC-to-IR conversion via the textbook breadth approximation.
+
+    ``IR ≈ IC * sqrt(breadth)`` where ``breadth = bars_per_year / horizon``
+    (independent bets per year). Assumes unit volatility so
+    ``sharpe ≈ IR``. This is a diagnostic proxy — it ignores transaction
+    costs, the autocorrelation in overlapping forward returns, and the
+    gap between time-series IC and realized portfolio performance.
+
+    Returns ``(annualized_ir, sharpe_estimate, breadth_per_year)``.
+    """
+    h = max(int(horizon), 1)
+    breadth = max(bars_per_year_val / h, 1.0)
+    annualized_ir = float(mean_ic * math.sqrt(breadth))
+    sharpe_estimate = annualized_ir  # unit-vol assumption
+    return annualized_ir, sharpe_estimate, float(breadth)
+
+
+def compute_tradeability(sharpe_estimate: float, stability_label: str) -> str:
+    """Bucket the IR-proxy sharpe into a tradeability label.
+
+    Uses absolute value — a negative IC with high |sharpe| is still
+    tradeable (short the signal instead of long).
+    """
+    abs_sharpe = abs(sharpe_estimate)
+    if abs_sharpe >= 1.0 and stability_label == "High":
+        return "Likely tradeable"
+    if abs_sharpe >= 0.5:
+        return "Marginal"
+    return "Unlikely"
+
+
+TRADEABILITY_CAVEAT = (
+    "Proxy only — assumes zero costs, unit vol, and independent bets. "
+    "Overlapping forward returns inflate breadth, so real Sharpe is typically lower."
+)
+
+
+def generate_next_steps(
+    raw_results: list[HorizonICAnalysis],
+    slope_results: list[HorizonICAnalysis] | None,
+    regime_results: dict[str, list[RegimeICPoint] | None] | None,
+    best_horizon: int | None,
+) -> list[str]:
+    """Produce 2–4 short, actionable recommendations based on the analysis.
+
+    Capped at 4 items to avoid a wall of text. Rules are ordered by how
+    much they move the needle (OOS data first, strategy decisions last).
+    """
+    steps: list[str] = []
+
+    if not raw_results:
+        return ["No results to analyze — check that the ticker and date range produced enough bars."]
+
+    if best_horizon is None:
+        steps.append(
+            "No horizon cleared the significance bar; try a different indicator, parameter, or longer date range."
+        )
+        return steps
+
+    best = next((r for r in raw_results if r.horizon == best_horizon), raw_results[0])
+
+    # OOS gap — most important thing to call out if missing
+    if best.oos_mean_ic is None:
+        steps.append(
+            "Collect more out-of-sample data before trading — current result is in-sample only."
+        )
+
+    # Regime dependence: high-vol IC materially stronger than low-vol (or vice versa)
+    if regime_results is not None:
+        high = regime_results.get("high_vol") or []
+        low = regime_results.get("low_vol") or []
+        high_best = next((p for p in high if p.horizon == best_horizon), None)
+        low_best = next((p for p in low if p.horizon == best_horizon), None)
+        if high_best and low_best:
+            h_abs, l_abs = abs(high_best.mean_ic), abs(low_best.mean_ic)
+            if h_abs >= 0.03 and h_abs >= 2 * l_abs:
+                steps.append(
+                    "Add a volatility filter — signal is materially stronger in high-vol regimes."
+                )
+            elif l_abs >= 0.03 and l_abs >= 2 * h_abs:
+                steps.append(
+                    "Add a low-vol filter — signal degrades sharply in high-vol regimes."
+                )
+
+    # Stability: edge exists but day-to-day consistency is poor
+    if best.stability_label == "Low" and abs(best.is_mean_ic) >= 0.03:
+        steps.append(
+            "Try a longer horizon — signal has directional edge but is noisy at the current horizon."
+        )
+
+    # Slope variant
+    if slope_results is not None:
+        slope_best = next((s for s in slope_results if s.horizon == best_horizon), None)
+        if slope_best is not None and slope_best.slope_adds_value:
+            steps.append(
+                "Try the slope variant — the indicator's rate of change is stronger than its raw value."
+            )
+
+    # Tradeable: strong + stable + OOS-validated
+    if (
+        best.strength_label in {"Moderate", "Strong"}
+        and best.stability_label == "High"
+        and best.oos_p_value is not None
+        and best.oos_p_value < 0.10
+    ):
+        steps.append(
+            "Consider a threshold-based strategy and measure realized Sharpe with transaction costs."
+        )
+
+    # Fall-through: distinguish "IS edge didn't validate OOS" from "pure noise".
+    if not steps:
+        if best.strength_label in {"Moderate", "Strong"} and (
+            best.oos_p_value is None or best.oos_p_value >= 0.10
+        ):
+            steps.append(
+                "IS edge did not validate out-of-sample — try a longer date range or different parameters before trading."
+            )
+        else:
+            steps.append(
+                "Signal looks noise-like; consider a different indicator, parameter sweep, or longer window."
+            )
+
+    return steps[:4]
+
+
+def generate_info_footnotes(horizons: list[int]) -> list[str]:
+    """Always-on honesty caveats rendered as muted text, not alarm-level."""
+    footnotes = [
+        "Single-asset IC — portfolio IC across many tickers may differ substantially.",
+        "Time-series IC is not the same as cross-sectional factor IC.",
+    ]
+    if any(h > 1 for h in horizons):
+        footnotes.append(
+            "Overlapping forward returns inflate raw significance; NW-adjusted stats are shown where possible."
+        )
+    return footnotes

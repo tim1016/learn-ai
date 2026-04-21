@@ -29,14 +29,20 @@ from app.research.indicator_reliability import (
     DEFAULT_VOL_WINDOW,
     MAX_DECAY_HORIZON,
     RANDOM_SIMULATIONS,
+    TRADEABILITY_CAVEAT,
     TRAIN_RATIO,
     HorizonICAnalysis,
+    bars_per_year,
     compute_ic_decay_curve,
     compute_indicator_reliability_with_oos,
+    compute_ir_proxy,
     compute_regime_ic,
     compute_slope_decisions,
+    compute_tradeability,
     find_best_horizon,
     format_indicator_display_name,
+    generate_info_footnotes,
+    generate_next_steps,
     generate_warnings,
     get_indicator_category,
 )
@@ -67,8 +73,15 @@ def _estimate_max_lookback(params: dict[str, Any]) -> int:
     return lookback
 
 
-def _to_horizon_ic_result(r: HorizonICAnalysis) -> HorizonICResult:
-    """Map the dataclass (internal) to the Pydantic model (wire format)."""
+def _to_horizon_ic_result(
+    r: HorizonICAnalysis,
+    include_distribution: bool = False,
+) -> HorizonICResult:
+    """Map the dataclass (internal) to the Pydantic model (wire format).
+
+    ``include_distribution`` gates the 100-float random-baseline histogram
+    — typically only the best horizon sends it, to keep payload compact.
+    """
     return HorizonICResult(
         horizon=r.horizon,
         is_mean_ic=r.is_mean_ic,
@@ -97,6 +110,12 @@ def _to_horizon_ic_result(r: HorizonICAnalysis) -> HorizonICResult:
         retention_delta_pct=r.retention_delta_pct,
         slope_adds_value=r.slope_adds_value,
         slope_recommended=r.slope_recommended,
+        annualized_ir=r.annualized_ir,
+        sharpe_estimate=r.sharpe_estimate,
+        breadth_per_year=r.breadth_per_year,
+        random_baseline_distribution=(
+            r.random_baseline_distribution if include_distribution else []
+        ),
     )
 
 
@@ -106,7 +125,8 @@ def _build_verdict(
 ) -> VerdictModel | None:
     """Compute top-line verdict from best horizon, or max-|IC| fallback.
 
-    Tradeability stays "Unknown" in P1 — populated by IR proxy in P3.
+    Tradeability is derived from the Sharpe proxy already populated on the
+    HorizonICAnalysis (see router main flow).
     """
     if not raw_results:
         return None
@@ -119,12 +139,15 @@ def _build_verdict(
     if picked is None:
         return None
 
+    tradeability = compute_tradeability(picked.sharpe_estimate, picked.stability_label)
+
     return VerdictModel(
         direction=picked.direction_label,  # type: ignore[arg-type]
         strength=picked.strength_label,  # type: ignore[arg-type]
         stability=picked.stability_label,  # type: ignore[arg-type]
-        tradeability="Unknown",
+        tradeability=tradeability,  # type: ignore[arg-type]
         horizon=picked.horizon,
+        tradeability_caveat=TRADEABILITY_CAVEAT,
     )
 
 
@@ -238,6 +261,20 @@ async def calculate_indicator_reliability(
             random_simulations=RANDOM_SIMULATIONS,
         )
 
+        # Populate IR proxy on every HorizonICAnalysis (cheap arithmetic).
+        bpy = bars_per_year(request.timespan, request.multiplier)
+        for r in raw_results:
+            ir, sharpe, breadth = compute_ir_proxy(r.is_mean_ic, r.horizon, bpy)
+            r.annualized_ir = ir
+            r.sharpe_estimate = sharpe
+            r.breadth_per_year = breadth
+        if slope_results:
+            for s in slope_results:
+                ir, sharpe, breadth = compute_ir_proxy(s.is_mean_ic, s.horizon, bpy)
+                s.annualized_ir = ir
+                s.sharpe_estimate = sharpe
+                s.breadth_per_year = breadth
+
         # Train split for diagnostic computations (decay curve, regime IC).
         # Mirrors the chronological split used inside compute_..._with_oos.
         split_idx = int(len(df) * TRAIN_RATIO)
@@ -301,13 +338,18 @@ async def calculate_indicator_reliability(
                     s.slope_adds_value = adds
                     s.slope_recommended = recommended
 
-        results = [_to_horizon_ic_result(r) for r in raw_results]
+        # Find best horizon first so we can gate the baseline distribution payload.
+        best_horizon = find_best_horizon(raw_results)
+
+        results = [
+            _to_horizon_ic_result(r, include_distribution=(r.horizon == best_horizon))
+            for r in raw_results
+        ]
         slope_response = (
             [_to_horizon_ic_result(r) for r in slope_results] if slope_results else None
         )
 
-        # Find best horizon and get its daily IC series
-        best_horizon = find_best_horizon(raw_results)
+        # Get best horizon's daily IC series for the chart
         daily_ic_values: list[float] = []
         daily_ic_dates: list[str] = []
 
@@ -334,6 +376,10 @@ async def calculate_indicator_reliability(
         )
 
         verdict = _build_verdict(raw_results, best_horizon)
+        next_steps = generate_next_steps(
+            raw_results, slope_results, regime_dict, best_horizon
+        )
+        info_footnotes = generate_info_footnotes(request.horizons)
 
         return IndicatorReliabilityResponse(
             success=True,
@@ -367,6 +413,8 @@ async def calculate_indicator_reliability(
             verdict=verdict,
             decay_curve=decay_response,
             regime_results=regime_response,
+            next_steps=next_steps,
+            info_footnotes=info_footnotes,
             warnings=warnings,
         )
 

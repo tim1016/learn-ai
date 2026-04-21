@@ -43,6 +43,7 @@ interface Verdict {
   stability: StabilityLabel;
   tradeability: TradeabilityLabel;
   horizon: number | null;
+  tradeability_caveat: string | null;
 }
 
 interface DecayCurvePoint {
@@ -105,6 +106,12 @@ interface HorizonICResult {
   // Slope decision flags (populated on slope variant rows only)
   slope_adds_value: boolean | null;
   slope_recommended: boolean | null;
+  // IR proxy
+  annualized_ir: number;
+  sharpe_estimate: number;
+  breadth_per_year: number;
+  // Random baseline distribution (populated only for best horizon)
+  random_baseline_distribution: number[];
 }
 
 interface IndicatorReliabilityResponse {
@@ -141,6 +148,9 @@ interface IndicatorReliabilityResponse {
   // P2 diagnostics
   decay_curve: DecayCurvePoint[];
   regime_results: RegimeResults | null;
+  // P3 economic layer & honesty
+  next_steps: string[];
+  info_footnotes: string[];
   // Warnings
   warnings: string[];
   error: string | null;
@@ -205,8 +215,10 @@ export class IndicatorReliabilityComponent {
 
   icChartCanvas = viewChild<ElementRef<HTMLCanvasElement>>('icChart');
   decayChartCanvas = viewChild<ElementRef<HTMLCanvasElement>>('decayChart');
+  baselineHistCanvas = viewChild<ElementRef<HTMLCanvasElement>>('baselineHist');
   private icChart: Chart | null = null;
   private decayChart: Chart | null = null;
+  private baselineHistChart: Chart | null = null;
 
   // Rolling window for the IC chart overlay (bars).
   private readonly ROLLING_IC_WINDOW = 20;
@@ -286,6 +298,21 @@ export class IndicatorReliabilityComponent {
       const canvas = this.decayChartCanvas();
       if (res && canvas && res.decay_curve && res.decay_curve.length > 0) {
         this.renderDecayChart(canvas.nativeElement, res.decay_curve);
+      }
+    });
+
+    // Render baseline histogram when result changes
+    effect(() => {
+      const res = this.result();
+      const canvas = this.baselineHistCanvas();
+      if (!res || !canvas) return;
+      const best = this.getBestRandomResult();
+      if (best && best.random_baseline_distribution.length > 0) {
+        this.renderBaselineHistogram(
+          canvas.nativeElement,
+          best.random_baseline_distribution,
+          best.is_mean_ic,
+        );
       }
     });
   }
@@ -456,6 +483,18 @@ export class IndicatorReliabilityComponent {
 
   formatZScore(z: number): string {
     return `${z >= 0 ? '+' : ''}${z.toFixed(1)}σ`;
+  }
+
+  formatSharpe(s: number): string {
+    return `${s >= 0 ? '+' : ''}${s.toFixed(2)}`;
+  }
+
+  getSharpeSeverity(s: number): 'success' | 'warn' | 'danger' | 'info' {
+    const abs = Math.abs(s);
+    if (abs >= 1.0) return 'success';
+    if (abs >= 0.5) return 'warn';
+    if (abs >= 0.2) return 'info';
+    return 'danger';
   }
 
   getStrengthSeverity(label: StrengthLabel): 'success' | 'warn' | 'danger' | 'info' {
@@ -766,6 +805,92 @@ export class IndicatorReliabilityComponent {
               color: '#475569',
             },
             ticks: { font: { size: 11 }, color: '#64748b' },
+            grid: { display: false },
+          },
+        },
+      },
+    });
+  }
+
+  private renderBaselineHistogram(
+    canvas: HTMLCanvasElement,
+    distribution: number[],
+    actualIc: number,
+  ): void {
+    if (this.baselineHistChart) this.baselineHistChart.destroy();
+
+    const nBins = 15;
+    const values = [...distribution, actualIc];
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const pad = (max - min) * 0.05 || 0.001;
+    const lo = min - pad;
+    const hi = max + pad;
+    const width = (hi - lo) / nBins;
+
+    const bins = new Array(nBins).fill(0);
+    const binCenters: number[] = [];
+    for (let i = 0; i < nBins; i++) binCenters.push(lo + (i + 0.5) * width);
+    for (const v of distribution) {
+      const idx = Math.min(nBins - 1, Math.max(0, Math.floor((v - lo) / width)));
+      bins[idx]++;
+    }
+    const actualBinIdx = Math.min(
+      nBins - 1,
+      Math.max(0, Math.floor((actualIc - lo) / width)),
+    );
+
+    // Highlight the bin that contains the actual IC.
+    const bgColors = bins.map((_, i) =>
+      i === actualBinIdx ? 'rgba(234, 88, 12, 0.85)' : 'rgba(100, 116, 139, 0.5)',
+    );
+    const borderColors = bins.map((_, i) =>
+      i === actualBinIdx ? '#ea580c' : '#64748b',
+    );
+
+    this.baselineHistChart = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: binCenters.map(c => c.toFixed(3)),
+        datasets: [
+          {
+            label: 'Random IC count',
+            data: bins,
+            backgroundColor: bgColors,
+            borderColor: borderColors,
+            borderWidth: 1,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          title: {
+            display: true,
+            text: `Random-shuffle IC distribution — actual IC = ${actualIc.toFixed(4)} (orange bin)`,
+            font: { size: 14, weight: 'bold' },
+            color: '#1e293b',
+            padding: { bottom: 12 },
+          },
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#1e293b',
+            callbacks: {
+              label: ctx =>
+                `Bin center ${binCenters[ctx.dataIndex].toFixed(4)}: ${ctx.raw} sims`,
+            },
+          },
+        },
+        scales: {
+          y: {
+            title: { display: true, text: 'Count', color: '#475569' },
+            ticks: { precision: 0, color: '#64748b' },
+            grid: { color: '#f1f5f9' },
+          },
+          x: {
+            title: { display: true, text: 'IC bin', color: '#475569' },
+            ticks: { color: '#64748b', maxRotation: 45, maxTicksLimit: 10 },
             grid: { display: false },
           },
         },
