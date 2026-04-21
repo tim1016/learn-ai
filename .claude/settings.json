@@ -1,26 +1,62 @@
 {
+  "$schema": "https://code.claude.com/schemas/settings.json",
+  "_comment_mcp_servers": "MCP server configs. Fill in credentials via environment variables — DO NOT commit real keys. See references/MCP-SETUP.md for installation commands.",
+  "mcpServers": {
+    "polygon": {
+      "_note": "Polygon.io MCP server — ad-hoc ticker/options queries and schema inspection. NOT for backtest data (use Postgres cache).",
+      "command": "npx",
+      "args": ["-y", "@polygon/mcp-server"],
+      "env": {
+        "POLYGON_API_KEY": "${POLYGON_API_KEY}"
+      }
+    },
+    "postgres": {
+      "_note": "Read-only connection to dev Postgres. Use a read-only role at the DB level; do not grant write access to the MCP user.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "${POSTGRES_READONLY_URL}"]
+    },
+    "github": {
+      "_note": "GitHub MCP — manage PRs/issues on learn-ai AND read reference repos at specific commits for porting.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
+    }
+  },
+  "_comment_permissions": "Permissions scoping for this project. Deny dangerous operations by default; explicitly allow the ones we need.",
   "permissions": {
     "allow": [
-      "WebFetch(domain:medium.com)",
-      "Bash(podman start my-backend)"
-    ]
-  },
-  "enabledPlugins": {
-    "frontend-design@claude-plugins-official": true
-  },
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-edit-validate.sh",
-            "statusMessage": "Validating edit...",
-            "timeout": 120
-          }
-        ]
-      }
+      "Read(Frontend/**)",
+      "Read(Backend/**)",
+      "Read(Backend.Tests/**)",
+      "Read(PythonDataService/**)",
+      "Read(docs/**)",
+      "Read(references/**)",
+      "Read(.claude/**)",
+      "Write(Frontend/src/**)",
+      "Write(Backend/**)",
+      "Write(Backend.Tests/**)",
+      "Write(PythonDataService/**)",
+      "Write(docs/**)",
+      "Bash(npm run *)",
+      "Bash(npx ng *)",
+      "Bash(dotnet *)",
+      "Bash(podman exec *)",
+      "Bash(podman logs *)",
+      "Bash(podman compose *)",
+      "Bash(python -m pytest*)",
+      "Bash(ruff *)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git status)"
+    ],
+    "deny": [
+      "Write(.env)",
+      "Write(.env.*)",
+      "Write(**/*secrets*)",
+      "Bash(git push --force*)",
+      "Bash(rm -rf *)"
     ]
   }
 }
