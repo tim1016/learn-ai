@@ -1,3 +1,98 @@
 :host {
   display: block;
 }
+
+.research-lab {
+  color: var(--text-primary);
+}
+
+.rl-header {
+  padding: 8px 0 16px;
+
+  h2 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 4px;
+    color: var(--text-primary);
+  }
+}
+
+.rl-subtitle {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+// ── Sub-nav (Validate / Inspect / Reference) ─────────────────────
+.rl-subnav {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 0 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  font-size: 12px;
+
+  &::-webkit-scrollbar { height: 4px; }
+  &::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+}
+
+.rl-subnav-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+.rl-subnav-eyebrow {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-right: 10px;
+  white-space: nowrap;
+}
+
+.rl-subnav-tab {
+  background: transparent;
+  border: 0;
+  padding: 8px 10px;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -17px; // align bottom border with the sub-nav's own border
+  height: 32px;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  transition: color 0.1s;
+
+  &:hover {
+    color: var(--text-primary);
+  }
+
+  &.active {
+    color: var(--text-primary);
+    font-weight: 500;
+    border-bottom-color: var(--accent);
+  }
+}
+
+.rl-subnav-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+  margin-left: 16px;
+}
+
+.rl-panel {
+  // Each sub-component handles its own layout.
+}

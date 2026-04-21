@@ -1,57 +1,46 @@
-<div class="p-4">
-  <h2 class="text-2xl font-bold mb-4 text-gray-800">Research Lab</h2>
-  <p class="text-gray-500 mb-6">
-    Validate predictive features using Information Coefficient analysis against 15-minute forward log returns.
-  </p>
+<div class="research-lab">
+  <header class="rl-header">
+    <h2>Research Lab</h2>
+    <p class="rl-subtitle">
+      Validate predictive features using Information Coefficient analysis against forward log returns.
+    </p>
+  </header>
 
-  <p-tabs value="0">
-    <p-tablist>
-      <p-tab value="0">Feature Runner</p-tab>
-      <p-tab value="1">Experiment History</p-tab>
-      <p-tab value="2">Documentation</p-tab>
-      <p-tab value="3">Signal Engine</p-tab>
-      <p-tab value="4">Signal History</p-tab>
-      <p-tab value="5">Signal Docs</p-tab>
-      <p-tab value="6">Cross-Sectional</p-tab>
-      <p-tab value="7">Options Math</p-tab>
-      <p-tab value="8">TV vs Polygon Divergence</p-tab>
-      <p-tab value="9">Pre-flight Check</p-tab>
-      <p-tab value="10">Indicator Reliability</p-tab>
-    </p-tablist>
-    <p-tabpanels>
-      <p-tabpanel value="0">
-        <app-feature-runner />
-      </p-tabpanel>
-      <p-tabpanel value="1">
-        <app-experiment-history />
-      </p-tabpanel>
-      <p-tabpanel value="2">
-        <app-info-panel />
-      </p-tabpanel>
-      <p-tabpanel value="3">
-        <app-signal-runner />
-      </p-tabpanel>
-      <p-tabpanel value="4">
-        <app-signal-history />
-      </p-tabpanel>
-      <p-tabpanel value="5">
-        <app-signal-info-panel />
-      </p-tabpanel>
-      <p-tabpanel value="6">
-        <app-batch-runner />
-      </p-tabpanel>
-      <p-tabpanel value="7">
-        <app-options-math-docs />
-      </p-tabpanel>
-      <p-tabpanel value="8">
-        <app-data-divergence />
-      </p-tabpanel>
-      <p-tabpanel value="9">
-        <app-strategy-preflight />
-      </p-tabpanel>
-      <p-tabpanel value="10">
-        <app-indicator-reliability />
-      </p-tabpanel>
-    </p-tabpanels>
-  </p-tabs>
+  <!-- Sub-nav: Validate / Inspect / Reference -->
+  <nav class="rl-subnav" role="navigation" aria-label="Research Lab sections">
+    @for (group of groups; track group.label; let last = $last) {
+      <div class="rl-subnav-group">
+        <span class="rl-subnav-eyebrow">{{ group.label }}</span>
+        @for (item of group.items; track item.id) {
+          <button
+            type="button"
+            class="rl-subnav-tab"
+            [class.active]="active() === item.id"
+            (click)="setActive(item.id)"
+          >
+            {{ item.label }}
+          </button>
+        }
+        @if (!last) {
+          <span class="rl-subnav-divider" aria-hidden="true"></span>
+        }
+      </div>
+    }
+  </nav>
+
+  <div class="rl-panel">
+    @switch (active()) {
+      @case ('feature-runner')        { <app-feature-runner /> }
+      @case ('indicator-reliability') { <app-indicator-reliability /> }
+      @case ('signal-engine')         { <app-signal-runner /> }
+      @case ('cross-sectional')       { <app-batch-runner /> }
+      @case ('data-divergence')       { <app-data-divergence /> }
+      @case ('strategy-preflight')    { <app-strategy-preflight /> }
+      @case ('experiment-history')    { <app-experiment-history /> }
+      @case ('options-math')          { <app-options-math-docs /> }
+      @case ('signal-docs')           { <app-signal-info-panel /> }
+      @case ('signal-history')        { <app-signal-history /> }
+      @case ('documentation')         { <app-info-panel /> }
+    }
+  </div>
 </div>

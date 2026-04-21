@@ -514,6 +514,286 @@ export class IndicatorReliabilityComponent {
     return label === 'None' ? 'danger' : 'info';
   }
 
+  // ─── Mission-control verdict helpers (T1) ─────────────────
+
+  /** Ordered list of horizon rows in the IS table. */
+  getHorizonRows(): HorizonICResult[] {
+    return this.result()?.results ?? [];
+  }
+
+  /** Best-horizon row (or null). Drives the verdict hero + decision cells. */
+  getBestRow(): HorizonICResult | null {
+    const r = this.result();
+    if (!r?.best_horizon) return null;
+    return r.results.find(h => h.horizon === r.best_horizon) ?? null;
+  }
+
+  /**
+   * Confidence score (0–100) — mirrors the design bundle's gauge formula.
+   * 20 points each for: FDR significant, Bonferroni significant, OOS holds
+   * (retention >= -30% OR positive), |z vs random| > 3, |best IC| > 0.10
+   * (partial credit: 10 points if |IC| > 0, 0 otherwise).
+   */
+  getConfidenceScore(): number {
+    const res = this.result();
+    const best = this.getBestRow();
+    if (!res || !best) return 0;
+
+    const fdrOk = res.any_significant_after_fdr ? 20 : 0;
+    const bonfOk = res.any_significant_after_bonferroni ? 20 : 0;
+
+    // OOS holds: delta >= -30% OR positive. Treat missing OOS as 0.
+    const delta = best.retention_delta_pct;
+    const oosOk = delta !== null && (delta >= -30 || delta > 0) ? 20 : 0;
+
+    const z = Math.abs(best.ic_vs_random_zscore);
+    const randomOk = z > 3 ? 20 : 0;
+
+    const absIc = Math.abs(best.is_mean_ic);
+    const icOk = absIc > 0.10 ? 20 : absIc > 0 ? 10 : 0;
+
+    return fdrOk + bonfOk + oosOk + randomOk + icOk;
+  }
+
+  /** Verdict bucket from the score — drives gauge color + headline verb. */
+  getConfidenceBucket(): 'TRADE' | 'INVESTIGATE' | 'REJECT' {
+    const s = this.getConfidenceScore();
+    if (s >= 85) return 'TRADE';
+    if (s >= 60) return 'INVESTIGATE';
+    return 'REJECT';
+  }
+
+  /** CSS-friendly color for the confidence bucket. */
+  getConfidenceColor(): string {
+    const b = this.getConfidenceBucket();
+    if (b === 'TRADE') return 'var(--bull)';
+    if (b === 'INVESTIGATE') return 'var(--warn)';
+    return 'var(--bear)';
+  }
+
+  /** Verb shown in the hero headline. */
+  getVerdictVerb(): string {
+    const b = this.getConfidenceBucket();
+    if (b === 'TRADE') return 'Ready to trade';
+    if (b === 'INVESTIGATE') return 'Investigate further';
+    return 'Do not trade';
+  }
+
+  /**
+   * Arc dash-length for the gauge. The gauge spans 3/4 of a circle (C * 0.75);
+   * we multiply by the score fraction to fill that arc proportionally.
+   */
+  getGaugeDash(): { filled: number; full: number; circumference: number } {
+    const R = 90;
+    const C = 2 * Math.PI * R;
+    const arc = C * 0.75;
+    const filled = (this.getConfidenceScore() / 100) * arc;
+    return { filled, full: arc, circumference: C };
+  }
+
+  /** Reason chips for the hero — pass/fail driven, pulled from the result. */
+  getReasonPills(): { label: string; kind: 'good' | 'warn' | 'neutral' }[] {
+    const res = this.result();
+    const best = this.getBestRow();
+    if (!res || !best) return [];
+
+    const pills: { label: string; kind: 'good' | 'warn' | 'neutral' }[] = [];
+    pills.push({ label: res.any_significant_after_fdr ? 'FDR ✓' : 'FDR ✗', kind: res.any_significant_after_fdr ? 'good' : 'warn' });
+    pills.push({ label: res.any_significant_after_bonferroni ? 'Bonferroni ✓' : 'Bonferroni ✗', kind: res.any_significant_after_bonferroni ? 'good' : 'warn' });
+
+    const delta = best.retention_delta_pct;
+    if (delta !== null) {
+      const sign = delta >= 0 ? '+' : '';
+      const ok = delta >= -30;
+      pills.push({ label: `OOS holds (${sign}${delta.toFixed(0)}%)`, kind: ok ? 'good' : 'warn' });
+    }
+
+    const absIc = Math.abs(best.oos_mean_ic ?? best.is_mean_ic);
+    pills.push({ label: `|IC| ${absIc.toFixed(3)} ${absIc > 0.10 ? '> 0.10' : '≤ 0.10'}`, kind: absIc > 0.10 ? 'good' : 'warn' });
+
+    // Regime insight if available
+    const rc = this.getRegimeComparison();
+    if (rc) {
+      pills.push({ label: `Stronger in ${rc.strongerLabel}`, kind: 'good' });
+    }
+
+    // Always-on honesty chip
+    pills.push({ label: 'Single asset only', kind: 'neutral' });
+
+    return pills;
+  }
+
+  /** WHEN cell content — "Hold {best}-bar" + decay detail. */
+  getWhenCell(): { answer: string; detail: string } | null {
+    const res = this.result();
+    const best = this.getBestRow();
+    if (!res || !best) return null;
+
+    const answer = `Hold ${best.horizon}-bar`;
+    const curve = res.decay_curve;
+    let detail: string;
+    if (curve && curve.length > 0) {
+      const peak = curve.reduce((acc, p) => (Math.abs(p.ic) > Math.abs(acc.ic) ? p : acc), curve[0]);
+      detail = `IC peaks at ${peak.horizon}-bar (${peak.ic.toFixed(3)}), ${Math.abs(peak.ic) > 0.10 ? 'decays slowly' : 'fades quickly'} after.`;
+    } else {
+      detail = `Best horizon by OOS significance.`;
+    }
+    return { answer, detail };
+  }
+
+  /** Compare regime ICs at the best horizon; returns the stronger regime. */
+  getRegimeComparison():
+    | { strongerLabel: 'high-vol regimes' | 'low-vol regimes'; deltaPct: number; highIc: number; lowIc: number; highHit: number; lowHit: number }
+    | null {
+    const res = this.result();
+    const best = this.getBestRow();
+    if (!res?.regime_results || !best) return null;
+    const high = res.regime_results.high_vol?.find(p => p.horizon === best.horizon);
+    const low = res.regime_results.low_vol?.find(p => p.horizon === best.horizon);
+    if (!high || !low) return null;
+    const hAbs = Math.abs(high.mean_ic);
+    const lAbs = Math.abs(low.mean_ic);
+    if (hAbs === 0 && lAbs === 0) return null;
+    const stronger = hAbs >= lAbs ? 'high-vol regimes' : 'low-vol regimes';
+    const base = stronger === 'high-vol regimes' ? lAbs : hAbs;
+    const delta = base > 1e-10 ? (Math.abs(hAbs - lAbs) / base) * 100 : 0;
+    return {
+      strongerLabel: stronger,
+      deltaPct: delta,
+      highIc: high.mean_ic,
+      lowIc: low.mean_ic,
+      highHit: high.hit_rate,
+      lowHit: low.hit_rate,
+    };
+  }
+
+  /** WHERE cell — regime answer + detail. */
+  getWhereCell(): { answer: string; detail: string } | null {
+    const rc = this.getRegimeComparison();
+    if (!rc) return null;
+    const answer = rc.strongerLabel === 'high-vol regimes' ? 'High-vol regimes' : 'Low-vol regimes';
+    const detail =
+      `+${rc.deltaPct.toFixed(0)}% stronger when vol is ${rc.strongerLabel.includes('high') ? 'above' : 'below'} median ` +
+      `(IC ${rc.strongerLabel.includes('high') ? rc.highIc.toFixed(3) : rc.lowIc.toFixed(3)} vs ` +
+      `${rc.strongerLabel.includes('high') ? rc.lowIc.toFixed(3) : rc.highIc.toFixed(3)}). ` +
+      `Hit-rate ${((rc.strongerLabel.includes('high') ? rc.highHit : rc.lowHit) * 100).toFixed(0)}% vs ` +
+      `${((rc.strongerLabel.includes('high') ? rc.lowHit : rc.highHit) * 100).toFixed(0)}%.`;
+    return { answer, detail };
+  }
+
+  /** HOW cell — threshold rule + sharpe proxy. */
+  getHowCell(): { answer: string; detail: string } | null {
+    const best = this.getBestRow();
+    if (!best) return null;
+    const dir = best.direction_label;
+    let answer: string;
+    if (dir === 'Mean-Reversion') {
+      answer = 'Fade extremes';
+    } else if (dir === 'Momentum') {
+      answer = 'Follow the move';
+    } else {
+      answer = 'No clear edge';
+    }
+    const detail =
+      `Sharpe proxy ${this.formatSharpe(best.sharpe_estimate)}. ` +
+      `${dir === 'Mean-Reversion' ? 'Short when indicator is high, long when low.' : dir === 'Momentum' ? 'Long when indicator is high, short when low.' : 'Signal too weak to trade.'} ` +
+      `Test with costs before sizing.`;
+    return { answer, detail };
+  }
+
+  /** 5-test decision checklist — each with a pass/fail + one-line detail. */
+  getChecklist(): { pass: boolean; label: string; detail: string }[] {
+    const res = this.result();
+    const best = this.getBestRow();
+    if (!res || !best) return [];
+
+    const items: { pass: boolean; label: string; detail: string }[] = [];
+
+    items.push({
+      pass: res.any_significant_after_fdr,
+      label: 'FDR significance',
+      detail: `p < 0.05 at ${this.countFdrPasses()}/${res.num_horizons_tested} horizons`,
+    });
+
+    items.push({
+      pass: res.any_significant_after_bonferroni,
+      label: 'Bonferroni (conservative)',
+      detail: res.any_significant_after_bonferroni ? 'Passes the strictest correction' : 'Fails strictest correction',
+    });
+
+    const delta = best.retention_delta_pct;
+    const oosPass = delta !== null && (delta >= -40 || delta > 0);
+    items.push({
+      pass: oosPass,
+      label: 'Out-of-sample holds',
+      detail: delta === null
+        ? 'No OOS data yet'
+        : `OOS ${best.oos_mean_ic?.toFixed(3) ?? '-'} vs IS ${best.is_mean_ic.toFixed(3)} (${delta >= 0 ? '+' : ''}${delta.toFixed(0)}%)`,
+    });
+
+    const z = Math.abs(best.ic_vs_random_zscore);
+    items.push({
+      pass: z > 3,
+      label: 'Beats random',
+      detail: `${z.toFixed(1)}σ above noise floor`,
+    });
+
+    const absIc = Math.abs(best.oos_mean_ic ?? best.is_mean_ic);
+    items.push({
+      pass: absIc > 0.10,
+      label: 'Economically meaningful',
+      detail: `|IC| ${absIc.toFixed(3)} ${absIc > 0.10 ? '>' : '≤'} 0.10 threshold`,
+    });
+
+    return items;
+  }
+
+  /** Count of horizons that cleared FDR — used in checklist detail. */
+  countFdrPasses(): number {
+    return this.getHorizonRows().filter(r => r.fdr_p < 0.05).length;
+  }
+
+  /** Horizon compact cards — used in the content grid. Preserves input order. */
+  getHorizonCards(): HorizonICResult[] {
+    return this.getHorizonRows();
+  }
+
+  /** Prompt + re-run with a new ticker (only wired CTA). */
+  runOnAnotherTicker(): void {
+    const current = this.ticker();
+    const next = window.prompt('Run on another ticker (e.g. MSFT, GOOGL, NVDA):', current);
+    if (!next) return;
+    const cleaned = next.trim().toUpperCase();
+    if (!cleaned || cleaned === current) return;
+    this.ticker.set(cleaned);
+    this.runAnalysis();
+  }
+
+  /**
+   * Noise-floor bar positions. The band shown is ±1σ around the random IC mean,
+   * mapped into a [0, 100] x-range for rendering. Your IC is placed relative
+   * to that range and clamped so extreme values still render on-bar.
+   */
+  getNoiseFloorBar(): { bandLeftPct: number; bandWidthPct: number; icPct: number; center: number } | null {
+    const res = this.result();
+    const best = this.getBestRow();
+    if (!res || !best) return null;
+    const mean = best.random_baseline_mean;
+    const std = best.random_baseline_std;
+    if (std < 1e-10) return null;
+
+    // Build a [-4σ, +4σ] range around the random mean, then plot best's IC.
+    const range = 4 * std;
+    const lo = mean - range;
+    const hi = mean + range;
+    const span = hi - lo;
+    const bandLeftPct = ((mean - std - lo) / span) * 100;
+    const bandWidthPct = ((2 * std) / span) * 100;
+    const icRaw = ((best.is_mean_ic - lo) / span) * 100;
+    const icPct = Math.max(2, Math.min(98, icRaw));
+    return { bandLeftPct, bandWidthPct, icPct, center: 50 };
+  }
+
   getTradeabilitySeverity(
     label: TradeabilityLabel,
   ): 'success' | 'warn' | 'danger' | 'info' {

@@ -33,7 +33,10 @@
       "Bash(tar -xvf -)",
       "mcp__claude_ai_Google_Drive__read_file_content",
       "Bash(echo \"EXIT: $?\")",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(mkdir -p /tmp/anthropic-design)",
+      "Bash(cp /home/inkant/.claude/projects/-home-inkant-Documents-learn-ai/de25d779-bc49-44d7-81b3-958bdb52b8fa/tool-results/webfetch-1776752824173-0ka9yo.bin bundle.tar.gz)",
+      "Bash(tar -tzf bundle.tar.gz)"
     ]
   }
 }
