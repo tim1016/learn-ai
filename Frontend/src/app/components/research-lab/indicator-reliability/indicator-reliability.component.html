@@ -1,0 +1,344 @@
+<div class="indicator-reliability">
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h3 class="text-xl font-semibold text-gray-800">Indicator Reliability Analysis</h3>
+      <p class="text-sm text-gray-500 mt-1">
+        Test if an indicator has predictive power on a specific ticker using Information Coefficient (IC).
+      </p>
+    </div>
+    @if (result() && formCollapsed()) {
+      <button
+        pButton
+        label="New Analysis"
+        icon="pi pi-plus"
+        class="p-button-outlined p-button-sm"
+        (click)="newRun()"
+      >
+        <span class="sr-only">Start new analysis</span>
+      </button>
+    }
+  </div>
+
+  <!-- Controls Panel -->
+  @if (!formCollapsed()) {
+    <div class="controls-panel p-4 bg-gray-50 rounded-lg border border-gray-200 mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- Ticker -->
+        <div class="field">
+          <label for="ticker" class="block text-sm font-medium text-gray-700 mb-1">Ticker</label>
+          <input
+            pInputText
+            id="ticker"
+            [ngModel]="ticker()"
+            (ngModelChange)="ticker.set($event)"
+            placeholder="AAPL"
+            class="w-full"
+          />
+        </div>
+
+        <!-- Indicator -->
+        <div class="field">
+          <label for="indicator" class="block text-sm font-medium text-gray-700 mb-1">Indicator</label>
+          <p-select
+            id="indicator"
+            [options]="indicatorOptions()"
+            optionLabel="label"
+            optionValue="value"
+            [ngModel]="indicatorName()"
+            (ngModelChange)="indicatorName.set($event)"
+            [filter]="true"
+            filterBy="label,value"
+            placeholder="Select indicator"
+            class="w-full"
+            [loading]="loadingIndicators()"
+          >
+            <ng-template let-option pTemplate="item">
+              <div>
+                <span class="font-medium">{{ option.label }}</span>
+                <span class="text-xs text-gray-500 ml-2">({{ option.category }})</span>
+              </div>
+            </ng-template>
+          </p-select>
+        </div>
+
+        <!-- Date Range -->
+        <div class="field">
+          <label for="fromDate" class="block text-sm font-medium text-gray-700 mb-1">From Date</label>
+          <input
+            pInputText
+            id="fromDate"
+            type="date"
+            [ngModel]="fromDate()"
+            (ngModelChange)="fromDate.set($event)"
+            class="w-full"
+          />
+        </div>
+
+        <div class="field">
+          <label for="toDate" class="block text-sm font-medium text-gray-700 mb-1">To Date</label>
+          <input
+            pInputText
+            id="toDate"
+            type="date"
+            [ngModel]="toDate()"
+            (ngModelChange)="toDate.set($event)"
+            class="w-full"
+          />
+        </div>
+      </div>
+
+      <!-- Dynamic Params -->
+      @if (paramConfigs().length > 0) {
+        <div class="mt-4 p-3 bg-white rounded border border-gray-200">
+          <span class="block text-sm font-medium text-gray-700 mb-2">
+            {{ selectedIndicatorLabel }} Parameters
+          </span>
+          <div class="flex flex-wrap gap-4">
+            @for (param of paramConfigs(); track param.name) {
+              <div class="flex items-center gap-2">
+                <label class="text-sm text-gray-600" [attr.for]="'param-' + param.name">
+                  {{ param.name }}:
+                </label>
+                <p-inputNumber
+                  [id]="'param-' + param.name"
+                  [ngModel]="paramValues()[param.name]"
+                  (ngModelChange)="updateParam(param.name, $event)"
+                  [min]="param.min ?? 1"
+                  [max]="param.max ?? 500"
+                  [step]="param.type === 'float' ? 0.1 : 1"
+                  [showButtons]="true"
+                  buttonLayout="horizontal"
+                  spinnerMode="horizontal"
+                  inputStyleClass="w-16 text-center"
+                  [pTooltip]="param.description"
+                  tooltipPosition="top"
+                />
+              </div>
+            }
+          </div>
+        </div>
+      }
+
+      <!-- Horizons & Options -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        <div class="field">
+          <label for="horizons" class="block text-sm font-medium text-gray-700 mb-1">Forward Horizons (bars)</label>
+          <p-multiselect
+            inputId="horizons"
+            [options]="allHorizons"
+            optionLabel="label"
+            optionValue="value"
+            [ngModel]="selectedHorizons()"
+            (ngModelChange)="selectedHorizons.set($event)"
+            placeholder="Select horizons"
+            class="w-full"
+          />
+        </div>
+
+        <div class="field flex items-end">
+          <p-checkbox
+            [ngModel]="includeSlope()"
+            (ngModelChange)="includeSlope.set($event)"
+            inputId="includeSlope"
+            [binary]="true"
+            label="Include Slope IC (analyze indicator CHANGE, not just value)"
+          />
+        </div>
+      </div>
+
+      <!-- Run Button -->
+      <div class="mt-6 flex justify-end">
+        <button
+          pButton
+          label="Run Analysis"
+          icon="pi pi-play"
+          [disabled]="!canRun()"
+          [loading]="loading()"
+          (click)="runAnalysis()"
+        >
+          <span class="sr-only">Run analysis</span>
+        </button>
+      </div>
+    </div>
+  }
+
+  <!-- Collapsed Summary -->
+  @if (formCollapsed() && result()) {
+    <button
+      type="button"
+      class="collapsed-summary w-full text-left p-3 bg-blue-50 rounded-lg border border-blue-200 mb-6 cursor-pointer hover:bg-blue-100 transition-colors"
+      (click)="toggleForm()"
+    >
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <i class="pi pi-chart-line text-blue-600" aria-hidden="true"></i>
+          <span class="font-medium text-gray-800">{{ result()!.display_name }}</span>
+          <span class="text-gray-500">on</span>
+          <span class="font-medium text-gray-800">{{ result()!.ticker }}</span>
+          <span class="text-gray-500">({{ result()!.start_date }} to {{ result()!.end_date }})</span>
+        </div>
+        <i class="pi pi-chevron-down text-gray-400" aria-hidden="true"></i>
+      </div>
+    </button>
+  }
+
+  <!-- Loading State -->
+  @if (loading()) {
+    <div class="flex flex-col items-center justify-center py-12">
+      <p-progressSpinner strokeWidth="4" />
+      <p class="mt-4 text-gray-600">Analyzing indicator reliability...</p>
+      <p class="text-sm text-gray-400">This may take a moment for long date ranges</p>
+    </div>
+  }
+
+  <!-- Error Message -->
+  @if (error()) {
+    <p-message severity="error" [text]="error()!" class="mb-4" />
+  }
+
+  <!-- Results -->
+  @if (result() && result()!.success && !loading()) {
+    @let res = result()!;
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <div class="summary-card p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <div class="text-sm text-gray-500">Bars Analyzed</div>
+        <div class="text-2xl font-bold text-gray-800">{{ res.bar_count | number }}</div>
+      </div>
+      <div class="summary-card p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <div class="text-sm text-gray-500">Category</div>
+        <div class="text-lg font-semibold text-blue-600">{{ res.category ?? 'Unknown' }}</div>
+      </div>
+      <div class="summary-card p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <div class="text-sm text-gray-500">Best Horizon</div>
+        <div class="text-2xl font-bold text-green-600">
+          @if (res.best_horizon) {
+            {{ res.best_horizon }}-bar
+          } @else {
+            None significant
+          }
+        </div>
+      </div>
+      <div class="summary-card p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
+        <div class="text-sm text-gray-500">Horizons Tested</div>
+        <div class="text-lg font-semibold text-gray-800">{{ res.results.length }}</div>
+      </div>
+    </div>
+
+    <!-- IC Results Table -->
+    <div class="results-section mb-6">
+      <h4 class="text-lg font-semibold text-gray-800 mb-3">IC by Forward Horizon (Raw Value)</h4>
+      <p-table [value]="res.results" styleClass="p-datatable-sm p-datatable-striped" [scrollable]="true">
+        <ng-template pTemplate="header">
+          <tr>
+            <th>Horizon</th>
+            <th pTooltip="Mean Information Coefficient (Spearman rank correlation)">Mean IC</th>
+            <th pTooltip="Newey-West corrected t-statistic (accounts for autocorrelation)">NW t-Stat</th>
+            <th pTooltip="p-value (< 0.05 is significant)">p-value</th>
+            <th pTooltip="Effective sample size after autocorrelation adjustment">Eff. N</th>
+            <th>Verdict</th>
+          </tr>
+        </ng-template>
+        <ng-template pTemplate="body" let-row>
+          <tr [class.bg-green-50]="isBestHorizon(row.horizon)">
+            <td class="font-medium">
+              {{ row.horizon }}-bar
+              @if (isBestHorizon(row.horizon)) {
+                <span class="ml-1 text-green-600 text-xs">(best)</span>
+              }
+            </td>
+            <td>
+              <p-tag
+                [value]="formatIc(row.mean_ic)"
+                [severity]="getIcSeverity(row.mean_ic, row.nw_p_value ?? row.p_value)"
+              />
+            </td>
+            <td>{{ (row.nw_t_stat ?? row.t_stat).toFixed(2) }}</td>
+            <td>{{ formatPValue(row.nw_p_value ?? row.p_value) }}</td>
+            <td>{{ row.effective_n }}</td>
+            <td class="text-sm">{{ row.interpretation }}</td>
+          </tr>
+        </ng-template>
+      </p-table>
+    </div>
+
+    <!-- Slope IC Table (if requested) -->
+    @if (res.slope_results && res.slope_results.length > 0) {
+      <div class="results-section mb-6">
+        <h4 class="text-lg font-semibold text-gray-800 mb-3">IC by Forward Horizon (Slope/Change)</h4>
+        <p class="text-sm text-gray-500 mb-2">
+          Tests if the indicator's rate of change is more predictive than its raw value.
+        </p>
+        <p-table
+          [value]="res.slope_results"
+          styleClass="p-datatable-sm p-datatable-striped"
+          [scrollable]="true"
+        >
+          <ng-template pTemplate="header">
+            <tr>
+              <th>Horizon</th>
+              <th>Mean IC</th>
+              <th>NW t-Stat</th>
+              <th>p-value</th>
+              <th>Eff. N</th>
+              <th>Verdict</th>
+            </tr>
+          </ng-template>
+          <ng-template pTemplate="body" let-row>
+            <tr>
+              <td class="font-medium">{{ row.horizon }}-bar</td>
+              <td>
+                <p-tag
+                  [value]="formatIc(row.mean_ic)"
+                  [severity]="getIcSeverity(row.mean_ic, row.nw_p_value ?? row.p_value)"
+                />
+              </td>
+              <td>{{ (row.nw_t_stat ?? row.t_stat).toFixed(2) }}</td>
+              <td>{{ formatPValue(row.nw_p_value ?? row.p_value) }}</td>
+              <td>{{ row.effective_n }}</td>
+              <td class="text-sm">{{ row.interpretation }}</td>
+            </tr>
+          </ng-template>
+        </p-table>
+      </div>
+    }
+
+    <!-- IC Time Series Chart -->
+    @if (res.daily_ic_values.length > 0) {
+      <div class="chart-section mb-6">
+        <h4 class="text-lg font-semibold text-gray-800 mb-3">Daily IC Time Series</h4>
+        <p class="text-sm text-gray-500 mb-2">
+          Shows how the indicator's predictive power varies over time. Stable IC suggests robust signal.
+        </p>
+        <div class="chart-container bg-white p-4 rounded-lg border border-gray-200" style="height: 350px">
+          <canvas #icChart></canvas>
+        </div>
+      </div>
+    }
+
+    <!-- Interpretation Guide -->
+    <div class="interpretation-guide p-4 bg-gray-50 rounded-lg border border-gray-200">
+      <h4 class="text-md font-semibold text-gray-800 mb-2">How to Interpret</h4>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600">
+        <div>
+          <strong class="text-green-600">Strong Signal (IC >= 0.03, p < 0.05)</strong>
+          <p>Indicator shows statistically significant predictive power. Consider using at this horizon.</p>
+        </div>
+        <div>
+          <strong class="text-yellow-600">Weak Signal (IC 0.01-0.03 or p 0.05-0.10)</strong>
+          <p>Some predictive content but may not survive transaction costs. Use with caution.</p>
+        </div>
+        <div>
+          <strong class="text-red-600">Noise (IC < 0.01 or p >= 0.10)</strong>
+          <p>No detectable predictive power at this horizon. Try different parameters or horizons.</p>
+        </div>
+        <div>
+          <strong>Best Horizon</strong>
+          <p>The horizon with highest |IC| and statistical significance. Use this for trading decisions.</p>
+        </div>
+      </div>
+    </div>
+  }
+</div>

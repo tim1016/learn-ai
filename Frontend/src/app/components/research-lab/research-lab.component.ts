@@ -9,11 +9,11 @@ import { BatchRunnerComponent } from './batch-runner/batch-runner.component';
 import { OptionsMathDocsComponent } from './options-math-docs/options-math-docs.component';
 import { DataDivergenceComponent } from './data-divergence/data-divergence.component';
 import { StrategyPreflightComponent } from './strategy-preflight/strategy-preflight.component';
+import { IndicatorReliabilityComponent } from './indicator-reliability/indicator-reliability.component';
 import { TabsModule } from 'primeng/tabs';
 
 @Component({
   selector: 'app-research-lab',
-  standalone: true,
   imports: [
     FeatureRunnerComponent,
     InfoPanelComponent,
@@ -25,6 +25,7 @@ import { TabsModule } from 'primeng/tabs';
     OptionsMathDocsComponent,
     DataDivergenceComponent,
     StrategyPreflightComponent,
+    IndicatorReliabilityComponent,
     TabsModule,
   ],
   templateUrl: './research-lab.component.html',

@@ -1,0 +1,86 @@
+.indicator-reliability {
+  max-width: 1400px;
+
+  .controls-panel {
+    .field {
+      label {
+        display: block;
+        margin-bottom: 0.25rem;
+      }
+    }
+  }
+
+  .collapsed-summary {
+    transition: all 0.2s ease;
+  }
+
+  .summary-card {
+    transition: box-shadow 0.2s ease;
+
+    &:hover {
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+  }
+
+  .results-section {
+    :host ::ng-deep {
+      .p-datatable {
+        .p-datatable-thead > tr > th {
+          background: #f8fafc;
+          color: #475569;
+          font-weight: 600;
+          font-size: 0.875rem;
+          padding: 0.75rem 1rem;
+        }
+
+        .p-datatable-tbody > tr > td {
+          padding: 0.75rem 1rem;
+        }
+
+        .p-datatable-tbody > tr.bg-green-50 {
+          background-color: #f0fdf4 !important;
+        }
+      }
+    }
+  }
+
+  .chart-container {
+    canvas {
+      width: 100% !important;
+      height: 100% !important;
+    }
+  }
+
+  .interpretation-guide {
+    p {
+      margin-top: 0.25rem;
+      line-height: 1.4;
+    }
+  }
+}
+
+// PrimeNG overrides
+:host ::ng-deep {
+  .p-multiselect {
+    width: 100%;
+  }
+
+  .p-select {
+    width: 100%;
+  }
+
+  .p-inputnumber {
+    .p-inputnumber-input {
+      text-align: center;
+    }
+  }
+
+  .p-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.875rem;
+  }
+
+  .p-message {
+    width: 100%;
+  }
+}

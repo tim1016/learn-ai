@@ -13,6 +13,7 @@ from app.routers import (
     data_quality,
     dataset,
     engine,
+    indicator_reliability,
     indicators,
     market_monitor,
     options,
@@ -66,6 +67,7 @@ app.include_router(market_monitor.router, prefix="/api/market", tags=["market"])
 app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
 app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
+app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
 app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
 app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])

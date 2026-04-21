@@ -259,10 +259,11 @@ def _check_polygon_data_available(
     return CheckResult(
         id="polygon_data",
         label="Polygon source data availability",
-        status="blocking",
+        status="warning",
         message=(
             f"No cached Polygon {req.timeframe} parquet for {req.symbol} under "
-            f"{tf_dir}. The backtest cannot run without source bars."
+            f"{tf_dir}. Backtest will fall back to live Polygon fetches; "
+            f"populate the cache for faster, reproducible runs."
         ),
         fix_hint=(
             f"Run `python -m app.research.divergence.cli all "
