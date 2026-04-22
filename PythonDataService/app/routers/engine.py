@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from datetime import date, datetime
+from datetime import time as time_of_day
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
@@ -35,7 +36,7 @@ from app.engine.data.availability import (
 )
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.engine import BacktestEngine
-from app.engine.execution.fill_model import FillModel
+from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.order import FillMode
 from app.engine.results.statistics import summarize
 from app.engine.strategy.algorithms.rsi_mean_reversion import (
@@ -649,6 +650,45 @@ class EngineBacktestRequest(BaseModel):
         description="Fill mode: signal_bar_close or next_bar_open",
     )
     commission_per_order: float = Field(1.0, ge=0)
+    slippage_per_share: float = Field(
+        0.0,
+        ge=0,
+        description=(
+            "Per-share slippage applied against the trade direction at fill. "
+            "Defaults to 0 to preserve LEAN-parity for bit-exact runs; pass a "
+            "non-zero value (e.g. 0.02 = 2 ticks for US equities) to model a "
+            "more realistic execution cost."
+        ),
+    )
+    session_entry_cutoff: time_of_day | None = Field(
+        None,
+        description=(
+            "After this time-of-day, entry orders (those that would grow "
+            "|position|) are dropped. Exits still fill. Interpreted in the "
+            "timezone of the bar data. Example: '15:55:00' for ET data."
+        ),
+    )
+    force_flat_at: time_of_day | None = Field(
+        None,
+        description=(
+            "At the first minute bar whose wall-clock time reaches this "
+            "value, the engine cancels all queued / deferred orders, clears "
+            "active TP/SL brackets, closes every open position at that "
+            "minute's close, and calls strategy.on_force_flat(). Once per "
+            "calendar day. Example: '15:58:00' for ET data."
+        ),
+    )
+    limit_penetration: float = Field(
+        0.0,
+        ge=0,
+        description=(
+            "Dollar amount the bar must penetrate past a resting limit's "
+            "price before the fill is recognized. Measured against the "
+            "adverse extreme — low for buy limits, high for sell limits. "
+            "Default 0 = TradingView-style touch fill; 0.02 for US "
+            "equities is a realistic 2-tick queue-position model."
+        ),
+    )
     # Optional overrides — when omitted, the strategy's own defaults (set in
     # its Initialize equivalent) are used.
     start_date: str | None = Field(None, description="YYYY-MM-DD override")
@@ -1070,12 +1110,17 @@ def run_engine_backtest(
         reader = LeanDailyDataReader(data_roots)
     else:
         reader = LeanMinuteDataReader(data_roots)
+    execution_config = ExecutionConfig(
+        fill_mode=fill_mode,
+        commission_per_order=Decimal(str(request.commission_per_order)),
+        slippage_per_share=Decimal(str(request.slippage_per_share)),
+        session_entry_cutoff=request.session_entry_cutoff,
+        force_flat_at=request.force_flat_at,
+        limit_penetration=Decimal(str(request.limit_penetration)),
+    )
     engine = BacktestEngine(
         data_source=reader,
-        fill_model=FillModel(
-            mode=fill_mode,
-            commission_per_order=Decimal(str(request.commission_per_order)),
-        ),
+        execution_config=execution_config,
     )
 
     # The strategy's initialize() runs inside engine.run(). We need to
