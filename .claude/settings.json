@@ -1,5 +1,5 @@
 {
-  "$schema": "https://code.claude.com/schemas/settings.json",
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "_comment_mcp_servers": "MCP server configs. Fill in credentials via environment variables — DO NOT commit real keys. See references/MCP-SETUP.md for installation commands.",
   "mcpServers": {
     "polygon": {
