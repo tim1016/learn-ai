@@ -47,6 +47,13 @@ class Order:
     tag: str = ""
     limit_price: Decimal | None = None
     stop_price: Decimal | None = None
+    # Optional bracket attached to an entry order. When either is set, the
+    # engine registers a post-fill watcher that evaluates the bracket
+    # against every subsequent fired bar via the pessimistic intrabar
+    # resolver (app.engine.execution.intrabar_resolver). Brackets on exit
+    # orders are ignored — brackets only make sense on entries.
+    take_profit_price: Decimal | None = None
+    stop_loss_price: Decimal | None = None
 
 
 @dataclass

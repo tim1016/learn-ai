@@ -81,6 +81,12 @@ class StrategyContext:
     consolidated_bars: list[TradeBar] = field(default_factory=list)
     # Insight manager — tracks structured predictions and scores them.
     insight_manager: InsightManager = field(default_factory=InsightManager)
+    # Engine-owned hook invoked on every fired consolidated bar BEFORE the
+    # strategy's own handler runs. Used by the BacktestEngine to evaluate
+    # active TP/SL brackets intrabar so the strategy sees the correct
+    # position state when its ``on_bar`` runs. ``None`` on strategies
+    # unit-tested without the engine.
+    _pre_handler_hook: Callable[[TradeBar], None] | None = None
 
     def add_equity(self, symbol: str) -> str:
         symbol = symbol.upper()
@@ -104,6 +110,8 @@ class StrategyContext:
             ctx.portfolio.update_reference_price(bar.symbol, bar.close)
             consolidator._last_fired_bar = bar  # type: ignore[attr-defined]
             ctx.consolidated_bars.append(bar)
+            if ctx._pre_handler_hook is not None:
+                ctx._pre_handler_hook(bar)
             handler(bar)
 
         consolidator.on_data_consolidated = _on_emit
@@ -182,3 +190,14 @@ class Strategy(ABC):
 
     def on_order_event(self, event: OrderEvent) -> None:  # pragma: no cover
         """Called whenever a pending order fills."""
+
+    def on_force_flat(self) -> None:  # pragma: no cover
+        """Called by the engine after a session-close force-flat.
+
+        Positions have already been closed and pending / deferred
+        orders cancelled by the time this fires. Strategies that keep
+        their own internal state (e.g. ``self._entered``,
+        ``self.bars_held``) should override this to reset those flags
+        so the next session opens with a clean slate. Default is a
+        no-op for strategies that don't opt into the session wrapper.
+        """
