@@ -118,7 +118,8 @@ export interface CalculateIndicatorsResult {
   success: boolean;
   ticker: string;
   indicators: IndicatorSeries[];
-  message: string | null;
+  /** Error description when success = false. null on success. */
+  error: string | null;
 }
 
 // Stock Snapshot types (v2 API)

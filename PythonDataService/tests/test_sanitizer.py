@@ -261,6 +261,39 @@ class TestSanitizeGeneric:
         assert "columns_processed" in result["summary"]
 
 
+class TestSanitizeGenericTimestampRoundTrip:
+    """Regression for the ms-epoch 10**6 collapse bug (audit § 2.2).
+
+    Before fix: sanitize_generic round-tripped timestamps through pd.to_datetime
+    and back via astype(int64) // 10**6, which in pandas 3.0 returns microseconds
+    (not ns), collapsing 1704067200000 → 1704067 → 1970-01-20.
+    After fix: original ms column is preserved untouched.
+    """
+
+    def test_ms_epoch_preserved_exactly(self):
+        input_ms = 1704067200000  # 2024-01-01T00:00:00Z
+        raw = [{"timestamp": input_ms, "open": 150.0, "close": 153.0, "volume": 1_000_000.0}]
+
+        result = DataSanitizer.sanitize_generic(raw)
+
+        assert len(result["data"]) == 1
+        out = result["data"][0]
+        assert int(out["timestamp"]) == input_ms, (
+            f"Expected {input_ms}, got {out['timestamp']} — ms-collapse regression"
+        )
+
+    def test_multiple_rows_ms_preserved(self):
+        raw = [
+            {"timestamp": 1704067200000, "open": 150.0, "close": 153.0, "volume": 1_000_000.0},
+            {"timestamp": 1704153600000, "open": 153.0, "close": 157.0, "volume": 900_000.0},
+        ]
+
+        result = DataSanitizer.sanitize_generic(raw)
+
+        timestamps_out = sorted(int(r["timestamp"]) for r in result["data"])
+        assert timestamps_out == [1704067200000, 1704153600000]
+
+
 class TestSanitizeIndicator:
     def test_basic_indicator_data(self):
         raw = {

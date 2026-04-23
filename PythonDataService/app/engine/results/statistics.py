@@ -420,6 +420,26 @@ def compute_portfolio_statistics(
     )
 
 
+def _finite_or_none(value: float | int | None) -> float | int | None:
+    """Coerce non-finite floats (inf, -inf, NaN) to None for JSON compliance.
+
+    Upstream callers (profit_factor on zero-loss runs, payoff_ratio with
+    zero-loss, Sharpe with zero std) legitimately emit inf; Pydantic /
+    FastAPI then raise ValueError at serialization time. Surface the
+    degeneracy as None rather than a 500.
+    """
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        if not math.isfinite(float(value)):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return value
+
+
 def summarize(
     initial_cash: float,
     final_equity: float,
@@ -430,6 +450,8 @@ def summarize(
     """Convenience wrapper returning a flat dict of all metrics.
 
     Useful for JSON responses where a nested shape is awkward.
+    All float fields are sanitized to None if non-finite (inf/-inf/NaN)
+    so the result is JSON-serializable by FastAPI/Pydantic unchanged.
     """
     ts = compute_trade_statistics(trades)
     ps = compute_portfolio_statistics(
@@ -439,30 +461,30 @@ def summarize(
         trading_days=trading_days,
         equity_curve=equity_curve,
     )
-    result = {
+    result: dict[str, float | int | None] = {
         # Trade-level
         "total_trades": ts.total_trades,
         "winning_trades": ts.winning_trades,
         "losing_trades": ts.losing_trades,
-        "win_rate": ts.win_rate,
-        "avg_win_pct": ts.avg_win_pct,
-        "avg_loss_pct": ts.avg_loss_pct,
-        "avg_trade_pct": ts.avg_trade_pct,
-        "largest_win_pct": ts.largest_win_pct,
-        "largest_loss_pct": ts.largest_loss_pct,
-        "profit_factor": ts.profit_factor,
-        "expectancy_pct": ts.expectancy_pct,
-        "payoff_ratio": ts.payoff_ratio,
+        "win_rate": _finite_or_none(ts.win_rate),
+        "avg_win_pct": _finite_or_none(ts.avg_win_pct),
+        "avg_loss_pct": _finite_or_none(ts.avg_loss_pct),
+        "avg_trade_pct": _finite_or_none(ts.avg_trade_pct),
+        "largest_win_pct": _finite_or_none(ts.largest_win_pct),
+        "largest_loss_pct": _finite_or_none(ts.largest_loss_pct),
+        "profit_factor": _finite_or_none(ts.profit_factor),
+        "expectancy_pct": _finite_or_none(ts.expectancy_pct),
+        "payoff_ratio": _finite_or_none(ts.payoff_ratio),
         # Portfolio-level
-        "net_profit": ps.net_profit,
-        "net_profit_pct": ps.net_profit_pct,
-        "max_drawdown_pct": ps.max_drawdown_pct,
-        "sharpe_ratio": ps.sharpe_ratio,
-        "sortino_ratio": ps.sortino_ratio,
-        "calmar_ratio": ps.calmar_ratio,
-        "cagr": ps.cagr,
-        "mae_pct": ps.mae_pct,
-        "mfe_pct": ps.mfe_pct,
+        "net_profit": _finite_or_none(ps.net_profit),
+        "net_profit_pct": _finite_or_none(ps.net_profit_pct),
+        "max_drawdown_pct": _finite_or_none(ps.max_drawdown_pct),
+        "sharpe_ratio": _finite_or_none(ps.sharpe_ratio),
+        "sortino_ratio": _finite_or_none(ps.sortino_ratio),
+        "calmar_ratio": _finite_or_none(ps.calmar_ratio),
+        "cagr": _finite_or_none(ps.cagr),
+        "mae_pct": _finite_or_none(ps.mae_pct),
+        "mfe_pct": _finite_or_none(ps.mfe_pct),
     }
     import logging
 

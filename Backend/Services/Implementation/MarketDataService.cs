@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using Backend.Data;
 using Backend.Models.DTOs;
 using Backend.Models.MarketData;
@@ -447,7 +448,10 @@ public class MarketDataService : IMarketDataService
             Close = dto.Close,
             Volume = dto.Volume,
             VolumeWeightedAveragePrice = dto.Vwap,
-            Timestamp = DateTime.Parse(dto.Timestamp).ToUniversalTime(),
+            Timestamp = DateTime.Parse(
+                dto.Timestamp,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal),
             Timespan = timespan,
             Multiplier = multiplier,
             TransactionCount = dto.Transactions.HasValue ? (long?)decimal.ToInt64(dto.Transactions.Value) : null,

@@ -373,3 +373,49 @@ class TestValidateStatistics:
     def test_nan_sharpe(self) -> None:
         errors = validate_statistics({"sharpe_ratio": float("nan")})
         assert any(e.code == "nan_sharpe" for e in errors)
+
+
+class TestSummarizeFiniteSanitization:
+    """Regression for audit § 5.3 — non-finite floats must be coerced to None.
+
+    Before fix: profit_factor (all-wins) emits float('inf'); FastAPI/Pydantic
+    serialization raised `ValueError: Out of range float values are not JSON
+    compliant: inf` after 3-5 s of compute. User saw generic HTTP 500.
+    After fix: summarize() coerces inf / -inf / NaN → None so the dict is
+    JSON-serializable unchanged.
+    """
+
+    def test_all_wins_profit_factor_is_none_not_inf(self) -> None:
+        trades = [
+            FakeTrade(Decimal("1"), Decimal("0.01"), "WIN"),
+            FakeTrade(Decimal("1"), Decimal("0.02"), "WIN"),
+            FakeTrade(Decimal("1"), Decimal("0.005"), "WIN"),
+        ]
+
+        stats = summarize(initial_cash=100_000.0, final_equity=103_500.0, trades=trades)
+
+        assert stats["profit_factor"] is None, (
+            f"All-wins profit_factor must coerce to None, got {stats['profit_factor']!r}"
+        )
+        assert stats["payoff_ratio"] is None, (
+            f"All-wins payoff_ratio must coerce to None, got {stats['payoff_ratio']!r}"
+        )
+
+    def test_summary_is_json_serializable(self) -> None:
+        """The bug's user-visible manifestation: json.dumps raises on inf."""
+        import json
+
+        trades = [FakeTrade(Decimal("1"), Decimal("0.01"), "WIN") for _ in range(5)]
+        stats = summarize(initial_cash=100_000.0, final_equity=105_000.0, trades=trades)
+
+        # Would raise ValueError on non-finite floats before the fix (with allow_nan=False).
+        json.dumps(stats, allow_nan=False)
+
+    def test_zero_trades_does_not_raise(self) -> None:
+        stats = summarize(initial_cash=100_000.0, final_equity=100_000.0, trades=[])
+
+        assert stats["total_trades"] == 0
+        # profit_factor is 0.0 for empty (not inf), but the serialization path must still hold.
+        import json
+
+        json.dumps(stats, allow_nan=False)

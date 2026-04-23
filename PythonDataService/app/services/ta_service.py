@@ -60,16 +60,32 @@ class TechnicalAnalysisService:
     @staticmethod
     def _calc_sma(df: pd.DataFrame, window: int) -> list[dict]:
         series = ta.sma(df["close"], length=window)
+        if series is None or series.empty:
+            return []
         return TechnicalAnalysisService._series_to_points(df["timestamp"], series)
 
     @staticmethod
     def _calc_ema(df: pd.DataFrame, window: int) -> list[dict]:
         series = ta.ema(df["close"], length=window)
+        if series is None or series.empty:
+            return []
         return TechnicalAnalysisService._series_to_points(df["timestamp"], series)
 
     @staticmethod
     def _calc_rsi(df: pd.DataFrame, window: int) -> list[dict]:
         series = ta.rsi(df["close"], length=window)
+        if series is None or series.empty:
+            return []
+        # Mask the warmup region where pandas-ta's ewm-seeded RSI disagrees
+        # with the streaming Wilders-seeded RSI by up to 14 points. Convergence
+        # to atol=1e-9 happens at ~3*window bars. Emitting values inside this
+        # window violates numerical-rigor.md:62 (atol=1e-9 for indicators) —
+        # see audit § 1.2. Before this mask: two paths returned different RSI
+        # for the same input on every call with < 3*period bars of history.
+        warmup_bars = 3 * window
+        if warmup_bars > 0:
+            series = series.copy()
+            series.iloc[:warmup_bars] = pd.NA
         return TechnicalAnalysisService._series_to_points(df["timestamp"], series)
 
     @staticmethod

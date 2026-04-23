@@ -399,7 +399,8 @@ def test_engine_exit_timing():
         entry_ts = None
         exit_ts = None
         for i, bar in enumerate(bars):
-            bar_ts_str = pd.Timestamp(bar["timestamp"], unit="ms").strftime("%Y-%m-%d %H:%M")
+            # Engine emits ISO 8601 UTC (%Y-%m-%dT%H:%M:%SZ) — see _format_timestamp.
+            bar_ts_str = pd.Timestamp(bar["timestamp"], unit="ms", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
             if bar_ts_str == trade.entry_timestamp:
                 entry_ts = i
             if bar_ts_str == trade.exit_timestamp:
@@ -541,6 +542,96 @@ def test_summary_metrics_formulas():
     assert abs(s["profit_factor"] - expected_pf) < 0.05, (
         f"Profit factor: expected {expected_pf:.4f}, got {s['profit_factor']}"
     )
+
+
+@needs_pandas_ta
+def test_duplicate_timestamps_are_deduped():
+    """Regression for audit § 2.9 — dedupe by timestamp before processing.
+
+    Before fix: sort_values preserved duplicates; two trades could be emitted
+    at the same ms in non-deterministic order, violating strict-float determinism.
+    After fix: drop_duplicates(keep='last') removes the dup, and monotonicity
+    is asserted before the engine runs.
+    """
+    from app.services.rule_based_backtest import run_rule_based_backtest
+
+    interval_ms = 15 * 60 * 1000
+    base_ts = int(pd.Timestamp("2025-01-17 10:00").timestamp() * 1000)
+
+    # Build 100 clean bars, then inject one duplicate of bar 40.
+    bars = []
+    for i in range(100):
+        ts = base_ts + i * interval_ms
+        price = 580.0 + i * 0.05
+        bars.append(
+            {
+                "timestamp": ts,
+                "open": price - 0.05,
+                "high": price + 0.10,
+                "low": price - 0.10,
+                "close": price,
+                "volume": 100000,
+            }
+        )
+    # Inject duplicate of bar 40 (same timestamp, slightly different close — the 'last' wins)
+    bars.insert(41, {**bars[40], "close": bars[40]["close"] + 1.0})
+
+    params = {
+        "fast_ema_period": 5,
+        "slow_ema_period": 10,
+        "rsi_period": 14,
+        "adx_period": 14,
+        "min_ema_gap": 0.01,
+        "rsi_min": 0,
+        "rsi_max": 100,
+        "exit_bars": 5,
+    }
+
+    result = run_rule_based_backtest("SPY", bars, params)
+
+    # Should succeed after dedupe; bars_processed should be 100 (not 101).
+    assert result.success, f"Backtest should succeed after dedupe, got: {result.error}"
+    assert result.bars_processed == 100, f"Expected 100 bars after dedupe, got {result.bars_processed}"
+
+
+class TestFormatTimestampRegression:
+    """Regression for the local-time-parse bug (audit § 2.3).
+
+    Before fix: `_format_timestamp` emitted '2024-01-01 00:00' (no T, no tz),
+    which ECMAScript parses as local time in Chrome/Safari — a 5-hour shift in
+    ET browsers. After fix: '2024-01-01T00:00:00Z' — unambiguous UTC.
+    """
+
+    def test_ms_epoch_emits_iso_utc(self):
+        from app.services.rule_based_backtest import _format_timestamp
+
+        # 2024-01-01T00:00:00Z == 1704067200000 ms
+        assert _format_timestamp(1704067200000) == "2024-01-01T00:00:00Z"
+
+    def test_format_does_not_reenact_naive_z_lie(self):
+        from app.services.rule_based_backtest import _format_timestamp
+
+        result = _format_timestamp(1704067200000)
+        # Must have the 'T' separator (not a space) per ECMAScript spec
+        assert "T" in result
+        # Must end with 'Z' (UTC designator)
+        assert result.endswith("Z")
+
+    def test_browser_new_date_equivalent_roundtrip(self):
+        """A ET-browser parsing the emitted string should produce the same ms.
+
+        This is the invariant that was broken: '2024-01-01 00:00' parsed as
+        local-midnight in ET produced 1704085200000 (not 1704067200000).
+        """
+        from app.services.rule_based_backtest import _format_timestamp
+
+        input_ms = 1704067200000
+        emitted = _format_timestamp(input_ms)
+
+        # Parsing the emitted string under any tz should round-trip exactly.
+        parsed = pd.Timestamp(emitted)
+        # pd.Timestamp on an ISO-with-Z string is tz-aware UTC.
+        assert int(parsed.timestamp() * 1000) == input_ms
 
 
 if __name__ == "__main__":
