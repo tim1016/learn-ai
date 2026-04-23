@@ -29,7 +29,7 @@ describe('BooksComponent', () => {
 
   it('should start in loading state', () => {
     bookServiceMock.getBooks.mockReturnValue(of([]));
-    expect(component.loading).toBe(true);
+    expect(component.loading()).toBe(true);
   });
 
   it('should load and display books', () => {
@@ -41,8 +41,8 @@ describe('BooksComponent', () => {
 
     fixture.detectChanges();
 
-    expect(component.loading).toBe(false);
-    expect(component.books.length).toBe(2);
+    expect(component.loading()).toBe(false);
+    expect(component.books().length).toBe(2);
   });
 
   it('should render book cards in template', () => {
@@ -61,7 +61,7 @@ describe('BooksComponent', () => {
 
     fixture.detectChanges();
 
-    expect(component.loading).toBe(false);
-    expect(component.error).toBe('Failed to load books. Is the backend running?');
+    expect(component.loading()).toBe(false);
+    expect(component.error()).toBe('Failed to load books. Is the backend running?');
   });
 });

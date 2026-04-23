@@ -1,25 +1,25 @@
-import { Component, inject, OnInit } from "@angular/core";
+import { ChangeDetectionStrategy, Component, inject, OnInit, signal } from "@angular/core";
 import { CommonModule } from "@angular/common";
 import { AuthorService } from "../../services/author.service";
 import { Author } from "../../graphql/types";
 
 @Component({
   selector: "app-authors",
-  standalone: true,
   imports: [CommonModule],
+  changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <h1>Authors</h1>
 
-    @if (loading) {
+    @if (loading()) {
       <div class="loading">Loading authors...</div>
     }
 
-    @if (error) {
-      <div class="error">{{ error }}</div>
+    @if (error()) {
+      <div class="error">{{ error() }}</div>
     }
 
     <div class="author-list">
-      @for (author of authors; track author.id) {
+      @for (author of authors(); track author.id) {
         <div class="card">
           <h3>{{ author.name }}</h3>
           @if (author.bio) {
@@ -41,20 +41,19 @@ import { Author } from "../../graphql/types";
 export class AuthorsComponent implements OnInit {
   private authorService = inject(AuthorService);
 
-  authors: Author[] = [];
-  loading = true;
-  error = "";
+  authors = signal<Author[]>([]);
+  loading = signal(true);
+  error = signal("");
 
   ngOnInit() {
     this.authorService.getAuthors().subscribe({
       next: (authors) => {
-        this.authors = authors;
-        this.loading = false;
+        this.authors.set(authors);
+        this.loading.set(false);
       },
-      error: (err) => {
-        this.error = "Failed to load authors. Is the backend running?";
-        this.loading = false;
-        console.error(err);
+      error: () => {
+        this.error.set("Failed to load authors. Is the backend running?");
+        this.loading.set(false);
       },
     });
   }

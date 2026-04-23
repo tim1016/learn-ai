@@ -1,17 +1,24 @@
-import { ApplicationConfig, inject } from "@angular/core";
-import { provideRouter, withInMemoryScrolling } from "@angular/router";
+import { ApplicationConfig, inject, provideZonelessChangeDetection } from "@angular/core";
+import { provideRouter, withInMemoryScrolling, withExperimentalAutoCleanupInjectors } from "@angular/router";
 import { provideHttpClient } from "@angular/common/http";
 import { provideAnimationsAsync } from "@angular/platform-browser/animations/async";
 import { providePrimeNG } from "primeng/config";
+import { MessageService } from "primeng/api";
 import { provideApollo } from "apollo-angular";
 import { HttpLink } from "apollo-angular/http";
 import { InMemoryCache } from "@apollo/client/core";
 import Aura from "@primeuix/themes/aura";
+import { environment } from "../environments/environment";
 import { routes } from "./app.routes";
 
 export const appConfig: ApplicationConfig = {
   providers: [
-    provideRouter(routes, withInMemoryScrolling({ anchorScrolling: 'enabled', scrollPositionRestoration: 'enabled' })),
+    provideZonelessChangeDetection(),
+    provideRouter(
+      routes,
+      withInMemoryScrolling({ anchorScrolling: 'enabled', scrollPositionRestoration: 'enabled' }),
+      withExperimentalAutoCleanupInjectors(),
+    ),
     provideHttpClient(),
     provideAnimationsAsync(),
     providePrimeNG({
@@ -22,12 +29,10 @@ export const appConfig: ApplicationConfig = {
         },
       },
     }),
-    provideApollo(() => {
-      const httpLink = inject(HttpLink);
-      return {
-        link: httpLink.create({ uri: "http://localhost:5000/graphql" }),
-        cache: new InMemoryCache(),
-      };
-    }),
+    MessageService,
+    provideApollo(() => ({
+      link: inject(HttpLink).create({ uri: environment.backendUrl }),
+      cache: new InMemoryCache(),
+    })),
   ],
 };

@@ -1,4 +1,4 @@
-import { ChangeDetectorRef, Component, inject, OnInit } from '@angular/core';
+import { ChangeDetectionStrategy, ChangeDetectorRef, Component, inject, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { TickerService } from '../../services/ticker.service';
@@ -15,8 +15,8 @@ interface TickerWithStats extends Ticker {
 
 @Component({
   selector: 'app-tickers',
-  standalone: true,
   imports: [CommonModule, RouterLink, TradingViewWidgetComponent, PageHeaderComponent],
+  changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="tickers-page">
       <app-page-header
