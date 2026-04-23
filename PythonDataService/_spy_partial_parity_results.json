@@ -1,0 +1,20 @@
+{
+  "ran_at_utc": "2026-04-22T21:09:25+00:00",
+  "runtime_seconds": 1.57,
+  "cache_root": "/home/inkant/Documents/learn-ai/PythonDataService/lean-cache",
+  "cache_range": "2025-04-21 -> 2026-04-20",
+  "engine_run_start": "2025-4-21",
+  "engine_run_end": "2026-3-27",
+  "comparison_window_from": "2025-05-05",
+  "fixture_total_trades": 63,
+  "fixture_in_window": 33,
+  "engine_trades_total": 36,
+  "engine_trades_in_window": 33,
+  "pairings_compared": 33,
+  "matches": 33,
+  "mismatches": 0,
+  "mismatch_details": [],
+  "final_equity_usd": 105747.9741,
+  "total_fees_usd": 72.0,
+  "net_profit_usd": 5747.9741
+}
