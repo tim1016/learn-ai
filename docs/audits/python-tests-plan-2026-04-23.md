@@ -345,4 +345,54 @@ Ordered so the user can pick up and execute each in isolation:
 
 ## 9 — Final status (updated after implementation)
 
-See the PR description for the exact list of test files added, test counts delivered, and any deltas to this plan discovered during implementation.
+**Delivered in this PR: +177 tests (648 → 825 passing).** The 4 pre-existing `test_cache` failures (§6.4) are unchanged. Lint is clean on every touched file.
+
+### Files added
+
+Phase 1 — baseline capture (no new files).
+
+Phase 2 — P0 pure-logic coverage (commit `9a4dfb5`):
+
+| File | Module under test | Tests |
+|---|---|---|
+| `tests/test_error_handlers.py` | `app/utils/error_handlers.py` | 2 |
+| `tests/test_formulas_documentation.py` | `app/research/documentation/formulas.py` | 10 (parametrized) |
+| `tests/test_stationarity.py` | `app/ml/preprocessing/stationarity.py` | 4 |
+| `tests/test_standardize.py` | `app/research/signal/standardize.py` | 7 |
+| `tests/test_regime.py` | `app/research/signal/regime.py` | 6 |
+| `tests/test_trade_comparison.py` | `app/services/trade_comparison.py` | 7 |
+| `tests/engine/test_trade_bar.py` | `app/engine/data/trade_bar.py` | 6 (parametrized) |
+| `tests/engine/test_order.py` | `app/engine/execution/order.py` | 6 |
+| `tests/engine/test_fill_model.py` | `app/engine/execution/fill_model.py` | 7 |
+| `tests/engine/test_portfolio.py` | `app/engine/execution/portfolio.py` | 20 |
+| `tests/engine/test_trade_bar_consolidator.py` | `app/engine/consolidators/trade_bar_consolidator.py` | 9 |
+
+Phase 3 — research/config/endpoint coverage (commits `59d221a`, `9acb07e`, `829582a`):
+
+| File | Module under test | Tests |
+|---|---|---|
+| `tests/test_feature_registry.py` | `app/research/features/registry.py` | 15 (parametrized) |
+| `tests/test_config.py` | `app/config.py`, `app/research/config.py`, `app/research/signal/config.py` | 5 |
+| `tests/test_signal_diagnostics.py` | `app/research/signal/diagnostics.py` | 9 |
+| `tests/test_graduation.py` | `app/research/signal/graduation.py` | 9 |
+| `tests/research/divergence/test_align.py` | `app/research/divergence/ingest/align.py` | 5 |
+| `tests/research/divergence/test_preflight.py` | `app/research/divergence/preflight.py` | 12 (parametrized) |
+| `tests/research/divergence/test_tv_ingest.py` | `app/research/divergence/ingest/tv_ingest.py` | 6 |
+| `tests/engine/test_polygon_export.py` | `app/engine/data/polygon_export.py` (pure helpers) | 5 |
+| `tests/test_indicators_endpoint.py` | `app/routers/indicators.py` | 3 |
+| `tests/research/divergence/test_bar_divergence.py` | `app/research/divergence/analysis/bar_divergence.py` | 6 |
+| `tests/test_strategies_common.py` | `app/services/strategies/common.py` | 12 |
+
+### Plan deltas discovered during implementation
+
+- **Container test mount gap (§6.5).** Worked around with `podman cp`. Durable fix still pending.
+- **Container missing pytest/pytest-asyncio/respx (§6.6).** Installed at test time only. Durable fix still pending.
+- **No pyarrow in container image.** `test_tv_ingest` skips the parquet-write assertion; the manifest JSON is still persisted and asserted. This is a container image gap, not a test gap.
+- **`WalkForwardWindow.fold_index`** — the dataclass uses `fold_index`, not `window_index`. Noted in the graduation test.
+- **`set_holdings` noop condition** — documented in `test_set_holdings_noop_when_already_at_target`: the branch fires when `target_fraction × total_value / reference_price == current_quantity` exactly.
+
+### Phases 4 and 5 — not delivered this session
+
+Phase 4 (P2 router smoke tests for chart / dataset / data_quality / options / quantlib_options / research / validation_study) and Phase 5 (CRITICAL port reconciliation — see §6.1, §6.2, §6.3) are punted to follow-up PRs. The plan at §8 lists them in resumable order.
+
+The CRITICAL items all require user input before work can proceed responsibly — writing tests against a pricer that violates the single-authority rule would entrench the violation rather than expose it.
