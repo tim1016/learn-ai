@@ -107,7 +107,7 @@ The day this suite is green on main is the day "deterministic" is a claim with r
 
 **Measurement (performed now, not in parent):**
 
-```
+```bash
 # 10 sequential /api/chart/data calls, same payload:
 curl -w "%{time_total}\n" ... × 10
 ```
@@ -185,7 +185,7 @@ The review forces a choice. The parent implicitly favors Option A (CLAUDE.md § 
 1. **Move `.NET` backtest-stats assembly into Python.** The parent § 6 found that the live backtest-stats path (`Mutation.cs:99-220`) is a .NET-in-process calculation — not a Python call. This is the single largest violation of Option A. Action: port the stats assembly to Python, register it on the engine route, return a complete `LeanStatistics`, have `.NET` pass it through.
 2. **Delete the dark routers (§ 3.2) with prejudice.** Once the engine route returns full stats, the dark `lean_statistics` producer has no reason to exist. Review's "cognitive integrity failure" closes.
 3. **Delete `RuleBasedBacktestResultType` or fold it into the main result.** Two BacktestResult shapes is the Option A violation that hits users. One shape, one Python authority.
-4. **RSI (§ 1.2) remediation** is forced by Option A: the two paths are both in Python, so Option A does not require deleting one. But the streaming engine is the Option A-aligned path (`Decimal`, warmup-aware, deterministic). pandas-ta stays as a research tool and is **masked** for `i < 3*period` at the `ta_service.py` response boundary. Any consumer that wants early values calls a different endpoint explicitly labeled "pandas-ta research mode — not indicator-of-record."
+4. **RSI (§ 1.2) remediation** is forced by Option A: the two paths are both in Python, so Option A does not require deleting one. But the streaming engine is the Option A-aligned path (`Decimal`, warmup-aware, deterministic). pandas-ta stays as a research tool and is **masked** for `i < 3*period` at the `ta_service.py` response boundary. Any consumer who wants early values calls a different endpoint explicitly labeled "pandas-ta research mode — not indicator-of-record."
 5. **CLAUDE.md update** to say exactly this in one paragraph. Currently CLAUDE.md hints at it but doesn't forbid the alternative.
 
 **What Option A does not do:** eliminate Angular computeds. Angular still transforms for rendering (downsampling, chart-format mapping). Those are not "math" in the sense of "produces a number a user will compare against another number." The rule is enforceable because the boundary is clean: any number shown in a number field or used in a strategy rule originated in Python.
@@ -239,7 +239,7 @@ This order means **the policy lands before the fixes**. Every subsequent PR has 
 
 The parent audit identified 30+ findings, re-verified 5 prior ones, proposed a codegen plan, and measured latency end-to-end. The review's challenge is fair: it **ranked by damage, not by invariant**. This addendum restacks by invariant, restores the three dimensions the review correctly called out as missing, and forces the Option A / Option B choice.
 
-**Grade movement after the addendum:** A- → A. A+ is out of reach until the architectural decision in § 5 is committed, the timestamp policy is encoded, and the minimal replay suite in § 4.1 is green. Those are three PRs, not an audit.
+**Grade movement after the addendum:** A- → A. A+ is unattainable until the architectural decision in § 5 is committed, the timestamp policy is encoded, and the minimal replay suite in § 4.1 is green. Those are three PRs, not an audit.
 
 **What remains true from the parent:** every file:line citation, every measurement, every severity on body findings, every codegen recommendation in § 8. This addendum reframes the executive summary and adds the dimensions that were out of scope. It does not retract a finding.
 
