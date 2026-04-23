@@ -60,16 +60,22 @@ class TechnicalAnalysisService:
     @staticmethod
     def _calc_sma(df: pd.DataFrame, window: int) -> list[dict]:
         series = ta.sma(df["close"], length=window)
+        if series is None or series.empty:
+            return []
         return TechnicalAnalysisService._series_to_points(df["timestamp"], series)
 
     @staticmethod
     def _calc_ema(df: pd.DataFrame, window: int) -> list[dict]:
         series = ta.ema(df["close"], length=window)
+        if series is None or series.empty:
+            return []
         return TechnicalAnalysisService._series_to_points(df["timestamp"], series)
 
     @staticmethod
     def _calc_rsi(df: pd.DataFrame, window: int) -> list[dict]:
         series = ta.rsi(df["close"], length=window)
+        if series is None or series.empty:
+            return []
         return TechnicalAnalysisService._series_to_points(df["timestamp"], series)
 
     @staticmethod

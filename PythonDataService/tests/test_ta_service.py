@@ -221,3 +221,37 @@ def test_generate_indicator_table_supertrend_exclusive():
         down = row.get("supertrend_down")
         # At most one should be populated
         assert not (up is not None and down is not None), "Supertrend up and down should not both be present"
+
+
+# ---------------------------------------------------------------------------
+# None-guard regression (audit § 1.1 / PR 3)
+#
+# Before fix: ta.sma/ta.ema/ta.rsi return None when window > len(df), and
+# _calc_* passed None to _series_to_points which called .iloc on it, producing
+# HTTP 500 'NoneType' object has no attribute 'iloc'.
+# After fix: None/empty returns [] so the endpoint responds 200 with empty data.
+# ---------------------------------------------------------------------------
+
+
+def test_sma_window_exceeds_bars_returns_empty():
+    bars = make_sample_bars(2)
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "sma", "window": 5}])
+
+    assert len(results) == 1
+    assert results[0]["data"] == []
+
+
+def test_ema_window_exceeds_bars_returns_empty():
+    bars = make_sample_bars(2)
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "ema", "window": 5}])
+
+    assert len(results) == 1
+    assert results[0]["data"] == []
+
+
+def test_rsi_window_exceeds_bars_returns_empty():
+    bars = make_sample_bars(2)
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "rsi", "window": 5}])
+
+    assert len(results) == 1
+    assert results[0]["data"] == []
