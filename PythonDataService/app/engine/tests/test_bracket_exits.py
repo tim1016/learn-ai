@@ -15,7 +15,7 @@ Three scenarios:
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
@@ -31,7 +31,7 @@ class _StaticBarReader:
     def __init__(self, bars: list[TradeBar]) -> None:
         self._bars = bars
 
-    def iter_bars(self, symbol: str, start: date, end: date) -> Iterator[TradeBar]:  # noqa: ARG002
+    def iter_bars(self, symbol: str, start: date, end: date) -> Iterator[TradeBar]:
         yield from self._bars
 
 
@@ -81,7 +81,7 @@ class _BracketEntryStrategy(Strategy):
 
 
 def _make_bar(minute: int, *, high: str, low: str, close: str = "500.00") -> TradeBar:
-    start = datetime(2024, 1, 2, 14, 30, tzinfo=timezone.utc) + timedelta(minutes=minute)
+    start = datetime(2024, 1, 2, 14, 30, tzinfo=UTC) + timedelta(minutes=minute)
     end = start + timedelta(minutes=1)
     return TradeBar(
         symbol="SPY",

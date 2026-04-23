@@ -9,7 +9,7 @@ expected amount.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -25,8 +25,8 @@ from app.engine.execution import (
 
 
 def _bar(close: str) -> TradeBar:
-    start = datetime(2024, 1, 2, 14, 45, tzinfo=timezone.utc)
-    end = datetime(2024, 1, 2, 15, 0, tzinfo=timezone.utc)
+    start = datetime(2024, 1, 2, 14, 45, tzinfo=UTC)
+    end = datetime(2024, 1, 2, 15, 0, tzinfo=UTC)
     return TradeBar(
         symbol="SPY",
         time=start,
@@ -45,7 +45,7 @@ def _market_order(direction: Direction, quantity: int = 100) -> Order:
         symbol="SPY",
         quantity=quantity,
         order_type=OrderType.MARKET,
-        time=datetime(2024, 1, 2, 15, 0, tzinfo=timezone.utc),
+        time=datetime(2024, 1, 2, 15, 0, tzinfo=UTC),
         direction=direction,
     )
 
