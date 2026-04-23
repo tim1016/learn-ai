@@ -16,7 +16,6 @@ import { DataLabSessionService, DataLabSessionSummary, DataLabSessionChartSnapsh
 import { MarketMonitorService } from '../../services/market-monitor.service';
 import { MarketHolidayEvent } from '../../models/market-monitor';
 import { IndicatorTooltipComponent } from '../../shared/indicator-tooltip/indicator-tooltip.component';
-import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import {
   getDisabledHolidayDates,
   buildHolidayMap,
@@ -125,7 +124,7 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
 @Component({
   selector: 'app-data-lab',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, DataLabChartComponent, DatePicker, SharedModule, Tooltip, IndicatorTooltipComponent, PageHeaderComponent],
+  imports: [CommonModule, FormsModule, RouterModule, DataLabChartComponent, DatePicker, SharedModule, Tooltip, IndicatorTooltipComponent],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -227,10 +226,12 @@ export class DataLabComponent {
   // Volume warning — set after chart data loads
   volumeWarning = signal('');
 
-  // Selected indicator names (unique set for checkbox state)
-  get selectedNames(): Set<string> {
-    return new Set(this.entries().map(e => e.name));
-  }
+  // Selected indicator names (unique set for checkbox state).
+  // Was a getter that allocated a new Set on every template read — the
+  // category grid called it ~80 times per render, and each keystroke in
+  // a param input triggered ~1,040 Set allocations (audit § 4.3).
+  // As a computed it memoizes until entries() changes.
+  selectedNames = computed<Set<string>>(() => new Set(this.entries().map(e => e.name)));
 
   entryCount = computed(() => this.entries().length);
 
@@ -569,13 +570,13 @@ export class DataLabComponent {
   }
 
   isSelected(name: string): boolean {
-    return this.entries().some(e => e.name === name);
+    return this.selectedNames().has(name);
   }
 
   categorySelectedCount(catName: string): number {
     const cat = this.categories().find(c => c.name === catName);
     if (!cat) return 0;
-    const names = this.selectedNames;
+    const names = this.selectedNames();
     return cat.indicators.filter(i => names.has(i.name)).length;
   }
 

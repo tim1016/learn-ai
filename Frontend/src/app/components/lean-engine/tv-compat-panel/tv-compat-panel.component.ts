@@ -100,18 +100,6 @@ export class TvCompatPanelComponent {
   readonly researchLabTvTab = '/research-lab'; // tab 8 is TV vs Polygon Divergence
 
   constructor() {
-    // When TV-compatible flips on, force every field to its safe default.
-    effect(() => {
-      if (this.tvCompatible()) {
-        this.sessionFilter.set('rth_only');
-        this.priceAdjustment.set('unadjusted');
-        this.warmupDays.set(90);
-        this.indicatorPeriodsCanonical.set(true);
-        this.barTimestamp.set('bar_open');
-        this.rsiSource.set('close');
-      }
-    });
-
     // Re-run pre-flight whenever any relevant field changes. Reads the
     // inputs + our local signals; Angular's effect tracking calls this
     // whenever anything used inside changes.
@@ -133,6 +121,16 @@ export class TvCompatPanelComponent {
     });
   }
 
+  /** Reset every locked field to its TV-compatible default. */
+  private applyTvCompatibleDefaults(): void {
+    this.sessionFilter.set('rth_only');
+    this.priceAdjustment.set('unadjusted');
+    this.warmupDays.set(90);
+    this.indicatorPeriodsCanonical.set(true);
+    this.barTimestamp.set('bar_open');
+    this.rsiSource.set('close');
+  }
+
   private async runPreflight(body: unknown): Promise<void> {
     this.preflightLoading.set(true);
     this.preflightError.set(null);
@@ -152,7 +150,15 @@ export class TvCompatPanelComponent {
   }
 
   toggleTvCompatible(): void {
-    this.tvCompatible.update(v => !v);
+    const next = !this.tvCompatible();
+    this.tvCompatible.set(next);
+    if (next) {
+      // When TV-compat mode flips on, force every locked field to its safe
+      // default. Previously done by a signal-writing effect (audit § 4.4);
+      // initial signal defaults already match TV-compat values so no
+      // startup-time seed is needed.
+      this.applyTvCompatibleDefaults();
+    }
   }
 
   iconFor(status: Severity): string {
