@@ -255,3 +255,23 @@ def test_rsi_window_exceeds_bars_returns_empty():
 
     assert len(results) == 1
     assert results[0]["data"] == []
+
+
+def test_rsi_warmup_region_is_masked():
+    """Regression for audit § 1.2 — pandas-ta RSI disagrees with streaming Wilders
+    by up to 14 points in the warmup region. Mask until 3*period bars.
+    """
+    window = 14
+    bars = make_sample_bars(100)  # enough to have output beyond the mask
+
+    results = TechnicalAnalysisService.calculate_indicators(bars, [{"name": "rsi", "window": window}])
+
+    assert len(results) == 1
+    data = results[0]["data"]
+    # Mask covers bar indices [0, 3*window) => 42. Emitted timestamps must all
+    # come from bar index >= 42.
+    emitted_timestamps = {p["timestamp"] for p in data}
+    masked_bar_timestamps = {b["timestamp"] for b in bars[: 3 * window]}
+    assert not (emitted_timestamps & masked_bar_timestamps), (
+        "RSI warmup region (bars 0..3*window) must not appear in output"
+    )
