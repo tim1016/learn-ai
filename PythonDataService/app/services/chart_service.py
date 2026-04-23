@@ -991,22 +991,39 @@ def get_chart_data(
             indicator_results = _format_indicator_results(df_with_ind, col_meta, indicators, compute_all_indicators)
             _indicator_cache.put(ind_key, indicator_results)
 
-    # ── Build response ──
-    bars_out = []
-    for _, row in df_resampled.iterrows():
-        bar: dict[str, Any] = {
-            "t": int(row["timestamp"]),
-            "o": round(float(row["open"]), 6) if pd.notna(row["open"]) else None,
-            "h": round(float(row["high"]), 6) if pd.notna(row["high"]) else None,
-            "l": round(float(row["low"]), 6) if pd.notna(row["low"]) else None,
-            "c": round(float(row["close"]), 6) if pd.notna(row["close"]) else None,
-            "v": round(float(row["volume"]), 2) if pd.notna(row.get("volume", None)) else 0,
-        }
-        if "session" in row and pd.notna(row["session"]):
-            bar["session"] = row["session"]
-        if "synthetic" in row and row.get("synthetic"):
-            bar["synthetic"] = True
-        bars_out.append(bar)
+    # ── Build response (vectorized — iterrows was 10-50x slower, audit § 5.4) ──
+    df_bars = pd.DataFrame(
+        {
+            "t": df_resampled["timestamp"].astype("int64"),
+            "o": df_resampled["open"].round(6),
+            "h": df_resampled["high"].round(6),
+            "l": df_resampled["low"].round(6),
+            "c": df_resampled["close"].round(6),
+        },
+        index=df_resampled.index,
+    )
+    if "volume" in df_resampled.columns:
+        df_bars["v"] = df_resampled["volume"].round(2).fillna(0)
+    else:
+        df_bars["v"] = 0
+
+    # NaN → None on OHLC so JSON serialization emits null (not float NaN).
+    for col in ("o", "h", "l", "c"):
+        df_bars[col] = df_bars[col].astype(object).where(df_bars[col].notna(), None)
+
+    bars_out: list[dict[str, Any]] = df_bars.to_dict(orient="records")
+
+    # Optional columns attached per-row; cheap since we already allocated bars_out.
+    if "session" in df_resampled.columns:
+        session_vals = df_resampled["session"].tolist()
+        for bar, s in zip(bars_out, session_vals, strict=True):
+            if pd.notna(s):
+                bar["session"] = s
+    if "synthetic" in df_resampled.columns:
+        synth_vals = df_resampled["synthetic"].tolist()
+        for bar, s in zip(bars_out, synth_vals, strict=True):
+            if s:
+                bar["synthetic"] = True
 
     return {
         "bars": bars_out,

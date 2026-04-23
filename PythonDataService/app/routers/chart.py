@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -81,7 +82,15 @@ async def chart_data(request: ChartDataRequest):
         # Convert indicators to dict format
         indicator_dicts = [{"name": ind.name, "params": ind.params} for ind in request.indicators]
 
-        result = get_chart_data(
+        # get_chart_data does heavy pandas work (Polygon fetch, resample, RTH
+        # filter, indicator compute) — all synchronous. Running it directly in
+        # the async handler blocked the event loop for 3-5 s and serialized
+        # every other request on this worker (audit § 5.6 — availability
+        # checks that normally take 5 ms measured 2.0 s head-of-line).
+        # asyncio.to_thread offloads to the default thread pool so the loop
+        # stays responsive.
+        result = await asyncio.to_thread(
+            get_chart_data,
             ticker=request.ticker,
             from_date=request.from_date,
             to_date=request.to_date,

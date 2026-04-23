@@ -216,7 +216,7 @@ public class Query
                 {
                     Success = false,
                     Ticker = symbol,
-                    Message = $"No data found for {symbol}. Fetch market data first."
+                    Error = $"No data found for {symbol}. Fetch market data first."
                 };
             }
 
@@ -235,7 +235,7 @@ public class Query
                 {
                     Success = false,
                     Ticker = symbol,
-                    Message = $"No aggregate data in DB for {symbol}. Fetch market data first."
+                    Error = $"No aggregate data in DB for {symbol}. Fetch market data first."
                 };
             }
 
@@ -256,7 +256,7 @@ public class Query
 
             return new CalculateIndicatorsResult
             {
-                Success = true,
+                Success = response.Success,
                 Ticker = symbol,
                 Indicators = response.Indicators.Select(ind => new IndicatorSeriesResult
                 {
@@ -272,7 +272,9 @@ public class Query
                         Lower = d.Lower
                     }).ToList()
                 }).ToList(),
-                Message = $"Calculated {response.Indicators.Count} indicators from {aggregates.Count} bars"
+                // Surface Python's error field directly — was dropped when the GraphQL
+                // output was named Message while the DTO was Error (audit § 3.3).
+                Error = response.Error
             };
         }
         catch (Exception ex)
@@ -282,7 +284,7 @@ public class Query
             {
                 Success = false,
                 Ticker = ticker.ToUpper(),
-                Message = $"Error: {ex.Message}"
+                Error = ex.Message
             };
         }
     }
