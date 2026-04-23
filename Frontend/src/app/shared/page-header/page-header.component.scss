@@ -1,0 +1,56 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+  margin-bottom: var(--space-6);
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.page-header-inner {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.eyebrow {
+  display: inline-block;
+  margin-bottom: var(--space-1);
+  color: $text-muted;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.page-title {
+  margin: 0 0 var(--space-1);
+  color: $text-primary;
+  font-size: var(--fs-h1);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-tight);
+  line-height: 1.15;
+}
+
+.page-subtitle {
+  margin: 0;
+  max-width: 72ch;
+  color: $text-subtle; // 4.6:1 on #0f1117 — WCAG AA
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.page-header-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+
+  &:empty {
+    display: none;
+  }
+}

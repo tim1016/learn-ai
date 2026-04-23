@@ -1,6 +1,5 @@
 import { ChangeDetectionStrategy, Component, input, signal } from "@angular/core";
 import { CommonModule } from "@angular/common";
-import { RouterModule } from "@angular/router";
 import { AccordionModule } from "primeng/accordion";
 import { DividerModule } from "primeng/divider";
 import { KatexDirective } from "../../../shared/katex.directive";
@@ -91,7 +90,6 @@ interface CopyBlock {
   standalone: true,
   imports: [
     CommonModule,
-    RouterModule,
     AccordionModule,
     DividerModule,
     KatexDirective,

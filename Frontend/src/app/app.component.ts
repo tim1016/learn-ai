@@ -19,7 +19,7 @@ import { MethodologyDrawerComponent } from './shared/methodology-drawer/methodol
     .main {
       flex: 1;
       min-width: 0;
-      padding: 1.25rem 1.5rem;
+      padding: var(--page-pad-y) var(--page-pad-x);
       overflow-x: auto;
     }
   `],

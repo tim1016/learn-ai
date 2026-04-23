@@ -48,9 +48,7 @@ const NAV: NavGroup[] = [
       { label: 'Snapshots', route: '/snapshots' },
       { label: 'Strategy Lab', route: '/strategy-lab', deprecated: true },
       { label: 'Strategy Validation', route: '/strategy-lab-validation' },
-      { label: 'Strategy Docs', route: '/strategy-docs' },
       { label: 'Indicator Validation', route: '/indicator-validation' },
-      { label: 'Indicator Docs', route: '/indicator-docs' },
       { label: 'Indicator Report', route: '/indicator-report' },
     ],
   },
@@ -60,15 +58,13 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-database',
     items: [
       { label: 'Data Lab', route: '/data-lab' },
-      { label: 'Indicator Reference', route: '/data-lab-docs' },
       { label: 'Data Quality', route: '/data-quality' },
-      { label: 'Pipeline Docs', route: '/data-quality-docs' },
     ],
   },
   {
     id: 'options',
     title: 'Options',
-    icon: 'pi pi-objects-column',
+    icon: 'pi pi-sliders-h',
     items: [
       { label: 'Options Chain', route: '/options-chain' },
       { label: 'Strategy Builder', route: '/strategy-builder' },
@@ -80,29 +76,40 @@ const NAV: NavGroup[] = [
   {
     id: 'research',
     title: 'Research Lab',
-    icon: 'pi pi-search',
+    icon: 'pi pi-compass',
     items: [
       { label: 'Research Lab', route: '/research-lab' },
-      { label: 'Methodology', route: '/docs/indicator-reliability-methodology' },
     ],
   },
   {
     id: 'portfolio',
     title: 'Portfolio',
-    icon: 'pi pi-wallet',
+    icon: 'pi pi-briefcase',
     items: [
       { label: 'Dashboard', route: '/portfolio' },
       { label: 'Engine Lab', route: '/engine' },
       { label: 'Tracked Instruments', route: '/tracked-instruments' },
     ],
   },
+  {
+    id: 'documentation',
+    title: 'Documentation',
+    icon: 'pi pi-book',
+    items: [
+      { label: 'Strategy Docs', route: '/strategy-docs' },
+      { label: 'Indicator Docs', route: '/indicator-docs' },
+      { label: 'Indicator Reference', route: '/data-lab-docs' },
+      { label: 'Pipeline Docs', route: '/data-quality-docs' },
+      { label: 'Methodology', route: '/docs/indicator-reliability-methodology' },
+    ],
+  },
 ];
 
 @Component({
   selector: 'app-sidebar',
-  standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CommonModule, FormsModule, RouterLink],
+  styleUrl: './app-sidebar.component.scss',
   template: `
     <aside class="sidebar">
       <div class="brand">
@@ -192,238 +199,6 @@ const NAV: NavGroup[] = [
       </div>
     </aside>
   `,
-  styles: [`
-    :host {
-      display: block;
-      flex-shrink: 0;
-      position: sticky;
-      top: 0;
-      height: 100vh;
-      z-index: 40;
-    }
-
-    .sidebar {
-      width: 240px;
-      height: 100vh;
-      background: var(--bg-surface);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      color: var(--text-secondary);
-      font-size: 13px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-
-    .mono {
-      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-      font-variant-numeric: tabular-nums;
-    }
-
-    // ── Brand ─────────────────────────────────────
-    .brand {
-      padding: 14px 16px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      border-bottom: 1px solid var(--border);
-    }
-    .wordmark {
-      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-      font-weight: 700;
-      font-size: 14px;
-      letter-spacing: -0.01em;
-      color: var(--text-primary);
-    }
-    .slash {
-      color: var(--text-muted);
-      font-weight: 500;
-    }
-
-    // ── Search ────────────────────────────────────
-    .search-wrap {
-      position: relative;
-      padding: 12px 12px 6px;
-    }
-    .search-icon {
-      position: absolute;
-      left: 21px;
-      top: 50%;
-      transform: translateY(-50%);
-      color: var(--text-muted);
-      font-size: 12px;
-      pointer-events: none;
-    }
-    .search-input {
-      width: 100%;
-      padding: 6px 8px 6px 30px;
-      background: var(--bg-canvas);
-      border: 1px solid var(--border);
-      border-radius: 5px;
-      color: var(--text-primary);
-      font-family: inherit;
-      font-size: 12px;
-      outline: none;
-      box-sizing: border-box;
-      transition: border-color 0.15s;
-    }
-    .search-input:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
-    }
-    .search-kbd {
-      position: absolute;
-      right: 18px;
-      top: 50%;
-      transform: translateY(-50%);
-      font-size: 10px;
-      color: var(--text-muted);
-      border: 1px solid var(--border);
-      padding: 1px 5px;
-      border-radius: 3px;
-      pointer-events: none;
-    }
-
-    // ── Nav scroll ────────────────────────────────
-    .nav-scroll {
-      flex: 1;
-      overflow-y: auto;
-      padding: 6px 6px 16px;
-
-      &::-webkit-scrollbar { width: 6px; }
-      &::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-    }
-
-    // ── Groups ────────────────────────────────────
-    .nav-group {
-      margin-bottom: 2px;
-    }
-    .nav-group-header {
-      width: 100%;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 7px 10px;
-      background: transparent;
-      border: 0;
-      border-radius: 4px;
-      color: var(--text-secondary);
-      font-family: inherit;
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      cursor: pointer;
-      text-align: left;
-      transition: background 0.12s, color 0.12s;
-    }
-    .nav-group-header:hover {
-      background: var(--bg-elevated);
-    }
-    .nav-group-header.has-active {
-      color: var(--text-primary);
-    }
-    .group-icon {
-      font-size: 12px;
-      color: var(--text-muted);
-    }
-    .nav-group-header.has-active .group-icon {
-      color: var(--accent);
-    }
-    .group-title {
-      flex: 1;
-    }
-    .chevron {
-      font-size: 9px;
-      color: var(--text-muted);
-      transition: transform 0.12s ease;
-    }
-    .chevron.open {
-      transform: rotate(90deg);
-    }
-
-    .nav-group-items {
-      padding: 2px 0 4px;
-    }
-
-    // ── Links ─────────────────────────────────────
-    .nav-link {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 10px 6px 28px;
-      text-decoration: none;
-      color: var(--text-secondary);
-      background: transparent;
-      border-left: 2px solid transparent;
-      margin-left: -2px;
-      font-size: 13px;
-      font-weight: 400;
-      border-radius: 0 3px 3px 0;
-      cursor: pointer;
-      transition: background 0.1s, color 0.1s;
-    }
-    .nav-link:hover {
-      background: var(--bg-elevated);
-      color: var(--text-primary);
-    }
-    .nav-link.active {
-      color: var(--text-primary);
-      background: var(--bg-hover);
-      border-left-color: var(--accent);
-      font-weight: 500;
-    }
-    .nav-link-label {
-      flex: 1;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .nav-link-group {
-      font-size: 10px;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .nav-link-badge {
-      font-size: 9px;
-      padding: 1px 4px;
-      border-radius: 3px;
-      background: rgba(245, 158, 11, 0.18);
-      color: var(--warn);
-      letter-spacing: 0.04em;
-    }
-    .flat-matches {
-      padding: 2px 0;
-    }
-    .empty {
-      padding: 12px;
-      font-size: 12px;
-      color: var(--text-muted);
-      text-align: center;
-    }
-
-    // ── Status footer ─────────────────────────────
-    .status-footer {
-      padding: 10px 16px 12px;
-      border-top: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-    .status-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--bull);
-      box-shadow: 0 0 6px var(--bull);
-      flex-shrink: 0;
-    }
-    .version {
-      margin-left: auto;
-    }
-  `],
 })
 export class AppSidebarComponent {
   private router = inject(Router);

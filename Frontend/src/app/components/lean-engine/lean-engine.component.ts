@@ -22,6 +22,7 @@ import { EngineChartComponent, ChartBar, EngineTradeForChart, EquityCurvePoint }
 import { InsightPanelComponent } from "./insight-panel/insight-panel.component";
 import { TvCompatPanelComponent } from "./tv-compat-panel/tv-compat-panel.component";
 import { EngineReplayV2Component } from "./engine-replay-v2/engine-replay-v2.component";
+import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
 
 // Severity for pre-flight: re-declared locally so we don't import the panel's types.
 type PreflightSeverity = "ok" | "warning" | "blocking";
@@ -129,6 +130,7 @@ interface DataAvailability {
     EngineResultsComponent, EngineHistoryComponent, LeanEngineDocsComponent,
     EngineChartComponent, InsightPanelComponent,
     TvCompatPanelComponent, EngineReplayV2Component,
+    PageHeaderComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./lean-engine.component.html",

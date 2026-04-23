@@ -1,0 +1,275 @@
+@use '../styles/tokens' as *;
+
+:host {
+  display: block;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  z-index: 40;
+}
+
+.sidebar {
+  width: var(--sidebar-w);
+  height: 100vh;
+  background: $bg-surface;
+  border-right: 1px solid $border;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: $text-secondary;
+  font-family: $font-sans;
+  font-size: 13px;
+}
+
+.mono {
+  font-family: $font-mono;
+  font-variant-numeric: tabular-nums;
+}
+
+// ── Brand ────────────────────────────────────────────────────
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid $border;
+}
+.wordmark {
+  font-family: $font-mono;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: $text-primary;
+}
+.slash {
+  color: $text-muted;
+  font-weight: 500;
+}
+
+// ── Search ───────────────────────────────────────────────────
+.search-wrap {
+  position: relative;
+  padding: 12px 12px 6px;
+}
+.search-icon {
+  position: absolute;
+  top: 50%;
+  left: 21px;
+  transform: translateY(-50%);
+  color: $text-muted;
+  font-size: 12px;
+  pointer-events: none;
+}
+.search-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 8px 6px 30px;
+  background: $bg-canvas;
+  border: 1px solid $border;
+  border-radius: $radius;
+  color: $text-primary;
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+  transition: border-color $t-ui, box-shadow $t-ui;
+
+  &:focus {
+    border-color: $accent;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  }
+}
+.search-kbd {
+  position: absolute;
+  top: 50%;
+  right: 18px;
+  transform: translateY(-50%);
+  padding: 1px 5px;
+  color: $text-muted;
+  border: 1px solid $border;
+  border-radius: 3px;
+  font-size: 10px;
+  pointer-events: none;
+}
+
+// ── Nav scroll region ────────────────────────────────────────
+.nav-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 8px 8px 16px;
+
+  &::-webkit-scrollbar { width: 6px; }
+  &::-webkit-scrollbar-thumb {
+    background: $border;
+    border-radius: 3px;
+  }
+}
+
+// ── Section groups ───────────────────────────────────────────
+.nav-group {
+  margin-bottom: 2px;
+}
+.nav-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: $radius-sm;
+  color: $text-muted;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+  transition: background $t-fast, color $t-fast;
+
+  &:hover { background: $bg-elevated; color: $text-secondary; }
+
+  &.has-active {
+    color: $text-secondary;
+    .group-icon { color: $accent; }
+  }
+}
+
+.group-icon {
+  flex-shrink: 0;
+  width: 14px;
+  color: $text-muted;
+  font-size: 13px;
+  text-align: center;
+}
+
+.group-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: $text-muted;
+  font-size: 9px;
+  transition: transform $t-ui ease;
+
+  &.open { transform: rotate(90deg); }
+}
+
+// ── Child links ──────────────────────────────────────────────
+// Defensive: block-level + full width so links stack even if
+// display:flex is ever overridden by a global rule.
+.nav-group-items {
+  display: block;
+  padding: 2px 0 6px;
+}
+
+.nav-link {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px 7px 30px;
+  margin: 1px 0 1px -2px;
+  color: $text-secondary;
+  background: transparent;
+  border-left: 3px solid transparent;
+  border-radius: 0 $radius-sm $radius-sm 0;
+  font-size: 13px;
+  font-weight: 400;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background $t-fast, color $t-fast, border-color $t-fast;
+
+  &:hover {
+    background: $bg-elevated;
+    color: $text-primary;
+  }
+
+  &:focus-visible {
+    outline: 2px solid $accent;
+    outline-offset: -2px;
+  }
+
+  &.active {
+    background: $bg-hover;
+    border-left-color: $accent;
+    color: $text-primary;
+    font-weight: 500;
+  }
+}
+
+.nav-link-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-link-group {
+  flex-shrink: 0;
+  color: $text-muted;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+// Informational outline badge — low visual weight.
+.nav-link-badge {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  background: var(--badge-warn-bg);
+  border: 1px solid var(--badge-warn-border);
+  border-radius: $radius-sm;
+  color: var(--badge-warn-text);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+// ── Search empty-state ───────────────────────────────────────
+.flat-matches {
+  display: block;
+  padding: 2px 0;
+}
+.empty {
+  padding: 12px;
+  color: $text-muted;
+  font-size: 12px;
+  text-align: center;
+}
+
+// ── Status footer ────────────────────────────────────────────
+.status-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 12px;
+  margin-top: auto;
+  border-top: 1px solid $border;
+  color: $text-muted;
+  font-size: 11px;
+}
+.status-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  background: $bull;
+  border-radius: 50%;
+  box-shadow: 0 0 6px $bull;
+}
+.version {
+  margin-left: auto;
+  color: $text-subtle;
+}

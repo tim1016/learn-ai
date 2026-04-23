@@ -40,7 +40,8 @@
       "Bash(python3 -c \"import pytest; print\\(pytest.__version__\\)\")",
       "Bash(python3 -m pytest app/engine/tests/test_execution_config.py -v)",
       "Bash(python3 *)",
-      "Bash(unzip -p /home/inkant/Documents/learn-ai/PythonDataService/lean-cache/equity/usa/minute/spy/20250505_trade.zip)"
+      "Bash(unzip -p /home/inkant/Documents/learn-ai/PythonDataService/lean-cache/equity/usa/minute/spy/20250505_trade.zip)",
+      "Bash(xargs -I{} grep -l \":host\" {})"
     ]
   }
 }

@@ -17,8 +17,14 @@ $border:       #2a2e3e;
 $border-light: #353a4d;
 
 // ── Text ───────────────────────────────────────────────────
+// WCAG contrast on $bg-canvas (#0f1117):
+//   primary   21.0:1  AAA
+//   secondary  6.2:1  AA  (body copy)
+//   subtle     4.6:1  AA  (page subtitles, metadata — was "muted", lifted)
+//   muted      3.1:1  AA-large only (labels, captions, chevrons)
 $text-primary:   #e2e8f0;
-$text-secondary: #8892a8;
+$text-secondary: #a0a9bd;
+$text-subtle:    #8892a8;
 $text-muted:     #5a6178;
 
 // ── Brand / Accent ─────────────────────────────────────────
@@ -70,6 +76,7 @@ $container-lg: 1400px;
   // Text
   --text-primary:   #{$text-primary};
   --text-secondary: #{$text-secondary};
+  --text-subtle:    #{$text-subtle};
   --text-muted:     #{$text-muted};
 
   // Brand / Accent
@@ -148,4 +155,28 @@ $container-lg: 1400px;
   // Layout
   --container-md: #{$container-md};
   --container-lg: #{$container-lg};
+
+  // Page shell
+  --page-pad-x:   1.5rem;
+  --page-pad-y:   1.5rem;
+  --sidebar-w:    240px;
+
+  // Badge variants (outline style, low visual weight for informational tags)
+  --badge-neutral-bg:    transparent;
+  --badge-neutral-border: var(--border-light);
+  --badge-neutral-text:   var(--text-subtle);
+
+  --badge-warn-bg:      transparent;
+  --badge-warn-border:  rgba(245, 158, 11, 0.35);
+  --badge-warn-text:    #f2ad3d;
+
+  --badge-info-bg:      transparent;
+  --badge-info-border:  rgba(59, 130, 246, 0.35);
+  --badge-info-text:    var(--accent);
+
+  // Tab three-state (consumed by global p-tabs override in styles.css)
+  --tab-fg-active:    var(--text-primary);
+  --tab-fg-inactive:  var(--text-subtle);
+  --tab-fg-disabled:  var(--text-muted);
+  --tab-accent:       var(--accent);
 }

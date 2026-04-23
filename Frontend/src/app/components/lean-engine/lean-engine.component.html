@@ -1,13 +1,8 @@
 <div class="lean-engine">
-  <header class="page-header">
-    <div>
-      <h1>Engine Lab</h1>
-      <p class="subtitle">
-        LEAN-compatible backtest engine with full statistics, trade history, and
-        research journal.
-      </p>
-    </div>
-  </header>
+  <app-page-header
+    title="Engine Lab"
+    subtitle="LEAN-compatible backtest engine with full statistics, trade history, and research journal."
+  />
 
   @if (strategiesLoading()) {
     <div class="notice">Loading strategies…</div>
