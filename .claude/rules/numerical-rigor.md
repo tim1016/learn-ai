@@ -85,7 +85,7 @@ Rationale: four different wire formats were in flight before this rule (`int ms`
 
 ### Two and only two conversion boundaries
 
-1. **External-API ingestion.** Parse → `int64 ms UTC` immediately on receipt. Validate monotonicity and uniqueness at the same point (`df.drop_duplicates(subset=["timestamp"]).reset_index(drop=True)`; `assert df["timestamp"].is_monotonic_increasing`). Everything downstream consumes `int64 ms`.
+1. **External-API ingestion.** Parse → `int64 ms UTC` immediately on receipt. Validate monotonicity and uniqueness at the same point and **fail fast** on violations: reject any duplicate timestamp and any non-strictly-increasing sequence with a descriptive error. Do not silently repair the feed (no `drop_duplicates`, no forward-fill, no reordering) — duplicates and gaps are signals about upstream corruption and must surface, not be masked. Everything downstream consumes `int64 ms`.
 2. **UI rendering.** `int64 ms` → `America/New_York` for **display only**. The display-side string is never stored, never sent back to a server, never compared against another timestamp.
 
 No other place in the codebase converts timestamps.
