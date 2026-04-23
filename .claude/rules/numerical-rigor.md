@@ -88,7 +88,7 @@ Rationale: four different wire formats were in flight before this rule (`int ms`
 1. **External-API ingestion.** Parse → `int64 ms UTC` immediately on receipt. Validate monotonicity and uniqueness at the same point and **fail fast** on violations: reject any duplicate timestamp and any non-strictly-increasing sequence with a descriptive error. Do not silently repair the feed (no `drop_duplicates`, no forward-fill, no reordering) — duplicates and gaps are signals about upstream corruption and must surface, not be masked. Everything downstream consumes `int64 ms`.
 2. **UI rendering.** `int64 ms` → `America/New_York` for **display only**. The display-side string is never stored, never sent back to a server, never compared against another timestamp.
 
-No other place in the codebase converts timestamps.
+No other place in the codebase converts timestamps for wire, storage, or serialization. Transient in-function timezone conversion for wall-clock semantics (see the classical rule below) is allowed, provided the result is not persisted and is converted back to canonical `int64 ms UTC` before return, write, or serialize.
 
 ### Ban list (CI-enforceable with grep)
 
@@ -96,7 +96,7 @@ No other place in the codebase converts timestamps.
 - `datetime.utcfromtimestamp` — same.
 - `datetime.now()` without a `tz=` argument — timezone-ambiguous.
 - `pd.to_datetime(...)` without `utc=True` — produces naive objects that lie when `.strftime("...Z")` is appended.
-- `DateTime.Parse(...)` without `CultureInfo.InvariantCulture` and `DateTimeStyles.AdjustToUniversal` — produces `Kind=Local` silently.
+- `DateTime.Parse(...)` in any timestamp-canonicalization path — **disallowed**. The common belief that it "produces `Kind=Local`" is misleading: naive strings actually parse as `Kind=Unspecified`, and passing `DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal` causes the parser to **silently coerce** naive strings to UTC. Both paths violate fail-fast ingestion. For string input, require `DateTimeOffset.ParseExact` (or `DateTime.ParseExact`) with `CultureInfo.InvariantCulture` and a format that includes an explicit offset designator; reject ambiguous/naive strings. Prefer: accept timestamps as numeric `long` (ms since epoch) and skip string parsing entirely.
 - `new Date(string)` in TypeScript where the string is not an ISO-8601 with tz designator — parses as local in Chrome/Safari, as `Invalid Date` in Firefox. If the input is a timestamp, it should have been typed `number` and passed directly.
 - `string` or `DateTime` typing on any field literally named `timestamp` / `ts` / `time` in a GraphQL DTO, C# DTO, Pydantic model, or TS interface. The type is `long` / `int` / `number`.
 
