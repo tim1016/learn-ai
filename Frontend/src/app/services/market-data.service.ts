@@ -83,7 +83,7 @@ const CALCULATE_INDICATORS_QUERY = `
           timestamp value signal histogram upper lower
         }
       }
-      message
+      error
     }
   }
 `;

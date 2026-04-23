@@ -80,7 +80,7 @@ export class TechnicalAnalysisComponent {
         )
       );
 
-      return { aggregates, indicators: indResult.indicators, message: indResult.message };
+      return { aggregates, indicators: indResult.indicators, message: indResult.error };
     }
   });
 

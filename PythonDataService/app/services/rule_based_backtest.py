@@ -105,7 +105,11 @@ def run_rule_based_backtest(
         return result
 
     df = pd.DataFrame(bars)
+    df = df.drop_duplicates(subset=["timestamp"], keep="last")
     df = df.sort_values("timestamp").reset_index(drop=True)
+    if not df["timestamp"].is_monotonic_increasing:
+        result.error = "Input bars are not monotonic in timestamp after dedup"
+        return result
     result.bars_processed = len(df)
 
     # Compute indicators via pandas-ta
@@ -250,11 +254,18 @@ def _compute_max_drawdown(cum_pnl: list[float]) -> float:
 
 
 def _format_timestamp(ts) -> str:
-    """Convert a timestamp (ms epoch or datetime) to ISO 8601."""
+    """Convert a timestamp (ms epoch or datetime) to unambiguous ISO 8601 UTC.
+
+    Uses the 'T' separator and 'Z' suffix so browser `new Date(str)` parses as UTC
+    on every major engine. The previous format '%Y-%m-%d %H:%M' (space, no tz)
+    was implementation-defined — Chrome/Safari parsed it as local time, causing
+    a 5-hour shift in ET browsers.
+    """
     if isinstance(ts, (int, float, np.integer, np.floating)):
-        return datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     if isinstance(ts, datetime):
-        return ts.strftime("%Y-%m-%d %H:%M")
+        dt = ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     if isinstance(ts, str):
         return ts
     return str(ts)

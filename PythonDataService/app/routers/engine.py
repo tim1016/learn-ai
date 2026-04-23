@@ -51,7 +51,7 @@ from app.engine.strategy.algorithms.spy_ema_crossover_options import (
 )
 from app.engine.strategy.algorithms.spy_orb import SpyOpeningRangeBreakout
 from app.engine.strategy.base import Strategy
-from app.routers.backtest import (
+from app.models.responses import (
     LeanPortfolioStatsResponse,
     LeanRuntimeStatsResponse,
     LeanStatisticsResponse,

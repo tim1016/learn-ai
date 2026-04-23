@@ -77,8 +77,32 @@ If a test fails at the default, do NOT loosen the tolerance to make it pass. Ins
 
 Timestamp handling is the single largest source of divergence in backtesting. Strict rules:
 
-- **All stored timestamps are UTC, tz-aware.** Naive datetimes are bugs.
-- **All logic operates in `America/New_York`.** Convert at the boundary, not ad-hoc in the middle of a pipeline.
+### Canonical format
+
+**Every timestamp in flight, at rest, or on the wire is an integer count of milliseconds since Unix epoch UTC.** No exceptions. ISO strings, `datetime` / `DateTime` objects, tz-aware ISO-with-`Z`, and naive datetimes are all **disallowed as wire and storage formats**. The in-memory language-native types are allowed only for arithmetic within a single function; they must be converted back to `int64 ms` before returning, writing, or serializing.
+
+Rationale: four different wire formats were in flight before this rule (`int ms`, naive-ISO-with-lying-`Z`, `"YYYY-MM-DD HH:MM"` that parses as local in the browser, .NET `DateTime` with `Kind=Local`-by-accident). See `docs/audits/computational-fidelity-2026-04-22.md` § 2 and its addendum § 3.
+
+### Two and only two conversion boundaries
+
+1. **External-API ingestion.** Parse → `int64 ms UTC` immediately on receipt. Validate monotonicity and uniqueness at the same point and **fail fast** on violations: reject any duplicate timestamp and any non-strictly-increasing sequence with a descriptive error. Do not silently repair the feed (no `drop_duplicates`, no forward-fill, no reordering) — duplicates and gaps are signals about upstream corruption and must surface, not be masked. Everything downstream consumes `int64 ms`.
+2. **UI rendering.** `int64 ms` → `America/New_York` for **display only**. The display-side string is never stored, never sent back to a server, never compared against another timestamp.
+
+No other place in the codebase converts timestamps for wire, storage, or serialization. Transient in-function timezone conversion for wall-clock semantics (see the classical rule below) is allowed, provided the result is not persisted and is converted back to canonical `int64 ms UTC` before return, write, or serialize.
+
+### Ban list (CI-enforceable with grep)
+
+- `datetime.utcnow` — deprecated in Python 3.12; use `datetime.now(UTC)` at the ingestion boundary, then immediately convert to ms.
+- `datetime.utcfromtimestamp` — same.
+- `datetime.now()` without a `tz=` argument — timezone-ambiguous.
+- `pd.to_datetime(...)` without `utc=True` — produces naive objects that lie when `.strftime("...Z")` is appended.
+- `DateTime.Parse(...)` in any timestamp-canonicalization path — **disallowed**. The common belief that it "produces `Kind=Local`" is misleading: naive strings actually parse as `Kind=Unspecified`, and passing `DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal` causes the parser to **silently coerce** naive strings to UTC. Both paths violate fail-fast ingestion. For string input, require `DateTimeOffset.ParseExact` (or `DateTime.ParseExact`) with `CultureInfo.InvariantCulture` and a format that includes an explicit offset designator; reject ambiguous/naive strings. Prefer: accept timestamps as numeric `long` (ms since epoch) and skip string parsing entirely.
+- `new Date(string)` in TypeScript where the string is not an ISO-8601 with tz designator — parses as local in Chrome/Safari, as `Invalid Date` in Firefox. If the input is a timestamp, it should have been typed `number` and passed directly.
+- `string` or `DateTime` typing on any field literally named `timestamp` / `ts` / `time` in a GraphQL DTO, C# DTO, Pydantic model, or TS interface. The type is `long` / `int` / `number`.
+
+### Classical rules (kept)
+
+- **All logic operates in `America/New_York`** when wall-clock semantics matter (session filters, exchange-aligned bar starts). The conversion is per-operation, never persisted.
 - **Bar timestamp = bar close.** A bar labeled `09:45:00` contains trades from `09:30:00` (inclusive) to `09:45:00` (exclusive).
 - **Never forward-fill or interpolate to align.** If two series have different timestamps, that's data telling you something — don't silence it.
 - **Bar alignment is explicit.** A 15-min bar starts at an exchange-aligned minute (`:00`, `:15`, `:30`, `:45`). A bar that starts at `:07` is wrong.
@@ -124,3 +148,5 @@ Every reconciled port produces a report in `docs/references/reconciliations/<n>.
 - Loosening a tolerance to pass a test that classified as `warmup` or `timestamp`
 - "My engine works, LEAN must be buggy" — no, figure out which is right *per the reference specification*, and document
 - Forward-filling to align mismatched timestamp series
+- ISO-string, `DateTime`, or naive-`datetime` as a wire or storage format for timestamps (see "Canonical format" above — `int64 ms UTC` is the only allowed format)
+- Any of the ban-list items under "Timestamp rigor → Ban list"

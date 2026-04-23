@@ -270,7 +270,7 @@ describe('MarketDataService', () => {
         data: {
           calculateIndicators: {
             success: true, ticker: 'AAPL',
-            indicators: [createMockIndicatorSeries()], message: null,
+            indicators: [createMockIndicatorSeries()], error: null,
           },
         },
       });
@@ -287,7 +287,7 @@ describe('MarketDataService', () => {
         data: {
           calculateIndicators: {
             success: true, ticker: 'AAPL',
-            indicators: [createMockIndicatorSeries()], message: null,
+            indicators: [createMockIndicatorSeries()], error: null,
           },
         },
       });

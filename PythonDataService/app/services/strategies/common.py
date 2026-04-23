@@ -113,11 +113,17 @@ def _compute_max_drawdown(cum_pnl: list[float]) -> float:
 
 
 def format_timestamp(ts) -> str:
-    """Convert a timestamp (ms epoch or datetime) to ISO 8601."""
+    """Convert a timestamp (ms epoch or datetime) to unambiguous ISO 8601 UTC.
+
+    Uses 'T' separator and 'Z' suffix so browser `new Date(str)` parses as UTC.
+    The previous format '%Y-%m-%d %H:%M' (space, no tz) parsed as local time in
+    Chrome/Safari — 5-hour shift in ET browsers.
+    """
     if isinstance(ts, (int, float, np.integer, np.floating)):
-        return datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     if isinstance(ts, datetime):
-        return ts.strftime("%Y-%m-%d %H:%M")
+        dt = ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     if isinstance(ts, str):
         return ts
     return str(ts)
