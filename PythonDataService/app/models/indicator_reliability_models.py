@@ -6,7 +6,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 StrengthLabel = Literal["Noise", "Weak", "Moderate", "Strong"]
 StabilityLabel = Literal["Low", "Moderate", "High"]
 DirectionLabel = Literal["Mean-Reversion", "Momentum", "None"]

@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from app.research.validation.ic import compute_information_coefficient, ICResult
+from app.research.validation.ic import ICResult, compute_information_coefficient
 
 logger = logging.getLogger(__name__)
 
