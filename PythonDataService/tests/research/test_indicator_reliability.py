@@ -250,7 +250,7 @@ class TestMultipleTestingCorrection:
         # Bonferroni: p * n
         assert bonferroni[0] == pytest.approx(0.04)
         # Both corrections are >= raw p
-        for raw, b, f in zip(p_values, bonferroni, fdr):
+        for raw, b, f in zip(p_values, bonferroni, fdr, strict=True):
             assert b >= raw - 1e-9
             assert f >= raw - 1e-9
 

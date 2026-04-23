@@ -8,7 +8,7 @@ the TradingView-style inflated-win-rate bias.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -23,8 +23,8 @@ from app.engine.execution.order import Direction
 
 
 def _bar(high: str, low: str, close: str = "500.00") -> TradeBar:
-    start = datetime(2024, 1, 2, 14, 45, tzinfo=timezone.utc)
-    end = datetime(2024, 1, 2, 15, 0, tzinfo=timezone.utc)
+    start = datetime(2024, 1, 2, 14, 45, tzinfo=UTC)
+    end = datetime(2024, 1, 2, 15, 0, tzinfo=UTC)
     return TradeBar(
         symbol="SPY",
         time=start,

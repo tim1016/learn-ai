@@ -20,31 +20,8 @@ describe('AppComponent', () => {
     expect(fixture.componentInstance).toBeTruthy();
   });
 
-  it('should render PrimeNG menubar', () => {
-    const menubar = fixture.nativeElement.querySelector('p-menubar');
-    expect(menubar).toBeTruthy();
-  });
-
-  it('should have 7 top-level menu items', () => {
-    const items = fixture.componentInstance.items();
-    expect(items.length).toBe(7);
-    expect(items[0].label).toBe('Stocks');
-    expect(items[1].label).toBe('Data Quality');
-    expect(items[2].label).toBe('Options');
-    expect(items[3].label).toBe('Engine');
-    expect(items[4].label).toBe('Portfolio');
-    expect(items[5].label).toBe('Research Lab');
-    expect(items[6].label).toBe('Tracked Instruments');
-  });
-
-  it('should have 13 sub-items under Stocks', () => {
-    const stockItems = fixture.componentInstance.items()[0].items!;
-    expect(stockItems.length).toBe(13);
-  });
-
-  it('should have 6 sub-items under Options', () => {
-    const optionItems = fixture.componentInstance.items()[2].items!;
-    expect(optionItems.length).toBe(6);
+  it('should render the app sidebar', () => {
+    expect(fixture.nativeElement.querySelector('app-sidebar')).toBeTruthy();
   });
 
   it('should contain a router-outlet', () => {
