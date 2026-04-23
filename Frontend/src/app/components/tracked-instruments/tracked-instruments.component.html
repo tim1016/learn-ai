@@ -1,6 +1,8 @@
 <div class="tracked-instruments">
-  <h2>Tracked Market Instruments</h2>
-  <p class="subtitle">Monitoring {{ tickerList().length }} instruments from Polygon.io</p>
+  <app-page-header
+    title="Tracked Instruments"
+    [subtitle]="'Monitoring ' + tickerList().length + ' instruments from Polygon.io'"
+  />
 
   @if (loading()) {
     <div class="loading">Loading tickers...</div>

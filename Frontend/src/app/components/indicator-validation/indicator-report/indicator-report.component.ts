@@ -13,6 +13,7 @@ import {
 } from 'lightweight-charts';
 import { MarketDataService } from '../../../services/market-data.service';
 import { IndicatorTableRow } from '../../../graphql/types';
+import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 
 interface CsvRow {
   time: string;
@@ -78,7 +79,7 @@ const CHART_PANELS: ChartPanel[] = [
 @Component({
   selector: 'app-indicator-report',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule],
+  imports: [CommonModule, FormsModule, RouterModule, PageHeaderComponent],
   templateUrl: './indicator-report.component.html',
   styleUrls: ['./indicator-report.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

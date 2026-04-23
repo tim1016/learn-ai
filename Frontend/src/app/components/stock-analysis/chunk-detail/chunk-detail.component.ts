@@ -6,6 +6,7 @@ import { MarketDataService } from '../../../services/market-data.service';
 import { StockAggregate } from '../../../graphql/types';
 import { LineChartComponent } from '../../market-data/line-chart/line-chart.component';
 import { AtmMethod } from '../models';
+import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 
 interface DaySummary {
   date: string;
@@ -20,7 +21,7 @@ interface DaySummary {
 @Component({
   selector: 'app-chunk-detail',
   standalone: true,
-  imports: [CommonModule, RouterLink, LineChartComponent],
+  imports: [CommonModule, RouterLink, LineChartComponent, PageHeaderComponent],
   templateUrl: './chunk-detail.component.html',
   styleUrls: ['./chunk-detail.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

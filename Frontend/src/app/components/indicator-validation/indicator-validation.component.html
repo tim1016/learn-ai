@@ -1,13 +1,15 @@
 <div class="indicator-validation">
-  <div class="page-title">
-    <h2>Indicator Validation — TradingView vs pandas-ta</h2>
-    <a routerLink="/indicator-docs" class="docs-link">
+  <app-page-header
+    title="Indicator Validation"
+    subtitle="Side-by-side numerical parity between TradingView and pandas-ta across every indicator."
+  >
+    <a slot="actions" routerLink="/indicator-docs" class="docs-link">
       <i class="pi pi-book"></i> Calculation Reference
     </a>
-    <a routerLink="/indicator-report" class="docs-link">
+    <a slot="actions" routerLink="/indicator-report" class="docs-link">
       <i class="pi pi-chart-scatter"></i> Visual Report
     </a>
-  </div>
+  </app-page-header>
 
   <div class="controls">
     <div class="input-group">

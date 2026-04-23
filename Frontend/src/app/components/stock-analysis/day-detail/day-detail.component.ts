@@ -8,6 +8,7 @@ import { LineChartComponent } from '../../market-data/line-chart/line-chart.comp
 import { VolumeChartComponent } from '../../market-data/volume-chart/volume-chart.component';
 import { AtmMethod, SelectedContract } from '../models';
 import { selectNearAtmContracts } from '../utils';
+import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 
 interface ContractChartData {
   contract: SelectedContract;
@@ -17,7 +18,7 @@ interface ContractChartData {
 @Component({
   selector: 'app-day-detail',
   standalone: true,
-  imports: [CommonModule, RouterLink, LineChartComponent, VolumeChartComponent],
+  imports: [CommonModule, RouterLink, LineChartComponent, VolumeChartComponent, PageHeaderComponent],
   templateUrl: './day-detail.component.html',
   styleUrls: ['./day-detail.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

@@ -3,13 +3,14 @@ import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { DataLabDocsCardComponent, IndicatorDoc, IndicatorTab } from './data-lab-docs-card/data-lab-docs-card.component';
+import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 
 type PanelFilter = 'all' | 'overlay' | 'sub';
 
 @Component({
   selector: 'app-data-lab-docs',
   standalone: true,
-  imports: [CommonModule, RouterModule, DataLabDocsCardComponent],
+  imports: [CommonModule, RouterModule, DataLabDocsCardComponent, PageHeaderComponent],
   templateUrl: './data-lab-docs.component.html',
   styleUrls: ['./data-lab-docs.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

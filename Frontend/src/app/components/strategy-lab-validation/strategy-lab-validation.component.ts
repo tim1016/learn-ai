@@ -13,6 +13,7 @@ import { environment } from '../../../environments/environment';
 import {
   StrategyLabChartComponent,
 } from '../strategy-lab/strategy-lab-chart/strategy-lab-chart.component';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import type {
   ChartBar, ChartIndicatorResult, BacktestTradeForChart,
 } from '../strategy-lab/strategy-lab-chart/strategy-lab-chart.component';
@@ -144,6 +145,7 @@ interface RefTrade {
     TableModule, Tag,
     Accordion, AccordionPanel, AccordionHeader, AccordionContent,
     StrategyLabChartComponent,
+    PageHeaderComponent,
   ],
   templateUrl: './strategy-lab-validation.component.html',
   styleUrls: ['./strategy-lab-validation.component.scss'],

@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { Accordion, AccordionContent, AccordionHeader, AccordionPanel } from 'primeng/accordion';
 import { KatexDirective } from '../../../shared/katex.directive';
+import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 
 interface IndicatorDoc {
   name: string;
@@ -22,7 +23,7 @@ interface ParameterDoc {
 @Component({
   selector: 'app-indicator-docs',
   standalone: true,
-  imports: [CommonModule, RouterModule, Accordion, AccordionContent, AccordionHeader, AccordionPanel, KatexDirective],
+  imports: [CommonModule, RouterModule, Accordion, AccordionContent, AccordionHeader, AccordionPanel, KatexDirective, PageHeaderComponent],
   templateUrl: './indicator-docs.component.html',
   styleUrls: ['./indicator-docs.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

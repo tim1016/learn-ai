@@ -10,10 +10,12 @@ import {
 
 type Tab = 'single' | 'movers' | 'multi' | 'unified';
 
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+
 @Component({
   selector: 'app-snapshots',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, PageHeaderComponent],
   templateUrl: './snapshots.component.html',
   styleUrls: ['./snapshots.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

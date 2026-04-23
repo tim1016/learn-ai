@@ -11,6 +11,7 @@ import { OptionsMathDocsComponent } from './options-math-docs/options-math-docs.
 import { DataDivergenceComponent } from './data-divergence/data-divergence.component';
 import { StrategyPreflightComponent } from './strategy-preflight/strategy-preflight.component';
 import { IndicatorReliabilityComponent } from './indicator-reliability/indicator-reliability.component';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 type TabId =
   | 'feature-runner'
@@ -40,6 +41,7 @@ interface SubNavGroup {
   imports: [
     CommonModule,
     FeatureRunnerComponent,
+    PageHeaderComponent,
     InfoPanelComponent,
     ExperimentHistoryComponent,
     SignalRunnerComponent,

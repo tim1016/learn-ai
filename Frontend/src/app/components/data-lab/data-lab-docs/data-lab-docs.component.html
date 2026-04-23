@@ -1,17 +1,14 @@
 <div class="data-lab-docs">
 
-  <header class="page-header">
-    <div class="header-top">
-      <div>
-        <div class="eyebrow">Data Lab Docs</div>
-        <h1>Calculation Reference</h1>
-        <p class="subtitle">Indicator formulas, library attribution, CSV columns, validation methodology.</p>
-      </div>
-      <a routerLink="/data-lab" class="back-link">
-        <i class="pi pi-arrow-left"></i> Back to Data Lab
-      </a>
-    </div>
-  </header>
+  <app-page-header
+    eyebrow="Data Lab Docs"
+    title="Calculation Reference"
+    subtitle="Indicator formulas, library attribution, CSV columns, validation methodology."
+  >
+    <a slot="actions" routerLink="/data-lab" class="back-link">
+      <i class="pi pi-arrow-left"></i> Back to Data Lab
+    </a>
+  </app-page-header>
 
   <div class="workbench">
     <!-- ── Sidebar ─────────────────────────────────── -->

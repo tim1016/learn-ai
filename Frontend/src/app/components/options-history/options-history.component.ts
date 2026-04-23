@@ -9,6 +9,7 @@ import { StockAggregate } from '../../graphql/types';
 import { validateDateRange, getMinAllowedDate } from '../../utils/date-validation';
 import { LineChartComponent } from '../market-data/line-chart/line-chart.component';
 import { VolumeChartComponent } from '../market-data/volume-chart/volume-chart.component';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 export interface ContractRow {
   optionTicker: string;
@@ -34,7 +35,7 @@ export interface ScanResult {
 @Component({
   selector: 'app-options-history',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, LineChartComponent, VolumeChartComponent],
+  imports: [CommonModule, FormsModule, RouterLink, LineChartComponent, VolumeChartComponent, PageHeaderComponent],
   templateUrl: './options-history.component.html',
   styleUrls: ['./options-history.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { TickerService } from '../../services/ticker.service';
 import { Ticker } from '../../graphql/types';
 import { TradingViewWidgetComponent } from './tradingview-widget/tradingview-widget.component';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 interface TickerWithStats extends Ticker {
   aggregateCount?: number;
@@ -15,11 +16,13 @@ interface TickerWithStats extends Ticker {
 @Component({
   selector: 'app-tickers',
   standalone: true,
-  imports: [CommonModule, RouterLink, TradingViewWidgetComponent],
+  imports: [CommonModule, RouterLink, TradingViewWidgetComponent, PageHeaderComponent],
   template: `
     <div class="tickers-page">
-      <h1>Tickers</h1>
-      <p class="subtitle">Market instruments tracked in your database</p>
+      <app-page-header
+        title="Tickers"
+        subtitle="Every market instrument tracked in your local database."
+      />
 
       <details class="page-guide">
         <summary>How to use this page</summary>

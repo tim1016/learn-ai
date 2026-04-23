@@ -1,10 +1,12 @@
 <div class="indicator-report">
-  <div class="page-header">
-    <h2>Indicator Comparison Report</h2>
-    <a routerLink="/indicator-validation" class="back-link">
+  <app-page-header
+    title="Indicator Report"
+    subtitle="Visual chart-overlay comparison of TradingView and pandas-ta indicator values."
+  >
+    <a slot="actions" routerLink="/indicator-validation" class="back-link">
       <i class="pi pi-arrow-left"></i> Back to Validation
     </a>
-  </div>
+  </app-page-header>
 
   <!-- Controls -->
   <div class="controls">

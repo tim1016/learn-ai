@@ -15,6 +15,7 @@ import { VolumeChartComponent } from './volume-chart/volume-chart.component';
 import { SummaryStatsComponent } from './summary-stats/summary-stats.component';
 import { MarketCalendarComponent } from '../market-calendar/market-calendar.component';
 import { TableModule } from 'primeng/table';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 @Component({
   selector: 'app-market-data',
@@ -24,7 +25,8 @@ import { TableModule } from 'primeng/table';
     CandlestickChartComponent, LineChartComponent,
     VolumeChartComponent, SummaryStatsComponent,
     MarketCalendarComponent,
-    TableModule
+    TableModule,
+    PageHeaderComponent,
   ],
   templateUrl: './market-data.component.html',
   styleUrls: ['./market-data.component.scss'],

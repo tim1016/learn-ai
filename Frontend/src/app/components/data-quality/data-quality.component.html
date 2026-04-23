@@ -1,11 +1,12 @@
 <div class="data-quality">
-  <!-- Header -->
-  <div class="page-header">
-    <h2>Data Quality Analysis</h2>
-    <a routerLink="/data-quality-docs" class="docs-link">
+  <app-page-header
+    title="Data Quality"
+    subtitle="Pipeline health, missing-bar audits, and integrity scores for cached OHLCV."
+  >
+    <a slot="actions" routerLink="/data-quality-docs" class="docs-link">
       <i class="pi pi-book"></i> Pipeline Docs
     </a>
-  </div>
+  </app-page-header>
 
   <!-- Config Form -->
   <div class="card">

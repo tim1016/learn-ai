@@ -16,6 +16,7 @@ import {
 } from "primeng/accordion";
 import { KatexDirective } from "../../../shared/katex.directive";
 import { environment } from "../../../../environments/environment";
+import { PageHeaderComponent } from "../../../shared/page-header/page-header.component";
 
 interface StepDoc {
   order: number;
@@ -47,6 +48,7 @@ interface LibraryInfo {
     AccordionHeader,
     AccordionPanel,
     KatexDirective,
+    PageHeaderComponent,
   ],
   templateUrl: "./data-quality-docs.component.html",
   styleUrl: "./data-quality-docs.component.scss",

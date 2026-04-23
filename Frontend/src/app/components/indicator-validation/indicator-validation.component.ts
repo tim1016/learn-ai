@@ -8,6 +8,7 @@ import { RouterModule } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { MarketDataService } from '../../services/market-data.service';
 import { IndicatorTableRow } from '../../graphql/types';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 interface CsvRow {
   time: string;
@@ -63,7 +64,7 @@ const TV_CSV_MA_MAPPING = [
 @Component({
   selector: 'app-indicator-validation',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule],
+  imports: [CommonModule, FormsModule, RouterModule, PageHeaderComponent],
   templateUrl: './indicator-validation.component.html',
   styleUrls: ['./indicator-validation.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

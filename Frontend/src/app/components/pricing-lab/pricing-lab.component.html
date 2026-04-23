@@ -1,11 +1,10 @@
 <div class="pricing-lab bg-slate-900 text-slate-200 min-h-screen px-4 py-3">
+  <app-page-header
+    title="Pricing Lab"
+    subtitle="Black-Scholes and binomial option pricing with live greeks."
+  />
   <!-- Header -->
   <div class="flex items-center gap-3 mb-4 flex-wrap">
-    <h1 class="text-lg font-bold text-white shrink-0 flex items-center gap-2">
-      <i class="pi pi-chart-bar text-purple-400"></i>
-      Pricing Lab
-    </h1>
-
     <input
       pInputText
       [ngModel]="ticker()"

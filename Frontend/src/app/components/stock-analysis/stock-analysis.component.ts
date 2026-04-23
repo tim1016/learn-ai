@@ -13,6 +13,7 @@ import { ChunkQueueComponent } from './chunk-queue/chunk-queue.component';
 import { FetchChunk, ProgressStats, AtmMethod, TradingDay, SelectedContract, ChunkStatus } from './models';
 import { selectNearAtmContracts } from './utils';
 import { validateDateRange, getMinAllowedDate } from '../../utils/date-validation';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 /** Threshold in ms: if a chunk completes faster than this, it was served from cache */
 const CACHE_THRESHOLD_MS = 2000;
@@ -20,7 +21,7 @@ const CACHE_THRESHOLD_MS = 2000;
 @Component({
   selector: 'app-stock-analysis',
   standalone: true,
-  imports: [CommonModule, FormsModule, LineChartComponent, VolumeChartComponent, ChunkQueueComponent],
+  imports: [CommonModule, FormsModule, LineChartComponent, VolumeChartComponent, ChunkQueueComponent, PageHeaderComponent],
   templateUrl: './stock-analysis.component.html',
   styleUrls: ['./stock-analysis.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

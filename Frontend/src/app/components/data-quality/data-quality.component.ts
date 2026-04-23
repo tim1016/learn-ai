@@ -11,6 +11,7 @@ import { RouterModule } from "@angular/router";
 import { HttpClient } from "@angular/common/http";
 import { firstValueFrom } from "rxjs";
 import { environment } from "../../../environments/environment";
+import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
 
 interface StepReport {
   order: number;
@@ -69,7 +70,7 @@ interface MetricRow {
   selector: "app-data-quality",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, RouterModule],
+  imports: [CommonModule, FormsModule, RouterModule, PageHeaderComponent],
   templateUrl: "./data-quality.component.html",
   styleUrl: "./data-quality.component.scss",
 })

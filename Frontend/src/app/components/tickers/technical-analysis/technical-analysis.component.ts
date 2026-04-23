@@ -5,6 +5,7 @@ import { firstValueFrom } from 'rxjs';
 import { MarketDataService } from '../../../services/market-data.service';
 import { StockAggregate, IndicatorSeries } from '../../../graphql/types';
 import { TaChartComponent } from '../ta-chart/ta-chart.component';
+import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 
 interface AnalysisRequest {
   ticker: string;
@@ -25,7 +26,7 @@ interface AnalysisResult {
 @Component({
   selector: 'app-technical-analysis',
   standalone: true,
-  imports: [CommonModule, FormsModule, TaChartComponent],
+  imports: [CommonModule, FormsModule, TaChartComponent, PageHeaderComponent],
   templateUrl: './technical-analysis.component.html',
   styleUrls: ['./technical-analysis.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

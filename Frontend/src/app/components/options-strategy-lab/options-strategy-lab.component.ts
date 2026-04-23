@@ -27,6 +27,7 @@ import {
 import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
 import { PayoffChartComponent } from './payoff-chart/payoff-chart.component';
 import { Checkbox } from 'primeng/checkbox';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 interface LegConfig {
   strike: number;
@@ -51,6 +52,7 @@ interface StrategyTemplate {
     InputText, Button, Select, SelectButton, ProgressSpinner,
     InputNumber, ToggleSwitch, Checkbox,
     ExpirationRibbonComponent, PayoffChartComponent,
+    PageHeaderComponent,
   ],
   templateUrl: './options-strategy-lab.component.html',
   styleUrls: ['./options-strategy-lab.component.scss'],

@@ -4,6 +4,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { inject } from '@angular/core';
 import { map } from 'rxjs/operators';
 import { MarkdownViewerComponent } from '../../shared/markdown-viewer/markdown-viewer.component';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 /**
  * Full-page view of the methodology document. Reached via
@@ -14,28 +15,24 @@ import { MarkdownViewerComponent } from '../../shared/markdown-viewer/markdown-v
   selector: 'app-methodology-page',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MarkdownViewerComponent],
+  imports: [MarkdownViewerComponent, PageHeaderComponent],
   template: `
     <div class="methodology-page">
-      <header class="page-header">
-        <span class="page-eyebrow mono">Reference</span>
-        <h1 class="page-title">Indicator Reliability — Methodology</h1>
-        <p class="page-subtitle">
-          Consolidated reference: IC statistics, multiple-testing correction,
-          random baselines, regime conditioning, IR proxy, and the
-          mission-control UI.
-        </p>
-        <div class="page-actions">
-          <a
-            class="page-link"
-            href="/assets/docs/indicator-reliability-methodology.md"
-            target="_blank"
-            rel="noopener"
-          >
-            Raw markdown <i class="pi pi-external-link" aria-hidden="true"></i>
-          </a>
-        </div>
-      </header>
+      <app-page-header
+        eyebrow="Reference"
+        title="Indicator Reliability — Methodology"
+        subtitle="Consolidated reference: IC statistics, multiple-testing correction, random baselines, regime conditioning, IR proxy, and the mission-control UI."
+      >
+        <a
+          slot="actions"
+          class="page-link"
+          href="/assets/docs/indicator-reliability-methodology.md"
+          target="_blank"
+          rel="noopener"
+        >
+          Raw markdown <i class="pi pi-external-link" aria-hidden="true"></i>
+        </a>
+      </app-page-header>
 
       <app-markdown-viewer
         [src]="src()"

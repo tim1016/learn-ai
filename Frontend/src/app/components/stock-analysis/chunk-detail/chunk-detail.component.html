@@ -3,10 +3,11 @@
     <i class="pi pi-arrow-left"></i> Back to Stock Analysis
   </a>
 
-  <h1>{{ ticker() }} &mdash; {{ fromDate() }} to {{ toDate() }}</h1>
-  <p class="subtitle">
-    {{ sortedBars().length | number }} minute bars across {{ tradingDays().length }} trading days
-  </p>
+  <app-page-header
+    eyebrow="Stock Analysis · Chunk"
+    [title]="ticker() + ' — ' + fromDate() + ' to ' + toDate()"
+    [subtitle]="(sortedBars().length | number) + ' minute bars across ' + tradingDays().length + ' trading days'"
+  />
 
   @if (loading()) {
     <div class="loading-state">Loading chunk data...</div>

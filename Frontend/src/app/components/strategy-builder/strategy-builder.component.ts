@@ -25,6 +25,7 @@ import {
 } from '../../utils/black-scholes';
 import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
 import { PayoffChartComponent } from '../options-strategy-lab/payoff-chart/payoff-chart.component';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 interface BuilderChainRow {
   strike: number;
@@ -74,6 +75,7 @@ interface StrategyTemplate {
     FormsModule, DecimalPipe,
     InputText, Button, Tooltip, Skeleton, SelectButton, Select,
     ExpirationRibbonComponent, PayoffChartComponent,
+    PageHeaderComponent,
   ],
   templateUrl: './strategy-builder.component.html',
   styleUrls: ['./strategy-builder.component.scss'],

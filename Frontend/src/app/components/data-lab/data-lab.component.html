@@ -1,8 +1,9 @@
 <div class="data-lab">
-  <div class="page-header">
-    <div class="header-row">
-      <h2>Data Lab</h2>
-      <div class="header-actions">
+  <app-page-header
+    title="Data Lab"
+    subtitle="Fetch minute-by-minute OHLCV from Polygon.io, calculate pandas-ta indicators, export as a single CSV + metadata JSON."
+  >
+    <div slot="actions" class="header-actions">
         <button class="btn-sessions" (click)="toggleSessionPanel()" [class.active]="sessionPanelOpen()">
           <i class="pi pi-history"></i> Sessions
           @if (savedSessions().length) {
@@ -12,11 +13,9 @@
         <a routerLink="/data-lab-docs" class="docs-link">
           <i class="pi pi-book"></i> Documentation
         </a>
-      </div>
     </div>
-    <p class="subtitle">
-      Fetch minute-by-minute OHLCV from Polygon.io, calculate pandas-ta indicators, export as a single CSV + metadata JSON
-    </p>
+  </app-page-header>
+  <div class="page-header">
 
     <!-- Active session indicator -->
     @if (activeSessionId()) {

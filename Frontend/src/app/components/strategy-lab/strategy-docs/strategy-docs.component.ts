@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { Accordion, AccordionContent, AccordionHeader, AccordionPanel } from 'primeng/accordion';
 import { KatexDirective } from '../../../shared/katex.directive';
+import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 
 interface IndicatorDoc {
   name: string;
@@ -27,7 +28,7 @@ interface PitfallDoc {
 @Component({
   selector: 'app-strategy-docs',
   standalone: true,
-  imports: [CommonModule, RouterModule, Accordion, AccordionContent, AccordionHeader, AccordionPanel, KatexDirective],
+  imports: [CommonModule, RouterModule, Accordion, AccordionContent, AccordionHeader, AccordionPanel, KatexDirective, PageHeaderComponent],
   templateUrl: './strategy-docs.component.html',
   styleUrls: ['./strategy-docs.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

@@ -3,11 +3,11 @@
     <i class="pi pi-arrow-left"></i> Back to Stock Analysis
   </a>
 
-  <h1>{{ ticker() }} &mdash; {{ date() }}</h1>
-  <p class="subtitle">
-    Minute-level stock &amp; 0DTE options data
-    &middot; ATM Method: {{ atmMethod() === 'currentOpen' ? 'Current Open' : 'Previous Close' }}
-  </p>
+  <app-page-header
+    eyebrow="Stock Analysis · Day"
+    [title]="ticker() + ' — ' + date()"
+    [subtitle]="'Minute-level stock &amp; 0DTE options data · ATM method: ' + (atmMethod() === 'currentOpen' ? 'Current Open' : 'Previous Close')"
+  />
 
   @if (loading()) {
     <div class="loading-state">Loading stock data...</div>

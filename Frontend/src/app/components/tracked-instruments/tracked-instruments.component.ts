@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { firstValueFrom, forkJoin } from 'rxjs';
 import { MarketDataService } from '../../services/market-data.service';
 import { TickerInfo, TickerDetailResult, RelatedTickersResult } from '../../graphql/types';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 const TRACKED_TICKERS = [
   'NVDA', 'TSLA', 'AAPL', 'AMZN', 'MSFT', 'META', 'GOOGL', 'GOOG', 'AMD', 'PLTR',
@@ -15,7 +16,7 @@ const TRACKED_TICKERS = [
 @Component({
   selector: 'app-tracked-instruments',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, PageHeaderComponent],
   templateUrl: './tracked-instruments.component.html',
   styleUrls: ['./tracked-instruments.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

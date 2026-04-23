@@ -34,6 +34,7 @@ import {
   ChartIndicatorResult,
 } from './strategy-lab-chart/strategy-lab-chart.component';
 import { BacktestResultsComponent } from './backtest-results/backtest-results.component';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 export type LabMode = 'backtest' | 'replay';
 
@@ -177,6 +178,7 @@ export interface BacktestTradeForChart {
     LineChartComponent,
     ReplayControlsComponent, ReplayChartComponent,
     BacktestResultsComponent,
+    PageHeaderComponent,
   ],
   templateUrl: './strategy-lab.component.html',
   styleUrls: ['./strategy-lab.component.scss'],

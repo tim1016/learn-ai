@@ -1,12 +1,13 @@
 <div class="dq-docs">
-
-  <div class="page-header">
-    <h1>Data Quality Pipeline Documentation</h1>
-    <p class="subtitle">Step-by-step cleanup process, libraries, formulas, and rationale</p>
-    <a routerLink="/data-quality" class="back-link">
+  <app-page-header
+    eyebrow="Data Quality Docs"
+    title="Pipeline Documentation"
+    subtitle="Step-by-step cleanup process, libraries, formulas, and rationale."
+  >
+    <a slot="actions" routerLink="/data-quality" class="back-link">
       <i class="pi pi-arrow-left"></i> Back to Data Quality
     </a>
-  </div>
+  </app-page-header>
 
   @if (loading()) {
     <div class="loading-msg">

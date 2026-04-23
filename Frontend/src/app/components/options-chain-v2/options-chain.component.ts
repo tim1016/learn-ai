@@ -20,6 +20,7 @@ import { getMinAllowedDate } from '../../utils/date-validation';
 import { CandlestickChartComponent } from '../market-data/candlestick-chart/candlestick-chart.component';
 import { VolumeChartComponent } from '../market-data/volume-chart/volume-chart.component';
 import { ExpirationRibbonComponent } from './expiration-ribbon/expiration-ribbon.component';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 // Pre-computed row with all display data — no method calls needed in template
 interface ChainRow {
@@ -80,6 +81,7 @@ interface ParsedOptionTicker {
     Tooltip, Skeleton, ProgressSpinner,
     CandlestickChartComponent, VolumeChartComponent,
     ExpirationRibbonComponent,
+    PageHeaderComponent,
   ],
   templateUrl: './options-chain.component.html',
   styleUrls: ['./options-chain.component.scss'],

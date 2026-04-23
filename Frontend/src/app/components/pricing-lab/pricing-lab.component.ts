@@ -37,6 +37,7 @@ import {
   bsRho,
   bsTheta, bsVega,
 } from '../../utils/black-scholes';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 type ChartMetric = 'price' | GreekType;
 
@@ -121,7 +122,7 @@ export const MODEL_REGISTRY: ModelDef[] = [
 @Component({
   selector: 'app-pricing-lab',
   standalone: true,
-  imports: [FormsModule, DecimalPipe, TitleCasePipe, InputText, Button, Select, SelectButton, Skeleton],
+  imports: [FormsModule, DecimalPipe, TitleCasePipe, InputText, Button, Select, SelectButton, Skeleton, PageHeaderComponent],
   templateUrl: './pricing-lab.component.html',
   styleUrls: ['./pricing-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
