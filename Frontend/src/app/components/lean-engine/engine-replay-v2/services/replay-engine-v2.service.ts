@@ -434,6 +434,7 @@ export class ReplayEngineV2Service {
       clearTimeout(this.flashTimeoutId);
       this.flashTimeoutId = null;
     }
+    this._flashEvent.set(null);
   }
 
   private startInterval(): void {
