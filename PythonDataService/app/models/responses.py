@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SanitizedDataResponse(BaseModel):
@@ -444,3 +444,87 @@ class DatasetGenerationResponse(BaseModel):
     columns: list[str] = []
     indicators_calculated: list[str] = []
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# LEAN-parity statistics response models
+#
+# Moved from app/routers/backtest.py (deleted as dark code — PR 4) because
+# app/routers/engine.py (the live backtest path) depends on these shapes.
+# ---------------------------------------------------------------------------
+class LeanPortfolioStatsResponse(BaseModel):
+    """LEAN PortfolioStatistics — 25 fields matching PS.cs exactly."""
+
+    average_win_rate: float = 0.0
+    average_loss_rate: float = 0.0
+    profit_loss_ratio: float = 0.0
+    win_rate: float = 0.0
+    loss_rate: float = 0.0
+    expectancy: float = 0.0
+    start_equity: float = 0.0
+    end_equity: float = 0.0
+    total_net_profit: float = 0.0
+    compounding_annual_return: float = 0.0
+    sharpe_ratio: float = 0.0
+    sortino_ratio: float = 0.0
+    probabilistic_sharpe_ratio: float = 0.0
+    annual_standard_deviation: float = 0.0
+    annual_variance: float = 0.0
+    alpha: float = 0.0
+    beta: float = 0.0
+    information_ratio: float = 0.0
+    tracking_error: float = 0.0
+    treynor_ratio: float = 0.0
+    drawdown: float = 0.0
+    drawdown_recovery: int = 0
+    value_at_risk_99: float = 0.0
+    value_at_risk_95: float = 0.0
+    portfolio_turnover: float = 0.0
+
+
+class LeanTradeStatsResponse(BaseModel):
+    """LEAN TradeStatistics — key fields matching TS.cs."""
+
+    start_date_time: str = ""
+    end_date_time: str = ""
+    total_number_of_trades: int = 0
+    number_of_winning_trades: int = 0
+    number_of_losing_trades: int = 0
+    total_profit_loss: float = 0.0
+    total_profit: float = 0.0
+    total_loss: float = 0.0
+    largest_profit: float = 0.0
+    largest_loss: float = 0.0
+    average_profit_loss: float = 0.0
+    average_profit: float = 0.0
+    average_loss: float = 0.0
+    average_trade_duration: str = ""
+    average_winning_trade_duration: str = ""
+    average_losing_trade_duration: str = ""
+    max_consecutive_winning_trades: int = 0
+    max_consecutive_losing_trades: int = 0
+    profit_factor: float = 0.0
+    profit_to_max_drawdown_ratio: float = 0.0
+    profit_loss_standard_deviation: float = 0.0
+    profit_loss_downside_deviation: float = 0.0
+    sharpe_ratio: float = 0.0
+    sortino_ratio: float = 0.0
+    total_fees: float = 0.0
+
+
+class LeanRuntimeStatsResponse(BaseModel):
+    """LEAN runtimeStatistics — 5 key fields."""
+
+    equity: float = 0.0
+    fees: float = 0.0
+    net_profit: float = 0.0
+    total_return: float = 0.0
+    total_orders: int = 0
+
+
+class LeanStatisticsResponse(BaseModel):
+    """Full LEAN statistics suite."""
+
+    portfolio: LeanPortfolioStatsResponse = Field(default_factory=LeanPortfolioStatsResponse)
+    trade: LeanTradeStatsResponse = Field(default_factory=LeanTradeStatsResponse)
+    runtime: LeanRuntimeStatsResponse = Field(default_factory=LeanRuntimeStatsResponse)

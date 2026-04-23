@@ -293,7 +293,7 @@ public class QueryTests
             "AAPL", "2026-01-01", "2026-01-31", indicators);
 
         Assert.False(result.Success);
-        Assert.Contains("No data found", result.Message);
+        Assert.Contains("No data found", result.Error);
     }
 
     [Fact]
@@ -312,7 +312,7 @@ public class QueryTests
             "AAPL", "2026-01-01", "2026-01-31", indicators);
 
         Assert.False(result.Success);
-        Assert.Contains("No aggregate data", result.Message);
+        Assert.Contains("No aggregate data", result.Error);
     }
 
     [Fact]
@@ -394,7 +394,7 @@ public class QueryTests
             "AAPL", "2026-01-01", "2026-01-31", indicators);
 
         Assert.False(result.Success);
-        Assert.Contains("Python service down", result.Message);
+        Assert.Contains("Python service down", result.Error);
     }
 
     #endregion
