@@ -523,4 +523,50 @@ public class MarketDataServiceTests
     }
 
     #endregion
+
+    #region Temporal integrity — regression for audit § 2.5
+
+    /// <summary>
+    /// Regression: before fix, DateTime.Parse without CultureInfo/DateTimeStyles
+    /// produced Kind=Local. The subsequent .ToUniversalTime() was a no-op in the
+    /// UTC container but shifted every stored bar silently under TZ=America/New_York.
+    /// After fix: parsed Kind is Utc regardless of container TZ.
+    /// </summary>
+    [Fact]
+    public async Task FetchAndStoreAggregatesAsync_StoredTimestampKindIsUtc()
+    {
+        var context = TestDbContextFactory.Create();
+        var service = new MarketDataService(context, _polygonServiceMock.Object, _loggerMock.Object);
+
+        var aggregateResponse = new AggregateResponse
+        {
+            Success = true,
+            Ticker = "AAPL",
+            DataType = "aggregates",
+            Data =
+            [
+                new AggregateData
+                {
+                    Timestamp = "2024-01-01T00:00:00.000000Z",
+                    Open = 150m, High = 155m, Low = 148m, Close = 153m,
+                    Volume = 1_000_000m, Vwap = 151.5m, Transactions = 5000
+                }
+            ],
+            Summary = new DataSummary { OriginalCount = 1, CleanedCount = 1, RemovedCount = 0 }
+        };
+
+        _polygonServiceMock
+            .Setup(p => p.FetchAggregatesAsync("AAPL", 1, "day", "2024-01-01", "2024-01-01",
+                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(aggregateResponse);
+
+        var result = await service.FetchAndStoreAggregatesAsync(
+            "AAPL", 1, "day", "2024-01-01", "2024-01-01");
+
+        Assert.Single(result);
+        Assert.Equal(DateTimeKind.Utc, result[0].Timestamp.Kind);
+        Assert.Equal(new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), result[0].Timestamp);
+    }
+
+    #endregion
 }

@@ -48,8 +48,9 @@ class DataSanitizer:
 
             logger.info(f"Sanitizing {original_count} aggregate records")
 
-            # Convert timestamp from ms to datetime for proper time-series handling
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            # Convert timestamp from ms to datetime for proper time-series handling.
+            # utc=True so downstream .strftime('...Z') is honest (not a naive-Z lie).
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
 
             # Remove duplicates
             if settings.REMOVE_DUPLICATES:
@@ -108,8 +109,8 @@ class DataSanitizer:
 
             logger.info(f"Sanitizing {original_count} trade records")
 
-            # Convert timestamp (nanoseconds for trades)
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ns")
+            # Convert timestamp (nanoseconds for trades); utc=True so .strftime('...Z') is honest.
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ns", utc=True)
 
             # Remove duplicates
             if settings.REMOVE_DUPLICATES:
@@ -191,11 +192,14 @@ class DataSanitizer:
 
             logger.info(f"Generic sanitization on {original_count} records (quantile={quantile})")
 
-            # Handle timestamp column if present (convert from Unix ms)
+            # Handle timestamp column if present — preserve original Unix ms untouched.
+            # Historically this round-tripped through pd.to_datetime and back with //10**6,
+            # which in pandas 3.0 returns microseconds (not ns), collapsing every
+            # timestamp by a factor of 10**6 (e.g. 1704067200000 → 1704067 → 1970-01-20).
             has_timestamp = "timestamp" in df.columns
-            timestamps = None
+            original_timestamps = None
             if has_timestamp:
-                timestamps = pd.to_datetime(df["timestamp"], unit="ms")
+                original_timestamps = df["timestamp"].copy()
                 df = df.drop(columns=["timestamp"])
 
             # Handle symbol/string columns
@@ -211,9 +215,9 @@ class DataSanitizer:
                 for col in string_cols:
                     cleaned[col] = string_data[col].loc[cleaned.index].values
 
-            if has_timestamp and timestamps is not None:
-                # Return as Unix ms (long) for C# interop
-                cleaned["timestamp"] = timestamps.loc[cleaned.index].astype(np.int64) // 10**6
+            if has_timestamp and original_timestamps is not None:
+                # Return the original ms values untouched — no tz math, no collapse.
+                cleaned["timestamp"] = original_timestamps.loc[cleaned.index].astype(np.int64)
 
             cleaned_count = len(cleaned)
 
