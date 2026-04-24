@@ -1,6 +1,28 @@
-"""Wrapper around Polygon.io REST client with error handling"""
+"""Wrapper around Polygon.io REST client with error handling.
+
+Proactive rate limiting
+-----------------------
+On the Polygon **Starter** plan every account gets **5 requests per minute**.
+Exceeding that returns HTTP 429 and gets counted against a daily "bad-citizen"
+quota that slows *all* subsequent traffic. Instead of reacting to 429s after
+they happen, this client paces requests on the way out:
+
+    Before sending any request, we check the timestamps of the last N
+    requests. If N is already at the plan's per-minute ceiling, we sleep
+    until the oldest one falls out of the 60-second window.
+
+This adds deterministic latency that the UI surfaces as "Your Polygon Starter
+plan allows 5 requests/minute — waiting X seconds for the next slot." Users
+see why the app is slow rather than guessing.
+
+See ``docs/references/polygon-throttle.md`` for the layman explanation.
+"""
 
 import logging
+import threading
+import time
+from collections import deque
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -11,11 +33,66 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+# A progress callback the throttle invokes when it has to sleep — lets the
+# SSE pipeline surface "next request paced for 9s" to the user.
+ThrottleEvent = Callable[[dict[str, Any]], None]
+
+
+class _PolygonThrottle:
+    """Thread-safe sliding-window rate limiter for Polygon.
+
+    Tracks the monotonic timestamps of the most recent requests and
+    sleeps the caller just long enough to stay under ``max_per_min``.
+    Zero disables the throttle (handy for local dev, or for Advanced-plan
+    accounts with no per-minute cap). Uses a lock so concurrent
+    FastAPI workers coordinate on the same budget.
+
+    When ``on_event`` is supplied to :meth:`acquire`, the throttle emits a
+    ``{"type": "chunk_paced", "wait_seconds": float, "label": str}`` event
+    each time it sleeps. Callers wire this through to a per-request event
+    queue so the UI can show a live "paced for 9s" readout.
+    """
+
+    def __init__(self, max_per_min: int):
+        self._max = max_per_min
+        self._hits: deque[float] = deque()
+        self._lock = threading.Lock()
+
+    def acquire(
+        self,
+        label: str = "polygon",
+        on_event: ThrottleEvent | None = None,
+    ) -> None:
+        if self._max <= 0:
+            return
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                # Evict any hits older than 60s from the left.
+                while self._hits and now - self._hits[0] >= 60.0:
+                    self._hits.popleft()
+                if len(self._hits) < self._max:
+                    self._hits.append(now)
+                    return
+                wait = 60.0 - (now - self._hits[0])
+            if wait > 0:
+                logger.info(
+                    "[THROTTLE] Paused %.1fs on %s — your Polygon plan allows %d requests/min.",
+                    wait,
+                    label,
+                    self._max,
+                )
+                if on_event is not None:
+                    on_event({"type": "chunk_paced", "wait_seconds": wait, "label": label})
+                time.sleep(wait)
+
+
 class PolygonClientService:
     """Wrapper around Polygon.io REST client with error handling"""
 
     def __init__(self):
         self.client = RESTClient(api_key=settings.POLYGON_API_KEY)
+        self._throttle = _PolygonThrottle(settings.POLYGON_RATE_LIMIT_PER_MIN)
 
     def fetch_aggregates(
         self,
@@ -27,6 +104,7 @@ class PolygonClientService:
         limit: int = 50000,
         adjusted: bool = True,
         sort: str = "asc",
+        on_event: ThrottleEvent | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch aggregate bars (OHLCV) from Polygon.
 
@@ -41,6 +119,12 @@ class PolygonClientService:
                 f"Fetching aggregates for {ticker}: {from_date} to {to_date} "
                 f"(timespan={timespan}x{multiplier}, adjusted={adjusted}, sort={sort}, limit={limit})"
             )
+
+            # Proactive pacing — one list_aggs call is one Polygon request
+            # (pagination happens inside the SDK call; the SDK-level retry
+            # is what eats the 429s when we run over). Acquiring before
+            # .list_aggs keeps us under the per-minute ceiling.
+            self._throttle.acquire(label=f"aggs:{ticker}", on_event=on_event)
 
             aggs = []
             for agg in self.client.list_aggs(
