@@ -66,18 +66,16 @@
               </div>
             }
 
-            <div class="form-grid">
-              <label class="field">
-                <span class="label">
-                  Resolution
-                  <span class="hint" title="Minute reads per-day zips; Daily reads per-symbol history zip.">?</span>
-                </span>
-                <select [ngModel]="resolution()" (ngModelChange)="resolution.set($event)">
-                  <option value="minute">Minute</option>
-                  <option value="daily">Daily</option>
-                </select>
-              </label>
+            <app-ticker-range-picker
+              [(value)]="rangeState"
+              [tickerPool]="tickerPool"
+              [recent]="recentTickers"
+              [availability]="pickerAvailability()"
+              [availableResolutions]="['minute', 'daily']"
+              (advisoryAction)="onPickerAdvisoryAction($event)"
+            />
 
+            <div class="form-grid">
               <label class="field">
                 <span class="label">Strategy</span>
                 <select
@@ -105,27 +103,6 @@
               </label>
 
               <label class="field">
-                <span class="label">Start date</span>
-                <input type="date" [ngModel]="startDate()" (ngModelChange)="startDate.set($event)" />
-              </label>
-
-              <label class="field">
-                <span class="label">End date</span>
-                <input type="date" [ngModel]="endDate()" (ngModelChange)="endDate.set($event)" />
-              </label>
-
-              <div class="field range-presets-field">
-                <span class="label">Quick range</span>
-                <div class="range-presets">
-                  @for (preset of rangePresets; track preset.label) {
-                    <p-button size="small" (click)="setPresetRange(preset.days)">
-                      {{ preset.label }}
-                    </p-button>
-                  }
-                </div>
-              </div>
-
-              <label class="field">
                 <span class="label">Initial cash</span>
                 <input type="number" min="0" step="1000"
                   [ngModel]="initialCash()" (ngModelChange)="initialCash.set($event)" />
@@ -138,14 +115,6 @@
                 </span>
                 <input type="number" min="0" step="0.01"
                   [ngModel]="commissionPerOrder()" (ngModelChange)="commissionPerOrder.set($event)" />
-              </label>
-
-              <label class="field checkbox-field">
-                <input type="checkbox" [ngModel]="autoFetch()" (ngModelChange)="autoFetch.set($event)" />
-                <span class="label">
-                  Auto-fetch missing data from Polygon
-                  <span class="hint" title="Pull bars missing from local cache via Polygon before the backtest.">?</span>
-                </span>
               </label>
             </div>
 

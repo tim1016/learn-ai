@@ -23,6 +23,34 @@ import { InsightPanelComponent } from "./insight-panel/insight-panel.component";
 import { TvCompatPanelComponent } from "./tv-compat-panel/tv-compat-panel.component";
 import { EngineReplayV2Component } from "./engine-replay-v2/engine-replay-v2.component";
 import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
+import {
+  TickerRangePickerComponent,
+  type AdvisoryAction,
+  type AvailabilityCell,
+  type AvailabilityStatus,
+  type TickerOption,
+  type TickerRange,
+} from "../../shared/ticker-range-picker";
+
+// A curated starter universe for the symbol combobox. Tickers not in this
+// pool can still be used — just edit the strategy's ``symbol`` field — but
+// the picker itself only surfaces what's here. Ordering matches "most
+// useful first" for dark-pool / ETF / mega-cap research.
+const TICKER_POOL: readonly TickerOption[] = [
+  { symbol: "SPY", name: "SPDR S&P 500 ETF Trust", exchange: "ARCA" },
+  { symbol: "QQQ", name: "Invesco QQQ Trust", exchange: "NASDAQ" },
+  { symbol: "IWM", name: "iShares Russell 2000 ETF", exchange: "ARCA" },
+  { symbol: "AAPL", name: "Apple Inc.", exchange: "NASDAQ" },
+  { symbol: "MSFT", name: "Microsoft Corporation", exchange: "NASDAQ" },
+  { symbol: "NVDA", name: "NVIDIA Corporation", exchange: "NASDAQ" },
+  { symbol: "TSLA", name: "Tesla, Inc.", exchange: "NASDAQ" },
+  { symbol: "AMZN", name: "Amazon.com, Inc.", exchange: "NASDAQ" },
+  { symbol: "META", name: "Meta Platforms, Inc.", exchange: "NASDAQ" },
+  { symbol: "GOOGL", name: "Alphabet Inc.", exchange: "NASDAQ" },
+  { symbol: "AMD", name: "Advanced Micro Devices", exchange: "NASDAQ" },
+];
+
+const RECENT_TICKERS: readonly string[] = ["SPY", "QQQ", "AAPL"];
 
 // Severity for pre-flight: re-declared locally so we don't import the panel's types.
 type PreflightSeverity = "ok" | "warning" | "blocking";
@@ -131,6 +159,7 @@ interface DataAvailability {
     EngineChartComponent, InsightPanelComponent,
     TvCompatPanelComponent, EngineReplayV2Component,
     PageHeaderComponent,
+    TickerRangePickerComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./lean-engine.component.html",
@@ -301,6 +330,58 @@ export class LeanEngineComponent implements OnInit {
     return "SPY";
   });
 
+  readonly tickerPool = TICKER_POOL;
+  readonly recentTickers = RECENT_TICKERS;
+
+  /** Writable source of truth for the shared picker. Kept as a
+   *  ``signal`` (not ``computed``) so the picker's two-way binding
+   *  isn't clobbered on every change-detection cycle by a re-evaluated
+   *  parent expression. An ``effect`` below propagates writes into the
+   *  legacy per-field signals that the availability check and the
+   *  ``run()`` body read from. */
+  readonly rangeState = signal<TickerRange>({
+    symbol: "SPY",
+    from: LeanEngineComponent.defaultStart(),
+    to: LeanEngineComponent.defaultEnd(),
+    resolution: "minute",
+    autoFetch: true,
+  });
+
+  /** Per-day availability cells derived from the existing summary-level
+   *  ``DataAvailability`` response. The backend only returns aggregate
+   *  counts + a ``missing_days`` list today, so we iterate every weekday
+   *  in the range and mark it complete / missing accordingly. Weekends
+   *  render as faint placeholders. */
+  readonly pickerAvailability = computed<readonly AvailabilityCell[]>(() => {
+    const av = this.availability();
+    const from = this.startDate();
+    const to = this.endDate();
+    if (!from || !to) return [];
+    const missing = new Set(av?.missing_days ?? []);
+    const cells: AvailabilityCell[] = [];
+    const start = new Date(from + "T00:00:00Z");
+    const end = new Date(to + "T00:00:00Z");
+    for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+      const iso = d.toISOString().slice(0, 10);
+      const dow = d.getUTCDay();
+      let status: AvailabilityStatus;
+      if (dow === 0 || dow === 6) status = "weekend";
+      else if (missing.has(iso)) status = "missing";
+      else if (av) status = "complete";
+      else status = "missing";
+      cells.push({ date: iso, status });
+    }
+    return cells;
+  });
+
+  onPickerAdvisoryAction(action: AdvisoryAction): void {
+    if (action.triggerRun) {
+      void this.run();
+      this.activeTab.set("1");
+    }
+    // ``refetchHoles`` is advisory for now — no backend endpoint yet.
+  }
+
   /** Strategies filtered down to those that support the currently-selected
    *  engine resolution. The filter is applied at the registry level on the
    *  backend too, but mirroring it here keeps the dropdown honest: picking
@@ -322,13 +403,40 @@ export class LeanEngineComponent implements OnInit {
   readonly paramEntries = computed(() => {
     const schema = this.selectedStrategy()?.params_schema;
     if (!schema?.properties) return [];
-    return Object.entries(schema.properties).map(([name, prop]) => ({
-      name,
-      prop,
-    }));
+    // ``symbol`` is driven by the shared ticker-range picker, not a free
+    // form field — hide it from the generic params form so it isn't
+    // shown twice.
+    return Object.entries(schema.properties)
+      .filter(([name]) => name !== "symbol")
+      .map(([name, prop]) => ({ name, prop }));
   });
 
   constructor() {
+    // Keep the legacy per-field signals in sync with the picker's
+    // writable ``rangeState``. These signals are what the availability
+    // check, preflight panel, and ``run()`` body read from, so this
+    // effect is the single bridge between the new picker and the rest
+    // of the component — no consumer below the picker had to change.
+    effect(() => {
+      const v = this.rangeState();
+      this.startDate.set(v.from);
+      this.endDate.set(v.to);
+      this.resolution.set(v.resolution as EngineResolution);
+      this.autoFetch.set(v.autoFetch ?? false);
+
+      // Mirror the picker's symbol into the strategy's params dict if
+      // the selected strategy exposes a ``symbol`` field. Otherwise the
+      // picker's symbol is informational only (e.g. the SPY-hardcoded
+      // EMA crossover).
+      const schema = this.selectedStrategy()?.params_schema;
+      if (schema?.properties && "symbol" in schema.properties) {
+        const current = this.paramValues();
+        if (current["symbol"] !== v.symbol) {
+          this.paramValues.set({ ...current, symbol: v.symbol });
+        }
+      }
+    }, { allowSignalWrites: true });
+
     // Auto-refresh the availability report whenever the user changes
     // symbol, start date, or end date. We don't wait for a "Check" button
     // because that would make the UI feel sluggish and the endpoint is

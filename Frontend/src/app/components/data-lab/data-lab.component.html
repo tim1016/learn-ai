@@ -143,94 +143,40 @@
 
   <!-- Controls -->
   <div class="controls-card">
-    <div class="controls-row">
-      <div class="input-group">
-        <label>Ticker</label>
-        <input type="text" [(ngModel)]="ticker" />
-      </div>
-      <div class="input-group date-picker-group">
-        <label>From</label>
-        <p-datepicker
-          [(ngModel)]="fromDateValue"
-          dateFormat="yy-mm-dd"
-          [showIcon]="true"
-          [minDate]="minDate"
-          [maxDate]="maxDate"
-          [disabledDays]="disabledDays"
-          [disabledDates]="disabledDates()"
-          [showButtonBar]="true"
-          [firstDayOfWeek]="1"
-        >
-          <ng-template pTemplate="date" let-dateMeta>
-            @let holiday = getHolidayForDate(dateMeta.day, dateMeta.month, dateMeta.year);
-            @if (holiday) {
-              <span
-                class="holiday-date"
-                [class.early-close]="holiday.status === 'Early Close'"
-                [class.closed]="holiday.status === 'Closed'"
-                [pTooltip]="getHolidayTooltip(holiday)"
-                tooltipPosition="top"
-              >{{ dateMeta.day }}</span>
-            } @else {
-              <span>{{ dateMeta.day }}</span>
-            }
-          </ng-template>
-          <ng-template pTemplate="footer">
-            @if (holidays().length) {
-              <div class="holiday-legend">
-                <span class="legend-item"><span class="legend-dot closed"></span> Closed</span>
-                <span class="legend-item"><span class="legend-dot early-close"></span> Early Close</span>
-              </div>
-            }
-          </ng-template>
-        </p-datepicker>
-      </div>
-      <div class="input-group date-picker-group">
-        <label>To</label>
-        <p-datepicker
-          [(ngModel)]="toDateValue"
-          dateFormat="yy-mm-dd"
-          [showIcon]="true"
-          [minDate]="minDate"
-          [maxDate]="maxDate"
-          [disabledDays]="disabledDays"
-          [disabledDates]="disabledDates()"
-          [showButtonBar]="true"
-          [firstDayOfWeek]="1"
-        >
-          <ng-template pTemplate="date" let-dateMeta>
-            @let holiday = getHolidayForDate(dateMeta.day, dateMeta.month, dateMeta.year);
-            @if (holiday) {
-              <span
-                class="holiday-date"
-                [class.early-close]="holiday.status === 'Early Close'"
-                [class.closed]="holiday.status === 'Closed'"
-                [pTooltip]="getHolidayTooltip(holiday)"
-                tooltipPosition="top"
-              >{{ dateMeta.day }}</span>
-            } @else {
-              <span>{{ dateMeta.day }}</span>
-            }
-          </ng-template>
-          <ng-template pTemplate="footer">
-            @if (holidays().length) {
-              <div class="holiday-legend">
-                <span class="legend-item"><span class="legend-dot closed"></span> Closed</span>
-                <span class="legend-item"><span class="legend-dot early-close"></span> Early Close</span>
-              </div>
-            }
-          </ng-template>
-        </p-datepicker>
-      </div>
-    </div>
+    <app-ticker-range-picker
+      [(value)]="rangeState"
+      [tickerPool]="tickerPool"
+      [recent]="recentTickers"
+      [availability]="pickerAvailability"
+      [hideResolution]="true"
+      [showAutoFetch]="false"
+      (advisoryAction)="onPickerAdvisoryAction($event)"
+    />
 
-    <div class="date-presets">
-      <span class="presets-label">Quick:</span>
-      <button class="preset-btn" (click)="setPresetRange(7)">7d</button>
-      <button class="preset-btn" (click)="setPresetRange(30)">30d</button>
-      <button class="preset-btn" (click)="setPresetMonths(3)">3m</button>
-      <button class="preset-btn" (click)="setPresetMonths(6)">6m</button>
-      <button class="preset-btn" (click)="setPresetMonths(12)">1y</button>
+    <div class="options-row" style="margin-top: 0.75rem;">
+      <div class="option-group">
+        <label for="data-lab-bar-timeframe">Bar timeframe</label>
+        <select
+          id="data-lab-bar-timeframe"
+          [ngModel]="activeBarTimeframe()"
+          (ngModelChange)="setBarTimeframe($event)"
+        >
+          @for (bt of barTimeframes; track bt.value) {
+            <option [value]="bt.value">{{ bt.label }}</option>
+          }
+          @if (activeBarTimeframe() === 'custom') {
+            <option value="custom">Custom ({{ multiplier() }} × {{ timespan() }})</option>
+          }
+        </select>
+        <span class="option-hint">Bar size the downloaded CSV will resample to.</span>
+      </div>
+      <div class="option-group">
+        <label for="data-lab-session">Session</label>
+        <select id="data-lab-session" [(ngModel)]="session">
+          <option value="rth">RTH Only (09:30-16:00 ET)</option>
+          <option value="extended">Extended Hours</option>
+        </select>
+      </div>
     </div>
 
     <div class="controls-row" style="margin-top: 0.75rem;">
@@ -243,53 +189,33 @@
       </button>
     </div>
 
-    <div class="options-row">
-      <div class="option-group">
-        <label>Timespan</label>
-        <select [(ngModel)]="timespan">
-          <option value="minute">Minute</option>
-          <option value="hour">Hour</option>
-          <option value="day">Day</option>
-        </select>
+    <details class="advanced-settings">
+      <summary>Advanced settings</summary>
+      <div class="options-row">
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="forwardFill()" (change)="forwardFill.set(!forwardFill())" />
+          <span>Forward-fill gaps</span>
+          <span class="option-hint">(fills missing bars with previous close, volume=0)</span>
+        </label>
+        <label class="checkbox-option"
+               pTooltip="When checked, historical prices are retroactively adjusted for stock splits and dividends (Polygon.io default). Uncheck for raw exchange prices."
+               tooltipPosition="top">
+          <input type="checkbox" [checked]="adjusted()" (change)="adjusted.set(!adjusted())" />
+          <span>Split & dividend adjusted</span>
+          <span class="option-hint">(Polygon default; uncheck for raw prices)</span>
+        </label>
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="warmup()" (change)="warmup.set(!warmup())" />
+          <span>Indicator warm-up</span>
+          <span class="option-hint">(fetch extra bars before start date so indicators converge from bar 1)</span>
+        </label>
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="computeAllIndicators()" (change)="computeAllIndicators.set(!computeAllIndicators())" />
+          <span>Pre-calculate all indicators</span>
+          <span class="option-hint">(compute all indicators at once; toggle visibility on the chart instantly)</span>
+        </label>
       </div>
-      <div class="option-group">
-        <label>Multiplier</label>
-        <input type="number" [(ngModel)]="multiplier" min="1" max="60" class="multiplier-input" />
-        <span class="option-hint">e.g. 5 + minute = 5-min bars</span>
-      </div>
-      <div class="option-group">
-        <label>Session</label>
-        <select [(ngModel)]="session">
-          <option value="rth">RTH Only (09:30-16:00 ET)</option>
-          <option value="extended">Extended Hours</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="options-row">
-      <label class="checkbox-option">
-        <input type="checkbox" [checked]="forwardFill()" (change)="forwardFill.set(!forwardFill())" />
-        <span>Forward-fill gaps</span>
-        <span class="option-hint">(fills missing bars with previous close, volume=0)</span>
-      </label>
-      <label class="checkbox-option"
-             pTooltip="When checked, historical prices are retroactively adjusted for stock splits and dividends (Polygon.io default). Uncheck for raw exchange prices."
-             tooltipPosition="top">
-        <input type="checkbox" [checked]="adjusted()" (change)="adjusted.set(!adjusted())" />
-        <span>Split & dividend adjusted</span>
-        <span class="option-hint">(Polygon default; uncheck for raw prices)</span>
-      </label>
-      <label class="checkbox-option">
-        <input type="checkbox" [checked]="warmup()" (change)="warmup.set(!warmup())" />
-        <span>Indicator warm-up</span>
-        <span class="option-hint">(fetch extra bars before start date so indicators converge from bar 1)</span>
-      </label>
-      <label class="checkbox-option">
-        <input type="checkbox" [checked]="computeAllIndicators()" (change)="computeAllIndicators.set(!computeAllIndicators())" />
-        <span>Pre-calculate all indicators</span>
-        <span class="option-hint">(compute all indicators at once; toggle visibility on the chart instantly)</span>
-      </label>
-    </div>
+    </details>
 
     <div class="selected-summary">
       <span class="badge">{{ entryCount() }} indicator instances</span>
