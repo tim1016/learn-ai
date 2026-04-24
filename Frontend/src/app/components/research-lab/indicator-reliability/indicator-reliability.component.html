@@ -212,6 +212,16 @@
     @let res = result()!;
     @let best = getBestRow();
 
+    <!-- Verdict hero — decide-for-me summary up top -->
+    @if (verdictAnalysis(); as va) {
+      <div class="verdict-hero-wrap mb-4">
+        <app-indicator-verdict-hero
+          [analysis]="va"
+          (cta)="onVerdictCta($event)"
+        />
+      </div>
+    }
+
     <!-- Warnings (high-priority) -->
     @if (res.warnings.length > 0) {
       <div class="warnings-section mb-4">

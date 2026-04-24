@@ -83,19 +83,19 @@
   .variable-item {
     padding: 0.2rem 0 0.2rem 1rem;
     font-size: 0.9rem;
-    color: #374151;
+    color: $text-secondary;
 
     &::before {
       content: "\2022";
       margin-right: 0.5rem;
-      color: #94a3b8;
+      color: $text-muted;
     }
   }
 }
 
 .interpretation {
   font-size: 0.9rem;
-  color: #475569;
+  color: $text-secondary;
   line-height: 1.7;
   margin: 0.5rem 0;
 }
@@ -105,7 +105,8 @@
   margin: 1rem 0;
   padding: 0.75rem 1rem;
   border-radius: 6px;
-  background: #f1f5f9;
+  background: $bg-elevated;
+  border: 1px solid $border;
 
   .pipeline-stage {
     display: flex;
@@ -275,7 +276,7 @@
 .subsection-title {
   font-size: 0.95rem;
   font-weight: 600;
-  color: #1e293b;
+  color: $text-primary;
   margin: 1rem 0 0.5rem;
   display: flex;
   align-items: center;
