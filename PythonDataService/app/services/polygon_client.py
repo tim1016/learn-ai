@@ -26,10 +26,21 @@ class PolygonClientService:
         to_date: str,
         limit: int = 50000,
         adjusted: bool = True,
+        sort: str = "asc",
     ) -> list[dict[str, Any]]:
-        """Fetch aggregate bars (OHLCV) from Polygon"""
+        """Fetch aggregate bars (OHLCV) from Polygon.
+
+        All Polygon ``/v2/aggs/ticker`` query parameters are passthrough:
+        ``adjusted``, ``sort``, and ``limit`` map directly to the upstream
+        request. ``timespan`` accepts any Polygon-supported value (``second``,
+        ``minute``, ``hour``, ``day``, ``week``, ``month``, ``quarter``,
+        ``year``); validation happens upstream in the request model.
+        """
         try:
-            logger.info(f"Fetching aggregates for {ticker}: {from_date} to {to_date} (adjusted={adjusted})")
+            logger.info(
+                f"Fetching aggregates for {ticker}: {from_date} to {to_date} "
+                f"(timespan={timespan}x{multiplier}, adjusted={adjusted}, sort={sort}, limit={limit})"
+            )
 
             aggs = []
             for agg in self.client.list_aggs(
@@ -40,6 +51,7 @@ class PolygonClientService:
                 to=to_date,
                 limit=limit,
                 adjusted=adjusted,
+                sort=sort,
             ):
                 # Convert to dict for serialization
                 aggs.append(
@@ -86,6 +98,307 @@ class PolygonClientService:
 
         except Exception as e:
             logger.error(f"Error fetching trades for {ticker}: {e!s}")
+            raise
+
+    # ------------------------------------------------------------------
+    # Stock reference endpoints — exposed as Data Lab companion files
+    # ------------------------------------------------------------------
+
+    def list_splits(
+        self,
+        ticker: str,
+        execution_date_gte: str | None = None,
+        execution_date_lte: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """List historical splits for a ticker. Endpoint: GET /stocks/v1/splits"""
+        try:
+            out: list[dict[str, Any]] = []
+            for s in self.client.list_splits(
+                ticker=ticker,
+                execution_date_gte=execution_date_gte,
+                execution_date_lte=execution_date_lte,
+                limit=min(limit, 1000),
+            ):
+                out.append(
+                    {
+                        "ticker": getattr(s, "ticker", ticker),
+                        "execution_date": getattr(s, "execution_date", None),
+                        "split_from": getattr(s, "split_from", None),
+                        "split_to": getattr(s, "split_to", None),
+                        "id": getattr(s, "id", None),
+                    }
+                )
+                if len(out) >= limit:
+                    break
+            return out
+        except Exception as exc:
+            logger.error(f"Error listing splits for {ticker}: {exc}")
+            raise
+
+    def list_dividends(
+        self,
+        ticker: str,
+        ex_dividend_date_gte: str | None = None,
+        ex_dividend_date_lte: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """List historical dividends for a ticker. Endpoint: GET /stocks/v1/dividends"""
+        try:
+            out: list[dict[str, Any]] = []
+            for d in self.client.list_dividends(
+                ticker=ticker,
+                ex_dividend_date_gte=ex_dividend_date_gte,
+                ex_dividend_date_lte=ex_dividend_date_lte,
+                limit=min(limit, 1000),
+            ):
+                out.append(
+                    {
+                        "ticker": getattr(d, "ticker", ticker),
+                        "ex_dividend_date": getattr(d, "ex_dividend_date", None),
+                        "declaration_date": getattr(d, "declaration_date", None),
+                        "record_date": getattr(d, "record_date", None),
+                        "pay_date": getattr(d, "pay_date", None),
+                        "cash_amount": getattr(d, "cash_amount", None),
+                        "currency": getattr(d, "currency", None),
+                        "dividend_type": getattr(d, "dividend_type", None),
+                        "frequency": getattr(d, "frequency", None),
+                    }
+                )
+                if len(out) >= limit:
+                    break
+            return out
+        except Exception as exc:
+            logger.error(f"Error listing dividends for {ticker}: {exc}")
+            raise
+
+    def get_ticker_overview(self, ticker: str, as_of_date: str | None = None) -> dict[str, Any]:
+        """Ticker details / company overview. Endpoint: GET /v3/reference/tickers/{ticker}"""
+        try:
+            details = self.client.get_ticker_details(ticker, date=as_of_date)
+            # The SDK returns a dataclass-like object; shallow-flatten the common fields.
+            fields = [
+                "ticker",
+                "name",
+                "market",
+                "locale",
+                "primary_exchange",
+                "type",
+                "active",
+                "currency_name",
+                "cik",
+                "composite_figi",
+                "share_class_figi",
+                "market_cap",
+                "phone_number",
+                "address",
+                "description",
+                "sic_code",
+                "sic_description",
+                "ticker_root",
+                "homepage_url",
+                "total_employees",
+                "list_date",
+                "share_class_shares_outstanding",
+                "weighted_shares_outstanding",
+            ]
+            result: dict[str, Any] = {}
+            for f in fields:
+                result[f] = getattr(details, f, None)
+            # address is a nested object
+            if result["address"] is not None and not isinstance(result["address"], dict):
+                result["address"] = {
+                    k: getattr(result["address"], k, None) for k in ("address1", "city", "state", "postal_code")
+                }
+            return result
+        except Exception as exc:
+            logger.error(f"Error fetching ticker overview for {ticker}: {exc}")
+            raise
+
+    def list_news(
+        self,
+        ticker: str,
+        published_utc_gte: str | None = None,
+        published_utc_lte: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Ticker news. Endpoint: GET /v2/reference/news"""
+        try:
+            out: list[dict[str, Any]] = []
+            for n in self.client.list_ticker_news(
+                ticker=ticker,
+                published_utc_gte=published_utc_gte,
+                published_utc_lte=published_utc_lte,
+                limit=min(limit, 1000),
+            ):
+                out.append(
+                    {
+                        "id": getattr(n, "id", None),
+                        "publisher": getattr(n.publisher, "name", None) if getattr(n, "publisher", None) else None,
+                        "title": getattr(n, "title", None),
+                        "author": getattr(n, "author", None),
+                        "published_utc": getattr(n, "published_utc", None),
+                        "article_url": getattr(n, "article_url", None),
+                        "tickers": ",".join(getattr(n, "tickers", []) or []),
+                        "description": getattr(n, "description", None),
+                        "keywords": ",".join(getattr(n, "keywords", []) or []),
+                    }
+                )
+                if len(out) >= limit:
+                    break
+            return out
+        except Exception as exc:
+            logger.error(f"Error listing news for {ticker}: {exc}")
+            raise
+
+    def list_financials(
+        self,
+        ticker: str,
+        timeframe: str = "quarterly",
+        filing_date_gte: str | None = None,
+        filing_date_lte: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Fundamental financials (balance sheet + income + cash flow).
+
+        Endpoint: GET /vX/reference/financials
+
+        ``timeframe`` accepts ``quarterly`` or ``annual``. Fields are
+        flattened to one row per filing period.
+        """
+        try:
+            out: list[dict[str, Any]] = []
+            for f in self.client.vx.list_stock_financials(
+                ticker=ticker,
+                timeframe=timeframe,
+                filing_date_gte=filing_date_gte,
+                filing_date_lte=filing_date_lte,
+                limit=min(limit, 100),
+            ):
+
+                def _get_leaf(stmt: Any, field: str) -> Any:
+                    v = getattr(stmt, field, None) if stmt else None
+                    return getattr(v, "value", None) if v is not None else None
+
+                income = getattr(getattr(f, "financials", None), "income_statement", None)
+                balance = getattr(getattr(f, "financials", None), "balance_sheet", None)
+                cash = getattr(getattr(f, "financials", None), "cash_flow_statement", None)
+
+                out.append(
+                    {
+                        "ticker": ticker,
+                        "start_date": getattr(f, "start_date", None),
+                        "end_date": getattr(f, "end_date", None),
+                        "filing_date": getattr(f, "filing_date", None),
+                        "fiscal_period": getattr(f, "fiscal_period", None),
+                        "fiscal_year": getattr(f, "fiscal_year", None),
+                        "timeframe": getattr(f, "timeframe", None),
+                        # Income statement highlights
+                        "revenues": _get_leaf(income, "revenues"),
+                        "gross_profit": _get_leaf(income, "gross_profit"),
+                        "operating_income_loss": _get_leaf(income, "operating_income_loss"),
+                        "net_income_loss": _get_leaf(income, "net_income_loss"),
+                        "basic_earnings_per_share": _get_leaf(income, "basic_earnings_per_share"),
+                        "diluted_earnings_per_share": _get_leaf(income, "diluted_earnings_per_share"),
+                        # Balance sheet highlights
+                        "assets": _get_leaf(balance, "assets"),
+                        "liabilities": _get_leaf(balance, "liabilities"),
+                        "equity": _get_leaf(balance, "equity"),
+                        # Cash flow highlights
+                        "net_cash_flow_from_operating_activities": _get_leaf(
+                            cash, "net_cash_flow_from_operating_activities"
+                        ),
+                        "net_cash_flow_from_investing_activities": _get_leaf(
+                            cash, "net_cash_flow_from_investing_activities"
+                        ),
+                        "net_cash_flow_from_financing_activities": _get_leaf(
+                            cash, "net_cash_flow_from_financing_activities"
+                        ),
+                    }
+                )
+                if len(out) >= limit:
+                    break
+            return out
+        except Exception as exc:
+            logger.error(f"Error listing financials for {ticker}: {exc}")
+            raise
+
+    def list_stock_quotes(
+        self,
+        ticker: str,
+        timestamp_gte_ns: int | None = None,
+        timestamp_lte_ns: int | None = None,
+        limit: int = 50000,
+        cap: int = 500_000,
+    ) -> list[dict[str, Any]]:
+        """Historical NBBO quotes. Endpoint: GET /v3/quotes/{stockTicker}
+
+        Tick-level data — can return millions of rows. ``cap`` protects the
+        server from OOM; callers should set a reasonable window.
+        """
+        try:
+            out: list[dict[str, Any]] = []
+            for q in self.client.list_quotes(
+                ticker=ticker,
+                timestamp_gte=timestamp_gte_ns,
+                timestamp_lte=timestamp_lte_ns,
+                limit=min(limit, 50000),
+            ):
+                out.append(
+                    {
+                        "sip_timestamp_ns": getattr(q, "sip_timestamp", None),
+                        "bid_price": getattr(q, "bid_price", None),
+                        "bid_size": getattr(q, "bid_size", None),
+                        "bid_exchange": getattr(q, "bid_exchange", None),
+                        "ask_price": getattr(q, "ask_price", None),
+                        "ask_size": getattr(q, "ask_size", None),
+                        "ask_exchange": getattr(q, "ask_exchange", None),
+                        "conditions": ",".join(str(c) for c in (getattr(q, "conditions", None) or [])),
+                    }
+                )
+                if len(out) >= cap:
+                    logger.warning(f"list_stock_quotes: hit cap={cap} for {ticker}")
+                    break
+            return out
+        except Exception as exc:
+            logger.error(f"Error listing quotes for {ticker}: {exc}")
+            raise
+
+    def list_stock_trades(
+        self,
+        ticker: str,
+        timestamp_gte_ns: int | None = None,
+        timestamp_lte_ns: int | None = None,
+        limit: int = 50000,
+        cap: int = 500_000,
+    ) -> list[dict[str, Any]]:
+        """Historical tick-level trades. Endpoint: GET /v3/trades/{stockTicker}"""
+        try:
+            out: list[dict[str, Any]] = []
+            for t in self.client.list_trades(
+                ticker=ticker,
+                timestamp_gte=timestamp_gte_ns,
+                timestamp_lte=timestamp_lte_ns,
+                limit=min(limit, 50000),
+            ):
+                out.append(
+                    {
+                        "sip_timestamp_ns": getattr(t, "sip_timestamp", None),
+                        "price": getattr(t, "price", None),
+                        "size": getattr(t, "size", None),
+                        "exchange": getattr(t, "exchange", None),
+                        "conditions": ",".join(str(c) for c in (getattr(t, "conditions", None) or [])),
+                        "trade_id": getattr(t, "id", None),
+                        "tape": getattr(t, "tape", None),
+                        "sequence_number": getattr(t, "sequence_number", None),
+                    }
+                )
+                if len(out) >= cap:
+                    logger.warning(f"list_stock_trades: hit cap={cap} for {ticker}")
+                    break
+            return out
+        except Exception as exc:
+            logger.error(f"Error listing trades for {ticker}: {exc}")
             raise
 
     def list_options_contracts(

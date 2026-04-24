@@ -247,9 +247,14 @@
       <div class="option-group">
         <label>Timespan</label>
         <select [(ngModel)]="timespan">
+          <option value="second">Second</option>
           <option value="minute">Minute</option>
           <option value="hour">Hour</option>
           <option value="day">Day</option>
+          <option value="week">Week</option>
+          <option value="month">Month</option>
+          <option value="quarter">Quarter</option>
+          <option value="year">Year</option>
         </select>
       </div>
       <div class="option-group">
@@ -263,6 +268,18 @@
           <option value="rth">RTH Only (09:30-16:00 ET)</option>
           <option value="extended">Extended Hours</option>
         </select>
+      </div>
+      <div class="option-group">
+        <label>Sort</label>
+        <select [(ngModel)]="sort">
+          <option value="asc">Ascending (oldest first)</option>
+          <option value="desc">Descending (newest first)</option>
+        </select>
+      </div>
+      <div class="option-group">
+        <label>Polygon limit (per chunk)</label>
+        <input type="number" [(ngModel)]="polygonLimit" min="1" max="50000" class="multiplier-input" />
+        <span class="option-hint">1–50000; higher = fewer chunks</span>
       </div>
     </div>
 
@@ -432,6 +449,76 @@
             <span>ρ rho</span>
           </label>
         </fieldset>
+      }
+    </div>
+  </details>
+
+  <!-- Polygon Reference Companions -->
+  <details class="companion-section">
+    <summary>
+      <i class="pi pi-database"></i>
+      <span>Polygon Reference Companions</span>
+      @let _refCount = (
+        (includeSplits() ? 1 : 0) + (includeDividends() ? 1 : 0) + (includeTickerOverview() ? 1 : 0)
+        + (includeNews() ? 1 : 0) + (includeFinancials() ? 1 : 0)
+        + (includeStockTrades() ? 1 : 0) + (includeStockQuotes() ? 1 : 0)
+      );
+      @if (_refCount > 0) {
+        <span class="badge">{{ _refCount }} selected</span>
+      }
+    </summary>
+
+    <div class="companion-body">
+      <p class="section-desc">
+        Each toggle adds one file to the ZIP sourced from the named Polygon endpoint.
+        Tick-level options (trades / quotes) can produce millions of rows for a single day —
+        server-side capped at 500k rows per file.
+      </p>
+
+      <fieldset class="field-toggles">
+        <legend>Reference endpoints</legend>
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="includeSplits()" (change)="includeSplits.set(!includeSplits())" />
+          <span><code>splits.csv</code> <span class="option-hint">/stocks/v1/splits</span></span>
+        </label>
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="includeDividends()" (change)="includeDividends.set(!includeDividends())" />
+          <span><code>dividends.csv</code> <span class="option-hint">/stocks/v1/dividends</span></span>
+        </label>
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="includeTickerOverview()" (change)="includeTickerOverview.set(!includeTickerOverview())" />
+          <span><code>ticker_overview.json</code> <span class="option-hint">/v3/reference/tickers</span></span>
+        </label>
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="includeNews()" (change)="includeNews.set(!includeNews())" />
+          <span><code>news.csv</code> <span class="option-hint">/v2/reference/news, cap 1000</span></span>
+        </label>
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="includeFinancials()" (change)="includeFinancials.set(!includeFinancials())" />
+          <span><code>financials.csv</code> <span class="option-hint">/vX/reference/financials, quarterly</span></span>
+        </label>
+      </fieldset>
+
+      <fieldset class="field-toggles">
+        <legend>Tick-level reference (heavy — short windows only)</legend>
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="includeStockTrades()" (change)="includeStockTrades.set(!includeStockTrades())" />
+          <span><code>stock_trades.csv</code> <span class="option-hint">/v3/trades, cap 500k rows</span></span>
+        </label>
+        <label class="checkbox-option">
+          <input type="checkbox" [checked]="includeStockQuotes()" (change)="includeStockQuotes.set(!includeStockQuotes())" />
+          <span><code>stock_quotes.csv</code> <span class="option-hint">/v3/quotes (NBBO), cap 500k rows</span></span>
+        </label>
+      </fieldset>
+
+      @if (includeStockTrades() || includeStockQuotes()) {
+        <div class="info-callout warn" style="margin-top: 0.5rem;">
+          <i class="pi pi-exclamation-triangle"></i>
+          <span>
+            Tick-level data can return millions of rows per trading day. The server caps each file at
+            500,000 rows — for a full-depth pull, use a narrow date range (ideally ≤ 1 trading day).
+          </span>
+        </div>
       }
     </div>
   </details>

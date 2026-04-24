@@ -57,6 +57,8 @@ def _fetch_and_process(request: DatasetGenerationRequest):
         timespan=request.timespan,
         multiplier=request.multiplier,
         adjusted=request.adjusted,
+        sort=request.sort,
+        limit=request.limit,
     )
     if not bars:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No bars returned")
@@ -248,6 +250,53 @@ async def generate_dataset_zip(request: DatasetGenerationRequest):
                 multiplier=request.multiplier,
             )
 
+        # Reference companions (optional, each independent)
+        from app.services.reference_companion_service import (
+            build_dividends_csv,
+            build_financials_csv,
+            build_news_csv,
+            build_quotes_csv,
+            build_splits_csv,
+            build_ticker_overview_json,
+            build_trades_csv,
+        )
+
+        splits_bytes = (
+            build_splits_csv(polygon_client, request.ticker, request.from_date, request.to_date)
+            if request.include_splits
+            else None
+        )
+        dividends_bytes = (
+            build_dividends_csv(polygon_client, request.ticker, request.from_date, request.to_date)
+            if request.include_dividends
+            else None
+        )
+        overview_bytes = (
+            build_ticker_overview_json(polygon_client, request.ticker, request.to_date)
+            if request.include_ticker_overview
+            else None
+        )
+        news_bytes = (
+            build_news_csv(polygon_client, request.ticker, request.from_date, request.to_date)
+            if request.include_news
+            else None
+        )
+        financials_bytes = (
+            build_financials_csv(polygon_client, request.ticker, request.from_date, request.to_date)
+            if request.include_financials
+            else None
+        )
+        stock_trades_bytes = (
+            build_trades_csv(polygon_client, request.ticker, request.from_date, request.to_date)
+            if request.include_trades
+            else None
+        )
+        stock_quotes_bytes = (
+            build_quotes_csv(polygon_client, request.ticker, request.from_date, request.to_date)
+            if request.include_quotes
+            else None
+        )
+
         # Quality report (optional)
         quality_report_bytes: bytes | None = None
         if request.include_quality_report:
@@ -284,6 +333,13 @@ async def generate_dataset_zip(request: DatasetGenerationRequest):
             options_puts_csv_bytes=options_puts_bytes,
             options_companion_report=options_report,
             quality_report_md_bytes=quality_report_bytes,
+            splits_csv_bytes=splits_bytes,
+            dividends_csv_bytes=dividends_bytes,
+            ticker_overview_json_bytes=overview_bytes,
+            news_csv_bytes=news_bytes,
+            financials_csv_bytes=financials_bytes,
+            stock_trades_csv_bytes=stock_trades_bytes,
+            stock_quotes_csv_bytes=stock_quotes_bytes,
         )
 
         session_label = "rth" if request.session == "rth" else "ext"
