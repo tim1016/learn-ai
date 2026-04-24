@@ -3,6 +3,12 @@
 
 :host {
   display: block;
+  // Establish a stacking context so the open dropdown renders above
+  // sibling controls in the parent card (Bar Timeframe, Session, API
+  // Pacing, etc.). Without this the dropdown's z-index competes at the
+  // page level and gets overpainted by later DOM siblings.
+  position: relative;
+  z-index: 1;
 }
 
 .picker {
@@ -124,11 +130,17 @@
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  background: var(--bg-elevated);
+  // Solid opaque background so sibling form controls don't bleed through
+  // when the dropdown extends past the ticker row.
+  background: $bg-elevated;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-pop);
-  z-index: 60;
+  // Force a high z-index inside the host's stacking context. The host
+  // itself sits at z-index 1 with isolation so this lifts the panel
+  // above any sibling card content that follows.
+  z-index: 1000;
+  isolation: isolate;
   max-height: 360px;
   overflow: hidden;
   display: flex;

@@ -99,6 +99,28 @@ export function daysBetween(a: string, b: string): number {
   );
 }
 
+/**
+ * Count the weekdays (Mon–Fri) between two YYYY-MM-DD dates, inclusive on
+ * both ends. Returns 0 when ``to`` is before ``from``. Used as a fallback
+ * for the span-display "Nbd" readout when the caller has not supplied
+ * availability cells (the cell-driven summary counts only weekdays with
+ * non-weekend status).
+ */
+export function weekdaysBetween(from: string, to: string): number {
+  const start = new Date(from);
+  const end = new Date(to);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  if (end < start) return 0;
+  let count = 0;
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const d = cursor.getDay();
+    if (d !== 0 && d !== 6) count++;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return count;
+}
+
 export function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }

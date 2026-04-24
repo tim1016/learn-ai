@@ -122,8 +122,8 @@
   <div class="info-callout">
     <i class="pi pi-info-circle"></i>
     <div>
-      <strong>Polygon.io (Starter plan)</strong>
-      <span>Up to 2 years historical, 15-min delayed. Data is fetched in chunks to stay within API limits.</span>
+      <strong>Polygon Starter</strong>
+      <span>2-yr history · 15-min delayed · 5 req/min</span>
     </div>
   </div>
 
@@ -154,106 +154,157 @@
     />
 
     <div class="options-row" style="margin-top: 0.75rem;">
-      <div class="option-group">
-        <label for="data-lab-bar-timeframe">Bar timeframe</label>
-        <select
-          id="data-lab-bar-timeframe"
-          [ngModel]="activeBarTimeframe()"
-          (ngModelChange)="setBarTimeframe($event)"
-        >
-          @for (bt of barTimeframes; track bt.value) {
-            <option [value]="bt.value">{{ bt.label }}</option>
+      <fieldset class="option-group fieldset-radio">
+        <legend>Bar timeframe</legend>
+        <div class="radio-pair" role="radiogroup" aria-label="Bar timeframe mode">
+          <label class="radio-inline">
+            <input type="radio" name="bar-mode" [checked]="autoBarTimeframe()" (change)="autoBarTimeframe.set(true)" />
+            <span>Auto</span>
+          </label>
+          <label class="radio-inline">
+            <input type="radio" name="bar-mode" [checked]="!autoBarTimeframe()" (change)="autoBarTimeframe.set(false)" />
+            <span>Manual</span>
+          </label>
+          @if (!autoBarTimeframe()) {
+            <select
+              id="data-lab-bar-timeframe"
+              class="bar-timeframe-select"
+              [ngModel]="activeBarTimeframe()"
+              (ngModelChange)="setBarTimeframe($event)"
+              aria-label="Bar size"
+            >
+              @for (bt of barTimeframes; track bt.value) {
+                <option [value]="bt.value">{{ bt.label }}</option>
+              }
+              @if (activeBarTimeframe() === 'custom') {
+                <option value="custom">Custom ({{ multiplier() }} × {{ timespan() }})</option>
+              }
+            </select>
           }
-          @if (activeBarTimeframe() === 'custom') {
-            <option value="custom">Custom ({{ multiplier() }} × {{ timespan() }})</option>
-          }
-        </select>
-        <span class="option-hint">Bar size the downloaded CSV will resample to.</span>
-      </div>
-      <div class="option-group">
-        <label for="data-lab-session">Session</label>
-        <select id="data-lab-session" [(ngModel)]="session">
-          <option value="rth">RTH Only (09:30-16:00 ET)</option>
-          <option value="extended">Extended Hours</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="controls-row" style="margin-top: 0.75rem;">
-      <button class="btn-primary" (click)="generateZip()" [disabled]="loading()">
-        @if (loading()) {
-          <i class="pi pi-spin pi-spinner"></i> Generating...
-        } @else {
-          <i class="pi pi-download"></i> Generate CSV
+        </div>
+        @if (autoBarTimeframe()) {
+          <span class="option-hint">{{ autoBarTimeframeReadout() }}</span>
         }
-      </button>
-    </div>
+      </fieldset>
 
-    <div class="options-row">
-      <div class="option-group">
-        <label>Timespan</label>
-        <select [(ngModel)]="timespan">
-          <option value="second">Second</option>
-          <option value="minute">Minute</option>
-          <option value="hour">Hour</option>
-          <option value="day">Day</option>
-          <option value="week">Week</option>
-          <option value="month">Month</option>
-          <option value="quarter">Quarter</option>
-          <option value="year">Year</option>
-        </select>
-      </div>
-      <div class="option-group">
-        <label>Multiplier</label>
-        <input type="number" [(ngModel)]="multiplier" min="1" max="60" class="multiplier-input" />
-        <span class="option-hint">e.g. 5 + minute = 5-min bars</span>
-      </div>
-      <div class="option-group">
-        <label>Session</label>
-        <select [(ngModel)]="session">
-          <option value="rth">RTH Only (09:30-16:00 ET)</option>
-          <option value="extended">Extended Hours</option>
-        </select>
-      </div>
-      <div class="option-group">
-        <label>Sort</label>
-        <select [(ngModel)]="sort">
-          <option value="asc">Ascending (oldest first)</option>
-          <option value="desc">Descending (newest first)</option>
-        </select>
-      </div>
-      <div class="option-group">
-        <label>Polygon limit (per chunk)</label>
-        <input type="number" [(ngModel)]="polygonLimit" min="1" max="50000" class="multiplier-input" />
-        <span class="option-hint">1–50000; higher = fewer chunks</span>
-      </div>
+      <fieldset class="option-group fieldset-radio">
+        <legend>Session</legend>
+        <div class="radio-pair" role="radiogroup" aria-label="Trading session">
+          <label class="radio-inline">
+            <input type="radio" name="session-mode" [checked]="session() === 'rth'" (change)="session.set('rth')" />
+            <span>Regular</span>
+          </label>
+          <label class="radio-inline">
+            <input type="radio" name="session-mode" [checked]="session() === 'extended'" (change)="session.set('extended')" />
+            <span>Extended</span>
+          </label>
+        </div>
+        <span class="option-hint">
+          @if (session() === 'rth') { Regular (09:30–16:00 ET) }
+          @else { Extended (pre + post-market, 04:00–20:00 ET) }
+        </span>
+      </fieldset>
+
+      <fieldset class="option-group fieldset-radio">
+        <legend>API pacing</legend>
+        <label class="checkbox-inline"
+               pTooltip="Polygon returns up to 50,000 rows per request. We break bigger windows into paced requests so you never hit your 5/min slot."
+               tooltipPosition="top">
+          <input type="checkbox" [checked]="autoChunk()" (change)="autoChunk.set(!autoChunk())" />
+          <span>Auto-chunk (recommended)</span>
+        </label>
+        <span class="option-hint">{{ autoChunkReadout() }}</span>
+      </fieldset>
     </div>
 
     <details class="advanced-settings">
-      <summary>Advanced settings</summary>
-      <div class="options-row">
-        <label class="checkbox-option">
-          <input type="checkbox" [checked]="forwardFill()" (change)="forwardFill.set(!forwardFill())" />
-          <span>Forward-fill gaps</span>
-          <span class="option-hint">(fills missing bars with previous close, volume=0)</span>
-        </label>
-        <label class="checkbox-option"
-               pTooltip="When checked, historical prices are retroactively adjusted for stock splits and dividends (Polygon.io default). Uncheck for raw exchange prices."
-               tooltipPosition="top">
-          <input type="checkbox" [checked]="adjusted()" (change)="adjusted.set(!adjusted())" />
-          <span>Split & dividend adjusted</span>
-          <span class="option-hint">(Polygon default; uncheck for raw prices)</span>
-        </label>
-        <label class="checkbox-option">
-          <input type="checkbox" [checked]="warmup()" (change)="warmup.set(!warmup())" />
-          <span>Indicator warm-up</span>
-          <span class="option-hint">(fetch extra bars before start date so indicators converge from bar 1)</span>
-        </label>
-        <label class="checkbox-option">
-          <input type="checkbox" [checked]="computeAllIndicators()" (change)="computeAllIndicators.set(!computeAllIndicators())" />
-          <span>Pre-calculate all indicators</span>
-          <span class="option-hint">(compute all indicators at once; toggle visibility on the chart instantly)</span>
-        </label>
+      <summary>Advanced</summary>
+
+      <div class="advanced-group">
+        <h4 class="advanced-group__title">Price adjustments</h4>
+        <div class="options-row">
+          <label class="checkbox-option"
+                 pTooltip="Splits — scales pre-split prices to today's share count. Handled by Polygon natively, reliable."
+                 tooltipPosition="top">
+            <input type="checkbox" [checked]="adjustForSplits()" (change)="adjustForSplits.set(!adjustForSplits())" />
+            <span>Adjust for splits</span>
+            <span class="option-hint">Reliable — applied by Polygon</span>
+          </label>
+          <label class="checkbox-option"
+                 pTooltip="Dividends — applied server-side to match TradingView. Polygon doesn't adjust for dividends natively; we fetch the dividend file and apply it so prices line up with TradingView's default chart. See docs/tv-polygon-validation-gotchas.md §1."
+                 tooltipPosition="top">
+            <input type="checkbox" [checked]="adjustForDividends()" (change)="adjustForDividends.set(!adjustForDividends())" />
+            <span>Adjust for dividends</span>
+            <span class="option-hint">Match TradingView · pulls the dividend file</span>
+          </label>
+        </div>
+        @if (adjustForDividends() && !includeDividends()) {
+          <div class="info-callout warn dependency-callout" role="status" aria-live="polite">
+            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+            <div class="dependency-callout__body">
+              <span>Dividend adjustment needs the dividends reference file.</span>
+              <div class="dependency-callout__actions">
+                <button type="button" class="btn-secondary btn-sm"
+                        (click)="includeDividends.set(true)">
+                  Enable "Include dividends" companion
+                </button>
+                <button type="button" class="btn-text btn-sm"
+                        (click)="adjustForDividends.set(false)">
+                  Keep disabled
+                </button>
+              </div>
+            </div>
+          </div>
+        }
+      </div>
+
+      <div class="advanced-group">
+        <h4 class="advanced-group__title">Data hygiene</h4>
+        <div class="options-row">
+          <label class="checkbox-option"
+                 pTooltip="Missing bars take the previous close, volume 0. Useful when indicators must compute through gaps."
+                 tooltipPosition="top">
+            <input type="checkbox" [checked]="forwardFill()" (change)="forwardFill.set(!forwardFill())" />
+            <span>Forward-fill gaps</span>
+            <span class="option-hint">Missing bars take previous close, volume 0</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="advanced-group">
+        <h4 class="advanced-group__title">Indicator prep</h4>
+        <div class="options-row">
+          <label class="checkbox-option"
+                 pTooltip="Fetch extra bars before the start date so indicators converge from row 1 instead of needing N bars to warm up."
+                 tooltipPosition="top">
+            <input type="checkbox" [checked]="warmup()" (change)="warmup.set(!warmup())" />
+            <span>Indicator warm-up</span>
+            <span class="option-hint">Fetch extra bars so row 1 is valid</span>
+          </label>
+          <label class="checkbox-option"
+                 pTooltip="Compute every available indicator at once and write each as a CSV column. Heavier compute, instant chart toggle."
+                 tooltipPosition="top">
+            <input type="checkbox" [checked]="computeAllIndicators()" (change)="computeAllIndicators.set(!computeAllIndicators())" />
+            <span>Pre-calculate all indicators</span>
+            <span class="option-hint">Writes every indicator column to CSV</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="advanced-group">
+        <h4 class="advanced-group__title">Output</h4>
+        <div class="options-row">
+          <div class="option-group">
+            <label for="csv-row-order">CSV row order</label>
+            <select id="csv-row-order" [(ngModel)]="sort"
+                    pTooltip="Pandas and most backtesters prefer ascending. Switch to descending only if your downstream script expects it."
+                    tooltipPosition="top">
+              <option value="asc">Ascending (oldest first)</option>
+              <option value="desc">Descending (newest first)</option>
+            </select>
+            <span class="option-hint">Affects CSV only — chart is unaffected.</span>
+          </div>
+        </div>
       </div>
     </details>
 
@@ -592,13 +643,189 @@
     </div>
   }
 
-  <!-- Multi-Timeframe Chart -->
-  <div class="chart-section">
-    <div class="chart-actions">
-      <button class="btn-primary" (click)="chartComponent.fetchData()" [disabled]="!ticker()">
-        <i class="pi pi-chart-line"></i> Fetch Data
+  <!-- Run bar -->
+  <div class="run-card" role="region" aria-label="Run controls">
+    @switch (runSession.state()) {
+      @case ('fetching') {
+        <ng-container *ngTemplateOutlet="runFetching"></ng-container>
+      }
+      @case ('bundling') {
+        <ng-container *ngTemplateOutlet="runBundling"></ng-container>
+      }
+      @case ('done') {
+        <ng-container *ngTemplateOutlet="runDone"></ng-container>
+      }
+      @case ('error') {
+        <ng-container *ngTemplateOutlet="runError"></ng-container>
+      }
+      @default {
+        <ng-container *ngTemplateOutlet="runIdle"></ng-container>
+      }
+    }
+  </div>
+
+  <ng-template #runIdle>
+    <div class="run-card__summary">
+      {{ ticker() || '—' }} · {{ fromDate() }} → {{ toDate() }} ·
+      {{ activeBarTimeframe() === 'custom' ? (multiplier() + ' × ' + timespan()) : activeBarTimeframe() }} ·
+      {{ session() === 'rth' ? 'RTH' : 'Extended' }} ·
+      ~{{ estimatedColumns().length }} columns
+    </div>
+    <div class="run-card__action">
+      <label class="checkbox-inline"
+             pTooltip="Adds a second phase after fetch: writes CSV + every selected companion + the quality report into one .zip download."
+             tooltipPosition="top">
+        <input type="checkbox" [checked]="alsoGenerateZip()" (change)="alsoGenerateZip.set(!alsoGenerateZip())" />
+        <span>Bundle everything into a ZIP</span>
+      </label>
+      <button class="btn-primary" (click)="fetchAndMaybeZip()" [disabled]="!ticker() || loading()">
+        @if (loading()) {
+          <i class="pi pi-spin pi-spinner"></i>
+          <span>Fetching…</span>
+        } @else {
+          <i class="pi pi-chart-line"></i>
+          <span>{{ alsoGenerateZip() ? 'Fetch & bundle' : 'Fetch data' }}</span>
+        }
       </button>
     </div>
+  </ng-template>
+
+  <ng-template #runFetching>
+    <div class="run-progress" role="status" aria-live="polite" aria-atomic="false">
+      <div class="run-progress__heading">
+        <strong>Fetching {{ ticker() }} {{ activeBarTimeframe() }} ·
+          chunk {{ runSession.chunks().length === 0 ? '…' : (runChunkInProgressIndex() + ' of ' + runSession.chunks().length) }}</strong>
+      </div>
+      <div class="run-progress__bar"
+           role="progressbar"
+           [attr.aria-valuenow]="runProgressPercent()"
+           aria-valuemin="0"
+           aria-valuemax="100"
+           aria-label="Fetch progress">
+        <div class="run-progress__bar-fill" [style.width.%]="runProgressPercent()"></div>
+      </div>
+      <div class="run-progress__meta">
+        <span>{{ runProgressPercent() }}%</span>
+        @if (runSession.etaSeconds() !== null) {
+          <span aria-hidden="true">· ~{{ runSession.etaSeconds() }}s remaining</span>
+        }
+      </div>
+      <ul class="run-chunk-list" role="list">
+        @for (c of runSession.chunks(); track c.index) {
+          <li class="run-chunk"
+              [class.run-chunk--done]="c.status === 'done'"
+              [class.run-chunk--fetching]="c.status === 'fetching'"
+              [class.run-chunk--paced]="c.status === 'queued' && (c.waitSeconds ?? 0) > 0"
+              role="listitem"
+              [attr.aria-label]="'chunk ' + c.index + ' of ' + c.total + ', ' + c.status">
+            <span class="run-chunk__icon" aria-hidden="true">
+              @switch (c.status) {
+                @case ('done') { ✓ }
+                @case ('fetching') { ▸ }
+                @default { · }
+              }
+            </span>
+            <span class="run-chunk__id mono">chunk {{ c.index }}</span>
+            <span class="run-chunk__range mono">
+              @if (c.from && c.to) { {{ c.from }} → {{ c.to }} }
+            </span>
+            <span class="run-chunk__status">
+              @switch (c.status) {
+                @case ('done') { {{ c.barsReturned ?? 0 | number }} bars · done }
+                @case ('fetching') { fetching… }
+                @default {
+                  @if ((c.waitSeconds ?? 0) > 0) {
+                    paced · next slot in {{ c.waitSeconds }}s
+                  } @else {
+                    queued
+                  }
+                }
+              }
+            </span>
+          </li>
+        }
+      </ul>
+      <div class="run-progress__actions">
+        <button type="button" class="btn-secondary btn-sm" (click)="runSession.cancel()">
+          <i class="pi pi-times"></i> Cancel fetch
+        </button>
+      </div>
+    </div>
+  </ng-template>
+
+  <ng-template #runBundling>
+    <div class="run-progress" role="status" aria-live="polite" aria-atomic="false">
+      <div class="run-progress__heading">
+        <strong>✓ Fetched bars · now bundling ZIP</strong>
+      </div>
+      <div class="run-progress__bar"
+           role="progressbar"
+           [attr.aria-valuenow]="runProgressPercent()"
+           aria-valuemin="0"
+           aria-valuemax="100"
+           aria-label="Bundle progress">
+        <div class="run-progress__bar-fill" [style.width.%]="runProgressPercent()"></div>
+      </div>
+      <ul class="run-chunk-list" role="list">
+        @for (c of runSession.bundleComponents(); track c.name) {
+          <li class="run-chunk"
+              [class.run-chunk--done]="c.status === 'done'"
+              role="listitem"
+              [attr.aria-label]="c.name + ', ' + c.status">
+            <span class="run-chunk__icon" aria-hidden="true">
+              @if (c.status === 'done') { ✓ } @else { · }
+            </span>
+            <span class="run-chunk__id mono">{{ c.name }}</span>
+          </li>
+        }
+      </ul>
+      <div class="run-progress__actions">
+        <button type="button" class="btn-secondary btn-sm" (click)="runSession.cancel()">
+          <i class="pi pi-times"></i> Cancel
+        </button>
+      </div>
+    </div>
+  </ng-template>
+
+  <ng-template #runDone>
+    <div class="run-done" role="status" aria-live="polite">
+      <strong>
+        ✓ Saved {{ runSession.result()?.filename }}
+        @if (runSession.result(); as r) { ({{ (r.sizeBytes / 1024 / 1024).toFixed(1) }} MB) }
+      </strong>
+      <div class="run-progress__actions">
+        <button type="button" class="btn-secondary btn-sm" (click)="runSession.reset()">
+          Fetch another
+        </button>
+      </div>
+    </div>
+  </ng-template>
+
+  <ng-template #runError>
+    @if (runSession.error(); as err) {
+      <div class="run-error info-callout warn" role="alert">
+        <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+        <div>
+          <strong>
+            @if (err.kind === 'cancelled') { Fetch cancelled }
+            @else { Fetch failed }
+          </strong>
+          <div>{{ err.message }}</div>
+          <div class="run-progress__actions">
+            <button type="button" class="btn-secondary btn-sm" (click)="fetchAndMaybeZip()">
+              Retry
+            </button>
+            <button type="button" class="btn-text btn-sm" (click)="runSession.reset()">
+              Discard
+            </button>
+          </div>
+        </div>
+      </div>
+    }
+  </ng-template>
+
+  <!-- Multi-Timeframe Chart -->
+  <div class="chart-section">
     <app-data-lab-chart
       #chartComponent
       [ticker]="ticker()"
@@ -606,7 +833,7 @@
       [toDate]="toDate()"
       [session]="session()"
       [forwardFill]="forwardFill()"
-      [adjusted]="adjusted()"
+      [adjusted]="adjustForSplits()"
       [chartIndicators]="chartIndicators()"
       [computeAllIndicators]="computeAllIndicators()"
       (dataLoaded)="onChartDataLoaded($event)"
