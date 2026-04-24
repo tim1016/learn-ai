@@ -1,16 +1,20 @@
-"""API endpoints for data quality analysis: cleanup pipeline with before/after reporting"""
+"""API endpoints for data quality analysis: cleanup pipeline with before/after reporting.
+
+CSV downloads (raw / clean) were removed — the data-lab component is the single
+authority for generating dataset CSVs. This router now only produces the
+before/after quality *report*, which the frontend renders and serializes to
+markdown client-side for download.
+"""
 
 from __future__ import annotations
 
-import io
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.services.data_quality_service import analyze, get_cached_csv, get_pipeline_docs
+from app.services.data_quality_service import analyze, get_pipeline_docs
 from app.services.polygon_client import PolygonClientService
 
 router = APIRouter()
@@ -34,7 +38,12 @@ class DataQualityRequest(BaseModel):
 
 @router.post("/analyze")
 async def analyze_data_quality(request: DataQualityRequest):
-    """Run the full 7-step cleanup pipeline and return before/after report with download tokens."""
+    """Run the full cleanup pipeline and return a before/after report.
+
+    No CSV is cached or downloadable from this endpoint — the data-lab ZIP
+    bundles the quality report alongside the dataset, and the frontend can
+    serialize this response to markdown for standalone download.
+    """
     try:
         logger.info(
             f"[DQ] Analyze request: {request.ticker} {request.from_date} to {request.to_date}, "
@@ -73,40 +82,6 @@ async def analyze_data_quality(request: DataQualityRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
         )
-
-
-@router.get("/raw-csv")
-async def download_raw_csv(token: str = Query(..., description="Download token from analyze response")):
-    """Stream the raw (uncleaned) data as CSV."""
-    csv_bytes = get_cached_csv(token)
-    if csv_bytes is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Token expired or not found. Re-run the analysis.",
-        )
-
-    return StreamingResponse(
-        io.BytesIO(csv_bytes),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="raw_data.csv"'},
-    )
-
-
-@router.get("/clean-csv")
-async def download_clean_csv(token: str = Query(..., description="Download token from analyze response")):
-    """Stream the cleaned data as CSV."""
-    csv_bytes = get_cached_csv(token)
-    if csv_bytes is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Token expired or not found. Re-run the analysis.",
-        )
-
-    return StreamingResponse(
-        io.BytesIO(csv_bytes),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="clean_data.csv"'},
-    )
 
 
 @router.get("/docs")

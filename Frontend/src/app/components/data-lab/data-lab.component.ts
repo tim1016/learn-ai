@@ -51,6 +51,40 @@ interface AvailableResponse {
   total: number;
 }
 
+interface QualityReportStep {
+  order: number;
+  name: string;
+  library: string;
+  description: string;
+  bars_before: number;
+  bars_after: number;
+  bars_removed: number;
+}
+
+interface QualityReportSummary {
+  total_bars: number;
+  trading_days: number;
+  zero_volume_bars: number;
+  flat_bars_ohlc_equal: number;
+  fractional_volume_bars: number;
+  vwap_above_high: number;
+  vwap_below_low: number;
+  ohlc_violations: number;
+  duplicate_timestamps: number;
+  weekend_bars: number;
+  intraday_gaps: number;
+}
+
+interface QualityReportResponse {
+  success: boolean;
+  ticker: string;
+  from_date: string;
+  to_date: string;
+  raw_summary: QualityReportSummary;
+  clean_summary: QualityReportSummary;
+  steps: QualityReportStep[];
+}
+
 interface CategoryData {
   name: string;
   indicators: IndicatorInfo[];
@@ -206,6 +240,63 @@ export class DataLabComponent {
   loadingValidation = signal(false);
   error = signal('');
   progress = signal('');
+
+  // ── Options companion config ───────────────────────────────
+  optionsCompanionEnabled = signal(false);
+  optionsStrikesEachSide = signal(5);
+  optionsIncludeCalls = signal(true);
+  optionsIncludePuts = signal(true);
+  optionsExpiryMode = signal<'same_day' | 'nearest_within_days'>('same_day');
+  optionsMaxDte = signal(7);
+  optIncludeOhlcv = signal(true);
+  optIncludeVwap = signal(true);
+  optIncludeTransactions = signal(true);
+  optIncludeOi = signal(false);
+  optIncludeIv = signal(true);
+  optIncludeDelta = signal(true);
+  optIncludeGamma = signal(true);
+  optIncludeTheta = signal(true);
+  optIncludeVega = signal(true);
+  optIncludeRho = signal(false);
+  optRiskFreeRate = signal(0.05);
+  optDividendYield = signal(0.0);
+
+  // Tickers with verified daily (Mon-Fri) expiries as of 2026
+  readonly DAILY_EXPIRY_TICKERS = ['SPY','QQQ','IWM','SPX','XSP','NDX','XND','DIA','VIX'];
+  tickerSupportsDaily = computed(() =>
+    this.DAILY_EXPIRY_TICKERS.includes(this.ticker().toUpperCase())
+  );
+
+  /**
+   * Low-resolution warning for the options companion.
+   *
+   * - `same_day` + `day` resolution → each 0DTE contract produces a single row (degenerate).
+   * - `same_day` + `hour` resolution → each 0DTE contract produces ~6-7 rows (sparse).
+   * - `nearest_within_days` + `day` resolution → each contract produces up to `max_dte` rows.
+   * Returns an explanatory string when the combination is degenerate, else empty.
+   */
+  optionsResolutionWarning = computed(() => {
+    if (!this.optionsCompanionEnabled()) return '';
+    const ts = this.timespan();
+    const mult = this.multiplier();
+    const mode = this.optionsExpiryMode();
+    if (ts === 'day') {
+      if (mode === 'same_day') {
+        return 'At day resolution with Same-day (0DTE) expiry, each contract produces exactly 1 row. You probably want minute or hour resolution for intraday IV/Greeks.';
+      }
+      return `At day resolution, each selected contract will produce up to ${this.optionsMaxDte()} daily rows.`;
+    }
+    if (ts === 'hour' && mode === 'same_day') {
+      return `At ${mult}-hour resolution with Same-day (0DTE) expiry, each contract produces ~${Math.max(1, Math.floor(7 / Math.max(mult, 1)))} rows — limited intraday granularity.`;
+    }
+    return '';
+  });
+
+  // ── Data Quality Report panel state ────────────────────────
+  includeQualityReportInZip = signal(false);
+  qualityReportLoading = signal(false);
+  qualityReportResult = signal<QualityReportResponse | null>(null);
+  qualityReportError = signal('');
 
   // Validation report state
   validationReport = signal('');
@@ -657,6 +748,29 @@ export class DataLabComponent {
     this.progress.set('Fetching OHLCV data and calculating indicators...');
 
     try {
+      const optionsConfig = this.optionsCompanionEnabled()
+        ? {
+            enabled: true,
+            strikes_each_side: this.optionsStrikesEachSide(),
+            include_calls: this.optionsIncludeCalls(),
+            include_puts: this.optionsIncludePuts(),
+            expiry_mode: this.optionsExpiryMode(),
+            max_dte: this.optionsMaxDte(),
+            include_ohlcv: this.optIncludeOhlcv(),
+            include_vwap: this.optIncludeVwap(),
+            include_transactions: this.optIncludeTransactions(),
+            include_open_interest: this.optIncludeOi(),
+            include_iv: this.optIncludeIv(),
+            include_delta: this.optIncludeDelta(),
+            include_gamma: this.optIncludeGamma(),
+            include_theta: this.optIncludeTheta(),
+            include_vega: this.optIncludeVega(),
+            include_rho: this.optIncludeRho(),
+            risk_free_rate: this.optRiskFreeRate(),
+            dividend_yield: this.optDividendYield(),
+          }
+        : null;
+
       const payload = {
         ticker: this.ticker(),
         from_date: this.fromDate(),
@@ -668,6 +782,8 @@ export class DataLabComponent {
         warmup: this.warmup(),
         timespan: this.timespan(),
         multiplier: this.multiplier(),
+        options_companion: optionsConfig,
+        include_quality_report: this.includeQualityReportInZip(),
       };
 
       const blob = await firstValueFrom(
@@ -740,6 +856,89 @@ export class DataLabComponent {
     if (!report) return;
     const blob = new Blob([report], { type: 'text/markdown' });
     this.downloadBlob(blob, `${this.ticker()}_validation_report.md`);
+  }
+
+  // ── Data Quality Report panel ─────────────────────────────
+
+  async runQualityReport(): Promise<void> {
+    this.qualityReportLoading.set(true);
+    this.qualityReportError.set('');
+    this.qualityReportResult.set(null);
+    try {
+      const res = await firstValueFrom(
+        this.http.post<QualityReportResponse>(
+          `${environment.pythonServiceUrl}/api/data-quality/analyze`,
+          {
+            ticker: this.ticker(),
+            from_date: this.fromDate(),
+            to_date: this.toDate(),
+            volume_fix: 'round',
+            recompute_indicators: false,
+            indicator_entries: [],
+          }
+        )
+      );
+      this.qualityReportResult.set(res);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.qualityReportError.set(msg);
+    } finally {
+      this.qualityReportLoading.set(false);
+    }
+  }
+
+  downloadQualityReportMd(): void {
+    const report = this.qualityReportResult();
+    if (!report) return;
+    const md = this.buildQualityReportMarkdown(report);
+    const blob = new Blob([md], { type: 'text/markdown' });
+    this.downloadBlob(blob, `${report.ticker}_quality_report.md`);
+  }
+
+  private buildQualityReportMarkdown(r: QualityReportResponse): string {
+    const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+    const lines: string[] = [];
+    lines.push(`# Data Quality Report — ${r.ticker}`);
+    lines.push('');
+    lines.push(`**Range:** ${r.from_date} → ${r.to_date}  **Generated:** ${now}`);
+    lines.push('');
+    lines.push('## Summary');
+    lines.push('');
+    lines.push('| Metric | Raw | Clean | Δ |');
+    lines.push('|---|---:|---:|---:|');
+    const metrics: [string, keyof QualityReportSummary][] = [
+      ['Total bars', 'total_bars'],
+      ['Trading days', 'trading_days'],
+      ['Zero-volume bars', 'zero_volume_bars'],
+      ['Flat bars (O=H=L=C)', 'flat_bars_ohlc_equal'],
+      ['Fractional volume bars', 'fractional_volume_bars'],
+      ['VWAP > high violations', 'vwap_above_high'],
+      ['VWAP < low violations', 'vwap_below_low'],
+      ['OHLC violations', 'ohlc_violations'],
+      ['Duplicate timestamps', 'duplicate_timestamps'],
+      ['Weekend bars', 'weekend_bars'],
+      ['Intraday gaps', 'intraday_gaps'],
+    ];
+    for (const [label, key] of metrics) {
+      const rawVal = r.raw_summary[key];
+      const cleanVal = r.clean_summary[key];
+      const delta = cleanVal - rawVal;
+      const deltaStr = delta > 0 ? `+${delta}` : `${delta}`;
+      lines.push(`| ${label} | ${rawVal} | ${cleanVal} | ${deltaStr} |`);
+    }
+    lines.push('');
+    lines.push('## Pipeline steps');
+    lines.push('');
+    for (const step of r.steps) {
+      lines.push(`### ${step.order}. ${step.name}`);
+      lines.push(`*Library:* \`${step.library}\``);
+      lines.push('');
+      lines.push(step.description);
+      lines.push('');
+      lines.push(`Bars: ${step.bars_before} → ${step.bars_after} (${step.bars_removed} removed)`);
+      lines.push('');
+    }
+    return lines.join('\n');
   }
 
   private downloadBlob(blob: Blob, filename: string): void {

@@ -208,12 +208,19 @@ async def generate_dataset_metadata_csv(request: DatasetGenerationRequest):
 
 @router.post("/generate-zip")
 async def generate_dataset_zip(request: DatasetGenerationRequest):
-    """Fetch OHLCV, calculate indicators, and return a ZIP with dataset.csv, metadata.csv, columns.csv."""
+    """Fetch OHLCV, calculate indicators, and return a ZIP.
+
+    Always contains ``dataset.csv``, ``metadata.csv``, ``columns.csv``. Adds
+    ``options_calls.csv`` / ``options_puts.csv`` when ``options_companion`` is
+    enabled and ``quality_report.md`` when ``include_quality_report`` is true.
+    """
     try:
         logger.info(
             f"[DATASET] Generating ZIP for {request.ticker}: "
             f"{request.from_date} to {request.to_date}, "
-            f"indicators={[e.get('name') for e in request.indicator_entries]}"
+            f"indicators={[e.get('name') for e in request.indicator_entries]}, "
+            f"options_companion={bool(request.options_companion and request.options_companion.enabled)}, "
+            f"quality_report={request.include_quality_report}"
         )
 
         df, column_meta, raw_count = _fetch_and_process(request)
@@ -222,6 +229,42 @@ async def generate_dataset_zip(request: DatasetGenerationRequest):
         extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
         indicator_col_names = [m["column"] for m in column_meta]
         all_data_cols = ohlcv_cols + extra_cols + indicator_col_names
+
+        # Options companion (optional)
+        options_calls_bytes: bytes | None = None
+        options_puts_bytes: bytes | None = None
+        options_report: dict | None = None
+        if request.options_companion and request.options_companion.enabled:
+            from app.services.options_companion_service import build_options_companion_csvs
+
+            options_calls_bytes, options_puts_bytes, options_report = build_options_companion_csvs(
+                underlying_bars_df=df,
+                ticker=request.ticker,
+                from_date=request.from_date,
+                to_date=request.to_date,
+                config=request.options_companion,
+                polygon=polygon_client,
+                timespan=request.timespan,
+                multiplier=request.multiplier,
+            )
+
+        # Quality report (optional)
+        quality_report_bytes: bytes | None = None
+        if request.include_quality_report:
+            from app.services.data_quality_service import analyze as dq_analyze
+            from app.services.data_quality_service import render_report_markdown
+
+            dq_result = dq_analyze(
+                polygon=polygon_client,
+                ticker=request.ticker,
+                from_date=request.from_date,
+                to_date=request.to_date,
+                volume_fix="round",
+                recompute_indicators=False,
+                indicator_entries=None,
+            )
+            if "error" not in dq_result:
+                quality_report_bytes = render_report_markdown(dq_result)
 
         zip_bytes = build_zip_bytes(
             df=df,
@@ -237,6 +280,10 @@ async def generate_dataset_zip(request: DatasetGenerationRequest):
             multiplier=request.multiplier,
             raw_bar_count=raw_count,
             filled_bar_count=len(df),
+            options_calls_csv_bytes=options_calls_bytes,
+            options_puts_csv_bytes=options_puts_bytes,
+            options_companion_report=options_report,
+            quality_report_md_bytes=quality_report_bytes,
         )
 
         session_label = "rth" if request.session == "rth" else "ext"

@@ -230,6 +230,57 @@ class IndicatorTableRequest(BaseModel):
         return v
 
 
+class OptionsCompanionConfig(BaseModel):
+    """Optional companion-file config emitted alongside the underlying dataset CSV.
+
+    When enabled, the ZIP response includes separate ``options_calls.csv`` and
+    ``options_puts.csv`` files (subject to ``include_calls`` / ``include_puts``)
+    containing 1-minute option aggregates for contracts picked around the
+    underlying's prior-day close on each expiry date. Greeks and IV are
+    computed locally via QuantLib (see ``options_companion_service``).
+    """
+
+    enabled: bool = Field(False, description="Emit options companion CSV files in the ZIP")
+    strikes_each_side: int = Field(
+        5, ge=1, le=25, description="Strikes above AND below ATM per type (default 5 + 1 ATM = 11 per type)"
+    )
+    include_calls: bool = Field(True, description="Emit options_calls.csv")
+    include_puts: bool = Field(True, description="Emit options_puts.csv")
+    expiry_mode: str = Field(
+        "same_day",
+        description="'same_day' = 0DTE only; 'nearest_within_days' = nearest expiry within max_dte days",
+    )
+    max_dte: int = Field(
+        7,
+        ge=0,
+        le=60,
+        description="When expiry_mode='nearest_within_days', the max days-to-expiry to look ahead",
+    )
+    # Per-field toggles (each omits its column(s) when false)
+    include_ohlcv: bool = Field(True, description="Include option OHLCV columns")
+    include_vwap: bool = Field(True, description="Include option VWAP column")
+    include_transactions: bool = Field(True, description="Include option transactions count column")
+    include_open_interest: bool = Field(False, description="Include OI column (live contracts only)")
+    include_iv: bool = Field(True, description="Include implied volatility column (solved per bar)")
+    include_delta: bool = Field(True, description="Include delta Greek")
+    include_gamma: bool = Field(True, description="Include gamma Greek")
+    include_theta: bool = Field(True, description="Include theta Greek")
+    include_vega: bool = Field(True, description="Include vega Greek")
+    include_rho: bool = Field(False, description="Include rho Greek")
+    risk_free_rate: float = Field(
+        0.05, ge=0, le=0.25, description="Flat annualized risk-free rate used in IV/Greeks solves"
+    )
+    dividend_yield: float = Field(0.0, ge=0, le=0.25, description="Flat continuous dividend yield for Greeks")
+
+    @field_validator("expiry_mode")
+    @classmethod
+    def validate_expiry_mode(cls, v: str) -> str:
+        valid = ["same_day", "nearest_within_days"]
+        if v not in valid:
+            raise ValueError(f"expiry_mode must be one of {valid}")
+        return v
+
+
 class DatasetGenerationRequest(BaseModel):
     """Request to generate a full indicator dataset with chunked OHLCV fetching"""
 
@@ -264,6 +315,16 @@ class DatasetGenerationRequest(BaseModel):
         description="Bar multiplier (e.g., 5 with timespan='minute' gives 5-min bars)",
     )
     adjusted: bool = Field(True, description="Adjust for splits/dividends (Polygon default: true)")
+    options_companion: OptionsCompanionConfig | None = Field(
+        None,
+        description="Optional options companion file config. When set with enabled=True, the ZIP gains "
+        "options_calls.csv and/or options_puts.csv with 1-minute aggregates + Greeks per contract.",
+    )
+    include_quality_report: bool = Field(
+        False,
+        description="When true, run the data-quality pipeline on the fetched bars and bundle "
+        "quality_report.md into the ZIP alongside the dataset.",
+    )
 
     @field_validator("timespan")
     @classmethod

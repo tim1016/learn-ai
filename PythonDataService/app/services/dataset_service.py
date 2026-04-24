@@ -926,8 +926,21 @@ def build_zip_bytes(
     raw_bar_count: int = 0,
     filled_bar_count: int = 0,
     trades_csv_bytes: bytes | None = None,
+    options_calls_csv_bytes: bytes | None = None,
+    options_puts_csv_bytes: bytes | None = None,
+    options_companion_report: dict[str, Any] | None = None,
+    quality_report_md_bytes: bytes | None = None,
 ) -> bytes:
-    """Pack dataset.csv, metadata.csv, columns.csv into a ZIP. Optionally include trades.csv."""
+    """Pack the dataset bundle into a ZIP.
+
+    Always includes ``dataset.csv``, ``metadata.csv``, ``columns.csv``.
+    Optional members:
+      * ``trades.csv`` — raw trade data (legacy path).
+      * ``options_calls.csv`` / ``options_puts.csv`` — options companion files.
+      * ``options_companion_report.json`` — per-day contract selection summary.
+      * ``quality_report.md`` — rendered data-quality report.
+    """
+    import json
     import zipfile
 
     dataset_csv = build_csv_bytes(df, columns)
@@ -953,5 +966,16 @@ def build_zip_bytes(
         zf.writestr("columns.csv", columns_csv)
         if trades_csv_bytes is not None:
             zf.writestr("trades.csv", trades_csv_bytes)
+        if options_calls_csv_bytes is not None:
+            zf.writestr("options_calls.csv", options_calls_csv_bytes)
+        if options_puts_csv_bytes is not None:
+            zf.writestr("options_puts.csv", options_puts_csv_bytes)
+        if options_companion_report is not None:
+            zf.writestr(
+                "options_companion_report.json",
+                json.dumps(options_companion_report, indent=2, default=str).encode("utf-8"),
+            )
+        if quality_report_md_bytes is not None:
+            zf.writestr("quality_report.md", quality_report_md_bytes)
 
     return buf.getvalue()
