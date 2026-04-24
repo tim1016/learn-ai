@@ -158,10 +158,8 @@ export const routes: Routes = [
   },
   {
     path: "data-quality",
-    loadComponent: () =>
-      import("./components/data-quality/data-quality.component").then(
-        (m) => m.DataQualityComponent
-      ),
+    redirectTo: "data-lab",
+    pathMatch: "full",
   },
   {
     path: "data-quality-docs",

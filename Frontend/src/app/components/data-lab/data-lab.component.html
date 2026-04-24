@@ -1,7 +1,7 @@
 <div class="data-lab">
   <app-page-header
     title="Data Lab"
-    subtitle="Fetch minute-by-minute OHLCV from Polygon.io, calculate pandas-ta indicators, export as a single CSV + metadata JSON."
+    subtitle="Fetch OHLCV + indicators from Polygon, optionally bundle an options companion (0DTE or near-expiry contracts around ATM) and a data-quality report into a single ZIP."
   >
     <div slot="actions" class="header-actions">
         <button class="btn-sessions" (click)="toggleSessionPanel()" [class.active]="sessionPanelOpen()">
@@ -298,6 +298,253 @@
       <button class="btn-text danger" (click)="clearAll()">Clear all</button>
     </div>
   </div>
+
+  <!-- Options Companion -->
+  <details class="companion-section">
+    <summary>
+      <i class="pi pi-sliders-h"></i>
+      <span>Options Companion Files</span>
+      @if (optionsCompanionEnabled()) {
+        <span class="badge">enabled</span>
+      }
+    </summary>
+
+    <div class="companion-body">
+      <p class="section-desc">
+        When enabled, the ZIP gains <code>options_calls.csv</code> and/or <code>options_puts.csv</code>:
+        option aggregates at the <strong>same resolution as the ticker</strong> — whatever
+        <em>Timespan × Multiplier</em> you picked above — for contracts chosen around the ATM strike
+        (prior day's close) on each target expiry. Implied volatility is solved per bar via QuantLib;
+        Greeks use <code>AnalyticEuropeanEngine</code>. Greeks validation against LEAN is a separate follow-up.
+      </p>
+
+      <label class="checkbox-option primary">
+        <input type="checkbox" [checked]="optionsCompanionEnabled()"
+               (change)="optionsCompanionEnabled.set(!optionsCompanionEnabled())" />
+        <span><strong>Include options companion files in the ZIP</strong></span>
+      </label>
+
+      @if (optionsCompanionEnabled()) {
+        @if (optionsExpiryMode() === 'same_day' && !tickerSupportsDaily()) {
+          <div class="info-callout warn" style="margin: 0.5rem 0;">
+            <i class="pi pi-exclamation-triangle"></i>
+            <span>
+              <strong>{{ ticker() }}</strong> does not have daily (Mon–Fri) option expirations.
+              In <em>Same-day (0DTE)</em> mode, only Fridays (or M/W/F for select mega-caps) will populate.
+              Switch to <em>Nearest expiry</em> for full coverage, or pick one of:
+              {{ DAILY_EXPIRY_TICKERS.join(', ') }}.
+            </span>
+          </div>
+        }
+
+        @if (optionsResolutionWarning(); as warn) {
+          <div class="info-callout warn" style="margin: 0.5rem 0;">
+            <i class="pi pi-info-circle"></i>
+            <span>{{ warn }}</span>
+          </div>
+        }
+
+        <div class="options-row">
+          <div class="option-group">
+            <label>Expiry selection</label>
+            <select [ngModel]="optionsExpiryMode()" (ngModelChange)="optionsExpiryMode.set($event)">
+              <option value="same_day">Same-day (0DTE) only</option>
+              <option value="nearest_within_days">Nearest expiry ≤ N days</option>
+            </select>
+          </div>
+          @if (optionsExpiryMode() === 'nearest_within_days') {
+            <div class="option-group">
+              <label>Max DTE (N)</label>
+              <input type="number" [ngModel]="optionsMaxDte()" (ngModelChange)="optionsMaxDte.set(+$event)"
+                     min="0" max="60" class="multiplier-input" />
+            </div>
+          }
+          <div class="option-group">
+            <label>Strikes each side (ATM ± N)</label>
+            <input type="number" [ngModel]="optionsStrikesEachSide()" (ngModelChange)="optionsStrikesEachSide.set(+$event)"
+                   min="1" max="25" class="multiplier-input" />
+          </div>
+          <div class="option-group">
+            <label>Risk-free rate</label>
+            <input type="number" step="0.005" [ngModel]="optRiskFreeRate()" (ngModelChange)="optRiskFreeRate.set(+$event)"
+                   min="0" max="0.25" class="multiplier-input" />
+          </div>
+          <div class="option-group">
+            <label>Dividend yield</label>
+            <input type="number" step="0.005" [ngModel]="optDividendYield()" (ngModelChange)="optDividendYield.set(+$event)"
+                   min="0" max="0.25" class="multiplier-input" />
+          </div>
+        </div>
+
+        <div class="options-row">
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optionsIncludeCalls()"
+                   (change)="optionsIncludeCalls.set(!optionsIncludeCalls())" />
+            <span>Emit calls CSV</span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optionsIncludePuts()"
+                   (change)="optionsIncludePuts.set(!optionsIncludePuts())" />
+            <span>Emit puts CSV</span>
+          </label>
+        </div>
+
+        <fieldset class="field-toggles">
+          <legend>Columns</legend>
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optIncludeOhlcv()" (change)="optIncludeOhlcv.set(!optIncludeOhlcv())" />
+            <span>OHLCV</span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optIncludeVwap()" (change)="optIncludeVwap.set(!optIncludeVwap())" />
+            <span>VWAP</span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optIncludeTransactions()" (change)="optIncludeTransactions.set(!optIncludeTransactions())" />
+            <span>Transactions</span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optIncludeOi()" (change)="optIncludeOi.set(!optIncludeOi())" />
+            <span>Open interest <span class="option-hint">(live contracts only)</span></span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optIncludeIv()" (change)="optIncludeIv.set(!optIncludeIv())" />
+            <span>Implied volatility</span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optIncludeDelta()" (change)="optIncludeDelta.set(!optIncludeDelta())" />
+            <span>Δ delta</span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optIncludeGamma()" (change)="optIncludeGamma.set(!optIncludeGamma())" />
+            <span>Γ gamma</span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optIncludeTheta()" (change)="optIncludeTheta.set(!optIncludeTheta())" />
+            <span>Θ theta</span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optIncludeVega()" (change)="optIncludeVega.set(!optIncludeVega())" />
+            <span>V vega</span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" [checked]="optIncludeRho()" (change)="optIncludeRho.set(!optIncludeRho())" />
+            <span>ρ rho</span>
+          </label>
+        </fieldset>
+      }
+    </div>
+  </details>
+
+  <!-- Data Quality Report -->
+  <details class="companion-section">
+    <summary>
+      <i class="pi pi-chart-bar"></i>
+      <span>Data Quality Report</span>
+      @if (includeQualityReportInZip()) {
+        <span class="badge">in-zip</span>
+      }
+    </summary>
+
+    <div class="companion-body">
+      <p class="section-desc">
+        Runs the 7-step cleanup pipeline (session filter, volume fix, VWAP recompute, flat-bar removal,
+        OHLC integrity, timezone normalization) and produces a before/after report. The raw and clean CSVs
+        are <strong>not</strong> downloadable separately — the Data Lab ZIP is the single source for dataset CSVs.
+      </p>
+
+      <label class="checkbox-option primary">
+        <input type="checkbox" [checked]="includeQualityReportInZip()"
+               (change)="includeQualityReportInZip.set(!includeQualityReportInZip())" />
+        <span><strong>Include <code>quality_report.md</code> in the ZIP</strong></span>
+      </label>
+
+      <div class="controls-row" style="margin-top: 0.75rem;">
+        <button class="btn-secondary" (click)="runQualityReport()" [disabled]="qualityReportLoading()">
+          @if (qualityReportLoading()) {
+            <i class="pi pi-spin pi-spinner"></i> Analyzing...
+          } @else {
+            <i class="pi pi-check-circle"></i> Generate Quality Report
+          }
+        </button>
+        @if (qualityReportResult()) {
+          <button class="btn-secondary" (click)="downloadQualityReportMd()">
+            <i class="pi pi-download"></i> Download .md
+          </button>
+        }
+      </div>
+
+      @if (qualityReportError()) {
+        <div class="error-msg" style="margin-top: 0.75rem;">{{ qualityReportError() }}</div>
+      }
+
+      @if (qualityReportResult(); as qr) {
+        <div class="report-container" style="margin-top: 1rem;">
+          <table class="comparison-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Raw</th>
+                <th>Clean</th>
+                <th>Δ</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Total bars</td>
+                <td>{{ qr.raw_summary.total_bars }}</td>
+                <td>{{ qr.clean_summary.total_bars }}</td>
+                <td>{{ qr.clean_summary.total_bars - qr.raw_summary.total_bars }}</td>
+              </tr>
+              <tr>
+                <td>Trading days</td>
+                <td>{{ qr.raw_summary.trading_days }}</td>
+                <td>{{ qr.clean_summary.trading_days }}</td>
+                <td>{{ qr.clean_summary.trading_days - qr.raw_summary.trading_days }}</td>
+              </tr>
+              <tr>
+                <td>Zero-volume bars</td>
+                <td>{{ qr.raw_summary.zero_volume_bars }}</td>
+                <td>{{ qr.clean_summary.zero_volume_bars }}</td>
+                <td>{{ qr.clean_summary.zero_volume_bars - qr.raw_summary.zero_volume_bars }}</td>
+              </tr>
+              <tr>
+                <td>Flat bars (O=H=L=C)</td>
+                <td>{{ qr.raw_summary.flat_bars_ohlc_equal }}</td>
+                <td>{{ qr.clean_summary.flat_bars_ohlc_equal }}</td>
+                <td>{{ qr.clean_summary.flat_bars_ohlc_equal - qr.raw_summary.flat_bars_ohlc_equal }}</td>
+              </tr>
+              <tr>
+                <td>Fractional volume bars</td>
+                <td>{{ qr.raw_summary.fractional_volume_bars }}</td>
+                <td>{{ qr.clean_summary.fractional_volume_bars }}</td>
+                <td>{{ qr.clean_summary.fractional_volume_bars - qr.raw_summary.fractional_volume_bars }}</td>
+              </tr>
+              <tr>
+                <td>VWAP violations</td>
+                <td>{{ qr.raw_summary.vwap_above_high + qr.raw_summary.vwap_below_low }}</td>
+                <td>{{ qr.clean_summary.vwap_above_high + qr.clean_summary.vwap_below_low }}</td>
+                <td>{{ (qr.clean_summary.vwap_above_high + qr.clean_summary.vwap_below_low)
+                     - (qr.raw_summary.vwap_above_high + qr.raw_summary.vwap_below_low) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="step-list">
+            @for (step of qr.steps; track step.order) {
+              <div class="step-row">
+                <strong>{{ step.order }}. {{ step.name }}</strong>
+                <span class="option-hint">{{ step.library }}</span>
+                <div>{{ step.description }}</div>
+                <div class="option-hint">
+                  Bars: {{ step.bars_before }} → {{ step.bars_after }} ({{ step.bars_removed }} removed)
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+      }
+    </div>
+  </details>
 
   @if (error()) {
     <div class="error-msg">{{ error() }}</div>

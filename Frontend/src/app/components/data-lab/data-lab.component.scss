@@ -641,6 +641,117 @@
   margin: 0;
 }
 
+// ─── Collapsible companion sections (options + quality report) ──
+.companion-section {
+  margin: 1rem 0;
+  border: 1px solid $border;
+  border-radius: 8px;
+  background: $bg-elevated;
+
+  > summary {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: $text-primary;
+
+    &::-webkit-details-marker { display: none; }
+
+    i {
+      color: $text-secondary;
+    }
+
+    .badge {
+      margin-left: 0.5rem;
+      font-size: 0.7rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: $bg-elevated;
+      border: 1px solid $border;
+      color: $text-secondary;
+      font-weight: 500;
+    }
+  }
+
+  .companion-body {
+    padding: 0.25rem 1rem 1rem;
+    border-top: 1px solid $border;
+  }
+}
+
+.checkbox-option.primary {
+  font-size: 0.95rem;
+
+  > span {
+    color: $text-primary;
+  }
+}
+
+.field-toggles {
+  margin: 0.75rem 0 0;
+  border: 1px dashed $border;
+  border-radius: 6px;
+  padding: 0.75rem 1rem 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+
+  > legend {
+    font-size: 0.75rem;
+    color: $text-secondary;
+    padding: 0 0.4rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+
+  th, td {
+    padding: 0.5rem 0.75rem;
+    text-align: right;
+    border-bottom: 1px solid $border;
+  }
+
+  th:first-child, td:first-child {
+    text-align: left;
+  }
+
+  thead th {
+    background: $bg-elevated;
+    font-weight: 600;
+    color: $text-secondary;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+  }
+}
+
+.step-list {
+  display: grid;
+  gap: 0.6rem;
+  padding: 1rem;
+
+  .step-row {
+    padding: 0.5rem 0.75rem;
+    border-left: 3px solid $border;
+    font-size: 0.82rem;
+    color: $text-primary;
+
+    .option-hint {
+      color: $text-secondary;
+      font-size: 0.75rem;
+    }
+  }
+}
+
 // ─── Indicator Catalog ──────────────────────────────────
 .indicator-section {
   margin-top: 0.5rem;

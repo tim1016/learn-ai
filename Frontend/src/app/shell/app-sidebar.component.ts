@@ -58,7 +58,6 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-database',
     items: [
       { label: 'Data Lab', route: '/data-lab' },
-      { label: 'Data Quality', route: '/data-quality' },
     ],
   },
   {

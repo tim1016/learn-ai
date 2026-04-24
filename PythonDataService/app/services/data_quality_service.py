@@ -1,12 +1,13 @@
-"""Data quality pipeline: 7-step cleanup for minute OHLCV data with before/after reporting"""
+"""Data quality pipeline: 7-step cleanup for minute OHLCV data with before/after reporting.
+
+CSV serialization and download-token caching were removed — the data-lab
+component is the single authority for generating dataset CSVs. This service
+now returns only the structured before/after report.
+"""
 
 from __future__ import annotations
 
-import csv
-import io
 import logging
-import uuid
-from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -26,43 +27,6 @@ logger = logging.getLogger(__name__)
 
 _ET = ZoneInfo("US/Eastern")
 _CORE_COLS = {"timestamp", "open", "high", "low", "close", "volume", "vwap", "transactions"}
-
-# In-memory cache for download tokens (token -> bytes)
-_download_cache: dict[str, tuple[bytes, float]] = {}
-_CACHE_TTL_SECONDS = 1800  # 30 minutes
-
-
-def _evict_stale_cache() -> None:
-    """Remove expired entries from the download cache."""
-    now = datetime.utcnow().timestamp()
-    expired = [k for k, (_, ts) in _download_cache.items() if now - ts > _CACHE_TTL_SECONDS]
-    for k in expired:
-        del _download_cache[k]
-
-
-def _df_to_csv_bytes(df: pd.DataFrame) -> bytes:
-    """Serialize a DataFrame to CSV bytes with unix_ts and iso_time prefix columns."""
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-
-    data_cols = [c for c in df.columns if c not in ("timestamp", "_dt_et", "_date")]
-    header = ["unix_ts", "iso_time", *data_cols]
-    writer.writerow(header)
-
-    for _, row in df.iterrows():
-        ts = int(row["timestamp"])
-        iso = datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%dT%H:%M:%SZ")
-        values = [ts, iso] + [_fmt(row.get(c)) for c in data_cols]
-        writer.writerow(values)
-    return buf.getvalue().encode("utf-8")
-
-
-def _fmt(v: Any) -> str:
-    if v is None or (isinstance(v, float) and np.isnan(v)):
-        return ""
-    if isinstance(v, float):
-        return f"{v:.6f}"
-    return str(v)
 
 
 def _compute_summary(df: pd.DataFrame) -> dict[str, Any]:
@@ -423,7 +387,6 @@ def analyze(
 
     # Compute raw summary
     raw_summary = _compute_summary(df)
-    raw_df = df.copy()
 
     # Run pipeline steps
     steps: list[dict[str, Any]] = []
@@ -454,14 +417,6 @@ def analyze(
     clean_summary = _compute_summary(df)
     clean_summary["indicators_recomputed"] = recompute_indicators and bool(indicator_entries)
 
-    # Cache both dataframes for download
-    _evict_stale_cache()
-    raw_token = str(uuid.uuid4())
-    clean_token = str(uuid.uuid4())
-    now = datetime.utcnow().timestamp()
-    _download_cache[raw_token] = (_df_to_csv_bytes(raw_df), now)
-    _download_cache[clean_token] = (_df_to_csv_bytes(df), now)
-
     logger.info(f"[DQ] Analysis complete: {raw_summary['total_bars']} raw → {clean_summary['total_bars']} clean")
 
     return {
@@ -471,18 +426,73 @@ def analyze(
         "raw_summary": raw_summary,
         "clean_summary": clean_summary,
         "steps": steps,
-        "raw_data_token": raw_token,
-        "clean_data_token": clean_token,
     }
 
 
-def get_cached_csv(token: str) -> bytes | None:
-    """Retrieve cached CSV bytes by download token."""
-    _evict_stale_cache()
-    entry = _download_cache.get(token)
-    if entry is None:
-        return None
-    return entry[0]
+def render_report_markdown(result: dict[str, Any]) -> bytes:
+    """Serialize an ``analyze()`` result to a human-readable markdown report.
+
+    Used by both the /generate-zip bundler and the frontend download button so
+    the markdown emitted everywhere is byte-identical.
+    """
+    from datetime import datetime as _dt
+
+    raw = result.get("raw_summary") or {}
+    clean = result.get("clean_summary") or {}
+    steps = result.get("steps") or []
+
+    lines: list[str] = []
+    lines.append(f"# Data Quality Report — {result.get('ticker', 'UNKNOWN')}")
+    lines.append("")
+    lines.append(
+        f"**Range:** {result.get('from_date', '?')} → {result.get('to_date', '?')}  "
+        f"**Generated:** {_dt.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}"
+    )
+    lines.append("")
+
+    def _row(label: str, r_val: Any, c_val: Any) -> str:
+        delta = ""
+        try:
+            d = int(c_val) - int(r_val)
+            delta = f"{d:+d}"
+        except (TypeError, ValueError):
+            delta = ""
+        return f"| {label} | {r_val} | {c_val} | {delta} |"
+
+    lines.append("## Summary")
+    lines.append("")
+    lines.append("| Metric | Raw | Clean | Δ |")
+    lines.append("|---|---:|---:|---:|")
+    for label, key in [
+        ("Total bars", "total_bars"),
+        ("Trading days", "trading_days"),
+        ("Zero-volume bars", "zero_volume_bars"),
+        ("Flat bars (O=H=L=C)", "flat_bars_ohlc_equal"),
+        ("Fractional volume bars", "fractional_volume_bars"),
+        ("VWAP > high violations", "vwap_above_high"),
+        ("VWAP < low violations", "vwap_below_low"),
+        ("OHLC violations", "ohlc_violations"),
+        ("Duplicate timestamps", "duplicate_timestamps"),
+        ("Weekend bars", "weekend_bars"),
+        ("Intraday gaps", "intraday_gaps"),
+    ]:
+        lines.append(_row(label, raw.get(key), clean.get(key)))
+
+    lines.append("")
+    lines.append("## Pipeline steps")
+    lines.append("")
+    for step in steps:
+        lines.append(f"### {step.get('order', '?')}. {step.get('name', '')}")
+        lines.append(f"*Library:* `{step.get('library', '')}`")
+        lines.append("")
+        lines.append(step.get("description", ""))
+        lines.append("")
+        lines.append(
+            f"Bars: {step.get('bars_before', 0)} → {step.get('bars_after', 0)} ({step.get('bars_removed', 0)} removed)"
+        )
+        lines.append("")
+
+    return "\n".join(lines).encode("utf-8")
 
 
 def get_pipeline_docs() -> list[dict[str, Any]]:
