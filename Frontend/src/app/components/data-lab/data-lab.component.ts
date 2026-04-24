@@ -1,5 +1,5 @@
 import {
-  Component, signal, computed, inject, viewChild,
+  Component, signal, computed, effect, inject, viewChild,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -18,11 +18,42 @@ import { MarketHolidayEvent } from '../../models/market-monitor';
 import { IndicatorTooltipComponent } from '../../shared/indicator-tooltip/indicator-tooltip.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import {
+  TickerRangePickerComponent,
+  type AdvisoryAction,
+  type AvailabilityCell,
+  type Resolution,
+  type TickerOption,
+  type TickerRange,
+} from '../../shared/ticker-range-picker';
+import {
   getDisabledHolidayDates,
   buildHolidayMap,
   getMinAllowedDate,
   validateDateRange,
 } from '../../utils/date-validation';
+
+/**
+ * User-facing bar timeframes. Each entry bundles the Polygon ``timespan``
+ * + ``multiplier`` pair so the UI can present a single "Bar timeframe"
+ * dropdown without leaking the multiplier-magic to the user.
+ */
+interface BarTimeframeOption {
+  /** The dropdown value (also the displayed label suffix). */
+  value: string;
+  label: string;
+  timespan: 'minute' | 'hour' | 'day';
+  multiplier: number;
+}
+
+const BAR_TIMEFRAMES: readonly BarTimeframeOption[] = [
+  { value: '1m', label: '1 min', timespan: 'minute', multiplier: 1 },
+  { value: '5m', label: '5 min', timespan: 'minute', multiplier: 5 },
+  { value: '15m', label: '15 min', timespan: 'minute', multiplier: 15 },
+  { value: '30m', label: '30 min', timespan: 'minute', multiplier: 30 },
+  { value: '1h', label: '1 hour', timespan: 'hour', multiplier: 1 },
+  { value: '4h', label: '4 hours', timespan: 'hour', multiplier: 4 },
+  { value: '1d', label: '1 day', timespan: 'day', multiplier: 1 },
+];
 
 interface ParamConfig {
   name: string;
@@ -159,7 +190,7 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
 @Component({
   selector: 'app-data-lab',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, DataLabChartComponent, DatePicker, SharedModule, Tooltip, IndicatorTooltipComponent, PageHeaderComponent],
+  imports: [CommonModule, FormsModule, RouterModule, DataLabChartComponent, DatePicker, SharedModule, Tooltip, IndicatorTooltipComponent, PageHeaderComponent, TickerRangePickerComponent],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -237,6 +268,72 @@ export class DataLabComponent {
   // Polygon /v2/aggs passthrough params
   sort = signal<'asc' | 'desc'>('asc');
   polygonLimit = signal(50000);
+
+  // ── Shared ticker-range picker wiring ─────────────────────
+  readonly tickerPool: readonly TickerOption[] = [
+    { symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', exchange: 'ARCA' },
+    { symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ' },
+    { symbol: 'IWM', name: 'iShares Russell 2000 ETF', exchange: 'ARCA' },
+    { symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ' },
+    { symbol: 'MSFT', name: 'Microsoft Corporation', exchange: 'NASDAQ' },
+    { symbol: 'NVDA', name: 'NVIDIA Corporation', exchange: 'NASDAQ' },
+    { symbol: 'TSLA', name: 'Tesla, Inc.', exchange: 'NASDAQ' },
+    { symbol: 'AMZN', name: 'Amazon.com, Inc.', exchange: 'NASDAQ' },
+    { symbol: 'META', name: 'Meta Platforms, Inc.', exchange: 'NASDAQ' },
+    { symbol: 'GOOGL', name: 'Alphabet Inc.', exchange: 'NASDAQ' },
+    { symbol: 'AMD', name: 'Advanced Micro Devices', exchange: 'NASDAQ' },
+  ];
+  readonly recentTickers: readonly string[] = ['SPY', 'QQQ', 'AAPL'];
+
+  private static timespanToResolution(t: 'minute' | 'hour' | 'day'): Resolution {
+    return t === 'day' ? 'daily' : t;
+  }
+
+  /** Writable picker state — two-way-bound so user edits survive change
+   *  detection. An effect below propagates ``rangeState`` into the
+   *  legacy ticker / fromDate / toDate signals that the rest of the
+   *  component reads from. */
+  readonly rangeState = signal<TickerRange>({
+    symbol: 'SPY',
+    from: DataLabComponent.formatDate(DataLabComponent.get30DaysAgo()),
+    to: DataLabComponent.formatDate(DataLabComponent.getYesterday()),
+    resolution: 'minute',
+    autoFetch: true,
+  });
+
+  /** Empty per-day cells for now — Data Lab doesn't yet fetch an
+   *  availability report. Advisories still fire on range-based signals
+   *  ("minute × 90+ days → switch to hour"). */
+  readonly pickerAvailability: readonly AvailabilityCell[] = [];
+
+  onPickerAdvisoryAction(_action: AdvisoryAction): void {
+    // No side-effects wired yet — the picker already patches
+    // ``rangeState`` on action; this would be where we triggered a
+    // fetch or a refetch.
+  }
+
+  // ── Bar timeframe (hides timespan × multiplier magic) ─────
+  readonly barTimeframes = BAR_TIMEFRAMES;
+
+  /** Which bar-timeframe option is currently selected, derived from the
+   *  underlying ``timespan`` + ``multiplier`` signals. Falls back to
+   *  "custom" when the combination doesn't match a preset so the user
+   *  can still see what's configured via the advanced fields. */
+  readonly activeBarTimeframe = computed<string>(() => {
+    const t = this.timespan();
+    const m = this.multiplier();
+    const match = BAR_TIMEFRAMES.find(
+      (b) => b.timespan === t && b.multiplier === m,
+    );
+    return match ? match.value : 'custom';
+  });
+
+  setBarTimeframe(value: string): void {
+    const entry = BAR_TIMEFRAMES.find((b) => b.value === value);
+    if (!entry) return;
+    this.timespan.set(entry.timespan);
+    this.multiplier.set(entry.multiplier);
+  }
 
   loading = signal(false);
   loadingIndicators = signal(false);
@@ -397,6 +494,37 @@ export class DataLabComponent {
   });
 
   constructor() {
+    // Propagate picker state into the legacy ticker / date / timespan
+    // signals. Writing to ``rangeState`` is the only way users change
+    // (symbol, from, to, resolution); everything else below the picker
+    // reads from the old signals without needing to know the picker
+    // exists.
+    effect(
+      () => {
+        const v = this.rangeState();
+        if (this.ticker() !== v.symbol) this.ticker.set(v.symbol);
+        const fromIso = DataLabComponent.formatDate(this.fromDateValue());
+        const toIso = DataLabComponent.formatDate(this.toDateValue());
+        if (fromIso !== v.from) {
+          this.fromDateValue.set(DataLabComponent.parseDate(v.from));
+        }
+        if (toIso !== v.to) {
+          this.toDateValue.set(DataLabComponent.parseDate(v.to));
+        }
+        // Only overwrite timespan if the picker's resolution doesn't
+        // already match — Data Lab's bar-timeframe dropdown writes the
+        // multiplier too, and the picker shouldn't undo that.
+        const expected = DataLabComponent.timespanToResolution(this.timespan());
+        if (v.resolution !== expected) {
+          this.timespan.set(v.resolution === 'daily' ? 'day' : v.resolution);
+          // Reset multiplier so the bar-timeframe dropdown matches a
+          // preset after a coarse resolution change via the picker.
+          this.multiplier.set(1);
+        }
+      },
+      { allowSignalWrites: true },
+    );
+
     this.loadAvailableIndicators();
     this.refreshSessionList();
     this.loadHolidays();

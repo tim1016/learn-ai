@@ -55,10 +55,6 @@
       </button>
     </div>
 
-    @if (singleError()) {
-      <p class="error">{{ singleError() }}</p>
-    }
-
     @if (singleSnapshot(); as snap) {
       <div class="snapshot-card">
         <h3>{{ snap.ticker }}</h3>

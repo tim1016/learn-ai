@@ -29,7 +29,7 @@ describe('AuthorsComponent', () => {
 
   it('should start in loading state', () => {
     authorServiceMock.getAuthors.mockReturnValue(of([]));
-    expect(component.loading).toBe(true);
+    expect(component.loading()).toBe(true);
   });
 
   it('should load and display authors', () => {
@@ -41,9 +41,9 @@ describe('AuthorsComponent', () => {
 
     fixture.detectChanges(); // triggers ngOnInit
 
-    expect(component.loading).toBe(false);
-    expect(component.authors.length).toBe(2);
-    expect(component.authors[0].name).toBe('George Orwell');
+    expect(component.loading()).toBe(false);
+    expect(component.authors().length).toBe(2);
+    expect(component.authors()[0].name).toBe('George Orwell');
   });
 
   it('should render author cards in template', () => {
@@ -62,7 +62,7 @@ describe('AuthorsComponent', () => {
 
     fixture.detectChanges();
 
-    expect(component.loading).toBe(false);
-    expect(component.error).toBe('Failed to load authors. Is the backend running?');
+    expect(component.loading()).toBe(false);
+    expect(component.error()).toBe('Failed to load authors. Is the backend running?');
   });
 });

@@ -29,6 +29,11 @@ import { MultiSelect } from 'primeng/multiselect';
 import { Chart, registerables } from 'chart.js';
 import { InfoIconComponent } from '../../../shared/info-icon/info-icon.component';
 import { MethodologyDrawerService } from '../../../shared/methodology-drawer/methodology-drawer.service';
+import {
+  IndicatorVerdictHeroComponent,
+  type VerdictAnalysis,
+  type VerdictCta,
+} from '../../../shared/indicator-verdict-hero';
 
 Chart.register(...registerables);
 
@@ -206,6 +211,7 @@ interface HorizonOption {
     Checkbox,
     MultiSelect,
     InfoIconComponent,
+    IndicatorVerdictHeroComponent,
   ],
 })
 export class IndicatorReliabilityComponent {
@@ -254,6 +260,69 @@ export class IndicatorReliabilityComponent {
   result = signal<IndicatorReliabilityResponse | null>(null);
   error = signal<string | null>(null);
   formCollapsed = signal(false);
+
+  /**
+   * Slim projection of the current result into the shape the shared
+   * ``<app-indicator-verdict-hero>`` consumes. Rebuilt on every result
+   * change so the hero always reflects the freshest analysis without
+   * the hero having to know about the full response type.
+   */
+  readonly verdictAnalysis = computed<VerdictAnalysis | null>(() => {
+    const res = this.result();
+    if (!res || !res.success) return null;
+    const best = res.results.find((r) => r.horizon === res.best_horizon)
+      ?? res.results[0];
+    if (!best) return null;
+
+    const oosHolds =
+      best.oos_retention !== null ? best.oos_retention >= 0.6 : true;
+    const economicallyMeaningful = Math.abs(best.oos_mean_ic ?? best.is_mean_ic) > 0.1;
+
+    const indicatorDisplay = res.display_name
+      || `${res.indicator_name.toUpperCase()}`;
+
+    const directionLabel =
+      best.direction_label === 'Mean-Reversion' ? 'mean-reversion'
+      : best.direction_label === 'Momentum' ? 'trend-following'
+      : 'directional';
+
+    const highVolBoostPct = (() => {
+      const hv = res.regime_results?.high_vol?.find((c) => c.horizon === best.horizon);
+      const lv = res.regime_results?.low_vol?.find((c) => c.horizon === best.horizon);
+      if (!hv || !lv || lv.mean_ic === 0) return null;
+      return Math.round(((Math.abs(hv.mean_ic) - Math.abs(lv.mean_ic)) / Math.abs(lv.mean_ic)) * 100);
+    })();
+
+    return {
+      indicatorDisplay,
+      ticker: res.ticker,
+      bestHorizonLabel: `${best.horizon}-bar`,
+      oosIc: best.oos_mean_ic ?? best.is_mean_ic,
+      isIc: best.is_mean_ic,
+      oosVsIsPct: best.retention_delta_pct,
+      sharpe: best.sharpe_estimate,
+      fdrSignificant: res.any_significant_after_fdr,
+      bonferroniSignificant: res.any_significant_after_bonferroni,
+      oosHolds,
+      zScore: best.ic_vs_random_zscore,
+      economicallyMeaningful,
+      highVolHitRate: res.regime_results?.high_vol?.find((c) => c.horizon === best.horizon)?.hit_rate ?? null,
+      lowVolHitRate: res.regime_results?.low_vol?.find((c) => c.horizon === best.horizon)?.hit_rate ?? null,
+      highVolBoostPct,
+      singleAsset: true,
+      directionLabel,
+      randomShuffles: res.random_simulations,
+    };
+  });
+
+  onVerdictCta(kind: VerdictCta): void {
+    // These are advisory emits today — each CTA is resolved later when
+    // the corresponding flow exists. For now we write intent to the
+    // console so the wiring is observable in dev, and the verdict panel
+    // stays useful as a read-only summary.
+     
+    console.info('[indicator-reliability] verdict CTA:', kind);
+  }
 
   // Indicator options (loaded from API)
   indicatorOptions = signal<IndicatorOption[]>([]);

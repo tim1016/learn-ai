@@ -1,0 +1,145 @@
+<section class="hero" [class]="tierCssClass(verdict().tier)">
+  <!-- ── Verdict band ─────────────────────────────────────── -->
+  <div class="hero__band">
+    <!-- Confidence gauge -->
+    <div class="gauge" aria-hidden="true">
+      <svg viewBox="0 0 220 220" width="200" height="200">
+        <circle
+          cx="110"
+          cy="110"
+          [attr.r]="gaugeRadius"
+          stroke="var(--border-strong)"
+          stroke-width="10"
+          fill="none"
+          [attr.stroke-dasharray]="gaugeVisible + ' ' + gaugeCircumference"
+          transform="rotate(135 110 110)"
+          stroke-linecap="round"
+        />
+        <circle
+          cx="110"
+          cy="110"
+          [attr.r]="gaugeRadius"
+          [attr.stroke]="tierColor()"
+          stroke-width="10"
+          fill="none"
+          [attr.stroke-dasharray]="gaugeDash() + ' ' + gaugeCircumference"
+          transform="rotate(135 110 110)"
+          stroke-linecap="round"
+          class="gauge__arc"
+        />
+      </svg>
+      <div class="gauge__inner">
+        <div class="gauge__label">Confidence</div>
+        <div class="gauge__score mono" [style.color]="tierColor()">
+          {{ verdict().score }}
+        </div>
+        <div class="gauge__denom mono">/ 100</div>
+        <div
+          class="gauge__tier mono"
+          [style.color]="tierColor()"
+          [style.border-color]="tierColor()"
+          [style.background]="'color-mix(in srgb, ' + tierColor() + ' 7%, transparent)'"
+        >
+          {{ tierLabel() }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Headline + pills -->
+    <div class="hero__copy">
+      <div class="hero__eyebrow">
+        Verdict · {{ analysis().indicatorDisplay }} on {{ analysis().ticker }}
+      </div>
+      <h1 class="hero__title">
+        <span [style.color]="tierColor()">{{ headline() }}</span>
+        <span class="hero__at"> at </span>
+        <span class="mono">{{ analysis().bestHorizonLabel }}</span>
+      </h1>
+      <p class="hero__lede">
+        A <strong>{{ analysis().directionLabel }}</strong> signal.
+        Out-of-sample IC
+        <strong class="mono">{{ analysis().oosIc.toFixed(3) }}</strong>
+        @if (analysis().oosVsIsPct !== null) {
+          — <strong [style.color]="(analysis().oosVsIsPct ?? 0) >= 0 ? 'var(--bull)' : 'var(--bear)'">
+            {{ (analysis().oosVsIsPct ?? 0) >= 0 ? "+" : "" }}{{ analysis().oosVsIsPct }}% vs in-sample</strong>,
+        }
+        @if (analysis().bonferroniSignificant) {
+          survives Bonferroni,
+        }
+        beats random by
+        <strong class="mono">{{ analysis().zScore | number: "1.1-1" }}σ</strong>.
+      </p>
+      <div class="hero__pills">
+        @for (p of pills(); track p.label) {
+          <span
+            class="pill mono"
+            [style.color]="pillColorVar(p.kind)"
+            [style.border-color]="'color-mix(in srgb, ' + pillColorVar(p.kind) + ' 35%, transparent)'"
+            [style.background]="'color-mix(in srgb, ' + pillColorVar(p.kind) + ' 10%, transparent)'"
+          >
+            {{ p.label }}
+          </span>
+        }
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="hero__actions">
+      <button
+        type="button"
+        class="action action--primary"
+        (click)="onCta('send-to-preflight')"
+      >
+        <span class="action__title">Send to Pre-flight</span>
+        <span class="action__sub">
+          {{ analysis().bestHorizonLabel }} · {{ analysis().indicatorDisplay }} · {{ analysis().ticker }}
+        </span>
+        <span class="action__kbd mono">⏎</span>
+      </button>
+      <button
+        type="button"
+        class="action"
+        (click)="onCta('save-verdict')"
+      >
+        <span class="action__title">Save to tested indicators</span>
+        <span class="action__sub">Persist verdict + params</span>
+      </button>
+      <button
+        type="button"
+        class="action"
+        (click)="onCta('run-on-another-ticker')"
+      >
+        <span class="action__title">Run on another ticker</span>
+        <span class="action__sub">Reuse current params</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Decision band: WHEN / WHERE / HOW ────────────────── -->
+  <div class="decisions">
+    <div class="decisions__cell">
+      <div class="decisions__head">
+        <span class="decisions__num mono">01</span>
+        <span class="decisions__q">When to trade</span>
+      </div>
+      <div class="decisions__answer">Hold {{ analysis().bestHorizonLabel }}</div>
+      <div class="decisions__detail">{{ whenDetail() }}</div>
+    </div>
+    <div class="decisions__cell">
+      <div class="decisions__head">
+        <span class="decisions__num mono">02</span>
+        <span class="decisions__q">Where it works</span>
+      </div>
+      <div class="decisions__answer">{{ whereAnswer() }}</div>
+      <div class="decisions__detail">{{ whereDetail() }}</div>
+    </div>
+    <div class="decisions__cell decisions__cell--last">
+      <div class="decisions__head">
+        <span class="decisions__num mono">03</span>
+        <span class="decisions__q">How to enter</span>
+      </div>
+      <div class="decisions__answer">Threshold entry</div>
+      <div class="decisions__detail">{{ howDetail() }}</div>
+    </div>
+  </div>
+</section>
