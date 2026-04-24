@@ -285,8 +285,12 @@ export class DataLabComponent {
   ];
   readonly recentTickers: readonly string[] = ['SPY', 'QQQ', 'AAPL'];
 
-  private static timespanToResolution(t: 'minute' | 'hour' | 'day'): Resolution {
-    return t === 'day' ? 'daily' : t;
+  private static timespanToResolution(
+    t: 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year',
+  ): Resolution {
+    if (t === 'hour') return 'hour';
+    if (t === 'second' || t === 'minute') return 'minute';
+    return 'daily';
   }
 
   /** Writable picker state — two-way-bound so user edits survive change
