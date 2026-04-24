@@ -243,7 +243,24 @@
                 @else if (preflightBlocks()) { Run blocked — fix pre-flight }
                 @else { Run backtest }
               </button>
+
+              @if (selectedStrategy()?.pine_available) {
+                <button
+                  type="button"
+                  class="pine-btn"
+                  [disabled]="pineDownloading() || !selectedStrategyName()"
+                  title="Download a Pine v6 script that matches the current parameter values. Paste into TradingView to validate trade-by-trade."
+                  (click)="downloadPineScript()"
+                >
+                  <i class="pi pi-download" aria-hidden="true"></i>
+                  @if (pineDownloading()) { Generating… }
+                  @else { Download Pine script }
+                </button>
+              }
             </div>
+            @if (pineError(); as err) {
+              <div class="notice error" role="alert">{{ err }}</div>
+            }
           </section>
         </p-tabpanel>
 
