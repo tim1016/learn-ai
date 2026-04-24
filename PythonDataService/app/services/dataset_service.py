@@ -7,6 +7,7 @@ import inspect
 import io
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -16,6 +17,11 @@ import pandas_market_calendars as mcal
 import pandas_ta as ta
 
 from app.services.polygon_client import PolygonClientService
+
+
+class RunCancelledError(Exception):
+    """Raised by the chunker when ``cancel_check`` returns True. Callers
+    catch this to emit a cancellation event and stop cleanly."""
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +213,8 @@ def fetch_bars_chunked(
     adjusted: bool = True,
     sort: str = "asc",
     limit: int = 50000,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch OHLCV bars for a long date range by splitting into chunks.
 
@@ -214,6 +222,16 @@ def fetch_bars_chunked(
     affect each per-chunk request — the final merged list is always
     timestamp-sorted ascending (dedup-safe for overlapping chunk boundaries).
     To surface ``desc`` output to the caller, we reverse after merge.
+
+    When ``on_event`` is supplied, the chunker emits progress dicts:
+        ``{type: "chunk_plan", total: int}``
+        ``{type: "chunk_start", index: int, total: int, from: str, to: str}``
+        ``{type: "chunk_done", index: int, total: int, bars_returned: int}``
+        ``{type: "chunk_paced", wait_seconds: float, label: str}``  (from throttle)
+
+    When ``cancel_check`` returns True between chunks, the chunker stops
+    early and raises ``RunCancelledError``. The caller should treat this as
+    a cooperative abort, not an error.
     """
     start = datetime.strptime(from_date, "%Y-%m-%d")
     end = datetime.strptime(to_date, "%Y-%m-%d")
@@ -236,29 +254,53 @@ def fetch_bars_chunked(
     effective_bpd = _bars_per_day.get(timespan, 450) // max(1, multiplier)
     days_per_chunk = max(1, _POLYGON_MAX_BARS // max(1, effective_bpd))
 
+    # Pre-compute total chunk count so the UI can render "chunk N of M"
+    # before the first request fires.
+    total_days = max(1, (end - start).days + 1)
+    total_chunks = max(1, (total_days + days_per_chunk - 1) // days_per_chunk)
+    if on_event is not None:
+        on_event({"type": "chunk_plan", "total": total_chunks})
+
     all_bars: list[dict[str, Any]] = []
     chunk_start = start
     chunk_idx = 0
 
     while chunk_start < end:
+        if cancel_check is not None and cancel_check():
+            raise RunCancelledError(f"cancelled after chunk {chunk_idx} of {total_chunks}")
         chunk_end = min(chunk_start + timedelta(days=days_per_chunk), end)
         chunk_idx += 1
-        logger.info(
-            f"[CHUNK {chunk_idx}] Fetching {multiplier}{timespan} bars for {ticker}: "
-            f"{chunk_start.strftime('%Y-%m-%d')} to {chunk_end.strftime('%Y-%m-%d')}"
-        )
+        from_str = chunk_start.strftime("%Y-%m-%d")
+        to_str = chunk_end.strftime("%Y-%m-%d")
+        logger.info(f"[CHUNK {chunk_idx}] Fetching {multiplier}{timespan} bars for {ticker}: {from_str} to {to_str}")
+        if on_event is not None:
+            on_event({
+                "type": "chunk_start",
+                "index": chunk_idx,
+                "total": total_chunks,
+                "from": from_str,
+                "to": to_str,
+            })
         bars = polygon.fetch_aggregates(
             ticker=ticker,
             multiplier=multiplier,
             timespan=timespan,
-            from_date=chunk_start.strftime("%Y-%m-%d"),
-            to_date=chunk_end.strftime("%Y-%m-%d"),
+            from_date=from_str,
+            to_date=to_str,
             adjusted=adjusted,
             sort=sort,
             limit=limit,
+            on_event=on_event,
         )
         all_bars.extend(bars)
         logger.info(f"[CHUNK {chunk_idx}] Got {len(bars)} bars (total: {len(all_bars)})")
+        if on_event is not None:
+            on_event({
+                "type": "chunk_done",
+                "index": chunk_idx,
+                "total": total_chunks,
+                "bars_returned": len(bars),
+            })
         chunk_start = chunk_end + timedelta(days=1)
 
     total_raw = len(all_bars)
