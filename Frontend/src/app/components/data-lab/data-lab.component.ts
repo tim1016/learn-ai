@@ -263,8 +263,11 @@ export class DataLabComponent {
   adjusted = signal(true);
   warmup = signal(true);
   computeAllIndicators = signal(false);
-  timespan = signal<'minute' | 'hour' | 'day'>('minute');
+  timespan = signal<'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year'>('minute');
   multiplier = signal(1);
+  // Polygon /v2/aggs passthrough params
+  sort = signal<'asc' | 'desc'>('asc');
+  polygonLimit = signal(50000);
 
   // ── Shared ticker-range picker wiring ─────────────────────
   readonly tickerPool: readonly TickerOption[] = [
@@ -282,8 +285,12 @@ export class DataLabComponent {
   ];
   readonly recentTickers: readonly string[] = ['SPY', 'QQQ', 'AAPL'];
 
-  private static timespanToResolution(t: 'minute' | 'hour' | 'day'): Resolution {
-    return t === 'day' ? 'daily' : t;
+  private static timespanToResolution(
+    t: 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year',
+  ): Resolution {
+    if (t === 'hour') return 'hour';
+    if (t === 'second' || t === 'minute') return 'minute';
+    return 'daily';
   }
 
   /** Writable picker state — two-way-bound so user edits survive change
@@ -394,6 +401,15 @@ export class DataLabComponent {
   qualityReportLoading = signal(false);
   qualityReportResult = signal<QualityReportResponse | null>(null);
   qualityReportError = signal('');
+
+  // ── Polygon reference-endpoint companion toggles ───────────
+  includeSplits = signal(false);
+  includeDividends = signal(false);
+  includeTickerOverview = signal(false);
+  includeNews = signal(false);
+  includeFinancials = signal(false);
+  includeStockTrades = signal(false);
+  includeStockQuotes = signal(false);
 
   // Validation report state
   validationReport = signal('');
@@ -910,8 +926,17 @@ export class DataLabComponent {
         warmup: this.warmup(),
         timespan: this.timespan(),
         multiplier: this.multiplier(),
+        sort: this.sort(),
+        limit: this.polygonLimit(),
         options_companion: optionsConfig,
         include_quality_report: this.includeQualityReportInZip(),
+        include_splits: this.includeSplits(),
+        include_dividends: this.includeDividends(),
+        include_ticker_overview: this.includeTickerOverview(),
+        include_news: this.includeNews(),
+        include_financials: this.includeFinancials(),
+        include_trades: this.includeStockTrades(),
+        include_quotes: this.includeStockQuotes(),
       };
 
       const blob = await firstValueFrom(

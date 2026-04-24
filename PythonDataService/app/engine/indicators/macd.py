@@ -45,9 +45,7 @@ class MovingAverageConvergenceDivergence(Indicator):
         # delegated to the signal EMA below.
         super().__init__(name, slow_period + signal_period - 1)
         if fast_period >= slow_period:
-            raise ValueError(
-                f"fast_period ({fast_period}) must be < slow_period ({slow_period})"
-            )
+            raise ValueError(f"fast_period ({fast_period}) must be < slow_period ({slow_period})")
         self.fast_period = fast_period
         self.slow_period = slow_period
         self.signal_period = signal_period

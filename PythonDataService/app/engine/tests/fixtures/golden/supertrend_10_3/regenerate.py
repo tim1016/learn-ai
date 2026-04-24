@@ -32,9 +32,7 @@ def build_bars() -> pd.DataFrame:
     lows = np.minimum(lows, np.minimum(opens, arr))
     base = pd.Timestamp("2024-01-02 14:30", tz="UTC")
     ts = [base + pd.Timedelta(minutes=15 * i) for i in range(COUNT)]
-    return pd.DataFrame(
-        {"timestamp": ts, "open": opens, "high": highs, "low": lows, "close": arr}
-    )
+    return pd.DataFrame({"timestamp": ts, "open": opens, "high": highs, "low": lows, "close": arr})
 
 
 def compute(df: pd.DataFrame) -> pd.DataFrame:

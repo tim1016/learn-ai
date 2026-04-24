@@ -45,9 +45,7 @@ def _synthetic_bars(count: int, seed: int = 42) -> pd.DataFrame:
     lows = np.minimum(lows, np.minimum(opens, arr))
     base = pd.Timestamp("2024-01-02 14:30", tz="UTC")
     ts = [base + pd.Timedelta(minutes=15 * i) for i in range(count)]
-    return pd.DataFrame(
-        {"timestamp": ts, "open": opens, "high": highs, "low": lows, "close": arr}
-    )
+    return pd.DataFrame({"timestamp": ts, "open": opens, "high": highs, "low": lows, "close": arr})
 
 
 def _run_st(df: pd.DataFrame, atr_period: int = 10, multiplier: float = 3.0) -> pd.DataFrame:
@@ -149,9 +147,7 @@ def test_matches_pandas_ta_supertrend_strict():
     ref_line = ref["SUPERT_10_3.0"].to_numpy()
     ref_dir = ref["SUPERTd_10_3.0"].to_numpy()
 
-    ours_line = np.array(
-        [v if v is not None else np.nan for v in ours["supertrend"].tolist()]
-    )
+    ours_line = np.array([v if v is not None else np.nan for v in ours["supertrend"].tolist()])
     ours_dir = np.array(
         [v if v is not None else 0 for v in ours["direction"].tolist()],
         dtype=float,
@@ -162,9 +158,7 @@ def test_matches_pandas_ta_supertrend_strict():
     # bar (first line at index `length - 1`, first direction at index
     # `length`). Compare only where both sides have a defined direction.
     both_defined = ~np.isnan(ref_dir)
-    np.testing.assert_array_equal(
-        ours_dir[both_defined].astype(int), ref_dir[both_defined].astype(int)
-    )
+    np.testing.assert_array_equal(ours_dir[both_defined].astype(int), ref_dir[both_defined].astype(int))
 
 
 # ---------------------------------------------------------------------------

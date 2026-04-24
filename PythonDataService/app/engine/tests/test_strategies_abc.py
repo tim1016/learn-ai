@@ -65,9 +65,7 @@ def test_strategy_a_gate_rejects_when_ema_gap_below_threshold():
 
 
 def test_strategy_a_gate_passes_with_large_gap_and_positive_macd():
-    s = SpyStrategyAAlgorithm(
-        ema_fast_period=3, ema_slow_period=5, ema_gap_threshold=Decimal("0.01")
-    )
+    s = SpyStrategyAAlgorithm(ema_fast_period=3, ema_slow_period=5, ema_gap_threshold=Decimal("0.01"))
     _wire(s)
     t = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
     # Rising sequence pushes fast > slow (large gap) and macd > 0.

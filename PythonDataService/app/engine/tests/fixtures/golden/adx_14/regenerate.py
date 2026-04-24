@@ -47,9 +47,7 @@ def build_bars() -> pd.DataFrame:
 
     base = pd.Timestamp("2024-01-02 14:30", tz="UTC")
     ts = [base + pd.Timedelta(minutes=15 * i) for i in range(COUNT)]
-    return pd.DataFrame(
-        {"timestamp": ts, "open": opens, "high": highs, "low": lows, "close": closes_arr}
-    )
+    return pd.DataFrame({"timestamp": ts, "open": opens, "high": highs, "low": lows, "close": closes_arr})
 
 
 def compute(df: pd.DataFrame) -> pd.DataFrame:

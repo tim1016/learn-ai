@@ -205,13 +205,34 @@ def fetch_bars_chunked(
     timespan: str = "minute",
     multiplier: int = 1,
     adjusted: bool = True,
+    sort: str = "asc",
+    limit: int = 50000,
 ) -> list[dict[str, Any]]:
-    """Fetch OHLCV bars for a long date range by splitting into chunks."""
+    """Fetch OHLCV bars for a long date range by splitting into chunks.
+
+    ``sort`` and ``limit`` map to Polygon's aggregate query params but only
+    affect each per-chunk request — the final merged list is always
+    timestamp-sorted ascending (dedup-safe for overlapping chunk boundaries).
+    To surface ``desc`` output to the caller, we reverse after merge.
+    """
     start = datetime.strptime(from_date, "%Y-%m-%d")
     end = datetime.strptime(to_date, "%Y-%m-%d")
 
-    # Dynamic chunk size based on timespan and multiplier
-    _bars_per_day = {"minute": 450, "hour": 24, "day": 1}
+    # Dynamic chunk size based on timespan and multiplier. Extended
+    # resolutions (second/week/month/quarter/year) get conservative defaults;
+    # the chunker is bar-count-bounded, not bar-duration bounded, so picking
+    # large values for low-frequency resolutions just means the whole range
+    # fits in one chunk.
+    _bars_per_day = {
+        "second": 27_000,
+        "minute": 450,
+        "hour": 24,
+        "day": 1,
+        "week": 1,
+        "month": 1,
+        "quarter": 1,
+        "year": 1,
+    }
     effective_bpd = _bars_per_day.get(timespan, 450) // max(1, multiplier)
     days_per_chunk = max(1, _POLYGON_MAX_BARS // max(1, effective_bpd))
 
@@ -233,6 +254,8 @@ def fetch_bars_chunked(
             from_date=chunk_start.strftime("%Y-%m-%d"),
             to_date=chunk_end.strftime("%Y-%m-%d"),
             adjusted=adjusted,
+            sort=sort,
+            limit=limit,
         )
         all_bars.extend(bars)
         logger.info(f"[CHUNK {chunk_idx}] Got {len(bars)} bars (total: {len(all_bars)})")
@@ -930,15 +953,26 @@ def build_zip_bytes(
     options_puts_csv_bytes: bytes | None = None,
     options_companion_report: dict[str, Any] | None = None,
     quality_report_md_bytes: bytes | None = None,
+    splits_csv_bytes: bytes | None = None,
+    dividends_csv_bytes: bytes | None = None,
+    ticker_overview_json_bytes: bytes | None = None,
+    news_csv_bytes: bytes | None = None,
+    financials_csv_bytes: bytes | None = None,
+    stock_trades_csv_bytes: bytes | None = None,
+    stock_quotes_csv_bytes: bytes | None = None,
 ) -> bytes:
     """Pack the dataset bundle into a ZIP.
 
     Always includes ``dataset.csv``, ``metadata.csv``, ``columns.csv``.
-    Optional members:
-      * ``trades.csv`` — raw trade data (legacy path).
+    Optional members (from Data Lab toggles):
+      * ``trades.csv`` — legacy raw trade data.
       * ``options_calls.csv`` / ``options_puts.csv`` — options companion files.
       * ``options_companion_report.json`` — per-day contract selection summary.
       * ``quality_report.md`` — rendered data-quality report.
+      * ``splits.csv`` / ``dividends.csv`` — Polygon reference endpoints.
+      * ``ticker_overview.json`` — single-object Polygon reference.
+      * ``news.csv`` / ``financials.csv`` — Polygon reference endpoints.
+      * ``stock_trades.csv`` / ``stock_quotes.csv`` — tick-level reference data.
     """
     import json
     import zipfile
@@ -977,5 +1011,19 @@ def build_zip_bytes(
             )
         if quality_report_md_bytes is not None:
             zf.writestr("quality_report.md", quality_report_md_bytes)
+        if splits_csv_bytes is not None:
+            zf.writestr("splits.csv", splits_csv_bytes)
+        if dividends_csv_bytes is not None:
+            zf.writestr("dividends.csv", dividends_csv_bytes)
+        if ticker_overview_json_bytes is not None:
+            zf.writestr("ticker_overview.json", ticker_overview_json_bytes)
+        if news_csv_bytes is not None:
+            zf.writestr("news.csv", news_csv_bytes)
+        if financials_csv_bytes is not None:
+            zf.writestr("financials.csv", financials_csv_bytes)
+        if stock_trades_csv_bytes is not None:
+            zf.writestr("stock_trades.csv", stock_trades_csv_bytes)
+        if stock_quotes_csv_bytes is not None:
+            zf.writestr("stock_quotes.csv", stock_quotes_csv_bytes)
 
     return buf.getvalue()

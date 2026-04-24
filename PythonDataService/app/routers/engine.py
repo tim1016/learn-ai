@@ -263,9 +263,7 @@ class RsiRangeStrategyAParams(StrategyParamsBase):
         le=100,
         description="Exit when ADX drops below this threshold. Default 15 for Strategy A.",
     )
-    resolution_minutes: int = Field(
-        15, ge=1, le=1440, description="Bar resolution. Default 15 minutes."
-    )
+    resolution_minutes: int = Field(15, ge=1, le=1440, description="Bar resolution. Default 15 minutes.")
 
 
 class RsiRangeStrategyBParams(StrategyParamsBase):
@@ -742,15 +740,12 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         gotchas=[
             "EMA gap threshold is ticker-scaled. Default 0.5 is a reasonable "
             "SPY 15-min starting point; other tickers scale with price.",
-            "MACD gate is the MACD line itself (fast_EMA − slow_EMA), NOT the "
-            "histogram and NOT the signal line.",
+            "MACD gate is the MACD line itself (fast_EMA − slow_EMA), NOT the histogram and NOT the signal line.",
             "Fills land on NEXT_BAR_OPEN — the strategy signals at the bar "
             "close, the fill price is the next bar's open. Set the engine's "
             "fill mode accordingly for TV parity.",
-            "Warmup is 200 bars by default — longest indicator chain is "
-            "EMA_slow(50) plus buffer.",
-            "No SL/TP — TV defaults. Worst-case drawdown per trade is "
-            "unbounded until ADX drops below 15.",
+            "Warmup is 200 bars by default — longest indicator chain is EMA_slow(50) plus buffer.",
+            "No SL/TP — TV defaults. Worst-case drawdown per trade is unbounded until ADX drops below 15.",
         ],
         param_schema=RsiRangeStrategyAParams,
         pine_generator=generate_strategy_a_pine,
@@ -797,8 +792,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "ta.supertrend() returns the *opposite* sign. The `is_long` "
             "property abstracts this away — read that, not the raw "
             "direction integer.",
-            "Supertrend default (ATR=10, multiplier=3) matches the Pine "
-            "defaults. pandas-ta's default is ATR=7.",
+            "Supertrend default (ATR=10, multiplier=3) matches the Pine defaults. pandas-ta's default is ATR=7.",
             "ADX entry threshold and ADX exit threshold are independent "
             "parameters — the default pair (20 in / 20 out) means the "
             "strategy exits as soon as trend strength weakens below its "
@@ -849,8 +843,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         gotchas=[
             "'ADX rising' is strictly greater than the prior bar. Flat ADX "
             "(exactly equal to prior) does NOT count as rising.",
-            "No MACD, no Supertrend — this is the cleanest test of the "
-            "RSI-range + ADX-strength combination.",
+            "No MACD, no Supertrend — this is the cleanest test of the RSI-range + ADX-strength combination.",
             "Same exit threshold as Strategy A by default (15). The user's "
             "TV screenshot had C's exit rule cropped; we inherit A's.",
         ],

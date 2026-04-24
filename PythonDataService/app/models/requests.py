@@ -315,10 +315,21 @@ class DatasetGenerationRequest(BaseModel):
         description="Bar multiplier (e.g., 5 with timespan='minute' gives 5-min bars)",
     )
     adjusted: bool = Field(True, description="Adjust for splits/dividends (Polygon default: true)")
+    sort: str = Field(
+        "asc",
+        description="Polygon aggregate sort order: 'asc' (oldest first) or 'desc' (newest first). "
+        "Applies to the upstream Polygon request; the downstream merged result stays ascending.",
+    )
+    limit: int = Field(
+        50000,
+        ge=1,
+        le=50000,
+        description="Polygon aggregate per-request limit (1–50000). Higher values mean fewer chunks.",
+    )
     options_companion: OptionsCompanionConfig | None = Field(
         None,
         description="Optional options companion file config. When set with enabled=True, the ZIP gains "
-        "options_calls.csv and/or options_puts.csv with 1-minute aggregates + Greeks per contract.",
+        "options_calls.csv and/or options_puts.csv with aggregates + Greeks per contract.",
     )
     include_quality_report: bool = Field(
         False,
@@ -326,10 +337,42 @@ class DatasetGenerationRequest(BaseModel):
         "quality_report.md into the ZIP alongside the dataset.",
     )
 
+    # ── Polygon reference-endpoint companion toggles ──────────
+    # Each toggle adds one file to the ZIP sourced from the named Polygon
+    # endpoint. Default off so the base ZIP stays minimal; the UI surfaces
+    # explicit warnings for the tick-level options (trades/quotes).
+    include_splits: bool = Field(False, description="Bundle splits.csv (Polygon /stocks/v1/splits)")
+    include_dividends: bool = Field(False, description="Bundle dividends.csv (Polygon /stocks/v1/dividends)")
+    include_ticker_overview: bool = Field(
+        False, description="Bundle ticker_overview.json (Polygon /v3/reference/tickers/{ticker})"
+    )
+    include_news: bool = Field(False, description="Bundle news.csv (Polygon /v2/reference/news)")
+    include_financials: bool = Field(
+        False,
+        description="Bundle financials.csv (Polygon /vX/reference/financials, quarterly filings)",
+    )
+    include_trades: bool = Field(
+        False,
+        description="Bundle trades.csv (Polygon /v3/trades). TICK-LEVEL — millions of rows; "
+        "use a short date window. Capped server-side at 500k rows.",
+    )
+    include_quotes: bool = Field(
+        False,
+        description="Bundle quotes.csv (Polygon /v3/quotes, NBBO). TICK-LEVEL — millions of rows; "
+        "use a short date window. Capped server-side at 500k rows.",
+    )
+
     @field_validator("timespan")
     @classmethod
     def validate_dataset_timespan(cls, v: str) -> str:
-        valid = ["minute", "hour", "day"]
+        valid = ["second", "minute", "hour", "day", "week", "month", "quarter", "year"]
         if v not in valid:
             raise ValueError(f"timespan must be one of {valid}")
+        return v
+
+    @field_validator("sort")
+    @classmethod
+    def validate_dataset_sort(cls, v: str) -> str:
+        if v not in ("asc", "desc"):
+            raise ValueError("sort must be 'asc' or 'desc'")
         return v

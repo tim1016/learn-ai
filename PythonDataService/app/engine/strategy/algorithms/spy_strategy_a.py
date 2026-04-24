@@ -62,9 +62,7 @@ class SpyStrategyAAlgorithm(RsiRangeStrategy):
     def _init_extra_indicators(self) -> None:
         self._ema_fast = ExponentialMovingAverage("A_EMA_fast", self.ema_fast_period)
         self._ema_slow = ExponentialMovingAverage("A_EMA_slow", self.ema_slow_period)
-        self._macd = MovingAverageConvergenceDivergence(
-            "A_MACD", self.macd_fast, self.macd_slow, self.macd_signal
-        )
+        self._macd = MovingAverageConvergenceDivergence("A_MACD", self.macd_fast, self.macd_slow, self.macd_signal)
 
     def _update_extra_indicators(self, bar: TradeBar) -> None:
         assert self._ema_fast is not None

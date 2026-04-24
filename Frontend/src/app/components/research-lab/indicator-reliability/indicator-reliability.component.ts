@@ -320,7 +320,7 @@ export class IndicatorReliabilityComponent {
     // the corresponding flow exists. For now we write intent to the
     // console so the wiring is observable in dev, and the verdict panel
     // stays useful as a read-only summary.
-    // eslint-disable-next-line no-console
+     
     console.info('[indicator-reliability] verdict CTA:', kind);
   }
 

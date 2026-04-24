@@ -116,12 +116,8 @@ class AverageDirectionalIndex(BarIndicator):
             assert self._smoothed_plus_dm is not None
             assert self._smoothed_minus_dm is not None
             assert self._smoothed_tr is not None
-            self._smoothed_plus_dm = (
-                self._smoothed_plus_dm - (self._smoothed_plus_dm / self._period_dec) + plus_dm
-            )
-            self._smoothed_minus_dm = (
-                self._smoothed_minus_dm - (self._smoothed_minus_dm / self._period_dec) + minus_dm
-            )
+            self._smoothed_plus_dm = self._smoothed_plus_dm - (self._smoothed_plus_dm / self._period_dec) + plus_dm
+            self._smoothed_minus_dm = self._smoothed_minus_dm - (self._smoothed_minus_dm / self._period_dec) + minus_dm
             self._smoothed_tr = self._smoothed_tr - (self._smoothed_tr / self._period_dec) + tr
 
         assert self._smoothed_tr is not None

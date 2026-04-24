@@ -67,9 +67,7 @@ class RsiRangeStrategy(Strategy):
         self.rsi_low_gate = Decimal(str(rsi_low_gate))
         self.rsi_high_gate = Decimal(str(rsi_high_gate))
         if self.rsi_low_gate >= self.rsi_high_gate:
-            raise ValueError(
-                f"rsi_low_gate ({rsi_low_gate}) must be < rsi_high_gate ({rsi_high_gate})"
-            )
+            raise ValueError(f"rsi_low_gate ({rsi_low_gate}) must be < rsi_high_gate ({rsi_high_gate})")
         self.adx_exit_threshold = Decimal(str(adx_exit_threshold))
 
         self._rsi: RelativeStrengthIndex | None = None
@@ -102,10 +100,7 @@ class RsiRangeStrategy(Strategy):
 
         # --- Exit: any existing position exits on ADX < threshold.
         if self._in_position:
-            if (
-                self._adx.current_value is not None
-                and self._adx.current_value < self.adx_exit_threshold
-            ):
+            if self._adx.current_value is not None and self._adx.current_value < self.adx_exit_threshold:
                 self.ctx.liquidate(self._symbol)
                 self._in_position = False
                 self.ctx.log(
@@ -135,10 +130,7 @@ class RsiRangeStrategy(Strategy):
         self._pending_entry = self._indicator_snapshot(bar)
         self.ctx.set_holdings(self._symbol, Decimal(1))
         self._in_position = True
-        self.ctx.log(
-            f"ENTRY SIGNAL: {bar.end_time:%Y-%m-%d %H:%M} close={bar.close:.2f} "
-            f"rsi={float(rsi_val):.2f}"
-        )
+        self.ctx.log(f"ENTRY SIGNAL: {bar.end_time:%Y-%m-%d %H:%M} close={bar.close:.2f} rsi={float(rsi_val):.2f}")
 
     # ------------------------------------------------------------------
     def on_order_event(self, event: OrderEvent) -> None:
@@ -152,9 +144,7 @@ class RsiRangeStrategy(Strategy):
             )
             self._pending_entry = None
             if self.ctx is not None:
-                self.ctx.log(
-                    f"ENTRY: {event.time:%Y-%m-%d %H:%M} price={event.fill_price:.2f}"
-                )
+                self.ctx.log(f"ENTRY: {event.time:%Y-%m-%d %H:%M} price={event.fill_price:.2f}")
             return
 
         # Exit fill.
