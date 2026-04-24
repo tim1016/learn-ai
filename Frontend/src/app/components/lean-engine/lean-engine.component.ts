@@ -53,6 +53,9 @@ interface StrategyInfo {
   /** Parity-critical gotchas surfaced from the validation studies.
    *  Render as a bullet list under the strategy description. */
   gotchas?: string[];
+  /** True when the backend can generate a Pine v6 script for this
+   *  strategy — controls visibility of the download button. */
+  pine_available?: boolean;
 }
 
 type EngineResolution = "minute" | "daily";
@@ -504,6 +507,46 @@ export class LeanEngineComponent implements OnInit {
       );
     } finally {
       this.running.set(false);
+    }
+  }
+
+  readonly pineDownloading = signal(false);
+  readonly pineError = signal<string | null>(null);
+
+  /** Fetch a Pine v6 script for the current strategy + params and
+   *  trigger a browser download. Disabled when the selected strategy
+   *  does not expose a generator (``pine_available === false``). */
+  async downloadPineScript(): Promise<void> {
+    const strategy = this.selectedStrategy();
+    if (!strategy?.pine_available) {
+      this.pineError.set("No Pine script is available for this strategy.");
+      return;
+    }
+    this.pineDownloading.set(true);
+    this.pineError.set(null);
+    try {
+      const url = `${this.apiBase}/strategies/${strategy.name}/pine`;
+      const text = await firstValueFrom(
+        this.http.post(url, this.paramValues(), { responseType: "text" })
+      );
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = `${strategy.name}.pine`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objectUrl);
+    } catch (err: any) {
+      const detail = err?.error?.detail;
+      this.pineError.set(
+        typeof detail === "string"
+          ? detail
+          : err?.message ?? "Pine download failed"
+      );
+    } finally {
+      this.pineDownloading.set(false);
     }
   }
 

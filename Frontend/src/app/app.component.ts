@@ -1,13 +1,13 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
+import { Toast } from 'primeng/toast';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
 import { MethodologyDrawerComponent } from './shared/methodology-drawer/methodology-drawer.component';
 
 @Component({
   selector: 'app-root',
-  standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, AppSidebarComponent, MethodologyDrawerComponent],
+  imports: [RouterOutlet, AppSidebarComponent, MethodologyDrawerComponent, Toast],
   styles: [`
     :host {
       display: flex;
@@ -29,6 +29,7 @@ import { MethodologyDrawerComponent } from './shared/methodology-drawer/methodol
       <router-outlet />
     </main>
     <app-methodology-drawer />
+    <p-toast position="top-right" />
   `,
 })
 export class AppComponent {}

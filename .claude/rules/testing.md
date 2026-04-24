@@ -35,6 +35,7 @@ Every port of mathematical logic from a reference source ships with:
 2. **An equivalence test** that loads the fixture and asserts `np.allclose(our_output, reference_output, atol=..., rtol=...)` with **explicit** tolerances.
 3. **Default tolerance: `atol=1e-9, rtol=0`**. Looser tolerances require a comment explaining why (e.g., "reference uses float32 internally, 1e-6 is the best achievable").
 4. **Edge case tests**: empty input, single-value, NaN in input, warmup region, mid-series discontinuity if applicable.
+5. **New-math-only rule, not a backfill**: every *new* mathematical function ships with a parity test on its first commit, and every *touched* math function gets its test updated in the same PR. Existing untested math in the repo is not backfilled on sight — it's tracked in `docs/math-sources-of-truth.md` under `Status: pending-fixture` and paid down on touch. The goal is to stop accruing debt, not to halt other work while old debt is serviced.
 
 ## Angular (Vitest)
 

@@ -1,52 +1,52 @@
-import { Component, Input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { AggregatesSummary } from '../../../graphql/types';
 
 @Component({
   selector: 'app-summary-stats',
-  standalone: true,
   imports: [CommonModule],
+  changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    @if (summary) {
+    @if (summary(); as s) {
       <div class="stats-grid">
         <div class="stat-card">
           <span class="stat-label">Period High</span>
-          <span class="stat-value">{{ summary.periodHigh | number:'1.2-2' }}</span>
+          <span class="stat-value">{{ s.periodHigh | number:'1.2-2' }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Period Low</span>
-          <span class="stat-value">{{ summary.periodLow | number:'1.2-2' }}</span>
+          <span class="stat-value">{{ s.periodLow | number:'1.2-2' }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Avg Volume</span>
-          <span class="stat-value">{{ summary.averageVolume | number:'1.0-0' }}</span>
+          <span class="stat-value">{{ s.averageVolume | number:'1.0-0' }}</span>
         </div>
-        @if (summary.averageVwap) {
+        @if (s.averageVwap) {
           <div class="stat-card">
             <span class="stat-label">Avg VWAP</span>
-            <span class="stat-value">{{ summary.averageVwap | number:'1.2-2' }}</span>
+            <span class="stat-value">{{ s.averageVwap | number:'1.2-2' }}</span>
           </div>
         }
         <div class="stat-card">
           <span class="stat-label">Open</span>
-          <span class="stat-value">{{ summary.openPrice | number:'1.2-2' }}</span>
+          <span class="stat-value">{{ s.openPrice | number:'1.2-2' }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Close</span>
-          <span class="stat-value">{{ summary.closePrice | number:'1.2-2' }}</span>
+          <span class="stat-value">{{ s.closePrice | number:'1.2-2' }}</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Change</span>
           <span class="stat-value"
-                [class.positive]="summary.priceChange >= 0"
-                [class.negative]="summary.priceChange < 0">
-            {{ summary.priceChange | number:'1.2-2' }}
-            ({{ summary.priceChangePercent | number:'1.2-2' }}%)
+                [class.positive]="s.priceChange >= 0"
+                [class.negative]="s.priceChange < 0">
+            {{ s.priceChange | number:'1.2-2' }}
+            ({{ s.priceChangePercent | number:'1.2-2' }}%)
           </span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Total Bars</span>
-          <span class="stat-value">{{ summary.totalBars }}</span>
+          <span class="stat-value">{{ s.totalBars }}</span>
         </div>
       </div>
     }
@@ -81,5 +81,5 @@ import { AggregatesSummary } from '../../../graphql/types';
   `]
 })
 export class SummaryStatsComponent {
-  @Input() summary: AggregatesSummary | null = null;
+  summary = input<AggregatesSummary | null>(null);
 }

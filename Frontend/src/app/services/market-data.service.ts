@@ -11,6 +11,7 @@ import {
   IndicatorTableResult, RuleBasedBacktestResult, PricingCompareResult,
 } from '../graphql/types';
 import { environment } from '../../environments/environment';
+import { todayDateString, dateStringMonthsFromNow } from '../utils/date-validation';
 
 const GRAPHQL_URL = environment.backendUrl;
 
@@ -688,16 +689,14 @@ export class MarketDataService {
       expirationDateLte?: string;
     } = {}
   ): Observable<string[]> {
-    const today = new Date().toISOString().slice(0, 10);
-    const sixMonthsOut = new Date(Date.now() + 180 * 86400000).toISOString().slice(0, 10);
     return this.http
       .post<OptionsExpirationsResponse>(GRAPHQL_URL, {
         query: GET_OPTIONS_EXPIRATIONS_QUERY,
         variables: {
           underlyingTicker,
           contractType: options.contractType,
-          expirationDateGte: options.expirationDateGte ?? today,
-          expirationDateLte: options.expirationDateLte ?? sixMonthsOut,
+          expirationDateGte: options.expirationDateGte ?? todayDateString(),
+          expirationDateLte: options.expirationDateLte ?? dateStringMonthsFromNow(6),
         }
       })
       .pipe(

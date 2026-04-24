@@ -1,11 +1,11 @@
 import {
-  Component, Input, ElementRef, ViewChild,
+  ChangeDetectionStrategy, Component, Input, ElementRef, ViewChild,
   AfterViewInit, OnDestroy, OnChanges, SimpleChanges
 } from '@angular/core';
 
 @Component({
   selector: 'app-tradingview-widget',
-  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   template: `<div #container class="tv-widget-container"></div>`,
   styles: [`
     .tv-widget-container {

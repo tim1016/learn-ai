@@ -27,6 +27,7 @@ from typing import Any, Literal
 import httpx
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from app.engine.data.availability import (
@@ -38,6 +39,11 @@ from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReade
 from app.engine.engine import BacktestEngine
 from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.order import FillMode
+from app.engine.pine_generators import (
+    generate_strategy_a_pine,
+    generate_strategy_b_pine,
+    generate_strategy_c_pine,
+)
 from app.engine.results.statistics import summarize
 from app.engine.strategy.algorithms.rsi_mean_reversion import (
     RsiMeanReversionAlgorithm,
@@ -50,6 +56,9 @@ from app.engine.strategy.algorithms.spy_ema_crossover_options import (
     SpyEmaCrossoverOptionsAlgorithm,
 )
 from app.engine.strategy.algorithms.spy_orb import SpyOpeningRangeBreakout
+from app.engine.strategy.algorithms.spy_strategy_a import SpyStrategyAAlgorithm
+from app.engine.strategy.algorithms.spy_strategy_b import SpyStrategyBAlgorithm
+from app.engine.strategy.algorithms.spy_strategy_c import SpyStrategyCAlgorithm
 from app.engine.strategy.base import Strategy
 from app.models.responses import (
     LeanPortfolioStatsResponse,
@@ -209,6 +218,118 @@ class EmaCrossoverOptionsParams(StrategyParamsBase):
     half_spread_pct: float = Field(0.01, ge=0, le=0.5)
 
 
+class RsiRangeStrategyAParams(StrategyParamsBase):
+    """Strategy A — EMA-gap + MACD + RSI-range, ADX-exit.
+
+    All thresholds and indicator periods are configurable. Entry requires
+    RSI to sit inside the ``[rsi_low_gate, rsi_high_gate]`` range AND the
+    EMA gap to exceed ``ema_gap_threshold`` AND MACD line > 0, all at the
+    same bar while flat. Pyramiding=1 prevents re-entry while holding.
+    """
+
+    symbol: str = Field("SPY", min_length=1, max_length=20, description="Underlying ticker.")
+    ema_fast_period: int = Field(20, ge=2, le=500, description="Fast EMA period.")
+    ema_slow_period: int = Field(50, ge=3, le=1000, description="Slow EMA period.")
+    ema_gap_threshold: float = Field(
+        0.5,
+        ge=0,
+        description=(
+            "Minimum absolute gap between fast and slow EMAs "
+            "(EMA_fast − EMA_slow > threshold). Default 0.5 is a reasonable "
+            "SPY 15-minute trend-confirmation threshold. Other tickers scale "
+            "with price — tune accordingly."
+        ),
+    )
+    macd_fast: int = Field(12, ge=2, le=200, description="MACD fast EMA period.")
+    macd_slow: int = Field(26, ge=3, le=500, description="MACD slow EMA period.")
+    macd_signal: int = Field(9, ge=2, le=200, description="MACD signal-line EMA period.")
+    rsi_period: int = Field(14, ge=2, le=200, description="RSI period (Wilders smoothing).")
+    rsi_low_gate: float = Field(
+        38.0,
+        ge=0,
+        lt=100,
+        description="Lower bound of the RSI entry range — RSI must be ≥ this to enter.",
+    )
+    rsi_high_gate: float = Field(
+        70.0,
+        gt=0,
+        le=100,
+        description="Upper bound of the RSI entry range — RSI must be ≤ this to enter.",
+    )
+    adx_period: int = Field(14, ge=2, le=200, description="ADX period (Wilders smoothing).")
+    adx_exit_threshold: float = Field(
+        15.0,
+        ge=0,
+        le=100,
+        description="Exit when ADX drops below this threshold. Default 15 for Strategy A.",
+    )
+    resolution_minutes: int = Field(
+        15, ge=1, le=1440, description="Bar resolution. Default 15 minutes."
+    )
+
+
+class RsiRangeStrategyBParams(StrategyParamsBase):
+    """Strategy B — Supertrend + ADX-entry + MACD + RSI-range, ADX-exit."""
+
+    symbol: str = Field("SPY", min_length=1, max_length=20, description="Underlying ticker.")
+    supertrend_atr_period: int = Field(
+        10, ge=2, le=200, description="ATR period for Supertrend. Default 10 (Pine default)."
+    )
+    supertrend_multiplier: float = Field(
+        3.0,
+        gt=0,
+        description="Supertrend ATR multiplier. Default 3 (Pine default).",
+    )
+    adx_entry_threshold: float = Field(
+        20.0,
+        ge=0,
+        le=100,
+        description="Require ADX > this threshold at entry. Default 20.",
+    )
+    macd_fast: int = Field(12, ge=2, le=200, description="MACD fast EMA period.")
+    macd_slow: int = Field(26, ge=3, le=500, description="MACD slow EMA period.")
+    macd_signal: int = Field(9, ge=2, le=200, description="MACD signal-line EMA period.")
+    rsi_period: int = Field(14, ge=2, le=200, description="RSI period (Wilders smoothing).")
+    rsi_low_gate: float = Field(38.0, ge=0, lt=100, description="Lower bound of RSI entry range.")
+    rsi_high_gate: float = Field(70.0, gt=0, le=100, description="Upper bound of RSI entry range.")
+    adx_period: int = Field(14, ge=2, le=200, description="ADX period.")
+    adx_exit_threshold: float = Field(
+        20.0,
+        ge=0,
+        le=100,
+        description="Exit when ADX drops below this threshold. Default 20 for Strategy B.",
+    )
+    resolution_minutes: int = Field(15, ge=1, le=1440, description="Bar resolution.")
+
+
+class RsiRangeStrategyCParams(StrategyParamsBase):
+    """Strategy C — ADX-entry + ADX-rising + RSI-range, ADX-exit.
+
+    No MACD, no Supertrend — the simplest of the three. Entry requires
+    RSI inside the range filter, ADX above a threshold, AND ADX rising
+    bar-over-bar.
+    """
+
+    symbol: str = Field("SPY", min_length=1, max_length=20, description="Underlying ticker.")
+    adx_entry_threshold: float = Field(
+        20.0,
+        ge=0,
+        le=100,
+        description="Require ADX > this threshold at entry. Default 20.",
+    )
+    rsi_period: int = Field(14, ge=2, le=200, description="RSI period (Wilders smoothing).")
+    rsi_low_gate: float = Field(38.0, ge=0, lt=100, description="Lower bound of RSI entry range.")
+    rsi_high_gate: float = Field(70.0, gt=0, le=100, description="Upper bound of RSI entry range.")
+    adx_period: int = Field(14, ge=2, le=200, description="ADX period.")
+    adx_exit_threshold: float = Field(
+        15.0,
+        ge=0,
+        le=100,
+        description="Exit when ADX drops below this threshold. Default 15 (same as Strategy A).",
+    )
+    resolution_minutes: int = Field(15, ge=1, le=1440, description="Bar resolution.")
+
+
 @dataclass
 class StrategyRegistration:
     display_name: str
@@ -229,6 +350,10 @@ class StrategyRegistration:
     # ticker / strategy combination. Each entry is one short paragraph
     # or bullet; render as a list on the frontend.
     gotchas: list[str] = dc_field(default_factory=list)
+    # Optional Pine v6 generator — takes validated params, returns a
+    # complete Pine script. When present, the frontend can download the
+    # script via ``GET /api/engine/strategies/{name}/pine``.
+    pine_generator: Callable[[StrategyParamsBase], str] | None = None
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -592,6 +717,156 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             half_spread_pct=p.half_spread_pct,  # type: ignore[attr-defined]
         ),
     ),
+    "rsi_range_a": StrategyRegistration(
+        display_name="Strategy A — EMA-gap + MACD + RSI-range",
+        description=(
+            "Long-only 15-minute trend-follower. On each bar while flat, enters "
+            "long if RSI is inside the [rsi_low_gate, rsi_high_gate] range AND "
+            "(EMA_fast − EMA_slow) exceeds a threshold AND MACD line > 0. Exits "
+            "when ADX drops below 15. Pyramiding=1 prevents re-entry while "
+            "holding. Validated against TradingView via trade-by-trade CSV "
+            "reconciliation."
+        ),
+        algorithm_pseudocode=(
+            "on each 15-min bar close:\n"
+            "    update EMA_fast, EMA_slow, MACD, RSI14, ADX14\n"
+            "    if in_position:\n"
+            "        if ADX < adx_exit_threshold (default 15):  exit\n"
+            "        continue\n"
+            "    if not all indicators ready: continue\n"
+            "    if rsi_low_gate <= RSI <= rsi_high_gate\n"
+            "       and (EMA_fast − EMA_slow) > ema_gap_threshold\n"
+            "       and MACD line > 0:\n"
+            "        enter long, size = 100% of equity (fills NEXT_BAR_OPEN)"
+        ),
+        gotchas=[
+            "EMA gap threshold is ticker-scaled. Default 0.5 is a reasonable "
+            "SPY 15-min starting point; other tickers scale with price.",
+            "MACD gate is the MACD line itself (fast_EMA − slow_EMA), NOT the "
+            "histogram and NOT the signal line.",
+            "Fills land on NEXT_BAR_OPEN — the strategy signals at the bar "
+            "close, the fill price is the next bar's open. Set the engine's "
+            "fill mode accordingly for TV parity.",
+            "Warmup is 200 bars by default — longest indicator chain is "
+            "EMA_slow(50) plus buffer.",
+            "No SL/TP — TV defaults. Worst-case drawdown per trade is "
+            "unbounded until ADX drops below 15.",
+        ],
+        param_schema=RsiRangeStrategyAParams,
+        pine_generator=generate_strategy_a_pine,
+        build=lambda p: SpyStrategyAAlgorithm(
+            symbol=p.symbol,  # type: ignore[attr-defined]
+            ema_fast_period=p.ema_fast_period,  # type: ignore[attr-defined]
+            ema_slow_period=p.ema_slow_period,  # type: ignore[attr-defined]
+            ema_gap_threshold=p.ema_gap_threshold,  # type: ignore[attr-defined]
+            macd_fast=p.macd_fast,  # type: ignore[attr-defined]
+            macd_slow=p.macd_slow,  # type: ignore[attr-defined]
+            macd_signal=p.macd_signal,  # type: ignore[attr-defined]
+            rsi_period=p.rsi_period,  # type: ignore[attr-defined]
+            rsi_low_gate=p.rsi_low_gate,  # type: ignore[attr-defined]
+            rsi_high_gate=p.rsi_high_gate,  # type: ignore[attr-defined]
+            adx_period=p.adx_period,  # type: ignore[attr-defined]
+            adx_exit_threshold=p.adx_exit_threshold,  # type: ignore[attr-defined]
+            resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
+        ),
+    ),
+    "rsi_range_b": StrategyRegistration(
+        display_name="Strategy B — Supertrend + ADX + MACD + RSI-range",
+        description=(
+            "Long-only 15-minute momentum strategy. Same RSI-range filter as "
+            "Strategy A. On each bar while flat, enters long if RSI is in "
+            "range, Supertrend is long, ADX > 20 (strong trend), and MACD "
+            "line > 0. Exits when ADX drops below 20."
+        ),
+        algorithm_pseudocode=(
+            "on each 15-min bar close:\n"
+            "    update Supertrend(atr, mult), MACD, RSI14, ADX14\n"
+            "    if in_position:\n"
+            "        if ADX < adx_exit_threshold (default 20):  exit\n"
+            "        continue\n"
+            "    if not all indicators ready: continue\n"
+            "    if rsi_low_gate <= RSI <= rsi_high_gate\n"
+            "       and Supertrend.is_long\n"
+            "       and ADX > adx_entry_threshold (default 20)\n"
+            "       and MACD line > 0:\n"
+            "        enter long, size = 100% of equity"
+        ),
+        gotchas=[
+            "Supertrend here uses the pandas-ta direction convention "
+            "(1 = uptrend / bullish, −1 = downtrend / bearish). Pine's "
+            "ta.supertrend() returns the *opposite* sign. The `is_long` "
+            "property abstracts this away — read that, not the raw "
+            "direction integer.",
+            "Supertrend default (ATR=10, multiplier=3) matches the Pine "
+            "defaults. pandas-ta's default is ATR=7.",
+            "ADX entry threshold and ADX exit threshold are independent "
+            "parameters — the default pair (20 in / 20 out) means the "
+            "strategy exits as soon as trend strength weakens below its "
+            "own entry condition.",
+            "Supertrend needs at least `atr_period` bars of warmup before "
+            "emitting a direction. Combined with MACD's 34-bar warmup and "
+            "RSI's 15-bar warmup, plan for ~50 bars minimum before the "
+            "first possible trade.",
+        ],
+        param_schema=RsiRangeStrategyBParams,
+        pine_generator=generate_strategy_b_pine,
+        build=lambda p: SpyStrategyBAlgorithm(
+            symbol=p.symbol,  # type: ignore[attr-defined]
+            supertrend_atr_period=p.supertrend_atr_period,  # type: ignore[attr-defined]
+            supertrend_multiplier=p.supertrend_multiplier,  # type: ignore[attr-defined]
+            adx_entry_threshold=p.adx_entry_threshold,  # type: ignore[attr-defined]
+            macd_fast=p.macd_fast,  # type: ignore[attr-defined]
+            macd_slow=p.macd_slow,  # type: ignore[attr-defined]
+            macd_signal=p.macd_signal,  # type: ignore[attr-defined]
+            rsi_period=p.rsi_period,  # type: ignore[attr-defined]
+            rsi_low_gate=p.rsi_low_gate,  # type: ignore[attr-defined]
+            rsi_high_gate=p.rsi_high_gate,  # type: ignore[attr-defined]
+            adx_period=p.adx_period,  # type: ignore[attr-defined]
+            adx_exit_threshold=p.adx_exit_threshold,  # type: ignore[attr-defined]
+            resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
+        ),
+    ),
+    "rsi_range_c": StrategyRegistration(
+        display_name="Strategy C — ADX-rising + RSI-range",
+        description=(
+            "Long-only 15-minute strategy with the simplest gate: on each "
+            "bar while flat, enter long if RSI is in range, ADX > 20 AND "
+            "ADX is rising bar-over-bar (ADX[i] > ADX[i-1]). Exits when "
+            "ADX drops below 15 (same exit rule as Strategy A)."
+        ),
+        algorithm_pseudocode=(
+            "on each 15-min bar close:\n"
+            "    update RSI14, ADX14\n"
+            "    if in_position:\n"
+            "        if ADX < adx_exit_threshold (default 15):  exit\n"
+            "        continue\n"
+            "    if not all indicators ready: continue\n"
+            "    if rsi_low_gate <= RSI <= rsi_high_gate\n"
+            "       and ADX > adx_entry_threshold (default 20)\n"
+            "       and ADX > ADX_prev:\n"
+            "        enter long, size = 100% of equity"
+        ),
+        gotchas=[
+            "'ADX rising' is strictly greater than the prior bar. Flat ADX "
+            "(exactly equal to prior) does NOT count as rising.",
+            "No MACD, no Supertrend — this is the cleanest test of the "
+            "RSI-range + ADX-strength combination.",
+            "Same exit threshold as Strategy A by default (15). The user's "
+            "TV screenshot had C's exit rule cropped; we inherit A's.",
+        ],
+        param_schema=RsiRangeStrategyCParams,
+        pine_generator=generate_strategy_c_pine,
+        build=lambda p: SpyStrategyCAlgorithm(
+            symbol=p.symbol,  # type: ignore[attr-defined]
+            adx_entry_threshold=p.adx_entry_threshold,  # type: ignore[attr-defined]
+            rsi_period=p.rsi_period,  # type: ignore[attr-defined]
+            rsi_low_gate=p.rsi_low_gate,  # type: ignore[attr-defined]
+            rsi_high_gate=p.rsi_high_gate,  # type: ignore[attr-defined]
+            adx_period=p.adx_period,  # type: ignore[attr-defined]
+            adx_exit_threshold=p.adx_exit_threshold,  # type: ignore[attr-defined]
+            resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
+        ),
+    ),
 }
 
 
@@ -835,6 +1110,9 @@ class StrategyInfo(BaseModel):
     # strategy in the frontend so they're not rediscovered by trial and
     # error on the next ticker / strategy combination.
     gotchas: list[str] = Field(default_factory=list)
+    # True when a Pine v6 generator is registered for this strategy.
+    # The frontend uses this to show/hide the Pine-download button.
+    pine_available: bool = False
 
 
 @router.get("/strategies", response_model=list[StrategyInfo])
@@ -857,9 +1135,41 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 supported_resolutions=sorted(reg.supported_resolutions),
                 algorithm_pseudocode=reg.algorithm_pseudocode,
                 gotchas=list(reg.gotchas),
+                pine_available=reg.pine_generator is not None,
             )
         )
     return result
+
+
+@router.post("/strategies/{name}/pine", response_class=PlainTextResponse)
+def generate_pine_script(name: str, params: dict[str, Any]) -> PlainTextResponse:
+    """Generate a Pine v6 script for ``name`` using the given params.
+
+    The request body is the same ``{params: {...}}`` shape used by
+    ``/backtest`` — the same Pydantic schema validates it. Response is
+    the Pine source as ``text/plain`` so the browser can offer it as a
+    direct download.
+    """
+    reg = _STRATEGY_REGISTRY.get(name)
+    if reg is None:
+        raise HTTPException(status_code=404, detail=f"Unknown strategy: {name}")
+    if reg.pine_generator is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No Pine script template available for strategy '{name}'",
+        )
+    try:
+        validated = reg.param_schema(**params)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    pine_source = reg.pine_generator(validated)
+    return PlainTextResponse(
+        content=pine_source,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}.pine"',
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

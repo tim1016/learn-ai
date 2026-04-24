@@ -307,6 +307,7 @@
 .actions {
   display: flex;
   justify-content: flex-end;
+  gap: 0.5rem;
   margin-top: 1.25rem;
 }
 
@@ -322,6 +323,25 @@
 
   &:hover:not(:disabled) { background: $accent-hover; }
   &:disabled { background: $bg-hover; color: $text-muted; cursor: not-allowed; }
+}
+
+.pine-btn {
+  background: transparent;
+  color: $accent;
+  border: 1px solid $accent;
+  padding: 0.625rem 1.25rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+
+  &:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); }
+  &:disabled { color: $text-muted; border-color: $bg-hover; cursor: not-allowed; }
+
+  .pi { font-size: 0.9rem; }
 }
 
 // ─── Empty Tab ────────────────────────────────────────
