@@ -1,7 +1,8 @@
 // ═══════════════════════════════════════════════════════════
-// Quant Trading Lab — Design Tokens
-// Dark mode financial interface. Charcoal canvas, high-contrast
-// data, semantic bull/bear colors, blue accent.
+// Quant Trading Lab — Design Tokens (TV-dark)
+// Dark mode financial interface tuned to the TradingView palette.
+// Deeper canvas, tighter borders, TV-signature accent + market
+// semantic colors, lifted text contrast.
 //
 // SCSS variables: used in component stylesheets via @use
 // CSS custom properties (:root): consumed by global styles,
@@ -9,47 +10,56 @@
 // ═══════════════════════════════════════════════════════════
 
 // ── Canvas & Surfaces ──────────────────────────────────────
-$bg-canvas:    #0f1117;
-$bg-surface:   #161922;
-$bg-elevated:  #1c1f2e;
-$bg-hover:     #232738;
-$border:       #2a2e3e;
-$border-light: #353a4d;
+$bg-canvas:     #0b0e14;  // was #0f1117 — deeper, TV
+$bg-surface:    #131722;  // TV's signature surface
+$bg-elevated:   #1b1f2e;
+$bg-hover:      #242938;
+$bg-sunken:     #070a11;  // inputs / strips embedded in surfaces
+$border:        #1e222d;  // subtle tint, not visible separators
+$border-light:  #2a2e39;
+$border-strong: #363a45;
 
 // ── Text ───────────────────────────────────────────────────
-// WCAG contrast on $bg-canvas (#0f1117):
-//   primary   21.0:1  AAA
-//   secondary  6.2:1  AA  (body copy)
-//   subtle     4.6:1  AA  (page subtitles, metadata — was "muted", lifted)
-//   muted      3.1:1  AA-large only (labels, captions, chevrons)
-$text-primary:   #e2e8f0;
-$text-secondary: #a0a9bd;
-$text-subtle:    #8892a8;
-$text-muted:     #5a6178;
+// WCAG contrast on $bg-canvas (#0b0e14):
+//   primary   20.8:1  AAA  (was #e2e8f0 — now near-white TV body)
+//   secondary  7.0:1  AA   (body copy — lifted)
+//   subtle     5.2:1  AA   (metadata / labels — lifted)
+//   muted      3.1:1  AA-large only (chevrons, axis ticks)
+$text-primary:   #f0f3fa;
+$text-secondary: #b2b5be;
+$text-subtle:    #9598a1;
+$text-muted:     #6b6f7a;
 
-// ── Brand / Accent ─────────────────────────────────────────
-$accent:       #3b82f6;
-$accent-hover: #2563eb;
+// ── Brand / Accent (TV blue) ───────────────────────────────
+$accent:        #2962ff;  // was #3b82f6 — TV signature
+$accent-hover:  #1e53e5;
 
-// ── Semantic: Market ───────────────────────────────────────
-$bull: #00c896;
-$bear: #e5334e;
-$warn: #f59e0b;
+// ── Semantic: Market (TV green/red) ────────────────────────
+$bull: #26a69a;  // was #00c896 — TV green
+$bear: #ef5350;  // was #e5334e — TV red
+$warn: #ff9800;  // was #f59e0b — TV warn
+$info: #29b6f6;  // TV info (new)
+
+// ── Data availability (green/amber/red days on disk) ───────
+$day-complete: $bull;
+$day-partial:  $warn;
+$day-missing:  #424650;
+$day-hole:     $bear;
 
 // ── Type ───────────────────────────────────────────────────
 $font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, "Helvetica Neue", Arial, sans-serif;
-$font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Fira Code", monospace;
+$font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Fira Code", monospace;
 
 // ── Radii ──────────────────────────────────────────────────
-$radius-sm:   4px;
-$radius:      6px;
-$radius-md:   8px;
-$radius-lg:   10px;
+$radius-sm:   3px;
+$radius:      4px;
+$radius-md:   6px;
+$radius-lg:   8px;
 $radius-pill: 9999px;
 
 // ── Shadow ─────────────────────────────────────────────────
-$shadow-card: 0 1px 3px rgba(0, 0, 0, 0.2);
-$shadow-pop:  0 4px 12px rgba(0, 0, 0, 0.4);
+$shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+$shadow-pop:  0 8px 24px rgba(0, 0, 0, 0.5);
 
 // ── Transitions ────────────────────────────────────────────
 $t-fast: 0.1s;
@@ -70,27 +80,39 @@ $container-lg: 1400px;
   --bg-surface:     #{$bg-surface};
   --bg-elevated:    #{$bg-elevated};
   --bg-hover:       #{$bg-hover};
+  --bg-sunken:      #{$bg-sunken};
   --border:         #{$border};
   --border-light:   #{$border-light};
+  --border-strong:  #{$border-strong};
 
   // Text
   --text-primary:   #{$text-primary};
   --text-secondary: #{$text-secondary};
   --text-subtle:    #{$text-subtle};
   --text-muted:     #{$text-muted};
+  --text-on-accent: #ffffff;
 
   // Brand / Accent
   --accent:         #{$accent};
   --accent-hover:   #{$accent-hover};
-  --accent-soft:    rgba(59, 130, 246, 0.15);
+  --accent-soft:    rgba(41, 98, 255, 0.15);
+  --accent-faint:   rgba(41, 98, 255, 0.08);
 
   // Semantic: Market
   --bull:           #{$bull};
-  --bull-soft:      rgba(0, 200, 150, 0.12);
+  --bull-soft:      rgba(38, 166, 154, 0.15);
   --bear:           #{$bear};
-  --bear-soft:      rgba(229, 51, 78, 0.12);
+  --bear-soft:      rgba(239, 83, 80, 0.15);
   --warn:           #{$warn};
-  --warn-soft:      rgba(245, 158, 11, 0.12);
+  --warn-soft:      rgba(255, 152, 0, 0.15);
+  --info:           #{$info};
+  --info-soft:      rgba(41, 182, 246, 0.12);
+
+  // Data availability (per-day cells in the ticker-range picker)
+  --day-complete:   #{$day-complete};
+  --day-partial:    #{$day-partial};
+  --day-missing:    #{$day-missing};
+  --day-hole:       #{$day-hole};
 
   // ITM / OTM / ATM (options chain)
   --itm-call-bg:    rgba(6, 78, 59, 0.45);
@@ -122,21 +144,22 @@ $container-lg: 1400px;
   --space-5:  1.25rem;
   --space-6:  1.5rem;
   --space-8:  2rem;
+  --space-10: 2.5rem;
 
   // Type families
   --font-sans: #{$font-sans};
   --font-mono: #{$font-mono};
 
-  // Type scale
+  // Type scale (tighter for data density)
   --fs-xxs:  0.65rem;
   --fs-xs:   0.72rem;
-  --fs-sm:   0.82rem;
-  --fs-base: 0.88rem;
-  --fs-md:   1rem;
+  --fs-sm:   0.8rem;
+  --fs-base: 0.875rem;
+  --fs-md:   0.95rem;
   --fs-lg:   1.1rem;
-  --fs-xl:   1.4rem;
-  --fs-h2:   1.6rem;
-  --fs-h1:   1.75rem;
+  --fs-xl:   1.35rem;
+  --fs-h2:   1.55rem;
+  --fs-h1:   1.7rem;
 
   // Weights
   --fw-regular: 400;
@@ -159,7 +182,10 @@ $container-lg: 1400px;
   // Page shell
   --page-pad-x:   1.5rem;
   --page-pad-y:   1.5rem;
-  --sidebar-w:    240px;
+  --sidebar-w:    232px;
+  --sidebar-w-collapsed: 56px;
+  --topbar-h:     52px;
+  --subnav-h:     40px;
 
   // Badge variants (outline style, low visual weight for informational tags)
   --badge-neutral-bg:    transparent;
@@ -167,11 +193,11 @@ $container-lg: 1400px;
   --badge-neutral-text:   var(--text-subtle);
 
   --badge-warn-bg:      transparent;
-  --badge-warn-border:  rgba(245, 158, 11, 0.35);
+  --badge-warn-border:  rgba(255, 152, 0, 0.35);
   --badge-warn-text:    #f2ad3d;
 
   --badge-info-bg:      transparent;
-  --badge-info-border:  rgba(59, 130, 246, 0.35);
+  --badge-info-border:  rgba(41, 98, 255, 0.35);
   --badge-info-text:    var(--accent);
 
   // Tab three-state (consumed by global p-tabs override in styles.css)

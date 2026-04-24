@@ -71,7 +71,7 @@
 
 .section-description {
   font-size: 0.875rem;
-  color: #64748b;
+  color: $text-secondary;
   margin-bottom: 1rem;
   line-height: 1.7;
 
@@ -218,7 +218,7 @@
 
 .interpretation {
   font-size: 0.9rem;
-  color: #475569;
+  color: $text-secondary;
   line-height: 1.7;
   margin: 0.5rem 0;
 }
@@ -250,7 +250,7 @@
 .subsection-title {
   font-size: 0.95rem;
   font-weight: 600;
-  color: #1e293b;
+  color: $text-primary;
   margin: 1rem 0 0.5rem;
   display: flex;
   align-items: center;
