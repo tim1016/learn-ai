@@ -174,6 +174,8 @@ Source: `PythonDataService/app/volatility/solver.py` — `implied_volatility(...
 
 **Bracketing.** IV is constrained to `[0.005, 5.0]` (0.5% – 500% annualized). Outside this range, the solver returns `CONVERGENCE_FAILURE` and the row's IV cell is blank.
 
+**Intraday-TTM override.** The default solver floor `MIN_TIME_TO_EXPIRY = 1.0 / 365` (1 calendar day) silently rejects every 0DTE bar (TTM ≤ 6.5 hours intraday) as `EXPIRED`. The companion service overrides this via the `min_ttm` parameter, set to `1.0 / (365 * 24 * 60)` (1 minute) — see `_MIN_TTM_INTRADAY` in `options_companion_service.py`. This lets IV solve across the entire 0DTE trading day except the very last minute, where the values are uninformative regardless. The default floor is preserved for every other caller of `implied_volatility`; only the companion pipeline opts in to the lower bound.
+
 **Reject conditions** (per `_compute_row_greeks` in `options_companion_service.py`):
 
 - `ttm <= 0` (option already expired by this bar)
@@ -190,9 +192,9 @@ When any reject fires, IV and all Greeks for that row are blank.
 
 ### 7.2 Greeks
 
-Source: `PythonDataService/app/services/quantlib_pricer.py` — `price_option(..., engine=PricingEngine.ANALYTIC_BS)`.
+Source: `PythonDataService/app/services/options_companion_service.py` — `_bsm_greeks(...)`.
 
-**Engine:** QuantLib `AnalyticEuropeanEngine` against `EuropeanOption` with a `BlackScholesMertonProcess`. The IV used in the Greeks solve is the per-bar IV from §7.1 — they are not computed independently.
+**Why not QuantLib `AnalyticEuropeanEngine`.** `quantlib_pricer.price_option` derives TTM from `(eval_date, expiration_date)` Python `date` objects, which are calendar-day-resolution. For 0DTE bars (eval_d == expiration_date), `Actual365Fixed.yearFraction` returns 0 and the pricer takes the "expired — return intrinsic" branch (`quantlib_pricer.py` lines 164–177): delta saturates to ±1, gamma/theta/vega/rho all return 0. The companion path needs precise *fractional* TTM in years — measured in milliseconds from `bar_ts_ms` to `expiry_close_ms` — so it bypasses QuantLib for Greeks and computes closed-form Black–Scholes–Merton directly. IV still uses `app.volatility.solver.implied_volatility` because that path accepts a continuous `ttm` argument.
 
 **Closed-form formulas** (Black–Scholes–Merton, with continuous dividend yield $q$ and risk-free rate $r$). Let:
 
@@ -202,28 +204,40 @@ Calls:
 
 $$\Delta = e^{-q t}\,\Phi(d_1)\quad
 \Gamma = \frac{e^{-q t}\,\phi(d_1)}{S\,\sigma\sqrt{t}}\quad
-\mathcal{V} = S\,e^{-q t}\,\phi(d_1)\,\sqrt{t}$$
+\mathcal{V}_\text{raw} = S\,e^{-q t}\,\phi(d_1)\,\sqrt{t}$$
 
-$$\Theta = -\frac{S\,e^{-q t}\,\phi(d_1)\,\sigma}{2\sqrt{t}} - r K e^{-r t}\Phi(d_2) + q S e^{-q t}\Phi(d_1)$$
+$$\Theta_\text{annual} = -\frac{S\,e^{-q t}\,\phi(d_1)\,\sigma}{2\sqrt{t}} - r K e^{-r t}\Phi(d_2) + q S e^{-q t}\Phi(d_1)$$
 
-$$\rho = K t e^{-r t}\Phi(d_2)$$
+$$\rho_\text{raw} = K t e^{-r t}\Phi(d_2)$$
 
-Puts:
+Puts (using $\Phi(-x) = 1 - \Phi(x)$):
 
 $$\Delta = e^{-q t}(\Phi(d_1)-1)\quad
-\Theta = -\frac{S\,e^{-q t}\,\phi(d_1)\,\sigma}{2\sqrt{t}} + r K e^{-r t}\Phi(-d_2) - q S e^{-q t}\Phi(-d_1)$$
+\Theta_\text{annual} = -\frac{S\,e^{-q t}\,\phi(d_1)\,\sigma}{2\sqrt{t}} + r K e^{-r t}\Phi(-d_2) - q S e^{-q t}\Phi(-d_1)$$
 
-$$\rho = -K t e^{-r t}\Phi(-d_2)$$
+$$\rho_\text{raw} = -K t e^{-r t}\Phi(-d_2)$$
 
 $\Gamma$ and $\mathcal{V}$ are identical for calls and puts.
 
-**Units.** Theta is per *year* (QuantLib's native unit) — divide by 365 for per-day, by 252 for per-trading-day. Vega is per unit volatility — multiply by `0.01` for per-1%-vol change. Rho is per unit rate — multiply by `0.01` for per-1%-rate change. The CSV emits the raw QuantLib values; downstream UI / analysis applies the unit convention it wants.
+**$\Phi$ and $\phi$ implementation.** $\Phi$ via `math.erf`: $\Phi(x) = \tfrac{1}{2}(1 + \operatorname{erf}(x/\sqrt{2}))$. $\phi$ via direct exponential. `_norm_cdf` and `_norm_pdf` in `options_companion_service.py`.
 
-**Validation status.** Per-bar Greek values are pending a formal parity pass against LEAN's analytic engine. Tracked in `docs/math-sources-of-truth.md`. Until that lands, treat Greeks as research-grade — directionally correct, signs and magnitudes consistent with closed-form, but not yet pinned to a golden fixture.
+**Unit conventions emitted in the CSV:**
+
+| Column | Convention | Conversion from raw |
+|---|---|---|
+| `delta` | raw (per unit price) | — |
+| `gamma` | raw (per unit price²) | — |
+| `theta` | **per calendar day** | $\Theta_\text{annual} / 365$ |
+| `vega` | **per 1 % vol move** | $\mathcal{V}_\text{raw} / 100$ |
+| `rho` | **per 1 % rate move** | $\rho_\text{raw} / 100$ |
+
+These match the legacy `quantlib_pricer.price_option` output conventions (see `quantlib_pricer.py` lines 207, 215, 223), so existing downstream consumers don't need to change.
+
+**Validation status.** Per-bar Greek values are pending a formal parity pass against LEAN's analytic engine. Tracked in `docs/math-sources-of-truth.md`. Until that lands, treat Greeks as research-grade — directionally correct, signs and magnitudes consistent with closed-form (sample 0DTE put bar verified in §10), but not yet pinned to a golden fixture.
 
 **Cross-references:**
 - Frontend Black–Scholes (Abramowitz & Stegun normal CDF, used for the strategy lab's payoff curves only — NOT the companion CSVs): `docs/black-scholes-implementation.md`
-- QuantLib engines available beyond `ANALYTIC_BS` (binomial, finite-difference, Monte Carlo): `PricingEngine` enum in `quantlib_pricer.py`. Only `ANALYTIC_BS` is used by the companion pipeline.
+- `quantlib_pricer.PricingEngine` enum (binomial, finite-difference, Monte Carlo) is **not** used in the companion pipeline.
 
 ---
 
@@ -239,23 +253,94 @@ Defensive bar-grid floor (`_bar_grid_floor_ms` in `options_companion_service.py`
 
 | Concern | File | Symbol |
 |---|---|---|
-| Slot selection | `options_companion_service.py` | `_select_strikes` |
+| Slot selection (offset → contract) | `options_companion_service.py` | `_select_strikes_with_slots` |
+| Slot label | `options_companion_service.py` | `_slot_label` |
 | Anchor (prior-day close) | `options_companion_service.py` | `_prior_day_close_map` |
 | Underlying↔option timestamp alignment | `options_companion_service.py` | `_underlying_close_map`, `_bar_grid_floor_ms` |
 | DTE expiry resolution | `options_companion_service.py` | `_resolve_target_expiry` |
-| Per-bar IV + Greeks | `options_companion_service.py` | `_compute_row_greeks` |
-| IV solver | `volatility/solver.py` | `implied_volatility` |
-| Greeks engine | `services/quantlib_pricer.py` | `price_option` |
+| Discontinuity tagging | `options_companion_service.py` | `_mark_discontinuity` |
+| Per-bar IV + Greeks orchestration | `options_companion_service.py` | `_compute_row_greeks` |
+| Closed-form Greeks compute | `options_companion_service.py` | `_bsm_greeks`, `_norm_cdf`, `_norm_pdf` |
+| IV solver | `volatility/solver.py` | `implied_volatility(..., min_ttm=...)` |
+| Polygon expirations endpoint | `services/polygon_client.py` | `list_options_expirations(..., expired=...)` |
 | Pydantic config | `models/requests.py` | `OptionsCompanionConfig` |
-| FastAPI route | `routers/dataset.py` | dataset generation endpoint |
+| ZIP packing | `services/dataset_service.py` | `build_zip_bytes(options_slot_files=...)` |
+| FastAPI route | `routers/dataset.py` | `_build_zip_with_events`, `/api/dataset/generate-zip[/stream]` |
 
 ---
 
-## 10. Test fixture (planned)
+## 10. Validation log
 
-A golden-fixture parity test is **pending** for this pipeline. The fixture will be a pinned input set (one trading day of SPY minute bars + the listed 0DTE chain on that day) with:
+### 10.1 Parity check, 2026-04-25
+
+**Setup.** Fresh run via `POST /api/dataset/generate-zip` with payload:
+
+```json
+{
+  "ticker": "SPY", "from_date": "2026-04-22", "to_date": "2026-04-25",
+  "session": "rth", "timespan": "minute", "multiplier": 1,
+  "options_companion": {
+    "enabled": true, "strikes_each_side": 5, "include_calls": false, "include_puts": true,
+    "dte_distance": 0, "include_discontinuity": true,
+    "include_ohlcv": true, "include_vwap": true, "include_transactions": true,
+    "include_iv": true, "include_delta": true, "include_gamma": true,
+    "include_theta": true, "include_vega": true,
+    "risk_free_rate": 0.05, "dividend_yield": 0.0
+  }
+}
+```
+
+**Reference.** A flat-format `options_puts.csv` produced by the previous code path against the same window — the legacy long-format export with columns `unix_ts, iso_time, contract_ticker, expiration, strike, type, OHLCV, vwap, transactions, iv, delta, gamma, theta, vega`.
+
+**Result.**
+
+- Reference rows: **12 295** (data rows, 3 trading days × 11 strikes × 1-minute RTH bars).
+- Fresh run rows (sum across the 11 per-slot files under `puts/`): **12 295**.
+- Common `(unix_ts, contract_ticker)` keys: **12 295** in reference, **12 295** in fresh, **12 295** intersect, **0** only-in-reference, **0** only-in-fresh.
+- **OHLCV+VWAP+transactions mismatches across all 12 295 common keys: 0.**
+
+The fresh per-slot output reproduces the reference byte-for-byte across `open, high, low, close, volume, vwap, transactions`. Concatenating the 11 slot CSVs and dropping `discontinuity` yields the legacy flat format.
+
+**Days_processed: 3, days_skipped: 0** — 2026-04-22, 04-23, 04-24. 2026-04-25 was a non-trading day in the test window so emitted no bars (correctly), and 2026-04-22 prior-close anchor falls back to the first bar's close on that day per `build_options_companion_csvs` (no Apr-21 data in range).
+
+### 10.2 Greeks fill rate
+
+After fixing the two pre-existing bugs documented in §10.3, IV+Greeks populated on the same 0DTE puts:
+
+- `puts/atm.csv`: **1148 / 1210 rows** with full IV + Δ + Γ + Θ + 𝒱 (95.0 %).
+- Unfilled rows are bars where the IV solver could not converge — typical pattern is deep-OTM strikes with thin premiums approaching the `MIN_OPTION_PRICE = 0.001` floor or the IV bracket `[0.005, 5.0]` bounds. These are correctly rejected rather than filled with fabricated values.
+
+**Sample row.** `puts/atm.csv`, first bar of 2026-04-22 (09:30 ET, contract `O:SPY260422P00711000`, SPY = 708.84, premium = 2.81):
+
+| field | value | sanity |
+|---|---|---|
+| iv | 0.196 | 19.6 % annualized — plausible for SPY 0DTE |
+| delta | -0.713 | put slightly ITM (K = 711 > S = 708.84), close to -0.7 expected |
+| gamma | 0.090 | high — concentrated near strike on a 0DTE |
+| theta | -2.31 (per day) | aggressive intraday decay, consistent with 6.5 hours to expiry |
+| vega | 0.066 (per 1 % vol) | low — vega collapses near expiry |
+
+### 10.3 Pre-existing bugs found and fixed during validation
+
+These bugs predate the per-slot rewrite and explain why the legacy flat CSV had **all Greeks/IV columns blank for every one of its 12 295 rows**.
+
+| # | Bug | Symptom | Fix |
+|---|---|---|---|
+| 1 | `polygon_client.list_options_expirations` did not pass `expired=true` to Polygon's `/v3/reference/options/contracts`. | The new strict-DTE check `_resolve_target_expiry` returned `None` for every historical trading day, since Polygon hides expired chains by default. Result: every day in a multi-day backfill reported `days_skipped` and produced zero rows. (The legacy `same_day` mode didn't hit this — it returned `trading_day` without verifying — so the bug was latent until strict-DTE arrived.) | Added `expired: bool \| None = None` to `list_options_expirations`. `_resolve_target_expiry` passes `expired=True`. |
+| 2 | `volatility/solver.py:MIN_TIME_TO_EXPIRY = 1.0/365` (1 calendar day) silently rejected every 0DTE bar with status `EXPIRED`. | Every 0DTE row's IV cell was blank, even with QuantLib correctly installed and the underlying spot map correctly aligned. | Added optional `min_ttm` parameter to `implied_volatility(...)`. The companion service passes `_MIN_TTM_INTRADAY = 1.0/(365*24*60)` (1 minute). All other callers retain the 1-day default. |
+| 3 | `quantlib_pricer.price_option` derives TTM from calendar dates `(eval_date, expiration_date)`. For 0DTE both dates are equal, so `Actual365Fixed.yearFraction(...)` returns 0 and the function takes its "expired" branch returning saturated Greeks (`δ = ±1, Γ = Θ = 𝒱 = ρ = 0`). | Even when bug #2 was bypassed, Greeks came back saturated for every 0DTE bar. | Greeks for the companion path are now computed inline by `_bsm_greeks(...)` using closed-form BSM with the precise fractional `ttm_years` from `(expiry_close_ms − bar_ts_ms) / _MS_PER_YEAR`. `quantlib_pricer.price_option` is unchanged and still serves other callers. |
+
+The combination of (1)+(2)+(3) explains the all-blank Greeks + zero-rows skip patterns observed in pre-fix runs. After all three fixes:
+
+- `days_skipped: 0` for in-range trading days with listed expiries.
+- IV populates on ~95 % of 0DTE rows; the remainder are correctly rejected by the IV solver (deep OTM or thin premiums).
+- Greeks populate wherever IV does, with intraday-correct magnitudes (no saturation).
+
+### 10.4 Test fixture (still planned)
+
+A golden-fixture parity test is still **pending** for this pipeline. Per the `numerical-rigor.md` math-debt rule this is a deliberate pay-down task on touch, not a hard prerequisite. The fixture will be a pinned input set (one trading day of SPY minute bars + the listed 0DTE chain on that day) with:
 
 - Reference IV computed via QuantLib **and** SciPy Brent independently; require agreement to `atol=1e-9`.
-- Reference Greeks from QuantLib's analytic engine compared against the closed-form formulas in §7.2; require agreement to `atol=1e-6, rtol=1e-6` (matching the project tolerance for Greeks per `.claude/rules/numerical-rigor.md`).
+- Reference Greeks from `_bsm_greeks` compared against an independent closed-form implementation (e.g. `py_vollib`); require agreement to `atol=1e-6, rtol=1e-6` (matching the project tolerance for Greeks per `.claude/rules/numerical-rigor.md`).
 
-Tracked in `docs/math-sources-of-truth.md` under `Status: pending-fixture`.
+Tracked in `docs/math-sources-of-truth.md` under `Status: pending-fixture`. The 2026-04-25 parity check in §10.1–§10.2 stands as the current empirical evidence that the pipeline produces sensible numbers; the golden fixture is the formal cross-check.

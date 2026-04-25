@@ -108,6 +108,7 @@ def implied_volatility(
     dividend: float = 0.0,
     is_call: bool = True,
     vol_guess: float = DEFAULT_IV_GUESS,
+    min_ttm: float | None = None,
 ) -> ImpliedVolResult:
     """
     Solve for implied volatility using QuantLib, with Brent fallback.
@@ -130,6 +131,10 @@ def implied_volatility(
         True for call, False for put.
     vol_guess : float
         Initial volatility guess for the solver.
+    min_ttm : float, optional
+        Override the module-level ``MIN_TIME_TO_EXPIRY`` floor. Lower this for
+        intraday-resolution callers (e.g. the 0DTE options companion, where
+        TTM is measured in hours). Default is the module floor (1 calendar day).
 
     Returns
     -------
@@ -144,11 +149,12 @@ def implied_volatility(
             message=f"spot={spot}, strike={strike} must be positive",
         )
 
-    if ttm < MIN_TIME_TO_EXPIRY:
+    effective_min_ttm = min_ttm if min_ttm is not None else MIN_TIME_TO_EXPIRY
+    if ttm < effective_min_ttm:
         return ImpliedVolResult(
             iv=None,
             status=SolveStatus.EXPIRED,
-            message=f"ttm={ttm:.6f} below minimum {MIN_TIME_TO_EXPIRY}",
+            message=f"ttm={ttm:.6f} below minimum {effective_min_ttm}",
         )
 
     intrinsic = _intrinsic_value(spot, strike, is_call, rate, ttm)

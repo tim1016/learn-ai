@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -30,13 +31,17 @@ import pandas as pd
 
 from app.models.requests import OptionsCompanionConfig
 from app.services.polygon_client import PolygonClientService
-from app.services.quantlib_pricer import _QL_AVAILABLE, PricingEngine, price_option
 from app.volatility.solver import SolveStatus, implied_volatility
 
 logger = logging.getLogger(__name__)
 
 _ET = ZoneInfo("America/New_York")
 _MS_PER_YEAR = 365.0 * 24 * 3600 * 1000
+# Intraday floor for the IV solver — 1 minute. The default solver floor is
+# 1 calendar day, which silently rejects every 0DTE bar (TTM ≤ 6.5 hours).
+# Anything inside the final minute of trading is essentially expired and
+# yields uninformative Greeks even when QuantLib does converge.
+_MIN_TTM_INTRADAY = 1.0 / (365.0 * 24 * 60)
 
 
 @dataclass(frozen=True)
@@ -198,6 +203,67 @@ def _fetch_contracts_for_expiry(
         return []
 
 
+def _norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _norm_pdf(x: float) -> float:
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def _bsm_greeks(
+    spot: float,
+    strike: float,
+    ttm: float,
+    rate: float,
+    dividend: float,
+    vol: float,
+    is_call: bool,
+) -> dict[str, float]:
+    """Closed-form Black–Scholes–Merton Greeks with continuous dividend yield.
+
+    Uses the precise fractional TTM ``ttm`` (years) directly — does not go
+    through QuantLib's calendar-date pricing path, which floors sub-day TTM
+    to zero and saturates 0DTE Greeks. Matches the unit conventions emitted
+    elsewhere in the system: ``theta`` per day, ``vega`` per 1 % vol move,
+    ``rho`` per 1 % rate move. ``delta`` and ``gamma`` are raw.
+    """
+    sqrt_t = math.sqrt(ttm)
+    d1 = (math.log(spot / strike) + (rate - dividend + 0.5 * vol * vol) * ttm) / (vol * sqrt_t)
+    d2 = d1 - vol * sqrt_t
+    nd1 = _norm_cdf(d1)
+    nd2 = _norm_cdf(d2)
+    pd1 = _norm_pdf(d1)
+    e_qt = math.exp(-dividend * ttm)
+    e_rt = math.exp(-rate * ttm)
+
+    gamma = e_qt * pd1 / (spot * vol * sqrt_t)
+    vega_raw = spot * e_qt * pd1 * sqrt_t  # per unit vol
+
+    if is_call:
+        delta = e_qt * nd1
+        theta_annual = (
+            -(spot * e_qt * pd1 * vol) / (2.0 * sqrt_t) - rate * strike * e_rt * nd2 + dividend * spot * e_qt * nd1
+        )
+        rho_raw = strike * ttm * e_rt * nd2
+    else:
+        delta = e_qt * (nd1 - 1.0)
+        theta_annual = (
+            -(spot * e_qt * pd1 * vol) / (2.0 * sqrt_t)
+            + rate * strike * e_rt * (1.0 - nd2)
+            - dividend * spot * e_qt * (1.0 - nd1)
+        )
+        rho_raw = -strike * ttm * e_rt * (1.0 - nd2)
+
+    return {
+        "delta": delta,
+        "gamma": gamma,
+        "theta": theta_annual / 365.0,  # per day, matching legacy convention
+        "vega": vega_raw / 100.0,  # per 1 % vol move
+        "rho": rho_raw / 100.0,  # per 1 % rate move
+    }
+
+
 def _compute_row_greeks(
     option_close: float,
     underlying_spot: float,
@@ -207,7 +273,7 @@ def _compute_row_greeks(
     is_call: bool,
     config: OptionsCompanionConfig,
 ) -> dict[str, float | None]:
-    """Solve IV then compute Greeks via QuantLib analytic engine. Skip values if inputs degenerate."""
+    """Solve IV then compute Greeks via closed-form BSM. Skip values if inputs degenerate."""
     ttm_years = max(0.0, (expiry_close_ms - bar_ts_ms) / _MS_PER_YEAR)
     out: dict[str, float | None] = {
         "iv": None,
@@ -229,6 +295,7 @@ def _compute_row_greeks(
         rate=config.risk_free_rate,
         dividend=config.dividend_yield,
         is_call=is_call,
+        min_ttm=_MIN_TTM_INTRADAY,
     )
 
     if iv_result.status in (SolveStatus.QUANTLIB_OK, SolveStatus.BRENT_FALLBACK, SolveStatus.OK) and iv_result.iv:
@@ -236,28 +303,21 @@ def _compute_row_greeks(
     else:
         return out
 
-    if not _QL_AVAILABLE:
-        return out
-
     try:
-        expiry_d = datetime.utcfromtimestamp(expiry_close_ms / 1000).date()
-        eval_d = datetime.utcfromtimestamp(bar_ts_ms / 1000).date()
-        greeks = price_option(
+        greeks = _bsm_greeks(
             spot=underlying_spot,
             strike=strike,
-            risk_free_rate=config.risk_free_rate,
-            volatility=iv_result.iv,
-            expiration_date=expiry_d,
-            option_type="call" if is_call else "put",
-            evaluation_date=eval_d,
-            dividend_yield=config.dividend_yield,
-            engine=PricingEngine.ANALYTIC_BS,
+            ttm=ttm_years,
+            rate=config.risk_free_rate,
+            dividend=config.dividend_yield,
+            vol=iv_result.iv,
+            is_call=is_call,
         )
-        out["delta"] = greeks.delta
-        out["gamma"] = greeks.gamma
-        out["theta"] = greeks.theta
-        out["vega"] = greeks.vega
-        out["rho"] = greeks.rho
+        out["delta"] = greeks["delta"]
+        out["gamma"] = greeks["gamma"]
+        out["theta"] = greeks["theta"]
+        out["vega"] = greeks["vega"]
+        out["rho"] = greeks["rho"]
     except Exception as exc:
         logger.debug(f"[OC] Greeks compute failed at ts={bar_ts_ms}: {exc}")
 
