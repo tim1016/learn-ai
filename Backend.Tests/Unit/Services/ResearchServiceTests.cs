@@ -104,7 +104,7 @@ public class ResearchServiceTests
         var aggregates = CreateSampleAggregates();
         _marketDataServiceMock
             .Setup(s => s.GetOrFetchAggregatesAsync(
-                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
+                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, true, default))
             .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var report = CreateSuccessReport();
@@ -140,7 +140,7 @@ public class ResearchServiceTests
         // Arrange
         _marketDataServiceMock
             .Setup(s => s.GetOrFetchAggregatesAsync(
-                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
+                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, true, default))
             .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = [] });
 
         var httpClient = CreateMockHttpClient(new ResearchReportDto());
@@ -162,7 +162,7 @@ public class ResearchServiceTests
         var aggregates = CreateSampleAggregates();
         _marketDataServiceMock
             .Setup(s => s.GetOrFetchAggregatesAsync(
-                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
+                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, true, default))
             .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var handler = new FakeHttpMessageHandler("Internal Server Error", HttpStatusCode.InternalServerError);
@@ -362,7 +362,7 @@ public class ResearchServiceTests
         var aggregates = CreateSampleAggregates();
         _marketDataServiceMock
             .Setup(s => s.GetOrFetchAggregatesAsync(
-                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
+                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, true, default))
             .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var report = CreateSuccessSignalReport();
@@ -398,7 +398,7 @@ public class ResearchServiceTests
         // Arrange
         _marketDataServiceMock
             .Setup(s => s.GetOrFetchAggregatesAsync(
-                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
+                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, true, default))
             .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = [] });
 
         var httpClient = CreateSignalMockHttpClient(new SignalEngineReportDto());
@@ -420,7 +420,7 @@ public class ResearchServiceTests
         var aggregates = CreateSampleAggregates();
         _marketDataServiceMock
             .Setup(s => s.GetOrFetchAggregatesAsync(
-                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
+                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, true, default))
             .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var handler = new FakeHttpMessageHandler("Internal Server Error", HttpStatusCode.InternalServerError);
@@ -439,7 +439,7 @@ public class ResearchServiceTests
         var aggregates = CreateSampleAggregates();
         _marketDataServiceMock
             .Setup(s => s.GetOrFetchAggregatesAsync(
-                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, default))
+                "AAPL", 1, "minute", "2024-01-01", "2024-01-31", false, true, default))
             .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var report = CreateSuccessSignalReport();

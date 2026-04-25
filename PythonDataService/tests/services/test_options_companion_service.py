@@ -8,7 +8,7 @@ mapping, and discontinuity tagging.
 
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import UTC, date
 
 import pandas as pd
 import pytest
@@ -518,3 +518,250 @@ class TestBuildOptionsCompanionTimestampAlignment:
             "expected fail-loud warning for 100%-empty Greek columns"
         )
         assert report["totals"]["iv_status"].get("no_price", 0) == 2
+
+
+class TestComputeRowGreeksStatusLabels:
+    """``_compute_row_greeks`` returns ``(values, status_label)``. Status
+    labels surface the per-bar reason the IV/Greeks are NaN and flow into
+    the run report's ``iv_status`` counter, so a column with 100%-NaN
+    values can be diagnosed by category. Pin the four guard branches."""
+
+    def _config(self) -> OptionsCompanionConfig:
+        return OptionsCompanionConfig(
+            enabled=True,
+            include_iv=True,
+            include_delta=True,
+            include_gamma=True,
+            include_theta=True,
+            include_vega=True,
+            risk_free_rate=0.05,
+            dividend_yield=0.0,
+        )
+
+    def test_expired_status_when_bar_is_after_close(self):
+        from app.services.options_companion_service import _compute_row_greeks
+
+        bar_ts = 1_749_596_400_000  # 2025-06-10 19:00 UTC = 15:00 ET
+        expiry_close = bar_ts - 60 * 60 * 1000  # 1 hour before bar
+        out, status = _compute_row_greeks(
+            option_close=1.50,
+            underlying_spot=710.0,
+            strike=709.0,
+            bar_ts_ms=bar_ts,
+            expiry_close_ms=expiry_close,
+            is_call=True,
+            config=self._config(),
+        )
+        assert status == "expired"
+        assert out["iv"] is None
+        assert out["delta"] is None
+
+    def test_no_price_status_when_option_close_is_zero(self):
+        from app.services.options_companion_service import _compute_row_greeks
+
+        bar_ts = 1_749_562_200_000  # 2025-06-10 09:30 ET (RTH)
+        expiry_close = bar_ts + 6 * 60 * 60 * 1000  # 6 hours later
+        out, status = _compute_row_greeks(
+            option_close=0.0,
+            underlying_spot=710.0,
+            strike=709.0,
+            bar_ts_ms=bar_ts,
+            expiry_close_ms=expiry_close,
+            is_call=True,
+            config=self._config(),
+        )
+        assert status == "no_price"
+        assert all(v is None for v in out.values())
+
+    def test_no_price_status_when_option_close_is_none(self):
+        from app.services.options_companion_service import _compute_row_greeks
+
+        bar_ts = 1_749_562_200_000
+        expiry_close = bar_ts + 6 * 60 * 60 * 1000
+        _, status = _compute_row_greeks(
+            option_close=None,
+            underlying_spot=710.0,
+            strike=709.0,
+            bar_ts_ms=bar_ts,
+            expiry_close_ms=expiry_close,
+            is_call=True,
+            config=self._config(),
+        )
+        assert status == "no_price"
+
+    def test_ok_status_populates_all_greeks(self):
+        from app.services.options_companion_service import _compute_row_greeks
+
+        bar_ts = 1_749_562_200_000  # 09:30 ET
+        expiry_close = bar_ts + 6 * 60 * 60 * 1000  # 15:30 ET (~6h to expiry)
+        out, status = _compute_row_greeks(
+            option_close=1.50,  # ITM call: spot 710 > strike 709 by $1
+            underlying_spot=710.0,
+            strike=709.0,
+            bar_ts_ms=bar_ts,
+            expiry_close_ms=expiry_close,
+            is_call=True,
+            config=self._config(),
+            vol_guess=0.20,
+        )
+        assert status == "ok"
+        assert out["iv"] is not None
+        assert out["delta"] is not None
+        assert out["gamma"] is not None
+        assert out["theta"] is not None
+        assert out["vega"] is not None
+        # ITM call: positive delta, positive gamma, negative theta
+        assert out["delta"] > 0
+        assert out["gamma"] > 0
+        assert out["theta"] < 0
+
+
+class TestProcessContractWarmStartIv:
+    """The companion threads ``last_iv`` between sequential bars on the
+    same contract so Newton converges in 2–4 iterations instead of from
+    the cold ``vol_guess=0.25`` seed. Verify the seed actually advances.
+    """
+
+    def test_solver_called_with_advancing_vol_guess(self, monkeypatch):
+        from app.services.options_companion_service import _process_contract, _SelectedContract
+
+        ts_0930 = 1_749_562_200_000
+        ts_0931 = ts_0930 + 60_000
+        ts_0932 = ts_0931 + 60_000
+
+        # Capture every call's vol_guess so we can assert the warm-start chain.
+        captured: list[float] = []
+
+        class _FakeIvResult:
+            def __init__(self, iv: float):
+                self.iv = iv
+
+                class _Status:
+                    value = "ok"
+
+                self.status = _Status()
+
+        def _fake_iv(*args, vol_guess, **kwargs):
+            # Accept any keyword the real ``implied_volatility`` adds in the
+            # future (e.g. ``min_ttm``) — the test only cares about how
+            # ``vol_guess`` advances across sequential bars.
+            captured.append(vol_guess)
+            # Return progressively different IVs so warm-start can pick them up
+            return _FakeIvResult(iv=0.20 + 0.01 * len(captured))
+
+        monkeypatch.setattr(
+            "app.services.options_companion_service.implied_volatility",
+            _fake_iv,
+        )
+
+        contract = _SelectedContract(
+            ticker="O:T709",
+            strike=709.0,
+            expiration=date(2025, 6, 10),
+            contract_type="call",
+            slot_offset=0,  # ATM in the slot ladder; not exercised by this test
+        )
+
+        bars = [
+            {"timestamp": t, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 10}
+            for t in (ts_0930, ts_0931, ts_0932)
+        ]
+        polygon = _FakePolygon(contracts=[], option_bars={"O:T709": bars})
+        underlying_by_ts = {ts_0930: 710.0, ts_0931: 710.5, ts_0932: 711.0}
+
+        rows, _ = _process_contract(
+            contract=contract,
+            trading_day=date(2025, 6, 10),
+            to_date="2025-06-10",
+            underlying_by_ts=underlying_by_ts,
+            config=OptionsCompanionConfig(enabled=True, risk_free_rate=0.05, dividend_yield=0.0),
+            timespan="minute",
+            multiplier=1,
+            polygon=polygon,
+        )
+
+        # Three bars → three IV solves.
+        assert len(rows) == 3
+        assert len(captured) == 3
+        # Bar 0: cold seed (0.25 default).
+        assert captured[0] == pytest.approx(0.25)
+        # Bar 1: warm-start from bar 0's solved IV (0.21).
+        assert captured[1] == pytest.approx(0.21)
+        # Bar 2: warm-start from bar 1's solved IV (0.22).
+        assert captured[2] == pytest.approx(0.22)
+
+
+class TestFirstDayCloseSource:
+    """Day-1 ``prior_close`` must be sourced from the first underlying bar's
+    close, NOT from the EOD-of-same-day close (which would leak future
+    information into ATM strike selection). Regresses the bias documented
+    inline in build_options_companion_csvs."""
+
+    def test_atm_ladder_centers_on_first_bar_close_not_eod(self):
+        from app.services.options_companion_service import build_options_companion_csvs
+
+        # Underlying drifts $100 → $110 within one trading day. EOD is $110;
+        # first-bar close is $100. Strike selection MUST center on $100.
+        ts_0930 = 1_749_562_200_000  # 2025-06-10 09:30 ET
+        underlying = pd.DataFrame(
+            {
+                "timestamp": [ts_0930 + i * 60_000 for i in range(11)],
+                "close": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0, 110.0],
+            }
+        )
+
+        # Wide strike ladder so both candidates ($100 and $110) are available.
+        contracts = [{"ticker": f"O:T{int(s)}", "strike_price": float(s)} for s in range(90, 121)]
+
+        # One trivial bar per contract so the row pipeline runs without
+        # blowing up — the test only inspects which strikes were selected.
+        option_bars = {
+            f"O:T{int(s)}": [
+                {"timestamp": ts_0930, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1}
+            ]
+            for s in range(90, 121)
+        }
+
+        polygon = _FakePolygon(contracts, option_bars)
+        config = OptionsCompanionConfig(
+            enabled=True,
+            include_calls=True,
+            include_puts=False,
+            strikes_each_side=2,  # ATM ± 2 → 5 slots
+            dte_distance=0,  # same-day expiry
+            include_iv=False,  # IV solving is irrelevant to this assertion
+            include_delta=False,
+            include_gamma=False,
+            include_theta=False,
+            include_vega=False,
+        )
+
+        slot_files, _ = build_options_companion_csvs(
+            underlying_bars_df=underlying,
+            ticker="SPY",
+            from_date="2025-06-10",
+            to_date="2025-06-10",
+            config=config,
+            polygon=polygon,
+            timespan="minute",
+            multiplier=1,
+        )
+
+        # New per-slot layout: one CSV per offset under calls/. Aggregate
+        # across slot files to recover the full set of selected strikes.
+        calls_paths = [p for p in slot_files if p.startswith("calls/")]
+        assert calls_paths, "expected at least one calls/* slot CSV"
+        selected_strikes: set[float] = set()
+        for path in calls_paths:
+            lines = slot_files[path].decode().strip().split("\n")
+            header = lines[0].split(",")
+            strike_idx = header.index("strike")
+            for row in lines[1:]:
+                selected_strikes.add(float(row.split(",")[strike_idx]))
+
+        # ATM = first bar's close ($100), ± 2 strikes → [98, 99, 100, 101, 102].
+        assert sorted(selected_strikes) == [98.0, 99.0, 100.0, 101.0, 102.0]
+        # Sanity: must NOT include strikes that would have been selected
+        # if EOD ($110) was used as the centering price.
+        assert 110.0 not in selected_strikes
+        assert 109.0 not in selected_strikes
