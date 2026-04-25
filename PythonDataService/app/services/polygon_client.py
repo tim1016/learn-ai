@@ -546,6 +546,7 @@ class PolygonClientService:
         contract_type: str | None = None,
         expiration_date_gte: str | None = None,
         expiration_date_lte: str | None = None,
+        expired: bool | None = None,
     ) -> list[str]:
         """Fetch unique expiration dates for an underlying ticker.
 
@@ -578,6 +579,8 @@ class PolygonClientService:
                         "limit": 1000,
                         "apiKey": settings.POLYGON_API_KEY,
                     }
+                    if expired is not None:
+                        params["expired"] = "true" if expired else "false"
                     resp = _requests.get(
                         "https://api.polygon.io/v3/reference/options/contracts",
                         params=params,

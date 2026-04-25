@@ -497,11 +497,13 @@ export class DataLabComponent {
 
   // ── Options companion config ───────────────────────────────
   optionsCompanionEnabled = signal(false);
-  optionsStrikesEachSide = signal(5);
+  optionsStrikesEachSide = signal(3);
   optionsIncludeCalls = signal(true);
   optionsIncludePuts = signal(true);
-  optionsExpiryMode = signal<'same_day' | 'nearest_within_days'>('same_day');
-  optionsMaxDte = signal(7);
+  // Strict DTE distance: 0 = 0DTE (same-day expiry); >0 = constant
+  // calendar-day distance from each trading day to its target expiry.
+  // Replaces the legacy expiry_mode + max_dte pair.
+  optionsDteDistance = signal(0);
   optIncludeOhlcv = signal(true);
   optIncludeVwap = signal(true);
   optIncludeTransactions = signal(true);
@@ -512,6 +514,7 @@ export class DataLabComponent {
   optIncludeTheta = signal(true);
   optIncludeVega = signal(true);
   optIncludeRho = signal(false);
+  optIncludeDiscontinuity = signal(true);
   optRiskFreeRate = signal(0.05);
   optDividendYield = signal(0.0);
 
@@ -522,24 +525,19 @@ export class DataLabComponent {
   );
 
   /**
-   * Low-resolution warning for the options companion.
-   *
-   * - `same_day` + `day` resolution → each 0DTE contract produces a single row (degenerate).
-   * - `same_day` + `hour` resolution → each 0DTE contract produces ~6-7 rows (sparse).
-   * - `nearest_within_days` + `day` resolution → each contract produces up to `max_dte` rows.
-   * Returns an explanatory string when the combination is degenerate, else empty.
-   */
-  /**
    * Estimated number of option contracts that will be pulled given the
-   * current date range, expiry mode, strike count, and calls/puts toggles.
+   * current date range, DTE distance, strike count, and calls/puts toggles.
    *
-   *   contracts ≈ expiries × (2·strikesEachSide + 1) × (#sides)
-   *   expiries  ≈ trading_days_in_range          for daily-expiry tickers
-   *             ≈ ceil(trading_days_in_range/5)  for weekly-only tickers
+   *   matchingDays ≈ trading_days_in_range          (daily-expiry tickers)
+   *                ≈ ceil(trading_days_in_range/5)  (weekly-only tickers)
+   *   contracts    = matchingDays × (2·strikesEachSide + 1) × (#sides)
+   *   bars         = contracts × barsPerTradingDay
    *
-   * Trading days are approximated as weekdays in [from, to] — holiday
-   * calendar is ignored at this resolution; the ±5 % error is well within
-   * the precision of "rough" estimates the user is making decisions from.
+   * Under the strict-DTE policy, each trading day picks one fresh chain
+   * of contracts and we fetch only that day's bars from each — the
+   * `daysPerContract` factor from the legacy `nearest_within_days` mode
+   * is gone. Trading days are approximated as weekdays in [from, to];
+   * the holiday calendar is ignored at this resolution.
    */
   optionsContractEstimate = computed<{ contracts: number; expiries: number; bars: number }>(() => {
     if (!this.optionsCompanionEnabled()) return { contracts: 0, expiries: 0, bars: 0 };
@@ -548,15 +546,12 @@ export class DataLabComponent {
     const tradingDays = countWeekdays(this.fromDate(), this.toDate());
     if (tradingDays <= 0) return { contracts: 0, expiries: 0, bars: 0 };
     const isDaily = this.tickerSupportsDaily();
-    const expiries = isDaily ? tradingDays : Math.max(1, Math.ceil(tradingDays / 5));
+    const matchingDays = isDaily ? tradingDays : Math.max(1, Math.ceil(tradingDays / 5));
     const strikes = this.optionsStrikesEachSide() * 2 + 1;
-    const contracts = expiries * strikes * sides;
+    const contracts = matchingDays * strikes * sides;
     const barsPerDay = barsPerTradingDay(this.timespan(), this.multiplier());
-    const daysPerContract = this.optionsExpiryMode() === 'same_day'
-      ? 1
-      : Math.min(this.optionsMaxDte() || 1, 30);
-    const bars = contracts * barsPerDay * daysPerContract;
-    return { contracts, expiries, bars };
+    const bars = contracts * barsPerDay;
+    return { contracts, expiries: matchingDays, bars };
   });
 
   /**
@@ -581,15 +576,12 @@ export class DataLabComponent {
     if (!this.optionsCompanionEnabled()) return '';
     const ts = this.timespan();
     const mult = this.multiplier();
-    const mode = this.optionsExpiryMode();
     if (ts === 'day') {
-      if (mode === 'same_day') {
-        return 'At day resolution with Same-day (0DTE) expiry, each contract produces exactly 1 row. You probably want minute or hour resolution for intraday IV/Greeks.';
-      }
-      return `At day resolution, each selected contract will produce up to ${this.optionsMaxDte()} daily rows.`;
+      return 'At day resolution, each contract produces exactly 1 row per trading day. You probably want minute or hour resolution for intraday IV/Greeks.';
     }
-    if (ts === 'hour' && mode === 'same_day') {
-      return `At ${mult}-hour resolution with Same-day (0DTE) expiry, each contract produces ~${Math.max(1, Math.floor(7 / Math.max(mult, 1)))} rows — limited intraday granularity.`;
+    if (ts === 'hour') {
+      const rowsPerDay = Math.max(1, Math.floor(7 / Math.max(mult, 1)));
+      return `At ${mult}-hour resolution, each contract produces ~${rowsPerDay} rows per trading day — limited intraday granularity.`;
     }
     return '';
   });
@@ -798,8 +790,7 @@ export class DataLabComponent {
           strikes_each_side: this.optionsStrikesEachSide(),
           include_calls: this.optionsIncludeCalls(),
           include_puts: this.optionsIncludePuts(),
-          expiry_mode: this.optionsExpiryMode(),
-          max_dte: this.optionsMaxDte(),
+          dte_distance: this.optionsDteDistance(),
           include_ohlcv: this.optIncludeOhlcv(),
           include_vwap: this.optIncludeVwap(),
           include_transactions: this.optIncludeTransactions(),
@@ -810,6 +801,7 @@ export class DataLabComponent {
           include_theta: this.optIncludeTheta(),
           include_vega: this.optIncludeVega(),
           include_rho: this.optIncludeRho(),
+          include_discontinuity: this.optIncludeDiscontinuity(),
           risk_free_rate: this.optRiskFreeRate(),
           dividend_yield: this.optDividendYield(),
         }
@@ -1394,12 +1386,11 @@ export class DataLabComponent {
     this.optionsStrikesEachSide.set(next);
   }
 
-  /** Quick-action for daily-expiry tickers in warn/danger: flip to
-   *  Nearest-expiry mode with maxDte=7, which approximates "weekly only"
-   *  by typically resolving to that week's Friday expiry. */
+  /** Quick-action for daily-expiry tickers in warn/danger: jump to a
+   *  weekly-cadence DTE distance so most listed expiries skip past
+   *  daily ones, reducing matched trading days roughly 5×. */
   switchToWeeklyOnly(): void {
-    this.optionsExpiryMode.set('nearest_within_days');
-    this.optionsMaxDte.set(7);
+    this.optionsDteDistance.set(7);
   }
 
   async generateZip(): Promise<void> {
@@ -1414,8 +1405,7 @@ export class DataLabComponent {
             strikes_each_side: this.optionsStrikesEachSide(),
             include_calls: this.optionsIncludeCalls(),
             include_puts: this.optionsIncludePuts(),
-            expiry_mode: this.optionsExpiryMode(),
-            max_dte: this.optionsMaxDte(),
+            dte_distance: this.optionsDteDistance(),
             include_ohlcv: this.optIncludeOhlcv(),
             include_vwap: this.optIncludeVwap(),
             include_transactions: this.optIncludeTransactions(),
@@ -1426,6 +1416,7 @@ export class DataLabComponent {
             include_theta: this.optIncludeTheta(),
             include_vega: this.optIncludeVega(),
             include_rho: this.optIncludeRho(),
+            include_discontinuity: this.optIncludeDiscontinuity(),
             risk_free_rate: this.optRiskFreeRate(),
             dividend_yield: this.optDividendYield(),
           }

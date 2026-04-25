@@ -328,11 +328,13 @@
 
     <div class="companion-body">
       <p class="section-desc">
-        When enabled, the ZIP gains <code>options_calls.csv</code> and/or <code>options_puts.csv</code>:
-        option aggregates at the <strong>same resolution as the ticker</strong> — whatever
-        <em>Timespan × Multiplier</em> you picked above — for contracts chosen around the ATM strike
-        (prior day's close) on each target expiry. Implied volatility is solved per bar via QuantLib;
-        Greeks use <code>AnalyticEuropeanEngine</code>. Greeks validation against LEAN is a separate follow-up.
+        When enabled, the ZIP gains per-slot CSVs under <code>calls/</code> and <code>puts/</code>
+        subfolders (e.g. <code>calls/atm.csv</code>, <code>puts/atm-01.csv</code>). Each slot file
+        is a fixed-schema time series for an ATM-relative slot — the underlying contract that fills
+        the slot rolls daily and is recorded as a row value. Bars are at the same resolution as the
+        ticker (<em>Timespan × Multiplier</em>). Implied volatility is solved per bar via QuantLib;
+        Greeks use <code>AnalyticEuropeanEngine</code>. Greeks validation against LEAN is a separate
+        follow-up. See <code>docs/options-companion-format.md</code> for the full spec.
       </p>
 
       <label class="checkbox-option primary">
@@ -345,8 +347,8 @@
         @let _est = optionsContractEstimate();
         @let _sev = optionsContractEstimateSeverity();
         @let _resWarn = optionsResolutionWarning();
-        @let _expiryWarn = optionsExpiryMode() === 'same_day' && !tickerSupportsDaily()
-          ? ticker() + ' does not have daily expirations — only Fridays will populate in 0DTE mode. Switch to Nearest expiry, or pick: ' + DAILY_EXPIRY_TICKERS.join(', ') + '.'
+        @let _expiryWarn = optionsDteDistance() === 0 && !tickerSupportsDaily()
+          ? ticker() + ' does not list daily expirations — at DTE=0 only Fridays will populate. Set DTE distance to land on a listed weekly expiry, or pick a daily-expiry ticker: ' + DAILY_EXPIRY_TICKERS.join(', ') + '.'
           : '';
 
         @if (_est.contracts > 0 || _resWarn || _expiryWarn) {
@@ -410,9 +412,9 @@
                         [disabled]="optionsStrikesEachSide() >= 25">
                   <i class="pi pi-plus"></i>
                 </button>
-                @if (tickerSupportsDaily() && (_sev === 'warn' || _sev === 'danger') && optionsExpiryMode() === 'same_day') {
+                @if (tickerSupportsDaily() && (_sev === 'warn' || _sev === 'danger') && optionsDteDistance() === 0) {
                   <button type="button" class="cp-action cp-action-secondary" (click)="switchToWeeklyOnly()">
-                    Switch to weekly only
+                    DTE = 7 (weekly cadence)
                   </button>
                 }
               </div>
@@ -422,19 +424,13 @@
 
         <div class="options-row">
           <div class="option-group">
-            <label>Expiry selection</label>
-            <select [ngModel]="optionsExpiryMode()" (ngModelChange)="optionsExpiryMode.set($event)">
-              <option value="same_day">Same-day (0DTE) only</option>
-              <option value="nearest_within_days">Nearest expiry ≤ N days</option>
-            </select>
+            <label
+              title="Calendar days from each trading day to its target expiry. 0 = 0DTE (same-day expiry). 7 = the option expiring exactly 7 days from each trading day. Strict matching: if no listed expiry lands on (trading_day + DTE), the day is skipped.">
+              DTE distance (days)
+            </label>
+            <input type="number" [ngModel]="optionsDteDistance()" (ngModelChange)="optionsDteDistance.set(+$event)"
+                   min="0" max="60" class="multiplier-input" />
           </div>
-          @if (optionsExpiryMode() === 'nearest_within_days') {
-            <div class="option-group">
-              <label>Max DTE (N)</label>
-              <input type="number" [ngModel]="optionsMaxDte()" (ngModelChange)="optionsMaxDte.set(+$event)"
-                     min="0" max="60" class="multiplier-input" />
-            </div>
-          }
           <div class="option-group">
             <label>Strikes each side (ATM ± N)</label>
             <input type="number" [ngModel]="optionsStrikesEachSide()" (ngModelChange)="optionsStrikesEachSide.set(+$event)"
@@ -456,12 +452,12 @@
           <label class="checkbox-option">
             <input type="checkbox" [checked]="optionsIncludeCalls()"
                    (change)="optionsIncludeCalls.set(!optionsIncludeCalls())" />
-            <span>Emit calls CSV</span>
+            <span>Emit <code>calls/</code> slot files</span>
           </label>
           <label class="checkbox-option">
             <input type="checkbox" [checked]="optionsIncludePuts()"
                    (change)="optionsIncludePuts.set(!optionsIncludePuts())" />
-            <span>Emit puts CSV</span>
+            <span>Emit <code>puts/</code> slot files</span>
           </label>
         </div>
 
@@ -506,6 +502,12 @@
           <label class="checkbox-option">
             <input type="checkbox" [checked]="optIncludeRho()" (change)="optIncludeRho.set(!optIncludeRho())" />
             <span>ρ rho</span>
+          </label>
+          <label class="checkbox-option"
+                 title="Marks rows where this slot's underlying contract just changed (1) versus continuous bars (0). The contract filling each slot rolls every trading day under any DTE distance — different strike or expiry, so values across a 1-row are two different financial instruments. Treat as a series reset when computing returns, plotting lines, or training models.">
+            <input type="checkbox" [checked]="optIncludeDiscontinuity()"
+                   (change)="optIncludeDiscontinuity.set(!optIncludeDiscontinuity())" />
+            <span>Discontinuity flag <span class="option-hint">(per-slot contract roll marker)</span></span>
           </label>
         </fieldset>
       }

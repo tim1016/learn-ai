@@ -1,22 +1,17 @@
-"""Options companion CSV builder.
+"""Options companion CSV builder — per-slot layout.
 
-Given already-fetched underlying minute bars plus an ``OptionsCompanionConfig``,
-this module discovers option contracts around the ATM strike on each target
-expiry date, fetches 1-minute aggregates for each contract, and computes
-implied volatility and selected Greeks *per bar* via QuantLib. The result is
-one CSV per option type (calls, puts) in long format.
+Emits one CSV per ``(side, slot)`` pair under ``calls/`` and ``puts/`` ZIP
+subfolders, where ``slot`` is a price-ordered offset from ATM (e.g.
+``atm-03``, ``atm``, ``atm+02``). The contract filling each slot rolls daily
+based on the prior trading day's close; the slot semantic is stable. See
+``docs/options-companion-format.md`` for the full format spec.
 
-IV source is deterministically solved per bar via
-``app.volatility.solver.implied_volatility`` (QuantLib primary, Brent
-fallback) — the volatility surface is intentionally **not** used as an input
-in v1 because surface-based IV requires pre-building a surface per minute
-timestamp per day, which is impractical. Surface-based IV is the future
-cross-check, not the input (see docs/references for the deferred validation
-task).
-
-Per-bar Greek values are pending a formal validation pass against LEAN /
-QuantLib's analytic engine (see the project plan) — today we rely on
-QuantLib's ``AnalyticEuropeanEngine`` for delta/gamma/theta/vega/rho.
+IV is solved per bar via ``app.volatility.solver.implied_volatility``
+(QuantLib primary, Brent fallback). Greeks are computed via QuantLib's
+``AnalyticEuropeanEngine`` using the solved IV. Surface-based IV is
+intentionally NOT used as input — it remains a deferred cross-check.
+Per-bar Greek values are pending a formal parity pass against LEAN /
+QuantLib's analytic engine; see ``docs/math-sources-of-truth.md``.
 """
 
 from __future__ import annotations
@@ -50,6 +45,20 @@ class _SelectedContract:
     strike: float
     expiration: date
     contract_type: str  # 'call' | 'put'
+    slot_offset: int  # ATM-relative; -strikes_each_side..+strikes_each_side
+
+
+def _slot_label(offset: int) -> str:
+    """Render a slot offset as a sortable, file-safe label.
+
+    Format: ``atm`` for offset 0, otherwise ``atm{sign}{|offset|:02d}`` —
+    e.g. ``atm-03``, ``atm+02``. Two-digit zero-pad keeps within-sign
+    lexical sort consistent up to offset 99 (max config caps at 25).
+    """
+    if offset == 0:
+        return "atm"
+    sign = "+" if offset > 0 else "-"
+    return f"atm{sign}{abs(offset):02d}"
 
 
 def _utc_ms_for_et_close(d: date, hour: int = 16, minute: int = 0) -> int:
@@ -106,24 +115,31 @@ def _underlying_close_map(bars_df: pd.DataFrame, timespan: str, multiplier: int)
     }
 
 
-def _select_strikes(
+def _select_strikes_with_slots(
     contracts: list[dict[str, Any]],
     prior_close: float,
     strikes_each_side: int,
-) -> list[dict[str, Any]]:
-    """Pick ATM + N strikes above + N below sorted by strike."""
+) -> list[tuple[int, dict[str, Any]]]:
+    """Return ``[(slot_offset, contract), ...]`` for offsets that have a listed strike.
+
+    The slot offset is ATM-relative: ``-strikes_each_side..+strikes_each_side``
+    where 0 is the strike closest to ``prior_close``. Offsets that fall
+    outside the listed chain (chain edge) are simply omitted — the
+    corresponding slot file gets no row for that day.
+    """
     if not contracts:
         return []
 
     sorted_c = sorted(contracts, key=lambda c: c["strike_price"])
     strikes = [c["strike_price"] for c in sorted_c]
-
-    # Find ATM index via closest strike
     atm_idx = int(np.argmin(np.abs(np.asarray(strikes) - prior_close)))
 
-    lo = max(0, atm_idx - strikes_each_side)
-    hi = min(len(sorted_c), atm_idx + strikes_each_side + 1)
-    return sorted_c[lo:hi]
+    out: list[tuple[int, dict[str, Any]]] = []
+    for offset in range(-strikes_each_side, strikes_each_side + 1):
+        idx = atm_idx + offset
+        if 0 <= idx < len(sorted_c):
+            out.append((offset, sorted_c[idx]))
+    return out
 
 
 def _resolve_target_expiry(
@@ -132,30 +148,32 @@ def _resolve_target_expiry(
     trading_day: date,
     config: OptionsCompanionConfig,
 ) -> date | None:
-    """Return the expiry date to use for a given `trading_day`, or None if none available."""
-    if config.expiry_mode == "same_day":
-        return trading_day
+    """Return the expiry to use for ``trading_day``, or ``None`` to skip.
 
-    # nearest_within_days: pull expirations for [day, day + max_dte]
-    end = trading_day + timedelta(days=config.max_dte)
+    Strict-DTE policy: target = ``trading_day + config.dte_distance``. The
+    expiry is returned only if Polygon lists a chain on exactly that date.
+    No tolerance — fuzzy matches would mix DTEs in the same row, which is
+    not a meaningful comparison for time-decay analysis.
+    """
+    target = trading_day + timedelta(days=config.dte_distance)
+    target_iso = target.isoformat()
     try:
+        # ``expired=True`` is critical: Polygon's /v3/reference/options/contracts
+        # filters out expired chains by default, so any historical trading day
+        # would otherwise look "no chain listed" and get incorrectly skipped.
         expirations = polygon.list_options_expirations(
             underlying_ticker=ticker,
-            expiration_date_gte=trading_day.isoformat(),
-            expiration_date_lte=end.isoformat(),
+            expiration_date_gte=target_iso,
+            expiration_date_lte=target_iso,
+            expired=True,
         )
     except Exception as exc:
         logger.warning(f"[OC] Expiration lookup failed for {ticker} on {trading_day}: {exc}")
         return None
 
-    if not expirations:
-        return None
-
-    # list_options_expirations returns strings; sort and take earliest ≥ trading_day
-    candidates = sorted({e for e in expirations if e >= trading_day.isoformat()})
-    if not candidates:
-        return None
-    return date.fromisoformat(candidates[0])
+    if target_iso in expirations:
+        return target
+    return None
 
 
 def _fetch_contracts_for_expiry(
@@ -218,8 +236,6 @@ def _compute_row_greeks(
     else:
         return out
 
-    # Compute Greeks using the solved IV. We skip this path if QuantLib is not installed
-    # — IV still populates (it has its own fallback), but Greeks require QL for now.
     if not _QL_AVAILABLE:
         return out
 
@@ -249,8 +265,17 @@ def _compute_row_greeks(
 
 
 def _columns_for(config: OptionsCompanionConfig) -> list[str]:
-    """Return the ordered list of columns for a companion CSV."""
-    cols = ["unix_ts", "iso_time", "contract_ticker", "expiration", "strike", "type"]
+    """Return the ordered column list for a per-slot CSV.
+
+    Side is encoded by the parent folder (``calls/`` or ``puts/``); slot is
+    encoded by the filename (``atm-03.csv`` etc.) — neither appears as a
+    column. Per-row identity columns (contract_ticker, strike, expiration)
+    let the user reconstruct the contract that filled this slot at each bar.
+    """
+    cols: list[str] = ["unix_ts", "iso_time"]
+    if config.include_discontinuity:
+        cols.append("discontinuity")
+    cols += ["contract_ticker", "strike", "expiration"]
     if config.include_ohlcv:
         cols += ["open", "high", "low", "close", "volume"]
     if config.include_vwap:
@@ -282,24 +307,22 @@ def _fmt(v: Any) -> str:
     return str(v)
 
 
-def _sort_companion_rows(rows: list[dict[str, Any]]) -> None:
-    """Sort companion rows in place by ``(unix_ts, contract_ticker)``.
-
-    Bars accumulate in append order (day → strike → bar), producing
-    contract-grouped, time-resetting blocks. This sort flattens them into a
-    single chronological stream and breaks ties on contract ticker for
-    determinism (multiple contracts always share each bar timestamp).
+def _mark_discontinuity(rows: list[dict[str, Any]]) -> None:
+    """Tag each row's ``discontinuity`` field by comparing contract_ticker
+    against the prior row's. The first row is always 1 (start of series =
+    new instrument). Mutates rows in place; assumes rows already sorted by
+    ``unix_ts``.
     """
-    rows.sort(key=lambda r: (r["unix_ts"], r["contract_ticker"]))
+    prev_ticker: str | None = None
+    for row in rows:
+        cur = row.get("contract_ticker")
+        row["discontinuity"] = 1 if cur != prev_ticker else 0
+        prev_ticker = cur
 
 
 def _write_rows_to_csv(rows: list[dict[str, Any]], columns: list[str]) -> bytes:
-    """Serialize rows to CSV bytes.
-
-    Caller contract: ``rows`` must already be sorted by their canonical time
-    key (``unix_ts`` for option bars). Use :func:`_sort_companion_rows`
-    immediately before calling this writer.
-    """
+    """Serialize rows to CSV bytes. Caller must have sorted by unix_ts and
+    populated ``discontinuity`` (when included in ``columns``)."""
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(columns)
@@ -311,7 +334,6 @@ def _write_rows_to_csv(rows: list[dict[str, Any]], columns: list[str]) -> bytes:
 def _process_contract(
     contract: _SelectedContract,
     trading_day: date,
-    from_date: str,
     to_date: str,
     underlying_by_ts: dict[int, float],
     config: OptionsCompanionConfig,
@@ -319,13 +341,12 @@ def _process_contract(
     multiplier: int,
     polygon: PolygonClientService,
 ) -> list[dict[str, Any]]:
-    """Fetch the option's aggregate bars at the ticker's resolution and build one row per bar.
+    """Fetch the option's bars for ``trading_day`` and build one row per bar.
 
-    Fetch window is clamped to ``[trading_day, min(trading_day + expiry_span, to_date)]``
-    — the option only produces bars while it's live, and for ``same_day`` mode
-    that's a single trading date.
+    Fetch window is clamped to ``[trading_day, min(expiration, to_date)]``.
+    The contract only produces bars while live; for ``dte_distance=0`` the
+    window collapses to a single trading date.
     """
-    # Clamp fetch window to the contract's lifetime within [from_date, to_date]
     contract_end = min(contract.expiration.isoformat(), to_date)
     try:
         bars = polygon.fetch_aggregates(
@@ -360,7 +381,6 @@ def _process_contract(
             "contract_ticker": contract.ticker,
             "expiration": iso_expiration,
             "strike": contract.strike,
-            "type": contract.contract_type,
             "open": bar.get("open"),
             "high": bar.get("high"),
             "low": bar.get("low"),
@@ -407,50 +427,46 @@ def build_options_companion_csvs(
     multiplier: int = 1,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
-) -> tuple[bytes | None, bytes | None, dict[str, Any]]:
-    """Build options_calls.csv and/or options_puts.csv byte payloads plus a summary report.
-
-    Options bars are fetched at the same ``(timespan, multiplier)`` as the
-    underlying — Polygon serves both through the same aggregate endpoint on
-    the same UTC-anchored bar grid, so timestamps align exactly. The IV-solve
-    keys the underlying lookup map by a floored bar-start so any future grid
-    drift still produces correct rows (the row simply loses IV/Greeks rather
-    than pairing with a wrong spot).
+) -> tuple[dict[str, bytes], dict[str, Any]]:
+    """Build per-slot CSV byte payloads plus a summary report.
 
     Returns
     -------
-    (calls_bytes, puts_bytes, report)
-        Either byte tuple entry is ``None`` when the corresponding type is
-        disabled or no rows were produced. ``report`` captures skipped days,
-        chosen expiries, and contract counts for the metadata bundle.
+    (slot_files, report)
+        ``slot_files`` is a dict mapping ZIP-relative paths
+        (``"calls/atm-03.csv"``, ``"puts/atm.csv"`` …) to encoded bytes.
+        Empty slots (no row produced) are omitted. ``report`` captures
+        skipped days, chosen expiries, and contract counts for the
+        metadata bundle.
+
+    The expiry policy is strict — for each trading day, only the listed
+    expiry exactly matching ``trading_day + config.dte_distance`` is used;
+    days without a matching expiry are skipped entirely.
     """
     if not config.enabled or underlying_bars_df.empty:
-        return None, None, {"enabled": False, "reason": "disabled or empty bars"}
+        return {}, {"enabled": False, "reason": "disabled or empty bars"}
 
-    # Imported lazily to avoid a circular import: options_companion_service is
-    # imported from app.routers.dataset, which itself imports from
-    # dataset_service. Pulling RunCancelledError at function-call time breaks
-    # the cycle without changing module graph layout.
+    # Lazy import to avoid a circular: options_companion_service is imported
+    # from app.routers.dataset, which itself imports from dataset_service.
     from app.services.dataset_service import RunCancelledError
 
     prior_close_by_day = _prior_day_close_map(underlying_bars_df)
     underlying_by_ts = _underlying_close_map(underlying_bars_df, timespan, multiplier)
 
-    # Unique trading days present in the dataset (ET date).
     trading_days = sorted(prior_close_by_day.keys())
     if not trading_days:
-        return None, None, {"enabled": True, "reason": "no trading days derived from bars"}
+        return {}, {"enabled": True, "reason": "no trading days derived from bars"}
 
-    # Seed prior-close for the first day: fall back to the first bar's close on that day
-    # if we don't have a real prior day.
-    first_day_close = None
+    # Seed prior-close for the first day in range — fall back to first bar's
+    # close on that day if we don't have a prior trading day.
     if len(trading_days) >= 2:
         first_day_close = prior_close_by_day[trading_days[0]]
     else:
         first_day_close = float(underlying_bars_df["close"].iloc[0])
 
-    calls_rows: list[dict[str, Any]] = []
-    puts_rows: list[dict[str, Any]] = []
+    # Slot rows accumulate per (side, slot_offset) and are written out at the
+    # end after sorting and discontinuity tagging.
+    slot_rows: dict[tuple[str, int], list[dict[str, Any]]] = {}
     skipped_days: list[dict[str, str]] = []
     per_day_report: list[dict[str, Any]] = []
     calls_done = 0
@@ -474,16 +490,50 @@ def build_options_companion_csvs(
             }
         )
 
+    def _process_side(
+        side: str,  # "call" | "put"
+        contracts_for_day: list[dict[str, Any]],
+        prior_close: float,
+        target_expiry: date,
+        day: date,
+        day_iso: str,
+        expiry_iso: str,
+    ) -> int:
+        nonlocal calls_done, puts_done
+        slotted = _select_strikes_with_slots(contracts_for_day, prior_close, config.strikes_each_side)
+        component = "calls" if side == "call" else "puts"
+        for offset, c in slotted:
+            _check_cancel()
+            contract = _SelectedContract(
+                ticker=c["ticker"],
+                strike=float(c["strike_price"]),
+                expiration=target_expiry,
+                contract_type=side,
+                slot_offset=offset,
+            )
+            if side == "call":
+                calls_done += 1
+                _emit_progress(component, calls_done, contract.ticker, day_iso, expiry_iso)
+            else:
+                puts_done += 1
+                _emit_progress(component, puts_done, contract.ticker, day_iso, expiry_iso)
+            rows = _process_contract(contract, day, to_date, underlying_by_ts, config, timespan, multiplier, polygon)
+            if rows:
+                slot_rows.setdefault((side, offset), []).extend(rows)
+        return len(slotted)
+
     for i, day in enumerate(trading_days):
         _check_cancel()
-        if i == 0:
-            prior_close = first_day_close
-        else:
-            prior_close = prior_close_by_day[trading_days[i - 1]]
+        prior_close = first_day_close if i == 0 else prior_close_by_day[trading_days[i - 1]]
 
         target_expiry = _resolve_target_expiry(polygon, ticker, day, config)
         if target_expiry is None:
-            skipped_days.append({"date": day.isoformat(), "reason": "no expiry found"})
+            skipped_days.append(
+                {
+                    "date": day.isoformat(),
+                    "reason": f"no listed expiry at trading_day + {config.dte_distance} days",
+                }
+            )
             continue
 
         day_iso = day.isoformat()
@@ -498,53 +548,31 @@ def build_options_companion_csvs(
 
         if config.include_calls:
             calls = _fetch_contracts_for_expiry(polygon, ticker, day, target_expiry, "call")
-            selected_calls = _select_strikes(calls, prior_close, config.strikes_each_side)
-            day_report["calls_selected"] = len(selected_calls)
-            for c in selected_calls:
-                _check_cancel()
-                contract = _SelectedContract(
-                    ticker=c["ticker"],
-                    strike=float(c["strike_price"]),
-                    expiration=target_expiry,
-                    contract_type="call",
-                )
-                calls_done += 1
-                _emit_progress("options_calls.csv", calls_done, contract.ticker, day_iso, expiry_iso)
-                calls_rows.extend(
-                    _process_contract(
-                        contract, day, from_date, to_date, underlying_by_ts, config, timespan, multiplier, polygon
-                    )
-                )
+            day_report["calls_selected"] = _process_side(
+                "call", calls, prior_close, target_expiry, day, day_iso, expiry_iso
+            )
 
         if config.include_puts:
             puts = _fetch_contracts_for_expiry(polygon, ticker, day, target_expiry, "put")
-            selected_puts = _select_strikes(puts, prior_close, config.strikes_each_side)
-            day_report["puts_selected"] = len(selected_puts)
-            for c in selected_puts:
-                _check_cancel()
-                contract = _SelectedContract(
-                    ticker=c["ticker"],
-                    strike=float(c["strike_price"]),
-                    expiration=target_expiry,
-                    contract_type="put",
-                )
-                puts_done += 1
-                _emit_progress("options_puts.csv", puts_done, contract.ticker, day_iso, expiry_iso)
-                puts_rows.extend(
-                    _process_contract(
-                        contract, day, from_date, to_date, underlying_by_ts, config, timespan, multiplier, polygon
-                    )
-                )
+            day_report["puts_selected"] = _process_side(
+                "put", puts, prior_close, target_expiry, day, day_iso, expiry_iso
+            )
 
         per_day_report.append(day_report)
 
-    # Globally sort by bar timestamp so the CSV is monotonic in time.
-    _sort_companion_rows(calls_rows)
-    _sort_companion_rows(puts_rows)
-
+    # Sort, tag discontinuity, and serialize each non-empty slot file.
     columns = _columns_for(config)
-    calls_bytes = _write_rows_to_csv(calls_rows, columns) if (config.include_calls and calls_rows) else None
-    puts_bytes = _write_rows_to_csv(puts_rows, columns) if (config.include_puts and puts_rows) else None
+    slot_files: dict[str, bytes] = {}
+    for (side, offset), rows in slot_rows.items():
+        rows.sort(key=lambda r: (r["unix_ts"], r["contract_ticker"]))
+        if config.include_discontinuity:
+            _mark_discontinuity(rows)
+        folder = "calls" if side == "call" else "puts"
+        path = f"{folder}/{_slot_label(offset)}.csv"
+        slot_files[path] = _write_rows_to_csv(rows, columns)
+
+    total_call_rows = sum(len(v) for k, v in slot_rows.items() if k[0] == "call")
+    total_put_rows = sum(len(v) for k, v in slot_rows.items() if k[0] == "put")
 
     report = {
         "enabled": True,
@@ -553,17 +581,20 @@ def build_options_companion_csvs(
         "to_date": to_date,
         "timespan": timespan,
         "multiplier": multiplier,
-        "expiry_mode": config.expiry_mode,
+        "dte_distance": config.dte_distance,
         "strikes_each_side": config.strikes_each_side,
-        "calls_rows": len(calls_rows),
-        "puts_rows": len(puts_rows),
+        "calls_rows": total_call_rows,
+        "puts_rows": total_put_rows,
+        "calls_files": sorted(p for p in slot_files if p.startswith("calls/")),
+        "puts_files": sorted(p for p in slot_files if p.startswith("puts/")),
         "days_processed": len(per_day_report),
         "days_skipped": skipped_days,
         "per_day": per_day_report,
     }
     logger.info(
         f"[OC] Built companion for {ticker}: "
-        f"{len(calls_rows)} call rows, {len(puts_rows)} put rows, "
+        f"{total_call_rows} call rows across {len(report['calls_files'])} files, "
+        f"{total_put_rows} put rows across {len(report['puts_files'])} files, "
         f"{len(per_day_report)} days, {len(skipped_days)} skipped"
     )
-    return calls_bytes, puts_bytes, report
+    return slot_files, report

@@ -996,8 +996,7 @@ def build_zip_bytes(
     raw_bar_count: int = 0,
     filled_bar_count: int = 0,
     trades_csv_bytes: bytes | None = None,
-    options_calls_csv_bytes: bytes | None = None,
-    options_puts_csv_bytes: bytes | None = None,
+    options_slot_files: dict[str, bytes] | None = None,
     options_companion_report: dict[str, Any] | None = None,
     quality_report_md_bytes: bytes | None = None,
     splits_csv_bytes: bytes | None = None,
@@ -1013,7 +1012,7 @@ def build_zip_bytes(
     Always includes ``dataset.csv``, ``metadata.csv``, ``columns.csv``.
     Optional members (from Data Lab toggles):
       * ``trades.csv`` — legacy raw trade data.
-      * ``options_calls.csv`` / ``options_puts.csv`` — options companion files.
+      * ``calls/<slot>.csv`` / ``puts/<slot>.csv`` — per-slot options companion files.
       * ``options_companion_report.json`` — per-day contract selection summary.
       * ``quality_report.md`` — rendered data-quality report.
       * ``splits.csv`` / ``dividends.csv`` — Polygon reference endpoints.
@@ -1047,10 +1046,9 @@ def build_zip_bytes(
         zf.writestr("columns.csv", columns_csv)
         if trades_csv_bytes is not None:
             zf.writestr("trades.csv", trades_csv_bytes)
-        if options_calls_csv_bytes is not None:
-            zf.writestr("options_calls.csv", options_calls_csv_bytes)
-        if options_puts_csv_bytes is not None:
-            zf.writestr("options_puts.csv", options_puts_csv_bytes)
+        if options_slot_files:
+            for path, payload in options_slot_files.items():
+                zf.writestr(path, payload)
         if options_companion_report is not None:
             zf.writestr(
                 "options_companion_report.json",
