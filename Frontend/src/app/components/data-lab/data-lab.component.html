@@ -768,14 +768,24 @@
       </div>
       <ul class="run-chunk-list" role="list">
         @for (c of runSession.bundleComponents(); track c.name) {
+          @let progress = runSession.bundleProgress();
+          @let active = progress?.component === c.name && c.status !== 'done';
           <li class="run-chunk"
               [class.run-chunk--done]="c.status === 'done'"
+              [class.run-chunk--fetching]="active"
               role="listitem"
-              [attr.aria-label]="c.name + ', ' + c.status">
+              [attr.aria-label]="c.name + ', ' + (active ? 'in progress, item ' + progress?.step : c.status)">
             <span class="run-chunk__icon" aria-hidden="true">
-              @if (c.status === 'done') { ✓ } @else { · }
+              @if (c.status === 'done') { ✓ }
+              @else if (active) { ▸ }
+              @else { · }
             </span>
             <span class="run-chunk__id mono">{{ c.name }}</span>
+            @if (active && progress) {
+              <span class="run-chunk__status">
+                contract {{ progress.step }}@if (progress.label) { · <span class="mono">{{ progress.label }}</span> }
+              </span>
+            }
           </li>
         }
       </ul>
