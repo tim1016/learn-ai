@@ -142,3 +142,47 @@ class TestInputGuards:
     def test_non_positive_input_raises(self, spot, strike, ttm, vol):
         with pytest.raises(ValueError):
             black_scholes_greeks(spot, strike, ttm, vol, 0.05, 0.0, True)
+
+
+class TestThetaScaling:
+    """Theta is documented as per-calendar-day (annual / 365)."""
+
+    def test_theta_is_annual_divided_by_365(self):
+        # Pin scaling: compute the annualized theta by hand from the same
+        # closed-form recursion the function uses, then compare.
+        S, K, T, vol, r, q = 100.0, 100.0, 0.25, 0.20, 0.05, 0.0
+        sqrt_t = math.sqrt(T)
+        d1 = (math.log(S / K) + (r - q + 0.5 * vol * vol) * T) / (vol * sqrt_t)
+        d2 = d1 - vol * sqrt_t
+        theta_annual = (
+            -S * math.exp(-q * T) * float(norm.pdf(d1)) * vol / (2.0 * sqrt_t)
+            - r * K * math.exp(-r * T) * float(norm.cdf(d2))
+        )
+
+        greeks = black_scholes_greeks(S, K, T, vol, r, q, is_call=True)
+        # API returns theta per calendar day; reconstruct the annual via × 365.
+        assert greeks.theta * 365.0 == pytest.approx(theta_annual, rel=1e-12)
+
+
+class TestDividendYield:
+    """Nonzero dividend yield exercises the disc_q discount path. With
+    q > 0, call delta is multiplied by exp(-qT) so it must be strictly
+    less than the q=0 case at the same spot/strike/vol."""
+
+    def test_call_delta_decreases_with_dividend(self):
+        S, K, T, vol, r = 100.0, 100.0, 1.0, 0.20, 0.05
+        no_div = black_scholes_greeks(S, K, T, vol, r, 0.0, is_call=True)
+        with_div = black_scholes_greeks(S, K, T, vol, r, 0.05, is_call=True)
+        # exp(-0.05) ≈ 0.9512, so delta should drop by roughly that factor —
+        # not exact because d1 also shifts, but the inequality is strict.
+        assert with_div.delta < no_div.delta
+
+    def test_put_call_parity_holds_with_nonzero_dividend(self):
+        S, K, T, vol, r, q = 100.0, 100.0, 0.5, 0.25, 0.04, 0.03
+        call = black_scholes_greeks(S, K, T, vol, r, q, is_call=True)
+        put = black_scholes_greeks(S, K, T, vol, r, q, is_call=False)
+        # Same delta-parity as the q=0 test — must hold for any q.
+        assert call.delta - put.delta == pytest.approx(math.exp(-q * T), abs=1e-12)
+        # Gamma and vega are call/put symmetric independent of q.
+        assert call.gamma == pytest.approx(put.gamma, abs=1e-12)
+        assert call.vega == pytest.approx(put.vega, abs=1e-12)

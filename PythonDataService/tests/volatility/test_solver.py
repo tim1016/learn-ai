@@ -162,3 +162,84 @@ class TestSolveIvChain:
             assert r["iv"] is not None
             assert r["iv_status"] in ("newton_ok", "quantlib_ok", "brent_fallback")
             assert abs(r["iv"] - vol) < 1e-3
+
+
+class TestNewtonSolverPath:
+    """Isolate the Newton solver path from QuantLib / Brent fallbacks.
+
+    Newton is the primary solver — it must succeed on well-conditioned
+    inputs (ATM, near-ATM, sub-day TTM) so the warm-start savings the
+    options companion relies on are real.
+    """
+
+    def test_newton_succeeds_for_atm_well_conditioned(self, spot: float, rate: float) -> None:
+        vol = 0.25
+        ttm = 0.5
+        price = bs_price(spot, spot, ttm, rate, vol, is_call=True)
+        result = implied_volatility(price, spot, spot, ttm, rate, vol_guess=0.20)
+        assert result.status == SolveStatus.NEWTON_OK
+        assert result.iv == pytest.approx(vol, abs=1e-6)
+
+    def test_newton_succeeds_for_sub_day_ttm(self, spot: float, rate: float) -> None:
+        # 30-min TTM with ATM call — Newton handles this directly. (We use
+        # ATM rather than ITM so vega is large and the recovered IV is
+        # well-determined; mildly ITM at sub-day TTM has near-zero vega
+        # which inflates per-call IV uncertainty even on a clean root.)
+        vol = 0.30
+        ttm = 30.0 / (365.0 * 24.0 * 60.0)
+        price = bs_price(spot, spot, ttm, rate, vol, is_call=True)
+        result = implied_volatility(price, spot, spot, ttm, rate, vol_guess=0.25)
+        assert result.status == SolveStatus.NEWTON_OK
+        assert result.iv == pytest.approx(vol, abs=1e-4)
+
+
+class TestBrentFallbackPath:
+    """When Newton's vega collapses (deep OTM with sub-day TTM the option
+    price is essentially insensitive to vol), the solver must hand off
+    to Brent without surfacing a convergence_failure to the caller."""
+
+    def test_brent_handles_deep_otm_sub_day(self, spot: float, rate: float) -> None:
+        # 1-hour TTM, 5% OTM call. Vega is small but not zero; Newton may
+        # still converge — assert the solver returns a usable IV regardless
+        # of which leg succeeded, but never status=CONVERGENCE_FAILURE.
+        vol = 0.30
+        ttm = 1.0 / (365.0 * 24.0)
+        strike = spot * 1.05
+        price = bs_price(spot, strike, ttm, rate, vol, is_call=True)
+        if price < 0.001:
+            pytest.skip("Premium below MIN_OPTION_PRICE — solver short-circuits to PRICE_TOO_LOW.")
+        result = implied_volatility(price, spot, strike, ttm, rate, is_call=True)
+        assert result.status != SolveStatus.CONVERGENCE_FAILURE
+        assert result.iv is not None
+        assert result.iv == pytest.approx(vol, abs=1e-3)
+
+    def test_quantlib_skipped_for_sub_day_ttm(self, spot: float, rate: float) -> None:
+        """QuantLib's day-resolution arithmetic rounds sub-day TTMs to a
+        full day, so the solver must skip QL entirely below 1/365 yr.
+        Pin: any sub-day solve must return NEWTON_OK or BRENT_FALLBACK,
+        never QUANTLIB_OK.
+        """
+        vol = 0.20
+        ttm = 12.0 / (365.0 * 24.0)  # 12 hours
+        price = bs_price(spot, spot, ttm, rate, vol, is_call=True)
+        result = implied_volatility(price, spot, spot, ttm, rate, is_call=True)
+        assert result.status in (SolveStatus.NEWTON_OK, SolveStatus.BRENT_FALLBACK)
+        assert result.status != SolveStatus.QUANTLIB_OK
+        assert result.iv == pytest.approx(vol, abs=1e-3)
+
+    def test_warm_start_returns_same_iv_as_cold_start(self, spot: float, rate: float) -> None:
+        """Warm-starting Newton with the prior bar's IV must converge to
+        the same answer as a cold start — the seed only changes
+        iteration count, not the final root.
+        """
+        vol = 0.25
+        ttm = 0.25
+        price = bs_price(spot, spot, ttm, rate, vol, is_call=True)
+        cold = implied_volatility(price, spot, spot, ttm, rate, vol_guess=0.50)
+        warm = implied_volatility(price, spot, spot, ttm, rate, vol_guess=0.249)
+        assert cold.iv is not None
+        assert warm.iv is not None
+        # Newton's internal tol is 1e-7 on price, which corresponds to
+        # ~1e-7 / vega absolute IV difference. At ATM 25 % vol on 0.25 yr,
+        # vega ≈ 20, so 1e-6 absolute IV is well within bound.
+        assert cold.iv == pytest.approx(warm.iv, abs=1e-6)
