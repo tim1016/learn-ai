@@ -166,4 +166,71 @@ describe('RunSessionService', () => {
 
     expect(service.progressFraction()).toBeCloseTo(0.5);
   });
+
+  it('bundle_progress populates bundleProgress and clears it when its parent component finishes', async () => {
+    // Sequence: bundle_start lists two components, bundle_progress arrives
+    // for options_calls.csv (step 47, label "O:SPY..."), then
+    // bundle_component_done fires for that component — bundleProgress must
+    // be set during the in-flight phase and reset to null afterwards.
+    const events = [
+      event({ type: 'session_started', session_id: 'sess6' }),
+      event({ type: 'chunk_plan', total: 1 }),
+      event({ type: 'chunk_start', index: 1, total: 1, from: 'a', to: 'b' }),
+      event({ type: 'chunk_done', index: 1, total: 1, bars_returned: 100 }),
+      event({ type: 'fetch_complete' }),
+      event({ type: 'bundle_start', components: ['options_calls.csv', 'metadata.csv'] }),
+      event({
+        type: 'bundle_progress',
+        component: 'options_calls.csv',
+        step: 47,
+        label: 'O:SPY260417C00705000',
+      }),
+      event({ type: 'bundle_component_done', name: 'options_calls.csv' }),
+      event({ type: 'bundle_component_done', name: 'metadata.csv' }),
+      event({
+        type: 'complete',
+        session_id: 'sess6',
+        filename: 'SPY.zip',
+        size_bytes: 2048,
+      }),
+    ];
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(sseResponse(events));
+
+    await service.start({ ticker: 'SPY' }, { downloadOnComplete: false });
+
+    // After options_calls.csv finished, the per-contract progress signal
+    // should be cleared — between components the UI shows nothing for it.
+    expect(service.bundleProgress()).toBeNull();
+    expect(service.bundleComponents().every((c) => c.status === 'done')).toBe(true);
+    expect(service.state()).toBe('done');
+  });
+
+  it('bundle_progress for one component does not clear when a different component finishes', async () => {
+    // Pin the asymmetry: bundle_component_done for ``metadata.csv`` must
+    // NOT clear the in-flight progress for ``options_calls.csv``. Only a
+    // matching component name nulls bundleProgress.
+    const events = [
+      event({ type: 'session_started', session_id: 'sess7' }),
+      event({ type: 'chunk_plan', total: 1 }),
+      event({ type: 'chunk_start', index: 1, total: 1, from: 'a', to: 'b' }),
+      event({ type: 'chunk_done', index: 1, total: 1, bars_returned: 1 }),
+      event({ type: 'fetch_complete' }),
+      event({ type: 'bundle_start', components: ['options_calls.csv', 'metadata.csv'] }),
+      event({
+        type: 'bundle_progress',
+        component: 'options_calls.csv',
+        step: 12,
+      }),
+      event({ type: 'bundle_component_done', name: 'metadata.csv' }),
+    ];
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(sseResponse(events));
+
+    await service.start({ ticker: 'SPY' }, { downloadOnComplete: false });
+
+    const progress = service.bundleProgress();
+    expect(progress).not.toBeNull();
+    expect(progress!.component).toBe('options_calls.csv');
+    expect(progress!.step).toBe(12);
+  });
 });

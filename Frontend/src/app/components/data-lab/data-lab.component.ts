@@ -75,6 +75,29 @@ export function pickAutoBarTimeframe(spanDays: number): string {
   return '1h';
 }
 
+/**
+ * Layman-friendly readout for the Auto Chunk control. Pure helper so the
+ * exact wording can be regression-tested without spinning up the
+ * component (the actual ``autoChunkReadout`` computed signal forwards
+ * to this function). Wording intentionally stays plan-tier-agnostic —
+ * the server-side throttle decides whether to pace, and quoting a
+ * specific per-minute number here would be wrong on paid plans.
+ */
+export function formatChunkReadout(
+  bars: number,
+  autoChunk: boolean,
+  polygonLimit: number,
+): string {
+  const chunks = Math.max(1, Math.ceil(bars / 50_000));
+  if (!autoChunk) {
+    return `Manual: ${polygonLimit.toLocaleString()} bars per request.`;
+  }
+  if (chunks === 1) {
+    return `1 request · ~${bars.toLocaleString()} bars · single response.`;
+  }
+  return `Plan runs ${chunks} requests · ~${bars.toLocaleString()} bars · paced if your plan caps requests/min.`;
+}
+
 interface ParamConfig {
   name: string;
   type: string;
@@ -419,17 +442,9 @@ export class DataLabComponent {
    * readout intentionally avoids quoting a specific per-minute number
    * so it stays accurate for both tiers.
    */
-  readonly autoChunkReadout = computed<string>(() => {
-    const bars = this.expectedBarCount();
-    const chunks = Math.max(1, Math.ceil(bars / 50_000));
-    if (!this.autoChunk()) {
-      return `Manual: ${this.polygonLimit().toLocaleString()} bars per request.`;
-    }
-    if (chunks === 1) {
-      return `1 request · ~${bars.toLocaleString()} bars · single response.`;
-    }
-    return `Plan runs ${chunks} requests · ~${bars.toLocaleString()} bars · paced if your plan caps requests/min.`;
-  });
+  readonly autoChunkReadout = computed<string>(() =>
+    formatChunkReadout(this.expectedBarCount(), this.autoChunk(), this.polygonLimit()),
+  );
 
   loading = signal(false);
   loadingIndicators = signal(false);
