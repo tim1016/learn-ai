@@ -1,0 +1,52 @@
+<div class="aig">
+  <span class="aig-rail" [style.background]="categoryColor()" aria-hidden="true"></span>
+
+  <div class="aig-main">
+    <div class="aig-header">
+      <span class="aig-name">{{ displayName() }}</span>
+      <span class="aig-count">{{ items().length }}</span>
+      @if (categoryLabel()) {
+        <span class="aig-category-chip"
+              [style.background]="categoryColorSoft()"
+              [style.color]="categoryColor()">
+          {{ categoryLabel() }}
+        </span>
+      }
+      <span class="aig-spacer"></span>
+      <button type="button" class="aig-icon-btn"
+              (click)="onResetGroup()"
+              pTooltip="Reset all to defaults" tooltipPosition="top"
+              [attr.aria-label]="'Reset all ' + displayName() + ' to defaults'">
+        <i class="pi pi-refresh"></i>
+      </button>
+      <button type="button" class="aig-icon-btn aig-icon-danger"
+              (click)="onRemoveGroup()"
+              pTooltip="Remove all" tooltipPosition="top"
+              [attr.aria-label]="'Remove all ' + displayName() + ' instances'">
+        <i class="pi pi-times"></i>
+      </button>
+    </div>
+
+    <div class="aig-pills">
+      @for (item of items(); track item.originalIndex) {
+        <span class="aig-pill"
+              [class.aig-pill-modified]="pillModified(item)"
+              role="button"
+              tabindex="0"
+              (click)="onConfigure(item.originalIndex, $event)"
+              [attr.aria-label]="'Configure ' + displayName() + ' ' + pillLabel(item)">
+          <code>{{ pillLabel(item) }}</code>
+          <button type="button" class="aig-pill-x"
+                  (click)="onRemove(item.originalIndex, $event)"
+                  [attr.aria-label]="'Remove ' + pillLabel(item)">
+            <i class="pi pi-times"></i>
+          </button>
+        </span>
+      }
+
+      <button type="button" class="aig-add" (click)="onAdd()">
+        <i class="pi pi-plus"></i> Add
+      </button>
+    </div>
+  </div>
+</div>

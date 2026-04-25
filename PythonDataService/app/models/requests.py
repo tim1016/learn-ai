@@ -233,28 +233,31 @@ class IndicatorTableRequest(BaseModel):
 class OptionsCompanionConfig(BaseModel):
     """Optional companion-file config emitted alongside the underlying dataset CSV.
 
-    When enabled, the ZIP response includes separate ``options_calls.csv`` and
-    ``options_puts.csv`` files (subject to ``include_calls`` / ``include_puts``)
-    containing 1-minute option aggregates for contracts picked around the
-    underlying's prior-day close on each expiry date. Greeks and IV are
-    computed locally via QuantLib (see ``options_companion_service``).
+    When enabled, the ZIP response includes per-slot CSVs under ``calls/``
+    and ``puts/`` subfolders (subject to ``include_calls`` / ``include_puts``)
+    — one file per (side, slot) where the slot is a price-ordered offset
+    from ATM (e.g. ``calls/atm-03.csv``, ``calls/atm.csv``, ``puts/atm+02.csv``).
+    Each file is a fixed-schema time series for that slot across all trading
+    days in range; the contract filling the slot rolls daily and is recorded
+    as the ``contract_ticker`` row value. See ``docs/options-companion-format.md``
+    for the full spec; computation lives in ``options_companion_service``.
     """
 
     enabled: bool = Field(False, description="Emit options companion CSV files in the ZIP")
     strikes_each_side: int = Field(
-        5, ge=1, le=25, description="Strikes above AND below ATM per type (default 5 + 1 ATM = 11 per type)"
+        3, ge=1, le=25, description="Strikes above AND below ATM per side (default 3 → 7 slots per side)"
     )
-    include_calls: bool = Field(True, description="Emit options_calls.csv")
-    include_puts: bool = Field(True, description="Emit options_puts.csv")
-    expiry_mode: str = Field(
-        "same_day",
-        description="'same_day' = 0DTE only; 'nearest_within_days' = nearest expiry within max_dte days",
-    )
-    max_dte: int = Field(
-        7,
+    include_calls: bool = Field(True, description="Emit calls/ slot CSVs")
+    include_puts: bool = Field(True, description="Emit puts/ slot CSVs")
+    dte_distance: int = Field(
+        0,
         ge=0,
         le=60,
-        description="When expiry_mode='nearest_within_days', the max days-to-expiry to look ahead",
+        description=(
+            "Days-to-expiry distance from each trading day. 0 = 0DTE same-day. "
+            "For each trading day D, target expiry = nearest listed expiry equal to "
+            "D + dte_distance; if no exact match exists, the day is skipped."
+        ),
     )
     # Per-field toggles (each omits its column(s) when false)
     include_ohlcv: bool = Field(True, description="Include option OHLCV columns")
@@ -267,18 +270,18 @@ class OptionsCompanionConfig(BaseModel):
     include_theta: bool = Field(True, description="Include theta Greek")
     include_vega: bool = Field(True, description="Include vega Greek")
     include_rho: bool = Field(False, description="Include rho Greek")
+    include_discontinuity: bool = Field(
+        True,
+        description=(
+            "Include the per-slot discontinuity column. Marks rows where this slot's "
+            "underlying contract just changed (1) versus continuous bars (0). Treat as a "
+            "series reset for returns/plotting — see docs/options-companion-format.md §5."
+        ),
+    )
     risk_free_rate: float = Field(
         0.05, ge=0, le=0.25, description="Flat annualized risk-free rate used in IV/Greeks solves"
     )
     dividend_yield: float = Field(0.0, ge=0, le=0.25, description="Flat continuous dividend yield for Greeks")
-
-    @field_validator("expiry_mode")
-    @classmethod
-    def validate_expiry_mode(cls, v: str) -> str:
-        valid = ["same_day", "nearest_within_days"]
-        if v not in valid:
-            raise ValueError(f"expiry_mode must be one of {valid}")
-        return v
 
 
 class DatasetGenerationRequest(BaseModel):
@@ -340,7 +343,7 @@ class DatasetGenerationRequest(BaseModel):
     options_companion: OptionsCompanionConfig | None = Field(
         None,
         description="Optional options companion file config. When set with enabled=True, the ZIP gains "
-        "options_calls.csv and/or options_puts.csv with aggregates + Greeks per contract.",
+        "per-slot CSVs under calls/ and puts/ subfolders (one per ATM-relative slot).",
     )
     include_quality_report: bool = Field(
         False,

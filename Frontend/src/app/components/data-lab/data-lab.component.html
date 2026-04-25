@@ -328,11 +328,13 @@
 
     <div class="companion-body">
       <p class="section-desc">
-        When enabled, the ZIP gains <code>options_calls.csv</code> and/or <code>options_puts.csv</code>:
-        option aggregates at the <strong>same resolution as the ticker</strong> — whatever
-        <em>Timespan × Multiplier</em> you picked above — for contracts chosen around the ATM strike
-        (prior day's close) on each target expiry. Implied volatility is solved per bar via QuantLib;
-        Greeks use <code>AnalyticEuropeanEngine</code>. Greeks validation against LEAN is a separate follow-up.
+        When enabled, the ZIP gains per-slot CSVs under <code>calls/</code> and <code>puts/</code>
+        subfolders (e.g. <code>calls/atm.csv</code>, <code>puts/atm-01.csv</code>). Each slot file
+        is a fixed-schema time series for an ATM-relative slot — the underlying contract that fills
+        the slot rolls daily and is recorded as a row value. Bars are at the same resolution as the
+        ticker (<em>Timespan × Multiplier</em>). Implied volatility is solved per bar via QuantLib;
+        Greeks use <code>AnalyticEuropeanEngine</code>. Greeks validation against LEAN is a separate
+        follow-up. See <code>docs/options-companion-format.md</code> for the full spec.
       </p>
 
       <label class="checkbox-option primary">
@@ -342,40 +344,93 @@
       </label>
 
       @if (optionsCompanionEnabled()) {
-        @if (optionsExpiryMode() === 'same_day' && !tickerSupportsDaily()) {
-          <div class="info-callout warn" style="margin: 0.5rem 0;">
-            <i class="pi pi-exclamation-triangle"></i>
-            <span>
-              <strong>{{ ticker() }}</strong> does not have daily (Mon–Fri) option expirations.
-              In <em>Same-day (0DTE)</em> mode, only Fridays (or M/W/F for select mega-caps) will populate.
-              Switch to <em>Nearest expiry</em> for full coverage, or pick one of:
-              {{ DAILY_EXPIRY_TICKERS.join(', ') }}.
-            </span>
-          </div>
-        }
+        @let _est = optionsContractEstimate();
+        @let _sev = optionsContractEstimateSeverity();
+        @let _resWarn = optionsResolutionWarning();
+        @let _expiryWarn = optionsDteDistance() === 0 && !tickerSupportsDaily()
+          ? ticker() + ' does not list daily expirations — at DTE=0 only Fridays will populate. Set DTE distance to land on a listed weekly expiry, or pick a daily-expiry ticker: ' + DAILY_EXPIRY_TICKERS.join(', ') + '.'
+          : '';
 
-        @if (optionsResolutionWarning(); as warn) {
-          <div class="info-callout warn" style="margin: 0.5rem 0;">
-            <i class="pi pi-info-circle"></i>
-            <span>{{ warn }}</span>
+        @if (_est.contracts > 0 || _resWarn || _expiryWarn) {
+          <div class="companion-plan"
+               [class.severity-ok]="_sev === 'ok' && !_resWarn && !_expiryWarn"
+               [class.severity-warn]="_sev === 'warn' || (!!_resWarn || !!_expiryWarn) && _sev !== 'danger'"
+               [class.severity-danger]="_sev === 'danger'">
+            <div class="cp-eyebrow">
+              Companion plan ·
+              @switch (_sev) {
+                @case ('danger') { <span class="cp-sev cp-sev-danger">DANGER</span> }
+                @case ('warn')   { <span class="cp-sev cp-sev-warn">WARN</span> }
+                @default {
+                  @if (_resWarn || _expiryWarn) {
+                    <span class="cp-sev cp-sev-warn">WARN</span>
+                  } @else {
+                    <span class="cp-sev cp-sev-ok">OK</span>
+                  }
+                }
+              }
+            </div>
+
+            <dl class="cp-rows">
+              @if (_est.contracts > 0) {
+                <div class="cp-row">
+                  <dt>Contracts</dt>
+                  <dd>~{{ _est.contracts.toLocaleString() }} across {{ _est.expiries.toLocaleString() }} expiries</dd>
+                </div>
+                <div class="cp-row">
+                  <dt>Option bars</dt>
+                  <dd>
+                    ~{{ _est.bars.toLocaleString() }}
+                    <span class="cp-detail">
+                      (ATM ± {{ optionsStrikesEachSide() }}@if (optionsIncludeCalls() && optionsIncludePuts()) { · calls + puts }@else if (optionsIncludeCalls()) { · calls only }@else if (optionsIncludePuts()) { · puts only })
+                    </span>
+                  </dd>
+                </div>
+              }
+              @if (_resWarn) {
+                <div class="cp-row">
+                  <dt>Resolution</dt>
+                  <dd>{{ _resWarn }}</dd>
+                </div>
+              }
+              @if (_expiryWarn) {
+                <div class="cp-row">
+                  <dt>Expiry coverage</dt>
+                  <dd>{{ _expiryWarn }}</dd>
+                </div>
+              }
+            </dl>
+
+            @if (_sev !== 'ok' || _resWarn || _expiryWarn) {
+              <div class="cp-actions">
+                <button type="button" class="cp-action" (click)="adjustStrikes(-1)"
+                        [disabled]="optionsStrikesEachSide() <= 1">
+                  <i class="pi pi-minus"></i> Strikes
+                </button>
+                <span class="cp-strikes-value">ATM ± {{ optionsStrikesEachSide() }}</span>
+                <button type="button" class="cp-action" (click)="adjustStrikes(1)"
+                        [disabled]="optionsStrikesEachSide() >= 25">
+                  <i class="pi pi-plus"></i>
+                </button>
+                @if (tickerSupportsDaily() && (_sev === 'warn' || _sev === 'danger') && optionsDteDistance() === 0) {
+                  <button type="button" class="cp-action cp-action-secondary" (click)="switchToWeeklyOnly()">
+                    DTE = 7 (weekly cadence)
+                  </button>
+                }
+              </div>
+            }
           </div>
         }
 
         <div class="options-row">
           <div class="option-group">
-            <label>Expiry selection</label>
-            <select [ngModel]="optionsExpiryMode()" (ngModelChange)="optionsExpiryMode.set($event)">
-              <option value="same_day">Same-day (0DTE) only</option>
-              <option value="nearest_within_days">Nearest expiry ≤ N days</option>
-            </select>
+            <label
+              title="Calendar days from each trading day to its target expiry. 0 = 0DTE (same-day expiry). 7 = the option expiring exactly 7 days from each trading day. Strict matching: if no listed expiry lands on (trading_day + DTE), the day is skipped.">
+              DTE distance (days)
+            </label>
+            <input type="number" [ngModel]="optionsDteDistance()" (ngModelChange)="optionsDteDistance.set(+$event)"
+                   min="0" max="60" class="multiplier-input" />
           </div>
-          @if (optionsExpiryMode() === 'nearest_within_days') {
-            <div class="option-group">
-              <label>Max DTE (N)</label>
-              <input type="number" [ngModel]="optionsMaxDte()" (ngModelChange)="optionsMaxDte.set(+$event)"
-                     min="0" max="60" class="multiplier-input" />
-            </div>
-          }
           <div class="option-group">
             <label>Strikes each side (ATM ± N)</label>
             <input type="number" [ngModel]="optionsStrikesEachSide()" (ngModelChange)="optionsStrikesEachSide.set(+$event)"
@@ -397,12 +452,12 @@
           <label class="checkbox-option">
             <input type="checkbox" [checked]="optionsIncludeCalls()"
                    (change)="optionsIncludeCalls.set(!optionsIncludeCalls())" />
-            <span>Emit calls CSV</span>
+            <span>Emit <code>calls/</code> slot files</span>
           </label>
           <label class="checkbox-option">
             <input type="checkbox" [checked]="optionsIncludePuts()"
                    (change)="optionsIncludePuts.set(!optionsIncludePuts())" />
-            <span>Emit puts CSV</span>
+            <span>Emit <code>puts/</code> slot files</span>
           </label>
         </div>
 
@@ -447,6 +502,12 @@
           <label class="checkbox-option">
             <input type="checkbox" [checked]="optIncludeRho()" (change)="optIncludeRho.set(!optIncludeRho())" />
             <span>ρ rho</span>
+          </label>
+          <label class="checkbox-option"
+                 title="Marks rows where this slot's underlying contract just changed (1) versus continuous bars (0). The contract filling each slot rolls every trading day under any DTE distance — different strike or expiry, so values across a 1-row are two different financial instruments. Treat as a series reset when computing returns, plotting lines, or training models.">
+            <input type="checkbox" [checked]="optIncludeDiscontinuity()"
+                   (change)="optIncludeDiscontinuity.set(!optIncludeDiscontinuity())" />
+            <span>Discontinuity flag <span class="option-hint">(per-slot contract roll marker)</span></span>
           </label>
         </fieldset>
       }
@@ -853,53 +914,67 @@
   <!-- Active Entries (configured indicators) -->
   @if (entries().length) {
     <div class="entries-section">
-      <h3>Active Indicators</h3>
+      <div class="entries-toolbar">
+        <span class="entries-toolbar-eyebrow">
+          Active Indicators · <span class="entries-toolbar-count">{{ entries().length }}</span>
+        </span>
+        <div class="entries-toolbar-actions">
+          <label class="entries-sort">
+            Sort
+            <select [ngModel]="entriesSortMode()" (ngModelChange)="entriesSortMode.set($event)">
+              @for (mode of entriesSortModes; track mode.value) {
+                <option [value]="mode.value">{{ mode.label }}</option>
+              }
+            </select>
+          </label>
+          <button class="entries-add" type="button" (click)="scrollToCatalog()">
+            <i class="pi pi-plus"></i> Add indicator
+          </button>
+        </div>
+      </div>
       <div class="entries-grid">
-        @for (entry of entries(); track $index) {
-          @let params = getConfigParams(entry.name);
-          <div class="entry-card">
-            <div class="entry-header">
-              <span class="entry-name">
-                <app-indicator-tooltip [indicatorKey]="entry.name" [paramConfigs]="params">
-                  {{ entryLabel(entry) }}
-                </app-indicator-tooltip>
-                @if (timeframeWarnings()[$index]; as warning) {
-                  <i class="pi pi-exclamation-triangle tf-warn"
-                     [pTooltip]="warning" tooltipPosition="top"></i>
-                }
-              </span>
-              <div class="entry-actions">
-                @if (params.length) {
-                  <button class="btn-reset" (click)="resetEntryToDefaults($index)" title="Reset to defaults">
-                    <i class="pi pi-refresh"></i>
-                  </button>
-                }
-                <button class="btn-remove" (click)="removeEntry($index)">
-                  <i class="pi pi-times"></i>
-                </button>
-              </div>
-            </div>
-            @if (params.length) {
-              <div class="entry-params">
-                @for (p of params; track p.name) {
-                  <div class="param-row">
-                    <label [title]="p.description">{{ p.name }}</label>
-                    <input
-                      type="number"
-                      [min]="p.min"
-                      [max]="p.max"
-                      [step]="p.type === 'float' ? 0.1 : 1"
-                      [ngModel]="entry.params[p.name]"
-                      (ngModelChange)="updateEntryParam($index, p.name, $event)" />
-                  </div>
-                }
-              </div>
+        @for (block of groupedEntriesView(); track $index) {
+          @switch (block.kind) {
+            @case ('single') {
+              <app-active-indicator-card
+                [entry]="block.item.entry"
+                [paramConfigs]="getConfigParams(block.item.entry.name)"
+                [timeframeWarning]="timeframeWarnings()[block.item.originalIndex] ?? ''"
+                (configure)="openConfigure(block.item.originalIndex)"
+                (resetDefaults)="resetEntryToDefaults(block.item.originalIndex)"
+                (remove)="removeEntry(block.item.originalIndex)" />
             }
-          </div>
+            @case ('group') {
+              <app-active-indicator-group
+                [name]="block.name"
+                [items]="block.items"
+                [paramConfigs]="getConfigParams(block.name)"
+                (configurePill)="openConfigure($event)"
+                (removePill)="removeEntry($event)"
+                (addAnother)="addInstanceByName(block.name)"
+                (resetGroup)="resetGroupToDefaults(block.name)"
+                (removeGroup)="removeGroupByName(block.name)" />
+            }
+          }
         }
       </div>
     </div>
   }
+
+  <!-- Indicator configuration modal (shared instance) -->
+  <app-indicator-config-modal
+    [visible]="modalVisible()"
+    (visibleChange)="onModalVisibleChange($event)"
+    [mode]="modalMode()"
+    [entry]="modalEntry()"
+    [paramConfigs]="modalParamConfigs()"
+    [activeIndicatorKeys]="activeIndicatorKeys()"
+    (paramChange)="onModalParamChange($event)"
+    (resetDefaults)="onModalReset()"
+    (resetParam)="onModalResetParam($event)"
+    (addRelated)="addInstanceByName($event)"
+    (removeRelated)="removeLastEntryByName($event)"
+    (addPreview)="onAddPreview($event)" />
 
   <!-- CSV Column Preview -->
   <div class="columns-section">
@@ -966,7 +1041,7 @@
   </div>
 
   <!-- Indicator Catalog -->
-  <div class="indicator-section">
+  <div class="indicator-section" id="data-lab-indicator-catalog">
     <h3>Indicator Catalog</h3>
     <p class="section-desc">
       Click to toggle an indicator. Use <strong>+</strong> to add another instance with different parameters.
@@ -1011,6 +1086,12 @@
                       </div>
                     </app-indicator-tooltip>
                   </label>
+                  <button class="btn-preview" type="button"
+                          (click)="openPreview(ind.name)"
+                          pTooltip="Preview before adding" tooltipPosition="top"
+                          [attr.aria-label]="'Preview ' + ind.name">
+                    <i class="pi pi-info-circle"></i>
+                  </button>
                   @if (ind.configurable_params.length) {
                     <button class="btn-add" title="Add another instance with different params" (click)="addInstance(ind)">
                       <i class="pi pi-plus"></i>

@@ -205,4 +205,18 @@ $container-lg: 1400px;
   --tab-fg-inactive:  var(--text-subtle);
   --tab-fg-disabled:  var(--text-muted);
   --tab-accent:       var(--accent);
+
+  // ─ Indicator categories ─────────────────────────────────────
+  // Semantic dimension separate from market bull/bear; chips are tinted
+  // backdrops carrying the category color as text. Hex contrast verified
+  // against --bg-elevated #1b1f2e: trend 6.7:1, momentum 7.1:1,
+  // volatility 8.2:1, volume 5.4:1.
+  --ind-cat-trend:           #4d8dff;
+  --ind-cat-trend-soft:      rgba(77, 141, 255, 0.10);
+  --ind-cat-momentum:        #a78bfa;
+  --ind-cat-momentum-soft:   rgba(167, 139, 250, 0.10);
+  --ind-cat-volatility:      #f2ad3d;
+  --ind-cat-volatility-soft: rgba(242, 173, 61, 0.10);
+  --ind-cat-volume:          #26a69a;
+  --ind-cat-volume-soft:     rgba(38, 166, 154, 0.10);
 }

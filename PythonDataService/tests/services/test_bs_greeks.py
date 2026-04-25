@@ -91,9 +91,7 @@ class TestSelfConsistency:
     )
     def test_iv_round_trip(self, S, K, T, sigma, r, is_call):
         price = _bs_price(S, K, T, sigma, r, 0.0, is_call)
-        result = implied_volatility(
-            option_price=price, spot=S, strike=K, ttm=T, rate=r, dividend=0.0, is_call=is_call
-        )
+        result = implied_volatility(option_price=price, spot=S, strike=K, ttm=T, rate=r, dividend=0.0, is_call=is_call)
         assert result.iv is not None, f"solver returned status={result.status}"
         # QuantLib's serial-day arithmetic rounds ttm to whole days, which
         # introduces up to ~0.5/365 error in T and a corresponding error in
@@ -108,9 +106,7 @@ class TestSubDayTtm:
         S, K, sigma, r = 710.0, 709.0, 0.18, 0.05
         T = 2.0 / (365.0 * 24.0)
         price = _bs_price(S, K, T, sigma, r, 0.0, is_call=True)
-        result = implied_volatility(
-            option_price=price, spot=S, strike=K, ttm=T, rate=r, dividend=0.0, is_call=True
-        )
+        result = implied_volatility(option_price=price, spot=S, strike=K, ttm=T, rate=r, dividend=0.0, is_call=True)
         assert result.iv is not None
         assert result.iv == pytest.approx(sigma, abs=1e-4)
 
@@ -118,9 +114,7 @@ class TestSubDayTtm:
         S, K, sigma, r = 710.0, 709.0, 0.18, 0.05
         T = 30.0 / (365.0 * 24.0 * 60.0)  # 30 min
         price = _bs_price(S, K, T, sigma, r, 0.0, is_call=True)
-        result = implied_volatility(
-            option_price=price, spot=S, strike=K, ttm=T, rate=r, dividend=0.0, is_call=True
-        )
+        result = implied_volatility(option_price=price, spot=S, strike=K, ttm=T, rate=r, dividend=0.0, is_call=True)
         # Old behaviour returned status="expired" with iv=None for any
         # ttm < 1/365 yr; assert we now solve and recover the input vol
         # (otherwise convergence_failure / input_error would silently slip
