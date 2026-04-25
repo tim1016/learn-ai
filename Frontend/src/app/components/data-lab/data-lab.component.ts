@@ -7,13 +7,13 @@ import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import { DatePicker } from 'primeng/datepicker';
 import { SharedModule } from 'primeng/api';
 import { Tooltip } from 'primeng/tooltip';
 import { environment } from '../../../environments/environment';
 import { DataLabChartComponent, ChartIndicatorEntry } from './data-lab-chart/data-lab-chart.component';
 import { DataLabSessionService, DataLabSessionSummary, DataLabSessionChartSnapshot } from '../../services/data-lab-session.service';
 import { MarketMonitorService } from '../../services/market-monitor.service';
+import { RunSessionService } from '../../services/run-session.service';
 import { MarketHolidayEvent } from '../../models/market-monitor';
 import { IndicatorTooltipComponent } from '../../shared/indicator-tooltip/indicator-tooltip.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
@@ -42,6 +42,7 @@ import {
   type TickerOption,
   type TickerRange,
 } from '../../shared/ticker-range-picker';
+import { TICKER_POOL, RECENT_TICKERS } from '../../shared/ticker-catalog';
 import {
   getDisabledHolidayDates,
   buildHolidayMap,
@@ -105,6 +106,25 @@ function barsPerTradingDay(
     case 'quarter':
     case 'year':   return 1;
   }
+}
+
+/**
+ * Auto bar-timeframe heuristic — picks a Polygon bar resolution from the
+ * calendar-day span of the range so a fetch returns in a reasonable time
+ * without asking the user to think in "bars per day". Locked by product
+ * on 2026-04-24:
+ *
+ *   ≤ 5 days       → 1-minute
+ *   5–30 days      → 5-minute
+ *   30–120 days    → 15-minute
+ *   120–365 days   → 1-hour
+ *   > 365 days     → 1-hour (Polygon Starter's cap is 2 years anyway)
+ */
+export function pickAutoBarTimeframe(spanDays: number): string {
+  if (spanDays <= 5) return '1m';
+  if (spanDays <= 30) return '5m';
+  if (spanDays <= 120) return '15m';
+  return '1h';
 }
 
 interface ParamConfig {
@@ -242,7 +262,12 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
 @Component({
   selector: 'app-data-lab',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, DataLabChartComponent, DatePicker, SharedModule, Tooltip, IndicatorTooltipComponent, PageHeaderComponent, TickerRangePickerComponent, ActiveIndicatorCardComponent, ActiveIndicatorGroupComponent, IndicatorConfigModalComponent],
+  imports: [
+    CommonModule, FormsModule, RouterModule,
+    DataLabChartComponent, SharedModule, Tooltip,
+    IndicatorTooltipComponent, PageHeaderComponent, TickerRangePickerComponent,
+    ActiveIndicatorCardComponent, ActiveIndicatorGroupComponent, IndicatorConfigModalComponent,
+  ],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -251,6 +276,8 @@ export class DataLabComponent {
   private http = inject(HttpClient);
   private sessionService = inject(DataLabSessionService);
   private marketMonitor = inject(MarketMonitorService);
+  /** Drives the streaming Fetch & bundle progress surface (states B/C/D/E). */
+  readonly runSession = inject(RunSessionService);
 
   /** Reference to the chart child so we can call loadCachedData(). */
   chartComponent = viewChild<DataLabChartComponent>('chartComponent');
@@ -269,7 +296,6 @@ export class DataLabComponent {
 
   ticker = signal('SPY');
 
-  // Date state: PrimeNG DatePicker binds to Date objects
   private static getYesterday(): Date {
     const d = new Date();
     d.setDate(d.getDate() - 1);
@@ -312,9 +338,27 @@ export class DataLabComponent {
 
   session = signal<'rth' | 'extended'>('rth');
   forwardFill = signal(true);
-  adjusted = signal(true);
+  /** Adjust for stock splits (Polygon's built-in adjusted=true). Reliable. */
+  adjustForSplits = signal(true);
+  /**
+   * Adjust for dividends. Polygon does NOT do this natively — its
+   * ``adjusted=true`` only covers splits. When this is on we fetch the
+   * dividend reference file and subtract each dividend from bars dated
+   * before its ex-date on the server, producing TradingView-style
+   * dividend-adjusted prices. See ``docs/tv-polygon-validation-gotchas.md`` §1.
+   */
+  adjustForDividends = signal(false);
   warmup = signal(true);
   computeAllIndicators = signal(false);
+  /** Auto-pick bar timeframe from the date range so fetch time stays sane. */
+  autoBarTimeframe = signal(true);
+  /**
+   * Auto-split the request into chunks that stay under Polygon's 50k-bar
+   * per-request cap and are paced to the Starter plan's 5 req/min limit.
+   */
+  autoChunk = signal(true);
+  /** When on, Fetch Data also builds & downloads the dataset ZIP. */
+  alsoGenerateZip = signal(false);
   timespan = signal<'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year'>('minute');
   multiplier = signal(1);
   // Polygon /v2/aggs passthrough params
@@ -322,20 +366,8 @@ export class DataLabComponent {
   polygonLimit = signal(50000);
 
   // ── Shared ticker-range picker wiring ─────────────────────
-  readonly tickerPool: readonly TickerOption[] = [
-    { symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', exchange: 'ARCA' },
-    { symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ' },
-    { symbol: 'IWM', name: 'iShares Russell 2000 ETF', exchange: 'ARCA' },
-    { symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ' },
-    { symbol: 'MSFT', name: 'Microsoft Corporation', exchange: 'NASDAQ' },
-    { symbol: 'NVDA', name: 'NVIDIA Corporation', exchange: 'NASDAQ' },
-    { symbol: 'TSLA', name: 'Tesla, Inc.', exchange: 'NASDAQ' },
-    { symbol: 'AMZN', name: 'Amazon.com, Inc.', exchange: 'NASDAQ' },
-    { symbol: 'META', name: 'Meta Platforms, Inc.', exchange: 'NASDAQ' },
-    { symbol: 'GOOGL', name: 'Alphabet Inc.', exchange: 'NASDAQ' },
-    { symbol: 'AMD', name: 'Advanced Micro Devices', exchange: 'NASDAQ' },
-  ];
-  readonly recentTickers: readonly string[] = ['SPY', 'QQQ', 'AAPL'];
+  readonly tickerPool: readonly TickerOption[] = TICKER_POOL;
+  readonly recentTickers: readonly string[] = RECENT_TICKERS;
 
   private static timespanToResolution(
     t: 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year',
@@ -390,6 +422,71 @@ export class DataLabComponent {
     this.timespan.set(entry.timespan);
     this.multiplier.set(entry.multiplier);
   }
+
+  /** Calendar-day span of the current from/to. */
+  readonly spanCalendarDays = computed<number>(() => {
+    const from = new Date(this.fromDate()).getTime();
+    const to = new Date(this.toDate()).getTime();
+    if (Number.isNaN(from) || Number.isNaN(to) || to < from) return 0;
+    return Math.round((to - from) / 86_400_000);
+  });
+
+  /** Human-friendly explanation of what Auto picked and why. */
+  readonly autoBarTimeframeReadout = computed<string>(() => {
+    const days = this.spanCalendarDays();
+    const picked = pickAutoBarTimeframe(days);
+    const label = BAR_TIMEFRAMES.find((b) => b.value === picked)?.label ?? picked;
+    return `${label} bars for ${days}-day range`;
+  });
+
+  /**
+   * Expected number of bars for the current (range × resolution × session)
+   * combination. Used to size the Auto Chunk readout. Uses the same
+   * bars-per-day constants as the Python chunker so the two agree.
+   */
+  private static readonly BARS_PER_DAY: Record<string, number> = {
+    second: 27_000,
+    minute: 450,
+    hour: 24,
+    day: 1,
+    week: 1,
+    month: 1,
+    quarter: 1,
+    year: 1,
+  };
+
+  readonly expectedBarCount = computed<number>(() => {
+    const days = this.spanCalendarDays();
+    // Weekends-only approximation: ~5/7ths of calendar days are trading days.
+    const tradingDays = Math.ceil((days * 5) / 7);
+    const bpd =
+      (DataLabComponent.BARS_PER_DAY[this.timespan()] ?? 450) /
+      Math.max(1, this.multiplier());
+    const rthAdjust = this.session() === 'rth' && this.timespan() === 'minute' ? 390 / 450 : 1;
+    return Math.max(1, Math.ceil(tradingDays * bpd * rthAdjust));
+  });
+
+  /**
+   * Layman-friendly readout for Auto Chunk — tells the user how many
+   * requests the fetch will issue and how long it will take given
+   * Polygon Starter's 5 req/min cap. Matches the design brief's wording
+   * convention: prefer "requests" / "slot" / "paced" over "chunk" /
+   * "rate-limit" / "backoff".
+   */
+  readonly autoChunkReadout = computed<string>(() => {
+    const bars = this.expectedBarCount();
+    const chunks = Math.max(1, Math.ceil(bars / 50_000));
+    if (!this.autoChunk()) {
+      return `Manual: ${this.polygonLimit().toLocaleString()} bars per request.`;
+    }
+    if (chunks === 1) {
+      return `1 request · ~${bars.toLocaleString()} bars · fits in a single slot.`;
+    }
+    // Starter plan: 5 req/min → 12 s per request once the first 5 are spent.
+    const paced = Math.max(0, chunks - 5);
+    const approxSec = Math.round(paced * 12 + Math.min(chunks, 5) * 1);
+    return `Plan runs ${chunks} requests · ~${bars.toLocaleString()} bars · ~${approxSec}s on your 5-req/min slot.`;
+  });
 
   loading = signal(false);
   loadingIndicators = signal(false);
@@ -629,9 +726,117 @@ export class DataLabComponent {
       { allowSignalWrites: true },
     );
 
+    // Auto-resolution: when the toggle is on, derive bar timeframe from
+    // the current date range. The user can still click the dropdown —
+    // turning Auto off reveals whatever was last auto-picked and hands
+    // the control back.
+    effect(
+      () => {
+        if (!this.autoBarTimeframe()) return;
+        const days = this.spanCalendarDays();
+        const picked = pickAutoBarTimeframe(days);
+        if (this.activeBarTimeframe() !== picked) {
+          this.setBarTimeframe(picked);
+        }
+      },
+      { allowSignalWrites: true },
+    );
+
+    // Note: dividend adjustment requires the ``dividends`` companion file,
+    // but we deliberately do NOT auto-enable it. The brief calls out
+    // "dependencies are visible, not policed" — we surface a callout next
+    // to the checkbox with explicit [Enable companion] / [Keep disabled]
+    // actions, leaving the user in control. See data-lab.component.html
+    // for the dependency-callout that handles this.
+
     this.loadAvailableIndicators();
     this.refreshSessionList();
     this.loadHolidays();
+  }
+
+  /**
+   * Unified primary action.
+   *
+   * Always kicks off the chart's own fetch so the preview lights up. When
+   * the "Also generate" checkbox is on, additionally drives the streaming
+   * dataset pipeline via :class:`RunSessionService` — that's the source
+   * of the chunk-level progress surface (states B/C/D/E in the design
+   * brief). The two paths run in parallel today (chart fetch + run-stream
+   * fetch); they both hit Polygon so we double the request count, but
+   * the chart endpoint isn't yet on the streaming pipeline.
+   */
+  async fetchAndMaybeZip(): Promise<void> {
+    const chart = this.chartComponent();
+    if (chart) chart.fetchData();
+    if (this.alsoGenerateZip()) {
+      await this.runSession.start(this._buildGenerateZipPayload());
+    }
+  }
+
+  /** Index of the chunk currently being fetched, for the run-card heading.
+   *  Falls back to the highest done index + 1 if no chunk is mid-flight. */
+  readonly runChunkInProgressIndex = computed<number>(() => {
+    const chunks = this.runSession.chunks();
+    const fetching = chunks.find((c) => c.status === 'fetching');
+    if (fetching) return fetching.index;
+    const done = chunks.filter((c) => c.status === 'done').length;
+    return Math.min(done + 1, chunks.length || 1);
+  });
+
+  /** Aggregate progress as a 0–100 integer, for ARIA progressbar + label. */
+  readonly runProgressPercent = computed<number>(() =>
+    Math.round(this.runSession.progressFraction() * 100),
+  );
+
+  /** Hand-off to the streaming pipeline — the same payload the legacy
+   *  ``generateZip`` endpoint expects. */
+  private _buildGenerateZipPayload(): Record<string, unknown> {
+    const optionsConfig = this.optionsCompanionEnabled()
+      ? {
+          enabled: true,
+          strikes_each_side: this.optionsStrikesEachSide(),
+          include_calls: this.optionsIncludeCalls(),
+          include_puts: this.optionsIncludePuts(),
+          expiry_mode: this.optionsExpiryMode(),
+          max_dte: this.optionsMaxDte(),
+          include_ohlcv: this.optIncludeOhlcv(),
+          include_vwap: this.optIncludeVwap(),
+          include_transactions: this.optIncludeTransactions(),
+          include_open_interest: this.optIncludeOi(),
+          include_iv: this.optIncludeIv(),
+          include_delta: this.optIncludeDelta(),
+          include_gamma: this.optIncludeGamma(),
+          include_theta: this.optIncludeTheta(),
+          include_vega: this.optIncludeVega(),
+          include_rho: this.optIncludeRho(),
+          risk_free_rate: this.optRiskFreeRate(),
+          dividend_yield: this.optDividendYield(),
+        }
+      : null;
+    return {
+      ticker: this.ticker(),
+      from_date: this.fromDate(),
+      to_date: this.toDate(),
+      indicator_entries: this.entries(),
+      session: this.session(),
+      forward_fill: this.forwardFill(),
+      adjusted: this.adjustForSplits(),
+      adjust_for_dividends: this.adjustForDividends(),
+      warmup: this.warmup(),
+      timespan: this.timespan(),
+      multiplier: this.multiplier(),
+      sort: this.sort(),
+      limit: this.polygonLimit(),
+      options_companion: optionsConfig,
+      include_quality_report: this.includeQualityReportInZip(),
+      include_splits: this.includeSplits(),
+      include_dividends: this.includeDividends(),
+      include_ticker_overview: this.includeTickerOverview(),
+      include_news: this.includeNews(),
+      include_financials: this.includeFinancials(),
+      include_trades: this.includeStockTrades(),
+      include_quotes: this.includeStockQuotes(),
+    };
   }
 
   // ── Session management ─────────────────────────────────────
@@ -701,7 +906,7 @@ export class DataLabComponent {
         toDate: this.toDate(),
         session: this.session(),
         forwardFill: this.forwardFill(),
-        adjusted: this.adjusted(),
+        adjusted: this.adjustForSplits(),
         entries: this.entries(),
       };
 
@@ -745,7 +950,8 @@ export class DataLabComponent {
     this.toDateValue.set(DataLabComponent.parseDate(session.config.toDate));
     this.session.set(session.config.session);
     this.forwardFill.set(session.config.forwardFill);
-    this.adjusted.set(session.config.adjusted ?? true);
+    this.adjustForSplits.set(session.config.adjusted ?? true);
+    this.adjustForDividends.set(false);
     this.entries.set([...session.config.entries]);
     this.activeSessionId.set(session.id);
     this.sessionName.set(session.name);
@@ -1231,7 +1437,8 @@ export class DataLabComponent {
         indicator_entries: this.entries(),
         session: this.session(),
         forward_fill: this.forwardFill(),
-        adjusted: this.adjusted(),
+        adjusted: this.adjustForSplits(),
+        adjust_for_dividends: this.adjustForDividends(),
         warmup: this.warmup(),
         timespan: this.timespan(),
         multiplier: this.multiplier(),

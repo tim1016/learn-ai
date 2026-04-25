@@ -8,6 +8,11 @@ class Settings(BaseSettings):
 
     # Polygon API
     POLYGON_API_KEY: str
+    # Polygon's paid plans (Starter / Developer / Advanced / Business) have
+    # no per-minute cap, so the throttle is off by default. Only the free
+    # Basic tier is 5/min — set this to 5 if you're on Basic. See
+    # docs/references/polygon-throttle.md for the full plan table.
+    POLYGON_RATE_LIMIT_PER_MIN: int = 0
 
     # FRED API (for dynamic risk-free rate)
     FRED_API_KEY: str = ""

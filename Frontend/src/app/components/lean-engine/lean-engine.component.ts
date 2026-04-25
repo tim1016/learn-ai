@@ -28,29 +28,9 @@ import {
   type AdvisoryAction,
   type AvailabilityCell,
   type AvailabilityStatus,
-  type TickerOption,
   type TickerRange,
 } from "../../shared/ticker-range-picker";
-
-// A curated starter universe for the symbol combobox. Tickers not in this
-// pool can still be used — just edit the strategy's ``symbol`` field — but
-// the picker itself only surfaces what's here. Ordering matches "most
-// useful first" for dark-pool / ETF / mega-cap research.
-const TICKER_POOL: readonly TickerOption[] = [
-  { symbol: "SPY", name: "SPDR S&P 500 ETF Trust", exchange: "ARCA" },
-  { symbol: "QQQ", name: "Invesco QQQ Trust", exchange: "NASDAQ" },
-  { symbol: "IWM", name: "iShares Russell 2000 ETF", exchange: "ARCA" },
-  { symbol: "AAPL", name: "Apple Inc.", exchange: "NASDAQ" },
-  { symbol: "MSFT", name: "Microsoft Corporation", exchange: "NASDAQ" },
-  { symbol: "NVDA", name: "NVIDIA Corporation", exchange: "NASDAQ" },
-  { symbol: "TSLA", name: "Tesla, Inc.", exchange: "NASDAQ" },
-  { symbol: "AMZN", name: "Amazon.com, Inc.", exchange: "NASDAQ" },
-  { symbol: "META", name: "Meta Platforms, Inc.", exchange: "NASDAQ" },
-  { symbol: "GOOGL", name: "Alphabet Inc.", exchange: "NASDAQ" },
-  { symbol: "AMD", name: "Advanced Micro Devices", exchange: "NASDAQ" },
-];
-
-const RECENT_TICKERS: readonly string[] = ["SPY", "QQQ", "AAPL"];
+import { TICKER_POOL, RECENT_TICKERS } from "../../shared/ticker-catalog";
 
 // Severity for pre-flight: re-declared locally so we don't import the panel's types.
 type PreflightSeverity = "ok" | "warning" | "blocking";

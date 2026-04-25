@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 import pandas as pd
 
@@ -95,6 +96,84 @@ def reverse_dividend_adjustment(
             div.ticker,
         )
     return out
+
+
+def apply_dividend_adjustment(
+    df: pd.DataFrame,
+    dividends: tuple[DividendEvent, ...],
+    timestamp_col: str = "timestamp",
+    price_cols: tuple[str, ...] = ("open", "high", "low", "close"),
+) -> pd.DataFrame:
+    """Subtract dividends from Polygon bars to produce TV-style adjusted prices.
+
+    Polygon's ``adjusted=True`` adjusts for splits only. To match TradingView's
+    default dividend-adjusted chart, every bar dated *before* a dividend's
+    ex-date must have ``cash_amount`` subtracted from each OHLC column.
+
+    This is the inverse of :func:`reverse_dividend_adjustment`: that one adds
+    dividends back into already-TV-adjusted data (useful for reconciliation);
+    this one applies the TV adjustment to raw Polygon data.
+
+    Args:
+        df: Bar DataFrame with a ms-since-epoch ``timestamp`` column (Polygon
+            aggregate shape) and OHLC columns in ``price_cols``.
+        dividends: Iterable of :class:`DividendEvent` with ``ex_date`` values.
+            Pass an empty tuple to pass through unchanged.
+        timestamp_col: Name of the int64-ms-UTC timestamp column.
+        price_cols: OHLC columns to adjust.
+
+    Returns:
+        New DataFrame with adjusted prices.
+    """
+    if not dividends:
+        return df.copy()
+    if timestamp_col not in df.columns:
+        raise ValueError(f"DataFrame missing required column {timestamp_col!r}")
+    out = df.copy()
+    # Convert ms-since-epoch to ET date for the strict-less-than compare.
+    # Timestamp rigor: this is local arithmetic inside the function; we
+    # don't return the datetime column, only use it for the mask.
+    bar_date = pd.to_datetime(out[timestamp_col], unit="ms", utc=True).dt.tz_convert("America/New_York").dt.date
+    for div in dividends:
+        mask = bar_date < div.ex_date
+        if not mask.any():
+            continue
+        for col in price_cols:
+            if col in out.columns:
+                out.loc[mask, col] = out.loc[mask, col] - div.cash_amount
+        logger.info(
+            "[DIV ADJ] -%.2f to %d bars before %s (%s)",
+            div.cash_amount,
+            int(mask.sum()),
+            div.ex_date,
+            div.ticker,
+        )
+    return out
+
+
+def dividends_from_polygon_payload(
+    raw: list[dict[str, Any]],
+    ticker: str,
+) -> tuple[DividendEvent, ...]:
+    """Convert ``polygon_client.list_dividends`` output into DividendEvent tuples.
+
+    Polygon's payload keys: ``ex_dividend_date`` (YYYY-MM-DD), ``cash_amount``
+    (float). Rows missing either field are skipped with a warning.
+    """
+    events: list[DividendEvent] = []
+    for row in raw:
+        ex_str = row.get("ex_dividend_date")
+        amt = row.get("cash_amount")
+        if not ex_str or amt is None:
+            logger.warning("[DIV ADJ] Skipping dividend row with missing field: %s", row)
+            continue
+        try:
+            ex = date.fromisoformat(ex_str)
+        except (TypeError, ValueError):
+            logger.warning("[DIV ADJ] Skipping dividend with unparseable ex_date: %s", ex_str)
+            continue
+        events.append(DividendEvent(ex_date=ex, cash_amount=float(amt), ticker=ticker))
+    return tuple(events)
 
 
 def detect_dividends_from_gap(
