@@ -129,7 +129,8 @@ export function pickAutoBarTimeframe(spanDays: number): string {
 
 interface ParamConfig {
   name: string;
-  type: string;
+  /** Mirrors PythonDataService INDICATOR_CONFIGS — only 'int' or 'float'. */
+  type: 'int' | 'float';
   default: number;
   min: number;
   max: number;
