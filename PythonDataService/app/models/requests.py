@@ -314,7 +314,18 @@ class DatasetGenerationRequest(BaseModel):
         le=60,
         description="Bar multiplier (e.g., 5 with timespan='minute' gives 5-min bars)",
     )
-    adjusted: bool = Field(True, description="Adjust for splits/dividends (Polygon default: true)")
+    adjusted: bool = Field(
+        True,
+        description="Polygon adjusted=true — adjusts for SPLITS ONLY. Does NOT adjust for "
+        "dividends. Use the separate adjust_for_dividends flag for TV-style dividend adjustment. "
+        "See docs/tv-polygon-validation-gotchas.md §1.",
+    )
+    adjust_for_dividends: bool = Field(
+        False,
+        description="When true, fetch the dividend reference file and subtract each dividend "
+        "from bars dated before its ex-date server-side. Produces TV-style dividend-adjusted "
+        "prices. Requires the Polygon reference companion (automatically bundled when this is on).",
+    )
     sort: str = Field(
         "asc",
         description="Polygon aggregate sort order: 'asc' (oldest first) or 'desc' (newest first). "
