@@ -17,6 +17,23 @@ import { MarketMonitorService } from '../../services/market-monitor.service';
 import { MarketHolidayEvent } from '../../models/market-monitor';
 import { IndicatorTooltipComponent } from '../../shared/indicator-tooltip/indicator-tooltip.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { ActiveIndicatorCardComponent } from './active-indicator-card/active-indicator-card.component';
+import { ActiveIndicatorGroupComponent, IndicatorGroupItem } from './active-indicator-group/active-indicator-group.component';
+import { IndicatorConfigModalComponent } from './indicator-config-modal/indicator-config-modal.component';
+import { INDICATOR_REFERENCE } from '../../shared/indicators/indicator-reference';
+
+type EntriesSortMode = 'insertion' | 'category' | 'name';
+
+interface EntriesViewSingle {
+  kind: 'single';
+  item: { entry: IndicatorEntry; originalIndex: number };
+}
+interface EntriesViewGroup {
+  kind: 'group';
+  name: string;
+  items: IndicatorGroupItem[];
+}
+type EntriesViewBlock = EntriesViewSingle | EntriesViewGroup;
 import {
   TickerRangePickerComponent,
   type AdvisoryAction,
@@ -54,6 +71,41 @@ const BAR_TIMEFRAMES: readonly BarTimeframeOption[] = [
   { value: '4h', label: '4 hours', timespan: 'hour', multiplier: 4 },
   { value: '1d', label: '1 day', timespan: 'day', multiplier: 1 },
 ];
+
+/** Count weekdays (Mon–Fri) in [from, to] inclusive. Holidays ignored — the
+ *  ~5 % overcount is acceptable for the rough options-contract estimate. */
+function countWeekdays(from: string, to: string): number {
+  if (!from || !to) return 0;
+  const start = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end < start) return 0;
+  const oneDay = 86_400_000;
+  const days = Math.floor((end.getTime() - start.getTime()) / oneDay) + 1;
+  let weekdays = 0;
+  for (let i = 0; i < days; i++) {
+    const dow = new Date(start.getTime() + i * oneDay).getUTCDay();
+    if (dow !== 0 && dow !== 6) weekdays++;
+  }
+  return weekdays;
+}
+
+/** Approximate RTH bars per trading day for a given timespan/multiplier. */
+function barsPerTradingDay(
+  timespan: 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year',
+  multiplier: number,
+): number {
+  const m = Math.max(1, multiplier);
+  switch (timespan) {
+    case 'second': return Math.ceil(23_400 / m);     // 6.5h × 60 × 60
+    case 'minute': return Math.ceil(390 / m);        // 6.5h × 60
+    case 'hour':   return Math.ceil(7 / m);          // 6.5h rounded up
+    case 'day':
+    case 'week':
+    case 'month':
+    case 'quarter':
+    case 'year':   return 1;
+  }
+}
 
 interface ParamConfig {
   name: string;
@@ -190,7 +242,7 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
 @Component({
   selector: 'app-data-lab',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule, DataLabChartComponent, DatePicker, SharedModule, Tooltip, IndicatorTooltipComponent, PageHeaderComponent, TickerRangePickerComponent],
+  imports: [CommonModule, FormsModule, RouterModule, DataLabChartComponent, DatePicker, SharedModule, Tooltip, IndicatorTooltipComponent, PageHeaderComponent, TickerRangePickerComponent, ActiveIndicatorCardComponent, ActiveIndicatorGroupComponent, IndicatorConfigModalComponent],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -379,6 +431,54 @@ export class DataLabComponent {
    * - `nearest_within_days` + `day` resolution → each contract produces up to `max_dte` rows.
    * Returns an explanatory string when the combination is degenerate, else empty.
    */
+  /**
+   * Estimated number of option contracts that will be pulled given the
+   * current date range, expiry mode, strike count, and calls/puts toggles.
+   *
+   *   contracts ≈ expiries × (2·strikesEachSide + 1) × (#sides)
+   *   expiries  ≈ trading_days_in_range          for daily-expiry tickers
+   *             ≈ ceil(trading_days_in_range/5)  for weekly-only tickers
+   *
+   * Trading days are approximated as weekdays in [from, to] — holiday
+   * calendar is ignored at this resolution; the ±5 % error is well within
+   * the precision of "rough" estimates the user is making decisions from.
+   */
+  optionsContractEstimate = computed<{ contracts: number; expiries: number; bars: number }>(() => {
+    if (!this.optionsCompanionEnabled()) return { contracts: 0, expiries: 0, bars: 0 };
+    const sides = (this.optionsIncludeCalls() ? 1 : 0) + (this.optionsIncludePuts() ? 1 : 0);
+    if (sides === 0) return { contracts: 0, expiries: 0, bars: 0 };
+    const tradingDays = countWeekdays(this.fromDate(), this.toDate());
+    if (tradingDays <= 0) return { contracts: 0, expiries: 0, bars: 0 };
+    const isDaily = this.tickerSupportsDaily();
+    const expiries = isDaily ? tradingDays : Math.max(1, Math.ceil(tradingDays / 5));
+    const strikes = this.optionsStrikesEachSide() * 2 + 1;
+    const contracts = expiries * strikes * sides;
+    const barsPerDay = barsPerTradingDay(this.timespan(), this.multiplier());
+    const daysPerContract = this.optionsExpiryMode() === 'same_day'
+      ? 1
+      : Math.min(this.optionsMaxDte() || 1, 30);
+    const bars = contracts * barsPerDay * daysPerContract;
+    return { contracts, expiries, bars };
+  });
+
+  /**
+   * Severity classification for the contract-estimate badge.
+   *
+   * Daily-expiry tickers (SPY, QQQ, IWM, …) accumulate contracts much
+   * faster than weekly-only ones — the same window of trading days
+   * produces ~5× the contract count when every weekday is also an
+   * expiry. Thresholds are split accordingly.
+   */
+  optionsContractEstimateSeverity = computed<'ok' | 'warn' | 'danger'>(() => {
+    const c = this.optionsContractEstimate().contracts;
+    const daily = this.tickerSupportsDaily();
+    const warn = daily ? 2_000 : 5_000;
+    const danger = daily ? 8_000 : 20_000;
+    if (c >= danger) return 'danger';
+    if (c >= warn) return 'warn';
+    return 'ok';
+  });
+
   optionsResolutionWarning = computed(() => {
     if (!this.optionsCompanionEnabled()) return '';
     const ts = this.timespan();
@@ -884,6 +984,215 @@ export class DataLabComponent {
       next[index] = { ...next[index], params: defaults };
       return next;
     });
+  }
+
+  // ── Active-indicator modal state ──────────────────────────
+  /** Index of the entry currently being configured in the modal, or null. */
+  configuringIndex = signal<number | null>(null);
+  configureModalVisible = computed(() => this.configuringIndex() !== null);
+  configuringEntry = computed(() => {
+    const i = this.configuringIndex();
+    return i === null ? null : (this.entries()[i] ?? null);
+  });
+  configuringParams = computed<ParamConfig[]>(() => {
+    const e = this.configuringEntry();
+    return e ? this.getConfigParams(e.name) : [];
+  });
+
+  openConfigure(index: number): void {
+    this.configuringIndex.set(index);
+  }
+
+  onConfigureModalVisibleChange(open: boolean): void {
+    if (!open) this.configuringIndex.set(null);
+  }
+
+  onModalParamChange(change: { name: string; value: number }): void {
+    const i = this.configuringIndex();
+    if (i === null) return;
+    this.updateEntryParam(i, change.name, change.value);
+  }
+
+  onModalReset(): void {
+    const i = this.configuringIndex();
+    if (i === null) return;
+    this.resetEntryToDefaults(i);
+  }
+
+  onModalResetParam(paramName: string): void {
+    const i = this.configuringIndex();
+    if (i === null) return;
+    const entry = this.entries()[i];
+    const info = this.indicatorMap()[entry.name];
+    const param = info?.configurable_params.find((p) => p.name === paramName);
+    if (!param) return;
+    this.updateEntryParam(i, paramName, param.default);
+  }
+
+  /** Add an indicator (by key) as a new instance, used by modal "related" chips. */
+  addInstanceByName(name: string): void {
+    const info = this.indicatorMap()[name];
+    if (!info) return;
+    this.addInstance(info);
+  }
+
+  // ── Preview-mode state (catalog → modal) ──────────────────
+  /** When non-null, the modal opens in preview mode for the given key. */
+  previewKey = signal<string | null>(null);
+  modalMode = computed<'configure' | 'preview'>(() =>
+    this.previewKey() !== null ? 'preview' : 'configure',
+  );
+  previewEntry = computed<IndicatorEntry | null>(() => {
+    const key = this.previewKey();
+    if (!key) return null;
+    const defaults: Record<string, number> = {};
+    const info = this.indicatorMap()[key];
+    if (info) for (const p of info.configurable_params) defaults[p.name] = p.default;
+    return { name: key, params: defaults };
+  });
+
+  /** Modal entry to render — either the configured active entry or the
+   *  preview synthetic entry. */
+  modalEntry = computed<IndicatorEntry | null>(() => {
+    return this.previewEntry() ?? this.configuringEntry();
+  });
+
+  /** Modal param configs for whichever entry is open (preview or active). */
+  modalParamConfigs = computed<ParamConfig[]>(() => {
+    const e = this.modalEntry();
+    return e ? this.getConfigParams(e.name) : [];
+  });
+
+  /** Modal visibility — open whenever we have either a preview or a
+   *  configure index. */
+  modalVisible = computed(() => this.previewKey() !== null || this.configuringIndex() !== null);
+
+  openPreview(key: string): void {
+    this.previewKey.set(key);
+  }
+
+  onModalVisibleChange(open: boolean): void {
+    if (!open) {
+      this.previewKey.set(null);
+      this.configuringIndex.set(null);
+    }
+  }
+
+  /** Preview "Add to active with these params" — adds a new instance. */
+  onAddPreview(payload: { key: string; params: Record<string, number> }): void {
+    const info = this.indicatorMap()[payload.key];
+    if (!info) return;
+    this.entries.update((list) => [...list, { name: payload.key, params: { ...payload.params } }]);
+  }
+
+  /** Remove the *last* active entry whose key matches — used by modal undo
+   *  and the "Remove" state of related-indicator chips. */
+  removeLastEntryByName(name: string): void {
+    const list = this.entries();
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].name === name) {
+        this.removeEntry(i);
+        return;
+      }
+    }
+  }
+
+  /** Active indicator keys (deduped) — supplied to the modal so related
+   *  chips can render their tri-state (idle / pending-undo / already-active). */
+  activeIndicatorKeys = computed<readonly string[]>(() =>
+    Array.from(new Set(this.entries().map((e) => e.name)))
+  );
+
+  // ── Active-indicators sort + add affordances ──────────────
+  readonly entriesSortModes: { value: EntriesSortMode; label: string }[] = [
+    { value: 'insertion', label: 'Order added' },
+    { value: 'category',  label: 'Category' },
+    { value: 'name',      label: 'Name (A→Z)' },
+  ];
+  entriesSortMode = signal<EntriesSortMode>('insertion');
+
+  /** Display-only view of entries with their original indices preserved so
+   *  the template can still call removeEntry/openConfigure with the right
+   *  index regardless of sort. */
+  sortedEntriesView = computed<{ entry: IndicatorEntry; originalIndex: number }[]>(() => {
+    const list = this.entries().map((entry, originalIndex) => ({ entry, originalIndex }));
+    const mode = this.entriesSortMode();
+    if (mode === 'insertion') return list;
+    if (mode === 'name') {
+      return list.sort((a, b) => a.entry.name.localeCompare(b.entry.name));
+    }
+    // category: stable-sort by category order, then by name
+    const order: Record<string, number> = { trend: 0, momentum: 1, volatility: 2, volume: 3 };
+    return list.sort((a, b) => {
+      const ca = INDICATOR_REFERENCE[a.entry.name]?.category ?? 'trend';
+      const cb = INDICATOR_REFERENCE[b.entry.name]?.category ?? 'trend';
+      const diff = (order[ca] ?? 99) - (order[cb] ?? 99);
+      return diff !== 0 ? diff : a.entry.name.localeCompare(b.entry.name);
+    });
+  });
+
+  /**
+   * Group consecutive runs of the same indicator key (≥ 4) into a single
+   * `kind: 'group'` entry; everything else passes through as `kind: 'single'`.
+   * Threshold matches the design brief — three EMAs is the typical
+   * fast/slow/signal triple and shouldn't be visually flattened.
+   */
+  groupedEntriesView = computed<EntriesViewBlock[]>(() => {
+    const items = this.sortedEntriesView();
+    const out: EntriesViewBlock[] = [];
+    let i = 0;
+    while (i < items.length) {
+      const name = items[i].entry.name;
+      let j = i;
+      while (j < items.length && items[j].entry.name === name) j++;
+      const run = items.slice(i, j);
+      if (run.length >= 4) {
+        out.push({ kind: 'group', name, items: run });
+      } else {
+        for (const it of run) out.push({ kind: 'single', item: it });
+      }
+      i = j;
+    }
+    return out;
+  });
+
+  /** Reset every entry sharing a name to its INDICATOR_CONFIGS defaults. */
+  resetGroupToDefaults(name: string): void {
+    const info = this.indicatorMap()[name];
+    if (!info) return;
+    const defaults: Record<string, number> = {};
+    for (const p of info.configurable_params) defaults[p.name] = p.default;
+    this.entries.update((list) =>
+      list.map((e) => (e.name === name ? { ...e, params: { ...defaults } } : e)),
+    );
+  }
+
+  /** Remove every entry sharing a name. Used by the group card's
+   *  "Remove all" affordance. */
+  removeGroupByName(name: string): void {
+    this.entries.update((list) => list.filter((e) => e.name !== name));
+  }
+
+  /** Scroll the page to the Indicator Catalog section. Used by the
+   *  "+ Add indicator" button in the Active Indicators sub-toolbar. */
+  scrollToCatalog(): void {
+    const el = document.getElementById('data-lab-indicator-catalog');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  /** Increment/decrement strikes-each-side from the Companion plan card.
+   *  Clamped to [1, 25] to match the `<input>` bounds in the form. */
+  adjustStrikes(delta: number): void {
+    const next = Math.max(1, Math.min(25, this.optionsStrikesEachSide() + delta));
+    this.optionsStrikesEachSide.set(next);
+  }
+
+  /** Quick-action for daily-expiry tickers in warn/danger: flip to
+   *  Nearest-expiry mode with maxDte=7, which approximates "weekly only"
+   *  by typically resolving to that week's Friday expiry. */
+  switchToWeeklyOnly(): void {
+    this.optionsExpiryMode.set('nearest_within_days');
+    this.optionsMaxDte.set(7);
   }
 
   async generateZip(): Promise<void> {

@@ -130,10 +130,8 @@ export const routes: Routes = [
   },
   {
     path: "indicator-docs",
-    loadComponent: () =>
-      import(
-        "./components/indicator-validation/indicator-docs/indicator-docs.component"
-      ).then((m) => m.IndicatorDocsComponent),
+    redirectTo: "data-lab-docs",
+    pathMatch: "full",
   },
   {
     path: "data-lab",

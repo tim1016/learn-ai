@@ -13,6 +13,10 @@
 .data-lab {
   max-width: none;
   padding: 1.5rem 1rem 3rem;
+  // Reserve gutter when the indicator-config inspector is pinned. Set by
+  // <app-indicator-config-modal> via document.documentElement style.
+  padding-right: calc(1rem + var(--inspector-w, 0px));
+  transition: padding-right var(--t-ui) ease;
 }
 
 // ─── Page Header ────────────────────────────────────────
@@ -424,6 +428,79 @@
     color: $text-primary;
     margin: 0 0 0.6rem;
   }
+}
+
+.entries-toolbar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0 0 0.5rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.entries-toolbar-eyebrow {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-subtle);
+}
+
+.entries-toolbar-count {
+  font-family: var(--font-mono);
+  color: var(--text-subtle);
+}
+
+.entries-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.entries-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--fs-xs);
+  color: var(--text-subtle);
+
+  select {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.2rem 0.4rem;
+    font-size: var(--fs-xs);
+    cursor: pointer;
+
+    &:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+  }
+}
+
+.entries-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0.25rem 0.6rem;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  cursor: pointer;
+  transition: background var(--t-ui) ease;
+
+  &:hover {
+    background: var(--accent-soft);
+  }
+
+  i { font-size: 0.7rem; }
 }
 
 .entries-grid {
@@ -865,6 +942,22 @@
   }
 }
 
+.btn-preview {
+  background: none;
+  border: none;
+  color: $text-muted;
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.7rem;
+  flex-shrink: 0;
+  border-radius: 4px;
+
+  &:hover {
+    color: $accent;
+    background: rgba($accent, 0.10);
+  }
+}
+
 .indicator-info {
   display: flex;
   flex-direction: column;
@@ -1144,4 +1237,107 @@
   > .options-row {
     margin-top: 0.5rem;
   }
+}
+
+.companion-plan {
+  margin: 0.75rem 0 0.25rem;
+  padding: 0.75rem 0.95rem;
+  border-radius: var(--radius-md);
+  border: 1px solid;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  &.severity-ok     { background: var(--info-soft); border-color: rgba(41, 182, 246, 0.30); }
+  &.severity-warn   { background: var(--warn-soft); border-color: rgba(255, 152, 0, 0.40); }
+  &.severity-danger { background: var(--bear-soft); border-color: rgba(239, 83, 80, 0.45); }
+}
+
+.cp-eyebrow {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-subtle);
+}
+
+.cp-sev {
+  font-weight: var(--fw-bold);
+  margin-left: 0.15rem;
+
+  &.cp-sev-ok     { color: var(--info); }
+  &.cp-sev-warn   { color: var(--warn); }
+  &.cp-sev-danger { color: var(--bear); }
+}
+
+.cp-rows {
+  display: grid;
+  grid-template-columns: minmax(110px, max-content) 1fr;
+  gap: 0.3rem 0.85rem;
+  margin: 0;
+
+  .cp-row {
+    display: contents;
+
+    dt {
+      color: var(--text-subtle);
+      font-size: var(--fs-xs);
+      font-weight: var(--fw-medium);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      align-self: center;
+    }
+    dd {
+      margin: 0;
+      color: var(--text-primary);
+    }
+  }
+}
+
+.cp-detail {
+  color: var(--text-subtle);
+  font-weight: var(--fw-regular);
+  margin-left: 0.25rem;
+}
+
+.cp-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-top: 0.4rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.cp-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 0.2rem 0.5rem;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: background var(--t-ui) ease;
+
+  &:hover:not([disabled]) { background: rgba(255, 255, 255, 0.05); }
+  &[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+  &.cp-action-secondary {
+    border-color: var(--accent);
+    color: var(--accent);
+    margin-left: auto;
+
+    &:hover { background: var(--accent-soft); }
+  }
+}
+
+.cp-strikes-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
 }
