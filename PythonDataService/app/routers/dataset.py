@@ -114,9 +114,7 @@ def _fetch_and_process(
             if on_event is not None:
                 on_event({"type": "dividend_adjusted", "events": len(events), "bars": raw_count})
         else:
-            logger.info(
-                "[DATASET] adjust_for_dividends=True but no dividends in range — passthrough"
-            )
+            logger.info("[DATASET] adjust_for_dividends=True but no dividends in range — passthrough")
 
     df, column_meta = preprocess_and_calculate(
         bars=bars,
@@ -301,11 +299,15 @@ def _build_zip_with_events(
         components.append("trades.csv")
     if request.include_quotes:
         components.append("quotes.csv")
+    # Per-slot companion files are emitted by side+slot (e.g. calls/atm-03.csv).
+    # The exact slot list isn't known until contracts are fetched, so we
+    # advertise the side-level placeholders up front and emit per-file
+    # ``bundle_component_done`` events as the slot files materialize.
     if request.options_companion and request.options_companion.enabled:
         if request.options_companion.include_calls:
-            components.append("options_calls.csv")
+            components.append("calls/")
         if request.options_companion.include_puts:
-            components.append("options_puts.csv")
+            components.append("puts/")
     if on_event is not None:
         on_event({"type": "bundle_start", "components": components})
 
@@ -314,13 +316,12 @@ def _build_zip_with_events(
             on_event({"type": "bundle_component_done", "name": name})
 
     # Options companion (optional)
-    options_calls_bytes: bytes | None = None
-    options_puts_bytes: bytes | None = None
+    options_slot_files: dict[str, bytes] = {}
     options_report: dict | None = None
     if request.options_companion and request.options_companion.enabled:
         from app.services.options_companion_service import build_options_companion_csvs
 
-        options_calls_bytes, options_puts_bytes, options_report = build_options_companion_csvs(
+        options_slot_files, options_report = build_options_companion_csvs(
             underlying_bars_df=df,
             ticker=request.ticker,
             from_date=request.from_date,
@@ -332,10 +333,8 @@ def _build_zip_with_events(
             on_event=on_event,
             cancel_check=cancel_check,
         )
-        if request.options_companion.include_calls:
-            _component_done("options_calls.csv")
-        if request.options_companion.include_puts:
-            _component_done("options_puts.csv")
+        for path in sorted(options_slot_files.keys()):
+            _component_done(path)
 
     # Reference companions (optional, each independent)
     from app.services.reference_companion_service import (
@@ -410,8 +409,7 @@ def _build_zip_with_events(
         multiplier=request.multiplier,
         raw_bar_count=raw_count,
         filled_bar_count=len(df),
-        options_calls_csv_bytes=options_calls_bytes,
-        options_puts_csv_bytes=options_puts_bytes,
+        options_slot_files=options_slot_files,
         options_companion_report=options_report,
         quality_report_md_bytes=quality_report_bytes,
         splits_csv_bytes=splits_bytes,
@@ -440,8 +438,9 @@ async def generate_dataset_zip(request: DatasetGenerationRequest):
     """Fetch OHLCV, calculate indicators, and return a ZIP.
 
     Always contains ``dataset.csv``, ``metadata.csv``, ``columns.csv``. Adds
-    ``options_calls.csv`` / ``options_puts.csv`` when ``options_companion`` is
-    enabled and ``quality_report.md`` when ``include_quality_report`` is true.
+    per-slot CSVs under ``calls/`` and ``puts/`` subfolders when
+    ``options_companion`` is enabled, and ``quality_report.md`` when
+    ``include_quality_report`` is true.
 
     Synchronous variant — single response with the binary ZIP. The
     streaming counterpart at ``/generate-zip/stream`` emits SSE events for
@@ -505,24 +504,33 @@ def _run_zip_pipeline(
             on_event=on_event,
             cancel_check=_cancel_check,
         )
-        on_event({
-            "type": "fetch_complete",
-            "raw_bars": raw_count,
-            "processed_bars": len(df),
-            "indicator_columns": len([m["column"] for m in column_meta]),
-        })
+        on_event(
+            {
+                "type": "fetch_complete",
+                "raw_bars": raw_count,
+                "processed_bars": len(df),
+                "indicator_columns": len([m["column"] for m in column_meta]),
+            }
+        )
         zip_bytes, filename = _build_zip_with_events(
-            request, df, column_meta, raw_count, on_event=on_event, cancel_check=_cancel_check,
+            request,
+            df,
+            column_meta,
+            raw_count,
+            on_event=on_event,
+            cancel_check=_cancel_check,
         )
         session.zip_bytes = zip_bytes
         session.filename = filename
-        on_event({
-            "type": "complete",
-            "session_id": session.id,
-            "filename": filename,
-            "size_bytes": len(zip_bytes),
-            "file_count": len(zip_bytes) and len([m["column"] for m in column_meta]) + 3,
-        })
+        on_event(
+            {
+                "type": "complete",
+                "session_id": session.id,
+                "filename": filename,
+                "size_bytes": len(zip_bytes),
+                "file_count": len(zip_bytes) and len([m["column"] for m in column_meta]) + 3,
+            }
+        )
     except RunCancelledError as exc:
         session.failed = True
         session.error_message = str(exc)

@@ -1,0 +1,390 @@
+$border: rgba(255, 255, 255, 0.10);
+$bg-elevated: #1a1f29;
+$text-primary: #e6e9ef;
+$text-secondary: #98a2b3;
+
+::ng-deep .icm-dialog .p-dialog-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid $border;
+}
+
+::ng-deep .icm-dialog .p-dialog-content {
+  padding: 0;
+}
+
+// ── Pinned/inspector mode ───────────────────────────────────
+// Right-anchored, full-height, no overlay, no drop shadow on the page.
+::ng-deep .icm-dialog-pinned.p-dialog {
+  position: fixed !important;
+  top: 0 !important;
+  right: 0 !important;
+  left: auto !important;
+  bottom: 0 !important;
+  margin: 0 !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  border-radius: 0 !important;
+  border-left: 1px solid var(--border) !important;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4) !important;
+}
+
+::ng-deep .icm-dialog-pinned .p-dialog-content {
+  max-height: calc(100vh - 80px);
+  height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+
+.icm-pin-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-subtle);
+  cursor: pointer;
+  padding: 0.35rem 0.45rem;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  align-self: flex-start;
+  margin-left: auto;
+  transition: background var(--t-ui) ease, color var(--t-ui) ease;
+
+  &:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+.icm-header {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+}
+
+.icm-rail {
+  width: 4px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.icm-header-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.icm-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.icm-header-chips {
+  margin-top: 0.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.icm-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.icm-chip-muted {
+  color: $text-secondary;
+  border-color: $border;
+  font-weight: 500;
+}
+
+.icm-chip-preview {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.66rem;
+}
+
+.icm-preview-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.85rem 0 0;
+  margin-top: 0.5rem;
+  border-top: 1px solid $border;
+}
+
+.icm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+  cursor: pointer;
+  transition: background var(--t-ui) ease;
+
+  &.icm-btn-secondary {
+    background: transparent;
+    color: $text-secondary;
+    border: 1px solid var(--border-light);
+    &:hover { background: rgba(255, 255, 255, 0.05); color: $text-primary; }
+  }
+
+  &.icm-btn-primary {
+    background: var(--accent);
+    color: var(--text-on-accent);
+    border: 1px solid var(--accent);
+    &:hover { background: var(--accent-hover); }
+  }
+}
+
+.icm-body {
+  padding: 1rem 1.25rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.icm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+
+  p { margin: 0; font-size: 0.88rem; line-height: 1.45; }
+}
+
+.icm-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.icm-section-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: $text-secondary;
+}
+
+.icm-muted {
+  color: $text-secondary;
+  font-size: 0.85rem;
+}
+
+.icm-analogy {
+  border-left: 2px solid $border;
+  padding-left: 0.65rem;
+}
+
+.icm-impact { font-size: 0.88rem; }
+
+.icm-text-btn {
+  background: transparent;
+  border: none;
+  color: $text-secondary;
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+
+  &:hover:not([disabled]) { color: $text-primary; background: rgba(255, 255, 255, 0.06); }
+
+  &[disabled] {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+.icm-mod-marker {
+  color: var(--warn);
+  font-weight: 700;
+  margin-left: 1px;
+}
+
+.icm-param-input-wrap {
+  grid-area: input;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.icm-param-undo {
+  position: absolute;
+  right: -1.55rem;
+  background: transparent;
+  border: none;
+  color: var(--warn);
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0.2rem;
+  border-radius: 3px;
+  line-height: 1;
+
+  &:hover { background: var(--warn-soft); }
+}
+
+.icm-param-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.icm-param-row {
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  grid-template-areas:
+    "label input"
+    "desc  desc";
+  gap: 0.35rem 0.75rem;
+  align-items: center;
+}
+
+.icm-param-label {
+  grid-area: label;
+  display: flex;
+  flex-direction: column;
+  font-weight: 500;
+}
+
+.icm-param-name {
+  font-family: 'SF Mono', Consolas, Monaco, monospace;
+  font-size: 0.85rem;
+  color: $text-primary;
+}
+
+.icm-param-bounds {
+  font-size: 0.72rem;
+  color: $text-secondary;
+  margin-top: 0.1rem;
+}
+
+.icm-param-input {
+  flex: 1;
+  background: $bg-elevated;
+  color: $text-primary;
+  border: 1px solid $border;
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+  font-family: 'SF Mono', Consolas, Monaco, monospace;
+  font-size: 0.85rem;
+  text-align: right;
+
+  &:focus {
+    outline: none;
+    border-color: rgba(99, 102, 241, 0.7);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+  }
+}
+
+.icm-param-desc {
+  grid-area: desc;
+  margin: 0;
+  font-size: 0.78rem;
+  color: $text-secondary;
+  line-height: 1.4;
+}
+
+.icm-formula {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid $border;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  font-size: 0.95rem;
+}
+
+.icm-library code {
+  font-size: 0.78rem;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+}
+
+.icm-bullets {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.icm-caveats .icm-caveat-risk {
+  list-style-type: none;
+  margin-left: -1.1rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(245, 158, 11, 0.10);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 4px;
+  color: $text-primary;
+}
+
+.icm-related-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.icm-related-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 0.3rem 0.6rem;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: #c7d2fe;
+  border: 1px solid rgba(41, 98, 255, 0.30);
+  cursor: pointer;
+  transition: background var(--t-ui) ease, border-color var(--t-ui) ease, color var(--t-ui) ease;
+
+  &:hover {
+    background: rgba(41, 98, 255, 0.18);
+    border-color: rgba(41, 98, 255, 0.45);
+  }
+
+  &.icm-related-pending {
+    background: var(--bull-soft);
+    color: var(--bull);
+    border-color: rgba(38, 166, 154, 0.45);
+
+    &:hover {
+      background: rgba(38, 166, 154, 0.22);
+      border-color: rgba(38, 166, 154, 0.60);
+    }
+  }
+
+  &.icm-related-active {
+    background: var(--bear-soft);
+    color: var(--bear);
+    border-color: rgba(239, 83, 80, 0.40);
+
+    &:hover {
+      background: rgba(239, 83, 80, 0.22);
+      border-color: rgba(239, 83, 80, 0.60);
+    }
+  }
+}
+
+.icm-provenance {
+  font-size: 0.75rem;
+  color: $text-secondary;
+  font-style: italic;
+  margin: 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid $border;
+}

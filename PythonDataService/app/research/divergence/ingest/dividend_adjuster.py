@@ -133,11 +133,7 @@ def apply_dividend_adjustment(
     # Convert ms-since-epoch to ET date for the strict-less-than compare.
     # Timestamp rigor: this is local arithmetic inside the function; we
     # don't return the datetime column, only use it for the mask.
-    bar_date = (
-        pd.to_datetime(out[timestamp_col], unit="ms", utc=True)
-        .dt.tz_convert("America/New_York")
-        .dt.date
-    )
+    bar_date = pd.to_datetime(out[timestamp_col], unit="ms", utc=True).dt.tz_convert("America/New_York").dt.date
     for div in dividends:
         mask = bar_date < div.ex_date
         if not mask.any():

@@ -96,7 +96,6 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-book',
     items: [
       { label: 'Strategy Docs', route: '/strategy-docs' },
-      { label: 'Indicator Docs', route: '/indicator-docs' },
       { label: 'Indicator Reference', route: '/data-lab-docs' },
       { label: 'Pipeline Docs', route: '/data-quality-docs' },
       { label: 'Methodology', route: '/docs/indicator-reliability-methodology' },

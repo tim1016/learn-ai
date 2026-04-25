@@ -1,0 +1,102 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Options Companion Validation Report</title>
+<style>
+body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 1280px;
+       margin: 24px auto; padding: 0 24px; color: #1f2937; }
+h1 { border-bottom: 2px solid #3aa55d; padding-bottom: 8px; }
+h2 { color: #1f2937; margin-top: 32px; border-left: 4px solid #3aa55d; padding-left: 10px; }
+table { border-collapse: collapse; margin: 12px 0; }
+td, th { border: 1px solid #e5e7eb; padding: 6px 12px; font-size: 14px; }
+th { background: #f3f4f6; }
+.kv { display: inline-block; margin-right: 24px; font-size: 14px; }
+.kv b { color: #6b7280; font-weight: 500; margin-right: 6px; }
+img { max-width: 100%; border: 1px solid #e5e7eb; border-radius: 4px; margin: 8px 0; }
+.pass { color: #15803d; font-weight: 600; }
+.warn { color: #b45309; font-weight: 600; }
+.fail { color: #b91c1c; font-weight: 600; }
+.note { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 10px 14px;
+         margin: 12px 0; font-size: 14px; }
+</style></head><body>
+
+<h1>Options Companion — Validation Report</h1>
+
+<div>
+  <span class="kv"><b>Ticker</b>SPY</span>
+  <span class="kv"><b>Range</b>2026-04-21 .. 2026-04-25</span>
+  <span class="kv"><b>Bar</b>1 minute</span>
+  <span class="kv"><b>DTE distance</b>0</span>
+  <span class="kv"><b>Strikes each side</b>3</span>
+</div>
+<div>
+  <span class="kv"><b>Days processed</b>4</span>
+  <span class="kv"><b>Days skipped</b>0</span>
+  <span class="kv"><b>Slot files</b>14</span>
+  <span class="kv"><b>Total option rows</b>20,681</span>
+  <span class="kv"><b>Underlying bars</b>1,560</span>
+</div>
+
+<h2>Headline result</h2>
+<p><span class="pass">PASS</span> — every option timestamp lies on the same 1-minute UTC grid as the underlying.
+Strikes are stable within each trading day and price-ordered (atm-3 &lt; ... &lt; atm+3). Calls and puts share
+the same strike at every slot label. Discontinuity flags fire exactly on contract-ticker changes.</p>
+
+<p><span class="warn">WARN</span> — 699 option timestamps (out of 20,681) have no
+matching underlying bar. All of them are in the 16:00-16:14 ET window: SPY options trade through the closing
+rotation while the underlying file is RTH-trimmed at 15:59 ET. This is a session-window difference, not a
+grid-alignment bug.</p>
+
+<h2>Per-day strike selection</h2>
+<table>
+<tr><th>Date</th><th>Expiry</th><th>Prior close</th><th>Calls selected</th><th>Puts selected</th></tr>
+<tr><td>2026-04-21</td><td>2026-04-21</td><td>704.15</td><td>7</td><td>7</td></tr><tr><td>2026-04-22</td><td>2026-04-22</td><td>704.15</td><td>7</td><td>7</td></tr><tr><td>2026-04-23</td><td>2026-04-23</td><td>711.21</td><td>7</td><td>7</td></tr><tr><td>2026-04-24</td><td>2026-04-24</td><td>708.44</td><td>7</td><td>7</td></tr>
+</table>
+
+<h2>1. Coverage heatmap</h2>
+<p>Each row is one slot CSV; each column is one minute on the unified grid.
+Green cells are option bars matched to an underlying bar; orange cells are
+post-close orphans; dark cells mean the slot file had no row at that minute
+(either the option didn't trade or it was outside the slot's active range).</p>
+<img src="01_coverage_heatmap.png">
+
+<h2>2. Strike ladder vs intraday SPY</h2>
+<p>Yellow line is the ATM slot strike for that day; gray lines are the ±1 / ±2 / ±3 strikes.
+Dotted gray is the prior-day close that anchors the ATM choice. Strikes are <i>price-ordered</i>
+and identical across calls and puts within each day.</p>
+<img src="02_strike_ladder.png">
+
+<h2>3. Per-slot coverage</h2>
+<p>The taller bars are the slots near ATM (more frequent trades). The orange caps are the
+15-minute post-close window. Every slot's orphan count = 15 bars/day × number of days the slot was active.</p>
+<img src="03_coverage_bars.png">
+
+<h2>4. Contract-roll timeline</h2>
+<p>Red bars mark <code>discontinuity=1</code> rows — the first bar after the slot's contract
+identity changed. They land exactly on day boundaries, as expected for 0DTE
+(the chosen expiry rolls forward by one calendar day every session).</p>
+<img src="04_discontinuity_timeline.png">
+
+<h2>5. Post-close drift (the WARN explained)</h2>
+<p>Implied SPY from put-call parity (C - P + K) on the ATM pair, plotted across 15:55..16:14 ET.
+The dotted gray is the 15:59 SPY close. Drift inside the closing rotation is small
+(under $0.50) on three of the four days. <b>2026-04-21 is the outlier:</b> a real ~$3 move
+between 16:08 and 16:09 — likely a post-close print event. Any IV/Greek computed against the 15:59
+underlying spot for those late bars on 04-21 would be wrong by ~3 SPY points.</p>
+<img src="05_post_close_drift.png">
+
+<h2>6. Inter-bar gaps</h2>
+<p>How often consecutive rows in a slot are exactly 1 minute apart vs gapped. Deeper-OTM slots
+(atm-3, atm+3) gap more because they trade thinner.</p>
+<img src="06_gap_distribution.png">
+
+<h2>Recommendations</h2>
+<ul>
+  <li>For IV / Greek joins against the underlying, drop option rows with hh:mm &gt;= 16:00 ET
+      <i>or</i> re-pull the underlying with extended-hours enabled. Without an underlying spot
+      for those minutes, parity-based math will be silently wrong on volatile days (see 04-21 above).</li>
+  <li>Strike ladder, anchor selection, day-boundary discontinuities, and call/put strike pairing
+      all behave per spec — no remediation needed there.</li>
+  <li>This report can be regenerated against any future companion ZIP with
+      <code>python PythonDataService/generate_options_companion_report.py --zip &lt;path&gt;</code>.</li>
+</ul>
+
+</body></html>

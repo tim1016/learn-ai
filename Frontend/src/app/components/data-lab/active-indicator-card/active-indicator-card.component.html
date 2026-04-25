@@ -1,0 +1,52 @@
+<div class="aic" (click)="onConfigure($event)" role="button" tabindex="0"
+     [attr.aria-label]="'Configure ' + displayName()">
+  <span class="aic-rail" [style.background]="categoryColor()" aria-hidden="true">
+    @if (hasModifiedParams()) {
+      <span class="aic-rail-dot" pTooltip="Modified from defaults" tooltipPosition="right"></span>
+    }
+  </span>
+
+  <div class="aic-main">
+    <div class="aic-title-row">
+      <span class="aic-name">{{ displayName() }}</span>
+      @if (timeframeWarning()) {
+        <i class="pi pi-exclamation-triangle aic-warn"
+           [pTooltip]="timeframeWarning()" tooltipPosition="top"></i>
+      }
+    </div>
+
+    <div class="aic-chip-row">
+      @if (categoryLabel()) {
+        <span class="aic-chip aic-chip-category"
+              [style.background]="categoryColorSoft()"
+              [style.color]="categoryColor()">
+          {{ categoryLabel() }}
+        </span>
+      }
+      @for (chip of paramChips(); track chip.label) {
+        <span class="aic-chip aic-chip-param" [class.aic-chip-modified]="chip.modified">
+          <code>{{ chip.label }}</code>@if (chip.modified) {<span class="aic-mod-marker">*</span>}
+        </span>
+      }
+    </div>
+  </div>
+
+  <div class="aic-actions">
+    @if (paramConfigs().length) {
+      <button type="button" class="aic-icon-btn"
+              (click)="onReset($event)"
+              [disabled]="!hasModifiedParams()"
+              pTooltip="Reset to defaults" tooltipPosition="top"
+              [attr.aria-label]="'Reset ' + displayName() + ' to defaults'">
+        <i class="pi pi-refresh"></i>
+      </button>
+    }
+    <button type="button" class="aic-icon-btn aic-icon-danger"
+            (click)="onRemove($event)"
+            pTooltip="Remove" tooltipPosition="top"
+            [attr.aria-label]="'Remove ' + displayName()">
+      <i class="pi pi-times"></i>
+    </button>
+    <i class="pi pi-arrow-right aic-chevron" aria-hidden="true"></i>
+  </div>
+</div>

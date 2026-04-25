@@ -1,0 +1,163 @@
+<p-dialog
+  [(visible)]="visible"
+  [modal]="!pinned()"
+  [closable]="true"
+  [dismissableMask]="!pinned()"
+  [draggable]="false"
+  [resizable]="false"
+  [style]="pinned() ? { width: '360px', maxWidth: '95vw' } : { width: '640px', maxWidth: '95vw' }"
+  [styleClass]="pinned() ? 'icm-dialog icm-dialog-pinned' : 'icm-dialog'"
+  (onHide)="close()">
+
+  <ng-template pTemplate="header">
+    @if (reference(); as r) {
+      <div class="icm-header">
+        <span class="icm-rail" [style.background]="categoryColor()"></span>
+        <div class="icm-header-text">
+          <h3 class="icm-title">{{ r.displayName }}</h3>
+          <div class="icm-header-chips">
+            @if (mode() === 'preview') {
+              <span class="icm-chip icm-chip-preview">Preview</span>
+            }
+            <span class="icm-chip"
+                  [style.borderColor]="categoryColor()"
+                  [style.color]="categoryColor()">
+              {{ categoryLabel() }}
+            </span>
+            <span class="icm-chip icm-chip-muted">{{ panelLabel() }}</span>
+            <span class="icm-chip icm-chip-muted">{{ r.recommendedTimeframes }}</span>
+          </div>
+        </div>
+        <button type="button" class="icm-pin-btn"
+                (click)="togglePin()"
+                [attr.aria-label]="pinned() ? 'Unpin inspector' : 'Pin to side as inspector'"
+                [pTooltip]="pinned() ? 'Unpin (return to modal)' : 'Pin to side'"
+                tooltipPosition="left">
+          <i class="pi" [class.pi-thumbtack]="!pinned()" [class.pi-arrow-right]="pinned()"></i>
+        </button>
+      </div>
+    } @else if (entry(); as e) {
+      <h3 class="icm-title">{{ e.name.toUpperCase() }}</h3>
+    }
+  </ng-template>
+
+  @if (reference(); as r) {
+    <div class="icm-body">
+      <!-- Why / analogy / impact -->
+      <section class="icm-section">
+        <h4 class="icm-section-title">Why use it</h4>
+        <p>{{ r.quickWhy }}</p>
+        <p class="icm-muted icm-analogy"><em>{{ r.quickAnalogy }}</em></p>
+        <p class="icm-impact"><strong>Impact:</strong> {{ r.quickImpact }}</p>
+      </section>
+
+      <!-- Parameters -->
+      @if (paramConfigs().length && effectiveEntry(); as e) {
+        <section class="icm-section">
+          <div class="icm-section-head">
+            <h4 class="icm-section-title">Parameters</h4>
+            <button type="button" class="icm-text-btn"
+                    (click)="onReset()"
+                    [disabled]="!hasModified()">
+              <i class="pi pi-refresh"></i> {{ resetButtonLabel() }}
+            </button>
+          </div>
+          <div class="icm-param-grid">
+            @for (p of paramConfigs(); track p.name) {
+              <div class="icm-param-row" [class.icm-param-modified]="isParamModified(p.name)">
+                <label class="icm-param-label" [attr.for]="'icm-param-' + p.name">
+                  <span class="icm-param-name">{{ p.name }}@if (isParamModified(p.name)) {<span class="icm-mod-marker">*</span>}</span>
+                  <span class="icm-param-bounds">{{ p.min }}–{{ p.max }} · default {{ p.default }}</span>
+                </label>
+                <div class="icm-param-input-wrap">
+                  <input
+                    type="number"
+                    class="icm-param-input"
+                    [id]="'icm-param-' + p.name"
+                    [min]="p.min"
+                    [max]="p.max"
+                    [step]="p.type === 'float' ? 0.1 : 1"
+                    [ngModel]="e.params[p.name]"
+                    (ngModelChange)="onParamChange(p.name, $event)" />
+                  @if (isParamModified(p.name)) {
+                    <button type="button" class="icm-param-undo"
+                            (click)="onResetParam(p.name, $event)"
+                            pTooltip="Reset to default" tooltipPosition="top"
+                            [attr.aria-label]="'Reset ' + p.name + ' to default ' + p.default">
+                      <i class="pi pi-undo"></i>
+                    </button>
+                  }
+                </div>
+                <p class="icm-param-desc">{{ p.description }}</p>
+              </div>
+            }
+          </div>
+        </section>
+      }
+
+      <!-- Formula -->
+      <section class="icm-section">
+        <h4 class="icm-section-title">Formula</h4>
+        <div class="icm-formula" [appKatex]="r.formulaLatex" [displayMode]="true"></div>
+        <p class="icm-muted icm-library"><code>{{ r.library }}</code> · outputs <code>{{ r.outputColumns.join(', ') }}</code></p>
+      </section>
+
+      <!-- Interpretation -->
+      <section class="icm-section">
+        <h4 class="icm-section-title">How to read it</h4>
+        <ul class="icm-bullets">
+          @for (line of r.interpretation; track line) {
+            <li>{{ line }}</li>
+          }
+        </ul>
+      </section>
+
+      <!-- Caveats -->
+      <section class="icm-section">
+        <h4 class="icm-section-title">Caveats</h4>
+        <ul class="icm-bullets icm-caveats">
+          <li class="icm-caveat-risk"><strong>Timeframe:</strong> {{ r.timeframeBehavior }}</li>
+          @for (note of r.dataNotes; track note) {
+            <li>{{ note }}</li>
+          }
+        </ul>
+      </section>
+
+      <!-- Related -->
+      @if (r.relatedIndicators.length) {
+        <section class="icm-section">
+          <h4 class="icm-section-title">Related indicators</h4>
+          <div class="icm-related-row">
+            @for (rel of r.relatedIndicators; track rel) {
+              @let _state = relatedChipState(rel);
+              <button type="button" class="icm-related-chip"
+                      [class.icm-related-pending]="_state === 'pending'"
+                      [class.icm-related-active]="_state === 'active'"
+                      (click)="onRelatedClick(rel)">
+                @switch (_state) {
+                  @case ('pending') { <i class="pi pi-check"></i> Added · undo }
+                  @case ('active')  { <i class="pi pi-times"></i> Remove {{ rel.toUpperCase() }} }
+                  @default          { <i class="pi pi-plus"></i> {{ rel.toUpperCase() }} }
+                }
+              </button>
+            }
+          </div>
+        </section>
+      }
+
+      <!-- Provenance -->
+      <p class="icm-provenance">{{ r.professionalRef }}</p>
+
+      @if (mode() === 'preview') {
+        <div class="icm-preview-footer">
+          <button type="button" class="icm-btn icm-btn-secondary" (click)="close()">
+            Cancel
+          </button>
+          <button type="button" class="icm-btn icm-btn-primary" (click)="onAddPreview()">
+            <i class="pi pi-plus"></i> Add to active with these params
+          </button>
+        </div>
+      }
+    </div>
+  }
+</p-dialog>

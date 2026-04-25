@@ -11,7 +11,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
-import { INDICATOR_QUICK_INFO, IndicatorQuickInfo, IndicatorParamDoc } from '../indicator-docs';
+import { INDICATOR_QUICK_INFO, IndicatorQuickInfo, IndicatorParamDoc } from '../indicators/indicator-reference';
 
 /**
  * Rich indicator tooltip overlay.

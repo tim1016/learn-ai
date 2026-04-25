@@ -59,9 +59,7 @@ def black_scholes_greeks(
 
     sqrt_t = math.sqrt(ttm_years)
     sigma_sqrt_t = volatility * sqrt_t
-    d1 = (
-        math.log(spot / strike) + (rate - dividend + 0.5 * volatility * volatility) * ttm_years
-    ) / sigma_sqrt_t
+    d1 = (math.log(spot / strike) + (rate - dividend + 0.5 * volatility * volatility) * ttm_years) / sigma_sqrt_t
     d2 = d1 - sigma_sqrt_t
 
     nd1 = float(norm.cdf(d1))
