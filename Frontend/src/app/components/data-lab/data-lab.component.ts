@@ -88,7 +88,8 @@ export function formatChunkReadout(
   autoChunk: boolean,
   polygonLimit: number,
 ): string {
-  const chunks = Math.max(1, Math.ceil(bars / 50_000));
+  const limit = Math.max(1, polygonLimit);
+  const chunks = Math.max(1, Math.ceil(bars / limit));
   if (!autoChunk) {
     return `Manual: ${polygonLimit.toLocaleString()} bars per request.`;
   }

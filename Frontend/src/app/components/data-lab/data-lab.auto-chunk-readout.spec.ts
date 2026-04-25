@@ -47,4 +47,19 @@ describe('formatChunkReadout', () => {
     const out = formatChunkReadout(0, true, 50_000);
     expect(out).toContain('1 request');
   });
+
+  it('drives chunk count off polygonLimit, not a hard-coded 50,000', () => {
+    // 30,000 bars at the default 50k limit fits in one request, but at a
+    // 10k per-request limit needs three. Pin: the readout reflects the
+    // configured limit so a future UI knob does not silently lie.
+    expect(formatChunkReadout(30_000, true, 10_000)).toContain('Plan runs 3 requests');
+    expect(formatChunkReadout(30_000, true, 50_000)).toBe('1 request · ~30,000 bars · single response.');
+  });
+
+  it('treats a non-positive polygonLimit as 1 to avoid division blow-ups', () => {
+    // Defensive guard — callers should never supply 0, but if they do the
+    // function must produce a finite chunk count rather than NaN/Infinity.
+    const out = formatChunkReadout(100, true, 0);
+    expect(out).toContain('Plan runs 100 requests');
+  });
 });

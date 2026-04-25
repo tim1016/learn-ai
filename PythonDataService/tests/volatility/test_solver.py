@@ -199,15 +199,19 @@ class TestBrentFallbackPath:
     to Brent without surfacing a convergence_failure to the caller."""
 
     def test_brent_handles_deep_otm_sub_day(self, spot: float, rate: float) -> None:
-        # 1-hour TTM, 5% OTM call. Vega is small but not zero; Newton may
-        # still converge — assert the solver returns a usable IV regardless
-        # of which leg succeeded, but never status=CONVERGENCE_FAILURE.
+        # 1-hour TTM, mildly OTM call. We pin the strike close enough to
+        # spot that the BS premium stays comfortably above MIN_OPTION_PRICE
+        # so the solver path is actually exercised — a wider OTM strike
+        # collapses the premium into the PRICE_TOO_LOW short-circuit and
+        # the test would silently skip the path it claims to cover.
         vol = 0.30
         ttm = 1.0 / (365.0 * 24.0)
-        strike = spot * 1.05
+        strike = spot * 1.005
         price = bs_price(spot, strike, ttm, rate, vol, is_call=True)
-        if price < 0.001:
-            pytest.skip("Premium below MIN_OPTION_PRICE — solver short-circuits to PRICE_TOO_LOW.")
+        assert price >= 0.001, (
+            f"test setup must keep premium above MIN_OPTION_PRICE "
+            f"(got {price:.6f})"
+        )
         result = implied_volatility(price, spot, strike, ttm, rate, is_call=True)
         assert result.status != SolveStatus.CONVERGENCE_FAILURE
         assert result.iv is not None
