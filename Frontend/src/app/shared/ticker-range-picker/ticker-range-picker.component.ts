@@ -3,6 +3,7 @@ import {
   Component,
   computed,
   DestroyRef,
+  effect,
   ElementRef,
   HostListener,
   inject,
@@ -14,6 +15,7 @@ import {
 } from "@angular/core";
 import { CommonModule } from "@angular/common";
 import { FormsModule } from "@angular/forms";
+import { Tooltip } from "primeng/tooltip";
 
 import {
   Advisory,
@@ -26,6 +28,7 @@ import {
   summarizeAvailability,
   TickerOption,
   TickerRange,
+  weekdaysBetween,
 } from "./ticker-range-picker.types";
 
 interface Preset { days: number; label: string }
@@ -37,6 +40,20 @@ const PRESETS: readonly Preset[] = [
   { days: 365, label: "1Y" },
   { days: 730, label: "2Y" },
 ];
+
+/**
+ * Display names for common US-equity venues. Surfaced in the exchange-chip
+ * tooltip so users see "NYSE Arca" instead of just "ARCA". Keep the keys
+ * upper-cased to match Polygon's primary_exchange values.
+ */
+const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
+  ARCA: "NYSE Arca",
+  NASDAQ: "NASDAQ",
+  NYSE: "New York Stock Exchange",
+  BATS: "Cboe BZX",
+  IEX: "IEX",
+  AMEX: "NYSE American",
+};
 
 /**
  * Shared ticker + range picker.
@@ -62,7 +79,7 @@ const PRESETS: readonly Preset[] = [
  */
 @Component({
   selector: "app-ticker-range-picker",
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, Tooltip],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./ticker-range-picker.component.html",
   styleUrls: ["./ticker-range-picker.component.scss"],
@@ -112,9 +129,26 @@ export class TickerRangePickerComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly rootEl =
     viewChild.required<ElementRef<HTMLElement>>("rootEl");
+  private readonly searchInput =
+    viewChild<ElementRef<HTMLInputElement>>("searchInput");
 
   readonly open = signal(false);
   readonly query = signal("");
+
+  constructor() {
+    // When the dropdown opens, the search input is freshly rendered. The
+    // user's click that opened it landed on the ticker-box (or an Enter/
+    // Space keystroke), so the input doesn't have focus yet. Pull focus
+    // on the next microtask so they can type immediately.
+    effect(() => {
+      if (this.open()) {
+        const input = this.searchInput();
+        if (input) {
+          queueMicrotask(() => input.nativeElement.focus());
+        }
+      }
+    });
+  }
 
   readonly summary = computed(() => summarizeAvailability(this.availability()));
   readonly advisories = computed<readonly Advisory[]>(() =>
@@ -123,6 +157,21 @@ export class TickerRangePickerComponent {
   readonly spanDays = computed(() => {
     const v = this.value();
     return daysBetween(v.from, v.to);
+  });
+  /**
+   * Business-days in the picker's range. Prefers the availability-cell
+   * count when cells are supplied by the host (so it reflects the actual
+   * market calendar, excluding holidays). Falls back to a plain
+   * weekday count between ``from`` and ``to`` when no cells exist — this
+   * is what Data Lab hits today (it doesn't yet fetch a per-day
+   * availability report), and without the fallback the readout shows
+   * ``0bd`` for every range.
+   */
+  readonly spanBusinessDays = computed(() => {
+    const summaryDays = this.summary().weekdays;
+    if (summaryDays > 0) return summaryDays;
+    const v = this.value();
+    return weekdaysBetween(v.from, v.to);
   });
   readonly activePreset = computed(() => {
     const s = this.spanDays();
@@ -134,6 +183,22 @@ export class TickerRangePickerComponent {
       this.tickerPool().find((t) => t.symbol === this.value().symbol)
         ?.exchange ?? "—"
   );
+
+  /**
+   * Hover/focus tooltip for the exchange chip. Ticker-aware: we look up
+   * the chip's code in the EXCHANGE_NAMES map so the user sees
+   * "NYSE Arca — primary listing venue for SPY" instead of the bare
+   * code. Falls back to a generic explainer when the code is unknown.
+   */
+  readonly selectedExchangeTooltip = computed<string>(() => {
+    const code = this.selectedExchange();
+    const symbol = this.value().symbol;
+    const name = EXCHANGE_NAMES[code];
+    if (!name) {
+      return "Listing exchange — where this instrument is primarily traded.";
+    }
+    return `${name} — primary listing venue for ${symbol}.`;
+  });
 
   readonly filteredTickers = computed<readonly TickerOption[]>(() => {
     const q = this.query().trim().toUpperCase();
@@ -165,6 +230,10 @@ export class TickerRangePickerComponent {
   }
 
   openDropdown(): void {
+    if (this.open()) {
+      // Already open — don't re-trigger and wipe the user's in-progress query.
+      return;
+    }
     this.open.set(true);
     this.query.set("");
   }

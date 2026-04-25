@@ -11,7 +11,38 @@
  * is 1:1 with its inputs via signals + `@for` — no branching worth
  * asserting on at the markup level.
  */
-import { computeAdvisories, summarizeAvailability } from './ticker-range-picker.types';
+import { computeAdvisories, summarizeAvailability, weekdaysBetween } from './ticker-range-picker.types';
+
+describe('weekdaysBetween', () => {
+  it('counts Mon–Fri inclusive of both endpoints', () => {
+    // Mon 2026-04-20 through Fri 2026-04-24 → 5 weekdays.
+    expect(weekdaysBetween('2026-04-20', '2026-04-24')).toBe(5);
+  });
+
+  it('skips weekend endpoints', () => {
+    // Sat 2026-04-18 through Sun 2026-04-26 → exactly 5 Mon-Fri in between.
+    expect(weekdaysBetween('2026-04-18', '2026-04-26')).toBe(5);
+  });
+
+  it('returns 1 when the range is a single weekday', () => {
+    expect(weekdaysBetween('2026-04-22', '2026-04-22')).toBe(1);
+  });
+
+  it('returns 0 when the range is a single weekend day', () => {
+    expect(weekdaysBetween('2026-04-25', '2026-04-25')).toBe(0);
+  });
+
+  it('returns 0 when to < from', () => {
+    expect(weekdaysBetween('2026-04-24', '2026-04-20')).toBe(0);
+  });
+
+  it('handles a 30-day range (regression for the picker showing 0bd)', () => {
+    // 30 calendar days ending 2026-04-23 → about 22 weekdays.
+    const bd = weekdaysBetween('2026-03-24', '2026-04-23');
+    expect(bd).toBeGreaterThanOrEqual(21);
+    expect(bd).toBeLessThanOrEqual(23);
+  });
+});
 
 describe('summarizeAvailability', () => {
   it('counts cells by status and ignores weekends', () => {

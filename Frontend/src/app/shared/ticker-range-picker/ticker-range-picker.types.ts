@@ -99,6 +99,39 @@ export function daysBetween(a: string, b: string): number {
   );
 }
 
+/**
+ * Count the weekdays (Mon–Fri) between two YYYY-MM-DD dates, inclusive on
+ * both ends. Returns 0 when ``to`` is before ``from``. Used as a fallback
+ * for the span-display "Nbd" readout when the caller has not supplied
+ * availability cells (the cell-driven summary counts only weekdays with
+ * non-weekend status).
+ *
+ * All arithmetic is in UTC so the result doesn't shift with the runtime's
+ * local timezone — ``new Date('2026-04-25').getDay()`` returns Friday in
+ * any TZ west of UTC, which mis-classifies that Saturday as a weekday.
+ */
+export function weekdaysBetween(from: string, to: string): number {
+  const start = parseIsoDateUtc(from);
+  const end = parseIsoDateUtc(to);
+  if (start === null || end === null) return 0;
+  if (end < start) return 0;
+  let count = 0;
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const d = cursor.getUTCDay();
+    if (d !== 0 && d !== 6) count++;
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return count;
+}
+
+function parseIsoDateUtc(s: string): Date | null {
+  const parts = s.split("-").map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+  const [y, m, d] = parts;
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
 export function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }

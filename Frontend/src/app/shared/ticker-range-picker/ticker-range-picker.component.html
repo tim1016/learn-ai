@@ -27,7 +27,12 @@
         <i class="pi pi-search ticker-box__icon" aria-hidden="true"></i>
         @if (!open()) {
           <span class="ticker-box__value mono">{{ value().symbol }}</span>
-          <span class="ticker-box__chip mono">{{ selectedExchange() }}</span>
+          <span class="ticker-box__chip mono"
+                [pTooltip]="selectedExchangeTooltip()"
+                tooltipPosition="top"
+                tabindex="0"
+                role="img"
+                [attr.aria-label]="selectedExchangeTooltip()">{{ selectedExchange() }}</span>
         } @else {
           <input
             type="text"
@@ -155,14 +160,14 @@
     <div class="field">
       <span class="label">Span</span>
       <div class="span-box mono">
-        {{ spanDays() }}d · {{ summary().weekdays }}bd
+        <span [attr.title]="spanDays() + ' calendar days · ' + spanBusinessDays() + ' trading sessions'">{{ spanDays() }}d · {{ spanBusinessDays() }} sessions</span>
       </div>
     </div>
   </div>
 
   <!-- ── Presets + auto-fetch ──────────────────────────────── -->
   <div class="presets">
-    <span class="presets__label">Quick</span>
+    <span class="presets__label">Quick ranges:</span>
     @for (p of presets; track p.days) {
       <button
         type="button"
