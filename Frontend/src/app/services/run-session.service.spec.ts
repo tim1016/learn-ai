@@ -6,7 +6,7 @@
  * event sequence (fetching → bundling → done; cancel; error). We never
  * hit the real Python service.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { RunSessionService } from './run-session.service';
 
@@ -42,6 +42,13 @@ describe('RunSessionService', () => {
     service = TestBed.inject(RunSessionService);
   });
 
+  afterEach(() => {
+    // Restore every spy/stub installed during the test. Without this the
+    // global URL stub (and our fetch / document.createElement spies) leak
+    // into the next suite running in the same Vitest process.
+    vi.restoreAllMocks();
+  });
+
   it('starts in idle state with no chunks or result', () => {
     expect(service.state()).toBe('idle');
     expect(service.chunks()).toEqual([]);
@@ -70,8 +77,12 @@ describe('RunSessionService', () => {
       .mockResolvedValueOnce(sseResponse(events))
       .mockResolvedValueOnce(new Response(new Blob(['x']), { status: 200 }));
 
-    // Stub the DOM bits that fire when the auto-download triggers.
-    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:fake', revokeObjectURL: () => undefined });
+    // Stub only the static methods on URL — never replace the URL
+    // constructor itself, since other suites in the same Vitest process
+    // call `new URL(...)` in their setup paths and break with
+    // "URL is not a constructor" if we replace it wholesale.
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:fake');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     const click = vi.fn();
     vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
       if (tag === 'a') return { href: '', download: '', click } as unknown as HTMLAnchorElement;
