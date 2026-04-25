@@ -578,7 +578,7 @@ class TestComputeRowGreeksStatusLabels:
 
         bar_ts = 1_749_562_200_000
         expiry_close = bar_ts + 6 * 60 * 60 * 1000
-        out, status = _compute_row_greeks(
+        _, status = _compute_row_greeks(
             option_close=None,
             underlying_spot=710.0,
             strike=709.0,
@@ -641,7 +641,10 @@ class TestProcessContractWarmStartIv:
 
                 self.status = _Status()
 
-        def _fake_iv(option_price, spot, strike, ttm, rate, dividend, is_call, vol_guess):
+        def _fake_iv(*args, vol_guess, **kwargs):
+            # Accept any keyword the real ``implied_volatility`` adds in the
+            # future (e.g. ``min_ttm``) — the test only cares about how
+            # ``vol_guess`` advances across sequential bars.
             captured.append(vol_guess)
             # Return progressively different IVs so warm-start can pick them up
             return _FakeIvResult(iv=0.20 + 0.01 * len(captured))
@@ -656,6 +659,7 @@ class TestProcessContractWarmStartIv:
             strike=709.0,
             expiration=date(2025, 6, 10),
             contract_type="call",
+            slot_offset=0,  # ATM in the slot ladder; not exercised by this test
         )
 
         bars = [
@@ -668,7 +672,6 @@ class TestProcessContractWarmStartIv:
         rows, _ = _process_contract(
             contract=contract,
             trading_day=date(2025, 6, 10),
-            from_date="2025-06-10",
             to_date="2025-06-10",
             underlying_by_ts=underlying_by_ts,
             config=OptionsCompanionConfig(enabled=True, risk_free_rate=0.05, dividend_yield=0.0),
@@ -724,8 +727,8 @@ class TestFirstDayCloseSource:
             enabled=True,
             include_calls=True,
             include_puts=False,
-            strikes_each_side=2,  # ATM ± 2 → 5 strikes total
-            expiry_mode="same_day",
+            strikes_each_side=2,  # ATM ± 2 → 5 slots
+            dte_distance=0,  # same-day expiry
             include_iv=False,  # IV solving is irrelevant to this assertion
             include_delta=False,
             include_gamma=False,
@@ -733,7 +736,7 @@ class TestFirstDayCloseSource:
             include_vega=False,
         )
 
-        calls_bytes, _, _ = build_options_companion_csvs(
+        slot_files, _ = build_options_companion_csvs(
             underlying_bars_df=underlying,
             ticker="SPY",
             from_date="2025-06-10",
@@ -744,14 +747,20 @@ class TestFirstDayCloseSource:
             multiplier=1,
         )
 
-        assert calls_bytes is not None
-        lines = calls_bytes.decode().strip().split("\n")
-        header = lines[0].split(",")
-        strike_idx = header.index("strike")
-        selected_strikes = sorted({float(r.split(",")[strike_idx]) for r in lines[1:]})
+        # New per-slot layout: one CSV per offset under calls/. Aggregate
+        # across slot files to recover the full set of selected strikes.
+        calls_paths = [p for p in slot_files if p.startswith("calls/")]
+        assert calls_paths, "expected at least one calls/* slot CSV"
+        selected_strikes: set[float] = set()
+        for path in calls_paths:
+            lines = slot_files[path].decode().strip().split("\n")
+            header = lines[0].split(",")
+            strike_idx = header.index("strike")
+            for row in lines[1:]:
+                selected_strikes.add(float(row.split(",")[strike_idx]))
 
         # ATM = first bar's close ($100), ± 2 strikes → [98, 99, 100, 101, 102].
-        assert selected_strikes == [98.0, 99.0, 100.0, 101.0, 102.0]
+        assert sorted(selected_strikes) == [98.0, 99.0, 100.0, 101.0, 102.0]
         # Sanity: must NOT include strikes that would have been selected
         # if EOD ($110) was used as the centering price.
         assert 110.0 not in selected_strikes
