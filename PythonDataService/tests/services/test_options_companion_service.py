@@ -18,6 +18,7 @@ from app.services.options_companion_service import (
     _columns_for,
     _prior_day_close_map,
     _select_strikes,
+    _sort_companion_rows,
     _underlying_close_map,
     _utc_ms_for_et_close,
 )
@@ -218,3 +219,49 @@ class TestUnderlyingCloseMapAlignment:
         # Option bar timestamp landing at the exact 5-min boundary
         key = _bar_grid_floor_ms(1_749_548_100_000, "minute", 5)
         assert lookup[key] == pytest.approx(201.5)
+
+
+class TestSortCompanionRows:
+    """Companion CSVs must be monotonic in unix_ts after the build sort runs.
+
+    Production accumulates rows in append order (day → strike → bar) which
+    produces contract-grouped, time-resetting blocks; the writer relies on
+    the caller having sorted by ``(unix_ts, contract_ticker)`` first.
+    """
+
+    def test_flattens_contract_blocks_into_chronological_stream(self):
+        # Two contracts, each with three bars at the same timestamps —
+        # mimics the per-contract block layout the user reported.
+        rows = [
+            {"unix_ts": 1000, "contract_ticker": "O:A", "close": 1.1},
+            {"unix_ts": 2000, "contract_ticker": "O:A", "close": 1.2},
+            {"unix_ts": 3000, "contract_ticker": "O:A", "close": 1.3},
+            {"unix_ts": 1000, "contract_ticker": "O:B", "close": 2.1},
+            {"unix_ts": 2000, "contract_ticker": "O:B", "close": 2.2},
+            {"unix_ts": 3000, "contract_ticker": "O:B", "close": 2.3},
+        ]
+        _sort_companion_rows(rows)
+
+        ts = [r["unix_ts"] for r in rows]
+        assert ts == sorted(ts), "unix_ts column must be non-decreasing"
+        # Tie-break is alphabetical on contract_ticker so identical
+        # timestamps cluster predictably (A before B).
+        assert rows[0:2] == [
+            {"unix_ts": 1000, "contract_ticker": "O:A", "close": 1.1},
+            {"unix_ts": 1000, "contract_ticker": "O:B", "close": 2.1},
+        ]
+
+    def test_already_sorted_input_is_unchanged(self):
+        rows = [
+            {"unix_ts": 1000, "contract_ticker": "O:A"},
+            {"unix_ts": 1000, "contract_ticker": "O:B"},
+            {"unix_ts": 2000, "contract_ticker": "O:A"},
+        ]
+        original = [dict(r) for r in rows]
+        _sort_companion_rows(rows)
+        assert rows == original
+
+    def test_empty_list_is_noop(self):
+        rows: list[dict] = []
+        _sort_companion_rows(rows)
+        assert rows == []

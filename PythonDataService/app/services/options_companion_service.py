@@ -282,7 +282,24 @@ def _fmt(v: Any) -> str:
     return str(v)
 
 
+def _sort_companion_rows(rows: list[dict[str, Any]]) -> None:
+    """Sort companion rows in place by ``(unix_ts, contract_ticker)``.
+
+    Bars accumulate in append order (day → strike → bar), producing
+    contract-grouped, time-resetting blocks. This sort flattens them into a
+    single chronological stream and breaks ties on contract ticker for
+    determinism (multiple contracts always share each bar timestamp).
+    """
+    rows.sort(key=lambda r: (r["unix_ts"], r["contract_ticker"]))
+
+
 def _write_rows_to_csv(rows: list[dict[str, Any]], columns: list[str]) -> bytes:
+    """Serialize rows to CSV bytes.
+
+    Caller contract: ``rows`` must already be sorted by their canonical time
+    key (``unix_ts`` for option bars). Use :func:`_sort_companion_rows`
+    immediately before calling this writer.
+    """
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(columns)
@@ -520,6 +537,10 @@ def build_options_companion_csvs(
                 )
 
         per_day_report.append(day_report)
+
+    # Globally sort by bar timestamp so the CSV is monotonic in time.
+    _sort_companion_rows(calls_rows)
+    _sort_companion_rows(puts_rows)
 
     columns = _columns_for(config)
     calls_bytes = _write_rows_to_csv(calls_rows, columns) if (config.include_calls and calls_rows) else None

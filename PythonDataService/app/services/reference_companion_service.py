@@ -35,12 +35,37 @@ logger = logging.getLogger(__name__)
 
 
 def _write_csv(rows: list[dict[str, Any]], columns: list[str]) -> bytes:
+    """Serialize rows to CSV bytes.
+
+    Caller contract: ``rows`` must already be sorted by their canonical time
+    key (e.g. ``execution_date`` for splits, ``sip_timestamp_ns`` for
+    trades). Sorting is the call-site's responsibility — see
+    :func:`_sorted_by_time` below.
+    """
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(columns)
     for row in rows:
         writer.writerow(["" if row.get(c) is None else str(row.get(c)) for c in columns])
     return buf.getvalue().encode("utf-8")
+
+
+def _sorted_by_time(rows: list[dict[str, Any]], time_key: str) -> list[dict[str, Any]]:
+    """Stable-sort ``rows`` ascending by ``time_key``.
+
+    Rows with a missing or ``None`` time-key are pushed to the end so they
+    are not silently dropped. Sort is non-mutating — returns a new list.
+    """
+
+    def _key(row: dict[str, Any]) -> tuple[int, Any]:
+        v = row.get(time_key)
+        # (1, "") sorts after (0, anything) — keeps None-keyed rows at the end
+        # while remaining a valid comparable tuple regardless of v's type.
+        if v is None:
+            return (1, "")
+        return (0, v)
+
+    return sorted(rows, key=_key)
 
 
 def _iso_to_ns(iso_date: str, end_of_day: bool = False) -> int:
@@ -60,6 +85,7 @@ def build_splits_csv(polygon: PolygonClientService, ticker: str, from_date: str,
         rows = polygon.list_splits(ticker=ticker, execution_date_gte=from_date, execution_date_lte=to_date)
         if not rows:
             return None
+        rows = _sorted_by_time(rows, "execution_date")
         return _write_csv(rows, ["ticker", "execution_date", "split_from", "split_to", "id"])
     except Exception as exc:
         logger.warning(f"[REF] splits fetch failed for {ticker}: {exc}")
@@ -71,6 +97,7 @@ def build_dividends_csv(polygon: PolygonClientService, ticker: str, from_date: s
         rows = polygon.list_dividends(ticker=ticker, ex_dividend_date_gte=from_date, ex_dividend_date_lte=to_date)
         if not rows:
             return None
+        rows = _sorted_by_time(rows, "ex_dividend_date")
         return _write_csv(
             rows,
             [
@@ -117,6 +144,7 @@ def build_news_csv(
         )
         if not rows:
             return None
+        rows = _sorted_by_time(rows, "published_utc")
         return _write_csv(
             rows,
             [
@@ -154,6 +182,7 @@ def build_financials_csv(
         )
         if not rows:
             return None
+        rows = _sorted_by_time(rows, "filing_date")
         return _write_csv(
             rows,
             [
@@ -199,6 +228,7 @@ def build_trades_csv(
         )
         if not rows:
             return None
+        rows = _sorted_by_time(rows, "sip_timestamp_ns")
         return _write_csv(
             rows,
             [
@@ -233,6 +263,7 @@ def build_quotes_csv(
         )
         if not rows:
             return None
+        rows = _sorted_by_time(rows, "sip_timestamp_ns")
         return _write_csv(
             rows,
             [
