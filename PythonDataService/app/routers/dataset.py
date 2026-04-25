@@ -267,12 +267,17 @@ def _build_zip_with_events(
     column_meta,
     raw_count: int,
     on_event: Callable[[dict[str, Any]], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[bytes, str]:
     """Bundle the dataset + companions + quality report into a ZIP.
 
     When ``on_event`` is supplied, emits ``bundle_start`` listing the
-    components that will be produced and ``bundle_component_done`` after
-    each one. Returns ``(zip_bytes, filename)``.
+    components that will be produced, ``bundle_progress`` events from
+    the options-companion loop (one per contract), and
+    ``bundle_component_done`` after each component finishes. When
+    ``cancel_check`` is supplied and returns True between components or
+    between contracts, the bundler raises ``RunCancelledError``.
+    Returns ``(zip_bytes, filename)``.
     """
     ohlcv_cols = ["open", "high", "low", "close", "volume"]
     extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
@@ -324,6 +329,8 @@ def _build_zip_with_events(
             polygon=polygon_client,
             timespan=request.timespan,
             multiplier=request.multiplier,
+            on_event=on_event,
+            cancel_check=cancel_check,
         )
         if request.options_companion.include_calls:
             _component_done("options_calls.csv")
@@ -504,7 +511,9 @@ def _run_zip_pipeline(
             "processed_bars": len(df),
             "indicator_columns": len([m["column"] for m in column_meta]),
         })
-        zip_bytes, filename = _build_zip_with_events(request, df, column_meta, raw_count, on_event=on_event)
+        zip_bytes, filename = _build_zip_with_events(
+            request, df, column_meta, raw_count, on_event=on_event, cancel_check=_cancel_check,
+        )
         session.zip_bytes = zip_bytes
         session.filename = filename
         on_event({

@@ -45,6 +45,10 @@ services:
       - PORT=8000
       - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200
       - BACKEND_URL=http://backend:8080
+      # Polygon paid plans (Starter / Developer / Advanced) all have no
+      # per-minute cap; only the free Basic tier is 5/min. Set to a
+      # positive integer here only if you're on the free tier.
+      - POLYGON_RATE_LIMIT_PER_MIN=${POLYGON_RATE_LIMIT_PER_MIN:-0}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
