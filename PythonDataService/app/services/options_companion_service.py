@@ -451,13 +451,13 @@ def build_options_companion_csvs(
     if not trading_days:
         return None, None, {"enabled": True, "reason": "no trading days derived from bars"}
 
-    # Seed prior-close for the first day: fall back to the first bar's close on that day
-    # if we don't have a real prior day.
-    first_day_close = (
-        prior_close_by_day[trading_days[0]]
-        if len(trading_days) >= 2
-        else float(underlying_bars_df["close"].iloc[0])
-    )
+    # Seed prior-close for the first day from that session's *first* bar.
+    # The previous version used ``prior_close_by_day[trading_days[0]]`` which
+    # is the day's last close — that leaks end-of-day information into the
+    # day-1 ATM ladder selection. The first bar's open/close is the earliest
+    # underlying anchor we have inside the dataset; if a true prior-session
+    # close is needed, the caller should fetch and prepend an extra day.
+    first_day_close = float(underlying_bars_df["close"].iloc[0])
 
     calls_rows: list[dict[str, Any]] = []
     puts_rows: list[dict[str, Any]] = []

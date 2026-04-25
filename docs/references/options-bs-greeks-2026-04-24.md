@@ -43,7 +43,7 @@ in that file (`SPY $709 call at 14:00 ET, T = 2/(365×24)` →
 ## Math summary
 Standard BSM with continuous dividend yield `q`:
 
-```
+```text
 d1 = [ln(S/K) + (r − q + σ²/2)·T] / (σ·√T)
 d2 = d1 − σ·√T
 

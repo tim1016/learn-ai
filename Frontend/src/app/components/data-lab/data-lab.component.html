@@ -208,7 +208,7 @@
       <fieldset class="option-group fieldset-radio">
         <legend>API pacing</legend>
         <label class="checkbox-inline"
-               pTooltip="Polygon returns up to 50,000 rows per request. We break bigger windows into paced requests so you never hit your 5/min slot."
+               pTooltip="Polygon returns up to 50,000 rows per request. We split larger windows into multiple requests and pace automatically if your plan enforces a per-minute cap."
                tooltipPosition="top">
           <input type="checkbox" [checked]="autoChunk()" (change)="autoChunk.set(!autoChunk())" />
           <span>Auto-chunk (recommended)</span>

@@ -202,12 +202,12 @@ def implied_volatility(
         )
 
     # ── QuantLib solve ───────────────────────────────────────────────────
-    # QuantLib's serial-day arithmetic rounds sub-day TTMs to zero, so the
-    # constructed expiry collapses onto eval_date and the analytic engine
-    # can't price the option. Skip QL entirely for sub-day TTM and go
-    # straight to the closed-form Brent fallback, which works in
-    # continuous time.
-    if round(ttm * 365) < 1:
+    # QuantLib's serial-day arithmetic only has day resolution, so any
+    # sub-day TTM gets rounded — a 0.75-day option would be priced as a
+    # full 1-day expiry. Skip QL entirely for any TTM under one calendar
+    # day and go straight to the closed-form Brent fallback, which works
+    # in continuous time.
+    if ttm < 1.0 / 365.0:
         return _brent_fallback(
             option_price=option_price,
             spot=spot,

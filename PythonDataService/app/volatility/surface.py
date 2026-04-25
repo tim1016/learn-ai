@@ -258,6 +258,7 @@ class VolSurfaceBuilder:
                 if result.iv is not None and result.status in (
                     SolveStatus.QUANTLIB_OK,
                     SolveStatus.BRENT_FALLBACK,
+                    SolveStatus.NEWTON_OK,
                 ):
                     strikes.append(rec["strike"])
                     ivs.append(result.iv)
