@@ -37,6 +37,7 @@ services:
       - ./PythonDataService/cache:/app/cache:z
     environment:
       - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - POLYGON_RATE_LIMIT_PER_MIN=${POLYGON_RATE_LIMIT_PER_MIN:-0}
       - FRED_API_KEY=${FRED_API_KEY}
       - LEAN_DATA_ROOT=/lean-data
       - LEAN_DATA_CACHE=/lean-cache

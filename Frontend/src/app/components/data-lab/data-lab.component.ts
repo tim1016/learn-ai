@@ -469,10 +469,12 @@ export class DataLabComponent {
 
   /**
    * Layman-friendly readout for Auto Chunk — tells the user how many
-   * requests the fetch will issue and how long it will take given
-   * Polygon Starter's 5 req/min cap. Matches the design brief's wording
-   * convention: prefer "requests" / "slot" / "paced" over "chunk" /
-   * "rate-limit" / "backoff".
+   * Polygon requests the fetch will issue. Paid plans run back-to-back
+   * (no per-minute cap); only the free Basic tier triggers the
+   * server-side throttle that paces requests to 5/min. The actual
+   * pacing decision is made server-side by the throttle config; this
+   * readout intentionally avoids quoting a specific per-minute number
+   * so it stays accurate for both tiers.
    */
   readonly autoChunkReadout = computed<string>(() => {
     const bars = this.expectedBarCount();
@@ -481,12 +483,9 @@ export class DataLabComponent {
       return `Manual: ${this.polygonLimit().toLocaleString()} bars per request.`;
     }
     if (chunks === 1) {
-      return `1 request · ~${bars.toLocaleString()} bars · fits in a single slot.`;
+      return `1 request · ~${bars.toLocaleString()} bars · single response.`;
     }
-    // Starter plan: 5 req/min → 12 s per request once the first 5 are spent.
-    const paced = Math.max(0, chunks - 5);
-    const approxSec = Math.round(paced * 12 + Math.min(chunks, 5) * 1);
-    return `Plan runs ${chunks} requests · ~${bars.toLocaleString()} bars · ~${approxSec}s on your 5-req/min slot.`;
+    return `Plan runs ${chunks} requests · ~${bars.toLocaleString()} bars · paced if your plan caps requests/min.`;
   });
 
   loading = signal(false);
