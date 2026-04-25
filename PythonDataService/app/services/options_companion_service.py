@@ -24,6 +24,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -387,6 +388,8 @@ def build_options_companion_csvs(
     polygon: PolygonClientService,
     timespan: str = "minute",
     multiplier: int = 1,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[bytes | None, bytes | None, dict[str, Any]]:
     """Build options_calls.csv and/or options_puts.csv byte payloads plus a summary report.
 
@@ -406,6 +409,12 @@ def build_options_companion_csvs(
     """
     if not config.enabled or underlying_bars_df.empty:
         return None, None, {"enabled": False, "reason": "disabled or empty bars"}
+
+    # Imported lazily to avoid a circular import: options_companion_service is
+    # imported from app.routers.dataset, which itself imports from
+    # dataset_service. Pulling RunCancelledError at function-call time breaks
+    # the cycle without changing module graph layout.
+    from app.services.dataset_service import RunCancelledError
 
     prior_close_by_day = _prior_day_close_map(underlying_bars_df)
     underlying_by_ts = _underlying_close_map(underlying_bars_df, timespan, multiplier)
@@ -427,8 +436,29 @@ def build_options_companion_csvs(
     puts_rows: list[dict[str, Any]] = []
     skipped_days: list[dict[str, str]] = []
     per_day_report: list[dict[str, Any]] = []
+    calls_done = 0
+    puts_done = 0
+
+    def _check_cancel() -> None:
+        if cancel_check is not None and cancel_check():
+            raise RunCancelledError(
+                f"options companion cancelled after {calls_done} calls, {puts_done} puts"
+            )
+
+    def _emit_progress(component: str, step: int, label: str, day_iso: str, expiry_iso: str) -> None:
+        if on_event is None:
+            return
+        on_event({
+            "type": "bundle_progress",
+            "component": component,
+            "step": step,
+            "label": label,
+            "day": day_iso,
+            "expiry": expiry_iso,
+        })
 
     for i, day in enumerate(trading_days):
+        _check_cancel()
         if i == 0:
             prior_close = first_day_close
         else:
@@ -439,9 +469,11 @@ def build_options_companion_csvs(
             skipped_days.append({"date": day.isoformat(), "reason": "no expiry found"})
             continue
 
+        day_iso = day.isoformat()
+        expiry_iso = target_expiry.isoformat()
         day_report: dict[str, Any] = {
-            "date": day.isoformat(),
-            "expiry": target_expiry.isoformat(),
+            "date": day_iso,
+            "expiry": expiry_iso,
             "prior_close": prior_close,
             "calls_selected": 0,
             "puts_selected": 0,
@@ -452,12 +484,15 @@ def build_options_companion_csvs(
             selected_calls = _select_strikes(calls, prior_close, config.strikes_each_side)
             day_report["calls_selected"] = len(selected_calls)
             for c in selected_calls:
+                _check_cancel()
                 contract = _SelectedContract(
                     ticker=c["ticker"],
                     strike=float(c["strike_price"]),
                     expiration=target_expiry,
                     contract_type="call",
                 )
+                calls_done += 1
+                _emit_progress("options_calls.csv", calls_done, contract.ticker, day_iso, expiry_iso)
                 calls_rows.extend(
                     _process_contract(
                         contract, day, from_date, to_date, underlying_by_ts, config, timespan, multiplier, polygon
@@ -469,12 +504,15 @@ def build_options_companion_csvs(
             selected_puts = _select_strikes(puts, prior_close, config.strikes_each_side)
             day_report["puts_selected"] = len(selected_puts)
             for c in selected_puts:
+                _check_cancel()
                 contract = _SelectedContract(
                     ticker=c["ticker"],
                     strike=float(c["strike_price"]),
                     expiration=target_expiry,
                     contract_type="put",
                 )
+                puts_done += 1
+                _emit_progress("options_puts.csv", puts_done, contract.ticker, day_iso, expiry_iso)
                 puts_rows.extend(
                     _process_contract(
                         contract, day, from_date, to_date, underlying_by_ts, config, timespan, multiplier, polygon

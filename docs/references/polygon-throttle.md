@@ -2,34 +2,41 @@
 
 ## Why it exists
 
-Polygon's pricing plans set a hard per-minute cap on API requests:
+Only Polygon's **free Basic tier** caps requests at 5/minute. **All paid plans
+(Starter, Developer, Advanced, Business) have no per-minute cap.** Verify the
+current limit on your account at [polygon.io/pricing](https://polygon.io/pricing)
+since plan terms change.
 
-| Plan        | Requests per minute |
-|-------------|---------------------|
-| Starter     | 5                   |
-| Developer   | 100                 |
-| Advanced    | unlimited           |
-| Business    | unlimited           |
+| Plan        | Per-minute cap |
+|-------------|----------------|
+| Basic (free)| 5              |
+| Starter     | unlimited      |
+| Developer   | unlimited      |
+| Advanced    | unlimited      |
+| Business    | unlimited      |
 
-If you exceed the cap, Polygon returns `HTTP 429 Too Many Requests`. Two things
-happen from there:
+If you exceed the cap on the free tier, Polygon returns `HTTP 429 Too Many
+Requests`. Two things happen from there:
 
 1. The failed request has to be retried, adding latency.
 2. Polygon logs the over-cap behaviour against your account and can slow
    *all* subsequent traffic for a while.
 
-The `PolygonClientService` doesn't wait for that to happen. It **paces**
-requests on the way out — sleeps before sending — so the per-minute budget is
-never exceeded in the first place.
+The `PolygonClientService` *can* pace requests on the way out — sleeping
+before sending — so the per-minute budget is never exceeded. By default this
+is **off** (`POLYGON_RATE_LIMIT_PER_MIN=0`) since the codebase assumes a paid
+plan; flip it on for the free tier.
 
 ## The layman story (what users see)
 
-On Starter, if a Data Lab fetch needs more than 5 chunks of data, the 6th
-chunk has to wait up to ~60 seconds for a request "slot" to free up.
+When the throttle is on (free tier), if a Data Lab fetch needs more than the
+plan's per-minute allowance, later requests pause for a "slot" to free up. On
+paid plans the throttle is off entirely and requests issue back-to-back.
 
-The UI tells the user exactly this, via the Auto Chunk readout:
+The UI tells the user via the Auto Chunk readout (only meaningful when the
+throttle is active):
 
-> Auto → 7 chunks (~42,000 bars). Your Polygon Starter plan allows 5
+> Auto → 7 chunks (~42,000 bars). Your Polygon plan allows 5
 > requests/minute — this will take ~60s.
 
 And the server logs a matching line at INFO level each time it paces:
@@ -53,11 +60,13 @@ deterministic, and the sleep time directly maps to user-facing latency.
 
 Set via `POLYGON_RATE_LIMIT_PER_MIN` in environment / `.env`:
 
-- `5` — Starter plan (default)
-- `100` — Developer plan
-- `0` — Disable the throttle (for Advanced / Business plans, or local
-  development where you've already hit the daily free-tier cap and want to
-  fail fast)
+- `0` — Throttle off (default). Use this on any paid Polygon plan
+  (Starter / Developer / Advanced / Business) — they have no per-minute
+  cap and the throttle would only add artificial latency.
+- `5` — Free Basic tier. Paces fetch requests so they never exceed
+  Polygon's 5/min cap and never trigger a 429.
+- Any positive integer — for plan tiers that publish a different cap,
+  or for self-imposed rate limits during testing.
 
 ## Where the throttle is applied
 

@@ -8,10 +8,11 @@ class Settings(BaseSettings):
 
     # Polygon API
     POLYGON_API_KEY: str
-    # Polygon plan rate limit. Starter = 5 req/min, Developer = 100 req/min,
-    # Advanced/Business = unlimited. Set to 0 to disable proactive pacing
-    # (requests will still be subject to Polygon's own 429 responses).
-    POLYGON_RATE_LIMIT_PER_MIN: int = 5
+    # Polygon's paid plans (Starter / Developer / Advanced / Business) have
+    # no per-minute cap, so the throttle is off by default. Only the free
+    # Basic tier is 5/min — set this to 5 if you're on Basic. See
+    # docs/references/polygon-throttle.md for the full plan table.
+    POLYGON_RATE_LIMIT_PER_MIN: int = 0
 
     # FRED API (for dynamic risk-free rate)
     FRED_API_KEY: str = ""
