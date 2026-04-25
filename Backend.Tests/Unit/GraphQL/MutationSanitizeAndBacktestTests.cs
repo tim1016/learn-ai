@@ -69,7 +69,7 @@ public class MutationSanitizeAndBacktestTests
 
         _marketDataMock.Setup(s => s.GetOrFetchAggregatesAsync(
                 It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(),
-                It.IsAny<string>(), It.IsAny<string>(), false, default))
+                It.IsAny<string>(), It.IsAny<string>(), false, true, default))
             .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = [] });
 
         var mutation = new Mutation();
@@ -88,12 +88,12 @@ public class MutationSanitizeAndBacktestTests
 
         var aggregates = new List<StockAggregate>
         {
-            new() { Open = 150m, High = 155m, Low = 148m, Close = 153m, Volume = 1_000_000m, Timespan = "day" }
+            new() { Open = 150m, High = 155m, Low = 148m, Close = 153m, Volume = 1_000_000m, Timespan = "day", Timestamp = new DateTime(2026, 1, 15, 19, 0, 0, DateTimeKind.Utc) }
         };
 
         _marketDataMock.Setup(s => s.GetOrFetchAggregatesAsync(
                 It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(),
-                It.IsAny<string>(), It.IsAny<string>(), false, default))
+                It.IsAny<string>(), It.IsAny<string>(), false, true, default))
             .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var mutation = new Mutation();
@@ -115,11 +115,11 @@ public class MutationSanitizeAndBacktestTests
 
         var aggregates = new List<StockAggregate>
         {
-            new() { TickerId = ticker.Id, Open = 150m, High = 155m, Low = 148m, Close = 153m, Volume = 1_000_000m, Timespan = "minute" }
+            new() { TickerId = ticker.Id, Open = 150m, High = 155m, Low = 148m, Close = 153m, Volume = 1_000_000m, Timespan = "minute", Timestamp = new DateTime(2026, 1, 15, 19, 0, 0, DateTimeKind.Utc) }
         };
 
         _marketDataMock.Setup(s => s.GetOrFetchAggregatesAsync(
-                "AAPL", 1, "minute", "2026-01-01", "2026-01-31", false, default))
+                "AAPL", 1, "minute", "2026-01-01", "2026-01-31", false, true, default))
             .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         var execution = new StrategyExecution
@@ -178,12 +178,12 @@ public class MutationSanitizeAndBacktestTests
 
         var aggregates = new List<StockAggregate>
         {
-            new() { TickerId = ticker.Id, Open = 150m, Timespan = "minute", High = 155m, Low = 148m, Close = 153m, Volume = 1_000_000m }
+            new() { TickerId = ticker.Id, Open = 150m, Timespan = "minute", High = 155m, Low = 148m, Close = 153m, Volume = 1_000_000m, Timestamp = new DateTime(2026, 1, 15, 19, 0, 0, DateTimeKind.Utc) }
         };
 
         _marketDataMock.Setup(s => s.GetOrFetchAggregatesAsync(
                 It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(),
-                It.IsAny<string>(), It.IsAny<string>(), false, default))
+                It.IsAny<string>(), It.IsAny<string>(), false, true, default))
             .ReturnsAsync(new AggregatesWithGapInfo { Aggregates = aggregates });
 
         _backtestMock.Setup(s => s.RunBacktestAsync(
