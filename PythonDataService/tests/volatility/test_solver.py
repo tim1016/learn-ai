@@ -47,7 +47,7 @@ class TestImpliedVolatility:
 
         result = implied_volatility(price, spot, strike, ttm, rate)
 
-        assert result.status in (SolveStatus.QUANTLIB_OK, SolveStatus.BRENT_FALLBACK)
+        assert result.status in (SolveStatus.NEWTON_OK, SolveStatus.QUANTLIB_OK, SolveStatus.BRENT_FALLBACK)
         assert result.iv is not None
         # QuantLib accuracy is on price, not vol; ~0.1% vol tolerance is realistic
         assert abs(result.iv - vol) < 0.005
@@ -96,8 +96,14 @@ class TestImpliedVolatility:
         assert abs(result.iv - vol) < 1e-3
 
     def test_expired_option_returns_expired(self, spot: float) -> None:
-        """Near-zero TTM should return EXPIRED status."""
-        result = implied_volatility(5.0, spot, spot, ttm=0.0001, rate=0.05)
+        """TTM below MIN_TIME_TO_EXPIRY (1 minute) should return EXPIRED.
+
+        The solver's floor was lowered from 1 calendar day to 1 minute so
+        the data-lab options companion can solve 0DTE intraday IVs (see
+        ``MIN_TIME_TO_EXPIRY`` rationale). This test pins the new floor.
+        """
+        sub_minute_ttm = 1e-7  # ~3 seconds, well below 1/(365*24*60)
+        result = implied_volatility(5.0, spot, spot, ttm=sub_minute_ttm, rate=0.05)
         assert result.status == SolveStatus.EXPIRED
         assert result.iv is None
 
@@ -154,5 +160,5 @@ class TestSolveIvChain:
         assert len(results) == 5
         for r in results:
             assert r["iv"] is not None
-            assert r["iv_status"] in ("quantlib_ok", "brent_fallback")
+            assert r["iv_status"] in ("newton_ok", "quantlib_ok", "brent_fallback")
             assert abs(r["iv"] - vol) < 1e-3

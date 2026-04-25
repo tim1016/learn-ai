@@ -26,7 +26,7 @@ import io
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -34,9 +34,9 @@ import numpy as np
 import pandas as pd
 
 from app.models.requests import OptionsCompanionConfig
+from app.services.bs_greeks import black_scholes_greeks
 from app.services.polygon_client import PolygonClientService
-from app.services.quantlib_pricer import _QL_AVAILABLE, PricingEngine, price_option
-from app.volatility.solver import SolveStatus, implied_volatility
+from app.volatility.solver import implied_volatility
 
 logger = logging.getLogger(__name__)
 
@@ -181,16 +181,26 @@ def _fetch_contracts_for_expiry(
 
 
 def _compute_row_greeks(
-    option_close: float,
+    option_close: float | None,
     underlying_spot: float,
     strike: float,
     bar_ts_ms: int,
     expiry_close_ms: int,
     is_call: bool,
     config: OptionsCompanionConfig,
-) -> dict[str, float | None]:
-    """Solve IV then compute Greeks via QuantLib analytic engine. Skip values if inputs degenerate."""
-    ttm_years = max(0.0, (expiry_close_ms - bar_ts_ms) / _MS_PER_YEAR)
+    vol_guess: float = 0.25,
+) -> tuple[dict[str, float | None], str]:
+    """Solve IV per bar and compute closed-form Greeks. Returns (values, status_label).
+
+    ``status_label`` is one of: ``"ok"``, ``"expired"`` (ttm ≤ 0),
+    ``"no_price"`` (option_close missing or non-positive), one of the
+    ``SolveStatus`` enum values when the IV solver gave up, or
+    ``"greeks_failed"`` when Greeks math raised after a successful IV
+    solve. Callers aggregate these into the per-day report so a 100%-NaN
+    column points to a specific cause. ``vol_guess`` warm-starts the
+    Newton solver from the previous bar's IV — sequential bars on the
+    same contract converge in 2–4 iterations.
+    """
     out: dict[str, float | None] = {
         "iv": None,
         "delta": None,
@@ -200,8 +210,11 @@ def _compute_row_greeks(
         "rho": None,
     }
 
-    if ttm_years <= 0 or option_close is None or option_close <= 0 or underlying_spot is None:
-        return out
+    ttm_years = max(0.0, (expiry_close_ms - bar_ts_ms) / _MS_PER_YEAR)
+    if ttm_years <= 0:
+        return out, "expired"
+    if option_close is None or option_close <= 0:
+        return out, "no_price"
 
     iv_result = implied_volatility(
         option_price=option_close,
@@ -211,31 +224,23 @@ def _compute_row_greeks(
         rate=config.risk_free_rate,
         dividend=config.dividend_yield,
         is_call=is_call,
+        vol_guess=vol_guess,
     )
 
-    if iv_result.status in (SolveStatus.QUANTLIB_OK, SolveStatus.BRENT_FALLBACK, SolveStatus.OK) and iv_result.iv:
-        out["iv"] = iv_result.iv
-    else:
-        return out
+    if iv_result.iv is None:
+        return out, iv_result.status.value
 
-    # Compute Greeks using the solved IV. We skip this path if QuantLib is not installed
-    # — IV still populates (it has its own fallback), but Greeks require QL for now.
-    if not _QL_AVAILABLE:
-        return out
+    out["iv"] = iv_result.iv
 
     try:
-        expiry_d = datetime.utcfromtimestamp(expiry_close_ms / 1000).date()
-        eval_d = datetime.utcfromtimestamp(bar_ts_ms / 1000).date()
-        greeks = price_option(
+        greeks = black_scholes_greeks(
             spot=underlying_spot,
             strike=strike,
-            risk_free_rate=config.risk_free_rate,
+            ttm_years=ttm_years,
             volatility=iv_result.iv,
-            expiration_date=expiry_d,
-            option_type="call" if is_call else "put",
-            evaluation_date=eval_d,
-            dividend_yield=config.dividend_yield,
-            engine=PricingEngine.ANALYTIC_BS,
+            rate=config.risk_free_rate,
+            dividend=config.dividend_yield,
+            is_call=is_call,
         )
         out["delta"] = greeks.delta
         out["gamma"] = greeks.gamma
@@ -243,9 +248,10 @@ def _compute_row_greeks(
         out["vega"] = greeks.vega
         out["rho"] = greeks.rho
     except Exception as exc:
-        logger.debug(f"[OC] Greeks compute failed at ts={bar_ts_ms}: {exc}")
+        logger.warning(f"[OC] Greeks compute failed at ts={bar_ts_ms}: {exc}")
+        return out, "greeks_failed"
 
-    return out
+    return out, "ok"
 
 
 def _columns_for(config: OptionsCompanionConfig) -> list[str]:
@@ -301,14 +307,22 @@ def _process_contract(
     timespan: str,
     multiplier: int,
     polygon: PolygonClientService,
-) -> list[dict[str, Any]]:
-    """Fetch the option's aggregate bars at the ticker's resolution and build one row per bar.
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Fetch option bars and emit one row per bar that aligns to the underlying grid.
 
-    Fetch window is clamped to ``[trading_day, min(trading_day + expiry_span, to_date)]``
-    — the option only produces bars while it's live, and for ``same_day`` mode
-    that's a single trading date.
+    Polygon's option aggregates include some pre/post-RTH activity that the
+    session-filtered underlying drops. Option bars whose floored timestamp
+    isn't a key in ``underlying_by_ts`` are discarded so the option row
+    set mirrors the underlying ticker's timestamps exactly — option
+    contracts are picked once at start of day and we just track price as
+    the underlying moves. Returned counters let the caller surface
+    drop and solver-failure rates in the run report.
     """
-    # Clamp fetch window to the contract's lifetime within [from_date, to_date]
+    counters: dict[str, Any] = {
+        "option_bars_raw": 0,
+        "option_bars_dropped": 0,
+        "iv_status": {},
+    }
     contract_end = min(contract.expiration.isoformat(), to_date)
     try:
         bars = polygon.fetch_aggregates(
@@ -321,21 +335,37 @@ def _process_contract(
         )
     except Exception as exc:
         logger.warning(f"[OC] Bar fetch failed for {contract.ticker} on {trading_day}: {exc}")
-        return []
+        return [], counters
 
     if not bars:
-        return []
+        return [], counters
 
+    counters["option_bars_raw"] = len(bars)
     expiry_close_ms = _utc_ms_for_et_close(contract.expiration, hour=16, minute=0)
     is_call = contract.contract_type == "call"
     iso_expiration = contract.expiration.isoformat()
+    needs_greeks = (
+        config.include_iv
+        or config.include_delta
+        or config.include_gamma
+        or config.include_theta
+        or config.include_vega
+        or config.include_rho
+    )
 
     rows: list[dict[str, Any]] = []
+    last_iv: float = 0.25  # Newton seed; replaced with each successful solve
     for bar in bars:
-        ts = int(bar["timestamp"])
-        iso_time = datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%dT%H:%M:%SZ")
-        aligned_key = _bar_grid_floor_ms(ts, timespan, multiplier)
+        aligned_key = _bar_grid_floor_ms(int(bar["timestamp"]), timespan, multiplier)
         underlying_spot = underlying_by_ts.get(aligned_key)
+        if underlying_spot is None:
+            counters["option_bars_dropped"] += 1
+            continue
+
+        # Use the canonical underlying timestamp so option rows and the
+        # underlying ticker's rows share unix_ts bit-for-bit.
+        ts = aligned_key
+        iso_time = datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         row: dict[str, Any] = {
             "unix_ts": ts,
@@ -354,16 +384,8 @@ def _process_contract(
             "open_interest": None,  # historical per-minute OI unavailable from Polygon
         }
 
-        needs_greeks = (
-            config.include_iv
-            or config.include_delta
-            or config.include_gamma
-            or config.include_theta
-            or config.include_vega
-            or config.include_rho
-        )
-        if needs_greeks and underlying_spot is not None:
-            greeks = _compute_row_greeks(
+        if needs_greeks:
+            greeks, status = _compute_row_greeks(
                 option_close=bar.get("close"),
                 underlying_spot=underlying_spot,
                 strike=contract.strike,
@@ -371,12 +393,17 @@ def _process_contract(
                 expiry_close_ms=expiry_close_ms,
                 is_call=is_call,
                 config=config,
+                vol_guess=last_iv,
             )
             row.update(greeks)
+            counters["iv_status"][status] = counters["iv_status"].get(status, 0) + 1
+            iv_value = greeks["iv"]
+            if iv_value is not None:
+                last_iv = iv_value
 
         rows.append(row)
 
-    return rows
+    return rows, counters
 
 
 def build_options_companion_csvs(
@@ -424,20 +451,34 @@ def build_options_companion_csvs(
     if not trading_days:
         return None, None, {"enabled": True, "reason": "no trading days derived from bars"}
 
-    # Seed prior-close for the first day: fall back to the first bar's close on that day
-    # if we don't have a real prior day.
-    first_day_close = None
-    if len(trading_days) >= 2:
-        first_day_close = prior_close_by_day[trading_days[0]]
-    else:
-        first_day_close = float(underlying_bars_df["close"].iloc[0])
+    # Seed prior-close for the first day from that session's *first* bar.
+    # The previous version used ``prior_close_by_day[trading_days[0]]`` which
+    # is the day's last close — that leaks end-of-day information into the
+    # day-1 ATM ladder selection. The first bar's open/close is the earliest
+    # underlying anchor we have inside the dataset; if a true prior-session
+    # close is needed, the caller should fetch and prepend an extra day.
+    first_day_close = float(underlying_bars_df["close"].iloc[0])
 
     calls_rows: list[dict[str, Any]] = []
     puts_rows: list[dict[str, Any]] = []
     skipped_days: list[dict[str, str]] = []
     per_day_report: list[dict[str, Any]] = []
+    totals: dict[str, Any] = {
+        "option_bars_raw": 0,
+        "option_bars_dropped": 0,
+        "iv_status": {},
+    }
     calls_done = 0
     puts_done = 0
+
+    def _accumulate(target: dict[str, Any], src: dict[str, Any]) -> None:
+        for k, v in src.items():
+            if isinstance(v, dict):
+                bucket = target.setdefault(k, {})
+                for sk, sv in v.items():
+                    bucket[sk] = bucket.get(sk, 0) + sv
+            else:
+                target[k] = target.get(k, 0) + v
 
     def _check_cancel() -> None:
         if cancel_check is not None and cancel_check():
@@ -459,16 +500,14 @@ def build_options_companion_csvs(
 
     for i, day in enumerate(trading_days):
         _check_cancel()
-        if i == 0:
-            prior_close = first_day_close
-        else:
-            prior_close = prior_close_by_day[trading_days[i - 1]]
+        prior_close = first_day_close if i == 0 else prior_close_by_day[trading_days[i - 1]]
 
         target_expiry = _resolve_target_expiry(polygon, ticker, day, config)
         if target_expiry is None:
             skipped_days.append({"date": day.isoformat(), "reason": "no expiry found"})
             continue
 
+        day_counters: dict[str, Any] = {"option_bars_raw": 0, "option_bars_dropped": 0, "iv_status": {}}
         day_iso = day.isoformat()
         expiry_iso = target_expiry.isoformat()
         day_report: dict[str, Any] = {
@@ -493,11 +532,11 @@ def build_options_companion_csvs(
                 )
                 calls_done += 1
                 _emit_progress("options_calls.csv", calls_done, contract.ticker, day_iso, expiry_iso)
-                calls_rows.extend(
-                    _process_contract(
-                        contract, day, from_date, to_date, underlying_by_ts, config, timespan, multiplier, polygon
-                    )
+                rows, counters = _process_contract(
+                    contract, day, from_date, to_date, underlying_by_ts, config, timespan, multiplier, polygon
                 )
+                calls_rows.extend(rows)
+                _accumulate(day_counters, counters)
 
         if config.include_puts:
             puts = _fetch_contracts_for_expiry(polygon, ticker, day, target_expiry, "put")
@@ -513,17 +552,38 @@ def build_options_companion_csvs(
                 )
                 puts_done += 1
                 _emit_progress("options_puts.csv", puts_done, contract.ticker, day_iso, expiry_iso)
-                puts_rows.extend(
-                    _process_contract(
-                        contract, day, from_date, to_date, underlying_by_ts, config, timespan, multiplier, polygon
-                    )
+                rows, counters = _process_contract(
+                    contract, day, from_date, to_date, underlying_by_ts, config, timespan, multiplier, polygon
                 )
+                puts_rows.extend(rows)
+                _accumulate(day_counters, counters)
 
+        day_report.update(day_counters)
+        _accumulate(totals, day_counters)
         per_day_report.append(day_report)
 
     columns = _columns_for(config)
     calls_bytes = _write_rows_to_csv(calls_rows, columns) if (config.include_calls and calls_rows) else None
     puts_bytes = _write_rows_to_csv(puts_rows, columns) if (config.include_puts and puts_rows) else None
+
+    # Fail-loud: any requested Greek/IV column that ends up entirely empty is
+    # a regression — surface it so the bundle isn't silently shipped looking
+    # like "OHLCV-with-strikes".
+    requested_greek_cols = [c for c in ("iv", "delta", "gamma", "theta", "vega", "rho") if c in columns]
+    empty_columns: list[str] = []
+    for label, rows in (("calls", calls_rows), ("puts", puts_rows)):
+        for col in requested_greek_cols:
+            if rows and not any(row.get(col) is not None for row in rows):
+                empty_columns.append(f"{label}.{col}")
+    if empty_columns:
+        logger.warning(
+            "[OC] Requested option columns came out 100%% empty: %s. "
+            "iv_status=%s, bars_dropped=%d/%d.",
+            empty_columns,
+            totals["iv_status"],
+            totals["option_bars_dropped"],
+            totals["option_bars_raw"],
+        )
 
     report = {
         "enabled": True,
@@ -539,10 +599,14 @@ def build_options_companion_csvs(
         "days_processed": len(per_day_report),
         "days_skipped": skipped_days,
         "per_day": per_day_report,
+        "totals": totals,
+        "empty_columns": empty_columns,
     }
     logger.info(
         f"[OC] Built companion for {ticker}: "
         f"{len(calls_rows)} call rows, {len(puts_rows)} put rows, "
-        f"{len(per_day_report)} days, {len(skipped_days)} skipped"
+        f"{len(per_day_report)} days, {len(skipped_days)} skipped, "
+        f"iv_status={totals['iv_status']}, "
+        f"dropped={totals['option_bars_dropped']}/{totals['option_bars_raw']}"
     )
     return calls_bytes, puts_bytes, report

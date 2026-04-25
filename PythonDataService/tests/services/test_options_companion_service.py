@@ -218,3 +218,168 @@ class TestUnderlyingCloseMapAlignment:
         # Option bar timestamp landing at the exact 5-min boundary
         key = _bar_grid_floor_ms(1_749_548_100_000, "minute", 5)
         assert lookup[key] == pytest.approx(201.5)
+
+
+class _FakePolygon:
+    """Captures arguments and returns canned responses for the companion path."""
+
+    def __init__(self, contracts: list[dict], option_bars: dict[str, list[dict]]):
+        self._contracts = contracts
+        self._option_bars = option_bars
+
+    def list_options_contracts(self, **kwargs) -> list[dict]:
+        return self._contracts
+
+    def fetch_aggregates(self, ticker: str, **kwargs) -> list[dict]:
+        return self._option_bars.get(ticker, [])
+
+    def list_options_expirations(self, **kwargs) -> list[str]:
+        return []  # unused under expiry_mode='same_day'
+
+
+class TestBuildOptionsCompanionTimestampAlignment:
+    """End-to-end: pre-RTH option bars are dropped, surviving option rows
+    share unix_ts with the underlying, and Greek/IV columns are populated.
+    Regresses Finding 3.1 (100% NaN Greeks) and the user's requirement that
+    'option contracts align in the timestamps' with the underlying.
+    """
+
+    def test_pre_rth_option_bars_dropped_and_greeks_populated(self):
+        from app.services.options_companion_service import build_options_companion_csvs
+
+        # 2025-06-10 09:30 ET == 13:30 UTC == 1_749_562_200_000 ms
+        ts_0930 = 1_749_562_200_000
+        ts_0931 = ts_0930 + 60_000
+        ts_0932 = ts_0931 + 60_000
+        ts_0915 = ts_0930 - 15 * 60_000
+        ts_0925 = ts_0930 - 5 * 60_000
+
+        underlying_df = pd.DataFrame(
+            {"timestamp": [ts_0930, ts_0931, ts_0932], "close": [710.0, 710.5, 711.0]}
+        )
+
+        contracts = [
+            {"ticker": "O:T709", "strike_price": 709.0},
+            {"ticker": "O:T710", "strike_price": 710.0},
+            {"ticker": "O:T711", "strike_price": 711.0},
+        ]
+
+        def _mk_bar(ts: int, price: float) -> dict:
+            return {
+                "timestamp": ts,
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price,
+                "volume": 100,
+                "vwap": price,
+                "transactions": 10,
+            }
+
+        option_bars = {
+            # 709 (ITM) — has 2 pre-RTH bars that must be dropped
+            "O:T709": [
+                _mk_bar(ts_0915, 1.00),
+                _mk_bar(ts_0925, 1.05),
+                _mk_bar(ts_0930, 1.10),
+                _mk_bar(ts_0931, 1.15),
+                _mk_bar(ts_0932, 1.20),
+            ],
+            "O:T710": [_mk_bar(ts_0930, 0.50), _mk_bar(ts_0931, 0.55), _mk_bar(ts_0932, 0.60)],
+            "O:T711": [_mk_bar(ts_0930, 0.20), _mk_bar(ts_0931, 0.22), _mk_bar(ts_0932, 0.25)],
+        }
+
+        polygon = _FakePolygon(contracts, option_bars)
+        config = OptionsCompanionConfig(
+            enabled=True,
+            include_calls=True,
+            include_puts=False,
+            strikes_each_side=1,
+            expiry_mode="same_day",
+            risk_free_rate=0.05,
+            dividend_yield=0.0,
+        )
+
+        calls_bytes, _puts_bytes, report = build_options_companion_csvs(
+            underlying_bars_df=underlying_df,
+            ticker="SPY",
+            from_date="2025-06-10",
+            to_date="2025-06-10",
+            config=config,
+            polygon=polygon,
+            timespan="minute",
+            multiplier=1,
+        )
+
+        # Counters: 5 + 3 + 3 = 11 raw, 2 pre-RTH dropped on the 709 strike.
+        assert report["totals"]["option_bars_raw"] == 11
+        assert report["totals"]["option_bars_dropped"] == 2
+
+        # Parse the emitted CSV.
+        assert calls_bytes is not None
+        lines = calls_bytes.decode().strip().split("\n")
+        header = lines[0].split(",")
+        rows = [line.split(",") for line in lines[1:]]
+        assert len(rows) == 9, "9 surviving option rows (3 contracts × 3 underlying ts)"
+
+        ts_idx = header.index("unix_ts")
+        emitted_ts = sorted({int(r[ts_idx]) for r in rows})
+        assert emitted_ts == [ts_0930, ts_0931, ts_0932], (
+            "option timestamps must mirror the underlying ticker's exactly"
+        )
+
+        # The 100%-NaN Greeks regression: at least one IV solve must succeed
+        # and at least one delta must be populated. The ITM 709 contract
+        # (price 1.10 with intrinsic 1.0) is the most conservative target.
+        iv_idx = header.index("iv")
+        delta_idx = header.index("delta")
+        assert any(r[iv_idx] for r in rows), "iv column should not be 100%% empty"
+        assert any(r[delta_idx] for r in rows), "delta column should not be 100%% empty"
+        # The new per-day status breakdown must report at least one "ok" solve.
+        assert report["totals"]["iv_status"].get("ok", 0) > 0
+
+    def test_warning_emitted_when_greek_column_is_100pct_empty(self, caplog):
+        """When all option closes are zero (no trades), every IV solve fails
+        with status='no_price' and the warning surfaces empty_columns."""
+        from app.services.options_companion_service import build_options_companion_csvs
+
+        ts_0930 = 1_749_562_200_000
+        ts_0931 = ts_0930 + 60_000
+        underlying_df = pd.DataFrame({"timestamp": [ts_0930, ts_0931], "close": [710.0, 710.5]})
+        contracts = [{"ticker": "O:T710", "strike_price": 710.0}]
+        # Every option bar has close=0 → solver returns "no_price" → all greeks NaN
+        option_bars = {
+            "O:T710": [
+                {"timestamp": ts_0930, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0},
+                {"timestamp": ts_0931, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0},
+            ]
+        }
+        polygon = _FakePolygon(contracts, option_bars)
+        config = OptionsCompanionConfig(
+            enabled=True,
+            include_calls=True,
+            include_puts=False,
+            strikes_each_side=1,
+            expiry_mode="same_day",
+        )
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="app.services.options_companion_service"):
+            _, _, report = build_options_companion_csvs(
+                underlying_bars_df=underlying_df,
+                ticker="SPY",
+                from_date="2025-06-10",
+                to_date="2025-06-10",
+                config=config,
+                polygon=polygon,
+                timespan="minute",
+                multiplier=1,
+            )
+
+        assert "calls.iv" in report["empty_columns"]
+        assert "calls.delta" in report["empty_columns"]
+        assert any("100%% empty" in rec.message or "100% empty" in rec.message for rec in caplog.records), (
+            "expected fail-loud warning for 100%-empty Greek columns"
+        )
+        assert report["totals"]["iv_status"].get("no_price", 0) == 2

@@ -27,6 +27,21 @@ export interface BundleComponentStatus {
   status: 'queued' | 'done';
 }
 
+/**
+ * Per-contract progress within a bundling component (today only the
+ * options-companion builder fans out enough requests to need this — each
+ * contract is one Polygon call). The frontend renders this as
+ * "options_calls.csv · contract 47 · O:SPY260417C00705000".
+ */
+export interface BundleComponentProgress {
+  /** Filename in the components list, e.g. "options_calls.csv". */
+  component: string;
+  /** 1-based count of items processed so far in that component. */
+  step: number;
+  /** Optional human-readable identifier of the item just being processed. */
+  label?: string;
+}
+
 export interface RunResult {
   sessionId: string;
   filename: string;
@@ -63,6 +78,7 @@ export class RunSessionService {
   private readonly _sessionId = signal<string | null>(null);
   private readonly _chunks = signal<readonly ChunkStatus[]>([]);
   private readonly _bundleComponents = signal<readonly BundleComponentStatus[]>([]);
+  private readonly _bundleProgress = signal<BundleComponentProgress | null>(null);
   private readonly _result = signal<RunResult | null>(null);
   private readonly _error = signal<RunError | null>(null);
   private readonly _alsoZip = signal(false);
@@ -75,6 +91,9 @@ export class RunSessionService {
   readonly sessionId = this._sessionId.asReadonly();
   readonly chunks = this._chunks.asReadonly();
   readonly bundleComponents = this._bundleComponents.asReadonly();
+  /** Live "step / label" within the component currently bundling (e.g.
+   *  options_calls.csv at contract 47). Null between components. */
+  readonly bundleProgress = this._bundleProgress.asReadonly();
   readonly result = this._result.asReadonly();
   readonly error = this._error.asReadonly();
   readonly alsoZip = this._alsoZip.asReadonly();
@@ -183,6 +202,7 @@ export class RunSessionService {
     this._sessionId.set(null);
     this._chunks.set([]);
     this._bundleComponents.set([]);
+    this._bundleProgress.set(null);
     this._result.set(null);
     this._error.set(null);
     this._alsoZip.set(false);
@@ -289,6 +309,15 @@ export class RunSessionService {
       case 'bundle_start': {
         const components = (event['components'] as string[]) ?? [];
         this._bundleComponents.set(components.map((name) => ({ name, status: 'queued' })));
+        this._bundleProgress.set(null);
+        break;
+      }
+      case 'bundle_progress': {
+        this._bundleProgress.set({
+          component: event['component'] as string,
+          step: event['step'] as number,
+          label: event['label'] as string | undefined,
+        });
         break;
       }
       case 'bundle_component_done': {
@@ -296,6 +325,11 @@ export class RunSessionService {
         this._bundleComponents.update((list) =>
           list.map((c) => (c.name === name ? { ...c, status: 'done' } : c)),
         );
+        // Clear sub-component progress when its parent completes — the
+        // next component's first ``bundle_progress`` will repopulate it.
+        if (this._bundleProgress()?.component === name) {
+          this._bundleProgress.set(null);
+        }
         break;
       }
       case 'complete':

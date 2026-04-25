@@ -22,6 +22,7 @@ from enum import StrEnum
 
 import QuantLib as ql
 from scipy.optimize import brentq
+from scipy.stats import norm
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,12 @@ MAX_IV: float = 5.0  # 500 %  ceiling
 DEFAULT_IV_GUESS: float = 0.25
 QUANTLIB_MAX_ITER: int = 200
 QUANTLIB_TOLERANCE: float = 1e-8
-MIN_TIME_TO_EXPIRY: float = 1.0 / 365.0  # 1 calendar day
+# 1 minute, in years. The data-lab companion solves IV per minute on 0DTE
+# contracts where ttm is a fraction of a day; the previous "1 calendar day"
+# floor silently returned EXPIRED for every 0DTE bar (see
+# docs/references/reconciliations/data-lab-spy-2026-04-17-to-2026-04-24.md
+# § Finding 3.1). The Brent fallback handles continuous TTM correctly.
+MIN_TIME_TO_EXPIRY: float = 1.0 / (365.0 * 24.0 * 60.0)
 MIN_OPTION_PRICE: float = 0.001  # reject near-zero premiums
 
 
@@ -40,6 +46,7 @@ class SolveStatus(StrEnum):
     OK = "ok"
     QUANTLIB_OK = "quantlib_ok"
     BRENT_FALLBACK = "brent_fallback"
+    NEWTON_OK = "newton_ok"
     INTRINSIC_VIOLATION = "intrinsic_violation"
     PRICE_TOO_LOW = "price_too_low"
     EXPIRED = "expired"
@@ -171,7 +178,47 @@ def implied_volatility(
             intrinsic=intrinsic,
         )
 
+    # ── Newton-Raphson with vega step (primary, fast) ────────────────────
+    # Quadratic convergence from a reasonable seed; per-bar callers thread
+    # the previous bar's solved IV in via ``vol_guess`` so the warm start
+    # cuts iterations to 3–5 and the data-lab options companion stays well
+    # under per-bar Brent's ~2 ms cost on a wide [0.005, 5.0] bracket.
+    newton_iv = _newton_iv_solve(
+        option_price=option_price,
+        spot=spot,
+        strike=strike,
+        ttm=ttm,
+        rate=rate,
+        dividend=dividend,
+        is_call=is_call,
+        initial_guess=vol_guess,
+    )
+    if newton_iv is not None:
+        return ImpliedVolResult(
+            iv=newton_iv,
+            status=SolveStatus.NEWTON_OK,
+            option_price=option_price,
+            intrinsic=intrinsic,
+        )
+
     # ── QuantLib solve ───────────────────────────────────────────────────
+    # QuantLib's serial-day arithmetic only has day resolution, so any
+    # sub-day TTM gets rounded — a 0.75-day option would be priced as a
+    # full 1-day expiry. Skip QL entirely for any TTM under one calendar
+    # day and go straight to the closed-form Brent fallback, which works
+    # in continuous time.
+    if ttm < 1.0 / 365.0:
+        return _brent_fallback(
+            option_price=option_price,
+            spot=spot,
+            strike=strike,
+            ttm=ttm,
+            rate=rate,
+            dividend=dividend,
+            is_call=is_call,
+            intrinsic=intrinsic,
+        )
+
     try:
         eval_date = ql.Date(15, 1, 2020)  # arbitrary anchor for determinism
         ql.Settings.instance().evaluationDate = eval_date
@@ -224,6 +271,55 @@ def implied_volatility(
     )
 
 
+def _newton_iv_solve(
+    option_price: float,
+    spot: float,
+    strike: float,
+    ttm: float,
+    rate: float,
+    dividend: float,
+    is_call: bool,
+    initial_guess: float = DEFAULT_IV_GUESS,
+    max_iter: int = 30,
+    tol: float = 1e-7,
+) -> float | None:
+    """Newton-Raphson IV solver using vega as the local slope.
+
+    Returns the solved IV on convergence, or ``None`` if the iteration
+    walks out of ``[MIN_IV, MAX_IV]`` or the local vega collapses (deep
+    OTM with sub-day TTM, where price is insensitive to vol). The caller
+    falls back to QuantLib or Brent on ``None``.
+    """
+    sigma = max(MIN_IV, min(MAX_IV, initial_guess if initial_guess > 0 else DEFAULT_IV_GUESS))
+    sqrt_t = math.sqrt(ttm)
+    disc_q = math.exp(-dividend * ttm)
+    disc_r = math.exp(-rate * ttm)
+    log_sk = math.log(spot / strike)
+    drift_t = (rate - dividend) * ttm
+
+    for _ in range(max_iter):
+        sigma_sqrt_t = sigma * sqrt_t
+        d1 = (log_sk + drift_t + 0.5 * sigma * sigma * ttm) / sigma_sqrt_t
+        d2 = d1 - sigma_sqrt_t
+        if is_call:
+            price = spot * disc_q * float(norm.cdf(d1)) - strike * disc_r * float(norm.cdf(d2))
+        else:
+            price = strike * disc_r * float(norm.cdf(-d2)) - spot * disc_q * float(norm.cdf(-d1))
+        diff = price - option_price
+        if abs(diff) < tol:
+            if MIN_IV <= sigma <= MAX_IV and math.isfinite(sigma):
+                return sigma
+            return None
+        vega = spot * disc_q * float(norm.pdf(d1)) * sqrt_t
+        if vega < 1e-10:
+            return None
+        sigma -= diff / vega
+        if not math.isfinite(sigma) or sigma <= MIN_IV * 0.5 or sigma >= MAX_IV * 2.0:
+            return None
+        sigma = max(MIN_IV, min(MAX_IV, sigma))
+    return None
+
+
 def _brent_fallback(
     option_price: float,
     spot: float,
@@ -238,17 +334,16 @@ def _brent_fallback(
 
     def _bs_price_for_vol(sigma: float) -> float:
         """Black-Scholes price as a function of vol, for root finding."""
-        d1 = (math.log(spot / strike) + (rate - dividend + 0.5 * sigma * sigma) * ttm) / (sigma * math.sqrt(ttm))
-        d2 = d1 - sigma * math.sqrt(ttm)
+        sqrt_t = math.sqrt(ttm)
+        d1 = (math.log(spot / strike) + (rate - dividend + 0.5 * sigma * sigma) * ttm) / (sigma * sqrt_t)
+        d2 = d1 - sigma * sqrt_t
 
-        df = math.exp(-rate * ttm)
-        fwd = spot * math.exp((rate - dividend) * ttm)
-
-        from scipy.stats import norm
+        disc_q = math.exp(-dividend * ttm)
+        disc_r = math.exp(-rate * ttm)
 
         if is_call:
-            return fwd * norm.cdf(d1) * math.exp(-rate * ttm) - strike * df * norm.cdf(d2)
-        return strike * df * norm.cdf(-d2) - fwd * math.exp(-rate * ttm) * norm.cdf(-d1)
+            return spot * disc_q * float(norm.cdf(d1)) - strike * disc_r * float(norm.cdf(d2))
+        return strike * disc_r * float(norm.cdf(-d2)) - spot * disc_q * float(norm.cdf(-d1))
 
     def objective(sigma: float) -> float:
         return _bs_price_for_vol(sigma) - option_price
