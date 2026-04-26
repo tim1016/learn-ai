@@ -1,0 +1,122 @@
+<section class="route">
+  <header class="route-toolbar">
+    <div class="crumbs">
+      <a [routerLink]="['/edge']" class="crumb-link">/edge</a>
+      <span class="crumb-sep">›</span>
+      <span class="crumb-cur">/regimes</span>
+    </div>
+    <div class="toolbar-spacer"></div>
+    <button class="score-pill" type="button" (click)="scoreOpen.set(true)">
+      <span class="score-dot" [style.background]="currentScoreColor()"></span>
+      <span>edge_score</span>
+      <span class="score-val" [style.color]="currentScoreColor()">{{ currentScoreLabel() }}</span>
+    </button>
+    <span class="tz">America/New_York</span>
+  </header>
+
+  <!-- Form -->
+  <div class="form-card">
+    <div>
+      <div class="eyebrow mb4">SYMBOL · STATES · ALGO</div>
+      <div class="form-row">
+        <select class="sel mono">
+          <option>SPY</option><option>QQQ</option><option>IWM</option>
+        </select>
+        <select class="sel mono">
+          <option>3 states</option><option>2 states</option>
+          <option>4 states</option><option>5 states</option>
+        </select>
+        <div class="seg">
+          @for (a of ['hmm','kmeans','compare']; track a) {
+            <button type="button" class="seg-btn algo"
+                    [class.on]="algo() === a"
+                    (click)="setAlgo($any(a))">{{ a }}</button>
+          }
+        </div>
+      </div>
+    </div>
+
+    <span class="divider"></span>
+
+    <div>
+      <div class="eyebrow mb4">DECODING</div>
+      <div class="seg">
+        @for (v of ['viterbi','posterior']; track v) {
+          <button type="button" class="seg-btn view"
+                  [class.on]="viewMode() === v"
+                  (click)="setView($any(v))">{{ v }}</button>
+        }
+      </div>
+    </div>
+
+    <div class="form-spacer"></div>
+
+    <div class="legend-row">
+      @for (n of regimeNames; track n; let i = $index) {
+        <div class="legend-item">
+          <span class="legend-dot" [style.background]="regimeColors[i]"></span>
+          <span>{{ n }}</span>
+        </div>
+      }
+    </div>
+  </div>
+
+  <!-- Price chart -->
+  <div class="chart-card">
+    @if (algo() === 'compare') {
+      <div class="compare-meta">
+        <span>HMM (sticky) ↑</span><span>·</span><span>K-means (flickering) ↓</span>
+      </div>
+    }
+    <edge-regime-price-chart
+      [width]="1340" [height]="priceChartHeight()"
+      [data]="data" [viewMode]="viewMode()"
+      [hoverIdx]="hoverIdx()"
+      (hover)="hoverIdx.set($event)" />
+  </div>
+
+  <!-- Bottom row -->
+  <div class="bottom-grid">
+    <div class="bottom-card matrix-card">
+      <edge-transition-matrix [size]="236" [matrix]="data.transitionMatrix" />
+    </div>
+
+    <div class="bottom-card">
+      <div class="eyebrow mb4">CENTROID FEATURE RADAR</div>
+      <edge-regime-radar [size]="260" [axes]="radarAxes" [regimeData]="radarData" />
+    </div>
+
+    <div class="bottom-card">
+      <edge-stability-sparkline [width]="420" [height]="130" [data]="data.stability" />
+      <div class="strategy-fit">
+        <div class="eyebrow mb6">STRATEGY-FIT P&amp;L · BY REGIME</div>
+        <div class="fit-list">
+          @for (r of data.perRegime; track r.id) {
+            <div class="fit-row">
+              <span class="fit-dot" [style.background]="regimeColors[r.id]"></span>
+              <span class="fit-name">{{ r.name }}</span>
+              <span class="fit-sharpe" [style.color]="sharpeColor(r.sharpe)">
+                {{ fmtSharpe(r.sharpe) }} sh
+              </span>
+              <div class="fit-bar">
+                <span class="fit-bar-fill"
+                      [style.left]="sharpeBarLeft(r.pnl)"
+                      [style.width]="sharpeBarWidth(r.pnl)"
+                      [style.background]="r.pnl > 0 ? TOK.bull : TOK.bear"></span>
+                <span class="fit-bar-zero"></span>
+              </div>
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drawers -->
+  <app-edge-score-drawer
+    [data]="data" [open]="scoreOpen()"
+    (close)="scoreOpen.set(false)" />
+  <app-trade-sim-drawer
+    [data]="data" [open]="tradeSimOpen()"
+    (close)="tradeSimOpen.set(false)" />
+</section>

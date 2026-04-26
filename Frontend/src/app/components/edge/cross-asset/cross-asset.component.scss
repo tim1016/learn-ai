@@ -1,0 +1,206 @@
+@use "../../../styles/tokens" as *;
+
+:host {
+  display: block;
+  background: $bg-canvas;
+  color: $text-primary;
+  min-height: 100vh;
+}
+
+.route { max-width: $container-lg; margin: 0 auto; padding: 16px; }
+
+/* ─── Toolbar (shared with rv-iv) ─── */
+.route-toolbar {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 12px;
+  font-family: $font-mono; font-size: 11px;
+}
+.crumbs { display: inline-flex; gap: 8px; align-items: center; color: $text-muted; }
+.crumb-link {
+  color: $text-muted; text-decoration: none;
+  &:hover { color: $accent; }
+}
+.crumb-sep { color: $text-muted; }
+.crumb-cur { color: $text-primary; }
+.toolbar-spacer { flex: 1; }
+.score-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 10px;
+  background: $bg-elevated; border: 1px solid $border-light;
+  border-radius: 4px; color: $text-secondary; cursor: pointer;
+  font-family: $font-mono; font-size: 11px;
+
+  .score-dot { width: 6px; height: 6px; border-radius: 999px; }
+  .score-val { font-weight: 700; }
+  &:hover { border-color: $accent; }
+}
+.run-sim-btn {
+  padding: 5px 12px; background: var(--accent-soft); border: 1px solid $accent;
+  border-radius: 4px; color: $accent;
+  font-size: 11px; font-weight: 600; cursor: pointer;
+
+  &:hover { background: rgba(41, 98, 255, 0.25); }
+}
+.tz { color: $text-muted; }
+
+.eyebrow {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: $text-subtle;
+  font-family: $font-mono;
+}
+
+/* ─── Stat grid ─── */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr) 2fr;
+  gap: 12px; margin-bottom: 12px;
+
+  @media (max-width: 1100px) { grid-template-columns: repeat(2, 1fr); }
+}
+.big-stat {
+  background: $bg-surface; border: 1px solid $border;
+  border-radius: $radius-md; padding: 14px;
+
+  &.ok   { border-left: 2px solid $bull; }
+  &.warn { border-left: 2px solid $warn; }
+}
+.big-stat-value {
+  font-size: 28px; font-weight: 700; font-family: $font-mono;
+  margin-top: 4px; line-height: 1.1;
+}
+.big-stat.ok .big-stat-value   { color: $bull; }
+.big-stat.warn .big-stat-value { color: $warn; }
+.big-stat-hint {
+  font-size: 11px; color: $text-muted; margin-top: 4px;
+}
+
+.universe-card {
+  background: $bg-surface; border: 1px solid $border;
+  border-radius: $radius-md; padding: 14px;
+  display: flex; align-items: center; gap: 16px;
+}
+.universe-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.universe-chip {
+  padding: 4px 10px; border-radius: 999px;
+  background: var(--ind-cat-trend-soft);
+  border: 1px solid rgba(77, 141, 255, 0.4);
+  color: var(--ind-cat-trend);
+  font-family: $font-mono; font-weight: 700; font-size: 11px;
+  display: inline-flex; align-items: center; gap: 4px;
+
+  .x { color: $text-muted; font-weight: 400; }
+}
+.universe-add {
+  padding: 4px 10px; border-radius: 999px;
+  background: transparent; border: 1px dashed $border-light;
+  color: $text-muted; font-size: 11px; cursor: pointer;
+
+  &:hover { color: $text-primary; border-color: $border-strong; }
+}
+
+/* ─── Form ─── */
+.form-card {
+  background: $bg-surface; border: 1px solid $border;
+  border-radius: $radius-md; padding: 12px;
+  margin-bottom: 12px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.split-toggle { display: flex; gap: 4px; }
+.split-btn {
+  padding: 6px 12px; border-radius: 4px;
+  background: transparent; border: 1px solid $border-light;
+  color: $text-secondary; font-size: 11px; font-family: $font-mono;
+  cursor: pointer; text-transform: uppercase;
+
+  &.on {
+    background: var(--ind-cat-trend-soft);
+    border-color: var(--ind-cat-trend);
+    color: var(--ind-cat-trend);
+  }
+}
+.divider { width: 1px; height: 22px; background: $border; }
+.strategy-select {
+  height: 28px; padding: 0 8px;
+  background: $bg-elevated; border: 1px solid $border-light;
+  border-radius: 4px; color: $text-primary;
+  font-size: 12px; font-family: $font-mono;
+}
+.form-spacer { flex: 1; }
+.form-meta { font-size: 11px; color: $text-muted; font-family: $font-mono; }
+
+/* ─── Heatmap ─── */
+.heatmap-card {
+  background: $bg-surface; border: 1px solid $border;
+  border-radius: $radius-md; padding: 12px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+.heatmap-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px;
+}
+.heatmap-legend {
+  display: flex; gap: 12px; align-items: center;
+  font-size: 11px; font-family: $font-mono; color: $text-muted;
+}
+.heatmap-bar {
+  width: 120px; height: 8px; border-radius: 2px;
+  background: linear-gradient(90deg, #ef5350, #6b6f7a, #26a69a);
+}
+.heatmap-note { margin-left: 12px; }
+.heatmap-host { position: relative; }
+.heatmap-tooltip {
+  position: absolute; top: 30px; left: 80px;
+  background: rgba(11, 14, 20, 0.97);
+  border: 1px solid $border-light;
+  border-radius: $radius;
+  padding: 8px 10px; min-width: 160px;
+  font-family: $font-mono; font-size: 11px;
+  pointer-events: none; z-index: 5;
+}
+.tt-head { color: $text-muted; margin-bottom: 4px; font-size: 10px; }
+.tt-row {
+  display: flex; justify-content: space-between; gap: 14px;
+  line-height: 15px;
+  span:first-child { color: $text-muted; }
+}
+
+/* ─── Equity ─── */
+.equity-card {
+  background: $bg-surface; border: 1px solid $border;
+  border-radius: $radius-md; padding: 12px;
+  overflow-x: auto;
+}
+.equity-head {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 12px; flex-wrap: wrap;
+}
+.composite-tabs { display: flex; gap: 4px; }
+.composite-btn {
+  padding: 4px 10px; border-radius: 4px;
+  background: transparent; border: 1px solid $border-light;
+  color: $text-subtle; font-size: 11px; cursor: pointer;
+
+  &.on {
+    background: $bg-elevated; border-color: $border-strong; color: $text-primary;
+  }
+}
+.equity-meta {
+  font-size: 10px; color: $text-muted; font-family: $font-mono;
+}
+
+.curves-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+  @media (max-width: 1100px) { grid-template-columns: repeat(2, 1fr); }
+}
+.curve-cell {
+  background: $bg-sunken; border: 1px solid $border;
+  border-radius: $radius; padding: 10px;
+}
+.curve-head {
+  display: flex; justify-content: space-between;
+  margin-bottom: 4px;
+
+  .curve-tkr { font-family: $font-mono; font-weight: 700; font-size: 12px; }
+  .curve-pct { font-family: $font-mono; font-size: 11px; }
+}

@@ -1,0 +1,205 @@
+<section class="route">
+  <!-- Route toolbar -->
+  <header class="route-toolbar">
+    <div class="crumbs">
+      <a [routerLink]="['/edge']" class="crumb-link">/edge</a>
+      <span class="crumb-sep">›</span>
+      <span class="crumb-cur">/realized-vs-iv</span>
+    </div>
+    <div class="toolbar-spacer"></div>
+    <button class="score-pill" type="button" (click)="scoreOpen.set(true)">
+      <span class="score-dot" [style.background]="currentScoreColor()"></span>
+      <span>edge_score</span>
+      <span class="score-val" [style.color]="currentScoreColor()">{{ currentScoreLabel() }}</span>
+    </button>
+    <button class="run-sim-btn" type="button" (click)="tradeSimOpen.set(true)">
+      ↻ Run trade simulator
+    </button>
+    <span class="tz">America/New_York</span>
+  </header>
+
+  <!-- Coverage banner -->
+  <div class="coverage-banner">
+    <i class="pi pi-exclamation-triangle"></i>
+    <div class="coverage-body">
+      <div class="coverage-title">Forward RV unavailable for last 21 trading days</div>
+      <div class="coverage-meta">
+        VRP signals after <code>{{ blindStartDate() }}</code> are blind to the future — rendered as a
+        hatched band on the chart. IV30 series begins
+        <code>{{ data().coverage.iv_first_ts }}</code> (gap of 14 trading days at the head).
+      </div>
+    </div>
+    <button class="coverage-action" type="button">View coverage probe →</button>
+  </div>
+
+  <!-- Form row -->
+  <div class="form-card">
+    <label class="field">
+      <span class="field-label">Symbol</span>
+      <select class="field-input mono"
+              [value]="symbol()"
+              (change)="symbol.set($any($event.target).value)">
+        @for (s of ['SPY','QQQ','IWM','AAPL','NVDA']; track s) {
+          <option [value]="s">{{ s }}</option>
+        }
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Bar size</span>
+      <select class="field-input mono"
+              [value]="barSize()"
+              (change)="barSize.set($any($event.target).value)">
+        @for (b of ['5m','15m','1h','1D']; track b) {
+          <option [value]="b">{{ b }}</option>
+        }
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Tenor</span>
+      <select class="field-input mono"
+              [value]="tenor()"
+              (change)="tenor.set($any($event.target).value)">
+        @for (t of ['7D','14D','30D','60D']; track t) {
+          <option [value]="t">{{ t }}</option>
+        }
+      </select>
+    </label>
+
+    <div class="estimator-block">
+      <span class="field-label">Estimator (multi-overlay)</span>
+      <div class="chip-row">
+        @for (e of ['ctc','parkinson','gk','yz']; track e) {
+          <button type="button" class="vol-chip"
+                  [class.on]="estimatorOn($any(e))"
+                  (click)="toggleEstimator($any(e))">
+            {{ e === 'ctc' ? 'CtC' : e === 'gk' ? 'GK' : e === 'yz' ? 'YZ' : 'Parkinson' }}
+          </button>
+        }
+      </div>
+    </div>
+
+    <div class="form-spacer"></div>
+
+    <button type="button" class="compute-btn"
+            (click)="onCompute()"
+            [disabled]="loading()">
+      @if (loading()) {
+        <i class="pi pi-spin pi-spinner"></i> Computing…
+      } @else {
+        Compute
+      }
+    </button>
+    @if (liveSource()) {
+      <span class="source-tag live">live · {{ symbol() }}</span>
+    } @else {
+      <span class="source-tag mock">synthetic</span>
+    }
+  </div>
+
+  @if (errorMsg()) {
+    <div class="compute-error">
+      <i class="pi pi-times-circle"></i>
+      Compute failed — {{ errorMsg() }}
+    </div>
+  }
+
+  <!-- Main chart -->
+  <div class="chart-card">
+    <div class="chart-toggles">
+      <span class="eyebrow">SIGNALS</span>
+      <button type="button" class="toggle"
+              [class.on]="showRealtime()"
+              (click)="showRealtime.set(!showRealtime())">
+        <span class="toggle-swatch realtime" [class.on]="showRealtime()"></span>
+        Realtime
+      </button>
+      <button type="button" class="toggle"
+              [class.on]="showOracle()"
+              (click)="showOracle.set(!showOracle())">
+        <span class="toggle-swatch oracle" [class.on]="showOracle()"></span>
+        Oracle (ex-post)
+      </button>
+
+      <span class="divider"></span>
+      <span class="eyebrow">LAYERS</span>
+      <button type="button" class="toggle" [class.on]="rvBands()" (click)="rvBands.set(!rvBands())">
+        <span class="toggle-swatch generic" [class.on]="rvBands()"></span>
+        RV bands 5/10/30
+      </button>
+      <button type="button" class="toggle" [class.on]="edgeStrip()" (click)="edgeStrip.set(!edgeStrip())">
+        <span class="toggle-swatch generic" [class.on]="edgeStrip()"></span>
+        Edge Score strip
+      </button>
+
+      <span class="legend-spacer"></span>
+      <span class="legend-row">
+        <span class="lg-line iv"></span><span>IV30</span>
+        <svg width="9" height="9"><polygon points="4.5,1 8,8 1,8" [attr.fill]="TOK.bull" /></svg>
+        <span>long-vol signal</span>
+        <svg width="9" height="9"><polygon points="4.5,8 8,1 1,1" [attr.fill]="TOK.bear" /></svg>
+        <span>short-vol signal</span>
+      </span>
+    </div>
+
+    <edge-price-iv-chart
+      [width]="1340" [height]="420"
+      [data]="data()"
+      [showOracle]="showOracle()"
+      [showRealtime]="showRealtime()"
+      [layers]="layers()"
+      [hoverIdx]="hoverIdx()"
+      (hover)="hoverIdx.set($event)" />
+  </div>
+
+  <!-- Histogram + readout -->
+  <div class="bottom-grid">
+    <div class="bottom-card">
+      <div class="bottom-head">
+        <span class="eyebrow">VRP_FORWARD HISTOGRAM</span>
+        <span class="bottom-meta">current marker → today's vrp_forward</span>
+      </div>
+      <edge-vrp-histogram
+        [width]="820" [height]="170"
+        [data]="data()"
+        [currentIdx]="currentIdx()" />
+    </div>
+
+    <div class="bottom-card">
+      <div class="eyebrow">SIGNAL READOUT</div>
+      @let r = readout();
+      <div class="readout-action">
+        <span class="readout-action-text" [style.color]="r.color">{{ r.action }}</span>
+        <span class="readout-meta">
+          @ vrp_z={{ r.z !== r.z ? '—' : r.z.toFixed(2) }} · trigger ±1.0σ
+        </span>
+      </div>
+      <div class="readout-grid">
+        <span class="r-key">iv30</span><span class="r-val">{{ fmtPct(r.iv30) }}</span>
+        <span class="r-key">rv_yz_30</span><span class="r-val">{{ fmtPct(r.rvYZ) }}</span>
+        <span class="r-key">rv_forward_21</span>
+        @if (r.rvForward !== r.rvForward) {
+          <span class="r-val r-blind">blind · forward window</span>
+        } @else {
+          <span class="r-val">{{ fmtPct(r.rvForward) }}</span>
+        }
+        <span class="r-key">vrp_forward</span>
+        <span class="r-val">{{ fmtPct(r.vrpForward, 2) }}</span>
+        <span class="r-key">edge_score</span>
+        <span class="r-val" [style.color]="r.edgeScore >= 0 ? TOK.bull : TOK.bear">
+          {{ fmtSigned(r.edgeScore) }}
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drawers -->
+  <app-edge-score-drawer
+    [data]="data()"
+    [open]="scoreOpen()"
+    [idx]="currentIdx()"
+    (close)="scoreOpen.set(false)" />
+  <app-trade-sim-drawer
+    [data]="data()"
+    [open]="tradeSimOpen()"
+    (close)="tradeSimOpen.set(false)" />
+</section>

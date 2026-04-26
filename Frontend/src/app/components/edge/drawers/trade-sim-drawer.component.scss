@@ -1,0 +1,105 @@
+@use "../../../styles/tokens" as *;
+
+:host { display: contents; }
+
+.tsd-scrim {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4); z-index: 90;
+  animation: tsdFade .15s ease;
+}
+.tsd {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 640px;
+  background: $bg-surface; border-left: 1px solid $border;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.5);
+  z-index: 100; display: flex; flex-direction: column;
+  animation: tsdSlide .2s ease;
+}
+
+.tsd-header {
+  padding: 14px 18px; border-bottom: 1px solid $border;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.tsd-title { font-size: 14px; font-weight: 600; margin-top: 2px; }
+.tsd-close {
+  background: transparent; border: none; color: $text-muted;
+  font-size: 16px; cursor: pointer; padding: 4px;
+  &:hover { color: $text-primary; }
+}
+
+.tsd-body { padding: 18px; overflow-y: auto; flex: 1; }
+.tsd-section { margin-bottom: 18px; }
+
+.tsd-eyebrow {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: $text-subtle;
+}
+.tsd-row-between { display: flex; justify-content: space-between; align-items: baseline; }
+.tsd-mb6 { margin-bottom: 6px; }
+.tsd-mb8 { margin-bottom: 8px; }
+
+.tsd-equity-pct {
+  font-family: $font-mono; font-size: 12px; color: $bull; font-weight: 700;
+}
+.tsd-equity-wrap {
+  background: $bg-sunken; border: 1px solid $border;
+  border-radius: $radius; padding: 8px;
+}
+
+.tsd-cost-grid {
+  display: grid; grid-template-columns: 110px 1fr 80px;
+  gap: 6px; font-size: 11px; font-family: $font-mono;
+}
+.tsd-cost-key {
+  color: $text-muted;
+  &.bold { color: $text-primary; font-weight: 700; }
+}
+.tsd-cost-bar {
+  position: relative; height: 14px; background: $bg-sunken; border-radius: 2px;
+
+  .tsd-bar-zero {
+    position: absolute; left: 50%; top: -1px; bottom: -1px;
+    width: 1px; background: $border-strong;
+  }
+  .tsd-bar-fill {
+    position: absolute; top: 0; height: 14px; border-radius: 2px;
+    opacity: 0.7;
+    &.bold { opacity: 1; }
+  }
+}
+.tsd-cost-val {
+  text-align: right;
+  &.bold { font-weight: 700; }
+}
+.tsd-cost-note {
+  margin-top: 8px; font-size: 10px;
+  color: $text-muted; font-family: $font-mono;
+}
+
+.tsd-ledger {
+  background: $bg-sunken; border: 1px solid $border;
+  border-radius: $radius;
+  font-family: $font-mono; font-size: 11px;
+  max-height: 320px; overflow: auto;
+}
+.tsd-ledger-row {
+  display: grid;
+  grid-template-columns: 24px 90px 90px 70px 70px 50px 70px 50px;
+  gap: 4px; padding: 4px 10px;
+  border-bottom: 1px solid $border;
+  color: $text-secondary;
+
+  .r { text-align: right; }
+  .muted { color: $text-muted; }
+  .side { font-weight: 600; }
+  .flag { font-size: 9px; }
+}
+.tsd-ledger-head {
+  color: $text-muted; font-size: 10px;
+  position: sticky; top: 0; background: $bg-sunken;
+  padding: 6px 10px;
+}
+
+@keyframes tsdFade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes tsdSlide {
+  from { transform: translateX(40px); opacity: 0 }
+  to { transform: translateX(0); opacity: 1 }
+}

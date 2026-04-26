@@ -204,4 +204,32 @@ export const routes: Routes = [
         (m) => m.MethodologyPageComponent
       ),
   },
+  {
+    path: "edge",
+    loadComponent: () =>
+      import("./components/edge/edge.component").then((m) => m.EdgeComponent),
+    children: [
+      {
+        path: "realized-vs-iv",
+        loadComponent: () =>
+          import(
+            "./components/edge/realized-vs-iv/realized-vs-iv.component"
+          ).then((m) => m.RealizedVsIvComponent),
+      },
+      {
+        path: "cross-asset",
+        loadComponent: () =>
+          import("./components/edge/cross-asset/cross-asset.component").then(
+            (m) => m.CrossAssetComponent
+          ),
+      },
+      {
+        path: "regimes",
+        loadComponent: () =>
+          import("./components/edge/regimes/regimes.component").then(
+            (m) => m.RegimesComponent
+          ),
+      },
+    ],
+  },
 ];

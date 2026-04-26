@@ -1,0 +1,106 @@
+@use "../../../styles/tokens" as *;
+
+:host {
+  display: contents;
+}
+
+.esd-scrim {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 90;
+  animation: esdFade .15s ease;
+}
+
+.esd {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 480px;
+  background: $bg-surface; border-left: 1px solid $border;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.5);
+  z-index: 100; display: flex; flex-direction: column;
+  animation: esdSlide .2s ease;
+}
+
+.esd-header {
+  padding: 14px 18px; border-bottom: 1px solid $border;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.esd-title { font-size: 14px; font-weight: 600; color: $text-primary; margin-top: 2px; }
+.esd-close {
+  background: transparent; border: none; color: $text-muted;
+  font-size: 16px; cursor: pointer; padding: 4px;
+  &:hover { color: $text-primary; }
+}
+
+.esd-body { padding: 18px; overflow-y: auto; flex: 1; }
+
+.esd-eyebrow {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: $text-subtle;
+}
+
+.esd-meta {
+  font-size: 10px; color: $text-muted; font-family: $font-mono;
+  margin-left: 8px;
+}
+.esd-meta-sec {
+  color: $text-secondary; margin-left: 0;
+}
+
+.esd-composite {
+  background: $bg-sunken; border: 1px solid $border;
+  border-left: 3px solid $accent; border-radius: $radius-md;
+  padding: 14px; margin-bottom: 16px;
+}
+.esd-row-between { display: flex; justify-content: space-between; align-items: center; }
+.esd-baseline { align-items: baseline; }
+.esd-big-number {
+  font-size: 36px; font-weight: 700; font-family: $font-mono;
+  line-height: 1; margin-top: 6px;
+}
+
+.esd-mt6 { margin-top: 6px; }
+.esd-mt4 { margin-top: 4px; }
+.esd-mt12 { margin-top: 12px; margin-bottom: 8px; }
+.esd-mt20 { margin-top: 20px; padding-top: 14px; }
+
+.esd-comp { margin-bottom: 12px; }
+.esd-comp-label {
+  font-family: $font-mono; font-weight: 700; font-size: 12px; margin-right: 8px;
+}
+
+.esd-bar {
+  position: relative; height: 6px; background: $bg-sunken; border-radius: 2px;
+  margin-top: 4px;
+
+  .esd-bar-zero {
+    position: absolute; left: 50%; top: -1px; bottom: -1px;
+    width: 1px; background: $border-strong;
+  }
+  .esd-bar-fill {
+    position: absolute; top: 0; height: 6px; border-radius: 2px;
+  }
+}
+
+.esd-divider { border-top: 1px solid $border; }
+.esd-mini-wrap {
+  height: 80px; background: $bg-sunken; border-radius: $radius;
+  padding: 6px; margin-top: 8px;
+}
+
+.esd-rail {
+  margin-top: 20px; padding: 12px;
+  background: $bg-sunken; border: 1px solid $border;
+  border-left: 2px solid $info; border-radius: $radius;
+  font-size: 11px; color: $text-subtle; line-height: 1.5;
+
+  .esd-rail-lbl { color: $info; font-weight: 600; }
+  code {
+    color: $text-secondary; font-family: $font-mono;
+    background: $bg-elevated; padding: 1px 5px; border-radius: 3px;
+  }
+}
+
+@keyframes esdFade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes esdSlide {
+  from { transform: translateX(40px); opacity: 0 }
+  to { transform: translateX(0); opacity: 1 }
+}

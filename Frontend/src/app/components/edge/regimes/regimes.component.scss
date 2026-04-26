@@ -1,0 +1,137 @@
+@use "../../../styles/tokens" as *;
+
+:host {
+  display: block;
+  background: $bg-canvas;
+  color: $text-primary;
+  min-height: 100vh;
+}
+
+.route { max-width: $container-lg; margin: 0 auto; padding: 16px; }
+
+/* Toolbar (shared with siblings) */
+.route-toolbar {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 12px;
+  font-family: $font-mono; font-size: 11px;
+}
+.crumbs { display: inline-flex; gap: 8px; align-items: center; color: $text-muted; }
+.crumb-link {
+  color: $text-muted; text-decoration: none;
+  &:hover { color: $accent; }
+}
+.crumb-sep { color: $text-muted; }
+.crumb-cur { color: $text-primary; }
+.toolbar-spacer { flex: 1; }
+.score-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 10px;
+  background: $bg-elevated; border: 1px solid $border-light;
+  border-radius: 4px; color: $text-secondary; cursor: pointer;
+  font-family: $font-mono; font-size: 11px;
+
+  .score-dot { width: 6px; height: 6px; border-radius: 999px; }
+  .score-val { font-weight: 700; }
+  &:hover { border-color: $accent; }
+}
+.tz { color: $text-muted; }
+
+.eyebrow {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: $text-subtle;
+  font-family: $font-mono;
+}
+.mb4 { margin-bottom: 4px; }
+.mb6 { margin-bottom: 6px; }
+
+/* Form */
+.form-card {
+  background: $bg-surface; border: 1px solid $border;
+  border-radius: $radius-md; padding: 12px;
+  margin-bottom: 12px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.divider { width: 1px; height: 30px; background: $border; }
+.form-row { display: flex; gap: 6px; }
+.sel {
+  height: 28px; padding: 0 8px;
+  background: $bg-elevated; border: 1px solid $border-light;
+  border-radius: 4px; color: $text-primary; font-size: 12px;
+  outline: none; cursor: pointer;
+  &.mono { font-family: $font-mono; }
+}
+.seg { display: flex; gap: 0; }
+.seg-btn {
+  padding: 0 10px; height: 28px;
+  background: transparent; border: 1px solid $border-light;
+  color: $text-subtle;
+  font-size: 11px; font-family: $font-mono; cursor: pointer;
+
+  &.algo.on {
+    background: var(--ind-cat-momentum-soft);
+    border-color: var(--ind-cat-momentum);
+    color: var(--ind-cat-momentum);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  &.view.on {
+    background: $bg-elevated; border-color: $border-strong; color: $text-primary;
+  }
+}
+.form-spacer { flex: 1; }
+
+.legend-row { display: flex; gap: 14px; }
+.legend-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: $text-secondary;
+}
+.legend-dot { width: 10px; height: 10px; border-radius: 2px; }
+
+/* Chart */
+.chart-card {
+  background: $bg-surface; border: 1px solid $border;
+  border-radius: $radius-md; padding: 12px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+.compare-meta {
+  display: flex; gap: 12px; margin-bottom: 8px;
+  font-size: 10px; color: $text-muted; font-family: $font-mono;
+}
+
+/* Bottom grid */
+.bottom-grid {
+  display: grid; grid-template-columns: 260px 1fr 1fr; gap: 12px;
+  margin-bottom: 12px;
+
+  @media (max-width: 1100px) { grid-template-columns: 1fr; }
+}
+.bottom-card {
+  background: $bg-surface; border: 1px solid $border;
+  border-radius: $radius-md; padding: 12px;
+}
+.matrix-card { display: flex; align-items: center; justify-content: center; }
+
+/* Strategy-fit P&L bars */
+.strategy-fit {
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid $border;
+}
+.fit-list { display: flex; flex-direction: column; gap: 4px; }
+.fit-row {
+  display: grid; grid-template-columns: 14px 1fr 70px 60px;
+  gap: 8px; align-items: center; font-size: 11px;
+}
+.fit-dot { width: 8px; height: 8px; border-radius: 2px; }
+.fit-name { color: $text-secondary; }
+.fit-sharpe { font-family: $font-mono; text-align: right; }
+.fit-bar {
+  position: relative; height: 6px;
+  background: $bg-sunken; border-radius: 2px;
+
+  .fit-bar-fill {
+    position: absolute; top: 0; height: 6px; border-radius: 2px;
+  }
+  .fit-bar-zero {
+    position: absolute; left: 50%; top: -2px; bottom: -2px;
+    width: 1px; background: $border-strong;
+  }
+}

@@ -81,6 +81,17 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    id: 'edge',
+    title: 'Edge',
+    icon: 'pi pi-bolt',
+    items: [
+      { label: 'Overview', route: '/edge' },
+      { label: 'Realized vs IV', route: '/edge/realized-vs-iv' },
+      { label: 'Cross-Asset', route: '/edge/cross-asset' },
+      { label: 'Regimes', route: '/edge/regimes' },
+    ],
+  },
+  {
     id: 'portfolio',
     title: 'Portfolio',
     icon: 'pi pi-briefcase',
