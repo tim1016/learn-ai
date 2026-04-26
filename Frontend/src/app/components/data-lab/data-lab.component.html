@@ -939,7 +939,7 @@
               <app-active-indicator-card
                 [entry]="block.item.entry"
                 [paramConfigs]="getConfigParams(block.item.entry.name)"
-                [timeframeWarning]="timeframeWarnings()[block.item.originalIndex] ?? ''"
+                [timeframeWarning]="timeframeWarnings()[block.item.originalIndex]"
                 (configure)="openConfigure(block.item.originalIndex)"
                 (resetDefaults)="resetEntryToDefaults(block.item.originalIndex)"
                 (remove)="removeEntry(block.item.originalIndex)" />

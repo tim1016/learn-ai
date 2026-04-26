@@ -1,0 +1,64 @@
+@if (open()) {
+  <div class="esd-scrim" (click)="closed.emit()" aria-hidden="true"></div>
+  <aside class="esd" role="dialog" aria-label="Edge Score Inspector">
+    <header class="esd-header">
+      <div>
+        <div class="esd-eyebrow">EDGE SCORE INSPECTOR</div>
+        <div class="esd-title">{{ dateLabel() }} · SPY · {{ action() }}</div>
+      </div>
+      <button class="esd-close" (click)="closed.emit()" aria-label="Close inspector">✕</button>
+    </header>
+
+    <div class="esd-body">
+      <section class="esd-composite" [style.borderLeftColor]="actionColor()">
+        <div class="esd-row-between">
+          <span class="esd-eyebrow">COMPOSITE EDGE SCORE</span>
+          <span class="esd-meta">weights · 0.4 / 0.3 / 0.2 / 0.1 · locked</span>
+        </div>
+        <div class="esd-big-number" [style.color]="actionColor()">{{ fmt(composite()) }}</div>
+        <div class="esd-meta esd-mt6">
+          Triggers a trade when |score| ≥ 0.30 · current threshold gate ·
+          {{ composite() > 0.3 || composite() < -0.3 ? 'live' : 'idle' }}.
+        </div>
+      </section>
+
+      <div class="esd-eyebrow esd-mt12">COMPONENT CONTRIBUTIONS</div>
+      @for (c of components(); track c.k) {
+        <div class="esd-comp">
+          <div class="esd-row-between esd-baseline">
+            <div>
+              <span class="esd-comp-label" [style.color]="c.color">{{ c.label }}</span>
+              <span class="esd-meta">{{ c.sub }}</span>
+            </div>
+            <span class="esd-meta esd-meta-sec">weight = {{ c.w.toFixed(1) }}</span>
+          </div>
+          <div class="esd-bar">
+            <span class="esd-bar-zero"></span>
+            <span class="esd-bar-fill"
+                  [style.background]="c.color"
+                  [style.left]="barLeft(c.val)"
+                  [style.width]="barWidth(c.val)"></span>
+          </div>
+          <div class="esd-row-between esd-meta esd-mt4">
+            <span>S = {{ fmt(c.val) }}</span>
+            <span [style.color]="contribColor(contrib(c))">contrib {{ fmt(contrib(c)) }}</span>
+          </div>
+        </div>
+      }
+
+      <section class="esd-mt20 esd-divider">
+        <div class="esd-eyebrow">COMPOSITE OVER TRAILING 60 BARS</div>
+        <div class="esd-mini-wrap">
+          <app-edge-mini-line [width]="420" [height]="68"
+            [values]="scoreSeries()" [color]="TOK.accent" fill="rgba(41,98,255,0.10)" />
+        </div>
+      </section>
+
+      <section class="esd-rail">
+        <span class="esd-rail-lbl">Anti-overfit rail · </span>
+        Weights are fixed at <code>[0.4, 0.3, 0.2, 0.1]</code> by spec. Tuning per-symbol or per-period
+        invalidates the audit trail. If you need different weighting, run a separate composite under a new key.
+      </section>
+    </div>
+  </aside>
+}

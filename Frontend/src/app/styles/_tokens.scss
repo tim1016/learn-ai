@@ -219,4 +219,25 @@ $container-lg: 1400px;
   --ind-cat-volatility-soft: rgba(242, 173, 61, 0.10);
   --ind-cat-volume:          #26a69a;
   --ind-cat-volume-soft:     rgba(38, 166, 154, 0.10);
+
+  // ─ Edge feature ────────────────────────────────────────────
+  // Per docs/architecture/design-handoff-edge-2026-04-25.md.
+  // Regime palette extends across 2-6 states without losing semantics.
+  --regime-1: #26a69a;
+  --regime-2: #ff9800;
+  --regime-3: #ef5350;
+  --regime-4: #4d8dff;
+  --regime-5: #a78bfa;
+  --regime-6: #6b6f7a;
+
+  // Edge Score component colors — used by the Edge Score Inspector drawer.
+  --score-vrp:    #f2ad3d;
+  --score-regime: #a78bfa;
+  --score-iv:     #29b6f6;
+  --score-trend:  #4d8dff;
+
+  // Soft-tint variants used by chart fill regions.
+  --ind-cat-volatility-faint: rgba(242, 173, 61, 0.04);
+  --ind-cat-trend-faint:      rgba(77, 141, 255, 0.04);
+  --ind-cat-momentum-faint:   rgba(167, 139, 250, 0.04);
 }

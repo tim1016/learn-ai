@@ -1,0 +1,80 @@
+@if (open()) {
+  <div class="tsd-scrim" (click)="closed.emit()" aria-hidden="true"></div>
+  <aside class="tsd" role="dialog" aria-label="Trade Simulator">
+    <header class="tsd-header">
+      <div>
+        <div class="tsd-eyebrow">TRADE SIMULATOR · PESSIMISTIC FILL</div>
+        <div class="tsd-title">
+          VRP signals · SPY · {{ data().trades.length }} trades · {{ tradableCount() }} tradable
+        </div>
+      </div>
+      <button class="tsd-close" (click)="closed.emit()" aria-label="Close simulator">✕</button>
+    </header>
+
+    <div class="tsd-body">
+      <section class="tsd-section">
+        <div class="tsd-row-between tsd-mb6">
+          <span class="tsd-eyebrow">EQUITY · NET OF COSTS</span>
+          <span class="tsd-equity-pct">{{ fmtSign(equityFinal(), 2) }}%</span>
+        </div>
+        <div class="tsd-equity-wrap">
+          <app-edge-mini-line [width]="580" [height]="120"
+            [values]="equitySeries()" [color]="TOK.bull" fill="rgba(38,166,154,0.10)" />
+        </div>
+      </section>
+
+      <section class="tsd-section">
+        <div class="tsd-eyebrow tsd-mb8">COST ATTRIBUTION</div>
+        <div class="tsd-cost-grid">
+          @for (row of costRows(); track row.k) {
+            <span class="tsd-cost-key" [class.bold]="row.bold">{{ row.k }}</span>
+            <div class="tsd-cost-bar">
+              <span class="tsd-bar-zero"></span>
+              <span class="tsd-bar-fill"
+                [style.background]="row.c"
+                [style.left]="costBarLeft(row.v)"
+                [style.width]="costBarWidth(row.v)"
+                [class.bold]="row.bold"></span>
+            </div>
+            <span class="tsd-cost-val" [class.bold]="row.bold" [style.color]="row.c">
+              {{ fmtSign(row.v) }}
+            </span>
+          }
+        </div>
+        <div class="tsd-cost-note">
+          gross_pnl − spread_cost − slippage − commissions = net_pnl ·
+          "tradable" excludes signals where is_tradable() = false
+        </div>
+      </section>
+
+      <section class="tsd-section">
+        <div class="tsd-eyebrow tsd-mb6">TRADE LEDGER · {{ data().trades.length }} POSITIONS</div>
+        <div class="tsd-ledger" role="table">
+          <div class="tsd-ledger-row tsd-ledger-head" role="row">
+            <span>#</span><span>date</span><span>side</span>
+            <span class="r">entry</span>
+            <span class="r">exit</span>
+            <span class="r">hold</span>
+            <span class="r">net</span>
+            <span class="r">flag</span>
+          </div>
+          @for (t of data().trades; track t.n) {
+            @let net = netOf(t);
+            <div class="tsd-ledger-row" role="row">
+              <span class="muted">{{ t.n }}</span>
+              <span>{{ t.ts }}</span>
+              <span class="side" [style.color]="sideColor(t.side)">{{ t.side }}</span>
+              <span class="r">{{ t.entry.toFixed(2) }}</span>
+              <span class="r">{{ t.exit.toFixed(2) }}</span>
+              <span class="r muted">{{ t.hold }}d</span>
+              <span class="r" [style.color]="netColor(net)">{{ fmtSign(net) }}</span>
+              <span class="r flag" [style.color]="tradableColor(t.tradable)">
+                {{ t.tradable ? '✓' : 'theo' }}
+              </span>
+            </div>
+          }
+        </div>
+      </section>
+    </div>
+  </aside>
+}

@@ -1,0 +1,147 @@
+<section class="route">
+  <header class="route-toolbar">
+    <div class="crumbs">
+      <a [routerLink]="['/edge']" class="crumb-link">/edge</a>
+      <span class="crumb-sep">›</span>
+      <span class="crumb-cur">/cross-asset</span>
+    </div>
+    <div class="toolbar-spacer"></div>
+    <button class="score-pill" type="button" (click)="scoreOpen.set(true)">
+      <span class="score-dot" [style.background]="currentScoreColor()"></span>
+      <span>edge_score</span>
+      <span class="score-val" [style.color]="currentScoreColor()">{{ currentScoreLabel() }}</span>
+    </button>
+    <button class="run-sim-btn" type="button" (click)="tradeSimOpen.set(true)">
+      ↻ Run trade simulator
+    </button>
+    <span class="tz">America/New_York</span>
+  </header>
+
+  <!-- Robustness scorecard + universe -->
+  <div class="stat-grid">
+    <div class="big-stat ok">
+      <div class="eyebrow">ROBUSTNESS</div>
+      <div class="big-stat-value">0.62</div>
+      <div class="big-stat-hint">composite stability across asset × period × split</div>
+    </div>
+    <div class="big-stat ok">
+      <div class="eyebrow">DSR (MEAN)</div>
+      <div class="big-stat-value">0.74</div>
+      <div class="big-stat-hint">Deflated Sharpe Ratio · López de Prado 2014</div>
+    </div>
+    <div class="big-stat warn">
+      <div class="eyebrow">PBO</div>
+      <div class="big-stat-value">0.31</div>
+      <div class="big-stat-hint">Probability of Backtest Overfitting · CSCV @ 200 combos</div>
+    </div>
+    <div class="universe-card">
+      <div class="eyebrow">UNIVERSE</div>
+      <div class="universe-chips">
+        @for (a of data.assets; track a) {
+          <span class="universe-chip">{{ a }}<span class="x">×</span></span>
+        }
+        <button type="button" class="universe-add">+ add ticker</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Form -->
+  <div class="form-card">
+    <div class="split-toggle">
+      @for (m of splitModes; track m) {
+        <button type="button" class="split-btn"
+                [class.on]="splitMode() === m"
+                (click)="setSplitMode(m)">{{ m }}</button>
+      }
+    </div>
+    <span class="divider"></span>
+    <span class="eyebrow">STRATEGY</span>
+    <select class="strategy-select">
+      <option>vrp_short_vol</option>
+      <option>buy_and_hold (placeholder)</option>
+      <option>regime_filter_long</option>
+    </select>
+    <div class="form-spacer"></div>
+    <span class="form-meta">
+      {{ data.assets.length }} assets × {{ data.periods.length }} periods · 1 split
+    </span>
+  </div>
+
+  <!-- Heatmap -->
+  <div class="heatmap-card">
+    <div class="heatmap-head">
+      <span class="eyebrow">SHARPE · ASSET × PERIOD</span>
+      <div class="heatmap-legend">
+        <span>−1.5</span>
+        <span class="heatmap-bar"></span>
+        <span>+1.5</span>
+        <span class="heatmap-note">border = Sharpe &gt; 1 · dot = Sharpe &lt; −0.5</span>
+      </div>
+    </div>
+    <div class="heatmap-host">
+      <app-edge-sharpe-heatmap
+        [width]="1340" [height]="200"
+        [data]="data"
+        [hoverCell]="hoverCell()"
+        (hover)="hoverCell.set($event)" />
+      @if (hoverStat(); as s) {
+        <div class="heatmap-tooltip">
+          <div class="tt-head">{{ s.asset }} · {{ s.period }}</div>
+          <div class="tt-row"><span>sharpe</span><span [style.color]="s.sharpe > 0 ? TOK.bull : TOK.bear">{{ s.sharpe.toFixed(2) }}</span></div>
+          <div class="tt-row"><span>n_trades</span><span>{{ s.n_trades }}</span></div>
+          <div class="tt-row"><span>win_rate</span><span>{{ (s.win_rate * 100).toFixed(0) }}%</span></div>
+          <div class="tt-row"><span>max_dd</span><span [style.color]="TOK.bear">{{ (s.max_dd * 100).toFixed(1) }}%</span></div>
+        </div>
+      }
+    </div>
+  </div>
+
+  <!-- Equity small-multiples / composite -->
+  <div class="equity-card">
+    <div class="equity-head">
+      <span class="eyebrow">EQUITY</span>
+      <div class="composite-tabs">
+        @for (c of composites; track c.k) {
+          <button type="button" class="composite-btn"
+                  [class.on]="composite() === c.k"
+                  (click)="setComposite(c.k)">{{ c.l }}</button>
+        }
+      </div>
+      <div class="form-spacer"></div>
+      <span class="equity-meta">shared y-axis · monthly rebal · weights .shift(1)</span>
+    </div>
+
+    @if (composite() === 'per-asset') {
+      <div class="curves-grid">
+        @for (a of data.assets; track a; let i = $index) {
+          @let curve = data.equityCurves[i];
+          <div class="curve-cell">
+            <div class="curve-head">
+              <span class="curve-tkr">{{ a }}</span>
+              <span class="curve-pct" [style.color]="curveColor(curve)">{{ fmtPct(curveDelta(curve)) }}</span>
+            </div>
+            <app-edge-mini-line [width]="300" [height]="80"
+              [values]="curve" [color]="curveColor(curve)" [fill]="curveFill(curve)" />
+          </div>
+        }
+      </div>
+    } @else {
+      <div class="curve-cell">
+        <div class="curve-head">
+          <span class="curve-tkr">{{ composite() === 'equal-weight' ? 'EW' : 'IVOL' }} · composite</span>
+          <span class="curve-pct" [style.color]="TOK.bull">+12.4%</span>
+        </div>
+        <app-edge-mini-line [width]="1300" [height]="120"
+          [values]="compositeSeries()" [color]="TOK.accent" fill="rgba(41,98,255,0.10)" />
+      </div>
+    }
+  </div>
+
+  <!-- Drawers -->
+  <app-edge-score-drawer
+    [data]="data" [open]="scoreOpen()"
+    (closed)="scoreOpen.set(false)" />
+  <app-trade-sim-drawer
+    [data]="data" [open]="tradeSimOpen()"
+    (closed)="tradeSimOpen.set(false)" />
+</section>
