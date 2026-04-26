@@ -300,6 +300,44 @@ describe('RunSessionService', () => {
     await done;
   });
 
+  it('bundle_component_start flips a component to fetching and bundle_component_done flips it to done', async () => {
+    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+
+    source.dispatch({ type: 'job.started' });
+    source.dispatch({ type: 'fetch_complete' });
+    source.dispatch({ type: 'bundle_start', components: ['news.csv', 'financials.csv'] });
+
+    expect(service.bundleComponents().every((c) => c.status === 'queued')).toBe(true);
+
+    source.dispatch({ type: 'bundle_component_start', name: 'news.csv' });
+    expect(service.bundleComponents().find((c) => c.name === 'news.csv')!.status).toBe('fetching');
+    expect(service.bundleComponents().find((c) => c.name === 'financials.csv')!.status).toBe('queued');
+
+    source.dispatch({ type: 'bundle_component_done', name: 'news.csv' });
+    expect(service.bundleComponents().find((c) => c.name === 'news.csv')!.status).toBe('done');
+
+    source.dispatch({ type: 'job.cancelled', reason: 'test cleanup' });
+    await done;
+  });
+
+  it('processing_indicators populates the indicator-phase signal and bundle_start clears it', async () => {
+    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+
+    source.dispatch({ type: 'job.started' });
+    source.dispatch({ type: 'chunk_plan', total: 1 });
+    source.dispatch({ type: 'chunk_done', index: 1, total: 1, bars_returned: 100 });
+    expect(service.processingIndicators()).toBeNull();
+
+    source.dispatch({ type: 'processing_indicators', indicator_count: 7, bar_count: 8000 });
+    expect(service.processingIndicators()).toEqual({ indicatorCount: 7, barCount: 8000 });
+
+    source.dispatch({ type: 'bundle_start', components: ['dataset.csv'] });
+    expect(service.processingIndicators()).toBeNull();
+
+    source.dispatch({ type: 'job.cancelled', reason: 'test cleanup' });
+    await done;
+  });
+
   it('cancel() routes through JobsService.cancelJob', async () => {
     const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
     source.dispatch({ type: 'job.started' });

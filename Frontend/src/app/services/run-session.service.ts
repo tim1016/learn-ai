@@ -24,7 +24,11 @@ export interface ChunkStatus {
 
 export interface BundleComponentStatus {
   name: string;
-  status: 'queued' | 'done';
+  /** queued → fetching → done. ``fetching`` is set when
+   *  ``bundle_component_start`` fires and lets the run-card render an
+   *  in-progress visual cue for slow Polygon calls (news, financials,
+   *  trades, quotes) that previously flickered queued → done. */
+  status: 'queued' | 'fetching' | 'done';
 }
 
 /**
@@ -92,6 +96,7 @@ export class RunSessionService {
   private readonly _error = signal<RunError | null>(null);
   private readonly _alsoZip = signal(false);
   private readonly _startedAt = signal<number | null>(null);
+  private readonly _processingIndicators = signal<{ indicatorCount: number; barCount: number } | null>(null);
 
   /** Subscriber handle on the active job's SSE stream. */
   private _eventSource: EventSource | null = null;
@@ -109,6 +114,11 @@ export class RunSessionService {
   readonly result = this._result.asReadonly();
   readonly error = this._error.asReadonly();
   readonly alsoZip = this._alsoZip.asReadonly();
+  /** Snapshot of the in-flight indicator computation phase, set when
+   *  the worker emits ``processing_indicators`` and cleared on
+   *  ``bundle_start``. The run-card surfaces it as a status line so
+   *  the gap between the last chunk and bundling isn't silent. */
+  readonly processingIndicators = this._processingIndicators.asReadonly();
 
   /**
    * Aggregate progress fraction in [0, 1]. During fetch this reflects the
@@ -155,6 +165,7 @@ export class RunSessionService {
     this._alsoZip.set(true);
     this._state.set('fetching');
     this._startedAt.set(Date.now());
+    this._processingIndicators.set(null);
 
     let jobId: string;
     try {
@@ -209,6 +220,7 @@ export class RunSessionService {
     this._error.set(null);
     this._alsoZip.set(false);
     this._startedAt.set(null);
+    this._processingIndicators.set(null);
     this._completionEnvelope = null;
   }
 
@@ -345,6 +357,15 @@ export class RunSessionService {
         const components = (event['components'] as string[]) ?? [];
         this._bundleComponents.set(components.map((name) => ({ name, status: 'queued' })));
         this._bundleProgress.set(null);
+        // Indicator phase ended once bundling begins.
+        this._processingIndicators.set(null);
+        break;
+      }
+      case 'bundle_component_start': {
+        const name = event['name'] as string;
+        this._bundleComponents.update((list) =>
+          list.map((c) => (c.name === name ? { ...c, status: 'fetching' } : c)),
+        );
         break;
       }
       case 'bundle_progress': {
@@ -363,6 +384,15 @@ export class RunSessionService {
         if (this._bundleProgress()?.component === name) {
           this._bundleProgress.set(null);
         }
+        break;
+      }
+      case 'processing_indicators': {
+        // Mid-fetch phase: bars are loaded, pandas-ta is now computing
+        // indicators. Surface as a status line on the run-card so the
+        // user sees something between the last chunk and bundle_start.
+        const count = event['indicator_count'] as number;
+        const bars = event['bar_count'] as number;
+        this._processingIndicators.set({ indicatorCount: count, barCount: bars });
         break;
       }
       // dividend_adjusted and other informational events — ignored by
