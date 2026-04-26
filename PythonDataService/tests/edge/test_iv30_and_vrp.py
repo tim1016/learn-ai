@@ -1,4 +1,5 @@
 """Tests for delta_inversion, iv30_constructor, and vrp."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -22,20 +23,35 @@ from app.engine.edge.vrp import compute_vrp, vrp_signal
 
 def test_strike_for_delta_50d_atm_at_zero_rates():
     K = strike_for_delta_constant_vol(
-        S=400.0, T=30.0 / 365.0, r=0.0, q=0.0, sigma=0.20, target_delta=0.50,
+        S=400.0,
+        T=30.0 / 365.0,
+        r=0.0,
+        q=0.0,
+        sigma=0.20,
+        target_delta=0.50,
     )
     # 50Δ ATM strike at zero rates: K = S * exp(σ²T/2 - σ√T · N⁻¹(0.5))
     # N⁻¹(0.5) = 0; so K = S * exp(σ²T/2)
-    expected = 400.0 * np.exp(0.5 * 0.20 ** 2 * 30.0 / 365.0)
+    expected = 400.0 * np.exp(0.5 * 0.20**2 * 30.0 / 365.0)
     np.testing.assert_allclose(K, expected, rtol=1e-9)
 
 
 def test_strike_for_delta_25d_call_higher_than_atm():
     atm = strike_for_delta_constant_vol(
-        S=400.0, T=30.0 / 365.0, r=0.0, q=0.0, sigma=0.20, target_delta=0.50,
+        S=400.0,
+        T=30.0 / 365.0,
+        r=0.0,
+        q=0.0,
+        sigma=0.20,
+        target_delta=0.50,
     )
     otm_call = strike_for_delta_constant_vol(
-        S=400.0, T=30.0 / 365.0, r=0.0, q=0.0, sigma=0.20, target_delta=0.25,
+        S=400.0,
+        T=30.0 / 365.0,
+        r=0.0,
+        q=0.0,
+        sigma=0.20,
+        target_delta=0.25,
     )
     assert otm_call > atm  # 25Δ call is OTM
 
@@ -43,14 +59,24 @@ def test_strike_for_delta_25d_call_higher_than_atm():
 def test_strike_for_delta_rejects_out_of_range():
     with pytest.raises(ValueError):
         strike_for_delta_constant_vol(
-            S=400.0, T=30.0 / 365.0, r=0.0, q=0.0, sigma=0.20, target_delta=1.5,
+            S=400.0,
+            T=30.0 / 365.0,
+            r=0.0,
+            q=0.0,
+            sigma=0.20,
+            target_delta=1.5,
         )
 
 
 def test_strike_and_iv_for_delta_with_flat_surface():
     flat = lambda K, T: 0.20  # noqa: E731
     K, sigma = strike_and_iv_for_delta(
-        S=400.0, T=30.0 / 365.0, r=0.0, q=0.0, target_delta=0.50, surface=flat,
+        S=400.0,
+        T=30.0 / 365.0,
+        r=0.0,
+        q=0.0,
+        target_delta=0.50,
+        surface=flat,
     )
     assert sigma == 0.20
     assert 395.0 < K < 405.0
@@ -58,11 +84,13 @@ def test_strike_and_iv_for_delta_with_flat_surface():
 
 def test_variance_interpolated_iv_midpoint():
     sigma = variance_interpolated_iv(
-        sigma_t1=0.20, t1_years=20 / 365.0,
-        sigma_t2=0.30, t2_years=40 / 365.0,
+        sigma_t1=0.20,
+        t1_years=20 / 365.0,
+        sigma_t2=0.30,
+        t2_years=40 / 365.0,
         target_t_years=30 / 365.0,
     )
-    var_30 = (0.5 * 0.20 ** 2 * 20 + 0.5 * 0.30 ** 2 * 40) / 30
+    var_30 = (0.5 * 0.20**2 * 20 + 0.5 * 0.30**2 * 40) / 30
     expected = np.sqrt(var_30)
     np.testing.assert_allclose(sigma, expected, atol=1e-12)
 

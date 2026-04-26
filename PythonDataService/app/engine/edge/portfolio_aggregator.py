@@ -4,6 +4,7 @@ Two composites (per docs/architecture/edge-feature-design.md §5.1):
 - Equal-weight: w_i = 1/N
 - Vol-weighted: w_i ∝ 1/σ_i^(60d), monthly rebalanced
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -50,8 +51,7 @@ def vol_weighted_returns(
 def composite_stats(returns: pd.Series) -> dict:
     r = returns.dropna().to_numpy(dtype=np.float64)
     if r.size < 2:
-        return {"n": int(r.size), "total_return": 0.0, "ann_sharpe": 0.0,
-                "ann_vol": 0.0, "max_dd": 0.0}
+        return {"n": int(r.size), "total_return": 0.0, "ann_sharpe": 0.0, "ann_vol": 0.0, "max_dd": 0.0}
     eq = (1.0 + r).cumprod()
     dd = (eq - eq.cummax()) / eq.cummax()
     ann_sharpe = float(r.mean() / r.std(ddof=1) * np.sqrt(252)) if r.std(ddof=1) > 0 else 0.0

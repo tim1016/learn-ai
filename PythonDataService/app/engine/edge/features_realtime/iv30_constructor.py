@@ -8,6 +8,7 @@ For a given (timestamp, set of expiries with σ at deltas), this module:
 3. Computes term-slope: σ_50Δ,60d - σ_50Δ,30d.
 4. Computes vol-of-vol: ΔIV30 and rolling-std(IV30, 20).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -15,8 +16,12 @@ import pandas as pd
 
 
 def variance_interpolated_iv(
-    *, sigma_t1: float, t1_years: float,
-    sigma_t2: float, t2_years: float, target_t_years: float,
+    *,
+    sigma_t1: float,
+    t1_years: float,
+    sigma_t2: float,
+    t2_years: float,
+    target_t_years: float,
 ) -> float:
     """Variance-time-weighted interpolation between two expiries to a constant maturity."""
     if not (t1_years <= target_t_years <= t2_years):
@@ -25,8 +30,8 @@ def variance_interpolated_iv(
         return float(sigma_t1)
     w1 = (t2_years - target_t_years) / (t2_years - t1_years)
     w2 = (target_t_years - t1_years) / (t2_years - t1_years)
-    var_t1 = sigma_t1 ** 2 * t1_years
-    var_t2 = sigma_t2 ** 2 * t2_years
+    var_t1 = sigma_t1**2 * t1_years
+    var_t2 = sigma_t2**2 * t2_years
     var_target = w1 * var_t1 + w2 * var_t2
     return float(np.sqrt(var_target / target_t_years))
 
@@ -48,8 +53,10 @@ def iv30_atm_50d(iv_by_expiry: pd.Series, target_days: int = 30) -> float | None
         nearest = int(days[np.argmin(np.abs(days - target_days))])
         return float(iv_by_expiry.loc[nearest])
     return variance_interpolated_iv(
-        sigma_t1=float(iv_by_expiry.loc[t1_days]), t1_years=t1_days / 365.0,
-        sigma_t2=float(iv_by_expiry.loc[t2_days]), t2_years=t2_days / 365.0,
+        sigma_t1=float(iv_by_expiry.loc[t1_days]),
+        t1_years=t1_days / 365.0,
+        sigma_t2=float(iv_by_expiry.loc[t2_days]),
+        t2_years=t2_days / 365.0,
         target_t_years=target_days / 365.0,
     )
 

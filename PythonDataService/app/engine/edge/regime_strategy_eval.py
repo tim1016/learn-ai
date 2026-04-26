@@ -3,6 +3,7 @@
 Pure post-hoc analysis: takes a trade ledger from trade_simulator + a regime
 label series, returns regime-conditional Sharpe / win-rate / etc.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable

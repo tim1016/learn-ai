@@ -13,6 +13,7 @@ Reuses spread_model.{option_spread, stock_spread, is_tradable} for friction.
 
 All wire/storage timestamps are int64 ms UTC (per numerical-rigor.md).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -37,18 +38,18 @@ class TradeSimConfig:
     time_stop_bars: int = 5
     hard_stop_pct: float | None = None
     target_pct: float | None = None
-    slippage_pct: float = 0.0005          # 5 bps stocks; override 0.02 for options
-    commission_per_unit: float = 0.005    # $0.005/share; override $0.65/contract
+    slippage_pct: float = 0.0005  # 5 bps stocks; override 0.02 for options
+    commission_per_unit: float = 0.005  # $0.005/share; override $0.65/contract
     spread_bps_stock: float = 1.0
-    fill_at_open: bool = True             # T+1 open; if False, T close
-    require_tradable: bool = False         # if True, drop non-tradable signals
+    fill_at_open: bool = True  # T+1 open; if False, T close
+    require_tradable: bool = False  # if True, drop non-tradable signals
 
 
 @dataclass(frozen=True)
 class Trade:
-    entry_ts: int          # int64 ms UTC
+    entry_ts: int  # int64 ms UTC
     exit_ts: int
-    side: int              # +1 long, -1 short
+    side: int  # +1 long, -1 short
     qty: float
     entry_px: float
     exit_px: float
@@ -56,7 +57,7 @@ class Trade:
     costs: float
     net_pnl: float
     tradable: bool
-    exit_reason: str       # "time_stop" | "opposite_signal" | "hard_stop" | "target" | "end_of_data"
+    exit_reason: str  # "time_stop" | "opposite_signal" | "hard_stop" | "target" | "end_of_data"
 
 
 @dataclass
@@ -147,8 +148,13 @@ def simulate(
                 comm = 2 * cfg.commission_per_unit * entry_qty
                 costs = spread_cost + comm
                 tradable = _check_tradable(
-                    cfg, entry_px, exit_px, quoted_volume, open_interest,
-                    bars.index[entry_idx], bars.index[i],
+                    cfg,
+                    entry_px,
+                    exit_px,
+                    quoted_volume,
+                    open_interest,
+                    bars.index[entry_idx],
+                    bars.index[i],
                 )
                 trade = Trade(
                     entry_ts=int(ts_ms[entry_idx]),
@@ -169,9 +175,7 @@ def simulate(
 
         equity_path[i] = equity
 
-    equity_curve = pd.DataFrame(
-        {"ts": ts_ms, "equity": equity_path, "drawdown": _drawdown(equity_path)}
-    )
+    equity_curve = pd.DataFrame({"ts": ts_ms, "equity": equity_path, "drawdown": _drawdown(equity_path)})
 
     stats = _summary_stats(trades)
     cost_attr = _cost_attribution(trades)
@@ -227,9 +231,17 @@ def _drawdown(equity: np.ndarray) -> np.ndarray:
 
 def _summary_stats(trades: list[Trade]) -> dict:
     if not trades:
-        return {"n_trades": 0, "n_tradable": 0, "win_rate": 0.0,
-                "avg_win": 0.0, "avg_loss": 0.0, "sharpe": 0.0,
-                "sortino": 0.0, "max_dd": 0.0, "mar": 0.0}
+        return {
+            "n_trades": 0,
+            "n_tradable": 0,
+            "win_rate": 0.0,
+            "avg_win": 0.0,
+            "avg_loss": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "max_dd": 0.0,
+            "mar": 0.0,
+        }
     pnls = np.array([t.net_pnl for t in trades])
     wins = pnls[pnls > 0]
     losses = pnls[pnls < 0]

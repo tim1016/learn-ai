@@ -1,4 +1,5 @@
 """Parity tests for app.engine.edge.spread_model."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -19,8 +20,11 @@ def test_option_spread_atm_30d_matches_hand_calc():
     s, k_strike, t, iv = 400.0, 400.0, 30.0 / 365.0, 0.20
     expected = DEFAULT_K * iv * np.sqrt(t) * (1.0 + DEFAULT_ALPHA * 0.0) * s
     got = option_spread(
-        underlying_price=s, strike=k_strike, time_to_expiry_years=t,
-        iv=iv, delta=0.50,
+        underlying_price=s,
+        strike=k_strike,
+        time_to_expiry_years=t,
+        iv=iv,
+        delta=0.50,
     )
     np.testing.assert_allclose(got, expected, atol=1e-12)
     assert got > OPTION_SPREAD_FLOOR
@@ -28,16 +32,21 @@ def test_option_spread_atm_30d_matches_hand_calc():
 
 def test_option_spread_floor_engages_for_low_iv():
     got = option_spread(
-        underlying_price=10.0, strike=10.0, time_to_expiry_years=1 / 365.0,
-        iv=0.001, delta=0.50,
+        underlying_price=10.0,
+        strike=10.0,
+        time_to_expiry_years=1 / 365.0,
+        iv=0.001,
+        delta=0.50,
     )
     assert got == OPTION_SPREAD_FLOOR
 
 
 def test_option_spread_wing_penalty_increases_with_distance_from_atm():
     base_args = dict(
-        underlying_price=400.0, strike=400.0,
-        time_to_expiry_years=30.0 / 365.0, iv=0.20,
+        underlying_price=400.0,
+        strike=400.0,
+        time_to_expiry_years=30.0 / 365.0,
+        iv=0.20,
     )
     atm = option_spread(delta=0.50, **base_args)
     wing_25 = option_spread(delta=0.25, **base_args)
@@ -51,7 +60,10 @@ def test_option_spread_wing_penalty_increases_with_distance_from_atm():
 
 def test_option_spread_sqrt_t_scaling():
     base_args = dict(
-        underlying_price=400.0, strike=400.0, iv=0.20, delta=0.50,
+        underlying_price=400.0,
+        strike=400.0,
+        iv=0.20,
+        delta=0.50,
     )
     short = option_spread(time_to_expiry_years=30.0 / 365.0, **base_args)
     long = option_spread(time_to_expiry_years=120.0 / 365.0, **base_args)
@@ -61,16 +73,22 @@ def test_option_spread_sqrt_t_scaling():
 def test_option_spread_rejects_non_positive_t():
     with pytest.raises(ValueError, match="time_to_expiry_years"):
         option_spread(
-            underlying_price=400.0, strike=400.0,
-            time_to_expiry_years=0.0, iv=0.20, delta=0.5,
+            underlying_price=400.0,
+            strike=400.0,
+            time_to_expiry_years=0.0,
+            iv=0.20,
+            delta=0.5,
         )
 
 
 def test_option_spread_vectorized_inputs():
     deltas = np.array([0.25, 0.50, 0.75])
     spreads = option_spread(
-        underlying_price=400.0, strike=400.0, time_to_expiry_years=30 / 365.0,
-        iv=0.20, delta=deltas,
+        underlying_price=400.0,
+        strike=400.0,
+        time_to_expiry_years=30 / 365.0,
+        iv=0.20,
+        delta=deltas,
     )
     assert spreads.shape == deltas.shape
     np.testing.assert_allclose(spreads[0], spreads[2], atol=1e-12)

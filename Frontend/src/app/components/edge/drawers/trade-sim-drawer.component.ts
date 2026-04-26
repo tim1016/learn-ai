@@ -24,7 +24,7 @@ export class TradeSimDrawerComponent {
   data = input.required<EdgeData>();
   open = input(false);
 
-  close = output<void>();
+  closed = output();
 
   protected readonly TOK = EDGE_TOK;
 

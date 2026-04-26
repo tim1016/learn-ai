@@ -1,4 +1,5 @@
 """Sanity tests for DSR + PBO + robustness_score."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -12,7 +13,11 @@ from app.engine.edge.robustness_stats import (
 
 def test_dsr_high_for_strong_solo_sharpe():
     dsr = deflated_sharpe_ratio(
-        observed_sharpe=2.0, n_trials=1, skew=0.0, kurtosis=3.0, n_observations=252,
+        observed_sharpe=2.0,
+        n_trials=1,
+        skew=0.0,
+        kurtosis=3.0,
+        n_observations=252,
     )
     assert dsr > 0.95
 
@@ -26,7 +31,11 @@ def test_dsr_drops_with_more_trials():
 
 def test_dsr_zero_or_low_for_weak_strategy():
     dsr = deflated_sharpe_ratio(
-        observed_sharpe=0.0, n_trials=10, skew=0.0, kurtosis=3.0, n_observations=252,
+        observed_sharpe=0.0,
+        n_trials=10,
+        skew=0.0,
+        kurtosis=3.0,
+        n_observations=252,
     )
     assert dsr < 0.5
 

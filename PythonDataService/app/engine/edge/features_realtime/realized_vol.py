@@ -14,6 +14,7 @@ pass bars_per_year=252*26.
 
 Hard rule: this module is in features_realtime/ — never .shift(-N).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -27,7 +28,10 @@ def _annualize(per_period_var: pd.Series, bars_per_year: int) -> pd.Series:
 
 
 def close_to_close(
-    bars: pd.DataFrame, *, window: int, annualize: bool = True,
+    bars: pd.DataFrame,
+    *,
+    window: int,
+    annualize: bool = True,
     bars_per_year: int = DAILY_BARS_PER_YEAR,
 ) -> pd.Series:
     """Standard CtC: var = (1/(n-1)) Σ (r_t - mean(r))^2, where r = ln(C_t/C_{t-1})."""
@@ -37,7 +41,10 @@ def close_to_close(
 
 
 def parkinson(
-    bars: pd.DataFrame, *, window: int, annualize: bool = True,
+    bars: pd.DataFrame,
+    *,
+    window: int,
+    annualize: bool = True,
     bars_per_year: int = DAILY_BARS_PER_YEAR,
 ) -> pd.Series:
     """Parkinson (1980): var = (1/(4n ln 2)) Σ (ln(H/L))^2.
@@ -50,7 +57,10 @@ def parkinson(
 
 
 def garman_klass(
-    bars: pd.DataFrame, *, window: int, annualize: bool = True,
+    bars: pd.DataFrame,
+    *,
+    window: int,
+    annualize: bool = True,
     bars_per_year: int = DAILY_BARS_PER_YEAR,
 ) -> pd.Series:
     """Garman-Klass (1980): var = (1/n) Σ [0.5 (ln H/L)^2 - (2 ln 2 - 1)(ln C/O)^2]."""
@@ -62,7 +72,10 @@ def garman_klass(
 
 
 def yang_zhang(
-    bars: pd.DataFrame, *, window: int, annualize: bool = True,
+    bars: pd.DataFrame,
+    *,
+    window: int,
+    annualize: bool = True,
     bars_per_year: int = DAILY_BARS_PER_YEAR,
 ) -> pd.Series:
     """Yang-Zhang (2000): drift-independent, gap-aware.
@@ -78,8 +91,8 @@ def yang_zhang(
     """
     if window < 2:
         raise ValueError("window must be >= 2 for Yang-Zhang")
-    log_oc = np.log(bars["open"] / bars["close"].shift(1))   # overnight
-    log_co = np.log(bars["close"] / bars["open"])            # open-to-close
+    log_oc = np.log(bars["open"] / bars["close"].shift(1))  # overnight
+    log_co = np.log(bars["close"] / bars["open"])  # open-to-close
     log_ho = np.log(bars["high"] / bars["open"])
     log_lo = np.log(bars["low"] / bars["open"])
     log_hc = np.log(bars["high"] / bars["close"])

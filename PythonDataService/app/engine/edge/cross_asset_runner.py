@@ -7,6 +7,7 @@ The real strategy registry will be wired in alongside the three TV strategies
 from `three_strategies_roadmap.md`. For v1 we ship a placeholder so the
 endpoint contract and aggregation layer can be exercised end-to-end.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -60,18 +61,15 @@ async def _run_one(symbol: str, period: TimePeriod, bars: pd.DataFrame, strategy
     fn = STRATEGY_REGISTRY[strategy_name]
     window = bars.loc[(bars.index >= period.start_ms) & (bars.index < period.end_ms)]
     if window.empty:
-        return {"symbol": symbol, "period": period.label,
-                "stats": {"n_trades": 0}, "equity_curve": []}
+        return {"symbol": symbol, "period": period.label, "stats": {"n_trades": 0}, "equity_curve": []}
     signals = fn(window)
-    sim_res = simulate(bars=window, signals=signals,
-                       config=TradeSimConfig(time_stop_bars=10**9))  # buy-and-hold proxy
+    sim_res = simulate(bars=window, signals=signals, config=TradeSimConfig(time_stop_bars=10**9))  # buy-and-hold proxy
     eq = sim_res.equity_curve
     return {
         "symbol": symbol,
         "period": period.label,
         "stats": sim_res.stats,
-        "equity_curve": [] if eq is None else eq.assign(ts=eq["ts"].astype(int))
-                                                .to_dict(orient="records"),
+        "equity_curve": [] if eq is None else eq.assign(ts=eq["ts"].astype(int)).to_dict(orient="records"),
     }
 
 
@@ -91,7 +89,8 @@ async def run_cross_asset(
 
     tasks = [
         _run_one(sym, period, bars_by_symbol[sym], request.strategy_name)
-        for sym in request.symbols if sym in bars_by_symbol
+        for sym in request.symbols
+        if sym in bars_by_symbol
         for period in periods
     ]
     raw = await asyncio.gather(*tasks)
@@ -148,7 +147,8 @@ def _dsr_by_asset(by_asset: dict) -> dict[str, float]:
         out[sym] = deflated_sharpe_ratio(
             observed_sharpe=float(sharpes.mean()),
             n_trials=len(sharpes),
-            skew=0.0, kurtosis=3.0,
+            skew=0.0,
+            kurtosis=3.0,
             n_observations=max(n_trades_total, 30),
         )
     return out

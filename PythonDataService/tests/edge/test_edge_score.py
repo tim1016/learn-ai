@@ -1,4 +1,5 @@
 """Tests for Edge Score composite."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -60,7 +61,11 @@ def test_edge_score_action_positive_when_components_long_vol():
     atr = pd.Series(np.ones(n))
     labels = pd.Series([2] * n)  # choppy-high-vol = +0.5
     res = edge_score(
-        vrp=vrp, iv30=iv30, trend_slope=slope, atr=atr, regime_labels=labels,
+        vrp=vrp,
+        iv30=iv30,
+        trend_slope=slope,
+        atr=atr,
+        regime_labels=labels,
     )
     assert res.action.iloc[-1] == 1
 
@@ -68,8 +73,10 @@ def test_edge_score_action_positive_when_components_long_vol():
 def test_edge_score_rejects_weights_that_dont_sum_to_one():
     with pytest.raises(ValueError, match="weights must sum"):
         edge_score(
-            vrp=pd.Series([0.0]), iv30=pd.Series([0.20]),
-            trend_slope=pd.Series([0.0]), atr=pd.Series([1.0]),
+            vrp=pd.Series([0.0]),
+            iv30=pd.Series([0.20]),
+            trend_slope=pd.Series([0.0]),
+            atr=pd.Series([1.0]),
             regime_labels=pd.Series([0]),
             weights={"vrp": 0.5, "regime": 0.5, "iv_pct": 0.5, "trend": 0.5},
         )

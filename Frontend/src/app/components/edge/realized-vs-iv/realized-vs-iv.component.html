@@ -141,7 +141,7 @@
       </span>
     </div>
 
-    <edge-price-iv-chart
+    <app-edge-price-iv-chart
       [width]="1340" [height]="420"
       [data]="data()"
       [showOracle]="showOracle()"
@@ -158,7 +158,7 @@
         <span class="eyebrow">VRP_FORWARD HISTOGRAM</span>
         <span class="bottom-meta">current marker → today's vrp_forward</span>
       </div>
-      <edge-vrp-histogram
+      <app-edge-vrp-histogram
         [width]="820" [height]="170"
         [data]="data()"
         [currentIdx]="currentIdx()" />
@@ -197,9 +197,9 @@
     [data]="data()"
     [open]="scoreOpen()"
     [idx]="currentIdx()"
-    (close)="scoreOpen.set(false)" />
+    (closed)="scoreOpen.set(false)" />
   <app-trade-sim-drawer
     [data]="data()"
     [open]="tradeSimOpen()"
-    (close)="tradeSimOpen.set(false)" />
+    (closed)="tradeSimOpen.set(false)" />
 </section>

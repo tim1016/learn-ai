@@ -1,5 +1,5 @@
 @if (open()) {
-  <div class="tsd-scrim" (click)="close.emit()" aria-hidden="true"></div>
+  <div class="tsd-scrim" (click)="closed.emit()" aria-hidden="true"></div>
   <aside class="tsd" role="dialog" aria-label="Trade Simulator">
     <header class="tsd-header">
       <div>
@@ -8,7 +8,7 @@
           VRP signals · SPY · {{ data().trades.length }} trades · {{ tradableCount() }} tradable
         </div>
       </div>
-      <button class="tsd-close" (click)="close.emit()" aria-label="Close simulator">✕</button>
+      <button class="tsd-close" (click)="closed.emit()" aria-label="Close simulator">✕</button>
     </header>
 
     <div class="tsd-body">
@@ -18,7 +18,7 @@
           <span class="tsd-equity-pct">{{ fmtSign(equityFinal(), 2) }}%</span>
         </div>
         <div class="tsd-equity-wrap">
-          <edge-mini-line [width]="580" [height]="120"
+          <app-edge-mini-line [width]="580" [height]="120"
             [values]="equitySeries()" [color]="TOK.bull" fill="rgba(38,166,154,0.10)" />
         </div>
       </section>

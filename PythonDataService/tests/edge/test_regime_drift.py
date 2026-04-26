@@ -1,4 +1,5 @@
 """Tests for Hungarian-aligned regime drift module."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -32,12 +33,12 @@ def test_align_labels_permutes_transition_matrix():
     new = ref[[1, 0]]
     new_A = np.array([[0.9, 0.1], [0.2, 0.8]])
     result = align_labels(
-        reference_centroids=ref, new_centroids=new, new_transition_matrix=new_A,
+        reference_centroids=ref,
+        new_centroids=new,
+        new_transition_matrix=new_A,
     )
     assert result.aligned_transition_matrix is not None
-    np.testing.assert_allclose(
-        result.aligned_transition_matrix, np.array([[0.8, 0.2], [0.1, 0.9]]), atol=1e-12
-    )
+    np.testing.assert_allclose(result.aligned_transition_matrix, np.array([[0.8, 0.2], [0.1, 0.9]]), atol=1e-12)
 
 
 def test_kl_zero_for_identical_matrices():
@@ -58,12 +59,16 @@ def test_stability_score_lower_for_more_similar_models():
     A3 = np.array([[0.5, 0.5], [0.5, 0.5]])
     c = np.array([[0.0, 0.0], [10.0, 10.0]])
     s_close = stability_score(
-        prev_transition=A1, new_transition_aligned=A2,
-        prev_centroids=c, new_centroids_aligned=c,
+        prev_transition=A1,
+        new_transition_aligned=A2,
+        prev_centroids=c,
+        new_centroids_aligned=c,
     )
     s_far = stability_score(
-        prev_transition=A1, new_transition_aligned=A3,
-        prev_centroids=c, new_centroids_aligned=c,
+        prev_transition=A1,
+        new_transition_aligned=A3,
+        prev_centroids=c,
+        new_centroids_aligned=c,
     )
     assert s_close < s_far
 

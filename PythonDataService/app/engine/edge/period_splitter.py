@@ -7,6 +7,7 @@ Three modes (per docs/architecture/edge-feature-design.md §5.2):
 
 All inputs and outputs in int64 ms UTC.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -28,7 +29,10 @@ class TimePeriod:
 
 
 def rolling_windows(
-    *, start_ms: int, end_ms: int, window_years: float = 2.0,
+    *,
+    start_ms: int,
+    end_ms: int,
+    window_years: float = 2.0,
     step_months: float = 6.0,
 ) -> list[TimePeriod]:
     """Sliding fixed-width windows."""
@@ -37,16 +41,22 @@ def rolling_windows(
     out: list[TimePeriod] = []
     cur = start_ms
     while cur + width <= end_ms:
-        out.append(TimePeriod(
-            label=f"rolling_{_iso(cur)}_{_iso(cur + width)}",
-            start_ms=cur, end_ms=cur + width,
-        ))
+        out.append(
+            TimePeriod(
+                label=f"rolling_{_iso(cur)}_{_iso(cur + width)}",
+                start_ms=cur,
+                end_ms=cur + width,
+            )
+        )
         cur += step
     if not out:
-        out.append(TimePeriod(
-            label=f"rolling_{_iso(start_ms)}_{_iso(end_ms)}",
-            start_ms=start_ms, end_ms=end_ms,
-        ))
+        out.append(
+            TimePeriod(
+                label=f"rolling_{_iso(start_ms)}_{_iso(end_ms)}",
+                start_ms=start_ms,
+                end_ms=end_ms,
+            )
+        )
     return out
 
 
@@ -61,15 +71,21 @@ def calendar_year_buckets(*, start_ms: int, end_ms: int) -> list[TimePeriod]:
         clipped_start = max(y_start, start_ms)
         clipped_end = min(y_end, end_ms)
         if clipped_start < clipped_end:
-            out.append(TimePeriod(
-                label=f"cal_{year}",
-                start_ms=clipped_start, end_ms=clipped_end,
-            ))
+            out.append(
+                TimePeriod(
+                    label=f"cal_{year}",
+                    start_ms=clipped_start,
+                    end_ms=clipped_end,
+                )
+            )
     return out
 
 
 def walk_forward(
-    *, start_ms: int, end_ms: int, train_years: float = 2.0,
+    *,
+    start_ms: int,
+    end_ms: int,
+    train_years: float = 2.0,
     test_months: float = 6.0,
 ) -> list[tuple[TimePeriod, TimePeriod]]:
     """Anchored walk-forward: returns list of (train, test) pairs."""
@@ -80,11 +96,13 @@ def walk_forward(
     while cur + train_w + test_w <= end_ms:
         train = TimePeriod(
             label=f"train_{_iso(cur)}_{_iso(cur + train_w)}",
-            start_ms=cur, end_ms=cur + train_w,
+            start_ms=cur,
+            end_ms=cur + train_w,
         )
         test = TimePeriod(
             label=f"test_{_iso(cur + train_w)}_{_iso(cur + train_w + test_w)}",
-            start_ms=cur + train_w, end_ms=cur + train_w + test_w,
+            start_ms=cur + train_w,
+            end_ms=cur + train_w + test_w,
         )
         out.append((train, test))
         cur += test_w

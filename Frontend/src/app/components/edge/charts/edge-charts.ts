@@ -14,10 +14,8 @@ import {
   Component,
   effect,
   ElementRef,
-  inject,
   input,
   output,
-  signal,
   ViewChild,
 } from "@angular/core";
 
@@ -42,7 +40,8 @@ function setupCanvas(canvas: HTMLCanvasElement, w: number, h: number): CanvasRen
   const dpr = window.devicePixelRatio || 1;
   canvas.width = w * dpr; canvas.height = h * dpr;
   canvas.style.width = w + "px"; canvas.style.height = h + "px";
-  const ctx = canvas.getContext("2d")!;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2d canvas context unavailable");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
   return ctx;
@@ -50,7 +49,7 @@ function setupCanvas(canvas: HTMLCanvasElement, w: number, h: number): CanvasRen
 
 /* ─── Mini sparkline ──────────────────────────────────────── */
 @Component({
-  selector: "edge-mini-line",
+  selector: "app-edge-mini-line",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `<canvas #canvas></canvas>`,
@@ -105,7 +104,7 @@ export class EdgeMiniLineComponent implements AfterViewInit {
 export interface PriceIVLayers { rvBands: boolean; edgeStrip: boolean; }
 
 @Component({
-  selector: "edge-price-iv-chart",
+  selector: "app-edge-price-iv-chart",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -248,7 +247,7 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
     }
 
     // Signals
-    const sigs: Array<SignalMark & { oracle: boolean }> = [
+    const sigs: (SignalMark & { oracle: boolean })[] = [
       ...(this.showRealtime() ? data.signals.map(s => ({ ...s, oracle: false })) : []),
       ...(this.showOracle()   ? data.oracleSignals.map(s => ({ ...s, oracle: true })) : []),
     ];
@@ -292,7 +291,7 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
 
 /* ─── VRP histogram ───────────────────────────────────────── */
 @Component({
-  selector: "edge-vrp-histogram",
+  selector: "app-edge-vrp-histogram",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `<canvas #canvas></canvas>`,
@@ -368,7 +367,7 @@ export class EdgeVrpHistogramComponent implements AfterViewInit {
 export interface HeatmapHover { ai: number; pi: number; }
 
 @Component({
-  selector: "edge-sharpe-heatmap",
+  selector: "app-edge-sharpe-heatmap",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `<canvas #canvas
@@ -460,7 +459,7 @@ export class EdgeSharpeHeatmapComponent implements AfterViewInit {
 
 /* ─── Regime price chart ──────────────────────────────────── */
 @Component({
-  selector: "edge-regime-price-chart",
+  selector: "app-edge-regime-price-chart",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `<canvas #canvas
@@ -554,7 +553,7 @@ export class EdgeRegimePriceChartComponent implements AfterViewInit {
 
 /* ─── Transition matrix ───────────────────────────────────── */
 @Component({
-  selector: "edge-transition-matrix",
+  selector: "app-edge-transition-matrix",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `<canvas #canvas></canvas>`,
@@ -599,7 +598,7 @@ export class EdgeTransitionMatrixComponent implements AfterViewInit {
 
 /* ─── Per-regime feature radar ────────────────────────────── */
 @Component({
-  selector: "edge-regime-radar",
+  selector: "app-edge-regime-radar",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `<canvas #canvas></canvas>`,
@@ -666,7 +665,7 @@ export class EdgeRegimeRadarComponent implements AfterViewInit {
 
 /* ─── Stability sparkline ─────────────────────────────────── */
 @Component({
-  selector: "edge-stability-sparkline",
+  selector: "app-edge-stability-sparkline",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `<canvas #canvas></canvas>`,

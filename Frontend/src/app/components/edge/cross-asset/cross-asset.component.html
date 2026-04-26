@@ -79,7 +79,7 @@
       </div>
     </div>
     <div class="heatmap-host">
-      <edge-sharpe-heatmap
+      <app-edge-sharpe-heatmap
         [width]="1340" [height]="200"
         [data]="data"
         [hoverCell]="hoverCell()"
@@ -120,7 +120,7 @@
               <span class="curve-tkr">{{ a }}</span>
               <span class="curve-pct" [style.color]="curveColor(curve)">{{ fmtPct(curveDelta(curve)) }}</span>
             </div>
-            <edge-mini-line [width]="300" [height]="80"
+            <app-edge-mini-line [width]="300" [height]="80"
               [values]="curve" [color]="curveColor(curve)" [fill]="curveFill(curve)" />
           </div>
         }
@@ -131,7 +131,7 @@
           <span class="curve-tkr">{{ composite() === 'equal-weight' ? 'EW' : 'IVOL' }} · composite</span>
           <span class="curve-pct" [style.color]="TOK.bull">+12.4%</span>
         </div>
-        <edge-mini-line [width]="1300" [height]="120"
+        <app-edge-mini-line [width]="1300" [height]="120"
           [values]="compositeSeries()" [color]="TOK.accent" fill="rgba(41,98,255,0.10)" />
       </div>
     }
@@ -140,8 +140,8 @@
   <!-- Drawers -->
   <app-edge-score-drawer
     [data]="data" [open]="scoreOpen()"
-    (close)="scoreOpen.set(false)" />
+    (closed)="scoreOpen.set(false)" />
   <app-trade-sim-drawer
     [data]="data" [open]="tradeSimOpen()"
-    (close)="tradeSimOpen.set(false)" />
+    (closed)="tradeSimOpen.set(false)" />
 </section>

@@ -9,6 +9,7 @@ Stability score combines:
 - Symmetric KL divergence between consecutive transition matrices
 - Mean centroid displacement (Euclidean)
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ from scipy.optimize import linear_sum_assignment
 
 @dataclass(frozen=True)
 class AlignmentResult:
-    permutation: np.ndarray   # (K,) int — old label j maps to permutation[j]
+    permutation: np.ndarray  # (K,) int — old label j maps to permutation[j]
     aligned_centroids: np.ndarray
     aligned_transition_matrix: np.ndarray | None
 

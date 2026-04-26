@@ -9,6 +9,7 @@ These implementations target reasonable accuracy for in-app diagnostics; full
 fidelity to the published numerical examples requires the supplemental materials
 of the original papers.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -35,7 +36,7 @@ def deflated_sharpe_ratio(
     if n_trials < 1:
         raise ValueError("n_trials must be >= 1")
     sr0 = _expected_max_sr(n_trials, benchmark_sharpe=benchmark_sharpe)
-    denom = 1.0 - skew * observed_sharpe + (kurtosis - 1.0) / 4.0 * observed_sharpe ** 2
+    denom = 1.0 - skew * observed_sharpe + (kurtosis - 1.0) / 4.0 * observed_sharpe**2
     if denom <= 0:
         return 0.0
     test_stat = (observed_sharpe - sr0) * np.sqrt(n_observations - 1) / np.sqrt(denom)
@@ -84,6 +85,7 @@ def probability_of_backtest_overfitting(matrix: np.ndarray) -> float:
     iterations = 0
     if total_combos <= max_combos:
         from itertools import combinations
+
         combos = combinations(range(s), half)
     else:
         all_idx = np.arange(s)

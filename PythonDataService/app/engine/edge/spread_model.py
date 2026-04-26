@@ -8,14 +8,15 @@ Math provenance:
   Pricing", Journal of Financial Economics 30(1).
 - Operational form per docs/architecture/edge-feature-design.md §7.2.
 """
+
 from __future__ import annotations
 
 import numpy as np
 
 OPTION_SPREAD_FLOOR = 0.05  # dollars per share; options never trade tighter
-DEFAULT_K = 0.04            # vol-time scaling coefficient
-DEFAULT_ALPHA = 1.5         # moneyness penalty steepness
-STOCK_DEFAULT_BPS = 1.0     # stock spread fraction in basis points
+DEFAULT_K = 0.04  # vol-time scaling coefficient
+DEFAULT_ALPHA = 1.5  # moneyness penalty steepness
+STOCK_DEFAULT_BPS = 1.0  # stock spread fraction in basis points
 
 
 def option_spread(

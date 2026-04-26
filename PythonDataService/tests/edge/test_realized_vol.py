@@ -6,6 +6,7 @@ tests. These tests verify mathematical properties:
   - Annualization scales as sqrt(252)
   - Yang-Zhang k constant matches the published formula
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -22,9 +23,15 @@ from app.engine.edge.features_realtime.realized_vol import (
 
 def _flat_bars(n: int, price: float = 100.0) -> pd.DataFrame:
     ts = pd.Index(np.arange(n, dtype=np.int64) * 86_400_000)
-    return pd.DataFrame({
-        "open": price, "high": price, "low": price, "close": price,
-    }, index=ts)
+    return pd.DataFrame(
+        {
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+        },
+        index=ts,
+    )
 
 
 def _gbm_bars(n: int, sigma: float = 0.20, seed: int = 0) -> pd.DataFrame:
@@ -37,9 +44,15 @@ def _gbm_bars(n: int, sigma: float = 0.20, seed: int = 0) -> pd.DataFrame:
     high = np.maximum(open_, close) * (1 + rng.uniform(0.0001, 0.005, n))
     low = np.minimum(open_, close) * (1 - rng.uniform(0.0001, 0.005, n))
     ts = pd.Index(np.arange(n, dtype=np.int64) * 86_400_000)
-    return pd.DataFrame({
-        "open": open_, "high": high, "low": low, "close": close,
-    }, index=ts)
+    return pd.DataFrame(
+        {
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+        },
+        index=ts,
+    )
 
 
 def test_close_to_close_zero_when_prices_constant():

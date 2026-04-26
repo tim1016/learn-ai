@@ -17,6 +17,7 @@ This router wraps the engine/edge math; integration with stored DB data is
 a follow-up. v1 endpoints accept inline `bars` payloads where applicable so
 the frontend can drive end-to-end smoke tests immediately.
 """
+
 from __future__ import annotations
 
 import logging
@@ -68,6 +69,7 @@ BARS_PER_YEAR = {"1d": DAILY_BARS_PER_YEAR, "15m": DAILY_BARS_PER_YEAR * 26}
 
 class BarPayload(BaseModel):
     """Inline OHLCV bar."""
+
     ts: int = Field(..., description="int64 ms UTC")
     open: float
     high: float
@@ -83,9 +85,7 @@ class RealizedVsIvSeriesRequest(BaseModel):
     estimators: list[str] = Field(default_factory=lambda: ["yz"])
     windows: list[int] = Field(default_factory=lambda: [5, 10, 30])
     bars: list[BarPayload]
-    iv_series: list[dict] | None = Field(
-        None, description="Optional [{ts, iv30}] history; omitted = empty IV column."
-    )
+    iv_series: list[dict] | None = Field(None, description="Optional [{ts, iv30}] history; omitted = empty IV column.")
 
 
 class RealizedVsIvSeriesResponse(BaseModel):
@@ -121,13 +121,15 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
             rv_forward[key] = _series_to_jsonable(fwd)
 
     if req.iv_series:
-        iv = pd.Series(
-            {int(p["ts"]): float(p["iv30"]) for p in req.iv_series}
-        ).reindex(bars.index)
+        iv = pd.Series({int(p["ts"]): float(p["iv30"]) for p in req.iv_series}).reindex(bars.index)
     else:
         iv = pd.Series(index=bars.index, dtype=float)
 
-    rv_for_vrp_key = f"{req.estimators[0]}_{req.tenor_days}" if f"{req.estimators[0]}_{req.tenor_days}" in rv_forward else next(iter(rv_forward))
+    rv_for_vrp_key = (
+        f"{req.estimators[0]}_{req.tenor_days}"
+        if f"{req.estimators[0]}_{req.tenor_days}" in rv_forward
+        else next(iter(rv_forward))
+    )
     rv_for_vrp = pd.Series(rv_forward[rv_for_vrp_key], index=bars.index)
     vrp_fwd = compute_vrp(iv.fillna(np.nan), rv_for_vrp)
     sig = vrp_signal(iv=iv.ffill(), rv=rv_for_vrp.ffill(), lookback=min(252, len(bars) - 1))
@@ -168,17 +170,16 @@ class SignalsResponse(BaseModel):
 async def realized_vs_iv_signals(req: SignalsRequest) -> SignalsResponse:
     series = await realized_vs_iv_series(req)
     iv = pd.Series(
-        [v if v is not None else np.nan for v in series.iv30], index=series.ts,
+        [v if v is not None else np.nan for v in series.iv30],
+        index=series.ts,
     )
     estimator_key = next(iter(series.rv_forward))
     rv_fwd = pd.Series(series.rv_forward[estimator_key], index=series.ts)
     rv_trailing_key = next(iter(series.rv_trailing))
     rv_trailing = pd.Series(series.rv_trailing[rv_trailing_key], index=series.ts)
 
-    sig_oracle = vrp_signal(iv=iv.ffill(), rv=rv_fwd.ffill(),
-                            lookback=req.lookback, threshold=req.threshold)
-    sig_real = vrp_signal(iv=iv.ffill(), rv=rv_trailing.ffill(),
-                          lookback=req.lookback, threshold=req.threshold)
+    sig_oracle = vrp_signal(iv=iv.ffill(), rv=rv_fwd.ffill(), lookback=req.lookback, threshold=req.threshold)
+    sig_real = vrp_signal(iv=iv.ffill(), rv=rv_trailing.ffill(), lookback=req.lookback, threshold=req.threshold)
     return SignalsResponse(
         symbol=req.symbol,
         ts=series.ts,
@@ -206,6 +207,7 @@ async def realized_vs_iv_coverage(symbol: str) -> dict:
 
 
 # ── Cross-asset ────────────────────────────────────────────────────────────
+
 
 class CrossAssetBars(BaseModel):
     symbol: str
@@ -245,6 +247,7 @@ async def cross_asset_strategies() -> dict:
 
 # ── Regimes ─────────────────────────────────────────────────────────────────
 
+
 class RegimeClusterBody(BaseModel):
     symbol: str
     n_states: int = Field(3, ge=2, le=6)
@@ -271,8 +274,10 @@ async def regimes_cluster(body: RegimeClusterBody) -> dict:
     if "hmm" in body.algorithms:
         hmm = fit_gaussian_hmm(X, n_states=body.n_states, seed=42)
         active = stability_filter(
-            hmm.labels, posterior=hmm.posterior,
-            p_min=body.p_min, min_run_length=body.min_run_length,
+            hmm.labels,
+            posterior=hmm.posterior,
+            p_min=body.p_min,
+            min_run_length=body.min_run_length,
         )
         out["hmm_labels"] = hmm.labels.tolist()
         out["hmm_posterior"] = hmm.posterior.tolist()
@@ -298,6 +303,7 @@ async def regimes_strategy_fit(body: RegimeStrategyFitBody) -> dict:
 
 # ── Trade sim ───────────────────────────────────────────────────────────────
 
+
 class TradeSimRunBody(BaseModel):
     bars: list[BarPayload]
     signals: list[dict]
@@ -310,9 +316,7 @@ class TradeSimRunBody(BaseModel):
 @router.post("/trade-sim/run")
 async def trade_sim_run(body: TradeSimRunBody) -> dict:
     bars = _bars_payload_to_df(body.bars)
-    signals = pd.Series(
-        {int(p["ts"]): int(p["side"]) for p in body.signals}
-    ).reindex(bars.index).fillna(0).astype(int)
+    signals = pd.Series({int(p["ts"]): int(p["side"]) for p in body.signals}).reindex(bars.index).fillna(0).astype(int)
     cfg = TradeSimConfig(
         instrument=body.instrument,
         time_stop_bars=body.time_stop_bars,
@@ -324,13 +328,14 @@ async def trade_sim_run(body: TradeSimRunBody) -> dict:
         "trades": [t.__dict__ for t in res.trades],
         "stats": res.stats,
         "cost_attribution": res.cost_attribution,
-        "equity_curve": [] if res.equity_curve is None else res.equity_curve.assign(
-            ts=res.equity_curve["ts"].astype(int)
-        ).to_dict(orient="records"),
+        "equity_curve": []
+        if res.equity_curve is None
+        else res.equity_curve.assign(ts=res.equity_curve["ts"].astype(int)).to_dict(orient="records"),
     }
 
 
 # ── Edge Score ──────────────────────────────────────────────────────────────
+
 
 class EdgeScoreBody(BaseModel):
     symbol: str
@@ -354,17 +359,19 @@ async def edge_score_series(body: EdgeScoreBody) -> dict:
     close = bars["close"]
     atr = (high - low).rolling(14, min_periods=14).mean()
     trend = close.rolling(20, min_periods=20).apply(
-        lambda y: float(np.polyfit(np.arange(len(y)), y, 1)[0]), raw=True,
+        lambda y: float(np.polyfit(np.arange(len(y)), y, 1)[0]),
+        raw=True,
     )
     labels = pd.Series(body.regime_labels, index=bars.index, dtype=int)
 
-    score_map_int = (
-        {int(k): float(v) for k, v in body.regime_score_map.items()}
-        if body.regime_score_map else None
-    )
+    score_map_int = {int(k): float(v) for k, v in body.regime_score_map.items()} if body.regime_score_map else None
     res = edge_score(
-        vrp=vrp, iv30=iv, trend_slope=trend, atr=atr,
-        regime_labels=labels, weights=body.weights or DEFAULT_WEIGHTS,
+        vrp=vrp,
+        iv30=iv,
+        trend_slope=trend,
+        atr=atr,
+        regime_labels=labels,
+        weights=body.weights or DEFAULT_WEIGHTS,
         regime_score_map=score_map_int,
     )
     return {
@@ -378,18 +385,22 @@ async def edge_score_series(body: EdgeScoreBody) -> dict:
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
+
 def _bars_payload_to_df(bars: list[BarPayload]) -> pd.DataFrame:
     rows = sorted(bars, key=lambda b: b.ts)
     ts_ms = pd.Index([int(b.ts) for b in rows], name="ts", dtype=np.int64)
     if not ts_ms.is_unique:
         raise HTTPException(400, "bar timestamps must be unique")
-    return pd.DataFrame({
-        "open": [b.open for b in rows],
-        "high": [b.high for b in rows],
-        "low":  [b.low for b in rows],
-        "close": [b.close for b in rows],
-        "volume": [b.volume for b in rows],
-    }, index=ts_ms)
+    return pd.DataFrame(
+        {
+            "open": [b.open for b in rows],
+            "high": [b.high for b in rows],
+            "low": [b.low for b in rows],
+            "close": [b.close for b in rows],
+            "volume": [b.volume for b in rows],
+        },
+        index=ts_ms,
+    )
 
 
 def _series_to_jsonable(s: pd.Series) -> list:

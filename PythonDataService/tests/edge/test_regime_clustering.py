@@ -1,4 +1,5 @@
 """Tests for KMeans + Gaussian HMM."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -57,8 +58,8 @@ def test_hmm_transition_matrix_is_sticky():
 def test_stability_filter_with_short_runs_dropped():
     labels = np.array([0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0])
     mask = stability_filter(labels, min_run_length=5)
-    assert mask[:5].sum() >= 1   # initial run ≥5 in length
-    assert not mask[5]           # singleton 1 dropped
+    assert mask[:5].sum() >= 1  # initial run ≥5 in length
+    assert not mask[5]  # singleton 1 dropped
 
 
 def test_stability_filter_uses_posterior_threshold():

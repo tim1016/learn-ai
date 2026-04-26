@@ -12,6 +12,7 @@ All features are then rolling-z-scored on a 60-bar lookback before clustering.
 
 IV-derived features (added in step 5): iv30_atm_50d, skew_25d, term_slope, d_iv, iv_vol.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -38,11 +39,14 @@ def _trend_slope(close: pd.Series, window: int) -> pd.Series:
 def _atr(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> pd.Series:
     """Wilder ATR — true range = max(H-L, |H-C_{t-1}|, |L-C_{t-1}|)."""
     prev_close = close.shift(1)
-    tr = pd.concat([
-        (high - low).abs(),
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     return tr.ewm(alpha=1.0 / window, adjust=False, min_periods=window).mean()
 
 
@@ -82,12 +86,15 @@ def build_ohlcv_features(
     trend_slope_norm = trend_slope / atr.replace(0, np.nan)
     volume_z_raw = _rolling_zscore(bars["volume"].astype(np.float64), feature_window)
 
-    return pd.DataFrame({
-        "trend_slope_z": _rolling_zscore(trend_slope_norm, z_lookback),
-        "rv_yz_z":       _rolling_zscore(rv_yz_value, z_lookback),
-        "atr_pct_z":     _rolling_zscore(atr_pct, z_lookback),
-        "volume_z_z":    _rolling_zscore(volume_z_raw, z_lookback),
-    }, index=bars.index)
+    return pd.DataFrame(
+        {
+            "trend_slope_z": _rolling_zscore(trend_slope_norm, z_lookback),
+            "rv_yz_z": _rolling_zscore(rv_yz_value, z_lookback),
+            "atr_pct_z": _rolling_zscore(atr_pct, z_lookback),
+            "volume_z_z": _rolling_zscore(volume_z_raw, z_lookback),
+        },
+        index=bars.index,
+    )
 
 
 def build_full_features(
@@ -110,7 +117,10 @@ def build_full_features(
     All inputs must share the bars index; columns absent or all-NaN are dropped.
     """
     base = build_ohlcv_features(
-        bars, feature_window=feature_window, atr_window=atr_window, z_lookback=z_lookback,
+        bars,
+        feature_window=feature_window,
+        atr_window=atr_window,
+        z_lookback=z_lookback,
     )
     extras: dict[str, pd.Series] = {}
     if iv30 is not None and iv30.notna().any():

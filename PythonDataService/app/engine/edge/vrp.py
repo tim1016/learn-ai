@@ -7,6 +7,7 @@ Definitions:
 Sign: positive = options over-priced expected RV (short-vol favored).
       negative = options under-priced (long-vol favored).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,9 +18,9 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class VrpSignal:
-    side: pd.Series        # +1 long-vol, -1 short-vol, 0 flat
-    vrp: pd.Series         # raw VRP (variance units)
-    vrp_z: pd.Series       # z-score over rolling lookback
+    side: pd.Series  # +1 long-vol, -1 short-vol, 0 flat
+    vrp: pd.Series  # raw VRP (variance units)
+    vrp_z: pd.Series  # z-score over rolling lookback
 
 
 def compute_vrp(iv: pd.Series, rv: pd.Series) -> pd.Series:
@@ -27,11 +28,15 @@ def compute_vrp(iv: pd.Series, rv: pd.Series) -> pd.Series:
 
     Both inputs must already be annualized vols (not variances).
     """
-    return iv ** 2 - rv ** 2
+    return iv**2 - rv**2
 
 
 def vrp_signal(
-    *, iv: pd.Series, rv: pd.Series, lookback: int = 252, threshold: float = 1.0,
+    *,
+    iv: pd.Series,
+    rv: pd.Series,
+    lookback: int = 252,
+    threshold: float = 1.0,
 ) -> VrpSignal:
     """Per-bar trade-side signal driven by VRP z-score.
 

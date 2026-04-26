@@ -68,7 +68,7 @@
         <span>HMM (sticky) ↑</span><span>·</span><span>K-means (flickering) ↓</span>
       </div>
     }
-    <edge-regime-price-chart
+    <app-edge-regime-price-chart
       [width]="1340" [height]="priceChartHeight()"
       [data]="data" [viewMode]="viewMode()"
       [hoverIdx]="hoverIdx()"
@@ -78,16 +78,16 @@
   <!-- Bottom row -->
   <div class="bottom-grid">
     <div class="bottom-card matrix-card">
-      <edge-transition-matrix [size]="236" [matrix]="data.transitionMatrix" />
+      <app-edge-transition-matrix [size]="236" [matrix]="data.transitionMatrix" />
     </div>
 
     <div class="bottom-card">
       <div class="eyebrow mb4">CENTROID FEATURE RADAR</div>
-      <edge-regime-radar [size]="260" [axes]="radarAxes" [regimeData]="radarData" />
+      <app-edge-regime-radar [size]="260" [axes]="radarAxes" [regimeData]="radarData" />
     </div>
 
     <div class="bottom-card">
-      <edge-stability-sparkline [width]="420" [height]="130" [data]="data.stability" />
+      <app-edge-stability-sparkline [width]="420" [height]="130" [data]="data.stability" />
       <div class="strategy-fit">
         <div class="eyebrow mb6">STRATEGY-FIT P&amp;L · BY REGIME</div>
         <div class="fit-list">
@@ -115,8 +115,8 @@
   <!-- Drawers -->
   <app-edge-score-drawer
     [data]="data" [open]="scoreOpen()"
-    (close)="scoreOpen.set(false)" />
+    (closed)="scoreOpen.set(false)" />
   <app-trade-sim-drawer
     [data]="data" [open]="tradeSimOpen()"
-    (close)="tradeSimOpen.set(false)" />
+    (closed)="tradeSimOpen.set(false)" />
 </section>

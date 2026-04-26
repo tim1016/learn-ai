@@ -185,7 +185,8 @@ export class EdgeMockDataService {
     const sharpeMatrix: number[][] = []; const heatmapStats: HeatmapStat[][] = [];
     for (let ai = 0; ai < assets.length; ai++) {
       const row: number[] = []; const stats: HeatmapStat[] = [];
-      for (let pi = 0; pi < periods.length; pi++) {
+      for (const _ of periods) {
+        void _;
         const baseSh = (ai === 0 ? 0.6 : ai === 1 ? 0.4 : ai === 2 ? -0.1 : 0.2) + nrand(r) * 0.6;
         row.push(baseSh);
         stats.push({

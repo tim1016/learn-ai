@@ -9,6 +9,7 @@ forward .shift(-W) applied so RV[t] = realized vol over [t, t+W].
 The last W bars of any output series are NaN (forward window not realized).
 The UI surfaces this as a greyed terminal band — see edge-feature-design.md §4.2.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -30,8 +31,12 @@ ESTIMATOR_FN = {
 
 
 def forward_rv(
-    bars: pd.DataFrame, *, estimator: str, window: int,
-    annualize: bool = True, bars_per_year: int = DAILY_BARS_PER_YEAR,
+    bars: pd.DataFrame,
+    *,
+    estimator: str,
+    window: int,
+    annualize: bool = True,
+    bars_per_year: int = DAILY_BARS_PER_YEAR,
 ) -> pd.Series:
     """RV[t] computed from bars (t, t+window]. The forward shift is applied here.
 

@@ -8,6 +8,7 @@ K-means: Lloyd (1982) with k-means++ initialization (Arthur & Vassilvitskii 2007
 Gaussian HMM: Baum-Welch EM with forward-backward in log-space for numerical
               stability. See Rabiner (1989), "A Tutorial on Hidden Markov Models".
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,25 +20,29 @@ from scipy.stats import multivariate_normal
 
 @dataclass(frozen=True)
 class KMeansResult:
-    labels: np.ndarray         # (T,) int
-    centroids: np.ndarray      # (K, D)
-    inertia: float             # within-cluster SSE
+    labels: np.ndarray  # (T,) int
+    centroids: np.ndarray  # (K, D)
+    inertia: float  # within-cluster SSE
 
 
 @dataclass(frozen=True)
 class HMMResult:
-    labels: np.ndarray              # (T,) Viterbi path
-    posterior: np.ndarray           # (T, K)
-    means: np.ndarray               # (K, D)
-    covariances: np.ndarray         # (K, D, D)
-    transition_matrix: np.ndarray   # (K, K)
-    initial_probs: np.ndarray       # (K,)
+    labels: np.ndarray  # (T,) Viterbi path
+    posterior: np.ndarray  # (T, K)
+    means: np.ndarray  # (K, D)
+    covariances: np.ndarray  # (K, D, D)
+    transition_matrix: np.ndarray  # (K, K)
+    initial_probs: np.ndarray  # (K,)
     log_likelihood: float
 
 
 def kmeans(
-    X: np.ndarray, n_clusters: int, *, n_iter: int = 100,
-    tol: float = 1e-6, seed: int = 42,
+    X: np.ndarray,
+    n_clusters: int,
+    *,
+    n_iter: int = 100,
+    tol: float = 1e-6,
+    seed: int = 42,
 ) -> KMeansResult:
     """Lloyd's algorithm with k-means++ init."""
     if X.ndim != 2:
@@ -84,8 +89,13 @@ def _kmeans_pp_init(X: np.ndarray, k: int, rng: np.random.Generator) -> np.ndarr
 
 
 def fit_gaussian_hmm(
-    X: np.ndarray, n_states: int, *, n_iter: int = 50,
-    tol: float = 1e-4, seed: int = 42, reg_covar: float = 1e-4,
+    X: np.ndarray,
+    n_states: int,
+    *,
+    n_iter: int = 50,
+    tol: float = 1e-4,
+    seed: int = 42,
+    reg_covar: float = 1e-4,
 ) -> HMMResult:
     """Fit a Gaussian HMM with full covariance via Baum-Welch.
 
@@ -98,11 +108,14 @@ def fit_gaussian_hmm(
 
     km = kmeans(X, n_states, seed=seed)
     means = km.centroids.copy()
-    covariances = np.stack([
-        np.cov(X[km.labels == k].T) + reg_covar * np.eye(D)
-        if (km.labels == k).sum() > 1 else np.eye(D) * reg_covar * 10
-        for k in range(n_states)
-    ])
+    covariances = np.stack(
+        [
+            np.cov(X[km.labels == k].T) + reg_covar * np.eye(D)
+            if (km.labels == k).sum() > 1
+            else np.eye(D) * reg_covar * 10
+            for k in range(n_states)
+        ]
+    )
     transition_matrix = np.full((n_states, n_states), 1.0 / n_states)
     transition_matrix = 0.9 * np.eye(n_states) + 0.1 * transition_matrix
     transition_matrix /= transition_matrix.sum(axis=1, keepdims=True)
@@ -133,9 +146,9 @@ def fit_gaussian_hmm(
 
         weights = gamma.sum(axis=0)
         for k in range(n_states):
-            means[k] = (gamma[:, k:k + 1] * X).sum(axis=0) / max(weights[k], 1e-12)
+            means[k] = (gamma[:, k : k + 1] * X).sum(axis=0) / max(weights[k], 1e-12)
             diff = X - means[k]
-            covariances[k] = (gamma[:, k:k + 1] * diff).T @ diff / max(weights[k], 1e-12)
+            covariances[k] = (gamma[:, k : k + 1] * diff).T @ diff / max(weights[k], 1e-12)
             covariances[k] += reg_covar * np.eye(D)
 
         ll = float(logsumexp(log_alpha[-1]))

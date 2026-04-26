@@ -26,7 +26,7 @@ export class EdgeScoreDrawerComponent {
   open = input(false);
   idx = input<number | undefined>(undefined);
 
-  close = output<void>();
+  closed = output();
 
   protected readonly TOK = EDGE_TOK;
 

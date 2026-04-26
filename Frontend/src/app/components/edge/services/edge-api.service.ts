@@ -12,7 +12,7 @@ interface BarPayload {
 
 interface AggregatesResponse {
   success: boolean;
-  data: Array<AggregateBarRaw>;
+  data: AggregateBarRaw[];
   summary: Record<string, unknown>;
   ticker: string;
   error?: string;
@@ -31,11 +31,11 @@ interface AggregateBarRaw {
 interface RealizedVsIvSeriesResponse {
   symbol: string;
   ts: number[];
-  rv_trailing: Record<string, Array<number | null>>;
-  rv_forward: Record<string, Array<number | null>>;
-  iv30: Array<number | null>;
-  vrp_forward: Array<number | null>;
-  vrp_z: Array<number | null>;
+  rv_trailing: Record<string, (number | null)[]>;
+  rv_forward: Record<string, (number | null)[]>;
+  iv30: (number | null)[];
+  vrp_forward: (number | null)[];
+  vrp_z: (number | null)[];
   coverage: { n_bars: number; iv_first_ts: number | null; iv_last_ts: number | null; forward_nan_bars: number; };
 }
 
@@ -77,7 +77,7 @@ export class EdgeApiService {
     return this.projectIntoEdgeData(req.symbol, bars, series);
   }
 
-  private async fetchBars(symbol: string, barSize: BarSize, tenor: Tenor): Promise<BarPayload[]> {
+  private async fetchBars(symbol: string, barSize: BarSize, _tenor: Tenor): Promise<BarPayload[]> {
     const today = new Date();
     const from = new Date(today);
     // Reach back ~1 year for daily, ~30 days for intraday — enough warmup + a meaningful window.
@@ -203,7 +203,7 @@ export class EdgeApiService {
   }
 }
 
-function nullsToNaN(arr: ReadonlyArray<number | null>): number[] {
+function nullsToNaN(arr: readonly (number | null)[]): number[] {
   return arr.map((v) => (v === null || v === undefined ? NaN : v));
 }
 

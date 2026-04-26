@@ -10,6 +10,7 @@ is opt-in (§8.1) and lives in a separate module when needed.
 
 All component scores are bounded to [-1, +1] via tanh squashing.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,17 +20,17 @@ import pandas as pd
 
 DEFAULT_WEIGHTS = {"vrp": 0.4, "regime": 0.3, "iv_pct": 0.2, "trend": 0.1}
 DEFAULT_REGIME_SCORE_MAP = {
-    0: 0.0,    # state 0 (e.g. trending-low-vol) — neutral default
-    1: -0.5,   # state 1 (e.g. trending-high-vol) — short-vol favored
-    2: 0.5,    # state 2 (e.g. choppy-high-vol)   — long-vol favored
+    0: 0.0,  # state 0 (e.g. trending-low-vol) — neutral default
+    1: -0.5,  # state 1 (e.g. trending-high-vol) — short-vol favored
+    2: 0.5,  # state 2 (e.g. choppy-high-vol)   — long-vol favored
 }
 
 
 @dataclass(frozen=True)
 class EdgeScoreResult:
-    score: pd.Series                    # composite in [-1, +1]
-    components: pd.DataFrame            # per-component scores (same index)
-    action: pd.Series                   # -1/0/+1 from threshold gating
+    score: pd.Series  # composite in [-1, +1]
+    components: pd.DataFrame  # per-component scores (same index)
+    action: pd.Series  # -1/0/+1 from threshold gating
 
 
 def s_vrp(vrp: pd.Series, lookback: int = 252) -> pd.Series:
@@ -75,12 +76,14 @@ def edge_score(
     if not np.isclose(sum(w.values()), 1.0):
         raise ValueError(f"weights must sum to 1.0, got {sum(w.values())}")
 
-    components = pd.DataFrame({
-        "vrp":    s_vrp(vrp),
-        "iv_pct": s_iv_percentile(iv30),
-        "trend":  s_trend(trend_slope, atr),
-        "regime": s_regime(regime_labels, regime_score_map),
-    })
+    components = pd.DataFrame(
+        {
+            "vrp": s_vrp(vrp),
+            "iv_pct": s_iv_percentile(iv30),
+            "trend": s_trend(trend_slope, atr),
+            "regime": s_regime(regime_labels, regime_score_map),
+        }
+    )
 
     score = (
         w["vrp"] * components["vrp"].fillna(0)

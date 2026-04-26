@@ -1,12 +1,12 @@
 @if (open()) {
-  <div class="esd-scrim" (click)="close.emit()" aria-hidden="true"></div>
+  <div class="esd-scrim" (click)="closed.emit()" aria-hidden="true"></div>
   <aside class="esd" role="dialog" aria-label="Edge Score Inspector">
     <header class="esd-header">
       <div>
         <div class="esd-eyebrow">EDGE SCORE INSPECTOR</div>
         <div class="esd-title">{{ dateLabel() }} · SPY · {{ action() }}</div>
       </div>
-      <button class="esd-close" (click)="close.emit()" aria-label="Close inspector">✕</button>
+      <button class="esd-close" (click)="closed.emit()" aria-label="Close inspector">✕</button>
     </header>
 
     <div class="esd-body">
@@ -49,7 +49,7 @@
       <section class="esd-mt20 esd-divider">
         <div class="esd-eyebrow">COMPOSITE OVER TRAILING 60 BARS</div>
         <div class="esd-mini-wrap">
-          <edge-mini-line [width]="420" [height]="68"
+          <app-edge-mini-line [width]="420" [height]="68"
             [values]="scoreSeries()" [color]="TOK.accent" fill="rgba(41,98,255,0.10)" />
         </div>
       </section>
