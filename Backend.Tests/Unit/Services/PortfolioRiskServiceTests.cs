@@ -286,8 +286,9 @@ public class PortfolioRiskServiceTests
 
         // Seed an open stock position in the DB so RunScenarioAsync's Python
         // projection has something to send.
-        CreateOpenPosition(context, account.Id, ticker.Id, 100, 500m,
+        var position = CreateOpenPosition(context, account.Id, ticker.Id, 100, 500m,
             AssetType.Stock, optionContractId: null);
+        var positionLegId = position.Id.ToString();
 
         valuationMock.Setup(v => v.ComputeValuationWithPricesAsync(
                 account.Id, It.IsAny<Dictionary<string, decimal>>(), It.IsAny<CancellationToken>()))
@@ -298,12 +299,14 @@ public class PortfolioRiskServiceTests
                 Equity = 100_000m,
                 Positions =
                 [
-                    new PositionValuation { Symbol = "SPY", CurrentPrice = 500m, Quantity = 100, Multiplier = 1, MarketValue = 50_000m }
+                    new PositionValuation { PositionId = position.Id, Symbol = "SPY", CurrentPrice = 500m, Quantity = 100, Multiplier = 1, MarketValue = 50_000m }
                 ],
             });
 
         // Python returns the recomputed scenario point. Mock returns a single
         // ScenarioPoint with a stock leg at theoretical_price = 450 (i.e. -10%).
+        // LegId echoes the position id so RunScenarioAsync's identity-based
+        // join (Phase 2.2 round-2 fix) finds the leg.
         polygonMock
             .Setup(p => p.PortfolioScenarioAsync(
                 It.IsAny<long>(), It.IsAny<decimal>(),
@@ -324,6 +327,7 @@ public class PortfolioRiskServiceTests
                         [
                             new Backend.Models.DTOs.PolygonResponses.LegGreeksDto
                             {
+                                LegId = positionLegId,
                                 Instrument = "stock",
                                 TheoreticalPrice = 450m,
                                 Delta = 1m,
