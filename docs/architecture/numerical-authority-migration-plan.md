@@ -210,21 +210,39 @@ Closeout migration. Engine Lab is already canonical, Strategy Lab UI is already 
 
 ## Phase 4 — Disambiguate `rule_based_backtest.py`
 
-Independent of the sequencing above; can run anytime after Phase 0.
+**Status: deferred 2026-04-27.** The original plan (preserved below) assumed
+`rule_based_backtest.py` is a strategy implementation that can be adapter-
+converted to delegate to `app/engine/strategy/algorithms/`. Investigation
+on 2026-04-27 found this assumption is wrong: `rule_based_backtest.py` is a
+**configurable rule engine** (composable entry conditions, multiple exit
+modes, parameterized via JSON), and the newer engine has only fixed strategies
+(each algorithm is a `Strategy` subclass with hardcoded rules). There is no
+equivalent in the newer engine to delegate to. See § Status as of 2026-04-27
+for the three reformulated paths and the deferral rationale.
 
-### 4.1 Decide fate
+The original 4.1–4.3 below are retained as historical context for whichever
+of the three paths gets chosen. Do not implement them as written.
 
-Recommended path: **adapter to `app/engine/`**. The configuration shape `rule_based_backtest.py` accepts is useful for some callers; the execution should delegate to the LEAN-ported engine. This keeps one execution authority while preserving the ergonomic surface.
+### 4.1 Decide fate (ORIGINAL — superseded)
 
-If a different role is chosen (validation-only, supported-secondary-engine), record the choice in this plan.
+~~Recommended path: **adapter to `app/engine/`**.~~ The configuration shape
+`rule_based_backtest.py` accepts is useful for some callers; the original
+plan said execution should delegate to the LEAN-ported engine. **This is no
+longer the recommended path** — see § Status as of 2026-04-27.
 
-### 4.2 Implement adapter
+### 4.2 Implement adapter (ORIGINAL — superseded)
 
-`rule_based_backtest.py` becomes a config translation layer that constructs the appropriate `app/engine/strategy/algorithms/*.py` instance and dispatches via the engine's standard run path. Local strategy implementations in `rule_based_backtest.py` are deleted.
+~~`rule_based_backtest.py` becomes a config translation layer that constructs
+the appropriate `app/engine/strategy/algorithms/*.py` instance and dispatches
+via the engine's standard run path.~~ The newer engine has no rule-engine
+equivalent to dispatch to; this step is impossible as written. Reformulated
+options live in § Status as of 2026-04-27.
 
-### 4.3 Update registry
+### 4.3 Update registry (ORIGINAL — superseded)
 
-Row added to `math-sources-of-truth.md` reflecting adapter status. Validation test asserts that the same configuration produces the same trades when run via `rule_based_backtest.py` versus directly via the engine.
+Once a Phase 4 path is chosen and shipped, update the
+`rule_based_backtest.py` row in `math-sources-of-truth.md` to match. The
+current registry row reflects the deferred state.
 
 ## Cross-cutting acceptance criteria
 

@@ -483,7 +483,16 @@ def compute_greek_curves(
             sign = 1.0 if leg.position == "long" else -1.0
             qty = leg.quantity
             if ttm_years <= 0 or iv <= 0 or spot <= 0:
-                # Greeks are zero except delta which jumps to ±1 if ITM.
+                # At expiry: delta jumps to ±1 if ITM, 0 otherwise; other
+                # Greeks vanish. Mirror compute_leg_greeks() so the same
+                # response doesn't disagree with itself between greeks
+                # (intrinsic-aware) and greek_curves (was zeroing all).
+                if ttm_years <= 0 and spot > 0:
+                    if leg.option_type == "call":
+                        d = 1.0 if spot > leg.strike else 0.0
+                    else:
+                        d = -1.0 if spot < leg.strike else 0.0
+                    agg_delta += d * sign * qty
                 continue
             g = black_scholes_greeks(
                 spot=spot,
@@ -547,12 +556,16 @@ def compute_leg_diagnostics(
             )
             delta, gamma, theta, vega = g.delta, g.gamma, g.theta, g.vega
         else:
-            # Expired or zero-IV: intrinsic, zero Greeks.
+            # Expired or zero-IV: intrinsic value, delta = ±1 if ITM (mirrors
+            # compute_leg_greeks() so greeks/greek_curves/leg_diagnostics agree
+            # at expiry). Other Greeks vanish.
             if leg.option_type == "call":
                 theo = max(spot_price - leg.strike, 0.0)
+                delta = 1.0 if (ttm_years <= 0 and spot_price > leg.strike) else 0.0
             else:
                 theo = max(leg.strike - spot_price, 0.0)
-            delta = gamma = theta = vega = 0.0
+                delta = -1.0 if (ttm_years <= 0 and spot_price < leg.strike) else 0.0
+            gamma = theta = vega = 0.0
 
         # Per-leg P&L. Long: theoretical - premium (gain when theo rises above
         # what we paid). Short: premium - theoretical (gain when theo falls

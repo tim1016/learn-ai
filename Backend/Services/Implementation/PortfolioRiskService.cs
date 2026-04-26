@@ -419,9 +419,13 @@ public class PortfolioRiskService : IPortfolioRiskService
             }
             var currentIv = iv;
 
-            var expirationMs = new DateTimeOffset(
-                contract.Expiration.ToDateTime(new TimeOnly(20, 0)),
-                TimeSpan.Zero).ToUnixTimeMilliseconds();
+            // Convert market-close (16:00 America/New_York) to UTC. Hardcoding
+            // 20:00 UTC is wrong by one hour during EDT (most of the year)
+            // and shifts time-to-expiry enough to move near-expiry pricing.
+            var marketCloseEt = contract.Expiration.ToDateTime(new TimeOnly(16, 0));
+            var easternTz = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+            var marketCloseUtc = TimeZoneInfo.ConvertTimeToUtc(marketCloseEt, easternTz);
+            var expirationMs = new DateTimeOffset(marketCloseUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
 
             result.Add(new PortfolioScenarioPositionDto
             {

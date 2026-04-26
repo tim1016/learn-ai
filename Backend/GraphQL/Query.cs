@@ -1629,10 +1629,18 @@ public class StrategyAnalyzeResult
     public StrategyGreeksResult Greeks { get; set; } = new();
 
     // Phase 1.1 opt-in extensions. Null when the corresponding include_*
-    // request flag was false (the default).
+    // request flag was false (the default). Explicit GraphQLName to follow
+    // the file's convention (HC v15 camelCase inference is fine for these
+    // names, but explicit > implicit makes refactor renames safe).
+    [GraphQLName("currentCurve")]
     public List<CurrentCurvePointResult>? CurrentCurve { get; set; }
+
+    [GraphQLName("greekCurves")]
     public List<GreekCurvePointResult>? GreekCurves { get; set; }
+
+    [GraphQLName("legDiagnostics")]
     public List<LegDiagnosticResult>? LegDiagnostics { get; set; }
+
     public string? Error { get; set; }
 }
 
@@ -1668,6 +1676,8 @@ public class LegDiagnosticResult
     public decimal CurrentGamma { get; set; }
     public decimal CurrentTheta { get; set; }
     public decimal CurrentVega { get; set; }
+
+    [GraphQLName("legPnl")]
     public decimal LegPnl { get; set; }
 }
 

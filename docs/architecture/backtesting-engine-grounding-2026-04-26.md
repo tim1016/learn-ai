@@ -3,6 +3,21 @@
 **Date:** 2026-04-26
 **Scope:** stocks + options backtesting, signal research, numerical validation, code quality
 **Calibration:** localhost research project, one-developer migration path, math rigor first
+**Status (read first):** **This memo is a pre-Phase-0 snapshot** — it describes
+repo state on 2026-04-26 *before* the numerical-authority migration started.
+It is preserved here as the audit that motivated the migration plan, not as
+current state. By the time you read this, much of the "current state"
+described below has been changed:
+
+- Phase 0 shipped: `references/` is no longer empty (vendored LEAN snapshots), `engine-authority-map.md` exists, `numerical-authority-migration-plan.md` sequences the work.
+- Phases 1.1, 1.2, 1.4 shipped: `OptionsStrategyLabComponent` no longer computes BS in TypeScript; cross-engine BS parity test pins `bs_greeks.py` ↔ `quantlib_pricer.py` at `atol=1e-10`.
+- Phase 2 shipped: `/api/portfolio/scenario` and `/api/portfolio/live-greeks` are canonical for portfolio scenario / live-Greeks math; `.NET` services are passthroughs.
+- Phase 1.3, 2.3 shipped: `black-scholes.ts` formally `legacy-ok` for two intentional UI callers; `ComputeDollarDeltaAsync` + `ComputePortfolioVegaAsync` now use live Python Greeks.
+- Phases 3, 4 deferred — see `numerical-authority-migration-plan.md` § Status as of 2026-04-27 for reasoning.
+
+For current state, the authoritative sources are `engine-authority-map.md`,
+`math-sources-of-truth.md`, and the migration plan's status section. Do not
+treat this memo as an up-to-date description of any subsystem.
 
 ## Executive summary
 
@@ -237,7 +252,7 @@ needs to answer:
 - what is validation-only
 
 This addendum ships that doc as
-[engine-authority-matrix.md](C:/Users/inkan/learn-ai/docs/architecture/engine-authority-matrix.md:1).
+[engine-authority-map.md](engine-authority-map.md).
 
 ### Step 3. Finish the options-math cutover using the existing server foothold
 
