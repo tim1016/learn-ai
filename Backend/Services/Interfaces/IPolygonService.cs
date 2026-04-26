@@ -8,12 +8,27 @@ namespace Backend.Services.Interfaces;
 /// </summary>
 public class StrategyLegInput
 {
+    public string? LegId { get; set; }
     public decimal Strike { get; set; }
     public required string OptionType { get; set; }
     public required string Position { get; set; }
     public decimal Premium { get; set; }
     public decimal Iv { get; set; }
     public int Quantity { get; set; } = 1;
+}
+
+/// <summary>
+/// Optional flags + what-if knobs for AnalyzeOptionsStrategyAsync. Phase 1.1 of
+/// `docs/architecture/numerical-authority-migration-plan.md`. Default values
+/// preserve the pre-Phase-1.1 response shape — existing callers don't need to change.
+/// </summary>
+public class StrategyAnalyzeOptions
+{
+    public bool IncludeCurrentCurve { get; set; }
+    public bool IncludeGreekCurves { get; set; }
+    public bool IncludeLegDiagnostics { get; set; }
+    public decimal WhatIfTimeShiftDays { get; set; }
+    public decimal WhatIfIvShift { get; set; }
 }
 
 /// <summary>
@@ -104,6 +119,8 @@ public interface IPolygonService
 
     /// <summary>
     /// Analyze an options strategy: payoff curve, POP, EV, breakevens.
+    /// Optional <paramref name="options"/> opts in to Phase 1.1 extensions
+    /// (current-time curves, Greek curves, per-leg diagnostics).
     /// </summary>
     Task<StrategyAnalyzeResponseDto> AnalyzeOptionsStrategyAsync(
         string symbol,
@@ -111,6 +128,7 @@ public interface IPolygonService
         string expirationDate,
         decimal spotPrice,
         decimal riskFreeRate = 0.043m,
+        StrategyAnalyzeOptions? options = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -195,4 +213,32 @@ public interface IPolygonService
     /// Used by rule-based backtest and other passthrough mutations.
     /// </summary>
     HttpClient GetHttpClient();
+
+    /// <summary>
+    /// Phase 2.1/2.2 of the numerical-authority migration: call Python's
+    /// <c>/api/portfolio/scenario</c> to recompute portfolio Greeks and P&amp;L
+    /// across a (spot, time, IV) grid using current-state options math
+    /// (no stale entry Greeks). See
+    /// <c>docs/architecture/numerical-authority-migration-plan.md</c>.
+    /// </summary>
+    Task<PortfolioScenarioResponseDto> PortfolioScenarioAsync(
+        long asOfMs,
+        decimal spotPrice,
+        List<PortfolioScenarioPositionDto> positions,
+        PortfolioScenarioGridDto? grid = null,
+        decimal riskFreeRate = 0.043m,
+        decimal dividendYield = 0m,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Phase 2.1/2.2: convenience wrapper that recomputes Greeks at current
+    /// state (no scenario grid). Returns a single ScenarioPoint.
+    /// </summary>
+    Task<PortfolioScenarioResponseDto> PortfolioLiveGreeksAsync(
+        long asOfMs,
+        decimal spotPrice,
+        List<PortfolioScenarioPositionDto> positions,
+        decimal riskFreeRate = 0.043m,
+        decimal dividendYield = 0m,
+        CancellationToken cancellationToken = default);
 }

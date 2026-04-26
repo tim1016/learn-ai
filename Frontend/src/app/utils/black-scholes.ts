@@ -1,12 +1,31 @@
 /**
- * [LEGACY] Client-side Black-Scholes pricing and Greeks.
- * Pure math — zero dependencies.
+ * @deprecated [LEGACY — DO NOT ADD NEW CALLERS]
  *
- * This module uses the Abramowitz & Stegun (1964) rational approximation
- * for the normal CDF (|error| < 1.5e-7).  It remains the default "Legacy"
- * pricing engine in the UI.  The new QuantLib engine (server-side, compiled
- * C++ via SWIG) is available as a validation / comparison engine and can
- * be toggled via the pricing-engine switch in Strategy Lab / Strategy Builder.
+ * Client-side Black-Scholes pricing and Greeks. Uses the Abramowitz & Stegun
+ * (1964) rational approximation for the normal CDF (|error| < 1.5e-7).
+ *
+ * Phase 1.3 of `docs/architecture/numerical-authority-migration-plan.md`:
+ * this module is on its way out. Per `AGENTS.md` § "Python owns all math",
+ * Black-Scholes math must live in `PythonDataService/app/services/bs_greeks.py`
+ * and `app/services/quantlib_pricer.py` — never in TypeScript.
+ *
+ * Status of remaining callers as of 2026-04-26:
+ * - `OptionsStrategyLabComponent` — MIGRATED in Phase 1.2; sources curves
+ *   and per-leg diagnostics from the server's `analyzeOptionsStrategy` payload.
+ * - `strategy-builder.component.ts` — STILL CALLS THIS FILE; pending migration.
+ * - `pricing-lab.component.ts` — STILL CALLS THIS FILE; pending migration
+ *   (note: this component's purpose is precisely to compare pricing engines,
+ *   so a render-only client-side path may be intentional).
+ * - `black-scholes.spec.ts` — self-test; will retire with this file.
+ *
+ * Cross-engine parity vs the canonical Python authorities is verified by
+ * `PythonDataService/tests/services/test_bs_cross_engine_parity.py`.
+ *
+ * **Hard rule: do not add new callers of any export in this module.** New
+ * code that needs BS math must go through the server. If a new use case
+ * surfaces that genuinely needs client-side BS (e.g. a fully offline mode),
+ * write up a justification and add a row to `docs/math-sources-of-truth.md`
+ * under `legacy-ok` status with a parity test before importing from here.
  *
  * @module legacy-black-scholes
  */

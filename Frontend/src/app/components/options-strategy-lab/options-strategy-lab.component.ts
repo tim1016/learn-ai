@@ -16,14 +16,18 @@ import { MarketDataService } from '../../services/market-data.service';
 import { QuantLibService } from '../../services/quantlib.service';
 import {
   SnapshotUnderlyingResult, SnapshotContractResult,
-  StrategyAnalyzeResult, StrategyLegInput, PayoffPoint,
+  StrategyAnalyzeResult, StrategyAnalyzeOptions, StrategyLegInput, PayoffPoint,
   GreekType, WhatIfScenario, ChartCurveData, GreekCurvePoint,
   PricingEngineType, QuantLibPriceResult, QuantLibEngine,
 } from '../../graphql/types';
-import {
-  strategyPnlAtPrice, strategyGreekAtPrice, LegParams, GreekName,
-  bsD1, bsD2, bsPrice, normCdf, lognormalCdf,
-} from '../../utils/black-scholes';
+// NOTE (Phase 1.2 of docs/architecture/numerical-authority-migration-plan.md):
+// All BS math has moved server-side to `app/services/strategy_engine.py` and
+// `app/services/bs_greeks.py`. This component no longer imports from
+// `../../utils/black-scholes`; that module is deprecated (Phase 1.3) and
+// kept only for any non-strategy-lab consumers during the transition.
+// Pre-analyze "live" curves use intrinsic-at-expiration only (no BS) — see
+// `livePayoffCurve` below. Anything that requires BS math (current value,
+// Greeks, what-if, POP, per-leg diagnostics) is sourced from `analysisResult`.
 import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
 import { PayoffChartComponent } from './payoff-chart/payoff-chart.component';
 import { Checkbox } from 'primeng/checkbox';
@@ -344,257 +348,118 @@ export class OptionsStrategyLabComponent {
 
   timeToExpiry = computed(() => this.daysToExpiry() / 365);
 
-  // Enabled legs mapped to LegParams for BS utility
-  enabledLegsParams = computed<LegParams[]>(() =>
-    this.legs()
-      .filter(l => l.enabled && l.strike > 0)
-      .map(l => ({
-        strike: l.strike,
-        optionType: l.optionType,
-        position: l.position,
-        premium: l.premium,
-        iv: l.iv,
-        quantity: l.quantity,
-      }))
-  );
+  // ---------------------------------------------------------------------------
+  // Phase 1.2: BS-based curves come from the server.
+  //
+  // The component used to recompute Black-Scholes price + Greeks here on every
+  // signal change. That's now the server's job (see
+  // `app/services/strategy_engine.py::analyze_strategy` with the
+  // `include_current_curve` / `include_greek_curves` / `include_leg_diagnostics`
+  // flags). The signals below are simple selectors over `analysisResult` and a
+  // companion `whatIfResults` map populated by parallel analyze calls.
+  // ---------------------------------------------------------------------------
 
-  // Premium-weighted average IV for tooltip probability
+  // Per-what-if-scenario analyze results, keyed by scenario id.
+  // Populated by `analyzeStrategy()` when scenarios are enabled.
+  private whatIfResults = signal<Record<string, StrategyAnalyzeResult>>({});
+
+  // Premium-weighted average IV across enabled legs. Pure arithmetic (no BS math).
+  // The payoff chart uses this for a tooltip-side probability label; nothing
+  // numerical that users compare downstream depends on it.
   weightedIv = computed(() => {
-    const params = this.enabledLegsParams();
-    if (params.length === 0) return 0.2;
-    const valid = params.filter(l => l.iv > 0);
-    if (valid.length === 0) return 0.2;
-    const totalWeight = valid.reduce((s, l) => s + l.premium * l.quantity, 0);
-    if (totalWeight <= 0) return valid.reduce((s, l) => s + l.iv, 0) / valid.length;
-    return valid.reduce((s, l) => s + l.iv * l.premium * l.quantity, 0) / totalWeight;
+    const legs = this.legs().filter(l => l.enabled && l.iv > 0);
+    if (legs.length === 0) return 0.2;
+    const totalWeight = legs.reduce((s, l) => s + l.premium * l.quantity, 0);
+    if (totalWeight <= 0) return legs.reduce((s, l) => s + l.iv, 0) / legs.length;
+    return legs.reduce((s, l) => s + l.iv * l.premium * l.quantity, 0) / totalWeight;
   });
 
-  // BS-priced P&L at current time (blue dashed line)
+  // BS-priced P&L curve at current time. Sourced from the server payload.
+  // Empty until the user clicks Analyze.
   currentPnlCurve = computed<PayoffPoint[]>(() => {
-    const params = this.enabledLegsParams();
-    const t = this.timeToExpiry();
-    const grid = this.priceGrid();
-    if (grid.length === 0 || params.length === 0 || t <= 0) return [];
-
-    const r = this.riskFreeRate();
-    return grid.map(price => ({
-      price,
-      pnl: strategyPnlAtPrice(params, price, t, r),
-    }));
+    const result = this.analysisResult();
+    if (!result?.currentCurve) return [];
+    return result.currentCurve.map(p => ({ price: p.price, pnl: p.theoreticalPnl }));
   });
 
-  // What-if scenario curves
+  // What-if scenario curves. One server call per enabled scenario; results are
+  // collected in `whatIfResults` keyed by scenario id.
   whatIfCurves = computed<ChartCurveData[]>(() => {
-    const params = this.enabledLegsParams();
-    const dte = this.daysToExpiry();
-    const grid = this.priceGrid();
-    if (grid.length === 0 || params.length === 0) return [];
-
-    const r = this.riskFreeRate();
+    const results = this.whatIfResults();
     return this.whatIfScenarios()
       .filter(s => s.enabled)
       .map(scenario => {
-        const newDte = Math.max(dte - scenario.timeDeltaDays, 0);
-        const newT = newDte / 365;
-        const shiftedParams = scenario.ivShift !== 0
-          ? params.map(l => ({ ...l, iv: Math.max(l.iv + scenario.ivShift, 0.01) }))
-          : params;
-
-        const points: PayoffPoint[] = grid.map(price => ({
-          price,
-          pnl: strategyPnlAtPrice(shiftedParams, price, newT, r),
-        }));
-
+        const r = results[scenario.id];
+        const points: PayoffPoint[] = r?.currentCurve
+          ? r.currentCurve.map(p => ({ price: p.price, pnl: p.theoreticalPnl }))
+          : [];
         return { label: scenario.label, points, color: scenario.color, borderDash: [6, 3] };
       });
   });
 
-  // Greek curve for right Y-axis
+  // Greek curve for the right Y-axis. Server returns aggregate greeks per spot
+  // grid point; this selector picks the requested greek.
   greekCurve = computed<GreekCurvePoint[]>(() => {
-    const params = this.enabledLegsParams();
-    const t = this.timeToExpiry();
-    const grid = this.priceGrid();
-    if (grid.length === 0 || params.length === 0 || t <= 0) return [];
-
-    const r = this.riskFreeRate();
-    const greek = this.selectedGreek() as GreekName;
-    return grid.map(price => ({
-      price,
-      value: strategyGreekAtPrice(params, price, t, r, greek),
+    const result = this.analysisResult();
+    if (!result?.greekCurves) return [];
+    const greek = this.selectedGreek();
+    return result.greekCurves.map(p => ({
+      price: p.price,
+      value: greek === 'delta' ? p.delta
+        : greek === 'gamma' ? p.gamma
+        : greek === 'theta' ? p.theta
+        : greek === 'vega'  ? p.vega
+        : 0,
     }));
   });
 
   // ---------------------------------------------------------------------------
-  // Probability of Profit — uses lognormal terminal distribution
+  // Probability of Profit — sourced from server (Phase 1.2 of migration plan).
+  //
+  // The server uses per-boundary IV interpolation to capture skew effects;
+  // see `compute_pop` in `app/services/strategy_engine.py`. Returns null until
+  // the user has run Analyze.
   // ---------------------------------------------------------------------------
-
-  /**
-   * Computes the probability that the strategy is profitable at expiration,
-   * based on the lognormal distribution of the terminal stock price.
-   *
-   * Algorithm: walk the expiration payoff curve, find zero-crossings (breakevens),
-   * then sum P(S_T in profitable_region) using the lognormal CDF.
-   */
   probabilityOfProfit = computed<number | null>(() => {
-    const curve = this.livePayoffCurve();
-    const spot = this.spotPrice();
-    const t = this.timeToExpiry();
-    const r = this.riskFreeRate();
-    const iv = this.weightedIv();
-    if (curve.length < 2 || spot <= 0 || t <= 0 || iv <= 0) return null;
-
-    // Find breakeven prices (linear interpolation at zero-crossings)
-    const breakevens: number[] = [];
-    for (let i = 0; i < curve.length - 1; i++) {
-      const p1 = curve[i];
-      const p2 = curve[i + 1];
-      if ((p1.pnl <= 0 && p2.pnl > 0) || (p1.pnl >= 0 && p2.pnl < 0)) {
-        const ratio = Math.abs(p1.pnl) / (Math.abs(p1.pnl) + Math.abs(p2.pnl));
-        breakevens.push(p1.price + (p2.price - p1.price) * ratio);
-      }
-    }
-
-    // Build boundaries: [gridMin, ...breakevens, gridMax]
-    const lo = curve[0].price;
-    const hi = curve[curve.length - 1].price;
-    const bounds = [lo, ...breakevens, hi];
-
-    // Sum probability mass over profitable segments
-    let pop = 0;
-    for (let i = 0; i < bounds.length - 1; i++) {
-      const mid = (bounds[i] + bounds[i + 1]) / 2;
-      // Find the payoff at the midpoint of this segment
-      let pnlAtMid = 0;
-      for (let j = 0; j < curve.length - 1; j++) {
-        if (curve[j].price <= mid && mid <= curve[j + 1].price) {
-          const frac = (mid - curve[j].price) / (curve[j + 1].price - curve[j].price);
-          pnlAtMid = curve[j].pnl + frac * (curve[j + 1].pnl - curve[j].pnl);
-          break;
-        }
-      }
-
-      if (pnlAtMid > 0) {
-        // This segment is profitable — add P(S_T in [bounds[i], bounds[i+1]])
-        const cdfHi = lognormalCdf(bounds[i + 1], spot, r, iv, t);
-        const cdfLo = lognormalCdf(bounds[i], spot, r, iv, t);
-        pop += cdfHi - cdfLo;
-      }
-    }
-
-    // Add tail probability if the last segment is profitable
-    // (price beyond the grid's upper bound)
-    const lastPnl = curve[curve.length - 1].pnl;
-    if (lastPnl > 0) {
-      pop += 1 - lognormalCdf(hi, spot, r, iv, t);
-    }
-    // Add lower tail if the first segment is profitable
-    const firstPnl = curve[0].pnl;
-    if (firstPnl > 0) {
-      pop += lognormalCdf(lo, spot, r, iv, t);
-    }
-
-    return Math.max(0, Math.min(1, pop));
+    const result = this.analysisResult();
+    if (!result?.success) return null;
+    return result.pop;
   });
 
   // ---------------------------------------------------------------------------
-  // Diagnostic table: per-price, per-leg Black-Scholes calculation breakdown
+  // Diagnostic table: per-leg current theoretical + Greeks at the request spot.
+  //
+  // Sourced from the server's `legDiagnostics` payload (Phase 1.2 of migration
+  // plan). The previous version computed a per-price × per-leg BS breakdown
+  // including d1/d2/N(d1)/N(d2)/discount intermediate values; these were used
+  // for debugging the client-side BS implementation. With BS now server-side,
+  // those intermediates would have to round-trip through GraphQL on every
+  // analyze call — they're not worth the bandwidth, so the simplified table
+  // shows just what users actually compare: per-leg current value and per-leg
+  // Greeks at request spot.
   // ---------------------------------------------------------------------------
 
-  /** Sample prices for the diagnostic table: spot ± offsets + each strike */
-  diagnosticPrices = computed<number[]>(() => {
-    const spot = this.spotPrice();
-    if (spot <= 0) return [];
-    const legs = this.legs().filter(l => l.enabled && l.strike > 0);
-    const prices = new Set<number>();
-
-    // Spot and offsets
-    const offsets = [-10, -5, -2, -1, 0, 1, 2, 5, 10];
-    for (const off of offsets) {
-      prices.add(Math.round((spot + off) * 100) / 100);
-    }
-
-    // Each strike and ±$1 around it
-    for (const leg of legs) {
-      prices.add(leg.strike - 1);
-      prices.add(leg.strike);
-      prices.add(leg.strike + 1);
-    }
-
-    return [...prices].sort((a, b) => a - b);
-  });
-
-  /** Full BS calculation details for each sample price × leg */
   diagnosticRows = computed(() => {
-    const params = this.enabledLegsParams();
-    const t = this.timeToExpiry();
-    const r = this.riskFreeRate();
-    const spot = this.spotPrice();
-    const prices = this.diagnosticPrices();
-    if (prices.length === 0 || params.length === 0 || t <= 0 || spot <= 0) return [];
-
-    return prices.map(price => {
-      const legDetails = params.map(leg => {
-        const sigma = leg.iv;
-        const sqrtT = Math.sqrt(t);
-        const lnSK = (price > 0 && leg.strike > 0) ? Math.log(price / leg.strike) : 0;
-        const d1 = bsD1(price, leg.strike, r, sigma, t);
-        const d2 = bsD2(price, leg.strike, r, sigma, t);
-        const nd1 = normCdf(d1);
-        const nd2 = normCdf(d2);
-        const nNegD1 = normCdf(-d1);
-        const nNegD2 = normCdf(-d2);
-        const discount = Math.exp(-r * t);
-
-        const theoPrice = bsPrice(price, leg.strike, r, sigma, t, leg.optionType);
-
-        // Intrinsic value at expiration for comparison
-        const intrinsic = leg.optionType === 'call'
-          ? Math.max(price - leg.strike, 0)
-          : Math.max(leg.strike - price, 0);
-
-        // Leg P&L
-        const legPnl = leg.position === 'long'
-          ? (theoPrice - leg.premium) * leg.quantity
-          : (leg.premium - theoPrice) * leg.quantity;
-
-        // Expiration P&L
-        const expPnl = leg.position === 'long'
-          ? (intrinsic - leg.premium) * leg.quantity
-          : (leg.premium - intrinsic) * leg.quantity;
-
-        return {
-          strike: leg.strike,
-          optionType: leg.optionType,
-          position: leg.position,
-          premium: leg.premium,
-          iv: sigma,
-          quantity: leg.quantity,
-          lnSK,
-          d1,
-          d2,
-          nd1,
-          nd2,
-          nNegD1,
-          nNegD2,
-          discount,
-          sqrtT,
-          theoPrice,
-          intrinsic,
-          legPnl,
-          expPnl,
-        };
-      });
-
-      const totalCurrentPnl = legDetails.reduce((s, l) => s + l.legPnl, 0);
-      const totalExpPnl = legDetails.reduce((s, l) => s + l.expPnl, 0);
-
-      return {
-        underlyingPrice: price,
-        legDetails,
-        totalCurrentPnl,
-        totalExpPnl,
-      };
-    });
+    const result = this.analysisResult();
+    if (!result?.legDiagnostics) return [];
+    return result.legDiagnostics.map(row => ({
+      legId: row.legId,
+      strike: row.strike,
+      optionType: row.optionType,
+      position: row.position,
+      premium: row.entryPremium,
+      iv: row.iv,
+      quantity: row.quantity,
+      theoPrice: row.currentTheoretical,
+      delta: row.currentDelta,
+      gamma: row.currentGamma,
+      theta: row.currentTheta,
+      vega: row.currentVega,
+      // Per-leg P&L at request spot (theoretical - entry, signed by position).
+      legPnl: row.position === 'long'
+        ? (row.currentTheoretical - row.entryPremium) * row.quantity
+        : (row.entryPremium - row.currentTheoretical) * row.quantity,
+    }));
   });
 
   /** Summary metadata for the diagnostic panel header */
@@ -603,8 +468,8 @@ export class OptionsStrategyLabComponent {
     const t = this.timeToExpiry();
     const dte = this.daysToExpiry();
     const r = this.riskFreeRate();
-    const params = this.enabledLegsParams();
-    return { spot, t, dte, r, legs: params };
+    const enabledLegs = this.legs().filter(l => l.enabled && l.strike > 0);
+    return { spot, t, dte, r, legs: enabledLegs };
   });
 
   // Fetch expirations
@@ -805,7 +670,13 @@ export class OptionsStrategyLabComponent {
     this.whatIfScenarios.update(scenarios => scenarios.filter(s => s.id !== id));
   }
 
-  // Analyze the strategy
+  // Analyze the strategy.
+  //
+  // Phase 1.2 of `docs/architecture/numerical-authority-migration-plan.md`:
+  // Server is now the canonical source for current-time curves, Greek curves,
+  // POP, and per-leg diagnostics. We set all opt-in flags so the response
+  // includes everything the UI needs, then fire one parallel analyze call per
+  // enabled what-if scenario so the chart can layer them on top.
   async analyzeStrategy(): Promise<void> {
     const spot = this.spotPrice();
     const expiration = this.selectedExpiration();
@@ -813,9 +684,11 @@ export class OptionsStrategyLabComponent {
 
     this.analyzing.set(true);
     this.error.set(null);
+    this.whatIfResults.set({});
 
     try {
-      const legInputs: StrategyLegInput[] = this.legs().filter(l => l.enabled).map(l => ({
+      const legInputs: StrategyLegInput[] = this.legs().filter(l => l.enabled).map((l, i) => ({
+        legId: `leg_${i}`,
         strike: l.strike,
         optionType: l.optionType,
         position: l.position,
@@ -824,21 +697,51 @@ export class OptionsStrategyLabComponent {
         quantity: l.quantity,
       }));
 
-      const result = await firstValueFrom(
-        this.marketDataService.analyzeOptionsStrategy(
-          this.ticker().trim().toUpperCase(),
-          legInputs,
-          expiration,
-          spot,
-        )
+      const symbol = this.ticker().trim().toUpperCase();
+      const baseOptions: StrategyAnalyzeOptions = {
+        includeCurrentCurve: true,
+        includeGreekCurves: true,
+        includeLegDiagnostics: true,
+      };
+
+      // Primary analyze call (current state, no what-if shifts).
+      const primary$ = this.marketDataService.analyzeOptionsStrategy(
+        symbol, legInputs, expiration, spot, this.riskFreeRate(), baseOptions,
       );
 
-      if (!result.success) {
-        this.error.set(result.error || 'Analysis failed');
+      // One additional analyze call per enabled what-if scenario. Each carries
+      // the same legs and includes the current curve under the shifted
+      // (time, IV) assumption — that becomes the dashed comparison line.
+      const enabledScenarios = this.whatIfScenarios().filter(s => s.enabled);
+      const scenarioCalls = enabledScenarios.map(scenario =>
+        firstValueFrom(this.marketDataService.analyzeOptionsStrategy(
+          symbol, legInputs, expiration, spot, this.riskFreeRate(),
+          {
+            includeCurrentCurve: true,
+            whatIfTimeShiftDays: scenario.timeDeltaDays,
+            whatIfIvShift: scenario.ivShift,
+          },
+        )),
+      );
+
+      const [primary, ...scenarios] = await Promise.all([
+        firstValueFrom(primary$),
+        ...scenarioCalls,
+      ]);
+
+      if (!primary.success) {
+        this.error.set(primary.error || 'Analysis failed');
         return;
       }
 
-      this.analysisResult.set(result);
+      this.analysisResult.set(primary);
+
+      const scenarioResults: Record<string, StrategyAnalyzeResult> = {};
+      enabledScenarios.forEach((scenario, idx) => {
+        const r = scenarios[idx];
+        if (r?.success) scenarioResults[scenario.id] = r;
+      });
+      this.whatIfResults.set(scenarioResults);
 
       // If QuantLib engine is selected, also fetch QuantLib Greeks for comparison
       if (this.pricingEngine() === 'quantlib') {
