@@ -25,20 +25,20 @@ public class PortfolioRiskService : IPortfolioRiskService
     }
 
     // ----------------------------------------------------------------------
-    // STALE-GREEK NOTICE (Phase 2 of numerical-authority-migration-plan.md):
+    // Phase 2.3 — closure of the STALE-GREEK NOTICE.
     //
-    // The two methods below — ComputeDollarDeltaAsync and ComputePortfolioVegaAsync
-    // — still source per-position Greeks from `OptionLeg.EntryDelta` /
-    // `OptionLeg.EntryVega`. Those are entry-time stored values; they do
-    // not reflect current spot/IV. The aggregate sum is rule-5 compliant
-    // (.NET aggregating Python-supplied Greeks is fine), but the *Greeks
-    // themselves* should come from `IPolygonService.PortfolioLiveGreeksAsync`
-    // — see RunScenarioAsync below for the pattern.
+    // ComputeDollarDeltaAsync and ComputePortfolioVegaAsync now source
+    // per-position Greeks from `IPolygonService.PortfolioLiveGreeksAsync`
+    // (Python recomputes against current spot/IV) instead of stored
+    // `OptionLeg.EntryDelta` / `EntryVega`. Stocks short-circuit to
+    // delta=1 and don't hit Python. The methods only aggregate; per
+    // rule-5 that's compliant.
     //
-    // Migration follow-up: replace the `latestLeg?.EntryXxx` lookups in
-    // these methods with a call to PortfolioLiveGreeksAsync that returns
-    // recomputed Greeks at current spot/IV. Tracked in
-    // docs/math-sources-of-truth.md § Portfolio.
+    // ComputePortfolioVegaAsync's GraphQL resolver `getPortfolioVega`
+    // takes only (accountId) — no prices — so this method fetches the
+    // underlying spots itself via `_polygonService.FetchStockSnapshotsAsync`.
+    // ComputeDollarDeltaAsync receives `prices` from the caller (existing
+    // contract) and uses them directly.
     // ----------------------------------------------------------------------
 
     public async Task<List<DollarDeltaResult>> ComputeDollarDeltaAsync(Guid accountId,
@@ -46,50 +46,73 @@ public class PortfolioRiskService : IPortfolioRiskService
     {
         var positions = await _context.Positions
             .Include(p => p.Ticker)
-            .Include(p => p.OptionContract)
+            .Include(p => p.OptionContract).ThenInclude(c => c!.UnderlyingTicker)
             .Where(p => p.AccountId == accountId && p.Status == PositionStatus.Open)
             .ToListAsync(ct);
 
         var results = new List<DollarDeltaResult>();
 
-        foreach (var position in positions)
+        // Stocks: delta = 1, no Python call needed.
+        foreach (var pos in positions.Where(p => p.AssetType == AssetType.Stock))
         {
-            var symbol = position.Ticker.Symbol;
+            var symbol = pos.Ticker.Symbol;
             if (!prices.TryGetValue(symbol, out var price)) continue;
-
-            var multiplier = position.OptionContractId.HasValue
-                ? (position.OptionContract?.Multiplier ?? 100)
-                : 1;
-
-            decimal delta;
-            if (position.AssetType == AssetType.Stock)
-            {
-                delta = 1m; // Stocks have delta = 1
-            }
-            else
-            {
-                // Get latest entry delta from option legs
-                var latestLeg = await _context.OptionLegs
-                    .Where(l => l.OptionContractId == position.OptionContractId
-                                && l.Trade.AccountId == accountId)
-                    .OrderByDescending(l => l.Trade.ExecutionTimestamp)
-                    .FirstOrDefaultAsync(ct);
-
-                delta = latestLeg?.EntryDelta ?? 0;
-            }
-
-            var dollarDelta = delta * price * position.NetQuantity * multiplier;
-
+            var dollarDelta = price * pos.NetQuantity;
             results.Add(new DollarDeltaResult
             {
-                PositionId = position.Id,
+                PositionId = pos.Id,
                 Symbol = symbol,
-                Delta = delta,
+                Delta = 1m,
                 Price = price,
-                Quantity = position.NetQuantity,
-                Multiplier = multiplier,
+                Quantity = pos.NetQuantity,
+                Multiplier = 1,
                 DollarDelta = dollarDelta,
             });
+        }
+
+        // Options: group by underlying, fetch live Greeks per underlying.
+        var optionGroups = positions
+            .Where(p => p.AssetType == AssetType.Option && p.OptionContract != null)
+            .GroupBy(p => p.OptionContract!.UnderlyingTicker.Symbol);
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        foreach (var group in optionGroups)
+        {
+            var underlying = group.Key;
+            if (!prices.TryGetValue(underlying, out var spot)) continue;
+
+            var pythonPositions = await ProjectPositionsForPythonAsync(
+                accountId, group.ToList(), ct);
+            if (pythonPositions.Count == 0) continue;
+
+            var liveGreeks = await _polygonService.PortfolioLiveGreeksAsync(
+                nowMs, spot, pythonPositions, cancellationToken: ct);
+
+            var point = liveGreeks.Points.FirstOrDefault();
+            if (point == null) continue;
+
+            for (var i = 0; i < pythonPositions.Count; i++)
+            {
+                var pyPos = pythonPositions[i];
+                var leg = i < point.Legs.Count ? point.Legs[i] : null;
+                if (leg == null) continue;
+
+                var pos = group.First(p => p.Id.ToString() == pyPos.LegId);
+                var multiplier = (int)(pyPos.Multiplier ?? 100m);
+                var dollarDelta = leg.Delta * spot * pos.NetQuantity * multiplier;
+
+                results.Add(new DollarDeltaResult
+                {
+                    PositionId = pos.Id,
+                    Symbol = pos.Ticker.Symbol,
+                    Delta = leg.Delta,
+                    Price = spot,
+                    Quantity = pos.NetQuantity,
+                    Multiplier = multiplier,
+                    DollarDelta = dollarDelta,
+                });
+            }
         }
 
         return results;
@@ -98,26 +121,65 @@ public class PortfolioRiskService : IPortfolioRiskService
     public async Task<decimal> ComputePortfolioVegaAsync(Guid accountId, CancellationToken ct = default)
     {
         var optionPositions = await _context.Positions
-            .Include(p => p.OptionContract)
+            .Include(p => p.OptionContract).ThenInclude(c => c!.UnderlyingTicker)
             .Where(p => p.AccountId == accountId
                         && p.Status == PositionStatus.Open
-                        && p.AssetType == AssetType.Option)
+                        && p.AssetType == AssetType.Option
+                        && p.OptionContract != null)
             .ToListAsync(ct);
 
+        if (optionPositions.Count == 0) return 0m;
+
+        var optionGroups = optionPositions
+            .GroupBy(p => p.OptionContract!.UnderlyingTicker.Symbol)
+            .ToList();
+
+        // Fetch underlying spots in one batched snapshot call. Resolver
+        // doesn't take prices, so we source them ourselves.
+        var underlyings = optionGroups.Select(g => g.Key).ToList();
+        var snapshots = await _polygonService.FetchStockSnapshotsAsync(underlyings, ct);
+        var spots = snapshots.Snapshots
+            .Where(s => s.Ticker != null)
+            .Select(s => new
+            {
+                s.Ticker,
+                Spot = s.Min?.Close ?? s.Day?.Close,
+            })
+            .Where(x => x.Spot.HasValue)
+            .ToDictionary(x => x.Ticker!, x => x.Spot!.Value);
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         decimal totalVega = 0;
 
-        foreach (var position in optionPositions)
+        foreach (var group in optionGroups)
         {
-            var multiplier = position.OptionContract?.Multiplier ?? 100;
+            var underlying = group.Key;
+            if (!spots.TryGetValue(underlying, out var spot))
+            {
+                _logger.LogWarning(
+                    "[Portfolio] No spot snapshot for {Underlying}; skipping vega contribution",
+                    underlying);
+                continue;
+            }
 
-            var latestLeg = await _context.OptionLegs
-                .Where(l => l.OptionContractId == position.OptionContractId
-                            && l.Trade.AccountId == accountId)
-                .OrderByDescending(l => l.Trade.ExecutionTimestamp)
-                .FirstOrDefaultAsync(ct);
+            var pythonPositions = await ProjectPositionsForPythonAsync(
+                accountId, group.ToList(), ct);
+            if (pythonPositions.Count == 0) continue;
 
-            if (latestLeg?.EntryVega != null)
-                totalVega += latestLeg.EntryVega.Value * position.NetQuantity * multiplier;
+            var liveGreeks = await _polygonService.PortfolioLiveGreeksAsync(
+                nowMs, spot, pythonPositions, cancellationToken: ct);
+
+            var point = liveGreeks.Points.FirstOrDefault();
+            if (point == null) continue;
+
+            for (var i = 0; i < pythonPositions.Count; i++)
+            {
+                var pyPos = pythonPositions[i];
+                var leg = i < point.Legs.Count ? point.Legs[i] : null;
+                if (leg == null) continue;
+                var multiplier = pyPos.Multiplier ?? 100m;
+                totalVega += leg.Vega * pyPos.Quantity * multiplier;
+            }
         }
 
         return totalVega;

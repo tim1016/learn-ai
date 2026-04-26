@@ -86,9 +86,9 @@ public class PortfolioRiskServiceTests
     #region DollarDelta — Options
 
     [Fact]
-    public async Task ComputeDollarDelta_Option_UsesLatestLegDelta()
+    public async Task ComputeDollarDelta_Option_UsesLiveGreeksFromPython()
     {
-        var (service, context, _, _) = CreateServiceWithContext();
+        var (service, context, _, polygonMock) = CreateServiceWithContext();
         var (account, ticker) = SeedAccountAndTicker(context);
 
         var contract = new OptionContract
@@ -107,7 +107,9 @@ public class PortfolioRiskServiceTests
         var position = CreateOpenPosition(context, account.Id, ticker.Id, 10, 5m,
             AssetType.Option, contract.Id);
 
-        // Create a trade with an option leg that has delta = 0.65
+        // Create a trade with an option leg. EntryDelta on the leg is no
+        // longer read by ComputeDollarDeltaAsync — kept here only because the
+        // model is non-nullable and test fidelity expects realistic data.
         var order = new Order
         {
             Id = Guid.NewGuid(),
@@ -141,11 +143,40 @@ public class PortfolioRiskServiceTests
             Id = Guid.NewGuid(),
             TradeId = trade.Id,
             OptionContractId = contract.Id,
-            EntryDelta = 0.65m,
+            EntryDelta = 0.50m, // intentionally different from the live-Greeks mock
             EntryIV = 0.25m,
         };
         context.OptionLegs.Add(leg);
         context.SaveChanges();
+
+        // Python returns live-recomputed delta = 0.65 for this position.
+        polygonMock
+            .Setup(p => p.PortfolioLiveGreeksAsync(
+                It.IsAny<long>(), It.IsAny<decimal>(),
+                It.Is<List<Backend.Models.DTOs.PolygonResponses.PortfolioScenarioPositionDto>>(
+                    list => list.Count == 1 && list[0].LegId == position.Id.ToString()),
+                It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Backend.Models.DTOs.PolygonResponses.PortfolioScenarioResponseDto
+            {
+                Symbol = "SPY",
+                SpotPrice = 505m,
+                Points =
+                [
+                    new Backend.Models.DTOs.PolygonResponses.ScenarioPointDto
+                    {
+                        Spot = 505m,
+                        Legs =
+                        [
+                            new Backend.Models.DTOs.PolygonResponses.LegGreeksDto
+                            {
+                                LegId = position.Id.ToString(),
+                                Instrument = "option",
+                                Delta = 0.65m,
+                            }
+                        ],
+                    }
+                ],
+            });
 
         var prices = new Dictionary<string, decimal> { ["SPY"] = 505m };
         var results = await service.ComputeDollarDeltaAsync(account.Id, prices);
@@ -347,9 +378,9 @@ public class PortfolioRiskServiceTests
     #region PortfolioVega
 
     [Fact]
-    public async Task ComputePortfolioVega_AggregatesAcrossPositions()
+    public async Task ComputePortfolioVega_AggregatesLiveGreeksAcrossPositions()
     {
-        var (service, context, _, _) = CreateServiceWithContext();
+        var (service, context, _, polygonMock) = CreateServiceWithContext();
         var (account, ticker) = SeedAccountAndTicker(context);
 
         var contract = new OptionContract
@@ -364,7 +395,7 @@ public class PortfolioRiskServiceTests
         };
         context.OptionContracts.Add(contract);
 
-        CreateOpenPosition(context, account.Id, ticker.Id, 10, 5m,
+        var position = CreateOpenPosition(context, account.Id, ticker.Id, 10, 5m,
             AssetType.Option, contract.Id);
 
         var order = new Order
@@ -400,12 +431,58 @@ public class PortfolioRiskServiceTests
             Id = Guid.NewGuid(),
             TradeId = trade.Id,
             OptionContractId = contract.Id,
-            EntryVega = 0.15m,
+            EntryVega = 0.05m, // intentionally different from the live-Greeks mock
             EntryDelta = 0.5m,
             EntryIV = 0.20m,
         };
         context.OptionLegs.Add(leg);
         context.SaveChanges();
+
+        // Resolver doesn't take prices; the service calls FetchStockSnapshotsAsync
+        // for the underlying spot, then PortfolioLiveGreeksAsync for the recomputed Greeks.
+        polygonMock
+            .Setup(p => p.FetchStockSnapshotsAsync(
+                It.Is<List<string>>(list => list.Contains("SPY")), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Backend.Models.DTOs.PolygonResponses.StockSnapshotsResponse
+            {
+                Success = true,
+                Snapshots =
+                [
+                    new Backend.Models.DTOs.PolygonResponses.StockTickerSnapshotDto
+                    {
+                        Ticker = "SPY",
+                        Min = new Backend.Models.DTOs.PolygonResponses.MinuteBarDto { Close = 505m },
+                    }
+                ],
+            });
+
+        polygonMock
+            .Setup(p => p.PortfolioLiveGreeksAsync(
+                It.IsAny<long>(), It.IsAny<decimal>(),
+                It.Is<List<Backend.Models.DTOs.PolygonResponses.PortfolioScenarioPositionDto>>(
+                    list => list.Count == 1 && list[0].LegId == position.Id.ToString()),
+                It.IsAny<decimal>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Backend.Models.DTOs.PolygonResponses.PortfolioScenarioResponseDto
+            {
+                Symbol = "SPY",
+                SpotPrice = 505m,
+                Points =
+                [
+                    new Backend.Models.DTOs.PolygonResponses.ScenarioPointDto
+                    {
+                        Spot = 505m,
+                        Legs =
+                        [
+                            new Backend.Models.DTOs.PolygonResponses.LegGreeksDto
+                            {
+                                LegId = position.Id.ToString(),
+                                Instrument = "option",
+                                Vega = 0.15m,
+                            }
+                        ],
+                    }
+                ],
+            });
 
         var vega = await service.ComputePortfolioVegaAsync(account.Id);
 
