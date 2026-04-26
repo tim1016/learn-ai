@@ -22,13 +22,16 @@ tests using snake_case kwargs.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from app.jobs.progress import ProgressEmitter
+from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
+from app.models.requests import DatasetGenerationRequest
+from app.services.dataset_service import RunCancelledError
 from app.services.polygon_client import PolygonClientService
 from app.services.rule_based_backtest import (
     RuleBasedBacktestResult,
@@ -65,6 +68,19 @@ class RuleBasedBacktestJobRequest(_CamelCaseModel):
     multiplier: int = 15
     timespan: str = "minute"
     parameters: dict = Field(default_factory=dict)
+
+
+class DatasetZipJobRequest(_CamelCaseModel):
+    """Body of POST /api/jobs-internal/dataset-zip.
+
+    Carries every field the existing :class:`DatasetGenerationRequest`
+    accepts — since the dataset request is an established schema, we
+    accept it as a ``dataset`` sub-object rather than flattening, so the
+    bundler keeps its single source of truth for shape validation.
+    """
+
+    job_id: str = Field(..., min_length=1)
+    dataset: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +147,97 @@ async def start_rule_based_backtest_job(req: RuleBasedBacktestJobRequest) -> dic
         return _serialize(result)
 
     run_in_thread(req.job_id, work, thread_name=f"backtest-{req.job_id[:8]}")
+    return {"job_id": req.job_id, "status": "queued"}
+
+
+@router.post("/dataset-zip", status_code=status.HTTP_202_ACCEPTED)
+async def start_dataset_zip_job(req: DatasetZipJobRequest) -> dict:
+    """Kick off a dataset fetch + bundle into a ZIP archive.
+
+    Maps the existing dataset bundling pipeline (`_fetch_and_process` +
+    `_build_zip_with_events`) onto the generic job framework. The pipeline
+    already supports ``on_event`` and ``cancel_check`` callables — we
+    plug those into :class:`ProgressEmitter` and
+    :class:`CancellationCheck` respectively, so the inner code is
+    unchanged. The final ZIP bytes go through ``completed_blob`` which
+    parks them at ``job:{id}:result-blob``; the .NET ``GET /api/jobs/
+    {id}/download`` streams them with the right Content-Disposition.
+    """
+    # Validate the embedded dataset payload through the existing schema.
+    try:
+        dataset_req = DatasetGenerationRequest.model_validate(req.dataset)
+    except Exception as exc:  # pydantic ValidationError or shape mismatch
+        raise HTTPException(status_code=400, detail=f"invalid dataset payload: {exc}")
+
+    def work(emit: ProgressEmitter, cancel) -> None:
+        # Late imports — these modules pull in pandas + polygon SDK and
+        # would slow router import time if hoisted.
+        from app.routers.dataset import _build_zip_with_events, _fetch_and_process
+
+        def on_event(event: dict[str, Any]) -> None:
+            # Forward the existing dataset event vocabulary unchanged so
+            # the data-lab run-card UI keeps rendering chunks +
+            # bundle-component checklists exactly as before. The
+            # framework's terminal events (job.completed/failed) close
+            # the SSE stream; chunk_progress et al. flow through as
+            # arbitrary mid-run events.
+            emit.emit_event(event.get("type", "event"), {k: v for k, v in event.items() if k != "type"})
+
+        def cancel_check() -> bool:
+            return cancel.should_cancel()
+
+        emit.phase("loading_bars")
+        try:
+            df, column_meta, raw_count = _fetch_and_process(
+                dataset_req,
+                on_event=on_event,
+                cancel_check=cancel_check,
+            )
+        except RunCancelledError as exc:
+            # Translate the dataset chunker's cancellation exception into
+            # the framework's so run_in_thread emits job.cancelled instead
+            # of job.failed.
+            raise JobCancelled(str(exc)) from exc
+        on_event({
+            "type": "fetch_complete",
+            "raw_bars": raw_count,
+            "processed_bars": len(df),
+            "indicator_columns": len([m["column"] for m in column_meta]),
+        })
+
+        emit.phase("bundling")
+        try:
+            zip_bytes, filename = _build_zip_with_events(
+                dataset_req,
+                df,
+                column_meta,
+                raw_count,
+                on_event=on_event,
+                cancel_check=cancel_check,
+            )
+        except RunCancelledError as exc:
+            raise JobCancelled(str(exc)) from exc
+
+        emit.phase("packaging")
+        emit.completed_blob(
+            filename=filename,
+            content_type="application/zip",
+            body=zip_bytes,
+        )
+        # completed_blob already emits job.completed and writes the
+        # result; returning None tells run_in_thread NOT to also call
+        # completed() with a JSON value.
+        return None
+
+    # The dataset bundler's cancel_check is invoked once per chunk
+    # (typically every few seconds), so the 1000-call cooldown in
+    # CancellationCheck is too lazy. Force a Redis check on every call.
+    run_in_thread(
+        req.job_id,
+        work,
+        cancel_check_every_n=1,
+        thread_name=f"dataset-zip-{req.job_id[:8]}",
+    )
     return {"job_id": req.job_id, "status": "queued"}
 
 
