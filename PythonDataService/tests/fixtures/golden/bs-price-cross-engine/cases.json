@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "description": "Input grid for cross-engine BS parity (bs_greeks.py vs quantlib_pricer.py). See attribution.md.",
+  "tolerance": {
+    "atol": 1e-10,
+    "rtol": 0.0
+  },
+  "grid": {
+    "spot": [80.0, 100.0, 120.0],
+    "strike": [100.0],
+    "ttm_days": [7, 30, 90, 180, 365],
+    "volatility": [0.10, 0.20, 0.40],
+    "rate": [0.0, 0.05],
+    "dividend": [0.0, 0.02],
+    "option_type": ["call", "put"]
+  }
+}

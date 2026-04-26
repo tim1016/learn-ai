@@ -835,7 +835,12 @@ public class Query
         List<StrategyLegInput> legs,
         string expirationDate,
         decimal spotPrice,
-        decimal riskFreeRate = 0.043m)
+        decimal riskFreeRate = 0.043m,
+        bool includeCurrentCurve = false,
+        bool includeGreekCurves = false,
+        bool includeLegDiagnostics = false,
+        decimal whatIfTimeShiftDays = 0m,
+        decimal whatIfIvShift = 0m)
     {
         try
         {
@@ -843,8 +848,17 @@ public class Query
                 "[Strategy] GraphQL query: symbol={Symbol}, legs={LegCount}, expiration={Expiration}",
                 symbol, legs.Count, expirationDate);
 
+            var options = new StrategyAnalyzeOptions
+            {
+                IncludeCurrentCurve = includeCurrentCurve,
+                IncludeGreekCurves = includeGreekCurves,
+                IncludeLegDiagnostics = includeLegDiagnostics,
+                WhatIfTimeShiftDays = whatIfTimeShiftDays,
+                WhatIfIvShift = whatIfIvShift,
+            };
+
             var response = await polygonService.AnalyzeOptionsStrategyAsync(
-                symbol, legs, expirationDate, spotPrice, riskFreeRate);
+                symbol, legs, expirationDate, spotPrice, riskFreeRate, options);
 
             return new StrategyAnalyzeResult
             {
@@ -869,6 +883,36 @@ public class Query
                     Theta = response.Greeks.Theta,
                     Vega = response.Greeks.Vega,
                 },
+                CurrentCurve = response.CurrentCurve?.Select(p => new CurrentCurvePointResult
+                {
+                    Price = p.Price,
+                    TheoreticalValue = p.TheoreticalValue,
+                    TheoreticalPnl = p.TheoreticalPnl,
+                }).ToList(),
+                GreekCurves = response.GreekCurves?.Select(p => new GreekCurvePointResult
+                {
+                    Price = p.Price,
+                    Delta = p.Delta,
+                    Gamma = p.Gamma,
+                    Theta = p.Theta,
+                    Vega = p.Vega,
+                }).ToList(),
+                LegDiagnostics = response.LegDiagnostics?.Select(d => new LegDiagnosticResult
+                {
+                    LegId = d.LegId,
+                    Strike = d.Strike,
+                    OptionType = d.OptionType,
+                    Position = d.Position,
+                    Quantity = d.Quantity,
+                    Iv = d.Iv,
+                    EntryPremium = d.EntryPremium,
+                    CurrentTheoretical = d.CurrentTheoretical,
+                    CurrentDelta = d.CurrentDelta,
+                    CurrentGamma = d.CurrentGamma,
+                    CurrentTheta = d.CurrentTheta,
+                    CurrentVega = d.CurrentVega,
+                    LegPnl = d.LegPnl,
+                }).ToList(),
                 Error = response.Error,
             };
         }
@@ -1583,7 +1627,58 @@ public class StrategyAnalyzeResult
     public List<decimal> Breakevens { get; set; } = [];
     public List<PayoffPointResult> Curve { get; set; } = [];
     public StrategyGreeksResult Greeks { get; set; } = new();
+
+    // Phase 1.1 opt-in extensions. Null when the corresponding include_*
+    // request flag was false (the default). Explicit GraphQLName to follow
+    // the file's convention (HC v15 camelCase inference is fine for these
+    // names, but explicit > implicit makes refactor renames safe).
+    [GraphQLName("currentCurve")]
+    public List<CurrentCurvePointResult>? CurrentCurve { get; set; }
+
+    [GraphQLName("greekCurves")]
+    public List<GreekCurvePointResult>? GreekCurves { get; set; }
+
+    [GraphQLName("legDiagnostics")]
+    public List<LegDiagnosticResult>? LegDiagnostics { get; set; }
+
     public string? Error { get; set; }
+}
+
+public class CurrentCurvePointResult
+{
+    public decimal Price { get; set; }
+    public decimal TheoreticalValue { get; set; }
+
+    [GraphQLName("theoreticalPnl")]
+    public decimal TheoreticalPnl { get; set; }
+}
+
+public class GreekCurvePointResult
+{
+    public decimal Price { get; set; }
+    public decimal Delta { get; set; }
+    public decimal Gamma { get; set; }
+    public decimal Theta { get; set; }
+    public decimal Vega { get; set; }
+}
+
+public class LegDiagnosticResult
+{
+    public string? LegId { get; set; }
+    public decimal Strike { get; set; }
+    public string OptionType { get; set; } = "";
+    public string Position { get; set; } = "";
+    public int Quantity { get; set; }
+    public decimal Iv { get; set; }
+    public decimal EntryPremium { get; set; }
+    public decimal CurrentTheoretical { get; set; }
+    public decimal CurrentDelta { get; set; }
+    public decimal CurrentGamma { get; set; }
+    public decimal CurrentTheta { get; set; }
+    public decimal CurrentVega { get; set; }
+
+    [GraphQLName("legPnl")]
+    public decimal LegPnl { get; set; }
 }
 
 // ------------------------------------------------------------------

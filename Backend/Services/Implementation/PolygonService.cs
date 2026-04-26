@@ -357,12 +357,101 @@ public class PolygonService : IPolygonService
         }
     }
 
+    public async Task<PortfolioScenarioResponseDto> PortfolioScenarioAsync(
+        long asOfMs,
+        decimal spotPrice,
+        List<PortfolioScenarioPositionDto> positions,
+        PortfolioScenarioGridDto? grid = null,
+        decimal riskFreeRate = 0.043m,
+        decimal dividendYield = 0m,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            grid ??= new PortfolioScenarioGridDto();
+
+            var request = new
+            {
+                as_of_ms = asOfMs,
+                spot_price = spotPrice,
+                risk_free_rate = riskFreeRate,
+                dividend_yield = dividendYield,
+                positions = positions.Select(p => p.Instrument == "option"
+                    ? (object)new
+                    {
+                        instrument = "option",
+                        symbol = p.Symbol,
+                        option_type = p.OptionType,
+                        strike = p.Strike,
+                        expiration_ms = p.ExpirationMs,
+                        quantity = p.Quantity,
+                        multiplier = p.Multiplier ?? 100m,
+                        entry_price = p.EntryPrice,
+                        current_iv = p.CurrentIv,
+                        leg_id = p.LegId,
+                    }
+                    : new
+                    {
+                        instrument = "stock",
+                        symbol = p.Symbol,
+                        quantity = p.Quantity,
+                        entry_price = p.EntryPrice,
+                        leg_id = p.LegId,
+                    }),
+                grid = new
+                {
+                    spot_shocks = grid.SpotShocks,
+                    time_shifts_days = grid.TimeShiftsDays,
+                    iv_shifts = grid.IvShifts,
+                },
+            };
+
+            _logger.LogInformation(
+                "[Portfolio] Scenario for {Symbol}: {PositionCount} positions, {Points} grid points",
+                positions.FirstOrDefault()?.Symbol ?? "?",
+                positions.Count,
+                grid.SpotShocks.Count * grid.TimeShiftsDays.Count * grid.IvShifts.Count);
+
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/portfolio/scenario", request, cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+
+            var result = await response.Content.ReadFromJsonAsync<PortfolioScenarioResponseDto>(
+                _jsonOptions, cancellationToken);
+
+            if (result == null)
+                throw new HttpRequestException("Received null response from Python /api/portfolio/scenario");
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Portfolio] Error running scenario");
+            throw;
+        }
+    }
+
+    public Task<PortfolioScenarioResponseDto> PortfolioLiveGreeksAsync(
+        long asOfMs,
+        decimal spotPrice,
+        List<PortfolioScenarioPositionDto> positions,
+        decimal riskFreeRate = 0.043m,
+        decimal dividendYield = 0m,
+        CancellationToken cancellationToken = default)
+    {
+        // Live Greeks = scenario with the default 1×1×1 grid (current state only).
+        return PortfolioScenarioAsync(
+            asOfMs, spotPrice, positions, grid: null, riskFreeRate, dividendYield, cancellationToken);
+    }
+
     public async Task<StrategyAnalyzeResponseDto> AnalyzeOptionsStrategyAsync(
         string symbol,
         List<StrategyLegInput> legs,
         string expirationDate,
         decimal spotPrice,
         decimal riskFreeRate = 0.043m,
+        StrategyAnalyzeOptions? options = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -371,11 +460,16 @@ public class PolygonService : IPolygonService
                 "[Strategy] Analyzing {LegCount}-leg strategy for {Symbol}",
                 legs.Count, symbol);
 
+            // Phase 1.1: opt-in fields default to false / 0 so existing
+            // callers see no behavior change.
+            options ??= new StrategyAnalyzeOptions();
+
             var request = new
             {
                 symbol,
                 legs = legs.Select(l => new
                 {
+                    leg_id = l.LegId,
                     strike = l.Strike,
                     option_type = l.OptionType,
                     position = l.Position,
@@ -386,6 +480,11 @@ public class PolygonService : IPolygonService
                 expiration_date = expirationDate,
                 spot_price = spotPrice,
                 risk_free_rate = riskFreeRate,
+                include_current_curve = options.IncludeCurrentCurve,
+                include_greek_curves = options.IncludeGreekCurves,
+                include_leg_diagnostics = options.IncludeLegDiagnostics,
+                what_if_time_shift_days = options.WhatIfTimeShiftDays,
+                what_if_iv_shift = options.WhatIfIvShift,
             };
 
             var response = await _httpClient.PostAsJsonAsync(

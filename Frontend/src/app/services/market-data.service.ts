@@ -7,7 +7,7 @@ import {
   OptionsChainSnapshotResult, BacktestResult, StockSnapshotResult,
   StockSnapshotsResult, MarketMoversResult, UnifiedSnapshotResult,
   TrackedTickersResult, TickerDetailResult, RelatedTickersResult,
-  StrategyAnalyzeResult, StrategyLegInput, FetchProgress,
+  StrategyAnalyzeResult, StrategyAnalyzeOptions, StrategyLegInput, FetchProgress,
   IndicatorTableResult, RuleBasedBacktestResult, PricingCompareResult,
 } from '../graphql/types';
 import { environment } from '../../environments/environment';
@@ -476,6 +476,11 @@ const ANALYZE_OPTIONS_STRATEGY_QUERY = `
     $expirationDate: String!
     $spotPrice: Decimal!
     $riskFreeRate: Decimal = 0.043
+    $includeCurrentCurve: Boolean = false
+    $includeGreekCurves: Boolean = false
+    $includeLegDiagnostics: Boolean = false
+    $whatIfTimeShiftDays: Decimal = 0
+    $whatIfIvShift: Decimal = 0
   ) {
     analyzeOptionsStrategy(
       symbol: $symbol
@@ -483,11 +488,23 @@ const ANALYZE_OPTIONS_STRATEGY_QUERY = `
       expirationDate: $expirationDate
       spotPrice: $spotPrice
       riskFreeRate: $riskFreeRate
+      includeCurrentCurve: $includeCurrentCurve
+      includeGreekCurves: $includeGreekCurves
+      includeLegDiagnostics: $includeLegDiagnostics
+      whatIfTimeShiftDays: $whatIfTimeShiftDays
+      whatIfIvShift: $whatIfIvShift
     ) {
       success symbol spotPrice strategyCost
       pop expectedValue maxProfit maxLoss breakevens
       curve { price pnl }
       greeks { delta gamma theta vega }
+      currentCurve { price theoreticalValue theoreticalPnl }
+      greekCurves { price delta gamma theta vega }
+      legDiagnostics {
+        legId strike optionType position quantity iv entryPremium
+        currentTheoretical currentDelta currentGamma currentTheta currentVega
+        legPnl
+      }
       error
     }
   }
@@ -976,12 +993,20 @@ export class MarketDataService {
     legs: StrategyLegInput[],
     expirationDate: string,
     spotPrice: number,
-    riskFreeRate = 0.043
+    riskFreeRate = 0.043,
+    options: StrategyAnalyzeOptions = {},
   ): Observable<StrategyAnalyzeResult> {
     return this.http
       .post<AnalyzeOptionsStrategyResponse>(GRAPHQL_URL, {
         query: ANALYZE_OPTIONS_STRATEGY_QUERY,
-        variables: { symbol, legs, expirationDate, spotPrice, riskFreeRate }
+        variables: {
+          symbol, legs, expirationDate, spotPrice, riskFreeRate,
+          includeCurrentCurve: options.includeCurrentCurve ?? false,
+          includeGreekCurves: options.includeGreekCurves ?? false,
+          includeLegDiagnostics: options.includeLegDiagnostics ?? false,
+          whatIfTimeShiftDays: options.whatIfTimeShiftDays ?? 0,
+          whatIfIvShift: options.whatIfIvShift ?? 0,
+        }
       })
       .pipe(
         tap(response => {

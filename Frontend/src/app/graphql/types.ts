@@ -356,12 +356,26 @@ export interface BacktestResult {
 
 // Options Strategy Analysis types
 export interface StrategyLegInput {
+  legId?: string;
   strike: number;
   optionType: string;
   position: string;
   premium: number;
   iv: number;
   quantity?: number;
+}
+
+/**
+ * Phase 1.1 opt-in flags for `analyzeOptionsStrategy`. Default-false; setting
+ * any of these to true causes the corresponding response field to be populated.
+ * See `docs/architecture/numerical-authority-migration-plan.md`.
+ */
+export interface StrategyAnalyzeOptions {
+  includeCurrentCurve?: boolean;
+  includeGreekCurves?: boolean;
+  includeLegDiagnostics?: boolean;
+  whatIfTimeShiftDays?: number;
+  whatIfIvShift?: number;
 }
 
 export interface PayoffPoint {
@@ -376,6 +390,36 @@ export interface GreeksResult {
   vega: number;
 }
 
+export interface CurrentCurvePoint {
+  price: number;
+  theoreticalValue: number;
+  theoreticalPnl: number;
+}
+
+export interface GreekCurvePointResult {
+  price: number;
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+}
+
+export interface LegDiagnosticResult {
+  legId: string | null;
+  strike: number;
+  optionType: string;
+  position: string;
+  quantity: number;
+  iv: number;
+  entryPremium: number;
+  currentTheoretical: number;
+  currentDelta: number;
+  currentGamma: number;
+  currentTheta: number;
+  currentVega: number;
+  legPnl: number;
+}
+
 export interface StrategyAnalyzeResult {
   success: boolean;
   symbol: string;
@@ -388,6 +432,10 @@ export interface StrategyAnalyzeResult {
   breakevens: number[];
   curve: PayoffPoint[];
   greeks: GreeksResult;
+  // Phase 1.1: null unless the matching include_* flag was set on the request.
+  currentCurve: CurrentCurvePoint[] | null;
+  greekCurves: GreekCurvePointResult[] | null;
+  legDiagnostics: LegDiagnosticResult[] | null;
   error: string | null;
 }
 

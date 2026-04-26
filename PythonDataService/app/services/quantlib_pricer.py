@@ -238,7 +238,7 @@ def price_option(
 
     return GreeksResult(
         engine=engine.value,
-        price=round(npv, 8),
+        price=npv,
         delta=round(delta, 8),
         gamma=round(gamma, 8),
         theta=round(theta_daily, 8),

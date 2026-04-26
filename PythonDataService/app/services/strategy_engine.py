@@ -14,12 +14,16 @@ import numpy as np
 from scipy.stats import lognorm, norm
 
 from app.models.strategy import (
+    CurrentCurvePoint,
+    GreekCurvePoint,
     GreeksResult,
+    LegDiagnostic,
     PayoffPoint,
     StrategyAnalyzeRequest,
     StrategyAnalyzeResponse,
     StrategyLeg,
 )
+from app.services.bs_greeks import black_scholes_greeks, bs_european_price
 
 logger = logging.getLogger(__name__)
 
@@ -375,6 +379,222 @@ def compute_strategy_greeks(
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase 1.1: current-time curves and per-leg diagnostics.
+#
+# These functions compute theoretical values at *today's* vol surface (or
+# a what-if shifted vol/time), not at expiry. They exist so OptionsStrategyLabComponent
+# can stop computing the same numbers in TypeScript via `black-scholes.ts`.
+# Math authority: `app/services/bs_greeks.py` (closed-form, continuous time).
+# ---------------------------------------------------------------------------
+
+
+def _per_share_leg_value(leg: StrategyLeg, spot: float, ttm_years: float, r: float, iv: float) -> float:
+    """Theoretical per-share value of one leg at given (spot, ttm, iv).
+
+    Sign matches `position`: long contributes +value, short contributes -value.
+    Quantity is *not* applied here — caller multiplies if needed.
+    """
+    if ttm_years <= 0 or iv <= 0:
+        # Intrinsic only.
+        if leg.option_type == "call":
+            value = max(spot - leg.strike, 0.0)
+        else:
+            value = max(leg.strike - spot, 0.0)
+    else:
+        value = bs_european_price(
+            spot=spot,
+            strike=leg.strike,
+            ttm_years=ttm_years,
+            rate=r,
+            volatility=iv,
+            is_call=leg.option_type == "call",
+            dividend=0.0,
+        )
+
+    sign = 1.0 if leg.position == "long" else -1.0
+    return sign * value
+
+
+def compute_current_curve(
+    legs: list[StrategyLeg],
+    spot_price: float,
+    price_range_pct: float,
+    num_points: int,
+    risk_free_rate: float,
+    days_to_expiry: int,
+    iv_shift: float = 0.0,
+) -> list[CurrentCurvePoint]:
+    """Theoretical per-share strategy value at today's vol surface, over a spot grid.
+
+    Distinct from `compute_payoff_curve` (which is at expiry, intrinsic-only).
+    `theoretical_pnl` = theoretical_value - strategy_cost, both per share.
+    """
+    low = spot_price * (1.0 - price_range_pct)
+    high = spot_price * (1.0 + price_range_pct)
+    prices = np.linspace(max(low, 0.01), high, num_points)
+    ttm_years = max(days_to_expiry / 365.0, 0.0)
+    cost = compute_strategy_cost(legs)
+
+    points: list[CurrentCurvePoint] = []
+    for p in prices:
+        spot = float(p)
+        value = 0.0
+        for leg in legs:
+            iv = max(leg.iv + iv_shift, 0.0)
+            value += _per_share_leg_value(leg, spot, ttm_years, risk_free_rate, iv) * leg.quantity
+        points.append(
+            CurrentCurvePoint(
+                price=round(spot, 4),
+                theoretical_value=round(value, 4),
+                theoretical_pnl=round(value - cost, 4),
+            )
+        )
+    return points
+
+
+def compute_greek_curves(
+    legs: list[StrategyLeg],
+    spot_price: float,
+    price_range_pct: float,
+    num_points: int,
+    risk_free_rate: float,
+    days_to_expiry: int,
+) -> list[GreekCurvePoint]:
+    """Aggregate Greek values at each spot grid point.
+
+    Per-spot delta/gamma/theta/vega summed over legs, with sign and quantity applied.
+    Vega is per 1% IV move; theta is per calendar day (matching the rest of the response).
+    """
+    low = spot_price * (1.0 - price_range_pct)
+    high = spot_price * (1.0 + price_range_pct)
+    prices = np.linspace(max(low, 0.01), high, num_points)
+    ttm_years = max(days_to_expiry / 365.0, 0.0)
+
+    points: list[GreekCurvePoint] = []
+    for p in prices:
+        spot = float(p)
+        agg_delta = 0.0
+        agg_gamma = 0.0
+        agg_theta = 0.0
+        agg_vega = 0.0
+        for leg in legs:
+            iv = leg.iv
+            sign = 1.0 if leg.position == "long" else -1.0
+            qty = leg.quantity
+            if ttm_years <= 0 or iv <= 0 or spot <= 0:
+                # At expiry: delta jumps to ±1 if ITM, 0 otherwise; other
+                # Greeks vanish. Mirror compute_leg_greeks() so the same
+                # response doesn't disagree with itself between greeks
+                # (intrinsic-aware) and greek_curves (was zeroing all).
+                if ttm_years <= 0 and spot > 0:
+                    if leg.option_type == "call":
+                        d = 1.0 if spot > leg.strike else 0.0
+                    else:
+                        d = -1.0 if spot < leg.strike else 0.0
+                    agg_delta += d * sign * qty
+                continue
+            g = black_scholes_greeks(
+                spot=spot,
+                strike=leg.strike,
+                ttm_years=ttm_years,
+                volatility=iv,
+                rate=risk_free_rate,
+                dividend=0.0,
+                is_call=leg.option_type == "call",
+            )
+            agg_delta += g.delta * sign * qty
+            agg_gamma += g.gamma * sign * qty
+            agg_theta += g.theta * sign * qty
+            agg_vega += g.vega * sign * qty
+        points.append(
+            GreekCurvePoint(
+                price=round(spot, 4),
+                delta=round(agg_delta, 6),
+                gamma=round(agg_gamma, 6),
+                theta=round(agg_theta, 6),
+                vega=round(agg_vega, 6),
+            )
+        )
+    return points
+
+
+def compute_leg_diagnostics(
+    legs: list[StrategyLeg],
+    spot_price: float,
+    risk_free_rate: float,
+    days_to_expiry: int,
+) -> list[LegDiagnostic]:
+    """Per-leg current theoretical value and per-leg Greeks at the request spot.
+
+    Used by the Strategy Lab diagnostic table that historically computed these
+    values in TypeScript via `black-scholes.ts`. Sign convention: per-share
+    *unsigned* values (long/short reflected in the `position` field, not the
+    numbers) so the UI can format independently. Use the request quantity as-is.
+    """
+    ttm_years = max(days_to_expiry / 365.0, 0.0)
+    rows: list[LegDiagnostic] = []
+    for leg in legs:
+        if ttm_years > 0 and leg.iv > 0:
+            theo = bs_european_price(
+                spot=spot_price,
+                strike=leg.strike,
+                ttm_years=ttm_years,
+                rate=risk_free_rate,
+                volatility=leg.iv,
+                is_call=leg.option_type == "call",
+                dividend=0.0,
+            )
+            g = black_scholes_greeks(
+                spot=spot_price,
+                strike=leg.strike,
+                ttm_years=ttm_years,
+                volatility=leg.iv,
+                rate=risk_free_rate,
+                dividend=0.0,
+                is_call=leg.option_type == "call",
+            )
+            delta, gamma, theta, vega = g.delta, g.gamma, g.theta, g.vega
+        else:
+            # Expired or zero-IV: intrinsic value, delta = ±1 if ITM (mirrors
+            # compute_leg_greeks() so greeks/greek_curves/leg_diagnostics agree
+            # at expiry). Other Greeks vanish.
+            if leg.option_type == "call":
+                theo = max(spot_price - leg.strike, 0.0)
+                delta = 1.0 if (ttm_years <= 0 and spot_price > leg.strike) else 0.0
+            else:
+                theo = max(leg.strike - spot_price, 0.0)
+                delta = -1.0 if (ttm_years <= 0 and spot_price < leg.strike) else 0.0
+            gamma = theta = vega = 0.0
+
+        # Per-leg P&L. Long: theoretical - premium (gain when theo rises above
+        # what we paid). Short: premium - theoretical (gain when theo falls
+        # below what we collected). Both scaled by quantity. Per-share — a
+        # contract multiplier is the caller's display choice (matches UI
+        # convention of showing per-share entry/theo).
+        per_share_signed = (theo - leg.premium) if leg.position == "long" else (leg.premium - theo)
+        leg_pnl = per_share_signed * leg.quantity
+
+        rows.append(
+            LegDiagnostic(
+                leg_id=leg.leg_id,
+                strike=leg.strike,
+                option_type=leg.option_type,
+                position=leg.position,
+                quantity=leg.quantity,
+                iv=leg.iv,
+                entry_premium=leg.premium,
+                current_theoretical=round(theo, 6),
+                current_delta=round(delta, 6),
+                current_gamma=round(gamma, 6),
+                current_theta=round(theta, 6),
+                current_vega=round(vega, 6),
+                leg_pnl=round(leg_pnl, 6),
+            )
+        )
+    return rows
+
+
 def compute_strategy_cost(legs: list[StrategyLeg]) -> float:
     """Net cost of the strategy. Positive = debit, negative = credit."""
     cost = 0.0
@@ -430,6 +650,41 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
             greeks,
         )
 
+        # Phase 1.1 opt-in extensions: compute only when requested so existing
+        # callers don't pay the cost.
+        current_curve = None
+        if request.include_current_curve:
+            shifted_days = max(days_to_expiry - request.what_if_time_shift_days, 0)
+            current_curve = compute_current_curve(
+                request.legs,
+                request.spot_price,
+                request.price_range_pct,
+                request.curve_points,
+                request.risk_free_rate,
+                round(shifted_days),
+                iv_shift=request.what_if_iv_shift,
+            )
+
+        greek_curves = None
+        if request.include_greek_curves:
+            greek_curves = compute_greek_curves(
+                request.legs,
+                request.spot_price,
+                request.price_range_pct,
+                request.curve_points,
+                request.risk_free_rate,
+                days_to_expiry,
+            )
+
+        leg_diagnostics = None
+        if request.include_leg_diagnostics:
+            leg_diagnostics = compute_leg_diagnostics(
+                request.legs,
+                request.spot_price,
+                request.risk_free_rate,
+                days_to_expiry,
+            )
+
         return StrategyAnalyzeResponse(
             success=True,
             symbol=request.symbol,
@@ -442,6 +697,9 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
             breakevens=breakevens,
             curve=curve,
             greeks=greeks,
+            current_curve=current_curve,
+            greek_curves=greek_curves,
+            leg_diagnostics=leg_diagnostics,
         )
 
     except Exception as e:
