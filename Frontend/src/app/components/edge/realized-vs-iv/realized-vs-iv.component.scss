@@ -73,6 +73,17 @@
   font-size: 11px; padding: 4px 10px; cursor: pointer;
 }
 
+/* IV-pipeline-not-wired variant of the coverage banner */
+.banner-iv-missing {
+  background: linear-gradient(180deg, rgba(41,182,246,0.10), rgba(41,182,246,0.04));
+  border: 1px solid rgba(41,182,246,0.28);
+  border-left: 2px solid $info;
+  color: $text-secondary;
+
+  .pi { color: $info; }
+  .coverage-action { border-color: rgba(41,182,246,0.30); color: $info; }
+}
+
 /* ─── Form ─── */
 .form-card {
   background: $bg-surface; border: 1px solid $border;
