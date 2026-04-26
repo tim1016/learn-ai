@@ -77,6 +77,4 @@ def is_tradable(
         return False
     if quoted_volume < min_volume:
         return False
-    if open_interest < min_open_interest:
-        return False
-    return True
+    return open_interest >= min_open_interest

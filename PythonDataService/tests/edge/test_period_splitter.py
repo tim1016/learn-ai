@@ -1,7 +1,7 @@
 """Tests for period_splitter."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.engine.edge.period_splitter import (
     APPROX_MS_PER_YEAR,
@@ -12,7 +12,7 @@ from app.engine.edge.period_splitter import (
 
 
 def _ms(y: int, m: int = 1, d: int = 1) -> int:
-    return int(datetime(y, m, d, tzinfo=timezone.utc).timestamp() * 1000)
+    return int(datetime(y, m, d, tzinfo=UTC).timestamp() * 1000)
 
 
 def test_rolling_windows_produces_expected_count():

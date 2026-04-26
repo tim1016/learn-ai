@@ -40,7 +40,7 @@ def align_labels(
     cost = np.linalg.norm(reference_centroids[:, None, :] - new_centroids[None, :, :], axis=2)
     row_ind, col_ind = linear_sum_assignment(cost)
     permutation = np.empty(len(reference_centroids), dtype=int)
-    for ref_idx, new_idx in zip(row_ind, col_ind):
+    for ref_idx, new_idx in zip(row_ind, col_ind, strict=True):
         permutation[new_idx] = ref_idx
 
     aligned_centroids = new_centroids[col_ind]

@@ -131,7 +131,7 @@ def _sharpe_matrix(by_asset: dict, periods: list[TimePeriod]) -> np.ndarray:
     if not by_asset or not periods:
         return np.array([[]])
     rows = []
-    for sym, runs in by_asset.items():
+    for runs in by_asset.values():
         period_to_sharpe = {r["period"]: r["stats"].get("sharpe", 0.0) for r in runs}
         rows.append([period_to_sharpe.get(p.label, 0.0) for p in periods])
     return np.array(rows, dtype=np.float64)

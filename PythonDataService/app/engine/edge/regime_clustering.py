@@ -172,7 +172,7 @@ def _log_emission(X: np.ndarray, means: np.ndarray, covs: np.ndarray) -> np.ndar
 
 
 def _forward(log_emit: np.ndarray, log_A: np.ndarray, log_pi: np.ndarray) -> np.ndarray:
-    T, K = log_emit.shape
+    T = log_emit.shape[0]
     log_alpha = np.empty_like(log_emit)
     log_alpha[0] = log_pi + log_emit[0]
     for t in range(1, T):
@@ -181,7 +181,7 @@ def _forward(log_emit: np.ndarray, log_A: np.ndarray, log_pi: np.ndarray) -> np.
 
 
 def _backward(log_emit: np.ndarray, log_A: np.ndarray) -> np.ndarray:
-    T, K = log_emit.shape
+    T = log_emit.shape[0]
     log_beta = np.zeros_like(log_emit)
     for t in range(T - 2, -1, -1):
         log_beta[t] = logsumexp(log_A + log_emit[t + 1][None, :] + log_beta[t + 1][None, :], axis=1)
