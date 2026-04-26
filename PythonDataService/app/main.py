@@ -18,6 +18,7 @@ from app.routers import (
     indicators,
     market_monitor,
     options,
+    portfolio,
     research,
     research_divergence,
     sanitize,
@@ -74,6 +75,9 @@ app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-
 app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
 app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
 app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
+# Portfolio scenario / live-Greeks. Phase 2 of numerical-authority migration:
+# Python becomes canonical for portfolio Greeks; .NET becomes a passthrough.
+app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"])
 # Edge router carries its own /api/edge prefix.
 app.include_router(edge.router)
 # /research/data-divergence/* — dashboard + matrix endpoints. The router
