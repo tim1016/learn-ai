@@ -165,8 +165,18 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
 
     const lo = Math.min(...candles.map(c => c.l)) * 0.998;
     const hi = Math.max(...candles.map(c => c.h)) * 1.002;
-    const ivLo = Math.min(...data.iv30) * 0.85;
-    const ivHi = Math.max(...data.iv30) * 1.15;
+
+    // Right-axis range: prefer IV when available, fall back to RV when the
+    // IV pipeline isn't wired (v1 live runs). With no IV at all, the IV
+    // line is suppressed but RV bands and RV-YZ trace stay visible against
+    // the same axis — relabel "IV30" → "RV YZ" in that case so the user
+    // knows what the right axis represents.
+    const ivFinite = data.iv30.filter((v) => Number.isFinite(v)) as number[];
+    const rvFinite = data.rvYZ.filter((v) => Number.isFinite(v)) as number[];
+    const ivAvailable = ivFinite.length > 0;
+    const axisSrc = ivAvailable ? ivFinite : rvFinite;
+    const ivLo = axisSrc.length ? Math.min(...axisSrc) * 0.85 : 0;
+    const ivHi = axisSrc.length ? Math.max(...axisSrc) * 1.15 : 1;
 
     const x = (i: number) => L + (i / (N - 1)) * innerW;
     const yP = (p: number) => T + innerH - ((p - lo) / (hi - lo)) * innerH;
@@ -212,11 +222,18 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
       ctx.fillRect(cx - cw / 2, Math.min(yP(c.o), yP(c.c)), cw, Math.max(1, Math.abs(yP(c.c) - yP(c.o))));
     });
 
-    // IV30
-    ctx.strokeStyle = TOK.vol; ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    data.iv30.forEach((v, i) => i === 0 ? ctx.moveTo(x(i), yI(v)) : ctx.lineTo(x(i), yI(v)));
-    ctx.stroke();
+    // IV30 — only when the live IV pipeline supplied data; otherwise the
+    // right axis is repurposed for RV (see ivAvailable above).
+    if (ivAvailable) {
+      ctx.strokeStyle = TOK.vol; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      data.iv30.forEach((v, i) => {
+        if (!Number.isFinite(v)) return;
+        const py = yI(v);
+        if (i === 0) ctx.moveTo(x(i), py); else ctx.lineTo(x(i), py);
+      });
+      ctx.stroke();
+    }
 
     // RV bands
     if (this.layers().rvBands) {
@@ -313,7 +330,7 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
     ctx.fillStyle = TOK.muted; ctx.textAlign = "left";
     ctx.fillText("PRICE", L, T - 2);
     ctx.fillStyle = TOK.vol; ctx.textAlign = "right";
-    ctx.fillText("IV30", L + innerW, T - 2);
+    ctx.fillText(ivAvailable ? "IV30" : "RV YZ", L + innerW, T - 2);
 
     // ── Bottom date axis ───────────────────────────────────────────────
     // Adaptive format: ISO YYYY-MM-DD for daily, MMM DD HH:mm for intraday.
@@ -384,7 +401,23 @@ export class EdgeVrpHistogramComponent implements AfterViewInit {
     const innerW = w - PAD_L - PAD_R; const innerH = h - PAD_T - PAD_B;
     const ctx = setupCanvas(canvas, w, h);
     const bins = data.vrpHistogram;
-    if (!bins.length) return;
+    if (!bins.length) {
+      // Empty state — IV pipeline not yet wired (v1) so no VRP samples.
+      ctx.fillStyle = TOK.muted;
+      ctx.font = "11px JetBrains Mono, monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(
+        "No VRP samples — IV pipeline not yet wired (v1).",
+        w / 2, h / 2 - 6,
+      );
+      ctx.fillStyle = TOK.subtle; ctx.font = "10px JetBrains Mono, monospace";
+      ctx.fillText(
+        "Returns once /api/edge/realized-vs-iv reads OptionIvSnapshots.",
+        w / 2, h / 2 + 10,
+      );
+      ctx.textBaseline = "alphabetic";
+      return;
+    }
     const maxC = Math.max(...bins.map(b => b.count));
     const minX = bins[0].x0, maxX = bins[bins.length - 1].x1;
     const xS = (v: number) => PAD_L + ((v - minX) / (maxX - minX)) * innerW;

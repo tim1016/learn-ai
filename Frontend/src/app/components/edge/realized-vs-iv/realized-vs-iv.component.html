@@ -19,18 +19,35 @@
   </header>
 
   <!-- Coverage banner -->
-  <div class="coverage-banner">
-    <i class="pi pi-exclamation-triangle"></i>
-    <div class="coverage-body">
-      <div class="coverage-title">Forward RV unavailable for last 21 trading days</div>
-      <div class="coverage-meta">
-        VRP signals after <code>{{ blindStartDate() }}</code> are blind to the future — rendered as a
-        hatched band on the chart. IV30 series begins
-        <code>{{ data().coverage.iv_first_ts }}</code> (gap of 14 trading days at the head).
+  @if (ivPipelineMissing()) {
+    <div class="coverage-banner banner-iv-missing">
+      <i class="pi pi-info-circle"></i>
+      <div class="coverage-body">
+        <div class="coverage-title">IV pipeline not wired yet — RV-only view</div>
+        <div class="coverage-meta">
+          Live RV ({{ rvLastValue() }}) renders against the right axis labelled
+          <code>RV YZ</code>. IV30 line, RV-vs-IV bands, VRP histogram, and
+          long/short-vol signal triangles will appear once
+          <code>/api/edge/realized-vs-iv/series</code> back-solves IV from
+          <code>OptionIvSnapshots</code> — F1 step 4 in the design doc.
+        </div>
       </div>
+      <button class="coverage-action" type="button">View coverage probe →</button>
     </div>
-    <button class="coverage-action" type="button">View coverage probe →</button>
-  </div>
+  } @else {
+    <div class="coverage-banner">
+      <i class="pi pi-exclamation-triangle"></i>
+      <div class="coverage-body">
+        <div class="coverage-title">Forward RV unavailable for last 21 trading days</div>
+        <div class="coverage-meta">
+          VRP signals after <code>{{ blindStartDate() }}</code> are blind to the future — rendered as a
+          hatched band on the chart. IV30 series begins
+          <code>{{ data().coverage.iv_first_ts }}</code> (gap of 14 trading days at the head).
+        </div>
+      </div>
+      <button class="coverage-action" type="button">View coverage probe →</button>
+    </div>
+  }
 
   <!-- Form row -->
   <div class="form-card">
