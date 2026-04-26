@@ -31,8 +31,11 @@ def test_s_iv_percentile_negative_when_iv_at_top():
     n = 300
     iv = pd.Series(np.linspace(0.10, 0.30, n))
     s = s_iv_percentile(iv, lookback=252)
+    # Top of percentile range → bounded at exactly -1 (rank == 1.0).
     assert s.iloc[-1] < 0
-    assert s.iloc[-1] > -1
+    assert s.iloc[-1] >= -1.0
+    # And the second-to-last is less negative than the last (monotone).
+    assert s.iloc[-1] <= s.iloc[-2]
 
 
 def test_s_trend_in_negative_zero_band():

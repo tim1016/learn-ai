@@ -48,9 +48,15 @@ def s_iv_percentile(iv30: pd.Series, lookback: int = 252) -> pd.Series:
 
 
 def s_trend(trend_slope: pd.Series, atr: pd.Series) -> pd.Series:
-    """Strong trend penalizes long-vol; output in [-1, 0]."""
+    """Strong trend penalizes long-vol; output in [-1, 0].
+
+    Operator-precedence note: `-np.tanh(x).clip(...)` parses as
+    `-(np.tanh(x).clip(...))`. Since tanh of a non-negative input is
+    non-negative, that path clips first to 0 and then negates to -0.
+    The intended formula negates first, *then* clips to [-1, 0].
+    """
     norm = trend_slope.abs() / atr.replace(0, np.nan)
-    return -np.tanh(norm).clip(lower=-1.0, upper=0.0)
+    return (-np.tanh(norm)).clip(lower=-1.0, upper=0.0)
 
 
 def s_regime(labels: pd.Series, score_map: dict[int, float] | None = None) -> pd.Series:
