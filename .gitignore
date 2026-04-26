@@ -45,3 +45,6 @@ PythonDataService/lean-cache/
 
 # Derived analytics cache (parquet) — regenerated from Polygon data
 PythonDataService/cache/
+
+# Local agent skill cache (Codex CLI / agents tooling)
+.agents/
