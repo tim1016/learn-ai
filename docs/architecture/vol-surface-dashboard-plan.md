@@ -1,333 +1,321 @@
-# Vol-Surface & Regime Dashboard — Build plan (post-cleanup)
+# Vol-Surface & Regime Dashboard — Build plan (regrounded after Edge ship)
 
 **Status:** Plan, awaiting user review. **Do not start without approval.**
-**Date:** 2026-04-25
-**Depends on:** PR #25 (`cleanup/options-math-sovereignty`) merged.
-**Supersedes:** the original draft TDD `vol-surface-dashboard-tdd.md` § 4 and § 5
-(math sections § 3 and dashboard § 6 from that draft remain valid input).
+**Date:** 2026-04-26 (regrounded)
+**Supersedes:** the version of this file at commit `576dc26`. That version
+predated the merge of the Edge feature ([PR #26](https://github.com/tim1016/learn-ai/pull/26),
+commit `4b03ff0`). Most of what it proposed now exists; this version
+re-scopes to the genuine remaining work.
+**Depends on:** PR #25 (`cleanup/options-math-sovereignty`) merged ✅, PR #26 (Edge) merged ✅.
 
-This is a build plan, not a TDD. It encodes the decisions made during the audit
-and the user's answers on 2026-04-25. The TDD itself gets rewritten only after
-the open questions at the bottom of this document are resolved.
-
----
-
-## 0. What this plan covers, what it doesn't
-
-**In scope (what we'll build):**
-- The single canonical Polygon snapshot endpoint with a `?date=` parameter — same code path covers "today's snapshot" and "any historical date."
-- `OptionsIvSnapshot` extension to multi-tenor (or table replacement — see Q1 below).
-- Garman-Klass realized vol (the only net-new math function in the dashboard pipeline).
-- ATM IV at standard tenors, IV-rank, IV-percentile, IV-RV spread.
-- Regime classifier (rule-based).
-- FastAPI endpoints + GraphQL passthrough + Angular dashboard components.
-
-**Out of scope (deferred):**
-- Scheduler / cron / hosted service. User is on manual on-demand refresh; no automation.
-- Options-math `compute_greeks(...)` dispatcher. Documented in `options-math-authorities.md`; built when a third call site needs it.
-- Backfill runner script. The parameterizable snapshot endpoint *is* the backfill mechanism — a thin shell loop calls it for each historical date. Documented but not vendored as Python code in v1.
+This is a build plan, not a TDD. Decisions encoded here are based on the
+2026-04-26 state of master plus the Edge design doc
+[`edge-feature-design.md`](edge-feature-design.md).
 
 ---
 
-## 1. Sequence
+## 0. What changed under us
 
-The build has four phases. Each phase is independently mergeable and shippable.
-The user can stop at the end of any phase and have a useful product.
+PR #26 shipped the **Edge** feature — a parent route `/edge` with three sub-views
+(Realized vs IV, Cross-Asset Validation, Regime Clustering) plus two
+cross-cutting capabilities (Trade Simulator, Edge Score). It comprises:
 
-```
-Phase A — Persistence skeleton (3-4 days)
-  Goal: one date-parameterized FastAPI endpoint that fetches a Polygon
-  snapshot, inverts IV via the canonical solver, and persists rows.
-  At end of phase: clicking a button (or hitting curl) populates one
-  day's IV data into Postgres.
+- ~2,200 lines of new Python under `app/engine/edge/` covering RV (4 estimators
+  including Garman-Klass and Yang-Zhang), IV30 construction with variance-time
+  interpolation per the CBOE VIX whitepaper, 25Δ skew, term-slope, vol-of-vol,
+  forward RV oracle, VRP, k-means + Gaussian HMM regime clustering, regime
+  drift detection, period-splitting (rolling N-year + calendar + walk-forward),
+  cross-asset runner, portfolio aggregator, robustness stats (DSR, PBO),
+  trade simulator with options spread model, and a four-component Edge Score.
+- 9 endpoints under `/api/edge/*` in [routers/edge.py](../../PythonDataService/app/routers/edge.py).
+- 3 Angular routes (`/edge`, `/edge/realized-vs-iv`, `/edge/regimes`) plus
+  edge-api and edge-mock-data services and 8 charts.
+- Strict `features_realtime/` vs `labels_oracle/` directory split with a
+  CI grep guard against forward-shift leakage.
 
-Phase B — Derived metrics (3-4 days)
-  Goal: a second endpoint reads stored IV, computes ATM-IV-at-tenors,
-  skew, term structure, IV-RV spread, IV-rank/percentile (with status
-  flags for thin history), regime classification. Persists to a new
-  table. At end of phase: SQL queries against surface_metrics_daily
-  return all the dashboard's numbers.
-
-Phase C — Backend transport (1-2 days)
-  Goal: GraphQL schema additions, .NET passthrough resolvers, contract
-  pinning. At end of phase: Apollo Angular client can fetch the
-  metrics. No UI yet.
-
-Phase D — Angular dashboard (5-7 days)
-  Goal: VolSurfacePage component with regime card, ATM-IV term-structure
-  chart, IV-rank gauge, IV-RV sparkline, regime-history timeline. At end
-  of phase: end-to-end manual flow — open the page, select SPY, see
-  metrics; click refresh; see updated metrics; click historical date,
-  trigger backfill for that date, see the row.
-```
-
-Total: **12-17 working days**, dropped from the original ~3 weeks because the
-options-math foundations are now consolidated and the closed-form Greeks /
-canonical solver are reused without re-implementation.
+The original plan's "build a Vol-Surface Dashboard from scratch" framing is
+**superseded**. Most of what it proposed now exists, often more rigorously than
+proposed.
 
 ---
 
-## 2. Phase A — Persistence skeleton
+## 1. Map of coverage: what Edge delivers vs what the original plan proposed
 
-### 2.1 Schema decisions to make first
+| Original plan item | Status in master today | Notes |
+|---|---|---|
+| Garman-Klass realized vol | ✅ Covered (`features_realtime/realized_vol.py:garman_klass`). Yang-Zhang also shipped, recommended over GK for daily VRP per Edge § 4.3. | YZ is a strict generalization; GK is fine where caller picks it explicitly. |
+| ATM IV at standard tenors | 🟡 Partial. `iv30_constructor.iv30_atm_50d` builds **only the 30d target** via variance-time interpolation. Other tenors (7d/14d/60d/90d) require a one-line change to retarget the same function. | Math primitive `variance_interpolated_iv` is generic. |
+| 25Δ skew (RR) | ✅ Covered (`iv30_constructor.skew_25d`). | Edge uses RR-25 = puts − calls, which is the equity-index convention. |
+| 25Δ butterfly | ❌ Not in Edge. One-line addition next to `skew_25d` if you still want it. | Lower priority — RR already captures the directional skew signal. |
+| Term-structure slope | ✅ Covered (`iv30_constructor.term_slope`, σ(60d) − σ(30d)). | |
+| Term-structure curvature | ❌ Not in Edge. Trivial addition. | |
+| IV-RV spread | ✅ Covered, **as variance-form VRP** (`vrp.compute_vrp` = IV² − RV², not IV − RV). VRP signal with z-score thresholds in `vrp.vrp_signal`. | Variance form is the academically correct definition (Bollerslev-Tauchen-Zhou). The original plan's vol-form spread is a coarser proxy; drop in favor of VRP. |
+| IV-rank (252d window) | ❌ Not directly. Edge uses VRP z-score for the same role. | If you still want the simple percentile-of-IV30-over-252d framing, `edge_score.s_iv_percentile` already implements it as one of the four Edge Score components. The "rank" variant (linear scaling between 252d min/max) would be net new but maps to ~5 lines. |
+| IV-percentile (252d window) | ✅ Covered (`edge_score.s_iv_percentile`). | |
+| Regime classifier | ✅ Covered, but **clustering-based, not rule-based**. K-means + Gaussian HMM with stability filter and Hungarian-aligned drift refits. Returns numeric cluster IDs (0..K-1), not semantic "HIGH/NORMAL/LOW" labels. | The original plan's rule-based HIGH/NORMAL/LOW is a different framing — simpler, less data-driven. See Open Question Q1 below: do you want both, or replace the rule-based proposal with the Edge clustering view? |
+| FastAPI endpoints (~4 planned) | ✅ Mostly covered. 9 endpoints under `/api/edge/*`. **Missing:** any endpoint that fetches a chain → inverts IV → persists. Edge router accepts `iv_series` inline as a v1 placeholder. | The persistence pipeline is the genuine remaining backend work (see § 3 below). |
+| GraphQL passthrough + .NET resolvers | ❌ Not built — and **explicitly skipped** by Edge decision #10 ("Frontend → Python `/api/edge/*` directly; skip .NET v1"). | This is a deliberate divergence from the repo's normal pattern. Open Question Q2. |
+| Angular dashboard | ✅ Covered as `/edge` route + 3 sub-routes + 8 charts. | The "current regime + recommended structure" summary card the original plan envisioned is **not** part of the Edge UX — Edge's parent page is a navigation card layout, not a regime status card. See Q3. |
+| `OptionsIvSnapshot` extension to multi-tenor | ❌ Not done. Edge design § 4.4 step 1 specifies "read stored option mid-quotes from Postgres `OptionIvSnapshots`," but this read path isn't wired in the v1 router. | This is the keystone remaining work. See § 3. |
+| Forward-implied dividend yield (parity) | ❌ Not in Edge. The pre-existing `compute_put_call_parity_forward` in `volatility/analytics.py` is still the only parity-related code; no q-extractor wraps it. | Net new if you want IV inputs to come from option-chain back-solving with rigorous q. |
+| FRED rate curve multi-tenor interpolation | ❌ Not in Edge. `fred_service.get_risk_free_rate(dte_days, observation_date)` returns a single rate; no curve. | Net new if you want IV inputs at multiple tenors with matched rates per tenor. |
+| Manual on-demand snapshot trigger | ❌ Not built. Edge router accepts inline payload only — there is no "click button → fetch chain → invert → persist" flow. | This was the user's preferred operating model. § 3 covers it. |
 
-Before writing any code, decide between two paths in **Open question Q1** below:
+**Summary:** of the original plan's ~13 work items, **8 are fully covered, 3
+are partial, and 2 are net-new but small.** The genuine remaining work is the
+**data pipeline that feeds Edge from live Polygon + Postgres** — neither end
+of which exists today.
 
-- **Q1a:** Extend `OptionsIvSnapshot` with multi-tenor columns (smallest churn).
-- **Q1b:** Build a fresh `surface_metrics_daily` table that supersedes `OptionsIvSnapshot` and migrate the existing rows into it.
+---
 
-The recommendation is Q1b for cleanliness, but Q1a is faster.
+## 2. The actual remaining work, in one sentence
 
-### 2.2 New files
+**Build the chain → invert → persist → read pipeline that turns the inline
+`iv_series` payload Edge currently consumes from the frontend into a real
+DB-backed time series populated by manually-triggered snapshots and
+historical backfills.**
+
+That's it. The math, the regime clustering, the VRP signal, the trade
+simulator, the Angular surface — all built. The plumbing that makes them
+operate on persistent data instead of mock payloads is what's left.
+
+---
+
+## 3. Build phases (regrounded)
+
+Three phases. Each is independently shippable. No phase requires the
+previous one to deploy — they layer on Edge incrementally.
+
+### Phase 1 — Manual snapshot pipeline (3-4 days)
+
+**Goal:** one date-parameterized FastAPI endpoint that fetches a Polygon
+options chain for a given (ticker, date), inverts IV per contract via the
+canonical solver, and persists rows. Same code path serves "today" and
+historical backfill.
+
+**New code:**
 
 ```
 PythonDataService/app/
 ├── volatility/
-│   ├── snapshot_pipeline.py         ← NEW. End-to-end "fetch chain → invert IV → persist"
-│   │                                       Reuses polygon_client + canonical solver.
-│   ├── parity_dividend.py           ← NEW. Wraps existing compute_put_call_parity_forward
-│   │                                       to convert F → q (one-line transform + bounds check).
-│   ├── rate_curve.py                ← NEW. Multi-tenor FRED interpolation (extend fred_service).
-│   └── persistence.py               ← NEW. SQLAlchemy / asyncpg writes to options_daily and
-│                                          surface_metrics_daily tables.
+│   ├── snapshot_pipeline.py       NEW. fetch chain → quality-filter → invert IV → persist
+│   ├── parity_dividend.py         NEW. Wraps existing analytics.compute_put_call_parity_forward
+│   │                                   to convert F → q with sanity bounds.
+│   ├── rate_curve.py              NEW. Multi-tenor FRED interpolation
+│   │                                   (extends existing fred_service).
+│   └── persistence.py             NEW. SQLAlchemy / asyncpg writes to options_chain_quotes
+│                                       and options_iv_history tables.
 └── routers/
-    └── volatility.py                ← EXTEND. Add POST /api/volatility/snapshot with ?date=
-
-Backend/Models/MarketData/
-└── SurfaceMetricsDaily.cs           ← NEW (or extend OptionsIvSnapshot — see Q1).
+    └── volatility.py              EXTEND. Add POST /api/volatility/snapshot with ?date=
 ```
 
-### 2.3 Shape of the snapshot endpoint
+**Schema:** Open Question Q4 below — extend `OptionsIvSnapshot` with raw
+chain-quote rows underneath, or build a fresh `options_chain_quotes` table
+that supersedes it. Edge design § 4.4 calls for "raw chain-quote table when
+present" alongside the existing `OptionsIvSnapshots`, so the cleanest
+answer is the new table.
+
+**Endpoint shape:**
 
 ```
 POST /api/volatility/snapshot
 {
   "ticker": "SPY",
-  "date": "2026-04-25",          # Required. Same code path serves "today" and historical.
-  "force": false                 # If true, refetch + recompute even if already persisted.
+  "date":   "2026-04-26",   # required; same code for today & historical
+  "force":  false           # if true, refetch + reinvert even if persisted
 }
-
 → {
   "ticker": "SPY",
-  "asof": 1745619600000,
+  "asof":   1745619600000,
   "rows_inserted": 2847,
-  "rows_skipped": 12,
-  "compute_time_ms": 4521,
-  "diagnostics": { ... }
+  "rows_skipped":  12,
+  "compute_time_ms": 4521
 }
 ```
 
-The endpoint:
-1. Fetches the chain via `polygon_client` (snapshot for today, historical OHLC bars for past dates).
-2. Filters quality (existing logic in `volatility/data_loader.py`).
-3. Looks up risk-free rate from FRED for the date.
-4. Computes parity-implied dividend yield per expiry.
-5. Inverts IV per row using **the canonical solver** (`app/volatility/solver.implied_volatility`).
-6. Persists to `options_daily` (and `options_contracts` for any new contracts).
+**Steps:**
+1. Fetch the chain (`PolygonClientService.list_snapshot_options_chain` for
+   today; per-contract daily aggregates for historical dates).
+2. Quality-filter (reuse existing logic in `volatility/data_loader.py`).
+3. Look up risk-free rate(s) from FRED for the date.
+4. Compute parity-implied dividend yield per expiry.
+5. Invert IV per row using **the canonical solver** (`volatility/solver.implied_volatility`).
+6. Persist quotes + per-contract IV.
 
-### 2.4 Acceptance for phase A
-
-- `curl -X POST .../snapshot -d '{"ticker":"SPY","date":"today"}'` populates today's data.
+**Acceptance:**
+- `curl ... -d '{"ticker":"SPY","date":"2026-04-26"}'` populates today's data.
 - Same endpoint with `"date":"2025-09-15"` populates that historical date.
-- A trivial bash loop over a date range fills history. (`for d in $(... date list); do curl ... -d "{\"date\":\"$d\"}"; done`)
-- Rerunning with `force=false` is a no-op for already-populated dates.
-- Tests: golden fixture for IV-inversion against py_vollib parity (per `numerical-rigor.md`).
+- Rerunning with `force=false` is a no-op.
+- Trivial bash loop fills history (`for d in $(...); do curl ... -d "{\"date\":\"$d\"}"; done`).
+- Golden fixture for IV inversion against `py_vollib` (per `numerical-rigor.md`
+  and matching the IV solver fixture promised in Edge design § 9).
+
+### Phase 2 — Bridge Edge from inline payload to stored data (1-2 days)
+
+**Goal:** every Edge endpoint that currently requires `iv_series` in the
+request body can instead read it from the DB by `(ticker, date_range)`.
+
+**Work:**
+- Add `iv30_from_db(ticker, start_ms, end_ms)` to `engine/edge/iv30_constructor`
+  (or a new sibling) that reads stored quotes, computes IV30 ATM 50Δ +
+  skew + term-slope per the existing functions, returns the `pd.Series`.
+- Update `realized_vs_iv_series`, `regimes/cluster`, `edge-score/series`
+  endpoints to accept `{ticker, start_ms, end_ms}` as an alternative to
+  inline `iv_series` and `bars`.
+- Edge frontend defaults to the DB path; the inline path stays for tests
+  and the `/edge` mock-data demo.
+
+**Acceptance:**
+- After Phase 1 has populated 252+ days of SPY data, hitting `/api/edge/realized-vs-iv/series`
+  with `{ticker:"SPY", start_ms, end_ms}` (no `bars` or `iv_series`) returns the
+  same VRP-forward and z-score series the inline path returns when fed the
+  same data.
+- Edge `/edge/realized-vs-iv` page on the frontend can switch a "live data"
+  toggle and render real numbers instead of mocks.
+
+### Phase 3 — Regime status surface (2-3 days, optional)
+
+**Goal:** the "current regime + recommended structures" summary card the
+original plan envisioned, sitting on the parent `/edge` page above the
+navigation cards.
+
+**Work:**
+- Either:
+  - **3a:** a small rule-based `regime_label.py` that maps the latest
+    cluster ID (from `regimes/cluster`) plus the latest VRP z-score and
+    IV-percentile into a HIGH/NORMAL/LOW × LONG-VOL/SHORT-VOL/FLAT label
+    with a short structure-recommendation list. ~150 LOC. Pure derived
+    view; no new math.
+  - **3b:** skip Phase 3 entirely and let the user navigate into
+    `/edge/regimes` for cluster context and `/edge/realized-vs-iv` for the
+    VRP signal. The Edge Score component already produces a single
+    -1/0/+1 action that arguably *is* the recommendation.
+
+The original plan strongly assumed a top-line summary card. Edge's
+nav-card design implicitly rejects that framing in favor of click-into-detail.
+**Open Question Q3** is whether 3a is still wanted.
 
 ---
 
-## 3. Phase B — Derived metrics
-
-### 3.1 New files
-
-```
-PythonDataService/app/volatility/
-├── realized_vol.py                  ← NEW. Garman-Klass: per-day variance + rolling annualized.
-│                                          Golden fixture against Sinclair's canonical formula.
-├── atm_extractor.py                 ← NEW. Forward-ATM IV at standard tenors with piecewise
-│                                          linear interpolation; null if no expiry within ±15%.
-├── percentiles.py                   ← NEW. trailing_iv_rank + trailing_iv_percentile
-│                                          with status flags (full / partial / insufficient).
-└── regime.py                        ← NEW. Rule-based classifier. Returns RegimeClassification
-                                            dataclass. Hand-built test cases.
-```
-
-### 3.2 Why Garman-Klass
-
-The audit showed only close-to-close realized vol exists today
-(`research/features/ta_features.py:compute_realized_vol_30`). For the IV-RV
-spread metric we need a low-variance estimator at standard windows. GK is
-the canonical choice and well-cited. Inputs: daily OHLC (already available
-from the existing aggregates table).
-
-### 3.3 IV rank and percentile mechanics
-
-Both functions take a series of historical 30d ATM IV (read from
-`surface_metrics_daily`) and return a `(value, status)` tuple. Status is:
-- `'insufficient'` — < 60 trading days of history → return None.
-- `'partial'` — 60-251 days → compute against available window, flag in UI.
-- `'full'` — ≥ 252 days → standard 252-day rank / percentile.
-
-The function is pure (no DB call from inside the math). The caller fetches
-the trailing window and passes it in.
-
-### 3.4 Regime classifier
-
-Implements the rules from the original draft TDD § 3.10. Pure-Python rule
-table, returns a `RegimeClassification` dataclass with vol/term/skew labels
-and a recommended-structure list. Tested with hand-constructed regime tuples
-producing the expected classification — no statistical inputs in the test.
-
-### 3.5 New endpoint
-
-```
-POST /api/volatility/metrics/refresh
-{
-  "ticker": "SPY",
-  "date": "2026-04-25"        # Optional. Default = today.
-}
-
-Behavior: Reads options_daily for the date + trailing window from
-surface_metrics_daily. Computes all metrics. Upserts the row.
-```
-
-### 3.6 Acceptance for phase B
-
-- After running `/snapshot` and `/metrics/refresh` for today, `surface_metrics_daily`
-  has one fully-populated row.
-- Running for ~252 historical days produces full IV-rank / percentile values.
-- Running for < 60 days produces NULL rank with `iv_rank_status = 'insufficient'`.
-- Tests: golden fixture for GK realized vol; property test for rank ∈ [0,1] when status=full;
-  hand-constructed regime cases.
-
----
-
-## 4. Phase C — Backend transport
-
-### 4.1 GraphQL schema additions
-
-(Identical to the original TDD § 5.4. No changes from earlier draft.)
-
-```graphql
-extend type Query {
-  surfaceRegime(ticker: String!): SurfaceRegime!
-  surfaceMetricsHistory(ticker: String!, from: DateTime!, to: DateTime!): [SurfaceMetricsPoint!]!
-}
-extend type Mutation {
-  refreshSurface(ticker: String!, date: DateTime): SurfaceRegimeResult!
-}
-```
-
-### 4.2 .NET resolver pattern
-
-Resolvers in `Backend/GraphQL/SurfaceQuery.cs` and `SurfaceMutation.cs`. They are
-pure passthroughs to the FastAPI endpoints — `IHttpClientFactory`-based typed
-client, structured logging with `[STEP X]` prefix, `JsonNamingPolicy.SnakeCaseLower`
-for the snake-case Python responses. No math in C#, per `CLAUDE.md` § 5.
-
-### 4.3 Acceptance for phase C
-
-- `gql query { surfaceRegime(ticker: "SPY") { ... } }` returns the persisted metrics + regime.
-- `gql mutation { refreshSurface(ticker: "SPY") { ... } }` triggers the pipeline and returns the result.
-- `gql mutation { refreshSurface(ticker: "SPY", date: "2025-09-15") { ... } }` triggers a historical refresh.
-- Backend.Tests covers the resolver wiring (Hot Chocolate `IRequestExecutor`).
-
----
-
-## 5. Phase D — Angular dashboard
-
-### 5.1 New component tree
-
-```
-Frontend/src/app/components/vol-surface-dashboard/
-├── vol-surface-dashboard.component.ts    Standalone, OnPush, signals
-├── vol-surface-dashboard.component.html
-├── vol-surface-dashboard.component.scss
-├── vol-surface-dashboard.component.spec.ts
-└── widgets/
-    ├── ticker-selector/                 SPY | QQQ tabs
-    ├── regime-summary-card/             Regime label + recommended structures
-    ├── atm-iv-term-structure/           Line chart (lightweight-charts)
-    ├── skew-visualization/              Smile curve at 30d expiry
-    ├── iv-rank-gauge/                   With "insufficient/partial/full" badge
-    ├── iv-rv-spread-sparkline/          Time-series with current value highlight
-    └── data-quality-footer/             Asof timestamp + refresh button
-```
-
-### 5.2 Apollo Angular wiring
-
-- One query at page load: `surfaceRegime(ticker)`. Returns everything for the cards.
-- Refresh button → `refreshSurface(ticker)` mutation. Disables for 30s.
-- Sparkline data lazy-fetched via `surfaceMetricsHistory(...)` when card expanded.
-- A "load this date" date-picker at the bottom triggers `refreshSurface(ticker, date)` for any historical date — this is the manual-backfill UX.
-
-### 5.3 Path 2 considerations on the gauge
-
-The IV-rank gauge needs to handle three states cleanly:
-- `'insufficient'` → "Accumulating history — N days of 60 needed" placeholder.
-- `'partial'` → show the rank with a small "computed against N days" badge + tooltip.
-- `'full'` → standard display.
-
-This is the only Angular component with non-trivial state-aware rendering. The rest are straightforward.
-
-### 5.4 Acceptance for phase D
-
-- AXE clean. WCAG AA. No `console.log`. Standalone components, OnPush, signals.
-- Click "Refresh" on the dashboard, see metrics update.
-- Click a historical date, confirm the row populates and the sparkline updates.
-- Vitest specs for the three state-flag branches of the IV-rank gauge.
-
----
-
-## 6. What we explicitly do NOT need (audit-corrected)
-
-| Originally planned | Status |
-|---|---|
-| Build Brent's-method BSM inverter | **Reuse `app/volatility/solver.implied_volatility`** (consolidated in PR #25). |
-| Build skew metric functions (RR, BF) | **Reuse `app/volatility/analytics.compute_skew_metrics`**. Add term-structure as an extension only. |
-| Build surface assembly | **Reuse `app/volatility/surface.py`**. |
-| Polygon fetcher with throttling | **Reuse `polygon_client.py`** (throttle is built in). |
-| New IV snapshot persistence table from scratch | **Extend or supersede `OptionsIvSnapshot`** (see Q1). |
-| Forward-implied dividend yield function | **Wrap existing `compute_put_call_parity_forward` in `analytics.py`** with a one-line F→q transform. |
-| Background scheduler / cron / ARQ | **Skip entirely.** User is on manual on-demand refresh; the date-parameterized endpoint covers backfill via shell loop. |
-| `compute_greeks` dispatcher | **Skip from this build.** Documented; add when a 3rd caller benefits. |
-
----
-
-## 7. Reuse matrix (what we lean on, by phase)
+## 4. Reuse matrix (what we lean on, by phase)
 
 | Phase | Reused | New |
 |---|---|---|
-| A | `polygon_client`, `volatility/solver`, `volatility/data_loader`, `fred_service`, `volatility/analytics.compute_put_call_parity_forward` | `snapshot_pipeline.py`, `parity_dividend.py`, `rate_curve.py`, `persistence.py`, schema migration |
-| B | `surface_metrics_daily` table from A, options OHLC table | `realized_vol.py` (GK), `atm_extractor.py`, `percentiles.py`, `regime.py` |
-| C | Existing GraphQL pipeline pattern, `IHttpClientFactory` clients | Schema types, two resolvers |
-| D | PrimeNG, lightweight-charts, existing routing layout | Component tree above, Apollo queries |
+| 1 | `polygon_client`, `volatility/solver` (canonical IV inverter), `volatility/data_loader`, `fred_service`, `volatility/analytics.compute_put_call_parity_forward` | `snapshot_pipeline.py`, `parity_dividend.py`, `rate_curve.py`, `persistence.py`, schema migration, one router endpoint |
+| 2 | All of Edge `engine/edge/`, the new persistence layer from Phase 1 | A `iv30_from_db(...)` reader function + minor router signature widening |
+| 3a | All of the above | One `regime_label.py` module + one Angular component on the `/edge` parent page |
+
+**Net new line count estimate:** ~600-900 LOC across Phases 1+2,
+plus ~250 LOC if Phase 3a is built. Compare to the original plan's
+~3,500 LOC estimate. The savings are entirely from Edge having
+already built the math.
 
 ---
 
-## 8. Open questions blocking the build
+## 5. What the original plan specified that we are now explicitly skipping
 
-These need answers before any TDD rewrite or any code in Phase A:
-
-1. **Q1: `OptionsIvSnapshot` extend vs replace.** Extend it with multi-tenor columns (Q1a), or replace it with a wider `surface_metrics_daily` table and migrate existing rows (Q1b)? Q1b is cleaner but requires a one-time migration; Q1a is one-day cheaper but leaves a half-overlapping table around. Recommendation: Q1b.
-2. **Q2: Forward ATM vs spot ATM.** TDD § 3.4 specifies forward-ATM for rigor. Most retail tooling uses spot-ATM ("50-delta convention"). Recommendation: forward, with the spot-ATM convention exposed only as a UI tooltip note.
-3. **Q3: Regime threshold tuning.** Current rules use hardcoded thresholds (0.70 for HIGH IV-rank, ±1.0 vol point for term slope). Ship with these defaults in v1 and tune in v1.1 once you have history? Or refuse to ship until tuned against your own ticker history?
-4. **Q4: Path commit.** Original plan distinguished "Path 1 backfill from day 1" vs "Path 2 forward-only accumulation." With the date-parameterized endpoint, both collapse to one build. Decision: do you actually want to run the historical loop once at launch (≈2 years of trading days × ~5s per snapshot ≈ 1-2 hours wall-clock), or do you genuinely prefer to start with no history and accumulate forward?
-5. **Q5: Backtesting integration.** Should the regime classifier feed into `app/engine/` strategy logic (e.g., as a filter on the EMA crossover engine — only trade when `vol_regime != 'HIGH'`)? Out of scope for this dashboard build, but the answer affects whether the metrics need to expose a stable Python API in addition to the GraphQL one.
-
-Once these are answered, the original `vol-surface-dashboard-tdd.md` § 4 and § 5
-get rewritten to match this plan, the math sections § 3 and dashboard § 6 carry
-forward unchanged, and Phase A starts.
+| Item | Why we're skipping |
+|---|---|
+| New `compute_greeks(...)` dispatcher | Already deferred; not made more urgent by Edge. |
+| Multi-tenor ATM IV beyond 30d | Single line to add when needed; no current Edge consumer wants it. |
+| 25Δ butterfly | Single line to add; no current Edge consumer wants it. |
+| Rule-based HIGH/NORMAL/LOW regime classifier as a backend service | Edge clustering supersedes the data-driven need. The summary-card framing (3a above) is the only place this would surface. |
+| GraphQL + .NET resolvers for vol metrics | Edge decision #10 explicitly bypasses .NET for v1. The .NET passthrough can be added later without rework if Edge consumers outside the existing `/edge` Angular route appear. |
+| `surface_metrics_daily` separate table | Replaced by `options_chain_quotes` + on-the-fly Edge math. The pre-aggregated daily metrics table was a perf optimization for the dashboard query path; Edge does it in-process per request, which is fine at SPY+QQQ scale. |
+| Background scheduler / cron / hosted service | Same as before — user is on manual on-demand refresh. |
 
 ---
 
-## 9. Reviewer checklist
+## 6. Open questions
 
-Before approving this plan, confirm:
+These need answers before any code in Phase 1.
 
-- [ ] PR #25 (`cleanup/options-math-sovereignty`) is merged. The plan assumes the canonical solver and consolidated bs_greeks module are on master.
-- [ ] You're comfortable with the four-phase decomposition (each phase is independently shippable).
-- [ ] You've answered Q1-Q5 above (or accepted the recommendation for each).
-- [ ] You agree the build is 12-17 working days end-to-end on Path-2-with-on-demand-backfill (no scheduler).
+**Q1 — Regime framing.** Edge ships unsupervised clustering (k-means + HMM,
+returning numeric cluster IDs). The original plan envisioned a rule-based
+HIGH/NORMAL/LOW classifier with directly-named regime labels. Three options:
+- **Q1a:** Drop the rule-based framing entirely. Use Edge clusters; users
+  read the centroid characteristics to understand what each cluster means.
+- **Q1b:** Build a thin **rule-based labeler on top of the cluster output**
+  (Phase 3a) that maps the latest cluster's centroid features to a
+  semantic label. Best of both worlds.
+- **Q1c:** Build a parallel rule-based classifier that runs alongside Edge's
+  clustering and shows both. Most work, most cognitive load on the user.
 
-If yes, the next deliverable is a rewritten `docs/architecture/vol-surface-dashboard.md`
-TDD reflecting these decisions, and Phase A begins.
+Recommendation: Q1b, conditional on Q3 = yes.
+
+**Q2 — .NET resolvers.** Edge decision #10 says skip .NET in v1. Do we want
+to *also* skip .NET for the snapshot pipeline (Phase 1's endpoint)? The repo
+convention is .NET-as-passthrough; Edge breaks it. Two options:
+- **Q2a:** Snapshot pipeline endpoint is direct Python, like Edge.
+  Lower friction, lower surface area, breaks the convention twice.
+- **Q2b:** Snapshot pipeline endpoint goes through .NET passthrough,
+  matching the historical pattern. ~½ day extra; adds an .NET resolver
+  test surface to maintain.
+
+Recommendation: Q2a — once Edge has set the precedent, doubling down on
+direct Python is more honest than maintaining two patterns side by side.
+A .NET overlay can be retrofitted later when there's a non-`/edge` consumer.
+
+**Q3 — Regime status summary card.** Phase 3a or skip? Recommendation: skip
+in v1; revisit after using Edge's existing UX for a week or two. The
+nav-card design might already deliver the insight without a top-line card.
+
+**Q4 — Schema.** Three options for the persistence layer:
+- **Q4a:** Extend `OptionsIvSnapshot` with multi-tenor columns (small change,
+  but doesn't get us per-contract raw quotes which Edge § 4.4 wants).
+- **Q4b:** Add a fresh `options_chain_quotes` table (raw mid-quote rows per
+  contract per date) and have Edge compute everything on the fly.
+  `OptionsIvSnapshot` stays as the existing 30d-ATM derived table.
+- **Q4c:** Both — `options_chain_quotes` for raw inputs, plus extend
+  `OptionsIvSnapshot` with multi-tenor columns as a pre-aggregated cache.
+  Most flexible, most code.
+
+Recommendation: Q4b. Edge does the derivation in-process; no need to
+pre-aggregate a second table. `OptionsIvSnapshot` stays for the existing
+research-report consumer.
+
+**Q5 — Universe.** Edge ships SPY+QQQ+IWM+DIA fixed. Original plan had
+SPY+QQQ. Phase 1's snapshot endpoint should presumably support all four
+on day one to match Edge. Confirm?
+
+**Q6 — Backfill scope.** Same question as last time, now slightly different
+because Edge needs ≥252 trading days for full IV-percentile and stable HMM
+fits. Run a one-time historical backfill of the four tickers × 2 years on
+launch (≈2,000 trading-day-snapshots × ~5s each ≈ ~3 hours wall-clock per
+ticker, ~12 hours total)? Or click forward from today?
+
+Recommendation: backfill, given Edge's clustering + drift detection
+genuinely benefits from depth.
+
+---
+
+## 7. Phasing summary
+
+| Phase | Work | Days | Ship-ready alone? |
+|---|---|---|---|
+| 1 | Manual snapshot endpoint + persistence | 3-4 | Yes — chain-quote DB populated, Edge still uses inline payload. |
+| 2 | Bridge Edge to read from DB | 1-2 | Yes — Edge runs on real data end-to-end. |
+| 3a | Regime status summary card (optional) | 2-3 | Yes — extra UX layer on top. |
+| **Total** | | **6-9 days** (with 3a) or **4-6 days** (without) | |
+
+Down from the previous estimate of 12-17 days, entirely because Edge's ship
+absorbed Phases B/C/D of the previous version.
+
+---
+
+## 8. Reviewer checklist
+
+Before approving:
+
+- [ ] You agree the original plan's "build a dashboard from scratch" framing
+      is superseded by Edge.
+- [ ] Q1 (regime framing) — recommendation: Q1b.
+- [ ] Q2 (.NET resolvers) — recommendation: Q2a.
+- [ ] Q3 (status summary card) — recommendation: skip.
+- [ ] Q4 (schema) — recommendation: Q4b (new `options_chain_quotes`).
+- [ ] Q5 (universe) — recommendation: SPY+QQQ+IWM+DIA to match Edge.
+- [ ] Q6 (backfill) — recommendation: yes, one-time at launch.
+
+If yes, Phase 1 starts. The first deliverable is a draft TDD for the
+snapshot pipeline (schema + endpoint + tests + golden fixture), reviewed
+before any code lands.
