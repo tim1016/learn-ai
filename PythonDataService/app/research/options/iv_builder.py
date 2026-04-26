@@ -8,10 +8,14 @@ from typing import Any
 
 import pandas as pd
 
-from app.research.options.bs_solver import RISK_FREE_RATE, implied_volatility
 from app.research.options.contract_finder import find_bracket_contracts
 from app.services.fred_service import get_risk_free_rate
 from app.services.polygon_client import PolygonClientService
+from app.volatility.solver import implied_volatility
+
+# Default risk-free rate used only if the FRED-backed lookup hasn't been
+# called yet (every active call site overrides it via ``get_risk_free_rate``).
+DEFAULT_RISK_FREE_RATE = 0.043
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +149,7 @@ def _derive_iv_for_contract(
     stock_close: float,
     dte: int,
     option_type: str,
-    risk_free_rate: float = RISK_FREE_RATE,
+    risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
 ) -> tuple[float | None, str]:
     """Derive IV for a single contract from a pre-fetched bar.
 
@@ -171,9 +175,24 @@ def _derive_iv_for_contract(
     except (ValueError, IndexError):
         return None, "bad_ticker_format"
 
-    iv = implied_volatility(price, stock_close, strike, T, risk_free_rate, option_type)
+    result = implied_volatility(
+        option_price=price,
+        spot=stock_close,
+        strike=strike,
+        ttm=T,
+        rate=risk_free_rate,
+        is_call=(option_type == "call"),
+    )
+    iv = result.iv
     if iv is None:
         return None, "solver_failed"
+
+    # Preserve the legacy [MIN_IV, MAX_IV] gate that bs_solver.implied_volatility
+    # used to enforce internally. The richer canonical solver returns a wider
+    # range; downstream quality-flagging would otherwise mark these as "low"
+    # rather than dropping them, which changes the IV-history surface area.
+    if iv < MIN_IV or iv > MAX_IV:
+        return None, "iv_out_of_range"
 
     return iv, source
 

@@ -9,7 +9,7 @@ from datetime import date
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.research.options.bs_solver import bs_price as scipy_bs_price
+from app.services.bs_greeks import bs_european_price
 from app.services.quantlib_pricer import (
     _QL_AVAILABLE,
     PricingEngine,
@@ -350,7 +350,7 @@ def _scipy_bs_greeks(
     sqrt_t = math.sqrt(T)
     npd1 = sp_norm.pdf(d1)
 
-    price = scipy_bs_price(S, K, T, r, sigma, option_type)
+    price = bs_european_price(S, K, T, r, sigma, is_call=(option_type == "call"))
 
     if option_type == "call":
         delta = sp_norm.cdf(d1)

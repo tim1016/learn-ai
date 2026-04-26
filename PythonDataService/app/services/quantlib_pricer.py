@@ -337,8 +337,8 @@ def implied_volatility(
     - The market price is below intrinsic value
     - No solution is found within bounds
 
-    This replaces ``bs_solver.implied_volatility`` for callers that want
-    to stay on the QuantLib pricing path.
+    Companion to ``app.volatility.solver.implied_volatility`` (the canonical
+    IV solver) for callers that want to stay on the QuantLib pricing path.
     """
     _ensure_ql()
 
