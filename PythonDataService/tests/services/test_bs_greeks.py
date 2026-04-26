@@ -14,7 +14,11 @@ import math
 import pytest
 from scipy.stats import norm
 
-from app.services.bs_greeks import black_scholes_greeks
+from app.services.bs_greeks import (
+    black_scholes_greeks,
+    bs_european_price,
+    bs_european_vega,
+)
 from app.volatility.solver import implied_volatility
 
 
@@ -148,10 +152,9 @@ class TestThetaScaling:
         sqrt_t = math.sqrt(T)
         d1 = (math.log(S / K) + (r - q + 0.5 * vol * vol) * T) / (vol * sqrt_t)
         d2 = d1 - vol * sqrt_t
-        theta_annual = (
-            -S * math.exp(-q * T) * float(norm.pdf(d1)) * vol / (2.0 * sqrt_t)
-            - r * K * math.exp(-r * T) * float(norm.cdf(d2))
-        )
+        theta_annual = -S * math.exp(-q * T) * float(norm.pdf(d1)) * vol / (2.0 * sqrt_t) - r * K * math.exp(
+            -r * T
+        ) * float(norm.cdf(d2))
 
         greeks = black_scholes_greeks(S, K, T, vol, r, q, is_call=True)
         # API returns theta per calendar day; reconstruct the annual via × 365.
@@ -180,3 +183,111 @@ class TestDividendYield:
         # Gamma and vega are call/put symmetric independent of q.
         assert call.gamma == pytest.approx(put.gamma, abs=1e-12)
         assert call.vega == pytest.approx(put.vega, abs=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# bs_european_price — the canonical analytical BS price function.
+# Coverage ported from the now-deleted tests/research/options/test_bs_solver.py
+# so the previously-tested invariants stay pinned.
+# ---------------------------------------------------------------------------
+
+
+class TestBsEuropeanPrice:
+    """Closed-form BS price (no continuous dividend)."""
+
+    def test_atm_call_positive(self):
+        price = bs_european_price(spot=100, strike=100, ttm_years=0.25, rate=0.05, volatility=0.20, is_call=True)
+        assert price > 0
+
+    def test_atm_put_positive(self):
+        price = bs_european_price(spot=100, strike=100, ttm_years=0.25, rate=0.05, volatility=0.20, is_call=False)
+        assert price > 0
+
+    def test_put_call_parity(self):
+        S, K, T, r, sigma = 100.0, 100.0, 0.5, 0.05, 0.25
+        call = bs_european_price(S, K, T, r, sigma, is_call=True)
+        put = bs_european_price(S, K, T, r, sigma, is_call=False)
+        # C - P = S - K * exp(-rT)
+        assert call - put == pytest.approx(S - K * math.exp(-r * T), abs=1e-10)
+
+    def test_deep_itm_call_near_intrinsic(self):
+        price = bs_european_price(spot=200, strike=100, ttm_years=0.25, rate=0.05, volatility=0.20, is_call=True)
+        intrinsic = 200 - 100 * math.exp(-0.05 * 0.25)
+        assert abs(price - intrinsic) < 1.0
+
+    def test_deep_otm_call_near_zero(self):
+        price = bs_european_price(spot=50, strike=200, ttm_years=0.25, rate=0.05, volatility=0.20, is_call=True)
+        assert price < 0.01
+
+    def test_zero_time_returns_zero(self):
+        assert bs_european_price(spot=100, strike=100, ttm_years=0, rate=0.05, volatility=0.20, is_call=True) == 0.0
+
+    def test_zero_vol_returns_zero(self):
+        assert bs_european_price(spot=100, strike=100, ttm_years=0.25, rate=0.05, volatility=0, is_call=True) == 0.0
+
+    def test_known_textbook_value(self):
+        # Hull textbook: S=100, K=100, T=1, r=0.05, sigma=0.20 -> call ≈ 10.4506
+        price = bs_european_price(spot=100, strike=100, ttm_years=1.0, rate=0.05, volatility=0.20, is_call=True)
+        assert price == pytest.approx(10.4506, abs=0.01)
+
+    def test_agrees_with_inline_reference(self):
+        # Cross-check against the file-local _bs_price helper across a small grid.
+        for S, K, T, r, vol in [
+            (100.0, 100.0, 0.5, 0.05, 0.20),
+            (100.0, 110.0, 0.25, 0.04, 0.30),
+            (250.0, 245.0, 30 / 365, 0.043, 0.40),
+        ]:
+            for is_call in (True, False):
+                expected = _bs_price(S, K, T, vol, r, dividend=0.0, is_call=is_call)
+                actual = bs_european_price(S, K, T, r, vol, is_call=is_call)
+                assert actual == pytest.approx(expected, abs=1e-12)
+
+
+class TestBsEuropeanVega:
+    """Raw vega (per 1.0 vol unit)."""
+
+    def test_atm_vega_positive(self):
+        v = bs_european_vega(spot=100, strike=100, ttm_years=0.25, rate=0.05, volatility=0.20)
+        assert v > 0
+
+    def test_vega_peaks_near_atm(self):
+        v_atm = bs_european_vega(spot=100, strike=100, ttm_years=0.25, rate=0.05, volatility=0.20)
+        v_itm = bs_european_vega(spot=100, strike=80, ttm_years=0.25, rate=0.05, volatility=0.20)
+        v_otm = bs_european_vega(spot=100, strike=120, ttm_years=0.25, rate=0.05, volatility=0.20)
+        assert v_atm > v_itm
+        assert v_atm > v_otm
+
+    def test_zero_time_returns_zero(self):
+        assert bs_european_vega(spot=100, strike=100, ttm_years=0, rate=0.05, volatility=0.20) == 0.0
+
+    def test_per_unit_vs_per_percent_consistency(self):
+        # raw vega (per 1.0 vol unit) must equal black_scholes_greeks().vega * 100
+        # (which is per-1% scaled). Sanity-check on the unit convention.
+        kwargs = dict(spot=100.0, strike=100.0, ttm_years=0.25, rate=0.05, volatility=0.20)
+        raw = bs_european_vega(**kwargs)
+        per_pct = black_scholes_greeks(**kwargs, dividend=0.0, is_call=True).vega
+        assert raw == pytest.approx(per_pct * 100.0, abs=1e-10)
+
+
+class TestImpliedVolatilityRoundtripViaCanonicalSolver:
+    """The same round-trip checks that test_bs_solver.py used to assert,
+    re-pointed at the canonical ``volatility/solver.implied_volatility``
+    via the now-canonical ``bs_european_price``."""
+
+    @pytest.mark.parametrize("is_call,sigma", [(True, 0.25), (False, 0.30), (True, 0.40), (False, 0.15)])
+    def test_atm_roundtrip(self, is_call: bool, sigma: float):
+        S, K, T, r = 100.0, 100.0, 0.5, 0.05
+        price = bs_european_price(S, K, T, r, sigma, is_call=is_call)
+        result = implied_volatility(option_price=price, spot=S, strike=K, ttm=T, rate=r, is_call=is_call)
+        assert result.iv is not None
+        assert result.iv == pytest.approx(sigma, abs=5e-3)
+
+    @pytest.mark.parametrize("moneyness", [0.90, 1.00, 1.10])
+    def test_otm_itm_roundtrip(self, moneyness: float):
+        S, sigma, T, r = 100.0, 0.30, 0.5, 0.05
+        K = S * moneyness
+        is_call = moneyness >= 1.0
+        price = bs_european_price(S, K, T, r, sigma, is_call=is_call)
+        result = implied_volatility(option_price=price, spot=S, strike=K, ttm=T, rate=r, is_call=is_call)
+        assert result.iv is not None
+        assert result.iv == pytest.approx(sigma, abs=5e-3)

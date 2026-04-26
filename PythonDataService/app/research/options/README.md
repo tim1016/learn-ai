@@ -120,10 +120,12 @@ For the **old 15-ticker batch**: **~46,000 API calls**.
 
 After fetching, all computation is local:
 
-1. **Black-Scholes Newton-Raphson** → derive IV from option price
-   - Inputs: market_price, stock_close, strike, T (DTE/365), risk_free_rate, option_type
-   - Fallback: Brent's method bisection if Newton-Raphson diverges (common for OTM options)
-   - Bounds: reject IV outside [5%, 300%]
+1. **Implied volatility inversion** via the canonical solver
+   `app.volatility.solver.implied_volatility` (QuantLib `VanillaOption.impliedVolatility()`
+   primary, scipy Brent fallback)
+   - Inputs: market_price, stock_close, strike, T (DTE/365), risk_free_rate, is_call
+   - Bounds: this pipeline rejects IV outside [5%, 300%] in `_derive_iv_for_contract`
+     to preserve the legacy gate; the underlying solver itself permits a wider range.
 
 2. **30-Day Interpolation** → constant-maturity IV
    - Two brackets: IV_low (DTE < 30) and IV_high (DTE > 30)
@@ -154,10 +156,11 @@ After fetching, all computation is local:
 | File | Role |
 |------|------|
 | `contract_finder.py` | Stage 2 + 3: finds bracket expiries and specific contracts |
-| `iv_builder.py` | Stage 1 + 4: orchestrates the full IV build, calls BS solver |
-| `bs_solver.py` | Newton-Raphson + Brent's method IV solver |
+| `iv_builder.py` | Stage 1 + 4: orchestrates the full IV build, delegates IV inversion to the canonical solver |
 | `diagnostics.py` | Validates IV time series quality before research |
 | `polygon_client.py` | Wrapper around Polygon Python SDK |
+| `app/volatility/solver.py` | **Canonical IV solver** (QuantLib + Brent fallback). See `docs/architecture/options-math-authorities.md`. |
+| `app/services/bs_greeks.py` | **Canonical analytical BS price/vega/Greeks** for European options. |
 
 ---
 
