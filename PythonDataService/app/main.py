@@ -16,6 +16,7 @@ from app.routers import (
     engine,
     indicator_reliability,
     indicators,
+    jobs,
     market_monitor,
     options,
     research,
@@ -74,6 +75,7 @@ app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-
 app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
 app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
 app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
+app.include_router(jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
 # Edge router carries its own /api/edge prefix.
 app.include_router(edge.router)
 # /research/data-divergence/* — dashboard + matrix endpoints. The router

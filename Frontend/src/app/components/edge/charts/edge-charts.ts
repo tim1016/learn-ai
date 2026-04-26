@@ -123,12 +123,15 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
   showRealtime = input(true);
   layers = input.required<PriceIVLayers>();
   hoverIdx = input<number | null>(null);
+  /** Drives the x-axis date format: ISO `YYYY-MM-DD` for daily, `MMM DD HH:mm` for intraday. */
+  barSize = input<"5m" | "15m" | "1h" | "1D">("1D");
 
   hover = output<number | null>();
 
   @ViewChild("canvas", { static: true }) canvasRef!: ElementRef<HTMLCanvasElement>;
 
-  private readonly PAD = { L: 44, R: 52, T: 14, B: 26 };
+  // Bottom padding extended to fit the dedicated x-axis tick row beneath the strip.
+  private readonly PAD = { L: 44, R: 52, T: 14, B: 44 };
 
   constructor() {
     effect(() => {
@@ -162,8 +165,18 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
 
     const lo = Math.min(...candles.map(c => c.l)) * 0.998;
     const hi = Math.max(...candles.map(c => c.h)) * 1.002;
-    const ivLo = Math.min(...data.iv30) * 0.85;
-    const ivHi = Math.max(...data.iv30) * 1.15;
+
+    // Right-axis range: prefer IV when available, fall back to RV when the
+    // IV pipeline isn't wired (v1 live runs). With no IV at all, the IV
+    // line is suppressed but RV bands and RV-YZ trace stay visible against
+    // the same axis — relabel "IV30" → "RV YZ" in that case so the user
+    // knows what the right axis represents.
+    const ivFinite = data.iv30.filter((v) => Number.isFinite(v)) as number[];
+    const rvFinite = data.rvYZ.filter((v) => Number.isFinite(v)) as number[];
+    const ivAvailable = ivFinite.length > 0;
+    const axisSrc = ivAvailable ? ivFinite : rvFinite;
+    const ivLo = axisSrc.length ? Math.min(...axisSrc) * 0.85 : 0;
+    const ivHi = axisSrc.length ? Math.max(...axisSrc) * 1.15 : 1;
 
     const x = (i: number) => L + (i / (N - 1)) * innerW;
     const yP = (p: number) => T + innerH - ((p - lo) / (hi - lo)) * innerH;
@@ -209,11 +222,18 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
       ctx.fillRect(cx - cw / 2, Math.min(yP(c.o), yP(c.c)), cw, Math.max(1, Math.abs(yP(c.c) - yP(c.o))));
     });
 
-    // IV30
-    ctx.strokeStyle = TOK.vol; ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    data.iv30.forEach((v, i) => i === 0 ? ctx.moveTo(x(i), yI(v)) : ctx.lineTo(x(i), yI(v)));
-    ctx.stroke();
+    // IV30 — only when the live IV pipeline supplied data; otherwise the
+    // right axis is repurposed for RV (see ivAvailable above).
+    if (ivAvailable) {
+      ctx.strokeStyle = TOK.vol; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      data.iv30.forEach((v, i) => {
+        if (!Number.isFinite(v)) return;
+        const py = yI(v);
+        if (i === 0) ctx.moveTo(x(i), py); else ctx.lineTo(x(i), py);
+      });
+      ctx.stroke();
+    }
 
     // RV bands
     if (this.layers().rvBands) {
@@ -229,10 +249,14 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
       });
     }
 
-    // Edge Score strip
+    // Edge Score strip — overlay near the bottom of the chart area, with
+    // breathing room above (so it isn't flush against the lowest price
+    // gridline) and a left-edge label + right-edge current-value chip
+    // so the colormap encoding is self-explanatory.
     if (this.layers().edgeStrip) {
-      const stripH = 12; const stripY = T + innerH - stripH - 2;
-      ctx.fillStyle = "rgba(11,14,20,0.7)";
+      const stripH = 16; const stripY = T + innerH - stripH - 8;
+      // Backdrop with a soft top border to separate from candle area.
+      ctx.fillStyle = "rgba(11,14,20,0.78)";
       ctx.fillRect(L, stripY, innerW, stripH);
       const ww = innerW / N;
       data.edgeScore.forEach((s, i) => {
@@ -244,6 +268,27 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
       });
       ctx.strokeStyle = TOK.borderL; ctx.lineWidth = 1;
       ctx.strokeRect(L + 0.5, stripY + 0.5, innerW - 1, stripH - 1);
+
+      // Left-edge "EDGE" label inside a small contrast pill.
+      ctx.fillStyle = "rgba(11,14,20,0.92)";
+      ctx.fillRect(L + 1, stripY + 1, 38, stripH - 2);
+      ctx.fillStyle = TOK.subtle; ctx.font = "9px JetBrains Mono, monospace";
+      ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText("EDGE", L + 5, stripY + stripH / 2 + 0.5);
+
+      // Right-edge current-value chip — driven by hover, falls back to last bar.
+      const hi = this.hoverIdx();
+      const curIdx = (hi != null && hi >= 0 && hi < N) ? hi : N - 1;
+      const curScore = data.edgeScore[curIdx] ?? 0;
+      const chipText = (curScore >= 0 ? "+" : "") + curScore.toFixed(2);
+      const chipColor = curScore > 0 ? TOK.bull : curScore < 0 ? TOK.bear : TOK.subtle;
+      const chipW = 44; const chipX = L + innerW - chipW - 1;
+      ctx.fillStyle = "rgba(11,14,20,0.92)";
+      ctx.fillRect(chipX, stripY + 1, chipW, stripH - 2);
+      ctx.fillStyle = chipColor; ctx.font = "10px JetBrains Mono, monospace";
+      ctx.textAlign = "right";
+      ctx.fillText(chipText, L + innerW - 4, stripY + stripH / 2 + 0.5);
+      ctx.textBaseline = "alphabetic";
     }
 
     // Signals
@@ -285,8 +330,43 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
     ctx.fillStyle = TOK.muted; ctx.textAlign = "left";
     ctx.fillText("PRICE", L, T - 2);
     ctx.fillStyle = TOK.vol; ctx.textAlign = "right";
-    ctx.fillText("IV30", L + innerW, T - 2);
+    ctx.fillText(ivAvailable ? "IV30" : "RV YZ", L + innerW, T - 2);
+
+    // ── Bottom date axis ───────────────────────────────────────────────
+    // Adaptive format: ISO YYYY-MM-DD for daily, MMM DD HH:mm for intraday.
+    // Pick ~7 ticks evenly across the available width.
+    if (data.dates && data.dates.length) {
+      const targetTicks = Math.max(4, Math.min(8, Math.floor(innerW / 110)));
+      const stride = Math.max(1, Math.floor((N - 1) / targetTicks));
+      const isDaily = this.barSize() === "1D";
+      ctx.fillStyle = TOK.muted; ctx.font = "10px JetBrains Mono, monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+      const labelY = T + innerH + 16;
+      // Tick stub line
+      ctx.strokeStyle = TOK.borderL; ctx.lineWidth = 1;
+      for (let i = 0; i < N; i += stride) {
+        const px = x(i);
+        if (px < L + 30 || px > L + innerW - 30) continue;
+        ctx.beginPath();
+        ctx.moveTo(px, T + innerH + 1);
+        ctx.lineTo(px, T + innerH + 5);
+        ctx.stroke();
+        ctx.fillText(formatBarDate(data.dates[i], isDaily), px, labelY);
+      }
+    }
   }
+}
+
+function formatBarDate(d: Date, isDaily: boolean): string {
+  if (isDaily) {
+    return d.toISOString().slice(0, 10); // YYYY-MM-DD
+  }
+  const monthShort = d.toLocaleString("en-US", { month: "short", timeZone: "America/New_York" });
+  const day = d.toLocaleString("en-US", { day: "2-digit", timeZone: "America/New_York" });
+  const time = d.toLocaleString("en-US", {
+    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/New_York",
+  });
+  return `${monthShort} ${day} ${time}`;
 }
 
 /* ─── VRP histogram ───────────────────────────────────────── */
@@ -321,7 +401,23 @@ export class EdgeVrpHistogramComponent implements AfterViewInit {
     const innerW = w - PAD_L - PAD_R; const innerH = h - PAD_T - PAD_B;
     const ctx = setupCanvas(canvas, w, h);
     const bins = data.vrpHistogram;
-    if (!bins.length) return;
+    if (!bins.length) {
+      // Empty state — IV pipeline not yet wired (v1) so no VRP samples.
+      ctx.fillStyle = TOK.muted;
+      ctx.font = "11px JetBrains Mono, monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(
+        "No VRP samples — IV pipeline not yet wired (v1).",
+        w / 2, h / 2 - 6,
+      );
+      ctx.fillStyle = TOK.subtle; ctx.font = "10px JetBrains Mono, monospace";
+      ctx.fillText(
+        "Returns once /api/edge/realized-vs-iv reads OptionIvSnapshots.",
+        w / 2, h / 2 + 10,
+      );
+      ctx.textBaseline = "alphabetic";
+      return;
+    }
     const maxC = Math.max(...bins.map(b => b.count));
     const minX = bins[0].x0, maxX = bins[bins.length - 1].x1;
     const xS = (v: number) => PAD_L + ((v - minX) / (maxX - minX)) * innerW;
@@ -353,13 +449,14 @@ export class EdgeVrpHistogramComponent implements AfterViewInit {
       ctx.closePath(); ctx.fill();
     }
 
+    // Bottom % tick labels — descriptor moved out of the canvas into the
+    // panel header in the parent template (no more text-on-text overlap).
     ctx.fillStyle = TOK.muted; ctx.font = "10px JetBrains Mono"; ctx.textAlign = "center";
     [-0.1, -0.05, 0, 0.05, 0.1].forEach(v => {
-      if (v >= minX && v <= maxX) ctx.fillText((v * 100).toFixed(0) + "%", xS(v), PAD_T + innerH + 14);
+      if (v >= minX && v <= maxX) {
+        ctx.fillText((v * 100).toFixed(0) + "%", xS(v), PAD_T + innerH + 16);
+      }
     });
-    ctx.textAlign = "left"; ctx.fillStyle = TOK.subtle;
-    ctx.fillText("VRP_FORWARD distribution · n=" + total + " · 5–95% band shaded",
-      PAD_L, PAD_T + innerH + 14);
   }
 }
 

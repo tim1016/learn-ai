@@ -2,11 +2,13 @@ using Backend;
 using Backend.Configuration;
 using Backend.Data;
 using Backend.GraphQL;
+using Backend.Jobs;
 using Backend.Services.Implementation;
 using Backend.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Polly;
 using Polly.Extensions.Http;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -84,6 +86,24 @@ builder.Services.AddHttpClient<IResearchService, ResearchService>(client =>
 })
 .AddPolicyHandler(circuitBreakerPolicy);
 
+// Redis — backing store for job state and SSE event streams. The same
+// Redis instance is shared with PythonDataService; the schema is
+// documented in Backend/Jobs/JobsApi.cs and PythonDataService/app/jobs/progress.py.
+var redisUrl = builder.Configuration["REDIS_URL"]
+    ?? Environment.GetEnvironmentVariable("REDIS_URL")
+    ?? "redis:6379";
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+    ConnectionMultiplexer.Connect(redisUrl));
+
+// HttpClient used by JobsApi to dispatch work to Python. No retry — a
+// long backtest must not silently spawn duplicate runs on a transient hiccup.
+builder.Services.AddHttpClient("python", client =>
+{
+    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(15);
+});
+
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
 builder.Services.AddScoped<IBacktestService, BacktestService>();
@@ -140,6 +160,7 @@ using (var scope = app.Services.CreateScope())
 app.UseCors();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapStudiesEndpoints();
+app.MapJobsEndpoints();
 app.MapGraphQL();
 
 app.Run();

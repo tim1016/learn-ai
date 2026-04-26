@@ -73,6 +73,17 @@
   font-size: 11px; padding: 4px 10px; cursor: pointer;
 }
 
+/* IV-pipeline-not-wired variant of the coverage banner */
+.banner-iv-missing {
+  background: linear-gradient(180deg, rgba(41,182,246,0.10), rgba(41,182,246,0.04));
+  border: 1px solid rgba(41,182,246,0.28);
+  border-left: 2px solid $info;
+  color: $text-secondary;
+
+  .pi { color: $info; }
+  .coverage-action { border-color: rgba(41,182,246,0.30); color: $info; }
+}
+
 /* ─── Form ─── */
 .form-card {
   background: $bg-surface; border: 1px solid $border;
@@ -205,6 +216,40 @@
 }
 .bottom-meta {
   font-size: 11px; color: $text-muted; font-family: $font-mono;
+}
+
+/* ─── Edge Score colormap legend (above the price chart) ─── */
+.edge-strip-legend {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 12px;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  background: $bg-sunken;
+  border: 1px solid $border-light;
+  border-left: 2px solid $accent;
+  border-radius: $radius;
+  font-family: $font-mono;
+  font-size: 10px;
+  color: $text-subtle;
+
+  .esl-eyebrow {
+    font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    color: $text-secondary;
+  }
+  .esl-key {
+    display: inline-flex; align-items: center; gap: 5px;
+    white-space: nowrap;
+  }
+  .esl-swatch {
+    display: inline-block;
+    width: 14px; height: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 2px;
+  }
+  .esl-meta {
+    margin-left: auto;
+    color: $text-muted;
+  }
 }
 
 .readout-action {

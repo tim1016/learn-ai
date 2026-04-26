@@ -3,11 +3,12 @@ import { RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
 import { MethodologyDrawerComponent } from './shared/methodology-drawer/methodology-drawer.component';
+import { JobsDrawerComponent } from './components/jobs/jobs-drawer.component';
 
 @Component({
   selector: 'app-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, AppSidebarComponent, MethodologyDrawerComponent, Toast],
+  imports: [RouterOutlet, AppSidebarComponent, MethodologyDrawerComponent, JobsDrawerComponent, Toast],
   styles: [`
     :host {
       display: flex;
@@ -29,6 +30,7 @@ import { MethodologyDrawerComponent } from './shared/methodology-drawer/methodol
       <router-outlet />
     </main>
     <app-methodology-drawer />
+    <app-jobs-drawer />
     <p-toast position="top-right" />
   `,
 })
