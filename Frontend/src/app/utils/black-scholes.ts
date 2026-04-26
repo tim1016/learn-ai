@@ -1,31 +1,46 @@
 /**
- * @deprecated [LEGACY — DO NOT ADD NEW CALLERS]
+ * @deprecated [LEGACY-OK — RENDER-HELPER ONLY, NO NEW CALLERS]
  *
  * Client-side Black-Scholes pricing and Greeks. Uses the Abramowitz & Stegun
  * (1964) rational approximation for the normal CDF (|error| < 1.5e-7).
  *
  * Phase 1.3 of `docs/architecture/numerical-authority-migration-plan.md`:
- * this module is on its way out. Per `AGENTS.md` § "Python owns all math",
- * Black-Scholes math must live in `PythonDataService/app/services/bs_greeks.py`
- * and `app/services/quantlib_pricer.py` — never in TypeScript.
+ * this module is **not a math authority**. Per `AGENTS.md` § "Python owns
+ * all math", canonical Black-Scholes pricing and Greeks live in
+ * `PythonDataService/app/services/bs_greeks.py` (closed-form) and
+ * `app/services/quantlib_pricer.py` (QuantLib). Cross-engine parity at
+ * `atol=1e-10` is pinned by `PythonDataService/tests/services/test_bs_cross_engine_parity.py`
+ * (Phase 1.4 shipped 2026-04-26, 361/361 cases pass).
  *
- * Status of remaining callers as of 2026-04-26:
- * - `OptionsStrategyLabComponent` — MIGRATED in Phase 1.2; sources curves
- *   and per-leg diagnostics from the server's `analyzeOptionsStrategy` payload.
- * - `strategy-builder.component.ts` — STILL CALLS THIS FILE; pending migration.
- * - `pricing-lab.component.ts` — STILL CALLS THIS FILE; pending migration
- *   (note: this component's purpose is precisely to compare pricing engines,
- *   so a render-only client-side path may be intentional).
- * - `black-scholes.spec.ts` — self-test; will retire with this file.
+ * Status of callers (as of 2026-04-27):
  *
- * Cross-engine parity vs the canonical Python authorities is verified by
- * `PythonDataService/tests/services/test_bs_cross_engine_parity.py`.
+ * 1. `OptionsStrategyLabComponent` — **MIGRATED** in Phase 1.2; sources
+ *    curves and per-leg diagnostics from the server's `analyzeOptionsStrategy`
+ *    payload (commit `451394d`). No client-side BS.
+ *
+ * 2. `pricing-lab.component.ts` — **LEGACY-OK** (intentional). The component's
+ *    explicit purpose is to compare pricing engines side-by-side: the TS
+ *    pricer, the server BS, and the QuantLib path. Removing TS from here
+ *    would defeat the comparison. Numbers users compare against another
+ *    number live in the SERVER columns; the TS column is one of the things
+ *    being compared, not the authority.
+ *
+ * 3. `strategy-builder.component.ts` — **LEGACY-OK** (interactive UI tradeoff).
+ *    Strategy Builder evaluates BS over a 1200-point price grid for every
+ *    leg edit (strike, premium, qty, expiration, IV). Server round-trip on
+ *    every parameter change creates UI lag that defeats the "live builder"
+ *    feature. The numbers shown here are exploratory feedback, not numbers
+ *    users compare against another number. Server-side migration is feasible
+ *    (mirror OptionsStrategyLab's debounced-fetch + parallel-what-if pattern)
+ *    but deferred until UX impact can be measured.
+ *
+ * 4. `black-scholes.spec.ts` — self-test; retires with this file if it's
+ *    ever deleted.
  *
  * **Hard rule: do not add new callers of any export in this module.** New
- * code that needs BS math must go through the server. If a new use case
- * surfaces that genuinely needs client-side BS (e.g. a fully offline mode),
- * write up a justification and add a row to `docs/math-sources-of-truth.md`
- * under `legacy-ok` status with a parity test before importing from here.
+ * UI features that need BS math must go through the server. The two
+ * legacy-ok exceptions above are explicitly limited to existing components
+ * and are not a precedent.
  *
  * @module legacy-black-scholes
  */

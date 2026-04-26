@@ -15,11 +15,13 @@
 - Phase 2 — portfolio scenario / live-Greeks (commit `d9738a5`): `/api/portfolio/scenario` and `/api/portfolio/live-greeks` endpoints; `IPolygonService.PortfolioScenarioAsync` + `PortfolioLiveGreeksAsync` passthroughs; `PortfolioRiskService.RunScenarioAsync` rewritten; old `EntryVega/EntryTheta` shock-propagation deleted.
 - Phase 3 prep (commit `d3c3c18`): `BacktestService.cs` annotated as deprecated.
 
-**Phase 1.3 partial.** `Frontend/src/app/utils/black-scholes.ts` header upgraded with `@deprecated` and "no new callers" rule. Two intentional callers remain (decision per row 1 below):
-1. `pricing-lab.component.ts` — comparison harness (its purpose is to show TS pricer alongside server pricer side-by-side); explicitly **legacy-ok**.
-2. `strategy-builder.component.ts` — interactive leg builder (round-trip latency tradeoff). Pending decision: migrate or formally bless as legacy-ok.
+**Phase 1.3 shipped (2026-04-27).** `Frontend/src/app/utils/black-scholes.ts` header upgraded to `[LEGACY-OK — RENDER-HELPER ONLY, NO NEW CALLERS]`. Two intentional callers documented:
+1. `pricing-lab.component.ts` — comparison harness whose explicit purpose is to show the TS pricer alongside the server pricer side-by-side. Removing TS would defeat the comparison.
+2. `strategy-builder.component.ts` — interactive leg builder; evaluates BS over a 1200-point grid on every leg edit. Server round-trips per change would defeat the "live builder" UX. Server-side migration is feasible (mirror OptionsStrategyLab's debounced-fetch + parallel-what-if pattern, ~1 hour of focused work + UI smoke test) but deferred until measured UX impact justifies it.
 
-**Phase 1.3 follow-up still open.** `ComputeDollarDeltaAsync` and `ComputePortfolioVegaAsync` in `PortfolioRiskService.cs` still source per-position Greeks from `EntryDelta`/`EntryVega` (DB stored at trade entry). Aggregation is rule-5 compliant; the *Greeks themselves* should come from `PortfolioLiveGreeksAsync`. Tracked by the `STALE-GREEK NOTICE` comment in the file. Worked on as a Phase 2.3 follow-up cleanup.
+Both callers produce exploratory feedback, not numbers users compare against another number; the canonical authorities `bs_greeks.py` + `quantlib_pricer.py` remain the only math authorities (parity-pinned to `atol=1e-10`).
+
+**Phase 2.3 shipped (2026-04-27).** `ComputeDollarDeltaAsync` + `ComputePortfolioVegaAsync` in `PortfolioRiskService.cs` switched from stored `EntryDelta`/`EntryVega` to `IPolygonService.PortfolioLiveGreeksAsync` (commit `334d419`). Stocks short-circuit to delta=1 without hitting Python. `ComputePortfolioVegaAsync`'s GraphQL resolver doesn't take prices, so the method fetches underlying spots itself via `FetchStockSnapshotsAsync` (one batched call). Test rewrites at `Backend.Tests/Unit/Services/PortfolioRiskServiceTests.cs` mock the live-Greeks calls; the math under test is unchanged (same DollarDelta = 328,250 and totalVega = 150) but the source shifts from stored to recomputed. 7/7 tests pass.
 
 **Phase 3 deferred — structural blocker.** Phase 3 as originally written assumed `runBacktest` becomes a passthrough to `/api/engine/backtest`. Investigation on 2026-04-27 found:
 1. Python's newer engine (`app/engine/strategy/algorithms/`) ports only 2 of the 4 strategies the .NET path runs (sma_crossover, rsi_mean_reversion). `RunMomentumRsiStochastic` and `RunRsiReversal` exist only in .NET and in the older `app/services/strategies/` (function-based, pandas-ta) registry — the older registry is not exposed via `/api/engine/backtest`.
@@ -247,8 +249,8 @@ After all phases:
 | Week | Phase | Owner | Status |
 |---|---|---|---|
 | 1 (days 1-2) | Phase 0 — governance | Inkant | **shipped 2026-04-26** (`e52e7c3`) |
-| 1 (days 3-7) | Phase 1 — options math cutover | Inkant | **1.1/1.2/1.4 shipped** (`451394d`, fix `69d2bfe`); 1.3 partial (two intentional callers remain) |
-| 2 | Phase 2 — portfolio scenario / live-Greeks | Inkant | **shipped 2026-04-26** (`d9738a5`); 2.3 follow-up open (`STALE-GREEK NOTICE` in `PortfolioRiskService.cs`) |
+| 1 (days 3-7) | Phase 1 — options math cutover | Inkant | **shipped** — 1.1/1.2 (`451394d`), 1.3 (header `legacy-ok` for pricing-lab + strategy-builder, see § Status as of 2026-04-27), 1.4 (`451394d` + fix `69d2bfe`) |
+| 2 | Phase 2 — portfolio scenario / live-Greeks | Inkant | **shipped** — 2.1/2.2 (`d9738a5`), 2.3 (`334d419` switches `ComputeDollarDelta` + `ComputePortfolioVega` to live Greeks via `PortfolioLiveGreeksAsync`) |
 | 3 (days 1-3) | Phase 3 — retire BacktestService math | Inkant | **deferred** — blocked on lean-engine reaching feature parity with Strategy Lab. Phase 3.0 deprecation comment shipped (`d3c3c18`). See § Status as of 2026-04-27. |
 | 3 (days 4-5) | Phase 4 — `rule_based_backtest.py` adapter | Inkant | **deferred** — original "thin adapter" plan doesn't fit the actual code shape; needs reformulation. See § Status as of 2026-04-27. |
 
