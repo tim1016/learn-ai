@@ -101,7 +101,8 @@ public class PortfolioRiskService : IPortfolioRiskService
                 var leg = point.Legs.FirstOrDefault(l => l.LegId == pyPos.LegId);
                 if (leg == null) continue;
 
-                var pos = group.First(p => p.Id.ToString() == pyPos.LegId);
+                var pos = group.FirstOrDefault(p => p.Id.ToString() == pyPos.LegId);
+                if (pos == null) continue;
                 var multiplier = (int)(pyPos.Multiplier ?? 100m);
                 var dollarDelta = leg.Delta * spot * pos.NetQuantity * multiplier;
 
