@@ -3,6 +3,13 @@ import { Routes } from "@angular/router";
 export const routes: Routes = [
   { path: "", redirectTo: "/market-data", pathMatch: "full" },
   {
+    path: "jobs-demo",
+    loadComponent: () =>
+      import("./components/jobs/backtest-job-page.component").then(
+        (m) => m.BacktestJobPageComponent
+      ),
+  },
+  {
     path: "market-data",
     loadComponent: () =>
       import("./components/market-data/market-data.component").then(

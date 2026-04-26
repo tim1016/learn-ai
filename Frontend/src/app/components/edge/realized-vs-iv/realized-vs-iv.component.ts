@@ -85,6 +85,26 @@ export class RealizedVsIvComponent {
     };
   });
 
+  readonly readoutHistogramN = computed(() =>
+    this.data().vrpHistogram.reduce((acc, b) => acc + b.count, 0),
+  );
+
+  /** True iff the loaded series has no finite IV30 samples. Currently the
+   *  expected state for live SPY/QQQ runs because the IV pipeline that
+   *  back-solves IV from OptionIvSnapshots isn't wired yet (v1). */
+  readonly ivPipelineMissing = computed(() => {
+    if (!this.liveSource()) return false;
+    return !this.data().iv30.some((v) => Number.isFinite(v));
+  });
+
+  readonly rvLastValue = computed(() => {
+    const arr = this.data().rvYZ;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (Number.isFinite(arr[i])) return (arr[i] * 100).toFixed(1) + "%";
+    }
+    return "—";
+  });
+
   readonly currentScoreLabel = computed(() => {
     const s = this.data().edgeScore[this.currentIdx()] ?? 0;
     const sign = s >= 0 ? "+" : "";

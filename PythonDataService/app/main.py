@@ -16,6 +16,7 @@ from app.routers import (
     engine,
     indicator_reliability,
     indicators,
+    jobs,
     market_monitor,
     options,
     portfolio,
@@ -78,6 +79,9 @@ app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
 # Portfolio scenario / live-Greeks. Phase 2 of numerical-authority migration:
 # Python becomes canonical for portfolio Greeks; .NET becomes a passthrough.
 app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"])
+# Internal job orchestration (Redis-backed). Mounted under /api/jobs-internal;
+# the public surface is the .NET /api/jobs facade in Backend/Jobs/JobsApi.cs.
+app.include_router(jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
 # Edge router carries its own /api/edge prefix.
 app.include_router(edge.router)
 # /research/data-divergence/* — dashboard + matrix endpoints. The router

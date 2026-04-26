@@ -11,6 +11,7 @@ pandas_market_calendars
 httpx==0.28.1
 requests>=2.28
 python-multipart==0.0.20
+redis>=5.0,<6
 reportlab>=4.0
 QuantLib>=1.35
 # Used by app.research.divergence.dashboard to render the TV vs Polygon

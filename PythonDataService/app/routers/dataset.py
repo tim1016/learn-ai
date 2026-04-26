@@ -1,12 +1,20 @@
-"""API endpoints for dataset generation: chunked OHLCV + dynamic indicator calculation + CSV export"""
+"""API endpoints for dataset generation: chunked OHLCV + dynamic indicator calculation + CSV export.
+
+Streaming bundle pipeline
+-------------------------
+The async fetch+bundle flow used to live here as
+``POST /generate-zip/stream`` with a custom ``RunSession`` registry. It
+was migrated to the unified job framework: the public surface is now
+``POST /api/jobs/dataset-zip`` (.NET layer), which dispatches to
+``POST /api/jobs-internal/dataset-zip`` (this service) — see
+``app/routers/jobs.py``. The synchronous one-shot ``POST /generate-zip``
+endpoint below is unchanged.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import io
-import json
 import logging
-import threading
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -20,7 +28,6 @@ from app.research.divergence.ingest import (
     dividends_from_polygon_payload,
 )
 from app.services.dataset_service import (
-    RunCancelledError,
     build_csv_bytes,
     build_metadata_csv,
     build_metadata_json,
@@ -33,7 +40,6 @@ from app.services.dataset_service import (
     preprocess_and_calculate,
 )
 from app.services.polygon_client import PolygonClientService
-from app.services.run_session_service import RunSession, run_sessions
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -474,144 +480,6 @@ async def generate_dataset_zip(request: DatasetGenerationRequest):
     except Exception as e:
         logger.error(f"[DATASET] ZIP error: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Streaming variant for the unified Fetch & bundle flow
-# ──────────────────────────────────────────────────────────────────────
-
-
-def _run_zip_pipeline(
-    request: DatasetGenerationRequest,
-    session: RunSession,
-    on_event: Callable[[dict[str, Any]], None],
-) -> None:
-    """Worker body — runs in a thread spawned from the SSE endpoint.
-
-    Drives the synchronous fetch + bundle pipeline, emitting events through
-    ``on_event``. On success: stows the ZIP bytes on ``session`` and emits
-    ``complete``. On cancel or failure: emits ``error`` and stows the
-    error message. Either way, the SSE generator sees a sentinel and
-    closes the stream.
-    """
-
-    def _cancel_check() -> bool:
-        return session.cancelled.is_set()
-
-    try:
-        df, column_meta, raw_count = _fetch_and_process(
-            request,
-            on_event=on_event,
-            cancel_check=_cancel_check,
-        )
-        on_event(
-            {
-                "type": "fetch_complete",
-                "raw_bars": raw_count,
-                "processed_bars": len(df),
-                "indicator_columns": len([m["column"] for m in column_meta]),
-            }
-        )
-        zip_bytes, filename = _build_zip_with_events(
-            request,
-            df,
-            column_meta,
-            raw_count,
-            on_event=on_event,
-            cancel_check=_cancel_check,
-        )
-        session.zip_bytes = zip_bytes
-        session.filename = filename
-        on_event(
-            {
-                "type": "complete",
-                "session_id": session.id,
-                "filename": filename,
-                "size_bytes": len(zip_bytes),
-                "file_count": len(zip_bytes) and len([m["column"] for m in column_meta]) + 3,
-            }
-        )
-    except RunCancelledError as exc:
-        session.failed = True
-        session.error_message = str(exc)
-        on_event({"type": "error", "kind": "cancelled", "message": str(exc)})
-    except HTTPException as exc:
-        session.failed = True
-        session.error_message = exc.detail
-        on_event({"type": "error", "kind": "http", "message": exc.detail})
-    except Exception as exc:
-        logger.error("[DATASET] Stream pipeline error: %s", exc, exc_info=True)
-        session.failed = True
-        session.error_message = str(exc)
-        on_event({"type": "error", "kind": "internal", "message": str(exc)})
-
-
-@router.post("/generate-zip/stream")
-async def generate_dataset_zip_stream(request: DatasetGenerationRequest):
-    """Streaming variant of ``/generate-zip`` — emits Server-Sent Events
-    so the frontend can render chunk-level progress (states B/C/D/E in
-    the design brief). The final ``complete`` event carries a session id
-    the client uses to retrieve the binary ZIP via
-    ``GET /run/{id}/zip``. Cancel mid-fetch via
-    ``DELETE /run/{id}``.
-    """
-    session = run_sessions.create()
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-    sentinel = object()
-
-    def emit(event: dict[str, Any]) -> None:
-        # Worker thread → event loop. ``call_soon_threadsafe`` is the only
-        # safe way to schedule a coroutine-less queue put from a non-loop
-        # thread. ``put_nowait`` doesn't block since the queue is unbounded.
-        loop.call_soon_threadsafe(queue.put_nowait, event)
-
-    def worker() -> None:
-        try:
-            _run_zip_pipeline(request, session, emit)
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, sentinel)  # type: ignore[arg-type]
-
-    threading.Thread(target=worker, name=f"run-{session.id}", daemon=True).start()
-    # Surface the session id on event 0 so even a slow client sees it
-    # before the first chunk_start.
-    await queue.put({"type": "session_started", "session_id": session.id})
-
-    async def event_stream():
-        while True:
-            event = await queue.get()
-            if event is sentinel:
-                break
-            yield f"data: {json.dumps(event)}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-
-@router.get("/run/{session_id}/zip")
-async def get_run_zip(session_id: str):
-    """Retrieve the bundled ZIP for a completed run. Single-shot —
-    succeeding deletes the registry entry."""
-    session = run_sessions.pop(session_id)
-    if session is None or session.zip_bytes is None or session.filename is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="run not found, not complete, or already retrieved",
-        )
-    return StreamingResponse(
-        io.BytesIO(session.zip_bytes),
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{session.filename}"'},
-    )
-
-
-@router.delete("/run/{session_id}")
-async def cancel_run(session_id: str):
-    """Cooperative cancel — flips the session's cancel flag. The worker
-    notices between chunks and emits a final ``error`` SSE event of kind
-    ``cancelled``."""
-    if not run_sessions.cancel(session_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
-    return {"cancelled": session_id}
 
 
 @router.post("/validation-report")

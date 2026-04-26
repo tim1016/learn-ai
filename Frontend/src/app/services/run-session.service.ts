@@ -1,5 +1,5 @@
-import { Injectable, signal, computed } from '@angular/core';
-import { environment } from '../../environments/environment';
+import { Injectable, computed, inject, signal } from '@angular/core';
+import { JobsService } from './jobs.service';
 
 /**
  * State machine for the unified Fetch & bundle flow. Mirrors the design
@@ -43,9 +43,12 @@ export interface BundleComponentProgress {
 }
 
 export interface RunResult {
+  /** Job id minted by the .NET layer (formerly "session_id"). */
   sessionId: string;
   filename: string;
   sizeBytes: number;
+  /** Public download URL — `/api/jobs/{id}/download`. */
+  downloadUrl: string;
 }
 
 export interface RunError {
@@ -54,26 +57,32 @@ export interface RunError {
 }
 
 /**
- * Drives one run of the streaming dataset pipeline.
+ * Drives one run of the dataset fetch + bundle pipeline.
  *
  * Lifecycle:
- *   ``start(payload)`` opens an SSE-style stream against
- *   ``POST /api/dataset/generate-zip/stream``, parses JSON events, and
- *   updates signals so the run-card template can render states B/C/D/E.
- *   On ``complete`` the service auto-fetches the binary ZIP.
+ *   ``start(payload)`` enqueues a ``dataset-zip`` job via :class:`JobsService`,
+ *   subscribes to its event stream, and updates signals so the run-card
+ *   template can render states B/C/D/E. On ``job.completed`` the service
+ *   auto-fetches the binary ZIP from ``GET /api/jobs/{id}/download``.
  *
- *   ``cancel()`` sends ``DELETE /api/dataset/run/{id}`` and waits for the
- *   worker to surface a final ``error`` event of kind ``cancelled``.
+ *   ``cancel()`` calls :meth:`JobsService.cancelJob` which sets the
+ *   cancel flag in Redis; the worker observes it between chunks and
+ *   emits ``job.cancelled``.
  *
  *   ``reset()`` clears state back to ``idle`` so the user can start
  *   another run.
  *
- * Why ``fetch`` + ``ReadableStream`` instead of ``EventSource``: the
- * EventSource API only supports GET requests; our run config is too big
- * to encode in a query string and POST is the only realistic verb.
+ * The chunk/component-level events (``chunk_plan``, ``chunk_start``,
+ * ``bundle_start``, …) are emitted unchanged by the Python worker via
+ * ``ProgressEmitter.emit_event``; they flow through the framework's
+ * Redis Stream → SSE pipeline transparently. This service only adds
+ * lifecycle handling for the framework events (``job.started``,
+ * ``job.completed``, …).
  */
 @Injectable({ providedIn: 'root' })
 export class RunSessionService {
+  private readonly jobs = inject(JobsService);
+
   private readonly _state = signal<RunState>('idle');
   private readonly _sessionId = signal<string | null>(null);
   private readonly _chunks = signal<readonly ChunkStatus[]>([]);
@@ -84,8 +93,11 @@ export class RunSessionService {
   private readonly _alsoZip = signal(false);
   private readonly _startedAt = signal<number | null>(null);
 
-  /** AbortController for the in-flight stream so cancel() can hang up. */
-  private _abort: AbortController | null = null;
+  /** Subscriber handle on the active job's SSE stream. */
+  private _eventSource: EventSource | null = null;
+  /** Filename + size captured from the terminal event so the auto-download
+   *  has what it needs without parsing the result envelope twice. */
+  private _completionEnvelope: { downloadUrl: string; filename: string; sizeBytes: number } | null = null;
 
   readonly state = this._state.asReadonly();
   readonly sessionId = this._sessionId.asReadonly();
@@ -144,35 +156,26 @@ export class RunSessionService {
     this._state.set('fetching');
     this._startedAt.set(Date.now());
 
-    const ctrl = new AbortController();
-    this._abort = ctrl;
-    let response: Response;
+    let jobId: string;
     try {
-      response = await fetch(`${environment.pythonServiceUrl}/api/dataset/generate-zip/stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: ctrl.signal,
-      });
+      // Wrap the dataset payload as the ``dataset`` sub-object — the
+      // Python job route accepts {job_id, dataset: {...}} and validates
+      // the inner dict against DatasetGenerationRequest.
+      jobId = await this.jobs.startJob('dataset-zip', { dataset: payload });
     } catch (e: unknown) {
-      // Network/abort failure before the stream opens. Treat abort as a
-      // cancellation so the UI shows the right state.
-      const aborted = e instanceof DOMException && e.name === 'AbortError';
       this._error.set({
-        kind: aborted ? 'cancelled' : 'internal',
-        message: aborted ? 'Cancelled before any data arrived' : (e instanceof Error ? e.message : String(e)),
+        kind: 'internal',
+        message: e instanceof Error ? e.message : String(e),
       });
       this._state.set('error');
       return;
     }
+    this._sessionId.set(jobId);
 
-    if (!response.ok || !response.body) {
-      this._error.set({ kind: 'http', message: `HTTP ${response.status}` });
-      this._state.set('error');
-      return;
-    }
-
-    await this._consumeSseStream(response.body, ctrl.signal);
+    // Open our own EventSource alongside the JobsService one. The SSE
+    // endpoint is read-only and supports multiple subscribers; this keeps
+    // domain-specific event handling here without bloating JobsService.
+    await this._consumeEventStream(jobId);
 
     if (options?.downloadOnComplete !== false && this._state() === 'done') {
       await this._downloadResult();
@@ -183,21 +186,20 @@ export class RunSessionService {
   async cancel(): Promise<void> {
     const sid = this._sessionId();
     if (sid) {
-      // Fire-and-forget — the worker will surface a final ``error`` event
-      // of kind ``cancelled`` over the open stream.
       try {
-        await fetch(`${environment.pythonServiceUrl}/api/dataset/run/${sid}`, { method: 'DELETE' });
+        await this.jobs.cancelJob(sid);
       } catch {
-        // We tried; the abort below stops the client side regardless.
+        // We tried; closing the EventSource below stops the client side
+        // regardless. The worker's terminal job.cancelled event (or its
+        // absence on retry) will surface through state.
       }
     }
-    if (this._abort) {
-      this._abort.abort();
-    }
+    this._closeStream();
   }
 
   /** Move back to idle so the user can start another run. */
   reset(): void {
+    this._closeStream();
     this._state.set('idle');
     this._sessionId.set(null);
     this._chunks.set([]);
@@ -207,60 +209,96 @@ export class RunSessionService {
     this._error.set(null);
     this._alsoZip.set(false);
     this._startedAt.set(null);
-    this._abort = null;
+    this._completionEnvelope = null;
   }
 
   // ── SSE plumbing ──────────────────────────────────────────────────
 
-  private async _consumeSseStream(body: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<void> {
-    const reader = body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
+  private _consumeEventStream(jobId: string): Promise<void> {
+    return new Promise((resolve) => {
+      const source = new EventSource(`/api/jobs/${jobId}/events`);
+      this._eventSource = source;
 
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        // SSE events are separated by a blank line. Within one event we
-        // only care about lines beginning with "data:".
-        let sepIdx = buffer.indexOf('\n\n');
-        while (sepIdx !== -1) {
-          const raw = buffer.slice(0, sepIdx);
-          buffer = buffer.slice(sepIdx + 2);
-          const data = raw
-            .split('\n')
-            .filter((l) => l.startsWith('data:'))
-            .map((l) => l.slice(5).trimStart())
-            .join('\n');
-          if (data) {
-            try {
-              this._handleEvent(JSON.parse(data));
-            } catch {
-              // Bad JSON from the server is unusual; skip rather than
-              // taking down the whole stream consumer.
-            }
+      source.onmessage = (msg) => {
+        try {
+          const event = JSON.parse(msg.data) as { type: string } & Record<string, unknown>;
+          this._handleEvent(event);
+          if (event.type === 'job.completed' || event.type === 'job.failed' || event.type === 'job.cancelled') {
+            this._closeStream();
+            resolve();
           }
-          sepIdx = buffer.indexOf('\n\n');
+        } catch {
+          // Bad JSON from the server is unusual; skip rather than
+          // taking down the whole stream consumer.
         }
-      }
-    } catch (e: unknown) {
-      const aborted = signal.aborted || (e instanceof DOMException && e.name === 'AbortError');
-      if (!aborted) {
-        this._error.set({
-          kind: 'internal',
-          message: e instanceof Error ? e.message : String(e),
-        });
-        this._state.set('error');
-      }
+      };
+
+      source.onerror = () => {
+        const state = this._state();
+        // EventSource auto-reconnects unless we close it; if we already
+        // saw a terminal state, the close below was scheduled and we
+        // can resolve. Otherwise let it keep trying.
+        if (state === 'done' || state === 'error') {
+          this._closeStream();
+          resolve();
+        }
+      };
+    });
+  }
+
+  private _closeStream(): void {
+    if (this._eventSource) {
+      this._eventSource.close();
+      this._eventSource = null;
     }
   }
 
   private _handleEvent(event: { type: string } & Record<string, unknown>): void {
     switch (event.type) {
-      case 'session_started':
-        this._sessionId.set(event['session_id'] as string);
+      // ── Framework lifecycle events ────────────────────────────────
+      case 'job.started':
+        // No-op — _state was set to 'fetching' at start time.
         break;
+      case 'job.phase':
+        // Mirror the Python phase into our coarser run-card state. The
+        // chunk/component-level events below carry the fine detail.
+        if (event['phase'] === 'bundling') this._state.set('bundling');
+        break;
+      case 'job.completed':
+        // Capture the binary's URL/filename so _downloadResult can fetch
+        // it without re-querying state.
+        this._completionEnvelope = {
+          downloadUrl: (event['download_url'] as string) ?? `/api/jobs/${this._sessionId()}/download`,
+          filename: (event['filename'] as string) ?? 'dataset.zip',
+          sizeBytes: (event['size_bytes'] as number) ?? 0,
+        };
+        this._result.set({
+          sessionId: this._sessionId() ?? '',
+          filename: this._completionEnvelope.filename,
+          sizeBytes: this._completionEnvelope.sizeBytes,
+          downloadUrl: this._completionEnvelope.downloadUrl,
+        });
+        this._state.set('done');
+        break;
+      case 'job.failed':
+        this._error.set({
+          kind: 'internal',
+          message: (event['message'] as string) ?? 'job failed',
+        });
+        this._state.set('error');
+        break;
+      case 'job.cancelled':
+        this._error.set({
+          kind: 'cancelled',
+          message: (event['reason'] as string) ?? 'cancelled',
+        });
+        this._state.set('error');
+        break;
+      // job.progress, job.log: handled by the global JobsService for the
+      // jobs-drawer view; nothing for us to do here.
+
+      // ── Dataset-specific events (emitted by the Python worker via
+      //    ProgressEmitter.emit_event) ─────────────────────────────────
       case 'chunk_plan': {
         const total = event['total'] as number;
         const queued: ChunkStatus[] = Array.from({ length: total }, (_, i) => ({
@@ -292,7 +330,6 @@ export class RunSessionService {
       }
       case 'chunk_paced': {
         const wait = event['wait_seconds'] as number;
-        // Tag the next-up queued chunk so the UI shows "paced for Ns".
         this._chunks.update((list) => {
           const out = [...list];
           const next = out.findIndex((c) => c.status === 'queued');
@@ -302,8 +339,6 @@ export class RunSessionService {
         break;
       }
       case 'fetch_complete':
-        // Bars are in; the bundling phase is next, even if no companions
-        // are configured (build_zip_bytes always produces dataset.csv etc.).
         this._state.set('bundling');
         break;
       case 'bundle_start': {
@@ -325,39 +360,22 @@ export class RunSessionService {
         this._bundleComponents.update((list) =>
           list.map((c) => (c.name === name ? { ...c, status: 'done' } : c)),
         );
-        // Clear sub-component progress when its parent completes — the
-        // next component's first ``bundle_progress`` will repopulate it.
         if (this._bundleProgress()?.component === name) {
           this._bundleProgress.set(null);
         }
         break;
       }
-      case 'complete':
-        this._result.set({
-          sessionId: event['session_id'] as string,
-          filename: event['filename'] as string,
-          sizeBytes: event['size_bytes'] as number,
-        });
-        this._state.set('done');
-        break;
-      case 'error':
-        this._error.set({
-          kind: (event['kind'] as RunError['kind']) ?? 'internal',
-          message: (event['message'] as string) ?? 'unknown error',
-        });
-        this._state.set('error');
-        break;
-      // dividend_adjusted, etc. — informational, ignored by the state machine.
+      // dividend_adjusted and other informational events — ignored by
+      // the state machine but visible in the global jobs-drawer feed.
     }
   }
 
   /** Pull the binary ZIP off the server and trigger a browser download. */
   private async _downloadResult(): Promise<void> {
-    const result = this._result();
-    if (!result) return;
-    const url = `${environment.pythonServiceUrl}/api/dataset/run/${result.sessionId}/zip`;
+    const envelope = this._completionEnvelope;
+    if (!envelope) return;
     try {
-      const response = await fetch(url);
+      const response = await fetch(envelope.downloadUrl);
       if (!response.ok) {
         this._error.set({ kind: 'http', message: `ZIP retrieval failed (HTTP ${response.status})` });
         this._state.set('error');
@@ -367,7 +385,7 @@ export class RunSessionService {
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = objectUrl;
-      a.download = result.filename;
+      a.download = envelope.filename;
       a.click();
       URL.revokeObjectURL(objectUrl);
     } catch (e: unknown) {
