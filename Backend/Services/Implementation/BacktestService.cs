@@ -6,6 +6,33 @@ using Backend.Services.Interfaces;
 
 namespace Backend.Services.Implementation;
 
+/// <summary>
+/// [DEPRECATED — scheduled for retirement in Phase 3 of
+/// <c>docs/architecture/numerical-authority-migration-plan.md</c>]
+///
+/// Runs SMA Crossover, RSI Mean Reversion, Momentum RSI/Stochastic, and RSI
+/// Reversal in-process on .NET. This is a rule-5 violation: per
+/// <c>AGENTS.md</c> § "Python owns all math", strategy execution and the
+/// derived statistics (Sharpe ratio, max drawdown) belong in the Python
+/// engine at <c>PythonDataService/app/engine/</c>.
+///
+/// Migration sequencing: (3.1) make the GraphQL <c>runBacktest</c> mutation
+/// a passthrough to <c>/api/engine/backtest</c>; (3.2) delete the in-process
+/// <c>RunSmaCrossover</c> / <c>RunRsiMeanReversion</c> /
+/// <c>RunMomentumRsiStochastic</c> / <c>RunRsiReversal</c> implementations
+/// and the local <c>CalculateMaxDrawdown</c> / <c>CalculateSharpeRatio</c>
+/// helpers.
+///
+/// Blocker on (3.1) at time of writing: Python has ports for SMA Crossover
+/// and RSI Mean Reversion but not yet for Momentum RSI/Stochastic or RSI
+/// Reversal. Those need to be ported to
+/// <c>PythonDataService/app/engine/strategy/algorithms/</c> first, OR the
+/// strategies need to be dropped from the UI if not in use. See the
+/// pending-migration rows in <c>docs/math-sources-of-truth.md</c>.
+///
+/// New strategies must NOT be added here. Add them to
+/// <c>PythonDataService/app/engine/strategy/algorithms/</c> and use Engine Lab.
+/// </summary>
 public class BacktestService : IBacktestService
 {
     private readonly AppDbContext _context;
