@@ -141,12 +141,39 @@
       </span>
     </div>
 
+    @if (edgeStrip()) {
+      <div class="edge-strip-legend" aria-label="Edge Score colormap legend">
+        <span class="esl-eyebrow">EDGE SCORE STRIP</span>
+        <span class="esl-key">
+          <span class="esl-swatch" style="background: rgba(38,166,154,0.85)"></span>
+          long-vol
+        </span>
+        <span class="esl-key">
+          <span class="esl-swatch" style="background: rgba(38,166,154,0.35)"></span>
+          weak long-vol
+        </span>
+        <span class="esl-key">
+          <span class="esl-swatch" style="background: rgba(120,120,120,0.18)"></span>
+          ≈ 0
+        </span>
+        <span class="esl-key">
+          <span class="esl-swatch" style="background: rgba(239,83,80,0.35)"></span>
+          weak short-vol
+        </span>
+        <span class="esl-key">
+          <span class="esl-swatch" style="background: rgba(239,83,80,0.85)"></span>
+          short-vol
+        </span>
+        <span class="esl-meta">opacity = |score| · range [-1, +1]</span>
+      </div>
+    }
     <app-edge-price-iv-chart
       [width]="1340" [height]="420"
       [data]="data()"
       [showOracle]="showOracle()"
       [showRealtime]="showRealtime()"
       [layers]="layers()"
+      [barSize]="barSize()"
       [hoverIdx]="hoverIdx()"
       (hover)="hoverIdx.set($event)" />
   </div>
@@ -156,7 +183,10 @@
     <div class="bottom-card">
       <div class="bottom-head">
         <span class="eyebrow">VRP_FORWARD HISTOGRAM</span>
-        <span class="bottom-meta">current marker → today's vrp_forward</span>
+        <span class="bottom-meta">
+          n={{ data().vrpHistogram.length ? readoutHistogramN() : 0 }} ·
+          5–95% band shaded · current marker → today's vrp_forward
+        </span>
       </div>
       <app-edge-vrp-histogram
         [width]="820" [height]="170"

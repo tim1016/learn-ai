@@ -85,6 +85,10 @@ export class RealizedVsIvComponent {
     };
   });
 
+  readonly readoutHistogramN = computed(() =>
+    this.data().vrpHistogram.reduce((acc, b) => acc + b.count, 0),
+  );
+
   readonly currentScoreLabel = computed(() => {
     const s = this.data().edgeScore[this.currentIdx()] ?? 0;
     const sign = s >= 0 ? "+" : "";
