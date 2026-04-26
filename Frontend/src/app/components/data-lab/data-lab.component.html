@@ -771,6 +771,12 @@
           <span aria-hidden="true">· ~{{ runSession.etaSeconds() }}s remaining</span>
         }
       </div>
+      @if (runSession.processingIndicators(); as ind) {
+        <div class="run-progress__phase" role="status">
+          <i class="pi pi-cog pi-spin" aria-hidden="true"></i>
+          Computing {{ ind.indicatorCount }} indicator@if (ind.indicatorCount !== 1) { s } over {{ ind.barCount | number }} bars…
+        </div>
+      }
       <ul class="run-chunk-list" role="list">
         @for (c of runSession.chunks(); track c.index) {
           <li class="run-chunk"
@@ -830,22 +836,25 @@
       <ul class="run-chunk-list" role="list">
         @for (c of runSession.bundleComponents(); track c.name) {
           @let progress = runSession.bundleProgress();
-          @let active = progress?.component === c.name && c.status !== 'done';
+          @let optionsActive = progress?.component === c.name && c.status !== 'done';
+          @let active = optionsActive || c.status === 'fetching';
           <li class="run-chunk"
               [class.run-chunk--done]="c.status === 'done'"
               [class.run-chunk--fetching]="active"
               role="listitem"
-              [attr.aria-label]="c.name + ', ' + (active ? 'in progress, item ' + progress?.step : c.status)">
+              [attr.aria-label]="c.name + ', ' + (active ? 'in progress' : c.status)">
             <span class="run-chunk__icon" aria-hidden="true">
               @if (c.status === 'done') { ✓ }
               @else if (active) { ▸ }
               @else { · }
             </span>
             <span class="run-chunk__id mono">{{ c.name }}</span>
-            @if (active && progress) {
+            @if (optionsActive && progress) {
               <span class="run-chunk__status">
                 contract {{ progress.step }}@if (progress.label) { · <span class="mono">{{ progress.label }}</span> }
               </span>
+            } @else if (c.status === 'fetching') {
+              <span class="run-chunk__status">fetching…</span>
             }
           </li>
         }
@@ -864,11 +873,31 @@
         ✓ Saved {{ runSession.result()?.filename }}
         @if (runSession.result(); as r) { ({{ (r.sizeBytes / 1024 / 1024).toFixed(1) }} MB) }
       </strong>
-      <div class="run-progress__actions">
-        <button type="button" class="btn-secondary btn-sm" (click)="runSession.reset()">
-          Fetch another
-        </button>
-      </div>
+    </div>
+    <!-- Surface the same controls runIdle shows so the user can fire
+         another run immediately without clicking "Fetch another" first. -->
+    <div class="run-card__summary">
+      {{ ticker() || '—' }} · {{ fromDate() }} → {{ toDate() }} ·
+      {{ activeBarTimeframe() === 'custom' ? (multiplier() + ' × ' + timespan()) : activeBarTimeframe() }} ·
+      {{ session() === 'rth' ? 'RTH' : 'Extended' }} ·
+      ~{{ estimatedColumns().length }} columns
+    </div>
+    <div class="run-card__action">
+      <label class="checkbox-inline"
+             pTooltip="Adds a second phase after fetch: writes CSV + every selected companion + the quality report into one .zip download."
+             tooltipPosition="top">
+        <input type="checkbox" [checked]="alsoGenerateZip()" (change)="alsoGenerateZip.set(!alsoGenerateZip())" />
+        <span>Bundle everything into a ZIP</span>
+      </label>
+      <button class="btn-primary" (click)="fetchAndMaybeZip()" [disabled]="!ticker() || loading()">
+        @if (loading()) {
+          <i class="pi pi-spin pi-spinner"></i>
+          <span>Fetching…</span>
+        } @else {
+          <i class="pi pi-chart-line"></i>
+          <span>{{ alsoGenerateZip() ? 'Fetch & bundle' : 'Fetch data' }}</span>
+        }
+      </button>
     </div>
   </ng-template>
 

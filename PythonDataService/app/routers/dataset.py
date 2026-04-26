@@ -122,6 +122,17 @@ def _fetch_and_process(
         else:
             logger.info("[DATASET] adjust_for_dividends=True but no dividends in range — passthrough")
 
+    # Indicator computation can take several seconds when many indicators
+    # are configured (each pandas-ta call is a separate vectorized pass).
+    # Surface it as a phase so the run-card doesn't appear stuck between
+    # the last chunk and bundle_start.
+    if on_event is not None:
+        on_event({
+            "type": "processing_indicators",
+            "indicator_count": len(request.indicator_entries),
+            "bar_count": len(bars),
+        })
+
     df, column_meta = preprocess_and_calculate(
         bars=bars,
         indicator_entries=request.indicator_entries,
@@ -317,6 +328,10 @@ def _build_zip_with_events(
     if on_event is not None:
         on_event({"type": "bundle_start", "components": components})
 
+    def _component_start(name: str) -> None:
+        if on_event is not None:
+            on_event({"type": "bundle_component_start", "name": name})
+
     def _component_done(name: str) -> None:
         if on_event is not None:
             on_event({"type": "bundle_component_done", "name": name})
@@ -353,38 +368,49 @@ def _build_zip_with_events(
         build_trades_csv,
     )
 
+    # Reference companions are independent Polygon REST calls (each can take
+    # several seconds for large date ranges); emit start+done so the run-card
+    # surfaces a "fetching X.csv" indicator instead of jumping queued→done.
     splits_bytes = None
     if request.include_splits:
+        _component_start("splits.csv")
         splits_bytes = build_splits_csv(polygon_client, request.ticker, request.from_date, request.to_date)
         _component_done("splits.csv")
     dividends_bytes = None
     if request.include_dividends:
+        _component_start("dividends.csv")
         dividends_bytes = build_dividends_csv(polygon_client, request.ticker, request.from_date, request.to_date)
         _component_done("dividends.csv")
     overview_bytes = None
     if request.include_ticker_overview:
+        _component_start("ticker_overview.json")
         overview_bytes = build_ticker_overview_json(polygon_client, request.ticker, request.to_date)
         _component_done("ticker_overview.json")
     news_bytes = None
     if request.include_news:
+        _component_start("news.csv")
         news_bytes = build_news_csv(polygon_client, request.ticker, request.from_date, request.to_date)
         _component_done("news.csv")
     financials_bytes = None
     if request.include_financials:
+        _component_start("financials.csv")
         financials_bytes = build_financials_csv(polygon_client, request.ticker, request.from_date, request.to_date)
         _component_done("financials.csv")
     stock_trades_bytes = None
     if request.include_trades:
+        _component_start("trades.csv")
         stock_trades_bytes = build_trades_csv(polygon_client, request.ticker, request.from_date, request.to_date)
         _component_done("trades.csv")
     stock_quotes_bytes = None
     if request.include_quotes:
+        _component_start("quotes.csv")
         stock_quotes_bytes = build_quotes_csv(polygon_client, request.ticker, request.from_date, request.to_date)
         _component_done("quotes.csv")
 
     # Quality report (optional)
     quality_report_bytes: bytes | None = None
     if request.include_quality_report:
+        _component_start("quality_report.md")
         from app.services.data_quality_service import analyze as dq_analyze
         from app.services.data_quality_service import render_report_markdown
 
@@ -401,6 +427,13 @@ def _build_zip_with_events(
             quality_report_bytes = render_report_markdown(dq_result)
         _component_done("quality_report.md")
 
+    # The core components (dataset/metadata/columns) are written together
+    # inside build_zip_bytes. Emit start events for all three first so the
+    # run-card shows "▸ packaging" while the writer runs, then done events
+    # below once it returns.
+    _component_start("dataset.csv")
+    _component_start("metadata.csv")
+    _component_start("columns.csv")
     zip_bytes = build_zip_bytes(
         df=df,
         columns=all_data_cols,
