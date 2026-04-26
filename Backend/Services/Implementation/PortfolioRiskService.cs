@@ -95,7 +95,10 @@ public class PortfolioRiskService : IPortfolioRiskService
             for (var i = 0; i < pythonPositions.Count; i++)
             {
                 var pyPos = pythonPositions[i];
-                var leg = i < point.Legs.Count ? point.Legs[i] : null;
+                // Match by LegId (position identity), not array index. Python
+                // preserves order today, but the contract doesn't guarantee it
+                // and reordering would silently misassign Greeks.
+                var leg = point.Legs.FirstOrDefault(l => l.LegId == pyPos.LegId);
                 if (leg == null) continue;
 
                 var pos = group.First(p => p.Id.ToString() == pyPos.LegId);
@@ -175,7 +178,10 @@ public class PortfolioRiskService : IPortfolioRiskService
             for (var i = 0; i < pythonPositions.Count; i++)
             {
                 var pyPos = pythonPositions[i];
-                var leg = i < point.Legs.Count ? point.Legs[i] : null;
+                // Match by LegId (position identity), not array index. Python
+                // preserves order today, but the contract doesn't guarantee it
+                // and reordering would silently misassign Greeks.
+                var leg = point.Legs.FirstOrDefault(l => l.LegId == pyPos.LegId);
                 if (leg == null) continue;
                 var multiplier = pyPos.Multiplier ?? 100m;
                 totalVega += leg.Vega * pyPos.Quantity * multiplier;
@@ -325,7 +331,10 @@ public class PortfolioRiskService : IPortfolioRiskService
             for (var i = 0; i < pythonPositions.Count; i++)
             {
                 var pyPos = pythonPositions[i];
-                var leg = i < point.Legs.Count ? point.Legs[i] : null;
+                // Match by LegId (position identity), not array index. Python
+                // preserves order today, but the contract doesn't guarantee it
+                // and reordering would silently misassign Greeks.
+                var leg = point.Legs.FirstOrDefault(l => l.LegId == pyPos.LegId);
                 if (leg == null) continue;
 
                 var multiplier = pyPos.Multiplier ?? 1m;
