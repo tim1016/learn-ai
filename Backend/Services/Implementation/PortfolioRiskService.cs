@@ -330,8 +330,12 @@ public class PortfolioRiskService : IPortfolioRiskService
 
                 var multiplier = pyPos.Multiplier ?? 1m;
                 var scenarioValue = leg.TheoreticalPrice * pyPos.Quantity * multiplier;
+                // Join by position identity (LegId), NOT by symbol. For options,
+                // pyPos.Symbol is the underlying ticker — two SPY option legs
+                // would otherwise both attach to the same SPY valuation row and
+                // lose per-position identity.
                 var currentPositionValue = valuation.Positions
-                    .FirstOrDefault(v => v.Symbol == pyPos.Symbol)?.MarketValue ?? 0m;
+                    .FirstOrDefault(v => v.PositionId.ToString() == pyPos.LegId)?.MarketValue ?? 0m;
 
                 positionScenarios.Add(new PositionScenario
                 {
@@ -400,20 +404,20 @@ public class PortfolioRiskService : IPortfolioRiskService
                 .OrderByDescending(l => l.Trade.ExecutionTimestamp)
                 .FirstOrDefaultAsync(ct);
 
-            // EntryIV is decimal? — fall back to a sane default if missing.
-            // The fallback is logged so it's traceable, not silent.
-            decimal currentIv;
-            if (latestLeg?.EntryIV is { } iv && iv > 0m)
+            // Per rule-5 (.NET is transport, never picks model inputs):
+            // when EntryIV is missing, skip this position and log a warning.
+            // .NET does NOT fabricate an IV — that would make it a math
+            // authority. The trade-off: positions without a stored IV are
+            // omitted from the scenario/delta/vega totals. Caller sees
+            // accurate data-coverage rather than fake math.
+            if (latestLeg?.EntryIV is not { } iv || iv <= 0m)
             {
-                currentIv = iv;
-            }
-            else
-            {
-                currentIv = 0.25m;
                 _logger.LogWarning(
-                    "[Portfolio] Position {PositionId} for {Symbol} has no stored EntryIV; using fallback {Iv}",
-                    pos.Id, contract.UnderlyingTicker.Symbol, currentIv);
+                    "[Portfolio] Position {PositionId} for {Symbol} has no stored EntryIV; skipped (no fake IV substituted)",
+                    pos.Id, contract.UnderlyingTicker.Symbol);
+                continue;
             }
+            var currentIv = iv;
 
             var expirationMs = new DateTimeOffset(
                 contract.Expiration.ToDateTime(new TimeOnly(20, 0)),

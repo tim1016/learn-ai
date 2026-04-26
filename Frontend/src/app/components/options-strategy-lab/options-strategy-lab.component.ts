@@ -455,10 +455,9 @@ export class OptionsStrategyLabComponent {
       gamma: row.currentGamma,
       theta: row.currentTheta,
       vega: row.currentVega,
-      // Per-leg P&L at request spot (theoretical - entry, signed by position).
-      legPnl: row.position === 'long'
-        ? (row.currentTheoretical - row.entryPremium) * row.quantity
-        : (row.entryPremium - row.currentTheoretical) * row.quantity,
+      // Per-leg P&L sourced from the server (Phase 1.1 `legDiagnostics.legPnl`).
+      // Sign is already baked in by `position` Python-side; UI just displays.
+      legPnl: row.legPnl,
     }));
   });
 
@@ -724,11 +723,20 @@ export class OptionsStrategyLabComponent {
         )),
       );
 
-      const [primary, ...scenarios] = await Promise.all([
+      // Use allSettled so a single failed what-if scenario doesn't sink the
+      // whole analysis. Primary is the core workflow; scenario overlays are
+      // optional. Each scenario fails independently.
+      const settled = await Promise.allSettled([
         firstValueFrom(primary$),
         ...scenarioCalls,
       ]);
 
+      const primaryOutcome = settled[0];
+      if (primaryOutcome.status === 'rejected') {
+        this.error.set(primaryOutcome.reason?.message || 'Primary analysis failed');
+        return;
+      }
+      const primary = primaryOutcome.value;
       if (!primary.success) {
         this.error.set(primary.error || 'Analysis failed');
         return;
@@ -738,8 +746,14 @@ export class OptionsStrategyLabComponent {
 
       const scenarioResults: Record<string, StrategyAnalyzeResult> = {};
       enabledScenarios.forEach((scenario, idx) => {
-        const r = scenarios[idx];
-        if (r?.success) scenarioResults[scenario.id] = r;
+        const outcome = settled[idx + 1];
+        if (outcome.status === 'fulfilled' && outcome.value?.success) {
+          scenarioResults[scenario.id] = outcome.value;
+        } else if (outcome.status === 'rejected') {
+          // Surface in console for diagnostics but don't block the primary render.
+           
+          console.warn(`[StrategyLab] What-if "${scenario.label}" failed:`, outcome.reason);
+        }
       });
       this.whatIfResults.set(scenarioResults);
 

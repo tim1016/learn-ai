@@ -417,6 +417,7 @@ export interface LegDiagnosticResult {
   currentGamma: number;
   currentTheta: number;
   currentVega: number;
+  legPnl: number;
 }
 
 export interface StrategyAnalyzeResult {

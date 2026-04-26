@@ -19,6 +19,7 @@ stored entry-time values. That's the bug Phase 2 fixes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, status
@@ -39,18 +40,17 @@ logger = logging.getLogger(__name__)
 async def portfolio_scenario(request: ScenarioRequest) -> ScenarioResponse:
     """Evaluate a portfolio across a grid of scenario points."""
     try:
-        n_points = (
-            len(request.grid.spot_shocks)
-            * len(request.grid.time_shifts_days)
-            * len(request.grid.iv_shifts)
-        )
+        n_points = len(request.grid.spot_shocks) * len(request.grid.time_shifts_days) * len(request.grid.iv_shifts)
         logger.info(
             "[Portfolio] Scenario for %s: %d positions × %d points",
             request.positions[0].symbol,
             len(request.positions),
             n_points,
         )
-        result = evaluate_scenario(request)
+        # evaluate_scenario is CPU-bound (BS pricing per grid point per leg);
+        # offload to a thread so concurrent requests / large grids don't stall
+        # the event loop.
+        result = await asyncio.to_thread(evaluate_scenario, request)
         if result.warnings:
             logger.info(
                 "[Portfolio] Scenario completed with %d warning(s); first: %s",

@@ -40,7 +40,12 @@ class OptionPosition(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=20, description="Underlying ticker")
     option_type: Literal["call", "put"]
     strike: float = Field(..., gt=0)
-    expiration_ms: int = Field(..., description="Expiration as int64 ms since Unix epoch UTC")
+    expiration_ms: int = Field(
+        ...,
+        ge=0,
+        le=9_223_372_036_854_775_807,  # 2**63 - 1 (max int64)
+        description="Expiration as int64 ms since Unix epoch UTC",
+    )
     quantity: float = Field(..., description="Net quantity in *contracts* (negative for short)")
     multiplier: float = Field(100.0, gt=0, description="Contract multiplier (default 100)")
     entry_price: float = Field(..., ge=0, description="Per-share entry premium (always positive)")
@@ -61,6 +66,7 @@ class ScenarioGrid(BaseModel):
 
     spot_shocks: list[float] = Field(
         default_factory=lambda: [0.0],
+        min_length=1,
         description=(
             "Spot shocks as fractional moves from current spot "
             "(e.g. -0.05 = spot drops 5%, 0.0 = current, 0.05 = spot rises 5%)"
@@ -68,10 +74,12 @@ class ScenarioGrid(BaseModel):
     )
     time_shifts_days: list[float] = Field(
         default_factory=lambda: [0.0],
+        min_length=1,
         description="Time shifts in calendar days from now (0.0 = now, +7 = one week forward)",
     )
     iv_shifts: list[float] = Field(
         default_factory=lambda: [0.0],
+        min_length=1,
         description="IV shifts as additive deltas (0.0 = current IV, 0.05 = +5 vol points)",
     )
 
@@ -97,10 +105,7 @@ class ScenarioRequest(BaseModel):
         callers should split by underlying."""
         symbols = {p.symbol for p in self.positions}
         if len(symbols) > 1:
-            raise ValueError(
-                f"All positions must share one underlying for /portfolio/scenario; "
-                f"got {sorted(symbols)}"
-            )
+            raise ValueError(f"All positions must share one underlying for /portfolio/scenario; got {sorted(symbols)}")
         return self
 
 

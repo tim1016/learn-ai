@@ -503,6 +503,7 @@ const ANALYZE_OPTIONS_STRATEGY_QUERY = `
       legDiagnostics {
         legId strike optionType position quantity iv entryPremium
         currentTheoretical currentDelta currentGamma currentTheta currentVega
+        legPnl
       }
       error
     }

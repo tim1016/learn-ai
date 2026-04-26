@@ -911,6 +911,7 @@ public class Query
                     CurrentGamma = d.CurrentGamma,
                     CurrentTheta = d.CurrentTheta,
                     CurrentVega = d.CurrentVega,
+                    LegPnl = d.LegPnl,
                 }).ToList(),
                 Error = response.Error,
             };
@@ -1667,6 +1668,7 @@ public class LegDiagnosticResult
     public decimal CurrentGamma { get; set; }
     public decimal CurrentTheta { get; set; }
     public decimal CurrentVega { get; set; }
+    public decimal LegPnl { get; set; }
 }
 
 // ------------------------------------------------------------------

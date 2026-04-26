@@ -66,4 +66,5 @@ public class LegDiagnosticDto
     public decimal CurrentGamma { get; set; }
     public decimal CurrentTheta { get; set; }
     public decimal CurrentVega { get; set; }
+    public decimal LegPnl { get; set; }
 }

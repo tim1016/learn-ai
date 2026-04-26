@@ -4,7 +4,7 @@ Vendored reference source code, frozen at specific commits, used as **ground tru
 
 ## Layout
 
-```
+```text
 references/
 └── <project>/
     └── <commit-sha>/

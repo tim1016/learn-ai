@@ -87,6 +87,10 @@ def _evaluate_point(
 ) -> ScenarioPoint:
     """Evaluate one scenario point: per-leg Greeks + portfolio aggregates."""
     effective_spot = request.spot_price * (1.0 + spot_shock)
+    if effective_spot <= 0.0:
+        # spot_shock <= -1.0 drives spot non-positive; bs_greeks would
+        # raise ValueError. Fail fast at the validation boundary instead.
+        raise ValueError(f"spot_shock={spot_shock} produces non-positive effective_spot={effective_spot}")
     scenario_ms = request.as_of_ms + int(time_shift_days * MS_PER_DAY)
 
     leg_results: list[LegGreeks] = []
@@ -110,9 +114,7 @@ def _evaluate_point(
         leg_results.append(leg)
 
         # Aggregate. Stocks: multiplier=1. Options: multiplier=100 by default.
-        multiplier = (
-            position.multiplier if isinstance(position, OptionPosition) else 1.0
-        )
+        multiplier = position.multiplier if isinstance(position, OptionPosition) else 1.0
         qty = position.quantity
         scaled = qty * multiplier
 
@@ -179,7 +181,7 @@ def _evaluate_leg(
             is_call=position.option_type == "call",
         )
         warnings.append(
-            f"leg {position.leg_id or position.symbol+str(position.strike)}: "
+            f"leg {position.leg_id or position.symbol + str(position.strike)}: "
             f"ttm_years={ttm_years:.6f}, sigma={sigma:.4f} → intrinsic-only valuation"
         )
         return LegGreeks(

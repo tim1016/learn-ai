@@ -554,6 +554,14 @@ def compute_leg_diagnostics(
                 theo = max(leg.strike - spot_price, 0.0)
             delta = gamma = theta = vega = 0.0
 
+        # Per-leg P&L. Long: theoretical - premium (gain when theo rises above
+        # what we paid). Short: premium - theoretical (gain when theo falls
+        # below what we collected). Both scaled by quantity. Per-share — a
+        # contract multiplier is the caller's display choice (matches UI
+        # convention of showing per-share entry/theo).
+        per_share_signed = (theo - leg.premium) if leg.position == "long" else (leg.premium - theo)
+        leg_pnl = per_share_signed * leg.quantity
+
         rows.append(
             LegDiagnostic(
                 leg_id=leg.leg_id,
@@ -568,6 +576,7 @@ def compute_leg_diagnostics(
                 current_gamma=round(gamma, 6),
                 current_theta=round(theta, 6),
                 current_vega=round(vega, 6),
+                leg_pnl=round(leg_pnl, 6),
             )
         )
     return rows
@@ -639,7 +648,7 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
                 request.price_range_pct,
                 request.curve_points,
                 request.risk_free_rate,
-                int(round(shifted_days)),
+                round(shifted_days),
                 iv_shift=request.what_if_iv_shift,
             )
 

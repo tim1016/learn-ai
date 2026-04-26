@@ -62,9 +62,7 @@ class StrategyAnalyzeRequest(BaseModel):
     )
     include_greek_curves: bool = Field(
         False,
-        description=(
-            "If true, include `greek_curves` — aggregate delta/gamma/theta/vega per spot grid point."
-        ),
+        description=("If true, include `greek_curves` — aggregate delta/gamma/theta/vega per spot grid point."),
     )
     include_leg_diagnostics: bool = Field(
         False,
@@ -142,6 +140,10 @@ class LegDiagnostic(BaseModel):
     current_gamma: float
     current_theta: float
     current_vega: float
+    # Per-leg P&L computed on the canonical Python side so the UI never
+    # synthesizes a number a user compares against another number. Sign is
+    # already baked in by `position` (long: theo - premium, short: premium - theo).
+    leg_pnl: float
 
 
 class StrategyAnalyzeResponse(BaseModel):

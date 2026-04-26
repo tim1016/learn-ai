@@ -28,6 +28,17 @@ from app.services.bs_greeks import black_scholes_greeks, bs_european_price
 from app.services.strategy_engine import analyze_strategy
 
 
+def _ttm_years(request: StrategyAnalyzeRequest) -> float:
+    """Derive time-to-maturity (years) from a request's expiration_date.
+
+    Tests should use this rather than hardcoding `30 / 365.0` so they
+    don't silently use wrong expected values if the fixture default changes.
+    """
+    exp = date.fromisoformat(request.expiration_date)
+    days = max((exp - date.today()).days, 0)
+    return days / 365.0
+
+
 def _bull_call_spread(today_plus: int = 30) -> StrategyAnalyzeRequest:
     """Long 100C / Short 105C, IV 25%, 30 DTE, spot 102."""
     expiration = (date.today() + timedelta(days=today_plus)).strftime("%Y-%m-%d")
@@ -35,12 +46,22 @@ def _bull_call_spread(today_plus: int = 30) -> StrategyAnalyzeRequest:
         symbol="TEST",
         legs=[
             StrategyLeg(
-                leg_id="long_100c", strike=100.0, option_type="call", position="long",
-                premium=5.0, iv=0.25, quantity=1,
+                leg_id="long_100c",
+                strike=100.0,
+                option_type="call",
+                position="long",
+                premium=5.0,
+                iv=0.25,
+                quantity=1,
             ),
             StrategyLeg(
-                leg_id="short_105c", strike=105.0, option_type="call", position="short",
-                premium=2.0, iv=0.25, quantity=1,
+                leg_id="short_105c",
+                strike=105.0,
+                option_type="call",
+                position="short",
+                premium=2.0,
+                iv=0.25,
+                quantity=1,
             ),
         ],
         expiration_date=expiration,
@@ -99,10 +120,7 @@ class TestCurrentCurve:
         max_diff = max(abs(b - s) for b, s in zip(baseline_values, shifted_values, strict=True))
         # Sanity: a 10-vol-point shift on a 30-DTE 25%-IV spread must move
         # *some* point on the curve by more than a cent.
-        assert max_diff > 0.01, (
-            f"IV shift 0→0.10 produced max curve change of only {max_diff:.6f}; "
-            f"expected > 0.01"
-        )
+        assert max_diff > 0.01, f"IV shift 0→0.10 produced max curve change of only {max_diff:.6f}; expected > 0.01"
 
 
 class TestGreekCurves:
@@ -119,17 +137,27 @@ class TestGreekCurves:
         request = _bull_call_spread()
         request.include_greek_curves = True
         result = analyze_strategy(request)
-        ttm = 30 / 365.0
+        ttm = _ttm_years(request)
         # Spot-check at request spot: delta should equal sum of per-leg
         # closed-form deltas with sign and quantity applied.
         atm = min(result.greek_curves, key=lambda p: abs(p.price - 102.0))
         long_g = black_scholes_greeks(
-            spot=atm.price, strike=100.0, ttm_years=ttm, volatility=0.25,
-            rate=0.04, dividend=0.0, is_call=True,
+            spot=atm.price,
+            strike=100.0,
+            ttm_years=ttm,
+            volatility=0.25,
+            rate=0.04,
+            dividend=0.0,
+            is_call=True,
         )
         short_g = black_scholes_greeks(
-            spot=atm.price, strike=105.0, ttm_years=ttm, volatility=0.25,
-            rate=0.04, dividend=0.0, is_call=True,
+            spot=atm.price,
+            strike=105.0,
+            ttm_years=ttm,
+            volatility=0.25,
+            rate=0.04,
+            dividend=0.0,
+            is_call=True,
         )
         expected_delta = long_g.delta * 1 - short_g.delta * 1
         assert atm.delta == pytest.approx(expected_delta, abs=1e-3)
@@ -150,12 +178,16 @@ class TestLegDiagnostics:
         request = _bull_call_spread()
         request.include_leg_diagnostics = True
         result = analyze_strategy(request)
-        ttm = 30 / 365.0
+        ttm = _ttm_years(request)
         for row in result.leg_diagnostics:
             expected = bs_european_price(
-                spot=request.spot_price, strike=row.strike, ttm_years=ttm,
-                rate=request.risk_free_rate, volatility=row.iv,
-                is_call=row.option_type == "call", dividend=0.0,
+                spot=request.spot_price,
+                strike=row.strike,
+                ttm_years=ttm,
+                rate=request.risk_free_rate,
+                volatility=row.iv,
+                is_call=row.option_type == "call",
+                dividend=0.0,
             )
             assert row.current_theoretical == pytest.approx(expected, abs=1e-4)
 
