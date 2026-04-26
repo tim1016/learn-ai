@@ -75,7 +75,16 @@
       "Bash(cp -v src/app/components/indicator-validation/indicator-report/indicator-report.component.html /home/inkant/Documents/learn-ai/Frontend/src/app/components/indicator-validation/indicator-report/indicator-report.component.html)",
       "Bash(cp -v src/app/components/indicator-validation/indicator-report/indicator-report.component.ts /home/inkant/Documents/learn-ai/Frontend/src/app/components/indicator-validation/indicator-report/indicator-report.component.ts)",
       "Bash(cp -v src/app/components/strategy-lab/strategy-docs/strategy-docs.component.ts /home/inkant/Documents/learn-ai/Frontend/src/app/components/strategy-lab/strategy-docs/strategy-docs.component.ts)",
-      "Bash(wait)"
+      "Bash(wait)",
+      "Bash(../.venv/Scripts/python -m pytest tests/services/test_bs_greeks.py tests/research/options/ tests/volatility/ -x -q)",
+      "Bash(\"C:/Users/inkan/learn-ai/.venv/Scripts/python\" -m pip install python-multipart -q)",
+      "Bash(../.venv/Scripts/python -m pytest tests/services/test_bs_greeks.py tests/volatility/ -x -q)",
+      "Bash(\"C:/Users/inkan/learn-ai/.venv/Scripts/python\" -m pip install QuantLib -q)",
+      "Bash(\"C:/Users/inkan/learn-ai/.venv/Scripts/python\" -c \"import QuantLib; print\\(QuantLib.__version__\\)\")",
+      "Bash(\"C:/Users/inkan/learn-ai/.venv/Scripts/python\" -m pip install plotly -q)",
+      "Bash(../.venv/Scripts/python -m pytest tests/services/test_bs_greeks.py tests/research/options/ -q)",
+      "Bash(../.venv/Scripts/python -m pytest tests/services/test_options_companion_service.py tests/volatility/test_solver.py -q)",
+      "Bash(.venv/Scripts/ruff check *)"
     ]
   }
 }
