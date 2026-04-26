@@ -1,10 +1,40 @@
 # Numerical authority migration plan
 
-**Status:** Active
+**Status:** Active — Phase 0/1/2 shipped; Phase 3 and Phase 4 reformulated (see § Status as of 2026-04-27)
 **Owner:** Inkant (single-developer migration)
 **Started:** 2026-04-26
 **Target window:** 2-3 weeks of focused work
 **Calibration:** localhost research project, math rigor first, no operational ceremony beyond what improves reproducibility
+
+## Status as of 2026-04-27
+
+**Shipped:**
+- Phase 0 — governance (commit `e52e7c3`): vendored LEAN refs, registry rows added, engine-authority-map.md, this plan, AGENTS.md update.
+- Phase 1.1–1.2 — server payload + frontend rewire (commit `451394d`): `OptionsStrategyLabComponent` consumes server `currentCurve` / `greekCurves` / `legDiagnostics`. No client-side BS in that component.
+- Phase 1.4 — cross-engine BS parity (commit `451394d` + fix `69d2bfe`): 361/361 cases pass at `atol=1e-10` between `app/services/bs_greeks.py` and `app/services/quantlib_pricer.py` (analytic_bs engine). The `69d2bfe` fix removed an `round(npv, 8)` in `quantlib_pricer.price_option` that was leaking precision into the parity comparison; downstream consumers either round explicitly at their serialization boundary or pass through.
+- Phase 2 — portfolio scenario / live-Greeks (commit `d9738a5`): `/api/portfolio/scenario` and `/api/portfolio/live-greeks` endpoints; `IPolygonService.PortfolioScenarioAsync` + `PortfolioLiveGreeksAsync` passthroughs; `PortfolioRiskService.RunScenarioAsync` rewritten; old `EntryVega/EntryTheta` shock-propagation deleted.
+- Phase 3 prep (commit `d3c3c18`): `BacktestService.cs` annotated as deprecated.
+
+**Phase 1.3 partial.** `Frontend/src/app/utils/black-scholes.ts` header upgraded with `@deprecated` and "no new callers" rule. Two intentional callers remain (decision per row 1 below):
+1. `pricing-lab.component.ts` — comparison harness (its purpose is to show TS pricer alongside server pricer side-by-side); explicitly **legacy-ok**.
+2. `strategy-builder.component.ts` — interactive leg builder (round-trip latency tradeoff). Pending decision: migrate or formally bless as legacy-ok.
+
+**Phase 1.3 follow-up still open.** `ComputeDollarDeltaAsync` and `ComputePortfolioVegaAsync` in `PortfolioRiskService.cs` still source per-position Greeks from `EntryDelta`/`EntryVega` (DB stored at trade entry). Aggregation is rule-5 compliant; the *Greeks themselves* should come from `PortfolioLiveGreeksAsync`. Tracked by the `STALE-GREEK NOTICE` comment in the file. Worked on as a Phase 2.3 follow-up cleanup.
+
+**Phase 3 deferred — structural blocker.** Phase 3 as originally written assumed `runBacktest` becomes a passthrough to `/api/engine/backtest`. Investigation on 2026-04-27 found:
+1. Python's newer engine (`app/engine/strategy/algorithms/`) ports only 2 of the 4 strategies the .NET path runs (sma_crossover, rsi_mean_reversion). `RunMomentumRsiStochastic` and `RunRsiReversal` exist only in .NET and in the older `app/services/strategies/` (function-based, pandas-ta) registry — the older registry is not exposed via `/api/engine/backtest`.
+2. The `runBacktest` mutation has two consumers: Strategy Lab (deprecated UI) AND `lean-engine` (its eventual replacement). `lean-engine` currently re-imports `ReplayChartComponent`, `ReplayControlsComponent`, `LeanStatisticsComponent` from inside `strategy-lab/`, and calls `marketData.runBacktest(...)` itself. So lean-engine is **not yet self-sufficient** to replace strategy-lab.
+
+The cleanest end state — confirmed by user 2026-04-27 — is **lean-engine fully replaces strategy-lab**, at which point the four .NET strategies + Strategy Lab UI + the older `app/services/strategies/` strategy files all delete together. The current state is intermediate. Phase 3 is deferred until `lean-engine` reaches feature parity with Strategy Lab; Phase 3.0 (the deprecation comment in `BacktestService.cs`) remains the only Phase 3 work shipped on this branch.
+
+**Phase 4 needs reformulation.** Phase 4 as originally written said "thin adapter to `app/engine/strategy/algorithms/*.py`" for `rule_based_backtest.py`. Investigation on 2026-04-27 found that `rule_based_backtest.py` is **not a strategy implementation** — it is a **configurable rule engine** (271 lines): composable entry conditions (EMA crossover, RSI band, ADX filter, gap filter), multiple exit modes (fixed-bar, indicator-based), parameterized via JSON. The newer engine has only **fixed strategies** (each algorithm is a `Strategy` subclass with hardcoded rules — `SpyEmaCrossoverAlgorithm`, etc.), so there is no equivalent "configurable rule engine" to delegate to. Reformulated options:
+- Build a new `RuleBasedAlgorithm(Strategy)` subclass that takes config and dispatches — meaningful new code, not an adapter conversion.
+- Map specific configurations to specific fixed algorithms — fragile because `rule_based_backtest` has more parameters than any single fixed strategy.
+- Accept `rule_based_backtest.py` as a permanent alternate engine, document the divide, and cite parity tests against `app/engine/` for the configurations both can run.
+
+Live consumers of `rule_based_backtest`: `Backend/GraphQL/Mutation.cs:704 runRuleBasedBacktest`, `PythonDataService/app/routers/jobs.py:91 POST /backtest` (Redis-backed async job), `Frontend/src/app/services/market-data.service.ts:931 runRuleBasedBacktest`. 638 lines of validation tests at `tests/test_rule_based_backtest_validation.py`. Dropping is not an option without UI consequences.
+
+Phase 4 is therefore deferred pending a design decision on which of the three reformulated options to take.
 
 ## Why this plan exists
 
@@ -216,10 +246,10 @@ After all phases:
 
 | Week | Phase | Owner | Status |
 |---|---|---|---|
-| 1 (days 1-2) | Phase 0 — governance | Inkant | pending |
-| 1 (days 3-7) | Phase 1 — options math cutover | Inkant | pending |
-| 2 | Phase 2 — portfolio scenario / live-Greeks | Inkant | pending |
-| 3 (days 1-3) | Phase 3 — retire BacktestService math | Inkant | pending |
-| 3 (days 4-5) | Phase 4 — `rule_based_backtest.py` adapter | Inkant | pending |
+| 1 (days 1-2) | Phase 0 — governance | Inkant | **shipped 2026-04-26** (`e52e7c3`) |
+| 1 (days 3-7) | Phase 1 — options math cutover | Inkant | **1.1/1.2/1.4 shipped** (`451394d`, fix `69d2bfe`); 1.3 partial (two intentional callers remain) |
+| 2 | Phase 2 — portfolio scenario / live-Greeks | Inkant | **shipped 2026-04-26** (`d9738a5`); 2.3 follow-up open (`STALE-GREEK NOTICE` in `PortfolioRiskService.cs`) |
+| 3 (days 1-3) | Phase 3 — retire BacktestService math | Inkant | **deferred** — blocked on lean-engine reaching feature parity with Strategy Lab. Phase 3.0 deprecation comment shipped (`d3c3c18`). See § Status as of 2026-04-27. |
+| 3 (days 4-5) | Phase 4 — `rule_based_backtest.py` adapter | Inkant | **deferred** — original "thin adapter" plan doesn't fit the actual code shape; needs reformulation. See § Status as of 2026-04-27. |
 
 Phase 4 can move earlier and run in parallel with Phase 1 or 2 if convenient — it has no dependencies after Phase 0.
