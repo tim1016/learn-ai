@@ -64,6 +64,7 @@ from app.engine.edge.regime_clustering import (
 from app.engine.edge.regime_strategy_eval import partition_by_regime
 from app.engine.edge.trade_simulator import TradeSimConfig, simulate
 from app.engine.edge.vrp import compute_vrp, vrp_signal
+from app.services.iv_recorder import get_iv_store
 from app.volatility.basis import convert_iv_act365_to_trading252
 
 logger = logging.getLogger(__name__)
@@ -160,7 +161,17 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
             rv_trailing[key] = _series_to_jsonable(trailing)
             rv_forward[key] = _series_to_jsonable(fwd)
 
-    iv, confidence = _parse_iv_series(req.iv_series, bars.index)
+    # Caller-supplied iv_series wins; otherwise fall through to the recorder
+    # for the bars window. No silent forward-fill — sparse snapshots remain
+    # sparse and downstream consumers handle NaN explicitly.
+    if req.iv_series:
+        iv_series_for_parse: list[dict] | None = req.iv_series
+        iv_source_label = "caller_supplied"
+    else:
+        recorded = _iv_series_from_recorder(req.symbol, bars.index)
+        iv_series_for_parse = recorded if recorded else None
+        iv_source_label = "recorder" if recorded else "absent"
+    iv, confidence = _parse_iv_series(iv_series_for_parse, bars.index)
 
     # HF RV (TRD/252) for VRP — for 15-min bars uses two-component HF; for daily
     # bars falls back to YZ at 21-day window (no intraday detail to exploit).
@@ -211,13 +222,52 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
         rv_hf_forward=_series_to_jsonable(rv_hf_fwd),
         vrp_forward=_series_to_jsonable(vrp_fwd),
         vrp_z=_series_to_jsonable(sig.vrp_z),
-        iv_source="caller_supplied" if req.iv_series else "absent",
+        iv_source=iv_source_label,
         confidence=_series_to_jsonable(sig.confidence) if sig.confidence is not None else None,
         vrp_z_scaled=_series_to_jsonable(sig.vrp_z_scaled) if sig.vrp_z_scaled is not None else None,
         floor_gated=[bool(v) for v in sig.floor_gated.tolist()] if sig.floor_gated is not None else None,
         explanation=explanation,
         coverage=coverage,
     )
+
+
+def _iv_series_from_recorder(symbol: str, bars_index: pd.Index) -> list[dict]:
+    """Read recorded IV snapshots in the bars window into ``iv_series`` shape.
+
+    Prefers ``iv30_vix_style`` and falls back to ``iv30_parametric``; rows
+    where both are None or that carry an ``error`` are skipped (no synthesis).
+    Pulls ``variance_contribution_synthetic`` from ``iv_provenance`` when
+    present so downstream confidence gating runs unchanged. ``health_score``
+    is intentionally not synthesized — recorder provenance does not carry it,
+    and ``_parse_iv_series`` defaults missing health to 1.0, which means
+    "the slot was successfully captured at its scheduled time" — a defensible
+    treatment of recorder-sourced data without inventing a health number.
+
+    Returns ``[]`` when the recorder has nothing in the window; the caller
+    treats that as ``iv_source="absent"``.
+    """
+    if len(bars_index) == 0:
+        return []
+    rows = get_iv_store().read_series(
+        symbol,
+        start_ms=int(bars_index.min()),
+        end_ms=int(bars_index.max()),
+    )
+    out: list[dict] = []
+    for r in rows:
+        if r.error is not None:
+            continue
+        iv = r.iv30_vix_style if r.iv30_vix_style is not None else r.iv30_parametric
+        if iv is None:
+            continue
+        item: dict = {"ts": r.snapshot_ts_ms, "iv30": float(iv)}
+        prov = r.iv_provenance or {}
+        if "variance_contribution_synthetic" in prov:
+            item["variance_contribution_synthetic"] = float(
+                prov["variance_contribution_synthetic"]
+            )
+        out.append(item)
+    return out
 
 
 def _parse_iv_series_for_regime(
@@ -404,7 +454,14 @@ async def regimes_cluster(body: RegimeClusterBody) -> dict:
     if len(bars) < 80:
         raise HTTPException(400, "need at least 80 bars to cluster regimes")
 
-    iv30, weight = _parse_iv_series_for_regime(body.iv_series, bars.index)
+    # Same caller-wins-then-recorder fallback as realized-vs-iv. When neither
+    # supplies iv_series, regime features fall back to OHLCV-only.
+    if body.iv_series:
+        iv_series_for_parse: list[dict] | None = body.iv_series
+    else:
+        recorded = _iv_series_from_recorder(body.symbol, bars.index)
+        iv_series_for_parse = recorded if recorded else None
+    iv30, weight = _parse_iv_series_for_regime(iv_series_for_parse, bars.index)
     if iv30 is not None:
         feats = build_full_features(bars, iv30=iv30, iv_feature_weight=weight).dropna()
     else:

@@ -191,6 +191,26 @@ class JsonlIvSnapshotStore(IvSnapshotStore):
         return out
 
 
+# ── Default store singleton ─────────────────────────────────────────────────
+
+
+_DEFAULT_STORE_PATH = Path("/var/lib/iv-recorder")
+_default_store: IvSnapshotStore = JsonlIvSnapshotStore(_DEFAULT_STORE_PATH)
+
+
+def get_iv_store() -> IvSnapshotStore:
+    """Return the process-wide recorder store. Both the recorder router
+    (writes) and consumer routers like edge.py (reads) share this singleton
+    so a single test injection swaps both sides."""
+    return _default_store
+
+
+def set_iv_store(store: IvSnapshotStore) -> None:
+    """Swap the module-level store. Used by tests to inject InMemory."""
+    global _default_store
+    _default_store = store
+
+
 # ── The work function ───────────────────────────────────────────────────────
 
 
