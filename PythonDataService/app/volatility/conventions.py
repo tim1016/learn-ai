@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
+
+TRADING_DAYS_PER_YEAR: Final[int] = 252
+CALENDAR_DAYS_PER_YEAR: Final[int] = 365
 
 
 @dataclass(frozen=True)

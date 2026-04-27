@@ -26,7 +26,16 @@ class VrpSignal:
 def compute_vrp(iv: pd.Series, rv: pd.Series) -> pd.Series:
     """VRP in variance units (σ_IV² − σ_RV²).
 
-    Both inputs must already be annualized vols (not variances).
+    **Both inputs must be in the same annualization basis.** The repo
+    convention is **TRD/252**. Realized vol from ``realized_vol.py`` is
+    already TRD/252 when ``annualize=True``. Implied vol coming out of
+    ``solver.py`` is **ACT/365** by default — convert with
+    :func:`app.volatility.basis.convert_iv_act365_to_trading252` (or use
+    :func:`iv30_atm_50d_trading_basis`) before passing here.
+
+    Mixing bases silently biases VRP by ~0.7% in normal weeks and up to
+    ~5% in dense-holiday windows. See
+    ``docs/references/iv-rv-basis-alignment.md`` for the math.
     """
     return iv**2 - rv**2
 

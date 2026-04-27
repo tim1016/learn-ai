@@ -41,6 +41,10 @@ def iv30_atm_50d(iv_by_expiry: pd.Series, target_days: int = 30) -> float | None
 
     iv_by_expiry: Series indexed by expiry-in-days, values = ATM IV (50Δ).
     Returns None if no straddling expiries exist.
+
+    Output σ is on ACT/365 basis (the input σ values come from our IV solver
+    which uses ``TTM = days / 365``). For comparison against trailing/forward
+    realized vol (TRD/252), use :func:`iv30_atm_50d_trading_basis` instead.
     """
     if iv_by_expiry.empty:
         return None
@@ -59,6 +63,25 @@ def iv30_atm_50d(iv_by_expiry: pd.Series, target_days: int = 30) -> float | None
         t2_years=t2_days / 365.0,
         target_t_years=target_days / 365.0,
     )
+
+
+def iv30_atm_50d_trading_basis(
+    iv_by_expiry: pd.Series,
+    asof: pd.Timestamp | int,
+    target_days: int = 30,
+) -> float | None:
+    """ATM IV30 at constant maturity, returned on TRD/252 basis.
+
+    Computes :func:`iv30_atm_50d` (ACT/365), then converts using NYSE
+    trading-day count over ``target_days`` calendar days at ``asof``. Use this
+    output directly in ``vrp.compute_vrp`` against TRD/252-annualized RV.
+    """
+    sigma_act365 = iv30_atm_50d(iv_by_expiry, target_days)
+    if sigma_act365 is None:
+        return None
+    from app.volatility.basis import convert_iv_act365_to_trading252
+
+    return convert_iv_act365_to_trading252(sigma_act365, asof, target_days)
 
 
 def skew_25d(iv_25d_put: float, iv_25d_call: float) -> float:
