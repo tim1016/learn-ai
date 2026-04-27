@@ -1,10 +1,16 @@
--r requirements.txt
+# Install runtime deps directly from heavy + light. The deprecated
+# requirements.txt (a hand-maintained concat) is no longer the source of
+# truth — adding a dep there silently drifted from heavy/light and broke
+# CI. See PythonDataService/requirements.txt for the deprecation note.
+-r requirements-heavy.txt
+-r requirements-light.txt
 
 # Testing
 pytest
 pytest-asyncio
 pytest-cov
-pyarrow
+# (pyarrow lives in requirements-heavy.txt now — used at runtime by the
+# vol-surface cache, not just by tests.)
 
 # Linting & Formatting
 ruff>=0.8
