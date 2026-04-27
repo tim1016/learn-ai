@@ -16,6 +16,8 @@ from app.routers import (
     engine,
     indicator_reliability,
     indicators,
+    iv30,
+    iv_recorder,
     jobs,
     market_monitor,
     options,
@@ -84,6 +86,12 @@ app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"]
 app.include_router(jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
 # Edge router carries its own /api/edge prefix.
 app.include_router(edge.router)
+# Live IV30 endpoints (vix-style + parametric) — Step C of IV-ownership plan.
+# Router carries its own /api/edge/iv30 prefix.
+app.include_router(iv30.router)
+# IV recorder (POST /api/iv-recorder/snapshot, GET .../series/{ticker}) —
+# Step D of IV-ownership plan. Driven by .NET cron; not in-process.
+app.include_router(iv_recorder.router)
 # /research/data-divergence/* — dashboard + matrix endpoints. The router
 # carries its own prefix so we mount it bare.
 app.include_router(research_divergence.router)
