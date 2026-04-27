@@ -31,6 +31,12 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.Configure<PolygonServiceOptions>(
     builder.Configuration.GetSection(PolygonServiceOptions.SectionName));
 
+// IV recorder cron — Step D follow-up of the IV-ownership plan. Opt-in
+// via `IvRecorder:Enabled = true` in config; dev/CI default is off.
+// Schedules one Quartz trigger per slot (e.g. 09:35 / 12:30 / 16:00 ET)
+// that POSTs to Python's /api/iv-recorder/snapshot per configured ticker.
+builder.Services.AddIvRecorder(builder.Configuration);
+
 // Shared Polly policies — generous thresholds to avoid tripping circuit on transient Polygon hiccups
 var retryPolicy = HttpPolicyExtensions
     .HandleTransientHttpError()
