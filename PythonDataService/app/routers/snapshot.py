@@ -30,6 +30,7 @@ from app.models.responses import (
     UnifiedSnapshotSession,
 )
 from app.services.polygon_client import PolygonClientService
+from app.services.rate_dividend_service import get_rate_and_dividend
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -81,11 +82,38 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
 
         logger.info(f"[Snapshot] Returning {len(contracts)} contracts for {request.underlying_ticker}")
 
+        # Source live r and q for callers (pricing-lab, strategy-builder, etc.).
+        # Best-effort: failures fall back to the FRED 0.043 default and q=0
+        # without breaking the snapshot payload.
+        risk_free_rate: float | None = None
+        dividend_yield: float | None = None
+        rate_source: str | None = None
+        dividend_source: str | None = None
+        spot = underlying.price if underlying and underlying.price else None
+        if spot and spot > 0:
+            try:
+                rd = get_rate_and_dividend(
+                    ticker=request.underlying_ticker,
+                    spot_price=spot,
+                    polygon=polygon_client,
+                    dte_days=30,
+                )
+                risk_free_rate = rd.rate
+                dividend_yield = rd.dividend_yield
+                rate_source = rd.source_rate
+                dividend_source = rd.source_dividend
+            except Exception as exc:
+                logger.warning("[Snapshot] rate/dividend lookup failed: %s", exc)
+
         return OptionsChainSnapshotResponse(
             success=True,
             underlying=underlying,
             contracts=contracts,
             count=len(contracts),
+            risk_free_rate=risk_free_rate,
+            dividend_yield=dividend_yield,
+            rate_source=rate_source,
+            dividend_source=dividend_source,
         )
 
     except Exception as e:

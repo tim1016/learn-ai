@@ -690,6 +690,11 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
 
       this.underlying.set(result.underlying);
       this.allContracts.set(result.contracts);
+      // Auto-populate riskFreeRate from FRED-sourced rate (Step 8 of IV-RV alignment).
+      // User can still override via UI.
+      if (result.riskFreeRate != null && result.riskFreeRate > 0) {
+        this.riskFreeRate.set(result.riskFreeRate);
+      }
 
       setTimeout(() => this.scrollToAtm(), 100);
     } catch (err) {

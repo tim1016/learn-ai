@@ -204,6 +204,10 @@ const GET_OPTIONS_CHAIN_SNAPSHOT_QUERY = `
         lastQuote { bid ask bidSize askSize midpoint timeframe }
       }
       count
+      riskFreeRate
+      dividendYield
+      rateSource
+      dividendSource
       error
     }
   }
