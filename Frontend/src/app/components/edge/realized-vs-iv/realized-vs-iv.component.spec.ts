@@ -7,6 +7,7 @@ import {
   EdgeMockDataService,
   type EdgeData,
   type IvConfidenceSummary,
+  type LiveIv30Marker,
 } from "../services/edge-mock-data.service";
 
 /**
@@ -120,5 +121,75 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
     expect(el.querySelector('[data-testid="iv-gated-now"]')).toBeNull();
     expect(el.querySelector('[data-testid="iv-confidence-value"]')).toBeNull();
     expect(textOf(el, '[data-testid="iv-source"]')).toContain("no IV provided");
+  });
+});
+
+describe("RealizedVsIvComponent — live IV30 readout", () => {
+  let fixture: ComponentFixture<RealizedVsIvComponent>;
+  let component: RealizedVsIvComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [RealizedVsIvComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(RealizedVsIvComponent);
+    component = fixture.componentInstance;
+  });
+
+  function setLiveIv30(live: LiveIv30Marker | null): void {
+    const base = TestBed.inject(EdgeMockDataService).get();
+    const next: EdgeData = { ...base, liveIv30: live };
+    component.data.set(next);
+    fixture.detectChanges();
+  }
+
+  it("does not render the live_iv30 readout row when liveIv30 is null", () => {
+    setLiveIv30(null);
+    expect(fixture.nativeElement.querySelector('[data-testid="live-iv30-readout"]')).toBeNull();
+  });
+
+  it("renders the live IV30 percent and the vix-style method label", () => {
+    setLiveIv30({
+      method: "vix_style",
+      iv30Act365: 0.213,
+      snapshotTsMs: 1_700_000_000_000,
+      spot: 591,
+      varianceContributionSynthetic: 0.04,
+      strikeCoverageScore: 0.92,
+    });
+
+    const readout = fixture.nativeElement.querySelector('[data-testid="live-iv30-readout"]');
+    if (!readout) throw new Error("live-iv30-readout not rendered");
+    expect(readout.textContent).toContain("21.3%");
+
+    const method = readout.querySelector('[data-testid="live-iv30-method"]');
+    if (!method) throw new Error("live-iv30-method not rendered");
+    expect(method.textContent).toContain("vix-style");
+
+    const synth = readout.querySelector('[data-testid="live-iv30-synth"]');
+    if (!synth) throw new Error("live-iv30-synth not rendered");
+    expect(synth.textContent).toContain("4%");
+  });
+
+  it("labels the parametric fallback when method=parametric", () => {
+    setLiveIv30({
+      method: "parametric",
+      iv30Act365: 0.18,
+      snapshotTsMs: 1_700_000_000_000,
+      spot: 591,
+      varianceContributionSynthetic: 0.0,
+      strikeCoverageScore: 0.5,
+    });
+
+    const method = fixture.nativeElement.querySelector('[data-testid="live-iv30-method"]');
+    if (!method) throw new Error("live-iv30-method not rendered");
+    expect(method.textContent).toContain("parametric");
+    expect(method.textContent).not.toContain("vix-style");
   });
 });

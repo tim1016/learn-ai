@@ -2,7 +2,7 @@ import { HttpClient } from "@angular/common/http";
 import { inject, Injectable } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import type {
-  Candle, EdgeData, IvConfidenceSummary, SignalMark, VrpBin,
+  Candle, EdgeData, IvConfidenceSummary, LiveIv30Marker, SignalMark, VrpBin,
 } from "./edge-mock-data.service";
 
 interface BarPayload {
@@ -61,6 +61,26 @@ interface RealizedVsIvSeriesResponse {
   };
 }
 
+interface Iv30LiveResponse {
+  symbol: string;
+  method: "vix_style" | "parametric";
+  target_calendar_days: number;
+  iv30_act365: number;
+  spot: number;
+  rate: number;
+  dividend_yield: number;
+  rate_source: string;
+  dividend_source: string;
+  expiries_used_calendar_days: number[];
+  snapshot_ts_ms: number;
+  iv_provenance: {
+    iv_source: string;
+    price_source_mix: Record<string, number>;
+    variance_contribution_synthetic: number;
+    strike_coverage_score: number;
+  };
+}
+
 export type BarSize = "5m" | "15m" | "1h" | "1D";
 export type Tenor = "7D" | "14D" | "30D" | "60D";
 export type Estimator = "ctc" | "parkinson" | "gk" | "yz";
@@ -80,14 +100,16 @@ export class EdgeApiService {
   private readonly http = inject(HttpClient);
 
   /** Fetch bars from /api/aggregates, post to /api/edge/realized-vs-iv/series,
-   *  project the response into the EdgeData shape used by the chart components. */
+   *  project the response into the EdgeData shape used by the chart components.
+   *  Also fires a parallel live-IV30 fetch (vix-style → parametric fallback) and
+   *  attaches the result so the chart can draw the live marker. */
   async computeRealizedVsIv(req: ComputeRvIvRequest): Promise<Partial<EdgeData>> {
     const bars = await this.fetchBars(req.symbol, req.barSize, req.tenor);
     if (bars.length === 0) {
       throw new Error(`no bars returned for ${req.symbol}`);
     }
     const tenorDays = this.tenorToDays(req.tenor);
-    const series = await firstValueFrom(this.http.post<RealizedVsIvSeriesResponse>(
+    const seriesP = firstValueFrom(this.http.post<RealizedVsIvSeriesResponse>(
       "/api/edge/realized-vs-iv/series",
       {
         symbol: req.symbol,
@@ -99,7 +121,28 @@ export class EdgeApiService {
         bars,
       }
     ));
-    return this.projectIntoEdgeData(req.symbol, bars, series);
+    const liveIvP = this.getLiveIv30(req.symbol, tenorDays);
+    const series = await seriesP;
+    const partial = this.projectIntoEdgeData(req.symbol, bars, series);
+    partial.liveIv30 = await liveIvP;
+    return partial;
+  }
+
+  /** Fetch the live IV30 value for `symbol`. Tries `vix-style` first
+   *  (matches the server-side recorder preference); on failure falls back
+   *  to `parametric`. Returns null when both endpoints error — the marker
+   *  is non-load-bearing UI, so we don't surface the error to the page. */
+  async getLiveIv30(symbol: string, targetCalendarDays = 30): Promise<LiveIv30Marker | null> {
+    const tryOne = async (path: string, method: LiveIv30Marker["method"]) => {
+      const resp = await firstValueFrom(this.http.post<Iv30LiveResponse>(
+        path, { symbol, target_calendar_days: targetCalendarDays },
+      ));
+      return liveResponseToMarker(resp, method);
+    };
+    try { return await tryOne("/api/edge/iv30/vix-style", "vix_style"); }
+    catch { /* fall through to parametric */ }
+    try { return await tryOne("/api/edge/iv30/parametric", "parametric"); }
+    catch { return null; }
   }
 
   private async fetchBars(symbol: string, barSize: BarSize, _tenor: Tenor): Promise<BarPayload[]> {
@@ -231,6 +274,20 @@ export class EdgeApiService {
       sparklines: { vrp: [], equity: [], stability: [] },
     };
   }
+}
+
+function liveResponseToMarker(
+  resp: Iv30LiveResponse,
+  method: LiveIv30Marker["method"],
+): LiveIv30Marker {
+  return {
+    method,
+    iv30Act365: resp.iv30_act365,
+    snapshotTsMs: resp.snapshot_ts_ms,
+    spot: resp.spot,
+    varianceContributionSynthetic: resp.iv_provenance.variance_contribution_synthetic,
+    strikeCoverageScore: resp.iv_provenance.strike_coverage_score,
+  };
 }
 
 function extractIvConfidence(

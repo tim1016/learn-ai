@@ -313,6 +313,18 @@
         <span class="r-val" [style.color]="r.edgeScore >= 0 ? TOK.bull : TOK.bear">
           {{ fmtSigned(r.edgeScore) }}
         </span>
+        @let live = liveIv30();
+        @if (live) {
+          <span class="r-key"
+                title="Live IV30 from /api/edge/iv30/{vix-style,parametric}, captured alongside the realized series. Marker is drawn on the chart at the rightmost x.">
+            live_iv30
+          </span>
+          <span class="r-val" data-testid="live-iv30-readout">
+            {{ fmtPct(live.iv30Act365) }}
+            <span class="r-meta" data-testid="live-iv30-method">· {{ live.method === 'vix_style' ? 'vix-style' : 'parametric' }}</span>
+            <span class="r-meta" data-testid="live-iv30-synth">· synth {{ (live.varianceContributionSynthetic * 100).toFixed(0) }}%</span>
+          </span>
+        }
       </div>
     </div>
   </div>

@@ -16,6 +16,9 @@ HTMLCanvasElement.prototype.getContext = ((kind: string) => {
   return new Proxy({}, {
     get: (_t, prop) => {
       if (prop === "canvas") return null;
+      // measureText is the only method whose return value is read for a
+      // property (`metrics.width`); everything else is fire-and-forget.
+      if (prop === "measureText") return () => ({ width: 0 });
       return () => undefined;
     },
     set: () => true,
