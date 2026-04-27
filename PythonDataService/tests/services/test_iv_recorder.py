@@ -183,15 +183,15 @@ class TestRecorderService:
 @pytest.fixture
 def in_memory_store():
     """Replace the module-level store with an in-memory one for the test."""
-    from app.routers import iv_recorder as iv_recorder_router
+    from app.services.iv_recorder import get_iv_store, set_iv_store
 
     new_store = InMemoryIvSnapshotStore()
-    original = iv_recorder_router._store
-    iv_recorder_router.set_store(new_store)
+    original = get_iv_store()
+    set_iv_store(new_store)
     try:
         yield new_store
     finally:
-        iv_recorder_router.set_store(original)
+        set_iv_store(original)
 
 
 @pytest.fixture

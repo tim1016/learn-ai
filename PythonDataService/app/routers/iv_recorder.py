@@ -15,15 +15,15 @@ omitted — wiring is a follow-up to keep this PR scoped).
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.services.iv_recorder import (
     SLOT_CHOICES,
-    JsonlIvSnapshotStore,
+    get_iv_store,
     record_iv_snapshot,
+    set_iv_store,
 )
 from app.services.polygon_client import PolygonClientService
 
@@ -31,17 +31,14 @@ router = APIRouter(prefix="/api/iv-recorder", tags=["iv-recorder"])
 logger = logging.getLogger(__name__)
 
 polygon_client = PolygonClientService()
-_DEFAULT_STORE_PATH = Path("/var/lib/iv-recorder")
-_store = JsonlIvSnapshotStore(_DEFAULT_STORE_PATH)
 
 
 # ── Test hook ───────────────────────────────────────────────────────────────
 
 
 def set_store(store) -> None:
-    """Swap the module-level store. Used by tests to inject InMemory."""
-    global _store
-    _store = store
+    """Backwards-compatible test hook. Prefer ``set_iv_store`` directly."""
+    set_iv_store(store)
 
 
 # ── Models ──────────────────────────────────────────────────────────────────
@@ -99,7 +96,7 @@ async def take_snapshot(req: SnapshotRequest) -> SnapshotResponse:
     row = record_iv_snapshot(
         ticker=req.ticker,
         slot=req.slot,
-        store=_store,
+        store=get_iv_store(),
         polygon=polygon_client,
         target_calendar_days=req.target_calendar_days,
     )
@@ -131,7 +128,7 @@ async def read_series(
     Both bounds are inclusive; either may be omitted to leave the
     corresponding bound open.
     """
-    rows = _store.read_series(ticker, start_ms=start_ms, end_ms=end_ms)
+    rows = get_iv_store().read_series(ticker, start_ms=start_ms, end_ms=end_ms)
     items = [
         RecordedSnapshotItem(
             ticker=r.ticker,
