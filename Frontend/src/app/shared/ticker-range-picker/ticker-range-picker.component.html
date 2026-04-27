@@ -1,58 +1,114 @@
-<div #rootEl class="picker">
-  <div class="picker__header">
-    <span class="picker__title">{{ title() }}</span>
-    <ng-content select="[slot=right-action]" />
+<div #rootEl class="picker-v2"
+     [class.picker-v2--legend-tinted]="legendTreatment() === 'tinted-bold'"
+     [class.picker-v2--legend-solid]="legendTreatment() === 'solid-bold'"
+     [class.picker-v2--legend-icon]="legendTreatment() === 'icon-glyph'">
+
+  <!-- ── Outer card head: title + summary ──────────────────────── -->
+  <div class="picker-v2__head">
+    <div class="picker-v2__title">
+      <i class="pi pi-database picker-v2__title-icon" aria-hidden="true"></i>
+      <span>{{ title() }}</span>
+    </div>
+    <div class="picker-v2__summary mono">
+      <span class="picker-v2__summary-symbol">{{ value().symbol }}</span>
+      <span class="picker-v2__summary-sep">·</span>
+      <span>{{ value().from }} → {{ value().to }}</span>
+      <span class="picker-v2__summary-sep">·</span>
+      <span>{{ value().resolution }}</span>
+      <ng-content select="[slot=right-action]" />
+    </div>
   </div>
 
-  <div
-    class="picker__grid"
-    [class.picker__grid--no-resolution]="hideResolution()"
-  >
-    <!-- ── Ticker combobox ─────────────────────────────────────── -->
-    <div class="field">
-      <span class="label">Ticker</span>
-      <div
-        class="ticker-box"
-        role="combobox"
-        tabindex="0"
-        [class.ticker-box--open]="open()"
-        [attr.aria-expanded]="open()"
-        aria-haspopup="listbox"
-        aria-controls="ticker-range-picker-listbox"
-        (click)="openDropdown()"
-        (keydown.enter)="onTickerBoxEnter($event)"
-        (keydown.space)="onTickerBoxSpace($event)"
-        (keydown.escape)="closeDropdown()"
-      >
-        <i class="pi pi-search ticker-box__icon" aria-hidden="true"></i>
-        @if (!open()) {
-          <span class="ticker-box__value mono">{{ value().symbol }}</span>
-          <span class="ticker-box__chip mono"
-                [pTooltip]="selectedExchangeTooltip()"
-                tooltipPosition="top"
-                tabindex="0"
-                role="img"
-                [attr.aria-label]="selectedExchangeTooltip()">{{ selectedExchange() }}</span>
-        } @else {
-          <input
-            type="text"
-            class="ticker-box__input mono"
-            placeholder="Search symbol or name…"
-            [ngModel]="query()"
-            (ngModelChange)="onSearchInput($event)"
-            (click)="$event.stopPropagation()"
-            (keydown)="$event.stopPropagation()"
-            #searchInput
-          />
-        }
-        <i class="pi pi-angle-down ticker-box__chev" aria-hidden="true"></i>
+  <!-- ── Three semantic groups ─────────────────────────────────── -->
+  <div class="picker-v2__groups"
+       [class.picker-v2__groups--no-resolution]="hideResolution()">
 
-        @if (open()) {
-          <div class="dropdown" id="ticker-range-picker-listbox" role="listbox">
-            <div class="dropdown__scroll">
-              @if (query() === "" && recentTickers().length > 0) {
-                <div class="dropdown__header">Recent</div>
-                @for (t of recentTickers(); track trackBySymbol($index, t)) {
+    <!-- ═══ GROUP 1 — INSTRUMENT ═══════════════════════════════ -->
+    <section class="group" aria-label="Instrument">
+      <header class="group__head">
+        <span class="group__eyebrow">
+          <span class="group__eyebrow-dot group__eyebrow-dot--accent"></span>
+          Instrument
+        </span>
+        <span class="group__helper mono">{{ selectedExchange() }}</span>
+      </header>
+
+      <div class="ticker-box-wrap">
+        <div
+          class="ticker-box"
+          role="combobox"
+          tabindex="0"
+          [class.ticker-box--open]="open()"
+          [attr.aria-expanded]="open()"
+          aria-haspopup="listbox"
+          aria-controls="ticker-range-picker-listbox"
+          (click)="openDropdown()"
+          (keydown.enter)="onTickerBoxEnter($event)"
+          (keydown.space)="onTickerBoxSpace($event)"
+          (keydown.escape)="closeDropdown()"
+        >
+          <i class="pi pi-search ticker-box__icon" aria-hidden="true"></i>
+          @if (!open()) {
+            <span class="ticker-box__symbol mono">{{ value().symbol }}</span>
+            <span class="ticker-box__name">
+              {{ selectedTicker()?.name || '' }}
+            </span>
+            <span class="ticker-box__chip mono"
+                  [pTooltip]="selectedExchangeTooltip()"
+                  tooltipPosition="top"
+                  tabindex="0"
+                  role="img"
+                  [attr.aria-label]="selectedExchangeTooltip()">{{ selectedExchange() }}</span>
+            <i class="pi pi-angle-down ticker-box__chev" aria-hidden="true"></i>
+          } @else {
+            <input
+              type="text"
+              class="ticker-box__input mono"
+              placeholder="Search symbol or name…"
+              [ngModel]="query()"
+              (ngModelChange)="onSearchInput($event)"
+              (click)="$event.stopPropagation()"
+              (keydown)="$event.stopPropagation()"
+              #searchInput
+            />
+          }
+
+          @if (open()) {
+            <div class="dropdown" id="ticker-range-picker-listbox" role="listbox">
+              <div class="dropdown__scroll">
+                @if (query() === "" && recentTickers().length > 0) {
+                  <div class="dropdown__header">Recent</div>
+                  @for (t of recentTickers(); track trackBySymbol($index, t)) {
+                    <button
+                      type="button"
+                      class="row"
+                      [class.row--active]="t.symbol === value().symbol"
+                      role="option"
+                      [attr.aria-selected]="t.symbol === value().symbol"
+                      (click)="pickTicker(t); $event.stopPropagation()"
+                    >
+                      <span class="row__symbol mono">{{ t.symbol }}</span>
+                      <span class="row__name">{{ t.name }}</span>
+                      <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
+                      <span
+                        class="row__cache mono"
+                        [style.color]="cacheTextColor(t.cache)"
+                      >
+                        {{ cacheLabel(t.cache) }}
+                      </span>
+                    </button>
+                  }
+                }
+                <div class="dropdown__header">
+                  @if (query() === "") {
+                    All tracked instruments
+                  } @else {
+                    {{ filteredTickers().length }} match{{
+                      filteredTickers().length === 1 ? "" : "es"
+                    }}
+                  }
+                </div>
+                @for (t of filteredTickers(); track trackBySymbol($index, t)) {
                   <button
                     type="button"
                     class="row"
@@ -72,74 +128,143 @@
                     </span>
                   </button>
                 }
-              }
-              <div class="dropdown__header">
-                @if (query() === "") {
-                  All tracked instruments
-                } @else {
-                  {{ filteredTickers().length }} match{{
-                    filteredTickers().length === 1 ? "" : "es"
-                  }}
+                @if (filteredTickers().length === 0) {
+                  <div class="dropdown__empty">
+                    No matches. Add via
+                    <a routerLink="/tracked-instruments">Tracked Instruments</a>.
+                  </div>
                 }
               </div>
-              @for (t of filteredTickers(); track trackBySymbol($index, t)) {
-                <button
-                  type="button"
-                  class="row"
-                  [class.row--active]="t.symbol === value().symbol"
-                  role="option"
-                  [attr.aria-selected]="t.symbol === value().symbol"
-                  (click)="pickTicker(t); $event.stopPropagation()"
-                >
-                  <span class="row__symbol mono">{{ t.symbol }}</span>
-                  <span class="row__name">{{ t.name }}</span>
-                  <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
-                  <span
-                    class="row__cache mono"
-                    [style.color]="cacheTextColor(t.cache)"
-                  >
-                    {{ cacheLabel(t.cache) }}
-                  </span>
-                </button>
-              }
-              @if (filteredTickers().length === 0) {
-                <div class="dropdown__empty">
-                  No matches. Add via
-                  <a routerLink="/tracked-instruments">Tracked Instruments</a>.
-                </div>
-              }
             </div>
-          </div>
-        }
+          }
+        </div>
       </div>
-    </div>
 
-    <!-- ── Date range ────────────────────────────────────────── -->
-    <div class="field">
-      <span class="label">From → To</span>
-      <div class="range-box">
+      @if (selectedTickerCachePct() !== null || selectedTickerLast()) {
+        <div class="instrument-foot mono">
+          <span class="instrument-foot__cache">
+            cache
+            <strong [style.color]="cacheTextColor(selectedTickerCachePct() ?? undefined)">
+              {{ cacheLabel(selectedTickerCachePct() ?? undefined) }}
+            </strong>
+          </span>
+          @if (selectedTickerLast()) {
+            <span class="instrument-foot__last">
+              last <span class="instrument-foot__last-val">{{ selectedTickerLast() }}</span>
+            </span>
+          }
+        </div>
+      }
+    </section>
+
+    <!-- ═══ GROUP 2 — TIME WINDOW ══════════════════════════════ -->
+    <section class="group" aria-label="Time window">
+      <header class="group__head">
+        <span class="group__eyebrow">
+          <span class="group__eyebrow-dot group__eyebrow-dot--bull"></span>
+          Time window
+        </span>
+        <span class="group__helper mono">{{ spanDays() }}d · {{ spanBusinessDays() }}bd</span>
+      </header>
+
+      <div class="range-row">
         <input
           type="date"
-          class="range-box__input mono"
+          class="range-row__input mono"
           [ngModel]="value().from"
           (ngModelChange)="updateFrom($event)"
           aria-label="Start date"
         />
-        <div class="range-box__divider" aria-hidden="true"></div>
+        <i class="pi pi-arrow-right range-row__arrow" aria-hidden="true"></i>
         <input
           type="date"
-          class="range-box__input mono"
+          class="range-row__input mono"
           [ngModel]="value().to"
           (ngModelChange)="updateTo($event)"
           aria-label="End date"
         />
       </div>
-    </div>
 
-    <!-- ── Resolution ────────────────────────────────────────── -->
+      <div class="presets" role="group" aria-label="Quick ranges">
+        @for (p of presets; track p.days) {
+          <button
+            type="button"
+            class="preset-btn"
+            [class.preset-btn--active]="activePreset() === p.days"
+            (click)="applyPreset(p.days)"
+          >
+            {{ p.label }}
+          </button>
+        }
+      </div>
+
+      @if (availability().length > 0) {
+        <!-- Per-day cells -->
+        <div class="strip" [attr.aria-label]="'Per-day cache availability'">
+          @for (c of availability(); track trackByDay($index, c)) {
+            <div
+              class="strip__cell"
+              [class.strip__cell--complete]="c.status === 'complete'"
+              [class.strip__cell--partial]="c.status === 'partial'"
+              [class.strip__cell--missing]="c.status === 'missing'"
+              [class.strip__cell--hole]="c.status === 'hole'"
+              [class.strip__cell--weekend]="c.status === 'weekend'"
+              [attr.title]="c.date + ' · ' + c.status"
+            ></div>
+          }
+        </div>
+
+        <!-- Smart legend — dominant chip is highlighted -->
+        <div class="legend">
+          <span class="legend-chip legend-chip--complete"
+                [class.legend-chip--dominant]="dominant() === 'complete'">
+            <i class="pi pi-check legend-chip__icon" aria-hidden="true"></i>
+            <span class="legend-chip__swatch"></span>
+            <span class="legend-chip__count mono">{{ summary().complete }}</span>
+            <span class="legend-chip__label">complete</span>
+          </span>
+          @if (summary().partial > 0) {
+            <span class="legend-chip legend-chip--partial"
+                  [class.legend-chip--dominant]="dominant() === 'partial'">
+              <i class="pi pi-clock legend-chip__icon" aria-hidden="true"></i>
+              <span class="legend-chip__swatch"></span>
+              <span class="legend-chip__count mono">{{ summary().partial }}</span>
+              <span class="legend-chip__label">partial</span>
+            </span>
+          }
+          @if (summary().hole > 0) {
+            <span class="legend-chip legend-chip--hole"
+                  [class.legend-chip--dominant]="dominant() === 'hole'">
+              <i class="pi pi-times legend-chip__icon" aria-hidden="true"></i>
+              <span class="legend-chip__swatch"></span>
+              <span class="legend-chip__count mono">{{ summary().hole }}</span>
+              <span class="legend-chip__label">{{ summary().hole === 1 ? 'hole' : 'holes' }}</span>
+            </span>
+          }
+          @if (summary().missing > 0) {
+            <span class="legend-chip legend-chip--missing"
+                  [class.legend-chip--dominant]="dominant() === 'missing'">
+              <i class="pi pi-circle-off legend-chip__icon" aria-hidden="true"></i>
+              <span class="legend-chip__swatch"></span>
+              <span class="legend-chip__count mono">{{ summary().missing }}</span>
+              <span class="legend-chip__label">missing</span>
+            </span>
+          }
+        </div>
+      }
+    </section>
+
+    <!-- ═══ GROUP 3 — SAMPLING ═════════════════════════════════ -->
     @if (!hideResolution()) {
-      <div class="field">
-        <span class="label">Resolution</span>
+      <section class="group" aria-label="Sampling">
+        <header class="group__head">
+          <span class="group__eyebrow">
+            <span class="group__eyebrow-dot group__eyebrow-dot--warn"></span>
+            Sampling
+          </span>
+          <span class="group__helper mono">{{ value().resolution }}</span>
+        </header>
+
         <div class="res-group" role="group" aria-label="Resolution">
           @for (r of availableResolutions(); track r) {
             <button
@@ -153,92 +278,53 @@
             </button>
           }
         </div>
-      </div>
-    }
 
-    <!-- ── Span summary ──────────────────────────────────────── -->
-    <div class="field">
-      <span class="label">Span</span>
-      <div class="span-box mono">
-        <span [attr.title]="spanDays() + ' calendar days · ' + spanBusinessDays() + ' trading sessions'">{{ spanDays() }}d · {{ spanBusinessDays() }} sessions</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Presets + auto-fetch ──────────────────────────────── -->
-  <div class="presets">
-    <span class="presets__label">Quick ranges:</span>
-    @for (p of presets; track p.days) {
-      <button
-        type="button"
-        class="preset-btn"
-        [class.preset-btn--active]="activePreset() === p.days"
-        (click)="applyPreset(p.days)"
-      >
-        {{ p.label }}
-      </button>
-    }
-    <div class="presets__spacer"></div>
-    @if (showAutoFetch()) {
-      <label class="autofetch">
-        <input
-          type="checkbox"
-          [ngModel]="value().autoFetch ?? false"
-          (ngModelChange)="setAutoFetch($event)"
-        />
-        Auto-fetch missing from Polygon
-      </label>
-    }
-  </div>
-
-  <!-- ── Availability strip ────────────────────────────────── -->
-  @if (availability().length > 0) {
-    <div class="strip">
-      <div class="strip__header">
-        <span class="strip__title">
-          Cache availability · {{ value().symbol }} · {{ value().resolution }}
-        </span>
-        <span class="strip__summary mono">
-          <span style="color: var(--bull)">{{ summary().complete }}</span>
-          <span style="color: var(--text-muted)"> / </span>
-          <span>{{ summary().weekdays }}</span>
-          <span style="color: var(--text-muted)"> weekdays complete</span>
-          @if (summary().partial > 0) {
-            <span> · </span>
-            <span style="color: var(--warn)">{{ summary().partial }} partial</span>
-          }
-          @if (summary().hole > 0) {
-            <span> · </span>
-            <span style="color: var(--bear)">{{ summary().hole }} holes</span>
-          }
-          @if (summary().missing > 0) {
-            <span> · </span>
-            <span style="color: var(--text-subtle)">{{ summary().missing }} missing</span>
-          }
-        </span>
-      </div>
-      <div class="strip__cells" [attr.aria-label]="'Per-day cache availability'">
-        @for (c of availability(); track trackByDay($index, c)) {
-          <div
-            class="strip__cell"
-            [class.strip__cell--complete]="c.status === 'complete'"
-            [class.strip__cell--partial]="c.status === 'partial'"
-            [class.strip__cell--missing]="c.status === 'missing'"
-            [class.strip__cell--hole]="c.status === 'hole'"
-            [class.strip__cell--weekend]="c.status === 'weekend'"
-            [attr.title]="c.date + ' · ' + c.status"
-          ></div>
+        @if (sessionMode() !== 'hidden') {
+          <div class="session" role="group" aria-label="Session">
+            <div class="session__head">
+              <span class="session__label">Session</span>
+              @if (sessionMode() === 'preview') {
+                <span class="session__tag mono"
+                      pTooltip="UI preview — Python engine still hardcodes RTH. Extended hours coming soon."
+                      tooltipPosition="top">preview</span>
+              }
+            </div>
+            <div class="session__group">
+              <button
+                type="button"
+                class="session-btn"
+                [class.session-btn--active]="effectiveSession() === 'rth'"
+                (click)="setSession('rth')"
+                [attr.aria-pressed]="effectiveSession() === 'rth'"
+              >RTH</button>
+              <button
+                type="button"
+                class="session-btn"
+                [class.session-btn--active]="effectiveSession() === 'extended'"
+                [disabled]="sessionMode() === 'disabled'"
+                [pTooltip]="sessionMode() === 'disabled' ? 'Extended hours coming soon' : ''"
+                tooltipPosition="top"
+                (click)="setSession('extended')"
+                [attr.aria-pressed]="effectiveSession() === 'extended'"
+              >Ext</button>
+            </div>
+          </div>
         }
-      </div>
-      <div class="legend">
-        <span class="legend__item"><span class="legend__swatch legend__swatch--complete"></span>complete</span>
-        <span class="legend__item"><span class="legend__swatch legend__swatch--partial"></span>partial</span>
-        <span class="legend__item"><span class="legend__swatch legend__swatch--hole"></span>hole</span>
-        <span class="legend__item"><span class="legend__swatch legend__swatch--missing"></span>missing</span>
-        <span class="legend__item"><span class="legend__swatch legend__swatch--weekend"></span>weekend</span>
-      </div>
-    </div>
-  }
+
+        @if (showAutoFetch()) {
+          <label class="autofetch">
+            <input
+              type="checkbox"
+              [ngModel]="value().autoFetch ?? false"
+              (ngModelChange)="setAutoFetch($event)"
+            />
+            <span class="autofetch__label">Auto-fetch missing</span>
+            <i class="pi pi-cloud-download autofetch__icon" aria-hidden="true"></i>
+          </label>
+        }
+      </section>
+    }
+  </div>
 
   <!-- ── Advisories ────────────────────────────────────────── -->
   @if (advisories().length > 0) {

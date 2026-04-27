@@ -1,27 +1,29 @@
+@use '../../../styles/tokens' as *;
+
 :host {
   display: block;
   width: 100%;
 }
 
 .chart-wrapper {
-  background: #0f1117;
-  border: 1px solid #2a2e3e;
-  border-radius: 8px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 10px;
   overflow: hidden;
 }
 
 .chart-tabs {
   display: flex;
   gap: 0;
-  border-bottom: 1px solid #2a2e3e;
-  background: #161922;
+  border-bottom: 1px solid $border;
+  background: $bg-elevated;
 }
 
 .chart-tab {
   padding: 8px 20px;
   background: transparent;
   border: none;
-  color: #8892a8;
+  color: $text-subtle;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -29,13 +31,13 @@
   transition: all 0.15s ease;
 
   &:hover:not(:disabled) {
-    color: #c8d0e0;
+    color: $text-primary;
     background: rgba(255, 255, 255, 0.03);
   }
 
   &.active {
-    color: #e0e4ec;
-    border-bottom-color: #5b8def;
+    color: $text-primary;
+    border-bottom-color: $accent;
   }
 
   &:disabled {
@@ -63,10 +65,10 @@
   align-items: center;
   justify-content: center;
   padding: 48px 24px;
-  color: #8892a8;
-  background: #0f1117;
-  border: 1px solid #2a2e3e;
-  border-radius: 8px;
+  color: $text-subtle;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 10px;
 
   .empty-icon {
     font-size: 32px;

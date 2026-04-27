@@ -1,6 +1,8 @@
 <div class="lean-engine">
   <app-page-header
     title="Engine Lab"
+    icon="pi-bolt"
+    [hasTabs]="true"
     subtitle="LEAN-compatible backtest engine with full statistics, trade history, and research journal."
   />
 
@@ -260,15 +262,18 @@
           }
 
           @if (result(); as r) {
-            <!-- Price chart + equity curve -->
-            <app-engine-chart
+            <!-- Results tab body — engine-results now hosts the
+                 run-summary bar + hero columns + chart/readiness split
+                 + secondary drawer + LEAN stats + trade log. -->
+            <app-engine-results
+              [result]="r"
+              [symbol]="effectiveSymbol()"
               [chartBars]="chartBars()"
-              [trades]="chartTrades()"
+              [chartTrades]="chartTrades()"
               [equityCurve]="equityCurve()"
-            />
-
-            <!-- Summary stats + trade table -->
-            <app-engine-results [result]="r" [symbol]="effectiveSymbol()" />
+              [fromDate]="startDate()"
+              [toDate]="endDate()"
+              [resolution]="resolution()" />
 
             <!-- Insight analysis (only shown when insights exist) -->
             @if (insights().length > 0) {

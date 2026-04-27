@@ -40,19 +40,23 @@ export interface EquityCurvePoint {
 }
 
 // ──────────────────────────────────────────────
-// Dark theme palette (matches Strategy Lab)
+// Dark theme palette — aligned to _tokens.scss so the chart panel
+// reads as the same surface as the rest of the app's cards.
+// (Pre-refactor hex like #0f1117 / #00c896 drifted from the current
+// TV-dark tokens and made the chart look like a different shade
+// of dark than its neighbours.)
 // ──────────────────────────────────────────────
 const DARK = {
-  bg:         '#0f1117',
-  surface:    '#161922',
-  grid:       'rgba(42, 46, 62, 0.5)',
-  text:       '#8892a8',
-  border:     '#2a2e3e',
+  bg:         '#131722', // $bg-surface
+  surface:    '#1b1f2e', // $bg-elevated
+  grid:       'rgba(42, 46, 57, 0.5)', // $border-light @ 50%
+  text:       '#9598a1', // $text-subtle (5.2:1 AA)
+  border:     '#2a2e39', // $border-light
   crosshair:  '#4a5068',
-  bull:       '#00c896',
-  bear:       '#e5334e',
-  bullVolume: 'rgba(0, 200, 150, 0.20)',
-  bearVolume: 'rgba(229, 51, 78, 0.20)',
+  bull:       '#26a69a', // $bull (TV green)
+  bear:       '#ef5350', // $bear (TV red)
+  bullVolume: 'rgba(38, 166, 154, 0.20)',
+  bearVolume: 'rgba(239, 83, 80, 0.20)',
 };
 
 @Component({

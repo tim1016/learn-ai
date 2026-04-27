@@ -23,13 +23,29 @@ import {
   AvailabilityCell,
   computeAdvisories,
   daysBetween,
+  DominantState,
+  dominantState,
   isoDate,
   Resolution,
+  Session,
   summarizeAvailability,
   TickerOption,
   TickerRange,
   weekdaysBetween,
 } from "./ticker-range-picker.types";
+
+/** Visual treatment for the smart-availability legend.
+ *  ``tinted-bold`` (default) = swatch + count + label on tinted bg.
+ *  ``solid-bold``           = filled chip in state colour, white label.
+ *  ``icon-glyph``           = icon + count, no swatch. Quietest. */
+export type LegendTreatment = "tinted-bold" | "solid-bold" | "icon-glyph";
+
+/** Session-toggle behaviour for the picker.
+ *  ``preview``  = Both options visible; "preview" tag on Extended; both
+ *                 selectable in the UI but consumers may ignore Extended.
+ *  ``disabled`` = Extended rendered but disabled with a tooltip.
+ *  ``hidden``   = Session group not rendered at all. */
+export type SessionMode = "preview" | "disabled" | "hidden";
 
 interface Preset { days: number; label: string }
 const PRESETS: readonly Preset[] = [
@@ -118,7 +134,15 @@ export class TickerRangePickerComponent {
   readonly hideResolution = input(false);
 
   /** Title shown in the tiny uppercase label at top of the card. */
-  readonly title = input("Ticker & range");
+  readonly title = input("Backtest data");
+
+  /** Visual treatment for the smart-availability legend. */
+  readonly legendTreatment = input<LegendTreatment>("tinted-bold");
+
+  /** How to render the session toggle. ``preview`` shows both RTH and
+   *  Ext with a "preview" tag (default — used by Engine Lab while the
+   *  Python engine still hardcodes RTH). */
+  readonly sessionMode = input<SessionMode>("preview");
 
   /** Emitted when the user clicks an advisory action button. The patch
    *  portion is auto-applied to ``value`` before the event fires — the
@@ -151,6 +175,26 @@ export class TickerRangePickerComponent {
   }
 
   readonly summary = computed(() => summarizeAvailability(this.availability()));
+
+  /** Which state the smart legend should emphasize. */
+  readonly dominant = computed<DominantState>(() => dominantState(this.summary()));
+
+  /** Convenience: the {@link TickerOption} that matches the current symbol,
+   *  or undefined when the pool hasn't loaded yet. */
+  readonly selectedTicker = computed<TickerOption | undefined>(() =>
+    this.tickerPool().find((t) => t.symbol === this.value().symbol)
+  );
+
+  /** Cache pct + last-cached date for the right-side helper inside the
+   *  Instrument group. Both null when the symbol isn't in the pool. */
+  readonly selectedTickerCachePct = computed<number | null>(() => {
+    const cache = this.selectedTicker()?.cache;
+    return typeof cache === "number" ? cache : null;
+  });
+  readonly selectedTickerLast = computed<string | null>(() => {
+    const last = this.selectedTicker()?.last ?? null;
+    return last;
+  });
   readonly advisories = computed<readonly Advisory[]>(() =>
     computeAdvisories(this.value(), this.summary())
   );
@@ -303,6 +347,20 @@ export class TickerRangePickerComponent {
 
   setResolution(r: Resolution): void {
     this.value.set({ ...this.value(), resolution: r });
+  }
+
+  /** Effective session — defaults to ``rth`` so legacy callers that
+   *  don't set the field render correctly. */
+  readonly effectiveSession = computed<Session>(
+    () => this.value().session ?? "rth"
+  );
+
+  setSession(s: Session): void {
+    // Ignore Extended clicks while disabled — UI guards visually but we
+    // double-check here so the host's two-way binding never receives a
+    // value the backend can't honor.
+    if (s === "extended" && this.sessionMode() === "disabled") return;
+    this.value.set({ ...this.value(), session: s });
   }
 
   applyPreset(days: number): void {

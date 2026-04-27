@@ -14,130 +14,164 @@
 }
 
 @if (studies().length > 0) {
+  <!-- ═════════ History toolbar — count + sort + view-mode + columns ═════════ -->
   <div class="history-toolbar">
     <div class="history-summary">
-      {{ totalCount() }} studies &mdash; sorted by
-      <strong>{{ sort().column }}</strong> {{ sort().direction }}
+      <strong class="mono">{{ totalCount() }}</strong>
+      {{ totalCount() === 1 ? 'study' : 'studies' }}
+      <span class="history-summary__sep">·</span>
+      sorted by
+      <strong>{{ sortLabel() }}</strong>,
+      {{ sortDirectionLabel() }}
     </div>
 
-    <div class="column-chooser">
-      <button
-        type="button"
-        class="chooser-trigger"
-        [attr.aria-expanded]="chooserOpen()"
-        (click)="toggleChooser()"
-      >
-        <i class="pi pi-sliders-h"></i>
-        Columns ({{ visibleColumns().length }}/{{ allColumns.length }})
-      </button>
-      @if (chooserOpen()) {
-        <div class="chooser-panel" role="menu">
-          <div class="chooser-header">
-            <span>Columns</span>
-            <button type="button" class="chooser-reset" (click)="resetColumns()">Reset to defaults</button>
-          </div>
+    <div class="history-toolbar__actions">
+      <label class="sort-control">
+        <span class="sort-control__label">Sort</span>
+        <select [ngModel]="sort().column"
+                (ngModelChange)="changeSortColumn($event)">
+          <option value="executedat">Run date</option>
+          <option value="totalpnl">Net P&amp;L</option>
+          <option value="cagr">CAGR</option>
+          <option value="sharpe">Sharpe</option>
+          <option value="sortino">Sortino</option>
+          <option value="psr">PSR</option>
+          <option value="drawdown">Max DD</option>
+          <option value="winrate">Win rate</option>
+          <option value="trades">Trades</option>
+          <option value="profitfactor">Profit factor</option>
+        </select>
+        <button type="button" class="sort-direction"
+                [attr.aria-label]="sort().direction === 'desc' ? 'Sort ascending' : 'Sort descending'"
+                (click)="toggleSortDirection()">
+          <i class="pi" [class]="sort().direction === 'desc' ? 'pi-sort-amount-down' : 'pi-sort-amount-up'"></i>
+        </button>
+      </label>
 
-          <div class="chooser-section-label">Core</div>
-          <ul class="chooser-list">
-            @for (col of allColumns; track col.id) {
-              @if (col.defaultOn) {
-                <li>
-                  <label>
-                    <input
-                      type="checkbox"
-                      [checked]="visibleIds().has(col.id)"
-                      (change)="toggleColumn(col.id)"
-                    />
-                    <span class="chooser-label">{{ col.label }}</span>
-                    @if (col.num) { <span class="chooser-type-tag">num</span> }
-                  </label>
-                </li>
-              }
-            }
-          </ul>
+      <div class="view-mode" role="group" aria-label="View mode">
+        <button type="button" class="view-mode__btn"
+                [class.view-mode__btn--active]="viewMode() === 'card'"
+                (click)="viewMode.set('card')"
+                aria-label="Card view">
+          <i class="pi pi-th-large"></i> Cards
+        </button>
+        <button type="button" class="view-mode__btn"
+                [class.view-mode__btn--active]="viewMode() === 'table'"
+                (click)="viewMode.set('table')"
+                aria-label="Table view">
+          <i class="pi pi-table"></i> Table
+        </button>
+      </div>
 
-          <div class="chooser-section-label">Advanced</div>
-          <ul class="chooser-list">
-            @for (col of allColumns; track col.id) {
-              @if (!col.defaultOn) {
-                <li>
-                  <label>
-                    <input
-                      type="checkbox"
-                      [checked]="visibleIds().has(col.id)"
-                      (change)="toggleColumn(col.id)"
-                    />
-                    <span class="chooser-label">{{ col.label }}</span>
-                    @if (col.num) { <span class="chooser-type-tag">num</span> }
-                  </label>
-                </li>
-              }
-            }
-          </ul>
+      @if (viewMode() === 'table') {
+        <div class="column-chooser">
+          <button
+            type="button"
+            class="chooser-trigger"
+            [attr.aria-expanded]="chooserOpen()"
+            (click)="toggleChooser()"
+          >
+            <i class="pi pi-sliders-h"></i>
+            Columns ({{ visibleColumns().length }}/{{ allColumns.length }})
+          </button>
+          @if (chooserOpen()) {
+            <div class="chooser-panel" role="menu">
+              <div class="chooser-header">
+                <span>Columns</span>
+                <button type="button" class="chooser-reset" (click)="resetColumns()">Reset to defaults</button>
+              </div>
+              <div class="chooser-section-label">Core</div>
+              <ul class="chooser-list">
+                @for (col of allColumns; track col.id) {
+                  @if (col.defaultOn) {
+                    <li>
+                      <label>
+                        <input
+                          type="checkbox"
+                          [checked]="visibleIds().has(col.id)"
+                          (change)="toggleColumn(col.id)"
+                        />
+                        <span class="chooser-label">{{ col.label }}</span>
+                        @if (col.num) { <span class="chooser-type-tag">num</span> }
+                      </label>
+                    </li>
+                  }
+                }
+              </ul>
+              <div class="chooser-section-label">Advanced</div>
+              <ul class="chooser-list">
+                @for (col of allColumns; track col.id) {
+                  @if (!col.defaultOn) {
+                    <li>
+                      <label>
+                        <input
+                          type="checkbox"
+                          [checked]="visibleIds().has(col.id)"
+                          (change)="toggleColumn(col.id)"
+                        />
+                        <span class="chooser-label">{{ col.label }}</span>
+                        @if (col.num) { <span class="chooser-type-tag">num</span> }
+                      </label>
+                    </li>
+                  }
+                }
+              </ul>
+            </div>
+          }
         </div>
       }
     </div>
   </div>
 
-  <div class="table-wrapper">
-    <table>
-      <thead>
-        <tr>
-          @for (col of visibleColumns(); track col.id) {
-            <th
-              [class.sortable]="!!col.sortable"
-              [class.num]="col.num"
-              (click)="col.sortable && toggleSort(col.sortable)"
-            >
-              {{ col.label }}
-              @if (col.sortable) {
-                <i class="pi" [class]="sortIcon(col.sortable)"></i>
-              }
-            </th>
-          }
-          <th class="action-col"></th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (s of studies(); track s.id) {
-          <tr class="study-row" (click)="onRowClick(s)">
-            @for (col of visibleColumns(); track col.id) {
-              @switch (col.id) {
-                @case ('date')        { <td class="date-cell">{{ formatDate(s.executedAt) }}</td> }
-                @case ('strategy')    { <td class="strategy-cell">{{ s.strategyName }}</td> }
-                @case ('symbol')      { <td>{{ s.symbol }}</td> }
-                @case ('range')       { <td class="range-cell">{{ s.startDate }} → {{ s.endDate }}</td> }
-                @case ('totalPnl')    { <td class="num" [class]="pnlClass(s.totalPnL)">{{ formatCurrency(s.totalPnL) }}</td> }
-                @case ('cagr')        { <td class="num" [class]="pnlClass(s.compoundingAnnualReturn)">{{ formatPct(s.compoundingAnnualReturn) }}</td> }
-                @case ('sharpe')      { <td class="num">{{ s.sharpeRatio.toFixed(3) }}</td> }
-                @case ('sortino')     { <td class="num">{{ s.sortinoRatio.toFixed(3) }}</td> }
-                @case ('psr')         { <td class="num">{{ formatPct(s.probabilisticSharpeRatio) }}</td> }
-                @case ('maxDrawdown') { <td class="num negative">{{ formatPct(s.maxDrawdown) }}</td> }
-                @case ('winRate')     { <td class="num">{{ formatPct(s.winRate) }}</td> }
-                @case ('totalTrades') { <td class="num">{{ s.totalTrades }}</td> }
-                @case ('profitFactor') { <td class="num">{{ s.profitFactor.toFixed(2) }}</td> }
-                @case ('var95')       { <td class="num">{{ formatPct(s.valueAtRisk95) }}</td> }
-                @case ('params')      { <td class="params-cell" [title]="s.parameters">{{ parseParams(s.parameters) }}</td> }
-                @case ('notes') {
-                  <td class="notes-cell" (click)="startEditNotes(s, $event)">
-                    @if (editingNotesId() === s.id) {
-                      <input
-                        type="text"
-                        class="notes-input"
-                        [ngModel]="editingNotesValue()"
-                        (ngModelChange)="editingNotesValue.set($event)"
-                        (blur)="saveNotes(s)"
-                        (keydown.enter)="saveNotes(s)"
-                        (keydown.escape)="cancelEditNotes()"
-                      />
-                    } @else {
-                      <span class="notes-text">{{ s.notes || '—' }}</span>
-                    }
-                  </td>
-                }
+  <!-- ═════════ Card view ═════════ -->
+  @if (viewMode() === 'card') {
+    <ul class="study-cards" role="list">
+      @for (s of studies(); track s.id) {
+        <li class="study-card" (click)="onRowClick(s)" tabindex="0"
+            (keydown.enter)="onRowClick(s)">
+          <div class="study-card__main">
+            <div class="study-card__head">
+              <span class="study-card__strategy">{{ s.strategyName }}</span>
+              <span class="study-card__chip mono">{{ s.symbol }}</span>
+              <span class="study-card__chip mono">{{ s.startDate }} → {{ s.endDate }}</span>
+              <span class="study-card__chip mono">{{ s.timespan }}</span>
+            </div>
+            @if (parseParams(s.parameters); as paramStr) {
+              @if (paramStr) {
+                <div class="study-card__params mono">{{ paramStr }}</div>
               }
             }
-            <td class="action-cell">
+            <div class="study-card__metrics">
+              <span class="study-card__metric">
+                <span class="study-card__metric-label">P&amp;L</span>
+                <strong class="mono" [class]="pnlClass(s.totalPnL)">{{ formatCurrency(s.totalPnL) }}</strong>
+              </span>
+              <span class="study-card__metric">
+                <span class="study-card__metric-label">CAGR</span>
+                <strong class="mono" [class]="pnlClass(s.compoundingAnnualReturn)">{{ formatPct(s.compoundingAnnualReturn) }}</strong>
+              </span>
+              <span class="study-card__metric">
+                <span class="study-card__metric-label">Sharpe</span>
+                <strong class="mono">{{ s.sharpeRatio.toFixed(2) }}</strong>
+              </span>
+              <span class="study-card__metric">
+                <span class="study-card__metric-label">Max DD</span>
+                <strong class="mono negative">{{ formatPct(s.maxDrawdown) }}</strong>
+              </span>
+              <span class="study-card__metric">
+                <span class="study-card__metric-label">Win</span>
+                <strong class="mono">{{ formatPct(s.winRate) }}</strong>
+              </span>
+              <span class="study-card__metric">
+                <span class="study-card__metric-label">Trades</span>
+                <strong class="mono">{{ s.totalTrades }}</strong>
+              </span>
+            </div>
+          </div>
+
+          <div class="study-card__side">
+            <span class="study-card__date mono">{{ formatDate(s.executedAt) }}</span>
+            <div class="study-card__actions">
               <button
                 type="button"
                 class="replay-btn"
@@ -146,10 +180,115 @@
               >
                 <i class="pi pi-play"></i> Replay
               </button>
-            </td>
+            </div>
+            @if (s.notes || editingNotesId() === s.id) {
+              <div class="study-card__notes">
+                @if (editingNotesId() === s.id) {
+                  <input
+                    type="text"
+                    class="notes-input"
+                    [ngModel]="editingNotesValue()"
+                    (ngModelChange)="editingNotesValue.set($event)"
+                    (click)="$event.stopPropagation()"
+                    (blur)="saveNotes(s)"
+                    (keydown.enter)="saveNotes(s); $event.stopPropagation()"
+                    (keydown.escape)="cancelEditNotes(); $event.stopPropagation()"
+                  />
+                } @else {
+                  <button type="button" class="notes-edit"
+                          (click)="startEditNotes(s, $event)">
+                    <i class="pi pi-pencil"></i>
+                    <span class="notes-text">{{ s.notes }}</span>
+                  </button>
+                }
+              </div>
+            } @else {
+              <button type="button" class="notes-add"
+                      (click)="startEditNotes(s, $event)"
+                      title="Add a note">
+                <i class="pi pi-plus"></i> note
+              </button>
+            }
+          </div>
+        </li>
+      }
+    </ul>
+  }
+
+  <!-- ═════════ Table view (legacy, still available) ═════════ -->
+  @if (viewMode() === 'table') {
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            @for (col of visibleColumns(); track col.id) {
+              <th
+                [class.sortable]="!!col.sortable"
+                [class.num]="col.num"
+                (click)="col.sortable && toggleSort(col.sortable)"
+              >
+                {{ col.label }}
+                @if (col.sortable) {
+                  <i class="pi" [class]="sortIcon(col.sortable)"></i>
+                }
+              </th>
+            }
+            <th class="action-col"></th>
           </tr>
-        }
-      </tbody>
-    </table>
-  </div>
+        </thead>
+        <tbody>
+          @for (s of studies(); track s.id) {
+            <tr class="study-row" (click)="onRowClick(s)">
+              @for (col of visibleColumns(); track col.id) {
+                @switch (col.id) {
+                  @case ('date')        { <td class="date-cell mono">{{ formatDate(s.executedAt) }}</td> }
+                  @case ('strategy')    { <td class="strategy-cell">{{ s.strategyName }}</td> }
+                  @case ('symbol')      { <td class="mono">{{ s.symbol }}</td> }
+                  @case ('range')       { <td class="range-cell mono">{{ s.startDate }} → {{ s.endDate }}</td> }
+                  @case ('totalPnl')    { <td class="num" [class]="pnlClass(s.totalPnL)">{{ formatCurrency(s.totalPnL) }}</td> }
+                  @case ('cagr')        { <td class="num" [class]="pnlClass(s.compoundingAnnualReturn)">{{ formatPct(s.compoundingAnnualReturn) }}</td> }
+                  @case ('sharpe')      { <td class="num">{{ s.sharpeRatio.toFixed(3) }}</td> }
+                  @case ('sortino')     { <td class="num">{{ s.sortinoRatio.toFixed(3) }}</td> }
+                  @case ('psr')         { <td class="num">{{ formatPct(s.probabilisticSharpeRatio) }}</td> }
+                  @case ('maxDrawdown') { <td class="num negative">{{ formatPct(s.maxDrawdown) }}</td> }
+                  @case ('winRate')     { <td class="num">{{ formatPct(s.winRate) }}</td> }
+                  @case ('totalTrades') { <td class="num">{{ s.totalTrades }}</td> }
+                  @case ('profitFactor') { <td class="num">{{ s.profitFactor.toFixed(2) }}</td> }
+                  @case ('var95')       { <td class="num">{{ formatPct(s.valueAtRisk95) }}</td> }
+                  @case ('params')      { <td class="params-cell mono" [title]="s.parameters">{{ parseParams(s.parameters) }}</td> }
+                  @case ('notes') {
+                    <td class="notes-cell" (click)="startEditNotes(s, $event)">
+                      @if (editingNotesId() === s.id) {
+                        <input
+                          type="text"
+                          class="notes-input"
+                          [ngModel]="editingNotesValue()"
+                          (ngModelChange)="editingNotesValue.set($event)"
+                          (blur)="saveNotes(s)"
+                          (keydown.enter)="saveNotes(s)"
+                          (keydown.escape)="cancelEditNotes()"
+                        />
+                      } @else {
+                        <span class="notes-text">{{ s.notes || '—' }}</span>
+                      }
+                    </td>
+                  }
+                }
+              }
+              <td class="action-cell">
+                <button
+                  type="button"
+                  class="replay-btn"
+                  title="Replay this run bar-by-bar"
+                  (click)="onReplayClick(s, $event)"
+                >
+                  <i class="pi pi-play"></i>
+                </button>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
 }

@@ -4,78 +4,143 @@
 :host {
   display: block;
   // Establish a stacking context so the open dropdown renders above
-  // sibling controls in the parent card (Bar Timeframe, Session, API
-  // Pacing, etc.). Without this the dropdown's z-index competes at the
-  // page level and gets overpainted by later DOM siblings.
+  // sibling controls in the parent card.
   position: relative;
   z-index: 1;
 }
 
-.picker {
+// ═══════════════════════════════════════════════════════════════════
+// Picker v2 — cards-within-card
+//
+// Outer card carries a head (title + summary line) and three semantic
+// inner-card "groups": Instrument · Time window · Sampling. Each group
+// has its own surface (slight elevation) and an eyebrow label with a
+// coloured dot keyed to its semantic role (accent / bull / warn).
+//
+// The smart-availability legend (inside the Time-window group) renders
+// each state as a chip; the dominant chip uses tinted-bold styling, the
+// rest are dim outlines so the user reads the verdict at a glance.
+// ═══════════════════════════════════════════════════════════════════
+.picker-v2 {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: var(--space-4);
+  padding: 14px;
 
-  &__header {
+  &__head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 0.75rem;
+    gap: 12px;
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
   }
 
   &__title {
-    font-size: 0.6875rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
     font-weight: var(--fw-semi);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+  }
+
+  &__title-icon {
+    font-size: 12px;
+    color: var(--accent);
+  }
+
+  &__summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
     color: var(--text-subtle);
   }
 
-  &__grid {
+  &__summary-symbol {
+    color: var(--text-primary);
+    font-weight: var(--fw-semi);
+  }
+
+  &__summary-sep {
+    color: var(--text-muted);
+  }
+
+  &__groups {
     display: grid;
-    grid-template-columns: 1.2fr 1fr 1fr 0.9fr;
-    gap: 0.625rem;
-    align-items: stretch;
+    grid-template-columns: 1.1fr 1.4fr 1fr;
+    gap: 10px;
 
     &--no-resolution {
-      grid-template-columns: 1.4fr 1.4fr 0.9fr;
+      grid-template-columns: 1.1fr 1.6fr;
     }
   }
 }
 
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-// ── Field shell ────────────────────────────────────────────
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  min-width: 0;
-}
-
-.label {
-  font-size: 0.6875rem;
-  font-weight: var(--fw-medium);
-  color: var(--text-subtle);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-// ── Ticker combobox ────────────────────────────────────────
-.ticker-box {
-  position: relative;
+// ── Group shell ────────────────────────────────────────────────────
+.group {
   background: var(--bg-elevated);
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
-  height: 34px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    font-weight: var(--fw-bold);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-subtle);
+  }
+
+  &__eyebrow-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+
+    &--accent { background: var(--accent); }
+    &--bull   { background: var(--bull); }
+    &--warn   { background: var(--warn); }
+  }
+
+  &__helper {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+}
+
+// ── Group 1 — Instrument ───────────────────────────────────────────
+.ticker-box-wrap {
+  position: relative;
+}
+
+.ticker-box {
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  height: 36px;
   display: flex;
   align-items: center;
-  padding: 0 0.5rem;
-  gap: 0.375rem;
+  gap: 6px;
+  padding: 0 8px;
   cursor: text;
   transition: border-color var(--t-ui), box-shadow var(--t-ui);
 
@@ -85,33 +150,33 @@
   }
 
   &__icon {
-    font-size: 0.6875rem;
+    font-size: 11px;
     color: var(--text-muted);
     flex-shrink: 0;
   }
 
-  &__value,
-  &__input {
-    flex: 1;
-    background: transparent;
-    border: none;
-    outline: none;
+  &__symbol {
+    font-weight: var(--fw-bold);
+    font-size: 14px;
     color: var(--text-primary);
-    font-weight: var(--fw-semi);
-    font-size: 0.875rem;
     letter-spacing: 0.02em;
-    min-width: 0;
+    flex-shrink: 0;
   }
 
-  &__input::placeholder {
-    color: var(--text-muted);
-    font-weight: var(--fw-regular);
+  &__name {
+    font-size: 11px;
+    color: var(--text-subtle);
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   &__chip {
-    font-size: 0.625rem;
-    padding: 1px 0.375rem;
-    border-radius: var(--radius-sm);
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 2px;
     background: var(--bg-hover);
     color: var(--text-subtle);
     letter-spacing: 0.04em;
@@ -119,9 +184,20 @@
   }
 
   &__chev {
-    font-size: 0.625rem;
+    font-size: 10px;
     color: var(--text-muted);
     flex-shrink: 0;
+  }
+
+  &__input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font-weight: var(--fw-semi);
+    font-size: 14px;
+    min-width: 0;
   }
 }
 
@@ -130,65 +206,57 @@
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  // Solid opaque background so sibling form controls don't bleed through
-  // when the dropdown extends past the ticker row.
-  background: $bg-elevated;
+  background: var(--bg-elevated);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-pop);
-  // Force a high z-index inside the host's stacking context. The host
-  // itself sits at z-index 1 with isolation so this lifts the panel
-  // above any sibling card content that follows.
-  z-index: 1000;
-  isolation: isolate;
-  max-height: 360px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
+  z-index: 60;
+  max-height: 320px;
+  overflow: auto;
 
   &__scroll {
-    overflow: auto;
-    max-height: 340px;
+    padding: 4px 0;
   }
 
   &__header {
-    padding: 0.5rem 0.75rem;
-    font-size: 0.625rem;
+    padding: 6px 10px;
+    font-size: 9px;
+    font-weight: var(--fw-bold);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-subtle);
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-surface);
-    font-weight: var(--fw-semi);
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
   }
 
   &__empty {
-    padding: 1.25rem;
-    text-align: center;
-    font-size: 0.75rem;
-    color: var(--text-muted);
+    padding: 10px;
+    font-size: 11px;
+    color: var(--text-subtle);
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+
+      &:hover { color: var(--accent-hover); text-decoration: underline; }
+    }
   }
 }
 
 .row {
   display: grid;
-  grid-template-columns: 70px 1fr auto auto;
+  grid-template-columns: 64px 1fr 60px 50px;
+  gap: 8px;
   align-items: center;
-  gap: 0.625rem;
-  padding: 0.4375rem 0.75rem;
-  cursor: pointer;
+  width: 100%;
+  padding: 7px 10px;
   background: transparent;
   border: none;
-  border-left: 2px solid transparent;
   text-align: left;
-  font: inherit;
+  cursor: pointer;
   color: inherit;
-  width: 100%;
-  transition: background var(--t-ui);
+  border-left: 2px solid transparent;
+  transition: background var(--t-fast);
 
-  &:hover {
-    background: var(--bg-hover);
-  }
+  &:hover { background: var(--bg-hover); }
 
   &--active {
     background: var(--accent-faint);
@@ -197,12 +265,12 @@
 
   &__symbol {
     font-weight: var(--fw-bold);
-    font-size: 0.8125rem;
+    font-size: 12px;
     color: var(--text-primary);
   }
 
   &__name {
-    font-size: 0.75rem;
+    font-size: 11px;
     color: var(--text-subtle);
     white-space: nowrap;
     overflow: hidden;
@@ -210,136 +278,90 @@
   }
 
   &__meta {
-    font-size: 0.625rem;
+    font-size: 9px;
     color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    text-align: right;
   }
 
   &__cache {
-    font-size: 0.625rem;
+    font-size: 10px;
+    text-align: right;
   }
 }
 
-// ── Date range ─────────────────────────────────────────────
-.range-box {
+.instrument-foot {
   display: flex;
-  align-items: stretch;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius);
-  height: 34px;
-  overflow: hidden;
-
-  &__input {
-    flex: 1;
-    background: transparent;
-    border: none;
-    outline: none;
-    color: var(--text-primary);
-    font-size: 0.8125rem;
-    padding: 0 0.5rem;
-    min-width: 0;
-    color-scheme: dark;
-  }
-
-  &__divider {
-    width: 1px;
-    background: var(--border);
-    align-self: stretch;
-  }
-}
-
-// ── Resolution toggle ──────────────────────────────────────
-.res-group {
-  display: flex;
-  height: 34px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.res-btn {
-  flex: 1;
-  background: transparent;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
   color: var(--text-subtle);
-  border: none;
-  border-right: 1px solid var(--border);
-  padding: 0 0.375rem;
-  font-size: 0.75rem;
-  font-weight: var(--fw-medium);
-  cursor: pointer;
-  transition: background var(--t-ui), color var(--t-ui);
-  text-transform: lowercase;
-  letter-spacing: 0.02em;
 
-  &:last-child {
-    border-right: none;
+  strong {
+    font-weight: var(--fw-bold);
   }
 
-  &:hover {
-    background: var(--bg-hover);
+  &__last-val {
     color: var(--text-secondary);
   }
-
-  &--active {
-    background: var(--accent-faint);
-    color: var(--accent);
-    font-weight: var(--fw-semi);
-  }
 }
 
-// ── Span summary ───────────────────────────────────────────
-.span-box {
-  height: 34px;
+// ── Group 2 — Time window ──────────────────────────────────────────
+.range-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: var(--bg-sunken);
+  gap: 6px;
+}
+
+.range-row__input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  font-size: 0.8125rem;
   color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--accent);
+  }
+
+  // Theme the native date-picker indicator on Chromium so it
+  // doesn't render as a bright icon on dark surface.
+  &::-webkit-calendar-picker-indicator {
+    filter: invert(0.6);
+    cursor: pointer;
+  }
 }
 
-// ── Presets row ────────────────────────────────────────────
+.range-row__arrow {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 .presets {
   display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  margin-top: 0.625rem;
   flex-wrap: wrap;
-
-  &__label {
-    font-size: 0.625rem;
-    font-weight: var(--fw-semi);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
-    margin-right: 0.25rem;
-  }
-
-  &__spacer {
-    flex: 1;
-  }
+  gap: 4px;
 }
 
 .preset-btn {
   height: 24px;
-  padding: 0 0.625rem;
+  padding: 0 8px;
   background: transparent;
   border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  border-radius: var(--radius);
-  font-size: 0.6875rem;
-  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: var(--fw-semi);
   cursor: pointer;
-  transition: border-color var(--t-ui), background var(--t-ui);
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
 
   &:hover {
-    border-color: var(--border-strong);
     background: var(--bg-hover);
+    color: var(--text-primary);
   }
 
   &--active {
@@ -349,237 +371,309 @@
   }
 }
 
-.autofetch {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  font-size: 0.6875rem;
-  color: var(--text-secondary);
-  cursor: pointer;
-
-  input[type="checkbox"] {
-    accent-color: var(--accent);
-    cursor: pointer;
-  }
-}
-
-// ── Availability strip ─────────────────────────────────────
+// ── Availability strip ────────────────────────────────────────────
 .strip {
-  margin-top: 0.875rem;
-  padding: 0.625rem 0.75rem;
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-
-  &__header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.5rem;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  &__title {
-    font-size: 0.6875rem;
-    font-weight: var(--fw-medium);
-    color: var(--text-subtle);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  &__summary {
-    font-size: 0.6875rem;
-    color: var(--text-secondary);
-  }
-
-  &__cells {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(6px, 1fr);
-    gap: 1px;
-    height: 18px;
-  }
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
 
   &__cell {
+    width: 9px;
+    height: 14px;
     border-radius: 1px;
-    cursor: pointer;
+    background: var(--day-missing);
 
-    &--complete {
-      background: var(--day-complete);
-    }
-    &--partial {
-      background: var(--day-partial);
-    }
-    &--missing {
-      background: var(--day-missing);
-    }
-    &--hole {
-      background: var(--day-hole);
-    }
-    &--weekend {
-      background: var(--day-missing);
-      opacity: 0.2;
-    }
+    &--complete { background: var(--day-complete); }
+    &--partial  { background: var(--day-partial); }
+    &--missing  { background: var(--day-missing); }
+    &--hole     { background: var(--day-hole); }
+    &--weekend  { background: var(--bg-canvas); opacity: 0.5; }
   }
 }
 
+// ── Smart-legend chips ────────────────────────────────────────────
+// Each chip carries: a state class (--complete / --partial / --hole /
+// --missing) for its colour, plus an optional --dominant modifier that
+// switches it from dim outline to filled emphasis. The picker host
+// chooses one of three legendTreatments; the variants mostly affect
+// what the dominant chip looks like.
 .legend {
   display: flex;
-  gap: 0.75rem;
-  margin-top: 0.5rem;
-  font-size: 0.625rem;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
   flex-wrap: wrap;
+  gap: 4px;
+}
 
-  &__item {
-    display: flex;
-    align-items: center;
-    gap: 0.3125rem;
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  color: var(--text-subtle);
+  font-weight: var(--fw-medium);
+
+  &__icon {
+    display: none;
+    font-size: 9px;
   }
 
   &__swatch {
-    width: 8px;
-    height: 8px;
-    border-radius: 1px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
 
-    &--complete {
-      background: var(--day-complete);
+  &__count {
+    color: var(--text-primary);
+    font-weight: var(--fw-bold);
+  }
+
+  // ── Per-state colours (swatch only — chip stays dim by default)
+  &--complete .legend-chip__swatch { background: var(--bull); }
+  &--partial  .legend-chip__swatch { background: var(--warn); }
+  &--hole     .legend-chip__swatch { background: var(--bear); }
+  &--missing  .legend-chip__swatch { background: var(--text-subtle); }
+
+  // ── Dominant state — emphasis ────────────────────────────────
+  &--dominant {
+    font-weight: var(--fw-semi);
+
+    &.legend-chip--complete {
+      background: var(--bull-soft);
+      border-color: rgba(38, 166, 154, 0.30);
+      color: var(--bull);
+      .legend-chip__count { color: var(--bull); }
     }
-    &--partial {
-      background: var(--day-partial);
+    &.legend-chip--partial {
+      background: var(--warn-soft);
+      border-color: rgba(255, 152, 0, 0.30);
+      color: var(--warn);
+      .legend-chip__count { color: var(--warn); }
     }
-    &--hole {
-      background: var(--day-hole);
+    &.legend-chip--hole {
+      background: var(--bear-soft);
+      border-color: rgba(239, 83, 80, 0.30);
+      color: var(--bear);
+      .legend-chip__count { color: var(--bear); }
     }
-    &--missing {
-      background: var(--day-missing);
-    }
-    &--weekend {
-      background: var(--day-missing);
-      opacity: 0.3;
+    &.legend-chip--missing {
+      background: var(--bg-hover);
+      border-color: var(--border-light);
+      color: var(--text-primary);
     }
   }
 }
 
-// ── Advisories ─────────────────────────────────────────────
-.advisories {
-  margin-top: 0.75rem;
+// ── Solid-bold treatment: dominant chip uses fully-saturated bg + on-accent text.
+.picker-v2--legend-solid .legend-chip--dominant {
+  &.legend-chip--complete { background: var(--bull); color: #0b0e14; border-color: var(--bull);
+    .legend-chip__count { color: #0b0e14; } .legend-chip__swatch { display: none; } }
+  &.legend-chip--partial  { background: var(--warn); color: #0b0e14; border-color: var(--warn);
+    .legend-chip__count { color: #0b0e14; } .legend-chip__swatch { display: none; } }
+  &.legend-chip--hole     { background: var(--bear); color: #fff; border-color: var(--bear);
+    .legend-chip__count { color: #fff; } .legend-chip__swatch { display: none; } }
+  &.legend-chip--missing  { background: var(--text-subtle); color: var(--bg-canvas); border-color: var(--text-subtle);
+    .legend-chip__count { color: var(--bg-canvas); } .legend-chip__swatch { display: none; } }
+}
+
+// ── Icon-glyph treatment: hide the swatch, show the per-state pi icon.
+.picker-v2--legend-icon .legend-chip {
+  .legend-chip__swatch { display: none; }
+  .legend-chip__icon   { display: inline-flex; }
+}
+.picker-v2--legend-icon .legend-chip--complete .legend-chip__icon { color: var(--bull); }
+.picker-v2--legend-icon .legend-chip--partial  .legend-chip__icon { color: var(--warn); }
+.picker-v2--legend-icon .legend-chip--hole     .legend-chip__icon { color: var(--bear); }
+.picker-v2--legend-icon .legend-chip--missing  .legend-chip__icon { color: var(--text-subtle); }
+
+// ── Group 3 — Sampling ────────────────────────────────────────────
+.res-group {
+  display: inline-flex;
+  height: 32px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+.res-btn {
+  padding: 0 14px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: var(--fw-semi);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+
+  &:last-child { border-right: none; }
+  &:hover { background: var(--bg-hover); color: var(--text-primary); }
+  &--active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+}
+
+.session {
   display: flex;
   flex-direction: column;
-  gap: 0.375rem;
+  gap: 4px;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  &__label {
+    font-weight: var(--fw-bold);
+  }
+
+  &__tag {
+    color: var(--warn);
+    font-weight: var(--fw-bold);
+    font-size: 9px;
+    padding: 1px 4px;
+    border: 1px solid rgba(255, 152, 0, 0.35);
+    border-radius: var(--radius-sm);
+    background: var(--warn-soft);
+    cursor: help;
+  }
+
+  &__group {
+    display: inline-flex;
+    height: 28px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    overflow: hidden;
+    align-self: flex-start;
+  }
+}
+
+.session-btn {
+  padding: 0 12px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: var(--fw-semi);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+
+  &:last-child { border-right: none; }
+  &:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  &--active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+.autofetch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+
+  &__label { flex: 1; }
+  &__icon  { color: var(--text-muted); font-size: 11px; }
+
+  input[type="checkbox"] {
+    accent-color: var(--accent);
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+  }
+}
+
+// ── Advisories ────────────────────────────────────────────────────
+.advisories {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 
 .advisory {
   display: flex;
   align-items: flex-start;
-  gap: 0.625rem;
-  padding: 0.5rem 0.625rem;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-left-width: 3px;
   border-radius: var(--radius);
-  font-size: 0.75rem;
+  font-size: 12px;
   color: var(--text-secondary);
-  line-height: 1.55;
-  border: 1px solid;
 
-  &--suggest {
-    background: rgba(41, 98, 255, 0.08);
-    border-color: rgba(41, 98, 255, 0.35);
-
-    .advisory__icon {
-      color: var(--accent);
-    }
-    .advisory__btn {
-      color: var(--accent);
-      border-color: rgba(41, 98, 255, 0.35);
-    }
-  }
-
-  &--warn {
-    background: rgba(255, 152, 0, 0.08);
-    border-color: rgba(255, 152, 0, 0.35);
-
-    .advisory__icon {
-      color: var(--warn);
-    }
-    .advisory__btn {
-      color: var(--warn);
-      border-color: rgba(255, 152, 0, 0.35);
-    }
-  }
-
-  &--bad {
-    background: rgba(239, 83, 80, 0.08);
-    border-color: rgba(239, 83, 80, 0.35);
-
-    .advisory__icon {
-      color: var(--bear);
-    }
-    .advisory__btn {
-      color: var(--bear);
-      border-color: rgba(239, 83, 80, 0.35);
-    }
-  }
-
-  &--info {
-    background: rgba(41, 182, 246, 0.08);
-    border-color: rgba(41, 182, 246, 0.30);
-
-    .advisory__icon {
-      color: var(--info);
-    }
-    .advisory__btn {
-      color: var(--info);
-      border-color: rgba(41, 182, 246, 0.30);
-    }
-  }
+  &--suggest { border-left-color: var(--accent); }
+  &--warn    { border-left-color: var(--warn);   background: var(--warn-soft); }
+  &--bad     { border-left-color: var(--bear);   background: var(--bear-soft); }
+  &--info    { border-left-color: var(--info); }
 
   &__icon {
-    font-size: 0.8125rem;
-    margin-top: 2px;
     flex-shrink: 0;
+    margin-top: 2px;
+    font-size: 12px;
   }
+  &--suggest &__icon { color: var(--accent); }
+  &--warn    &__icon { color: var(--warn); }
+  &--bad     &__icon { color: var(--bear); }
+  &--info    &__icon { color: var(--info); }
 
   &__body {
     flex: 1;
+    line-height: 1.5;
+    min-width: 0;
 
-    ::ng-deep strong {
-      color: var(--text-primary);
-      font-weight: var(--fw-semi);
-    }
-
-    ::ng-deep .mono {
-      font-family: var(--font-mono);
-      font-variant-numeric: tabular-nums;
-    }
+    strong { color: var(--text-primary); font-weight: var(--fw-semi); }
+    .mono  { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
   }
 
   &__btn {
-    font-size: 0.6875rem;
-    padding: 0.1875rem 0.5rem;
-    border-radius: var(--radius-sm);
-    border: 1px solid;
-    background: transparent;
-    white-space: nowrap;
-    font-weight: var(--fw-medium);
-    cursor: pointer;
     flex-shrink: 0;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 11px;
+    font-weight: var(--fw-semi);
+    cursor: pointer;
+    transition: background var(--t-fast);
 
-    &:hover {
-      background: var(--bg-hover);
-    }
+    &:hover { background: var(--bg-hover); }
   }
 }
 
-// ── Responsive ─────────────────────────────────────────────
-@media (max-width: 960px) {
-  .picker__grid {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-@media (max-width: 600px) {
-  .picker__grid {
+// ── Mobile collapse ────────────────────────────────────────────────
+@media (max-width: 900px) {
+  .picker-v2__groups,
+  .picker-v2__groups--no-resolution {
     grid-template-columns: 1fr;
   }
 }

@@ -1,168 +1,257 @@
 @let r = result();
 
-<!-- Pipeline Info -->
-<div class="info-callout">
-  <i class="pi pi-database"></i>
-  <div>
-    <strong>{{ symbol() }} &mdash; {{ r.strategy_name }}</strong>
-    <span>
-      {{ r.fill_mode === 'signal_bar_close' ? 'Signal Bar Close' : 'Next Bar Open' }}
-      &mdash; {{ r.total_trades }} trades
-      &mdash; {{ formatCurrency(r.initial_cash) }} &rarr; {{ formatCurrency(r.final_equity) }}
+<!-- ═════════ Run summary bar ═════════
+     Status pulse + symbol/range/strategy chips + Re-run/Share buttons.
+     Replaces the prior "info-callout" header — gives the user immediate
+     orientation about what they are looking at. -->
+<div class="run-summary mono">
+  <span class="run-summary__status"
+        [class.run-summary__status--bull]="profitable()"
+        [class.run-summary__status--bear]="!profitable()">
+    <span class="run-summary__pulse"></span>
+    <span class="run-summary__verdict">
+      Last run · {{ runStamp() }} · {{ profitable() ? 'profitable' : 'lossy' }}
     </span>
-  </div>
+  </span>
+
+  <span class="run-summary__divider" aria-hidden="true"></span>
+
+  <span class="run-summary__chip">{{ symbol() }}</span>
+  @if (rangeLabel()) {
+    <span class="run-summary__chip">{{ rangeLabel() }}</span>
+  }
+  @if (resolution()) {
+    <span class="run-summary__chip">{{ resolution() }}</span>
+  }
+  <span class="run-summary__chip">{{ r.strategy_name }}</span>
+  <span class="run-summary__chip">
+    fill: {{ r.fill_mode === 'signal_bar_close' ? 'signal close' : 'next open' }}
+  </span>
+
+  <span class="run-summary__spacer"></span>
+
+  <button type="button" class="run-summary__btn" disabled
+          pTooltip="Re-run from Configure tab" tooltipPosition="top">
+    <i class="pi pi-refresh"></i> Re-run
+  </button>
+  <button type="button" class="run-summary__btn" disabled
+          pTooltip="Sharing not implemented yet" tooltipPosition="top">
+    <i class="pi pi-share-alt"></i> Share run
+  </button>
 </div>
 
-<!-- Production Readiness Score — top-of-page executive layer -->
-<app-readiness-score-card [result]="r" />
-
-<!-- Hero Metrics — graded against 2025-26 institutional hurdles.
-     Ordered by importance: outcome (net profit) → risk (drawdown) →
-     risk-adjusted return (sharpe/sortino) → edge quality (PF/win/expectancy). -->
-<div class="hero-metrics six-wide">
+<!-- ═════════ Hero columns — three lead metrics ═════════
+     Net P&L · Sharpe · Max Drawdown. Picked over the prior 6-card grid
+     for at-a-glance density on a 1440-tall screen. The remaining
+     hero metrics (Sortino, PF, Win Rate, Expectancy) move into the
+     readiness sidebar's expanded view.
+     Each card carries a subtle traffic-light stripe and a verdict
+     subtitle from the existing grade utilities. -->
+<div class="hero-cols">
   <!-- Net Profit -->
-  <div class="hero-card graded" [attr.data-band]="netProfitGrade().band"
-    [pTooltip]="tooltipBody('Net Profit', netProfitGrade().targetRange, netProfitGrade().subtitle)"
-    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
-    <span class="hero-label">Net Profit</span>
-    <span class="hero-value">{{ formatCurrency(r.net_profit) }}</span>
-    <span class="hero-sub">{{ formatPct(r.net_profit / r.initial_cash) }}</span>
-    <span class="hero-verdict">{{ netProfitGrade().subtitle }}</span>
-  </div>
+  <article class="hero-col" [attr.data-band]="netProfitGrade().band">
+    <header class="hero-col__head">
+      <span class="hero-col__label">Net P&amp;L</span>
+      <span class="hero-col__sub">vs ${{ formatNumber(r.initial_cash, 0) }} initial</span>
+    </header>
+    <div class="hero-col__value mono"
+         [class.positive]="r.net_profit > 0"
+         [class.negative]="r.net_profit < 0">
+      {{ r.net_profit >= 0 ? '+' : '' }}{{ formatCurrency(r.net_profit) }}
+    </div>
+    <div class="hero-col__delta mono"
+         [class.positive]="r.net_profit > 0"
+         [class.negative]="r.net_profit < 0">
+      {{ r.net_profit >= 0 ? '+' : '' }}{{ formatPct(r.net_profit / r.initial_cash) }}
+    </div>
+    <div class="hero-col__verdict">{{ netProfitGrade().subtitle }}</div>
+  </article>
+
+  <!-- Sharpe -->
+  <article class="hero-col" [attr.data-band]="sharpeGrade().band">
+    <header class="hero-col__head">
+      <span class="hero-col__label">Sharpe</span>
+      <span class="hero-col__sub">annualized · risk-adjusted</span>
+    </header>
+    <div class="hero-col__value mono">
+      {{ formatNumber(r.statistics['sharpe_ratio'], 2) }}
+    </div>
+    <div class="hero-col__delta mono">
+      target {{ sharpeGrade().targetRange }}
+    </div>
+    <div class="hero-col__verdict">{{ sharpeGrade().subtitle }}</div>
+  </article>
 
   <!-- Max Drawdown -->
-  <div class="hero-card graded" [attr.data-band]="maxDrawdownGrade().band"
-    [pTooltip]="tooltipBody('Max Drawdown', maxDrawdownGrade().targetRange, maxDrawdownGrade().subtitle)"
-    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
-    <span class="hero-label">Max Drawdown</span>
-    <span class="hero-value">{{ formatPct(r.statistics['max_drawdown_pct'] ?? 0) }}</span>
-    <span class="hero-sub">Peak-to-trough</span>
-    <span class="hero-verdict">{{ maxDrawdownGrade().subtitle }}</span>
-  </div>
-
-  <!-- Sharpe Ratio -->
-  <div class="hero-card graded" [attr.data-band]="sharpeGrade().band"
-    [pTooltip]="tooltipBody('Sharpe Ratio', sharpeGrade().targetRange, sharpeGrade().subtitle)"
-    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
-    <span class="hero-label">Sharpe</span>
-    <span class="hero-value">{{ formatNumber(r.statistics['sharpe_ratio'], 2) }}</span>
-    <span class="hero-sub">Risk-adjusted return</span>
-    <span class="hero-verdict">{{ sharpeGrade().subtitle }}</span>
-  </div>
-
-  <!-- Sortino Ratio -->
-  <div class="hero-card graded" [attr.data-band]="sortinoGrade().band"
-    [pTooltip]="tooltipBody('Sortino Ratio', sortinoGrade().targetRange, sortinoGrade().subtitle)"
-    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
-    <span class="hero-label">Sortino</span>
-    <span class="hero-value">{{ formatNumber(r.statistics['sortino_ratio'], 2) }}</span>
-    <span class="hero-sub">Downside-only vol</span>
-    <span class="hero-verdict">{{ sortinoGrade().subtitle }}</span>
-  </div>
-
-  <!-- Profit Factor -->
-  <div class="hero-card graded" [attr.data-band]="profitFactorGrade().band"
-    [pTooltip]="tooltipBody('Profit Factor', profitFactorGrade().targetRange, profitFactorGrade().subtitle)"
-    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
-    <span class="hero-label">Profit Factor</span>
-    <span class="hero-value">{{ formatNumber(r.statistics['profit_factor'], 2) }}</span>
-    <span class="hero-sub">Gross wins / losses</span>
-    <span class="hero-verdict">{{ profitFactorGrade().subtitle }}</span>
-  </div>
-
-  <!-- Win Rate -->
-  <div class="hero-card graded" [attr.data-band]="winRateGrade().band"
-    [pTooltip]="tooltipBody('Win Rate', winRateGrade().targetRange, winRateGrade().subtitle)"
-    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
-    <span class="hero-label">Win Rate</span>
-    <span class="hero-value">{{ formatPct(r.win_rate) }}</span>
-    <span class="hero-sub">{{ r.winning_trades }}W / {{ r.losing_trades }}L · {{ r.total_trades }} trades</span>
-    <span class="hero-verdict">{{ winRateGrade().subtitle }}</span>
-  </div>
-</div>
-
-<!-- Secondary metric row: expectancy + trades summary -->
-<div class="hero-metrics two-wide">
-  <div class="hero-card graded" [attr.data-band]="expectancyGrade().band"
-    [pTooltip]="tooltipBody('Expectancy (per trade)', expectancyGrade().targetRange, expectancyGrade().subtitle)"
-    tooltipPosition="top" [tooltipOptions]="{ showDelay: 150 }">
-    <span class="hero-label">Expectancy / trade</span>
-    <span class="hero-value">{{ formatPct(r.statistics['expectancy_pct'] ?? 0) }}</span>
-    <span class="hero-sub">Average PnL per round trip</span>
-    <span class="hero-verdict">{{ expectancyGrade().subtitle }}</span>
-  </div>
-
-  <div class="hero-card">
-    <span class="hero-label">Trade Summary</span>
-    <span class="hero-value">{{ r.total_trades }}</span>
-    <span class="hero-sub">{{ r.winning_trades }} winning · {{ r.losing_trades }} losing</span>
-    <span class="hero-verdict">Sample size drives statistical confidence.</span>
-  </div>
-</div>
-
-<!-- Trade-vs-Portfolio Sharpe divergence card.  Surfaced separately
-     from the hero row because it's a *relationship* between two other
-     metrics, not a standalone number. -->
-@let div = sharpeDivergence();
-<div class="divergence-card" [attr.data-band]="div.band">
-  <div class="divergence-head">
-    <div>
-      <span class="divergence-label">Trade Sharpe vs Portfolio Sharpe</span>
-      <span class="divergence-sub">Gap reveals sequencing risk — long flat periods between active bursts.</span>
+  <article class="hero-col" [attr.data-band]="maxDrawdownGrade().band">
+    <header class="hero-col__head">
+      <span class="hero-col__label">Max Drawdown</span>
+      <span class="hero-col__sub">peak-to-trough</span>
+    </header>
+    <div class="hero-col__value mono negative">
+      {{ formatPct(r.statistics['max_drawdown_pct'] ?? 0) }}
     </div>
-    @if (div.gap !== null) {
-      <div class="divergence-values">
-        <div class="dv-pair">
-          <span class="dv-label">Trade</span>
-          <span class="dv-value">{{ formatNumber(div.trade, 2) }}</span>
+    <div class="hero-col__delta mono">
+      target {{ maxDrawdownGrade().targetRange }}
+    </div>
+    <div class="hero-col__verdict">{{ maxDrawdownGrade().subtitle }}</div>
+  </article>
+</div>
+
+<!-- ═════════ 1.6fr / 1fr split — chart + readiness sidebar ═════════
+     Equity curve + price chart on the left, production-readiness card
+     on the right. Replaces the prior full-width chart + full-width
+     readiness pattern that produced the bulk of the vertical scroll. -->
+<div class="results-split">
+  <div class="results-split__chart">
+    <app-engine-chart
+      [chartBars]="chartBars()"
+      [trades]="chartTrades()"
+      [equityCurve]="equityCurve()"
+    />
+  </div>
+  <div class="results-split__side">
+    <app-readiness-score-card [result]="r" />
+  </div>
+</div>
+
+<!-- ═════════ Secondary metrics drawer ═════════
+     Win rate · Profit factor · Sortino · Expectancy · Trade Sharpe
+     divergence · Fee analysis. All collapsed by default — the user
+     reveals on demand. Keeps the page short while preserving access. -->
+<details class="secondary-drawer" [attr.open]="showFeeDrawer() ? '' : null"
+         (toggle)="showFeeDrawer.set($any($event.target).open)">
+  <summary class="secondary-drawer__head">
+    <i class="pi" [class.pi-chevron-right]="!showFeeDrawer()"
+                  [class.pi-chevron-down]="showFeeDrawer()"></i>
+    <span>Edge quality &amp; fee analytics</span>
+    <span class="secondary-drawer__hint">
+      Win {{ formatPct(r.win_rate) }} · PF {{ formatNumber(r.statistics['profit_factor'], 2) }}
+      · Sortino {{ formatNumber(r.statistics['sortino_ratio'], 2) }}
+      · Fees {{ formatCurrency(totalFees()) }}
+    </span>
+  </summary>
+
+  <div class="secondary-drawer__body">
+    <!-- Edge-quality cards -->
+    <div class="hero-cols hero-cols--four">
+      <article class="hero-col" [attr.data-band]="sortinoGrade().band">
+        <header class="hero-col__head">
+          <span class="hero-col__label">Sortino</span>
+          <span class="hero-col__sub">downside-only vol</span>
+        </header>
+        <div class="hero-col__value mono">{{ formatNumber(r.statistics['sortino_ratio'], 2) }}</div>
+        <div class="hero-col__verdict">{{ sortinoGrade().subtitle }}</div>
+      </article>
+
+      <article class="hero-col" [attr.data-band]="profitFactorGrade().band">
+        <header class="hero-col__head">
+          <span class="hero-col__label">Profit Factor</span>
+          <span class="hero-col__sub">gross wins / losses</span>
+        </header>
+        <div class="hero-col__value mono">{{ formatNumber(r.statistics['profit_factor'], 2) }}</div>
+        <div class="hero-col__verdict">{{ profitFactorGrade().subtitle }}</div>
+      </article>
+
+      <article class="hero-col" [attr.data-band]="winRateGrade().band">
+        <header class="hero-col__head">
+          <span class="hero-col__label">Win Rate</span>
+          <span class="hero-col__sub">{{ r.winning_trades }}W / {{ r.losing_trades }}L</span>
+        </header>
+        <div class="hero-col__value mono">{{ formatPct(r.win_rate) }}</div>
+        <div class="hero-col__verdict">{{ winRateGrade().subtitle }}</div>
+      </article>
+
+      <article class="hero-col" [attr.data-band]="expectancyGrade().band">
+        <header class="hero-col__head">
+          <span class="hero-col__label">Expectancy / trade</span>
+          <span class="hero-col__sub">avg PnL per round-trip</span>
+        </header>
+        <div class="hero-col__value mono">{{ formatPct(r.statistics['expectancy_pct'] ?? 0) }}</div>
+        <div class="hero-col__verdict">{{ expectancyGrade().subtitle }}</div>
+      </article>
+    </div>
+
+    <!-- Trade vs Portfolio Sharpe divergence -->
+    @let div = sharpeDivergence();
+    <div class="divergence-card" [attr.data-band]="div.band">
+      <div class="divergence-head">
+        <div>
+          <span class="divergence-label">Trade Sharpe vs Portfolio Sharpe</span>
+          <span class="divergence-sub">Gap reveals sequencing risk — long flat periods between active bursts.</span>
         </div>
-        <div class="dv-minus">−</div>
-        <div class="dv-pair">
-          <span class="dv-label">Portfolio</span>
-          <span class="dv-value">{{ formatNumber(div.portfolio, 2) }}</span>
-        </div>
-        <div class="dv-equals">=</div>
-        <div class="dv-pair dv-gap">
-          <span class="dv-label">Gap</span>
-          <span class="dv-value">{{ div.gap.toFixed(2) }}</span>
-        </div>
+        @if (div.gap !== null) {
+          <div class="divergence-values mono">
+            <div class="dv-pair">
+              <span class="dv-label">Trade</span>
+              <span class="dv-value">{{ formatNumber(div.trade, 2) }}</span>
+            </div>
+            <div class="dv-minus">−</div>
+            <div class="dv-pair">
+              <span class="dv-label">Portfolio</span>
+              <span class="dv-value">{{ formatNumber(div.portfolio, 2) }}</span>
+            </div>
+            <div class="dv-equals">=</div>
+            <div class="dv-pair dv-gap">
+              <span class="dv-label">Gap</span>
+              <span class="dv-value">{{ div.gap.toFixed(2) }}</span>
+            </div>
+          </div>
+        }
       </div>
-    }
-  </div>
-  <p class="divergence-verdict">{{ div.verdict }}</p>
-</div>
+      <p class="divergence-verdict">{{ div.verdict }}</p>
+    </div>
 
-<!-- Fee Breakdown -->
-<div class="fee-breakdown">
-  <h3>Fee Analysis</h3>
-  <div class="hero-metrics">
-    <div class="hero-card">
-      <span class="hero-label">Total Fees</span>
-      <span class="hero-value">{{ formatCurrency(totalFees()) }}</span>
-    </div>
-    <div class="hero-card">
-      <span class="hero-label">Fee / Trade</span>
-      <span class="hero-value">{{ formatCurrency(feePerTrade()) }}</span>
-      <span class="hero-sub">per round trip</span>
-    </div>
-    <div class="hero-card">
-      <span class="hero-label">Fee Drag</span>
-      <span class="hero-value">{{ formatPct(feeDragPct()) }}</span>
-      <span class="hero-sub">of gross profit</span>
-    </div>
-    <div class="hero-card" [class.positive]="r.net_profit + totalFees() > 0" [class.negative]="r.net_profit + totalFees() <= 0">
-      <span class="hero-label">Gross Profit</span>
-      <span class="hero-value">{{ formatCurrency(r.net_profit + totalFees()) }}</span>
+    <!-- Fee Analysis -->
+    <div class="fee-block">
+      <h3 class="fee-block__head">Fee Analysis</h3>
+      <div class="hero-cols hero-cols--four">
+        <article class="hero-col">
+          <header class="hero-col__head"><span class="hero-col__label">Total Fees</span></header>
+          <div class="hero-col__value mono">{{ formatCurrency(totalFees()) }}</div>
+        </article>
+        <article class="hero-col">
+          <header class="hero-col__head">
+            <span class="hero-col__label">Fee / Trade</span>
+            <span class="hero-col__sub">per round-trip</span>
+          </header>
+          <div class="hero-col__value mono">{{ formatCurrency(feePerTrade()) }}</div>
+        </article>
+        <article class="hero-col">
+          <header class="hero-col__head">
+            <span class="hero-col__label">Fee Drag</span>
+            <span class="hero-col__sub">of gross profit</span>
+          </header>
+          <div class="hero-col__value mono">{{ formatPct(feeDragPct()) }}</div>
+        </article>
+        <article class="hero-col">
+          <header class="hero-col__head"><span class="hero-col__label">Gross Profit</span></header>
+          <div class="hero-col__value mono"
+               [class.positive]="r.net_profit + totalFees() > 0"
+               [class.negative]="r.net_profit + totalFees() <= 0">
+            {{ formatCurrency(r.net_profit + totalFees()) }}
+          </div>
+        </article>
+      </div>
     </div>
   </div>
-</div>
+</details>
 
-<!-- LEAN Statistics Dashboard -->
+<!-- ═════════ LEAN statistics dashboard (kept) ═════════ -->
 @if (leanStats(); as lean) {
-  <app-lean-statistics [stats]="lean" />
+  <details class="lean-stats-drawer">
+    <summary class="lean-stats-drawer__head">
+      <i class="pi pi-chevron-right"></i>
+      <span>LEAN statistics dashboard</span>
+      <span class="lean-stats-drawer__hint">
+        full portfolio + trade + runtime statistics
+      </span>
+    </summary>
+    <app-lean-statistics [stats]="lean" />
+  </details>
 }
 
-<!-- Trade Log (collapsed) -->
+<!-- ═════════ Trade Log (kept, collapsed) ═════════ -->
 @if (r.trades.length > 0) {
   <div class="trade-log-panel">
     <button class="panel-toggle" (click)="showTradeLog.set(!showTradeLog())">
@@ -181,7 +270,7 @@
             }
           </select>
         </div>
-        <button class="csv-btn" (click)="downloadTradesCsv()" title="Download CSV">
+        <button type="button" class="csv-btn" (click)="downloadTradesCsv()" title="Download CSV">
           <i class="pi pi-download"></i> CSV
         </button>
       </div>
