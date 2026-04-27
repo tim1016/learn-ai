@@ -15,11 +15,55 @@ from pathlib import Path
 import pytest
 
 from app.services.bs_greeks import bs_european_price
+from app.volatility.price_normalization import (
+    NormalizedOptionPrice,
+    NormalizedOptionQuote,
+    from_eod_close,
+    from_snapshot_quote,
+)
 from app.volatility.vix_replication import (
     OptionQuote,
     replicate_expiry_variance,
+    replicate_expiry_variance_with_provenance,
     vix_style_iv30,
+    vix_style_iv30_with_provenance,
 )
+
+
+def _bs_normalized_chain(
+    *,
+    spot: float,
+    strikes: list[float],
+    T_years: float,
+    rate: float,
+    sigma: float,
+    half_spread: float = 0.01,
+    source: str = "opra_mid",
+) -> list[NormalizedOptionQuote]:
+    """Synthetic chain of NormalizedOptionQuote at a known constant σ.
+
+    ``source="opra_mid"`` builds bid/ask = mid ± half_spread and tags
+    ``opra_mid``. ``source="synthetic_close_proxy"`` runs each leg through
+    ``from_eod_close`` so the synthesis-rule provenance is preserved.
+    """
+    out: list[NormalizedOptionQuote] = []
+    for k in strikes:
+        c = bs_european_price(
+            spot=spot, strike=k, ttm_years=T_years, rate=rate, volatility=sigma, is_call=True
+        )
+        p = bs_european_price(
+            spot=spot, strike=k, ttm_years=T_years, rate=rate, volatility=sigma, is_call=False
+        )
+        if source == "opra_mid":
+            call = from_snapshot_quote(max(0.0, c - half_spread), c + half_spread)
+            put = from_snapshot_quote(max(0.0, p - half_spread), p + half_spread)
+        elif source == "synthetic_close_proxy":
+            call = from_eod_close(c)
+            put = from_eod_close(p)
+        else:
+            raise ValueError(f"unknown source {source!r}")
+        out.append(NormalizedOptionQuote(strike=k, call=call, put=put))
+    return out
 
 
 def _bs_chain(
@@ -242,3 +286,332 @@ def _quotes_from_meta_window(df, expiry_days: int):
 
 def _isnan(v) -> bool:
     return isinstance(v, float) and v != v
+
+
+_BUILD_SCRIPT_PER_STRIKE_RULE = "max($0.05, 0.5%·max(call_close, put_close, $1.0))"
+
+
+def _per_strike_synthetic_leg(close: float, half_spread: float) -> NormalizedOptionPrice:
+    """Build a ``synthetic_close_proxy`` ``NormalizedOptionPrice`` using a
+    pre-computed (per-strike) half-spread. Mirrors the SPY golden-fixture
+    build script's rule, where the spread depends on max(call, put) at the
+    same strike — different from the per-leg rule in
+    ``price_normalization.from_eod_close``.
+
+    Zero-bid the leg when ``close < 0.05`` *or* when ``close - half_spread <= 0``;
+    the second condition matters for deep-OTM legs at the same strike as a
+    deep-ITM leg, where the per-strike half-spread is dominated by the
+    ITM side and squashes the small OTM side to zero. This matches the
+    legacy build script's wing-truncation behavior exactly.
+
+    Used only by the SPY golden fixture test for deterministic equivalence
+    against the meta sidecar.
+    """
+    if close < 0.05 or close - half_spread <= 0.0:
+        return NormalizedOptionPrice(
+            mid=0.0,
+            source="synthetic_close_proxy",
+            spread_estimate=None,
+            spread_synthetic=True,
+            half_spread_rule=_BUILD_SCRIPT_PER_STRIKE_RULE,
+            quality_score=0.0,
+        )
+    quality = max(0.0, min(1.0, 1.0 - half_spread / close))
+    return NormalizedOptionPrice(
+        mid=close,
+        source="synthetic_close_proxy",
+        spread_estimate=half_spread,
+        spread_synthetic=True,
+        half_spread_rule=_BUILD_SCRIPT_PER_STRIKE_RULE,
+        quality_score=quality,
+    )
+
+
+def _normalized_quotes_from_meta_window(df, expiry_days: int) -> list[NormalizedOptionQuote]:
+    """Reconstruct the chain as ``NormalizedOptionQuote`` using the same
+    per-strike half-spread rule as the SPY golden-fixture build script,
+    so the provenance-aware replication produces a value that's
+    deterministically equivalent to the meta sidecar.
+    """
+    sub = df[df["expiry_days"] == expiry_days]
+    wide = sub.pivot_table(
+        index="strike", columns="contract_type", values="close", aggfunc="first"
+    ).sort_index()
+    out: list[NormalizedOptionQuote] = []
+    for strike, row in wide.iterrows():
+        call_close = (
+            float(row.get("call", 0.0))
+            if "call" in wide.columns and not _isnan(row.get("call", 0.0))
+            else 0.0
+        )
+        put_close = (
+            float(row.get("put", 0.0))
+            if "put" in wide.columns and not _isnan(row.get("put", 0.0))
+            else 0.0
+        )
+        half = max(0.05, 0.005 * max(call_close, put_close, 1.0))
+        out.append(
+            NormalizedOptionQuote(
+                strike=float(strike),
+                call=_per_strike_synthetic_leg(call_close, half),
+                put=_per_strike_synthetic_leg(put_close, half),
+            )
+        )
+    return out
+
+
+# ----------------------------------------------------------------------
+# Step B — provenance-aware replication
+# ----------------------------------------------------------------------
+
+
+class TestReplicateExpiryWithProvenance:
+    """The provenance-aware path produces identical math to the legacy path
+    when fed the same chain wrapped as ``opra_mid``, plus a populated
+    ``IvProvenance``.
+    """
+
+    def test_matches_legacy_math_on_clean_opra_chain(self):
+        spot = 100.0
+        sigma_true = 0.20
+        T_years = 30 / 365.0
+        rate = 0.05
+        strikes = [60, 65, 70, 75, 80, 85, 90, 92.5, 95, 97.5, 100,
+                   102.5, 105, 107.5, 110, 115, 120, 125, 130, 135, 140]
+
+        legacy_chain = []
+        for k in strikes:
+            c = bs_european_price(spot=spot, strike=k, ttm_years=T_years, rate=rate, volatility=sigma_true, is_call=True)
+            p = bs_european_price(spot=spot, strike=k, ttm_years=T_years, rate=rate, volatility=sigma_true, is_call=False)
+            legacy_chain.append(
+                OptionQuote(
+                    strike=k,
+                    call_bid=max(0.0, c - 0.01), call_ask=c + 0.01,
+                    put_bid=max(0.0, p - 0.01), put_ask=p + 0.01,
+                )
+            )
+        legacy_rep = replicate_expiry_variance(legacy_chain, rate=rate, T_years=T_years)
+
+        normalized_chain = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T_years, rate=rate,
+            sigma=sigma_true, half_spread=0.01, source="opra_mid",
+        )
+        new_rep, prov = replicate_expiry_variance_with_provenance(
+            normalized_chain, rate=rate, T_years=T_years
+        )
+
+        # Math is identical. K0 selection is pure index, so byte-equal;
+        # forward and sigma² involve float math but should match within
+        # round-off.
+        assert new_rep.forward == pytest.approx(legacy_rep.forward, rel=1e-12)
+        assert new_rep.K0 == legacy_rep.K0
+        assert new_rep.sigma_squared_T == pytest.approx(legacy_rep.sigma_squared_T, rel=1e-12)
+        assert new_rep.n_strikes_used == legacy_rep.n_strikes_used
+
+        # Provenance is right for an all-opra chain.
+        assert prov.iv_source == "internal_solver"
+        assert prov.variance_contribution_synthetic == 0.0
+        assert prov.price_source_mix.get("opra_mid", 0.0) == pytest.approx(1.0)
+        # Strike coverage reflects post-truncation surviving wings, not the
+        # input range — a BS-synthesized chain at σ=0.20 truncates deep
+        # OTM aggressively, so this is < 1.0 even with 21 input strikes.
+        assert 0.0 < prov.strike_coverage_score <= 1.0
+
+    def test_synthetic_close_proxy_chain_reports_full_synthesis(self):
+        spot = 100.0
+        sigma_true = 0.20
+        T_years = 30 / 365.0
+        rate = 0.05
+        strikes = [80, 85, 90, 95, 100, 105, 110, 115, 120]
+
+        chain = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T_years, rate=rate,
+            sigma=sigma_true, source="synthetic_close_proxy",
+        )
+        _, prov = replicate_expiry_variance_with_provenance(
+            chain, rate=rate, T_years=T_years
+        )
+        assert prov.variance_contribution_synthetic == pytest.approx(1.0)
+        assert prov.price_source_mix.get("synthetic_close_proxy", 0.0) == pytest.approx(1.0)
+
+    def test_mixed_atm_opra_wings_synthetic_yields_intermediate_share(self):
+        """Round 3 issue #2: variance-contribution-weighted synthetic share.
+
+        Build a chain where the inner cluster is real OPRA mid and the
+        wings are synthetic. The count-based share is independent of
+        which strikes are which; the variance-weighted share depends on
+        which strikes contribute most to the integration.
+        """
+        spot = 100.0
+        sigma_true = 0.20
+        T_years = 30 / 365.0
+        rate = 0.05
+
+        all_strikes = [70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130]
+        atm_window = {95, 100, 105}  # opra_mid here
+
+        opra_chain = _bs_normalized_chain(
+            spot=spot, strikes=all_strikes, T_years=T_years, rate=rate,
+            sigma=sigma_true, source="opra_mid",
+        )
+        synth_chain = _bs_normalized_chain(
+            spot=spot, strikes=all_strikes, T_years=T_years, rate=rate,
+            sigma=sigma_true, source="synthetic_close_proxy",
+        )
+        mixed = [
+            opra_chain[i] if all_strikes[i] in atm_window else synth_chain[i]
+            for i in range(len(all_strikes))
+        ]
+
+        _, prov = replicate_expiry_variance_with_provenance(
+            mixed, rate=rate, T_years=T_years
+        )
+
+        # The mix is non-trivial — neither 0 nor 1.
+        assert 0.0 < prov.variance_contribution_synthetic < 1.0
+        # And both sources show up in the count mix.
+        assert "opra_mid" in prov.price_source_mix
+        assert "synthetic_close_proxy" in prov.price_source_mix
+        # Sanity: the count-based mix should sum to ~1.
+        assert sum(prov.price_source_mix.values()) == pytest.approx(1.0)
+
+    def test_debug_payload_lists_per_strike_contributions(self):
+        spot = 100.0
+        T_years = 30 / 365.0
+        rate = 0.05
+        strikes = [80, 90, 95, 100, 105, 110, 120]
+        chain = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T_years, rate=rate, sigma=0.20,
+            source="opra_mid",
+        )
+        _, prov = replicate_expiry_variance_with_provenance(
+            chain, rate=rate, T_years=T_years, debug=True,
+        )
+        assert prov.per_strike_contributions is not None
+        # Each contribution dict has the documented shape.
+        for entry in prov.per_strike_contributions:
+            assert {"strike", "kind", "dK", "Q", "c_i", "active_leg_sources",
+                    "active_leg_synthetic"}.issubset(entry.keys())
+            assert entry["c_i"] >= 0
+            assert entry["kind"] in ("put", "call", "both")
+
+    def test_debug_default_off_gives_none(self):
+        spot = 100.0
+        T_years = 30 / 365.0
+        rate = 0.05
+        strikes = [80, 90, 100, 110, 120]
+        chain = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T_years, rate=rate, sigma=0.20,
+            source="opra_mid",
+        )
+        _, prov = replicate_expiry_variance_with_provenance(
+            chain, rate=rate, T_years=T_years
+        )
+        assert prov.per_strike_contributions is None
+
+
+class TestVixStyleIv30WithProvenance:
+    def test_combines_two_expiries_provenance(self):
+        spot = 100.0
+        sigma_true = 0.20
+        rate = 0.05
+        T1_d, T2_d = 21, 35
+        strikes = [60, 70, 80, 90, 95, 100, 105, 110, 120, 130, 140]
+        chain1 = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T1_d / 365.0, rate=rate,
+            sigma=sigma_true, source="opra_mid",
+        )
+        chain2 = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T2_d / 365.0, rate=rate,
+            sigma=sigma_true, source="synthetic_close_proxy",
+        )
+        sigma30, prov = vix_style_iv30_with_provenance(
+            chain1, chain2,
+            rate1=rate, T1_calendar_days=T1_d,
+            rate2=rate, T2_calendar_days=T2_d,
+            target_calendar_days=30,
+        )
+        # Sparse 11-strike BS chain at σ=0.20 — replication is within ~150 bps.
+        # Tighter assertion lives in test_recovers_sigma_with_two_straddling_expiries
+        # (21 strikes, 50 bps).
+        assert abs(sigma30 - sigma_true) < 0.015
+        assert prov.iv_source == "internal_solver"
+        # Half opra (expiry1), half synthetic (expiry2): combined synth share
+        # is between 0 and 1. The exact value depends on the variance-time
+        # weights; assert the bounds.
+        assert 0.1 < prov.variance_contribution_synthetic < 0.9
+        # Both sources show up in the combined mix.
+        assert "opra_mid" in prov.price_source_mix
+        assert "synthetic_close_proxy" in prov.price_source_mix
+        assert sum(prov.price_source_mix.values()) == pytest.approx(1.0)
+
+    def test_combined_strike_coverage_is_minimum_of_two(self):
+        spot = 100.0
+        rate = 0.05
+        T1_d, T2_d = 21, 35
+        # expiry1 has wide wings; expiry2 has narrow wings.
+        wide = [50, 60, 70, 80, 90, 95, 100, 105, 110, 120, 130, 140, 150]
+        narrow = [90, 95, 100, 105, 110]
+        chain1 = _bs_normalized_chain(
+            spot=spot, strikes=wide, T_years=T1_d / 365.0, rate=rate,
+            sigma=0.20, source="opra_mid",
+        )
+        chain2 = _bs_normalized_chain(
+            spot=spot, strikes=narrow, T_years=T2_d / 365.0, rate=rate,
+            sigma=0.20, source="opra_mid",
+        )
+        _, prov_wide = replicate_expiry_variance_with_provenance(
+            chain1, rate=rate, T_years=T1_d / 365.0
+        )
+        _, prov_narrow = replicate_expiry_variance_with_provenance(
+            chain2, rate=rate, T_years=T2_d / 365.0
+        )
+        assert prov_wide.strike_coverage_score > prov_narrow.strike_coverage_score
+
+        _, combined_prov = vix_style_iv30_with_provenance(
+            chain1, chain2,
+            rate1=rate, T1_calendar_days=T1_d,
+            rate2=rate, T2_calendar_days=T2_d,
+        )
+        # Combined coverage = min — the narrow expiry drags the IV30 down.
+        assert combined_prov.strike_coverage_score == pytest.approx(prov_narrow.strike_coverage_score)
+
+
+@pytest.mark.skipif(
+    not GOLDEN_FIXTURE.exists(),
+    reason=f"golden fixture {GOLDEN_FIXTURE} not populated",
+)
+class TestSpyGoldenFixtureWithProvenance:
+    """The SPY 2024-12-20 fixture is built end-to-end from EOD close prices,
+    so every leg is ``synthetic_close_proxy`` and the variance-contribution-
+    weighted synthetic share is exactly 1.0.
+    """
+
+    def test_replication_with_provenance_matches_meta_sidecar(self):
+        import json
+
+        import pandas as pd
+
+        df = pd.read_parquet(GOLDEN_FIXTURE)
+        meta = json.loads(GOLDEN_FIXTURE.with_suffix(".meta.json").read_text())
+        below = int(meta["straddle"]["below_30d"])
+        above = int(meta["straddle"]["above_30d"])
+
+        chain1 = _normalized_quotes_from_meta_window(df, below)
+        chain2 = _normalized_quotes_from_meta_window(df, above)
+        sigma_vix, prov = vix_style_iv30_with_provenance(
+            chain1, chain2,
+            rate1=meta["rate"], T1_calendar_days=below,
+            rate2=meta["rate"], T2_calendar_days=above,
+            target_calendar_days=30,
+        )
+        # Math: deterministic recomputation of the meta sidecar value.
+        assert abs(sigma_vix - float(meta["vix_style_iv30_act365"])) < 1e-9
+
+        # Provenance: end-to-end synthetic.
+        assert prov.variance_contribution_synthetic == pytest.approx(1.0)
+        assert prov.price_source_mix.get("synthetic_close_proxy", 0.0) == pytest.approx(1.0)
+        # SPY 2024-12-20 surviving chain extends ~2.5σ each side after the
+        # per-strike-rule wing truncation kills small far-OTM legs that share
+        # a strike with deep-ITM legs. Score lands ~0.50.
+        assert prov.strike_coverage_score >= 0.5
