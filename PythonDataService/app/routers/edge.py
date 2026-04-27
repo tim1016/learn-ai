@@ -34,6 +34,10 @@ from app.engine.edge.cross_asset_runner import (
     run_cross_asset,
 )
 from app.engine.edge.edge_score import DEFAULT_WEIGHTS, edge_score
+from app.engine.edge.features_realtime.hf_realized_vol import (
+    Session,
+    hf_realized_vol_trd252,
+)
 from app.engine.edge.features_realtime.realized_vol import (
     DAILY_BARS_PER_YEAR,
     close_to_close,
@@ -45,6 +49,7 @@ from app.engine.edge.features_realtime.regime_features import (
     build_ohlcv_features,
 )
 from app.engine.edge.labels_oracle.forward_rv import forward_rv
+from app.engine.edge.labels_oracle.hf_forward_rv import hf_forward_rv_trd252
 from app.engine.edge.regime_clustering import (
     fit_gaussian_hmm,
     kmeans,
@@ -53,6 +58,7 @@ from app.engine.edge.regime_clustering import (
 from app.engine.edge.regime_strategy_eval import partition_by_regime
 from app.engine.edge.trade_simulator import TradeSimConfig, simulate
 from app.engine.edge.vrp import compute_vrp, vrp_signal
+from app.volatility.basis import convert_iv_act365_to_trading252
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/edge", tags=["edge"])
@@ -82,10 +88,17 @@ class RealizedVsIvSeriesRequest(BaseModel):
     symbol: str
     bar_size: Literal["15m", "1d"] = "1d"
     tenor_days: int = Field(30, ge=1, le=365)
+    session: Session = Field(
+        "ETH",
+        description="Session for the HF RV estimator. ETH = 04:00-20:00 ET (default), RTH = 09:30-16:00 ET.",
+    )
     estimators: list[str] = Field(default_factory=lambda: ["yz"])
     windows: list[int] = Field(default_factory=lambda: [5, 10, 30])
     bars: list[BarPayload]
-    iv_series: list[dict] | None = Field(None, description="Optional [{ts, iv30}] history; omitted = empty IV column.")
+    iv_series: list[dict] | None = Field(
+        None,
+        description="Optional [{ts, iv30}] history. iv30 must be ACT/365 (the solver's native basis); the router converts to TRD/252 before VRP.",
+    )
 
 
 class RealizedVsIvSeriesResponse(BaseModel):
@@ -94,6 +107,9 @@ class RealizedVsIvSeriesResponse(BaseModel):
     rv_trailing: dict[str, list[float | None]]
     rv_forward: dict[str, list[float | None]]
     iv30: list[float | None]
+    iv30_trd252: list[float | None]
+    rv_hf_trailing: list[float | None]
+    rv_hf_forward: list[float | None]
     vrp_forward: list[float | None]
     vrp_z: list[float | None]
     coverage: dict
@@ -125,20 +141,23 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
     else:
         iv = pd.Series(index=bars.index, dtype=float)
 
-    rv_for_vrp_key = (
-        f"{req.estimators[0]}_{req.tenor_days}"
-        if f"{req.estimators[0]}_{req.tenor_days}" in rv_forward
-        else next(iter(rv_forward))
-    )
-    rv_for_vrp = pd.Series(rv_forward[rv_for_vrp_key], index=bars.index)
-    vrp_fwd = compute_vrp(iv.fillna(np.nan), rv_for_vrp)
-    sig = vrp_signal(iv=iv.ffill(), rv=rv_for_vrp.ffill(), lookback=min(252, len(bars) - 1))
+    # HF RV (TRD/252) for VRP — for 15-min bars uses two-component HF; for daily
+    # bars falls back to YZ at 21-day window (no intraday detail to exploit).
+    rv_hf_trail, rv_hf_fwd = _compute_hf_rv_for_vrp(bars, req.bar_size, req.session)
+
+    # Basis-convert IV from ACT/365 (solver-native) to TRD/252 before VRP.
+    iv_trd252 = _convert_iv_to_trd252(iv, req.tenor_days)
+
+    vrp_fwd = compute_vrp(iv_trd252.fillna(np.nan), rv_hf_fwd)
+    sig = vrp_signal(iv=iv_trd252.ffill(), rv=rv_hf_fwd.ffill(), lookback=min(252, len(bars) - 1))
 
     coverage = {
         "n_bars": len(bars),
         "iv_first_ts": int(iv.dropna().index.min()) if iv.notna().any() else None,
         "iv_last_ts": int(iv.dropna().index.max()) if iv.notna().any() else None,
-        "forward_nan_bars": int(rv_for_vrp.isna().sum()),
+        "forward_nan_bars": int(rv_hf_fwd.isna().sum()),
+        "session": req.session,
+        "vrp_basis": "TRD/252 (IV converted from ACT/365 via NYSE calendar)",
     }
     return RealizedVsIvSeriesResponse(
         symbol=req.symbol,
@@ -146,6 +165,9 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
         rv_trailing=rv_trailing,
         rv_forward=rv_forward,
         iv30=_series_to_jsonable(iv),
+        iv30_trd252=_series_to_jsonable(iv_trd252),
+        rv_hf_trailing=_series_to_jsonable(rv_hf_trail),
+        rv_hf_forward=_series_to_jsonable(rv_hf_fwd),
         vrp_forward=_series_to_jsonable(vrp_fwd),
         vrp_z=_series_to_jsonable(sig.vrp_z),
         coverage=coverage,
@@ -405,3 +427,49 @@ def _bars_payload_to_df(bars: list[BarPayload]) -> pd.DataFrame:
 
 def _series_to_jsonable(s: pd.Series) -> list:
     return [None if (isinstance(v, float) and np.isnan(v)) else float(v) for v in s.tolist()]
+
+
+def _compute_hf_rv_for_vrp(
+    bars: pd.DataFrame,
+    bar_size: str,
+    session: Session,
+) -> tuple[pd.Series, pd.Series]:
+    """Return (trailing, forward) HF realized vol on TRD/252 basis.
+
+    For 15-min bars, uses the two-component HF estimator from
+    ``hf_realized_vol_trd252`` with the chosen session. For daily bars, falls
+    back to a YZ-21 estimator (intraday detail not available).
+
+    Both outputs are int64-ms-indexed to match ``bars``.
+    """
+    if bar_size == "15m":
+        # HF requires tz-aware DatetimeIndex. Build a UTC-indexed copy here so
+        # we don't mutate the caller's DataFrame.
+        bars_utc = bars.copy()
+        bars_utc.index = pd.to_datetime(bars.index, unit="ms", utc=True)
+        trailing = hf_realized_vol_trd252(bars_utc, window_trading_days=21, session=session)
+        forward = hf_forward_rv_trd252(bars_utc, window_trading_days=21, session=session)
+        # Re-index back to int64 ms to match the rest of the pipeline.
+        trailing.index = bars.index
+        forward.index = bars.index
+        return trailing, forward
+    # Daily fallback: 21-day YZ trailing / forward. TRD/252 already.
+    trailing = yang_zhang(bars, window=21, annualize=True, bars_per_year=DAILY_BARS_PER_YEAR)
+    forward = forward_rv(
+        bars, estimator="yz", window=21, annualize=True, bars_per_year=DAILY_BARS_PER_YEAR
+    )
+    return trailing, forward
+
+
+def _convert_iv_to_trd252(iv_act365: pd.Series, tenor_days: int) -> pd.Series:
+    """Per-timestamp basis conversion from ACT/365 to TRD/252.
+
+    NaN inputs pass through unchanged. The dynamic NYSE-calendar factor is
+    queried per timestamp via ``convert_iv_act365_to_trading252``.
+    """
+    out = pd.Series(index=iv_act365.index, dtype=float)
+    for ts, sigma in iv_act365.items():
+        if sigma is None or (isinstance(sigma, float) and np.isnan(sigma)):
+            continue
+        out.loc[ts] = convert_iv_act365_to_trading252(float(sigma), int(ts), tenor_days)
+    return out
