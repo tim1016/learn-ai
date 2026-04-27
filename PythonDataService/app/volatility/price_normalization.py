@@ -1,6 +1,7 @@
 """Typed price-normalization contract for option mids feeding the IV solver.
 
-Step A of the IV-ownership plan (`docs/architecture/iv-ownership-plan.md`).
+See ``docs/architecture/iv-ownership-research.md`` §4.6 for the schema and
+§7.9 for the ``quality_score = 1 - half_spread / mid`` rationale.
 
 The system has two real data regimes for option prices:
 
@@ -9,18 +10,14 @@ The system has two real data regimes for option prices:
    Stocks Starter + Options Starter, where we don't have historical NBBO and
    must infer mid/spread from EOD aggregates.
 
-The plan's architectural commitment (Round 1 rebuttal): the *call site*
-declares which regime the data came from. There is no polymorphic adapter
-that hides the branch behind a method name. Every option price that enters
-the IV solver carries a tag that says where it came from and how its
-spread was derived.
+Architectural commitment: the *call site* declares which regime the data
+came from. There is no polymorphic adapter that hides the branch behind a
+method name. Every option price that enters the IV solver carries a tag
+that says where it came from and how its spread was derived.
 
 `NormalizedOptionPrice` is per-leg (one mid + provenance). `NormalizedOptionQuote`
 is per-strike (call-leg + put-leg on the same expiry), the shape that flows
 into VIX-style replication.
-
-See `docs/architecture/iv-ownership-decisions.md` for the rationale on
-`quality_score = 1 - half_spread / mid` (Q5).
 """
 
 from __future__ import annotations

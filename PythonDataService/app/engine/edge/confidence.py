@@ -1,32 +1,28 @@
 """Continuous confidence formula shared by VRP gating and regime weighting.
 
-Steps E and F of the IV-ownership plan
-(``docs/architecture/iv-ownership-plan.md``).
+See ``docs/architecture/iv-ownership-research.md`` §4.7 for the consolidated
+rationale (multiplicative form, hard floor, imputed-prior policy for missing
+``health_score``).
 
 Single source of truth for "how trustworthy is this IV30, on a 0..1 scale,
 given (a) chain stability and (b) how much of the chain is synthesized."
-Both the VRP signal generator (Step E) and the regime classifier
-(Step F) call this module so the two production gates can never drift
-against each other.
+Both the VRP signal generator and the regime classifier call this module
+so the two production gates can never drift against each other.
 
 The confidence is multiplicative:
 
     confidence = health_score * (1 - variance_contribution_synthetic)
 
-Multiplicative because stability and trust-in-inputs are roughly
-independent failure modes — a healthy chain with all synthetic data is
-still untrustworthy; a real OPRA chain that's wildly unstable across
-refits is also untrustworthy. Both must be high for confidence to be
-high. Additive doesn't capture this.
+Multiplicative because stability and trust-in-inputs are roughly independent
+failure modes — both must be high for confidence to be high. Additive
+doesn't capture this.
 
-Step F's regime feature weight uses an extra ramp:
+Regime feature weight uses an extra ramp:
 
     feature_weight = max(0, 2 * health_score - 1) * (1 - vcs)
 
-The ramp-from-0.5 means a chain at health=0.5 carries no IV-feature
-weight in the regime classifier, while VRP gating still admits some
-signal. This matches the spirit of the existing IV30 stability test
-threshold (``health < 0.5`` flagged as "degrade gracefully").
+The ramp-from-0.5 means a chain at health=0.5 carries no IV-feature weight
+in the regime classifier, while VRP gating still admits some signal.
 """
 
 from __future__ import annotations
@@ -35,9 +31,9 @@ from dataclasses import dataclass
 
 DEFAULT_CONFIDENCE_FLOOR = 0.1
 """Hard-gate floor: confidence below this forces signal action to 0
-regardless of z-magnitude (Step E acceptance §5.E). Configurable per route
-via Pydantic settings — see ``docs/architecture/iv-ownership-decisions.md``
-Q4."""
+regardless of z-magnitude. Configurable per route via Pydantic settings.
+See ``docs/architecture/iv-ownership-research.md`` §7.7 for the rationale
+and §8.2.2 for the planned reliability-curve calibration."""
 
 
 @dataclass(frozen=True)

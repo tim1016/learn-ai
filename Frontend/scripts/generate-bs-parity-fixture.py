@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the frontend BS parity fixture.
 
-Step G of the IV-ownership plan
-(``docs/architecture/iv-ownership-plan.md``).
+See ``docs/architecture/iv-ownership-research.md`` §6 (tolerances and
+validation) for the consolidated tolerance table.
 
 Self-contained — uses only the Python stdlib (``math.erf``) so it can run
 in any environment without depending on the PythonDataService venv.

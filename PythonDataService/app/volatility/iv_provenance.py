@@ -1,18 +1,18 @@
 """Typed provenance for IV30 outputs.
 
-Step A of the IV-ownership plan (`docs/architecture/iv-ownership-plan.md`).
+See ``docs/architecture/iv-ownership-research.md`` §4.6 for the consolidated
+schema rationale and §7.3 for why count-share *and* variance-share are both
+recorded.
 
 `IvSource` and `IvProvenance` describe the **derived** volatility — distinct
 from `PriceSource` and `NormalizedOptionPrice` (in `price_normalization.py`)
-which describe the **inputs** to the IV solver.
-
-This separation was Round 3 issue #1 of the plan: the first draft had a
-single `polygon_computed_iv` enum that conflated the two levels. They are
-not collapsible: a chain can be 100% real OPRA mids (`PriceSource`) but
-still be solved by either our internal solver or by trusting Polygon's
-IV field (`IvSource`). The plan's commitment is to never store Polygon's
-IV field as an IV — the recorder always recomputes — but the enum allows
-for diagnostic comparison.
+which describe the **inputs** to the IV solver. The separation prevents the
+"single `polygon_computed_iv` enum" category violation: a chain can be 100%
+real OPRA mids (`PriceSource`) but still be solved by either our internal
+solver or by trusting Polygon's IV field (`IvSource`). The repo's
+sovereignty commitment is to never store Polygon's IV as authoritative —
+the recorder always recomputes — but the enum allows for diagnostic
+comparison.
 
 The two operationally important fields are:
 

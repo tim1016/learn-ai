@@ -1,7 +1,9 @@
 """Tests for the recorder fallback in edge.py.
 
-Closes the second item from docs/architecture/iv-ownership-signoff.md §5
-(realized-vs-iv router auto-reads from recorder). Exercises:
+Covers the realized-vs-iv router auto-reading from the recorder when
+``iv_series`` is omitted, plus the imputed-prior policy on
+``health_score`` (see docs/architecture/iv-ownership-research.md §4.7
+and §8.1.1). Exercises:
 
 - The pure helper ``_iv_series_from_recorder`` (precedence + skip rules).
 - The realized-vs-iv route's ``iv_source`` field across the three states:
@@ -204,3 +206,90 @@ class TestRealizedVsIvIvSourceField:
         body = resp.json()
         assert body["iv_source"] == "absent"
         assert all(v is None for v in body["iv30"])
+
+
+class TestHealthScoreImputedPrior:
+    """Pins the imputed-prior policy: when ``health_score`` is omitted from
+    iv_series items but ``variance_contribution_synthetic`` is present (the
+    typical recorder-fallback shape), confidence is computed against a
+    conservative ``0.5`` prior — not ``1.0`` — and the imputed-ness is
+    surfaced via ``explanation.health_imputed_now``.
+
+    Closes the §7.3 reviewer-feedback contradiction: defaulting to ``1.0``
+    encoded "fully trusted stability" with zero evidence, which is the same
+    "defensible-looking but wrong" synthesis we used to reject for
+    ``strike_coverage_score``. See
+    ``docs/architecture/iv-ownership-research.md`` Reviewer Feedback Log.
+    """
+
+    async def test_explanation_flags_health_imputed_when_missing(self, client, recorder_store):
+        bars = _bars(40)
+        # Recorder snapshot carries vcs but no health_score — the typical
+        # recorder-fallback shape.
+        _record(recorder_store, ts_ms=bars[30]["ts"], iv_vix=0.22, vcs=0.10)
+
+        resp = await client.post(
+            "/api/edge/realized-vs-iv/series",
+            json={"symbol": "SPY", "bars": bars},
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["iv_source"] == "recorder"
+        explanation = body["explanation"]
+        assert explanation is not None
+        assert explanation["health_imputed_now"] is True
+
+    async def test_explanation_does_not_flag_when_health_supplied(self, client, recorder_store):
+        bars = _bars(40)
+        # Caller supplies both vcs *and* health_score — no imputation.
+        caller_iv = [
+            {
+                "ts": bars[30]["ts"],
+                "iv30": 0.22,
+                "variance_contribution_synthetic": 0.10,
+                "health_score": 0.95,
+            }
+        ]
+
+        resp = await client.post(
+            "/api/edge/realized-vs-iv/series",
+            json={"symbol": "SPY", "bars": bars, "iv_series": caller_iv},
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        explanation = body["explanation"]
+        assert explanation is not None
+        assert explanation["health_imputed_now"] is False
+
+    async def test_imputed_prior_lowers_confidence_vs_legacy_default(self, client, recorder_store):
+        bars = _bars(40)
+        # Two requests, identical except one supplies health=1.0 explicitly,
+        # the other omits it. With the imputed-prior policy, the omitted-health
+        # confidence should be roughly half the explicit-1.0 confidence
+        # (since the only change is health 1.0 → 0.5 in the multiplicative
+        # formula confidence = health * (1 - vcs), and vcs = 0 here).
+        _record(recorder_store, ts_ms=bars[30]["ts"], iv_vix=0.22, vcs=0.0)
+        resp_imputed = await client.post(
+            "/api/edge/realized-vs-iv/series",
+            json={"symbol": "SPY", "bars": bars},
+        )
+        explicit_iv = [
+            {
+                "ts": bars[30]["ts"],
+                "iv30": 0.22,
+                "variance_contribution_synthetic": 0.0,
+                "health_score": 1.0,
+            }
+        ]
+        resp_explicit = await client.post(
+            "/api/edge/realized-vs-iv/series",
+            json={"symbol": "SPY", "bars": bars, "iv_series": explicit_iv},
+        )
+
+        c_imputed = resp_imputed.json()["explanation"]["latest_confidence"]
+        c_explicit = resp_explicit.json()["explanation"]["latest_confidence"]
+        # Imputed health = 0.5, explicit health = 1.0; vcs = 0 in both cases.
+        # So confidence_imputed should equal half confidence_explicit.
+        assert c_imputed == pytest.approx(c_explicit * 0.5, rel=1e-6)
