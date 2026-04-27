@@ -28,6 +28,10 @@ export interface EdgeData {
   rvGK: number[];
   rvYZ: number[];
   rvForward: number[];
+  /** RV used for VRP — HF two-component on 15m bars, falls back to YZ-21 on daily. TRD/252 basis. */
+  rvHf21d: number[];
+  /** IV30 in TRD/252 basis (post Step 1 conversion). Aligned for headline VRP. */
+  iv30Trd252: number[];
   vrpForward: number[];
   vrpZ: number[];
   vrpHistogram: VrpBin[];
@@ -255,7 +259,12 @@ export class EdgeMockDataService {
 
     return {
       N, dates, candles, iv30, ivVol, skew, termSlope,
-      rvCloseClose, rvParkinson, rvGK, rvYZ, rvForward, vrpForward, vrpZ, vrpHistogram,
+      rvCloseClose, rvParkinson, rvGK, rvYZ, rvForward,
+      // Mock: HF RV + IV30(TRD/252) tracked from the same synthetic series.
+      // Live data overrides via the api response.
+      rvHf21d: rvForward.slice(),
+      iv30Trd252: iv30.slice(),
+      vrpForward, vrpZ, vrpHistogram,
       regimePath, transitionMatrix, edgeScore, edgeComponents,
       signals, oracleSignals,
       coverage: { bars_total: N, forward_blind_tail: 21, iv_first_ts: dates[14].toISOString().slice(0, 10) },
