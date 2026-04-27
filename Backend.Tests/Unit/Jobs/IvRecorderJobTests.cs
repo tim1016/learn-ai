@@ -56,9 +56,9 @@ public class IvRecorderJobTests
         // the slot.
         var responses = new Queue<HttpResponseMessage>();
         responses.Enqueue(new HttpResponseMessage(HttpStatusCode.InternalServerError)
-            { Content = new StringContent("boom") });
+        { Content = new StringContent("boom") });
         responses.Enqueue(new HttpResponseMessage(HttpStatusCode.OK)
-            { Content = new StringContent("{\"success\":true}") });
+        { Content = new StringContent("{\"success\":true}") });
         var handler = new RecordingHttpMessageHandler(responses);
 
         var sut = CreateJob(handler, new IvRecorderOptions
