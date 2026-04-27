@@ -128,6 +128,11 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
 
   hover = output<number | null>();
 
+  /** Whether to render the live-IV30 marker at the right edge of the IV
+   *  axis. The marker reads from `data.liveIv30`; this exposes a separate
+   *  toggle for callers that want to suppress it without dropping the data. */
+  showLiveIv30 = input(true);
+
   @ViewChild("canvas", { static: true }) canvasRef!: ElementRef<HTMLCanvasElement>;
 
   // Bottom padding extended to fit the dedicated x-axis tick row beneath the strip.
@@ -137,7 +142,8 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
     effect(() => {
       const _ = this.width() + this.height() + (this.hoverIdx() ?? -1);
       const __ = (this.showOracle() ? 1 : 0) + (this.showRealtime() ? 1 : 0)
-                + (this.layers().rvBands ? 1 : 0) + (this.layers().edgeStrip ? 1 : 0);
+                + (this.layers().rvBands ? 1 : 0) + (this.layers().edgeStrip ? 1 : 0)
+                + (this.showLiveIv30() ? 1 : 0);
       void _; void __;
       const data = this.data();
       if (!this.canvasRef) return;
@@ -233,6 +239,38 @@ export class EdgePriceIVChartComponent implements AfterViewInit {
         if (i === 0) ctx.moveTo(x(i), py); else ctx.lineTo(x(i), py);
       });
       ctx.stroke();
+    }
+
+    // Live IV30 marker — anchored at the rightmost x within the data domain
+    // (no axis extension; per scoping decision (b) the marker lives in
+    // existing pixels). Renders only when callers supply data.liveIv30 AND
+    // its value falls inside the right-axis window — out-of-range values
+    // would draw off the chart and mislead the eye.
+    const live = data.liveIv30;
+    if (this.showLiveIv30() && live && Number.isFinite(live.iv30Act365)
+        && live.iv30Act365 >= ivLo && live.iv30Act365 <= ivHi) {
+      const cx = L + innerW;
+      const cy = yI(live.iv30Act365);
+      // Soft halo + filled dot in the IV-axis color.
+      ctx.fillStyle = "rgba(242, 173, 61, 0.20)";
+      ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = TOK.vol;
+      ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2); ctx.fill();
+      // "LIVE n.n%" badge directly above the dot — stays inside the canvas
+      // but doesn't fight the axis labels in the right margin.
+      const pct = (live.iv30Act365 * 100).toFixed(1) + "%";
+      const label = `LIVE ${pct}`;
+      ctx.font = "9px JetBrains Mono, monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+      // Pill backdrop for legibility against price candles.
+      const padX = 4; const padY = 2;
+      const tw = ctx.measureText(label).width;
+      const bx = cx - tw / 2 - padX;
+      const by = cy - 16 - padY;
+      ctx.fillStyle = "rgba(11,14,20,0.85)";
+      ctx.fillRect(bx, by, tw + padX * 2, 12 + padY);
+      ctx.fillStyle = TOK.vol;
+      ctx.fillText(label, cx, cy - 8);
     }
 
     // RV bands

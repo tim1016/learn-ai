@@ -103,6 +103,8 @@ export class RealizedVsIvComponent {
     return !this.data().iv30.some((v) => Number.isFinite(v));
   });
 
+  readonly liveIv30 = computed(() => this.data().liveIv30 ?? null);
+
   readonly ivConfidence = computed(() => this.data().ivConfidence ?? null);
 
   /** Visual mode for the IV-confidence banner: "warn" when the latest bar

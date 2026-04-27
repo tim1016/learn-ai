@@ -15,6 +15,17 @@ export interface CostAttribution {
   gross: number; spread: number; slip: number; comm: number; net: number; netTradable: number;
 }
 
+export interface LiveIv30Marker {
+  method: "vix_style" | "parametric";
+  /** Solver-native ACT/365 IV30 value (decimal, e.g. 0.213 for 21.3%). */
+  iv30Act365: number;
+  snapshotTsMs: number;
+  spot: number;
+  /** Provenance signals piped through for the readout strip. */
+  varianceContributionSynthetic: number;
+  strikeCoverageScore: number;
+}
+
 export interface IvConfidenceSummary {
   ivSource: "caller_supplied" | "recorder" | "absent";
   latestConfidence: number | null;
@@ -55,6 +66,9 @@ export interface EdgeData {
   /** Populated only when /api/edge/realized-vs-iv/series returned IV with
    *  provenance; null for synthetic mock data and the legacy "absent" path. */
   ivConfidence?: IvConfidenceSummary | null;
+  /** Live IV30 snapshot from /api/edge/iv30/{vix-style,parametric}; null
+   *  when both endpoints errored or for synthetic mock data. */
+  liveIv30?: LiveIv30Marker | null;
   assets: string[];
   periods: string[];
   sharpeMatrix: number[][];
