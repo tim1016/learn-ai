@@ -14,7 +14,11 @@ Targets Python 3.11+ with FastAPI, Pydantic v2, pandas. Read when writing or edi
 - **`async def`** for all route handlers and any function doing I/O.
 - **`snake_case`** for functions, methods, variables. **`CONSTANT_CASE`** for module-level constants.
 - **`PascalCase`** for classes.
-- **ruff** for linting. Enforce zero warnings.
+- **ruff** for linting. Enforce zero warnings — and run at **project scope**, not file scope. Before committing or pushing any Python change run:
+  ```
+  ruff check PythonDataService/app/ PythonDataService/tests/
+  ```
+  This is the same scope CI uses. The pre-commit hook (`lint-staged`) only lints staged paths, so cross-file drift slips through — unused imports left after a refactor, sort order broken by a new import, dead `# noqa` directives. Per-file `ruff check <one_file>.py` is *not* a substitute. Fix issues outside files you touched in a separate commit and surface it; do not silently re-format unrelated code as part of your task.
 
 ## FastAPI
 

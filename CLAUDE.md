@@ -64,6 +64,7 @@ Full conventions live in `.claude/rules/`. Read the relevant file before signifi
 - Never leave `console.log`, `print()`, or `Console.WriteLine` in committed code. Use the structured logger for each stack.
 - Never write silent exception handlers (`catch {}`, `except: pass`). Handle explicitly or let it propagate with context.
 - Every bug fix ships with a regression test that fails before the fix and passes after.
+- **Run project-scope lint and tests before pushing.** The pre-commit hook (`lint-staged`) only checks the staged paths in *one* commit; cross-file drift (unused imports left after a refactor, sort order, ESLint warnings introduced indirectly) slips through. Run the same command CI uses for whatever stack you touched: `ruff check PythonDataService/app/ PythonDataService/tests/`, `npx eslint Frontend/src/ --max-warnings 0`, or `dotnet format podman.sln --verify-no-changes`. Per-file checks are for iteration; project-scope is for the push. See `.claude/rules/python.md` (lint scope) and `.claude/rules/testing.md` (pre-push test hygiene + how to baseline against inherited failures).
 - Every port from a reference source ships with (a) a golden fixture test, (b) a `docs/references/` note, (c) the tolerance used and why.
 - When editing an existing file, follow the patterns already in that file. Don't reformat or restyle on the way through.
 - Don't introduce new dependencies without justification. State the alternative considered and why it was rejected.
