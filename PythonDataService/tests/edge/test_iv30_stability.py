@@ -12,8 +12,6 @@ Thresholds (per the locked plan):
 
 from __future__ import annotations
 
-import math
-
 import pytest
 
 from app.services.bs_greeks import bs_european_price

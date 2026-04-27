@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import math
 
-import pytest
-
 from py_vollib.black_scholes_merton import black_scholes_merton as pv_bsm
 from py_vollib.black_scholes_merton.implied_volatility import (
     implied_volatility as pv_iv,
@@ -24,7 +22,6 @@ from py_vollib.black_scholes_merton.implied_volatility import (
 
 from app.services.bs_greeks import bs_european_price, bs_european_vega
 from app.volatility.solver import implied_volatility as our_iv
-
 
 # Grid factors held tight enough to keep the test < 0.5s but wide enough
 # to exercise the moneyness / TTM / vol surface. The full Cartesian product
