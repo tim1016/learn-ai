@@ -2,7 +2,7 @@ import { HttpClient } from "@angular/common/http";
 import { inject, Injectable } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import type {
-  Candle, EdgeData, SignalMark, VrpBin,
+  Candle, EdgeData, IvConfidenceSummary, SignalMark, VrpBin,
 } from "./edge-mock-data.service";
 
 interface BarPayload {
@@ -39,6 +39,17 @@ interface RealizedVsIvSeriesResponse {
   rv_hf_forward: (number | null)[];
   vrp_forward: (number | null)[];
   vrp_z: (number | null)[];
+  // IV-ownership Step E + recorder-fallback additions. Optional because old
+  // server builds and the "absent" path may omit them.
+  iv_source?: "caller_supplied" | "recorder" | "absent";
+  confidence?: (number | null)[] | null;
+  vrp_z_scaled?: (number | null)[] | null;
+  floor_gated?: boolean[] | null;
+  explanation?: {
+    latest_confidence: number;
+    floor: number;
+    gated_now: boolean;
+  } | null;
   coverage: {
     n_bars: number;
     iv_first_ts: number | null;
@@ -46,6 +57,7 @@ interface RealizedVsIvSeriesResponse {
     forward_nan_bars: number;
     session?: string;
     vrp_basis?: string;
+    has_confidence?: boolean;
   };
 }
 
@@ -215,9 +227,26 @@ export class EdgeApiService {
         forward_blind_tail: series.coverage.forward_nan_bars,
         iv_first_ts: series.coverage.iv_first_ts ? new Date(series.coverage.iv_first_ts).toISOString().slice(0, 10) : "—",
       },
+      ivConfidence: extractIvConfidence(series),
       sparklines: { vrp: [], equity: [], stability: [] },
     };
   }
+}
+
+function extractIvConfidence(
+  series: RealizedVsIvSeriesResponse,
+): IvConfidenceSummary | null {
+  if (!series.iv_source) return null;
+  const nGated = series.floor_gated
+    ? series.floor_gated.reduce((acc, x) => acc + (x ? 1 : 0), 0)
+    : 0;
+  return {
+    ivSource: series.iv_source,
+    latestConfidence: series.explanation?.latest_confidence ?? null,
+    floor: series.explanation?.floor ?? null,
+    gatedNow: series.explanation?.gated_now ?? null,
+    nGated,
+  };
 }
 
 function nullsToNaN(arr: readonly (number | null)[]): number[] {

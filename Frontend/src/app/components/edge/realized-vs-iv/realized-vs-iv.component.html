@@ -49,6 +49,46 @@
     </div>
   }
 
+  <!-- IV-source + confidence banner. Renders only when the response carried
+       provenance fields (iv_source) — synthetic mock data shows nothing. -->
+  @let ivc = ivConfidence();
+  @if (ivc) {
+    <div class="coverage-banner banner-iv-confidence"
+         [class.banner-iv-confidence-warn]="ivConfidenceTone() === 'warn'"
+         data-testid="iv-confidence-banner">
+      <i class="pi" [class.pi-shield]="ivConfidenceTone() === 'info'"
+                   [class.pi-exclamation-triangle]="ivConfidenceTone() === 'warn'"></i>
+      <div class="coverage-body">
+        <div class="coverage-title">
+          IV source: <code data-testid="iv-source">{{ ivSourceLabels[ivc.ivSource] }}</code>
+          @if (ivc.latestConfidence !== null) {
+            <span class="iv-conf-pill" data-testid="iv-confidence-value">
+              confidence {{ (ivc.latestConfidence * 100).toFixed(0) }}%
+            </span>
+          }
+          @if (ivc.floor !== null) {
+            <span class="iv-conf-floor">floor {{ (ivc.floor * 100).toFixed(0) }}%</span>
+          }
+        </div>
+        <div class="coverage-meta">
+          @if (ivc.gatedNow === true) {
+            <strong data-testid="iv-gated-now">Latest bar gated</strong> — confidence below floor;
+            VRP signals forced to 0.
+          } @else if (ivc.gatedNow === false) {
+            Latest bar above floor — VRP signal active.
+          } @else {
+            Confidence not computed for this run (no
+            <code>variance_contribution_synthetic</code> in the IV series).
+          }
+          @if (ivc.nGated > 0) {
+            · <span data-testid="iv-n-gated">{{ ivc.nGated }} bar{{ ivc.nGated === 1 ? '' : 's' }}</span>
+            gated overall.
+          }
+        </div>
+      </div>
+    </div>
+  }
+
   <!-- Polygon Starter spread-synthesis caveat -->
   <div class="coverage-banner banner-data-source">
     <i class="pi pi-info-circle"></i>

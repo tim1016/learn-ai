@@ -103,6 +103,22 @@ export class RealizedVsIvComponent {
     return !this.data().iv30.some((v) => Number.isFinite(v));
   });
 
+  readonly ivConfidence = computed(() => this.data().ivConfidence ?? null);
+
+  /** Visual mode for the IV-confidence banner: "warn" when the latest bar
+   *  is gated below the floor, "info" otherwise. Null hides the banner. */
+  readonly ivConfidenceTone = computed<"warn" | "info" | null>(() => {
+    const c = this.ivConfidence();
+    if (!c) return null;
+    return c.gatedNow === true ? "warn" : "info";
+  });
+
+  protected readonly ivSourceLabels: Record<"caller_supplied" | "recorder" | "absent", string> = {
+    caller_supplied: "caller-supplied",
+    recorder: "recorder fallback",
+    absent: "no IV provided",
+  };
+
   readonly rvLastValue = computed(() => {
     const arr = this.data().rvYZ;
     for (let i = arr.length - 1; i >= 0; i--) {
