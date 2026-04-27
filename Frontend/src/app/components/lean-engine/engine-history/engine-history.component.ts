@@ -1,6 +1,6 @@
 import {
-  Component, inject, signal, output, OnInit,
-  ChangeDetectionStrategy,
+  Component, ChangeDetectionStrategy, OnInit,
+  computed, inject, output, signal,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -51,6 +51,45 @@ interface SortState {
   direction: 'asc' | 'desc';
 }
 
+/**
+ * Column registry for the studies table.
+ *
+ * The history table previously hardcoded sixteen always-visible columns,
+ * which was overwhelming for the 90% case where the user only wants to
+ * scan recent runs by P&L / Sharpe / DD. ``id`` is the persisted
+ * identifier (also used as the localStorage key suffix), ``defaultOn``
+ * picks the initial visible set, and ``sortable`` flags which columns
+ * are re-orderable via the toggleSort handler.
+ */
+export interface ColumnDef {
+  id: string;
+  label: string;
+  sortable?: string;     // backend sort key, when sortable
+  defaultOn: boolean;
+  num?: boolean;
+}
+
+export const HISTORY_COLUMNS: readonly ColumnDef[] = [
+  { id: 'date',         label: 'Date',     sortable: 'executedat',   defaultOn: true },
+  { id: 'strategy',     label: 'Strategy', sortable: 'strategyname', defaultOn: true },
+  { id: 'symbol',       label: 'Symbol',                              defaultOn: true },
+  { id: 'range',        label: 'Range',                               defaultOn: true },
+  { id: 'totalPnl',     label: 'Net P&L',  sortable: 'totalpnl',     defaultOn: true,  num: true },
+  { id: 'sharpe',       label: 'Sharpe',   sortable: 'sharpe',       defaultOn: true,  num: true },
+  { id: 'maxDrawdown',  label: 'Max DD',   sortable: 'drawdown',     defaultOn: true,  num: true },
+  { id: 'winRate',      label: 'Win %',    sortable: 'winrate',      defaultOn: true,  num: true },
+  { id: 'totalTrades',  label: 'Trades',   sortable: 'trades',       defaultOn: true,  num: true },
+  { id: 'cagr',         label: 'CAGR',     sortable: 'cagr',         defaultOn: false, num: true },
+  { id: 'sortino',      label: 'Sortino',  sortable: 'sortino',      defaultOn: false, num: true },
+  { id: 'psr',          label: 'PSR',      sortable: 'psr',          defaultOn: false, num: true },
+  { id: 'profitFactor', label: 'PF',       sortable: 'profitfactor', defaultOn: false, num: true },
+  { id: 'var95',        label: 'VaR 95',   sortable: 'var95',        defaultOn: false, num: true },
+  { id: 'params',       label: 'Params',                              defaultOn: false },
+  { id: 'notes',        label: 'Notes',                               defaultOn: false },
+];
+
+const COLUMN_PREF_KEY = 'engine-history.columns.v1';
+
 @Component({
   selector: 'app-engine-history',
   standalone: true,
@@ -79,6 +118,65 @@ export class EngineHistoryComponent implements OnInit {
   /** ID of the row currently being edited for notes. */
   editingNotesId = signal<number | null>(null);
   editingNotesValue = signal('');
+
+  /** All known columns (immutable registry). */
+  readonly allColumns = HISTORY_COLUMNS;
+
+  /** User-selected visible-column ids. Persisted to localStorage so the
+   *  picker survives reloads. Defaults to columns flagged ``defaultOn``. */
+  readonly visibleIds = signal<Set<string>>(this.loadColumnPrefs());
+
+  /** Visible column defs in registry order. */
+  readonly visibleColumns = computed(() =>
+    this.allColumns.filter(c => this.visibleIds().has(c.id))
+  );
+
+  /** Open/closed state for the column-chooser dropdown. */
+  readonly chooserOpen = signal(false);
+
+  toggleChooser(): void {
+    this.chooserOpen.update(v => !v);
+  }
+
+  toggleColumn(id: string): void {
+    this.visibleIds.update(set => {
+      const next = new Set(set);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      this.persistColumnPrefs(next);
+      return next;
+    });
+  }
+
+  resetColumns(): void {
+    const defaults = new Set(this.allColumns.filter(c => c.defaultOn).map(c => c.id));
+    this.visibleIds.set(defaults);
+    this.persistColumnPrefs(defaults);
+  }
+
+  private loadColumnPrefs(): Set<string> {
+    try {
+      const raw = localStorage.getItem(COLUMN_PREF_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as string[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Filter to ids that still exist in the registry.
+          return new Set(parsed.filter(id => this.allColumns.some(c => c.id === id)));
+        }
+      }
+    } catch {
+      // Corrupt prefs — fall through to defaults.
+    }
+    return new Set(this.allColumns.filter(c => c.defaultOn).map(c => c.id));
+  }
+
+  private persistColumnPrefs(set: Set<string>): void {
+    try {
+      localStorage.setItem(COLUMN_PREF_KEY, JSON.stringify([...set]));
+    } catch {
+      // Quota exceeded / private mode — non-fatal.
+    }
+  }
 
   ngOnInit(): void {
     this.loadStudies();

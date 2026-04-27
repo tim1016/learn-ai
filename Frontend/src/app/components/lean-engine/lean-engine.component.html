@@ -43,7 +43,7 @@
           <section class="config-card">
             @if (paramEntries().length > 0) {
               <div class="params-card">
-                <h3>Parameters</h3>
+                <h3 data-section="01">Strategy parameters</h3>
                 <div class="form-grid">
                   @for (entry of paramEntries(); track entry.name) {
                     <label class="field">
@@ -75,48 +75,68 @@
               (advisoryAction)="onPickerAdvisoryAction($event)"
             />
 
-            <div class="form-grid">
-              <label class="field">
-                <span class="label">Strategy</span>
-                <select
-                  [ngModel]="selectedStrategyName()"
-                  (ngModelChange)="onStrategyChange($event)"
-                  [disabled]="availableStrategies().length === 0"
-                >
-                  @for (s of availableStrategies(); track s.name) {
-                    <option [value]="s.name">{{ s.display_name }}</option>
+            <div class="options-card">
+              <h3 data-section="03">Run options</h3>
+              <div class="form-grid">
+                <label class="field">
+                  <span class="label">Strategy</span>
+                  <select
+                    [ngModel]="selectedStrategyName()"
+                    (ngModelChange)="onStrategyChange($event)"
+                    [disabled]="availableStrategies().length === 0"
+                  >
+                    @for (s of availableStrategies(); track s.name) {
+                      <option [value]="s.name">{{ s.display_name }}</option>
+                    }
+                  </select>
+                  @if (availableStrategies().length === 0) {
+                    <span class="field-hint">
+                      No strategies registered for <strong>{{ resolution() }}</strong> resolution.
+                    </span>
                   }
-                </select>
-                @if (availableStrategies().length === 0) {
-                  <span class="field-hint">
-                    No strategies registered for <strong>{{ resolution() }}</strong> resolution.
+                </label>
+
+                <label class="field">
+                  <span class="label">Fill mode</span>
+                  <select [ngModel]="fillMode()" (ngModelChange)="fillMode.set($event)">
+                    <option value="signal_bar_close">Signal bar close</option>
+                    <option value="next_bar_open">Next bar open</option>
+                  </select>
+                </label>
+
+                <label class="field">
+                  <span class="label">Initial cash</span>
+                  <input type="number" min="0" step="1000"
+                    [ngModel]="initialCash()" (ngModelChange)="initialCash.set($event)" />
+                </label>
+
+                <label class="field">
+                  <span class="label">
+                    Commission / order
+                    <span class="hint" title="Fee charged per filled order. $1.00 matches LEAN's InteractiveBrokers model.">?</span>
                   </span>
-                }
-              </label>
-
-              <label class="field">
-                <span class="label">Fill mode</span>
-                <select [ngModel]="fillMode()" (ngModelChange)="fillMode.set($event)">
-                  <option value="signal_bar_close">Signal bar close</option>
-                  <option value="next_bar_open">Next bar open</option>
-                </select>
-              </label>
-
-              <label class="field">
-                <span class="label">Initial cash</span>
-                <input type="number" min="0" step="1000"
-                  [ngModel]="initialCash()" (ngModelChange)="initialCash.set($event)" />
-              </label>
-
-              <label class="field">
-                <span class="label">
-                  Commission / order
-                  <span class="hint" title="Fee charged per filled order. $1.00 matches LEAN's InteractiveBrokers model.">?</span>
-                </span>
-                <input type="number" min="0" step="0.01"
-                  [ngModel]="commissionPerOrder()" (ngModelChange)="commissionPerOrder.set($event)" />
-              </label>
+                  <input type="number" min="0" step="0.01"
+                    [ngModel]="commissionPerOrder()" (ngModelChange)="commissionPerOrder.set($event)" />
+                </label>
+              </div>
             </div>
+
+            <!-- SSE-driven live status banner (only while a run is in flight) -->
+            @if (running() || runStatusBanner()) {
+              <div class="run-banner" role="status" aria-live="polite"
+                   [attr.data-phase]="runPhase()">
+                <span class="run-banner-spinner" aria-hidden="true">
+                  @if (running()) { <i class="pi pi-spin pi-spinner"></i> }
+                  @else { <i class="pi pi-check-circle"></i> }
+                </span>
+                <div class="run-banner-body">
+                  <div class="run-banner-headline">{{ runStatusBanner() }}</div>
+                  @if (runPhaseDetail()) {
+                    <div class="run-banner-detail">{{ runPhaseDetail() }}</div>
+                  }
+                </div>
+              </div>
+            }
 
             <!-- Data Availability Panel -->
             @if (startDate() && endDate()) {

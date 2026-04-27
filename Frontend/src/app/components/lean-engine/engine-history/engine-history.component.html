@@ -14,91 +14,129 @@
 }
 
 @if (studies().length > 0) {
-  <div class="history-summary">
-    {{ totalCount() }} studies &mdash; sorted by
-    <strong>{{ sort().column }}</strong> {{ sort().direction }}
+  <div class="history-toolbar">
+    <div class="history-summary">
+      {{ totalCount() }} studies &mdash; sorted by
+      <strong>{{ sort().column }}</strong> {{ sort().direction }}
+    </div>
+
+    <div class="column-chooser">
+      <button
+        type="button"
+        class="chooser-trigger"
+        [attr.aria-expanded]="chooserOpen()"
+        (click)="toggleChooser()"
+      >
+        <i class="pi pi-sliders-h"></i>
+        Columns ({{ visibleColumns().length }}/{{ allColumns.length }})
+      </button>
+      @if (chooserOpen()) {
+        <div class="chooser-panel" role="menu">
+          <div class="chooser-header">
+            <span>Columns</span>
+            <button type="button" class="chooser-reset" (click)="resetColumns()">Reset to defaults</button>
+          </div>
+
+          <div class="chooser-section-label">Core</div>
+          <ul class="chooser-list">
+            @for (col of allColumns; track col.id) {
+              @if (col.defaultOn) {
+                <li>
+                  <label>
+                    <input
+                      type="checkbox"
+                      [checked]="visibleIds().has(col.id)"
+                      (change)="toggleColumn(col.id)"
+                    />
+                    <span class="chooser-label">{{ col.label }}</span>
+                    @if (col.num) { <span class="chooser-type-tag">num</span> }
+                  </label>
+                </li>
+              }
+            }
+          </ul>
+
+          <div class="chooser-section-label">Advanced</div>
+          <ul class="chooser-list">
+            @for (col of allColumns; track col.id) {
+              @if (!col.defaultOn) {
+                <li>
+                  <label>
+                    <input
+                      type="checkbox"
+                      [checked]="visibleIds().has(col.id)"
+                      (change)="toggleColumn(col.id)"
+                    />
+                    <span class="chooser-label">{{ col.label }}</span>
+                    @if (col.num) { <span class="chooser-type-tag">num</span> }
+                  </label>
+                </li>
+              }
+            }
+          </ul>
+        </div>
+      }
+    </div>
   </div>
 
   <div class="table-wrapper">
     <table>
       <thead>
         <tr>
-          <th class="sortable" (click)="toggleSort('executedat')">
-            Date <i class="pi" [class]="sortIcon('executedat')"></i>
-          </th>
-          <th class="sortable" (click)="toggleSort('strategyname')">
-            Strategy <i class="pi" [class]="sortIcon('strategyname')"></i>
-          </th>
-          <th>Symbol</th>
-          <th>Range</th>
-          <th class="sortable num" (click)="toggleSort('totalpnl')">
-            Net P&L <i class="pi" [class]="sortIcon('totalpnl')"></i>
-          </th>
-          <th class="sortable num" (click)="toggleSort('cagr')">
-            CAGR <i class="pi" [class]="sortIcon('cagr')"></i>
-          </th>
-          <th class="sortable num" (click)="toggleSort('sharpe')">
-            Sharpe <i class="pi" [class]="sortIcon('sharpe')"></i>
-          </th>
-          <th class="sortable num" (click)="toggleSort('sortino')">
-            Sortino <i class="pi" [class]="sortIcon('sortino')"></i>
-          </th>
-          <th class="sortable num" (click)="toggleSort('psr')">
-            PSR <i class="pi" [class]="sortIcon('psr')"></i>
-          </th>
-          <th class="sortable num" (click)="toggleSort('drawdown')">
-            Max DD <i class="pi" [class]="sortIcon('drawdown')"></i>
-          </th>
-          <th class="sortable num" (click)="toggleSort('winrate')">
-            Win % <i class="pi" [class]="sortIcon('winrate')"></i>
-          </th>
-          <th class="sortable num" (click)="toggleSort('trades')">
-            Trades <i class="pi" [class]="sortIcon('trades')"></i>
-          </th>
-          <th class="sortable num" (click)="toggleSort('profitfactor')">
-            PF <i class="pi" [class]="sortIcon('profitfactor')"></i>
-          </th>
-          <th class="sortable num" (click)="toggleSort('var95')">
-            VaR 95 <i class="pi" [class]="sortIcon('var95')"></i>
-          </th>
-          <th>Params</th>
-          <th>Notes</th>
+          @for (col of visibleColumns(); track col.id) {
+            <th
+              [class.sortable]="!!col.sortable"
+              [class.num]="col.num"
+              (click)="col.sortable && toggleSort(col.sortable)"
+            >
+              {{ col.label }}
+              @if (col.sortable) {
+                <i class="pi" [class]="sortIcon(col.sortable)"></i>
+              }
+            </th>
+          }
           <th class="action-col"></th>
         </tr>
       </thead>
       <tbody>
         @for (s of studies(); track s.id) {
           <tr class="study-row" (click)="onRowClick(s)">
-            <td class="date-cell">{{ formatDate(s.executedAt) }}</td>
-            <td class="strategy-cell">{{ s.strategyName }}</td>
-            <td>{{ s.symbol }}</td>
-            <td class="range-cell">{{ s.startDate }} → {{ s.endDate }}</td>
-            <td class="num" [class]="pnlClass(s.totalPnL)">{{ formatCurrency(s.totalPnL) }}</td>
-            <td class="num" [class]="pnlClass(s.compoundingAnnualReturn)">{{ formatPct(s.compoundingAnnualReturn) }}</td>
-            <td class="num">{{ s.sharpeRatio.toFixed(3) }}</td>
-            <td class="num">{{ s.sortinoRatio.toFixed(3) }}</td>
-            <td class="num">{{ formatPct(s.probabilisticSharpeRatio) }}</td>
-            <td class="num negative">{{ formatPct(s.maxDrawdown) }}</td>
-            <td class="num">{{ formatPct(s.winRate) }}</td>
-            <td class="num">{{ s.totalTrades }}</td>
-            <td class="num">{{ s.profitFactor.toFixed(2) }}</td>
-            <td class="num">{{ formatPct(s.valueAtRisk95) }}</td>
-            <td class="params-cell" [title]="s.parameters">{{ parseParams(s.parameters) }}</td>
-            <td class="notes-cell" (click)="startEditNotes(s, $event)">
-              @if (editingNotesId() === s.id) {
-                <input
-                  type="text"
-                  class="notes-input"
-                  [ngModel]="editingNotesValue()"
-                  (ngModelChange)="editingNotesValue.set($event)"
-                  (blur)="saveNotes(s)"
-                  (keydown.enter)="saveNotes(s)"
-                  (keydown.escape)="cancelEditNotes()"
-                />
-              } @else {
-                <span class="notes-text">{{ s.notes || '—' }}</span>
+            @for (col of visibleColumns(); track col.id) {
+              @switch (col.id) {
+                @case ('date')        { <td class="date-cell">{{ formatDate(s.executedAt) }}</td> }
+                @case ('strategy')    { <td class="strategy-cell">{{ s.strategyName }}</td> }
+                @case ('symbol')      { <td>{{ s.symbol }}</td> }
+                @case ('range')       { <td class="range-cell">{{ s.startDate }} → {{ s.endDate }}</td> }
+                @case ('totalPnl')    { <td class="num" [class]="pnlClass(s.totalPnL)">{{ formatCurrency(s.totalPnL) }}</td> }
+                @case ('cagr')        { <td class="num" [class]="pnlClass(s.compoundingAnnualReturn)">{{ formatPct(s.compoundingAnnualReturn) }}</td> }
+                @case ('sharpe')      { <td class="num">{{ s.sharpeRatio.toFixed(3) }}</td> }
+                @case ('sortino')     { <td class="num">{{ s.sortinoRatio.toFixed(3) }}</td> }
+                @case ('psr')         { <td class="num">{{ formatPct(s.probabilisticSharpeRatio) }}</td> }
+                @case ('maxDrawdown') { <td class="num negative">{{ formatPct(s.maxDrawdown) }}</td> }
+                @case ('winRate')     { <td class="num">{{ formatPct(s.winRate) }}</td> }
+                @case ('totalTrades') { <td class="num">{{ s.totalTrades }}</td> }
+                @case ('profitFactor') { <td class="num">{{ s.profitFactor.toFixed(2) }}</td> }
+                @case ('var95')       { <td class="num">{{ formatPct(s.valueAtRisk95) }}</td> }
+                @case ('params')      { <td class="params-cell" [title]="s.parameters">{{ parseParams(s.parameters) }}</td> }
+                @case ('notes') {
+                  <td class="notes-cell" (click)="startEditNotes(s, $event)">
+                    @if (editingNotesId() === s.id) {
+                      <input
+                        type="text"
+                        class="notes-input"
+                        [ngModel]="editingNotesValue()"
+                        (ngModelChange)="editingNotesValue.set($event)"
+                        (blur)="saveNotes(s)"
+                        (keydown.enter)="saveNotes(s)"
+                        (keydown.escape)="cancelEditNotes()"
+                      />
+                    } @else {
+                      <span class="notes-text">{{ s.notes || '—' }}</span>
+                    }
+                  </td>
+                }
               }
-            </td>
+            }
             <td class="action-cell">
               <button
                 type="button"

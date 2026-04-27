@@ -84,17 +84,19 @@ import { JobsService } from '../../services/jobs.service';
     }
   `],
   template: `
-    <button
-      type="button"
-      class="launcher"
-      (click)="open.set(true)"
-      [attr.aria-label]="'Jobs drawer, ' + activeCount() + ' active'"
-      [attr.aria-expanded]="open()"
-    >
-      <i class="pi pi-server" aria-hidden="true"></i>
-      <span>Jobs</span>
-      <span class="badge" [class.idle]="activeCount() === 0">{{ activeCount() }}</span>
-    </button>
+    @if (showLauncher()) {
+      <button
+        type="button"
+        class="launcher"
+        (click)="open.set(true)"
+        [attr.aria-label]="'Jobs drawer, ' + activeCount() + ' active'"
+        [attr.aria-expanded]="open()"
+      >
+        <i class="pi pi-server" aria-hidden="true"></i>
+        <span>Jobs</span>
+        <span class="badge" [class.idle]="activeCount() === 0">{{ activeCount() }}</span>
+      </button>
+    }
 
     <p-drawer
       [visible]="open()"
@@ -150,6 +152,15 @@ export class JobsDrawerComponent {
   );
 
   readonly activeCount = computed(() => this.jobsService.activeJobs().length);
+
+  /** Visibility for the floating launcher.
+   *
+   * Hidden when no jobs exist at all so the FAB doesn't clutter the
+   * canvas during normal browsing. Once jobs land in the registry it
+   * shows — even after they finish — until the user dismisses them
+   * from the drawer (which removes them from JobsService.jobs()).
+   */
+  readonly showLauncher = computed(() => this.jobsService.jobs().length > 0);
 
   onVisibleChange(visible: boolean): void {
     this.open.set(visible);

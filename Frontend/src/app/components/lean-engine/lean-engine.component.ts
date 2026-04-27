@@ -31,6 +31,7 @@ import {
   type TickerRange,
 } from "../../shared/ticker-range-picker";
 import { TICKER_POOL, RECENT_TICKERS } from "../../shared/ticker-catalog";
+import { JobsService } from "../../services/jobs.service";
 
 // Severity for pre-flight: re-declared locally so we don't import the panel's types.
 type PreflightSeverity = "ok" | "warning" | "blocking";
@@ -67,6 +68,15 @@ interface StrategyInfo {
 }
 
 type EngineResolution = "minute" | "daily";
+
+type RunPhase =
+  | "idle"
+  | "connecting"
+  | "loading_bars"
+  | "simulating"
+  | "computing_stats"
+  | "completed"
+  | "failed";
 
 interface ParamsSchema {
   title?: string;
@@ -117,6 +127,10 @@ interface EngineBacktestResponse {
   chart_bars?: { t: number; o: number; h: number; l: number; c: number; v: number }[];
   insights?: Record<string, any>[];
   insight_summary?: Record<string, any>;
+  /** Auto-saved study row id, populated by the engine before returning so
+   *  the Engine Lab can immediately enable the Replay tab. Null when the
+   *  best-effort save call to the .NET backend failed. */
+  study_id?: number | null;
   error?: string;
 }
 
@@ -150,6 +164,7 @@ interface DataAvailability {
 })
 export class LeanEngineComponent implements OnInit {
   private http = inject(HttpClient);
+  private jobsService = inject(JobsService);
   private readonly apiBase = `${environment.pythonServiceUrl}/api/engine`;
 
   // ------------------------------------------------------------------
@@ -214,9 +229,26 @@ export class LeanEngineComponent implements OnInit {
   readonly running = signal(false);
 
   // ------------------------------------------------------------------
-  // Replay (feature-flagged port of strategy-lab replay)
+  // Live status banner (SSE-driven) — surfaces the engine's current
+  // phase + last log line while a run is in flight, then sticks around
+  // briefly with a success/failure verdict so the user has a settled
+  // confirmation before navigating to Results.
   // ------------------------------------------------------------------
-  readonly replayEnabled = (environment as { flags?: { replayInLeanEngine?: boolean } }).flags?.replayInLeanEngine === true;
+  readonly runPhase = signal<RunPhase>('idle');
+  readonly runStatusBanner = signal<string>('');
+  readonly runPhaseDetail = signal<string>('');
+
+  private setRunStatus(phase: RunPhase, headline: string, detail = ''): void {
+    this.runPhase.set(phase);
+    this.runStatusBanner.set(headline);
+    this.runPhaseDetail.set(detail);
+  }
+
+  // ------------------------------------------------------------------
+  // Replay — always enabled; the tab unlocks once a study (just-run or
+  // selected from History) is available.
+  // ------------------------------------------------------------------
+  readonly replayEnabled = true;
   readonly selectedStudyForReplay = signal<StudyListItem | null>(null);
 
   onReplayRequested(study: StudyListItem): void {
@@ -395,6 +427,9 @@ export class LeanEngineComponent implements OnInit {
   });
 
   constructor() {
+    // Bridge JobsService events → run banner state.
+    this.wireEngineJobEffect();
+
     // Keep the legacy per-field signals in sync with the picker's
     // writable ``rangeState``. These signals are what the availability
     // check, preflight panel, and ``run()`` body read from, so this
@@ -549,8 +584,21 @@ export class LeanEngineComponent implements OnInit {
   }
 
   // ------------------------------------------------------------------
-  // Run a backtest
+  // Run a backtest — driven by the global Jobs/SSE infrastructure.
+  //
+  // Flow:
+  //   1. POST /api/jobs/engine_backtest with the EngineBacktestRequest
+  //      payload nested under ``backtest`` (the .NET layer mints the
+  //      job_id and forwards to /api/jobs-internal/engine-backtest).
+  //   2. JobsService opens the SSE channel and updates a per-job
+  //      signal as phase / log events arrive. A reactive effect bound
+  //      to that signal drives the run banner — we don't talk to
+  //      EventSource directly.
+  //   3. On terminal job state (completed / failed / cancelled), fetch
+  //      the JSON result blob and render Results / Replay as before.
   // ------------------------------------------------------------------
+  private engineJobId = signal<string | null>(null);
+
   async run(): Promise<void> {
     const name = this.selectedStrategyName();
     if (!name) return;
@@ -558,8 +606,17 @@ export class LeanEngineComponent implements OnInit {
     this.running.set(true);
     this.runError.set(null);
     this.result.set(null);
+    this.setRunStatus(
+      "connecting",
+      "Submitting backtest…",
+      `${this.effectiveSymbol()} · ${this.startDate()} → ${this.endDate()}`,
+    );
 
-    const body: Record<string, unknown> = {
+    // The backtest request is nested under a ``backtest`` key — the
+    // .NET layer forwards the payload verbatim to the Python internal
+    // endpoint, which validates the inner shape via
+    // EngineBacktestRequest.
+    const backtest: Record<string, unknown> = {
       strategy_name: name,
       fill_mode: this.fillMode(),
       initial_cash: this.initialCash(),
@@ -568,34 +625,143 @@ export class LeanEngineComponent implements OnInit {
       auto_fetch: this.autoFetch(),
       resolution: this.resolution(),
     };
-    if (this.startDate()) body["start_date"] = this.startDate();
-    if (this.endDate()) body["end_date"] = this.endDate();
+    if (this.startDate()) backtest["start_date"] = this.startDate();
+    if (this.endDate()) backtest["end_date"] = this.endDate();
 
     try {
-      const url = `${this.apiBase}/backtest`;
-      const response = await firstValueFrom(
-        this.http.post<EngineBacktestResponse>(url, body)
-      );
+      const id = await this.jobsService.startJob("engine_backtest", { backtest });
+      this.engineJobId.set(id);
+      // The jobEffect (configured in the constructor) will flip
+      // running()/setRunStatus()/result() as job events arrive.
+    } catch (err: any) {
+      const detail = err?.error?.detail;
+      const message =
+        typeof detail === "string" ? detail : err?.message ?? "Backtest request failed";
+      this.runError.set(message);
+      this.setRunStatus("failed", "Backtest request failed", message);
+      this.running.set(false);
+    }
+  }
+
+  /** Reactive bridge from JobsService → banner state.
+   *
+   *  Subscribed once in the constructor. Reads the JobState for the
+   *  active engine job id (if any) and translates phase / status into
+   *  the banner's signals. On terminal status, fetches the result
+   *  blob, then unlocks Replay / jumps to the Results tab. */
+  private wireEngineJobEffect(): void {
+    effect(() => {
+      const id = this.engineJobId();
+      if (!id) return;
+      const job = this.jobsService.job(id);
+      if (!job) return;
+
+      const lastLog = job.recentLogs[job.recentLogs.length - 1]?.message ?? "";
+
+      if (job.status === "queued" || job.status === "running") {
+        const phase = (job.phase ?? "connecting") as RunPhase;
+        const headlines: Record<string, string> = {
+          connecting: "Submitting backtest…",
+          loading_bars: "Loading bars from cache & Polygon…",
+          simulating: "Running engine — consolidating bars and evaluating signals…",
+          computing_stats: "Computing statistics & saving study…",
+        };
+        this.setRunStatus(phase, headlines[phase] ?? `Phase: ${phase}`, lastLog);
+        return;
+      }
+
+      if (job.status === "failed") {
+        const message = job.errorMessage ?? "Backtest failed";
+        this.runError.set(message);
+        this.setRunStatus("failed", "Backtest failed", message);
+        this.running.set(false);
+        this.engineJobId.set(null);
+        this.jobsService.dismiss(id);
+        return;
+      }
+
+      if (job.status === "cancelled") {
+        this.setRunStatus("failed", "Backtest cancelled", job.message ?? "");
+        this.running.set(false);
+        this.engineJobId.set(null);
+        this.jobsService.dismiss(id);
+        return;
+      }
+
+      if (job.status === "completed") {
+        // Fetch the JSON result blob, then drive the rest of the UI.
+        // We clear engineJobId synchronously so re-firings of this
+        // effect during the async fetch don't double-handle.
+        this.engineJobId.set(null);
+        void this.handleEngineJobCompleted(id);
+      }
+    }, { allowSignalWrites: true });
+  }
+
+  private async handleEngineJobCompleted(jobId: string): Promise<void> {
+    try {
+      const response = await this.jobsService.fetchResult<EngineBacktestResponse>(jobId);
       this.result.set(response);
       if (response.error) {
         this.runError.set(response.error);
+        this.setRunStatus("failed", "Backtest failed", response.error);
       } else if (response.success) {
-        // Jump to the Results tab so the user actually sees the output —
-        // matches the behavior of onStudySelected() when loading a past
-        // study, and makes the scorecard + hero cards the first thing
-        // they read after clicking Run.
+        this.setRunStatus(
+          "completed",
+          `Completed — ${response.total_trades} trade${response.total_trades === 1 ? "" : "s"}, net ${this.formatCurrency(response.net_profit)}`,
+        );
+        if (response.study_id != null) {
+          this.selectedStudyForReplay.set(this.synthesizeStudyForReplay(response));
+        }
         this.activeTab.set("1");
       }
     } catch (err: any) {
-      const detail = err?.error?.detail;
-      this.runError.set(
-        typeof detail === "string"
-          ? detail
-          : err?.message ?? "Backtest request failed"
-      );
+      const message = err?.message ?? "Failed to fetch backtest result";
+      this.runError.set(message);
+      this.setRunStatus("failed", "Failed to fetch backtest result", message);
     } finally {
       this.running.set(false);
+      this.jobsService.dismiss(jobId);
     }
+  }
+
+  /** Build a StudyListItem-shaped object from the just-finished backtest
+   *  response so the Replay component can drive itself off it without
+   *  refetching from /api/studies. Only the fields the replay actually
+   *  reads (id, symbol, strategyName, startDate, endDate, timespan)
+   *  carry meaningful values; everything else is filled with safe
+   *  defaults so the type lines up. */
+  private synthesizeStudyForReplay(r: EngineBacktestResponse): StudyListItem {
+    return {
+      id: r.study_id as number,
+      symbol: this.effectiveSymbol(),
+      strategyName: r.strategy_name,
+      startDate: this.startDate(),
+      endDate: this.endDate(),
+      timespan: this.resolution(),
+      fillMode: r.fill_mode,
+      source: "engine",
+      totalTrades: r.total_trades,
+      winningTrades: r.winning_trades,
+      losingTrades: r.losing_trades,
+      winRate: r.win_rate,
+      totalPnL: r.net_profit,
+      maxDrawdown: (r.statistics?.["max_drawdown_pct"] as number) ?? 0,
+      sharpeRatio: (r.statistics?.["sharpe_ratio"] as number) ?? 0,
+      sortinoRatio: (r.statistics?.["sortino_ratio"] as number) ?? 0,
+      compoundingAnnualReturn: 0,
+      probabilisticSharpeRatio: 0,
+      profitFactor: (r.statistics?.["profit_factor"] as number) ?? 0,
+      valueAtRisk95: 0,
+      alpha: 0,
+      beta: 0,
+      initialCash: r.initial_cash,
+      finalEquity: r.final_equity,
+      parameters: JSON.stringify(this.paramValues()),
+      notes: null,
+      executedAt: new Date().toISOString(),
+      durationMs: 0,
+    };
   }
 
   readonly pineDownloading = signal(false);

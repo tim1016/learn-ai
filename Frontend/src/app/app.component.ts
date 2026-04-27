@@ -3,12 +3,15 @@ import { RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
 import { MethodologyDrawerComponent } from './shared/methodology-drawer/methodology-drawer.component';
-import { JobsDrawerComponent } from './components/jobs/jobs-drawer.component';
 
+// The global JobsDrawer / floating "Jobs" launcher was removed in favor
+// of per-feature SSE-driven progress UIs (e.g. the Engine Lab run
+// banner). JobsService stays mounted via providedIn:'root' so features
+// can still consume Jobs SSE without a shared drawer surface.
 @Component({
   selector: 'app-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, AppSidebarComponent, MethodologyDrawerComponent, JobsDrawerComponent, Toast],
+  imports: [RouterOutlet, AppSidebarComponent, MethodologyDrawerComponent, Toast],
   styles: [`
     :host {
       display: flex;
@@ -30,7 +33,6 @@ import { JobsDrawerComponent } from './components/jobs/jobs-drawer.component';
       <router-outlet />
     </main>
     <app-methodology-drawer />
-    <app-jobs-drawer />
     <p-toast position="top-right" />
   `,
 })
