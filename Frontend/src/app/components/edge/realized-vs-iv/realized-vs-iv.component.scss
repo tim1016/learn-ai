@@ -84,6 +84,18 @@
   .coverage-action { border-color: rgba(41,182,246,0.30); color: $info; }
 }
 
+/* Data-source disclosure (Polygon Starter spread-synthesis policy) */
+.banner-data-source {
+  background: linear-gradient(180deg, rgba(120,120,120,0.08), rgba(120,120,120,0.03));
+  border: 1px solid rgba(255,255,255,0.08);
+  border-left: 2px solid $text-muted;
+  color: $text-secondary;
+
+  .pi { color: $text-muted; }
+  code { color: $text-primary; font-size: 0.85em; }
+  strong { color: $text-primary; }
+}
+
 /* ─── Form ─── */
 .form-card {
   background: $bg-surface; border: 1px solid $border;

@@ -6,6 +6,10 @@ public class OptionsChainSnapshotResponse
     public UnderlyingSnapshotDto? Underlying { get; set; }
     public List<OptionsContractSnapshotDto> Contracts { get; set; } = [];
     public int Count { get; set; }
+    public decimal? RiskFreeRate { get; set; }
+    public decimal? DividendYield { get; set; }
+    public string? RateSource { get; set; }
+    public string? DividendSource { get; set; }
     public string? Error { get; set; }
 }
 

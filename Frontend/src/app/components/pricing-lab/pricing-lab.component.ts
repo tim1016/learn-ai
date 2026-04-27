@@ -352,6 +352,12 @@ export class PricingLabComponent implements OnDestroy {
           price: snap.underlying.price ?? 0,
         });
       }
+      // Auto-populate the riskFreeRate signal from the FRED-sourced rate
+      // returned by the snapshot. User can still override via UI.
+      // (Step 8 of IV-RV alignment.)
+      if (snap.riskFreeRate != null && snap.riskFreeRate > 0) {
+        this.riskFreeRate.set(snap.riskFreeRate);
+      }
       this.allContracts.set(snap.contracts ?? []);
     } catch (err) {
       console.error('[PricingLab] Error fetching chain:', err);

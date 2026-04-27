@@ -34,20 +34,32 @@ interface RealizedVsIvSeriesResponse {
   rv_trailing: Record<string, (number | null)[]>;
   rv_forward: Record<string, (number | null)[]>;
   iv30: (number | null)[];
+  iv30_trd252: (number | null)[];
+  rv_hf_trailing: (number | null)[];
+  rv_hf_forward: (number | null)[];
   vrp_forward: (number | null)[];
   vrp_z: (number | null)[];
-  coverage: { n_bars: number; iv_first_ts: number | null; iv_last_ts: number | null; forward_nan_bars: number; };
+  coverage: {
+    n_bars: number;
+    iv_first_ts: number | null;
+    iv_last_ts: number | null;
+    forward_nan_bars: number;
+    session?: string;
+    vrp_basis?: string;
+  };
 }
 
 export type BarSize = "5m" | "15m" | "1h" | "1D";
 export type Tenor = "7D" | "14D" | "30D" | "60D";
 export type Estimator = "ctc" | "parkinson" | "gk" | "yz";
+export type Session = "ETH" | "RTH";
 
 export interface ComputeRvIvRequest {
   symbol: string;
   barSize: BarSize;
   tenor: Tenor;
   estimators: readonly Estimator[];
+  session?: Session;
   windows?: readonly number[];
 }
 
@@ -69,6 +81,7 @@ export class EdgeApiService {
         symbol: req.symbol,
         bar_size: req.barSize === "1D" ? "1d" : req.barSize === "15m" ? "15m" : "1d",
         tenor_days: tenorDays,
+        session: req.session ?? "ETH",
         estimators: req.estimators,
         windows: req.windows ?? [5, 10, 30],
         bars,
@@ -150,10 +163,12 @@ export class EdgeApiService {
     }));
     const dates = bars.map((b) => new Date(b.ts));
     const iv30 = nullsToNaN(series.iv30);
+    const iv30Trd252 = nullsToNaN(series.iv30_trd252 ?? []);
     const rvTrailingKey = Object.keys(series.rv_trailing)[0] ?? "yz_30";
     const rvForwardKey = Object.keys(series.rv_forward)[0] ?? "yz_30";
     const rvYZ = nullsToNaN(series.rv_trailing[rvTrailingKey] ?? []);
     const rvForward = nullsToNaN(series.rv_forward[rvForwardKey] ?? []);
+    const rvHf21d = nullsToNaN(series.rv_hf_forward ?? []);
     const vrpForward = nullsToNaN(series.vrp_forward);
     const vrpZ = nullsToNaN(series.vrp_z);
 
@@ -184,6 +199,8 @@ export class EdgeApiService {
       rvGK: new Array(N).fill(NaN),
       rvYZ,
       rvForward,
+      rvHf21d,
+      iv30Trd252,
       vrpForward,
       vrpZ,
       vrpHistogram,

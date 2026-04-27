@@ -628,6 +628,10 @@ public class Query
                 Underlying = underlying,
                 Contracts = contracts,
                 Count = contracts.Count,
+                RiskFreeRate = response.RiskFreeRate,
+                DividendYield = response.DividendYield,
+                RateSource = response.RateSource,
+                DividendSource = response.DividendSource,
             };
         }
         catch (Exception ex)
@@ -1346,6 +1350,10 @@ public class OptionsChainSnapshotResult
     public SnapshotUnderlyingResult? Underlying { get; set; }
     public List<SnapshotContractResult> Contracts { get; set; } = [];
     public int Count { get; set; }
+    public decimal? RiskFreeRate { get; set; }
+    public decimal? DividendYield { get; set; }
+    public string? RateSource { get; set; }
+    public string? DividendSource { get; set; }
     public string? Error { get; set; }
 }
 

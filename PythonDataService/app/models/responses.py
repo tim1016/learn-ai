@@ -144,12 +144,22 @@ class UnderlyingSnapshot(BaseModel):
 
 
 class OptionsChainSnapshotResponse(BaseModel):
-    """Response schema for options chain snapshot"""
+    """Response schema for options chain snapshot.
+
+    The ``risk_free_rate`` and ``dividend_yield`` fields are sourced from FRED
+    (DGS1MO interpolated) and Polygon TTM dividends respectively (Step 8 of
+    IV-RV alignment). They replace the historical hardcoded `r=0.043, q=0`
+    defaults used by pricing-lab, options-strategy-lab, strategy-builder.
+    """
 
     success: bool
     underlying: UnderlyingSnapshot | None = None
     contracts: list[OptionsContractSnapshotItem] = []
     count: int = 0
+    risk_free_rate: float | None = None
+    dividend_yield: float | None = None
+    rate_source: str | None = None
+    dividend_source: str | None = None
     error: str | None = None
 
 

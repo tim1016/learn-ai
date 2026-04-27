@@ -75,6 +75,18 @@ Every port of mathematical logic from a reference source ships with:
 - Aim for **every branch in business logic** tested. Don't chase coverage on boilerplate.
 - Coverage reports are diagnostic, not a goal.
 
+## Pre-push test-suite hygiene
+
+Before pushing or opening a PR, run the full per-stack test suite and **distinguish your work's failures from inherited failures**.
+
+- **Run at project scope**, not just the files you touched. Tests for unrelated areas can break from a shared-helper edit, an env-var rename, or a Pydantic / pandas / SDK upgrade. Per-file pytest is for fast iteration; the project-scope run is what CI does and what reviewers will see.
+  - Python: `podman exec polygon-data-service python -m pytest /app/tests`
+  - .NET: `cd Backend.Tests && dotnet test`
+  - Frontend: `podman exec my-frontend npx ng test --watch=false`
+- **Establish a baseline before you treat a failure as "not mine."** Stash your changes, check out `origin/<base-branch>`, run the same command, and confirm the failure is pre-existing. Anything not on that pre-existing list is yours to fix or surface.
+- **Pre-existing failures must be surfaced in the PR description**, not silently ignored. They're inherited tech debt, but they shouldn't mask your work's failures or make a reviewer wonder what's new.
+- **Container-state hygiene** when iterating with `podman cp`: copy specific files (`podman cp local/path/file.py container:/app/path/file.py`), never directories with trailing `/` or container destinations that already exist as a directory — `podman cp src/ container:/app/dst` will create `/app/dst/src/` if `/app/dst/` exists, polluting test discovery. After a long iteration session, `rm -rf` any duplicated paths you created (or rebuild the container) before treating a test-suite run as authoritative.
+
 ## Reconciliation tests
 
 When a port has been reconciled against a reference (see `reconcile-backtest` skill), the test lives in `tests/integration/reconciliation/test_<name>.py` and:

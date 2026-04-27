@@ -14,7 +14,26 @@ Targets Python 3.11+ with FastAPI, Pydantic v2, pandas. Read when writing or edi
 - **`async def`** for all route handlers and any function doing I/O.
 - **`snake_case`** for functions, methods, variables. **`CONSTANT_CASE`** for module-level constants.
 - **`PascalCase`** for classes.
-- **ruff** for linting. Enforce zero warnings.
+- **ruff** for linting. Enforce zero warnings — and run at **project scope**, not file scope. Before committing or pushing any Python change run:
+  ```
+  ruff check PythonDataService/app/ PythonDataService/tests/
+  ```
+  This is the same scope CI uses. The pre-commit hook (`lint-staged`) only lints staged paths, so cross-file drift slips through — unused imports left after a refactor, sort order broken by a new import, dead `# noqa` directives. Per-file `ruff check <one_file>.py` is *not* a substitute. Fix issues outside files you touched in a separate commit and surface it; do not silently re-format unrelated code as part of your task.
+
+## Adding a Python dependency
+
+The runtime deps are split into two files:
+
+- `PythonDataService/requirements-heavy.txt` — large or slow-to-install binaries (numpy, pandas, scipy, statsmodels, pyarrow, ...). Cached as a separate Docker layer.
+- `PythonDataService/requirements-light.txt` — everything else.
+
+**A `requirements.txt` file exists but is deprecated** — it does not list any deps and is not consumed by Dockerfile, CI, or `requirements-dev.txt`. Do **not** add deps there. (It used to be a hand-maintained concat, drifted silently from heavy/light, and broke CI when CI was reading it as the source of truth.)
+
+When adding a dep:
+1. Decide heavy vs light by install time and binary size — if in doubt, light.
+2. Pin a version (`==`) for app-critical deps; lower-bound + upper-bound (`>=X,<Y`) for dev-aligned packages where minor drift is fine.
+3. If the container is running, `podman exec polygon-data-service pip install <pkg>` to test immediately, but **also commit the file change** — the local pip install evaporates on rebuild.
+4. CI installs `requirements-heavy.txt + requirements-light.txt + requirements-dev.txt` directly. There is no "regenerate the convenience file" step anymore.
 
 ## FastAPI
 

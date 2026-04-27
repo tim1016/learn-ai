@@ -49,6 +49,25 @@
     </div>
   }
 
+  <!-- Polygon Starter spread-synthesis caveat -->
+  <div class="coverage-banner banner-data-source">
+    <i class="pi pi-info-circle"></i>
+    <div class="coverage-body">
+      <div class="coverage-title">Historical IV uses synthesized bid/ask</div>
+      <div class="coverage-meta">
+        Polygon Starter daily aggregates carry close prices only — no
+        historical bid/ask. Where IV is back-solved from past chains we
+        approximate mid as daily close and synthesize spread as
+        <code>max($0.05, 0.5%·close)</code>; contracts with close &lt; $0.05
+        are treated as zero-bid (matches the CBOE truncation rule).
+        <strong>Live</strong> chain data uses real bid/ask from the snapshot
+        endpoint, so realtime IV30 is unaffected. See
+        <code>tests/fixtures/golden/iv30/spy-2024-12-20-chain.meta.json</code>
+        for the policy.
+      </div>
+    </div>
+  </div>
+
   <!-- Form row -->
   <div class="form-card">
     <label class="field">
@@ -90,6 +109,21 @@
                   [class.on]="estimatorOn($any(e))"
                   (click)="toggleEstimator($any(e))">
             {{ e === 'ctc' ? 'CtC' : e === 'gk' ? 'GK' : e === 'yz' ? 'YZ' : 'Parkinson' }}
+          </button>
+        }
+      </div>
+    </div>
+
+    <div class="estimator-block">
+      <span class="field-label" title="HF estimator session for VRP-driving rv_hf_21d. Chip estimators above are session-agnostic daily-bar.">
+        HF session
+      </span>
+      <div class="chip-row">
+        @for (s of ['ETH','RTH']; track s) {
+          <button type="button" class="vol-chip"
+                  [class.on]="sessionOn($any(s))"
+                  (click)="setSession($any(s))">
+            {{ s }}
           </button>
         }
       </div>
@@ -221,13 +255,17 @@
         </span>
       </div>
       <div class="readout-grid">
-        <span class="r-key">iv30</span><span class="r-val">{{ fmtPct(r.iv30) }}</span>
-        <span class="r-key">rv_yz_30</span><span class="r-val">{{ fmtPct(r.rvYZ) }}</span>
-        <span class="r-key">rv_forward_21</span>
-        @if (r.rvForward !== r.rvForward) {
+        <span class="r-key" title="IV30 in solver-native ACT/365 basis. Display only.">iv30</span>
+        <span class="r-val">{{ fmtPct(r.iv30) }}</span>
+        <span class="r-key" title="IV30 converted to TRD/252 basis (NYSE calendar). Used for VRP.">iv30_trd252</span>
+        <span class="r-val">{{ fmtPct(r.iv30Trd252) }}</span>
+        <span class="r-key" title="Trailing 30-bar Yang-Zhang on daily bars. Chip-driven, NOT VRP-driving.">rv_yz_30_daily</span>
+        <span class="r-val">{{ fmtPct(r.rvYzDaily) }}</span>
+        <span class="r-key" title="HF two-component estimator over 21 trading days. Drives VRP. Session-aware.">rv_hf_21d</span>
+        @if (r.rvHf21d !== r.rvHf21d) {
           <span class="r-val r-blind">blind · forward window</span>
         } @else {
-          <span class="r-val">{{ fmtPct(r.rvForward) }}</span>
+          <span class="r-val">{{ fmtPct(r.rvHf21d) }}</span>
         }
         <span class="r-key">vrp_forward</span>
         <span class="r-val">{{ fmtPct(r.vrpForward, 2) }}</span>

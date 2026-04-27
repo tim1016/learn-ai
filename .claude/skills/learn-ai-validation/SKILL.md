@@ -58,10 +58,8 @@ Validated against: tests/test_indicators.py::test_sma_matches_lean_golden
 /// <summary>
 /// Formula: MaxDrawdown = max_t(running_peak_t − equity_t) / running_peak_t
 /// Reference: Bacon, Practical Portfolio Performance Measurement (2e), §8.2
-/// Canonical implementation: PENDING MIGRATION — canonical target is
-///   PythonDataService/app/engine/statistics/drawdown.py (not yet created).
-///   This .NET implementation is flagged rule-5 non-compliant in
-///   docs/math-sources-of-truth.md.
+/// Canonical implementation: this file (no other layer computes drawdown).
+///   Tracked in docs/math-sources-of-truth.md.
 /// Validated against: Backend.Tests/Unit/Services/BacktestServiceTests.cs
 ///   (service-level only, no parity fixture yet).
 /// </summary>
@@ -73,20 +71,21 @@ Validated against: tests/test_indicators.py::test_sma_matches_lean_golden
 - **Touched math**: if you edit a math function and the block is missing or stale, add/update it. Touching = changing the numerical behavior OR the signature.
 - **Untouched legacy**: do NOT backfill every existing math file today. The registry (`docs/math-sources-of-truth.md`) tracks legacy debt; burn it down as you touch it.
 
-### "Canonical implementation" and rule 5
+### Single source of truth
 
-Repo rule 5 (root `CLAUDE.md`): **Python owns all math. .NET is transport. Angular is visualization.** There is **one** canonical implementation per concept.
+There must be **one** canonical implementation per math concept — duplicate implementations across layers create silent drift. The provenance block makes this explicit:
 
-- If your `Canonical implementation` field points at a `.NET` or `Frontend` file for a number that isn't a display-only concern, you are making a rule-5 claim that needs to be justified in the registry (e.g., client-side Black-Scholes for responsive UI, with a parity test against the Python canonical).
-- If another layer already has the same math, it must either (a) call the canonical service, or (b) carry a parity test naming the canonical file in `Validated against`, so drift is provable.
+- If you're computing a number that already exists elsewhere, your `Canonical implementation` field either (a) points at the existing file (and your file calls it via a service), or (b) names this file as the new canonical and the prior implementation is replaced or marked as a parity-tested mirror.
+- A "parity-tested mirror" is acceptable when latency, layer-locality, or vendor parity genuinely demands a copy (e.g., a UI-side Black-Scholes for instant payoff curves; a vendor-shape DTO that re-derives a derived field). It must carry a parity test naming the canonical file in `Validated against`, so drift is provable.
+- Math may live in Python, .NET, Frontend, or anywhere else that fits the use case — pick the layer that makes the system simpler. The single-source-of-truth principle is independent of where that source lives.
 
 ## Layer detection
 
 When work touches a file under:
 
-- `PythonDataService/` → Python layer. Math is allowed and expected here.
-- `Backend/` → .NET layer. Math is a **smell**. If you're adding a number, ask: should this live in Python? Default yes.
-- `Frontend/` → Angular layer. Math is a **smell** except for render-speed duplicates that carry a parity test.
+- `PythonDataService/` → Python layer. Historical home for shared math (indicators, Greeks, backtest stats), exposed via FastAPI. Most legacy canonicals live here, and adding new shared math here keeps the call graph simple.
+- `Backend/` → .NET layer. Hosts GraphQL, auth, persistence; computes numbers when latency or layer-locality demands it (e.g., simple aggregations close to the DB, or fast paths that avoid a Python round-trip). If a number you're adding already exists in another layer, default to calling the canonical instead of duplicating.
+- `Frontend/` → Angular layer. Visualization plus interactive math when round-trip latency would hurt UX (e.g., live payoff curves, what-if scenarios). Duplicates of math that lives elsewhere should carry a parity test.
 
 ## Inline critical rules (Desktop-portable — Claude Code can also read the full rule files)
 

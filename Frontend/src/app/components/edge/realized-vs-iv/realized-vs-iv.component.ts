@@ -7,7 +7,7 @@ import {
 } from "../charts/edge-charts";
 import { EdgeScoreDrawerComponent } from "../drawers/edge-score-drawer.component";
 import { TradeSimDrawerComponent } from "../drawers/trade-sim-drawer.component";
-import { EdgeApiService, type Estimator } from "../services/edge-api.service";
+import { EdgeApiService, type Estimator, type Session } from "../services/edge-api.service";
 import { EdgeMockDataService, type EdgeData } from "../services/edge-mock-data.service";
 
 @Component({
@@ -42,6 +42,10 @@ export class RealizedVsIvComponent {
   readonly estimators = signal<Record<Estimator, boolean>>({
     ctc: false, parkinson: false, gk: false, yz: true,
   });
+  /** ETH (04:00-20:00 ET) is the default. RTH (09:30-16:00) excludes
+   *  pre-/post-market 15-min bars from the HF estimator. Daily-bar mode
+   *  ignores this — the YZ-21 fallback is session-agnostic. */
+  readonly session = signal<Session>("ETH");
 
   readonly hoverIdx = signal<number | null>(null);
   readonly currentIdx = computed(() => this.hoverIdx() ?? Math.floor(this.data().N / 2));
@@ -78,8 +82,10 @@ export class RealizedVsIvComponent {
     return {
       i, z, action, color,
       iv30: d.iv30[i],
-      rvYZ: d.rvYZ[i],
+      iv30Trd252: d.iv30Trd252?.[i] ?? NaN,
+      rvYzDaily: d.rvYZ[i],
       rvForward: d.rvForward[i],
+      rvHf21d: d.rvHf21d?.[i] ?? NaN,
       vrpForward: d.vrpForward[i],
       edgeScore: d.edgeScore[i],
     };
@@ -125,6 +131,7 @@ export class RealizedVsIvComponent {
         symbol: this.symbol(),
         barSize: this.barSize(),
         tenor: this.tenor(),
+        session: this.session(),
         estimators: enabled.length ? enabled : ["yz"],
       });
       // Merge over mock data so chart components keep all expected fields.
@@ -142,6 +149,9 @@ export class RealizedVsIvComponent {
     this.estimators.update((m) => ({ ...m, [k]: !m[k] }));
   }
   protected estimatorOn(k: Estimator): boolean { return this.estimators()[k]; }
+
+  protected setSession(s: Session): void { this.session.set(s); }
+  protected sessionOn(s: Session): boolean { return this.session() === s; }
 
   protected fmtPct(v: number, digits = 1): string {
     if (Number.isNaN(v)) return "—";

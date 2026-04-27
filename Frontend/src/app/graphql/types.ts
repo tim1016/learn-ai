@@ -254,6 +254,12 @@ export interface OptionsChainSnapshotResult {
   underlying: SnapshotUnderlyingResult | null;
   contracts: SnapshotContractResult[];
   count: number;
+  /** Annualized risk-free rate for the chain (FRED-sourced, ~30d tenor). */
+  riskFreeRate: number | null;
+  /** Continuous-dividend-yield proxy (Polygon trailing-12-month / spot). */
+  dividendYield: number | null;
+  rateSource: string | null;
+  dividendSource: string | null;
   error: string | null;
 }
 

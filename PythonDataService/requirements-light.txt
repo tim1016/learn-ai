@@ -14,6 +14,9 @@ python-multipart==0.0.20
 redis>=5.0,<6
 reportlab>=4.0
 QuantLib>=1.35
+# py_vollib used as an independent solver-parity reference in tests
+# (tests/volatility/test_solver_parity_pyvollib.py — Step 5 of IV-RV alignment).
+py_vollib==1.0.1
 # Used by app.research.divergence.dashboard to render the TV vs Polygon
 # data-divergence dashboard (iframe target in the research lab).
 plotly>=5.20,<7
