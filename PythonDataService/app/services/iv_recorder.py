@@ -147,13 +147,18 @@ class JsonlIvSnapshotStore(IvSnapshotStore):
 
     def __init__(self, base_dir: str | Path) -> None:
         self.base_dir = Path(base_dir)
-        self.base_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        # mkdir is deferred to first write — the production default path
+        # (/var/lib/iv-recorder) isn't writable in CI/import contexts where
+        # the module is loaded but no slot is captured. The recorder hot
+        # path always calls write(), so the directory is created on first
+        # legitimate use.
 
     def _file_for(self, ticker: str) -> Path:
         return self.base_dir / f"{ticker}.jsonl"
 
     def write(self, snapshot: RecordedIvSnapshot) -> None:
+        self.base_dir.mkdir(parents=True, exist_ok=True)
         line = json.dumps(asdict(snapshot), separators=(",", ":"))
         with self._lock, open(self._file_for(snapshot.ticker), "a") as f:
             f.write(line + "\n")
