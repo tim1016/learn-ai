@@ -15,6 +15,16 @@ export interface CostAttribution {
   gross: number; spread: number; slip: number; comm: number; net: number; netTradable: number;
 }
 
+export interface IvConfidenceSummary {
+  ivSource: "caller_supplied" | "recorder" | "absent";
+  latestConfidence: number | null;
+  floor: number | null;
+  gatedNow: boolean | null;
+  /** Total bars in the response with floor_gated=true; 0 when the gating
+   *  signal isn't present in the response. */
+  nGated: number;
+}
+
 export interface EdgeData {
   N: number;
   dates: Date[];
@@ -42,6 +52,9 @@ export interface EdgeData {
   signals: SignalMark[];
   oracleSignals: SignalMark[];
   coverage: { bars_total: number; forward_blind_tail: number; iv_first_ts: string; };
+  /** Populated only when /api/edge/realized-vs-iv/series returned IV with
+   *  provenance; null for synthetic mock data and the legacy "absent" path. */
+  ivConfidence?: IvConfidenceSummary | null;
   assets: string[];
   periods: string[];
   sharpeMatrix: number[][];
