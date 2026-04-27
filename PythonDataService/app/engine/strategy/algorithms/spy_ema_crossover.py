@@ -96,7 +96,13 @@ class SpyEmaCrossoverAlgorithm(Strategy):
         self.trade_log: list[LoggedTrade] = []
 
     def initialize(self) -> None:
-        # Date range and cash — match LEAN's Initialize().
+        # LEAN-parity defaults — match the C# reference Initialize().
+        # The router's ``_apply_overrides`` runs right after initialize()
+        # and replaces these with the request body's start_date /
+        # end_date / initial_cash whenever the caller supplies them, so
+        # the Engine Lab picker still wins. The defaults only kick in
+        # for the no-arg fixture path used by the bit-exact LEAN
+        # validation test.
         self.set_start_date(2024, 3, 28)
         self.set_end_date(2026, 3, 27)
         self.set_cash(100000)

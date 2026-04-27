@@ -1,4 +1,25 @@
-<div class="tv-compat-root">
+<details class="tv-compat-root">
+  <summary class="tv-compat-summary">
+    <svg class="caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+      <path d="M3 1.5L7 5L3 8.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="tv-compat-summary-title">TradingView compatibility</span>
+    @if (tvCompatible()) {
+      <span class="badge ok" [class.warn]="overallStatus() === 'warning'"
+            [class.bad]="overallStatus() === 'blocking'">
+        @switch (overallStatus()) {
+          @case ('blocking') { ✕ Run blocked }
+          @case ('warning')  { ! Review warnings }
+          @case ('ok')       { ✓ Locked &amp; ready }
+          @default           { Locked &amp; checking… }
+        }
+      </span>
+    } @else {
+      <span class="badge warn">Advanced — defaults overridden</span>
+    }
+    <span class="tv-compat-summary-hint">Click to expand settings &amp; pre-flight detail</span>
+  </summary>
+
   <!-- Master toggle -->
   <header class="master-row">
     <label class="master-toggle"
@@ -182,4 +203,4 @@
       </div>
     }
   </section>
-</div>
+</details>

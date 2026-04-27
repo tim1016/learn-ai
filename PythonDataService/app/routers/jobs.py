@@ -31,6 +31,7 @@ from pydantic.alias_generators import to_camel
 from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.models.requests import DatasetGenerationRequest
+from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from app.services.dataset_service import RunCancelledError
 from app.services.polygon_client import PolygonClientService
 from app.services.rule_based_backtest import (
@@ -83,6 +84,19 @@ class DatasetZipJobRequest(_CamelCaseModel):
     dataset: dict[str, Any] = Field(default_factory=dict)
 
 
+class EngineBacktestJobRequest(_CamelCaseModel):
+    """Body of POST /api/jobs-internal/engine-backtest.
+
+    Mirrors the existing synchronous EngineBacktestRequest shape but
+    accepts it as a ``backtest`` sub-object so the field validation
+    remains the single source of truth. The .NET JobsApi forwards the
+    Engine Lab POST body verbatim plus an injected ``job_id``.
+    """
+
+    job_id: str = Field(..., min_length=1)
+    backtest: dict[str, Any] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -101,10 +115,7 @@ async def start_rule_based_backtest_job(req: RuleBasedBacktestJobRequest) -> dic
     def work(emit: ProgressEmitter, cancel) -> dict:
         # ----- Phase 1: load bars from Polygon -----
         emit.phase("loading_bars")
-        emit.log(
-            f"Fetching {req.ticker} {req.multiplier}{req.timespan} "
-            f"bars from {req.from_date} to {req.to_date}"
-        )
+        emit.log(f"Fetching {req.ticker} {req.multiplier}{req.timespan} bars from {req.from_date} to {req.to_date}")
         cancel.raise_if_cancelled()
 
         bars = polygon_client.fetch_aggregates(
@@ -198,12 +209,14 @@ async def start_dataset_zip_job(req: DatasetZipJobRequest) -> dict:
             # the framework's so run_in_thread emits job.cancelled instead
             # of job.failed.
             raise JobCancelled(str(exc)) from exc
-        on_event({
-            "type": "fetch_complete",
-            "raw_bars": raw_count,
-            "processed_bars": len(df),
-            "indicator_columns": len([m["column"] for m in column_meta]),
-        })
+        on_event(
+            {
+                "type": "fetch_complete",
+                "raw_bars": raw_count,
+                "processed_bars": len(df),
+                "indicator_columns": len([m["column"] for m in column_meta]),
+            }
+        )
 
         emit.phase("bundling")
         try:
@@ -238,6 +251,54 @@ async def start_dataset_zip_job(req: DatasetZipJobRequest) -> dict:
         cancel_check_every_n=1,
         thread_name=f"dataset-zip-{req.job_id[:8]}",
     )
+    return {"job_id": req.job_id, "status": "queued"}
+
+
+@router.post("/engine-backtest", status_code=status.HTTP_202_ACCEPTED)
+async def start_engine_backtest_job(req: EngineBacktestJobRequest) -> dict:
+    """Kick off a LEAN-engine backtest in a worker thread. Returns 202.
+
+    The Engine Lab UI is the primary caller; the .NET JobsApi forwards
+    the request after minting the ``job_id`` and writing the initial
+    state record to Redis. The worker emits ``phase`` and ``log`` events
+    to the same Redis stream, then ``completed`` with the
+    EngineBacktestResponse-shaped result body.
+    """
+    # Validate the embedded backtest body through the existing schema —
+    # no duplication of field constraints.
+    try:
+        backtest_req = EngineBacktestRequest.model_validate(req.backtest)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid backtest payload: {exc}")
+
+    def work(emit: ProgressEmitter, cancel) -> dict:
+        # The engine itself is single-shot and does not poll for cancel
+        # mid-run. We honor cancel at the obvious phase boundaries: just
+        # before the data load and before invoking engine.run(). Once
+        # the simulator starts, it runs to completion (typically
+        # seconds-to-low-minutes for the strategies registered today).
+        cancel.raise_if_cancelled()
+
+        def on_phase(phase: str) -> None:
+            cancel.raise_if_cancelled()
+            emit.phase(phase)
+
+        def on_log(message: str) -> None:
+            emit.log(message)
+
+        response = execute_engine_backtest(
+            request=backtest_req,
+            on_phase=on_phase,
+            on_log=on_log,
+        )
+        cancel.raise_if_cancelled()
+
+        # Pydantic v2: dict serialization preserves snake_case to match
+        # what the frontend already deserializes from the synchronous
+        # /api/engine/backtest endpoint.
+        return response.model_dump(mode="json")
+
+    run_in_thread(req.job_id, work, thread_name=f"engine-{req.job_id[:8]}")
     return {"job_id": req.job_id, "status": "queued"}
 
 

@@ -1,15 +1,91 @@
 @use '../../../styles/tokens' as *;
 
+// Hosted as a <details> so the body collapses by default. The summary
+// shows the master toggle status + pre-flight verdict so users keep the
+// most important signal at a glance without expanding.
 .tv-compat-root {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  margin: 14px 0;
-  padding: 16px 18px;
-  background: linear-gradient(180deg, rgba($accent, 0.1) 0%, $bg-elevated 100%);
+  margin: 0;
+  padding: 0;
+  background: $bg-surface;
   border: 1px solid $border;
   border-radius: 10px;
   color: $text-primary;
+  overflow: hidden;
+
+  &[open] > .tv-compat-summary {
+    border-bottom: 1px solid $border;
+    .caret {
+      transform: rotate(90deg);
+      color: $accent;
+    }
+  }
+
+  > *:not(.tv-compat-summary) {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  > *:not(.tv-compat-summary):first-of-type { padding-top: 14px; }
+  > *:not(.tv-compat-summary):last-child   { padding-bottom: 16px; }
+
+  // Vertical rhythm between expanded children.
+  > .master-row,
+  > .advanced-warn,
+  > .settings-grid,
+  > .preflight-panel {
+    margin-top: 14px;
+  }
+  > .master-row { margin-top: 14px; }
+}
+
+.tv-compat-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: $text-primary;
+  list-style: none;
+  user-select: none;
+  background: linear-gradient(180deg, rgba($accent, 0.06) 0%, transparent 100%);
+
+  &::-webkit-details-marker { display: none; }
+
+  .caret {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    transition: transform $t-ui, color $t-ui;
+    color: $text-subtle;
+    flex: 0 0 auto;
+  }
+
+  .tv-compat-summary-title {
+    flex: 0 0 auto;
+  }
+
+  .tv-compat-summary-hint {
+    margin-left: auto;
+    font-size: 0.72rem;
+    font-weight: 400;
+    color: $text-muted;
+  }
+
+  .badge {
+    font-size: 0.68rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: rgba($bull, 0.12);
+    color: $bull;
+
+    &.warn { background: rgba($warn, 0.12); color: $warn; }
+    &.bad  { background: rgba($bear, 0.12); color: $bear; }
+  }
 }
 
 .master-row {

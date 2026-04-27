@@ -26,7 +26,7 @@ from typing import Any, Literal
 
 import httpx
 import pandas as pd
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError
 
@@ -358,25 +358,63 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "ema_crossover": StrategyRegistration(
         display_name="EMA Crossover",
         description=(
-            "15-minute EMA(5)/EMA(10) crossover with Wilders RSI(14) filter "
-            "(50 ≤ RSI ≤ 70), minimum 0.20 gap between the fast and slow EMA "
-            "at the signal bar, and a 5-bar hold exit. Same rules as the "
-            "LEAN reference — bit-exact against the SPY log when run with "
-            "the default SPY symbol. Pick any ticker; flip auto-fetch on "
-            "to pull missing bars from Polygon into the local cache."
+            "Long-only intraday trend strategy. Bit-exact against the LEAN "
+            "C# reference when run with the default SPY symbol; any ticker "
+            "in the cache (or auto-fetched from Polygon) can be substituted "
+            "without touching code.\n"
+            "\n"
+            "The strategy reads minute SPY bars, consolidates them into "
+            "15-minute bars, tracks EMA(5), EMA(10) and Wilders RSI(14), "
+            "and goes long for exactly five 15-minute bars (75 min) every "
+            "time a fresh fast-over-slow crossover lines up with a 0.20 "
+            "minimum gap and an RSI in the 50–70 trend-confirmation band. "
+            "There is no stop, no target, no scaling, and at most one "
+            "position open at a time."
         ),
         algorithm_pseudocode=(
-            "on each 15-min bar close:\n"
-            "    update EMA5, EMA10, RSI14 with bar.close\n"
-            "    if in_position:\n"
-            "        bars_held += 1\n"
-            "        if bars_held == 5:  exit at bar close\n"
-            "    else if all indicators ready:\n"
-            "        fresh_cross = EMA5 > EMA10  and  EMA5[-1] <= EMA10[-1]\n"
-            "        gap_ok     = (EMA5 - EMA10) >= 0.20\n"
-            "        rsi_ok     = 50 <= RSI <= 70\n"
-            "        if fresh_cross and gap_ok and rsi_ok:\n"
-            "            enter long, size = 100% of equity"
+            "Universe\n"
+            "    symbol     = configurable (default SPY)\n"
+            "    resolution = 15-minute bars consolidated from minute data\n"
+            "\n"
+            "Indicators (Alpha — updated each 15m bar close at bar.end_time)\n"
+            "    EMA_fast = ExponentialMovingAverage(5)\n"
+            "    EMA_slow = ExponentialMovingAverage(10)\n"
+            "    RSI      = RelativeStrengthIndex(14, Wilders smoothing)\n"
+            "\n"
+            "Warmup\n"
+            "    no signals fire until EMA_fast.is_ready and EMA_slow.is_ready\n"
+            "    and RSI.is_ready (at least 14 closes for RSI; EMAs are\n"
+            "    SMA-seeded over their period). The crossover-state flag is\n"
+            "    primed during warmup so the first eligible bar is not a\n"
+            "    spurious 'fresh' cross.\n"
+            "\n"
+            "Alpha — bar entry conditions (evaluated while flat)\n"
+            "    fresh_cross = EMA_fast > EMA_slow\n"
+            "                  AND EMA_fast[-1] <= EMA_slow[-1]\n"
+            "    gap_ok      = (EMA_fast - EMA_slow) >= 0.20\n"
+            "    rsi_ok      = 50 <= RSI <= 70\n"
+            "    ⇒ if all three: emit Insight(UP, period=5 bars); enter long\n"
+            "\n"
+            "Alpha — bar exit conditions (evaluated while in trade)\n"
+            "    bars_held += 1 each new bar\n"
+            "    ⇒ when bars_held == 5: Liquidate(symbol)\n"
+            "\n"
+            "Risk Management — position survival rules\n"
+            "    none — no stop-loss, no take-profit, no signal-flip exit.\n"
+            "    A losing trade is held to the time-stop. A reversed crossover\n"
+            "    inside the 5-bar window is ignored.\n"
+            "\n"
+            "Portfolio Construction\n"
+            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
+            "\n"
+            "Execution\n"
+            "    fill_mode = signal_bar_close → fills at the signal bar's close\n"
+            "                                   (matches LEAN parity fixture)\n"
+            "              | next_bar_open    → fills at the next bar's open\n"
+            "                                   (matches TradingView trade-list)\n"
+            "\n"
+            "End of algorithm\n"
+            "    if still in position at the last bar: Liquidate(symbol)"
         ),
         gotchas=[
             "EMA warmup is seeded from the SMA of the first N samples — "
@@ -418,19 +456,43 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",
         description=(
-            "Classic golden-cross / death-cross rule. Enters long when the "
-            "short SMA crosses above the long SMA and exits on the opposite "
-            "cross. Configurable symbol, window sizes, and bar resolution."
+            "Classic golden-cross / death-cross. Enters long when the short "
+            "SMA crosses above the long SMA, exits on the opposite cross. "
+            "Configurable symbol, window sizes (in bars), and bar resolution."
         ),
         algorithm_pseudocode=(
-            "on each bar close:\n"
-            "    update SMA_short (window=short_window)\n"
-            "    update SMA_long  (window=long_window)\n"
-            "    if both ready:\n"
-            "        if in_position and SMA_short < SMA_long:  exit\n"
-            "        elif flat  and SMA_short > SMA_long and\n"
-            "                       SMA_short[-1] <= SMA_long[-1]:\n"
-            "            enter long, size = 100% of equity"
+            "Universe\n"
+            "    symbol     = configurable (default SPY)\n"
+            "    resolution = consolidated to resolution_minutes (default 15m)\n"
+            "\n"
+            "Indicators (Alpha — updated each bar at bar.end_time)\n"
+            "    SMA_short = SimpleMovingAverage(short_window bars)\n"
+            "    SMA_long  = SimpleMovingAverage(long_window bars)\n"
+            "\n"
+            "Warmup\n"
+            "    no signals until both SMAs have window-size samples.\n"
+            "    SMA has no recursion (just a rolling mean), so there is\n"
+            "    no warmup parity drift between LEAN and Pine.\n"
+            "\n"
+            "Alpha — bar entry conditions (evaluated while flat)\n"
+            "    fresh_cross = SMA_short > SMA_long\n"
+            "                  AND SMA_short[-1] <= SMA_long[-1]\n"
+            "    ⇒ if fresh_cross: emit Insight(UP); enter long\n"
+            "\n"
+            "Alpha — bar exit conditions (evaluated while in trade)\n"
+            "    death_cross = SMA_short < SMA_long\n"
+            "    ⇒ if death_cross: Liquidate(symbol)\n"
+            "\n"
+            "Risk Management — position survival rules\n"
+            "    none — exit is signal-driven only. Re-entry requires a\n"
+            "    fresh crossover, which prevents the same-bar re-entry\n"
+            "    that would otherwise produce many spurious trades.\n"
+            "\n"
+            "Portfolio Construction\n"
+            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
+            "\n"
+            "Execution\n"
+            "    fill_mode = signal_bar_close (LEAN default) | next_bar_open"
         ),
         gotchas=[
             "Window sizes are in BARS, not minutes. With "
@@ -465,19 +527,42 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         description=(
             "Long-term golden-cross / death-cross run against LEAN daily "
             "bars (one zip per symbol under equity/usa/daily/). Defaults "
-            "to the classic 50/200 on AAPL. The underlying algorithm is "
-            "the same SmaCrossoverAlgorithm used for intraday — only the "
-            "bar cadence differs, which is handled by the data reader."
+            "to the classic 50/200 on AAPL. Same SmaCrossoverAlgorithm as "
+            "the intraday variant — only the bar cadence differs."
         ),
         algorithm_pseudocode=(
-            "on each daily bar close:\n"
-            "    update SMA_short  (window = short_window days)\n"
-            "    update SMA_long   (window = long_window days)\n"
-            "    if both ready:\n"
-            "        if in_position and SMA_short < SMA_long:  exit\n"
-            "        elif flat  and SMA_short > SMA_long and\n"
-            "                       SMA_short[-1] <= SMA_long[-1]:\n"
-            "            enter long, size = 100% of equity"
+            "Universe\n"
+            "    symbol     = configurable (default AAPL)\n"
+            "    resolution = daily (read from equity/usa/daily/{symbol}.zip)\n"
+            "\n"
+            "Indicators (Alpha — updated each daily bar close)\n"
+            "    SMA_short = SimpleMovingAverage(short_window days, default 50)\n"
+            "    SMA_long  = SimpleMovingAverage(long_window  days, default 200)\n"
+            "\n"
+            "Warmup\n"
+            "    no signals until both SMAs have window-size samples\n"
+            "    (typically ~200 trading days for the 50/200 default).\n"
+            "\n"
+            "Alpha — bar entry conditions (evaluated while flat)\n"
+            "    golden_cross = SMA_short > SMA_long\n"
+            "                   AND SMA_short[-1] <= SMA_long[-1]\n"
+            "    ⇒ if golden_cross: emit Insight(UP); enter long\n"
+            "\n"
+            "Alpha — bar exit conditions (evaluated while in trade)\n"
+            "    death_cross = SMA_short < SMA_long\n"
+            "    ⇒ if death_cross: Liquidate(symbol)\n"
+            "\n"
+            "Risk Management — position survival rules\n"
+            "    none — overnight gap risk is not modeled by the fill model;\n"
+            "    holding through earnings, splits, and dividends is the\n"
+            "    intended behavior of the long-term cross.\n"
+            "\n"
+            "Portfolio Construction\n"
+            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
+            "\n"
+            "Execution\n"
+            "    fill_mode = signal_bar_close (end-of-day fill at the\n"
+            "    cross bar's close)"
         ),
         gotchas=[
             "Uses the LEAN daily-bar reader, not a consolidator. Bars come "
@@ -512,16 +597,42 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "rsi_mean_reversion": StrategyRegistration(
         display_name="RSI Mean Reversion",
         description=(
-            "Long-only RSI threshold strategy. Buys when RSI drops below the "
-            "oversold level and sells when RSI rises above the overbought "
-            "level. Configurable symbol, window, thresholds, and resolution."
+            "Long-only RSI threshold strategy. Buys oversold (RSI < oversold), "
+            "sells overbought (RSI > overbought). Configurable symbol, window, "
+            "thresholds, and resolution. No time-based exit — position is held "
+            "as long as RSI stays inside the band."
         ),
         algorithm_pseudocode=(
-            "on each bar close:\n"
-            "    update RSI(window, Wilders smoothing)\n"
-            "    if RSI not ready:  return\n"
-            "    if in_position and RSI > overbought:  exit\n"
-            "    elif flat       and RSI < oversold:    enter long, 100% equity"
+            "Universe\n"
+            "    symbol     = configurable (default SPY)\n"
+            "    resolution = consolidated to resolution_minutes (default 15m)\n"
+            "\n"
+            "Indicators (Alpha — updated each bar at bar.end_time)\n"
+            "    RSI = RelativeStrengthIndex(window, Wilders smoothing)\n"
+            "\n"
+            "Warmup\n"
+            "    no signals until RSI is_ready (sample ≥ window+1).\n"
+            "    First avg gain/loss is a plain SMA at sample window+1,\n"
+            "    Wilders recursion thereafter.\n"
+            "\n"
+            "Alpha — bar entry conditions (evaluated while flat)\n"
+            "    oversold = RSI < oversold_threshold\n"
+            "    ⇒ if oversold: emit Insight(UP); enter long\n"
+            "\n"
+            "Alpha — bar exit conditions (evaluated while in trade)\n"
+            "    overbought = RSI > overbought_threshold\n"
+            "    ⇒ if overbought: Liquidate(symbol)\n"
+            "\n"
+            "Risk Management — position survival rules\n"
+            "    none — no stop, no time-stop, no max drawdown guard.\n"
+            "    Re-entry IS allowed on the same day if RSI dips back\n"
+            "    below oversold after an exit (intentional).\n"
+            "\n"
+            "Portfolio Construction\n"
+            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
+            "\n"
+            "Execution\n"
+            "    fill_mode = signal_bar_close | next_bar_open"
         ),
         gotchas=[
             "Uses Wilders smoothing — first average gain/loss is a plain "
@@ -567,23 +678,48 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "same code runs against SPY, QQQ, IWM, etc."
         ),
         algorithm_pseudocode=(
-            "at first RTH bar of each day:\n"
-            "    reset ORB state, traded_today = False\n"
-            "on each RTH 15-min bar:\n"
-            "    bar_of_day += 1\n"
-            "    if bar_of_day <= orb_bars:\n"
+            "Universe\n"
+            "    symbol     = configurable (default SPY; SPY/QQQ/IWM trade cleanly)\n"
+            "    resolution = 15-minute bars consolidated from minute data\n"
+            "    session    = RTH only (09:30–16:00 America/New_York)\n"
+            "\n"
+            "Indicators\n"
+            "    none — pure price action, zero recursive state across days\n"
+            "\n"
+            "Warmup\n"
+            "    none — every trading day starts with no carried state, which\n"
+            "    is what makes ORB ideal as a cross-system validation primitive\n"
+            "    (no chance of indicator-state drift between implementations).\n"
+            "\n"
+            "Alpha — opening-range construction (first orb_bars of each RTH day)\n"
+            "    bar_of_day in [1..orb_bars]:\n"
             "        orb_high = max(orb_high, bar.high)\n"
             "        orb_low  = min(orb_low,  bar.low)\n"
-            "        if bar_of_day == orb_bars:\n"
-            "            range_pct = (orb_high - orb_low) / orb_low * 100\n"
-            "            orb_valid = min_range_pct <= range_pct <= max_range_pct\n"
-            "    elif orb_valid and not traded_today:\n"
-            "        if in_position:\n"
-            "            bars_held += 1\n"
-            "            if bars_held == hold_bars:  exit\n"
-            "        elif bar.close > orb_high:\n"
-            "            enter long, 100% equity\n"
-            "            traded_today = True"
+            "    on the orb_bars-th bar:\n"
+            "        range_pct = (orb_high - orb_low) / orb_low * 100\n"
+            "        orb_valid = min_range_pct <= range_pct <= max_range_pct\n"
+            "\n"
+            "Alpha — bar entry conditions (evaluated while flat, after ORB completes)\n"
+            "    breakout = bar.close > orb_high\n"
+            "    ⇒ if orb_valid AND breakout AND NOT traded_today:\n"
+            "        emit Insight(UP); enter long; traded_today = True\n"
+            "\n"
+            "Alpha — bar exit conditions (evaluated while in trade)\n"
+            "    bars_held += 1 each new bar\n"
+            "    ⇒ when bars_held == hold_bars: Liquidate(symbol)\n"
+            "\n"
+            "Risk Management — position survival rules\n"
+            "    one trade per day — traded_today flag prevents re-entry\n"
+            "    after the time-stop exit (regression test:\n"
+            "    test_spy_orb_one_trade_per_day.py).\n"
+            "    On days where the hold window crosses 16:00 ET, the exit\n"
+            "    bar is the next session's first RTH bar (overnight hold).\n"
+            "\n"
+            "Portfolio Construction\n"
+            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
+            "\n"
+            "Execution\n"
+            "    fill_mode = signal_bar_close (matches LEAN-style entries)"
         ),
         gotchas=[
             "ONE trade per day. The _traded_today flag was added to the "
@@ -652,15 +788,59 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "a defined-risk options spread instead of the underlying stock."
         ),
         algorithm_pseudocode=(
-            "on each 15-min bar close (signal logic identical to ema_crossover):\n"
-            "    update EMA_fast, EMA_slow, RSI\n"
-            "    if signal fires:\n"
-            "        select option chain with min_dte <= dte <= max_dte\n"
-            "        long_leg  = strike with delta closest to long_call_delta_target  (0.60)\n"
-            "        short_leg = strike with delta closest to short_call_delta_target (0.30)\n"
-            "        verify open_interest, volume, bid-ask spread filters\n"
-            "        open spread (debit for bull-call, credit for bull-put)\n"
-            "        hold for bars_to_hold bars, then close both legs"
+            "Universe\n"
+            "    underlying     = configurable (default SPY)\n"
+            "    derivative set = same-underlying option chain, calls & puts\n"
+            "    resolution     = 15-min bars consolidated from minute data\n"
+            "\n"
+            "Indicators (Alpha — identical to ema_crossover, on the underlying)\n"
+            "    EMA_fast = ExponentialMovingAverage(ema_fast_period)\n"
+            "    EMA_slow = ExponentialMovingAverage(ema_slow_period)\n"
+            "    RSI      = RelativeStrengthIndex(rsi_period, Wilders smoothing)\n"
+            "\n"
+            "Warmup\n"
+            "    same as ema_crossover — wait for all three to be is_ready,\n"
+            "    prime the prev-cross flag during warmup bars.\n"
+            "\n"
+            "Alpha — bar entry conditions (evaluated while flat)\n"
+            "    fresh_cross = EMA_fast > EMA_slow\n"
+            "                  AND EMA_fast[-1] <= EMA_slow[-1]\n"
+            "    gap_ok      = (EMA_fast - EMA_slow) >= ema_gap_min\n"
+            "    rsi_ok      = rsi_min <= RSI <= rsi_max\n"
+            "    ⇒ if all three: emit Insight(UP); proceed to spread selection\n"
+            "\n"
+            "Universe Selection (per signal — narrow the chain)\n"
+            "    candidates = chain.filter(min_dte <= DTE <= max_dte,\n"
+            "                              open_interest >= min_open_interest,\n"
+            "                              volume >= min_volume,\n"
+            "                              bid_ask_spread_pct <= max_bid_ask_spread_pct)\n"
+            "    if no liquid contract: skip signal (logged)\n"
+            "\n"
+            "Portfolio Construction (per spread_type)\n"
+            "    BULL_CALL: long  call ≈ long_call_delta_target  (0.60)\n"
+            "               short call ≈ short_call_delta_target (0.30)\n"
+            "               net debit; max profit = width − debit\n"
+            "    BULL_PUT:  short put  ≈ short_put_delta_target  (-0.30)\n"
+            "               long  put  ≈ long_put_delta_target   (-0.15)\n"
+            "               net credit; max profit = credit\n"
+            "    sizing = contracts_per_trade (default 1) × contract_multiplier (100)\n"
+            "    cap    = max_positions concurrently open\n"
+            "\n"
+            "Alpha — bar exit conditions (evaluated while in trade)\n"
+            "    bars_held += 1 each new 15-min bar\n"
+            "    ⇒ when bars_held == bars_to_hold: close BOTH legs\n"
+            "\n"
+            "Risk Management — position survival rules\n"
+            "    none — defined-risk by construction (max loss = debit\n"
+            "    paid for bull-call, width − credit for bull-put). No early\n"
+            "    assignment handling; assumes European-style settlement for\n"
+            "    the backtest window (acceptable for 7–30 DTE SPY options).\n"
+            "\n"
+            "Execution / Pricing\n"
+            "    pricing_mode = quantlib_only      (synthetic BS via QuantLib)\n"
+            "                 | market_preferred   (Polygon snapshot if available)\n"
+            "                 | market_required    (skip if no market data)\n"
+            "    fills land at the spread's mid ± half_spread_pct"
         ),
         gotchas=[
             "Signal timing is BIT-IDENTICAL to ema_crossover (same EMAs, "
@@ -726,16 +906,42 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "reconciliation."
         ),
         algorithm_pseudocode=(
-            "on each 15-min bar close:\n"
-            "    update EMA_fast, EMA_slow, MACD, RSI14, ADX14\n"
-            "    if in_position:\n"
-            "        if ADX < adx_exit_threshold (default 15):  exit\n"
-            "        continue\n"
-            "    if not all indicators ready: continue\n"
-            "    if rsi_low_gate <= RSI <= rsi_high_gate\n"
-            "       and (EMA_fast − EMA_slow) > ema_gap_threshold\n"
-            "       and MACD line > 0:\n"
-            "        enter long, size = 100% of equity (fills NEXT_BAR_OPEN)"
+            "Universe\n"
+            "    symbol     = configurable (default SPY)\n"
+            "    resolution = consolidated to resolution_minutes (default 15m)\n"
+            "\n"
+            "Indicators (Alpha — updated each bar at bar.end_time)\n"
+            "    EMA_fast = ExponentialMovingAverage(ema_fast_period, default 20)\n"
+            "    EMA_slow = ExponentialMovingAverage(ema_slow_period, default 50)\n"
+            "    MACD     = MovingAverageConvergenceDivergence(\n"
+            "                   macd_fast, macd_slow, macd_signal)\n"
+            "    RSI      = RelativeStrengthIndex(rsi_period, Wilders smoothing)\n"
+            "    ADX      = AverageDirectionalIndex(adx_period, Wilders)\n"
+            "\n"
+            "Warmup\n"
+            "    ~200 bars by default (longest indicator chain is\n"
+            "    EMA_slow=50 plus a buffer for steady state).\n"
+            "\n"
+            "Alpha — bar entry conditions (evaluated while flat)\n"
+            "    rsi_in_range = rsi_low_gate <= RSI <= rsi_high_gate\n"
+            "    gap_ok       = (EMA_fast - EMA_slow) > ema_gap_threshold\n"
+            "    macd_bull    = MACD.line > 0     (line, NOT histogram, NOT signal)\n"
+            "    ⇒ if all three: emit Insight(UP); enter long\n"
+            "\n"
+            "Alpha — bar exit conditions (evaluated while in trade)\n"
+            "    trend_weak = ADX < adx_exit_threshold (default 15)\n"
+            "    ⇒ if trend_weak: Liquidate(symbol)\n"
+            "\n"
+            "Risk Management — position survival rules\n"
+            "    pyramiding=1 — no scale-in / re-entry while holding.\n"
+            "    no SL / no TP — drawdown is unbounded until ADX collapses.\n"
+            "\n"
+            "Portfolio Construction\n"
+            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
+            "\n"
+            "Execution\n"
+            "    fill_mode = next_bar_open  (TradingView-parity setting;\n"
+            "    signals fire at bar close, fill price = next bar's open)"
         ),
         gotchas=[
             "EMA gap threshold is ticker-scaled. Default 0.5 is a reasonable "
@@ -774,17 +980,41 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "line > 0. Exits when ADX drops below 20."
         ),
         algorithm_pseudocode=(
-            "on each 15-min bar close:\n"
-            "    update Supertrend(atr, mult), MACD, RSI14, ADX14\n"
-            "    if in_position:\n"
-            "        if ADX < adx_exit_threshold (default 20):  exit\n"
-            "        continue\n"
-            "    if not all indicators ready: continue\n"
-            "    if rsi_low_gate <= RSI <= rsi_high_gate\n"
-            "       and Supertrend.is_long\n"
-            "       and ADX > adx_entry_threshold (default 20)\n"
-            "       and MACD line > 0:\n"
-            "        enter long, size = 100% of equity"
+            "Universe\n"
+            "    symbol     = configurable (default SPY)\n"
+            "    resolution = consolidated to resolution_minutes (default 15m)\n"
+            "\n"
+            "Indicators (Alpha — updated each bar at bar.end_time)\n"
+            "    Supertrend = Supertrend(supertrend_atr_period,\n"
+            "                            supertrend_multiplier)   default (10, 3)\n"
+            "    MACD       = MACD(macd_fast, macd_slow, macd_signal)\n"
+            "    RSI        = RSI(rsi_period, Wilders)\n"
+            "    ADX        = ADX(adx_period, Wilders)\n"
+            "\n"
+            "Warmup\n"
+            "    ~50 bars minimum (Supertrend = atr_period bars,\n"
+            "    MACD ≈ 34 bars to converge, RSI ≈ 15, plus buffer).\n"
+            "\n"
+            "Alpha — bar entry conditions (evaluated while flat)\n"
+            "    rsi_in_range  = rsi_low_gate <= RSI <= rsi_high_gate\n"
+            "    trend_long    = Supertrend.is_long\n"
+            "    trend_strong  = ADX > adx_entry_threshold (default 20)\n"
+            "    macd_bull     = MACD.line > 0\n"
+            "    ⇒ if all four: emit Insight(UP); enter long\n"
+            "\n"
+            "Alpha — bar exit conditions (evaluated while in trade)\n"
+            "    trend_weak = ADX < adx_exit_threshold (default 20)\n"
+            "    ⇒ if trend_weak: Liquidate(symbol)\n"
+            "\n"
+            "Risk Management — position survival rules\n"
+            "    pyramiding=1 — no scale-in while holding.\n"
+            "    no SL / no TP — exit is purely trend-strength-driven.\n"
+            "\n"
+            "Portfolio Construction\n"
+            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
+            "\n"
+            "Execution\n"
+            "    fill_mode = signal_bar_close (default) | next_bar_open"
         ),
         gotchas=[
             "Supertrend here uses the pandas-ta direction convention "
@@ -829,16 +1059,37 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "ADX drops below 15 (same exit rule as Strategy A)."
         ),
         algorithm_pseudocode=(
-            "on each 15-min bar close:\n"
-            "    update RSI14, ADX14\n"
-            "    if in_position:\n"
-            "        if ADX < adx_exit_threshold (default 15):  exit\n"
-            "        continue\n"
-            "    if not all indicators ready: continue\n"
-            "    if rsi_low_gate <= RSI <= rsi_high_gate\n"
-            "       and ADX > adx_entry_threshold (default 20)\n"
-            "       and ADX > ADX_prev:\n"
-            "        enter long, size = 100% of equity"
+            "Universe\n"
+            "    symbol     = configurable (default SPY)\n"
+            "    resolution = consolidated to resolution_minutes (default 15m)\n"
+            "\n"
+            "Indicators (Alpha — updated each bar at bar.end_time)\n"
+            "    RSI = RelativeStrengthIndex(rsi_period, Wilders)\n"
+            "    ADX = AverageDirectionalIndex(adx_period, Wilders)\n"
+            "\n"
+            "Warmup\n"
+            "    ~30 bars (longest dependency is ADX, Wilders-smoothed).\n"
+            "\n"
+            "Alpha — bar entry conditions (evaluated while flat)\n"
+            "    rsi_in_range = rsi_low_gate <= RSI <= rsi_high_gate\n"
+            "    trend_strong = ADX > adx_entry_threshold (default 20)\n"
+            "    adx_rising   = ADX > ADX[-1]    (strict; flat ADX does NOT count)\n"
+            "    ⇒ if all three: emit Insight(UP); enter long\n"
+            "\n"
+            "Alpha — bar exit conditions (evaluated while in trade)\n"
+            "    trend_weak = ADX < adx_exit_threshold (default 15)\n"
+            "    ⇒ if trend_weak: Liquidate(symbol)\n"
+            "\n"
+            "Risk Management — position survival rules\n"
+            "    pyramiding=1 — no scale-in while holding.\n"
+            "    no SL / no TP. Cleanest test of the RSI-range + ADX-strength\n"
+            "    combination — no MACD or Supertrend confounds.\n"
+            "\n"
+            "Portfolio Construction\n"
+            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
+            "\n"
+            "Execution\n"
+            "    fill_mode = signal_bar_close (default) | next_bar_open"
         ),
         gotchas=[
             "'ADX rising' is strictly greater than the prior bar. Flat ADX "
@@ -1029,7 +1280,35 @@ class EngineBacktestResponse(BaseModel):
     # Phase 1: Insight tracking — per-prediction scoring and aggregate analytics.
     insights: list[dict] = Field(default_factory=list)
     insight_summary: dict[str, Any] = Field(default_factory=dict)
+    # Auto-save study id, populated synchronously before returning so the
+    # Engine Lab can immediately enable the Replay tab without polling
+    # /api/studies for the latest row. Null when the save call failed
+    # (the run still succeeded — the persistence is best-effort).
+    study_id: int | None = None
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Phase callbacks
+#
+# Both the synchronous /backtest endpoint and the Jobs-system worker call
+# the same ``_execute_engine_backtest_core`` to do the actual run. They
+# differ only in how progress is reported: the sync path passes no-op
+# callbacks (the response is the only signal); the Jobs worker forwards
+# every phase/log into a ProgressEmitter that writes Redis events the
+# .NET SSE layer streams to the browser. Keeping this as a callback pair
+# avoids importing ProgressEmitter into the hot path.
+# ---------------------------------------------------------------------------
+PhaseCallback = Callable[[str], None]
+LogCallback = Callable[[str], None]
+
+
+def _noop_phase(_: str) -> None:
+    pass
+
+
+def _noop_log(_: str) -> None:
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -1303,13 +1582,38 @@ def get_data_availability(
 @router.post("/backtest", response_model=EngineBacktestResponse)
 def run_engine_backtest(
     request: EngineBacktestRequest,
-    background_tasks: BackgroundTasks,
 ) -> EngineBacktestResponse:
-    """Run a strategy through the LEAN-compatible backtest engine.
+    """Run a strategy through the LEAN-compatible backtest engine (synchronous).
 
-    The engine reads LEAN-format minute zips from the configured data root
-    and produces trades that reproduce LEAN's reference log bit-exactly
-    when the same strategy is run against the same data.
+    Used by tests, curl, and any caller that doesn't need streamed
+    progress. The Engine Lab UI uses the Jobs system instead — see
+    ``POST /api/jobs/engine_backtest`` (defined in the .NET layer) which
+    forwards to ``/api/jobs-internal/engine-backtest`` here.
+
+    The engine reads LEAN-format minute zips from the configured data
+    root and produces trades that reproduce LEAN's reference log
+    bit-exactly when the same strategy is run against the same data.
+    """
+    return execute_engine_backtest(
+        request=request,
+        on_phase=_noop_phase,
+        on_log=_noop_log,
+    )
+
+
+def execute_engine_backtest(
+    *,
+    request: EngineBacktestRequest,
+    on_phase: PhaseCallback,
+    on_log: LogCallback,
+) -> EngineBacktestResponse:
+    """Core backtest workflow shared by the sync POST and the Jobs worker.
+
+    Both call paths converge here. ``on_phase`` and ``on_log`` are
+    callbacks the worker uses to forward to a ProgressEmitter; the sync
+    path passes no-ops. Raises HTTPException for client errors; returns
+    an EngineBacktestResponse with ``success=False`` for engine
+    failures.
     """
     _run_start = time.time()
     registration = _STRATEGY_REGISTRY.get(request.strategy_name)
@@ -1319,10 +1623,6 @@ def run_engine_backtest(
             detail=(f"Unknown strategy '{request.strategy_name}'. Registered: {sorted(_STRATEGY_REGISTRY)}"),
         )
 
-    # Strategies declare which resolutions they accept. Reject up-front so
-    # the user gets a clear 400 instead of a cryptic mismatch deep inside
-    # the engine when a daily-only strategy is run against minute data (or
-    # vice versa).
     if request.resolution not in registration.supported_resolutions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1333,10 +1633,6 @@ def run_engine_backtest(
             ),
         )
 
-    # Validate ``request.params`` against the strategy's own schema. We do this
-    # explicitly rather than making ``params`` a typed field on the request,
-    # because different strategies have different parameter shapes and the
-    # request has to accept all of them.
     try:
         validated_params = registration.param_schema.model_validate(request.params)
     except ValidationError as exc:
@@ -1359,15 +1655,13 @@ def run_engine_backtest(
 
     strategy = registration.build(validated_params)
 
-    # Optional on-demand fetch: if the caller asked for auto_fetch and we
-    # know the symbol + date range, make sure the cache has everything the
-    # engine will try to read. The SPY fixture never needs this because it
-    # lives in the read-only reference mount and is already complete.
     if request.auto_fetch:
         symbol = getattr(validated_params, "symbol", None)
         start_override = request.start_date
         end_override = request.end_date
         if symbol and start_override and end_override:
+            on_phase("loading_bars")
+            on_log(f"Ensuring {symbol} {request.resolution} bars {start_override} → {end_override}")
             try:
                 from app.services.polygon_client import PolygonClientService
 
@@ -1405,9 +1699,6 @@ def run_engine_backtest(
                     error=f"auto_fetch failed: {exc}",
                 )
 
-    # Pick the reader class to match the requested resolution. Both
-    # readers share the same ``iter_bars(symbol, start, end)`` contract so
-    # the engine loop is unchanged — only the bar cadence differs.
     reader: LeanMinuteDataReader | LeanDailyDataReader
     if request.resolution == "daily":
         reader = LeanDailyDataReader(data_roots)
@@ -1426,9 +1717,6 @@ def run_engine_backtest(
         execution_config=execution_config,
     )
 
-    # The strategy's initialize() runs inside engine.run(). We need to
-    # apply overrides *after* initialize but *before* the main loop, so we
-    # wrap initialize to interleave the override step.
     original_initialize = strategy.initialize
 
     def _wrapped_initialize() -> None:
@@ -1437,10 +1725,14 @@ def run_engine_backtest(
 
     strategy.initialize = _wrapped_initialize  # type: ignore[assignment]
 
+    on_phase("simulating")
+    on_log(f"Running {request.strategy_name} on {getattr(validated_params, 'symbol', '?')} ({request.resolution})")
+
     try:
         result = engine.run(strategy)
     except Exception as exc:
         logger.exception("[ENGINE] Backtest failed for %s", request.strategy_name)
+        on_log(f"Engine error: {exc}")
         return EngineBacktestResponse(
             success=False,
             strategy_name=request.strategy_name,
@@ -1455,6 +1747,9 @@ def run_engine_backtest(
             win_rate=0.0,
             error=str(exc),
         )
+
+    on_phase("computing_stats")
+    on_log(f"Engine produced {len(getattr(strategy, 'trade_log', []) or [])} trades; computing statistics")
 
     trades = getattr(strategy, "trade_log", []) or []
     formatted = [_format_trade(i + 1, t) for i, t in enumerate(trades)]
@@ -1599,9 +1894,12 @@ def run_engine_backtest(
         insight_summary=result.insight_summary,
     )
 
-    # ── Auto-save to .NET backend (fire-and-forget) ──────────────
-    background_tasks.add_task(
-        _save_study_sync,
+    # ── Auto-save to .NET backend (synchronous so we can return the id) ──
+    # Used by the Engine Lab to enable the Replay tab right after a run
+    # without an extra round-trip to /api/studies?latest=true. The save
+    # itself is best-effort — a backend hiccup leaves study_id=None and
+    # logs the failure but does not fail the backtest response.
+    response.study_id = _save_study_sync(
         response=response,
         symbol=strategy.ctx.symbols[0] if strategy.ctx.symbols else "SPY",
         start_date=request.start_date or "",
@@ -1610,6 +1908,8 @@ def run_engine_backtest(
         params_json=json.dumps(request.params) if request.params else "{}",
         duration_ms=int((time.time() - _run_start) * 1000),
     )
+
+    on_log(f"Saved study {response.study_id}")
 
     return response
 
@@ -1626,8 +1926,13 @@ def _save_study_sync(
     resolution: str,
     params_json: str,
     duration_ms: int,
-) -> None:
-    """POST the backtest result to the .NET backend for persistence."""
+) -> int | None:
+    """POST the backtest result to the .NET backend for persistence.
+
+    Returns the saved study id so the Engine Lab can immediately enable
+    the Replay tab. Returns None when the save fails — the run itself
+    is unaffected; persistence is best-effort.
+    """
     from app.config import settings
 
     backend_url = getattr(settings, "BACKEND_URL", "http://localhost:5000")
@@ -1690,8 +1995,11 @@ def _save_study_sync(
         with httpx.Client(timeout=10.0) as client:
             resp = client.post(url, json=body)
             if resp.status_code < 300:
-                logger.info("[ENGINE] Study saved (id=%s)", resp.json().get("id"))
-            else:
-                logger.warning("[ENGINE] Study save failed: %s %s", resp.status_code, resp.text[:200])
+                payload = resp.json()
+                study_id = payload.get("id")
+                logger.info("[ENGINE] Study saved (id=%s)", study_id)
+                return int(study_id) if study_id is not None else None
+            logger.warning("[ENGINE] Study save failed: %s %s", resp.status_code, resp.text[:200])
     except Exception:
         logger.exception("[ENGINE] Study save request failed — study not persisted")
+    return None

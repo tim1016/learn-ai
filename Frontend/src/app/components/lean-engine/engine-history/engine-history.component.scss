@@ -23,19 +23,143 @@
     align-items: center;
     gap: 0.35rem;
     padding: 0.3rem 0.6rem;
-    font-size: 0.8rem;
-    border: 1px solid #cbd5e1;
-    background: #f8fafc;
+    font-size: 0.75rem;
+    border: 1px solid $border-light;
+    background: $bg-elevated;
     border-radius: 4px;
     cursor: pointer;
-    color: #1e293b;
+    color: $text-secondary;
 
     &:hover {
-      background: #e2e8f0;
-      border-color: #94a3b8;
+      background: $bg-hover;
+      border-color: $accent;
+      color: $accent;
     }
 
     .pi { font-size: 0.75rem; }
+  }
+}
+
+// ─── History toolbar ──────────────────────────────────
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+  padding: 0 2px;
+}
+
+.column-chooser {
+  position: relative;
+
+  .chooser-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.7rem;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: $radius;
+    color: $text-secondary;
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: border-color $t-ui, color $t-ui;
+
+    &:hover { border-color: $accent; color: $text-primary; }
+
+    .pi { font-size: 0.7rem; }
+  }
+
+  .chooser-panel {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    z-index: 1000;
+    min-width: 200px;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: $radius-md;
+    box-shadow: $shadow-pop;
+    padding: 0.5rem 0;
+  }
+
+  .chooser-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.25rem 0.75rem 0.5rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: $text-muted;
+    border-bottom: 1px solid $border;
+  }
+
+  .chooser-reset {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: $accent;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+
+    &:hover { color: $accent-hover; }
+  }
+
+  .chooser-section-label {
+    padding: 0.5rem 0.75rem 0.25rem;
+    font-family: $font-mono;
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: $accent;
+    opacity: 0.85;
+  }
+
+  .chooser-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+
+    & + .chooser-section-label { border-top: 1px solid $border; margin-top: 0.25rem; }
+
+    li label {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      padding: 0.3rem 0.85rem;
+      cursor: pointer;
+      color: $text-secondary;
+      font-size: 0.78rem;
+      transition: background $t-ui, color $t-ui;
+      border-left: 2px solid transparent;
+
+      &:hover {
+        background: $bg-hover;
+        color: $text-primary;
+        border-left-color: $accent;
+      }
+
+      input[type="checkbox"] { accent-color: $accent; }
+    }
+  }
+
+  .chooser-label { flex: 1; }
+
+  .chooser-type-tag {
+    font-family: $font-mono;
+    font-size: 0.58rem;
+    color: $text-muted;
+    background: rgba($accent, 0.08);
+    padding: 1px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.05em;
+    text-transform: lowercase;
   }
 }
 
@@ -48,8 +172,8 @@
 
 .history-summary {
   font-size: 0.72rem;
-  color: $text-muted;
-  margin-bottom: 0.5rem;
+  // Body text — lifted to $text-subtle for AA contrast on canvas.
+  color: $text-subtle;
   padding: 0 2px;
 }
 
