@@ -1,0 +1,33 @@
+{
+  "source": "Polygon /v3/reference/options/contracts + /v2/aggs",
+  "as_of_date": "2024-12-20",
+  "symbol": "SPY",
+  "spot": 591.15,
+  "rate": 0.0423968253968254,
+  "dividend": 0.011951349065381037,
+  "rate_source": "FRED",
+  "dividend_source": "Polygon TTM",
+  "expiries_in_window": [
+    21,
+    28,
+    35,
+    42
+  ],
+  "straddle": {
+    "below_30d": 28,
+    "above_30d": 35
+  },
+  "vix_style_iv30_act365": 0.17305460843066506,
+  "parametric_iv30": 0.15583619498680715,
+  "iv30_diff_bps": 172.1841344385791,
+  "half_spread_policy": "max($0.05, 0.5% of close); zero-bid below $0.05",
+  "n_contracts": 881,
+  "schema": {
+    "expiry_days": "int \u2014 calendar days to expiry from as_of_date",
+    "strike": "float \u2014 strike price",
+    "expiration_date": "ISO date string",
+    "contract_type": "'call' | 'put'",
+    "close": "float \u2014 Polygon daily close as of as_of_date",
+    "ticker": "Polygon contract ticker (O:SPY...)"
+  }
+}
