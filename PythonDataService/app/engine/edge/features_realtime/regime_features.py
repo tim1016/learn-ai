@@ -97,6 +97,9 @@ def build_ohlcv_features(
     )
 
 
+_IV_DERIVED_COLUMNS = ("d_iv_z", "iv_vol_z", "iv30_z", "skew_25d_z", "term_slope_z")
+
+
 def build_full_features(
     bars: pd.DataFrame,
     *,
@@ -106,15 +109,23 @@ def build_full_features(
     feature_window: int = 20,
     atr_window: int = 14,
     z_lookback: int = 60,
+    iv_feature_weight: float | pd.Series | None = None,
 ) -> pd.DataFrame:
     """Full regime feature matrix with optional IV-derived features.
 
-    When iv30 is supplied, two derived columns are appended:
+    When iv30 is supplied, three derived columns are appended:
+        iv30_z       — z-score of IV30
         d_iv_z       — z-score of ΔIV30 (vol-of-vol pace)
         iv_vol_z     — z-score of rolling-std(IV30, 20) (vol-of-vol level)
     skew_25d and term_slope are passed through z-scored if supplied.
 
     All inputs must share the bars index; columns absent or all-NaN are dropped.
+
+    Step F of the IV-ownership plan: ``iv_feature_weight`` ∈ [0, 1] (or a
+    Series of per-bar weights) scales every IV-derived column by the
+    weight before returning. Weight = 0 collapses the IV features to 0;
+    weight = 1 leaves them unchanged. The single source of truth for
+    this weight is ``app.engine.edge.confidence.regime_feature_weight``.
     """
     base = build_ohlcv_features(
         bars,
@@ -136,4 +147,22 @@ def build_full_features(
 
     if not extras:
         return base
+
+    if iv_feature_weight is not None:
+        weight = _coerce_iv_feature_weight(iv_feature_weight, bars.index)
+        for col_name in extras:
+            if col_name in _IV_DERIVED_COLUMNS:
+                extras[col_name] = extras[col_name] * weight
+
     return pd.concat([base, pd.DataFrame(extras, index=bars.index)], axis=1)
+
+
+def _coerce_iv_feature_weight(
+    weight: float | pd.Series, index: pd.Index
+) -> pd.Series:
+    """Accept either a scalar weight or a per-bar Series; emit a clamped Series."""
+    if isinstance(weight, pd.Series):
+        w = weight.reindex(index).fillna(0.0)
+    else:
+        w = pd.Series(float(weight), index=index)
+    return w.clip(lower=0.0, upper=1.0)
