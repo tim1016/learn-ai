@@ -5,7 +5,11 @@
 }
 
 .engine-docs {
-  padding: 0 1rem;
+  // No horizontal padding — sit flush inside the tabpanel like the
+  // Configure / Results / History tabs. The prior 1rem gutter
+  // produced a noticeable left/right offset versus the other tabs and
+  // contributed to the "different background" feel users reported.
+  padding: 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +75,9 @@
 
 .section-description {
   font-size: 0.875rem;
-  color: $text-muted;
+  // $text-muted is 3.1:1 (AA-large only). Lift to $text-subtle (5.2:1)
+  // so 14px body copy meets WCAG AA.
+  color: $text-subtle;
   margin: 0 0 1rem;
   max-width: 75ch;
 }
@@ -134,7 +140,8 @@
     display: block;
     font-size: 0.8125rem;
     font-weight: 600;
-    color: $text-muted;
+    // Was $text-muted (3.1:1, AA-large only). Lift for AA at 13px label.
+    color: $text-subtle;
     margin-bottom: 0.375rem;
   }
 

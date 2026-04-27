@@ -45,14 +45,41 @@ p {
 .negative { color: var(--bear); font-weight: 600; }
 .muted    { color: var(--text-muted); }
 
-.mono, code {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Fira Code", monospace;
+/* Tabular-num utilities. Apply to any element rendering a price,
+   percentage, count, ratio, or ID-like string so digits align in a
+   monospaced grid. Non-negotiable per design system. */
+.mono, .num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Inline code uses the mono stack but stays a "chip" — small bg, padding,
+   rounded. Scoped to <code> only; .mono is the bare utility. */
+code {
+  font-family: var(--font-mono);
   font-size: 0.8rem;
   background: var(--bg-elevated);
   padding: 0.1rem 0.3rem;
   border-radius: 4px;
   color: var(--text-primary);
 }
+
+/* Focus ring per design system. 2px accent ring with 1px offset so it
+   reads on dark surfaces without overlapping content edges. */
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* TV-style scrollbars — barely visible until hover. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-light);
+  border-radius: 5px;
+  border: 2px solid var(--bg-canvas);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 
 /* ── Card (dark surface) ── */
 .card {

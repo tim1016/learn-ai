@@ -9,6 +9,12 @@
 
 export type Resolution = "minute" | "hour" | "daily";
 
+/** Trading session filter. ``rth`` = regular hours (09:30–16:00 ET);
+ *  ``extended`` = pre + post-market (04:00–20:00 ET). The Engine Lab
+ *  consumer treats Extended as a UI preview today — the Python engine
+ *  still hardcodes RTH (see ``PythonDataService/app/routers/engine.py``). */
+export type Session = "rth" | "extended";
+
 export interface TickerRange {
   symbol: string;
   /** YYYY-MM-DD */
@@ -16,6 +22,8 @@ export interface TickerRange {
   /** YYYY-MM-DD */
   to: string;
   resolution: Resolution;
+  /** Defaults to ``rth`` when absent. */
+  session?: Session;
   autoFetch?: boolean;
 }
 
@@ -72,6 +80,30 @@ export interface Advisory {
    *  user input, only from well-known templates). */
   body: string;
   action?: AdvisoryAction;
+}
+
+/**
+ * Pick the single state that should be emphasized in the smart legend.
+ * Priority: hole > partial > complete > missing > none. Empty summary
+ * (no weekdays inspected) falls through to ``none``.
+ *
+ * The dominant chip renders tinted-bold; everything else renders as a
+ * dim outline so the user sees the verdict at a glance.
+ */
+export type DominantState =
+  | "complete"
+  | "partial"
+  | "hole"
+  | "missing"
+  | "none";
+
+export function dominantState(s: AvailabilitySummary): DominantState {
+  if (s.weekdays === 0) return "none";
+  if (s.hole > 0) return "hole";
+  if (s.partial > 0) return "partial";
+  if (s.missing > 0) return "missing";
+  if (s.complete > 0) return "complete";
+  return "none";
 }
 
 export function summarizeAvailability(

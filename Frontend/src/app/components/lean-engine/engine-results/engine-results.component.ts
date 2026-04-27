@@ -8,6 +8,12 @@ import { TooltipModule } from 'primeng/tooltip';
 import { LeanStatisticsComponent } from '../../strategy-lab/lean-statistics/lean-statistics.component';
 import { ReadinessScoreCardComponent } from '../readiness-score-card/readiness-score-card.component';
 import {
+  EngineChartComponent,
+  ChartBar,
+  EngineTradeForChart,
+  EquityCurvePoint,
+} from '../engine-chart/engine-chart.component';
+import {
   gradeSharpe, gradeSortino, gradeProfitFactor, gradeWinRate,
   gradeMaxDrawdown, gradeExpectancy, gradeNetProfit,
 } from '../metric-grade.util';
@@ -86,7 +92,10 @@ export interface EngineResultData {
 @Component({
   selector: 'app-engine-results',
   standalone: true,
-  imports: [CommonModule, FormsModule, TooltipModule, LeanStatisticsComponent, ReadinessScoreCardComponent],
+  imports: [
+    CommonModule, FormsModule, TooltipModule,
+    LeanStatisticsComponent, ReadinessScoreCardComponent, EngineChartComponent,
+  ],
   templateUrl: './engine-results.component.html',
   styleUrls: ['./engine-results.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -95,8 +104,38 @@ export class EngineResultsComponent {
   result = input.required<EngineResultData>();
   symbol = input<string>('SPY');
 
+  /** Bars + trade markers for the price chart panel. Optional —
+   *  when not supplied, the chart panel renders empty placeholders. */
+  readonly chartBars = input<ChartBar[]>([]);
+  readonly chartTrades = input<EngineTradeForChart[]>([]);
+  readonly equityCurve = input<EquityCurvePoint[]>([]);
+
+  /** Run timestamp string ("2m ago", "just now", etc.). Optional —
+   *  the parent passes a precomputed value. */
+  readonly runStamp = input<string>('just now');
+
+  /** Backtest range + resolution for the run-summary chips. Optional —
+   *  parent passes whichever it has. */
+  readonly fromDate = input<string>('');
+  readonly toDate = input<string>('');
+  readonly resolution = input<string>('');
+
+  /** Convenience: profitable / lossy verdict drives the status-pulse
+   *  colour in the run-summary bar. */
+  readonly profitable = computed(() => this.result().net_profit >= 0);
+  readonly rangeLabel = computed(() => {
+    const f = this.fromDate(); const t = this.toDate();
+    return f && t ? `${f} → ${t}` : '';
+  });
+
   showTradeLog = signal(false);
   selectedTimezone = signal<string>('UTC');
+
+  /** Drives the "Fees & analytics" drawer toggle. The fee block is
+   *  decision-support, not a primary KPI — kept hidden by default to
+   *  preserve vertical density on large screens. */
+  showFeeDrawer = signal(false);
+  toggleFeeDrawer(): void { this.showFeeDrawer.update(v => !v); }
 
   leanStats = computed(() => this.result().lean_statistics ?? null);
 

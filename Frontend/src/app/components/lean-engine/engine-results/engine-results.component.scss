@@ -1,6 +1,262 @@
 @use '../../../styles/tokens' as *;
 
-// ─── Info Callout ─────────────────────────────────────
+:host {
+  display: block;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Run summary bar — top of Results tab
+//
+// One-line orientation: status pulse + symbol/range/strategy chips +
+// re-run/share buttons. Replaces the prior info-callout, gives the
+// user immediate context about which run they're looking at.
+// ═══════════════════════════════════════════════════════════════════
+.run-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin: 0 0 12px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 8px;
+  font-size: 11px;
+  color: $text-subtle;
+
+  &__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    color: $bull;
+
+    &--bear { color: $bear; }
+  }
+
+  &__pulse {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
+    animation: run-summary-pulse 2.4s ease-in-out infinite;
+  }
+
+  &__verdict { color: inherit; }
+
+  &__divider {
+    width: 1px;
+    height: 16px;
+    background: $border;
+  }
+
+  &__chip {
+    padding: 3px 8px;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: 3px;
+    color: $text-secondary;
+    font-size: 11px;
+  }
+
+  &__spacer { flex: 1; }
+
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 10px;
+    background: transparent;
+    border: 1px solid $border-light;
+    border-radius: 3px;
+    color: $text-secondary;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+
+    &:hover:not(:disabled) {
+      background: $bg-hover;
+      color: $text-primary;
+    }
+
+    &:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .pi { font-size: 10px; }
+  }
+}
+
+@keyframes run-summary-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Hero columns — three lead metrics
+//
+// Replaces the prior 6+2-card grid. Net P&L · Sharpe · Max DD as the
+// always-visible lead; the rest move into the secondary drawer.
+// ═══════════════════════════════════════════════════════════════════
+.hero-cols {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 0 0 12px;
+
+  &--four {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  @media (max-width: 1100px) {
+    grid-template-columns: repeat(2, 1fr);
+    &--four { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 640px) {
+    grid-template-columns: 1fr;
+    &--four { grid-template-columns: 1fr; }
+  }
+}
+
+.hero-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px 14px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-top: 3px solid $border-light;
+  border-radius: 8px;
+  min-width: 0;
+
+  // Traffic-light stripe by grade band — same logic as old .hero-card
+  &[data-band="green"]     { border-top-color: $bull; }
+  &[data-band="amber"]     { border-top-color: $warn; }
+  &[data-band="red"]       { border-top-color: $bear; }
+  &[data-band="skeptical"] { border-top-color: #a855f7; }
+  &[data-band="na"]        { border-top-color: $text-muted; }
+
+  &__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+
+  &__label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: $text-subtle;
+  }
+
+  &__sub {
+    font-size: 10px;
+    color: $text-muted;
+    text-align: right;
+  }
+
+  &__value {
+    font-size: 22px;
+    font-weight: 700;
+    color: $text-primary;
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+
+    &.positive { color: $bull; }
+    &.negative { color: $bear; }
+  }
+
+  &__delta {
+    font-size: 11px;
+    color: $text-subtle;
+
+    &.positive { color: $bull; }
+    &.negative { color: $bear; }
+  }
+
+  &__verdict {
+    font-size: 11px;
+    color: $text-secondary;
+    line-height: 1.4;
+    margin-top: 6px;
+    min-height: 2.2em;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 1.6fr / 1fr split — chart + readiness sidebar
+// ═══════════════════════════════════════════════════════════════════
+.results-split {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 0 0 12px;
+
+  @media (max-width: 1100px) {
+    grid-template-columns: 1fr;
+  }
+
+  &__chart, &__side { min-width: 0; }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Secondary drawer — collapsed by default
+// ═══════════════════════════════════════════════════════════════════
+.secondary-drawer,
+.lean-stats-drawer {
+  margin: 0 0 12px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 8px;
+  overflow: hidden;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    color: $text-primary;
+    font-size: 13px;
+    font-weight: 600;
+
+    &::-webkit-details-marker { display: none; }
+    &:hover { background: $bg-hover; }
+
+    .pi { font-size: 11px; color: $text-muted; }
+  }
+
+  &__hint {
+    margin-left: auto;
+    font-family: $font-mono;
+    font-size: 11px;
+    color: $text-subtle;
+    font-weight: 400;
+  }
+
+  &__body {
+    padding: 12px 14px 14px;
+    border-top: 1px solid $border;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Legacy "info-callout" — preserved in case a stray ref still exists.
+// New layout uses .run-summary instead.
+// ═══════════════════════════════════════════════════════════════════
 .info-callout {
   display: flex;
   gap: 0.75rem;

@@ -171,10 +171,264 @@
 }
 
 .history-summary {
-  font-size: 0.72rem;
-  // Body text — lifted to $text-subtle for AA contrast on canvas.
+  font-size: 12px;
   color: $text-subtle;
   padding: 0 2px;
+
+  strong { color: $text-primary; font-weight: 600; }
+  &__sep { color: $text-muted; margin: 0 4px; }
+}
+
+// ── Sort + view-mode controls in the toolbar ──────────────────────
+.history-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sort-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: $text-subtle;
+
+  &__label {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 9px;
+    font-weight: 700;
+  }
+
+  select {
+    height: 28px;
+    padding: 0 6px;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: $radius;
+    color: $text-primary;
+    font-size: 11px;
+    font-family: inherit;
+
+    &:focus { outline: none; border-color: $accent; }
+  }
+}
+
+.sort-direction {
+  width: 28px;
+  height: 28px;
+  background: $bg-elevated;
+  border: 1px solid $border-light;
+  border-radius: $radius;
+  color: $text-secondary;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background $t-ui, color $t-ui;
+
+  &:hover { background: $bg-hover; color: $text-primary; }
+  .pi { font-size: 12px; }
+}
+
+.view-mode {
+  display: inline-flex;
+  height: 28px;
+  border: 1px solid $border-light;
+  border-radius: $radius;
+  overflow: hidden;
+
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 10px;
+    background: transparent;
+    border: none;
+    border-right: 1px solid $border-light;
+    color: $text-secondary;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+
+    &:last-child { border-right: none; }
+    &:hover { background: $bg-hover; color: $text-primary; }
+    &--active { background: rgba($accent, 0.15); color: $accent; }
+    .pi { font-size: 10px; }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Card view
+// ═══════════════════════════════════════════════════════════════════
+.study-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.study-card {
+  display: grid;
+  grid-template-columns: 1fr 200px;
+  gap: 16px;
+  align-items: stretch;
+  padding: 12px 14px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: $radius-md;
+  cursor: pointer;
+  transition: border-color $t-ui, background $t-ui;
+
+  &:hover {
+    border-color: $border-light;
+    background: rgba(0, 0, 0, 0.15);
+  }
+
+  &:focus-visible {
+    outline: 2px solid $accent;
+    outline-offset: 1px;
+  }
+
+  &__main {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  &__head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  &__strategy {
+    font-size: 14px;
+    font-weight: 600;
+    color: $text-primary;
+    margin-right: 4px;
+  }
+
+  &__chip {
+    padding: 2px 8px;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: $radius-sm;
+    font-size: 10px;
+    color: $text-subtle;
+  }
+
+  &__params {
+    font-size: 10px;
+    color: $text-muted;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    margin-top: 2px;
+  }
+
+  &__metric {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 1px;
+
+    &-label {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: $text-muted;
+    }
+
+    strong {
+      font-size: 13px;
+      font-weight: 700;
+      color: $text-primary;
+
+      &.positive { color: $bull; }
+      &.negative { color: $bear; }
+    }
+  }
+
+  &__side {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+
+  &__date {
+    font-size: 11px;
+    color: $text-muted;
+  }
+
+  &__actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  &__notes {
+    width: 100%;
+    text-align: right;
+
+    .notes-input {
+      width: 100%;
+      text-align: left;
+    }
+  }
+}
+
+.notes-edit {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: $text-subtle;
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: inherit;
+
+  &:hover { color: $text-primary; }
+
+  .pi { font-size: 9px; opacity: 0.7; }
+
+  .notes-text {
+    font-style: italic;
+    text-align: right;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.notes-add {
+  background: transparent;
+  border: 1px dashed $border-light;
+  border-radius: $radius-sm;
+  padding: 2px 8px;
+  color: $text-muted;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+
+  &:hover { color: $text-secondary; border-color: $border-strong; }
+  .pi { font-size: 8px; }
 }
 
 // ─── Table ────────────────────────────────────────────

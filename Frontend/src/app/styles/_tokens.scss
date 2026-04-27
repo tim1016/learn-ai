@@ -171,6 +171,11 @@ $container-lg: 1400px;
   --ls-tight: -0.02em;
   --ls-caps:  0.05em;
 
+  // Density multiplier — comfortable = 1, compact = 0.85.
+  // Pinned to 1 for production per design hand-off
+  // (docs/architecture/design-handoff-engine-lab-2026-04-26.md).
+  --density: 1;
+
   // Transitions
   --t-fast: #{$t-fast};
   --t-ui:   #{$t-ui};

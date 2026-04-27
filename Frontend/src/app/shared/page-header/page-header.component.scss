@@ -12,6 +12,30 @@
   gap: var(--space-5);
   padding: var(--space-2) 0 var(--space-4);
   border-bottom: 1px solid rgba(136, 146, 168, 0.12); // hairline over $bg-canvas
+
+  // When a tab strip sits immediately under the header (Engine Lab,
+  // Data Lab) we want them to read as a single SubNav unit per the
+  // design hand-off. Drop the hairline + tighten spacing so the two
+  // share a continuous bottom border.
+  &--with-tabs {
+    border-bottom: none;
+    padding-bottom: var(--space-2);
+    margin-bottom: 0;
+  }
+}
+
+.page-title-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: var(--space-2);
+  background: var(--accent-faint);
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  font-size: 1rem;
+  vertical-align: -0.2em;
 }
 
 .page-header-inner {

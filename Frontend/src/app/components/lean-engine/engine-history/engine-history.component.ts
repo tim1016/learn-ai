@@ -1,6 +1,6 @@
 import {
   Component, ChangeDetectionStrategy, OnInit,
-  computed, inject, output, signal,
+  computed, effect, inject, output, signal,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -134,6 +134,47 @@ export class EngineHistoryComponent implements OnInit {
   /** Open/closed state for the column-chooser dropdown. */
   readonly chooserOpen = signal(false);
 
+  /** Card vs table view. Cards are the default — better readability and
+   *  matches the design hand-off. The table is preserved as a power-user
+   *  alternative since it surfaces every column and supports the
+   *  per-column chooser. Persisted via localStorage. */
+  readonly viewMode = signal<'card' | 'table'>(this.loadViewMode());
+
+  private loadViewMode(): 'card' | 'table' {
+    try {
+      const v = localStorage.getItem('engine-history.viewMode.v1');
+      return v === 'table' ? 'table' : 'card';
+    } catch {
+      return 'card';
+    }
+  }
+
+  constructor() {
+    // Persist view-mode changes so the user's preference survives reloads.
+    effect(() => {
+      try {
+        localStorage.setItem('engine-history.viewMode.v1', this.viewMode());
+      } catch {
+        // Quota / private mode — non-fatal.
+      }
+    });
+  }
+
+  changeSortColumn(column: string): void {
+    this.sort.update((s) => ({ column, direction: s.direction }));
+    this.page.set(1);
+    this.loadStudies();
+  }
+
+  toggleSortDirection(): void {
+    this.sort.update((s) => ({
+      column: s.column,
+      direction: s.direction === 'asc' ? 'desc' : 'asc',
+    }));
+    this.page.set(1);
+    this.loadStudies();
+  }
+
   toggleChooser(): void {
     this.chooserOpen.update(v => !v);
   }
@@ -222,6 +263,26 @@ export class EngineHistoryComponent implements OnInit {
     if (s.column !== column) return 'pi-sort-alt';
     return s.direction === 'asc' ? 'pi-sort-amount-up' : 'pi-sort-amount-down';
   }
+
+  /** Friendly label for the active sort column. The backend sort key
+   *  (e.g. ``executedat``) is opaque to the user; we resolve it back
+   *  through the column registry, with a fallback for ``executedat``
+   *  which doesn't have its own column row. */
+  readonly sortLabel = computed(() => {
+    const key = this.sort().column;
+    if (key === 'executedat') return 'Run date';
+    const col = this.allColumns.find(c => c.sortable === key);
+    return col?.label ?? key;
+  });
+
+  /** Friendly direction for the toolbar summary — date columns read
+   *  "newest/oldest first"; everything else reads "highest/lowest first". */
+  readonly sortDirectionLabel = computed(() => {
+    const isDate = this.sort().column === 'executedat';
+    const desc = this.sort().direction === 'desc';
+    if (isDate) return desc ? 'newest first' : 'oldest first';
+    return desc ? 'highest first' : 'lowest first';
+  });
 
   onRowClick(study: StudyListItem): void {
     this.studySelected.emit(study.id);

@@ -11,7 +11,7 @@
  * is 1:1 with its inputs via signals + `@for` — no branching worth
  * asserting on at the markup level.
  */
-import { computeAdvisories, summarizeAvailability, weekdaysBetween } from './ticker-range-picker.types';
+import { computeAdvisories, dominantState, summarizeAvailability, weekdaysBetween } from './ticker-range-picker.types';
 
 describe('weekdaysBetween', () => {
   it('counts Mon–Fri inclusive of both endpoints', () => {
@@ -114,5 +114,27 @@ describe('computeAdvisories', () => {
       { complete: 17, partial: 0, hole: 0, missing: 0, weekdays: 17 },
     );
     expect(advisories).toEqual([]);
+  });
+});
+
+describe('dominantState', () => {
+  it('returns "none" when no weekdays inspected', () => {
+    expect(dominantState({ complete: 0, partial: 0, hole: 0, missing: 0, weekdays: 0 })).toBe('none');
+  });
+
+  it('promotes "hole" over everything else', () => {
+    expect(dominantState({ complete: 10, partial: 2, hole: 1, missing: 1, weekdays: 14 })).toBe('hole');
+  });
+
+  it('returns "partial" when no holes but partials exist', () => {
+    expect(dominantState({ complete: 8, partial: 2, hole: 0, missing: 0, weekdays: 10 })).toBe('partial');
+  });
+
+  it('returns "missing" when only missing days remain', () => {
+    expect(dominantState({ complete: 0, partial: 0, hole: 0, missing: 5, weekdays: 5 })).toBe('missing');
+  });
+
+  it('returns "complete" when everything is on disk', () => {
+    expect(dominantState({ complete: 21, partial: 0, hole: 0, missing: 0, weekdays: 21 })).toBe('complete');
   });
 });

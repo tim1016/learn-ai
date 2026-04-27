@@ -26,33 +26,38 @@
   }
 }
 
-// ─── Tabs Override ────────────────────────────────────
+// ─── Tabs Override — SubNav treatment per design hand-off ─────────
+// Tabs sit directly under the page header and share its bottom hairline,
+// reading as a continuous SubNav unit instead of as a separate card.
+// Active tab keeps the body text in $text-primary and uses a 2px accent
+// underline as the only colour cue (designer's specification).
 ::ng-deep .p-tabs {
   .p-tablist {
-    background: $bg-surface;
-    border: 1px solid $border;
-    border-radius: 8px 8px 0 0;
-    padding: 0 0.5rem;
-    // Sit flush against the page-header bottom hairline so the page
-    // reads as a continuous run instead of three competing borders.
-    margin-top: 0.25rem;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid $border;
+    border-radius: 0;
+    padding: 0;
+    height: var(--subnav-h);
+    margin-top: 0;
   }
 
   .p-tab {
-    // Inactive tab labels need to meet AA against $bg-surface — bump
-    // from $text-muted (3.1:1) to $text-subtle (5.2:1).
     color: $text-subtle;
     font-size: 0.82rem;
     font-weight: 600;
-    padding: 0.75rem 1rem;
+    padding: 0 0.75rem;
+    height: 100%;
     gap: 6px;
     border: none;
     background: transparent;
+    transition: color $t-ui;
 
     &:hover:not(.p-disabled) { color: $text-primary; }
-    &.p-tab-active { color: $accent; border-bottom: 2px solid $accent; }
-    // Disabled state — drop to text-muted (still 3:1, AA-large only)
-    // without compounding opacity that would push it under 2:1.
+    &.p-tab-active {
+      color: $text-primary;
+      border-bottom: 2px solid $accent;
+    }
     &.p-disabled {
       color: $text-muted;
       opacity: 0.7;
