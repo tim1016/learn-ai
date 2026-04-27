@@ -28,6 +28,11 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.engine.edge.confidence import (
+    DEFAULT_CONFIDENCE_FLOOR,
+    confidence_with_explanation,
+    regime_feature_weight,
+)
 from app.engine.edge.cross_asset_runner import (
     STRATEGY_REGISTRY,
     CrossAssetRunRequest,
@@ -46,6 +51,7 @@ from app.engine.edge.features_realtime.realized_vol import (
     yang_zhang,
 )
 from app.engine.edge.features_realtime.regime_features import (
+    build_full_features,
     build_ohlcv_features,
 )
 from app.engine.edge.labels_oracle.forward_rv import forward_rv
@@ -97,7 +103,18 @@ class RealizedVsIvSeriesRequest(BaseModel):
     bars: list[BarPayload]
     iv_series: list[dict] | None = Field(
         None,
-        description="Optional [{ts, iv30}] history. iv30 must be ACT/365 (the solver's native basis); the router converts to TRD/252 before VRP.",
+        description=(
+            "Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}] history. "
+            "iv30 must be ACT/365 (the solver's native basis); the router converts to TRD/252 before VRP. "
+            "When health_score and variance_contribution_synthetic are supplied, the response includes "
+            "per-bar confidence and the VRP signal is gated by it (Step E of IV-ownership plan)."
+        ),
+    )
+    confidence_floor: float = Field(
+        DEFAULT_CONFIDENCE_FLOOR,
+        ge=0.0,
+        le=1.0,
+        description="Hard-gate floor: signals are forced to 0 where confidence < floor.",
     )
 
 
@@ -112,6 +129,13 @@ class RealizedVsIvSeriesResponse(BaseModel):
     rv_hf_forward: list[float | None]
     vrp_forward: list[float | None]
     vrp_z: list[float | None]
+    # Step E additions — populated only when caller supplies per-bar
+    # health_score / variance_contribution_synthetic in iv_series.
+    iv_source: str = "caller_supplied"
+    confidence: list[float | None] | None = None
+    vrp_z_scaled: list[float | None] | None = None
+    floor_gated: list[bool] | None = None
+    explanation: dict | None = None
     coverage: dict
 
 
@@ -136,10 +160,7 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
             rv_trailing[key] = _series_to_jsonable(trailing)
             rv_forward[key] = _series_to_jsonable(fwd)
 
-    if req.iv_series:
-        iv = pd.Series({int(p["ts"]): float(p["iv30"]) for p in req.iv_series}).reindex(bars.index)
-    else:
-        iv = pd.Series(index=bars.index, dtype=float)
+    iv, confidence = _parse_iv_series(req.iv_series, bars.index)
 
     # HF RV (TRD/252) for VRP — for 15-min bars uses two-component HF; for daily
     # bars falls back to YZ at 21-day window (no intraday detail to exploit).
@@ -149,7 +170,26 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
     iv_trd252 = _convert_iv_to_trd252(iv, req.tenor_days)
 
     vrp_fwd = compute_vrp(iv_trd252.fillna(np.nan), rv_hf_fwd)
-    sig = vrp_signal(iv=iv_trd252.ffill(), rv=rv_hf_fwd.ffill(), lookback=min(252, len(bars) - 1))
+    sig = vrp_signal(
+        iv=iv_trd252.ffill(),
+        rv=rv_hf_fwd.ffill(),
+        lookback=min(252, len(bars) - 1),
+        confidence=confidence,
+        confidence_floor=req.confidence_floor,
+    )
+
+    explanation = None
+    if confidence is not None and confidence.notna().any():
+        latest_idx = confidence.dropna().index.max()
+        latest_h = float(confidence.loc[latest_idx])
+        # Synthesize a representative breakdown from the latest non-NaN point.
+        # The full per-bar history of (health, vcs) lives in iv_series; this is
+        # the "what is the system telling me right now" summary for the UI banner.
+        explanation = {
+            "latest_confidence": latest_h,
+            "floor": req.confidence_floor,
+            "gated_now": bool(latest_h < req.confidence_floor),
+        }
 
     coverage = {
         "n_bars": len(bars),
@@ -158,6 +198,7 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
         "forward_nan_bars": int(rv_hf_fwd.isna().sum()),
         "session": req.session,
         "vrp_basis": "TRD/252 (IV converted from ACT/365 via NYSE calendar)",
+        "has_confidence": confidence is not None,
     }
     return RealizedVsIvSeriesResponse(
         symbol=req.symbol,
@@ -170,8 +211,78 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
         rv_hf_forward=_series_to_jsonable(rv_hf_fwd),
         vrp_forward=_series_to_jsonable(vrp_fwd),
         vrp_z=_series_to_jsonable(sig.vrp_z),
+        iv_source="caller_supplied" if req.iv_series else "absent",
+        confidence=_series_to_jsonable(sig.confidence) if sig.confidence is not None else None,
+        vrp_z_scaled=_series_to_jsonable(sig.vrp_z_scaled) if sig.vrp_z_scaled is not None else None,
+        floor_gated=[bool(v) for v in sig.floor_gated.tolist()] if sig.floor_gated is not None else None,
+        explanation=explanation,
         coverage=coverage,
     )
+
+
+def _parse_iv_series_for_regime(
+    iv_series: list[dict] | None, bars_index: pd.Index
+) -> tuple[pd.Series | None, pd.Series | None]:
+    """Parse iv_series for the regime route — returns (iv30, feature_weight).
+
+    When the caller supplies ``health_score`` / ``variance_contribution_synthetic``
+    alongside ``iv30``, this builds a per-bar feature weight via Step F's
+    ``regime_feature_weight`` formula. When only iv30 is supplied,
+    ``feature_weight`` is None (default behavior — full weight).
+    """
+    if not iv_series:
+        return None, None
+
+    iv_map = {int(p["ts"]): float(p["iv30"]) for p in iv_series}
+    iv = pd.Series(iv_map).reindex(bars_index)
+
+    has_health = any("health_score" in p for p in iv_series)
+    has_vcs = any("variance_contribution_synthetic" in p for p in iv_series)
+    if not (has_health or has_vcs):
+        return iv, None
+
+    weight_map: dict[int, float] = {}
+    for p in iv_series:
+        h = float(p.get("health_score", 1.0))
+        s = float(p.get("variance_contribution_synthetic", 0.0))
+        weight_map[int(p["ts"])] = regime_feature_weight(
+            health_score=h, variance_contribution_synthetic=s
+        )
+    weight = pd.Series(weight_map).reindex(bars_index).fillna(0.0)
+    return iv, weight
+
+
+def _parse_iv_series(
+    iv_series: list[dict] | None, bars_index: pd.Index
+) -> tuple[pd.Series, pd.Series | None]:
+    """Parse the optional iv_series payload.
+
+    Returns (iv, confidence). When the caller supplies per-bar
+    ``health_score`` and/or ``variance_contribution_synthetic`` alongside
+    ``iv30``, the function builds a per-bar confidence series via
+    ``confidence_with_explanation``. Otherwise ``confidence`` is None and
+    the legacy ungated path runs.
+    """
+    if not iv_series:
+        return pd.Series(index=bars_index, dtype=float), None
+
+    iv_map = {int(p["ts"]): float(p["iv30"]) for p in iv_series}
+    iv = pd.Series(iv_map).reindex(bars_index)
+
+    has_health = any("health_score" in p for p in iv_series)
+    has_vcs = any("variance_contribution_synthetic" in p for p in iv_series)
+    if not (has_health or has_vcs):
+        return iv, None
+
+    conf_map: dict[int, float] = {}
+    for p in iv_series:
+        h = float(p.get("health_score", 1.0))
+        s = float(p.get("variance_contribution_synthetic", 0.0))
+        conf_map[int(p["ts"])] = confidence_with_explanation(
+            health_score=h, variance_contribution_synthetic=s
+        ).confidence
+    confidence = pd.Series(conf_map).reindex(bars_index)
+    return iv, confidence
 
 
 class SignalsRequest(RealizedVsIvSeriesRequest):
@@ -277,6 +388,14 @@ class RegimeClusterBody(BaseModel):
     p_min: float = 0.7
     min_run_length: int = 5
     bars: list[BarPayload]
+    iv_series: list[dict] | None = Field(
+        None,
+        description=(
+            "Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}]. "
+            "When supplied, IV-derived features (iv30_z, d_iv_z, iv_vol_z) are added "
+            "to the regime feature matrix and weighted by regime_feature_weight (Step F)."
+        ),
+    )
 
 
 @router.post("/regimes/cluster")
@@ -285,7 +404,11 @@ async def regimes_cluster(body: RegimeClusterBody) -> dict:
     if len(bars) < 80:
         raise HTTPException(400, "need at least 80 bars to cluster regimes")
 
-    feats = build_ohlcv_features(bars).dropna()
+    iv30, weight = _parse_iv_series_for_regime(body.iv_series, bars.index)
+    if iv30 is not None:
+        feats = build_full_features(bars, iv30=iv30, iv_feature_weight=weight).dropna()
+    else:
+        feats = build_ohlcv_features(bars).dropna()
     X = feats.to_numpy(dtype=np.float64)
     out: dict = {"symbol": body.symbol, "ts": [int(t) for t in feats.index.tolist()]}
 

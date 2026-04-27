@@ -3,12 +3,14 @@
   "compilerOptions": {
     "outDir": "./out-tsc/spec",
     "types": ["vitest/globals"],
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "resolveJsonModule": true
   },
   "include": [
     "src/**/*.spec.ts",
     "src/**/*.d.ts",
-    "src/testing/**/*.ts"
+    "src/testing/**/*.ts",
+    "src/testing/**/*.json"
   ],
   "exclude": []
 }
