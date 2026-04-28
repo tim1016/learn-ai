@@ -171,7 +171,7 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
         recorded = _iv_series_from_recorder(req.symbol, bars.index)
         iv_series_for_parse = recorded if recorded else None
         iv_source_label = "recorder" if recorded else "absent"
-    iv, confidence = _parse_iv_series(iv_series_for_parse, bars.index)
+    iv, confidence, health_imputed = _parse_iv_series(iv_series_for_parse, bars.index)
 
     # HF RV (TRD/252) for VRP — for 15-min bars uses two-component HF; for daily
     # bars falls back to YZ at 21-day window (no intraday detail to exploit).
@@ -196,10 +196,18 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
         # Synthesize a representative breakdown from the latest non-NaN point.
         # The full per-bar history of (health, vcs) lives in iv_series; this is
         # the "what is the system telling me right now" summary for the UI banner.
+        # ``health_imputed_now`` propagates the imputed-prior flag from
+        # _parse_iv_series so the UI can show "confidence based on imputed
+        # health_score" rather than treat the latest number as authoritative.
+        if health_imputed is not None and latest_idx in health_imputed.index:
+            health_imputed_now = bool(health_imputed.loc[latest_idx])
+        else:
+            health_imputed_now = False
         explanation = {
             "latest_confidence": latest_h,
             "floor": req.confidence_floor,
             "gated_now": bool(latest_h < req.confidence_floor),
+            "health_imputed_now": health_imputed_now,
         }
 
     coverage = {
@@ -239,9 +247,10 @@ def _iv_series_from_recorder(symbol: str, bars_index: pd.Index) -> list[dict]:
     Pulls ``variance_contribution_synthetic`` from ``iv_provenance`` when
     present so downstream confidence gating runs unchanged. ``health_score``
     is intentionally not synthesized — recorder provenance does not carry it,
-    and ``_parse_iv_series`` defaults missing health to 1.0, which means
-    "the slot was successfully captured at its scheduled time" — a defensible
-    treatment of recorder-sourced data without inventing a health number.
+    and ``_parse_iv_series`` applies a conservative imputed-prior of 0.5 to
+    bars without an explicit health number, surfacing the imputed-ness via
+    ``health_imputed_now`` on the response so the UI can flag the bar
+    rather than treat the confidence as authoritative.
 
     Returns ``[]`` when the recorder has nothing in the window; the caller
     treats that as ``iv_source="absent"``.
@@ -291,9 +300,13 @@ def _parse_iv_series_for_regime(
     if not (has_health or has_vcs):
         return iv, None
 
+    # Same imputed-prior policy as _parse_iv_series — see that docstring for
+    # the rationale. When health is not supplied, we default to 0.5 (a
+    # conservative prior); the regime route weights features down accordingly
+    # rather than treating an absent number as "full health".
     weight_map: dict[int, float] = {}
     for p in iv_series:
-        h = float(p.get("health_score", 1.0))
+        h = float(p.get("health_score", 0.5))
         s = float(p.get("variance_contribution_synthetic", 0.0))
         weight_map[int(p["ts"])] = regime_feature_weight(
             health_score=h, variance_contribution_synthetic=s
@@ -304,17 +317,29 @@ def _parse_iv_series_for_regime(
 
 def _parse_iv_series(
     iv_series: list[dict] | None, bars_index: pd.Index
-) -> tuple[pd.Series, pd.Series | None]:
+) -> tuple[pd.Series, pd.Series | None, pd.Series | None]:
     """Parse the optional iv_series payload.
 
-    Returns (iv, confidence). When the caller supplies per-bar
+    Returns ``(iv, confidence, health_imputed)``. When the caller supplies per-bar
     ``health_score`` and/or ``variance_contribution_synthetic`` alongside
     ``iv30``, the function builds a per-bar confidence series via
-    ``confidence_with_explanation``. Otherwise ``confidence`` is None and
+    ``confidence_with_explanation``. Otherwise ``confidence`` is ``None`` and
     the legacy ungated path runs.
+
+    **Imputed-prior policy for missing ``health_score``.** When ``vcs`` is
+    supplied but ``health_score`` is omitted (the typical recorder-fallback
+    shape — recorder provenance does not carry a health number), we use a
+    conservative prior of ``0.5`` rather than the previous ``1.0``. Defaulting
+    to ``1.0`` was a "defensible-looking but wrong" synthesis: it encoded
+    "fully trusted stability" with zero evidence, which is exactly the
+    contradiction we used to reject mapping ``strike_coverage_score`` 1:1 to
+    ``health_score``. The imputed-ness is surfaced via the returned
+    ``health_imputed`` series so consumers can flag the bar visually rather
+    than treat it as authoritative. See
+    ``docs/architecture/iv-ownership-research.md`` Reviewer Feedback Log.
     """
     if not iv_series:
-        return pd.Series(index=bars_index, dtype=float), None
+        return pd.Series(index=bars_index, dtype=float), None, None
 
     iv_map = {int(p["ts"]): float(p["iv30"]) for p in iv_series}
     iv = pd.Series(iv_map).reindex(bars_index)
@@ -322,17 +347,21 @@ def _parse_iv_series(
     has_health = any("health_score" in p for p in iv_series)
     has_vcs = any("variance_contribution_synthetic" in p for p in iv_series)
     if not (has_health or has_vcs):
-        return iv, None
+        return iv, None, None
 
     conf_map: dict[int, float] = {}
+    imputed_map: dict[int, bool] = {}
     for p in iv_series:
-        h = float(p.get("health_score", 1.0))
+        ts = int(p["ts"])
+        imputed_map[ts] = "health_score" not in p
+        h = float(p.get("health_score", 0.5))
         s = float(p.get("variance_contribution_synthetic", 0.0))
-        conf_map[int(p["ts"])] = confidence_with_explanation(
+        conf_map[ts] = confidence_with_explanation(
             health_score=h, variance_contribution_synthetic=s
         ).confidence
     confidence = pd.Series(conf_map).reindex(bars_index)
-    return iv, confidence
+    health_imputed = pd.Series(imputed_map).reindex(bars_index)
+    return iv, confidence, health_imputed
 
 
 class SignalsRequest(RealizedVsIvSeriesRequest):

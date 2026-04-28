@@ -1,30 +1,27 @@
-"""Multi-snapshot IV recorder — Step D of the IV-ownership plan.
+"""Multi-snapshot IV recorder.
 
-Captures live Polygon snapshots, runs the chain through the Step A/B
-contracts (typed price normalization + provenance-aware VIX-style
-replication), and persists the result with full provenance so the
-historical IV pipeline can be built forward-only from the day this
-recorder ships.
+Captures live Polygon snapshots, runs the chain through the typed
+price-normalization + provenance-aware VIX-style replication, and persists
+the result with full provenance so the historical IV pipeline can be built
+forward-only from the day this recorder ships.
 
-Architecture (per ``docs/architecture/iv-ownership-decisions.md`` Q2):
-the recorder is invoked by the .NET ``JobsController`` on a cron — it is
-not an in-process scheduler. This module exposes:
+See ``docs/architecture/iv-ownership-research.md`` for the consolidated
+research document covering math, decisions, reviewer feedback, and the
+forward plan. Section §7.5 explains why the .NET ``JobsController`` owns
+the cron (not an in-process scheduler), and §7.4 explains why this is a
+JSONL file store today (Postgres after burn-in).
+
+This module exposes:
 
 - ``record_iv_snapshot(...)`` — the work function the cron calls.
 - ``IvSnapshotStore`` — pluggable persistence interface.
 - ``JsonlIvSnapshotStore`` — production-pragmatic JSONL file store.
 - ``InMemoryIvSnapshotStore`` — for tests.
 
-The Postgres-backed implementation is a follow-up; the JSONL store is
-load-bearing-friendly (one INSERT per slot, append-only) and the schema
-is forward-compatible with the table proposed in
-``docs/architecture/iv-ownership-decisions.md`` §1 Q3.
-
-**Sovereignty rule (plan §4.D):** we store raw bid/ask per contract and
-the *internal-solver* IV. Polygon's IV field is never stored as an
+**Sovereignty rule:** we store raw bid/ask per contract and the
+*internal-solver* IV. Polygon's IV field is never stored as an
 authoritative IV value — even when it appears in the snapshot response,
-it is dropped here. This is the single non-negotiable about the
-recorder.
+it is dropped here. See research-doc §7.1.
 """
 
 from __future__ import annotations

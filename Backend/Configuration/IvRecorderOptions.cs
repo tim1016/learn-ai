@@ -1,29 +1,31 @@
 namespace Backend.Configuration;
 
 /// <summary>
-/// Configuration for the IV recorder cron — Step D follow-up of the
-/// IV-ownership plan (docs/architecture/iv-ownership-plan.md).
+/// Configuration for the IV recorder cron.
+///
+/// See <c>docs/architecture/iv-ownership-research.md</c> §7.5 for the
+/// .NET-owned-cron rationale, §7.6 for the slot schedule, and §9 for the
+/// queued 15:55 slot experiment.
 ///
 /// The .NET host owns the schedule; each slot fires a Quartz job that
 /// POSTs to the Python <c>/api/iv-recorder/snapshot</c> endpoint per
 /// configured ticker. Tickers and slots are config-driven so expanding
-/// from SPY-only (decisions doc Q6) to SPY/QQQ/IWM/DIA after burn-in
-/// is one settings change.
+/// from SPY-only to SPY/QQQ/IWM/DIA after burn-in is one settings change.
 /// </summary>
 public class IvRecorderOptions
 {
     public const string SectionName = "IvRecorder";
 
     /// <summary>
-    /// Underlying tickers to record per slot. Decisions doc Q6: start
-    /// with SPY only; expand after 30 sessions of clean data validate
-    /// the pipeline.
+    /// Underlying tickers to record per slot. Start with SPY only; expand
+    /// after 30 sessions of clean data validate the pipeline (research-doc
+    /// §7 / §9).
     /// </summary>
     public List<string> Tickers { get; set; } = new();
 
     /// <summary>
     /// Daily snapshot times in <c>HH:mm</c> America/New_York wall-clock,
-    /// Mon–Fri only (decisions doc Q1: 09:35 / 12:30 / 16:00 ET).
+    /// Mon–Fri only. Default: 09:35 / 12:30 / 16:00 ET (research-doc §7.6).
     /// </summary>
     public List<string> Slots { get; set; } = new();
 
