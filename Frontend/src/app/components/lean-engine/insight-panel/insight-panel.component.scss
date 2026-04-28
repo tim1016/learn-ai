@@ -1,13 +1,11 @@
+@use '../../../styles/tokens' as *;
+
 :host {
   display: block;
   margin-top: 16px;
 }
 
 // ── Calibration chips (ECE + Magnitude Bias) ──────────
-$chip-bull: #00c896;
-$chip-warn: #f59e0b;
-$chip-bear: #e5334e;
-
 .calibration-chips {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -21,45 +19,45 @@ $chip-bear: #e5334e;
   gap: 4px;
   padding: 12px 14px;
   border-radius: 8px;
-  background: #1c1f2e;
-  border: 1px solid #2a2e3e;
-  border-left: 3px solid #353a4d;
+  background: $bg-elevated;
+  border: 1px solid $border-light;
+  border-left: 3px solid $border-strong;
 
-  &[data-band="green"] { border-left-color: $chip-bull; }
-  &[data-band="amber"] { border-left-color: $chip-warn; }
-  &[data-band="red"]   { border-left-color: $chip-bear; }
-  &[data-band="na"]    { border-left-color: #5a6178; opacity: 0.7; }
+  &[data-band="green"] { border-left-color: $bull; }
+  &[data-band="amber"] { border-left-color: $warn; }
+  &[data-band="red"]   { border-left-color: $bear; }
+  &[data-band="na"]    { border-left-color: $text-muted; opacity: 0.7; }
 
   .chip-label {
     font-size: 0.6875rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #8892a8;
+    color: $text-subtle;
   }
 
   .chip-value {
     font-size: 1.25rem;
     font-weight: 700;
-    color: #e0e4ec;
+    color: $text-primary;
     font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
     line-height: 1.2;
 
     small {
       font-size: 0.75rem;
       font-weight: 400;
-      color: #8892a8;
+      color: $text-subtle;
       margin-left: 6px;
     }
   }
 
-  &[data-band="green"] .chip-value { color: $chip-bull; }
-  &[data-band="amber"] .chip-value { color: $chip-warn; }
-  &[data-band="red"]   .chip-value { color: $chip-bear; }
+  &[data-band="green"] .chip-value { color: $bull; }
+  &[data-band="amber"] .chip-value { color: $warn; }
+  &[data-band="red"]   .chip-value { color: $bear; }
 
   .chip-verdict {
     font-size: 0.75rem;
-    color: #8892a8;
+    color: $text-subtle;
     line-height: 1.45;
     margin-top: 2px;
   }
@@ -72,7 +70,7 @@ $chip-bear: #e5334e;
   summary {
     cursor: pointer;
     font-size: 0.8125rem;
-    color: #3b82f6;
+    color: $accent;
     padding: 6px 0;
     user-select: none;
 
@@ -85,8 +83,8 @@ $chip-bear: #e5334e;
 }
 
 .insight-panel {
-  background: #161922;
-  border: 1px solid #2a2e3e;
+  background: $bg-surface;
+  border: 1px solid $border-light;
   border-radius: 8px;
   overflow: hidden;
 }
@@ -108,7 +106,7 @@ $chip-bear: #e5334e;
     margin: 0;
     font-size: 15px;
     font-weight: 600;
-    color: #e0e4ec;
+    color: $text-primary;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -123,12 +121,12 @@ $chip-bear: #e5334e;
     font-weight: 500;
     padding: 2px 8px;
     border-radius: 10px;
-    background: rgba(91, 141, 239, 0.15);
-    color: #5b8def;
+    background: rgba($accent, 0.15);
+    color: $accent;
   }
 
   .collapse-toggle {
-    color: #8892a8;
+    color: $text-subtle;
     font-size: 14px;
   }
 }
@@ -138,9 +136,9 @@ $chip-bear: #e5334e;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 1px;
-  background: #2a2e3e;
-  border-top: 1px solid #2a2e3e;
-  border-bottom: 1px solid #2a2e3e;
+  background: $border-light;
+  border-top: 1px solid $border-light;
+  border-bottom: 1px solid $border-light;
 }
 
 .kpi {
@@ -148,18 +146,18 @@ $chip-bear: #e5334e;
   flex-direction: column;
   align-items: center;
   padding: 16px 12px;
-  background: #161922;
+  background: $bg-surface;
 
   .kpi-value {
     font-size: 22px;
     font-weight: 700;
-    color: #e0e4ec;
+    color: $text-primary;
     font-variant-numeric: tabular-nums;
   }
 
   .kpi-label {
     font-size: 11px;
-    color: #8892a8;
+    color: $text-subtle;
     margin-top: 4px;
     text-align: center;
   }
@@ -168,19 +166,19 @@ $chip-bear: #e5334e;
 // Sub-sections
 .sub-section {
   padding: 16px;
-  border-top: 1px solid #2a2e3e;
+  border-top: 1px solid $border-light;
 
   h4 {
     margin: 0 0 8px;
     font-size: 13px;
     font-weight: 600;
-    color: #c8d0e0;
+    color: $text-secondary;
   }
 
   .sub-desc {
     margin: 0 0 12px;
     font-size: 12px;
-    color: #8892a8;
+    color: $text-subtle;
     line-height: 1.5;
   }
 }
@@ -194,11 +192,11 @@ $chip-bear: #e5334e;
   th, td {
     padding: 6px 10px;
     text-align: left;
-    border-bottom: 1px solid #2a2e3e;
+    border-bottom: 1px solid $border-light;
   }
 
   th {
-    color: #8892a8;
+    color: $text-subtle;
     font-weight: 500;
     font-size: 11px;
     text-transform: uppercase;
@@ -206,7 +204,7 @@ $chip-bear: #e5334e;
   }
 
   td {
-    color: #c8d0e0;
+    color: $text-secondary;
     font-variant-numeric: tabular-nums;
   }
 
@@ -227,11 +225,11 @@ $chip-bear: #e5334e;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 11px;
-    color: #8892a8;
+    color: $text-subtle;
   }
 
-  td.up { color: #00c896; }
-  td.down { color: #e5334e; }
+  td.up { color: $bull; }
+  td.down { color: $bear; }
 }
 
 .table-scroll {
@@ -251,11 +249,11 @@ $chip-bear: #e5334e;
 
   .toggle-icon {
     font-size: 12px;
-    color: #8892a8;
+    color: $text-subtle;
   }
 
   &:hover h4 {
-    color: #e0e4ec;
+    color: $text-primary;
   }
 }
 
@@ -274,7 +272,7 @@ $chip-bear: #e5334e;
   font-size: 12px;
 
   .hour-label {
-    color: #8892a8;
+    color: $text-subtle;
     font-variant-numeric: tabular-nums;
   }
 
@@ -294,13 +292,13 @@ $chip-bear: #e5334e;
 
   .hour-pct {
     text-align: right;
-    color: #c8d0e0;
+    color: $text-secondary;
     font-weight: 500;
     font-variant-numeric: tabular-nums;
   }
 
   .hour-count {
-    color: #8892a8;
+    color: $text-subtle;
     font-size: 11px;
   }
 }

@@ -29,7 +29,7 @@
   border-radius: 50%;
   border: 1px solid rgba(148, 163, 184, 0.25);
   background: rgba(30, 41, 59, 0.7);
-  color: #e2e8f0;
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 14px;
   transition: transform 0.08s, background 0.12s, border-color 0.12s;
@@ -115,7 +115,7 @@
 
   &.active {
     background: rgba(148, 163, 184, 0.18);
-    color: #e2e8f0;
+    color: var(--text-primary);
   }
 
   &:hover:not(.active) { color: #cbd5e1; }
@@ -128,7 +128,7 @@
 
   .time {
     font-size: 12px;
-    color: #e2e8f0;
+    color: var(--text-primary);
     font-weight: 500;
   }
 

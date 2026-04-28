@@ -1,6 +1,6 @@
 :host {
   display: block;
-  color: #e2e8f0;
+  color: var(--text-primary);
 }
 
 .empty-state {
@@ -27,7 +27,7 @@
   font-size: 11px;
 
   .meta { display: flex; align-items: center; gap: 10px; }
-  .symbol { font-weight: 700; color: #e2e8f0; font-size: 13px; }
+  .symbol { font-weight: 700; color: var(--text-primary); font-size: 13px; }
   .strategy { color: #38bdf8; }
   .range, .timespan { color: #94a3b8; }
 

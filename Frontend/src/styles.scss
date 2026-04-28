@@ -1,10 +1,19 @@
+@use './app/styles/tokens';
 @import "tailwindcss";
 @import "katex/dist/katex.min.css";
 
 /* ═══════════════════════════════════════════════════════════
    Quant Trading Lab — Global Styles
-   Dark canvas, semantic market colors, system sans stack.
-   CSS custom properties mirror _tokens.scss SCSS vars.
+
+   The @use above emits the `:root { --bg-canvas: …; … }` block
+   from _tokens.scss into THIS global stylesheet. Angular does
+   not scope global styles, so the custom properties land on
+   <html> and are visible to inline component styles, PrimeNG
+   rules, and any `var(--token)` reference anywhere. Component
+   SCSS files that also @use the partial emit a (harmless,
+   attribute-scoped, dead) :root block — that duplication can
+   be cleaned up by extracting just the CSS-var emission into
+   its own partial used only here.
    ═══════════════════════════════════════════════════════════ */
 
 * {

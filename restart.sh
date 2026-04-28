@@ -15,8 +15,18 @@ fi
 echo "==> Tearing down all containers..."
 podman compose down
 
-echo "==> Building and starting all services..."
-podman compose up -d --build --force-recreate $NO_CACHE
+# `compose up --no-cache` is not supported by the docker-compose plugin
+# (the flag is rejected at parse time). Build first when --no-cache is
+# requested, then up. The cached path can fold build into up as before.
+if [[ -n "$NO_CACHE" ]]; then
+  echo "==> Building images from scratch..."
+  podman compose build --no-cache --pull
+  echo "==> Starting all services..."
+  podman compose up -d --force-recreate
+else
+  echo "==> Building and starting all services..."
+  podman compose up -d --build --force-recreate
+fi
 
 echo "==> Waiting for services to become healthy..."
 for i in {1..30}; do
