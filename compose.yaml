@@ -6,7 +6,7 @@ services:
     environment:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
-      - pgdata:/var/lib/postgresql/data:Z
+      - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
@@ -110,8 +110,13 @@ services:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 15s
+      retries: 6
+      # Cold `dotnet watch run` takes 30–60s to compile from scratch on
+      # the first --no-cache rebuild. 15s wasn't enough — compose marked
+      # the backend unhealthy and aborted frontend startup. 90s gives
+      # cold builds room without slowing warm restarts (start_period
+      # only delays the first check; retries handle steady-state).
+      start_period: 90s
     deploy:
       resources:
         limits:

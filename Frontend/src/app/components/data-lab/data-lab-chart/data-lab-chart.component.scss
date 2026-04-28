@@ -1,25 +1,11 @@
 // ═══════════════════════════════════════════════════════════
 // Data Lab Chart — Dark Mode Theme
-// Design: charcoal canvas, high-contrast financial data,
-//         vibrant indicators against dark background
+// Pulls all colour, type, and surface vars from the central
+// design tokens. Do NOT reintroduce local $bg-canvas etc. —
+// they shadow the TV-dark palette and create contrast drift.
 // ═══════════════════════════════════════════════════════════
 
-// ── Design Tokens ──
-$bg-canvas:    #0f1117;
-$bg-surface:   #161922;
-$bg-elevated:  #1c1f2e;
-$bg-hover:     #232738;
-$border:       #2a2e3e;
-$border-light: #353a4d;
-
-$text-primary:   #e2e8f0;
-$text-secondary: #8892a8;
-$text-muted:     #5a6178;
-
-$bull:  #00c896;
-$bear:  #e5334e;
-$accent: #3b82f6;
-$warn:   #f59e0b;
+@use '../../../styles/tokens' as *;
 
 .chart-wrapper {
   position: relative;

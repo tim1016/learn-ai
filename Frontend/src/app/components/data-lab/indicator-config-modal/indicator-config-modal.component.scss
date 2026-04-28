@@ -1,7 +1,4 @@
-$border: rgba(255, 255, 255, 0.10);
-$bg-elevated: #1a1f29;
-$text-primary: #e6e9ef;
-$text-secondary: #98a2b3;
+@use '../../../styles/tokens' as *;
 
 ::ng-deep .icm-dialog .p-dialog-header {
   padding: 1rem 1.25rem;

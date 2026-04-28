@@ -3,15 +3,15 @@
 // Uses position: fixed so it escapes overflow: hidden ancestors
 // ═══════════════════════════════════════════════════════════
 
+@use '../../styles/tokens' as *;
+
+// Tooltip-only surface tones (slightly different from the global
+// $bg-elevated/$bg-surface to read as a popover lifted above the page).
 $bg-tooltip:     #1a1d2e;
 $bg-section:     #141725;
 $border-tooltip: #2d3148;
-$text-primary:   #e2e8f0;
-$text-secondary: #8892a8;
-$text-muted:     #5a6178;
-$accent:         #3b82f6;
-$accent-dim:     rgba(59, 130, 246, 0.12);
-$overlay-badge:  #00c896;
+$accent-dim:     rgba(41, 98, 255, 0.12);
+$overlay-badge:  $bull;
 $subpanel-badge: #a78bfa;
 
 :host {
