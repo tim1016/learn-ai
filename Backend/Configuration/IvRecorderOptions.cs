@@ -25,7 +25,11 @@ public class IvRecorderOptions
 
     /// <summary>
     /// Daily snapshot times in <c>HH:mm</c> America/New_York wall-clock,
-    /// Mon–Fri only. Default: 09:35 / 12:30 / 16:00 ET (research-doc §7.6).
+    /// Mon–Fri only. Default: 09:35 / 12:30 / 15:55 / 16:00 ET — the
+    /// 15:55 slot runs alongside 16:00 for the trial-month experiment
+    /// described in research-doc §7.6 / §8.2.3, comparing solver-fail
+    /// rate, spread width, vcs, and IV30 stability before deciding
+    /// whether to swap.
     /// </summary>
     public List<string> Slots { get; set; } = new();
 

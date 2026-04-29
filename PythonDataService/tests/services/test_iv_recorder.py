@@ -264,5 +264,7 @@ class TestRecorderRoutes:
 
 
 class TestSlotChoicesContract:
-    def test_three_default_slots(self):
-        assert SLOT_CHOICES == ("09:35", "12:30", "16:00")
+    def test_default_slots(self):
+        # 15:55 runs alongside 16:00 for the trial-month experiment in
+        # research-doc §7.6 / §8.2.3.
+        assert SLOT_CHOICES == ("09:35", "12:30", "15:55", "16:00")

@@ -33,8 +33,10 @@ builder.Services.Configure<PolygonServiceOptions>(
 
 // IV recorder cron — Step D follow-up of the IV-ownership plan. Opt-in
 // via `IvRecorder:Enabled = true` in config; dev/CI default is off.
-// Schedules one Quartz trigger per slot (e.g. 09:35 / 12:30 / 16:00 ET)
-// that POSTs to Python's /api/iv-recorder/snapshot per configured ticker.
+// Schedules one Quartz trigger per slot (default 09:35 / 12:30 / 15:55 /
+// 16:00 ET; 15:55 runs alongside 16:00 for the trial-month experiment
+// in research-doc §7.6 / §8.2.3) that POSTs to Python's
+// /api/iv-recorder/snapshot per configured ticker.
 builder.Services.AddIvRecorder(builder.Configuration);
 
 // Shared Polly policies — generous thresholds to avoid tripping circuit on transient Polygon hiccups
