@@ -1,0 +1,295 @@
+// Past-chain inspector card — D10a card-on-config-row layout.
+// Per docs/architecture/options-ux-design-prompt.md UX-Q3.
+
+:host {
+  display: block;
+}
+
+.past-chain-card {
+  background: rgb(15, 23, 42);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.card-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.eyebrow {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+}
+
+.card-subtitle {
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  line-height: 1.4;
+
+  code {
+    background: rgba(59, 130, 246, 0.12);
+    color: #93c5fd;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.75rem;
+  }
+}
+
+.card-config {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.config-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+}
+
+.config-field select {
+  background: rgb(30, 41, 59);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  color: #e2e8f0;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  padding: 4px 8px;
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+}
+
+.card-error {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #f87171;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.card-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.loading-message {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.skeleton-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.card-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.summary-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.summary-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+}
+
+.summary-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  font-variant-numeric: tabular-nums;
+}
+
+.chain-table-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 4px;
+}
+
+.past-chain-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+
+  th, td {
+    padding: 4px 8px;
+    text-align: right;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  }
+
+  th {
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #94a3b8;
+    background: rgba(15, 23, 42, 0.7);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  th.cat-call { color: #34d399; text-align: center; }
+  th.cat-put  { color: #f87171; text-align: center; }
+  th.cat-strike { color: #f1f5f9; background: rgba(30, 41, 59, 0.85); text-align: center; }
+
+  td.strike {
+    text-align: center;
+    font-weight: 700;
+    color: #f1f5f9;
+    background: rgba(30, 41, 59, 0.5);
+    border-left: 1px solid rgba(148, 163, 184, 0.18);
+    border-right: 1px solid rgba(148, 163, 184, 0.18);
+    position: relative;
+  }
+
+  td.price { color: #f1f5f9; font-weight: 600; }
+
+  td.drill { padding: 2px 4px; text-align: center; }
+
+  tr.row-atm td {
+    background: rgba(245, 158, 11, 0.06);
+  }
+  tr.row-atm td.strike {
+    background: rgba(245, 158, 11, 0.18);
+    color: #fff;
+  }
+
+  tbody tr:hover td:not(.strike) {
+    background: rgba(148, 163, 184, 0.08);
+  }
+
+  .empty-row {
+    text-align: center;
+    color: #94a3b8;
+    padding: 2rem 0.75rem;
+  }
+}
+
+.atm-badge {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: -7px;
+  background: #f59e0b;
+  color: #0f172a;
+  font-size: 8px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 2px;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.drill-btn {
+  width: 22px;
+  height: 20px;
+  border-radius: 3px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  line-height: 1;
+  transition: all 0.1s;
+
+  &:hover {
+    border-color: #3b82f6;
+    background: rgba(59, 130, 246, 0.08);
+  }
+}
+
+.scan-details {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.scan-toggle {
+  background: transparent;
+  border: none;
+  color: #93c5fd;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0;
+}
+
+.scan-table {
+  margin-top: 0.5rem;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.7rem;
+
+  th, td {
+    padding: 3px 6px;
+    text-align: left;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  }
+
+  tr.selected {
+    background: rgba(59, 130, 246, 0.08);
+  }
+}
+
+.detail-charts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.detail-empty {
+  padding: 1.5rem;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}

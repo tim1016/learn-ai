@@ -511,6 +511,17 @@
             <span>Discontinuity flag <span class="option-hint">(per-slot contract roll marker)</span></span>
           </label>
         </fieldset>
+
+        <!--
+          UX-Q3 / R1: past-chain inspector card. Lets the operator preview
+          what an options-companion run will fetch on a given past date,
+          without having to actually run the bundle. See
+          docs/architecture/options-routes-research.md § 5.1 R1.
+        -->
+        <app-past-chain-inspector
+          [ticker]="ticker()"
+          [analysisDate]="toDate()"
+        />
       }
     </div>
   </details>

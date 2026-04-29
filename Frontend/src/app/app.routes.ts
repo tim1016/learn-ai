@@ -105,11 +105,14 @@ export const routes: Routes = [
       ),
   },
   {
+    // Per docs/architecture/options-routes-research.md §7 D10 + §5.1 R1:
+    // /options-history is deleted; the past-chain inspector is hosted
+    // inside /data-lab as a card on the options-companion config row
+    // (UX-Q3). Redirect kept for ≥ 7 days to preserve bookmarks;
+    // remove in Phase 4.5.
     path: "options-history",
-    loadComponent: () =>
-      import("./components/options-history/options-history.component").then(
-        (m) => m.OptionsHistoryComponent
-      ),
+    redirectTo: "/data-lab",
+    pathMatch: "full",
   },
   {
     path: "snapshots",
