@@ -193,12 +193,38 @@ def _select_atm_strike_normalized(quotes: list[NormalizedOptionQuote]) -> Normal
     return best
 
 
+DOMINANCE_GATE_THRESHOLD = 0.50
+"""Maximum tolerated single-strike variance share before the gate
+iteratively drops the dominator and recomputes. See
+``docs/architecture/iv-research-chat-notes.md`` §5.8 for the rationale
+on threshold choice (50% — half the variance from one strike is the
+"this IV is unreliable" line, lower than CBOE's implicit tolerance via
+two-zero-bid truncation but higher than the empirical SPY ~0.34 max
+share so the gate doesn't fire on healthy chains)."""
+
+DOMINANCE_GATE_MAX_ITERATIONS = 2
+"""Hard cap on drop-and-recompute iterations. After this many tries,
+if the chain is still above threshold, ``single_strike_hard_failed``
+is set and downstream consumers must treat the IV as unreliable. Two
+iterations is the empirical sweet spot — one is usually enough; three
+or more on real chains means the chain is structurally pathological."""
+
+DOMINANCE_GATE_MIN_STRIKES_AFTER_DROP = 8
+"""Floor on the number of selected strikes after iterative drop. With
+fewer strikes the variance integral is too sparse for a defensible
+IV regardless of the dominance metric. Rough split: ~4 puts + 4 calls
+around K0."""
+
+
 def replicate_expiry_variance_with_provenance(
     quotes: list[NormalizedOptionQuote],
     *,
     rate: float,
     T_years: float,
     debug: bool = False,
+    dominance_gate_threshold: float | None = DOMINANCE_GATE_THRESHOLD,
+    dominance_gate_max_iterations: int = DOMINANCE_GATE_MAX_ITERATIONS,
+    dominance_gate_min_strikes: int = DOMINANCE_GATE_MIN_STRIKES_AFTER_DROP,
 ) -> tuple[ExpiryReplication, IvProvenance]:
     """Same math as ``replicate_expiry_variance`` plus ``IvProvenance``.
 
@@ -263,63 +289,135 @@ def replicate_expiry_variance_with_provenance(
         selected.append((nq, "call"))
 
     selected.sort(key=lambda pair: pair[0].strike)
-    sel_strikes = [nq.strike for nq, _ in selected]
-    n = len(sel_strikes)
-    if n < 3:
-        raise ValueError(f"need at least 3 selected strikes, got {n}")
+    if len(selected) < 3:
+        raise ValueError(f"need at least 3 selected strikes, got {len(selected)}")
 
     e_rT = math.exp(rate * T_years)
-    var_sum = 0.0
-    contrib_total = 0.0
-    contrib_synthetic = 0.0
-    max_c_i = 0.0
-    count_per_source: dict[PriceSource, float] = {}
-    contributions: list[dict] = []
 
-    for i, (nq, kind) in enumerate(selected):
-        if i == 0:
-            dK = sel_strikes[1] - sel_strikes[0]
-        elif i == n - 1:
-            dK = sel_strikes[-1] - sel_strikes[-2]
-        else:
-            dK = (sel_strikes[i + 1] - sel_strikes[i - 1]) / 2.0
+    def _integrate(
+        sel: list[tuple[NormalizedOptionQuote, str]],
+    ) -> tuple[float, float, float, float, int, dict[PriceSource, float], list[dict]]:
+        """Run the per-strike variance integral on the given selection.
 
-        if kind == "put":
-            Q = nq.put.mid
-            active_legs: list[tuple[NormalizedOptionPrice, float]] = [(nq.put, 1.0)]
-        elif kind == "call":
-            Q = nq.call.mid
-            active_legs = [(nq.call, 1.0)]
-        else:  # "both" — at K0, average ATM call and put
-            Q = (nq.call.mid + nq.put.mid) / 2.0
-            active_legs = [(nq.call, 0.5), (nq.put, 0.5)]
+        Returns ``(var_sum, contrib_total, contrib_synthetic, max_c_i,
+        max_idx, count_per_source, contributions)``. ``max_idx`` is the
+        index in ``sel`` of the strike contributing the largest c_i —
+        the dominance gate uses this to pick which strike to drop.
+        """
+        sel_strikes = [nq.strike for nq, _ in sel]
+        n = len(sel_strikes)
+        v_sum = 0.0
+        c_total = 0.0
+        c_synth = 0.0
+        m_c = 0.0
+        m_idx = 0
+        count_src: dict[PriceSource, float] = {}
+        contribs: list[dict] = []
+        for i, (nq, kind) in enumerate(sel):
+            if i == 0:
+                dK = sel_strikes[1] - sel_strikes[0]
+            elif i == n - 1:
+                dK = sel_strikes[-1] - sel_strikes[-2]
+            else:
+                dK = (sel_strikes[i + 1] - sel_strikes[i - 1]) / 2.0
 
-        # The integral term per strike, before the (forward/K0 - 1)² adjustment.
-        c_i = (2.0 / T_years) * (dK / (nq.strike**2)) * e_rT * Q
-        var_sum += (dK / (nq.strike**2)) * e_rT * Q
-        contrib_total += c_i
-        if c_i > max_c_i:
-            max_c_i = c_i
+            if kind == "put":
+                Q = nq.put.mid
+                active_legs: list[tuple[NormalizedOptionPrice, float]] = [(nq.put, 1.0)]
+            elif kind == "call":
+                Q = nq.call.mid
+                active_legs = [(nq.call, 1.0)]
+            else:  # "both" — at K0, average ATM call and put
+                Q = (nq.call.mid + nq.put.mid) / 2.0
+                active_legs = [(nq.call, 0.5), (nq.put, 0.5)]
 
-        any_synthetic = False
-        for leg, frac in active_legs:
-            if leg.spread_synthetic:
-                contrib_synthetic += c_i * frac
-                any_synthetic = True
-            count_per_source[leg.source] = count_per_source.get(leg.source, 0.0) + frac
+            c_i = (2.0 / T_years) * (dK / (nq.strike**2)) * e_rT * Q
+            v_sum += (dK / (nq.strike**2)) * e_rT * Q
+            c_total += c_i
+            if c_i > m_c:
+                m_c = c_i
+                m_idx = i
 
-        if debug:
-            contributions.append(
-                {
-                    "strike": nq.strike,
-                    "kind": kind,
-                    "dK": dK,
-                    "Q": Q,
-                    "c_i": c_i,
-                    "active_leg_sources": [leg.source for leg, _ in active_legs],
-                    "active_leg_synthetic": any_synthetic,
-                }
+            any_synthetic = False
+            for leg, frac in active_legs:
+                if leg.spread_synthetic:
+                    c_synth += c_i * frac
+                    any_synthetic = True
+                count_src[leg.source] = count_src.get(leg.source, 0.0) + frac
+
+            if debug:
+                contribs.append(
+                    {
+                        "strike": nq.strike,
+                        "kind": kind,
+                        "dK": dK,
+                        "Q": Q,
+                        "c_i": c_i,
+                        "active_leg_sources": [leg.source for leg, _ in active_legs],
+                        "active_leg_synthetic": any_synthetic,
+                    }
+                )
+        return v_sum, c_total, c_synth, m_c, m_idx, count_src, contribs
+
+    var_sum, contrib_total, contrib_synthetic, max_c_i, max_idx, count_per_source, contributions = (
+        _integrate(selected)
+    )
+    max_strike_share = max_c_i / contrib_total if contrib_total > 0 else 0.0
+    max_strike_share = max(0.0, min(1.0, max_strike_share))
+
+    # ── Single-strike dominance gate (iterative drop-and-recompute) ──
+    # If a single strike contributes more than ``dominance_gate_threshold``
+    # of the variance integral, drop it and recompute. Iterate up to
+    # ``dominance_gate_max_iterations`` times; floor at
+    # ``dominance_gate_min_strikes`` selected strikes; never drop K0
+    # (the formula is anchored on K0 and dropping it makes the
+    # replication ill-defined). On exhaustion, set ``hard_failed=True``
+    # so downstream consumers can force confidence to 0.
+    dropped_iters = 0
+    hard_failed = False
+    if dominance_gate_threshold is not None:
+        K0_position = next(
+            (i for i, (nq, _) in enumerate(selected) if nq.strike == K0),
+            None,
+        )
+        while (
+            max_strike_share > dominance_gate_threshold
+            and dropped_iters < dominance_gate_max_iterations
+        ):
+            if max_idx == K0_position:
+                # K0 dominates — formula is structurally anchored on K0
+                # so we cannot drop it. Hard-fail and stop.
+                hard_failed = True
+                break
+            if len(selected) - 1 < dominance_gate_min_strikes:
+                # Dropping would push us below the strike-count floor.
+                hard_failed = True
+                break
+            del selected[max_idx]
+            dropped_iters += 1
+            (
+                var_sum,
+                contrib_total,
+                contrib_synthetic,
+                max_c_i,
+                max_idx,
+                count_per_source,
+                contributions,
+            ) = _integrate(selected)
+            max_strike_share = (
+                max_c_i / contrib_total if contrib_total > 0 else 0.0
             )
+            max_strike_share = max(0.0, min(1.0, max_strike_share))
+            # Recompute K0 position in the (now shorter) selected list.
+            K0_position = next(
+                (i for i, (nq, _) in enumerate(selected) if nq.strike == K0),
+                None,
+            )
+        if max_strike_share > dominance_gate_threshold:
+            hard_failed = True
+
+    sel_strikes = [nq.strike for nq, _ in selected]
+    n = len(sel_strikes)
 
     sigma_sq_T = (2.0 / T_years) * var_sum - (1.0 / T_years) * (forward / K0 - 1.0) ** 2
     rep = ExpiryReplication(
@@ -332,13 +430,6 @@ def replicate_expiry_variance_with_provenance(
 
     vcs = contrib_synthetic / contrib_total if contrib_total > 0 else 0.0
     vcs = max(0.0, min(1.0, vcs))
-
-    # Per-strike domination diagnostic: research-doc §8.2.5. A healthy
-    # uniform chain lands near 1/n_strikes; values above ~0.30 indicate
-    # one strike (typically deep-OTM via 1/K² weighting) is dominating
-    # the integral and warrants inspection of per_strike_contributions.
-    max_strike_share = max_c_i / contrib_total if contrib_total > 0 else 0.0
-    max_strike_share = max(0.0, min(1.0, max_strike_share))
 
     total_count = sum(count_per_source.values())
     price_source_mix: dict[PriceSource, float] = (
@@ -363,6 +454,8 @@ def replicate_expiry_variance_with_provenance(
         variance_contribution_synthetic=vcs,
         strike_coverage_score=strike_coverage,
         max_single_strike_share=max_strike_share,
+        single_strike_dropped=dropped_iters,
+        single_strike_hard_failed=hard_failed,
         per_strike_contributions=contributions if debug else None,
     )
 
@@ -419,6 +512,7 @@ def vix_style_iv30_with_provenance(
     T2_calendar_days: int,
     target_calendar_days: int = 30,
     debug: bool = False,
+    dominance_gate_threshold: float | None = DOMINANCE_GATE_THRESHOLD,
 ) -> tuple[float, IvProvenance]:
     """Constant-maturity VIX-style σ + ``IvProvenance``.
 
@@ -444,10 +538,12 @@ def vix_style_iv30_with_provenance(
     T_target = target_calendar_days / 365.0
 
     rep1, prov1 = replicate_expiry_variance_with_provenance(
-        expiry1_quotes, rate=rate1, T_years=T1, debug=debug
+        expiry1_quotes, rate=rate1, T_years=T1, debug=debug,
+        dominance_gate_threshold=dominance_gate_threshold,
     )
     rep2, prov2 = replicate_expiry_variance_with_provenance(
-        expiry2_quotes, rate=rate2, T_years=T2, debug=debug
+        expiry2_quotes, rate=rate2, T_years=T2, debug=debug,
+        dominance_gate_threshold=dominance_gate_threshold,
     )
 
     w = (T2 - T_target) / (T2 - T1)
@@ -496,12 +592,22 @@ def vix_style_iv30_with_provenance(
             for c in prov2.per_strike_contributions:
                 combined_contribs.append({**c, "expiry_calendar_days": T2_calendar_days})
 
+    # Single-strike dominance gate aggregation: sum the per-expiry drop
+    # iteration counts; hard_failed is OR-ed (either expiry hard-failing
+    # invalidates the combined IV30).
+    combined_dropped = prov1.single_strike_dropped + prov2.single_strike_dropped
+    combined_hard_failed = (
+        prov1.single_strike_hard_failed or prov2.single_strike_hard_failed
+    )
+
     combined_prov = IvProvenance(
         iv_source="internal_solver",
         price_source_mix=combined_mix,
         variance_contribution_synthetic=combined_vcs,
         strike_coverage_score=combined_coverage,
         max_single_strike_share=combined_max_share,
+        single_strike_dropped=combined_dropped,
+        single_strike_hard_failed=combined_hard_failed,
         per_strike_contributions=combined_contribs,
     )
 
