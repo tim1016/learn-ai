@@ -69,6 +69,7 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
       floor: 0.5,
       gatedNow: false,
       nGated: 0,
+      healthImputed: false,
     });
 
     const el = bannerOrThrow();
@@ -84,6 +85,7 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
       floor: 0.5,
       gatedNow: true,
       nGated: 4,
+      healthImputed: false,
     });
 
     const el = bannerOrThrow();
@@ -99,6 +101,7 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
       floor: 0.5,
       gatedNow: false,
       nGated: 1,
+      healthImputed: false,
     });
 
     const el = bannerOrThrow();
@@ -115,12 +118,64 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
       floor: null,
       gatedNow: null,
       nGated: 0,
+      healthImputed: null,
     });
 
     const el = bannerOrThrow();
     expect(el.querySelector('[data-testid="iv-gated-now"]')).toBeNull();
     expect(el.querySelector('[data-testid="iv-confidence-value"]')).toBeNull();
     expect(textOf(el, '[data-testid="iv-source"]')).toContain("no IV provided");
+  });
+
+  // Research-doc §7.11 / §8.2.4: when the recorder row lacks an explicit
+  // health_score, confidence is computed against the conservative 0.5
+  // imputed prior; the UI flags this so the consumer doesn't treat the
+  // confidence number as evidence-backed.
+
+  it("renders the imputed pill when healthImputed=true", () => {
+    setIvConfidence({
+      ivSource: "recorder",
+      latestConfidence: 0.6,
+      floor: 0.5,
+      gatedNow: false,
+      nGated: 0,
+      healthImputed: true,
+    });
+
+    const el = bannerOrThrow();
+    const pill = el.querySelector('[data-testid="iv-confidence-imputed"]');
+    expect(pill).not.toBeNull();
+    expect(pill?.textContent).toContain("imputed");
+    // Accessible name surfaces the rationale for screen-reader users.
+    expect(pill?.getAttribute("aria-label")).toContain("imputed");
+  });
+
+  it("hides the imputed pill when healthImputed=false (real evidence)", () => {
+    setIvConfidence({
+      ivSource: "recorder",
+      latestConfidence: 0.83,
+      floor: 0.5,
+      gatedNow: false,
+      nGated: 0,
+      healthImputed: false,
+    });
+
+    const el = bannerOrThrow();
+    expect(el.querySelector('[data-testid="iv-confidence-imputed"]')).toBeNull();
+  });
+
+  it("hides the imputed pill when healthImputed=null (confidence not computed)", () => {
+    setIvConfidence({
+      ivSource: "absent",
+      latestConfidence: null,
+      floor: null,
+      gatedNow: null,
+      nGated: 0,
+      healthImputed: null,
+    });
+
+    const el = bannerOrThrow();
+    expect(el.querySelector('[data-testid="iv-confidence-imputed"]')).toBeNull();
   });
 });
 

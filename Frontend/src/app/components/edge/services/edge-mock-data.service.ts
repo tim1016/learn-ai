@@ -34,6 +34,12 @@ export interface IvConfidenceSummary {
   /** Total bars in the response with floor_gated=true; 0 when the gating
    *  signal isn't present in the response. */
   nGated: number;
+  /** True when the latest bar's `health_score` was imputed (the recorder
+   *  row lacked it and the conservative 0.5 prior was used). Null when
+   *  confidence wasn't computed for the run. Surface this so the UI can
+   *  flag "confidence is based on imputed health" rather than presenting
+   *  the number as fully evidence-backed. See research-doc §7.11 / §8.2.4. */
+  healthImputed: boolean | null;
 }
 
 export interface EdgeData {

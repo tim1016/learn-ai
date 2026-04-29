@@ -69,6 +69,16 @@
           @if (ivc.floor !== null) {
             <span class="iv-conf-floor">floor {{ (ivc.floor * 100).toFixed(0) }}%</span>
           }
+          @if (ivc.healthImputed === true) {
+            <span class="iv-conf-imputed"
+                  data-testid="iv-confidence-imputed"
+                  title="Recorder row lacked an explicit health_score; confidence
+                         is computed against a conservative 0.5 imputed prior
+                         rather than evidence-backed stability."
+                  aria-label="health score imputed (conservative prior)">
+              imputed
+            </span>
+          }
         </div>
         <div class="coverage-meta">
           @if (ivc.gatedNow === true) {

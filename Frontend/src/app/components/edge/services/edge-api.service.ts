@@ -49,6 +49,11 @@ interface RealizedVsIvSeriesResponse {
     latest_confidence: number;
     floor: number;
     gated_now: boolean;
+    /** Server-side flag (research-doc §7.11): the latest bar's confidence
+     *  was computed against the conservative 0.5 imputed prior because
+     *  the recorder row lacked an explicit health_score. Optional for
+     *  backwards compat with server builds that pre-date the field. */
+    health_imputed_now?: boolean;
   } | null;
   coverage: {
     n_bars: number;
@@ -303,6 +308,7 @@ function extractIvConfidence(
     floor: series.explanation?.floor ?? null,
     gatedNow: series.explanation?.gated_now ?? null,
     nGated,
+    healthImputed: series.explanation?.health_imputed_now ?? null,
   };
 }
 
