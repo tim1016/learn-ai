@@ -622,3 +622,31 @@
     .stat-value { color: #fcd34d; font-size: 0.95rem; }
   }
 }
+
+// UX-Q2 chain density toggle (Quick / Full Greeks)
+// Per docs/architecture/options-ux-design-prompt.md
+.density-toggle {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: transparent;
+  color: rgba(148, 163, 184, 0.85);
+  cursor: pointer;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: all 0.15s;
+
+  &:hover {
+    color: #cbd5e1;
+    border-color: rgba(148, 163, 184, 0.55);
+    background: rgba(148, 163, 184, 0.08);
+  }
+
+  &.is-greeks {
+    color: #60a5fa;
+    border-color: #3b82f6;
+    background: rgba(59, 130, 246, 0.12);
+  }
+}

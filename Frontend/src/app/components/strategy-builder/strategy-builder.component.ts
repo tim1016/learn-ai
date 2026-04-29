@@ -24,7 +24,7 @@ import {
   strategyPnlAtPrice, strategyGreekAtPrice, LegParams, GreekName,
 } from '../../utils/black-scholes';
 import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
-import { PayoffChartComponent } from '../options-strategy-lab/payoff-chart/payoff-chart.component';
+import { PayoffChartComponent } from '../../shared/payoff-chart/payoff-chart.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 interface BuilderChainRow {
@@ -38,6 +38,10 @@ interface BuilderChainRow {
   otmCall: boolean;
   otmPut: boolean;
   callDelta: string;
+  // UX-Q2: V/Θ/Γ surfaced when chainDensity === 'greeks'
+  callVega: string;
+  callTheta: string;
+  callGamma: string;
   callPrice: string;
   callPriceNum: number;
   callIv: number;
@@ -45,6 +49,9 @@ interface BuilderChainRow {
   callVolume: string;
   callVolumeBarWidth: number;
   putDelta: string;
+  putVega: string;
+  putTheta: string;
+  putGamma: string;
   putPrice: string;
   putPriceNum: number;
   putIv: number;
@@ -52,6 +59,16 @@ interface BuilderChainRow {
   putVolume: string;
   putVolumeBarWidth: number;
 }
+
+/**
+ * Chain-density mode per UX-Q2 in `docs/architecture/options-ux-design-prompt.md`.
+ * 'quick' shows L · S · Δ · Price · OI · Vol per side (default).
+ * 'greeks' adds V · Θ · Γ between L/S and Δ — preserves the full-Greek
+ * display from the deleted /options-chain page (D9a).
+ * Choice is persisted to localStorage for power-user stickiness.
+ */
+type ChainDensity = 'quick' | 'greeks';
+const CHAIN_DENSITY_STORAGE_KEY = 'sb.chainDensity';
 
 interface LegConfig {
   strike: number;
@@ -126,6 +143,25 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
   strikeRange = signal(15);
   readonly strikeRangeOptions = [5, 10, 15, 20, 25, 30];
   showAllStrikes = signal(false);
+
+  // UX-Q2: chain density mode. Default = 'quick' (Δ + Price + OI + Vol);
+  // 'greeks' expands to add V/Θ/Γ. Initial value is read from localStorage
+  // so power users land in their preferred mode every time.
+  chainDensity = signal<ChainDensity>(this.readChainDensityFromStorage());
+
+  private readChainDensityFromStorage(): ChainDensity {
+    if (typeof localStorage === 'undefined') return 'quick';
+    const v = localStorage.getItem(CHAIN_DENSITY_STORAGE_KEY);
+    return v === 'greeks' ? 'greeks' : 'quick';
+  }
+
+  toggleChainDensity(): void {
+    const next: ChainDensity = this.chainDensity() === 'quick' ? 'greeks' : 'quick';
+    this.chainDensity.set(next);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(CHAIN_DENSITY_STORAGE_KEY, next);
+    }
+  }
 
   // ── Strategy State ────────────────────────────────────────
   legs = signal<LegConfig[]>([]);
@@ -386,6 +422,9 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
         otmCall: price > 0 && strike > price && strike !== atmStrike,
         otmPut: price > 0 && strike < price && strike !== atmStrike,
         callDelta: this.fmtGreek(call?.greeks?.delta ?? null),
+        callVega: this.fmtGreek(call?.greeks?.vega ?? null),
+        callTheta: this.fmtGreek(call?.greeks?.theta ?? null),
+        callGamma: this.fmtGreek(call?.greeks?.gamma ?? null),
         callPrice: this.resolvePrice(call),
         callPriceNum: this.resolvePremiumNum(call),
         callIv: call?.impliedVolatility ?? 0,
@@ -393,6 +432,9 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
         callVolume: this.fmtNum(call?.day?.volume ?? null),
         callVolumeBarWidth: this.barWidth(call?.day?.volume ?? null, maxCallVol),
         putDelta: this.fmtGreek(put?.greeks?.delta ?? null),
+        putVega: this.fmtGreek(put?.greeks?.vega ?? null),
+        putTheta: this.fmtGreek(put?.greeks?.theta ?? null),
+        putGamma: this.fmtGreek(put?.greeks?.gamma ?? null),
         putPrice: this.resolvePrice(put),
         putPriceNum: this.resolvePremiumNum(put),
         putIv: put?.impliedVolatility ?? 0,

@@ -157,6 +157,11 @@
             <colgroup>
               <col class="col-action" />
               <col class="col-action" />
+              @if (chainDensity() === 'greeks') {
+                <col class="col-greek" />
+                <col class="col-greek" />
+                <col class="col-greek" />
+              }
               <col class="col-greek" />
               <col class="col-price" />
               <col class="col-oi" />
@@ -166,18 +171,45 @@
               <col class="col-oi" />
               <col class="col-price" />
               <col class="col-greek" />
+              @if (chainDensity() === 'greeks') {
+                <col class="col-greek" />
+                <col class="col-greek" />
+                <col class="col-greek" />
+              }
               <col class="col-action" />
               <col class="col-action" />
             </colgroup>
             <thead>
+              @let callSpan = chainDensity() === 'greeks' ? 9 : 6;
+              @let putSpan  = chainDensity() === 'greeks' ? 9 : 6;
               <tr class="border-b-2 border-slate-700">
-                <th colspan="6" class="text-center text-emerald-400 font-bold py-1.5 text-xs">CALLS</th>
+                <th [attr.colspan]="callSpan" class="text-center text-emerald-400 font-bold py-1.5 text-xs">
+                  CALLS
+                </th>
                 <th class="bg-slate-800/80"></th>
-                <th colspan="6" class="text-center text-red-400 font-bold py-1.5 text-xs">PUTS</th>
+                <th [attr.colspan]="putSpan" class="text-center text-red-400 font-bold py-1.5 text-xs">
+                  <div class="flex items-center justify-center gap-2">
+                    <span>PUTS</span>
+                    <!-- UX-Q2: density toggle (Quick / Full Greeks). Sticky per-user. -->
+                    <button
+                      type="button"
+                      class="density-toggle"
+                      [class.is-greeks]="chainDensity() === 'greeks'"
+                      pTooltip="Toggle full Greeks (V/Θ/Γ) per row"
+                      tooltipPosition="top"
+                      (click)="toggleChainDensity()"
+                    >{{ chainDensity() === 'greeks' ? 'Full Greeks' : 'Quick' }}</button>
+                  </div>
+                </th>
               </tr>
               <tr class="border-b border-slate-700 text-slate-400 text-[10px] uppercase tracking-wider">
                 <th class="px-0.5 py-1 text-center" pTooltip="Buy (Long)" tooltipPosition="top">L</th>
                 <th class="px-0.5 py-1 text-center" pTooltip="Sell (Short)" tooltipPosition="top">S</th>
+                @if (chainDensity() === 'greeks') {
+                  <th class="px-1.5 py-1 text-right" pTooltip="Vega" tooltipPosition="top">V</th>
+                  <th class="px-1.5 py-1 text-right" pTooltip="Theta" tooltipPosition="top">Θ</th>
+                  <th class="px-1.5 py-1 text-right" pTooltip="Gamma" tooltipPosition="top">Γ</th>
+                }
                 <th class="px-1.5 py-1 text-right">Delta</th>
                 <th class="px-1.5 py-1 text-right font-semibold">Price</th>
                 <th class="px-1.5 py-1 text-right">OI</th>
@@ -187,6 +219,11 @@
                 <th class="px-1.5 py-1 text-left">OI</th>
                 <th class="px-1.5 py-1 text-left font-semibold">Price</th>
                 <th class="px-1.5 py-1 text-left">Delta</th>
+                @if (chainDensity() === 'greeks') {
+                  <th class="px-1.5 py-1 text-left" pTooltip="Gamma" tooltipPosition="top">Γ</th>
+                  <th class="px-1.5 py-1 text-left" pTooltip="Theta" tooltipPosition="top">Θ</th>
+                  <th class="px-1.5 py-1 text-left" pTooltip="Vega" tooltipPosition="top">V</th>
+                }
                 <th class="px-0.5 py-1 text-center" pTooltip="Buy (Long)" tooltipPosition="top">L</th>
                 <th class="px-0.5 py-1 text-center" pTooltip="Sell (Short)" tooltipPosition="top">S</th>
               </tr>
@@ -220,6 +257,12 @@
                       (click)="addLegFromChain(row.call, 'call', 'short')"
                     >S</button>
                   </td>
+                  <!-- CALL V / Θ / Γ (UX-Q2: only when chainDensity === 'greeks') -->
+                  @if (chainDensity() === 'greeks') {
+                    <td class="col-call px-1.5 py-1 text-right text-slate-400">{{ row.callVega }}</td>
+                    <td class="col-call px-1.5 py-1 text-right text-slate-400">{{ row.callTheta }}</td>
+                    <td class="col-call px-1.5 py-1 text-right text-slate-400">{{ row.callGamma }}</td>
+                  }
                   <!-- CALL Delta -->
                   <td class="col-call px-1.5 py-1 text-right text-slate-300">{{ row.callDelta }}</td>
                   <!-- CALL Price -->
@@ -251,6 +294,12 @@
                   <td class="col-put col-put-price px-1.5 py-1 text-left text-slate-100 font-semibold">{{ row.putPrice }}</td>
                   <!-- PUT Delta -->
                   <td class="col-put px-1.5 py-1 text-left text-slate-300">{{ row.putDelta }}</td>
+                  <!-- PUT Γ / Θ / V (UX-Q2: mirrored from call side; only when chainDensity === 'greeks') -->
+                  @if (chainDensity() === 'greeks') {
+                    <td class="col-put px-1.5 py-1 text-left text-slate-400">{{ row.putGamma }}</td>
+                    <td class="col-put px-1.5 py-1 text-left text-slate-400">{{ row.putTheta }}</td>
+                    <td class="col-put px-1.5 py-1 text-left text-slate-400">{{ row.putVega }}</td>
+                  }
                   <!-- PUT Long -->
                   <td class="col-put px-0.5 py-1 text-center">
                     <button
