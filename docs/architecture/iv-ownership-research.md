@@ -8,9 +8,11 @@
 > reference. Audit-trail of decisions, math, constraints, accepted/deferred/
 > declined reviewer feedback, and the forward plan — all in one file.
 >
-> **Last revised:** 2026-04-27 (consolidation pass after PR #42 + reviewer
-> round 4 feedback). Re-revise this single doc on subsequent reviews; do not
-> spawn sibling docs.
+> **Last revised:** 2026-04-29 (post §9-backlog cleanup PRs #45–#49 +
+> CodeRabbit auto-review feedback). Previous revision: 2026-04-27
+> (consolidation pass after PR #42 + reviewer round 4 feedback).
+> Re-revise this single doc on subsequent reviews; do not spawn
+> sibling docs.
 
 ---
 
@@ -72,9 +74,11 @@ three ways:
 > IV time series; capture our own with full provenance starting the day the
 > recorder ships.
 
-The work shipped over five PRs spanning Python, .NET, and Angular layers (the
-work itself is summarised below; the operational mechanics — cron registration,
-frontend wiring — were intentionally separate from the math reviews).
+The work shipped across many PRs spanning Python, .NET, and Angular layers
+(audit trail in [§11 Pull-request audit trail](#pull-request-audit-trail)).
+The operational mechanics — cron registration, frontend wiring — were
+intentionally split from the math-bearing PRs so the math reviews stayed
+focused.
 
 ### 2.2 What "owning the math" implies in practice
 
@@ -85,9 +89,11 @@ frontend wiring — were intentionally separate from the math reviews).
 - **Per-strike provenance** carried through the IV solver so we know how much
   of the resulting IV is structurally synthetic vs. backed by real OPRA mid
   quotes.
-- **Multi-snapshot daily recorder** (3 slots/day, 09:35 / 12:30 / 16:00 ET)
-  writing raw bid/ask + computed IV + provenance + rate/dividend, so future
-  solver upgrades can re-derive without re-fetching from Polygon.
+- **Multi-snapshot daily recorder** (4 slots/day, 09:35 / 12:30 / 15:55 /
+  16:00 ET — 15:55 is a trial slot running alongside 16:00; see [§7.6](#76-recorder-snapshot-schedule-slots))
+  writing raw bid/ask + computed IV + provenance + rate/dividend +
+  `health_score`, so future solver upgrades can re-derive without
+  re-fetching from Polygon.
 - **Continuous confidence gating** that scales VRP signal strength by
   `health × (1 − vcs)` and hard-gates below a configurable floor.
 
@@ -346,14 +352,25 @@ Per-IV computation produces an `IvProvenance` record
 ```python
 @dataclass(frozen=True)
 class IvProvenance:
-    iv_source: Literal["vix_style", "internal_solver"]
+    iv_source: Literal["internal_solver", "polygon_field"]
     price_source_mix: dict[PriceSource, float]   # share by COUNT
     variance_contribution_synthetic: float       # share by VARIANCE
     strike_coverage_score: float                 # 0..1, OTM wing depth
+    max_single_strike_share: float               # 0..1, domination diagnostic
     per_strike_contributions: list[dict] | None  # opt-in via debug=True
 ```
 
 `PriceSource ∈ {"opra_mid", "opra_mid_recorded", "synthetic_close_proxy"}`.
+`IvSource = "polygon_field"` is reserved for a future declined-tier (see
+[§7.10](#710-sovereignty-no-polygon-iv-fallback-tier)); production output is
+always `"internal_solver"`.
+
+The provenance object is exposed on the wire via `IvProvenancePayload` in
+`app/routers/iv30.py` — every field above is declared on the Pydantic
+response model, so `/api/edge/iv30/{vix-style,parametric}` consumers see
+the full record. (CodeRabbit caught a real bug here: an undeclared field
+on the response model is silently dropped by FastAPI; see
+[§8.4](#84-coderabbit-automated-review-2026-04-29).)
 
 **The two synthetic-share metrics — count vs variance.** This is the single
 most consequential design choice in the stack.
@@ -375,6 +392,19 @@ as a secondary diagnostic. See [§7](#7-decisions-log) for the full rationale.
 **`strike_coverage_score`:** `min(1, sigma_wings_covered / 5)` — how many
 standard deviations OTM the chain extends before zero-bid truncation. Low score
 = wing-truncated VIX replication.
+
+**`max_single_strike_share`:** `max_i(c_i / Σ c_j)` over the strikes that
+survived wing truncation. **Diagnostic, not gating.** Surfaces the pathological
+case from [§8.1.4](#814-confirmed-correct-no-action--variance-share-gating): a
+single deep-OTM synthetic strike dominating the integral via `1/K²` weighting.
+Healthy SPY-like chains land near `1/n_kept` (post-truncation strike count);
+empirically observed values are around 0.34 on a 21-strike σ=0.20 BS chain
+because surviving K0-adjacent strikes carry larger centred-`dK` weights.
+Values above ~0.30 warrant inspection of `per_strike_contributions` to
+identify the dominating leg. Combined across two expiries via `max(prov1,
+prov2)` — worst-case semantics matching `strike_coverage_score`'s `min`.
+Set to `0.0` on the parametric ATM-only path, where the metric is not
+meaningful (mirrors the `strike_coverage_score = 0.0` convention there).
 
 ### 4.7 Confidence gating
 
@@ -415,16 +445,25 @@ still admits attenuated signals.
 **Imputed-prior policy for missing `health_score`** (added as part of the
 reviewer feedback log; see [§8.1.1](#811-accepted--health_score-default)). When
 a caller supplies `variance_contribution_synthetic` but omits `health_score`
-(the typical recorder-fallback shape — recorder provenance does not yet carry
-a stored health number), `_parse_iv_series` defaults to `health_score = 0.5`,
-not `1.0`.
+(or sends it as JSON-explicit `null`), `_parse_iv_series` defaults to
+`health_score = 0.5`, not `1.0`.
+
+**Two shapes count as "missing".** The key being absent and the key being
+present with value `null` both mean "no evidence" on the wire and both
+trigger the imputed prior. Both also flip `health_imputed_now: True` so the
+UI can flag the bar. CodeRabbit caught the explicit-null case as a real bug
+on PR #47 — `float(p.get("health_score", 0.5))` crashed via `float(None)
+→ TypeError → 500` for callers explicitly marking "no value". Coalesce
+fix landed in `_parse_iv_series` and `_parse_iv_series_for_regime`; see
+[§8.4](#84-coderabbit-automated-review-2026-04-29) for context.
 
 The previous default of `1.0` encoded "fully trusted stability" with zero
 evidence — the same kind of "defensible-looking but wrong" synthesis we use to
 reject mapping `strike_coverage_score` 1:1 to `health_score`. The conservative
 prior of 0.5 + an explicit `health_imputed_now: bool` flag on the response's
 `explanation` block lets consumers flag the bar visually rather than treat the
-confidence as authoritative.
+confidence as authoritative. The frontend now renders this as an "imputed"
+pill in the IV-confidence banner (frontend file map in §13.3).
 
 **Concrete behaviour.** If a recorder snapshot has `vcs = 0` and no health:
 
@@ -433,18 +472,29 @@ confidence as authoritative.
 | Old (1.0) | 1.0 | "Full trust, signal at full strength" — false certainty |
 | **New (0.5)** | **0.5** | "We don't know stability, attenuate" — honest |
 
+**Recorder-side resolution (PR #47, 2026-04-28).** The recorder now
+computes `health_score` at write time via `compute_iv30_health_normalized`
+and persists it on `RecordedIvSnapshot` ([§4.8](#48-iv30-health-stability-suite)).
+`_iv_series_from_recorder` propagates the stored value to consumers when
+present. The imputed prior remains the fallback for legacy rows (written
+before this PR, lacking the field) and for rows whose health computation
+itself failed; the path is no longer always-imputed for recorder bars,
+but the policy stays in place for the unhealthy edge cases.
+
 ### 4.8 IV30 health stability suite
 
-A diagnostic available as a callable helper (`app/volatility/iv30_health.py`),
-**not yet wired into production gating** (see [§9 Future plan](#9-future-plan--deferred-items)):
+`app/volatility/iv30_health.py` produces a per-build composite stability
+score on `[0, 1]` plus the component sub-scores:
 
 ```python
-@dataclass
+@dataclass(frozen=True)
 class Iv30HealthBreakdown:
-    resampling_score:                float  # exp(−ΔIV_bps / 10)
-    strike_grid_score:               float  # exp(−ΔIV_bps / 20)
-    parametric_vs_replication_score: float  # exp(−ΔIV_bps / 50)
-    composite: float  # unweighted mean
+    score: float                              # composite (unweighted mean)
+    resampling_score: float                   # exp(−ΔIV_bps / 10)
+    strike_grid_score: float                  # exp(−ΔIV_bps / 20)
+    parametric_vs_replication_score: float | None  # exp(−ΔIV_bps / 50)
+    delta_resampling_bps: float
+    delta_strike_grid_bps: float
 ```
 
 | Sub-score | Perturbation | Half-life |
@@ -453,10 +503,28 @@ class Iv30HealthBreakdown:
 | `strike_grid_score` | half-resolution grid | 20 bps |
 | `parametric_vs_replication_score` | parametric ATM vs VIX-replication | 50 bps |
 
-Status: function exists. The regime classifier wiring (Step F of the original
-plan) consumes it via `feature_weight = max(0, 2·h − 1) · (1 − vcs)` per refit;
-the realized-vs-iv path defaults to the imputed prior of `0.5` when no
-`health_score` is supplied.
+**Two callable variants** (PR #47):
+
+- `compute_iv30_health` — legacy `OptionQuote` (bare-float bid/ask) input.
+  Used by the existing iv30_stability test suite which pre-dates the
+  normalized-quote refactor.
+- `compute_iv30_health_normalized` — `NormalizedOptionQuote` input.
+  Wraps `vix_style_iv30_with_provenance` (provenance discarded; only σ
+  used). Threads `target_calendar_days` through so the score reflects the
+  caller's requested tenor, not an implicit 30. A parity test pins the
+  two variants byte-for-byte (`atol=1e-9`) on a clean OPRA chain.
+
+**Status** (post PR #47, 2026-04-28): wired into the recorder write path
+via `record_iv_snapshot`, computed off the same chain that produced the
+IV30, and persisted on `RecordedIvSnapshot.health_score`. A health failure
+logs and continues with `health_score=None`; the IV row is still written
+(the IV is useful even without the regime-feature-weighting boost). The
+`_iv_series_from_recorder` fallback propagates the stored value through
+to `_parse_iv_series_for_regime`, which already consumed `health_score`
+via `feature_weight = max(0, 2·h − 1) · (1 − vcs)` — the regime path now
+actually receives non-imputed values for recorder bars. Bars from before
+the recorder stored health (legacy JSONL rows) and bars where the health
+computation failed still hit the imputed prior of 0.5.
 
 ### 4.9 Risk-free rate and dividend yield
 
@@ -542,7 +610,7 @@ stocks may need a more careful treatment.
        │  chain preserved)        │     │   score            │
        └──────────┬───────────────┘     └────────────────────┘
                   │
-                  ▼  Quartz cron (09:35, 12:30, 16:00 ET, Mon–Fri)
+                  ▼  Quartz cron (09:35, 12:30, 15:55, 16:00 ET, Mon–Fri)
        ┌──────────────────────────┐
        │ JsonlIvSnapshotStore     │  (append-only, one file/ticker)
        │ (forward-compatible w/   │  Postgres cutover after 30 sessions
@@ -615,12 +683,14 @@ favoured.
 | HF two-component RV | Drives `vrp_forward` / `vrp_z` for 15-min bars (YZ-21 fallback for daily) |
 | ETH/RTH session toggle | UI chip → `session` field on request → estimator |
 | FRED + Polygon (r, q) | Snapshot router populates → 3 pricing pages auto-populate |
-| Live `/iv30/{vix-style,parametric}` | Endpoints live; live overlay marker rendered on the chart |
-| Multi-snapshot recorder | Cron runs Mon–Fri; JSONL store (Postgres after burn-in) |
-| Realized-vs-IV recorder fallback | Auto-reads when `iv_series` omitted; sparse, no ffill |
-| Confidence gating | Continuous attenuation + hard floor; banner surfaces iv_source / confidence / floor_gated / n_gated |
+| Live `/iv30/{vix-style,parametric}` | Endpoints live; full `IvProvenance` (incl. `max_single_strike_share`) on the wire; live overlay marker rendered on the chart |
+| Multi-snapshot recorder | 4 slots/day Mon–Fri (09:35 / 12:30 / 15:55 / 16:00 ET — 15:55 trial); JSONL store (Postgres after burn-in) |
+| Recorder-side `health_score` | Computed off the same chain at write time via `compute_iv30_health_normalized`; persisted on `RecordedIvSnapshot` |
+| Realized-vs-IV recorder fallback | Auto-reads when `iv_series` omitted; sparse, no ffill; propagates `vcs` and `health_score` when present |
+| Confidence gating | Continuous attenuation + hard floor; banner surfaces iv_source / confidence / floor_gated / n_gated / **healthImputed** pill |
 | Live IV30 marker on chart | `EdgeApiService.getLiveIv30` (vix-style → parametric fallback); marker drawn at `(L+innerW, yI(value))` |
-| `compute_iv30_health` | Callable helper — regime classifier integration is queued (see [§9](#9-future-plan--deferred-items)) |
+| `compute_iv30_health` | Wired into recorder write path (PR #47); regime classifier consumes via `_parse_iv_series_for_regime` once recorder rows carry the stored value |
+| `max_single_strike_share` | Computed in `replicate_expiry_variance_with_provenance`; combined as `max(prov1, prov2)` across two expiries; exposed on `IvProvenancePayload` (diagnostic only — no gating) |
 | py_vollib parity | CI-only (test); not a runtime dependency |
 
 ---
@@ -765,14 +835,15 @@ CREATE TABLE recorded_iv_snapshots (
     id              BIGSERIAL PRIMARY KEY,
     ticker          TEXT NOT NULL,
     snapshot_ts     BIGINT NOT NULL,        -- int64 ms UTC
-    slot            TEXT NOT NULL,          -- '09:35' | '12:30' | '16:00'
+    slot            TEXT NOT NULL,          -- '09:35' | '12:30' | '15:55' | '16:00'
     spot            DOUBLE PRECISION NOT NULL,
     rate            DOUBLE PRECISION NOT NULL,
     dividend        DOUBLE PRECISION NOT NULL,
     iv30_vix_style  DOUBLE PRECISION,       -- nullable on solver failure
     iv30_parametric DOUBLE PRECISION,
-    iv_provenance   JSONB NOT NULL,
+    iv_provenance   JSONB NOT NULL,         -- includes max_single_strike_share
     raw_chain       JSONB NOT NULL,
+    health_score    DOUBLE PRECISION,       -- nullable on legacy / health-failed rows
     UNIQUE (ticker, snapshot_ts)
 );
 CREATE INDEX recorded_iv_snapshots_ticker_ts ON recorded_iv_snapshots (ticker, snapshot_ts);
@@ -783,8 +854,10 @@ during the first 30 sessions outweighed the operational nicety.
 
 ### 7.5 Why .NET host owning the cron, not Python in-process?
 
-**A.** Three Quartz triggers (09:35 / 12:30 / 16:00 ET, Mon–Fri) configured in
-the .NET host POST to Python's `/api/iv-recorder/snapshot` per ticker.
+**A.** Four Quartz triggers (09:35 / 12:30 / 15:55 / 16:00 ET, Mon–Fri —
+15:55 is a trial slot, see [§7.6](#76-recorder-snapshot-schedule-slots))
+configured in the .NET host POST to Python's `/api/iv-recorder/snapshot`
+per ticker.
 
 **Why.** (1) Existing job rail in .NET. (2) Single operational story for all
 crons. (3) Python recorder stays stateless — easier to test, easier to
@@ -795,18 +868,25 @@ piece (broker) for one cron.
 
 ### 7.6 Recorder snapshot schedule (slots)
 
-**A.** 09:35 / 12:30 / 16:00 ET, Mon–Fri, configurable.
+**A.** 09:35 / 12:30 / 15:55 / 16:00 ET, Mon–Fri, configurable.
 
-**Why.** Three samples is the elbow on cost vs. sampling-bias reduction. Two
-would already be a 2× improvement over close-only. 09:35 dodges the opening
-5-minute imbalance. 16:00 captures the print. 12:30 is mid-session and away
-from any London/Asia handoff weirdness.
+**Why.** Three samples was the elbow on cost vs. sampling-bias reduction at
+the original cut. 09:35 dodges the opening 5-minute imbalance. 16:00
+captures the print. 12:30 is mid-session and away from any London/Asia
+handoff weirdness.
 
-**Open question (deferred).** A reviewer suggested that **15:55** may be a
-cleaner alternative to **16:00** (closer to the close without auction
-microstructure noise). Cheap to test by adding 15:55 as a fourth slot for a
-trial month and measuring solver failure rate, spread width, vcs, and IV30
-stability. Tracked in [§9 Future plan](#9-future-plan--deferred-items).
+**15:55 trial slot active (PR #45, started 2026-04-28).** A reviewer
+suggested 15:55 may be a cleaner alternative to 16:00 (closer to the close
+without closing-auction microstructure noise). Both are now recorded in
+parallel for a trial month so we can measure — per slot — solver failure
+rate, spread width, `vcs`, `max_single_strike_share`, and IV30 stability.
+The decision to swap to 15:55-only or keep both is downstream of measurement;
+tracked in [§9 Future plan](#9-future-plan--deferred-items) as an
+explicit follow-up after the recorder accumulates a month of data.
+
+The trial costs +33% storage on the JSONL store (4 rows per ticker per
+session day instead of 3) and +33% Polygon snapshot calls on the .NET
+side; both are negligible at the current single-ticker (SPY) scope.
 
 ### 7.7 Why `confidence_floor = 0.1`?
 
@@ -826,10 +906,11 @@ indistinguishable from zero. Tracked in [§9](#9-future-plan--deferred-items).
 
 ### 7.8 Why no forward-fill of recorder data?
 
-**A.** The recorder writes 1–3 snapshots/day at scheduled slots. Consumers
-expect per-bar IV. We do **not** forward-fill in the service layer. Sparse
-stays sparse; downstream `.ffill()` calls are explicit, per-call, and never
-persisted.
+**A.** The recorder writes 1–4 snapshots/day at scheduled slots (the upper
+bound increased from 3 to 4 with the 15:55 trial slot, [§7.6](#76-recorder-snapshot-schedule-slots)).
+Consumers expect per-bar IV. We do **not** forward-fill in the service
+layer. Sparse stays sparse; downstream `.ffill()` calls are explicit,
+per-call, and never persisted.
 
 **Why.** Forward-filling at the service boundary would make every downstream
 consumer assume densely-sampled IV, hiding the gaps. The gap density is itself
@@ -886,6 +967,17 @@ prior + explicit imputed flag is honest about what we don't know.
 This change was made in response to reviewer feedback; see
 [§8.1.1](#811-accepted--health_score-default).
 
+**Input-boundary defense for explicit `null` (PR #47b/#49 follow-up).** The
+parsers must treat `{"health_score": null, ...}` identically to a missing
+key — both are JSON shapes for "no evidence" — and both must coalesce to
+the imputed prior, raise no exception, and flip `health_imputed_now: True`.
+The naïve `float(p.get("health_score", 0.5))` only handles the missing-key
+case; explicit `null` produced `float(None) → TypeError → 500`. CodeRabbit
+caught this on PR #47 review; see [§8.4](#84-coderabbit-automated-review-2026-04-29).
+Both `_parse_iv_series` and `_parse_iv_series_for_regime` now use a
+two-step coalesce (`p.get(...)` then `0.5 if raw is None else float(raw)`)
+and the `imputed_map` flags both shapes.
+
 ---
 
 ## 8. Reviewer feedback log
@@ -915,8 +1007,10 @@ contradiction with our own §3.6-equivalent rejection of synthesising
 default missing `health_score` to `0.5`; `_parse_iv_series` returns a parallel
 `health_imputed` boolean Series; the response's `explanation` block carries
 `health_imputed_now: bool`. Documented in [§4.7](#47-confidence-gating) and
-[§7.11](#711-imputed-prior-policy-for-missing-health_score). Frontend
-`healthImputed` UI plumbing is queued in [§9](#9-future-plan--deferred-items).
+[§7.11](#711-imputed-prior-policy-for-missing-health_score). The frontend
+`healthImputed` UI plumbing shipped in PR #48 (banner pill); the
+recorder side now stores real `health_score` so the imputed prior is the
+exception rather than the rule for recorder bars.
 
 #### 8.1.2 Accepted — Cboe dissemination caveat
 
@@ -1001,7 +1095,7 @@ calibration work can run.
 [§7.7 Why `confidence_floor = 0.1`](#77-why-confidence_floor--01) and listed
 in [§9](#9-future-plan--deferred-items).
 
-#### 8.2.3 Deferred — 15:55 vs 16:00 slot experiment
+#### 8.2.3 Resolved 2026-04-28 in PR #45 — 15:55 vs 16:00 slot experiment
 
 **Reviewer's critique.** "I would prefer 15:55 over 16:00 for cleaner tradable
 quote quality and less auction microstructure noise. If you keep 16:00, I'd
@@ -1013,30 +1107,52 @@ estimate. That's a cheap empirical decision."
 config-only change (`appsettings.json` slot list). Not bundled into the same
 PR as the imputed-prior fix to keep commit messages focused.
 
-**Action taken.** Listed as the next operational PR in
+**Action taken.** Shipped via PR #45 (recorder slot list) + PR #49
+(docstring follow-up): `SLOT_CHOICES` widened to a 4-tuple, Quartz cron
+config gained the entry, doc comments updated. Trial recording started
+2026-04-28; the measurement-and-decide step (keep both / swap to
+15:55-only) is queued as a deferred follow-up — see
+[§7.6](#76-recorder-snapshot-schedule-slots) and
 [§9](#9-future-plan--deferred-items).
 
-#### 8.2.4 Deferred — frontend `healthImputed` UI plumbing
+#### 8.2.4 Resolved 2026-04-28 in PR #48 — frontend `healthImputed` UI plumbing
 
 **Our follow-up to §8.1.1.** The Python-side imputed-prior change surfaces
-`health_imputed_now: bool` on the response. The frontend should:
+`health_imputed_now: bool` on the response. The frontend now:
 
-- Extend `IvConfidenceSummary` with `healthImputed: boolean | null`.
-- Render a small "imputed" tag in the confidence banner when true.
-- Update component spec.
+- Extends `IvConfidenceSummary` with `healthImputed: boolean | null`.
+- Renders a small "imputed" pill in the confidence banner when true,
+  with `data-testid="iv-confidence-imputed"`, `title=` explaining the
+  imputed-prior policy, and `aria-label` for screen readers.
+- Three new component-spec tests cover render-when-true, hide-when-false,
+  hide-when-null.
 
-Not in this PR (per scope decision); listed in
-[§9](#9-future-plan--deferred-items).
+The pill is styled to mirror the sibling `.iv-conf-pill` and `.iv-conf-floor`
+(raw spans for inline mono-spaced micro-labels) with an amber accent to
+communicate "caveat" rather than "alarm". CodeRabbit suggested switching
+to a PrimeNG `<p-tag>`; declined to preserve local visual consistency
+across the three sibling pills (see [§8.4](#84-coderabbit-automated-review-2026-04-29)).
 
-#### 8.2.5 Deferred — per-strike influence cap diagnostic
+#### 8.2.5 Resolved 2026-04-28 in PR #46 — per-strike influence cap diagnostic
 
 **Reviewer's note.** "The pathological case (single deep OTM synthetic
 dominating by `1/K²`) is theoretically possible but usually not the practical
 failure mode in equity index strips; you should cap per-strike influence
 diagnostics to detect domination artefacts."
 
-**Our response.** Low priority. Captured as a diagnostic-only enhancement to
-`iv_provenance.py`; no action in this PR.
+**Our response.** Low priority but mechanical; shipped as a diagnostic-only
+field on `IvProvenance`, not gating.
+
+**Action taken.** Added `max_single_strike_share: float` to `IvProvenance`
+([§4.6](#46-iv-provenance-schema)). Computed in
+`replicate_expiry_variance_with_provenance` by tracking `max(c_i)` in the
+existing per-strike loop and dividing by `contrib_total`. Combined across
+two expiries via `max(prov1, prov2)` — worst-case semantics consistent
+with `strike_coverage_score`'s `min`. Exposed on `IvProvenancePayload`
+so the field reaches `/api/edge/iv30/{vix-style,parametric}` consumers
+(this last step was caught by CodeRabbit on the initial PR — undeclared
+fields on a FastAPI response model are silently dropped; see
+[§8.4](#84-coderabbit-automated-review-2026-04-29)).
 
 ### 8.3 Declined items
 
@@ -1067,6 +1183,105 @@ trail without inventing the new tier.
 worth the surface area. Documented at
 [§7.10](#710-sovereignty-no-polygon-iv-fallback-tier).
 
+### 8.4 CodeRabbit automated review (2026-04-29)
+
+A separate, automated LLM-reviewer (CodeRabbit, configured on the repo)
+posted line-level findings on PRs #45–#48 immediately after they opened.
+Recorded here as a separate subsection from §8.1–§8.3 because the source
+is automated rather than the human quant-LLM channel, but the same
+accept/defer/decline discipline applied. Findings worth keeping a
+record of:
+
+#### 8.4.1 Accepted (PR #45 / #49) — scheduler attribution in docstrings
+
+**Finding.** "Docstring says `.NET JobsController` schedules the cron, but
+scheduling is wired through Quartz (`AddIvRecorder` /
+`IvRecorderRegistration`)."
+
+**Verification.** True — no `JobsController` class actually exists in
+`Backend/`. Both `routers/iv_recorder.py` and `services/iv_recorder.py`
+module docstrings used the wrong attribution (likely drift from an
+earlier draft of the .NET wiring). Fixed in PR #49 by referencing the
+real `AddIvRecorder` / `IvRecorderRegistration` chain. (A residual stale
+reference in `app/routers/jobs.py` is from a different sub-system and
+out of scope; flagged for a separate cleanup pass if/when that router is
+revisited.)
+
+#### 8.4.2 Accepted (PR #46) — `max_single_strike_share` missing from response payload
+
+**Finding.** "The new diagnostic is set on `IvProvenance` but
+`IvProvenancePayload` and `_provenance_to_payload()` don't include it; FastAPI
+response models silently drop undeclared fields, so `/api/edge/iv30/*`
+never surfaces the new metric."
+
+**Verification.** True. Verified via a one-shot eval that
+`payload.model_dump()` after the fix contains the field. Added to
+`IvProvenancePayload` (defaulted to `0.0` to match the parametric path's
+"not meaningful" semantics) and threaded through
+`_provenance_to_payload`. Test extended to assert presence on both the
+vix-style and parametric responses.
+
+This is a category of bug worth remembering: every new field on a typed
+provenance object that needs to reach the wire requires a parallel update
+to the Pydantic response model. The internal `IvProvenance` and the wire
+`IvProvenancePayload` must drift together.
+
+#### 8.4.3 Accepted (PR #47) — `target_calendar_days` not threaded through health
+
+**Finding.** "`compute_iv30_health_normalized` always uses the implicit
+30-day target while `record_iv_snapshot` accepts `target_calendar_days` in
+[1, 180]; non-default tenors raise `target N not bracketed` inside the
+wrapped vix-style call, get swallowed by the recorder's outer try/except,
+and persist as `health_score=None`."
+
+**Verification.** True. Added `target_calendar_days: int = 30` parameter
+to `compute_iv30_health_normalized` and `_vix_iv30_normalized`; recorder
+call site passes `target_calendar_days=target_calendar_days`. Two tests
+added: `target_calendar_days=28` produces a valid score on a [21, 35]
+chain; `target_calendar_days=60` raises `not bracketed` (confirms the
+parameter is threaded all the way down rather than clamped).
+
+The default stays at 30 to preserve parity with the legacy
+`compute_iv30_health` path; the parity test continues to pass.
+
+#### 8.4.4 Accepted (PR #47, outside-diff) — explicit `null` `health_score` crashes parsers
+
+**Finding.** "`float(p.get("health_score", 0.5))` only handles a missing
+key. If a caller sends `{"health_score": null, ...}` on the wire,
+`float(None)` raises TypeError and the route 500s. Coalesce explicit None
+to the 0.5 prior before casting."
+
+**Verification.** True. Both `_parse_iv_series_for_regime` and
+`_parse_iv_series` patched: `h_raw = p.get("health_score"); h = 0.5 if
+h_raw is None else float(h_raw)`. Same shape applied to
+`variance_contribution_synthetic` for symmetry. The `imputed_map` was
+also flagging only missing-key as imputed; updated to also flag
+present-but-null because both shapes are equally "no evidence". Three
+tests added covering the null-coalescing behaviour.
+
+This is documented inline at
+[§7.11](#711-imputed-prior-policy-for-missing-health_score) so future
+contributors see the explicit-null shape as a first-class case rather
+than a defensive afterthought.
+
+#### 8.4.5 Declined (PR #48) — replace `<span class="iv-conf-imputed">` with PrimeNG `<p-tag>`
+
+**Finding.** "Use the PrimeNG `Tag` component (`<p-tag>`) for the
+imputed badge to align with the design system."
+
+**Decision.** Declined. The two sibling pills already in the same banner
+(`.iv-conf-pill`, `.iv-conf-floor`) are also raw `<span>` elements —
+short inline mono-spaced micro-labels rather than full Tag components.
+Switching only the new "imputed" pill to `<p-tag>` would create visual
+inconsistency on a single line: PrimeNG's Tag has its own padding, font,
+and severity-scaling defaults that don't match the existing `iv-conf-*`
+pill shape. A coordinated migration of all three siblings to `<p-tag>` is
+arguably the right cleanup, but that's a separate (broader) refactor and
+out of scope for a UI-plumbing PR whose purpose was to surface a single
+new flag. The accessibility ask in [§8.2.4](#824-resolved-2026-04-28-in-pr-48--frontend-healthimputed-ui-plumbing)
+("small 'imputed' tag in the confidence banner") is already met by the
+current span via `aria-label`, `title`, and the `data-testid` hook.
+
 ---
 
 ## 9. Future plan / deferred items
@@ -1076,16 +1291,27 @@ condition that should kick it off.
 
 | Item | Trigger | Effort | Reference |
 |---|---|---|---|
-| **15:55 slot config experiment** | Next operational PR | 1-line `appsettings.json` change + 1-month measurement | [§7.6](#76-recorder-snapshot-schedule-slots), [§8.2.3](#823-deferred--1555-vs-1600-slot-experiment) |
-| **Frontend `healthImputed` UI plumbing** | Anytime; queued | ~6 files (`IvConfidenceSummary` + banner + spec) | [§8.2.4](#824-deferred--frontend-healthimputed-ui-plumbing) |
-| **Postgres-backed `IvSnapshotStore`** | Recorder has 30+ sessions of clean data | New `asyncpg` impl + bulk-load migration + cutover | [§7.4](#74-why-jsonl-store-now-postgres-later) |
+| **15:55 vs 16:00 measurement-and-decide** | Recorder has ≥1 month of trial-slot data (started 2026-04-28) | Notebook: per-slot solver-fail / spread / vcs / max_single_strike_share / IV30 stability; pick keep-both vs swap | [§7.6](#76-recorder-snapshot-schedule-slots), [§8.2.3](#823-resolved-2026-04-28-in-pr-45--1555-vs-1600-slot-experiment) |
+| **Postgres-backed `IvSnapshotStore`** | Recorder has 30+ sessions of clean data | New `asyncpg` impl + bulk-load migration + cutover; the `health_score` column comes along for free since the JSONL field is already in `RecordedIvSnapshot` | [§7.4](#74-why-jsonl-store-now-postgres-later) |
 | **Confidence-floor calibration** | ≥30 sessions of clean recorder data | Reliability-curve analysis + new floor value | [§7.7](#77-why-confidence_floor--01), [§8.2.2](#822-deferred--confidence-floor-calibration) |
-| **Realized-vs-IV recorder fallback uses `health_score`** | After Postgres cutover; recorder schema gains a `health_score` column populated by the IV30 stability suite at write time | Extend `RecordedIvSnapshot` + `_iv_series_from_recorder` to propagate health | Implied by [§4.7](#47-confidence-gating) |
 | **Effective-time basis converter (overnight-variance upgrade)** | Phase 2; alongside Postgres cutover | Calibrated `D_eff` per underlying + new tolerance tests | [§4.1](#41-annualisation-conventions-and-basis-converter), [§8.2.1](#821-deferred--basis-converter-overnight-variance-upgrade) |
-| **Per-strike influence cap diagnostic** | Low priority | `iv_provenance.py` extension only | [§8.2.5](#825-deferred--per-strike-influence-cap-diagnostic) |
-| **Wire `compute_iv30_health` into the regime classifier and recorder write path** | Anytime; mechanical | `feature_weight = max(0, 2·h − 1) · (1 − vcs)` per refit | [§4.8](#48-iv30-health-stability-suite) |
 | **Polygon-IV fallback tier** | Live-trading with monitoring SLAs only | New `IvSource` variant + confidence cap + UI flag | [§7.10](#710-sovereignty-no-polygon-iv-fallback-tier), [§8.3.1](#831-declined--polygon-iv-fallback-tier) |
 | **Polygon plan upgrade (historical NBBO)** | Cost/value reassessment after recorder is live for a quarter | New `from_historical_quote` constructor + `PriceSource` variant | [§10](#10-out-of-scope) |
+
+### 9.1 Resolved between 2026-04-27 and 2026-04-29
+
+The five items below shipped during the 2026-04-28 backlog cleanup
+(PRs #45–#49) and have been removed from the active plan. Recorded
+here as a status anchor so a future re-reviewer doesn't re-propose
+them:
+
+| Item | Resolved by | Reference |
+|---|---|---|
+| 15:55 slot config experiment | PR #45 (config) + PR #49 (docstring follow-up) | [§7.6](#76-recorder-snapshot-schedule-slots), [§8.2.3](#823-resolved-2026-04-28-in-pr-45--1555-vs-1600-slot-experiment) |
+| Per-strike influence cap diagnostic | PR #46 (`max_single_strike_share` on `IvProvenance` + payload) | [§4.6](#46-iv-provenance-schema), [§8.2.5](#825-resolved-2026-04-28-in-pr-46--per-strike-influence-cap-diagnostic) |
+| Wire `compute_iv30_health` into recorder write path + regime fallback | PR #47 (`compute_iv30_health_normalized`, recorder persists `health_score`, `_iv_series_from_recorder` propagates) | [§4.8](#48-iv30-health-stability-suite) |
+| Realized-vs-IV recorder fallback uses `health_score` | PR #47 (recorder side; full Postgres-side propagation still gated on Postgres cutover, but the JSONL path is live) | [§4.7](#47-confidence-gating) |
+| Frontend `healthImputed` UI plumbing | PR #48 (`IvConfidenceSummary.healthImputed`, banner pill, three new spec tests) | [§8.2.4](#824-resolved-2026-04-28-in-pr-48--frontend-healthimputed-ui-plumbing) |
 
 ---
 
@@ -1160,7 +1386,12 @@ Listed because the temptation to do them will recur:
 | #40 | feat/iv-router-recorder-fallback | Realized-vs-IV + regime auto-read from recorder |
 | #41 | feat/iv-confidence-banner | IV-source + confidence banner on the realized-vs-iv page |
 | #42 | feat/iv30-live-overlay | Live IV30 marker on the realized-vs-iv chart |
-| (current) | feat/iv-health-imputed-and-research-doc | `health_score` imputed-prior fix + this consolidated research doc |
+| #43 | feat/iv-health-imputed-and-research-doc | `health_score` imputed-prior fix + this consolidated research doc |
+| #45 | feat/iv-recorder-1555-slot | 15:55 trial recorder slot (config + Quartz cron + `SLOT_CHOICES` 4-tuple) |
+| #46 | feat/iv-provenance-strike-influence-cap | `max_single_strike_share` diagnostic on `IvProvenance` + payload + tests |
+| #47 | feat/iv-health-end-to-end | `compute_iv30_health_normalized` wired into recorder write path; `RecordedIvSnapshot.health_score`; `_iv_series_from_recorder` propagation; `target_calendar_days` threading; explicit-null coalescing in parsers |
+| #48 | feat/iv-confidence-health-imputed-ui | Frontend `IvConfidenceSummary.healthImputed` + banner pill + spec tests |
+| #49 | feat/iv-recorder-1555-slot (follow-up) | Docstring scheduler attribution: Quartz `AddIvRecorder`, not `JobsController` |
 
 ---
 
@@ -1218,8 +1449,11 @@ Recorder snapshot with `vcs = 0.30`, no `health_score`:
 | **New (`0.5`)** | `0.5 · 0.70 = 0.35` | Imputed health × moderate vcs |
 
 The signal still fires when `|z_scaled| > threshold` is satisfied; the
-imputed-prior just attenuates by 2× until the recorder stores actual health
-numbers (queued in [§9](#9-future-plan--deferred-items)).
+imputed-prior just attenuates by 2× on bars where the recorder did not
+store an actual health number. Since PR #47 the recorder writes
+`health_score` at each slot, so the 2× attenuation now only fires on
+legacy rows (pre-PR-#47) and on rows where the health computation itself
+failed.
 
 ---
 
@@ -1231,16 +1465,16 @@ numbers (queued in [§9](#9-future-plan--deferred-items)).
 |---|---|
 | `app/volatility/basis.py` | ACT/365 ↔ TRD/252 converter |
 | `app/volatility/conventions.py` | `TRADING_DAYS_PER_YEAR=252`, `CALENDAR_DAYS_PER_YEAR=365` |
-| `app/volatility/vix_replication.py` | CBOE VIX whitepaper replication (with provenance) |
-| `app/volatility/iv30_health.py` | Stability sub-scores + composite |
+| `app/volatility/vix_replication.py` | CBOE VIX whitepaper replication (with provenance, including `max_single_strike_share`) |
+| `app/volatility/iv30_health.py` | Stability sub-scores + composite; legacy `compute_iv30_health` (`OptionQuote`) and `compute_iv30_health_normalized` (`NormalizedOptionQuote`, threads `target_calendar_days`) |
 | `app/volatility/solver.py` | 3-tier IV solver chain |
 | `app/volatility/surface.py` | SVI/SABR/variance-interp smile fitting (not in VRP path) |
 | `app/volatility/price_normalization.py` | `NormalizedOptionPrice`, `PriceSource`, constructors |
-| `app/volatility/iv_provenance.py` | `IvProvenance`, `IvSource` |
+| `app/volatility/iv_provenance.py` | `IvProvenance` (incl. `max_single_strike_share` diagnostic), `IvSource` |
 | `app/services/dividend_service.py` | TTM dividend yield from Polygon |
 | `app/services/rate_dividend_service.py` | (r, q) facade composing FRED + Polygon |
 | `app/services/fred_service.py` | DTB tenor fetch + interpolation |
-| `app/services/iv_recorder.py` | Multi-snapshot recorder + `IvSnapshotStore` (in-memory + JSONL) |
+| `app/services/iv_recorder.py` | Multi-snapshot recorder + `IvSnapshotStore` (in-memory + JSONL); writes `RecordedIvSnapshot.health_score` via `compute_iv30_health_normalized` at write time |
 | `app/services/bs_greeks.py` | Closed-form BSM with continuous q |
 | `app/engine/edge/features_realtime/hf_realized_vol.py` | Two-component HF RV |
 | `app/engine/edge/features_realtime/realized_vol.py` | Daily 4-estimator (chip overlay) |
@@ -1249,9 +1483,9 @@ numbers (queued in [§9](#9-future-plan--deferred-items)).
 | `app/engine/edge/labels_oracle/forward_rv.py` | Forward-shifted daily 4-estimator |
 | `app/engine/edge/vrp.py` | VRP + signal generator with continuous confidence gating |
 | `app/engine/edge/confidence.py` | Confidence formula (single source of truth for VRP + regime) |
-| `app/routers/edge.py` | Realized-vs-IV + regime routes; recorder fallback; imputed-prior policy |
-| `app/routers/iv30.py` | Live IV30 endpoints |
-| `app/routers/iv_recorder.py` | Recorder POST + read endpoints |
+| `app/routers/edge.py` | Realized-vs-IV + regime routes; recorder fallback (propagates `health_score` when present); imputed-prior policy with explicit-null coalescing |
+| `app/routers/iv30.py` | Live IV30 endpoints; `IvProvenancePayload` exposes the full `IvProvenance` (incl. `max_single_strike_share`) on the wire |
+| `app/routers/iv_recorder.py` | Recorder POST + read endpoints; `RecordedSnapshotItem` carries `health_score` |
 | `app/routers/snapshot.py` | Exposes `(r, q)` on chain-snapshot response |
 | `app/models/responses.py` | Snapshot response model |
 
@@ -1263,17 +1497,17 @@ numbers (queued in [§9](#9-future-plan--deferred-items)).
 | `Jobs/IvRecorderJob.cs` | Quartz job firing per slot |
 | `Jobs/IvRecorderRegistration.cs` | Quartz scheduler wiring |
 | `Program.cs` | `AddIvRecorder()` registration |
-| `appsettings.json` | `IvRecorder` section (default slots, tickers, target_calendar_days) |
+| `appsettings.json` | `IvRecorder` section (default slots — 4 entries with 15:55 trial — tickers, target_calendar_days) |
 
 ### 13.3 Frontend — `Frontend/src/app/`
 
 | File | Purpose |
 |---|---|
-| `components/edge/realized-vs-iv/realized-vs-iv.component.{ts,html,scss}` | Page component + IV-source/confidence banner + live-IV30 readout row |
-| `components/edge/realized-vs-iv/realized-vs-iv.component.spec.ts` | Banner + readout tests |
+| `components/edge/realized-vs-iv/realized-vs-iv.component.{ts,html,scss}` | Page component + IV-source/confidence banner (incl. amber "imputed" pill when `healthImputed=true`) + live-IV30 readout row |
+| `components/edge/realized-vs-iv/realized-vs-iv.component.spec.ts` | Banner + readout tests (incl. imputed-pill render-when-true / hide-when-false / hide-when-null) |
 | `components/edge/charts/edge-charts.ts` | Canvas charts; live IV30 marker rendering |
-| `components/edge/services/edge-api.service.{ts,spec.ts}` | `computeRealizedVsIv` + `getLiveIv30` (vix-style → parametric fallback) |
-| `components/edge/services/edge-mock-data.service.ts` | `EdgeData` interface, `IvConfidenceSummary`, `LiveIv30Marker` |
+| `components/edge/services/edge-api.service.{ts,spec.ts}` | `computeRealizedVsIv` + `getLiveIv30`; `extractIvConfidence` maps `explanation.health_imputed_now` → `summary.healthImputed` |
+| `components/edge/services/edge-mock-data.service.ts` | `EdgeData` interface, `IvConfidenceSummary` (incl. `healthImputed: boolean \| null`), `LiveIv30Marker` |
 | `utils/black-scholes.parity.spec.ts` | py_vollib BS parity test (frontend) |
 | `testing/bs-parity/grid.json` | BS parity grid fixture (360 cases) |
 | `test-setup.ts` | jsdom canvas Proxy stub (supports `measureText().width`) |
