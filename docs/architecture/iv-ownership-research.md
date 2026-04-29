@@ -356,7 +356,9 @@ class IvProvenance:
     price_source_mix: dict[PriceSource, float]   # share by COUNT
     variance_contribution_synthetic: float       # share by VARIANCE
     strike_coverage_score: float                 # 0..1, OTM wing depth
-    max_single_strike_share: float               # 0..1, domination diagnostic
+    max_single_strike_share: float               # 0..1, post-gate domination
+    single_strike_dropped: int                   # gate iteration count
+    single_strike_hard_failed: bool              # gate exhausted budget
     per_strike_contributions: list[dict] | None  # opt-in via debug=True
 ```
 
@@ -394,17 +396,48 @@ standard deviations OTM the chain extends before zero-bid truncation. Low score
 = wing-truncated VIX replication.
 
 **`max_single_strike_share`:** `max_i(c_i / Σ c_j)` over the strikes that
-survived wing truncation. **Diagnostic, not gating.** Surfaces the pathological
-case from [§8.1.4](#814-confirmed-correct-no-action--variance-share-gating): a
-single deep-OTM synthetic strike dominating the integral via `1/K²` weighting.
-Healthy SPY-like chains land near `1/n_kept` (post-truncation strike count);
-empirically observed values are around 0.34 on a 21-strike σ=0.20 BS chain
-because surviving K0-adjacent strikes carry larger centred-`dK` weights.
-Values above ~0.30 warrant inspection of `per_strike_contributions` to
-identify the dominating leg. Combined across two expiries via `max(prov1,
-prov2)` — worst-case semantics matching `strike_coverage_score`'s `min`.
-Set to `0.0` on the parametric ATM-only path, where the metric is not
+survived wing truncation **and the dominance gate**. After gate
+iterations, this reflects the *final* (post-drop) share — not the
+pre-drop value. Healthy SPY-like chains land near `1/n_kept`;
+empirically observed values are around 0.34 on a 21-strike σ=0.20 BS
+chain because surviving K0-adjacent strikes carry larger centred-`dK`
+weights. Combined across two expiries via `max(prov1, prov2)` —
+worst-case semantics matching `strike_coverage_score`'s `min`. Set to
+`0.0` on the parametric ATM-only path, where the metric is not
 meaningful (mirrors the `strike_coverage_score = 0.0` convention there).
+
+**`single_strike_dropped` and `single_strike_hard_failed`:** the
+dominance gate's outcome. `dropped` counts iterations of
+drop-and-recompute (capped at `dominance_gate_max_iterations`, default
+2); `hard_failed = True` when the gate exhausted its budget, hit the
+8-strike floor, or was asked to drop K0 (which is structurally
+required). Combined across two expiries by **summing** drop counts and
+**OR-ing** hard-fail flags (either expiry hard-failing invalidates the
+combined IV30). Both fields are persisted on `RecordedIvSnapshot.iv_provenance`
+so a downstream consumer can force `confidence = 0` on hard-failed bars.
+See [§8.2.5](#825-resolved-2026-04-28-in-pr-46--2026-04-29--per-strike-influence-diagnostic-then-active-gate).
+
+#### 4.6.1 Synthetic spread policy (tiered moneyness vs flat)
+
+`app/volatility/price_normalization.py` exposes two synthesis
+constructors. **Live and recorder paths use real bid/ask via
+`from_snapshot_quote` and `from_recorded_snapshot`** — they don't hit
+either of these.
+
+| Constructor | Rule | Use |
+|---|---|---|
+| `from_eod_close(close)` | `half = max($0.05, 0.005·close)` (flat) | Golden-fixture reproducibility (SPY 2024-12-20); not recommended for new paths |
+| `from_eod_close_tiered_moneyness(close, strike, spot)` | Tiered on `\|K−S\|/S`: `<0.05` → 0.5%·spot, `<0.15` → 1.0%·spot, `≥0.15` → 2.0%·spot, $0.05 floor | Default for new synthesis paths; bounds wing-spread bias |
+
+**Why two constructors instead of one parameterised function.** The flat
+rule is preserved verbatim so the SPY 2024-12-20 golden fixture
+reconstructs byte-identically. New code that synthesises historical
+chains uses the tiered constructor. Each rule's text is recorded in
+`half_spread_rule` on every leg's `NormalizedOptionPrice`, so a future
+reader can tell which policy produced any given bar without reading
+the build script. See [§8.5.2](#852-accepted--moneyness-tiered-synthetic-spread-opt-in)
+for the rationale on why the wings need a wider tier (Nemes 2013;
+empirical 10Δ spreads are 1–2% of S, not 0.5%·close).
 
 ### 4.7 Confidence gating
 
@@ -442,44 +475,40 @@ The ramp-from-0.5 is intentional: chains rated "uncertain" (around the existing
 0.5 stability flag) drop out of regime contribution entirely, while VRP gating
 still admits attenuated signals.
 
-**Imputed-prior policy for missing `health_score`** (added as part of the
-reviewer feedback log; see [§8.1.1](#811-accepted--health_score-default)). When
-a caller supplies `variance_contribution_synthetic` but omits `health_score`
-(or sends it as JSON-explicit `null`), `_parse_iv_series` defaults to
-`health_score = 0.5`, not `1.0`.
+**Imputed-evidence policy for missing `health_score`** (see
+[§7.11](#711-imputed-evidence-policy-for-missing-health_score) for the full
+decision history; the short form is below). The policy went through three
+states:
 
-**Two shapes count as "missing".** The key being absent and the key being
-present with value `null` both mean "no evidence" on the wire and both
-trigger the imputed prior. Both also flip `health_imputed_now: True` so the
-UI can flag the bar. CodeRabbit caught the explicit-null case as a real bug
-on PR #47 — `float(p.get("health_score", 0.5))` crashed via `float(None)
-→ TypeError → 500` for callers explicitly marking "no value". Coalesce
-fix landed in `_parse_iv_series` and `_parse_iv_series_for_regime`; see
-[§8.4](#84-coderabbit-automated-review-2026-04-29) for context.
+1. **Original**: `health_score = 1.0` when missing → `confidence = 1 · (1 − vcs)`. Rejected as "fully trusted stability with zero evidence."
+2. **Intermediate (PR #43–#48)**: `health_score = 0.5` imputed prior + explicit `health_imputed_now: bool` flag → `confidence = 0.5 · (1 − vcs)`. Accepted at the time, but later flagged as still-arbitrary: halving every no-evidence confidence is itself a real signal-attenuation choice with no evidence to support the cut.
+3. **Current (2026-04-29)**: **drop-the-health-factor** branch. When `health_score` is missing or explicit `null`, confidence collapses to `(1 − vcs)`; the imputed-ness is still surfaced via `health_imputed_now: True` so the UI flags the bar. The regime-feature path uses a different branch — missing `health_score` ⇒ `feature_weight = 0` directly (not via `0.5 · …`), since the regime ramp already maps `health = 0.5` to weight 0 and the explicit branch makes the intent obvious.
 
-The previous default of `1.0` encoded "fully trusted stability" with zero
-evidence — the same kind of "defensible-looking but wrong" synthesis we use to
-reject mapping `strike_coverage_score` 1:1 to `health_score`. The conservative
-prior of 0.5 + an explicit `health_imputed_now: bool` flag on the response's
-`explanation` block lets consumers flag the bar visually rather than treat the
-confidence as authoritative. The frontend now renders this as an "imputed"
-pill in the IV-confidence banner (frontend file map in §13.3).
+**Asymmetry between the two paths is deliberate.** Confidence is a
+*multiplier on a z-score*, so "no evidence" → "trust the data-quality side
+alone" is the right collapse. Regime feature weight is a *contribution
+weight on a regime input*, so "no evidence" → "no contribution" is the
+right collapse. Both shapes (missing key, explicit `null`) take the same
+branch; the latter is a JSON-explicit "no value" that the parsers must
+not crash on (CodeRabbit on PR #47).
 
-**Concrete behaviour.** If a recorder snapshot has `vcs = 0` and no health:
+**Concrete behaviour** (recorder snapshot with `vcs = 0.30`, no health):
 
-| Default | `confidence` | Operational meaning |
+| Policy | `confidence` | Notes |
 |---|---|---|
-| Old (1.0) | 1.0 | "Full trust, signal at full strength" — false certainty |
-| **New (0.5)** | **0.5** | "We don't know stability, attenuate" — honest |
+| Original (`h = 1.0`) | `1.0 · 0.70 = 0.70` | "Full trust" — false certainty |
+| Intermediate (`h = 0.5`) | `0.5 · 0.70 = 0.35` | Imputed-prior multiplier — arbitrary 2× attenuation |
+| **Current** (drop factor) | **`(1 − 0.30) = 0.70`** | Confidence carried by data-quality alone; UI marks bar imputed |
 
-**Recorder-side resolution (PR #47, 2026-04-28).** The recorder now
-computes `health_score` at write time via `compute_iv30_health_normalized`
-and persists it on `RecordedIvSnapshot` ([§4.8](#48-iv30-health-stability-suite)).
+**Recorder-side resolution (PR #47, 2026-04-28).** The recorder computes
+`health_score` at write time via `compute_iv30_health_normalized` and
+persists it on `RecordedIvSnapshot` ([§4.8](#48-iv30-health-stability-suite)).
 `_iv_series_from_recorder` propagates the stored value to consumers when
-present. The imputed prior remains the fallback for legacy rows (written
-before this PR, lacking the field) and for rows whose health computation
-itself failed; the path is no longer always-imputed for recorder bars,
-but the policy stays in place for the unhealthy edge cases.
+present. The imputed-evidence branch remains the fallback for legacy rows
+(written before this PR, lacking the field) and for rows whose health
+computation itself failed; the path is no longer always-imputed for
+recorder bars, but the policy stays in place for the unhealthy edge
+cases.
 
 ### 4.8 IV30 health stability suite
 
@@ -570,8 +599,46 @@ It will be inaccurate for:
 - Dividend-paying underlyings on/around an ex-date (the proxy doesn't shift on
   ex-date; the option's forward does).
 
-Neither is a blocker for the SPY/QQQ/IWM/DIA universe; options on individual
-stocks may need a more careful treatment.
+Neither is a blocker for the SPY/QQQ/IWM/DIA/EFA universe; **the proxy must
+not be reused for single-name equities without a discrete-dividend
+present-value adjustment** — single-name dividends are large relative to
+spot and clustered around ex-dates, so the smooth TTM proxy mis-prices
+options on those names by the size of the adjacent dividend. See
+[§8.5.10](#8510-documented--ttm-dividend-yield-proxy-scope).
+
+### 4.10 Threshold-firing audit log
+
+`app/engine/edge/threshold_events.py` exposes structured-log emitters
+tagged with `event=<name>` so an operator can grep recorder logs and
+count how often each gate or threshold fired. Vocabulary kept small and
+stable (downstream dashboards key off the names):
+
+| Event | Fired by | Meaning |
+|---|---|---|
+| `iv_dominance_warn` | (reserved — not yet wired) | `max_single_strike_share` entered the warn band but did not cross the hard gate |
+| `iv_dominance_gate` | `services/iv_recorder.py` after `vix_style_iv30_with_provenance` | Dominance gate iterated (drop-and-recompute) or hard-failed; carries `iterations`, `hard_failed`, `strikes_remaining` |
+| `confidence_floor_fired` | `routers/edge.py` realized-vs-IV route, latest-bar | `confidence < floor` on the bar driving the UI banner; signal forced to 0 |
+| `imputed_prior_emitted` | `routers/edge.py` realized-vs-IV route, latest-bar | Latest bar took the drop-health-factor branch (missing or null `health_score`) |
+
+**Scope.** Emit only on the *latest bar* in batched routes (the bar
+driving the UI / signal output) rather than every historical bar in the
+window. This avoids drowning the log on long backfills while still giving
+the operator a per-request "did the gate fire on this run?" signal. The
+recorder side, which writes one bar per slot, emits unconditionally
+whenever the gate fires.
+
+**Why a separate module.** Adding `logger.warning(...)` inline at each
+call site makes the event vocabulary drift; centralising the emitters
+keeps the names stable and gives the operator a single grep target. The
+module is import-cheap (logging only, no external deps) and importing
+from `app/engine/edge/` into `app/services/iv_recorder.py` is the
+direction the architecture already runs.
+
+**No emit from the math layer.** `vix_replication.py` does not import
+threshold-events; the gate's outcome is encoded in `IvProvenance` and
+the consumer (recorder, route) emits when it observes the firing flag.
+This keeps the math layer free of cross-cutting concerns and makes the
+gate logic independently testable.
 
 ---
 
@@ -946,37 +1013,59 @@ preserves the audit trail without inventing a new tier. See
 **Reversal trigger.** If we move to live trading with monitoring SLAs, the
 calculus flips and the fallback tier becomes worth the surface. Tracked.
 
-### 7.11 Imputed-prior policy for missing `health_score`
+### 7.11 Imputed-evidence policy for missing `health_score`
 
 **A.** When a caller (or recorder fallback) supplies `vcs` but omits
-`health_score`, default to `0.5` (a conservative prior), not `1.0`. Surface
-the imputed-ness on the response via `explanation.health_imputed_now: bool`.
+`health_score` (key absent OR explicit JSON `null`), the **VRP confidence
+path** drops the health factor entirely: `confidence = (1 − vcs)`. The
+**regime-feature path** sets `feature_weight = 0` directly. Both flag
+the bar via `health_imputed_now: True` so the UI marks it.
 
-**Why.** Defaulting to `1.0` encodes "fully trusted stability" with zero
-evidence — the same kind of "defensible-looking but wrong" synthesis we use to
-reject mapping `strike_coverage_score` 1:1 to `health_score`. The conservative
-prior + explicit imputed flag is honest about what we don't know.
+**Why drop the factor instead of impute a prior.** The previous policy
+multiplied by a synthetic `0.5` prior. The 2026-04-29 external review
+flagged this as still-arbitrary: a 0.5 multiplier *is* a real
+signal-attenuation choice (it halves every no-evidence confidence), and
+there is no evidence to support the specific cut. "No evidence on
+stability — let data-quality alone carry confidence" is the honest
+collapse. The bar still surfaces as imputed in the UI, so a consumer
+can choose to discount it without the math pretending to.
+
+**Why an asymmetry between the two paths.** Confidence is a *multiplier
+on a z-score*; regime feature weight is a *contribution weight on a
+regime input*. For the multiplier, "no evidence on stability" → "trust
+the other input" is the right collapse. For the contribution weight,
+"no evidence" → "no contribution" is the right collapse. The pre-2026-04-29
+policy had the regime path arrive at `feature_weight = 0` *via*
+`max(0, 2·0.5 − 1) = 0`; the new code makes that intent explicit in the
+parser (a `continue` branch on missing health) so a future reader does
+not have to recompute the chain.
 
 **Rejected alternatives.**
 
-- `None` + explicit gate branch. Cleaner semantically but requires plumbing
-  `Optional[float]` through every gate call.
-- Synthesise from `strike_coverage_score`. Conflates structural and stability
-  properties.
+- **`None` + explicit branch in every consumer.** Cleaner semantically
+  but requires plumbing `Optional[float]` through every gate call.
+- **Synthesise from `strike_coverage_score`.** Conflates structural and
+  stability properties.
+- **Use empirical median health as prior.** Adds a calibration step that
+  itself drifts; deferred until the recorder has months of data and
+  there is empirical evidence the median-prior outperforms the
+  drop-factor branch (no such evidence today).
+
+**Input-boundary defense for explicit `null` (PR #47b/#49 follow-up,
+preserved by the new policy).** The parsers must treat
+`{"health_score": null, ...}` identically to a missing key — both are
+JSON shapes for "no evidence" — both must take the imputed branch, raise
+no exception, and flip `health_imputed_now: True`. The naïve
+`float(p.get("health_score", default))` crashes on explicit `null` via
+`float(None) → TypeError → 500`. Both `_parse_iv_series` and
+`_parse_iv_series_for_regime` use a two-step coalesce (`p.get(...)` then
+branch on `is None`) and the `imputed_map` flags both shapes. Test
+locked at
+`tests/routers/test_edge_recorder_fallback.py::TestParseIvSeriesNullCoalescing`.
 
 This change was made in response to reviewer feedback; see
-[§8.1.1](#811-accepted--health_score-default).
-
-**Input-boundary defense for explicit `null` (PR #47b/#49 follow-up).** The
-parsers must treat `{"health_score": null, ...}` identically to a missing
-key — both are JSON shapes for "no evidence" — and both must coalesce to
-the imputed prior, raise no exception, and flip `health_imputed_now: True`.
-The naïve `float(p.get("health_score", 0.5))` only handles the missing-key
-case; explicit `null` produced `float(None) → TypeError → 500`. CodeRabbit
-caught this on PR #47 review; see [§8.4](#84-coderabbit-automated-review-2026-04-29).
-Both `_parse_iv_series` and `_parse_iv_series_for_regime` now use a
-two-step coalesce (`p.get(...)` then `0.5 if raw is None else float(raw)`)
-and the `imputed_map` flags both shapes.
+[§8.1.1](#811-accepted--health_score-default) and the 2026-04-29 review
+log at [§8.5](#85-external-review-2026-04-29).
 
 ---
 
@@ -1055,45 +1144,103 @@ weighting. Captured as a low-priority follow-up in
 
 ### 8.2 Deferred items
 
-#### 8.2.1 Deferred — basis converter overnight-variance upgrade
+#### 8.2.1 Reframed 2026-04-29 — basis converter "overnight bias" is not a bias on our pipeline
 
-**Reviewer's critique.** "Your basis-converter assumption ('variance accrues
-only on trading days') is structurally biased unless you explicitly model
-overnight/weekend variance contribution. NBER w17422 reports roughly ~30% of a
-trading day's volatility is realised overnight on average, and weekend
-effective time is well below calendar-time scaling. Recommendation: keep the
-current converter as baseline; add an effective-time converter
-`σ_TRD252 = σ_ACT365 · √(252/365 · D_eff/N)` where `D_eff` is calendar days
-weighted by session type. Calibrate `D_eff` from your own realized
-decomposition per underlying."
+**Reviewer's critique (original 2026-04-27).** "Your basis-converter
+assumption ('variance accrues only on trading days') is structurally
+biased unless you explicitly model overnight/weekend variance
+contribution. NBER w17422 reports roughly ~30% of a trading day's
+volatility is realised overnight on average, and weekend effective time
+is well below calendar-time scaling. Recommendation: keep the current
+converter as baseline; add an effective-time converter
+`σ_TRD252 = σ_ACT365 · √(252/365 · D_eff/N)` where `D_eff` is calendar
+days weighted by session type."
 
-**Our response.** Accepted as a real theoretical limitation, deferred to Phase
-2 work for two reasons:
+**Reframing on 2026-04-29 review.** The critique conflates two things:
 
-1. Calibrating `D_eff` requires per-underlying realised decomposition we
-   don't have until the recorder has 30+ sessions of clean data.
-2. It's a substantial code change (converter + calibration pipeline + tests)
-   that should land alongside the Postgres cutover, not as a one-off.
+1. **Basis conversion as a unit conversion** — what `basis.py` does. This
+   is variance-preserving by construction: σ_ACT365 and σ_TRD252 describe
+   the *same total variance over the same window*, just in different
+   units. There is no bias to introduce or remove here; the algebra is a
+   tautology over (N, D, 252, 365).
+2. **IV / RV comparison-space** — what the VRP statistic compares. *This*
+   is where overnight matters: if RV omits overnight returns, the IV-RV
+   comparison is on mismatched canvases.
 
-**Action taken.** Documented as a known limitation at
-[§4.1 Annualisation conventions and basis converter](#41-annualisation-conventions-and-basis-converter)
-("Known limitation deferred to Phase 2"). Listed in
-[§9 Future plan](#9-future-plan--deferred-items) with the NBER reference.
+Our HF two-component RV estimator
+([§4.2](#42-realised-volatility-estimators)) **already includes** the
+overnight squared return alongside the intraday 15-min sum, so IV30 and
+RV30 on our pipeline are both overnight-inclusive. The reviewer's
+flagged bias does not apply.
 
-#### 8.2.2 Deferred — confidence-floor calibration
+**Residual concern (still real, but reframed).** The single squared
+overnight return is a *high-variance estimator* of overnight integrated
+variance (Hansen–Lunde 2005, Martens 2002). For SPY, NBER w17422 puts
+overnight at ~30% of total variance — non-trivial. A noisier RV makes
+the VRP z-score noisier (wider confidence intervals on the lookback)
+without biasing it. Candidate fixes — multi-day pooling of the overnight
+component, Hansen–Lunde-weighted overnight, two-scale RV — are now
+tracked under [§9 Future plan](#9-future-plan--deferred-items) as
+"overnight-component noise reduction (post-recorder)" rather than "basis
+converter upgrade."
 
-**Reviewer's critique.** "Hard floor 0.1 is not obviously wrong, but currently
-heuristic. Calibrate using out-of-sample reliability curves: bin by confidence
-deciles, measure directional hit rate / IC / strategy Sharpe by bin, choose
-floor where edge is statistically indistinguishable from zero (or negative)."
+**Action taken (2026-04-29).** Updated
+[`docs/references/iv-rv-basis-alignment.md`](../references/iv-rv-basis-alignment.md)
+with an "Open: overnight-component noise" section pointing at the three
+candidate estimators and the trigger condition (forward recorder data
+showing overnight noise dominates the VRP signal). No code change today.
 
-**Our response.** Accepted methodology; gated on having ≥30 sessions of clean
-recorder data (we don't yet). The current `0.1` is the placeholder until the
-calibration work can run.
+#### 8.2.2 Reframed 2026-04-29 — confidence-shape calibration (harness wired, run trigger pending data)
 
-**Action taken.** Documented at
-[§7.7 Why `confidence_floor = 0.1`](#77-why-confidence_floor--01) and listed
-in [§9](#9-future-plan--deferred-items).
+**Reviewer's critique (original 2026-04-27).** "Hard floor 0.1 is not
+obviously wrong, but currently heuristic. Calibrate using out-of-sample
+reliability curves: bin by confidence deciles, measure directional hit
+rate / IC / strategy Sharpe by bin, choose floor where edge is
+statistically indistinguishable from zero (or negative)."
+
+**Reframing on 2026-04-29 review.** The reviewer corrected the framing:
+confidence is a *multiplier on a z-score*, not a probability, so
+reliability diagrams (which calibrate predicted probabilities against
+empirical hit rates) are the wrong primitive. The right ranking metric
+is *signal quality on the scaled z-score* — information coefficient
+(Spearman corr of `z_scaled` vs forward return) and the realized Sharpe
+of the gated trades.
+
+The floor is not the only knob. The full open question is the *shape*
+of `f(confidence)` between floor and 1.0 — identity (current), power
+(`c**p` for `p ∈ [0.5, 1, 2]`), or logistic
+(`1/(1 + exp(−a·(c − b)))`). Different shapes attenuate borderline
+confidences differently; the right one is empirical.
+
+**Our response.** Accepted reframing. Wired the calibration harness now
+so the experiment is ready when the labelled-signal data arrives;
+deferred the actual run until ≥30 forward sessions of recorder data with
+realized PnL labels exist.
+
+**Action taken (2026-04-29).** New module
+`app/engine/edge/calibration/confidence.py` (intentionally outside the
+production runtime path so the hot module stays thin):
+
+- `SignalRecord` dataclass — one labelled signal observation
+  `(ts, ticker, health, vcs, conf_raw, z_raw, forward_return)`.
+- `SHAPE_FAMILIES = {"identity", "power", "logistic"}` — the three
+  candidate shape families; signature pinned.
+- `evaluate_confidence_shape(family, params, log)` — returns
+  `{ic, sharpe, n_trades, hit_rate}`. Body intentionally raises
+  `NotImplementedError` until labelled history exists; only the
+  signature is locked.
+- `fit_shape_family(family, log)` — sweeps parameters within a family
+  and returns the best fit by IC + Sharpe.
+
+The trigger to fill in the body is the same as the original deferral
+condition: ≥30 forward sessions with realized P&L. At that point the
+fitted shape is checked in as code (replacing the identity multiplier
+in `confidence.py`), not loaded at runtime — no production drift between
+calibration runs.
+
+The hard floor of `0.1` stays as the kill-switch for catastrophic input
+quality regardless of the chosen shape; the shape calibration determines
+*how the multiplier curves between floor and 1.0*.
 
 #### 8.2.3 Resolved 2026-04-28 in PR #45 — 15:55 vs 16:00 slot experiment
 
@@ -1133,26 +1280,57 @@ communicate "caveat" rather than "alarm". CodeRabbit suggested switching
 to a PrimeNG `<p-tag>`; declined to preserve local visual consistency
 across the three sibling pills (see [§8.4](#84-coderabbit-automated-review-2026-04-29)).
 
-#### 8.2.5 Resolved 2026-04-28 in PR #46 — per-strike influence cap diagnostic
+#### 8.2.5 Resolved 2026-04-28 in PR #46 / 2026-04-29 — per-strike influence diagnostic, then active gate
 
-**Reviewer's note.** "The pathological case (single deep OTM synthetic
-dominating by `1/K²`) is theoretically possible but usually not the practical
-failure mode in equity index strips; you should cap per-strike influence
-diagnostics to detect domination artefacts."
+**Reviewer's note (original).** "The pathological case (single deep OTM
+synthetic dominating by `1/K²`) is theoretically possible but usually not
+the practical failure mode in equity index strips; you should cap
+per-strike influence diagnostics to detect domination artefacts."
 
-**Our response.** Low priority but mechanical; shipped as a diagnostic-only
-field on `IvProvenance`, not gating.
+**Our response (PR #46, 2026-04-28).** Shipped as a diagnostic-only field
+on `IvProvenance`, not gating.
 
-**Action taken.** Added `max_single_strike_share: float` to `IvProvenance`
-([§4.6](#46-iv-provenance-schema)). Computed in
-`replicate_expiry_variance_with_provenance` by tracking `max(c_i)` in the
-existing per-strike loop and dividing by `contrib_total`. Combined across
-two expiries via `max(prov1, prov2)` — worst-case semantics consistent
-with `strike_coverage_score`'s `min`. Exposed on `IvProvenancePayload`
-so the field reaches `/api/edge/iv30/{vix-style,parametric}` consumers
-(this last step was caught by CodeRabbit on the initial PR — undeclared
-fields on a FastAPI response model are silently dropped; see
-[§8.4](#84-coderabbit-automated-review-2026-04-29)).
+**Reviewer's escalation (2026-04-29 external review).** "A diagnostic
+that fires on a known-pathological signal but doesn't *do* anything is
+half a fix. CBOE's two-zero-bid truncation is not sufficient when a
+single live wing dominates. If `max_share > ~0.50` either drop that
+strike and recompute, or set confidence to 0 — anything else is
+sleepwalking past the warning."
+
+**Our response (2026-04-29).** Accepted. Promoted from diagnostic to
+active gate.
+
+**Action taken.**
+
+- `replicate_expiry_variance_with_provenance` now accepts
+  `dominance_gate_threshold` (default `0.50`),
+  `dominance_gate_max_iterations` (default `2`), and
+  `dominance_gate_min_strikes` (default `8`). When the post-integration
+  share exceeds the threshold, the dominator is dropped and the integral
+  is recomputed; iteration repeats up to `max_iterations` times.
+- K0 is **never** dropped (the formula is anchored on K0 and dropping it
+  makes the replication ill-defined); a K0-dominating chain hard-fails
+  immediately.
+- The strike-count floor (default 8 ≈ 4 puts + 4 calls around K0)
+  short-circuits to hard-fail rather than cascade-drop to nothing.
+- `IvProvenance` gains `single_strike_dropped: int` (iteration count)
+  and `single_strike_hard_failed: bool`; the recorder persists both.
+  `vix_style_iv30_with_provenance` aggregates per-expiry: drop counts
+  sum, hard-fail is OR-ed (either expiry hard-failing invalidates the
+  combined IV30).
+- The recorder emits an `event=iv_dominance_gate` structured log when
+  the gate fires (see new
+  [§4.10 Threshold-firing audit log](#410-threshold-firing-audit-log)).
+- Existing inflated-K=95 unit tests opt out of the gate via
+  `dominance_gate_threshold=None` so they continue to assert the
+  un-mitigated metric; the gate's own behaviour is locked in
+  `tests/volatility/test_vix_replication.py::TestSingleStrikeDominanceGate`.
+
+**Why 0.50 as the default threshold.** Empirical SPY chains land near
+0.34 max share (the low-hundreds-of-strikes regime), so 0.50 leaves a
+comfortable buffer above the healthy band but well below "one strike
+runs the whole integration." Tunable per call site; no claim that 0.50
+is uniquely correct.
 
 ### 8.3 Declined items
 
@@ -1282,6 +1460,152 @@ new flag. The accessibility ask in [§8.2.4](#824-resolved-2026-04-28-in-pr-48--
 ("small 'imputed' tag in the confidence banner") is already met by the
 current span via `aria-label`, `title`, and the `data-testid` hook.
 
+### 8.5 External LLM review (2026-04-29)
+
+A second-pass external quant-LLM review (companion notes at
+[`docs/architecture/iv-research-chat-notes.md`](iv-research-chat-notes.md))
+re-examined the items the first review left open and flagged a few
+that the resolution had glossed over. Items below resolved or accepted;
+the re-examination of §8.2.1 (basis converter) and §8.2.2 (confidence
+calibration) is folded into those subsections directly.
+
+#### 8.5.1 Accepted — single-strike dominance promoted to active gate
+
+See [§8.2.5](#825-resolved-2026-04-28-in-pr-46--2026-04-29--per-strike-influence-diagnostic-then-active-gate)
+for the full record. Reviewer pointed out that a diagnostic that fires
+on a known-pathological signal but doesn't act is half a fix. Promoted
+to iterative drop-and-recompute with K0 protection and an 8-strike
+floor; opt-out kept for tests that pin the un-mitigated metric.
+
+#### 8.5.2 Accepted — moneyness-tiered synthetic spread (opt-in)
+
+**Reviewer's critique.** "A flat 0.5%·close half-spread is fine ATM but
+indefensible at 10Δ where empirical spreads are ~1–2% of S. Use a
+moneyness-adaptive rule (linear in `|K−S|/S` or piecewise tiers) so
+deep-OTM legs aren't priced at unrealistically tight spreads in the
+synthesis path."
+
+**Our response.** Accepted with a scope guard. Live and recorder paths
+already use real bid/ask via `from_snapshot_quote` and
+`from_recorded_snapshot`; the flat rule only ever ran on the
+synthetic-close path (`from_eod_close`), used by golden-fixture
+generation and historical backfill. Added a moneyness-tiered variant
+*alongside* the flat rule rather than replacing it, so the SPY
+2024-12-20 golden fixture stays byte-identical for reproducibility.
+
+**Action taken (2026-04-29).**
+
+- New `tiered_moneyness_half_spread(close, strike, spot)` keyed on
+  `|K−S|/S`: `<0.05` → 0.5%·spot, `<0.15` → 1.0%·spot, `≥0.15` →
+  2.0%·spot, with a $0.05 absolute floor.
+- New `from_eod_close_tiered_moneyness` constructor preserving zero-bid
+  handling and rule-string provenance.
+- `TIERED_MONEYNESS_HALF_SPREAD_RULE` rule-string constant so the
+  policy text travels with each leg's `half_spread_rule` field.
+- Tests in
+  `tests/volatility/test_price_normalization.py::TestTieredMoneynessHalfSpread`
+  and `TestFromEodCloseTieredMoneyness` lock the breakpoints, the
+  spot-anchored magnitude, and the dollar floor.
+- `from_eod_close` (flat rule) is unchanged. New synthesis paths should
+  use the tiered constructor; legacy paths stay flat for reproducibility
+  until they re-bake fixtures explicitly.
+
+#### 8.5.3 Accepted — drop-the-health-factor branch replaces 0.5 imputed prior
+
+See [§7.11](#711-imputed-evidence-policy-for-missing-health_score) and
+[§4.7](#47-confidence-gating). Reviewer pointed out that imputing 0.5 is
+itself a real signal-attenuation choice (halves every no-evidence
+confidence) and is no more defensible than the 1.0 it replaced. The
+correct collapse for a multiplier-on-z-score is "drop the missing factor
+and let the other input carry"; the regime-feature path uses an explicit
+`feature_weight = 0` branch instead.
+
+#### 8.5.4 Accepted — recorder universe expansion
+
+**Reviewer's note.** "Adding QQQ/IWM/DIA/EFA to the recorder is cheap and
+unlocks cross-sectional features for free; storage and snapshot-call
+cost is linear and well within Polygon Starter quota."
+
+**Action taken (2026-04-29).** `Backend/appsettings.json` `IvRecorder.Tickers`
+expanded from `["SPY"]` to `["SPY", "QQQ", "IWM", "DIA", "EFA"]`. The
+.NET host's Quartz `IvRecorderJob` already iterates over the configured
+list per slot, so no code change. The expansion takes effect at next
+restart of the .NET host.
+
+#### 8.5.5 Accepted — threshold-firing audit log (`event=` tagged)
+
+**Reviewer's note.** "After ~100 forward signals, an operator should be
+able to grep recorder logs and count how often each gate or threshold
+fired. Without that, gates run silently and you can't tell if the
+default thresholds are too loose or too tight."
+
+**Action taken (2026-04-29).** New module
+`app/engine/edge/threshold_events.py` exposes four emitters tagged with
+`event=<name>` in the structured log: `iv_dominance_warn`,
+`iv_dominance_gate`, `confidence_floor_fired`,
+`imputed_prior_emitted`. Wired into the recorder (gate event when the
+single-strike gate iterates or hard-fails) and into the realized-vs-IV
+route (floor and imputed events at the latest-bar). Emit only on the
+latest bar in batched routes to avoid drowning logs on long backfills.
+
+#### 8.5.6 Reframed — basis-converter overnight bias
+
+See [§8.2.1](#821-reframed-2026-04-29--basis-converter-overnight-bias-is-not-a-bias-on-our-pipeline).
+The original critique conflated unit conversion with comparison-space
+mismatch; on our pipeline both IV and HF RV are overnight-inclusive, so
+the flagged bias does not exist. The residual concern (overnight noise,
+not bias) is tracked in the basis-alignment doc.
+
+#### 8.5.7 Reframed — confidence-shape calibration
+
+See [§8.2.2](#822-reframed-2026-04-29--confidence-shape-calibration-harness-wired-run-trigger-pending-data).
+Reframed from "calibrate the floor via reliability diagrams" (wrong
+primitive — confidence is a multiplier, not a probability) to "calibrate
+the *shape* via IC and Sharpe." Harness wired now in
+`app/engine/edge/calibration/confidence.py`; run trigger is ≥30 sessions
+of labelled recorder data.
+
+#### 8.5.8 Pinned — 0DTE solver behaviour
+
+**Reviewer's ask.** "Whatever your `MIN_TIME_TO_EXPIRY` is, write the test
+that locks the boundary so a future refactor doesn't silently regress
+0DTE handling."
+
+**Action taken (2026-04-29).** New
+`tests/volatility/test_solver.py::TestZeroDteFloorBoundary` parametrises
+the boundary at T = 30 / 5 / 1 minutes — at and just above the 1-minute
+floor — asserting finite, in-bounds IV recovery; a sub-floor case
+(30 seconds) asserts `EXPIRED` so the asymmetry at the floor is
+explicit. The constant `MIN_TIME_TO_EXPIRY = 1.0 / (365·24·60)` was
+already in place from the data-lab options companion port; this test
+just pins it.
+
+#### 8.5.9 Acknowledged with no action — multi-day VIX anchor
+
+**Reviewer's ask.** "One day's gap to CBOE VIX (~19 bps on
+2024-12-20) is non-evidence. Pull 10–20 historical dates and report
+the distribution of error before claiming the formula is calibrated."
+
+**Our response.** Accepted in principle, scoped to a sanity check rather
+than evidence. Polygon Starter does not provide historical NBBO; any
+multi-day study would use last-trade / best-quote snapshots and inherit
+the same synthetic-spread caveat as backtests. Result: the study can
+tell us the formula isn't *catastrophically* wrong, but cannot pin a
+tight tolerance. Tracked as a 5-date Phase-2 sanity check in
+[§9](#9-future-plan--deferred-items), explicitly **not** as a replacement
+for the recorder-forward calibration that produces real evidence.
+
+#### 8.5.10 Documented — TTM dividend-yield proxy scope
+
+**Reviewer's note.** "TTM-dividends ÷ spot is fine for index ETFs with
+quarterly dividends but breaks for single-name equities around ex-dates,
+where present-value-of-discrete-dividends is the right approach."
+
+**Action taken (2026-04-29).** Documented at
+[§4.9.1](#491-dividend-yield-accuracy-caveats) with the scope guard
+("OK for SPY/QQQ-style ETFs, do not extend to single-name equities
+without a discrete-dividend PV adjustment"). No code change today.
+
 ---
 
 ## 9. Future plan / deferred items
@@ -1291,10 +1615,11 @@ condition that should kick it off.
 
 | Item | Trigger | Effort | Reference |
 |---|---|---|---|
+| **Confidence-shape calibration (run the wired harness)** | ≥30 forward sessions with realised P&L on recorder bars | Run `evaluate_confidence_shape` over `{identity, power, logistic}`, pick by IC + Sharpe, write the chosen shape into `confidence.py` | [§8.2.2](#822-reframed-2026-04-29--confidence-shape-calibration-harness-wired-run-trigger-pending-data), [§8.5.7](#857-reframed--confidence-shape-calibration) |
 | **15:55 vs 16:00 measurement-and-decide** | Recorder has ≥1 month of trial-slot data (started 2026-04-28) | Notebook: per-slot solver-fail / spread / vcs / max_single_strike_share / IV30 stability; pick keep-both vs swap | [§7.6](#76-recorder-snapshot-schedule-slots), [§8.2.3](#823-resolved-2026-04-28-in-pr-45--1555-vs-1600-slot-experiment) |
 | **Postgres-backed `IvSnapshotStore`** | Recorder has 30+ sessions of clean data | New `asyncpg` impl + bulk-load migration + cutover; the `health_score` column comes along for free since the JSONL field is already in `RecordedIvSnapshot` | [§7.4](#74-why-jsonl-store-now-postgres-later) |
-| **Confidence-floor calibration** | ≥30 sessions of clean recorder data | Reliability-curve analysis + new floor value | [§7.7](#77-why-confidence_floor--01), [§8.2.2](#822-deferred--confidence-floor-calibration) |
-| **Effective-time basis converter (overnight-variance upgrade)** | Phase 2; alongside Postgres cutover | Calibrated `D_eff` per underlying + new tolerance tests | [§4.1](#41-annualisation-conventions-and-basis-converter), [§8.2.1](#821-deferred--basis-converter-overnight-variance-upgrade) |
+| **5-date VIX-anchor sanity check** | Phase 2; pull SPY chains for 5 historical dates and report distribution of \|IV30 − VIX\| | Half-day; expect ±50–100 bp dispersion, treat as "formula not catastrophically wrong," not as calibration evidence | [§8.5.9](#859-acknowledged-with-no-action--multi-day-vix-anchor) |
+| **Overnight-component noise reduction (post-recorder)** | Forward recorder data shows the single squared overnight return dominates VRP signal noise | Multi-day pooling, Hansen–Lunde-weighted overnight, or two-scale RV; pick by IC of `vrp_z_scaled` | [§8.2.1](#821-reframed-2026-04-29--basis-converter-overnight-bias-is-not-a-bias-on-our-pipeline), [`docs/references/iv-rv-basis-alignment.md`](../references/iv-rv-basis-alignment.md) |
 | **Polygon-IV fallback tier** | Live-trading with monitoring SLAs only | New `IvSource` variant + confidence cap + UI flag | [§7.10](#710-sovereignty-no-polygon-iv-fallback-tier), [§8.3.1](#831-declined--polygon-iv-fallback-tier) |
 | **Polygon plan upgrade (historical NBBO)** | Cost/value reassessment after recorder is live for a quarter | New `from_historical_quote` constructor + `PriceSource` variant | [§10](#10-out-of-scope) |
 
