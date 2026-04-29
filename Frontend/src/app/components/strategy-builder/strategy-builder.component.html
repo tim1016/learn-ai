@@ -155,6 +155,8 @@
         <div class="overflow-x-auto">
           <table class="chain-table w-full border-collapse text-xs">
             <colgroup>
+              <!-- UX-Q1: drill-down icon-per-side (📈 calls, leftmost) -->
+              <col class="col-drill" />
               <col class="col-action" />
               <col class="col-action" />
               @if (chainDensity() === 'greeks') {
@@ -178,11 +180,15 @@
               }
               <col class="col-action" />
               <col class="col-action" />
+              <!-- UX-Q1: drill-down icon-per-side (📉 puts, rightmost) -->
+              <col class="col-drill" />
             </colgroup>
             <thead>
               @let callSpan = chainDensity() === 'greeks' ? 9 : 6;
               @let putSpan  = chainDensity() === 'greeks' ? 9 : 6;
               <tr class="border-b-2 border-slate-700">
+                <!-- UX-Q1: spacer for the call drill-down icon column -->
+                <th class="col-drill"></th>
                 <th [attr.colspan]="callSpan" class="text-center text-emerald-400 font-bold py-1.5 text-xs">
                   CALLS
                 </th>
@@ -201,8 +207,12 @@
                     >{{ chainDensity() === 'greeks' ? 'Full Greeks' : 'Quick' }}</button>
                   </div>
                 </th>
+                <!-- UX-Q1: spacer for the put drill-down icon column -->
+                <th class="col-drill"></th>
               </tr>
               <tr class="border-b border-slate-700 text-slate-400 text-[10px] uppercase tracking-wider">
+                <!-- UX-Q1: history label hint (calls side) -->
+                <th class="col-drill" pTooltip="Click to view contract history" tooltipPosition="top">Hist</th>
                 <th class="px-0.5 py-1 text-center" pTooltip="Buy (Long)" tooltipPosition="top">L</th>
                 <th class="px-0.5 py-1 text-center" pTooltip="Sell (Short)" tooltipPosition="top">S</th>
                 @if (chainDensity() === 'greeks') {
@@ -226,6 +236,8 @@
                 }
                 <th class="px-0.5 py-1 text-center" pTooltip="Buy (Long)" tooltipPosition="top">L</th>
                 <th class="px-0.5 py-1 text-center" pTooltip="Sell (Short)" tooltipPosition="top">S</th>
+                <!-- UX-Q1: history label hint (puts side) -->
+                <th class="col-drill" pTooltip="Click to view contract history" tooltipPosition="top">Hist</th>
               </tr>
             </thead>
             <tbody>
@@ -239,6 +251,17 @@
                   [class.row-otm-put]="row.otmPut"
                   [attr.data-atm]="row.isAtm ? 'true' : null"
                 >
+                  <!-- UX-Q1: call drill-down icon (📈) — opens history drawer -->
+                  <td class="col-drill text-center">
+                    <button
+                      type="button"
+                      class="drill-icon"
+                      [disabled]="!row.call"
+                      pTooltip="View call history"
+                      tooltipPosition="top"
+                      (click)="openContractHistory(row.call, 'call')"
+                    >📈</button>
+                  </td>
                   <!-- CALL Long -->
                   <td class="col-call px-0.5 py-1 text-center">
                     <button
@@ -317,6 +340,17 @@
                       [disabled]="!row.put"
                       (click)="addLegFromChain(row.put, 'put', 'short')"
                     >S</button>
+                  </td>
+                  <!-- UX-Q1: put drill-down icon (📉) — opens history drawer -->
+                  <td class="col-drill text-center">
+                    <button
+                      type="button"
+                      class="drill-icon"
+                      [disabled]="!row.put"
+                      pTooltip="View put history"
+                      tooltipPosition="top"
+                      (click)="openContractHistory(row.put, 'put')"
+                    >📉</button>
                   </td>
                 </tr>
               }
@@ -570,3 +604,98 @@
     </div>
   </aside>
 </div>
+
+<!--
+  UX-Q1 / R0b: per-contract historical drill-down drawer.
+  Absorbed from the deleted /options-chain page.
+  Triggered by the 📈/📉 icon-per-side button outside each chain row.
+-->
+<p-drawer
+  [visible]="historyDrawerOpen()"
+  (visibleChange)="onHistoryDrawerVisibleChange($event)"
+  position="right"
+  styleClass="history-drawer"
+  [style]="{ width: '38rem' }"
+  [showCloseIcon]="true"
+>
+  <ng-template pTemplate="header">
+    @let parsed = parsedHistoryTicker();
+    @if (parsed) {
+      <div class="history-header">
+        <div class="history-header-row">
+          <span class="history-underlying">{{ parsed.underlying }}</span>
+          <span class="history-type" [class.is-call]="parsed.type === 'Call'" [class.is-put]="parsed.type === 'Put'">
+            {{ parsed.type }}
+          </span>
+          <span class="history-strike">{{ parsed.strike }}</span>
+        </div>
+        <div class="history-meta">
+          Exp {{ parsed.expDate }}
+        </div>
+      </div>
+    }
+  </ng-template>
+
+  @if (historyLoading()) {
+    <div class="history-loading">
+      <p-skeleton height="280px" width="100%" />
+      <p-skeleton height="120px" width="100%" styleClass="mt-3" />
+    </div>
+  } @else if (historyError(); as err) {
+    <div class="history-error">
+      <i class="pi pi-exclamation-triangle"></i>
+      {{ err }}
+    </div>
+  } @else if (historyAggregates().length === 0 && historyDrawerOpen()) {
+    <div class="history-empty">
+      No historical data found for this contract on Polygon Starter
+      (2-year window). The contract may be too new or too thinly
+      traded to have daily aggregates.
+    </div>
+  } @else {
+    <div class="history-content">
+      <!-- Candlestick chart -->
+      <div class="history-section">
+        <div class="history-section-title">Daily candles</div>
+        <app-candlestick-chart
+          [data]="historyAggregates()"
+          [ticker]="selectedHistoryContract()?.ticker ?? ''"
+          [darkMode]="true"
+          [chartHeight]="260"
+        />
+      </div>
+
+      <!-- Volume chart -->
+      <div class="history-section">
+        <div class="history-section-title">Daily volume</div>
+        <app-volume-chart
+          [data]="historyAggregates()"
+          [darkMode]="true"
+          [chartHeight]="120"
+        />
+      </div>
+
+      <!-- Summary stats -->
+      @if (historySummary(); as summary) {
+        <div class="history-summary-grid">
+          <div class="history-stat">
+            <span class="history-stat-label">2y high</span>
+            <span class="history-stat-value">${{ summary.high | number:'1.2-2' }}</span>
+          </div>
+          <div class="history-stat">
+            <span class="history-stat-label">2y low</span>
+            <span class="history-stat-value">${{ summary.low | number:'1.2-2' }}</span>
+          </div>
+          <div class="history-stat">
+            <span class="history-stat-label">Avg volume</span>
+            <span class="history-stat-value">{{ summary.avgVolume | number:'1.0-0' }}</span>
+          </div>
+          <div class="history-stat">
+            <span class="history-stat-label">Bars</span>
+            <span class="history-stat-value">{{ summary.totalBars }}</span>
+          </div>
+        </div>
+      }
+    </div>
+  }
+</p-drawer>

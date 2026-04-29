@@ -52,11 +52,14 @@ export const routes: Routes = [
       ).then((m) => m.DayDetailComponent),
   },
   {
+    // Per docs/architecture/options-routes-research.md §7 D9 + §5.1 R0b:
+    // /options-chain is deleted; /strategy-builder absorbs the chain
+    // viewer + per-contract drill-down (UX-Q1) + Greek toggle (UX-Q2).
+    // Redirect kept for ≥ 7 days to preserve bookmarks; remove in
+    // Phase 4.5.
     path: "options-chain",
-    loadComponent: () =>
-      import("./components/options-chain-v2/options-chain.component").then(
-        (m) => m.OptionsChainComponent
-      ),
+    redirectTo: "/strategy-builder",
+    pathMatch: "full",
   },
   {
     path: "strategy-lab",

@@ -393,4 +393,101 @@ describe('StrategyBuilderComponent', () => {
       expect(localStorage.getItem('sb.chainDensity')).toBe('quick');
     });
   });
+
+  // ── UX-Q1 / R0b: drill-down icon-per-side trigger ────────────────
+  describe('UX-Q1: drill-down history drawer', () => {
+    function buildContract(side: 'call' | 'put') {
+      return {
+        ticker: `O:SPY260220${side === 'call' ? 'C' : 'P'}00590000`,
+        contractType: side,
+        strikePrice: 590,
+        expirationDate: '2026-02-20',
+        breakEvenPrice: 595,
+        impliedVolatility: 0.20,
+        openInterest: 1000,
+        greeks: { delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15 },
+        day: { open: 5, high: 6, low: 4.5, close: 5.5, volume: 1000 },
+        lastTrade: null,
+        lastQuote: null,
+      } as any;
+    }
+
+    it('openContractHistory populates state and fires the aggregates fetch', async () => {
+      const contract = buildContract('call');
+
+      const promise = component.openContractHistory(contract, 'call');
+
+      // Synchronous state set before the HTTP resolves
+      expect(component.historyDrawerOpen()).toBe(true);
+      expect(component.historyLoading()).toBe(true);
+      expect(component.selectedHistoryContract()?.ticker).toBe('O:SPY260220C00590000');
+      expect(component.selectedHistoryContract()?.contractType).toBe('call');
+
+      const reqs = httpMock.match(r =>
+        r.url === 'http://localhost:5000/graphql'
+        && typeof (r.body as { query?: string } | null)?.query === 'string'
+        && (r.body as { query: string }).query.includes('getOrFetchStockAggregates'));
+      expect(reqs.length).toBe(1);
+      reqs[0].flush({
+        data: {
+          getOrFetchStockAggregates: {
+            ticker: 'O:SPY260220C00590000',
+            aggregates: [
+              { open: 5, high: 6, low: 4, close: 5.5, volume: 1000, timestamp: '2026-02-19T00:00:00Z' },
+            ],
+            summary: null,
+          },
+        },
+      });
+
+      await promise;
+
+      expect(component.historyLoading()).toBe(false);
+      expect(component.historyAggregates().length).toBe(1);
+      expect(component.historyError()).toBeNull();
+    });
+
+    it('openContractHistory is a no-op for a null contract or one without a ticker', async () => {
+      await component.openContractHistory(null, 'call');
+      expect(component.historyDrawerOpen()).toBe(false);
+      expect(component.selectedHistoryContract()).toBeNull();
+
+      await component.openContractHistory({ ticker: null } as any, 'put');
+      expect(component.historyDrawerOpen()).toBe(false);
+    });
+
+    it('closeHistoryDrawer clears all drill-down state', () => {
+      component.historyDrawerOpen.set(true);
+      component.selectedHistoryContract.set({
+        ticker: 'O:SPY260220C00590000',
+        contractType: 'call', strikePrice: 590, expirationDate: '2026-02-20',
+        snapshot: buildContract('call'),
+      });
+      component.historyAggregates.set([
+        { open: 5, high: 6, low: 4, close: 5.5, volume: 1000, timestamp: '2026-02-19T00:00:00Z' } as any,
+      ]);
+      component.historyError.set('boom');
+
+      component.closeHistoryDrawer();
+
+      expect(component.historyDrawerOpen()).toBe(false);
+      expect(component.selectedHistoryContract()).toBeNull();
+      expect(component.historyAggregates()).toEqual([]);
+      expect(component.historyError()).toBeNull();
+    });
+
+    it('parsedHistoryTicker returns the expected display fields for a SPY call', () => {
+      component.selectedHistoryContract.set({
+        ticker: 'O:SPY260220C00590000',
+        contractType: 'call', strikePrice: 590, expirationDate: '2026-02-20',
+        snapshot: buildContract('call'),
+      });
+
+      const parsed = component.parsedHistoryTicker();
+      expect(parsed?.underlying).toBe('SPY');
+      expect(parsed?.expDate).toBe('Feb 20, 2026');
+      expect(parsed?.type).toBe('Call');
+      expect(parsed?.strike).toBe('$590.00');
+    });
+  });
 });

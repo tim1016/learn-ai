@@ -5,6 +5,7 @@ import {
 import { FormsModule } from '@angular/forms';
 import { DecimalPipe } from '@angular/common';
 import { firstValueFrom } from 'rxjs';
+import { Drawer } from 'primeng/drawer';
 import { InputText } from 'primeng/inputtext';
 import { Button } from 'primeng/button';
 import { Tooltip } from 'primeng/tooltip';
@@ -17,13 +18,17 @@ import {
   SnapshotUnderlyingResult, SnapshotContractResult,
   StrategyAnalyzeResult, StrategyLegInput, PayoffPoint,
   GreekType, WhatIfScenario, ChartCurveData, GreekCurvePoint,
-  StockTickerSnapshot,
+  StockTickerSnapshot, StockAggregate,
   PricingEngineType, QuantLibPriceResult, QuantLibEngine,
 } from '../../graphql/types';
 import {
   strategyPnlAtPrice, strategyGreekAtPrice, LegParams, GreekName,
 } from '../../utils/black-scholes';
+import { parseOccForDisplay, OccDisplayParts } from '../../utils/occ-ticker';
+import { getMinAllowedDate } from '../../utils/date-validation';
 import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
+import { CandlestickChartComponent } from '../market-data/candlestick-chart/candlestick-chart.component';
+import { VolumeChartComponent } from '../market-data/volume-chart/volume-chart.component';
 import { PayoffChartComponent } from '../../shared/payoff-chart/payoff-chart.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
@@ -80,6 +85,18 @@ interface LegConfig {
   enabled: boolean;
 }
 
+/**
+ * Drill-down drawer state per UX-Q1 (icon-per-side trigger).
+ * Absorbed from the deleted /options-chain page during R0b.
+ */
+interface SelectedHistoryContract {
+  ticker: string;
+  contractType: 'call' | 'put';
+  strikePrice: number;
+  expirationDate: string;
+  snapshot: SnapshotContractResult;
+}
+
 interface StrategyTemplate {
   name: string;
   legs: { optionType: 'call' | 'put'; position: 'long' | 'short'; strikeOffset: number }[];
@@ -90,8 +107,9 @@ interface StrategyTemplate {
   standalone: true,
   imports: [
     FormsModule, DecimalPipe,
-    InputText, Button, Tooltip, Skeleton, SelectButton, Select,
+    Drawer, InputText, Button, Tooltip, Skeleton, SelectButton, Select,
     ExpirationRibbonComponent, PayoffChartComponent,
+    CandlestickChartComponent, VolumeChartComponent,
     PageHeaderComponent,
   ],
   templateUrl: './strategy-builder.component.html',
@@ -163,10 +181,100 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * Open the drill-down drawer for a specific contract. Triggered by
+   * the 📈/📉 icon-per-side buttons outside each chain row (UX-Q1).
+   * Loads the contract's daily aggregates over the maximum allowed
+   * window (Polygon Starter = 2 years).
+   */
+  async openContractHistory(
+    contract: SnapshotContractResult | null,
+    side: 'call' | 'put',
+  ): Promise<void> {
+    if (!contract?.ticker) return;
+
+    this.selectedHistoryContract.set({
+      ticker: contract.ticker,
+      contractType: side,
+      strikePrice: contract.strikePrice ?? 0,
+      expirationDate: contract.expirationDate ?? '',
+      snapshot: contract,
+    });
+    this.historyDrawerOpen.set(true);
+    this.historyLoading.set(true);
+    this.historyError.set(null);
+    this.historyAggregates.set([]);
+
+    try {
+      const fromDate = getMinAllowedDate();
+      const toDate = new Date().toISOString().slice(0, 10);
+      const result = await firstValueFrom(
+        this.marketDataService.getOrFetchStockAggregates(
+          contract.ticker, fromDate, toDate, 'day', 1,
+        ),
+      );
+      this.historyAggregates.set(result.aggregates ?? []);
+    } catch (err) {
+      this.historyError.set(err instanceof Error ? err.message : String(err));
+    } finally {
+      this.historyLoading.set(false);
+    }
+  }
+
+  closeHistoryDrawer(): void {
+    this.historyDrawerOpen.set(false);
+    this.selectedHistoryContract.set(null);
+    this.historyAggregates.set([]);
+    this.historyError.set(null);
+  }
+
+  /** PrimeNG Drawer two-way visibility binding handler. */
+  onHistoryDrawerVisibleChange(visible: boolean): void {
+    if (!visible) this.closeHistoryDrawer();
+    else this.historyDrawerOpen.set(true);
+  }
+
   // ── Strategy State ────────────────────────────────────────
   legs = signal<LegConfig[]>([]);
   strategyType = signal<string>('custom');
   drawerOpen = signal(false);
+
+  // ── Drill-down State (UX-Q1, R0b) ─────────────────────────
+  // The historical drill-down absorbed from the deleted /options-chain
+  // page. Triggered by the icon-per-side button outside each chain row
+  // (📈 for calls, leftmost cell; 📉 for puts, rightmost cell). The
+  // drawer hosts a 2-year candlestick + volume chart for the selected
+  // contract.
+  historyDrawerOpen = signal(false);
+  selectedHistoryContract = signal<SelectedHistoryContract | null>(null);
+  historyLoading = signal(false);
+  historyAggregates = signal<StockAggregate[]>([]);
+  historyError = signal<string | null>(null);
+
+  parsedHistoryTicker = computed<OccDisplayParts | null>(() => {
+    const sc = this.selectedHistoryContract();
+    if (!sc?.ticker) return null;
+    return parseOccForDisplay(sc.ticker);
+  });
+
+  historySummary = computed(() => {
+    const aggs = this.historyAggregates();
+    if (aggs.length === 0) return null;
+    let high = -Infinity;
+    let low = Infinity;
+    let volSum = 0;
+    for (const a of aggs) {
+      if (a.high > high) high = a.high;
+      if (a.low < low) low = a.low;
+      volSum += a.volume;
+    }
+    return {
+      high,
+      low,
+      avgVolume: Math.round(volSum / aggs.length),
+      totalBars: aggs.length,
+    };
+  });
 
   // ── Analysis ──────────────────────────────────────────────
   analysisResult = signal<StrategyAnalyzeResult | null>(null);
