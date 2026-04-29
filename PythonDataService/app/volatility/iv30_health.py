@@ -23,7 +23,12 @@ import math
 import random
 from dataclasses import dataclass
 
-from app.volatility.vix_replication import OptionQuote, vix_style_iv30
+from app.volatility.price_normalization import NormalizedOptionQuote
+from app.volatility.vix_replication import (
+    OptionQuote,
+    vix_style_iv30,
+    vix_style_iv30_with_provenance,
+)
 
 
 @dataclass(frozen=True)
@@ -94,6 +99,119 @@ def compute_iv30_health(
     if parametric_iv30 is not None:
         diff_bps = abs(parametric_iv30 - baseline) * 10000
         parametric_score = math.exp(-diff_bps / 50.0)  # 50 bps half-life
+
+    parts = [resampling_score, strike_grid_score]
+    if parametric_score is not None:
+        parts.append(parametric_score)
+    composite = sum(parts) / len(parts)
+
+    return Iv30HealthBreakdown(
+        score=composite,
+        resampling_score=resampling_score,
+        strike_grid_score=strike_grid_score,
+        parametric_vs_replication_score=parametric_score,
+        delta_resampling_bps=delta_resample_bps,
+        delta_strike_grid_bps=delta_grid_bps,
+    )
+
+
+def _drop_random_normalized(
+    quotes: list[NormalizedOptionQuote], frac: float, seed: int
+) -> list[NormalizedOptionQuote]:
+    rng = random.Random(seed)
+    keep = [q for q in quotes if rng.random() > frac]
+    return keep if len(keep) >= 5 else quotes
+
+
+def _drop_alternates_normalized(
+    quotes: list[NormalizedOptionQuote],
+) -> list[NormalizedOptionQuote]:
+    sorted_q = sorted(quotes, key=lambda q: q.strike)
+    return sorted_q[::2]
+
+
+def _vix_iv30_normalized(
+    expiry1_quotes: list[NormalizedOptionQuote],
+    expiry2_quotes: list[NormalizedOptionQuote],
+    *,
+    rate1: float,
+    T1_calendar_days: int,
+    rate2: float,
+    T2_calendar_days: int,
+    target_calendar_days: int = 30,
+) -> float:
+    """Strip provenance and return only σ. The provenance-aware path is
+    the canonical math; we discard the IvProvenance here because the
+    health score is a stability test, not a provenance assertion."""
+    sigma, _ = vix_style_iv30_with_provenance(
+        expiry1_quotes, expiry2_quotes,
+        rate1=rate1, T1_calendar_days=T1_calendar_days,
+        rate2=rate2, T2_calendar_days=T2_calendar_days,
+        target_calendar_days=target_calendar_days,
+    )
+    return sigma
+
+
+def compute_iv30_health_normalized(
+    expiry1_quotes: list[NormalizedOptionQuote],
+    expiry2_quotes: list[NormalizedOptionQuote],
+    *,
+    rate1: float,
+    T1_calendar_days: int,
+    rate2: float,
+    T2_calendar_days: int,
+    target_calendar_days: int = 30,
+    parametric_iv30: float | None = None,
+    seed: int = 11,
+) -> Iv30HealthBreakdown:
+    """``NormalizedOptionQuote`` variant of :func:`compute_iv30_health`.
+
+    Same math, same exponential decay constants (10 bps / 20 bps / 50 bps
+    half-lives), same composite-mean averaging. Exists because the recorder
+    operates exclusively on ``NormalizedOptionQuote`` and round-tripping
+    through ``OptionQuote`` would discard the price-source provenance the
+    rest of the recorder pipeline depends on. A parity test pins the two
+    variants to the same number on a clean OPRA chain.
+
+    ``target_calendar_days`` selects the constant-maturity horizon scored —
+    defaults to 30 for parity with the legacy IV30-only path, but the
+    recorder threads its caller-requested tenor through so the persisted
+    score reflects the IV that was actually computed (recorder allows
+    1..180 day requests; without this, non-default runs raised
+    "target X not bracketed" inside the wrapped vix_style call and the
+    health computation silently fell back to ``health_score=None``).
+    """
+    baseline = _vix_iv30_normalized(
+        expiry1_quotes, expiry2_quotes,
+        rate1=rate1, T1_calendar_days=T1_calendar_days,
+        rate2=rate2, T2_calendar_days=T2_calendar_days,
+        target_calendar_days=target_calendar_days,
+    )
+
+    resampled = _vix_iv30_normalized(
+        _drop_random_normalized(expiry1_quotes, 0.05, seed),
+        _drop_random_normalized(expiry2_quotes, 0.05, seed + 1),
+        rate1=rate1, T1_calendar_days=T1_calendar_days,
+        rate2=rate2, T2_calendar_days=T2_calendar_days,
+        target_calendar_days=target_calendar_days,
+    )
+    delta_resample_bps = abs(resampled - baseline) * 10000
+    resampling_score = math.exp(-delta_resample_bps / 10.0)
+
+    grid_iv = _vix_iv30_normalized(
+        _drop_alternates_normalized(expiry1_quotes),
+        _drop_alternates_normalized(expiry2_quotes),
+        rate1=rate1, T1_calendar_days=T1_calendar_days,
+        rate2=rate2, T2_calendar_days=T2_calendar_days,
+        target_calendar_days=target_calendar_days,
+    )
+    delta_grid_bps = abs(grid_iv - baseline) * 10000
+    strike_grid_score = math.exp(-delta_grid_bps / 20.0)
+
+    parametric_score: float | None = None
+    if parametric_iv30 is not None:
+        diff_bps = abs(parametric_iv30 - baseline) * 10000
+        parametric_score = math.exp(-diff_bps / 50.0)
 
     parts = [resampling_score, strike_grid_score]
     if parametric_score is not None:

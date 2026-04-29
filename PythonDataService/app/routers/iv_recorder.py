@@ -65,6 +65,7 @@ class RecordedSnapshotItem(BaseModel):
     iv30_parametric: float | None
     iv_provenance: dict
     error: str | None = None
+    health_score: float | None = None
 
 
 class SnapshotResponse(BaseModel):
@@ -117,6 +118,7 @@ async def take_snapshot(req: SnapshotRequest) -> SnapshotResponse:
             iv30_parametric=row.iv30_parametric,
             iv_provenance=row.iv_provenance,
             error=row.error,
+            health_score=row.health_score,
         ),
     )
 
@@ -145,6 +147,7 @@ async def read_series(
             iv30_parametric=r.iv30_parametric,
             iv_provenance=r.iv_provenance,
             error=r.error,
+            health_score=r.health_score,
         )
         for r in rows
     ]

@@ -117,6 +117,38 @@ class TestJsonlStore:
         store = JsonlIvSnapshotStore(tmp_path)
         assert store.read_series("XYZ") == []
 
+    def test_legacy_jsonl_without_health_score_reads_back_as_none(
+        self, tmp_path: Path
+    ):
+        # Write a JSONL line that pre-dates the health_score field — the
+        # production /var/lib/iv-recorder/SPY.jsonl will have rows like
+        # this from before this PR landed. RecordedIvSnapshot(**d) must
+        # tolerate the missing key via the default.
+        legacy_row = {
+            "ticker": "SPY",
+            "snapshot_ts_ms": 1700000000000,
+            "slot": "16:00",
+            "spot": 590.0,
+            "rate": 0.045,
+            "dividend_yield": 0.012,
+            "rate_source": "FRED",
+            "dividend_source": "Polygon TTM",
+            "iv30_vix_style": 0.18,
+            "iv30_parametric": None,
+            "iv_provenance": {"iv_source": "internal_solver"},
+            "raw_chain": [],
+            "error": None,
+            # NOTE: no health_score key — that's the whole point.
+        }
+        f = tmp_path / "SPY.jsonl"
+        f.write_text(json.dumps(legacy_row) + "\n")
+
+        store = JsonlIvSnapshotStore(tmp_path)
+        rows = store.read_series("SPY")
+        assert len(rows) == 1
+        assert rows[0].health_score is None
+        assert rows[0].iv30_vix_style == pytest.approx(0.18)
+
 
 class TestRecorderService:
     def test_writes_full_provenance_on_success(self):
@@ -155,6 +187,14 @@ class TestRecorderService:
             assert "bid" in r and "ask" in r
             assert "polygon_iv_diagnostic" in r
         assert row.snapshot_ts_ms == int(asof.timestamp() * 1000)
+        # Health score is computed on the same chain and persisted. The
+        # parity test in test_iv30_stability.py validates the math; here
+        # we just confirm the field is populated and in range. (Score
+        # quality depends on chain density / spacing — this synthetic
+        # chain has 5-dollar strikes, so half-resolution resampling moves
+        # IV non-trivially and drives the composite below 0.9.)
+        assert row.health_score is not None
+        assert 0.0 <= row.health_score <= 1.0
 
     def test_polygon_failure_persists_error_row(self):
         store = InMemoryIvSnapshotStore()
@@ -167,9 +207,12 @@ class TestRecorderService:
         )
         assert row.error is not None
         assert "polygon" in row.error.lower()
+        # Error rows have no health score — there's no chain to score.
+        assert row.health_score is None
         rows = store.read_series("SPY")
         assert len(rows) == 1
         assert rows[0].error is not None
+        assert rows[0].health_score is None
 
     def test_invalid_slot_rejected(self):
         store = InMemoryIvSnapshotStore()
