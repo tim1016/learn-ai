@@ -247,3 +247,58 @@ class TestBrentFallbackPath:
         # ~1e-7 / vega absolute IV difference. At ATM 25 % vol on 0.25 yr,
         # vega ≈ 20, so 1e-6 absolute IV is well within bound.
         assert cold.iv == pytest.approx(warm.iv, abs=1e-6)
+
+
+class TestZeroDteFloorBoundary:
+    """0DTE / near-floor TTM regression tests.
+
+    The solver's `MIN_TIME_TO_EXPIRY` floor is 1 minute (in years). Below
+    that the solver returns `EXPIRED`; at or above it must return a
+    finite, plausible IV. These tests pin the boundary so the constant
+    can't silently regress to a coarser value (e.g. one calendar day,
+    which would silently kill 0DTE signal recovery — see
+    docs/references/reconciliations/data-lab-spy-2026-04-17-to-2026-04-24.md
+    Finding 3.1).
+    """
+
+    @pytest.mark.parametrize(
+        "minutes_to_expiry",
+        [30.0, 5.0, 1.0],
+        ids=["t_30min", "t_5min", "t_1min_at_floor"],
+    )
+    def test_iv_finite_at_or_near_floor(
+        self,
+        spot: float,
+        rate: float,
+        minutes_to_expiry: float,
+    ) -> None:
+        """At and just-above the 1-minute floor, the solver must return a
+        finite, positive IV inside [MIN_IV, MAX_IV]. Uses ATM so vega is
+        large; deep-OTM at sub-minute TTM is intentionally a separate
+        regime (covered elsewhere)."""
+        vol = 0.30
+        ttm = minutes_to_expiry / (365.0 * 24.0 * 60.0)
+        price = bs_price(spot, spot, ttm, rate, vol, is_call=True)
+
+        result = implied_volatility(price, spot, spot, ttm, rate, is_call=True)
+
+        assert result.iv is not None, f"solver returned None at T={minutes_to_expiry} min"
+        assert math.isfinite(result.iv), f"non-finite IV at T={minutes_to_expiry} min"
+        assert 0.005 <= result.iv <= 5.0, f"IV {result.iv} out of bounds at T={minutes_to_expiry} min"
+        # Recovery tolerance widens as TTM shrinks (vega gets noisier near
+        # the floor). 5 % at the floor is generous; tighter would be
+        # over-fit to a single solver path.
+        assert abs(result.iv - vol) < 0.05, (
+            f"IV {result.iv} too far from input {vol} at T={minutes_to_expiry} min"
+        )
+
+    def test_iv_below_floor_returns_expired(self, spot: float, rate: float) -> None:
+        """Just below the 1-minute floor (30 seconds) must return EXPIRED,
+        not a degenerate IV. Pins the asymmetry: the boundary is closed
+        on the floor side and open below it."""
+        ttm = 30.0 / (365.0 * 24.0 * 60.0 * 60.0)  # 30 seconds in years
+        # Construct a non-zero premium so we exercise the floor branch,
+        # not the PRICE_TOO_LOW short-circuit.
+        result = implied_volatility(0.50, spot, spot, ttm, rate, is_call=True)
+        assert result.status == SolveStatus.EXPIRED
+        assert result.iv is None
