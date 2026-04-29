@@ -1335,13 +1335,13 @@ per-item audit is in
 | **R0b delete `/options-chain`** | ✅ DONE 2026-04-29 | UX-Q2 chain density toggle, UX-Q1 icon-per-side drill-down + drawer migration, full Greek display per row (D9a), `/options-chain` route deleted, 7-day-watch redirect to `/strategy-builder` in place. UX-Q4 (two-column 60/40 layout) deferred but doesn't block the route deletion. |
 | **R1 port `/options-history` → `/data-lab`** | ✅ DONE 2026-04-29 | `past-chain.service.ts` (lifted from the legacy `analyze()`) + `data-lab/past-chain-inspector/` sub-component (3-state lifecycle: collapsed → loading → expanded; modal drill-down per UX-Q3). Mounted on the options-companion config row. `/options-history` route deleted; redirect added. |
 | **R8 `bs_greeks` authority migration** | ⏸ DEFERRED — focused session | Sovereignty math; needs the 1000-point parity test plus a latency benchmark before swapping the live-preview Greeks path. Phase 1.2 of `options-vol-platform-tdd.md`. |
-| **R6 `GreekFormat`** | ⏸ DEFERRED — post-consolidation | Reclassified: not a migration enabler since strategy-builder already has its own local versions. Smaller blast radius now that R0b/R1 have landed. |
-| **R7 `ContractPricePicker`** | ⏸ DEFERRED — post-consolidation | Same reclassification as R6. |
-| **R4 `OptionsChainStateService`** | ⏸ DEFERRED — post-consolidation | Now that R0b/R1 have landed, only 2 live-chain consumers remain (`/strategy-builder`, `/pricing-lab`); abstraction has lower leverage. |
+| **R6 `GreekFormat`** | ❌ ABSORBED — no longer needed | Post-cleanup audit (2026-04-29): the only remaining consumer of `fmtGreek`/`fmtNum` is `/strategy-builder`. `/pricing-lab` uses inline `.toFixed()` with different precision (4dp price, 6dp Greeks). The "duplication" the plan tracked was eliminated when `/options-chain` and `/options-strategy-lab` were deleted. No extraction needed. |
+| **R7 `ContractPricePicker`** | ❌ ABSORBED — no longer needed | Post-cleanup audit: `resolvePrice`/`resolvePremiumNum` only live in `/strategy-builder` now. No duplication remains. |
+| **R4 `OptionsChainStateService`** | ❌ ABSORBED — no longer needed | Post-cleanup audit: live-chain prelude consumers are `/strategy-builder`, `/pricing-lab`, and `/ticker-explorer` (the last is an unrelated workflow). Forcing a shared state-machine on three unrelated callers is a net loss; the original 4-component duplication that motivated R4 is gone. |
 | **R0b — UX-Q4 two-column 60/40 layout** | ⏸ DEFERRED — focused session | Substantial template + SCSS rework. Strategy-builder works in the current single-column layout; the UX-Q4 layout is a refinement. |
 
 PR order when work resumes: **R8** (sovereignty math, focused session),
-then **UX-Q4 layout** (template + SCSS), then **R6/R7/R4** as cleanup.
+then **UX-Q4 layout** (template + SCSS). R6/R7/R4 are no longer needed.
 
 Each PR contains its parity test from [§8.2](#82-parity-tests-for-every-extraction).
 Legacy code removed in the same PR per [§7 D7](#7-decisions-log),

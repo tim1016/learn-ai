@@ -115,9 +115,9 @@ the gap. Existing coverage on entry:
 | **R0b — UX-Q4 (two-column 60/40 layout)** | Restructure strategy-builder layout: chain left 60%, build + payoff stacked right 40%; templates as horizontal pills above chain; scenario toggles inline beneath chart | ⏸ DEFERRED — substantial layout/SCSS rework; the chain absorption + drill-down work in the current single-column layout |
 | **R0b — delete `/options-chain`** | Remove `options-chain-v2/` (except `expiration-ribbon/`); add 7-day-watch redirect | ✅ DONE — `options-chain-v2/{ts,html,scss}` deleted; `expiration-ribbon/` preserved; redirect to `/strategy-builder` added |
 | **R1** | Delete `/options-history`. Port `analyze()` to `past-chain.service.ts` and rendering to `data-lab/past-chain-inspector/` per UX-Q3 (collapsed card → progress-bar loading → expanded chain → modal drill-down) | ✅ DONE — service + sub-component shipped; mounted on options-companion config row in `/data-lab`; `/options-history` redirect added; +14 spec tests |
-| **R6** | Extract Greek formatters (`fmtGreek`, `fmtIv`, `fmtPrice`, `fmtNum`) | ⏸ DEFERRED — post-consolidation |
-| **R7** | Extract `ContractPricePicker` | ⏸ DEFERRED — post-consolidation |
-| **R4** | Extract `OptionsChainStateService` | ⏸ DEFERRED — post-consolidation |
+| **R6** | Extract Greek formatters (`fmtGreek`, `fmtIv`, `fmtPrice`, `fmtNum`) | ❌ ABSORBED — only consumer post-cleanup is `/strategy-builder`. No duplication remains. |
+| **R7** | Extract `ContractPricePicker` | ❌ ABSORBED — only `/strategy-builder` uses `resolvePrice`/`resolvePremiumNum` now. |
+| **R4** | Extract `OptionsChainStateService` | ❌ ABSORBED — live-chain consumers are `/strategy-builder`, `/pricing-lab`, `/ticker-explorer`; the last is unrelated, abstraction has negative leverage. |
 | **R8** | Sovereignty migration: delete TS `utils/black-scholes.ts`; server-side BS authority is the only path | ⏸ DEFERRED — focused session |
 
 #### R5 details
