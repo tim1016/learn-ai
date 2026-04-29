@@ -304,13 +304,16 @@ def _parse_iv_series_for_regime(
         return iv, None
 
     # Same imputed-prior policy as _parse_iv_series — see that docstring for
-    # the rationale. When health is not supplied, we default to 0.5 (a
-    # conservative prior); the regime route weights features down accordingly
-    # rather than treating an absent number as "full health".
+    # the rationale. When health is not supplied (key absent OR value
+    # explicitly null on the wire), we default to 0.5 (a conservative
+    # prior); the regime route weights features down accordingly rather
+    # than treating an absent number as "full health".
     weight_map: dict[int, float] = {}
     for p in iv_series:
-        h = float(p.get("health_score", 0.5))
-        s = float(p.get("variance_contribution_synthetic", 0.0))
+        h_raw = p.get("health_score")
+        h = 0.5 if h_raw is None else float(h_raw)
+        s_raw = p.get("variance_contribution_synthetic")
+        s = 0.0 if s_raw is None else float(s_raw)
         weight_map[int(p["ts"])] = regime_feature_weight(
             health_score=h, variance_contribution_synthetic=s
         )
@@ -356,9 +359,14 @@ def _parse_iv_series(
     imputed_map: dict[int, bool] = {}
     for p in iv_series:
         ts = int(p["ts"])
-        imputed_map[ts] = "health_score" not in p
-        h = float(p.get("health_score", 0.5))
-        s = float(p.get("variance_contribution_synthetic", 0.0))
+        # A bar is "imputed" when the key is missing OR the value is
+        # explicitly None on the wire — both shapes mean "no evidence",
+        # and both must surface to the UI as such.
+        h_raw = p.get("health_score")
+        imputed_map[ts] = "health_score" not in p or h_raw is None
+        h = 0.5 if h_raw is None else float(h_raw)
+        s_raw = p.get("variance_contribution_synthetic")
+        s = 0.0 if s_raw is None else float(s_raw)
         conf_map[ts] = confidence_with_explanation(
             health_score=h, variance_contribution_synthetic=s
         ).confidence

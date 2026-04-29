@@ -301,6 +301,11 @@ def record_iv_snapshot(
 
         # Health score is computed off the same chain so the recorder
         # fallback can propagate it downstream (research-doc §4.8 / §9).
+        # ``target_calendar_days`` is threaded through so the score
+        # reflects the IV that was actually computed — the recorder
+        # accepts 1..180 day requests and a non-default tenor would
+        # otherwise raise "target N not bracketed" inside the health
+        # path and silently land as health_score=None.
         # A health failure does not abort the write — the IV is still
         # useful, just without the regime-feature weighting boost.
         try:
@@ -308,6 +313,7 @@ def record_iv_snapshot(
                 by_expiry[t1], by_expiry[t2],
                 rate1=rd.rate, T1_calendar_days=t1,
                 rate2=rd.rate, T2_calendar_days=t2,
+                target_calendar_days=target_calendar_days,
                 parametric_iv30=iv_parametric,
             )
             health_score = float(health.score)

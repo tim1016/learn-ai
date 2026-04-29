@@ -188,6 +188,76 @@ class TestIvSeriesFromRecorder:
         assert len(_iv_series_from_recorder("QQQ", idx)) == 1
 
 
+class TestParseIvSeriesNullCoalescing:
+    """Caller-supplied iv_series may carry ``health_score: null`` on the
+    wire (a JSON-explicit "no value"), not just an absent key. Both
+    parsers must coalesce explicit null to the conservative 0.5 imputed
+    prior rather than crashing on ``float(None)``. CodeRabbit P1 on PR 47.
+    """
+
+    def test_parse_iv_series_handles_explicit_null_health(self):
+        from app.routers.edge import _parse_iv_series
+
+        idx = pd.Index([1_000, 2_000], dtype=np.int64)
+        # First bar: missing key. Second bar: explicit None on the wire.
+        # Both must trigger the imputed prior + flag, not raise.
+        iv_series = [
+            {"ts": 1_000, "iv30": 0.20, "variance_contribution_synthetic": 0.05},
+            {"ts": 2_000, "iv30": 0.21, "health_score": None,
+             "variance_contribution_synthetic": 0.07},
+        ]
+
+        iv, confidence, health_imputed = _parse_iv_series(iv_series, idx)
+
+        assert iv.notna().all()
+        assert confidence is not None
+        assert health_imputed is not None
+        # Both bars are "imputed" — key-missing AND explicit-null both qualify.
+        assert bool(health_imputed.loc[1_000]) is True
+        assert bool(health_imputed.loc[2_000]) is True
+        # Same imputed prior fired for both → confidences should match
+        # within the float-precision noise from confidence_with_explanation
+        # (the only differing input is vcs, so values still differ slightly).
+        assert 0.0 <= confidence.loc[1_000] <= 1.0
+        assert 0.0 <= confidence.loc[2_000] <= 1.0
+
+    def test_parse_iv_series_for_regime_handles_explicit_null_health(self):
+        from app.routers.edge import _parse_iv_series_for_regime
+
+        idx = pd.Index([1_000, 2_000], dtype=np.int64)
+        iv_series = [
+            {"ts": 1_000, "iv30": 0.20, "health_score": None,
+             "variance_contribution_synthetic": 0.0},
+            {"ts": 2_000, "iv30": 0.21, "health_score": None,
+             "variance_contribution_synthetic": None},
+        ]
+
+        # Must not raise — the bug was float(None) → TypeError → 500.
+        iv, weight = _parse_iv_series_for_regime(iv_series, idx)
+
+        assert iv.notna().all()
+        assert weight is not None
+        # h=0.5 → max(0, 2·0.5 − 1) = 0 → feature_weight = 0 regardless of vcs.
+        assert weight.loc[1_000] == pytest.approx(0.0)
+        assert weight.loc[2_000] == pytest.approx(0.0)
+
+    def test_parse_iv_series_explicit_null_matches_missing_key(self):
+        # Explicit null and missing key must produce identical confidence
+        # for the same vcs — both are "no evidence" cases.
+        from app.routers.edge import _parse_iv_series
+
+        idx = pd.Index([1_000, 2_000], dtype=np.int64)
+        iv_series = [
+            {"ts": 1_000, "iv30": 0.20, "variance_contribution_synthetic": 0.10},
+            {"ts": 2_000, "iv30": 0.20, "health_score": None,
+             "variance_contribution_synthetic": 0.10},
+        ]
+
+        _, confidence, _ = _parse_iv_series(iv_series, idx)
+
+        assert confidence.loc[1_000] == pytest.approx(confidence.loc[2_000])
+
+
 class TestRealizedVsIvIvSourceField:
     async def test_caller_supplied_wins_over_recorder(self, client, recorder_store):
         bars = _bars(40)

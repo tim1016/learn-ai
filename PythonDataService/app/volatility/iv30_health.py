@@ -138,6 +138,7 @@ def _vix_iv30_normalized(
     T1_calendar_days: int,
     rate2: float,
     T2_calendar_days: int,
+    target_calendar_days: int = 30,
 ) -> float:
     """Strip provenance and return only σ. The provenance-aware path is
     the canonical math; we discard the IvProvenance here because the
@@ -146,6 +147,7 @@ def _vix_iv30_normalized(
         expiry1_quotes, expiry2_quotes,
         rate1=rate1, T1_calendar_days=T1_calendar_days,
         rate2=rate2, T2_calendar_days=T2_calendar_days,
+        target_calendar_days=target_calendar_days,
     )
     return sigma
 
@@ -158,6 +160,7 @@ def compute_iv30_health_normalized(
     T1_calendar_days: int,
     rate2: float,
     T2_calendar_days: int,
+    target_calendar_days: int = 30,
     parametric_iv30: float | None = None,
     seed: int = 11,
 ) -> Iv30HealthBreakdown:
@@ -169,11 +172,20 @@ def compute_iv30_health_normalized(
     through ``OptionQuote`` would discard the price-source provenance the
     rest of the recorder pipeline depends on. A parity test pins the two
     variants to the same number on a clean OPRA chain.
+
+    ``target_calendar_days`` selects the constant-maturity horizon scored —
+    defaults to 30 for parity with the legacy IV30-only path, but the
+    recorder threads its caller-requested tenor through so the persisted
+    score reflects the IV that was actually computed (recorder allows
+    1..180 day requests; without this, non-default runs raised
+    "target X not bracketed" inside the wrapped vix_style call and the
+    health computation silently fell back to ``health_score=None``).
     """
     baseline = _vix_iv30_normalized(
         expiry1_quotes, expiry2_quotes,
         rate1=rate1, T1_calendar_days=T1_calendar_days,
         rate2=rate2, T2_calendar_days=T2_calendar_days,
+        target_calendar_days=target_calendar_days,
     )
 
     resampled = _vix_iv30_normalized(
@@ -181,6 +193,7 @@ def compute_iv30_health_normalized(
         _drop_random_normalized(expiry2_quotes, 0.05, seed + 1),
         rate1=rate1, T1_calendar_days=T1_calendar_days,
         rate2=rate2, T2_calendar_days=T2_calendar_days,
+        target_calendar_days=target_calendar_days,
     )
     delta_resample_bps = abs(resampled - baseline) * 10000
     resampling_score = math.exp(-delta_resample_bps / 10.0)
@@ -190,6 +203,7 @@ def compute_iv30_health_normalized(
         _drop_alternates_normalized(expiry2_quotes),
         rate1=rate1, T1_calendar_days=T1_calendar_days,
         rate2=rate2, T2_calendar_days=T2_calendar_days,
+        target_calendar_days=target_calendar_days,
     )
     delta_grid_bps = abs(grid_iv - baseline) * 10000
     strike_grid_score = math.exp(-delta_grid_bps / 20.0)
