@@ -28,13 +28,14 @@ The two operationally important fields are:
   knows when to look at wing truncation as the cause of replication
   disagreement.
 - ``max_single_strike_share``: the largest single-strike share of the
-  VIX-replication variance integral (max ``c_i / Σ c_j``). Diagnostic for
-  the pathological case the reviewer in research-doc §8.2.5 flagged — a
-  single deep-OTM strike with an inflated Q dominating the integral via
-  ``1/K²`` weighting. Healthy SPY-like chains land near ``1/n_strikes``;
-  values above ~0.30 warrant a look at the dominating strike. No gating
-  is wired off this field; it exists for surfacing artefacts during
-  debugging and post-hoc reliability analysis.
+  VIX-replication variance integral (max ``c_i / Σ c_j``). When the
+  share crosses the configured gate threshold the replicator iteratively
+  drops the dominating strike and recomputes; the iteration count and a
+  hard-fail flag are surfaced via ``single_strike_dropped`` /
+  ``single_strike_hard_failed``. Healthy SPY-like chains land near
+  ``1/n_strikes``; values above ~0.30 warrant a look at the dominating
+  strike. See research-doc §8.2.5 and ``iv-research-chat-notes.md``
+  §5.8.
 """
 
 from __future__ import annotations
@@ -71,11 +72,18 @@ class IvProvenance:
         calls/puts. 1.0 means the chain extends 5σ or more on both sides
         before the wing-truncation rule fires.
     max_single_strike_share : largest single-strike share of the
-        VIX-replication variance integral (``max(c_i) / Σ c_j``). Diagnostic
-        for the deep-OTM-domination case in research-doc §8.2.5. Defaults
-        to 0.0 for non-chain-replication paths (e.g. parametric ATM) where
-        the metric is not meaningful — same convention as
-        ``strike_coverage_score=0.0`` for the parametric path.
+        VIX-replication variance integral (``max(c_i) / Σ c_j``). After
+        any iterative drop-and-recompute, this reflects the **final**
+        share — not the pre-drop value (the pre-drop value goes to the
+        threshold-event log). Defaults to 0.0 for non-chain-replication
+        paths (e.g. parametric ATM) where the metric is not meaningful.
+    single_strike_dropped : number of iterations the dominance gate
+        executed (drop dominant strike + recompute). 0 means the gate
+        never fired. Capped at the gate's ``max_iterations`` parameter.
+    single_strike_hard_failed : True when the dominance gate exhausted
+        its iteration budget and the chain is still above threshold —
+        downstream consumers must treat the IV as unreliable
+        (confidence=0). Mutually exclusive with healthy bars.
     per_strike_contributions : opt-in via ``debug=True``. Each entry has
         ``{strike, kind, dK, Q, c_i, active_leg_source, active_leg_synthetic}``.
         ``None`` by default — the production hot path doesn't pay the
@@ -87,6 +95,8 @@ class IvProvenance:
     variance_contribution_synthetic: float
     strike_coverage_score: float
     max_single_strike_share: float = 0.0
+    single_strike_dropped: int = 0
+    single_strike_hard_failed: bool = False
     per_strike_contributions: list[dict] | None = field(default=None)
 
     def __post_init__(self) -> None:
@@ -104,6 +114,11 @@ class IvProvenance:
             raise ValueError(
                 f"max_single_strike_share must be in [0, 1], "
                 f"got {self.max_single_strike_share}"
+            )
+        if self.single_strike_dropped < 0:
+            raise ValueError(
+                f"single_strike_dropped must be >= 0, "
+                f"got {self.single_strike_dropped}"
             )
         if self.price_source_mix:
             total = sum(self.price_source_mix.values())

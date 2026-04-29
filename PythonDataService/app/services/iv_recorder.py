@@ -36,6 +36,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.engine.edge.threshold_events import log_iv_dominance_gate
 from app.routers.iv30 import _normalized_quotes_by_expiry, _pick_straddle_pair
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import RateAndDividend, get_rate_and_dividend
@@ -80,9 +81,10 @@ class RecordedIvSnapshot:
     error: str | None = None
     # Stability score in [0, 1] computed at write time via the IV30 health
     # suite (research-doc §4.8). None on error rows and on legacy rows that
-    # pre-date this field — readers fall back to the imputed prior of 0.5
-    # surfaced through ``health_imputed_now``. Defaulted so back-compat
-    # JSONL rows reconstruct cleanly via ``RecordedIvSnapshot(**d)``.
+    # pre-date this field — readers take the drop-health-factor branch in
+    # ``_parse_iv_series`` (confidence = 1 - vcs) and surface the missing
+    # evidence via ``health_imputed_now``. Defaulted so back-compat JSONL
+    # rows reconstruct cleanly via ``RecordedIvSnapshot(**d)``.
     health_score: float | None = None
 
 
@@ -300,6 +302,22 @@ def record_iv_snapshot(
         iv_vix = float(sigma)
         prov_dict = _provenance_to_dict(prov)
 
+        # Single-strike dominance gate — emit a threshold-firing event
+        # when the gate iterated or hard-failed so the operator can
+        # grep for these across the recorder burn-in. The provenance
+        # already carries the post-gate values; this just surfaces the
+        # event so it isn't only visible by reading the JSONL.
+        if prov.single_strike_dropped > 0 or prov.single_strike_hard_failed:
+            log_iv_dominance_gate(
+                ticker=ticker,
+                snapshot_ts_ms=snapshot_ts,
+                max_share_before=prov.max_single_strike_share,
+                max_share_after=prov.max_single_strike_share,
+                iterations=prov.single_strike_dropped,
+                hard_failed=prov.single_strike_hard_failed,
+                strikes_remaining=0,
+            )
+
         # Health score is computed off the same chain so the recorder
         # fallback can propagate it downstream (research-doc §4.8 / §9).
         # ``target_calendar_days`` is threaded through so the score
@@ -355,6 +373,9 @@ def _provenance_to_dict(prov: IvProvenance) -> dict:
         "price_source_mix": dict(prov.price_source_mix),
         "variance_contribution_synthetic": prov.variance_contribution_synthetic,
         "strike_coverage_score": prov.strike_coverage_score,
+        "max_single_strike_share": prov.max_single_strike_share,
+        "single_strike_dropped": prov.single_strike_dropped,
+        "single_strike_hard_failed": prov.single_strike_hard_failed,
     }
 
 

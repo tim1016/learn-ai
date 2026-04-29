@@ -548,7 +548,8 @@ class TestReplicateExpiryWithProvenance:
             sigma=sigma_true, source="opra_mid",
         )
         _, prov_healthy = replicate_expiry_variance_with_provenance(
-            healthy, rate=rate, T_years=T_years
+            healthy, rate=rate, T_years=T_years,
+            dominance_gate_threshold=None,
         )
 
         # Inflate the K=95 put to a fixed $50 mid. K=95 is reliably in the
@@ -564,8 +565,11 @@ class TestReplicateExpiryWithProvenance:
             strike=original.strike, call=original.call, put=inflated_put,
         )
 
+        # Gate disabled here so the metric reflects the un-mitigated chain;
+        # the gate's behavior is exercised in TestSingleStrikeDominanceGate.
         _, prov_inflated = replicate_expiry_variance_with_provenance(
-            inflated_chain, rate=rate, T_years=T_years
+            inflated_chain, rate=rate, T_years=T_years,
+            dominance_gate_threshold=None,
         )
 
         # The inflated strike should dominate; the lift over the healthy
@@ -581,6 +585,138 @@ class TestReplicateExpiryWithProvenance:
         )
         # And the inflated value sits well into the "domination" regime.
         assert prov_inflated.max_single_strike_share > 0.5
+
+
+class TestSingleStrikeDominanceGate:
+    """The gate iteratively drops the dominant strike and recomputes when
+    ``max_single_strike_share`` exceeds threshold; it hard-fails after
+    ``max_iterations`` attempts or below the strike-count floor.
+
+    See ``docs/architecture/iv-research-chat-notes.md`` §5.8.
+    """
+
+    @staticmethod
+    def _inflated_chain(spot, sigma_true, T_years, rate, strikes, *, target_strike):
+        """Build a chain with an inflated put at ``target_strike`` so that
+        single-strike share blows up — exactly the pathological shape the
+        gate is supposed to catch."""
+        from app.volatility.price_normalization import (
+            NormalizedOptionQuote,
+            from_snapshot_quote,
+        )
+
+        chain = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T_years, rate=rate,
+            sigma=sigma_true, source="opra_mid",
+        )
+        target_idx = strikes.index(target_strike)
+        original = chain[target_idx]
+        chain[target_idx] = NormalizedOptionQuote(
+            strike=original.strike,
+            call=original.call,
+            put=from_snapshot_quote(bid=49.99, ask=50.01),
+        )
+        return chain
+
+    def test_gate_drops_dominant_strike_and_recomputes(self):
+        spot = 100.0
+        sigma_true = 0.20
+        T_years = 30 / 365.0
+        rate = 0.05
+        strikes = [60, 65, 70, 75, 80, 85, 90, 92.5, 95, 97.5, 100,
+                   102.5, 105, 107.5, 110, 115, 120, 125, 130, 135, 140]
+        inflated = self._inflated_chain(
+            spot, sigma_true, T_years, rate, strikes, target_strike=95
+        )
+
+        _, prov_gated = replicate_expiry_variance_with_provenance(
+            inflated, rate=rate, T_years=T_years,
+            dominance_gate_threshold=0.50,
+            dominance_gate_max_iterations=2,
+        )
+
+        # Gate fired at least once — and the post-gate share is below
+        # threshold (the recompute should have flattened the dominator).
+        assert prov_gated.single_strike_dropped >= 1
+        assert prov_gated.single_strike_hard_failed is False
+        assert prov_gated.max_single_strike_share <= 0.50
+
+    def test_gate_disabled_returns_original_share(self):
+        spot = 100.0
+        sigma_true = 0.20
+        T_years = 30 / 365.0
+        rate = 0.05
+        strikes = [60, 65, 70, 75, 80, 85, 90, 92.5, 95, 97.5, 100,
+                   102.5, 105, 107.5, 110, 115, 120, 125, 130, 135, 140]
+        inflated = self._inflated_chain(
+            spot, sigma_true, T_years, rate, strikes, target_strike=95
+        )
+
+        _, prov_ungated = replicate_expiry_variance_with_provenance(
+            inflated, rate=rate, T_years=T_years,
+            dominance_gate_threshold=None,
+        )
+
+        # Gate disabled — original (un-mitigated) share leaks through and
+        # it exceeds threshold.
+        assert prov_ungated.single_strike_dropped == 0
+        assert prov_ungated.single_strike_hard_failed is False
+        assert prov_ungated.max_single_strike_share > 0.50
+
+    def test_gate_hard_fails_when_floor_blocks_more_drops(self):
+        # Tiny chain: dropping below the strike floor should hard-fail
+        # rather than cascade-drop to nothing. With min_strikes=8 and a
+        # 9-strike chain, one drop is allowed; if the gate would need
+        # a second drop, it must hard-fail instead.
+        spot = 100.0
+        sigma_true = 0.20
+        T_years = 30 / 365.0
+        rate = 0.05
+        strikes = [80, 85, 90, 95, 100, 105, 110, 115, 120]
+        inflated = self._inflated_chain(
+            spot, sigma_true, T_years, rate, strikes, target_strike=95
+        )
+
+        _, prov = replicate_expiry_variance_with_provenance(
+            inflated, rate=rate, T_years=T_years,
+            dominance_gate_threshold=0.50,
+            dominance_gate_max_iterations=5,
+            dominance_gate_min_strikes=9,  # at-floor; first drop is blocked
+        )
+
+        # Floor binds immediately: gate cannot drop the dominator without
+        # falling below the strike floor.
+        assert prov.single_strike_dropped == 0
+        assert prov.single_strike_hard_failed is True
+        # The pre-gate share is preserved (no drops happened) and is
+        # above threshold.
+        assert prov.max_single_strike_share > 0.50
+
+    def test_gate_default_threshold_does_not_fire_on_healthy_chain(self):
+        """A dense SPY-like chain stays below the 0.50 default threshold.
+        The 21-strike grid is dense enough that no single strike (incl.
+        K0 with its averaged call+put treatment) crosses the threshold;
+        a sparse 11-strike grid is a separate regime. Pins that the
+        default-on gate is benign on the chain shape we expect from real
+        Polygon snapshots."""
+        spot = 100.0
+        sigma_true = 0.20
+        T_years = 30 / 365.0
+        rate = 0.05
+        strikes = [60, 65, 70, 75, 80, 85, 90, 92.5, 95, 97.5, 100,
+                   102.5, 105, 107.5, 110, 115, 120, 125, 130, 135, 140]
+        healthy = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T_years, rate=rate,
+            sigma=sigma_true, source="opra_mid",
+        )
+
+        _, prov = replicate_expiry_variance_with_provenance(
+            healthy, rate=rate, T_years=T_years,
+        )
+
+        assert prov.single_strike_dropped == 0
+        assert prov.single_strike_hard_failed is False
+        assert prov.max_single_strike_share <= 0.50
 
 
 class TestVixStyleIv30WithProvenance:
@@ -649,11 +785,14 @@ class TestVixStyleIv30WithProvenance:
             put=from_snapshot_quote(bid=49.99, ask=50.01),
         )
 
+        # Gate disabled — this test pins the metric, not the gate.
         _, prov1 = replicate_expiry_variance_with_provenance(
-            chain1, rate=rate, T_years=T1_d / 365.0
+            chain1, rate=rate, T_years=T1_d / 365.0,
+            dominance_gate_threshold=None,
         )
         _, prov2 = replicate_expiry_variance_with_provenance(
-            chain2, rate=rate, T_years=T2_d / 365.0
+            chain2, rate=rate, T_years=T2_d / 365.0,
+            dominance_gate_threshold=None,
         )
         # The inflated expiry has a higher max-share than the healthy one.
         assert prov2.max_single_strike_share > prov1.max_single_strike_share
@@ -662,6 +801,7 @@ class TestVixStyleIv30WithProvenance:
             chain1, chain2,
             rate1=rate, T1_calendar_days=T1_d,
             rate2=rate, T2_calendar_days=T2_d,
+            dominance_gate_threshold=None,
         )
         assert combined.max_single_strike_share == pytest.approx(
             max(prov1.max_single_strike_share, prov2.max_single_strike_share)

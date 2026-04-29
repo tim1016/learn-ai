@@ -89,3 +89,29 @@ fix into the production pipeline.
 | IV30 stability under perturbation | Step 6 |
 | ETH/RTH UI toggle | Step 7 |
 | pricing-lab / strategy-builder hardcoded `r=0.043` | Step 8 |
+
+## Open: overnight-component noise (post-recorder calibration)
+
+The HF two-component RV estimator (`hf_realized_vol.py`) uses a single
+squared overnight log-return per session. That term is itself a
+high-variance estimator of overnight integrated variance (Hansen–Lunde
+2005, Martens 2002). For SPY, NBER w17422 puts overnight at ~30% of total
+variance — non-trivial.
+
+This is **not a basis-conversion bug**: IV30 and RV30 are both
+overnight-inclusive on our pipeline, so the comparison is on the same
+canvas. The remaining concern is *noise*, not *bias*. A noisier RV makes
+the VRP statistic noisier (wider z-score CI, weaker signal-to-noise on
+the lookback) without biasing it.
+
+Candidate fixes (all post-recorder, after we have empirical evidence
+overnight noise dominates the VRP signal):
+
+- Multi-day pooling of the overnight component (rolling mean over N
+  sessions, accept the lag).
+- Hansen–Lunde-weighted overnight estimator.
+- Two-scale RV that explicitly separates overnight from intraday and
+  weights inverse to estimator variance.
+
+Tracked here for awareness; no code change planned until forward
+recorder data shows the overnight piece is the dominant noise source.

@@ -153,8 +153,10 @@ class TestIvSeriesFromRecorder:
         assert items[0]["variance_contribution_synthetic"] == pytest.approx(0.12)
         # When the recorder row has no health_score (legacy row, or a row
         # whose health computation failed), we omit the field so
-        # _parse_iv_series falls back to the conservative 0.5 imputed
-        # prior — research-doc §7.11.
+        # _parse_iv_series takes the drop-health-factor branch and
+        # confidence collapses to (1 - vcs). See _parse_iv_series
+        # docstring for the rationale on the policy change from the
+        # earlier 0.5 imputed prior.
         assert "health_score" not in items[0]
 
     def test_propagates_health_score_when_present(self, recorder_store):
@@ -191,8 +193,11 @@ class TestIvSeriesFromRecorder:
 class TestParseIvSeriesNullCoalescing:
     """Caller-supplied iv_series may carry ``health_score: null`` on the
     wire (a JSON-explicit "no value"), not just an absent key. Both
-    parsers must coalesce explicit null to the conservative 0.5 imputed
-    prior rather than crashing on ``float(None)``. CodeRabbit P1 on PR 47.
+    parsers must handle explicit null without crashing on ``float(None)``,
+    and both shapes (missing-key, explicit-null) must take the same
+    imputed-evidence branch. CodeRabbit P1 on PR 47, refined per
+    iv-research-chat-notes.md §5.3 — imputed bars now drop the health
+    factor entirely (confidence = 1 - vcs) rather than apply a 0.5 prior.
     """
 
     def test_parse_iv_series_handles_explicit_null_health(self):
@@ -200,7 +205,8 @@ class TestParseIvSeriesNullCoalescing:
 
         idx = pd.Index([1_000, 2_000], dtype=np.int64)
         # First bar: missing key. Second bar: explicit None on the wire.
-        # Both must trigger the imputed prior + flag, not raise.
+        # Both must take the drop-health-factor branch and flag the bar
+        # as imputed, not raise.
         iv_series = [
             {"ts": 1_000, "iv30": 0.20, "variance_contribution_synthetic": 0.05},
             {"ts": 2_000, "iv30": 0.21, "health_score": None,
@@ -215,11 +221,9 @@ class TestParseIvSeriesNullCoalescing:
         # Both bars are "imputed" — key-missing AND explicit-null both qualify.
         assert bool(health_imputed.loc[1_000]) is True
         assert bool(health_imputed.loc[2_000]) is True
-        # Same imputed prior fired for both → confidences should match
-        # within the float-precision noise from confidence_with_explanation
-        # (the only differing input is vcs, so values still differ slightly).
-        assert 0.0 <= confidence.loc[1_000] <= 1.0
-        assert 0.0 <= confidence.loc[2_000] <= 1.0
+        # Drop-health-factor branch: confidence = (1 - vcs).
+        assert confidence.loc[1_000] == pytest.approx(1.0 - 0.05)
+        assert confidence.loc[2_000] == pytest.approx(1.0 - 0.07)
 
     def test_parse_iv_series_for_regime_handles_explicit_null_health(self):
         from app.routers.edge import _parse_iv_series_for_regime
@@ -306,17 +310,18 @@ class TestRealizedVsIvIvSourceField:
 
 
 class TestHealthScoreImputedPrior:
-    """Pins the imputed-prior policy: when ``health_score`` is omitted from
-    iv_series items but ``variance_contribution_synthetic`` is present (the
-    typical recorder-fallback shape), confidence is computed against a
-    conservative ``0.5`` prior — not ``1.0`` — and the imputed-ness is
-    surfaced via ``explanation.health_imputed_now``.
+    """Pins the drop-health-factor policy: when ``health_score`` is omitted
+    from iv_series items but ``variance_contribution_synthetic`` is present
+    (the typical recorder-fallback shape), confidence collapses to
+    ``(1 - vcs)`` rather than applying a synthetic prior multiplier. The
+    imputed-ness is surfaced via ``explanation.health_imputed_now`` so the
+    UI can flag the bar even though the numeric confidence may match the
+    explicit full-health case.
 
-    Closes the §7.3 reviewer-feedback contradiction: defaulting to ``1.0``
-    encoded "fully trusted stability" with zero evidence, which is the same
-    "defensible-looking but wrong" synthesis we used to reject for
-    ``strike_coverage_score``. See
-    ``docs/architecture/iv-ownership-research.md`` Reviewer Feedback Log.
+    Refined per ``docs/architecture/iv-research-chat-notes.md`` §5.3 — the
+    earlier 0.5 imputed-prior policy was replaced because halving every
+    no-evidence confidence is itself a real signal-attenuation choice
+    with no evidence to support the cut.
     """
 
     async def test_explanation_flags_health_imputed_when_missing(self, client, recorder_store):
@@ -360,13 +365,17 @@ class TestHealthScoreImputedPrior:
         assert explanation is not None
         assert explanation["health_imputed_now"] is False
 
-    async def test_imputed_prior_lowers_confidence_vs_legacy_default(self, client, recorder_store):
+    async def test_imputed_drops_health_factor_matches_explicit_full_health(
+        self, client, recorder_store
+    ):
         bars = _bars(40)
         # Two requests, identical except one supplies health=1.0 explicitly,
-        # the other omits it. With the imputed-prior policy, the omitted-health
-        # confidence should be roughly half the explicit-1.0 confidence
-        # (since the only change is health 1.0 → 0.5 in the multiplicative
-        # formula confidence = health * (1 - vcs), and vcs = 0 here).
+        # the other omits it. Under the drop-health-factor branch, the
+        # imputed bar produces confidence = (1 - vcs); the explicit
+        # full-health bar produces confidence = 1.0 * (1 - vcs). With
+        # vcs = 0 in both cases the two values must be identical — both
+        # collapse to 1.0. The imputed-ness is still surfaced via the
+        # ``health_imputed_now`` flag so the UI can mark the bar.
         _record(recorder_store, ts_ms=bars[30]["ts"], iv_vix=0.22, vcs=0.0)
         resp_imputed = await client.post(
             "/api/edge/realized-vs-iv/series",
@@ -385,8 +394,13 @@ class TestHealthScoreImputedPrior:
             json={"symbol": "SPY", "bars": bars, "iv_series": explicit_iv},
         )
 
-        c_imputed = resp_imputed.json()["explanation"]["latest_confidence"]
-        c_explicit = resp_explicit.json()["explanation"]["latest_confidence"]
-        # Imputed health = 0.5, explicit health = 1.0; vcs = 0 in both cases.
-        # So confidence_imputed should equal half confidence_explicit.
-        assert c_imputed == pytest.approx(c_explicit * 0.5, rel=1e-6)
+        body_imputed = resp_imputed.json()
+        body_explicit = resp_explicit.json()
+        c_imputed = body_imputed["explanation"]["latest_confidence"]
+        c_explicit = body_explicit["explanation"]["latest_confidence"]
+        # Both confidences collapse to 1.0 (vcs=0 on both), but reach it
+        # via different branches.
+        assert c_imputed == pytest.approx(c_explicit, rel=1e-6)
+        # Imputed-ness flag still fires regardless of the numeric match.
+        assert body_imputed["explanation"]["health_imputed_now"] is True
+        assert body_explicit["explanation"]["health_imputed_now"] is False
