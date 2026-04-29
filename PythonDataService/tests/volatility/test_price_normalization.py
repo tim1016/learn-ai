@@ -177,6 +177,121 @@ class TestFromEodClose:
             from_eod_close(close=-1.0)
 
 
+class TestTieredMoneynessHalfSpread:
+    """The moneyness-tiered rule keeps deep-wing spreads realistic without
+    historical NBBO. Pins the breakpoints and the spot-anchored magnitude
+    so future tweaks have to land here first.
+    """
+
+    def test_atm_uses_50bp_tier(self):
+        from app.volatility.price_normalization import tiered_moneyness_half_spread
+
+        # |K-S|/S = 0 → ATM tier (0.5% of spot).
+        hs = tiered_moneyness_half_spread(close=5.0, strike=590.0, spot=590.0)
+        assert hs == pytest.approx(max(0.05, 0.005 * 590.0))
+        assert hs == pytest.approx(2.95)
+
+    def test_moderate_otm_uses_100bp_tier(self):
+        from app.volatility.price_normalization import tiered_moneyness_half_spread
+
+        # |K-S|/S = 0.10 → moderate tier (1.0% of spot).
+        hs = tiered_moneyness_half_spread(close=2.0, strike=649.0, spot=590.0)
+        assert hs == pytest.approx(max(0.05, 0.010 * 590.0))
+        assert hs == pytest.approx(5.90)
+
+    def test_deep_otm_uses_200bp_tier(self):
+        from app.volatility.price_normalization import tiered_moneyness_half_spread
+
+        # |K-S|/S = 0.20 → deep tier (2.0% of spot).
+        hs = tiered_moneyness_half_spread(close=0.50, strike=708.0, spot=590.0)
+        assert hs == pytest.approx(max(0.05, 0.020 * 590.0))
+        assert hs == pytest.approx(11.80)
+
+    def test_breakpoint_5pct_inclusive_lower_tier(self):
+        # |K-S|/S = exactly 0.05 → upper (moderate) tier; 5% of spot.
+        from app.volatility.price_normalization import tiered_moneyness_half_spread
+
+        hs_just_below = tiered_moneyness_half_spread(
+            close=2.0, strike=619.49, spot=590.0
+        )
+        # 619.49/590 - 1 = 0.04998... < 0.05 → ATM tier
+        assert hs_just_below == pytest.approx(2.95)
+        hs_at_breakpoint = tiered_moneyness_half_spread(
+            close=2.0, strike=619.50, spot=590.0
+        )
+        # 619.5/590 - 1 = 0.05 (exactly) → moderate tier
+        assert hs_at_breakpoint == pytest.approx(5.90)
+
+    def test_below_low_priced_underlying_floor_dollar_minimum_holds(self):
+        from app.volatility.price_normalization import tiered_moneyness_half_spread
+
+        # Tiny spot — the $0.05 absolute floor should bind.
+        hs = tiered_moneyness_half_spread(close=0.10, strike=1.0, spot=1.0)
+        assert hs == pytest.approx(0.05)
+
+    def test_negative_inputs_rejected(self):
+        from app.volatility.price_normalization import tiered_moneyness_half_spread
+
+        with pytest.raises(ValueError, match="spot must be > 0"):
+            tiered_moneyness_half_spread(close=1.0, strike=100.0, spot=0.0)
+        with pytest.raises(ValueError, match="strike must be > 0"):
+            tiered_moneyness_half_spread(close=1.0, strike=0.0, spot=100.0)
+        with pytest.raises(ValueError, match="close must be >= 0"):
+            tiered_moneyness_half_spread(close=-0.1, strike=100.0, spot=100.0)
+
+
+class TestFromEodCloseTieredMoneyness:
+    """End-to-end constructor parity with ``from_eod_close``: both must
+    behave identically on the close-only fields (zero-bid handling, source
+    tag, rule-string preservation), and only the half-spread should differ
+    when ``|K-S|/S`` puts the strike past a tier breakpoint.
+    """
+
+    def test_atm_quality_matches_existing_flat_rule(self):
+        from app.volatility.price_normalization import (
+            from_eod_close_tiered_moneyness,
+        )
+
+        # ATM tier: half = 0.5% of spot. With close=5.0 and spot=590 the
+        # spread is 0.005·590 = 2.95, which is wider than the flat-rule
+        # 0.005·5 = 0.025; quality drops accordingly. Pin the exact value
+        # so accidental swap to close-anchored doesn't slip through.
+        nop = from_eod_close_tiered_moneyness(close=5.0, strike=590.0, spot=590.0)
+        assert nop.spread_estimate == pytest.approx(2.95)
+        assert nop.quality_score == pytest.approx(max(0.0, 1.0 - 2.95 / 5.0))
+
+    def test_deep_otm_uses_widest_tier(self):
+        from app.volatility.price_normalization import (
+            from_eod_close_tiered_moneyness,
+        )
+
+        # |K-S|/S = 0.20 → 2% of spot.
+        nop = from_eod_close_tiered_moneyness(close=0.50, strike=708.0, spot=590.0)
+        # half = 11.8 > mid = 0.5 → quality clamps to 0.
+        assert nop.spread_estimate == pytest.approx(11.80)
+        assert nop.quality_score == 0.0
+
+    def test_zero_bid_below_floor(self):
+        from app.volatility.price_normalization import (
+            from_eod_close_tiered_moneyness,
+        )
+
+        nop = from_eod_close_tiered_moneyness(close=0.04, strike=590.0, spot=590.0)
+        assert nop.is_zero_bid
+        assert nop.mid == 0.0
+        assert nop.quality_score == 0.0
+
+    def test_records_tiered_rule_string(self):
+        from app.volatility.price_normalization import (
+            TIERED_MONEYNESS_HALF_SPREAD_RULE,
+            from_eod_close_tiered_moneyness,
+        )
+
+        nop = from_eod_close_tiered_moneyness(close=5.0, strike=590.0, spot=590.0)
+        assert nop.half_spread_rule == TIERED_MONEYNESS_HALF_SPREAD_RULE
+        assert nop.spread_synthetic is True
+
+
 class TestRoundTripSerialization:
     """`asdict` is the bridge to the recorder's JSONB column."""
 

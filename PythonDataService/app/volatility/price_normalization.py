@@ -42,6 +42,53 @@ keeps the synthesis reproducible without spelunking. Different rules are
 allowed; the record-keeping is the load-bearing part."""
 
 
+TIERED_MONEYNESS_HALF_SPREAD_RULE = (
+    "tiered_moneyness: |K-S|/S<0.05→0.5%·S, <0.15→1.0%·S, ≥0.15→2.0%·S; floor $0.05"
+)
+"""Moneyness-tiered half-spread synthesis rule. Empirical option spreads
+widen substantially with distance from spot — flat 0.5%·S is fine ATM
+but indefensible at 10Δ where real spreads are ~1–2% of S. The tiered
+schedule (Nemes-style) bounds the wing-spread bias without needing
+historical NBBO. Default for new synthesis paths going forward;
+``DEFAULT_HALF_SPREAD_RULE`` (flat 0.5%·S) is preserved for the SPY
+2024-12-20 golden fixture so its reconstructions stay byte-identical.
+See ``docs/architecture/iv-research-chat-notes.md`` §5.5."""
+
+
+def tiered_moneyness_half_spread(
+    *,
+    close: float,
+    strike: float,
+    spot: float,
+) -> float:
+    """Half-spread for the tiered-moneyness rule.
+
+    Tier breakpoints on ``|K-S|/S``:
+
+    - ``< 0.05`` (ATM-ish):     ``max($0.05, 0.005·spot)``
+    - ``< 0.15`` (~moderate):   ``max($0.05, 0.010·spot)``
+    - ``>= 0.15`` (deep wing):  ``max($0.05, 0.020·spot)``
+
+    Why ``spot`` not ``close`` for the relative term: option premium
+    collapses on the wings, so ``0.5%·close`` shrinks toward zero exactly
+    where real spreads grow. Anchoring on spot keeps the dollar magnitude
+    realistic on far strikes. ``close`` is still passed to support a
+    future "tighter-than-tier" override (e.g. an unusually liquid wing).
+    """
+    if spot <= 0:
+        raise ValueError(f"spot must be > 0, got {spot}")
+    if strike <= 0:
+        raise ValueError(f"strike must be > 0, got {strike}")
+    if close < 0:
+        raise ValueError(f"close must be >= 0, got {close}")
+    rel_dist = abs(strike - spot) / spot
+    if rel_dist < 0.05:
+        return max(0.05, 0.005 * spot)
+    if rel_dist < 0.15:
+        return max(0.05, 0.010 * spot)
+    return max(0.05, 0.020 * spot)
+
+
 @dataclass(frozen=True)
 class NormalizedOptionPrice:
     """A single option leg's mid price with full provenance.
@@ -168,6 +215,49 @@ def from_eod_close(
             quality_score=0.0,
         )
     half_spread = max(0.05, 0.005 * close)
+    return NormalizedOptionPrice(
+        mid=close,
+        source="synthetic_close_proxy",
+        spread_estimate=half_spread,
+        spread_synthetic=True,
+        half_spread_rule=rule,
+        quality_score=_quality_from_half_spread(close, half_spread),
+    )
+
+
+def from_eod_close_tiered_moneyness(
+    close: float,
+    *,
+    strike: float,
+    spot: float,
+    rule: str = TIERED_MONEYNESS_HALF_SPREAD_RULE,
+) -> NormalizedOptionPrice:
+    """Synthesize a quote from EOD close using a moneyness-tiered half-spread.
+
+    Default for new synthesis paths. The flat-rule ``from_eod_close`` is
+    retained for golden-fixture reproducibility; new code that synthesizes
+    historical option quotes should use this function instead so deep-OTM
+    legs aren't priced with a 0.5%-of-close spread that empirically
+    understates wing spreads by an order of magnitude.
+
+    Zero-bid handling matches ``from_eod_close``: if ``close`` is below
+    the absolute $0.05 floor the leg is treated as zero-bid (mid=0,
+    quality=0).
+    """
+    if close < 0:
+        raise ValueError(f"close must be >= 0, got {close}")
+    if close < 0.05:
+        return NormalizedOptionPrice(
+            mid=0.0,
+            source="synthetic_close_proxy",
+            spread_estimate=None,
+            spread_synthetic=True,
+            half_spread_rule=rule,
+            quality_score=0.0,
+        )
+    half_spread = tiered_moneyness_half_spread(
+        close=close, strike=strike, spot=spot
+    )
     return NormalizedOptionPrice(
         mid=close,
         source="synthetic_close_proxy",
