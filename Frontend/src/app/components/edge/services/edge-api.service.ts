@@ -50,9 +50,11 @@ interface RealizedVsIvSeriesResponse {
     floor: number;
     gated_now: boolean;
     /** Server-side flag (research-doc §7.11): the latest bar's confidence
-     *  was computed against the conservative 0.5 imputed prior because
-     *  the recorder row lacked an explicit health_score. Optional for
-     *  backwards compat with server builds that pre-date the field. */
+     *  was computed via the drop-health-factor branch because the recorder
+     *  row lacked an explicit health_score. Confidence collapsed to
+     *  (1 − vcs); the UI should still mark the bar as "based on imputed
+     *  evidence." Optional for backwards compat with server builds that
+     *  pre-date the field. */
     health_imputed_now?: boolean;
   } | null;
   coverage: {

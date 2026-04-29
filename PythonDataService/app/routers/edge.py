@@ -62,6 +62,10 @@ from app.engine.edge.regime_clustering import (
     stability_filter,
 )
 from app.engine.edge.regime_strategy_eval import partition_by_regime
+from app.engine.edge.threshold_events import (
+    log_confidence_floor_fired,
+    log_imputed_prior_emitted,
+)
 from app.engine.edge.trade_simulator import TradeSimConfig, simulate
 from app.engine.edge.vrp import compute_vrp, vrp_signal
 from app.services.iv_recorder import get_iv_store
@@ -203,12 +207,31 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
             health_imputed_now = bool(health_imputed.loc[latest_idx])
         else:
             health_imputed_now = False
+        gated_now = bool(latest_h < req.confidence_floor)
         explanation = {
             "latest_confidence": latest_h,
             "floor": req.confidence_floor,
-            "gated_now": bool(latest_h < req.confidence_floor),
+            "gated_now": gated_now,
             "health_imputed_now": health_imputed_now,
         }
+        # Threshold-firing audit emitters: tagged structured logs the
+        # operator can grep across the recorder burn-in to confirm gates
+        # fire at the expected rate. Tied to the *latest* bar (the one
+        # driving the UI banner) rather than every historical bar to
+        # avoid drowning the log on long backfills.
+        if gated_now:
+            log_confidence_floor_fired(
+                ticker=req.symbol,
+                snapshot_ts_ms=int(latest_idx) if pd.notna(latest_idx) else None,
+                confidence=latest_h,
+                floor=req.confidence_floor,
+            )
+        if health_imputed_now:
+            log_imputed_prior_emitted(
+                ticker=req.symbol,
+                snapshot_ts_ms=int(latest_idx) if pd.notna(latest_idx) else None,
+                shape="missing_or_null",
+            )
 
     coverage = {
         "n_bars": len(bars),
@@ -246,12 +269,12 @@ def _iv_series_from_recorder(symbol: str, bars_index: pd.Index) -> list[dict]:
     where both are None or that carry an ``error`` are skipped (no synthesis).
     Pulls ``variance_contribution_synthetic`` from ``iv_provenance`` and
     ``health_score`` directly off the row when present so downstream
-    confidence gating and regime-feature weighting use real evidence rather
-    than the conservative 0.5 imputed prior. Rows from before the recorder
-    persisted ``health_score`` (or rows where the health computation itself
-    failed) lack the field; ``_parse_iv_series`` falls back to the imputed
-    prior and surfaces the imputed-ness via ``health_imputed_now`` so the
-    UI can flag the bar.
+    confidence gating and regime-feature weighting use real evidence. Rows
+    from before the recorder persisted ``health_score`` (or rows where the
+    health computation itself failed) lack the field; ``_parse_iv_series``
+    takes the drop-health-factor branch (confidence = 1 − vcs) and
+    surfaces the imputed-ness via ``health_imputed_now`` so the UI can
+    flag the bar.
 
     Returns ``[]`` when the recorder has nothing in the window; the caller
     treats that as ``iv_source="absent"``.
@@ -303,19 +326,24 @@ def _parse_iv_series_for_regime(
     if not (has_health or has_vcs):
         return iv, None
 
-    # Same imputed-prior policy as _parse_iv_series — see that docstring for
-    # the rationale. When health is not supplied (key absent OR value
-    # explicitly null on the wire), we default to 0.5 (a conservative
-    # prior); the regime route weights features down accordingly rather
-    # than treating an absent number as "full health".
+    # Imputed-prior policy: when health_score is missing (key absent OR
+    # explicit null), the regime path emits feature_weight = 0 — "no
+    # evidence on stability" maps to "this bar contributes no IV signal
+    # to the regime classifier." The VRP path takes a different branch
+    # for the same shape (drop the health factor and let (1 - vcs) carry
+    # confidence) because confidence is a multiplier on a z-score, not a
+    # feature weight on a regime input — see _parse_iv_series for the
+    # asymmetry rationale.
     weight_map: dict[int, float] = {}
     for p in iv_series:
         h_raw = p.get("health_score")
-        h = 0.5 if h_raw is None else float(h_raw)
+        if "health_score" not in p or h_raw is None:
+            weight_map[int(p["ts"])] = 0.0
+            continue
         s_raw = p.get("variance_contribution_synthetic")
         s = 0.0 if s_raw is None else float(s_raw)
         weight_map[int(p["ts"])] = regime_feature_weight(
-            health_score=h, variance_contribution_synthetic=s
+            health_score=float(h_raw), variance_contribution_synthetic=s
         )
     weight = pd.Series(weight_map).reindex(bars_index).fillna(0.0)
     return iv, weight
@@ -333,16 +361,19 @@ def _parse_iv_series(
     the legacy ungated path runs.
 
     **Imputed-prior policy for missing ``health_score``.** When ``vcs`` is
-    supplied but ``health_score`` is omitted (the typical recorder-fallback
-    shape — recorder provenance does not carry a health number), we use a
-    conservative prior of ``0.5`` rather than the previous ``1.0``. Defaulting
-    to ``1.0`` was a "defensible-looking but wrong" synthesis: it encoded
-    "fully trusted stability" with zero evidence, which is exactly the
-    contradiction we used to reject mapping ``strike_coverage_score`` 1:1 to
-    ``health_score``. The imputed-ness is surfaced via the returned
-    ``health_imputed`` series so consumers can flag the bar visually rather
-    than treat it as authoritative. See
-    ``docs/architecture/iv-ownership-research.md`` Reviewer Feedback Log.
+    supplied but ``health_score`` is missing (key absent OR explicit null on
+    the wire), the bar is processed as a **drop-the-health-factor** case:
+    confidence collapses to ``(1 - vcs)`` rather than ``health * (1 - vcs)``.
+    The previous policy multiplied by a synthetic ``0.5`` prior; we replaced
+    that because a 0.5 multiplier is a real signal-attenuation choice (it
+    halves every confidence with no evidence to support the cut) whereas
+    "no evidence on stability, trust the data-quality side alone" is the
+    honest answer when health truly is unknown. The imputed-ness is still
+    surfaced via the returned ``health_imputed`` series so the UI can mark
+    the bar visually rather than silently treat it as fully validated.
+
+    See ``docs/architecture/iv-ownership-research.md`` Reviewer Feedback Log
+    and ``docs/architecture/iv-research-chat-notes.md`` §5.3.
     """
     if not iv_series:
         return pd.Series(index=bars_index, dtype=float), None, None
@@ -363,13 +394,19 @@ def _parse_iv_series(
         # explicitly None on the wire — both shapes mean "no evidence",
         # and both must surface to the UI as such.
         h_raw = p.get("health_score")
-        imputed_map[ts] = "health_score" not in p or h_raw is None
-        h = 0.5 if h_raw is None else float(h_raw)
+        is_imputed = "health_score" not in p or h_raw is None
+        imputed_map[ts] = is_imputed
         s_raw = p.get("variance_contribution_synthetic")
         s = 0.0 if s_raw is None else float(s_raw)
-        conf_map[ts] = confidence_with_explanation(
-            health_score=h, variance_contribution_synthetic=s
-        ).confidence
+        if is_imputed:
+            # Drop the health factor entirely on missing-evidence bars;
+            # confidence is carried by data-quality alone.
+            conf_map[ts] = max(0.0, min(1.0, 1.0 - s))
+        else:
+            conf_map[ts] = confidence_with_explanation(
+                health_score=float(h_raw),
+                variance_contribution_synthetic=s,
+            ).confidence
     confidence = pd.Series(conf_map).reindex(bars_index)
     health_imputed = pd.Series(imputed_map).reindex(bars_index)
     return iv, confidence, health_imputed
