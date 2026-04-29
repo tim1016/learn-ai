@@ -1332,16 +1332,16 @@ per-item audit is in
 |---|---|---|
 | **R5 `OccTickerFormat`** | ✅ DONE | `Frontend/src/app/utils/occ-ticker.ts` + 18-test parity spec including round-trip on 7 representative tuples. |
 | **R0a delete `/options-strategy-lab`** | ✅ DONE | `payoff-chart/` relocated to `Frontend/src/app/shared/`. Component dir deleted. Route replaced with 7-day-watch redirect to `/strategy-builder`. Spec still 15/15 green. |
-| **R0b delete `/options-chain`** | ⏸ DEFERRED — UX-design-gated | UX-Q1, UX-Q2, UX-Q4 in [`options-ux-design-prompt.md`](options-ux-design-prompt.md) need a Claude Design pass. Mechanical migration is doable but the UX cost of guessing is too high to ship blind to a working production page. |
-| **R1 port `/options-history` → `/data-lab`** | ⏸ DEFERRED — UX-design-gated | UX-Q3 (past-chain inspector card visual) in the design prompt. Plus the port itself is non-trivial: service extraction + new sub-component. |
+| **R0b delete `/options-chain`** | ✅ DONE 2026-04-29 | UX-Q2 chain density toggle, UX-Q1 icon-per-side drill-down + drawer migration, full Greek display per row (D9a), `/options-chain` route deleted, 7-day-watch redirect to `/strategy-builder` in place. UX-Q4 (two-column 60/40 layout) deferred but doesn't block the route deletion. |
+| **R1 port `/options-history` → `/data-lab`** | ✅ DONE 2026-04-29 | `past-chain.service.ts` (lifted from the legacy `analyze()`) + `data-lab/past-chain-inspector/` sub-component (3-state lifecycle: collapsed → loading → expanded; modal drill-down per UX-Q3). Mounted on the options-companion config row. `/options-history` route deleted; redirect added. |
 | **R8 `bs_greeks` authority migration** | ⏸ DEFERRED — focused session | Sovereignty math; needs the 1000-point parity test plus a latency benchmark before swapping the live-preview Greeks path. Phase 1.2 of `options-vol-platform-tdd.md`. |
-| **R6 `GreekFormat`** | ⏸ DEFERRED — post-consolidation | Reclassified: not a migration enabler since strategy-builder already has its own local versions. Smaller blast radius after R0b/R1 land. |
+| **R6 `GreekFormat`** | ⏸ DEFERRED — post-consolidation | Reclassified: not a migration enabler since strategy-builder already has its own local versions. Smaller blast radius now that R0b/R1 have landed. |
 | **R7 `ContractPricePicker`** | ⏸ DEFERRED — post-consolidation | Same reclassification as R6. |
-| **R4 `OptionsChainStateService`** | ⏸ DEFERRED — post-consolidation | After R0b/R1 land, only 2 live-chain consumers remain (`/strategy-builder`, `/pricing-lab`); abstraction has lower leverage. |
+| **R4 `OptionsChainStateService`** | ⏸ DEFERRED — post-consolidation | Now that R0b/R1 have landed, only 2 live-chain consumers remain (`/strategy-builder`, `/pricing-lab`); abstraction has lower leverage. |
+| **R0b — UX-Q4 two-column 60/40 layout** | ⏸ DEFERRED — focused session | Substantial template + SCSS rework. Strategy-builder works in the current single-column layout; the UX-Q4 layout is a refinement. |
 
-PR order when work resumes: **R0b** (largest blast-radius deferred
-item, currently gating §5.1 of the truth doc), then **R1**, then
-**R8**, then **R6/R7/R4** as cleanup.
+PR order when work resumes: **R8** (sovereignty math, focused session),
+then **UX-Q4 layout** (template + SCSS), then **R6/R7/R4** as cleanup.
 
 Each PR contains its parity test from [§8.2](#82-parity-tests-for-every-extraction).
 Legacy code removed in the same PR per [§7 D7](#7-decisions-log),
