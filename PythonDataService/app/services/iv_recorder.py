@@ -7,9 +7,10 @@ forward-only from the day this recorder ships.
 
 See ``docs/architecture/iv-ownership-research.md`` for the consolidated
 research document covering math, decisions, reviewer feedback, and the
-forward plan. Section §7.5 explains why the .NET ``JobsController`` owns
-the cron (not an in-process scheduler), and §7.4 explains why this is a
-JSONL file store today (Postgres after burn-in).
+forward plan. Section §7.5 explains why the .NET host's Quartz scheduler
+(``AddIvRecorder`` / ``IvRecorderRegistration``) owns the cron, not an
+in-process Python scheduler, and §7.4 explains why this is a JSONL file
+store today (Postgres after burn-in).
 
 This module exposes:
 
