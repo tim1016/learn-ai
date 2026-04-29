@@ -80,11 +80,12 @@ export const routes: Routes = [
       ).then((m) => m.StrategyDocsComponent),
   },
   {
+    // Per docs/architecture/options-routes-research.md §7 D8 + §5.1 R0a:
+    // /options-strategy-lab is deleted; /strategy-builder is the survivor.
+    // Redirect kept for ≥ 7 days to preserve bookmarks; remove in Phase 4.5.
     path: "options-strategy-lab",
-    loadComponent: () =>
-      import(
-        "./components/options-strategy-lab/options-strategy-lab.component"
-      ).then((m) => m.OptionsStrategyLabComponent),
+    redirectTo: "/strategy-builder",
+    pathMatch: "full",
   },
   {
     path: "strategy-builder",

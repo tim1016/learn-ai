@@ -9,7 +9,7 @@ import {
 } from 'lightweight-charts';
 import {
   PayoffPoint, ChartCurveData, GreekCurvePoint, GreekType,
-} from '../../../graphql/types';
+} from '../../graphql/types';
 
 @Component({
   selector: 'app-payoff-chart',
