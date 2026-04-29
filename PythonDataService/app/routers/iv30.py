@@ -65,6 +65,10 @@ class IvProvenancePayload(BaseModel):
     price_source_mix: dict[str, float]
     variance_contribution_synthetic: float
     strike_coverage_score: float
+    # Defaulted because FastAPI response_model filters out fields not declared
+    # on the model — without this, the diagnostic added in research-doc §8.2.5
+    # is silently dropped from /api/edge/iv30/{vix-style,parametric} responses.
+    max_single_strike_share: float = 0.0
     per_strike_contributions: list[dict] | None = None
 
 
@@ -74,6 +78,7 @@ def _provenance_to_payload(prov: IvProvenance) -> IvProvenancePayload:
         price_source_mix=dict(prov.price_source_mix),
         variance_contribution_synthetic=prov.variance_contribution_synthetic,
         strike_coverage_score=prov.strike_coverage_score,
+        max_single_strike_share=prov.max_single_strike_share,
         per_strike_contributions=prov.per_strike_contributions,
     )
 
