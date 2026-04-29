@@ -15,7 +15,14 @@ from __future__ import annotations
 import pytest
 
 from app.services.bs_greeks import bs_european_price
-from app.volatility.iv30_health import compute_iv30_health
+from app.volatility.iv30_health import (
+    compute_iv30_health,
+    compute_iv30_health_normalized,
+)
+from app.volatility.price_normalization import (
+    NormalizedOptionQuote,
+    from_snapshot_quote,
+)
 from app.volatility.vix_replication import OptionQuote, vix_style_iv30
 
 
@@ -194,3 +201,65 @@ class TestIv30TimeOfDayStability:
         # Recovered σ stays near the truth on every snapshot.
         for iv in ivs:
             assert abs(iv - SIGMA_TRUE) < 0.005, f"snapshot σ={iv:.4f} far from {SIGMA_TRUE}"
+
+
+def _to_normalized(quote: OptionQuote) -> NormalizedOptionQuote:
+    return NormalizedOptionQuote(
+        strike=quote.strike,
+        call=from_snapshot_quote(quote.call_bid, quote.call_ask),
+        put=from_snapshot_quote(quote.put_bid, quote.put_ask),
+    )
+
+
+class TestNormalizedHealthParity:
+    """``compute_iv30_health_normalized`` and the legacy ``compute_iv30_health``
+    must produce identical numbers on a clean OPRA chain. Pins the recorder
+    write path (which uses the normalized variant) to the audited legacy math.
+    """
+
+    def test_scores_match_legacy_on_clean_opra_chain(
+        self, chain1: list[OptionQuote], chain2: list[OptionQuote]
+    ):
+        legacy = compute_iv30_health(
+            chain1, chain2,
+            rate1=RATE, T1_calendar_days=T1_DAYS,
+            rate2=RATE, T2_calendar_days=T2_DAYS,
+        )
+
+        norm_chain1 = [_to_normalized(q) for q in chain1]
+        norm_chain2 = [_to_normalized(q) for q in chain2]
+        normalized = compute_iv30_health_normalized(
+            norm_chain1, norm_chain2,
+            rate1=RATE, T1_calendar_days=T1_DAYS,
+            rate2=RATE, T2_calendar_days=T2_DAYS,
+        )
+
+        # Every component sub-score and the composite agree to 1e-9 — the
+        # math is identical, the input wrapper is the only difference.
+        assert normalized.score == pytest.approx(legacy.score, abs=1e-9)
+        assert normalized.resampling_score == pytest.approx(legacy.resampling_score, abs=1e-9)
+        assert normalized.strike_grid_score == pytest.approx(legacy.strike_grid_score, abs=1e-9)
+        assert normalized.delta_resampling_bps == pytest.approx(legacy.delta_resampling_bps, abs=1e-9)
+        assert normalized.delta_strike_grid_bps == pytest.approx(legacy.delta_strike_grid_bps, abs=1e-9)
+
+    def test_parametric_arm_matches_legacy(
+        self, chain1: list[OptionQuote], chain2: list[OptionQuote], baseline_iv30: float
+    ):
+        legacy = compute_iv30_health(
+            chain1, chain2,
+            rate1=RATE, T1_calendar_days=T1_DAYS,
+            rate2=RATE, T2_calendar_days=T2_DAYS,
+            parametric_iv30=baseline_iv30,
+        )
+        norm_chain1 = [_to_normalized(q) for q in chain1]
+        norm_chain2 = [_to_normalized(q) for q in chain2]
+        normalized = compute_iv30_health_normalized(
+            norm_chain1, norm_chain2,
+            rate1=RATE, T1_calendar_days=T1_DAYS,
+            rate2=RATE, T2_calendar_days=T2_DAYS,
+            parametric_iv30=baseline_iv30,
+        )
+        assert normalized.parametric_vs_replication_score == pytest.approx(
+            legacy.parametric_vs_replication_score, abs=1e-9
+        )
+        assert normalized.score == pytest.approx(legacy.score, abs=1e-9)

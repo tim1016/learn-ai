@@ -244,13 +244,14 @@ def _iv_series_from_recorder(symbol: str, bars_index: pd.Index) -> list[dict]:
 
     Prefers ``iv30_vix_style`` and falls back to ``iv30_parametric``; rows
     where both are None or that carry an ``error`` are skipped (no synthesis).
-    Pulls ``variance_contribution_synthetic`` from ``iv_provenance`` when
-    present so downstream confidence gating runs unchanged. ``health_score``
-    is intentionally not synthesized — recorder provenance does not carry it,
-    and ``_parse_iv_series`` applies a conservative imputed-prior of 0.5 to
-    bars without an explicit health number, surfacing the imputed-ness via
-    ``health_imputed_now`` on the response so the UI can flag the bar
-    rather than treat the confidence as authoritative.
+    Pulls ``variance_contribution_synthetic`` from ``iv_provenance`` and
+    ``health_score`` directly off the row when present so downstream
+    confidence gating and regime-feature weighting use real evidence rather
+    than the conservative 0.5 imputed prior. Rows from before the recorder
+    persisted ``health_score`` (or rows where the health computation itself
+    failed) lack the field; ``_parse_iv_series`` falls back to the imputed
+    prior and surfaces the imputed-ness via ``health_imputed_now`` so the
+    UI can flag the bar.
 
     Returns ``[]`` when the recorder has nothing in the window; the caller
     treats that as ``iv_source="absent"``.
@@ -275,6 +276,8 @@ def _iv_series_from_recorder(symbol: str, bars_index: pd.Index) -> list[dict]:
             item["variance_contribution_synthetic"] = float(
                 prov["variance_contribution_synthetic"]
             )
+        if r.health_score is not None:
+            item["health_score"] = float(r.health_score)
         out.append(item)
     return out
 

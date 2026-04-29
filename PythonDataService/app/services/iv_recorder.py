@@ -38,6 +38,7 @@ from pathlib import Path
 from app.routers.iv30 import _normalized_quotes_by_expiry, _pick_straddle_pair
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import RateAndDividend, get_rate_and_dividend
+from app.volatility.iv30_health import compute_iv30_health_normalized
 from app.volatility.iv_provenance import IvProvenance
 from app.volatility.vix_replication import vix_style_iv30_with_provenance
 
@@ -76,6 +77,12 @@ class RecordedIvSnapshot:
     iv_provenance: dict
     raw_chain: list[dict]
     error: str | None = None
+    # Stability score in [0, 1] computed at write time via the IV30 health
+    # suite (research-doc §4.8). None on error rows and on legacy rows that
+    # pre-date this field — readers fall back to the imputed prior of 0.5
+    # surfaced through ``health_imputed_now``. Defaulted so back-compat
+    # JSONL rows reconstruct cleanly via ``RecordedIvSnapshot(**d)``.
+    health_score: float | None = None
 
 
 @dataclass
@@ -280,6 +287,7 @@ def record_iv_snapshot(
     iv_parametric: float | None = None  # parametric path is a follow-up
     prov_dict: dict = {}
     error_msg: str | None = None
+    health_score: float | None = None
     try:
         t1, t2 = _pick_straddle_pair(by_expiry, target_calendar_days)
         sigma, prov = vix_style_iv30_with_provenance(
@@ -290,6 +298,24 @@ def record_iv_snapshot(
         )
         iv_vix = float(sigma)
         prov_dict = _provenance_to_dict(prov)
+
+        # Health score is computed off the same chain so the recorder
+        # fallback can propagate it downstream (research-doc §4.8 / §9).
+        # A health failure does not abort the write — the IV is still
+        # useful, just without the regime-feature weighting boost.
+        try:
+            health = compute_iv30_health_normalized(
+                by_expiry[t1], by_expiry[t2],
+                rate1=rd.rate, T1_calendar_days=t1,
+                rate2=rd.rate, T2_calendar_days=t2,
+                parametric_iv30=iv_parametric,
+            )
+            health_score = float(health.score)
+        except Exception as exc:
+            logger.warning(
+                "[iv-recorder] %s slot=%s health computation failed: %s",
+                ticker, slot, exc,
+            )
     except Exception as exc:
         logger.warning("[iv-recorder] %s slot=%s replication failure: %s", ticker, slot, exc)
         error_msg = f"replication_failed: {exc}"
@@ -310,6 +336,7 @@ def record_iv_snapshot(
         iv_provenance=prov_dict,
         raw_chain=raw_chain,
         error=error_msg,
+        health_score=health_score,
     )
     store.write(row)
     return row
