@@ -309,7 +309,12 @@ async def iv30_parametric(req: Iv30LiveRequest) -> Iv30LiveResponse:
         iv_source="internal_solver",
         price_source_mix=price_source_mix,
         variance_contribution_synthetic=vcs,
+        # Both wing-coverage and single-strike-domination are diagnostics
+        # of the chain-replication integral; not meaningful for the
+        # parametric ATM-only path. 0.0 signals "not applicable" the same
+        # way strike_coverage_score=0.0 does.
         strike_coverage_score=0.0,
+        max_single_strike_share=0.0,
         per_strike_contributions=None,
     )
 

@@ -509,6 +509,79 @@ class TestReplicateExpiryWithProvenance:
         )
         assert prov.per_strike_contributions is None
 
+    def test_max_single_strike_share_in_unit_interval(self):
+        """Sanity: the diagnostic always lands in [0, 1] for any valid
+        chain, including the empty-integration edge case."""
+        spot = 100.0
+        T_years = 30 / 365.0
+        rate = 0.05
+        strikes = [80, 90, 95, 100, 105, 110, 120]
+        chain = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T_years, rate=rate,
+            sigma=0.20, source="opra_mid",
+        )
+        _, prov = replicate_expiry_variance_with_provenance(
+            chain, rate=rate, T_years=T_years
+        )
+        assert 0.0 <= prov.max_single_strike_share <= 1.0
+
+    def test_max_single_strike_share_uplifted_by_inflated_strike(self):
+        """Research-doc §8.2.5: a single strike with an anomalously large
+        quote dominates the variance integral via the ``c_i ∝ Q`` term.
+        Asserted as a relative uplift over the same chain without the
+        inflation — sidesteps absolute-calibration brittleness from
+        wing-truncation interacting with strike spacing."""
+        from app.volatility.price_normalization import (
+            NormalizedOptionQuote,
+            from_snapshot_quote,
+        )
+
+        spot = 100.0
+        sigma_true = 0.20
+        T_years = 30 / 365.0
+        rate = 0.05
+        strikes = [60, 65, 70, 75, 80, 85, 90, 92.5, 95, 97.5, 100,
+                   102.5, 105, 107.5, 110, 115, 120, 125, 130, 135, 140]
+
+        healthy = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T_years, rate=rate,
+            sigma=sigma_true, source="opra_mid",
+        )
+        _, prov_healthy = replicate_expiry_variance_with_provenance(
+            healthy, rate=rate, T_years=T_years
+        )
+
+        # Inflate the K=95 put to a fixed $50 mid. K=95 is reliably in the
+        # integration (just below ATM, BS-priced put is ~$0.66 at σ=0.20),
+        # so a fixed dollar inflation makes the c_i term roughly 75x its
+        # natural value. A multiplier on the BS-fair value would not work
+        # for deep-OTM strikes whose fair value is essentially zero.
+        inflated_chain = list(healthy)
+        target_idx = strikes.index(95)
+        original = inflated_chain[target_idx]
+        inflated_put = from_snapshot_quote(bid=49.99, ask=50.01)
+        inflated_chain[target_idx] = NormalizedOptionQuote(
+            strike=original.strike, call=original.call, put=inflated_put,
+        )
+
+        _, prov_inflated = replicate_expiry_variance_with_provenance(
+            inflated_chain, rate=rate, T_years=T_years
+        )
+
+        # The inflated strike should dominate; the lift over the healthy
+        # baseline must be substantial. 0.30 leaves ample margin around
+        # the empirical lift (typically > 0.5) without depending on the
+        # exact post-truncation chain shape.
+        lift = prov_inflated.max_single_strike_share - prov_healthy.max_single_strike_share
+        assert lift > 0.30, (
+            f"100x inflation at K=95 should dominate the integral; "
+            f"healthy={prov_healthy.max_single_strike_share:.3f}, "
+            f"inflated={prov_inflated.max_single_strike_share:.3f}, "
+            f"lift={lift:.3f}"
+        )
+        # And the inflated value sits well into the "domination" regime.
+        assert prov_inflated.max_single_strike_share > 0.5
+
 
 class TestVixStyleIv30WithProvenance:
     def test_combines_two_expiries_provenance(self):
@@ -544,6 +617,55 @@ class TestVixStyleIv30WithProvenance:
         assert "opra_mid" in prov.price_source_mix
         assert "synthetic_close_proxy" in prov.price_source_mix
         assert sum(prov.price_source_mix.values()) == pytest.approx(1.0)
+
+    def test_combined_max_strike_share_is_max_of_two(self):
+        """Worst-case domination across the two expiries surfaces in the
+        combined provenance, mirroring ``strike_coverage_score``'s
+        worst-case `min` semantics."""
+        from app.volatility.price_normalization import (
+            NormalizedOptionQuote,
+            from_snapshot_quote,
+        )
+
+        spot = 100.0
+        rate = 0.05
+        T1_d, T2_d = 21, 35
+        strikes = [60, 70, 80, 90, 95, 100, 105, 110, 120, 130, 140]
+
+        # expiry1 is healthy; expiry2 has one inflated K=95 put.
+        chain1 = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T1_d / 365.0, rate=rate,
+            sigma=0.20, source="opra_mid",
+        )
+        chain2 = _bs_normalized_chain(
+            spot=spot, strikes=strikes, T_years=T2_d / 365.0, rate=rate,
+            sigma=0.20, source="opra_mid",
+        )
+        target_idx = strikes.index(95)
+        original = chain2[target_idx]
+        chain2[target_idx] = NormalizedOptionQuote(
+            strike=original.strike,
+            call=original.call,
+            put=from_snapshot_quote(bid=49.99, ask=50.01),
+        )
+
+        _, prov1 = replicate_expiry_variance_with_provenance(
+            chain1, rate=rate, T_years=T1_d / 365.0
+        )
+        _, prov2 = replicate_expiry_variance_with_provenance(
+            chain2, rate=rate, T_years=T2_d / 365.0
+        )
+        # The inflated expiry has a higher max-share than the healthy one.
+        assert prov2.max_single_strike_share > prov1.max_single_strike_share
+
+        _, combined = vix_style_iv30_with_provenance(
+            chain1, chain2,
+            rate1=rate, T1_calendar_days=T1_d,
+            rate2=rate, T2_calendar_days=T2_d,
+        )
+        assert combined.max_single_strike_share == pytest.approx(
+            max(prov1.max_single_strike_share, prov2.max_single_strike_share)
+        )
 
     def test_combined_strike_coverage_is_minimum_of_two(self):
         spot = 100.0
