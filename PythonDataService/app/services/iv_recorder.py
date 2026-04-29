@@ -44,8 +44,13 @@ from app.volatility.vix_replication import vix_style_iv30_with_provenance
 logger = logging.getLogger(__name__)
 
 
-SLOT_CHOICES = ("09:35", "12:30", "16:00")
-"""The three default daily slots — see decisions doc §1 Q1."""
+SLOT_CHOICES = ("09:35", "12:30", "15:55", "16:00")
+"""Daily snapshot slots accepted by the recorder.
+
+15:55 runs alongside 16:00 for the trial-month experiment described in
+research-doc §7.6 / §8.2.3 (compare solver-fail rate, spread width, vcs,
+IV30 stability before deciding whether to swap). All four are persisted;
+the 15:55 vs 16:00 decision is downstream of measurement."""
 
 
 @dataclass(frozen=True)
@@ -60,7 +65,7 @@ class RecordedIvSnapshot:
 
     ticker: str
     snapshot_ts_ms: int
-    slot: str  # "09:35" | "12:30" | "16:00"
+    slot: str  # "09:35" | "12:30" | "15:55" | "16:00"
     spot: float
     rate: float
     dividend_yield: float

@@ -1,8 +1,10 @@
 """IV recorder router — POST endpoint that .NET cron calls per slot.
 
 Step D of the IV-ownership plan. The .NET ``JobsController`` schedules
-three cron entries per ticker per session (09:35 / 12:30 / 16:00 ET) and
-calls this endpoint at each slot time. The endpoint is idempotent on
+one cron entry per configured slot per ticker (default 09:35 / 12:30 /
+15:55 / 16:00 ET — 15:55 runs alongside 16:00 for the trial-month
+experiment in research-doc §7.6 / §8.2.3) and calls this endpoint at
+each slot time. The endpoint is idempotent on
 ``(ticker, snapshot_ts_ms)``: a duplicate fire writes a duplicate row,
 which is acceptable for the forward-only history use case (the read
 side de-dupes on ``snapshot_ts_ms``).

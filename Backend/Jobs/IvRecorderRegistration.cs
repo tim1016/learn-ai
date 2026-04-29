@@ -55,7 +55,7 @@ public static class IvRecorderRegistration
             throw new InvalidOperationException(
                 "IvRecorder is enabled but no slots are configured. " +
                 "Set IvRecorder:Slots to a non-empty list of HH:mm ET times " +
-                "(e.g. [\"09:35\", \"12:30\", \"16:00\"]).");
+                "(e.g. [\"09:35\", \"12:30\", \"15:55\", \"16:00\"]).");
         }
 
         if (options.Tickers.Count == 0)
