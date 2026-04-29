@@ -272,6 +272,7 @@ def replicate_expiry_variance_with_provenance(
     var_sum = 0.0
     contrib_total = 0.0
     contrib_synthetic = 0.0
+    max_c_i = 0.0
     count_per_source: dict[PriceSource, float] = {}
     contributions: list[dict] = []
 
@@ -297,6 +298,8 @@ def replicate_expiry_variance_with_provenance(
         c_i = (2.0 / T_years) * (dK / (nq.strike**2)) * e_rT * Q
         var_sum += (dK / (nq.strike**2)) * e_rT * Q
         contrib_total += c_i
+        if c_i > max_c_i:
+            max_c_i = c_i
 
         any_synthetic = False
         for leg, frac in active_legs:
@@ -330,6 +333,13 @@ def replicate_expiry_variance_with_provenance(
     vcs = contrib_synthetic / contrib_total if contrib_total > 0 else 0.0
     vcs = max(0.0, min(1.0, vcs))
 
+    # Per-strike domination diagnostic: research-doc §8.2.5. A healthy
+    # uniform chain lands near 1/n_strikes; values above ~0.30 indicate
+    # one strike (typically deep-OTM via 1/K² weighting) is dominating
+    # the integral and warrants inspection of per_strike_contributions.
+    max_strike_share = max_c_i / contrib_total if contrib_total > 0 else 0.0
+    max_strike_share = max(0.0, min(1.0, max_strike_share))
+
     total_count = sum(count_per_source.values())
     price_source_mix: dict[PriceSource, float] = (
         {src: cnt / total_count for src, cnt in count_per_source.items()}
@@ -352,6 +362,7 @@ def replicate_expiry_variance_with_provenance(
         price_source_mix=price_source_mix,
         variance_contribution_synthetic=vcs,
         strike_coverage_score=strike_coverage,
+        max_single_strike_share=max_strike_share,
         per_strike_contributions=contributions if debug else None,
     )
 
@@ -468,6 +479,13 @@ def vix_style_iv30_with_provenance(
 
     combined_coverage = min(prov1.strike_coverage_score, prov2.strike_coverage_score)
 
+    # Worst-case across the two expiries — a single-strike dominating either
+    # expiry compromises the IV30 even if the other is well-distributed.
+    # Same "worst-of-the-two" semantics as combined_coverage's `min`.
+    combined_max_share = max(
+        prov1.max_single_strike_share, prov2.max_single_strike_share
+    )
+
     combined_contribs: list[dict] | None = None
     if debug:
         combined_contribs = []
@@ -483,6 +501,7 @@ def vix_style_iv30_with_provenance(
         price_source_mix=combined_mix,
         variance_contribution_synthetic=combined_vcs,
         strike_coverage_score=combined_coverage,
+        max_single_strike_share=combined_max_share,
         per_strike_contributions=combined_contribs,
     )
 

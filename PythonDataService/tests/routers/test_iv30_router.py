@@ -123,6 +123,11 @@ class TestVixStyleRoute:
         assert prov["variance_contribution_synthetic"] == pytest.approx(0.0, abs=1e-12)
         assert prov["price_source_mix"].get("opra_mid") == pytest.approx(1.0)
         assert 0.0 <= prov["strike_coverage_score"] <= 1.0
+        # max_single_strike_share (research-doc §8.2.5) must reach the wire —
+        # FastAPI response_model would silently drop it if not declared on
+        # IvProvenancePayload.
+        assert "max_single_strike_share" in prov
+        assert 0.0 <= prov["max_single_strike_share"] <= 1.0
 
         # Rate / dividend / spot present.
         assert body["spot"] == pytest.approx(mock_snapshot["spot"])
@@ -189,8 +194,10 @@ class TestParametricRoute:
         assert prov["iv_source"] == "internal_solver"
         # All ATM legs are real OPRA → 0% synthetic.
         assert prov["variance_contribution_synthetic"] == pytest.approx(0.0)
-        # Parametric samples no wings — coverage is 0 by construction.
+        # Parametric samples no wings — coverage and per-strike-share are
+        # both 0 by construction (research-doc §8.2.5).
         assert prov["strike_coverage_score"] == 0.0
+        assert prov["max_single_strike_share"] == 0.0
         assert prov["price_source_mix"].get("opra_mid") == pytest.approx(1.0)
 
 

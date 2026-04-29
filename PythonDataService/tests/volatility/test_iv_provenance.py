@@ -44,6 +44,27 @@ class TestIvProvenanceContract:
                 strike_coverage_score=-0.1,
             )
 
+    def test_max_single_strike_share_default_is_zero(self):
+        # Backwards-compat: existing constructors that don't pass this
+        # diagnostic field should still build cleanly.
+        prov = IvProvenance(
+            iv_source="internal_solver",
+            price_source_mix={"opra_mid": 1.0},
+            variance_contribution_synthetic=0.0,
+            strike_coverage_score=0.95,
+        )
+        assert prov.max_single_strike_share == 0.0
+
+    def test_max_single_strike_share_outside_unit_interval_rejected(self):
+        with pytest.raises(ValueError, match="max_single_strike_share"):
+            IvProvenance(
+                iv_source="internal_solver",
+                price_source_mix={"opra_mid": 1.0},
+                variance_contribution_synthetic=0.0,
+                strike_coverage_score=0.5,
+                max_single_strike_share=1.5,
+            )
+
     def test_price_source_mix_must_sum_to_one(self):
         with pytest.raises(ValueError, match=r"must sum to 1\.0"):
             IvProvenance(
