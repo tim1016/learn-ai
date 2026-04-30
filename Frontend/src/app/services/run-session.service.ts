@@ -97,6 +97,11 @@ export class RunSessionService {
   private readonly _alsoZip = signal(false);
   private readonly _startedAt = signal<number | null>(null);
   private readonly _processingIndicators = signal<{ indicatorCount: number; barCount: number } | null>(null);
+  /** Captured from the worker's ``fetch_complete`` event — the headline
+   *  numbers for the run (raw bars Polygon returned, post-processed bars,
+   *  indicator-column count). Persists through the bundle phase and into
+   *  ``done`` so the run-card can show what the dataset.csv will hold. */
+  private readonly _fetchSummary = signal<{ rawBars: number; processedBars: number; indicatorColumns: number } | null>(null);
 
   /** Subscriber handle on the active job's SSE stream. */
   private _eventSource: EventSource | null = null;
@@ -119,6 +124,7 @@ export class RunSessionService {
    *  ``bundle_start``. The run-card surfaces it as a status line so
    *  the gap between the last chunk and bundling isn't silent. */
   readonly processingIndicators = this._processingIndicators.asReadonly();
+  readonly fetchSummary = this._fetchSummary.asReadonly();
 
   /**
    * Aggregate progress fraction in [0, 1]. During fetch this reflects the
@@ -221,6 +227,7 @@ export class RunSessionService {
     this._alsoZip.set(false);
     this._startedAt.set(null);
     this._processingIndicators.set(null);
+    this._fetchSummary.set(null);
     this._completionEnvelope = null;
   }
 
@@ -351,6 +358,11 @@ export class RunSessionService {
         break;
       }
       case 'fetch_complete':
+        this._fetchSummary.set({
+          rawBars: (event['raw_bars'] as number) ?? 0,
+          processedBars: (event['processed_bars'] as number) ?? 0,
+          indicatorColumns: (event['indicator_columns'] as number) ?? 0,
+        });
         this._state.set('bundling');
         break;
       case 'bundle_start': {

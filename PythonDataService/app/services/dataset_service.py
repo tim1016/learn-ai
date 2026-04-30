@@ -333,25 +333,59 @@ def fetch_bars_chunked(
     return unique_bars
 
 
-def filter_session(df: pd.DataFrame, session: str) -> pd.DataFrame:
-    """Filter bars to RTH (09:30-16:00 ET) or keep all (extended)."""
+_BAR_WINDOW_MINUTES_PER_UNIT: dict[str, int] = {
+    "second": 1,  # rounded up to one minute for the session-window check
+    "minute": 1,
+    "hour": 60,
+    "day": 1440,
+    "week": 1440,
+    "month": 1440,
+    "quarter": 1440,
+    "year": 1440,
+}
+
+
+def filter_session(
+    df: pd.DataFrame,
+    session: str,
+    timespan: str = "minute",
+    multiplier: int = 1,
+) -> pd.DataFrame:
+    """Filter bars to RTH (09:30–16:00 ET) or keep all (extended).
+
+    A bar is kept whenever its trade window OVERLAPS [09:30, 16:00) ET on
+    a weekday — not just when its start-of-window timestamp falls inside
+    that range. The original implementation only checked the start, which
+    silently dropped:
+
+      * The 09:00 ET hourly bar (window 09:00–10:00) that contains the
+        09:30 RTH open. RTH hourly datasets came back with 6 bars/day
+        instead of 7.
+      * Every daily/weekly/monthly bar (timestamp at 00:00 ET, well
+        before 09:30). RTH daily datasets came back with zero rows.
+
+    Day-and-above bars are treated as 1440-minute windows so they
+    overlap RTH on every weekday — the weekday mask is the only
+    practical filter for those resolutions.
+    """
     if session != "rth":
         return df
 
     dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     dt_et = dt_utc.dt.tz_convert(_ET)
-
-    # RTH: 09:30 <= time < 16:00 ET, weekdays only
     time_minutes = dt_et.dt.hour * 60 + dt_et.dt.minute
+    bar_window_minutes = max(1, multiplier) * _BAR_WINDOW_MINUTES_PER_UNIT.get(timespan, 1)
+
     rth_start = _RTH_START_HOUR * 60 + _RTH_START_MIN  # 570
     rth_end = _RTH_END_HOUR * 60 + _RTH_END_MIN  # 960
 
-    mask = (
-        (time_minutes >= rth_start) & (time_minutes < rth_end) & (dt_et.dt.dayofweek < 5)  # Mon-Fri
-    )
+    overlaps_rth = (time_minutes < rth_end) & ((time_minutes + bar_window_minutes) > rth_start)
+    is_weekday = dt_et.dt.dayofweek < 5
+    mask = overlaps_rth & is_weekday
+
     before = len(df)
     df = df[mask].reset_index(drop=True)
-    logger.info(f"[SESSION] RTH filter: {before} → {len(df)} bars")
+    logger.info(f"[SESSION] RTH filter ({multiplier}{timespan}): {before} → {len(df)} bars")
     return df
 
 
@@ -649,7 +683,7 @@ def preprocess_and_calculate(
     df = pd.DataFrame(bars)
     df = df.sort_values("timestamp").reset_index(drop=True)
 
-    df = filter_session(df, session)
+    df = filter_session(df, session, timespan=timespan, multiplier=multiplier)
 
     # Tag session column for CSV export (uses NYSE calendar)
     if from_date and to_date:

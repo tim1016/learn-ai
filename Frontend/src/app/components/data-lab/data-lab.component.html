@@ -851,6 +851,24 @@
       <div class="run-progress__heading">
         <strong>✓ Fetched bars · now bundling ZIP</strong>
       </div>
+      @if (runSession.fetchSummary(); as fs) {
+        <div class="run-fetch-summary">
+          <span class="run-fetch-summary__item">
+            <span class="run-fetch-summary__label">Polygon raw bars</span>
+            <span class="run-fetch-summary__value mono">{{ fs.rawBars.toLocaleString() }}</span>
+          </span>
+          <span class="run-fetch-summary__sep" aria-hidden="true">·</span>
+          <span class="run-fetch-summary__item">
+            <span class="run-fetch-summary__label">After session filter / fill</span>
+            <span class="run-fetch-summary__value mono">{{ fs.processedBars.toLocaleString() }}</span>
+          </span>
+          <span class="run-fetch-summary__sep" aria-hidden="true">·</span>
+          <span class="run-fetch-summary__item">
+            <span class="run-fetch-summary__label">Indicator columns</span>
+            <span class="run-fetch-summary__value mono">{{ fs.indicatorColumns }}</span>
+          </span>
+        </div>
+      }
       <div class="run-progress__bar"
            role="progressbar"
            [attr.aria-valuenow]="runProgressPercent()"
@@ -900,6 +918,24 @@
         @if (runSession.result(); as r) { ({{ (r.sizeBytes / 1024 / 1024).toFixed(1) }} MB) }
       </strong>
     </div>
+    @if (runSession.fetchSummary(); as fs) {
+      <div class="run-fetch-summary">
+        <span class="run-fetch-summary__item">
+          <span class="run-fetch-summary__label">Polygon raw bars</span>
+          <span class="run-fetch-summary__value mono">{{ fs.rawBars.toLocaleString() }}</span>
+        </span>
+        <span class="run-fetch-summary__sep" aria-hidden="true">·</span>
+        <span class="run-fetch-summary__item">
+          <span class="run-fetch-summary__label">Rows in dataset.csv</span>
+          <span class="run-fetch-summary__value mono">{{ fs.processedBars.toLocaleString() }}</span>
+        </span>
+        <span class="run-fetch-summary__sep" aria-hidden="true">·</span>
+        <span class="run-fetch-summary__item">
+          <span class="run-fetch-summary__label">Indicator columns</span>
+          <span class="run-fetch-summary__value mono">{{ fs.indicatorColumns }}</span>
+        </span>
+      </div>
+    }
     <!-- Surface the same controls runIdle shows so the user can fire
          another run immediately without clicking "Fetch another" first. -->
     <div class="run-card__summary">
