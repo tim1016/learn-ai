@@ -60,6 +60,26 @@ export interface RunError {
   message: string;
 }
 
+/** A single line in the run dock's running event log. */
+export interface RunLogEntry {
+  /** Monotonic id for tracking — derived from index + ts so two entries
+   *  in the same millisecond stay distinct. */
+  id: string;
+  /** Wall-clock millis when the entry was appended on the client. */
+  timestamp: number;
+  /** Severity drives the color stripe in the dock. */
+  level: 'info' | 'success' | 'warn' | 'error';
+  /** Single-character glyph rendered before the message. */
+  glyph: string;
+  /** Single-line summary. Pre-formatted; the dock just prints it. */
+  message: string;
+}
+
+/** Cap on the rolling FIFO log buffer. Tuned high enough that one heavy
+ *  fetch (hundreds of chunks + bundle components) doesn't roll its own
+ *  earlier entries off the screen, low enough to keep the dock fast. */
+const RUN_LOG_MAX_LINES = 500;
+
 /**
  * Drives one run of the dataset fetch + bundle pipeline.
  *
@@ -103,6 +123,14 @@ export class RunSessionService {
    *  ``done`` so the run-card can show what the dataset.csv will hold. */
   private readonly _fetchSummary = signal<{ rawBars: number; processedBars: number; indicatorColumns: number } | null>(null);
 
+  /** Rolling FIFO log of every SSE event the run pipeline emits. Capped
+   *  at RUN_LOG_MAX_LINES; entries persist across runs (the dock is a
+   *  "what's happened lately" view, not a per-run wipe). */
+  private readonly _log = signal<readonly RunLogEntry[]>([]);
+  /** Monotonic id seed so distinct entries in the same millisecond stay
+   *  unique under @for track expressions. */
+  private _logSeq = 0;
+
   /** Subscriber handle on the active job's SSE stream. */
   private _eventSource: EventSource | null = null;
   /** Filename + size captured from the terminal event so the auto-download
@@ -125,6 +153,29 @@ export class RunSessionService {
    *  the gap between the last chunk and bundling isn't silent. */
   readonly processingIndicators = this._processingIndicators.asReadonly();
   readonly fetchSummary = this._fetchSummary.asReadonly();
+  readonly log = this._log.asReadonly();
+
+  /** Wipe the log. The dock's "Clear" button calls this; ordinary
+   *  resets between runs leave the buffer alone so the user keeps the
+   *  context of the previous run while the next one starts. */
+  clearLog(): void {
+    this._log.set([]);
+  }
+
+  /** Append one entry to the FIFO log. Trims oldest when over the cap. */
+  private _appendLog(level: RunLogEntry['level'], glyph: string, message: string): void {
+    const entry: RunLogEntry = {
+      id: `${Date.now()}-${++this._logSeq}`,
+      timestamp: Date.now(),
+      level,
+      glyph,
+      message,
+    };
+    this._log.update((current) => {
+      const next = [...current, entry];
+      return next.length > RUN_LOG_MAX_LINES ? next.slice(-RUN_LOG_MAX_LINES) : next;
+    });
+  }
 
   /**
    * Aggregate progress fraction in [0, 1]. During fetch this reflects the
@@ -172,22 +223,23 @@ export class RunSessionService {
     this._state.set('fetching');
     this._startedAt.set(Date.now());
     this._processingIndicators.set(null);
+    const ticker = (payload as { ticker?: string }).ticker ?? '?';
+    const fromDate = (payload as { from_date?: string }).from_date ?? '?';
+    const toDate = (payload as { to_date?: string }).to_date ?? '?';
+    this._appendLog('info', '▸', `starting run · ${ticker} · ${fromDate} → ${toDate}`);
 
     let jobId: string;
     try {
-      // Wrap the dataset payload as the ``dataset`` sub-object — the
-      // Python job route accepts {job_id, dataset: {...}} and validates
-      // the inner dict against DatasetGenerationRequest.
       jobId = await this.jobs.startJob('dataset-zip', { dataset: payload });
     } catch (e: unknown) {
-      this._error.set({
-        kind: 'internal',
-        message: e instanceof Error ? e.message : String(e),
-      });
+      const message = e instanceof Error ? e.message : String(e);
+      this._error.set({ kind: 'internal', message });
       this._state.set('error');
+      this._appendLog('error', '✗', `failed to start job: ${message}`);
       return;
     }
     this._sessionId.set(jobId);
+    this._appendLog('info', 'ⓘ', `job id ${jobId}`);
 
     // Open our own EventSource alongside the JobsService one. The SSE
     // endpoint is read-only and supports multiple subscribers; this keeps
@@ -276,16 +328,13 @@ export class RunSessionService {
     switch (event.type) {
       // ── Framework lifecycle events ────────────────────────────────
       case 'job.started':
-        // No-op — _state was set to 'fetching' at start time.
+        this._appendLog('info', '▸', 'run started');
         break;
       case 'job.phase':
-        // Mirror the Python phase into our coarser run-card state. The
-        // chunk/component-level events below carry the fine detail.
         if (event['phase'] === 'bundling') this._state.set('bundling');
+        this._appendLog('info', '⚙', `phase: ${event['phase']}`);
         break;
-      case 'job.completed':
-        // Capture the binary's URL/filename so _downloadResult can fetch
-        // it without re-querying state.
+      case 'job.completed': {
         this._completionEnvelope = {
           downloadUrl: (event['download_url'] as string) ?? `/api/jobs/${this._sessionId()}/download`,
           filename: (event['filename'] as string) ?? 'dataset.zip',
@@ -298,23 +347,39 @@ export class RunSessionService {
           downloadUrl: this._completionEnvelope.downloadUrl,
         });
         this._state.set('done');
+        const mb = (this._completionEnvelope.sizeBytes / 1024 / 1024).toFixed(1);
+        this._appendLog('success', '✓', `run complete · ${this._completionEnvelope.filename} · ${mb} MB`);
         break;
-      case 'job.failed':
-        this._error.set({
-          kind: 'internal',
-          message: (event['message'] as string) ?? 'job failed',
-        });
+      }
+      case 'job.failed': {
+        const message = (event['message'] as string) ?? 'job failed';
+        this._error.set({ kind: 'internal', message });
         this._state.set('error');
+        this._appendLog('error', '✗', `failed: ${message}`);
         break;
-      case 'job.cancelled':
-        this._error.set({
-          kind: 'cancelled',
-          message: (event['reason'] as string) ?? 'cancelled',
-        });
+      }
+      case 'job.cancelled': {
+        const reason = (event['reason'] as string) ?? 'cancelled';
+        this._error.set({ kind: 'cancelled', message: reason });
         this._state.set('error');
+        this._appendLog('warn', '⏹', `cancelled: ${reason}`);
         break;
-      // job.progress, job.log: handled by the global JobsService for the
-      // jobs-drawer view; nothing for us to do here.
+      }
+      case 'job.log': {
+        // Framework structured logs forwarded over SSE — surface them
+        // verbatim in the dock so the "wealth of information" the worker
+        // emits actually reaches the user. Map the Python logging level
+        // to dock severity.
+        const level = ((event['level'] as string) ?? 'info').toLowerCase();
+        const message = (event['message'] as string) ?? '';
+        const dockLevel: RunLogEntry['level'] =
+          level === 'error' || level === 'critical' ? 'error' :
+          level === 'warning' || level === 'warn' ? 'warn' :
+          'info';
+        const glyph = dockLevel === 'error' ? '✗' : dockLevel === 'warn' ? '⚠' : 'ⓘ';
+        this._appendLog(dockLevel, glyph, message);
+        break;
+      }
 
       // ── Dataset-specific events (emitted by the Python worker via
       //    ProgressEmitter.emit_event) ─────────────────────────────────
@@ -328,15 +393,18 @@ export class RunSessionService {
           status: 'queued',
         }));
         this._chunks.set(queued);
+        this._appendLog('info', 'ⓘ', `planning ${total} chunk${total === 1 ? '' : 's'}`);
         break;
       }
       case 'chunk_start': {
         const idx = event['index'] as number;
         const from = event['from'] as string;
         const to = event['to'] as string;
+        const total = event['total'] as number | undefined;
         this._chunks.update((list) =>
           list.map((c) => (c.index === idx ? { ...c, status: 'fetching', from, to, waitSeconds: 0 } : c)),
         );
+        this._appendLog('info', '▸', `chunk ${idx}${total ? ` of ${total}` : ''}: ${from} → ${to}`);
         break;
       }
       case 'chunk_done': {
@@ -345,6 +413,7 @@ export class RunSessionService {
         this._chunks.update((list) =>
           list.map((c) => (c.index === idx ? { ...c, status: 'done', barsReturned: bars, waitSeconds: 0 } : c)),
         );
+        this._appendLog('success', '✓', `chunk ${idx} · ${bars.toLocaleString()} bars`);
         break;
       }
       case 'chunk_paced': {
@@ -355,22 +424,28 @@ export class RunSessionService {
           if (next !== -1) out[next] = { ...out[next], waitSeconds: Math.round(wait) };
           return out;
         });
+        this._appendLog('warn', '⏸', `pacing ${Math.round(wait)} s for plan rate-limit`);
         break;
       }
-      case 'fetch_complete':
-        this._fetchSummary.set({
-          rawBars: (event['raw_bars'] as number) ?? 0,
-          processedBars: (event['processed_bars'] as number) ?? 0,
-          indicatorColumns: (event['indicator_columns'] as number) ?? 0,
-        });
+      case 'fetch_complete': {
+        const raw = (event['raw_bars'] as number) ?? 0;
+        const processed = (event['processed_bars'] as number) ?? 0;
+        const cols = (event['indicator_columns'] as number) ?? 0;
+        this._fetchSummary.set({ rawBars: raw, processedBars: processed, indicatorColumns: cols });
         this._state.set('bundling');
+        this._appendLog(
+          'success',
+          '✓',
+          `fetch complete · raw=${raw.toLocaleString()} → processed=${processed.toLocaleString()} · ${cols} indicator col${cols === 1 ? '' : 's'}`,
+        );
         break;
+      }
       case 'bundle_start': {
         const components = (event['components'] as string[]) ?? [];
         this._bundleComponents.set(components.map((name) => ({ name, status: 'queued' })));
         this._bundleProgress.set(null);
-        // Indicator phase ended once bundling begins.
         this._processingIndicators.set(null);
+        this._appendLog('info', '▸', `bundling ${components.length} component${components.length === 1 ? '' : 's'}: ${components.join(', ')}`);
         break;
       }
       case 'bundle_component_start': {
@@ -378,14 +453,15 @@ export class RunSessionService {
         this._bundleComponents.update((list) =>
           list.map((c) => (c.name === name ? { ...c, status: 'fetching' } : c)),
         );
+        this._appendLog('info', '▸', `bundling ${name}`);
         break;
       }
       case 'bundle_progress': {
-        this._bundleProgress.set({
-          component: event['component'] as string,
-          step: event['step'] as number,
-          label: event['label'] as string | undefined,
-        });
+        const component = event['component'] as string;
+        const step = event['step'] as number;
+        const label = event['label'] as string | undefined;
+        this._bundleProgress.set({ component, step, label });
+        this._appendLog('info', '·', `${component} step ${step}${label ? ` · ${label}` : ''}`);
         break;
       }
       case 'bundle_component_done': {
@@ -396,19 +472,27 @@ export class RunSessionService {
         if (this._bundleProgress()?.component === name) {
           this._bundleProgress.set(null);
         }
+        this._appendLog('success', '✓', `${name} bundled`);
         break;
       }
       case 'processing_indicators': {
-        // Mid-fetch phase: bars are loaded, pandas-ta is now computing
-        // indicators. Surface as a status line on the run-card so the
-        // user sees something between the last chunk and bundle_start.
         const count = event['indicator_count'] as number;
         const bars = event['bar_count'] as number;
         this._processingIndicators.set({ indicatorCount: count, barCount: bars });
+        this._appendLog('info', 'ⓘ', `processing ${count} indicator${count === 1 ? '' : 's'} × ${bars.toLocaleString()} bars`);
         break;
       }
-      // dividend_adjusted and other informational events — ignored by
-      // the state machine but visible in the global jobs-drawer feed.
+      case 'dividend_adjusted': {
+        const events = (event['events'] as number) ?? 0;
+        const bars = (event['bars'] as number) ?? 0;
+        this._appendLog('info', 'ⓘ', `dividend adjustment · ${events} event${events === 1 ? '' : 's'} over ${bars.toLocaleString()} bars`);
+        break;
+      }
+      default:
+        // Unknown / future event types still surface in the log so the
+        // user gets the "wealth of information" without us silently
+        // dropping novel events.
+        this._appendLog('info', '·', `${event.type}`);
     }
   }
 
@@ -419,8 +503,10 @@ export class RunSessionService {
     try {
       const response = await fetch(envelope.downloadUrl);
       if (!response.ok) {
-        this._error.set({ kind: 'http', message: `ZIP retrieval failed (HTTP ${response.status})` });
+        const message = `ZIP retrieval failed (HTTP ${response.status})`;
+        this._error.set({ kind: 'http', message });
         this._state.set('error');
+        this._appendLog('error', '✗', message);
         return;
       }
       const blob = await response.blob();
@@ -430,9 +516,12 @@ export class RunSessionService {
       a.download = envelope.filename;
       a.click();
       URL.revokeObjectURL(objectUrl);
+      this._appendLog('success', '⤓', `downloaded ${envelope.filename}`);
     } catch (e: unknown) {
-      this._error.set({ kind: 'internal', message: e instanceof Error ? e.message : String(e) });
+      const message = e instanceof Error ? e.message : String(e);
+      this._error.set({ kind: 'internal', message });
       this._state.set('error');
+      this._appendLog('error', '✗', `download failed: ${message}`);
     }
   }
 }

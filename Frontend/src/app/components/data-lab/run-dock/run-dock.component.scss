@@ -1,0 +1,355 @@
+@use 'sass:color';
+
+// Bottom-docked run UI. Sticky to viewport bottom.
+// Severity palette tuned to read at a glance against the dark dock bg.
+
+$dock-bg:        #0e1117;
+$dock-bg-elev:   #161922;
+$dock-border:    #2a2e3e;
+$dock-text:      #d6dae3;
+$dock-muted:     #8892a8;
+
+$lvl-info:       #6b8aff;
+$lvl-success:    #00c896;
+$lvl-warn:       #ffb300;
+$lvl-error:      #ff5570;
+
+:host {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  font-size: 0.85rem;
+  color: $dock-text;
+  pointer-events: none;
+}
+
+:host > .run-dock__wrapper {
+  pointer-events: auto;
+}
+
+:host.run-dock--expanded .run-dock__wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 320px;
+  background: $dock-bg;
+  border-top: 1px solid $dock-border;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+}
+
+:host.run-dock--collapsed .run-dock__wrapper {
+  display: block;
+  height: 36px;
+  background: $dock-bg;
+  border-top: 1px solid $dock-border;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.run-dock__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 0.9rem;
+  padding: 0.5rem 0.9rem;
+  background: $dock-bg-elev;
+  border-bottom: 1px solid $dock-border;
+  flex: 0 0 auto;
+}
+
+.run-dock__headline {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.run-dock__state-tag {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  background: rgba($lvl-info, 0.15);
+  color: $lvl-info;
+  border: 1px solid rgba($lvl-info, 0.3);
+  flex: 0 0 auto;
+}
+
+.run-dock__header--success .run-dock__state-tag {
+  background: rgba($lvl-success, 0.15);
+  color: $lvl-success;
+  border-color: rgba($lvl-success, 0.3);
+}
+.run-dock__header--warn .run-dock__state-tag {
+  background: rgba($lvl-warn, 0.15);
+  color: $lvl-warn;
+  border-color: rgba($lvl-warn, 0.3);
+}
+.run-dock__header--error .run-dock__state-tag {
+  background: rgba($lvl-error, 0.15);
+  color: $lvl-error;
+  border-color: rgba($lvl-error, 0.3);
+}
+
+.run-dock__headline-text {
+  color: $dock-text;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.run-dock__eta {
+  color: $dock-muted;
+  font-size: 0.78rem;
+  flex: 0 0 auto;
+}
+
+.run-dock__progress {
+  flex: 1 1 220px;
+  min-width: 160px;
+  height: 6px;
+  background: $dock-bg;
+  border: 1px solid $dock-border;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.run-dock__progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, rgba($lvl-info, 0.6), $lvl-info);
+  transition: width 0.25s ease-out;
+}
+
+.run-dock__metrics {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+  padding: 0.25rem 0.55rem;
+  background: $dock-bg;
+  border: 1px solid $dock-border;
+  border-radius: 3px;
+}
+
+.run-dock__metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.run-dock__metric-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.65rem;
+  color: $dock-muted;
+}
+
+.run-dock__metric-value {
+  color: $dock-text;
+  font-weight: 600;
+  font-size: 0.78rem;
+}
+
+.run-dock__metric-sep {
+  color: $dock-border;
+}
+
+.run-dock__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.run-dock__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: $dock-bg;
+  color: $dock-text;
+  border: 1px solid $dock-border;
+  border-radius: 3px;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+
+  &:hover:not(:disabled) {
+    background: color.adjust($dock-bg-elev, $lightness: 4%);
+    border-color: $dock-muted;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.run-dock__btn--icon {
+  padding: 0.3rem 0.5rem;
+}
+
+.run-dock__btn--danger {
+  border-color: rgba($lvl-error, 0.4);
+  color: $lvl-error;
+
+  &:hover:not(:disabled) {
+    background: rgba($lvl-error, 0.1);
+    border-color: $lvl-error;
+  }
+}
+
+.run-dock__log {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0.4rem 0.5rem;
+  background: $dock-bg;
+
+  // Slim, dark scrollbar tuned for the terminal aesthetic.
+  &::-webkit-scrollbar {
+    width: 8px;
+  }
+  &::-webkit-scrollbar-track {
+    background: $dock-bg;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: $dock-border;
+    border-radius: 4px;
+  }
+  scrollbar-color: $dock-border $dock-bg;
+}
+
+.run-dock__log-empty {
+  color: $dock-muted;
+  font-style: italic;
+  padding: 1rem 0.5rem;
+}
+
+.run-dock__log-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.run-dock__line {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 0.45rem;
+  padding: 0.1rem 0.4rem 0.1rem 0.55rem;
+  border-left: 2px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  &--info    { border-left-color: $lvl-info; }
+  &--info    .run-dock__line-glyph { color: $lvl-info; }
+  &--success { border-left-color: $lvl-success; }
+  &--success .run-dock__line-glyph { color: $lvl-success; }
+  &--warn    { border-left-color: $lvl-warn; }
+  &--warn    .run-dock__line-glyph { color: $lvl-warn; }
+  &--warn    .run-dock__line-msg   { color: color.adjust($lvl-warn, $lightness: 12%); }
+  &--error   { border-left-color: $lvl-error; background: rgba($lvl-error, 0.06); }
+  &--error   .run-dock__line-glyph { color: $lvl-error; }
+  &--error   .run-dock__line-msg   { color: color.adjust($lvl-error, $lightness: 14%); }
+}
+
+.run-dock__line-time {
+  color: $dock-muted;
+  flex: 0 0 auto;
+}
+
+.run-dock__line-glyph {
+  text-align: center;
+  width: 1ch;
+}
+
+.run-dock__line-msg {
+  color: $dock-text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// Collapsed state — full-width clickable strip.
+.run-dock__strip {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  height: 100%;
+  padding: 0 0.9rem;
+  background: $dock-bg;
+  color: $dock-text;
+  border: none;
+  border-top: 1px solid $dock-border;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.82rem;
+  transition: background 0.15s ease;
+
+  &:hover {
+    background: color.adjust($dock-bg, $lightness: 3%);
+  }
+
+  &--info    { border-top-color: rgba($lvl-info, 0.4); }
+  &--success { border-top-color: rgba($lvl-success, 0.5); }
+  &--warn    { border-top-color: rgba($lvl-warn, 0.5); }
+  &--error   { border-top-color: rgba($lvl-error, 0.6); }
+}
+
+.run-dock__strip-state {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  background: rgba($lvl-info, 0.15);
+  color: $lvl-info;
+  border: 1px solid rgba($lvl-info, 0.3);
+}
+
+.run-dock__strip--success .run-dock__strip-state {
+  background: rgba($lvl-success, 0.15);
+  color: $lvl-success;
+  border-color: rgba($lvl-success, 0.3);
+}
+.run-dock__strip--warn .run-dock__strip-state {
+  background: rgba($lvl-warn, 0.15);
+  color: $lvl-warn;
+  border-color: rgba($lvl-warn, 0.3);
+}
+.run-dock__strip--error .run-dock__strip-state {
+  background: rgba($lvl-error, 0.15);
+  color: $lvl-error;
+  border-color: rgba($lvl-error, 0.3);
+}
+
+.run-dock__strip-text {
+  color: $dock-text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+
+.run-dock__strip-eta {
+  color: $dock-muted;
+  font-size: 0.78rem;
+}
+
+.run-dock__strip-spacer {
+  flex: 1 1 auto;
+}
+
+.run-dock__strip-count {
+  color: $dock-muted;
+  font-size: 0.78rem;
+}

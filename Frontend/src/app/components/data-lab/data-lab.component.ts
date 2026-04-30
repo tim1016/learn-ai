@@ -21,6 +21,7 @@ import { ActiveIndicatorCardComponent } from './active-indicator-card/active-ind
 import { ActiveIndicatorGroupComponent, IndicatorGroupItem } from './active-indicator-group/active-indicator-group.component';
 import { PastChainInspectorComponent } from './past-chain-inspector/past-chain-inspector.component';
 import { IndicatorConfigModalComponent } from './indicator-config-modal/indicator-config-modal.component';
+import { RunDockComponent } from './run-dock/run-dock.component';
 import { INDICATOR_REFERENCE } from '../../shared/indicators/indicator-reference';
 
 type EntriesSortMode = 'insertion' | 'category' | 'name';
@@ -319,7 +320,7 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
     DataLabChartComponent, SharedModule, Tooltip,
     IndicatorTooltipComponent, PageHeaderComponent, TickerRangePickerComponent,
     ActiveIndicatorCardComponent, ActiveIndicatorGroupComponent, IndicatorConfigModalComponent,
-    PastChainInspectorComponent,
+    PastChainInspectorComponent, RunDockComponent,
   ],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
@@ -924,21 +925,6 @@ export class DataLabComponent {
       await this.runSession.start(this._buildGenerateZipPayload());
     }
   }
-
-  /** Index of the chunk currently being fetched, for the run-card heading.
-   *  Falls back to the highest done index + 1 if no chunk is mid-flight. */
-  readonly runChunkInProgressIndex = computed<number>(() => {
-    const chunks = this.runSession.chunks();
-    const fetching = chunks.find((c) => c.status === 'fetching');
-    if (fetching) return fetching.index;
-    const done = chunks.filter((c) => c.status === 'done').length;
-    return Math.min(done + 1, chunks.length || 1);
-  });
-
-  /** Aggregate progress as a 0–100 integer, for ARIA progressbar + label. */
-  readonly runProgressPercent = computed<number>(() =>
-    Math.round(this.runSession.progressFraction() * 100),
-  );
 
   /** Hand-off to the streaming pipeline — the same payload the legacy
    *  ``generateZip`` endpoint expects. */
