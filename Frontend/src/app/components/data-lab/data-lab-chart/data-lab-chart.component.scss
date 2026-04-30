@@ -298,23 +298,22 @@
 }
 
 // ── Sub-panels ──
-// Visible breathing room between the main candle chart and the indicator
-// stack, plus between adjacent indicator panels. Without margin the
-// panels look glued together and a single dropped pixel of border is
-// the only separator.
+// Vertical spacing comes from the flex `gap` — no margin/border on the
+// individual panels, so the breathing room is consistent and never
+// stacks with their inline styles. The y-grid lines align horizontally
+// because every chart pins its right-price-scale to the same minimum
+// width (see DataLabChartComponent).
 .sub-panels-host {
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  margin-top: 16px;
+  gap: 20px;
+  margin-top: 20px;
 }
 
 :host ::ng-deep {
   .sub-panel {
     position: relative;
-    border-top: 1px solid $border;
-    padding-top: 8px;
   }
 
   .sub-panel-label {

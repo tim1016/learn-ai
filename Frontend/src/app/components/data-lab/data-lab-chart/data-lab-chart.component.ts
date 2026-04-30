@@ -433,6 +433,11 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
       },
       rightPriceScale: {
         borderColor: DARK.border,
+        // Pin a fixed minimum width so every sub-panel that uses the same
+        // value lines its drawing area up at the exact same pixel column,
+        // making the y-grid lines across the stack share a column instead
+        // of drifting with each axis-label width.
+        minimumWidth: 64,
       },
     });
 
@@ -618,12 +623,13 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     panelId: string,
     indicators: ChartIndicatorResult[]
   ): void {
-    // Create container
+    // Create container. Vertical spacing between panels is handled by the
+    // host's flex `gap` — no inline margin here, otherwise the gap would
+    // double up with the SCSS rule and look uneven.
     const container = document.createElement('div');
     container.className = 'sub-panel';
     container.style.width = '100%';
-    container.style.height = '150px';
-    container.style.marginTop = '4px';
+    container.style.height = '200px';
     container.style.position = 'relative';
 
     // Panel label
@@ -643,7 +649,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
 
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: 150,
+      height: 200,
       layout: {
         background: { color: DARK.bg },
         textColor: DARK.text,
@@ -665,6 +671,9 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
       },
       rightPriceScale: {
         borderColor: DARK.border,
+        // Same minimumWidth as the main chart so the drawing areas line
+        // up — the y-grid lines now share an x-column across the stack.
+        minimumWidth: 64,
       },
     });
 
