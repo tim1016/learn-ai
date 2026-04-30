@@ -16,7 +16,12 @@
   // Reserve gutter when the indicator-config inspector is pinned. Set by
   // <app-indicator-config-modal> via document.documentElement style.
   padding-right: calc(1rem + var(--inspector-w, 0px));
-  transition: padding-right var(--t-ui) ease;
+  // Reserve bottom space for the fixed <app-run-dock>. The dock writes
+  // --run-dock-height onto :root when expanded (320 px) / collapsed
+  // (36 px) so the page can scroll past everything without the last
+  // controls being hidden under the dock.
+  padding-bottom: calc(3rem + var(--run-dock-height, 36px));
+  transition: padding-right var(--t-ui) ease, padding-bottom var(--t-ui) ease;
 }
 
 // ─── Page Header ────────────────────────────────────────

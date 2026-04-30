@@ -730,261 +730,35 @@
     </div>
   }
 
-  <!-- Run bar -->
+  <!-- Run bar — only shows the always-on action button + summary now.
+       Progress, log, fetch summary and error states all live in the
+       bottom-docked <app-run-dock> component below. -->
   <div class="run-card" role="region" aria-label="Run controls">
-    @switch (runSession.state()) {
-      @case ('fetching') {
-        <ng-container *ngTemplateOutlet="runFetching"></ng-container>
-      }
-      @case ('bundling') {
-        <ng-container *ngTemplateOutlet="runBundling"></ng-container>
-      }
-      @case ('done') {
-        <ng-container *ngTemplateOutlet="runDone"></ng-container>
-      }
-      @case ('error') {
-        <ng-container *ngTemplateOutlet="runError"></ng-container>
-      }
-      @default {
-        <ng-container *ngTemplateOutlet="runIdle"></ng-container>
-      }
-    }
+    <div class="run-card__summary">
+      {{ ticker() || '—' }} · {{ fromDate() }} → {{ toDate() }} ·
+      {{ activeBarTimeframe() === 'custom' ? (multiplier() + ' × ' + timespan()) : activeBarTimeframe() }} ·
+      {{ session() === 'rth' ? 'RTH' : 'Extended' }} ·
+      ~{{ estimatedColumns().length }} columns
+    </div>
+    <div class="run-card__action">
+      <label class="checkbox-inline"
+             pTooltip="Adds a second phase after fetch: writes CSV + every selected companion + the quality report into one .zip download."
+             tooltipPosition="top">
+        <input type="checkbox" [checked]="alsoGenerateZip()" (change)="alsoGenerateZip.set(!alsoGenerateZip())" />
+        <span>Bundle everything into a ZIP</span>
+      </label>
+      <button class="btn-primary" (click)="fetchAndMaybeZip()"
+              [disabled]="!ticker() || loading() || runSession.state() === 'fetching' || runSession.state() === 'bundling'">
+        @if (loading() || runSession.state() === 'fetching' || runSession.state() === 'bundling') {
+          <i class="pi pi-spin pi-spinner"></i>
+          <span>Running…</span>
+        } @else {
+          <i class="pi pi-chart-line"></i>
+          <span>{{ alsoGenerateZip() ? 'Fetch & bundle' : 'Fetch data' }}</span>
+        }
+      </button>
+    </div>
   </div>
-
-  <ng-template #runIdle>
-    <div class="run-card__summary">
-      {{ ticker() || '—' }} · {{ fromDate() }} → {{ toDate() }} ·
-      {{ activeBarTimeframe() === 'custom' ? (multiplier() + ' × ' + timespan()) : activeBarTimeframe() }} ·
-      {{ session() === 'rth' ? 'RTH' : 'Extended' }} ·
-      ~{{ estimatedColumns().length }} columns
-    </div>
-    <div class="run-card__action">
-      <label class="checkbox-inline"
-             pTooltip="Adds a second phase after fetch: writes CSV + every selected companion + the quality report into one .zip download."
-             tooltipPosition="top">
-        <input type="checkbox" [checked]="alsoGenerateZip()" (change)="alsoGenerateZip.set(!alsoGenerateZip())" />
-        <span>Bundle everything into a ZIP</span>
-      </label>
-      <button class="btn-primary" (click)="fetchAndMaybeZip()" [disabled]="!ticker() || loading()">
-        @if (loading()) {
-          <i class="pi pi-spin pi-spinner"></i>
-          <span>Fetching…</span>
-        } @else {
-          <i class="pi pi-chart-line"></i>
-          <span>{{ alsoGenerateZip() ? 'Fetch & bundle' : 'Fetch data' }}</span>
-        }
-      </button>
-    </div>
-  </ng-template>
-
-  <ng-template #runFetching>
-    <div class="run-progress" role="status" aria-live="polite" aria-atomic="false">
-      <div class="run-progress__heading">
-        <strong>Fetching {{ ticker() }} {{ activeBarTimeframe() }} ·
-          chunk {{ runSession.chunks().length === 0 ? '…' : (runChunkInProgressIndex() + ' of ' + runSession.chunks().length) }}</strong>
-      </div>
-      <div class="run-progress__bar"
-           role="progressbar"
-           [attr.aria-valuenow]="runProgressPercent()"
-           aria-valuemin="0"
-           aria-valuemax="100"
-           aria-label="Fetch progress">
-        <div class="run-progress__bar-fill" [style.width.%]="runProgressPercent()"></div>
-      </div>
-      <div class="run-progress__meta">
-        <span>{{ runProgressPercent() }}%</span>
-        @if (runSession.etaSeconds() !== null) {
-          <span aria-hidden="true">· ~{{ runSession.etaSeconds() }}s remaining</span>
-        }
-      </div>
-      @if (runSession.processingIndicators(); as ind) {
-        <div class="run-progress__phase" role="status">
-          <i class="pi pi-cog pi-spin" aria-hidden="true"></i>
-          Computing {{ ind.indicatorCount }} indicator@if (ind.indicatorCount !== 1) { s } over {{ ind.barCount | number }} bars…
-        </div>
-      }
-      <ul class="run-chunk-list" role="list">
-        @for (c of runSession.chunks(); track c.index) {
-          <li class="run-chunk"
-              [class.run-chunk--done]="c.status === 'done'"
-              [class.run-chunk--fetching]="c.status === 'fetching'"
-              [class.run-chunk--paced]="c.status === 'queued' && (c.waitSeconds ?? 0) > 0"
-              role="listitem"
-              [attr.aria-label]="'chunk ' + c.index + ' of ' + c.total + ', ' + c.status">
-            <span class="run-chunk__icon" aria-hidden="true">
-              @switch (c.status) {
-                @case ('done') { ✓ }
-                @case ('fetching') { ▸ }
-                @default { · }
-              }
-            </span>
-            <span class="run-chunk__id mono">chunk {{ c.index }}</span>
-            <span class="run-chunk__range mono">
-              @if (c.from && c.to) { {{ c.from }} → {{ c.to }} }
-            </span>
-            <span class="run-chunk__status">
-              @switch (c.status) {
-                @case ('done') { {{ c.barsReturned ?? 0 | number }} bars · done }
-                @case ('fetching') { fetching… }
-                @default {
-                  @if ((c.waitSeconds ?? 0) > 0) {
-                    paced · next slot in {{ c.waitSeconds }}s
-                  } @else {
-                    queued
-                  }
-                }
-              }
-            </span>
-          </li>
-        }
-      </ul>
-      <div class="run-progress__actions">
-        <button type="button" class="btn-secondary btn-sm" (click)="runSession.cancel()">
-          <i class="pi pi-times"></i> Cancel fetch
-        </button>
-      </div>
-    </div>
-  </ng-template>
-
-  <ng-template #runBundling>
-    <div class="run-progress" role="status" aria-live="polite" aria-atomic="false">
-      <div class="run-progress__heading">
-        <strong>✓ Fetched bars · now bundling ZIP</strong>
-      </div>
-      @if (runSession.fetchSummary(); as fs) {
-        <div class="run-fetch-summary">
-          <span class="run-fetch-summary__item">
-            <span class="run-fetch-summary__label">Polygon raw bars</span>
-            <span class="run-fetch-summary__value mono">{{ fs.rawBars.toLocaleString() }}</span>
-          </span>
-          <span class="run-fetch-summary__sep" aria-hidden="true">·</span>
-          <span class="run-fetch-summary__item">
-            <span class="run-fetch-summary__label">After session filter / fill</span>
-            <span class="run-fetch-summary__value mono">{{ fs.processedBars.toLocaleString() }}</span>
-          </span>
-          <span class="run-fetch-summary__sep" aria-hidden="true">·</span>
-          <span class="run-fetch-summary__item">
-            <span class="run-fetch-summary__label">Indicator columns</span>
-            <span class="run-fetch-summary__value mono">{{ fs.indicatorColumns }}</span>
-          </span>
-        </div>
-      }
-      <div class="run-progress__bar"
-           role="progressbar"
-           [attr.aria-valuenow]="runProgressPercent()"
-           aria-valuemin="0"
-           aria-valuemax="100"
-           aria-label="Bundle progress">
-        <div class="run-progress__bar-fill" [style.width.%]="runProgressPercent()"></div>
-      </div>
-      <ul class="run-chunk-list" role="list">
-        @for (c of runSession.bundleComponents(); track c.name) {
-          @let progress = runSession.bundleProgress();
-          @let optionsActive = progress?.component === c.name && c.status !== 'done';
-          @let active = optionsActive || c.status === 'fetching';
-          <li class="run-chunk"
-              [class.run-chunk--done]="c.status === 'done'"
-              [class.run-chunk--fetching]="active"
-              role="listitem"
-              [attr.aria-label]="c.name + ', ' + (active ? 'in progress' : c.status)">
-            <span class="run-chunk__icon" aria-hidden="true">
-              @if (c.status === 'done') { ✓ }
-              @else if (active) { ▸ }
-              @else { · }
-            </span>
-            <span class="run-chunk__id mono">{{ c.name }}</span>
-            @if (optionsActive && progress) {
-              <span class="run-chunk__status">
-                contract {{ progress.step }}@if (progress.label) { · <span class="mono">{{ progress.label }}</span> }
-              </span>
-            } @else if (c.status === 'fetching') {
-              <span class="run-chunk__status">fetching…</span>
-            }
-          </li>
-        }
-      </ul>
-      <div class="run-progress__actions">
-        <button type="button" class="btn-secondary btn-sm" (click)="runSession.cancel()">
-          <i class="pi pi-times"></i> Cancel
-        </button>
-      </div>
-    </div>
-  </ng-template>
-
-  <ng-template #runDone>
-    <div class="run-done" role="status" aria-live="polite">
-      <strong>
-        ✓ Saved {{ runSession.result()?.filename }}
-        @if (runSession.result(); as r) { ({{ (r.sizeBytes / 1024 / 1024).toFixed(1) }} MB) }
-      </strong>
-    </div>
-    @if (runSession.fetchSummary(); as fs) {
-      <div class="run-fetch-summary">
-        <span class="run-fetch-summary__item">
-          <span class="run-fetch-summary__label">Polygon raw bars</span>
-          <span class="run-fetch-summary__value mono">{{ fs.rawBars.toLocaleString() }}</span>
-        </span>
-        <span class="run-fetch-summary__sep" aria-hidden="true">·</span>
-        <span class="run-fetch-summary__item">
-          <span class="run-fetch-summary__label">Rows in dataset.csv</span>
-          <span class="run-fetch-summary__value mono">{{ fs.processedBars.toLocaleString() }}</span>
-        </span>
-        <span class="run-fetch-summary__sep" aria-hidden="true">·</span>
-        <span class="run-fetch-summary__item">
-          <span class="run-fetch-summary__label">Indicator columns</span>
-          <span class="run-fetch-summary__value mono">{{ fs.indicatorColumns }}</span>
-        </span>
-      </div>
-    }
-    <!-- Surface the same controls runIdle shows so the user can fire
-         another run immediately without clicking "Fetch another" first. -->
-    <div class="run-card__summary">
-      {{ ticker() || '—' }} · {{ fromDate() }} → {{ toDate() }} ·
-      {{ activeBarTimeframe() === 'custom' ? (multiplier() + ' × ' + timespan()) : activeBarTimeframe() }} ·
-      {{ session() === 'rth' ? 'RTH' : 'Extended' }} ·
-      ~{{ estimatedColumns().length }} columns
-    </div>
-    <div class="run-card__action">
-      <label class="checkbox-inline"
-             pTooltip="Adds a second phase after fetch: writes CSV + every selected companion + the quality report into one .zip download."
-             tooltipPosition="top">
-        <input type="checkbox" [checked]="alsoGenerateZip()" (change)="alsoGenerateZip.set(!alsoGenerateZip())" />
-        <span>Bundle everything into a ZIP</span>
-      </label>
-      <button class="btn-primary" (click)="fetchAndMaybeZip()" [disabled]="!ticker() || loading()">
-        @if (loading()) {
-          <i class="pi pi-spin pi-spinner"></i>
-          <span>Fetching…</span>
-        } @else {
-          <i class="pi pi-chart-line"></i>
-          <span>{{ alsoGenerateZip() ? 'Fetch & bundle' : 'Fetch data' }}</span>
-        }
-      </button>
-    </div>
-  </ng-template>
-
-  <ng-template #runError>
-    @if (runSession.error(); as err) {
-      <div class="run-error info-callout warn" role="alert">
-        <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-        <div>
-          <strong>
-            @if (err.kind === 'cancelled') { Fetch cancelled }
-            @else { Fetch failed }
-          </strong>
-          <div>{{ err.message }}</div>
-          <div class="run-progress__actions">
-            <button type="button" class="btn-secondary btn-sm" (click)="fetchAndMaybeZip()">
-              Retry
-            </button>
-            <button type="button" class="btn-text btn-sm" (click)="runSession.reset()">
-              Discard
-            </button>
-          </div>
-        </div>
-      </div>
-    }
-  </ng-template>
 
   <!-- Multi-Timeframe Chart -->
   @if (chartRendered()) {
@@ -1200,3 +974,8 @@
     </div>
   </div>
 </div>
+
+<!-- Bottom-docked run UI: replaces the previous in-flow progress card.
+     Always present; toggles between expanded panel and collapsed strip. -->
+<app-run-dock />
+

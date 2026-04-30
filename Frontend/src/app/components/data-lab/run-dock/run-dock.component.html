@@ -1,0 +1,92 @@
+<!-- Bottom-docked run UI. Pinned to viewport via .run-dock fixed positioning. -->
+<div class="run-dock__wrapper" role="region" aria-label="Run progress and event log">
+  @if (expanded()) {
+    <header class="run-dock__header" [class]="'run-dock__header--' + headlineLevel()">
+      <div class="run-dock__headline">
+        <span class="run-dock__state-tag">{{ runSession.state() }}</span>
+        <span class="run-dock__headline-text">{{ headline() }}</span>
+        @if (etaText(); as eta) {
+          <span class="run-dock__eta" aria-label="estimated time remaining">· ETA {{ eta }}</span>
+        }
+      </div>
+
+      @if (runSession.state() === 'fetching' || runSession.state() === 'bundling') {
+        <div class="run-dock__progress"
+             role="progressbar"
+             [attr.aria-valuenow]="progressPercent()"
+             aria-valuemin="0"
+             aria-valuemax="100"
+             [attr.aria-label]="'Run progress: ' + progressPercent() + '%'">
+          <div class="run-dock__progress-fill" [style.width.%]="progressPercent()"></div>
+        </div>
+      }
+
+      @if (runSession.fetchSummary(); as fs) {
+        <div class="run-dock__metrics">
+          <span class="run-dock__metric">
+            <span class="run-dock__metric-label">Polygon raw</span>
+            <span class="run-dock__metric-value mono">{{ fs.rawBars.toLocaleString() }}</span>
+          </span>
+          <span class="run-dock__metric-sep" aria-hidden="true">·</span>
+          <span class="run-dock__metric">
+            <span class="run-dock__metric-label">After processing</span>
+            <span class="run-dock__metric-value mono">{{ fs.processedBars.toLocaleString() }}</span>
+          </span>
+          <span class="run-dock__metric-sep" aria-hidden="true">·</span>
+          <span class="run-dock__metric">
+            <span class="run-dock__metric-label">Indicator cols</span>
+            <span class="run-dock__metric-value mono">{{ fs.indicatorColumns }}</span>
+          </span>
+        </div>
+      }
+
+      <div class="run-dock__actions">
+        @if (canCancel()) {
+          <button type="button" class="run-dock__btn run-dock__btn--danger" (click)="cancel()">
+            <i class="pi pi-times" aria-hidden="true"></i> Cancel
+          </button>
+        }
+        <button type="button" class="run-dock__btn" (click)="clearLog()" [disabled]="runSession.log().length === 0">
+          <i class="pi pi-trash" aria-hidden="true"></i> Clear log
+        </button>
+        <button type="button" class="run-dock__btn run-dock__btn--icon" (click)="collapse()" aria-label="Collapse run dock">
+          <i class="pi pi-chevron-down" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+
+    <div #logScroll class="run-dock__log" (scroll)="onLogScroll()" role="log" aria-live="polite" aria-atomic="false">
+      @if (runSession.log().length === 0) {
+        <div class="run-dock__log-empty">
+          No events yet. The dock will stream chunk · bundle · indicator updates as they happen.
+        </div>
+      } @else {
+        <ul class="run-dock__log-list">
+          @for (entry of runSession.log(); track trackById($index, entry)) {
+            <li class="run-dock__line"
+                [class]="'run-dock__line--' + entry.level">
+              <span class="run-dock__line-time mono">[{{ formatTime(entry.timestamp) }}]</span>
+              <span class="run-dock__line-glyph" aria-hidden="true">{{ entry.glyph }}</span>
+              <span class="run-dock__line-msg">{{ entry.message }}</span>
+            </li>
+          }
+        </ul>
+      }
+    </div>
+  } @else {
+    <button type="button"
+            class="run-dock__strip run-dock__strip--{{ headlineLevel() }}"
+            (click)="expand()"
+            [attr.aria-label]="'Expand run dock. ' + headline()">
+      <span class="run-dock__strip-state">{{ runSession.state() }}</span>
+      <span class="run-dock__strip-text">{{ headline() }}</span>
+      @if (etaText(); as eta) {
+        <span class="run-dock__strip-eta">· ETA {{ eta }}</span>
+      }
+      <span class="run-dock__strip-spacer"></span>
+      <span class="run-dock__strip-count mono" [attr.aria-label]="runSession.log().length + ' events in log'">
+        {{ runSession.log().length }} ▴
+      </span>
+    </button>
+  }
+</div>

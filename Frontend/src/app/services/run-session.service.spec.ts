@@ -350,4 +350,107 @@ describe('RunSessionService', () => {
     source.dispatch({ type: 'job.cancelled', reason: 'manual' });
     await done;
   });
+
+  // ── Run-dock event log ───────────────────────────────────────────
+
+  it('appends a log entry for each meaningful SSE event with the right severity', async () => {
+    const { done, source } = await startAndGrabSource(
+      service,
+      { ticker: 'SPY', from_date: '2025-01-06', to_date: '2025-01-10' },
+      { downloadOnComplete: false },
+    );
+    // start() seeded "starting run · …" + "job id …"; dispatch from there.
+    source.dispatch({ type: 'job.started' });
+    source.dispatch({ type: 'chunk_plan', total: 2 });
+    source.dispatch({ type: 'chunk_done', index: 1, total: 2, bars_returned: 1234 });
+    source.dispatch({ type: 'chunk_paced', wait_seconds: 9.4 });
+    source.dispatch({ type: 'fetch_complete', raw_bars: 8000, processed_bars: 7800, indicator_columns: 25 });
+    source.dispatch({ type: 'job.failed', message: 'boom' });
+
+    const log = service.log();
+    const levels = log.map((e) => e.level);
+    // Severity mapping is the contract — confirm each landed.
+    expect(levels).toContain('warn'); // chunk_paced
+    expect(levels).toContain('success'); // chunk_done + fetch_complete
+    expect(levels).toContain('error'); // job.failed
+    expect(levels).toContain('info'); // job.started + chunk_plan + others
+
+    const failed = log.find((e) => e.message.startsWith('failed:'));
+    expect(failed?.level).toBe('error');
+    expect(failed?.glyph).toBe('✗');
+
+    const paced = log.find((e) => e.message.includes('pacing'));
+    expect(paced?.level).toBe('warn');
+
+    const fetchDone = log.find((e) => e.message.startsWith('fetch complete'));
+    expect(fetchDone?.level).toBe('success');
+    expect(fetchDone?.message).toContain('25 indicator');
+
+    await done;
+  });
+
+  it('caps the log at 500 entries, FIFO — oldest entries roll off when over the limit', async () => {
+    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+
+    // Seed a recognisable first entry, then push enough events to exceed 500.
+    source.dispatch({ type: 'chunk_plan', total: 999 });
+    for (let i = 1; i <= 600; i++) {
+      source.dispatch({ type: 'chunk_done', index: i, total: 999, bars_returned: i });
+    }
+
+    const log = service.log();
+    expect(log.length).toBe(500);
+    // The earliest "chunk_plan" entry plus the first ~100 chunk_done entries
+    // should have rolled off; the buffer's tail must contain the latest.
+    expect(log[log.length - 1].message).toContain('chunk 600');
+
+    source.dispatch({ type: 'job.cancelled', reason: 'cleanup' });
+    await done;
+  });
+
+  it('log persists across reset() — the dock keeps history when a new run starts', async () => {
+    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    source.dispatch({ type: 'chunk_plan', total: 1 });
+    source.dispatch({ type: 'job.cancelled', reason: 'first run' });
+    await done;
+
+    const lengthBeforeReset = service.log().length;
+    expect(lengthBeforeReset).toBeGreaterThan(0);
+
+    service.reset();
+    expect(service.log().length).toBe(lengthBeforeReset); // unchanged
+    expect(service.state()).toBe('idle');
+
+    // clearLog() is the only path that wipes — confirm it actually does.
+    service.clearLog();
+    expect(service.log().length).toBe(0);
+  });
+
+  it('unknown event types still produce a log line so future events are not silently dropped', async () => {
+    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+    const beforeCount = service.log().length;
+
+    source.dispatch({ type: 'totally_made_up_event', anything: 'goes' });
+
+    const after = service.log();
+    expect(after.length).toBe(beforeCount + 1);
+    expect(after[after.length - 1].message).toBe('totally_made_up_event');
+
+    source.dispatch({ type: 'job.cancelled', reason: 'cleanup' });
+    await done;
+  });
+
+  it('dividend_adjusted event lands in the log even though it does not affect state', async () => {
+    const { done, source } = await startAndGrabSource(service, { ticker: 'SPY' }, { downloadOnComplete: false });
+
+    source.dispatch({ type: 'dividend_adjusted', events: 4, bars: 1500 });
+
+    const matched = service.log().find((e) => e.message.startsWith('dividend adjustment'));
+    expect(matched).toBeDefined();
+    expect(matched?.message).toContain('4 events');
+    expect(matched?.message).toContain('1,500 bars');
+
+    source.dispatch({ type: 'job.cancelled', reason: 'cleanup' });
+    await done;
+  });
 });
