@@ -34,6 +34,24 @@ describe('parseOcc', () => {
     expect(parseOcc('O:spy260220C00689000')).toBeNull();        // lowercase
     expect(parseOcc('')).toBeNull();
   });
+
+  it('rejects calendar-invalid dates that match the regex shape', () => {
+    expect(parseOcc('O:SPY261301C00100000')).toBeNull();        // month 13
+    expect(parseOcc('O:SPY260000C00100000')).toBeNull();        // month 0
+    expect(parseOcc('O:SPY260132C00100000')).toBeNull();        // day 32 in Jan
+    expect(parseOcc('O:SPY260230C00100000')).toBeNull();        // Feb 30
+    expect(parseOcc('O:SPY270229C00100000')).toBeNull();        // 2027 not leap
+  });
+
+  it('accepts boundary leap-day dates', () => {
+    // 2028 is a leap year (divisible by 4, not 100)
+    expect(parseOcc('O:SPY280229C00100000')).toEqual({
+      underlying: 'SPY',
+      expirationDate: '2028-02-29',
+      contractType: 'call',
+      strike: 100,
+    });
+  });
 });
 
 describe('parseOccForDisplay', () => {
@@ -97,6 +115,38 @@ describe('formatOcc', () => {
     expect(() => formatOcc({
       underlying: 'SPY', expirationDate: '2026-02-20', contractType: 'call', strike: -1,
     })).toThrow();
+  });
+
+  it('throws on calendar-invalid dates that pass the ISO shape regex', () => {
+    expect(() => formatOcc({
+      underlying: 'SPY', expirationDate: '2026-13-01', contractType: 'call', strike: 100,
+    })).toThrow(/valid calendar date/);
+    expect(() => formatOcc({
+      underlying: 'SPY', expirationDate: '2026-02-30', contractType: 'call', strike: 100,
+    })).toThrow(/valid calendar date/);
+    expect(() => formatOcc({
+      underlying: 'SPY', expirationDate: '2027-02-29', contractType: 'call', strike: 100,
+    })).toThrow(/valid calendar date/);
+  });
+
+  it('throws when the strike exceeds the 8-digit payload limit', () => {
+    // 100_000 → 100_000_000 milli-dollars → 9 digits, would yield an
+    // un-parseable ticker.
+    expect(() => formatOcc({
+      underlying: 'BRKA', expirationDate: '2026-06-19', contractType: 'call', strike: 100_000,
+    })).toThrow(/strike exceeds/);
+    expect(() => formatOcc({
+      underlying: 'BRKA', expirationDate: '2026-06-19', contractType: 'call', strike: 1_000_000,
+    })).toThrow(/strike exceeds/);
+  });
+
+  it('accepts strikes up to the 8-digit boundary', () => {
+    // 99_999.999 → exactly 99_999_999 milli, the largest 8-digit payload.
+    const t = formatOcc({
+      underlying: 'BRKA', expirationDate: '2026-06-19', contractType: 'call', strike: 99_999.999,
+    });
+    expect(t).toBe('O:BRKA260619C99999999');
+    expect(parseOcc(t)?.strike).toBeCloseTo(99_999.999, 3);
   });
 });
 

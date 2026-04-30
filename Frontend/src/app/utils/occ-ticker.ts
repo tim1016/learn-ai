@@ -46,8 +46,39 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
+ * 8-digit strike payload encodes thousandths of a dollar, so the
+ * largest representable strike is 99 999.999. Reject any strike at or
+ * above $100 000 at the format boundary instead of producing a 9-digit
+ * payload that {@link parseOcc} would silently reject.
+ */
+const MAX_STRIKE_MILLI = 99_999_999;
+
+/**
+ * Days-in-month for a given (year, 1-indexed month). Matches the Gregorian
+ * calendar used everywhere we render expirations. Used to reject
+ * structurally-valid but calendar-invalid OCC dates (e.g. month 13,
+ * Feb 30) before they reach a downstream consumer that would convert
+ * them via `new Date(...)` and silently roll over.
+ */
+function daysInMonth(year: number, month: number): number {
+  if (month < 1 || month > 12) return 0;
+  if (month === 2) {
+    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    return leap ? 29 : 28;
+  }
+  return [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+}
+
+function isValidGregorianDate(year: number, month: number, day: number): boolean {
+  if (month < 1 || month > 12) return false;
+  if (day < 1) return false;
+  return day <= daysInMonth(year, month);
+}
+
+/**
  * Parse a raw OCC ticker into structured fields. Returns null if the
- * input does not match the OCC regex.
+ * input does not match the OCC regex or encodes a calendar-invalid
+ * date (month 13, Feb 30, etc.).
  */
 export function parseOcc(ticker: string): OccTickerParts | null {
   const match = ticker.match(OCC_REGEX);
@@ -58,6 +89,8 @@ export function parseOcc(ticker: string): OccTickerParts | null {
   const year = 2000 + parseInt(dateStr.slice(0, 2), 10);
   const month = parseInt(dateStr.slice(2, 4), 10);
   const day = parseInt(dateStr.slice(4, 6), 10);
+
+  if (!isValidGregorianDate(year, month, day)) return null;
 
   const expirationDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   const contractType = typeChar === 'C' ? 'call' : 'put';
@@ -113,12 +146,21 @@ export function formatOcc(parts: OccTickerParts): string {
     throw new Error(`OCC: expirationDate must be ISO YYYY-MM-DD, got "${expirationDate}"`);
   }
   const [, yyyy, mm, dd] = dateMatch;
+  if (!isValidGregorianDate(parseInt(yyyy, 10), parseInt(mm, 10), parseInt(dd, 10))) {
+    throw new Error(`OCC: expirationDate is not a valid calendar date: "${expirationDate}"`);
+  }
 
   const yy = yyyy.slice(2);
   const cp = contractType === 'call' ? 'C' : 'P';
   // Strike is encoded as integer thousandths, zero-padded to 8 digits.
   // e.g. 689.0 → "00689000", 0.5 → "00000500"
-  const strikeStr = String(Math.round(strike * 1000)).padStart(8, '0');
+  const strikeMilli = Math.round(strike * 1000);
+  if (strikeMilli > MAX_STRIKE_MILLI) {
+    throw new Error(
+      `OCC: strike exceeds the 8-digit payload limit (max $${MAX_STRIKE_MILLI / 1000}), got ${strike}`,
+    );
+  }
+  const strikeStr = String(strikeMilli).padStart(8, '0');
 
   return `O:${underlying}${yy}${mm}${dd}${cp}${strikeStr}`;
 }
