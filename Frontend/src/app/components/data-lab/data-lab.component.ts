@@ -19,6 +19,7 @@ import { IndicatorTooltipComponent } from '../../shared/indicator-tooltip/indica
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { ActiveIndicatorCardComponent } from './active-indicator-card/active-indicator-card.component';
 import { ActiveIndicatorGroupComponent, IndicatorGroupItem } from './active-indicator-group/active-indicator-group.component';
+import { PastChainInspectorComponent } from './past-chain-inspector/past-chain-inspector.component';
 import { IndicatorConfigModalComponent } from './indicator-config-modal/indicator-config-modal.component';
 import { INDICATOR_REFERENCE } from '../../shared/indicators/indicator-reference';
 
@@ -292,6 +293,7 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
     DataLabChartComponent, SharedModule, Tooltip,
     IndicatorTooltipComponent, PageHeaderComponent, TickerRangePickerComponent,
     ActiveIndicatorCardComponent, ActiveIndicatorGroupComponent, IndicatorConfigModalComponent,
+    PastChainInspectorComponent,
   ],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],

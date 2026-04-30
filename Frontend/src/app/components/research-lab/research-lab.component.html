@@ -35,7 +35,46 @@
       @case ('data-divergence')       { <app-data-divergence /> }
       @case ('strategy-preflight')    { <app-strategy-preflight /> }
       @case ('experiment-history')    { <app-experiment-history /> }
-      @case ('options-math')          { <app-options-math-docs /> }
+      @case ('options-math')          {
+        <!--
+          Per docs/architecture/options-routes-research.md §7 D1 (markdown-only)
+          and §6 (single-doc deliverable), the in-app math reference was
+          deleted in Phase 6 of the cleanup. Options-math truth content
+          lives in docs/architecture/options-math-authorities.md (and is
+          being absorbed into options-research.md as that doc is authored).
+        -->
+        <div class="rl-redirect-panel">
+          <h2>Options Math Reference</h2>
+          <p>
+            The options-math reference now lives in the project's markdown
+            documentation set. See:
+          </p>
+          <ul>
+            <li>
+              <a href="https://github.com/tim1016/learn-ai/blob/master/docs/architecture/options-math-authorities.md"
+                 target="_blank" rel="noopener noreferrer">
+                docs/architecture/options-math-authorities.md
+              </a>
+              — single-source-of-truth index for every options calculation
+              (BS price, Greeks, IV solver, skew metrics, QuantLib pricing).
+            </li>
+            <li>
+              <a href="https://github.com/tim1016/learn-ai/blob/master/docs/references/options-bs-greeks-2026-04-24.md"
+                 target="_blank" rel="noopener noreferrer">
+                docs/references/options-bs-greeks-2026-04-24.md
+              </a>
+              — Black-Scholes formula reference card.
+            </li>
+            <li>
+              <a href="https://github.com/tim1016/learn-ai/blob/master/docs/options-cross-section-overview.md"
+                 target="_blank" rel="noopener noreferrer">
+                docs/options-cross-section-overview.md
+              </a>
+              — research-feature math overview (IV rank, log skew, VRP).
+            </li>
+          </ul>
+        </div>
+      }
       @case ('signal-docs')           { <app-signal-info-panel /> }
       @case ('signal-history')        { <app-signal-history /> }
       @case ('documentation')         { <app-info-panel /> }

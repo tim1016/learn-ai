@@ -17,6 +17,16 @@
           {{ selectedGreek() | titlecase }}
         </span>
       }
+      @for (scenario of whatIfCurves(); track scenario.label) {
+        <span class="legend-item">
+          <span
+            class="legend-swatch whatif"
+            [style.background]="scenario.color"
+            [style.border-color]="scenario.color"
+          ></span>
+          {{ scenario.label }}
+        </span>
+      }
     </div>
   }
 

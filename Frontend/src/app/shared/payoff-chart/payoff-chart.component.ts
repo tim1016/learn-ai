@@ -9,7 +9,7 @@ import {
 } from 'lightweight-charts';
 import {
   PayoffPoint, ChartCurveData, GreekCurvePoint, GreekType,
-} from '../../../graphql/types';
+} from '../../graphql/types';
 
 @Component({
   selector: 'app-payoff-chart',
@@ -42,6 +42,12 @@ export class PayoffChartComponent implements OnDestroy {
   private expSeries: ISeriesApi<'Baseline'> | null = null;
   private currSeries: ISeriesApi<'Line'> | null = null;
   private greekSeries: ISeriesApi<'Line'> | null = null;
+  /**
+   * Scenario-id → dashed line series. Lazily created when a scenario
+   * is enabled; removed when disabled. Keying by label keeps the chart
+   * in sync with whatever the parent's `whatIfScenarios` signal emits.
+   */
+  private whatIfSeries = new Map<string, ISeriesApi<'Line'>>();
   private injector = inject(Injector);
 
   /** Greek display name for tooltip */
@@ -159,6 +165,7 @@ export class PayoffChartComponent implements OnDestroy {
     const pts = this.expirationCurve();
     const curr = this.currentPnlCurve();
     const greekPts = this.greekCurve();
+    const whatIfs = this.whatIfCurves();
     const spot = this.spotPrice();
 
     if (!this.chart || !this.expSeries || !this.currSeries || !this.greekSeries) return;
@@ -167,6 +174,7 @@ export class PayoffChartComponent implements OnDestroy {
       this.expSeries.setData([]);
       this.currSeries.setData([]);
       this.greekSeries.setData([]);
+      this.removeAllWhatIfSeries();
       this.chart.applyOptions({ leftPriceScale: { visible: false } });
       return;
     }
@@ -194,7 +202,70 @@ export class PayoffChartComponent implements OnDestroy {
       this.chart.applyOptions({ leftPriceScale: { visible: false } });
     }
 
+    // What-if scenarios — one dashed series per enabled scenario
+    this.syncWhatIfSeries(whatIfs);
+
     this.chart.timeScale().fitContent();
+  }
+
+  /**
+   * Reconcile the on-chart what-if series with the input list:
+   * - Add a series for any enabled scenario not yet on the chart
+   * - Update data on series whose scenario is still enabled
+   * - Remove series for scenarios that have been disabled
+   */
+  private syncWhatIfSeries(scenarios: ChartCurveData[]): void {
+    if (!this.chart) return;
+
+    const incomingLabels = new Set(scenarios.map(s => s.label));
+
+    // Drop series for scenarios that are no longer enabled.
+    for (const [label, series] of this.whatIfSeries) {
+      if (!incomingLabels.has(label)) {
+        this.chart.removeSeries(series);
+        this.whatIfSeries.delete(label);
+      }
+    }
+
+    // Add or update series for enabled scenarios.
+    for (const scenario of scenarios) {
+      // ChartCurveData.borderDash defaults to [6,3] from the parent;
+      // lightweight-charts only exposes preset LineStyle values, so map
+      // the presence of a dash array to LineStyle.Dashed.
+      const lineStyle = (scenario.borderDash && scenario.borderDash.length > 0)
+        ? LineStyle.Dashed
+        : LineStyle.Solid;
+
+      let series = this.whatIfSeries.get(scenario.label);
+      if (!series) {
+        series = this.chart.addSeries(LineSeries, {
+          color: scenario.color,
+          lineWidth: 2,
+          lineStyle,
+          crosshairMarkerVisible: true,
+          crosshairMarkerRadius: 3,
+        });
+        this.whatIfSeries.set(scenario.label, series);
+      } else {
+        // Reapply style on every sync so the line picks up changes when
+        // the parent emits a new scenario object that keeps the same
+        // label but flips color/borderDash (e.g. theme toggle, user
+        // recolor). Without this, the series keeps its first-render
+        // style indefinitely.
+        series.applyOptions({ color: scenario.color, lineStyle });
+      }
+      series.setData(
+        scenario.points.map(p => ({ time: p.price as UTCTimestamp, value: p.pnl })),
+      );
+    }
+  }
+
+  private removeAllWhatIfSeries(): void {
+    if (!this.chart) return;
+    for (const series of this.whatIfSeries.values()) {
+      this.chart.removeSeries(series);
+    }
+    this.whatIfSeries.clear();
   }
 
   // ── Crosshair tooltip ──────────────────────────────────────────────
@@ -222,19 +293,38 @@ export class PayoffChartComponent implements OnDestroy {
     }
 
     const fmt = (v: number) => `${v >= 0 ? '+' : ''}$${v.toFixed(2)}`;
-    let html = `<div class="tt-title">Underlying: $${price.toFixed(2)}</div>`;
+
+    // Build the tooltip via DOM nodes rather than innerHTML to avoid
+    // XSS — what-if `label` and `color` originate from
+    // `whatIfCurves` (caller-supplied) and would otherwise flow into
+    // the parsed HTML string.
+    tip.replaceChildren();
+    tip.appendChild(this.buildTooltipTitle(`Underlying: $${price.toFixed(2)}`));
+
     if (expVal != null) {
-      html += `<div class="tt-row"><span class="tt-dot tt-exp"></span>Exp P&L: ${fmt(expVal)}</div>`;
+      tip.appendChild(this.buildTooltipRow(['tt-dot', 'tt-exp'], `Exp P&L: ${fmt(expVal)}`));
     }
     if (currVal != null) {
-      html += `<div class="tt-row"><span class="tt-dot tt-curr"></span>Cur P&L: ${fmt(currVal)}</div>`;
+      tip.appendChild(this.buildTooltipRow(['tt-dot', 'tt-curr'], `Cur P&L: ${fmt(currVal)}`));
     }
     if (greekVal != null) {
       const greekLabel = this.greekLabels[this.selectedGreek()] ?? this.selectedGreek();
-      html += `<div class="tt-row"><span class="tt-dot tt-greek"></span>${greekLabel}: ${greekVal.toFixed(4)}</div>`;
+      tip.appendChild(
+        this.buildTooltipRow(['tt-dot', 'tt-greek'], `${greekLabel}: ${greekVal.toFixed(4)}`),
+      );
     }
 
-    tip.innerHTML = html;
+    // What-if scenario rows — one per enabled series
+    for (const [label, series] of this.whatIfSeries) {
+      const raw = param.seriesData.get(series) as { value?: number } | undefined;
+      const v = raw?.value;
+      if (v == null) continue;
+      const scenario = this.whatIfCurves().find(s => s.label === label);
+      tip.appendChild(
+        this.buildTooltipRow(['tt-dot'], `${label}: ${fmt(v)}`, scenario?.color),
+      );
+    }
+
     tip.style.display = 'block';
 
     const box = this.chartEl()?.nativeElement;
@@ -246,6 +336,34 @@ export class PayoffChartComponent implements OnDestroy {
     tip.style.top = `${Math.max(param.point.y - 20, 0)}px`;
   }
 
+  private buildTooltipTitle(text: string): HTMLDivElement {
+    const div = document.createElement('div');
+    div.className = 'tt-title';
+    div.textContent = text;
+    return div;
+  }
+
+  private buildTooltipRow(
+    dotClasses: string[],
+    text: string,
+    dotColor?: string,
+  ): HTMLDivElement {
+    const row = document.createElement('div');
+    row.className = 'tt-row';
+    const dot = document.createElement('span');
+    dot.classList.add(...dotClasses);
+    if (dotColor) {
+      // setProperty (vs string concat into a style attribute) treats
+      // the value as a CSS token, not a parsed style declaration —
+      // an attacker-supplied "red; background:url(...)" can't escape
+      // the `background-color` property.
+      dot.style.setProperty('background-color', dotColor);
+    }
+    row.appendChild(dot);
+    row.appendChild(document.createTextNode(text));
+    return row;
+  }
+
   // ── Cleanup ────────────────────────────────────────────────────────
 
   ngOnDestroy(): void {
@@ -254,5 +372,6 @@ export class PayoffChartComponent implements OnDestroy {
     this.expSeries = null;
     this.currSeries = null;
     this.greekSeries = null;
+    this.whatIfSeries.clear();
   }
 }

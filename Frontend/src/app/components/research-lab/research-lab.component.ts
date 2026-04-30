@@ -7,7 +7,6 @@ import { SignalRunnerComponent } from './signal-runner/signal-runner.component';
 import { SignalInfoPanelComponent } from './signal-info-panel/signal-info-panel.component';
 import { SignalHistoryComponent } from './signal-history/signal-history.component';
 import { BatchRunnerComponent } from './batch-runner/batch-runner.component';
-import { OptionsMathDocsComponent } from './options-math-docs/options-math-docs.component';
 import { DataDivergenceComponent } from './data-divergence/data-divergence.component';
 import { StrategyPreflightComponent } from './strategy-preflight/strategy-preflight.component';
 import { IndicatorReliabilityComponent } from './indicator-reliability/indicator-reliability.component';
@@ -48,7 +47,6 @@ interface SubNavGroup {
     SignalInfoPanelComponent,
     SignalHistoryComponent,
     BatchRunnerComponent,
-    OptionsMathDocsComponent,
     DataDivergenceComponent,
     StrategyPreflightComponent,
     IndicatorReliabilityComponent,

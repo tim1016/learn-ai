@@ -155,8 +155,15 @@
         <div class="overflow-x-auto">
           <table class="chain-table w-full border-collapse text-xs">
             <colgroup>
+              <!-- UX-Q1: drill-down icon-per-side (📈 calls, leftmost) -->
+              <col class="col-drill" />
               <col class="col-action" />
               <col class="col-action" />
+              @if (chainDensity() === 'greeks') {
+                <col class="col-greek" />
+                <col class="col-greek" />
+                <col class="col-greek" />
+              }
               <col class="col-greek" />
               <col class="col-price" />
               <col class="col-oi" />
@@ -166,18 +173,55 @@
               <col class="col-oi" />
               <col class="col-price" />
               <col class="col-greek" />
+              @if (chainDensity() === 'greeks') {
+                <col class="col-greek" />
+                <col class="col-greek" />
+                <col class="col-greek" />
+              }
               <col class="col-action" />
               <col class="col-action" />
+              <!-- UX-Q1: drill-down icon-per-side (📉 puts, rightmost) -->
+              <col class="col-drill" />
             </colgroup>
             <thead>
+              @let callSpan = chainDensity() === 'greeks' ? 9 : 6;
+              @let putSpan  = chainDensity() === 'greeks' ? 9 : 6;
               <tr class="border-b-2 border-slate-700">
-                <th colspan="6" class="text-center text-emerald-400 font-bold py-1.5 text-xs">CALLS</th>
+                <!-- UX-Q1: spacer for the call drill-down icon column -->
+                <th class="col-drill"></th>
+                <th [attr.colspan]="callSpan" class="text-center text-emerald-400 font-bold py-1.5 text-xs">
+                  CALLS
+                </th>
                 <th class="bg-slate-800/80"></th>
-                <th colspan="6" class="text-center text-red-400 font-bold py-1.5 text-xs">PUTS</th>
+                <th [attr.colspan]="putSpan" class="text-center text-red-400 font-bold py-1.5 text-xs">
+                  <div class="flex items-center justify-center gap-2">
+                    <span>PUTS</span>
+                    <!-- UX-Q2: density toggle (Quick / Full Greeks). Sticky per-user. -->
+                    <button
+                      type="button"
+                      class="density-toggle"
+                      [class.is-greeks]="chainDensity() === 'greeks'"
+                      [attr.aria-pressed]="chainDensity() === 'greeks'"
+                      aria-label="Toggle full Greeks columns"
+                      pTooltip="Toggle full Greeks (V/Θ/Γ) per row"
+                      tooltipPosition="top"
+                      (click)="toggleChainDensity()"
+                    >{{ chainDensity() === 'greeks' ? 'Full Greeks' : 'Quick' }}</button>
+                  </div>
+                </th>
+                <!-- UX-Q1: spacer for the put drill-down icon column -->
+                <th class="col-drill"></th>
               </tr>
               <tr class="border-b border-slate-700 text-slate-400 text-[10px] uppercase tracking-wider">
+                <!-- UX-Q1: history label hint (calls side) -->
+                <th class="col-drill" pTooltip="Click to view contract history" tooltipPosition="top">Hist</th>
                 <th class="px-0.5 py-1 text-center" pTooltip="Buy (Long)" tooltipPosition="top">L</th>
                 <th class="px-0.5 py-1 text-center" pTooltip="Sell (Short)" tooltipPosition="top">S</th>
+                @if (chainDensity() === 'greeks') {
+                  <th class="px-1.5 py-1 text-right" pTooltip="Vega" tooltipPosition="top">V</th>
+                  <th class="px-1.5 py-1 text-right" pTooltip="Theta" tooltipPosition="top">Θ</th>
+                  <th class="px-1.5 py-1 text-right" pTooltip="Gamma" tooltipPosition="top">Γ</th>
+                }
                 <th class="px-1.5 py-1 text-right">Delta</th>
                 <th class="px-1.5 py-1 text-right font-semibold">Price</th>
                 <th class="px-1.5 py-1 text-right">OI</th>
@@ -187,8 +231,15 @@
                 <th class="px-1.5 py-1 text-left">OI</th>
                 <th class="px-1.5 py-1 text-left font-semibold">Price</th>
                 <th class="px-1.5 py-1 text-left">Delta</th>
+                @if (chainDensity() === 'greeks') {
+                  <th class="px-1.5 py-1 text-left" pTooltip="Gamma" tooltipPosition="top">Γ</th>
+                  <th class="px-1.5 py-1 text-left" pTooltip="Theta" tooltipPosition="top">Θ</th>
+                  <th class="px-1.5 py-1 text-left" pTooltip="Vega" tooltipPosition="top">V</th>
+                }
                 <th class="px-0.5 py-1 text-center" pTooltip="Buy (Long)" tooltipPosition="top">L</th>
                 <th class="px-0.5 py-1 text-center" pTooltip="Sell (Short)" tooltipPosition="top">S</th>
+                <!-- UX-Q1: history label hint (puts side) -->
+                <th class="col-drill" pTooltip="Click to view contract history" tooltipPosition="top">Hist</th>
               </tr>
             </thead>
             <tbody>
@@ -202,6 +253,18 @@
                   [class.row-otm-put]="row.otmPut"
                   [attr.data-atm]="row.isAtm ? 'true' : null"
                 >
+                  <!-- UX-Q1: call drill-down icon (📈) — opens history drawer -->
+                  <td class="col-drill text-center">
+                    <button
+                      type="button"
+                      class="drill-icon"
+                      [disabled]="!row.call"
+                      aria-label="View call contract history"
+                      pTooltip="View call history"
+                      tooltipPosition="top"
+                      (click)="openContractHistory(row.call, 'call')"
+                    >📈</button>
+                  </td>
                   <!-- CALL Long -->
                   <td class="col-call px-0.5 py-1 text-center">
                     <button
@@ -220,6 +283,12 @@
                       (click)="addLegFromChain(row.call, 'call', 'short')"
                     >S</button>
                   </td>
+                  <!-- CALL V / Θ / Γ (UX-Q2: only when chainDensity === 'greeks') -->
+                  @if (chainDensity() === 'greeks') {
+                    <td class="col-call px-1.5 py-1 text-right text-slate-400">{{ row.callVega }}</td>
+                    <td class="col-call px-1.5 py-1 text-right text-slate-400">{{ row.callTheta }}</td>
+                    <td class="col-call px-1.5 py-1 text-right text-slate-400">{{ row.callGamma }}</td>
+                  }
                   <!-- CALL Delta -->
                   <td class="col-call px-1.5 py-1 text-right text-slate-300">{{ row.callDelta }}</td>
                   <!-- CALL Price -->
@@ -251,6 +320,12 @@
                   <td class="col-put col-put-price px-1.5 py-1 text-left text-slate-100 font-semibold">{{ row.putPrice }}</td>
                   <!-- PUT Delta -->
                   <td class="col-put px-1.5 py-1 text-left text-slate-300">{{ row.putDelta }}</td>
+                  <!-- PUT Γ / Θ / V (UX-Q2: mirrored from call side; only when chainDensity === 'greeks') -->
+                  @if (chainDensity() === 'greeks') {
+                    <td class="col-put px-1.5 py-1 text-left text-slate-400">{{ row.putGamma }}</td>
+                    <td class="col-put px-1.5 py-1 text-left text-slate-400">{{ row.putTheta }}</td>
+                    <td class="col-put px-1.5 py-1 text-left text-slate-400">{{ row.putVega }}</td>
+                  }
                   <!-- PUT Long -->
                   <td class="col-put px-0.5 py-1 text-center">
                     <button
@@ -268,6 +343,18 @@
                       [disabled]="!row.put"
                       (click)="addLegFromChain(row.put, 'put', 'short')"
                     >S</button>
+                  </td>
+                  <!-- UX-Q1: put drill-down icon (📉) — opens history drawer -->
+                  <td class="col-drill text-center">
+                    <button
+                      type="button"
+                      class="drill-icon"
+                      [disabled]="!row.put"
+                      aria-label="View put contract history"
+                      pTooltip="View put history"
+                      tooltipPosition="top"
+                      (click)="openContractHistory(row.put, 'put')"
+                    >📉</button>
                   </td>
                 </tr>
               }
@@ -380,11 +467,11 @@
               </div>
               <div class="summary-row">
                 <span class="summary-label">Max Profit</span>
-                <span class="summary-value profit">${{ liveMaxProfit() | number:'1.2-2' }}</span>
+                <span class="summary-value profit">{{ liveMaxProfitDisplay() }}</span>
               </div>
               <div class="summary-row">
                 <span class="summary-label">Max Loss</span>
-                <span class="summary-value loss">${{ liveMaxLoss() | number:'1.2-2' }}</span>
+                <span class="summary-value loss">{{ liveMaxLossDisplay() }}</span>
               </div>
               @if (liveBreakevens().length > 0) {
                 <div class="summary-row">
@@ -452,6 +539,25 @@
           </div>
         </div>
 
+        <!--
+          Zero-TTM banner: when the selected expiration is today/past, the
+          forward-looking curves (current-time P&L, Greek curve, what-if
+          scenarios) are intentionally empty because BS Greeks degenerate
+          at T=0. Surface that state instead of silently dropping curves.
+        -->
+        @if (noForwardCurves()) {
+          <div class="ttm-zero-banner panel-section" role="status">
+            <i class="pi pi-info-circle"></i>
+            <span>
+              Selected expiration is today or in the past. Only the
+              expiration P&amp;L curve is shown — current-time P&amp;L,
+              the Greek curve, and what-if scenarios all require a future
+              expiration (Black-Scholes Greeks are degenerate at T=0).
+              Pick a later expiration from the ribbon to see them.
+            </span>
+          </div>
+        }
+
         <!-- Payoff Chart (taller in drawer) -->
         <div class="panel-section chart-section">
           <app-payoff-chart
@@ -501,11 +607,11 @@
             </div>
             <div class="stat-card profit-card">
               <span class="stat-label">Max Profit</span>
-              <span class="stat-value">${{ result.maxProfit | number:'1.2-2' }}</span>
+              <span class="stat-value">{{ analysisMaxProfitDisplay() }}</span>
             </div>
             <div class="stat-card loss-card">
               <span class="stat-label">Max Loss</span>
-              <span class="stat-value">${{ result.maxLoss | number:'1.2-2' }}</span>
+              <span class="stat-value">{{ analysisMaxLossDisplay() }}</span>
             </div>
             <div class="stat-card be-card">
               <span class="stat-label">Breakeven{{ result.breakevens.length > 1 ? 's' : '' }}</span>
@@ -521,3 +627,98 @@
     </div>
   </aside>
 </div>
+
+<!--
+  UX-Q1 / R0b: per-contract historical drill-down drawer.
+  Absorbed from the deleted /options-chain page.
+  Triggered by the 📈/📉 icon-per-side button outside each chain row.
+-->
+<p-drawer
+  [visible]="historyDrawerOpen()"
+  (visibleChange)="onHistoryDrawerVisibleChange($event)"
+  position="right"
+  styleClass="history-drawer"
+  [style]="{ width: '38rem' }"
+  [showCloseIcon]="true"
+>
+  <ng-template pTemplate="header">
+    @let parsed = parsedHistoryTicker();
+    @if (parsed) {
+      <div class="history-header">
+        <div class="history-header-row">
+          <span class="history-underlying">{{ parsed.underlying }}</span>
+          <span class="history-type" [class.is-call]="parsed.type === 'Call'" [class.is-put]="parsed.type === 'Put'">
+            {{ parsed.type }}
+          </span>
+          <span class="history-strike">{{ parsed.strike }}</span>
+        </div>
+        <div class="history-meta">
+          Exp {{ parsed.expDate }}
+        </div>
+      </div>
+    }
+  </ng-template>
+
+  @if (historyLoading()) {
+    <div class="history-loading">
+      <p-skeleton height="280px" width="100%" />
+      <p-skeleton height="120px" width="100%" styleClass="mt-3" />
+    </div>
+  } @else if (historyError(); as err) {
+    <div class="history-error">
+      <i class="pi pi-exclamation-triangle"></i>
+      {{ err }}
+    </div>
+  } @else if (historyAggregates().length === 0 && historyDrawerOpen()) {
+    <div class="history-empty">
+      No historical data found for this contract on Polygon Starter
+      (2-year window). The contract may be too new or too thinly
+      traded to have daily aggregates.
+    </div>
+  } @else {
+    <div class="history-content">
+      <!-- Candlestick chart -->
+      <div class="history-section">
+        <div class="history-section-title">Daily candles</div>
+        <app-candlestick-chart
+          [data]="historyAggregates()"
+          [ticker]="selectedHistoryContract()?.ticker ?? ''"
+          [darkMode]="true"
+          [chartHeight]="260"
+        />
+      </div>
+
+      <!-- Volume chart -->
+      <div class="history-section">
+        <div class="history-section-title">Daily volume</div>
+        <app-volume-chart
+          [data]="historyAggregates()"
+          [darkMode]="true"
+          [chartHeight]="120"
+        />
+      </div>
+
+      <!-- Summary stats -->
+      @if (historySummary(); as summary) {
+        <div class="history-summary-grid">
+          <div class="history-stat">
+            <span class="history-stat-label">2y high</span>
+            <span class="history-stat-value">${{ summary.high | number:'1.2-2' }}</span>
+          </div>
+          <div class="history-stat">
+            <span class="history-stat-label">2y low</span>
+            <span class="history-stat-value">${{ summary.low | number:'1.2-2' }}</span>
+          </div>
+          <div class="history-stat">
+            <span class="history-stat-label">Avg volume</span>
+            <span class="history-stat-value">{{ summary.avgVolume | number:'1.0-0' }}</span>
+          </div>
+          <div class="history-stat">
+            <span class="history-stat-label">Bars</span>
+            <span class="history-stat-value">{{ summary.totalBars }}</span>
+          </div>
+        </div>
+      }
+    </div>
+  }
+</p-drawer>

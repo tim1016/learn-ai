@@ -5,6 +5,7 @@ import {
 import { FormsModule } from '@angular/forms';
 import { DecimalPipe } from '@angular/common';
 import { firstValueFrom } from 'rxjs';
+import { Drawer } from 'primeng/drawer';
 import { InputText } from 'primeng/inputtext';
 import { Button } from 'primeng/button';
 import { Tooltip } from 'primeng/tooltip';
@@ -17,14 +18,18 @@ import {
   SnapshotUnderlyingResult, SnapshotContractResult,
   StrategyAnalyzeResult, StrategyLegInput, PayoffPoint,
   GreekType, WhatIfScenario, ChartCurveData, GreekCurvePoint,
-  StockTickerSnapshot,
+  StockTickerSnapshot, StockAggregate,
   PricingEngineType, QuantLibPriceResult, QuantLibEngine,
 } from '../../graphql/types';
 import {
   strategyPnlAtPrice, strategyGreekAtPrice, LegParams, GreekName,
 } from '../../utils/black-scholes';
+import { parseOccForDisplay, OccDisplayParts } from '../../utils/occ-ticker';
+import { getMinAllowedDate } from '../../utils/date-validation';
 import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
-import { PayoffChartComponent } from '../options-strategy-lab/payoff-chart/payoff-chart.component';
+import { CandlestickChartComponent } from '../market-data/candlestick-chart/candlestick-chart.component';
+import { VolumeChartComponent } from '../market-data/volume-chart/volume-chart.component';
+import { PayoffChartComponent } from '../../shared/payoff-chart/payoff-chart.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 interface BuilderChainRow {
@@ -38,6 +43,10 @@ interface BuilderChainRow {
   otmCall: boolean;
   otmPut: boolean;
   callDelta: string;
+  // UX-Q2: V/Θ/Γ surfaced when chainDensity === 'greeks'
+  callVega: string;
+  callTheta: string;
+  callGamma: string;
   callPrice: string;
   callPriceNum: number;
   callIv: number;
@@ -45,6 +54,9 @@ interface BuilderChainRow {
   callVolume: string;
   callVolumeBarWidth: number;
   putDelta: string;
+  putVega: string;
+  putTheta: string;
+  putGamma: string;
   putPrice: string;
   putPriceNum: number;
   putIv: number;
@@ -52,6 +64,16 @@ interface BuilderChainRow {
   putVolume: string;
   putVolumeBarWidth: number;
 }
+
+/**
+ * Chain-density mode per UX-Q2 in `docs/architecture/options-ux-design-prompt.md`.
+ * 'quick' shows L · S · Δ · Price · OI · Vol per side (default).
+ * 'greeks' adds V · Θ · Γ between L/S and Δ — preserves the full-Greek
+ * display from the deleted /options-chain page (D9a).
+ * Choice is persisted to localStorage for power-user stickiness.
+ */
+type ChainDensity = 'quick' | 'greeks';
+const CHAIN_DENSITY_STORAGE_KEY = 'sb.chainDensity';
 
 interface LegConfig {
   strike: number;
@@ -63,9 +85,38 @@ interface LegConfig {
   enabled: boolean;
 }
 
+/**
+ * Drill-down drawer state per UX-Q1 (icon-per-side trigger).
+ * Absorbed from the deleted /options-chain page during R0b.
+ */
+interface SelectedHistoryContract {
+  ticker: string;
+  contractType: 'call' | 'put';
+  strikePrice: number;
+  expirationDate: string;
+  snapshot: SnapshotContractResult;
+}
+
 interface StrategyTemplate {
   name: string;
   legs: { optionType: 'call' | 'put'; position: 'long' | 'short'; strikeOffset: number }[];
+}
+
+/**
+ * Format a per-contract dollar extremum for the strategy-summary cards.
+ * Handles three cases the templates would otherwise need to branch on:
+ * `null` (no legs / no analysis), ±∞ (unbounded leg geometry), and
+ * finite numbers. Centralised so the drawer summary and the Analysis
+ * Results card agree on rendering.
+ */
+function formatPayoffExtremum(value: number | null): string {
+  if (value === null) return '—';
+  if (!Number.isFinite(value)) return value > 0 ? '∞' : '−∞';
+  const sign = value < 0 ? '−' : '';
+  return `${sign}$${Math.abs(value).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 @Component({
@@ -73,8 +124,9 @@ interface StrategyTemplate {
   standalone: true,
   imports: [
     FormsModule, DecimalPipe,
-    InputText, Button, Tooltip, Skeleton, SelectButton, Select,
+    Drawer, InputText, Button, Tooltip, Skeleton, SelectButton, Select,
     ExpirationRibbonComponent, PayoffChartComponent,
+    CandlestickChartComponent, VolumeChartComponent,
     PageHeaderComponent,
   ],
   templateUrl: './strategy-builder.component.html',
@@ -127,10 +179,137 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
   readonly strikeRangeOptions = [5, 10, 15, 20, 25, 30];
   showAllStrikes = signal(false);
 
+  // UX-Q2: chain density mode. Default = 'quick' (Δ + Price + OI + Vol);
+  // 'greeks' expands to add V/Θ/Γ. Initial value is read from localStorage
+  // so power users land in their preferred mode every time.
+  chainDensity = signal<ChainDensity>(this.readChainDensityFromStorage());
+
+  private readChainDensityFromStorage(): ChainDensity {
+    if (typeof localStorage === 'undefined') return 'quick';
+    const v = localStorage.getItem(CHAIN_DENSITY_STORAGE_KEY);
+    return v === 'greeks' ? 'greeks' : 'quick';
+  }
+
+  toggleChainDensity(): void {
+    const next: ChainDensity = this.chainDensity() === 'quick' ? 'greeks' : 'quick';
+    this.chainDensity.set(next);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(CHAIN_DENSITY_STORAGE_KEY, next);
+    }
+  }
+
+  // Monotonic token used to invalidate in-flight history fetches when
+  // the user clicks another contract or closes the drawer before the
+  // first request resolves. Without this, the older response can write
+  // back into historyAggregates/historyError/historyLoading and show
+  // the wrong contract's data after fast interactions.
+  private historyFetchToken = 0;
+
+  /**
+   * Open the drill-down drawer for a specific contract. Triggered by
+   * the 📈/📉 icon-per-side buttons outside each chain row (UX-Q1).
+   * Loads the contract's daily aggregates over the maximum allowed
+   * window (Polygon Starter = 2 years).
+   */
+  async openContractHistory(
+    contract: SnapshotContractResult | null,
+    side: 'call' | 'put',
+  ): Promise<void> {
+    if (!contract?.ticker) return;
+
+    const requestToken = ++this.historyFetchToken;
+
+    this.selectedHistoryContract.set({
+      ticker: contract.ticker,
+      contractType: side,
+      strikePrice: contract.strikePrice ?? 0,
+      expirationDate: contract.expirationDate ?? '',
+      snapshot: contract,
+    });
+    this.historyDrawerOpen.set(true);
+    this.historyLoading.set(true);
+    this.historyError.set(null);
+    this.historyAggregates.set([]);
+
+    try {
+      const fromDate = getMinAllowedDate();
+      const toDate = new Date().toISOString().slice(0, 10);
+      const result = await firstValueFrom(
+        this.marketDataService.getOrFetchStockAggregates(
+          contract.ticker, fromDate, toDate, 'day', 1,
+        ),
+      );
+      // Stale-response guard: another openContractHistory or
+      // closeHistoryDrawer ran while this request was in flight.
+      if (requestToken !== this.historyFetchToken) return;
+      this.historyAggregates.set(result.aggregates ?? []);
+    } catch (err) {
+      if (requestToken !== this.historyFetchToken) return;
+      this.historyError.set(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (requestToken === this.historyFetchToken) {
+        this.historyLoading.set(false);
+      }
+    }
+  }
+
+  closeHistoryDrawer(): void {
+    // Bump the token so any in-flight openContractHistory recognises
+    // its response as stale and skips the writes.
+    this.historyFetchToken++;
+    this.historyDrawerOpen.set(false);
+    this.selectedHistoryContract.set(null);
+    this.historyAggregates.set([]);
+    this.historyError.set(null);
+  }
+
+  /** PrimeNG Drawer two-way visibility binding handler. */
+  onHistoryDrawerVisibleChange(visible: boolean): void {
+    if (!visible) this.closeHistoryDrawer();
+    else this.historyDrawerOpen.set(true);
+  }
+
   // ── Strategy State ────────────────────────────────────────
   legs = signal<LegConfig[]>([]);
   strategyType = signal<string>('custom');
   drawerOpen = signal(false);
+
+  // ── Drill-down State (UX-Q1, R0b) ─────────────────────────
+  // The historical drill-down absorbed from the deleted /options-chain
+  // page. Triggered by the icon-per-side button outside each chain row
+  // (📈 for calls, leftmost cell; 📉 for puts, rightmost cell). The
+  // drawer hosts a 2-year candlestick + volume chart for the selected
+  // contract.
+  historyDrawerOpen = signal(false);
+  selectedHistoryContract = signal<SelectedHistoryContract | null>(null);
+  historyLoading = signal(false);
+  historyAggregates = signal<StockAggregate[]>([]);
+  historyError = signal<string | null>(null);
+
+  parsedHistoryTicker = computed<OccDisplayParts | null>(() => {
+    const sc = this.selectedHistoryContract();
+    if (!sc?.ticker) return null;
+    return parseOccForDisplay(sc.ticker);
+  });
+
+  historySummary = computed(() => {
+    const aggs = this.historyAggregates();
+    if (aggs.length === 0) return null;
+    let high = -Infinity;
+    let low = Infinity;
+    let volSum = 0;
+    for (const a of aggs) {
+      if (a.high > high) high = a.high;
+      if (a.low < low) low = a.low;
+      volSum += a.volume;
+    }
+    return {
+      high,
+      low,
+      avgVolume: Math.round(volSum / aggs.length),
+      totalBars: aggs.length,
+    };
+  });
 
   // ── Analysis ──────────────────────────────────────────────
   analysisResult = signal<StrategyAnalyzeResult | null>(null);
@@ -386,6 +565,9 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
         otmCall: price > 0 && strike > price && strike !== atmStrike,
         otmPut: price > 0 && strike < price && strike !== atmStrike,
         callDelta: this.fmtGreek(call?.greeks?.delta ?? null),
+        callVega: this.fmtGreek(call?.greeks?.vega ?? null),
+        callTheta: this.fmtGreek(call?.greeks?.theta ?? null),
+        callGamma: this.fmtGreek(call?.greeks?.gamma ?? null),
         callPrice: this.resolvePrice(call),
         callPriceNum: this.resolvePremiumNum(call),
         callIv: call?.impliedVolatility ?? 0,
@@ -393,6 +575,9 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
         callVolume: this.fmtNum(call?.day?.volume ?? null),
         callVolumeBarWidth: this.barWidth(call?.day?.volume ?? null, maxCallVol),
         putDelta: this.fmtGreek(put?.greeks?.delta ?? null),
+        putVega: this.fmtGreek(put?.greeks?.vega ?? null),
+        putTheta: this.fmtGreek(put?.greeks?.theta ?? null),
+        putGamma: this.fmtGreek(put?.greeks?.gamma ?? null),
         putPrice: this.resolvePrice(put),
         putPriceNum: this.resolvePremiumNum(put),
         putIv: put?.impliedVolatility ?? 0,
@@ -489,6 +674,18 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
     return [...gridSet].sort((a, b) => a - b);
   });
 
+  /**
+   * UX banner trigger — when the user has built legs but the selected
+   * expiration leaves zero or negative time-to-expiry, the
+   * currentPnlCurve, greekCurve, and whatIfCurves are all empty by
+   * design (BS Greeks degenerate at T=0: Δ becomes a step function,
+   * Γ blows up, Θ/V collapse). Surface that to the user explicitly
+   * instead of silently dropping the forward-looking curves.
+   */
+  noForwardCurves = computed<boolean>(() =>
+    this.legs().some(l => l.enabled) && this.timeToExpiry() <= 0,
+  );
+
   livePayoffCurve = computed<PayoffPoint[]>(() => {
     const currentLegs = this.legs().filter(l => l.enabled);
     const grid = this.priceGrid();
@@ -576,16 +773,79 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
     }));
   });
 
-  liveMaxProfit = computed(() => {
-    const curve = this.livePayoffCurve();
-    if (curve.length === 0) return null;
-    return Math.max(...curve.map(p => p.pnl));
+  /**
+   * Right-tail unboundedness flags derived analytically from the leg
+   * structure. Puts can't produce unbounded P&L because the underlying
+   * is bounded below by 0; only net call exposure does. A net long-call
+   * position (sum of long-call quantities > sum of short-call) → max
+   * profit unbounded as S → ∞; the inverse → max loss unbounded.
+   *
+   * This replaces the old behaviour of taking max/min of the chart-grid
+   * curve, which silently capped unbounded payoffs at the right edge of
+   * the visible window (e.g. a long call would report a finite "Max
+   * Profit" equal to its P&L at spot × 1.05 instead of the textbook ∞).
+   */
+  payoffTailFlags = computed<{ profitUnbounded: boolean; lossUnbounded: boolean }>(() => {
+    let netCallQty = 0;
+    for (const leg of this.legs()) {
+      if (!leg.enabled || leg.optionType !== 'call') continue;
+      netCallQty += (leg.position === 'long' ? 1 : -1) * leg.quantity;
+    }
+    return {
+      profitUnbounded: netCallQty > 0,
+      lossUnbounded: netCallQty < 0,
+    };
   });
 
-  liveMaxLoss = computed(() => {
+  /**
+   * Max profit per contract (= per-share max × 100 contract multiplier),
+   * `Infinity` if leg geometry makes the upside unbounded, or `null`
+   * when no legs are enabled. Multiplier matches `netCost`, so all four
+   * summary values in the drawer share consistent dollar units.
+   */
+  liveMaxProfit = computed<number | null>(() => {
     const curve = this.livePayoffCurve();
     if (curve.length === 0) return null;
-    return Math.min(...curve.map(p => p.pnl));
+    if (this.payoffTailFlags().profitUnbounded) return Number.POSITIVE_INFINITY;
+    return Math.max(...curve.map(p => p.pnl)) * 100;
+  });
+
+  /** Symmetric counterpart of {@link liveMaxProfit}. */
+  liveMaxLoss = computed<number | null>(() => {
+    const curve = this.livePayoffCurve();
+    if (curve.length === 0) return null;
+    if (this.payoffTailFlags().lossUnbounded) return Number.NEGATIVE_INFINITY;
+    return Math.min(...curve.map(p => p.pnl)) * 100;
+  });
+
+  /**
+   * Display strings for the drawer + Analysis Results cards. Templates
+   * call into these instead of formatting in-place, because the value
+   * can be a finite number, ±∞ (unbounded leg geometry), or null
+   * (no legs / missing analysis).
+   */
+  liveMaxProfitDisplay = computed<string>(() => formatPayoffExtremum(this.liveMaxProfit()));
+  liveMaxLossDisplay = computed<string>(() => formatPayoffExtremum(this.liveMaxLoss()));
+
+  /**
+   * Analysis Results card uses the backend per-share values (× 100 for
+   * per-contract dollars), but still defers to leg-derived
+   * unboundedness flags — `analyzeOptionsStrategy` returns a finite
+   * grid-clamped value for unbounded payoffs the same way the live
+   * curve does, so we override to ∞ when the legs say so.
+   */
+  analysisMaxProfitDisplay = computed<string>(() => {
+    const r = this.analysisResult();
+    if (!r) return '—';
+    if (this.payoffTailFlags().profitUnbounded) return '∞';
+    return formatPayoffExtremum(r.maxProfit * 100);
+  });
+
+  analysisMaxLossDisplay = computed<string>(() => {
+    const r = this.analysisResult();
+    if (!r) return '—';
+    if (this.payoffTailFlags().lossUnbounded) return '−∞';
+    return formatPayoffExtremum(r.maxLoss * 100);
   });
 
   liveGreeks = computed(() => {

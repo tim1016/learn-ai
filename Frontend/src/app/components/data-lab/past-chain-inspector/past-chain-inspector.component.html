@@ -1,0 +1,249 @@
+@let s = state();
+
+<div class="past-chain-card" [class.is-expanded]="s === 'expanded'">
+
+  <!-- Card header (always visible) -->
+  <header class="card-header">
+    <div class="card-header-text">
+      <span class="eyebrow">Past chain inspector</span>
+      <span class="card-subtitle">
+        Preview the contracts a bundle run will fetch on
+        <code>{{ analysisDate() || '—' }}</code> for
+        <code>{{ ticker() || '—' }}</code>.
+      </span>
+    </div>
+
+    @if (s === 'collapsed') {
+      <p-button
+        label="Preview chain on this date"
+        icon="pi pi-search"
+        size="small"
+        severity="secondary"
+        (onClick)="preview()"
+        [disabled]="!ticker() || !analysisDate()"
+      />
+    } @else if (s === 'expanded') {
+      <p-button
+        label="Collapse"
+        icon="pi pi-chevron-up"
+        size="small"
+        severity="secondary"
+        (onClick)="collapse()"
+      />
+    }
+  </header>
+
+  <!-- Inline config row -->
+  <div class="card-config">
+    <label class="config-field">
+      <span class="config-label">Strikes per side</span>
+      <select
+        [ngModel]="numStrikes()"
+        (ngModelChange)="numStrikes.set(+$event)"
+        [disabled]="s === 'loading'"
+      >
+        @for (n of [3, 5, 7, 10, 15]; track n) {
+          <option [value]="n">±{{ n }}</option>
+        }
+      </select>
+    </label>
+
+    <label class="config-field">
+      <span class="config-label">ATM reference</span>
+      <select
+        [ngModel]="atmMethod()"
+        (ngModelChange)="atmMethod.set($event)"
+        [disabled]="s === 'loading'"
+      >
+        <option value="open">Open price</option>
+        <option value="prevClose">Previous close</option>
+      </select>
+    </label>
+  </div>
+
+  <!-- Error -->
+  @if (error(); as err) {
+    <div class="card-error">
+      <i class="pi pi-exclamation-triangle"></i>
+      {{ err }}
+    </div>
+  }
+
+  <!-- Loading state -->
+  @if (s === 'loading') {
+    <div class="card-loading">
+      <div class="loading-message">
+        <i class="pi pi-spin pi-spinner"></i>
+        <span>{{ loadingMessage() }}</span>
+      </div>
+
+      <!-- Skeleton chain — hints at the shape that's about to render. -->
+      <div class="skeleton-chain">
+        @for (i of [0, 1, 2, 3, 4, 5, 6, 7, 8]; track i) {
+          <div class="skeleton-row">
+            <p-skeleton width="100%" height="22px" />
+          </div>
+        }
+      </div>
+    </div>
+  }
+
+  <!-- Expanded state -->
+  @if (s === 'expanded' && result(); as r) {
+    <div class="card-summary">
+      <div class="summary-stat">
+        <span class="summary-label">ATM strike</span>
+        <span class="summary-value">{{ r.atmStrike }}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-label">{{ atmMethod() === 'open' ? 'Open' : 'Prev close' }}</span>
+        <span class="summary-value">${{ formatPrice(r.atmPrice) }}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-label">Strikes returned</span>
+        <span class="summary-value">{{ uniqueStrikes().length }}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-label">Strikes scanned</span>
+        <span class="summary-value">{{ r.scanResults.length }}</span>
+      </div>
+    </div>
+
+    <!-- Calls / Strike / Puts grid -->
+    <div class="chain-table-wrap">
+      <table class="past-chain-table">
+        <thead>
+          <tr class="cat-row">
+            <th colspan="5" class="cat-call">Calls</th>
+            <th class="cat-strike">Strike</th>
+            <th colspan="5" class="cat-put">Puts</th>
+          </tr>
+          <tr class="head-row">
+            <th>Hist</th>
+            <th>Prev close</th>
+            <th>Open</th>
+            <th>Close</th>
+            <th>Δ %</th>
+            <th class="cat-strike"></th>
+            <th>Δ %</th>
+            <th>Close</th>
+            <th>Open</th>
+            <th>Prev close</th>
+            <th>Hist</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (strike of uniqueStrikes(); track strike) {
+            @let call = callByStrike().get(strike);
+            @let put  = putByStrike().get(strike);
+            <tr [class.row-atm]="isAtm(strike)">
+              <!-- Call drill icon -->
+              <td class="drill">
+                @if (call?.dailyBar) {
+                  <button
+                    class="drill-btn"
+                    pTooltip="View call minute-detail"
+                    tooltipPosition="top"
+                    (click)="openDetail(call!.optionTicker)"
+                  >📈</button>
+                }
+              </td>
+              <td>{{ formatPrice(call?.prevDayClose) }}</td>
+              <td>{{ formatPrice(call?.dailyBar?.open) }}</td>
+              <td class="price">{{ formatPrice(call?.dailyBar?.close) }}</td>
+              <td
+                [class.text-emerald-400]="(call?.changePercent ?? 0) > 0"
+                [class.text-red-400]="(call?.changePercent ?? 0) < 0"
+              >{{ formatChangePct(call?.changePercent ?? null) }}</td>
+
+              <td class="strike">
+                {{ strike }}
+                @if (isAtm(strike)) { <div class="atm-badge">ATM ${{ formatPrice(r.atmPrice) }}</div> }
+              </td>
+
+              <td
+                [class.text-emerald-400]="(put?.changePercent ?? 0) > 0"
+                [class.text-red-400]="(put?.changePercent ?? 0) < 0"
+              >{{ formatChangePct(put?.changePercent ?? null) }}</td>
+              <td class="price">{{ formatPrice(put?.dailyBar?.close) }}</td>
+              <td>{{ formatPrice(put?.dailyBar?.open) }}</td>
+              <td>{{ formatPrice(put?.prevDayClose) }}</td>
+              <!-- Put drill icon -->
+              <td class="drill">
+                @if (put?.dailyBar) {
+                  <button
+                    class="drill-btn"
+                    pTooltip="View put minute-detail"
+                    tooltipPosition="top"
+                    (click)="openDetail(put!.optionTicker)"
+                  >📉</button>
+                }
+              </td>
+            </tr>
+          }
+          @if (uniqueStrikes().length === 0) {
+            <tr><td colspan="11" class="empty-row">
+              No strikes had data on {{ analysisDate() }}. Try a wider scan
+              or a different date.
+            </td></tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Scan-results audit table (off by default per UX-Q3). -->
+    <div class="scan-details">
+      <button class="scan-toggle" (click)="toggleScanDetails()">
+        {{ showScanDetails() ? '▾' : '▸' }}
+        Show scan details ({{ selectedScanCount() }} of {{ r.scanResults.length }} strikes selected)
+      </button>
+      @if (showScanDetails()) {
+        <table class="scan-table">
+          <thead>
+            <tr>
+              <th>Strike</th>
+              <th>Call data</th>
+              <th>Put data</th>
+              <th>Selected</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (sr of r.scanResults; track sr.strikePrice) {
+              <tr [class.selected]="sr.selected">
+                <td>{{ sr.strikePrice }}</td>
+                <td>{{ sr.callHasData ? '✓' : '—' }}</td>
+                <td>{{ sr.putHasData ? '✓' : '—' }}</td>
+                <td>{{ sr.selected ? '✓' : '—' }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </div>
+  }
+</div>
+
+<!--
+  UX-Q3: per-contract minute drill-down lives in a MODAL (not a nested
+  drawer). Focused, dismissable, doesn't disturb the data-lab config.
+-->
+<p-dialog
+  [visible]="detailModalOpen()"
+  (visibleChange)="onDetailVisibleChange($event)"
+  [modal]="true"
+  [closable]="true"
+  [dismissableMask]="true"
+  [style]="{ width: '46rem' }"
+  [header]="detailTicker() ?? 'Contract minute detail'"
+>
+  @if (detailLoading()) {
+    <p-skeleton width="100%" height="220px" />
+  } @else if (detailBars().length === 0) {
+    <div class="detail-empty">No minute bars for this contract on {{ analysisDate() }}.</div>
+  } @else {
+    <div class="detail-charts">
+      <app-line-chart [data]="detailBars()" [height]="220" [timeVisible]="true" />
+      <app-volume-chart [data]="detailBars()" [chartHeight]="100" [darkMode]="true" [timeVisible]="true" />
+    </div>
+  }
+</p-dialog>
