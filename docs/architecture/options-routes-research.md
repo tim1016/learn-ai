@@ -1348,7 +1348,10 @@ Legacy code removed in the same PR per [§7 D7](#7-decisions-log),
 unless the verification protocol [§8.1](#81-pre-deletion-verification-protocol)
 applies (R0a's redirect carries a 7-day watch period; R0b, R1 will too).
 
-**Exit criterion (target):** R0b, R1, R8 land. **(Today: R5 + R0a only.)**
+**Exit criterion (target):** R0b, R1, R8 land. **(Status as of
+2026-04-29: R5, R0a, R0b (UX-Q1 + UX-Q2), and R1 have all shipped;
+remaining: R8 sovereignty migration and R0b's UX-Q4 layout
+rework.)**
 
 ### Phase 4 — Orphan removal — DROPPED
 
@@ -1441,8 +1444,11 @@ authored with the full per-phase ledger, deferred-work rationale,
 duplication delta (baseline vs measured-after), and file-change
 inventory. The UX design prompt
 ([`docs/architecture/options-ux-design-prompt.md`](options-ux-design-prompt.md))
-is seeded with UX-Q1 through UX-Q4 and ready to paste into Claude
-Design when R0b / R1 are unblocked.
+is the D11 accumulator with all four UX questions answered by the
+2026-04-29 Claude Design pass; UX-Q1, UX-Q2, and UX-Q3 have all
+been implemented (R0b drill-down, R0b chain density, R1
+past-chain inspector). UX-Q4 (page layout) remains the only
+unimplemented design recommendation.
 
 
 

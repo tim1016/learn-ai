@@ -11,7 +11,7 @@
 >
 > **Last revised:** 2026-04-29. Reflects work shipped through Phase 6
 > of the cleanup; Phases 4.5, 7, and parts of 3 + 5 are explicitly
-> deferred and tracked in [§ Deferred work](#-deferred-work-and-rationale)
+> deferred and tracked in [§ Deferred work](#deferred-work-and-rationale)
 > below.
 
 ---
@@ -281,45 +281,27 @@ This document.
 These items were *not* completed in the 2026-04-29 effort and are
 tracked here so the next session has a clean starting point.
 
-### R0b — `/options-chain` deletion + drill-down migration
+### R0b — `/options-chain` deletion + drill-down migration — DONE
 
-**Why deferred.** Adding 6 Greek columns (per D9a) and a drill-down
-drawer to `/strategy-builder`'s already-dense chain table is a
-substantive UX change to a working production page. The two relevant
-UX questions are flagged in
-[`options-ux-design-prompt.md`](options-ux-design-prompt.md):
+UX-Q1 (drill-down trigger) and UX-Q2 (chain-table density) were
+locked by the 2026-04-29 Claude Design pass and shipped earlier
+the same day. UX-Q4 (page layout) remains explicitly deferred —
+see Phase 3 ledger row "R0b — UX-Q4". Status:
 
-- **UX-Q1** — drill-down trigger ambiguity (click for leg vs click
-  for history?)
-- **UX-Q2** — chain-table density under D9a
-- **UX-Q4** — overall strategy-builder page layout
+- **UX-Q2 chain density toggle** — landed (commit `5729589`).
+- **UX-Q1 drill-down icon-per-side + drawer migration** — landed
+  (commit `51e604f`); `/options-chain` deleted, redirect to
+  `/strategy-builder` in place.
+- **UX-Q4 layout rework** — still deferred; tracked in the Phase 3
+  ledger.
 
-Per [§7 D11](options-routes-research.md#7-decisions-log), these UX
-questions accumulate to a Claude Design pass rather than being
-guessed at by the implementing agent. Doing the migration without
-that pass would force the implementer to make load-bearing UX
-decisions on a working page; the cost of getting them wrong (worse
-UX than the current two-page state) outweighs the route-count
-savings.
+### R1 — `/options-history` port to `/data-lab` — DONE
 
-**What's needed to unblock.** Either (a) the owner runs the
-existing UX prompt against Claude Design and locks the layout
-choices for UX-Q1/Q2/Q4, or (b) the owner waives the UX gate and
-authorizes a working-default mechanical migration to land.
-
-### R1 — `/options-history` port to `/data-lab`
-
-**Why deferred.** Same gating reason — UX-Q3 (past-chain inspector
-card visual on `/data-lab`) is in the design prompt. Plus the port
-is non-trivial: ~407-line component split into a new
-`past-chain.service.ts` + a new `past-chain-inspector` sub-component,
-spec migration, mounted into a card on the existing `/data-lab`
-options-companion config row (D10a). Risk of regressing the existing
-`/data-lab` workflow without careful testing.
-
-**What's needed to unblock.** UX-Q3 design recommendation, plus a
-focused session for the service extraction + sub-component
-authoring.
+UX-Q3 was answered by the same Claude Design pass; port shipped
+in commit `076e802`. `past-chain.service.ts` extracted; new
+`past-chain-inspector` sub-component mounted on the data-lab
+options-companion config row; redirect from `/options-history`
+in place; +14 spec tests.
 
 ### R8 — Server-side BS sovereignty migration
 
@@ -461,8 +443,12 @@ Frontend/src/app/components/research-lab/options-math-docs/  # entire directory 
 → 23/23 passing.
 
 **Frontend:** `podman exec my-frontend npx ng test --watch=false`
-→ 47 test files / 511 tests passing (was 484 pre-effort; +27
-covers the new specs and the OCC utility).
+→ 531 tests passing (was 484 pre-effort; +47 covers the
+Phase 2 backfill, the OCC utility, the UX-Q2 toggle persistence
+spec, and the UX-Q1 drill-down + R1 past-chain inspector specs).
+The 511-tests figure recorded at the Phase 2 verification step
+above is the snapshot at that point in time; UX-Q2, UX-Q1, and
+R1 each added more specs in subsequent phases.
 
 **Build:** `podman exec my-frontend npx ng build --configuration=development`
 clean.
