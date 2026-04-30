@@ -298,14 +298,23 @@
 }
 
 // ── Sub-panels ──
+// Visible breathing room between the main candle chart and the indicator
+// stack, plus between adjacent indicator panels. Without margin the
+// panels look glued together and a single dropped pixel of border is
+// the only separator.
 .sub-panels-host {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
 }
 
 :host ::ng-deep {
   .sub-panel {
     position: relative;
     border-top: 1px solid $border;
+    padding-top: 8px;
   }
 
   .sub-panel-label {

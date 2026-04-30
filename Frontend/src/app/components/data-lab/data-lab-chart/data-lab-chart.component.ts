@@ -454,7 +454,11 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
       scaleMargins: { top: 0.8, bottom: 0 },
     });
 
-    // Sync sub-panels on visible range change
+    // Sync sub-panels on visible range change. The reverse direction
+    // (sub-panel pan/zoom → main chart) is wired in `addSubPanel`,
+    // because each sub-panel's own subscription has to be attached at
+    // creation time. The shared `_isSyncing` flag guards the loop
+    // either way.
     this.mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (this._isSyncing || !range) return;
       this._isSyncing = true;
@@ -771,6 +775,26 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     }
 
     this.subPanels.push({ id: panelId, container, chart, seriesMap });
+
+    // Reverse-direction sync: when the user pans or zooms an indicator
+    // panel, push the new range back into the main chart and into every
+    // *other* sub-panel. Without this every panel could drift to its
+    // own x-range — the main chart's subscription only fires when the
+    // main chart itself changes, so a sub-panel scroll wouldn't reach
+    // the others. The `_isSyncing` guard prevents the broadcast from
+    // looping back into us.
+    chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (this._isSyncing || !range || !this.mainChart) return;
+      this._isSyncing = true;
+      requestAnimationFrame(() => {
+        this.mainChart?.timeScale().setVisibleLogicalRange(range);
+        for (const other of this.subPanels) {
+          if (other.id === panelId) continue;
+          other.chart.timeScale().setVisibleLogicalRange(range);
+        }
+        this._isSyncing = false;
+      });
+    });
   }
 
   private removeSubPanel(panelId: string): void {
