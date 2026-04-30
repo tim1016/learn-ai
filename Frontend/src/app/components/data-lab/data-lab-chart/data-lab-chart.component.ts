@@ -453,6 +453,11 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
       },
       rightPriceScale: {
         borderColor: DARK.border,
+        // Pin a fixed minimum width so every sub-panel that uses the same
+        // value lines its drawing area up at the exact same pixel column,
+        // making the y-grid lines across the stack share a column instead
+        // of drifting with each axis-label width.
+        minimumWidth: 64,
       },
     });
 
@@ -474,7 +479,11 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
       scaleMargins: { top: 0.8, bottom: 0 },
     });
 
-    // Sync sub-panels on visible range change
+    // Sync sub-panels on visible range change. The reverse direction
+    // (sub-panel pan/zoom → main chart) is wired in `addSubPanel`,
+    // because each sub-panel's own subscription has to be attached at
+    // creation time. The shared `_isSyncing` flag guards the loop
+    // either way.
     this.mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (this._isSyncing || !range) return;
       this._isSyncing = true;
@@ -634,12 +643,13 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     panelId: string,
     indicators: ChartIndicatorResult[]
   ): void {
-    // Create container
+    // Create container. Vertical spacing between panels is handled by the
+    // host's flex `gap` — no inline margin here, otherwise the gap would
+    // double up with the SCSS rule and look uneven.
     const container = document.createElement('div');
     container.className = 'sub-panel';
     container.style.width = '100%';
-    container.style.height = '150px';
-    container.style.marginTop = '4px';
+    container.style.height = '200px';
     container.style.position = 'relative';
 
     // Panel label
@@ -659,7 +669,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
 
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: 150,
+      height: 200,
       layout: {
         background: { color: DARK.bg },
         textColor: DARK.text,
@@ -681,6 +691,9 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
       },
       rightPriceScale: {
         borderColor: DARK.border,
+        // Same minimumWidth as the main chart so the drawing areas line
+        // up — the y-grid lines now share an x-column across the stack.
+        minimumWidth: 64,
       },
     });
 
@@ -791,6 +804,26 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     }
 
     this.subPanels.push({ id: panelId, container, chart, seriesMap });
+
+    // Reverse-direction sync: when the user pans or zooms an indicator
+    // panel, push the new range back into the main chart and into every
+    // *other* sub-panel. Without this every panel could drift to its
+    // own x-range — the main chart's subscription only fires when the
+    // main chart itself changes, so a sub-panel scroll wouldn't reach
+    // the others. The `_isSyncing` guard prevents the broadcast from
+    // looping back into us.
+    chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (this._isSyncing || !range || !this.mainChart) return;
+      this._isSyncing = true;
+      requestAnimationFrame(() => {
+        this.mainChart?.timeScale().setVisibleLogicalRange(range);
+        for (const other of this.subPanels) {
+          if (other.id === panelId) continue;
+          other.chart.timeScale().setVisibleLogicalRange(range);
+        }
+        this._isSyncing = false;
+      });
+    });
   }
 
   private removeSubPanel(panelId: string): void {
