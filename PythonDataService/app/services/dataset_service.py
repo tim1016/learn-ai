@@ -466,23 +466,30 @@ def forward_fill_gaps(
     The grid frequency must match the requested ``(timespan, multiplier)`` —
     otherwise the merge would expand higher-resolution bars onto a finer grid
     and silently reshape the data (e.g. 15-minute bars expanded to 1-minute
-    rows via ffill). For day/week/month resolutions there is at most one bar
-    per groupby-date group, so within-day forward-fill is meaningless and
-    we return the frame unchanged.
+    rows via ffill).
+
+    Only minute-resolution bars participate in forward-fill: those are the
+    ones where Polygon legitimately omits empty intra-session minutes and a
+    continuous grid is useful for indicator math. Hour/day/week/month bars
+    come back from Polygon already aligned to their own boundaries (top of
+    the hour, top of the day, etc.) which do not match the RTH session
+    start of 09:30 ET; building a synthetic grid for them would produce
+    timestamps that never line up with Polygon's bars, the merge would
+    return NaN for every row, and the resulting CSV looks empty. Return
+    the frame unchanged in that case.
     """
     if df.empty:
         return df
 
-    if timespan == "minute":
-        freq = f"{max(1, multiplier)}min"
-        bar_delta = timedelta(minutes=max(1, multiplier))
-    elif timespan == "hour":
-        freq = f"{max(1, multiplier)}h"
-        bar_delta = timedelta(hours=max(1, multiplier))
-    else:
-        # day/week/month/quarter/year: one bar per day-group, nothing to fill.
-        logger.info(f"[FILL] Skipping forward_fill for timespan={timespan} (no within-day gaps to fill)")
+    if timespan != "minute":
+        logger.info(
+            f"[FILL] Skipping forward_fill for timespan={timespan} — Polygon returns "
+            f"these bars pre-aligned and an RTH-anchored grid would mis-align with them."
+        )
         return df
+
+    freq = f"{max(1, multiplier)}min"
+    bar_delta = timedelta(minutes=max(1, multiplier))
 
     dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     dt_et = dt_utc.dt.tz_convert(_ET)

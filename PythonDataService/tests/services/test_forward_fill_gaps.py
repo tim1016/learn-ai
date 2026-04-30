@@ -90,18 +90,25 @@ def test_1m_bars_unchanged_behavior():
     assert deltas_ms == [60 * 1000]
 
 
-@pytest.mark.parametrize("timespan", ["day", "week", "month"])
-def test_day_and_above_returns_frame_unchanged(timespan: str):
-    """Day/week/month resolutions: at most one bar per groupby-date group,
-    so within-day forward-fill is a no-op. The function must short-circuit
-    instead of building a grid that doesn't map cleanly to those resolutions."""
+@pytest.mark.parametrize("timespan", ["hour", "day", "week", "month"])
+def test_non_minute_returns_frame_unchanged(timespan: str):
+    """Hour/day/week/month resolutions: Polygon returns these bars
+    pre-aligned to their own boundaries (top of the hour, etc.) which do
+    not match the RTH session start of 09:30 ET. Building a synthetic
+    grid for them would produce timestamps that never overlap with the
+    real bars, the merge would return all-NaN, and the resulting CSV
+    would have empty rows for every slot — exactly the bug that surfaced
+    when a 2-year hourly RTH dataset came back with 3006 timestamp-only
+    rows. The function must short-circuit and pass real bars through."""
     bars = [
-        _bar(_ms(2026, 1, 5, 9, 30), close=100.0),
-        _bar(_ms(2026, 1, 6, 9, 30), close=101.0),
+        _bar(_ms(2026, 1, 5, 9, 0), close=100.0),    # Polygon hourly aligns to :00
+        _bar(_ms(2026, 1, 5, 10, 0), close=100.5),
+        _bar(_ms(2026, 1, 6, 9, 0), close=101.0),
     ]
     df = pd.DataFrame(bars)
 
     out = forward_fill_gaps(df, session="rth", timespan=timespan, multiplier=1)
 
-    assert len(out) == 2
-    assert out["close"].tolist() == [100.0, 101.0]
+    # Must return the input frame unchanged — every row keeps its real OHLC.
+    assert len(out) == 3
+    assert out["close"].tolist() == [100.0, 100.5, 101.0]
