@@ -229,21 +229,30 @@ export class PayoffChartComponent implements OnDestroy {
 
     // Add or update series for enabled scenarios.
     for (const scenario of scenarios) {
+      // ChartCurveData.borderDash defaults to [6,3] from the parent;
+      // lightweight-charts only exposes preset LineStyle values, so map
+      // the presence of a dash array to LineStyle.Dashed.
+      const lineStyle = (scenario.borderDash && scenario.borderDash.length > 0)
+        ? LineStyle.Dashed
+        : LineStyle.Solid;
+
       let series = this.whatIfSeries.get(scenario.label);
       if (!series) {
         series = this.chart.addSeries(LineSeries, {
           color: scenario.color,
           lineWidth: 2,
-          // ChartCurveData.borderDash defaults to [6,3] from the parent;
-          // lightweight-charts only exposes preset LineStyle values, so
-          // map the presence of a dash array to LineStyle.Dashed.
-          lineStyle: (scenario.borderDash && scenario.borderDash.length > 0)
-            ? LineStyle.Dashed
-            : LineStyle.Solid,
+          lineStyle,
           crosshairMarkerVisible: true,
           crosshairMarkerRadius: 3,
         });
         this.whatIfSeries.set(scenario.label, series);
+      } else {
+        // Reapply style on every sync so the line picks up changes when
+        // the parent emits a new scenario object that keeps the same
+        // label but flips color/borderDash (e.g. theme toggle, user
+        // recolor). Without this, the series keeps its first-render
+        // style indefinitely.
+        series.applyOptions({ color: scenario.color, lineStyle });
       }
       series.setData(
         scenario.points.map(p => ({ time: p.price as UTCTimestamp, value: p.pnl })),
@@ -284,16 +293,25 @@ export class PayoffChartComponent implements OnDestroy {
     }
 
     const fmt = (v: number) => `${v >= 0 ? '+' : ''}$${v.toFixed(2)}`;
-    let html = `<div class="tt-title">Underlying: $${price.toFixed(2)}</div>`;
+
+    // Build the tooltip via DOM nodes rather than innerHTML to avoid
+    // XSS — what-if `label` and `color` originate from
+    // `whatIfCurves` (caller-supplied) and would otherwise flow into
+    // the parsed HTML string.
+    tip.replaceChildren();
+    tip.appendChild(this.buildTooltipTitle(`Underlying: $${price.toFixed(2)}`));
+
     if (expVal != null) {
-      html += `<div class="tt-row"><span class="tt-dot tt-exp"></span>Exp P&L: ${fmt(expVal)}</div>`;
+      tip.appendChild(this.buildTooltipRow(['tt-dot', 'tt-exp'], `Exp P&L: ${fmt(expVal)}`));
     }
     if (currVal != null) {
-      html += `<div class="tt-row"><span class="tt-dot tt-curr"></span>Cur P&L: ${fmt(currVal)}</div>`;
+      tip.appendChild(this.buildTooltipRow(['tt-dot', 'tt-curr'], `Cur P&L: ${fmt(currVal)}`));
     }
     if (greekVal != null) {
       const greekLabel = this.greekLabels[this.selectedGreek()] ?? this.selectedGreek();
-      html += `<div class="tt-row"><span class="tt-dot tt-greek"></span>${greekLabel}: ${greekVal.toFixed(4)}</div>`;
+      tip.appendChild(
+        this.buildTooltipRow(['tt-dot', 'tt-greek'], `${greekLabel}: ${greekVal.toFixed(4)}`),
+      );
     }
 
     // What-if scenario rows — one per enabled series
@@ -302,11 +320,11 @@ export class PayoffChartComponent implements OnDestroy {
       const v = raw?.value;
       if (v == null) continue;
       const scenario = this.whatIfCurves().find(s => s.label === label);
-      const color = scenario?.color ?? '#9ca3af';
-      html += `<div class="tt-row"><span class="tt-dot" style="background:${color}"></span>${label}: ${fmt(v)}</div>`;
+      tip.appendChild(
+        this.buildTooltipRow(['tt-dot'], `${label}: ${fmt(v)}`, scenario?.color),
+      );
     }
 
-    tip.innerHTML = html;
     tip.style.display = 'block';
 
     const box = this.chartEl()?.nativeElement;
@@ -316,6 +334,34 @@ export class PayoffChartComponent implements OnDestroy {
       ? `${param.point.x - tw - 12}px`
       : `${param.point.x + 12}px`;
     tip.style.top = `${Math.max(param.point.y - 20, 0)}px`;
+  }
+
+  private buildTooltipTitle(text: string): HTMLDivElement {
+    const div = document.createElement('div');
+    div.className = 'tt-title';
+    div.textContent = text;
+    return div;
+  }
+
+  private buildTooltipRow(
+    dotClasses: string[],
+    text: string,
+    dotColor?: string,
+  ): HTMLDivElement {
+    const row = document.createElement('div');
+    row.className = 'tt-row';
+    const dot = document.createElement('span');
+    dot.classList.add(...dotClasses);
+    if (dotColor) {
+      // setProperty (vs string concat into a style attribute) treats
+      // the value as a CSS token, not a parsed style declaration —
+      // an attacker-supplied "red; background:url(...)" can't escape
+      // the `background-color` property.
+      dot.style.setProperty('background-color', dotColor);
+    }
+    row.appendChild(dot);
+    row.appendChild(document.createTextNode(text));
+    return row;
   }
 
   // ── Cleanup ────────────────────────────────────────────────────────
