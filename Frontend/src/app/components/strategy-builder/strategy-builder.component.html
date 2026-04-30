@@ -201,6 +201,8 @@
                       type="button"
                       class="density-toggle"
                       [class.is-greeks]="chainDensity() === 'greeks'"
+                      [attr.aria-pressed]="chainDensity() === 'greeks'"
+                      aria-label="Toggle full Greeks columns"
                       pTooltip="Toggle full Greeks (V/Θ/Γ) per row"
                       tooltipPosition="top"
                       (click)="toggleChainDensity()"
@@ -257,6 +259,7 @@
                       type="button"
                       class="drill-icon"
                       [disabled]="!row.call"
+                      aria-label="View call contract history"
                       pTooltip="View call history"
                       tooltipPosition="top"
                       (click)="openContractHistory(row.call, 'call')"
@@ -347,6 +350,7 @@
                       type="button"
                       class="drill-icon"
                       [disabled]="!row.put"
+                      aria-label="View put contract history"
                       pTooltip="View put history"
                       tooltipPosition="top"
                       (click)="openContractHistory(row.put, 'put')"
@@ -463,11 +467,11 @@
               </div>
               <div class="summary-row">
                 <span class="summary-label">Max Profit</span>
-                <span class="summary-value profit">${{ liveMaxProfit() | number:'1.2-2' }}</span>
+                <span class="summary-value profit">{{ liveMaxProfitDisplay() }}</span>
               </div>
               <div class="summary-row">
                 <span class="summary-label">Max Loss</span>
-                <span class="summary-value loss">${{ liveMaxLoss() | number:'1.2-2' }}</span>
+                <span class="summary-value loss">{{ liveMaxLossDisplay() }}</span>
               </div>
               @if (liveBreakevens().length > 0) {
                 <div class="summary-row">
@@ -603,11 +607,11 @@
             </div>
             <div class="stat-card profit-card">
               <span class="stat-label">Max Profit</span>
-              <span class="stat-value">${{ result.maxProfit | number:'1.2-2' }}</span>
+              <span class="stat-value">{{ analysisMaxProfitDisplay() }}</span>
             </div>
             <div class="stat-card loss-card">
               <span class="stat-label">Max Loss</span>
-              <span class="stat-value">${{ result.maxLoss | number:'1.2-2' }}</span>
+              <span class="stat-value">{{ analysisMaxLossDisplay() }}</span>
             </div>
             <div class="stat-card be-card">
               <span class="stat-label">Breakeven{{ result.breakevens.length > 1 ? 's' : '' }}</span>

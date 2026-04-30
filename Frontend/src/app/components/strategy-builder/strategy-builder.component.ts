@@ -102,6 +102,23 @@ interface StrategyTemplate {
   legs: { optionType: 'call' | 'put'; position: 'long' | 'short'; strikeOffset: number }[];
 }
 
+/**
+ * Format a per-contract dollar extremum for the strategy-summary cards.
+ * Handles three cases the templates would otherwise need to branch on:
+ * `null` (no legs / no analysis), ±∞ (unbounded leg geometry), and
+ * finite numbers. Centralised so the drawer summary and the Analysis
+ * Results card agree on rendering.
+ */
+function formatPayoffExtremum(value: number | null): string {
+  if (value === null) return '—';
+  if (!Number.isFinite(value)) return value > 0 ? '∞' : '−∞';
+  const sign = value < 0 ? '−' : '';
+  return `${sign}$${Math.abs(value).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 @Component({
   selector: 'app-strategy-builder',
   standalone: true,
@@ -181,6 +198,13 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
     }
   }
 
+  // Monotonic token used to invalidate in-flight history fetches when
+  // the user clicks another contract or closes the drawer before the
+  // first request resolves. Without this, the older response can write
+  // back into historyAggregates/historyError/historyLoading and show
+  // the wrong contract's data after fast interactions.
+  private historyFetchToken = 0;
+
   /**
    * Open the drill-down drawer for a specific contract. Triggered by
    * the 📈/📉 icon-per-side buttons outside each chain row (UX-Q1).
@@ -192,6 +216,8 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
     side: 'call' | 'put',
   ): Promise<void> {
     if (!contract?.ticker) return;
+
+    const requestToken = ++this.historyFetchToken;
 
     this.selectedHistoryContract.set({
       ticker: contract.ticker,
@@ -213,15 +239,24 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
           contract.ticker, fromDate, toDate, 'day', 1,
         ),
       );
+      // Stale-response guard: another openContractHistory or
+      // closeHistoryDrawer ran while this request was in flight.
+      if (requestToken !== this.historyFetchToken) return;
       this.historyAggregates.set(result.aggregates ?? []);
     } catch (err) {
+      if (requestToken !== this.historyFetchToken) return;
       this.historyError.set(err instanceof Error ? err.message : String(err));
     } finally {
-      this.historyLoading.set(false);
+      if (requestToken === this.historyFetchToken) {
+        this.historyLoading.set(false);
+      }
     }
   }
 
   closeHistoryDrawer(): void {
+    // Bump the token so any in-flight openContractHistory recognises
+    // its response as stale and skips the writes.
+    this.historyFetchToken++;
     this.historyDrawerOpen.set(false);
     this.selectedHistoryContract.set(null);
     this.historyAggregates.set([]);
@@ -738,16 +773,79 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
     }));
   });
 
-  liveMaxProfit = computed(() => {
-    const curve = this.livePayoffCurve();
-    if (curve.length === 0) return null;
-    return Math.max(...curve.map(p => p.pnl));
+  /**
+   * Right-tail unboundedness flags derived analytically from the leg
+   * structure. Puts can't produce unbounded P&L because the underlying
+   * is bounded below by 0; only net call exposure does. A net long-call
+   * position (sum of long-call quantities > sum of short-call) → max
+   * profit unbounded as S → ∞; the inverse → max loss unbounded.
+   *
+   * This replaces the old behaviour of taking max/min of the chart-grid
+   * curve, which silently capped unbounded payoffs at the right edge of
+   * the visible window (e.g. a long call would report a finite "Max
+   * Profit" equal to its P&L at spot × 1.05 instead of the textbook ∞).
+   */
+  payoffTailFlags = computed<{ profitUnbounded: boolean; lossUnbounded: boolean }>(() => {
+    let netCallQty = 0;
+    for (const leg of this.legs()) {
+      if (!leg.enabled || leg.optionType !== 'call') continue;
+      netCallQty += (leg.position === 'long' ? 1 : -1) * leg.quantity;
+    }
+    return {
+      profitUnbounded: netCallQty > 0,
+      lossUnbounded: netCallQty < 0,
+    };
   });
 
-  liveMaxLoss = computed(() => {
+  /**
+   * Max profit per contract (= per-share max × 100 contract multiplier),
+   * `Infinity` if leg geometry makes the upside unbounded, or `null`
+   * when no legs are enabled. Multiplier matches `netCost`, so all four
+   * summary values in the drawer share consistent dollar units.
+   */
+  liveMaxProfit = computed<number | null>(() => {
     const curve = this.livePayoffCurve();
     if (curve.length === 0) return null;
-    return Math.min(...curve.map(p => p.pnl));
+    if (this.payoffTailFlags().profitUnbounded) return Number.POSITIVE_INFINITY;
+    return Math.max(...curve.map(p => p.pnl)) * 100;
+  });
+
+  /** Symmetric counterpart of {@link liveMaxProfit}. */
+  liveMaxLoss = computed<number | null>(() => {
+    const curve = this.livePayoffCurve();
+    if (curve.length === 0) return null;
+    if (this.payoffTailFlags().lossUnbounded) return Number.NEGATIVE_INFINITY;
+    return Math.min(...curve.map(p => p.pnl)) * 100;
+  });
+
+  /**
+   * Display strings for the drawer + Analysis Results cards. Templates
+   * call into these instead of formatting in-place, because the value
+   * can be a finite number, ±∞ (unbounded leg geometry), or null
+   * (no legs / missing analysis).
+   */
+  liveMaxProfitDisplay = computed<string>(() => formatPayoffExtremum(this.liveMaxProfit()));
+  liveMaxLossDisplay = computed<string>(() => formatPayoffExtremum(this.liveMaxLoss()));
+
+  /**
+   * Analysis Results card uses the backend per-share values (× 100 for
+   * per-contract dollars), but still defers to leg-derived
+   * unboundedness flags — `analyzeOptionsStrategy` returns a finite
+   * grid-clamped value for unbounded payoffs the same way the live
+   * curve does, so we override to ∞ when the legs say so.
+   */
+  analysisMaxProfitDisplay = computed<string>(() => {
+    const r = this.analysisResult();
+    if (!r) return '—';
+    if (this.payoffTailFlags().profitUnbounded) return '∞';
+    return formatPayoffExtremum(r.maxProfit * 100);
+  });
+
+  analysisMaxLossDisplay = computed<string>(() => {
+    const r = this.analysisResult();
+    if (!r) return '—';
+    if (this.payoffTailFlags().lossUnbounded) return '−∞';
+    return formatPayoffExtremum(r.maxLoss * 100);
   });
 
   liveGreeks = computed(() => {
