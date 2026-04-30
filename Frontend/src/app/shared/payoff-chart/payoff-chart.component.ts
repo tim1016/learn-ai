@@ -42,6 +42,12 @@ export class PayoffChartComponent implements OnDestroy {
   private expSeries: ISeriesApi<'Baseline'> | null = null;
   private currSeries: ISeriesApi<'Line'> | null = null;
   private greekSeries: ISeriesApi<'Line'> | null = null;
+  /**
+   * Scenario-id → dashed line series. Lazily created when a scenario
+   * is enabled; removed when disabled. Keying by label keeps the chart
+   * in sync with whatever the parent's `whatIfScenarios` signal emits.
+   */
+  private whatIfSeries = new Map<string, ISeriesApi<'Line'>>();
   private injector = inject(Injector);
 
   /** Greek display name for tooltip */
@@ -159,6 +165,7 @@ export class PayoffChartComponent implements OnDestroy {
     const pts = this.expirationCurve();
     const curr = this.currentPnlCurve();
     const greekPts = this.greekCurve();
+    const whatIfs = this.whatIfCurves();
     const spot = this.spotPrice();
 
     if (!this.chart || !this.expSeries || !this.currSeries || !this.greekSeries) return;
@@ -167,6 +174,7 @@ export class PayoffChartComponent implements OnDestroy {
       this.expSeries.setData([]);
       this.currSeries.setData([]);
       this.greekSeries.setData([]);
+      this.removeAllWhatIfSeries();
       this.chart.applyOptions({ leftPriceScale: { visible: false } });
       return;
     }
@@ -194,7 +202,61 @@ export class PayoffChartComponent implements OnDestroy {
       this.chart.applyOptions({ leftPriceScale: { visible: false } });
     }
 
+    // What-if scenarios — one dashed series per enabled scenario
+    this.syncWhatIfSeries(whatIfs);
+
     this.chart.timeScale().fitContent();
+  }
+
+  /**
+   * Reconcile the on-chart what-if series with the input list:
+   * - Add a series for any enabled scenario not yet on the chart
+   * - Update data on series whose scenario is still enabled
+   * - Remove series for scenarios that have been disabled
+   */
+  private syncWhatIfSeries(scenarios: ChartCurveData[]): void {
+    if (!this.chart) return;
+
+    const incomingLabels = new Set(scenarios.map(s => s.label));
+
+    // Drop series for scenarios that are no longer enabled.
+    for (const [label, series] of this.whatIfSeries) {
+      if (!incomingLabels.has(label)) {
+        this.chart.removeSeries(series);
+        this.whatIfSeries.delete(label);
+      }
+    }
+
+    // Add or update series for enabled scenarios.
+    for (const scenario of scenarios) {
+      let series = this.whatIfSeries.get(scenario.label);
+      if (!series) {
+        series = this.chart.addSeries(LineSeries, {
+          color: scenario.color,
+          lineWidth: 2,
+          // ChartCurveData.borderDash defaults to [6,3] from the parent;
+          // lightweight-charts only exposes preset LineStyle values, so
+          // map the presence of a dash array to LineStyle.Dashed.
+          lineStyle: (scenario.borderDash && scenario.borderDash.length > 0)
+            ? LineStyle.Dashed
+            : LineStyle.Solid,
+          crosshairMarkerVisible: true,
+          crosshairMarkerRadius: 3,
+        });
+        this.whatIfSeries.set(scenario.label, series);
+      }
+      series.setData(
+        scenario.points.map(p => ({ time: p.price as UTCTimestamp, value: p.pnl })),
+      );
+    }
+  }
+
+  private removeAllWhatIfSeries(): void {
+    if (!this.chart) return;
+    for (const series of this.whatIfSeries.values()) {
+      this.chart.removeSeries(series);
+    }
+    this.whatIfSeries.clear();
   }
 
   // ── Crosshair tooltip ──────────────────────────────────────────────
@@ -234,6 +296,16 @@ export class PayoffChartComponent implements OnDestroy {
       html += `<div class="tt-row"><span class="tt-dot tt-greek"></span>${greekLabel}: ${greekVal.toFixed(4)}</div>`;
     }
 
+    // What-if scenario rows — one per enabled series
+    for (const [label, series] of this.whatIfSeries) {
+      const raw = param.seriesData.get(series) as { value?: number } | undefined;
+      const v = raw?.value;
+      if (v == null) continue;
+      const scenario = this.whatIfCurves().find(s => s.label === label);
+      const color = scenario?.color ?? '#9ca3af';
+      html += `<div class="tt-row"><span class="tt-dot" style="background:${color}"></span>${label}: ${fmt(v)}</div>`;
+    }
+
     tip.innerHTML = html;
     tip.style.display = 'block';
 
@@ -254,5 +326,6 @@ export class PayoffChartComponent implements OnDestroy {
     this.expSeries = null;
     this.currSeries = null;
     this.greekSeries = null;
+    this.whatIfSeries.clear();
   }
 }
