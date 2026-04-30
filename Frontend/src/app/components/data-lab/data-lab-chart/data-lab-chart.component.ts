@@ -187,6 +187,18 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     timeframe: string;
   }>();
 
+  /** Emitted when the chart endpoint rejects the request with a
+   *  TIMEFRAME_NOT_ALLOWED error and supplies a recommendation. The
+   *  parent owns the timeframe and decides whether to apply it. This
+   *  closes the gap between the parent's safety-net threshold (250k
+   *  bars) and the chart endpoint's stricter ~20k limit — without it,
+   *  manual picks in the 20k–250k range fail with no auto-correction. */
+  timeframeRejected = output<{
+    requested: string;
+    recommended: string;
+    detail: string;
+  }>();
+
   // Chart container refs
   mainChartContainer = viewChild<ElementRef<HTMLDivElement>>('mainChart');
   subPanelHost = viewChild<ElementRef<HTMLDivElement>>('subPanelHost');
@@ -378,10 +390,18 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
             if (detail.allowed_timeframes) {
               this.allowedTimeframes.set(detail.allowed_timeframes);
             }
-            // The parent owns the timeframe selection now; surface the
-            // recommendation in the toast so the user can adjust.
+            // The parent owns the timeframe selection. Hand it the
+            // recommendation so it can auto-correct: the parent's bar-count
+            // safety net only fires above 250k expected bars, but the chart
+            // endpoint rejects at ~20k, so without this the 20k–250k range
+            // would consistently fail with no auto-recovery.
             if (detail.recommended_timeframe) {
-              this.toastMessage.set(`Try ${detail.recommended_timeframe} for this range`);
+              this.timeframeRejected.emit({
+                requested: this.timeframe(),
+                recommended: detail.recommended_timeframe,
+                detail: detail.detail,
+              });
+              this.toastMessage.set(`Switched to ${detail.recommended_timeframe} for this range`);
               setTimeout(() => this.toastMessage.set(''), 4000);
             }
             break;

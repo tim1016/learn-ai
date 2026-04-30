@@ -1001,6 +1001,7 @@
         [chartIndicators]="chartIndicators()"
         [computeAllIndicators]="computeAllIndicators()"
         (dataLoaded)="onChartDataLoaded($event)"
+        (timeframeRejected)="onChartTimeframeRejected($event)"
       />
     </div>
   }

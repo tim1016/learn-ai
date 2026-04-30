@@ -19,6 +19,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
@@ -48,7 +49,7 @@ logger = logging.getLogger(__name__)
 polygon_client = PolygonClientService()
 
 
-def _base_price_cols(df) -> list[str]:
+def _base_price_cols(df: pd.DataFrame) -> list[str]:
     """Order the price-side columns for CSV export. ``PC`` (previous
     trading day's close) sits before ``open`` when present so reviewers
     reading the CSV left-to-right see the prior reference before the

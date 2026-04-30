@@ -502,6 +502,32 @@ export class DataLabComponent {
     return '1D';
   });
 
+  /**
+   * Apply the chart endpoint's recommendation when it rejects a fetch
+   * with TIMEFRAME_NOT_ALLOWED. The chart endpoint caps individual
+   * fetches at ~20k bars; the parent's bar-count safety net only fires
+   * above 250k expected bars, so without this handler manual picks in
+   * the 20k–250k range would fail silently with no correction.
+   *
+   * Switches off Auto so the user's intent is preserved on the next
+   * range change (Auto would otherwise re-pick from the date span and
+   * potentially overshoot again).
+   */
+  onChartTimeframeRejected(event: { requested: string; recommended: string; detail: string }): void {
+    const parsed = parseChartTimeframe(event.recommended);
+    if (!parsed) return;
+    this.autoBarTimeframe.set(false);
+    this.timespan.set(parsed.timespan);
+    this.multiplier.set(parsed.multiplier);
+    // Re-fetch with the new timeframe so the user sees the chart they
+    // expected. Defer to setTimeout so Angular has time to propagate the
+    // updated `timeframe` input through to the chart child.
+    setTimeout(() => {
+      const chart = this.chartComponent();
+      if (chart) chart.fetchData();
+    });
+  }
+
   /** Calendar-day span of the current from/to. */
   readonly spanCalendarDays = computed<number>(() => {
     const from = new Date(this.fromDate()).getTime();
