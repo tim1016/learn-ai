@@ -7,23 +7,9 @@
     </div>
   }
 
-  <!-- Timeframe selector -->
-  <div class="timeframe-bar">
-    <div class="tf-buttons">
-      @for (tf of allTimeframes; track tf) {
-        <button
-          class="tf-btn"
-          [class.active]="selectedTimeframe() === tf"
-          [class.disabled]="!isTimeframeAllowed(tf)"
-          [disabled]="!isTimeframeAllowed(tf)"
-          [title]="getEstimatedBarsTooltip(tf)"
-          (click)="selectTimeframe(tf)">
-          {{ tf }}
-        </button>
-      }
-    </div>
-
-    @if (quality(); as q) {
+  <!-- Quality summary (timeframe selector removed — parent owns the timeframe) -->
+  @if (quality(); as q) {
+    <div class="chart-toolbar">
       <button class="quality-toggle" (click)="toggleQuality()" [title]="'Data quality report'">
         <i class="pi pi-chart-bar"></i>
         <span class="quality-badge">{{ q.resampled_bar_count }} bars</span>
@@ -31,8 +17,8 @@
           <span class="quality-warn">{{ q.gaps_found }} gaps</span>
         }
       </button>
-    }
-  </div>
+    </div>
+  }
 
   <!-- Quality details modal -->
   @if (qualityModalOpen() && quality(); as q) {
@@ -83,13 +69,6 @@
       <div class="chart-skeleton">
         <div class="skeleton-shimmer"></div>
         <span>Loading chart data...</span>
-      </div>
-    }
-
-    @if (!hasData() && !loading() && !error()) {
-      <div class="chart-empty">
-        <i class="pi pi-chart-line"></i>
-        <p>Enter a ticker and date range above to load chart data</p>
       </div>
     }
 

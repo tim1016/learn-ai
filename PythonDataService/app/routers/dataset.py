@@ -28,6 +28,7 @@ from app.research.divergence.ingest import (
     dividends_from_polygon_payload,
 )
 from app.services.dataset_service import (
+    add_previous_close_column,
     build_csv_bytes,
     build_metadata_csv,
     build_metadata_json,
@@ -35,6 +36,7 @@ from app.services.dataset_service import (
     compute_warmup_start_date,
     estimate_max_lookback,
     fetch_bars_chunked,
+    fetch_rth_closes,
     get_indicator_configs,
     list_available_indicators,
     preprocess_and_calculate,
@@ -44,6 +46,18 @@ from app.services.polygon_client import PolygonClientService
 router = APIRouter()
 logger = logging.getLogger(__name__)
 polygon_client = PolygonClientService()
+
+
+def _base_price_cols(df) -> list[str]:
+    """Order the price-side columns for CSV export. ``PC`` (previous
+    trading day's close) sits before ``open`` when present so reviewers
+    reading the CSV left-to-right see the prior reference before the
+    current bar's prices.
+    """
+    base = ["open", "high", "low", "close", "volume"]
+    if "PC" in df.columns:
+        return ["PC", *base]
+    return base
 
 
 def _fetch_and_process(
@@ -141,7 +155,25 @@ def _fetch_and_process(
         trim_from_ts=trim_from_ts,
         from_date=request.from_date,
         to_date=request.to_date,
+        timespan=request.timespan,
+        multiplier=request.multiplier,
     )
+
+    # PC column — the close of the most recently completed RTH session at
+    # or before each bar's timestamp (rolling at 16:00 ET). Sourced from a
+    # separate daily-bar fetch with a 14-day buffer before from_date so the
+    # pre-market / morning RTH bars on the first day in the window have a
+    # valid prior-session close. Done after warmup-trim so the lookup runs
+    # only against the user's requested window. Honors request.adjusted.
+    if request.include_previous_close:
+        rth_closes = fetch_rth_closes(
+            polygon=polygon_client,
+            ticker=request.ticker,
+            from_date=request.from_date,
+            to_date=request.to_date,
+            adjusted=request.adjusted,
+        )
+        df = add_previous_close_column(df, rth_closes)
 
     return df, column_meta, raw_count
 
@@ -185,7 +217,7 @@ async def generate_dataset_csv(request: DatasetGenerationRequest):
 
         df, column_meta, raw_count = _fetch_and_process(request)
 
-        ohlcv_cols = ["open", "high", "low", "close", "volume"]
+        ohlcv_cols = _base_price_cols(df)
         extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
         indicator_col_names = [m["column"] for m in column_meta]
         all_data_cols = ohlcv_cols + extra_cols + indicator_col_names
@@ -219,7 +251,7 @@ async def generate_dataset_metadata(request: DatasetGenerationRequest):
     try:
         df, column_meta, raw_count = _fetch_and_process(request)
 
-        ohlcv_cols = ["open", "high", "low", "close", "volume"]
+        ohlcv_cols = _base_price_cols(df)
         extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
 
         metadata_bytes = build_metadata_json(
@@ -256,7 +288,7 @@ async def generate_dataset_metadata_csv(request: DatasetGenerationRequest):
     try:
         df, column_meta, _ = _fetch_and_process(request)
 
-        ohlcv_cols = ["open", "high", "low", "close", "volume"]
+        ohlcv_cols = _base_price_cols(df)
         extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
 
         csv_bytes = build_metadata_csv(column_meta, ohlcv_cols + extra_cols)
@@ -294,7 +326,7 @@ def _build_zip_with_events(
     between contracts, the bundler raises ``RunCancelledError``.
     Returns ``(zip_bytes, filename)``.
     """
-    ohlcv_cols = ["open", "high", "low", "close", "volume"]
+    ohlcv_cols = _base_price_cols(df)
     extra_cols = [c for c in ["vwap", "transactions", "session"] if c in df.columns]
     indicator_col_names = [m["column"] for m in column_meta]
     all_data_cols = ohlcv_cols + extra_cols + indicator_col_names

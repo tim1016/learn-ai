@@ -350,6 +350,16 @@ class DatasetGenerationRequest(BaseModel):
         description="When true, run the data-quality pipeline on the fetched bars and bundle "
         "quality_report.md into the ZIP alongside the dataset.",
     )
+    include_previous_close: bool = Field(
+        True,
+        description="When true, add a 'PC' column to dataset.csv positioned before 'open'. "
+        "PC is the close of the most recently completed RTH session at or before each bar's "
+        "timestamp: bars before 16:00 ET reference the prior trading day's close, bars at or "
+        "after 16:00 ET reference the same day's close (which has just printed). This makes "
+        "overnight volatility a single subtraction across the 16:00 boundary. Sourced from "
+        "Polygon daily aggregates honoring the 'adjusted' flag; a ~14 calendar-day buffer "
+        "before from_date is fetched so morning bars on day 1 have a prior session.",
+    )
 
     # ── Polygon reference-endpoint companion toggles ──────────
     # Each toggle adds one file to the ZIP sourced from the named Polygon

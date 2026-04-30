@@ -78,12 +78,6 @@ export interface ChartDataResponse {
   meta: { cached_resample: boolean; cached_indicators: boolean };
 }
 
-export interface AllowedTimeframesResponse {
-  allowed_timeframes: string[];
-  estimated_bars_per_timeframe: Record<string, number>;
-  recommended_timeframe: string;
-}
-
 export interface ChartIndicatorEntry {
   name: string;
   params: Record<string, number>;
@@ -166,18 +160,21 @@ function getEmaRibbonColor(length: number): string | null {
 export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   private http = inject(HttpClient);
 
-  // Inputs from parent (shared controls)
+  // Inputs from parent (shared controls). The chart is purely a renderer
+  // for the parent's chosen (ticker, range, timeframe) — it no longer owns
+  // its own timeframe selector. The parent is the source of truth and
+  // applies any auto-cap logic before the fetch.
   ticker = input.required<string>();
   fromDate = input.required<string>();
   toDate = input.required<string>();
   session = input.required<string>();
   forwardFill = input.required<boolean>();
+  timeframe = input.required<string>();
   adjusted = input(true);
   chartIndicators = input<ChartIndicatorEntry[]>([]);
   computeAllIndicators = input(false);
 
   // Outputs
-  timeframeChanged = output<string>();
   /** Emitted after chart data is fetched (or loaded from cache) so parent can snapshot it. */
   dataLoaded = output<{
     bars: ChartBar[];
@@ -195,7 +192,6 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   subPanelHost = viewChild<ElementRef<HTMLDivElement>>('subPanelHost');
 
   // State
-  selectedTimeframe = signal('1D');
   allowedTimeframes = signal<string[]>([...ALL_TIMEFRAMES]);
   estimatedBars = signal<Record<string, number>>({});
   recommendedTimeframe = signal('1D');
@@ -249,27 +245,22 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
 
   // Computed
   hasData = computed(() => this.bars().length > 0);
-  allTimeframes = ALL_TIMEFRAMES;
-
-  isTimeframeAllowed(tf: string): boolean {
-    return this.allowedTimeframes().includes(tf);
-  }
-
-  getEstimatedBarsTooltip(tf: string): string {
-    const est = this.estimatedBars()[tf];
-    if (est === undefined) return tf;
-    return `${tf} — ~${est.toLocaleString()} bars`;
-  }
 
   ngAfterViewInit(): void {
     this.createMainChart();
     this.initialized = true;
+    // No auto-fetch here. The parent decides when to fetch (live click) vs
+    // when to load from a cached session via loadCachedData(); auto-fetching
+    // on mount would race the cache restore and double-spend Polygon calls.
   }
 
-  /** Called by parent when user clicks "Fetch Data". */
+  /** Called by parent when user clicks "Fetch Data". The parent owns the
+   *  timeframe — there is no precheck or auto-switch here. If the chart
+   *  endpoint rejects the request (e.g. far too many bars), the parent's
+   *  bar-count safety net should have already pulled the timeframe back. */
   fetchData(): void {
     if (!this.ticker() || !this.fromDate() || !this.toDate()) return;
-    this.fetchAllowedTimeframes().then(() => this.fetchChartData());
+    this.fetchChartData();
   }
 
   /**
@@ -292,7 +283,8 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     this.allowedTimeframes.set(snapshot.allowedTimeframes);
     this.estimatedBars.set(snapshot.estimatedBarsPerTimeframe);
     this.recommendedTimeframe.set(snapshot.recommendedTimeframe);
-    this.selectedTimeframe.set(snapshot.timeframe);
+    // Note: snapshot.timeframe is informational here — the parent already
+    // mirrored it into its own timespan/multiplier signals before calling.
     this.visibleIndicators.set(new Set(snapshot.visibleIndicatorIds));
     this.error.set('');
 
@@ -312,45 +304,8 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   }
 
   // ──────────────────────────────────────────────
-  // Timeframe selection
-  // ──────────────────────────────────────────────
-  selectTimeframe(tf: string): void {
-    if (!this.isTimeframeAllowed(tf)) return;
-    this.selectedTimeframe.set(tf);
-    this.timeframeChanged.emit(tf);
-  }
-
-  // ──────────────────────────────────────────────
   // Data fetching
   // ──────────────────────────────────────────────
-  private async fetchAllowedTimeframes(): Promise<void> {
-    try {
-      const resp = await firstValueFrom(
-        this.http.post<AllowedTimeframesResponse>(
-          `${environment.pythonServiceUrl}/api/chart/allowed-timeframes`,
-          {
-            ticker: this.ticker(),
-            from_date: this.fromDate(),
-            to_date: this.toDate(),
-            session: this.session(),
-          }
-        )
-      );
-      this.allowedTimeframes.set(resp.allowed_timeframes);
-      this.estimatedBars.set(resp.estimated_bars_per_timeframe);
-      this.recommendedTimeframe.set(resp.recommended_timeframe);
-
-      // Auto-switch if current timeframe is not allowed
-      if (!resp.allowed_timeframes.includes(this.selectedTimeframe())) {
-        const prev = this.selectedTimeframe();
-        this.selectedTimeframe.set(resp.recommended_timeframe);
-        this.toastMessage.set(`${prev} not available for this range — switched to ${resp.recommended_timeframe}`);
-        setTimeout(() => this.toastMessage.set(''), 4000);
-      }
-    } catch {
-      // Non-critical — allowed timeframes will be returned with chart data
-    }
-  }
 
   private async fetchChartData(): Promise<void> {
     const ticker = this.ticker();
@@ -375,7 +330,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
             ticker,
             from_date: fromDate,
             to_date: toDate,
-            timeframe: this.selectedTimeframe(),
+            timeframe: this.timeframe(),
             session: this.session(),
             forward_fill: this.forwardFill(),
             adjusted: this.adjusted(),
@@ -412,7 +367,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
         estimatedBarsPerTimeframe: resp.estimated_bars_per_timeframe,
         recommendedTimeframe: resp.recommended_timeframe,
         visibleIndicatorIds: visibleIds,
-        timeframe: this.selectedTimeframe(),
+        timeframe: this.timeframe(),
       });
     } catch (e: any) {
       const detail = e?.error?.detail;
@@ -423,9 +378,10 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
             if (detail.allowed_timeframes) {
               this.allowedTimeframes.set(detail.allowed_timeframes);
             }
+            // The parent owns the timeframe selection now; surface the
+            // recommendation in the toast so the user can adjust.
             if (detail.recommended_timeframe) {
-              this.selectedTimeframe.set(detail.recommended_timeframe);
-              this.toastMessage.set(`Switched to ${detail.recommended_timeframe}`);
+              this.toastMessage.set(`Try ${detail.recommended_timeframe} for this range`);
               setTimeout(() => this.toastMessage.set(''), 4000);
             }
             break;

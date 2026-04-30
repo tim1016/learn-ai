@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────
 _ET = ZoneInfo("US/Eastern")
 _UTC = ZoneInfo("UTC")
-_MAX_BARS = 10_000
+_MAX_BARS = 20_000
 
 # All indicators with default params — built from the canonical registry.
 # EMA gets multiple default lengths for the ribbon.

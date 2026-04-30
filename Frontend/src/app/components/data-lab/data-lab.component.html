@@ -269,6 +269,13 @@
             <span>Forward-fill gaps</span>
             <span class="option-hint">Missing bars take previous close, volume 0</span>
           </label>
+          <label class="checkbox-option"
+                 pTooltip="Adds a 'PC' column (placed before 'open') with the most recently completed RTH close (16:00 ET) for the underlying ticker — bars before 16:00 reference the prior trading day's close, bars at or after 16:00 reference the same day's close. Makes overnight volatility a single subtraction across the close. Sourced from a separate Polygon daily-bars fetch with a 14-day buffer before the start date."
+                 tooltipPosition="top">
+            <input type="checkbox" [checked]="includePreviousClose()" (change)="includePreviousClose.set(!includePreviousClose())" />
+            <span>Include previous close column (PC)</span>
+            <span class="option-hint">Most recent RTH close at or before each bar</span>
+          </label>
         </div>
       </div>
 
@@ -431,6 +438,13 @@
             </label>
             <input type="number" [ngModel]="optionsDteDistance()" (ngModelChange)="optionsDteDistance.set(+$event)"
                    min="0" max="60" class="multiplier-input" />
+            <span class="option-hint">
+              @if (optionsDteDistance() === 0) {
+                0 = same-day expiry (0DTE)
+              } @else {
+                Expires {{ optionsDteDistance() }} day{{ optionsDteDistance() === 1 ? '' : 's' }} after each trading day
+              }
+            </span>
           </div>
           <div class="option-group">
             <label>Strikes each side (ATM ± N)</label>
@@ -937,20 +951,23 @@
   </ng-template>
 
   <!-- Multi-Timeframe Chart -->
-  <div class="chart-section">
-    <app-data-lab-chart
-      #chartComponent
-      [ticker]="ticker()"
-      [fromDate]="fromDate()"
-      [toDate]="toDate()"
-      [session]="session()"
-      [forwardFill]="forwardFill()"
-      [adjusted]="adjustForSplits()"
-      [chartIndicators]="chartIndicators()"
-      [computeAllIndicators]="computeAllIndicators()"
-      (dataLoaded)="onChartDataLoaded($event)"
-    />
-  </div>
+  @if (chartRendered()) {
+    <div class="chart-section">
+      <app-data-lab-chart
+        #chartComponent
+        [ticker]="ticker()"
+        [fromDate]="fromDate()"
+        [toDate]="toDate()"
+        [session]="session()"
+        [forwardFill]="forwardFill()"
+        [adjusted]="adjustForSplits()"
+        [timeframe]="chartTimeframe()"
+        [chartIndicators]="chartIndicators()"
+        [computeAllIndicators]="computeAllIndicators()"
+        (dataLoaded)="onChartDataLoaded($event)"
+      />
+    </div>
+  }
 
   <!-- Active Entries (configured indicators) -->
   @if (entries().length) {

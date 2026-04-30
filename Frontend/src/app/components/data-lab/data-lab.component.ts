@@ -128,6 +128,32 @@ export function pickAutoBarTimeframe(spanDays: number): string {
   return '1h';
 }
 
+export type PolygonTimespan = 'minute' | 'hour' | 'day' | 'week' | 'month';
+
+/**
+ * Parse the chart component's timeframe vocabulary ("1m", "5m", "15m",
+ * "1h", "4h", "1D", "1W", "1M") into Polygon's (timespan, multiplier)
+ * pair. Returns null for unrecognized inputs so callers can ignore
+ * vocabulary the dataset endpoint can't honor.
+ */
+export function parseChartTimeframe(
+  timeframe: string,
+): { timespan: PolygonTimespan; multiplier: number } | null {
+  const match = timeframe.match(/^(\d+)([mhDWM])$/);
+  if (!match) return null;
+  const multiplier = parseInt(match[1], 10);
+  const unit = match[2];
+  const timespan: PolygonTimespan | null =
+    unit === 'm' ? 'minute' :
+    unit === 'h' ? 'hour' :
+    unit === 'D' ? 'day' :
+    unit === 'W' ? 'week' :
+    unit === 'M' ? 'month' :
+    null;
+  if (!timespan) return null;
+  return { timespan, multiplier };
+}
+
 /**
  * Layman-friendly readout for the Auto Chunk control. Pure helper so the
  * exact wording can be regression-tested without spinning up the
@@ -309,6 +335,13 @@ export class DataLabComponent {
   /** Reference to the chart child so we can call loadCachedData(). */
   chartComponent = viewChild<DataLabChartComponent>('chartComponent');
 
+  /** Whether the chart has been requested at least once. The chart is
+   *  hidden via @if until the user clicks Fetch — initial page load
+   *  shows no chart-shaped placeholder. After the first fetch, the chart
+   *  stays mounted so subsequent fetches can flow through the viewchild
+   *  without re-mount timing issues. */
+  chartRendered = signal(false);
+
   // ── Session management state ──────────────────────────────
   savedSessions = signal<DataLabSessionSummary[]>([]);
   activeSessionId = signal<string | null>(null);
@@ -450,6 +483,25 @@ export class DataLabComponent {
     this.multiplier.set(entry.multiplier);
   }
 
+  /**
+   * The bar timeframe in the data-lab-chart vocabulary
+   * ("1m"/"5m"/"15m"/"1h"/"4h"/"1D"/"1W"/"1M"). The chart no longer owns
+   * a selector; it consumes this signal as its `timeframe` input. Maps
+   * the parent's (timespan, multiplier) pair to the chart-endpoint
+   * vocabulary — note the day case uses "1D" (uppercase) which is what
+   * the chart endpoint expects.
+   */
+  readonly chartTimeframe = computed<string>(() => {
+    const t = this.timespan();
+    const m = this.multiplier();
+    if (t === 'minute') return `${m}m`;
+    if (t === 'hour') return `${m}h`;
+    if (t === 'day') return m === 1 ? '1D' : `${m}D`;
+    if (t === 'week') return `${m}W`;
+    if (t === 'month') return `${m}M`;
+    return '1D';
+  });
+
   /** Calendar-day span of the current from/to. */
   readonly spanCalendarDays = computed<number>(() => {
     const from = new Date(this.fromDate()).getTime();
@@ -465,6 +517,12 @@ export class DataLabComponent {
     const label = BAR_TIMEFRAMES.find((b) => b.value === picked)?.label ?? picked;
     return `${label} bars for ${days}-day range`;
   });
+
+  /** Threshold above which the bar-count safety-net effect forces a
+   *  fall-back to the auto-resolution heuristic. 250k is the same ceiling
+   *  the picker's "wide minute range" advisory uses, so the two surfaces
+   *  agree on what counts as "too many bars". */
+  private static readonly MAX_SAFE_BAR_COUNT = 250_000;
 
   /**
    * Expected number of bars for the current (range × resolution × session)
@@ -609,6 +667,9 @@ export class DataLabComponent {
   qualityReportResult = signal<QualityReportResponse | null>(null);
   qualityReportError = signal('');
 
+  // ── Dataset column toggles ────────────────────────────────
+  includePreviousClose = signal(true);
+
   // ── Polygon reference-endpoint companion toggles ───────────
   includeSplits = signal(false);
   includeDividends = signal(false);
@@ -752,6 +813,40 @@ export class DataLabComponent {
       { allowSignalWrites: true },
     );
 
+    // Push the bar-timeframe back into the picker's `resolution` field so
+    // the picker's range-vs-resolution advisories reflect the user's actual
+    // pick. Without this, the picker keeps its own copy and would warn
+    // about "minute × N days" even when the user had switched to hour.
+    // The complementary picker → timespan flow lives in the rangeState
+    // effect above; this is the reverse direction.
+    effect(
+      () => {
+        const expectedResolution = DataLabComponent.timespanToResolution(this.timespan());
+        const current = this.rangeState();
+        if (current.resolution === expectedResolution) return;
+        this.rangeState.set({ ...current, resolution: expectedResolution });
+      },
+      { allowSignalWrites: true },
+    );
+
+    // Bar-count safety net: if the (range × timeframe × session) combo
+    // would overshoot a sane number of bars, fall back to the auto
+    // heuristic. This kicks in when a manual pick + a wide range would
+    // generate hundreds of thousands of rows. The auto toggle is forced
+    // on so the user can see why their pick was overridden via the
+    // existing "Auto picked X" hint.
+    effect(
+      () => {
+        const expected = this.expectedBarCount();
+        if (expected <= DataLabComponent.MAX_SAFE_BAR_COUNT) return;
+        const picked = pickAutoBarTimeframe(this.spanCalendarDays());
+        if (this.activeBarTimeframe() === picked) return;
+        this.autoBarTimeframe.set(true);
+        this.setBarTimeframe(picked);
+      },
+      { allowSignalWrites: true },
+    );
+
     // Note: dividend adjustment requires the ``dividends`` companion file,
     // but we deliberately do NOT auto-enable it. The brief calls out
     // "dependencies are visible, not policed" — we surface a callout next
@@ -776,8 +871,19 @@ export class DataLabComponent {
    * the chart endpoint isn't yet on the streaming pipeline.
    */
   async fetchAndMaybeZip(): Promise<void> {
-    const chart = this.chartComponent();
-    if (chart) chart.fetchData();
+    if (!this.chartRendered()) {
+      // First click: mount the chart, then defer the fetch to a setTimeout
+      // so Angular has time to process the @if and populate the viewchild.
+      this.chartRendered.set(true);
+      setTimeout(() => {
+        const chart = this.chartComponent();
+        if (chart) chart.fetchData();
+      });
+    } else {
+      // Chart is already mounted — fetch via the viewchild directly.
+      const chart = this.chartComponent();
+      if (chart) chart.fetchData();
+    }
     if (this.alsoGenerateZip()) {
       await this.runSession.start(this._buildGenerateZipPayload());
     }
@@ -839,6 +945,7 @@ export class DataLabComponent {
       limit: this.polygonLimit(),
       options_companion: optionsConfig,
       include_quality_report: this.includeQualityReportInZip(),
+      include_previous_close: this.includePreviousClose(),
       include_splits: this.includeSplits(),
       include_dividends: this.includeDividends(),
       include_ticker_overview: this.includeTickerOverview(),
@@ -969,6 +1076,20 @@ export class DataLabComponent {
     // Restore chart data from snapshot (no API call)
     if (session.chartSnapshot) {
       this.latestChartSnapshot.set(session.chartSnapshot);
+
+      // Mirror the snapshot's timeframe into parent state — the chart no
+      // longer owns this signal, so the parent must set it before the
+      // chart mounts and reads its `timeframe` input.
+      const parsed = parseChartTimeframe(session.chartSnapshot.timeframe);
+      if (parsed) {
+        this.autoBarTimeframe.set(false);
+        this.timespan.set(parsed.timespan);
+        this.multiplier.set(parsed.multiplier);
+      }
+
+      // Mount the chart (it's hidden until chartRendered flips on) before
+      // pushing data into it.
+      this.chartRendered.set(true);
 
       // Give Angular a tick to propagate input changes to the chart child
       setTimeout(() => {
@@ -1455,6 +1576,7 @@ export class DataLabComponent {
         limit: this.polygonLimit(),
         options_companion: optionsConfig,
         include_quality_report: this.includeQualityReportInZip(),
+        include_previous_close: this.includePreviousClose(),
         include_splits: this.includeSplits(),
         include_dividends: this.includeDividends(),
         include_ticker_overview: this.includeTickerOverview(),
