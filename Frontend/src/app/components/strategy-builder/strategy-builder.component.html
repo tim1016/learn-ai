@@ -535,6 +535,25 @@
           </div>
         </div>
 
+        <!--
+          Zero-TTM banner: when the selected expiration is today/past, the
+          forward-looking curves (current-time P&L, Greek curve, what-if
+          scenarios) are intentionally empty because BS Greeks degenerate
+          at T=0. Surface that state instead of silently dropping curves.
+        -->
+        @if (noForwardCurves()) {
+          <div class="ttm-zero-banner panel-section" role="status">
+            <i class="pi pi-info-circle"></i>
+            <span>
+              Selected expiration is today or in the past. Only the
+              expiration P&amp;L curve is shown — current-time P&amp;L,
+              the Greek curve, and what-if scenarios all require a future
+              expiration (Black-Scholes Greeks are degenerate at T=0).
+              Pick a later expiration from the ribbon to see them.
+            </span>
+          </div>
+        }
+
         <!-- Payoff Chart (taller in drawer) -->
         <div class="panel-section chart-section">
           <app-payoff-chart

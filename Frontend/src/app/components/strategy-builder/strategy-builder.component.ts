@@ -639,6 +639,18 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
     return [...gridSet].sort((a, b) => a - b);
   });
 
+  /**
+   * UX banner trigger — when the user has built legs but the selected
+   * expiration leaves zero or negative time-to-expiry, the
+   * currentPnlCurve, greekCurve, and whatIfCurves are all empty by
+   * design (BS Greeks degenerate at T=0: Δ becomes a step function,
+   * Γ blows up, Θ/V collapse). Surface that to the user explicitly
+   * instead of silently dropping the forward-looking curves.
+   */
+  noForwardCurves = computed<boolean>(() =>
+    this.legs().some(l => l.enabled) && this.timeToExpiry() <= 0,
+  );
+
   livePayoffCurve = computed<PayoffPoint[]>(() => {
     const currentLegs = this.legs().filter(l => l.enabled);
     const grid = this.priceGrid();

@@ -810,3 +810,26 @@
   color: #e2e8f0;
   font-variant-numeric: tabular-nums;
 }
+
+// Zero-TTM info banner shown above the payoff chart when the user
+// has legs but selectedExpiration evaluates to T <= 0 days.
+// Per the conversation following the 2026-04-29 design pass — makes
+// the "missing forward curves" state legible instead of silent.
+.ttm-zero-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 6px;
+  color: #fcd34d;
+  font-size: 0.78rem;
+  line-height: 1.5;
+
+  i {
+    flex-shrink: 0;
+    margin-top: 1px;
+    font-size: 0.85rem;
+  }
+}

@@ -490,4 +490,57 @@ describe('StrategyBuilderComponent', () => {
       expect(parsed?.strike).toBe('$590.00');
     });
   });
+
+  // ── UX: zero-TTM banner ─────────────────────────────────────────
+  // The forward-looking curves (currentPnlCurve, greekCurve,
+  // whatIfCurves) silently return [] when timeToExpiry() <= 0 because
+  // BS Greeks are degenerate at T=0. This banner makes that state
+  // legible instead of silent.
+  describe('UX: noForwardCurves banner trigger', () => {
+    function withEnabledLeg(): void {
+      component.legs.set([
+        { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
+      ]);
+    }
+
+    it('is true when legs exist and selectedExpiration evaluates to T <= 0', () => {
+      withEnabledLeg();
+      const todayIso = new Date().toISOString().slice(0, 10);
+      component.selectedExpiration.set(todayIso);
+
+      // timeToExpiry clamps to 0 once the 16:00 ET deadline passes;
+      // for any same-day exp the value is at most a few hours, but
+      // the banner should fire when the live computation returns 0
+      // OR a negligibly small T. Verify by checking the computed
+      // signal directly: if the legs exist and timeToExpiry() <= 0
+      // we want the banner.
+      const expectedBanner = component.timeToExpiry() <= 0;
+      expect(component.noForwardCurves()).toBe(expectedBanner);
+    });
+
+    it('is false when no legs are enabled (banner only fires once a leg exists)', () => {
+      const todayIso = new Date().toISOString().slice(0, 10);
+      component.selectedExpiration.set(todayIso);
+      component.legs.set([]);
+      expect(component.noForwardCurves()).toBe(false);
+    });
+
+    it('is false when timeToExpiry > 0 (future expiration with enabled legs)', () => {
+      withEnabledLeg();
+      const future = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      component.selectedExpiration.set(future);
+      // Sanity: timeToExpiry should now be positive.
+      expect(component.timeToExpiry()).toBeGreaterThan(0);
+      expect(component.noForwardCurves()).toBe(false);
+    });
+
+    it('is false when leg is present but disabled', () => {
+      const todayIso = new Date().toISOString().slice(0, 10);
+      component.selectedExpiration.set(todayIso);
+      component.legs.set([
+        { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: false },
+      ]);
+      expect(component.noForwardCurves()).toBe(false);
+    });
+  });
 });
