@@ -1,5 +1,5 @@
 import {
-  Component, signal, computed, effect, inject, viewChild,
+  Component, signal, computed, effect, inject, untracked, viewChild,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -774,25 +774,31 @@ export class DataLabComponent {
     effect(
       () => {
         const v = this.rangeState();
-        if (this.ticker() !== v.symbol) this.ticker.set(v.symbol);
-        const fromIso = DataLabComponent.formatDate(this.fromDateValue());
-        const toIso = DataLabComponent.formatDate(this.toDateValue());
-        if (fromIso !== v.from) {
-          this.fromDateValue.set(DataLabComponent.parseDate(v.from));
-        }
-        if (toIso !== v.to) {
-          this.toDateValue.set(DataLabComponent.parseDate(v.to));
-        }
-        // Only overwrite timespan if the picker's resolution doesn't
-        // already match — Data Lab's bar-timeframe dropdown writes the
-        // multiplier too, and the picker shouldn't undo that.
-        const expected = DataLabComponent.timespanToResolution(this.timespan());
-        if (v.resolution !== expected) {
-          this.timespan.set(v.resolution === 'daily' ? 'day' : v.resolution);
-          // Reset multiplier so the bar-timeframe dropdown matches a
-          // preset after a coarse resolution change via the picker.
-          this.multiplier.set(1);
-        }
+        // Only the picker's `rangeState` changes should trigger this
+        // effect's writes — every other signal read goes through
+        // `untracked()` so it isn't registered as a dep. Without this, a
+        // user picking 15m via the bar-timeframe dropdown would race the
+        // sibling timespan→resolution effect: whichever ran first saw
+        // stale state and the late-arriving Effect A here clobbered the
+        // multiplier back to 1, silently undoing the manual pick.
+        untracked(() => {
+          if (this.ticker() !== v.symbol) this.ticker.set(v.symbol);
+          const fromIso = DataLabComponent.formatDate(this.fromDateValue());
+          const toIso = DataLabComponent.formatDate(this.toDateValue());
+          if (fromIso !== v.from) {
+            this.fromDateValue.set(DataLabComponent.parseDate(v.from));
+          }
+          if (toIso !== v.to) {
+            this.toDateValue.set(DataLabComponent.parseDate(v.to));
+          }
+          const expected = DataLabComponent.timespanToResolution(this.timespan());
+          if (v.resolution !== expected) {
+            this.timespan.set(v.resolution === 'daily' ? 'day' : v.resolution);
+            // Reset multiplier so the bar-timeframe dropdown matches a
+            // preset after a coarse resolution change via the picker.
+            this.multiplier.set(1);
+          }
+        });
       },
       { allowSignalWrites: true },
     );
@@ -818,13 +824,17 @@ export class DataLabComponent {
     // pick. Without this, the picker keeps its own copy and would warn
     // about "minute × N days" even when the user had switched to hour.
     // The complementary picker → timespan flow lives in the rangeState
-    // effect above; this is the reverse direction.
+    // effect above; this is the reverse direction. Only timespan-driven
+    // re-runs are intended here — read rangeState through `untracked()`
+    // so this effect doesn't loop with the picker→timespan one.
     effect(
       () => {
         const expectedResolution = DataLabComponent.timespanToResolution(this.timespan());
-        const current = this.rangeState();
-        if (current.resolution === expectedResolution) return;
-        this.rangeState.set({ ...current, resolution: expectedResolution });
+        untracked(() => {
+          const current = this.rangeState();
+          if (current.resolution === expectedResolution) return;
+          this.rangeState.set({ ...current, resolution: expectedResolution });
+        });
       },
       { allowSignalWrites: true },
     );
