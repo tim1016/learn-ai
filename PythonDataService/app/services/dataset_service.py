@@ -333,41 +333,203 @@ def fetch_bars_chunked(
     return unique_bars
 
 
-def filter_session(df: pd.DataFrame, session: str) -> pd.DataFrame:
-    """Filter bars to RTH (09:30-16:00 ET) or keep all (extended)."""
+_BAR_WINDOW_MINUTES_PER_UNIT: dict[str, int] = {
+    "second": 1,  # rounded up to one minute for the session-window check
+    "minute": 1,
+    "hour": 60,
+    "day": 1440,
+    "week": 1440,
+    "month": 1440,
+    "quarter": 1440,
+    "year": 1440,
+}
+
+
+def filter_session(
+    df: pd.DataFrame,
+    session: str,
+    timespan: str = "minute",
+    multiplier: int = 1,
+) -> pd.DataFrame:
+    """Filter bars to RTH (09:30–16:00 ET) or keep all (extended).
+
+    A bar is kept whenever its trade window OVERLAPS [09:30, 16:00) ET on
+    a weekday — not just when its start-of-window timestamp falls inside
+    that range. The original implementation only checked the start, which
+    silently dropped:
+
+      * The 09:00 ET hourly bar (window 09:00–10:00) that contains the
+        09:30 RTH open. RTH hourly datasets came back with 6 bars/day
+        instead of 7.
+      * Every daily/weekly/monthly bar (timestamp at 00:00 ET, well
+        before 09:30). RTH daily datasets came back with zero rows.
+
+    Day-and-above bars are treated as 1440-minute windows so they
+    overlap RTH on every weekday — the weekday mask is the only
+    practical filter for those resolutions.
+    """
     if session != "rth":
         return df
 
     dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     dt_et = dt_utc.dt.tz_convert(_ET)
-
-    # RTH: 09:30 <= time < 16:00 ET, weekdays only
     time_minutes = dt_et.dt.hour * 60 + dt_et.dt.minute
+    bar_window_minutes = max(1, multiplier) * _BAR_WINDOW_MINUTES_PER_UNIT.get(timespan, 1)
+
     rth_start = _RTH_START_HOUR * 60 + _RTH_START_MIN  # 570
     rth_end = _RTH_END_HOUR * 60 + _RTH_END_MIN  # 960
 
-    mask = (
-        (time_minutes >= rth_start) & (time_minutes < rth_end) & (dt_et.dt.dayofweek < 5)  # Mon-Fri
-    )
+    overlaps_rth = (time_minutes < rth_end) & ((time_minutes + bar_window_minutes) > rth_start)
+    is_weekday = dt_et.dt.dayofweek < 5
+    mask = overlaps_rth & is_weekday
+
     before = len(df)
     df = df[mask].reset_index(drop=True)
-    logger.info(f"[SESSION] RTH filter: {before} → {len(df)} bars")
+    logger.info(f"[SESSION] RTH filter ({multiplier}{timespan}): {before} → {len(df)} bars")
     return df
 
 
-def forward_fill_gaps(df: pd.DataFrame, session: str) -> pd.DataFrame:
+def fetch_rth_closes(
+    polygon: PolygonClientService,
+    ticker: str,
+    from_date: str,
+    to_date: str,
+    adjusted: bool = True,
+    buffer_days: int = 14,
+) -> dict[str, float]:
+    """Map each trading date in [from_date - buffer_days, to_date] to that
+    day's RTH close (16:00 ET) from Polygon daily aggregates.
+
+    The 14-day default buffer ensures the first trading day in the requested
+    window has a prior session's close available for ``add_previous_close_column``;
+    it absorbs weekends and any reasonable single-week market closure.
+
+    Polygon's daily-bar timestamp is the start-of-day in UTC for the trading
+    date; converting to ET and taking ``.date`` gives the bar's trading date
+    unambiguously.
     """
-    Build a continuous minute grid and forward-fill missing bars.
-    Missing bars get: open=high=low=close=prev_close, volume=0, transactions=0.
+    buffer_start = (
+        datetime.strptime(from_date, "%Y-%m-%d") - timedelta(days=buffer_days)
+    ).strftime("%Y-%m-%d")
+
+    daily = polygon.fetch_aggregates(
+        ticker=ticker,
+        multiplier=1,
+        timespan="day",
+        from_date=buffer_start,
+        to_date=to_date,
+        adjusted=adjusted,
+        sort="asc",
+    )
+    if not daily:
+        logger.warning(f"[PC] No daily bars returned for {ticker} {buffer_start}→{to_date}")
+        return {}
+
+    closes: dict[str, float] = {}
+    for bar in daily:
+        ts_ms = int(bar["timestamp"])
+        bar_date = pd.Timestamp(ts_ms, unit="ms", tz="UTC").tz_convert(_ET).date()
+        closes[bar_date.isoformat()] = float(bar["close"])
+
+    logger.info(f"[PC] Built RTH-close map for {ticker}: {len(closes)} trading days")
+    return closes
+
+
+# Wall-clock minute (ET) at which the regular trading session ends.
+_RTH_CLOSE_MINUTE = _RTH_END_HOUR * 60 + _RTH_END_MIN  # 16:00 → 960
+
+
+def add_previous_close_column(
+    df: pd.DataFrame,
+    rth_closes: dict[str, float],
+    column_name: str = "PC",
+) -> pd.DataFrame:
+    """Stamp ``column_name`` with the close of the most recently completed
+    RTH session at or before each bar's timestamp.
+
+    Rule (ET wall-clock):
+      * Bar time < 16:00 → PC = previous trading day's RTH close.
+      * Bar time ≥ 16:00 → PC = today's RTH close (the session that just
+        ended).
+
+    This is the time-aware reading of "previous close": morning RTH bars on
+    day D and pre-market bars on day D both reference D−1's close, while
+    after-hours bars on day D reference D's just-completed close — so the
+    overnight gap between two adjacent extended-session bars is a single
+    subtraction.
+
+    Bars whose lookup target isn't in ``rth_closes`` (e.g. the very first
+    trading day in a fresh feed with no prior session) get NaN, never a
+    silent zero.
+    """
+    if df.empty:
+        df[column_name] = pd.Series(dtype="float64")
+        return df
+
+    if not rth_closes:
+        df[column_name] = pd.Series([float("nan")] * len(df), dtype="float64")
+        return df
+
+    dt_et = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(_ET)
+    bar_dates = dt_et.dt.date.astype(str).reset_index(drop=True)
+    bar_minute_of_day = (dt_et.dt.hour * 60 + dt_et.dt.minute).reset_index(drop=True)
+    after_close_mask = bar_minute_of_day >= _RTH_CLOSE_MINUTE
+
+    sorted_dates = sorted(rth_closes.keys())
+    prev_date_map: dict[str, str] = {sorted_dates[i]: sorted_dates[i - 1] for i in range(1, len(sorted_dates))}
+
+    today_close = bar_dates.map(rth_closes)
+    prev_close = bar_dates.map(prev_date_map).map(rth_closes)
+
+    pc = today_close.where(after_close_mask, prev_close).astype("float64")
+    df[column_name] = pc.to_numpy()
+    return df
+
+
+def forward_fill_gaps(
+    df: pd.DataFrame,
+    session: str,
+    timespan: str = "minute",
+    multiplier: int = 1,
+) -> pd.DataFrame:
+    """
+    Build a continuous bar grid at the requested resolution and forward-fill
+    missing bars. Missing bars get: open=high=low=close=prev_close, volume=0,
+    transactions=0.
+
+    The grid frequency must match the requested ``(timespan, multiplier)`` —
+    otherwise the merge would expand higher-resolution bars onto a finer grid
+    and silently reshape the data (e.g. 15-minute bars expanded to 1-minute
+    rows via ffill).
+
+    Only minute-resolution bars participate in forward-fill: those are the
+    ones where Polygon legitimately omits empty intra-session minutes and a
+    continuous grid is useful for indicator math. Hour/day/week/month bars
+    come back from Polygon already aligned to their own boundaries (top of
+    the hour, top of the day, etc.) which do not match the RTH session
+    start of 09:30 ET; building a synthetic grid for them would produce
+    timestamps that never line up with Polygon's bars, the merge would
+    return NaN for every row, and the resulting CSV looks empty. Return
+    the frame unchanged in that case.
     """
     if df.empty:
         return df
+
+    if timespan != "minute":
+        logger.info(
+            f"[FILL] Skipping forward_fill for timespan={timespan} — Polygon returns "
+            f"these bars pre-aligned and an RTH-anchored grid would mis-align with them."
+        )
+        return df
+
+    freq = f"{max(1, multiplier)}min"
+    bar_delta = timedelta(minutes=max(1, multiplier))
 
     dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     dt_et = dt_utc.dt.tz_convert(_ET)
     df["_dt_et"] = dt_et
 
-    # Group by trading date and build continuous minute ranges
+    # Group by trading date and build continuous bar ranges
     filled_frames = []
     for date, group in df.groupby(dt_et.dt.date):
         day_dt = pd.Timestamp(date)
@@ -383,10 +545,10 @@ def forward_fill_gaps(df: pd.DataFrame, session: str) -> pd.DataFrame:
             # Extended: 04:00 - 20:00 ET (typical Polygon range)
             first_bar = group["_dt_et"].iloc[0]
             last_bar = group["_dt_et"].iloc[-1]
-            start = first_bar.floor("min")
-            end = last_bar.ceil("min") + timedelta(minutes=1)
+            start = first_bar.floor(freq)
+            end = last_bar.ceil(freq) + bar_delta
 
-        minute_range = pd.date_range(start=start, end=end - timedelta(minutes=1), freq="min", tz=_ET)
+        minute_range = pd.date_range(start=start, end=end - bar_delta, freq=freq, tz=_ET)
         # Convert to milliseconds since epoch (pandas 3.0 uses variable resolution,
         # so .astype("int64") may return µs not ns — use total_seconds() for safety)
         _epoch = pd.Timestamp("1970-01-01", tz="UTC")
@@ -506,6 +668,8 @@ def preprocess_and_calculate(
     trim_from_ts: int | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    timespan: str = "minute",
+    multiplier: int = 1,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """
     Shared preprocessing pipeline:
@@ -519,14 +683,14 @@ def preprocess_and_calculate(
     df = pd.DataFrame(bars)
     df = df.sort_values("timestamp").reset_index(drop=True)
 
-    df = filter_session(df, session)
+    df = filter_session(df, session, timespan=timespan, multiplier=multiplier)
 
     # Tag session column for CSV export (uses NYSE calendar)
     if from_date and to_date:
         df = _tag_session_column(df, from_date, to_date)
 
     if forward_fill:
-        df = forward_fill_gaps(df, session)
+        df = forward_fill_gaps(df, session, timespan=timespan, multiplier=multiplier)
 
     column_meta: list[dict[str, Any]] = []
     if indicator_entries:
@@ -719,6 +883,7 @@ def build_metadata_json(
     ]
     for col in ohlcv_cols:
         desc_map = {
+            "PC": "Previous trading day's RTH close for the underlying ticker",
             "open": "Opening price of the minute bar",
             "high": "Highest price during the minute bar",
             "low": "Lowest price during the minute bar",
@@ -727,12 +892,15 @@ def build_metadata_json(
             "vwap": "Volume-weighted average price for the minute bar",
             "transactions": "Number of transactions in the minute bar",
         }
+        source_map = {
+            "PC": "Polygon.io REST API (list_aggs, daily timespan)",
+        }
         base_columns.append(
             {
                 "column": col,
                 "type": "float" if col != "transactions" else "int",
                 "description": desc_map.get(col, col),
-                "source": "Polygon.io REST API (list_aggs)",
+                "source": source_map.get(col, "Polygon.io REST API (list_aggs)"),
             }
         )
 
@@ -890,6 +1058,10 @@ def build_metadata_csv(
         ("iso_time", "string", "Derived", "", "", "ISO 8601 datetime (UTC)"),
     ]
     desc_map = {
+        "PC": "Previous close — the RTH close (16:00 ET) of the most recently completed "
+        "regular trading session at or before this bar. Bars before 16:00 ET reference the "
+        "prior trading day's close; bars at or after 16:00 ET reference the same day's "
+        "close. Sourced from Polygon daily aggregates.",
         "open": "Opening price of the minute bar",
         "high": "Highest price during the minute bar",
         "low": "Lowest price during the minute bar",

@@ -117,6 +117,8 @@ async def generate_indicator_table(request: IndicatorTableRequest):
             session=request.session,
             forward_fill=request.forward_fill,
             trim_from_ts=from_ts,
+            timespan=request.timespan,
+            multiplier=request.multiplier,
         )
 
         # Post-processing: RSI MA (SMA of the RSI column — not a standard single-call indicator)
