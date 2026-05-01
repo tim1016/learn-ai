@@ -20,7 +20,16 @@ import { SelectModule } from 'primeng/select';
 import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 
-import { BatchResearchResult } from '../../../services/research.service';
+import {
+  AggregateIcCi,
+  BatchResearchResult,
+  BinomialNullTest,
+  CrossSectionalCriterion,
+  CrossSectionalStageInfo,
+  TickerBatchResult,
+  TickerValidity,
+  ValiditySummary,
+} from '../../../services/research.service';
 import { JobsService, JobState } from '../../../services/jobs.service';
 
 const DEFAULT_TICKERS = ['SPY', 'QQQ', 'AAPL'];
@@ -43,11 +52,61 @@ const TARGET_TYPES = [
 interface CrossSectionalJobResultRaw {
   success: boolean;
   feature_name: string;
+  target_type?: string;
   tickers_tested: number;
+  tickers_tested_raw?: number;
+  tickers_valid?: number;
   tickers_passed: number;
   pass_rate: number;
   cross_sectional_consistent: boolean;
   aggregate_ic: number;
+  aggregate_ic_uniform?: number;
+  aggregate_ic_ci?: {
+    point: number;
+    se: number;
+    ci_lower: number;
+    ci_upper: number;
+    confidence_level: number;
+    weighting_method: string;
+    n_tickers_used: number;
+    sum_weights: number;
+    valid: boolean;
+  };
+  binomial_test?: {
+    n_valid: number;
+    n_eff_assets: number;
+    n_passed: number;
+    alpha_per_ticker: number;
+    p_value: number;
+    significant: boolean;
+  };
+  n_eff_assets?: number;
+  validity_summary?: {
+    valid: number;
+    invalid_iv: number;
+    invalid_data: number;
+    errored: number;
+  };
+  stage_info?: {
+    stage: number;
+    label: string;
+    description: string;
+    next_stage_label: string;
+    failed_criteria: {
+      name: string;
+      description: string;
+      current_value: number;
+      required_repr: string;
+      met: boolean;
+    }[];
+    advance_criteria: {
+      name: string;
+      description: string;
+      current_value: number;
+      required_repr: string;
+      met: boolean;
+    }[];
+  };
   ticker_results: {
     ticker: string;
     mean_ic: number;
@@ -60,6 +119,7 @@ interface CrossSectionalJobResultRaw {
     passed_validation: boolean;
     data_points: number;
     error: string | null;
+    validity?: TickerValidity;
   }[];
   summary: string;
 }
@@ -197,6 +257,79 @@ export class BatchRunnerComponent {
     return this.result()?.crossSectionalConsistent ? 'Consistent' : 'Not Consistent';
   }
 
+  // ─── Verdict helpers (new schema only) ───────────────────────────
+
+  /** Stage 0/1/2/3 from the new SSE-driven response. ``null`` for the
+   *  legacy GraphQL path that doesn't populate ``stageInfo``. */
+  readonly stage = computed<0 | 1 | 2 | 3 | null>(
+    () => this.result()?.stageInfo?.stage ?? null,
+  );
+
+  readonly stageBand = computed<'green' | 'amber' | 'red' | 'na'>(() => {
+    const s = this.stage();
+    if (s === null) return 'na';
+    if (s === 3) return 'green';
+    if (s === 2) return 'green';
+    if (s === 1) return 'amber';
+    return 'red';
+  });
+
+  readonly aggregateIcCi = computed<AggregateIcCi | null>(
+    () => this.result()?.aggregateIcCi ?? null,
+  );
+
+  readonly binomialTest = computed<BinomialNullTest | null>(
+    () => this.result()?.binomialTest ?? null,
+  );
+
+  readonly validitySummary = computed<ValiditySummary | null>(
+    () => this.result()?.validitySummary ?? null,
+  );
+
+  readonly stageInfo = computed<CrossSectionalStageInfo | null>(
+    () => this.result()?.stageInfo ?? null,
+  );
+
+  readonly ciStraddlesZero = computed<boolean>(() => {
+    const ci = this.aggregateIcCi();
+    return !!ci?.valid && ci.ciLower < 0 && ci.ciUpper > 0;
+  });
+
+  /** "0.0281 ± 0.0156" form for the headline; falls back to "0.0281"
+   *  when the CI was not computed (legacy path). */
+  readonly aggregateIcDisplay = computed<string>(() => {
+    const r = this.result();
+    if (!r) return '—';
+    const ci = this.aggregateIcCi();
+    if (ci?.valid) {
+      const halfWidth = (ci.ciUpper - ci.ciLower) / 2;
+      return `${ci.point.toFixed(4)} ± ${halfWidth.toFixed(4)}`;
+    }
+    return r.aggregateIc.toFixed(4);
+  });
+
+  readonly ciIntervalDisplay = computed<string | null>(() => {
+    const ci = this.aggregateIcCi();
+    if (!ci?.valid) return null;
+    return `95% CI [${ci.ciLower.toFixed(4)}, ${ci.ciUpper.toFixed(4)}]`;
+  });
+
+  /** Per-ticker UI tag — distinguishes PASS / FAIL / INVALID / ERROR. */
+  validityTagSeverity(row: TickerBatchResult): 'success' | 'danger' | 'warn' | 'info' {
+    const v: TickerValidity = row.validity ?? 'valid';
+    if (v === 'invalid_iv' || v === 'invalid_data') return 'warn';
+    if (v === 'error') return 'info';
+    return row.passedValidation ? 'success' : 'danger';
+  }
+
+  validityTagLabel(row: TickerBatchResult): string {
+    const v: TickerValidity = row.validity ?? 'valid';
+    if (v === 'invalid_iv') return 'INVALID — IV';
+    if (v === 'invalid_data') return 'INVALID — DATA';
+    if (v === 'error') return 'ERROR';
+    return row.passedValidation ? 'PASS' : 'FAIL';
+  }
+
   toggleTicker(ticker: string): void {
     const current = this.selectedTickers();
     if (current.includes(ticker)) {
@@ -324,8 +457,70 @@ export class BatchRunnerComponent {
         passedValidation: r.passed_validation,
         dataPoints: r.data_points,
         error: r.error ?? undefined,
+        validity: r.validity,
       })),
       summary: raw.summary,
+      tickersTestedRaw: raw.tickers_tested_raw,
+      tickersValid: raw.tickers_valid,
+      validitySummary: raw.validity_summary
+        ? {
+            valid: raw.validity_summary.valid,
+            invalidIv: raw.validity_summary.invalid_iv,
+            invalidData: raw.validity_summary.invalid_data,
+            errored: raw.validity_summary.errored,
+          }
+        : undefined,
+      aggregateIcUniform: raw.aggregate_ic_uniform,
+      aggregateIcCi: raw.aggregate_ic_ci
+        ? {
+            point: raw.aggregate_ic_ci.point,
+            se: raw.aggregate_ic_ci.se,
+            ciLower: raw.aggregate_ic_ci.ci_lower,
+            ciUpper: raw.aggregate_ic_ci.ci_upper,
+            confidenceLevel: raw.aggregate_ic_ci.confidence_level,
+            weightingMethod: raw.aggregate_ic_ci.weighting_method,
+            nTickersUsed: raw.aggregate_ic_ci.n_tickers_used,
+            sumWeights: raw.aggregate_ic_ci.sum_weights,
+            valid: raw.aggregate_ic_ci.valid,
+          }
+        : undefined,
+      binomialTest: raw.binomial_test
+        ? {
+            nValid: raw.binomial_test.n_valid,
+            nEffAssets: raw.binomial_test.n_eff_assets,
+            nPassed: raw.binomial_test.n_passed,
+            alphaPerTicker: raw.binomial_test.alpha_per_ticker,
+            pValue: raw.binomial_test.p_value,
+            significant: raw.binomial_test.significant,
+          }
+        : undefined,
+      nEffAssets: raw.n_eff_assets,
+      stageInfo: raw.stage_info
+        ? {
+            stage: raw.stage_info.stage as 0 | 1 | 2 | 3,
+            label: raw.stage_info.label,
+            description: raw.stage_info.description,
+            nextStageLabel: raw.stage_info.next_stage_label,
+            failedCriteria: raw.stage_info.failed_criteria.map(this.toCriterion),
+            advanceCriteria: raw.stage_info.advance_criteria.map(this.toCriterion),
+          }
+        : undefined,
+    };
+  }
+
+  private toCriterion(c: {
+    name: string;
+    description: string;
+    current_value: number;
+    required_repr: string;
+    met: boolean;
+  }): CrossSectionalCriterion {
+    return {
+      name: c.name,
+      description: c.description,
+      currentValue: c.current_value,
+      requiredRepr: c.required_repr,
+      met: c.met,
     };
   }
 }

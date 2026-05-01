@@ -423,6 +423,8 @@ export interface RunSignalEngineInput {
 
 // ─── Batch / Cross-Sectional Interfaces ──────────────────
 
+export type TickerValidity = 'valid' | 'invalid_iv' | 'invalid_data' | 'error';
+
 export interface TickerBatchResult {
   ticker: string;
   meanIc: number;
@@ -435,6 +437,56 @@ export interface TickerBatchResult {
   passedValidation: boolean;
   dataPoints: number;
   error?: string;
+  /** New: distinguishes "FAIL — IC ran, signal weak" from "INVALID — IV
+   *  diagnostics failed, no IC computation". The legacy GraphQL endpoint
+   *  doesn't supply this; the new SSE-driven path does. */
+  validity?: TickerValidity;
+}
+
+export interface ValiditySummary {
+  valid: number;
+  invalidIv: number;
+  invalidData: number;
+  errored: number;
+}
+
+export interface AggregateIcCi {
+  point: number;
+  se: number;
+  ciLower: number;
+  ciUpper: number;
+  confidenceLevel: number;
+  weightingMethod: string;
+  nTickersUsed: number;
+  sumWeights: number;
+  valid: boolean;
+}
+
+export interface BinomialNullTest {
+  nValid: number;
+  nEffAssets: number;
+  nPassed: number;
+  alphaPerTicker: number;
+  pValue: number;
+  significant: boolean;
+}
+
+export interface CrossSectionalCriterion {
+  name: string;
+  description: string;
+  currentValue: number;
+  requiredRepr: string;
+  met: boolean;
+}
+
+export interface CrossSectionalStageInfo {
+  /** 0 = Rejected, 1 = Weak, 2 = Research candidate, 3 = Promotion. */
+  stage: 0 | 1 | 2 | 3;
+  label: string;
+  description: string;
+  nextStageLabel: string;
+  failedCriteria: CrossSectionalCriterion[];
+  advanceCriteria: CrossSectionalCriterion[];
 }
 
 export interface BatchResearchResult {
@@ -447,6 +499,16 @@ export interface BatchResearchResult {
   aggregateIc: number;
   tickerResults: TickerBatchResult[];
   summary: string;
+  // Optional — populated by the new SSE-driven path. The legacy GraphQL
+  // mutation will leave these undefined.
+  tickersTestedRaw?: number;
+  tickersValid?: number;
+  validitySummary?: ValiditySummary;
+  aggregateIcUniform?: number;
+  aggregateIcCi?: AggregateIcCi;
+  binomialTest?: BinomialNullTest;
+  nEffAssets?: number;
+  stageInfo?: CrossSectionalStageInfo;
   error?: string;
 }
 
