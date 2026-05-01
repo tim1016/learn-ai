@@ -105,11 +105,22 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
 
 // HttpClient used by JobsApi to dispatch work to Python. No retry — a
 // long backtest must not silently spawn duplicate runs on a transient hiccup.
+//
+// Timeout: the Python /api/jobs-internal/* handlers spawn the actual
+// work in a daemon thread (see app/jobs/runner.py) and return
+// ``{"job_id": …, "status": "queued"}`` essentially synchronously, so
+// the dispatch itself should complete in milliseconds. 15 s was tight
+// when the python-service event loop was busy with a previous study's
+// IC computations — uvicorn on a single worker can briefly starve a
+// new request while another one is mid-flight, and we'd 502 the user
+// even though the dispatch path itself is fire-and-forget. 60 s is
+// pure headroom; if the dispatch ever takes that long, something
+// else is genuinely wrong.
 builder.Services.AddHttpClient("python", client =>
 {
     var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
     client.BaseAddress = new Uri(baseUrl);
-    client.Timeout = TimeSpan.FromSeconds(15);
+    client.Timeout = TimeSpan.FromSeconds(60);
 });
 
 // Register business services (testable via interfaces)
