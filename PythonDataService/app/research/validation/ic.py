@@ -74,16 +74,7 @@ def _compute_newey_west_t_stat(
     mean_ic = float(np.mean(ic_array))
     demeaned = ic_array - mean_ic
 
-    # Automatic lag selection: Andrews (1991) rule for Bartlett kernel.
-    # The caller's ``min_lag`` floor (typically 5 for daily options) is
-    # only respected when the sample can support it: at small N, enforcing
-    # min_lag = 5 with n ≈ 5 collapses N_eff to ~0 because the truncation
-    # eats the whole sample. Cap the floor at n // 4 so the lag scales
-    # down for short series but remains at the daily-options floor when
-    # the sample is comfortable.
-    effective_min_lag = min(min_lag, max(n // 4, 1))
-    max_lag = max(_andrews_lag(n), effective_min_lag)
-    max_lag = min(max_lag, n - 2)
+    max_lag = _select_hac_lag(n, min_lag)
 
     # Gamma_0: variance
     gamma_0 = float(np.sum(demeaned**2) / n)
@@ -112,6 +103,39 @@ def _andrews_lag(n: int) -> int:
     return max(1, math.floor(4 * (n / 100) ** (2 / 9)))
 
 
+def _select_hac_lag(n: int, min_lag: int = 0) -> int:
+    """Pick the truncation lag for Newey-West / N_eff at sample size n.
+
+    Andrews (1991) is the textbook rule but it was derived for moderate
+    samples; on a 5-IC-observation rolling window with daily-options
+    autocorrelation it leaves N_eff collapsed to ~2. The fix has two
+    parts:
+
+    1. **Hard upper bound at sqrt-style scaling.** For small samples we
+       cap the lag at ``min(round(1.5 · sqrt(n)), n // 3)`` regardless
+       of what Andrews suggests. This is tighter than Andrews on small
+       n and equal-or-looser only on large n.
+    2. **Drop the caller's ``min_lag`` floor when n < 50.** A 5-lag
+       floor encodes "daily-options autocorrelation extends a week" but
+       the floor is only meaningful when the sample can support it —
+       below n = 50 the floor itself becomes the dominant truncation
+       and destroys N_eff.
+
+    Returns the chosen lag, clamped to ``max(1, n - 2)``.
+    """
+    if n < 3:
+        return 1
+
+    sqrt_cap = max(1, round(1.5 * math.sqrt(n)))
+    third_cap = max(1, n // 3)
+    upper_bound = min(sqrt_cap, third_cap)
+
+    effective_min_lag = 1 if n < 50 else min(min_lag, upper_bound)
+    lag = max(_andrews_lag(n), effective_min_lag)
+    lag = min(lag, upper_bound, n - 2)
+    return max(lag, 1)
+
+
 def _compute_effective_sample_size(ic_array: np.ndarray, min_lag: int = 0) -> float:
     """Compute effective sample size accounting for autocorrelation.
 
@@ -130,13 +154,10 @@ def _compute_effective_sample_size(ic_array: np.ndarray, min_lag: int = 0) -> fl
     if var < 1e-20:
         return float(n)
 
-    # Use Andrews (1991) bandwidth, consistent with Newey-West. Same
-    # adaptive cap on the caller's lag floor as in _compute_newey_west_t_stat:
-    # at small N, an over-aggressive floor truncates so much of the sum
-    # that N_eff collapses to ~0.
-    effective_min_lag = min(min_lag, max(n // 4, 1))
-    max_lag = max(_andrews_lag(n), effective_min_lag)
-    max_lag = min(max_lag, n - 2)
+    # Same adaptive lag selection as _compute_newey_west_t_stat —
+    # see _select_hac_lag for the rationale (sqrt-scaled cap +
+    # min_lag floor dropped when n < 50).
+    max_lag = _select_hac_lag(n, min_lag)
     rho_sum = 0.0
 
     for k in range(1, max_lag + 1):

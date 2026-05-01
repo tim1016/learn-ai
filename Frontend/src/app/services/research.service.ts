@@ -441,6 +441,10 @@ export interface TickerBatchResult {
    *  diagnostics failed, no IC computation". The legacy GraphQL endpoint
    *  doesn't supply this; the new SSE-driven path does. */
   validity?: TickerValidity;
+  /** True when the ticker is technically valid (IC ran) but its
+   *  effective sample size is below the trust threshold (default 10).
+   *  Surfaced in the UI as a "low confidence" annotation on the row. */
+  lowConfidence?: boolean;
 }
 
 export interface ValiditySummary {
@@ -457,6 +461,9 @@ export interface AggregateIcCi {
   ciUpper: number;
   confidenceLevel: number;
   weightingMethod: string;
+  /** Disclaimer about the SE approximation used (Stage 1 / Stage 2 form
+   *  vs. full Lo (2002) form). Rendered in the CI tooltip. */
+  seApproximationNote?: string;
   nTickersUsed: number;
   sumWeights: number;
   valid: boolean;
@@ -508,6 +515,10 @@ export interface BatchResearchResult {
   aggregateIcCi?: AggregateIcCi;
   binomialTest?: BinomialNullTest;
   nEffAssets?: number;
+  /** Which input matrix drove `nEffAssets` — `'ic'` (Stage-2-correct,
+   *  per-ticker IC time series) or `'returns'` (Stage-1 fallback,
+   *  daily stock returns). Disclosed via tooltip. */
+  nEffAssetsMethod?: 'ic' | 'returns';
   stageInfo?: CrossSectionalStageInfo;
   error?: string;
 }

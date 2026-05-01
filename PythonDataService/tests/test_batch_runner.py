@@ -22,6 +22,7 @@ import pandas as pd
 import pytest
 
 from app.research.batch_runner import (
+    N_EFF_ASSETS_IC_OBS_MIN,
     PER_TICKER_ALPHA,
     STAGE0_AGGREGATE_IC_FLOOR,
     STAGE0_BINOMIAL_P_MAX,
@@ -31,10 +32,12 @@ from app.research.batch_runner import (
     BinomialNullTest,
     _compute_binomial_null_test,
     _compute_n_eff_assets,
+    _compute_n_eff_assets_with_method,
     _compute_stage_info,
     _compute_weighted_aggregate_ic,
     _summarize_validity,
 )
+from app.research.validation.ic import _select_hac_lag
 
 # ─── Validity classification ─────────────────────────────────────
 
@@ -368,3 +371,106 @@ def test_stage3_when_meets_promotion_thresholds():
 
     assert info.stage == 3
     assert info.label == "Promotion Candidate"
+
+
+# ─── HAC lag selection (after ChatGPT v2 review) ─────────────
+
+
+def test_select_hac_lag_drops_min_lag_floor_at_small_n():
+    """A ``min_lag = 5`` floor doesn't survive a 6-IC-observation window.
+
+    Before the v2 fix, the floor dominated and N_eff collapsed to ~2.
+    The new selection caps the lag at ``min(round(1.5·√n), n // 3)`` and
+    forces ``min_lag = 1`` when ``n < 50``.
+    """
+    # n = 6 → sqrt-cap ≈ round(1.5·2.449) = 4 ; n//3 = 2 ; upper = 2
+    # min_lag floor is dropped (n < 50), so the chosen lag must be ≤ 2.
+    chosen = _select_hac_lag(n=6, min_lag=5)
+    assert chosen <= 2
+    assert chosen >= 1
+
+
+def test_select_hac_lag_respects_min_lag_when_n_large_enough():
+    """At n ≥ 50 we honour the caller's structural min_lag."""
+    # n = 200 → sqrt-cap ≈ round(1.5·14.14) = 21 ; n//3 = 66 ; upper = 21
+    chosen = _select_hac_lag(n=200, min_lag=5)
+    assert chosen >= 5
+    assert chosen <= 21
+
+
+def test_select_hac_lag_clamps_to_n_minus_2():
+    """Even when the cap is permissive, lag can't exceed n - 2."""
+    chosen = _select_hac_lag(n=4, min_lag=10)
+    assert chosen <= 4 - 2
+
+
+# ─── N_eff_assets method selection ──────────────────────────
+
+
+def test_n_eff_assets_with_method_prefers_ic_when_all_tickers_have_enough_obs():
+    """IC correlation is the Stage-2-correct dependency structure; we
+    use it whenever every ticker has ≥ N_EFF_ASSETS_IC_OBS_MIN obs."""
+    rng = np.random.default_rng(seed=17)
+    dates_long = [f"2025-01-{d:02d}" for d in range(1, 21)]
+    ic_series = {
+        t: pd.Series(
+            rng.normal(size=N_EFF_ASSETS_IC_OBS_MIN + 5),
+            index=dates_long[: N_EFF_ASSETS_IC_OBS_MIN + 5],
+        )
+        for t in ("A", "B", "C")
+    }
+    returns = {
+        t: pd.Series(rng.normal(size=20), index=dates_long) for t in ("A", "B", "C")
+    }
+
+    n_eff, method = _compute_n_eff_assets_with_method(ic_series, returns)
+
+    assert method == "ic"
+    assert 1.0 <= n_eff <= 3.0
+
+
+def test_n_eff_assets_with_method_falls_back_to_returns_when_ic_too_short():
+    """Below the IC-obs threshold per ticker, fall back to the
+    daily-returns correlation (Stage 1 acceptable)."""
+    rng = np.random.default_rng(seed=18)
+    dates = [f"2025-01-{d:02d}" for d in range(1, 21)]
+    ic_series = {
+        t: pd.Series(rng.normal(size=2), index=dates[:2]) for t in ("A", "B", "C")
+    }
+    returns = {
+        t: pd.Series(rng.normal(size=20), index=dates) for t in ("A", "B", "C")
+    }
+
+    n_eff, method = _compute_n_eff_assets_with_method(ic_series, returns)
+
+    assert method == "returns"
+    assert 1.0 <= n_eff <= 3.0
+
+
+def test_n_eff_assets_with_method_falls_back_when_ic_series_empty():
+    """No IC series at all → returns fallback."""
+    returns = {
+        t: pd.Series(np.linspace(-0.01, 0.01, 20)) for t in ("A", "B")
+    }
+
+    _, method = _compute_n_eff_assets_with_method({}, returns)
+
+    assert method == "returns"
+
+
+# ─── AggregateIC SE-approximation note ──────────────────────
+
+
+def test_weighted_aggregate_ic_carries_se_approximation_disclaimer():
+    """The CI tooltip must cite the SE approximation so a reader knows
+    what's pinned vs approximated."""
+    rows = [
+        {"validity": "valid", "mean_ic": 0.04, "effective_n": 100.0, "passed_validation": True},
+        {"validity": "valid", "mean_ic": 0.06, "effective_n": 100.0, "passed_validation": True},
+    ]
+
+    result = _compute_weighted_aggregate_ic(rows)
+
+    assert result.valid is True
+    assert "approximation" in result.se_approximation_note.lower()
+    assert "Lo (2002)" in result.se_approximation_note

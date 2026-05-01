@@ -159,7 +159,7 @@
                   </div>
                   @if (ciIntervalDisplay()) {
                     <div class="ci-display"
-                      pTooltip="Lo-style 95% CI on the precision-weighted aggregate IC. Weights = per-ticker N_eff. CI that includes 0 means the aggregate is statistically indistinguishable from noise."
+                      [pTooltip]="ci.seApproximationNote || 'Lo-style 95% CI. Weights = per-ticker N_eff. CI that includes 0 means the aggregate is indistinguishable from noise.'"
                       tooltipPosition="bottom">
                       <span class="ci-text">{{ ciIntervalDisplay() }}</span>
                       @if (ciStraddlesZero()) {
@@ -168,6 +168,18 @@
                     </div>
                   }
                 </div>
+                @if (ciUnreliable()) {
+                  <div class="ci-unreliable-banner">
+                    <i class="pi pi-exclamation-triangle"></i>
+                    <span>
+                      <strong>CI unreliable:</strong> the half-width is wider
+                      than 5× |IC|, which means the band is too wide to be
+                      interpretable. This is a small-sample artefact —
+                      treat the IC as a point estimate without inferential
+                      weight until N<sub>eff</sub> grows.
+                    </span>
+                  </div>
+                }
               }
             }
           </div>
@@ -297,11 +309,11 @@
             </span>
           </div>
           <div class="stat-cell"
-               pTooltip="Effective number of independent assets via eigenvalue decomposition of the cross-asset correlation matrix. SPY/QQQ/AAPL are highly correlated, so N_eff_assets is typically much less than the raw ticker count."
+               [pTooltip]="'Effective number of independent assets via eigenvalue decomposition of the ' + nEffAssetsMethodLabel() + ' correlation matrix. (Σλ)² / Σλ² where λ are correlation-matrix eigenvalues — SPY/QQQ/AAPL are highly correlated, so N_eff_assets is typically much less than the raw ticker count.'"
                tooltipPosition="top">
             <span class="stat-label">N<sub>eff_assets</sub> (eigenvalue)</span>
             <span class="stat-value">{{ bt.nEffAssets | number: '1.2-2' }}</span>
-            <span class="stat-meta">vs {{ bt.nValid }} valid (raw)</span>
+            <span class="stat-meta">via {{ nEffAssetsMethodLabel() }}</span>
           </div>
         </div>
       }
