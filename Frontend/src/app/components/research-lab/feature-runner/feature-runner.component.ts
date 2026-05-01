@@ -31,6 +31,21 @@ interface FeatureOption {
   value: string;
 }
 
+/** Shape of the ``target`` payload emitted by ``_serialize_target`` in
+ *  ``PythonDataService/app/routers/jobs.py``. Mirrors the GraphQL
+ *  ``TargetMetadata`` so the mapper below can rename keys 1:1. */
+interface FeatureResearchTargetRaw {
+  target_name: string;
+  horizon_minutes: number;
+  horizon_bars: number;
+  bar_minutes: number;
+  timezone: string;
+  valid_count: number;
+  total_count: number;
+  valid_ratio: number;
+  invalid_reason_counts: { reason: string; count: number }[];
+}
+
 /** Snake-case shape returned by /api/jobs-internal/feature-research worker. */
 interface FeatureResearchJobResultRaw {
   success: boolean;
@@ -56,6 +71,7 @@ interface FeatureResearchJobResultRaw {
   robustness: unknown;
   feature_spec: unknown;
   validation_verdict: unknown;
+  target?: FeatureResearchTargetRaw | null;
   passed_validation: boolean;
   error: string | null;
 }
@@ -179,9 +195,15 @@ export class FeatureRunnerComponent {
     return `${this.selectedFeatureLabel} on ${this.ticker().toUpperCase()} (${this.fromDate()} to ${this.toDate()})`;
   }
 
+  // Tracks which job id we've already settled (fetched result, surfaced
+  // error, or acknowledged cancellation) so the effect doesn't re-fire
+  // its terminal branch on every subsequent event tick. ``handleCompleted``
+  // sets this *after* the fetch succeeds so a transient ``fetchResult``
+  // failure doesn't lock out retries.
+  private resultSettledFor: string | null = null;
+
   constructor() {
-    let lastLogTs = 0;
-    let resultFetchedFor: string | null = null;
+    let lastLogSeq = -1;
 
     effect(() => {
       this.jobsService.jobs(); // dependency
@@ -190,23 +212,26 @@ export class FeatureRunnerComponent {
       const j = this.jobsService.job(id);
       if (!j) return;
 
-      // Forward log lines into the rolling buffer.
+      // Forward log lines into the rolling buffer. Dedupe by the
+      // monotonic ``seq`` rather than ``ts`` so two events landing in
+      // the same millisecond aren't collapsed into one — the second
+      // line would otherwise be lost once it slides past the 5-entry
+      // ``recentLogs`` window.
       for (const log of j.recentLogs) {
-        if (log.ts > lastLogTs) {
+        if (log.seq > lastLogSeq) {
           const level = pythonLevelToEntryLevel(log.level);
           this.logBuffer.append(level, glyphForLevel(level), log.message);
-          lastLogTs = log.ts;
+          lastLogSeq = log.seq;
         }
       }
 
-      if (j.status === 'completed' && resultFetchedFor !== id) {
-        resultFetchedFor = id;
+      if (j.status === 'completed' && this.resultSettledFor !== id) {
         void this.handleCompleted(id);
-      } else if (j.status === 'failed' && resultFetchedFor !== id) {
-        resultFetchedFor = id;
+      } else if (j.status === 'failed' && this.resultSettledFor !== id) {
+        this.resultSettledFor = id;
         this.error.set(j.errorMessage ?? 'Feature research run failed');
-      } else if (j.status === 'cancelled' && resultFetchedFor !== id) {
-        resultFetchedFor = id;
+      } else if (j.status === 'cancelled' && this.resultSettledFor !== id) {
+        this.resultSettledFor = id;
         this.error.set(j.message ?? 'Run cancelled');
       }
     });
@@ -242,9 +267,21 @@ export class FeatureRunnerComponent {
     if (!id) return;
     try {
       await this.jobsService.cancelJob(id);
-    } catch {
-      // The terminal SSE event makes the cancel moot; the panel will
-      // pick up the final state regardless.
+    } catch (err: unknown) {
+      // Tolerate the race where the worker terminated before the cancel
+      // request landed — the terminal SSE event makes the cancel moot.
+      // Surface every other failure so a real network or server error
+      // doesn't leave the UI silently stuck on "running" (matches the
+      // batch-runner cancel handler).
+      const status = this.jobsService.job(id)?.status;
+      if (status === 'completed' || status === 'cancelled' || status === 'failed') {
+        return;
+      }
+      const msg =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message: unknown }).message)
+          : 'Failed to cancel feature research run';
+      this.error.set(msg);
     }
   }
 
@@ -274,6 +311,10 @@ export class FeatureRunnerComponent {
       } else if (mapped.error) {
         this.error.set(mapped.error);
       }
+      // Only mark this id as settled once the fetch actually returned;
+      // a transient ``fetchResult`` failure should leave the guard open
+      // so the next event tick can retry.
+      this.resultSettledFor = id;
     } catch (err: unknown) {
       const msg =
         err && typeof err === 'object' && 'message' in err
@@ -310,6 +351,19 @@ export class FeatureRunnerComponent {
       robustness: raw.robustness as ResearchResult['robustness'],
       featureSpec: raw.feature_spec as ResearchResult['featureSpec'],
       validationVerdict: raw.validation_verdict as ResearchResult['validationVerdict'],
+      targetMetadata: raw.target
+        ? {
+            targetName: raw.target.target_name,
+            horizonMinutes: raw.target.horizon_minutes,
+            horizonBars: raw.target.horizon_bars,
+            barMinutes: raw.target.bar_minutes,
+            timezone: raw.target.timezone,
+            validCount: raw.target.valid_count,
+            totalCount: raw.target.total_count,
+            validRatio: raw.target.valid_ratio,
+            invalidReasonCounts: raw.target.invalid_reason_counts,
+          }
+        : null,
       error: raw.error ?? undefined,
     };
   }

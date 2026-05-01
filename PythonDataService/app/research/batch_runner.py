@@ -416,6 +416,16 @@ def run_cross_sectional_study(
             )
 
         except Exception as e:
+            # Defer-to-wrapper: when the SSE wrapper's cancel_check raises
+            # JobCancelled mid-ticker (e.g. the inner `if cancel_check():`
+            # at the data-fetch boundary), let it propagate so
+            # run_in_thread emits job.cancelled instead of marking the
+            # ticker as a per-row "error" and letting the loop finish
+            # `completed`. We can't import JobCancelled here (research →
+            # jobs would be a layering inversion), so we sniff by class
+            # name — same pattern as runner.py / signal/engine.py.
+            if type(e).__name__ == "JobCancelled":
+                raise
             result["error"] = str(e)
             result["validity"] = "error"
             on_log(f"[{i + 1}/{n}] {ticker}: ERROR — {e}")

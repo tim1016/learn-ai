@@ -3,10 +3,13 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  DestroyRef,
   ElementRef,
   effect,
+  inject,
   input,
   output,
+  signal,
   viewChild,
 } from '@angular/core';
 
@@ -121,14 +124,25 @@ export class RunProgressPanelComponent {
     return `${current.toLocaleString()} / ${j.total.toLocaleString()} ${unit}`;
   });
 
+  // Reactive ``now`` that ticks every second while a job is running so
+  // ``elapsedSeconds`` advances even between SSE events. Without this,
+  // long phases (e.g. a 30-second IV history fetch) would freeze the
+  // displayed elapsed time until the next ``job.phase``/``job.log``
+  // update arrived.
+  private readonly now = signal(Date.now());
+  private tickHandle: number | null = null;
+
   readonly elapsedSeconds = computed<number | null>(() => {
     const j = this.job();
     if (!j?.startedAt) return null;
-    const end = j.finishedAt ?? Date.now();
+    const end = j.finishedAt ?? this.now();
     return Math.max(0, Math.round((end - j.startedAt) / 1000));
   });
 
   constructor() {
+    const destroyRef = inject(DestroyRef);
+    destroyRef.onDestroy(() => this.stopTicking());
+
     // Auto-scroll the log container to the bottom whenever a new entry
     // lands AND the autoScroll input is on.
     effect(() => {
@@ -141,6 +155,32 @@ export class RunProgressPanelComponent {
         el.scrollTop = el.scrollHeight;
       });
     });
+
+    // Drive the elapsed-time ticker from the running state. Starts on
+    // the first event that says the job is running (and has a
+    // ``startedAt``); stops on terminal status or when ``finishedAt``
+    // is set, so a finished job shows a frozen elapsed value.
+    effect(() => {
+      const j = this.job();
+      const shouldTick = !!j?.startedAt && !j?.finishedAt && this.running();
+      if (shouldTick) {
+        this.startTicking();
+      } else {
+        this.stopTicking();
+      }
+    });
+  }
+
+  private startTicking(): void {
+    if (this.tickHandle !== null) return;
+    this.tickHandle = setInterval(() => this.now.set(Date.now()), 1000) as unknown as number;
+  }
+
+  private stopTicking(): void {
+    if (this.tickHandle !== null) {
+      clearInterval(this.tickHandle);
+      this.tickHandle = null;
+    }
   }
 
   formatTime(ts: number): string {

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -49,6 +49,12 @@ from app.services.rule_based_backtest import (
     RuleBasedBacktestResult,
     run_rule_based_backtest,
 )
+
+# Polygon-supported aggregate granularities; the runners only exercise
+# minute/hour/day/week today, but the broader set is allowed because the
+# rule-based backtest path accepts whatever the engine accepts.
+Timespan = Literal["minute", "hour", "day", "week", "month", "quarter", "year"]
+DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -138,10 +144,10 @@ class FeatureResearchJobRequest(_CamelCaseModel):
     job_id: str = Field(..., min_length=1)
     ticker: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
-    from_date: str
-    to_date: str
-    multiplier: int = 1
-    timespan: str = "minute"
+    from_date: str = Field(..., pattern=DATE_PATTERN)
+    to_date: str = Field(..., pattern=DATE_PATTERN)
+    multiplier: int = Field(1, ge=1)
+    timespan: Timespan = "minute"
     force: bool = False
 
 
@@ -151,10 +157,10 @@ class SignalEngineJobRequest(_CamelCaseModel):
     job_id: str = Field(..., min_length=1)
     ticker: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
-    from_date: str
-    to_date: str
-    multiplier: int = 15
-    timespan: str = "minute"
+    from_date: str = Field(..., pattern=DATE_PATTERN)
+    to_date: str = Field(..., pattern=DATE_PATTERN)
+    multiplier: int = Field(15, ge=1)
+    timespan: Timespan = "minute"
     flip_sign: bool = True
     regime_gate_enabled: bool = True
     force: bool = False
@@ -790,6 +796,31 @@ def _serialize(r: RuleBasedBacktestResult) -> dict:
     }
 
 
+def _serialize_target(target: Any) -> dict:
+    """Project a ``TargetResult`` to a JSON-friendly dict that mirrors
+    the GraphQL ``TargetMetadata`` shape the Frontend already consumes
+    via ``runFeatureResearch``. The bulky ``values``/``timestamps``
+    Series are intentionally dropped — only the metadata that drives
+    the UI disclosure travels with the report. ``invalid_reason_counts``
+    is emitted as a list of ``{reason, count}`` so the async path
+    matches the projection Hot Chocolate emits for the sync path.
+    """
+    return {
+        "target_name": target.target_name,
+        "horizon_minutes": target.horizon_minutes,
+        "horizon_bars": target.horizon_bars,
+        "bar_minutes": target.bar_minutes,
+        "timezone": target.timezone,
+        "valid_count": target.valid_count,
+        "total_count": target.total_count,
+        "valid_ratio": target.valid_ratio,
+        "invalid_reason_counts": [
+            {"reason": reason, "count": count}
+            for reason, count in target.invalid_reason_counts.items()
+        ],
+    }
+
+
 def _serialize_feature_report(report: Any) -> dict:
     """Serialize a ResearchReport for storage in the result cache and
     delivery to the Frontend.
@@ -824,6 +855,7 @@ def _serialize_feature_report(report: Any) -> dict:
         "validation_verdict": (
             asdict(report.validation_verdict) if report.validation_verdict is not None else None
         ),
+        "target": _serialize_target(report.target) if report.target is not None else None,
         "passed_validation": report.passed_validation,
         "error": report.error,
     }

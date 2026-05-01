@@ -202,7 +202,7 @@ export class BatchRunnerComponent {
     //   1. accumulate log lines into our running buffer (the service
     //      caps `recentLogs` to the last 5),
     //   2. detect terminal status and fetch the result blob once.
-    let lastLogTs = 0;
+    let lastLogSeq = -1;
     let resultFetchedFor: string | null = null;
 
     effect(() => {
@@ -216,12 +216,16 @@ export class BatchRunnerComponent {
       // Accumulate any new log lines into the shared RunLogBuffer
       // (capped at 500 entries; older lines drop off silently).
       // JobsService.recentLogs is sliced to the last 5; this buffer keeps
-      // the rolling history for the panel.
+      // the rolling history for the panel. Dedupe by the monotonic
+      // ``seq`` rather than ``ts`` because two SSE log events landing in
+      // the same wall-clock millisecond would otherwise collapse into
+      // one and the dropped line never reappears once it slides past the
+      // 5-entry window.
       for (const log of j.recentLogs) {
-        if (log.ts > lastLogTs) {
+        if (log.seq > lastLogSeq) {
           const level = pythonLevelToEntryLevel(log.level);
           this.logBuffer.append(level, glyphForLevel(level), log.message);
-          lastLogTs = log.ts;
+          lastLogSeq = log.seq;
         }
       }
 

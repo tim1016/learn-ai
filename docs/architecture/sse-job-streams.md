@@ -23,7 +23,7 @@ PR #57; feature runner and signal engine moved to the same plumbing on
 
 ## Architecture
 
-```
+```text
 ┌──────────┐    POST /api/jobs/{type}      ┌──────────┐    POST /api/jobs-internal/{type}    ┌──────────┐
 │ Frontend │ ─────────────────────────────▶│  .NET    │ ─────────────────────────────────────▶│  Python  │
 │ (signal/ │   (mints job_id)              │ JobsApi  │   (forwards body + job_id)            │  jobs    │
@@ -57,7 +57,7 @@ Registered in two places:
 | `engine_backtest` | `/api/jobs-internal/engine-backtest` | not cached |
 | `cross_sectional` | `/api/jobs-internal/cross-sectional` | feature, tickers, dates, target |
 | `feature_research` | `/api/jobs-internal/feature-research` | ticker, feature, dates, bar resolution |
-| `signal_engine` | `/api/jobs-internal/signal-engine` | ticker, feature, dates, flip_sign, regime_gate |
+| `signal_engine` | `/api/jobs-internal/signal-engine` | ticker, feature, dates, flip_sign, regime_gate_enabled |
 
 ## Phase vocabulary
 

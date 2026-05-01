@@ -143,7 +143,7 @@ export class SignalRunnerComponent {
   }
 
   constructor() {
-    let lastLogTs = 0;
+    let lastLogSeq = -1;
     let resultFetchedFor: string | null = null;
 
     effect(() => {
@@ -153,11 +153,15 @@ export class SignalRunnerComponent {
       const j = this.jobsService.job(id);
       if (!j) return;
 
+      // Dedupe by monotonic ``seq`` rather than ``ts`` — two SSE log
+      // events sharing a wall-clock millisecond would otherwise collapse
+      // and the dropped line would never reappear once it slides past
+      // the 5-entry recentLogs window.
       for (const log of j.recentLogs) {
-        if (log.ts > lastLogTs) {
+        if (log.seq > lastLogSeq) {
           const level = pythonLevelToEntryLevel(log.level);
           this.logBuffer.append(level, glyphForLevel(level), log.message);
-          lastLogTs = log.ts;
+          lastLogSeq = log.seq;
         }
       }
 
@@ -204,8 +208,20 @@ export class SignalRunnerComponent {
     if (!id) return;
     try {
       await this.jobsService.cancelJob(id);
-    } catch {
-      // Tolerate the race where the worker terminates before cancel lands.
+    } catch (err: unknown) {
+      // Tolerate the race where the worker terminated before cancel
+      // landed — the terminal SSE event makes the cancel moot. Surface
+      // every other failure so a real network or server error doesn't
+      // leave the UI silently stuck on "running" (matches batch-runner).
+      const status = this.jobsService.job(id)?.status;
+      if (status === 'completed' || status === 'cancelled' || status === 'failed') {
+        return;
+      }
+      const msg =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message: unknown }).message)
+          : 'Failed to cancel signal engine run';
+      this.error.set(msg);
     }
   }
 

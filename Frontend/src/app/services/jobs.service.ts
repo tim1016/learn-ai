@@ -47,8 +47,14 @@ export interface JobState {
   cached?: boolean;
   /** Wall-clock millis when the cache entry was originally written. */
   cachedAt?: number;
-  // Last few log lines so the drawer can show them inline.
-  recentLogs: { level: string; message: string; ts: number }[];
+  // Last few log lines so the drawer can show them inline. ``seq`` is a
+  // monotonic per-job counter, used by consumers to dedupe entries that
+  // arrive in the same wall-clock millisecond (``Date.now()`` collisions
+  // happen under bursty SSE traffic).
+  recentLogs: { level: string; message: string; ts: number; seq: number }[];
+  // Next sequence number to assign to a log entry. Incremented every
+  // time a ``job.log`` event is folded in.
+  logSeq: number;
   // Wall-clock at which the job started/finished, for elapsed display.
   startedAt?: number;
   finishedAt?: number;
@@ -118,6 +124,7 @@ export class JobsService {
       type,
       status: 'queued',
       recentLogs: [],
+      logSeq: 0,
     });
     this.openStream(resp.id);
     return resp.id;
@@ -161,6 +168,7 @@ export class JobsService {
           phase: s.phase,
           startedAt: s.started_at ? Number(s.started_at) : undefined,
           recentLogs: [],
+          logSeq: 0,
         });
         if (!TERMINAL.includes(status)) {
           this.openStream(s.id);
@@ -236,7 +244,12 @@ export function applyJobEvent(prev: JobState, evt: JobEvent): JobState {
       return {
         ...prev,
         status: 'running',
-        startedAt: Date.now(),
+        // Preserve the original start time on a replayed event:
+        // ``EventSource`` reconnects can redeliver historical events,
+        // and ``resumeActive()`` may have already populated this from
+        // the server-derived ``started_at``. Resetting to ``Date.now()``
+        // here would make the elapsed timer jump.
+        startedAt: prev.startedAt ?? Date.now(),
         cached: (evt['cached'] as boolean) ?? prev.cached,
       };
     case 'job.phase': {
@@ -262,9 +275,10 @@ export function applyJobEvent(prev: JobState, evt: JobEvent): JobState {
         level: (evt['level'] as string) ?? 'info',
         message: (evt['message'] as string) ?? '',
         ts: Date.now(),
+        seq: prev.logSeq,
       };
       const recent = [...prev.recentLogs, log].slice(-MAX_RECENT_LOGS);
-      return { ...prev, recentLogs: recent };
+      return { ...prev, recentLogs: recent, logSeq: prev.logSeq + 1 };
     }
     case 'job.completed':
       return {
