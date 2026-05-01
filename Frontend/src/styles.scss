@@ -1,6 +1,10 @@
 @use './app/styles/tokens';
-@import "tailwindcss";
-@import "katex/dist/katex.min.css";
+
+// Plain CSS pass-through. The url(...) form sidesteps Sass's @import
+// rule (deprecated in Dart Sass 3.0) — Sass treats this as a literal
+// CSS @import and the bundler resolves it.
+@import url("tailwindcss");
+@import url("katex/dist/katex.min.css");
 
 /* ═══════════════════════════════════════════════════════════
    Quant Trading Lab — Global Styles

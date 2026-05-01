@@ -1,4 +1,5 @@
 @use '../../styles/tokens' as *;
+@use 'sass:color';
 
 .indicator-validation {
   padding: 1rem;
@@ -249,7 +250,7 @@ tr.match-exact td {
 
 tr.match-close td {
   background: rgba($bull, 0.08);
-  color: lighten($bull, 10%);
+  color: color.adjust($bull, $lightness: 10%);
 }
 
 tr.match-ok td {

@@ -1,4 +1,5 @@
 @use '../../../../styles/tokens' as *;
+@use 'sass:color';
 
 :host {
   display: block;
@@ -84,9 +85,9 @@
     transform-box: fill-box;
   }
 
-  &[data-bias="under"] .point { fill: $bull; stroke: darken($bull, 20%); }
-  &[data-bias="over"]  .point { fill: $bear; stroke: darken($bear, 15%); }
-  &[data-bias="neutral"] .point { fill: $accent; stroke: darken($accent, 15%); }
+  &[data-bias="under"] .point { fill: $bull; stroke: color.adjust($bull, $lightness: -20%); }
+  &[data-bias="over"]  .point { fill: $bear; stroke: color.adjust($bear, $lightness: -15%); }
+  &[data-bias="neutral"] .point { fill: $accent; stroke: color.adjust($accent, $lightness: -15%); }
 
   &:hover .point {
     opacity: 0.85;
