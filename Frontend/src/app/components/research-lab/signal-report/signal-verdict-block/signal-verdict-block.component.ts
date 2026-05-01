@@ -72,11 +72,14 @@ export class SignalVerdictBlockComponent {
     () => this.result().walkForward?.meanOosSharpe ?? 0,
   );
 
-  /** "0.27 ± 0.18" or just "0.27" when the CI was not computed. */
+  /** "0.27 ± 0.18" or just "0.27" when the CI was not computed.
+   *  Guards against sparse responses where ``valid: true`` arrives
+   *  without bounds (older history records persisted before the CI
+   *  shape stabilised). */
   readonly sharpeDisplay = computed<string>(() => {
     const sharpe = this.headlineSharpe();
     const ci = this.sharpeCi();
-    if (ci?.valid) {
+    if (ci?.valid && ci.ciLower != null && ci.ciUpper != null) {
       const halfWidth = (ci.ciUpper - ci.ciLower) / 2;
       return `${sharpe.toFixed(2)} ± ${halfWidth.toFixed(2)}`;
     }
@@ -85,13 +88,13 @@ export class SignalVerdictBlockComponent {
 
   readonly ciIntervalDisplay = computed<string | null>(() => {
     const ci = this.sharpeCi();
-    if (!ci?.valid) return null;
+    if (!ci?.valid || ci.ciLower == null || ci.ciUpper == null) return null;
     return `95% CI [${ci.ciLower.toFixed(2)}, ${ci.ciUpper.toFixed(2)}]`;
   });
 
   readonly ciStraddlesZero = computed<boolean>(() => {
     const ci = this.sharpeCi();
-    if (!ci?.valid) return false;
+    if (!ci?.valid || ci.ciLower == null || ci.ciUpper == null) return false;
     return ci.ciLower < 0 && ci.ciUpper > 0;
   });
 

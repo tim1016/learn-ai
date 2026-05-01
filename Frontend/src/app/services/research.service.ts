@@ -482,8 +482,10 @@ export interface Methodology {
   minBarsForSignal: number;
   flipSign: boolean;
   regimeGateEnabled: boolean;
-  thresholds: number[];
-  costBpsOptions: number[];
+  /** Backend may omit these on older history records persisted before
+   *  the field was added; templates must coalesce to `[]`. */
+  thresholds?: number[] | null;
+  costBpsOptions?: number[] | null;
 }
 
 export interface SignalEngineResult {

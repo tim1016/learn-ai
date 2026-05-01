@@ -121,9 +121,9 @@
               <span class="meth-label">Regime Gate</span>
               <span class="meth-value">{{ meth.regimeGateEnabled ? 'Enabled' : 'Disabled' }}</span>
               <span class="meth-label">Thresholds Tested</span>
-              <span class="meth-value">{{ meth.thresholds.join(', ') }}</span>
+              <span class="meth-value">{{ (meth.thresholds ?? []).join(', ') || '—' }}</span>
               <span class="meth-label">Cost Options</span>
-              <span class="meth-value">{{ meth.costBpsOptions.join(', ') }} bps</span>
+              <span class="meth-value">{{ (meth.costBpsOptions ?? []).join(', ') || '—' }} bps</span>
             </div>
           </p-accordion-content>
         </p-accordion-panel>
