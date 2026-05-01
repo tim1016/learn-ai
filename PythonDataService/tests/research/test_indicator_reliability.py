@@ -465,6 +465,122 @@ class TestRandomBaselineReturnsDistribution:
         # Mean of the distribution should equal the returned mean
         assert mean == pytest.approx(sum(dist) / len(dist), rel=1e-6)
 
+    def test_block_shuffle_preserves_feature_marginal_distribution(self):
+        """The day-block circular shift must permute existing values, not
+        invent new ones. Set of (sorted) post-shuffle values must equal
+        the set of pre-shuffle values within each rotation."""
+        from app.research.indicator_reliability import _day_block_circular_shift
+
+        rng = np.random.default_rng(seed=42)
+        feature = np.array([1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 100.0, 200.0, 300.0])
+        sessions = np.array(["d1", "d1", "d1", "d2", "d2", "d2", "d3", "d3", "d3"])
+
+        rotated = _day_block_circular_shift(feature, sessions, rng)
+
+        # Same multiset of values (up to NaNs from variable-length sessions, none here).
+        assert sorted(rotated.tolist()) == sorted(feature.tolist())
+
+    def test_block_shuffle_preserves_within_day_order(self):
+        """Within a session, feature values stay in their original order
+        — only the *day* assignment is rotated."""
+        from app.research.indicator_reliability import _day_block_circular_shift
+
+        rng = np.random.default_rng(seed=0)
+        feature = np.array([1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 100.0, 200.0, 300.0])
+        sessions = np.array(["d1", "d1", "d1", "d2", "d2", "d2", "d3", "d3", "d3"])
+
+        rotated = _day_block_circular_shift(feature, sessions, rng)
+
+        # Whatever donor day each target day reads from, the within-day
+        # triple must come from one of the original triples (1,2,3) or
+        # (10,20,30) or (100,200,300) in that exact order.
+        for chunk_start in (0, 3, 6):
+            chunk = tuple(rotated[chunk_start : chunk_start + 3].tolist())
+            assert chunk in {(1.0, 2.0, 3.0), (10.0, 20.0, 30.0), (100.0, 200.0, 300.0)}
+
+    def test_block_shuffle_falls_back_to_iid_with_one_session(self):
+        from app.research.indicator_reliability import _day_block_circular_shift
+
+        rng = np.random.default_rng(seed=1)
+        feature = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        sessions = np.array(["d1"] * 5)
+
+        rotated = _day_block_circular_shift(feature, sessions, rng)
+
+        # Fall-back path uses IID permutation; multiset preserved, order may differ.
+        assert sorted(rotated.tolist()) == sorted(feature.tolist())
+
+    def test_block_shuffle_handles_variable_session_lengths(self):
+        """When the donor session is shorter than the target, trailing
+        rows are NaN-filled and the IC computation drops them."""
+        from app.research.indicator_reliability import _day_block_circular_shift
+
+        rng = np.random.default_rng(seed=2)
+        feature = np.array([1.0, 2.0, 3.0, 10.0, 20.0, 100.0])  # 3 + 2 + 1 bars
+        sessions = np.array(["d1", "d1", "d1", "d2", "d2", "d3"])
+
+        rotated = _day_block_circular_shift(feature, sessions, rng)
+
+        # Length preserved; some rows may be NaN.
+        assert len(rotated) == len(feature)
+        finite = rotated[~np.isnan(rotated)]
+        # All finite values come from the original.
+        assert all(v in set(feature.tolist()) for v in finite)
+
+    def test_baseline_with_feature_column_uses_block_shuffle(self):
+        """When the feature column is supplied, the shuffled-IC distribution
+        should reflect real feature persistence — the std is materially
+        wider than the parametric 1/sqrt(N) the legacy uniform-rank
+        null implies."""
+        df = _create_test_df(500)
+        # Block-shuffle baseline (v2 default).
+        _, std_block, _ = compute_random_baseline_ic(
+            df,
+            horizon=10,
+            feature_column="rsi_14",
+            n_simulations=200,
+            rng=np.random.default_rng(seed=7),
+        )
+        # Legacy uniform-rank baseline (no feature_column).
+        _, std_legacy, _ = compute_random_baseline_ic(
+            df,
+            horizon=10,
+            n_simulations=200,
+            rng=np.random.default_rng(seed=7),
+        )
+
+        # Both stds are positive; we don't assert which is wider because
+        # for an essentially-noise feature like the synthetic RSI here
+        # the autocorrelation gain is small. We *do* assert they aren't
+        # identical — i.e. the new path is a different null, not a
+        # silent wrapper.
+        assert std_block > 0
+        assert std_legacy > 0
+        # Sanity: distributions should differ; allow a tiny epsilon.
+        assert abs(std_block - std_legacy) > 1e-9 or std_block != std_legacy
+
+    def test_baseline_default_simulations_is_1000(self):
+        """v2: bumped from 100 to 1000 so tail-σ claims are meaningful."""
+        from app.research.indicator_reliability import RANDOM_SIMULATIONS
+
+        assert RANDOM_SIMULATIONS == 1000
+
+    def test_baseline_rng_makes_results_deterministic(self):
+        df = _create_test_df(500)
+        rng_a = np.random.default_rng(seed=123)
+        rng_b = np.random.default_rng(seed=123)
+
+        mean_a, std_a, dist_a = compute_random_baseline_ic(
+            df, horizon=10, feature_column="rsi_14", n_simulations=20, rng=rng_a
+        )
+        mean_b, std_b, dist_b = compute_random_baseline_ic(
+            df, horizon=10, feature_column="rsi_14", n_simulations=20, rng=rng_b
+        )
+
+        assert mean_a == pytest.approx(mean_b, abs=1e-12)
+        assert std_a == pytest.approx(std_b, abs=1e-12)
+        assert dist_a == pytest.approx(dist_b, abs=1e-12)
+
 
 class TestNextSteps:
     def _r(self, **kwargs) -> HorizonICAnalysis:

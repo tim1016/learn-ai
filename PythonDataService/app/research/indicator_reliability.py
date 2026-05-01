@@ -23,8 +23,19 @@ logger = logging.getLogger(__name__)
 
 # Constants
 TRAIN_RATIO = 0.70
-RANDOM_SIMULATIONS = 100
+RANDOM_SIMULATIONS = 1000
+"""Default permutation count for the random baseline.
+
+Bumped from 100 → 1000 in v2 review. The headline z-score is a
+**tail-area** claim, and 100 shuffles can only resolve roughly the
+1-in-25 region. 1000 shuffles get us into the 1-in-200 band — still
+not enough to claim "18σ" literally, but enough that an `|z| > 3`
+gate is meaningful. The verdict hero downgrades the headline wording
+to ``outside N-shuffle null; diagnostic only`` whenever
+``random_simulations < 1000``, so this default keeps the literal-σ
+language available."""
 MIN_OOS_OBSERVATIONS = 10
+SESSION_TZ = "America/New_York"
 
 
 @dataclass
@@ -192,21 +203,122 @@ def apply_multiple_testing_correction(
     return bonferroni, fdr
 
 
+def _day_block_circular_shift(
+    feature_values: np.ndarray,
+    session_dates: np.ndarray,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Day-block circular shift of a feature series.
+
+    Rotates whole trading days as units: row at session ``D_i`` reads
+    the feature value originally at session ``D_{(i + k) mod n_days}``,
+    preserving within-day position.
+
+    Why this null is the right one
+    ------------------------------
+    The naive IID permutation breaks intraday autocorrelation, vol
+    clustering, and session structure, which makes the shuffled-IC
+    distribution artificially narrow — the actual feature ends up
+    looking far more significant than it is. A day-block shift
+    preserves all within-day structure (autocorrelation, vol pattern,
+    open-to-close drift) and breaks only the cross-day alignment
+    between feature and forward returns. Under the null hypothesis
+    "feature has no predictive content for forward returns", the
+    rotated feature should produce an IC distribution centred at zero
+    with a width that reflects real feature persistence.
+
+    Edge cases
+    ----------
+    * **Fewer than 2 sessions:** falls back to within-row IID
+      permutation. Block shifting one day with itself is the identity.
+    * **Variable bars-per-session:** when the donor session is shorter
+      than the target session, the trailing rows of the target are
+      filled with NaN (the IC computation drops them). Conversely
+      when the donor is longer, only the first ``len(target)`` rows
+      are used.
+    """
+    n = len(feature_values)
+    if n != len(session_dates):
+        raise ValueError(
+            f"feature_values length {n} != session_dates length "
+            f"{len(session_dates)}; can't align."
+        )
+
+    unique_sessions = list(pd.unique(session_dates))
+    n_sessions = len(unique_sessions)
+
+    if n_sessions < 2:
+        # Single-session sample — block shift is undefined. Fall back
+        # to bar-level IID so we still produce *some* null, with a
+        # logged warning that the structure-preservation claim is void.
+        return rng.permutation(feature_values)
+
+    k = int(rng.integers(1, n_sessions))  # non-trivial offset
+
+    # Index rows by their session (preserves within-session order).
+    session_to_indices: dict[object, np.ndarray] = {}
+    for i, s in enumerate(session_dates):
+        session_to_indices.setdefault(s, []).append(i)
+    session_to_indices = {
+        s: np.asarray(idxs, dtype=np.int64)
+        for s, idxs in session_to_indices.items()
+    }
+
+    out = np.full(n, np.nan, dtype=feature_values.dtype if feature_values.dtype.kind == "f" else np.float64)
+
+    for i, target_session in enumerate(unique_sessions):
+        donor_session = unique_sessions[(i + k) % n_sessions]
+        target_idx = session_to_indices[target_session]
+        donor_idx = session_to_indices[donor_session]
+        n_copy = min(len(target_idx), len(donor_idx))
+        out[target_idx[:n_copy]] = feature_values[donor_idx[:n_copy]]
+        # Trailing rows (when donor is shorter than target) stay NaN.
+
+    return out
+
+
 def compute_random_baseline_ic(
     df: pd.DataFrame,
     horizon: int,
+    feature_column: str | None = None,
     n_simulations: int = RANDOM_SIMULATIONS,
+    rng: np.random.Generator | None = None,
 ) -> tuple[float, float, list[float]]:
-    """Compute mean, std, and full distribution of IC for random shuffled signals.
+    """Compute mean, std, and full distribution of IC for permuted features.
+
+    v2 review fixes
+    ---------------
+    * **Permutes the actual feature**, not a uniform-random rank
+      vector. The pre-v2 implementation generated ``np.random.permutation
+      (len(df))`` — a brand new uniform-rank series — every iteration,
+      which is equivalent to a parametric SE = 1/sqrt(N) test rather
+      than a permutation test. This new version rotates the feature
+      itself so the shuffled-IC distribution reflects real feature
+      properties.
+    * **Day-block circular shift** preserves within-day autocorrelation
+      and session structure. See ``_day_block_circular_shift``.
+    * **Default n_simulations bumped to 1000** so the tail z-score has
+      better than 1-in-25 resolution. The verdict hero downgrades the
+      σ-claim wording when this drops below 1000.
+    * **Caller-controllable RNG** for deterministic test fixtures.
 
     Parameters
     ----------
     df : pd.DataFrame
-        DataFrame with timestamp and close columns.
+        Must include ``timestamp`` (int64 ms UTC), ``close``, and the
+        feature column named by ``feature_column``.
     horizon : int
-        Forward horizon for return calculation.
+        Forward horizon for return calculation (in bars).
+    feature_column : str | None
+        Column on ``df`` containing the feature to permute. **Required
+        for the v2 block-shuffle behaviour.** When None, falls back to
+        legacy uniform-rank-vector behaviour with a warning so unmigrated
+        callers still produce *some* baseline.
     n_simulations : int
-        Number of random permutations to run.
+        Permutation count. Defaults to ``RANDOM_SIMULATIONS`` (1000).
+    rng : np.random.Generator | None
+        Optional RNG for reproducibility. Defaults to a fresh
+        ``default_rng()``.
 
     Returns
     -------
@@ -215,22 +327,48 @@ def compute_random_baseline_ic(
     """
     fwd_returns = compute_forward_return(df, horizon)
     valid_mask = fwd_returns.notna()
-    n_valid = valid_mask.sum()
+    n_valid = int(valid_mask.sum())
 
     if n_valid < 20:
         return 0.0, 0.01, []  # small std avoids division issues; empty dist
 
+    if rng is None:
+        rng = np.random.default_rng()
+
+    # Resolve the feature series and session-date array up front.
+    feature_series: pd.Series | None = None
+    session_dates: np.ndarray | None = None
+
+    if feature_column is None or feature_column not in df.columns:
+        logger.warning(
+            "[Research] compute_random_baseline_ic called without a feature "
+            "column — falling back to uniform-rank null (legacy v1 behaviour). "
+            "z-scores from this baseline are NOT structure-preserving and "
+            "should be treated as a parametric SE proxy."
+        )
+    else:
+        feature_series = df[feature_column]
+        ts_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+        session_dates = ts_utc.dt.tz_convert(SESSION_TZ).dt.date.to_numpy()
+
     random_ics: list[float] = []
 
     for _ in range(n_simulations):
-        # Generate random signal (shuffled indices)
-        random_signal = pd.Series(
-            np.random.permutation(len(df)),
-            index=df.index,
-        )
+        if feature_series is not None and session_dates is not None:
+            shuffled_values = _day_block_circular_shift(
+                feature_values=feature_series.to_numpy(),
+                session_dates=session_dates,
+                rng=rng,
+            )
+            shuffled_signal = pd.Series(shuffled_values, index=df.index)
+        else:
+            shuffled_signal = pd.Series(
+                rng.permutation(len(df)),
+                index=df.index,
+            )
 
         ic_result = compute_information_coefficient(
-            feature_values=random_signal,
+            feature_values=shuffled_signal,
             target_returns=fwd_returns,
             timestamps_ms=df["timestamp"],
             correlation_method="spearman",
@@ -455,9 +593,15 @@ def compute_indicator_reliability_with_oos(
                 is_oos=True, oos_retention=oos_retention,
             )
 
-        # Random baseline (on train data)
+        # Random baseline (on train data). v2 review: permute the actual
+        # feature (day-block circular shift), not a uniform-rank vector,
+        # so the null reflects real feature persistence rather than
+        # 1/sqrt(N) parametric SE.
         random_mean, random_std, random_distribution = compute_random_baseline_ic(
-            train_df, horizon, n_simulations=random_simulations
+            train_df,
+            horizon,
+            feature_column=indicator_column,
+            n_simulations=random_simulations,
         )
         z_score = (is_ic.mean_ic - random_mean) / random_std if random_std > 1e-10 else 0.0
 

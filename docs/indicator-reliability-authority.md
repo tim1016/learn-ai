@@ -130,19 +130,34 @@ Failure mode: in-sample IC strong, OOS IC ≈ 0.
 
 ### 3.4 Beats random (z-score against shuffled baseline)
 
-Runs `random_simulations` shuffles of the feature series against the
-returns and computes the per-shuffle IC distribution. The actual
-IC's z-score against that distribution must be `|z| > 3`.
+Runs `random_simulations` shuffles of the **actual feature series**
+(via `_day_block_circular_shift`) against the forward returns and
+computes the per-shuffle IC distribution. The actual IC's z-score
+against that distribution must satisfy `|z| > 3`.
 
-⚠️ **The shuffle is currently naive (IID), which breaks intraday
-autocorrelation and volatility clustering structure.** This makes
-the resulting null too "easy" and overstates the z-score. The hero
-treats any z-claim built on `< 1000` shuffles as *diagnostic only*
-and switches the wording from "beats random by Xσ" to "outside the
-N-shuffle null". A proper block / circular-shift / day-level shuffle
-is on the roadmap (§ 7).
+The day-block circular shift rotates whole trading days as units —
+row at session `D_i` reads the feature value originally at session
+`D_{(i + k) mod n_sessions}` while preserving within-day position.
+This preserves intraday autocorrelation, vol clustering, and
+session structure (open/close drift, lunch lull, etc.) and breaks
+only the cross-day alignment between feature and forward returns.
+Under the null hypothesis "feature has no predictive content for
+forward returns", the rotated feature should produce an IC
+distribution centred at zero with width that reflects real feature
+persistence. See `_day_block_circular_shift` in
+`indicator_reliability.py` for the implementation.
 
-Failure mode: the IC could plausibly arise from chance.
+The default shuffle count is **1000** (bumped from 100 in v2). The
+verdict hero still downgrades the σ-claim wording to "outside
+N-shuffle null; diagnostic only" if a caller drops below 1000.
+
+The pre-v2 implementation generated a uniform-rank vector each
+iteration rather than permuting the actual feature, which made the
+null equivalent to a parametric `SE = 1 / sqrt(N)` test rather than
+a permutation test. The v2 version permutes the real feature.
+
+Failure mode: the IC could plausibly arise from chance under a
+structure-preserving null.
 
 ### 3.5 |IC| > 0.10 statistical-magnitude threshold
 
@@ -207,39 +222,47 @@ Below the verdict band, the page renders a three-cell decision strip:
 
 ## 6. Random baseline — what z-score actually means
 
-The page reports a z-score against a permuted-feature null. The
-permutation is currently IID over rows, which destroys:
+The page reports a z-score against a structure-preserving permuted-
+feature null. The permutation rotates whole trading days as units
+(`_day_block_circular_shift`), which retains:
 
-- intraday autocorrelation,
-- vol clustering across days,
-- session structure (open / close / lunch),
-- regime persistence.
+- intraday autocorrelation (within-day feature trajectory intact),
+- vol clustering across the day,
+- session structure (open / close / lunch).
 
-A naive permutation test asks "is the feature unrelated to returns
-under IID shuffling" — but intraday returns are not IID. The
-practical effect is that the null is too "easy" and the actual IC
-looks more significant than it is.
+It breaks **only** the cross-day alignment between feature and
+forward returns. That is the right null for a "is this feature's
+predictive content beyond chance, holding feature persistence
+constant" question.
 
-The page mitigates this in two ways:
+Two safeguards remain:
 
-- **Tail-claim caveat.** Z-score wording is downgraded to
-  "outside N-shuffle null; diagnostic only" when `random_simulations
-  < 1000`. The current default is 100 (per the v1 PDF), which falls
-  in this band — the literal "18.1σ" wording is suppressed and the
-  pre-flight tier is hard-blocked.
-- **Block-shuffle roadmap.** A session-preserving / block /
-  circular-shift permutation that retains the autocorrelation
-  structure is on the roadmap (§ 7).
+- **Tail-claim caveat.** When `random_simulations < 1000`, the
+  verdict hero downgrades the σ-claim wording to "outside N-shuffle
+  null; diagnostic only" and the pre-flight tier is hard-blocked
+  even with 5/5 screens. 1000 is the new default; users running
+  smaller sims for speed get the caveat automatically.
+- **Reproducibility.** `compute_random_baseline_ic` accepts an
+  explicit `rng` so test fixtures and CI runs are deterministic.
+
+> **Open work.** A circular-shift fall-back for single-session
+> samples (the current code falls back to bar-level IID when there
+> is only one session) doesn't preserve autocorrelation. For
+> single-session callers we should pivot to bar-level
+> circular-shift instead. Tracked in § 7.
 
 ## 7. Known limitations and roadmap
 
 **Known wrong / weak:**
 
-- **Naive IID shuffle test understates the null.** Replace with
-  block / circular-shift / day-level permutation that preserves
-  autocorrelation and session structure.
-- **Default 100 shuffles is too few for tail-significance claims.**
-  Bump to 1000 minimum; 5000 for a Stage-3-equivalent claim.
+- **Single-session fall-back uses bar-level IID.** When only one
+  trading session is observed, day-block rotation is undefined and
+  the code falls back to IID permutation. For these callers we
+  should use a bar-level circular shift instead.
+- **5000-shuffle baseline for high-σ tail claims.** 1000 (the new
+  default) resolves the 1-in-200 tail comfortably. For literal
+  "X-σ" wording above ~3.5σ the resolution is still coarse;
+  bump to 5000 when the user wants a Stage-3-equivalent tail claim.
 - **Single-asset evidence is hard-blocked but the Cross-Sectional
   page is not yet wired in.** The blocker prevents over-claiming;
   the right next step is a "run on MSFT / GOOGL / NVDA" affordance
@@ -275,7 +298,8 @@ The page mitigates this in two ways:
 
 **Roadmap (priorities):**
 
-1. Block-shuffle null + 1000-shuffle minimum default.
+1. ~~Block-shuffle null + 1000-shuffle minimum default.~~ **Shipped
+   v2.** Day-block circular shift is the new default; 1000 simulations.
 2. Cross-Sectional auto-handoff to remove the single-asset blocker.
 3. Per-indicator economic threshold tied to cost × turnover.
 4. Predeclared paper-trading forecast emitted at pre-flight tier.
@@ -283,6 +307,7 @@ The page mitigates this in two ways:
 6. Sign-mismatch fork (spec-failed vs inverse-discovered branches).
 7. Regime stability → deployment-scope metadata.
 8. Incremental-value screen (partial IC after the existing stack).
+9. Bar-level circular-shift fall-back for single-session samples.
 
 ## 8. Code cross-reference
 
