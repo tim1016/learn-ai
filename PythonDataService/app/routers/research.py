@@ -17,15 +17,18 @@ from app.models.research_models import (
     BuildIvHistoryResponse,
     CrossSectionalReportResponse,
     DataSufficiencyResponse,
+    DeflatedSharpeResponse,
     EffectiveSampleSizeResponse,
     FeatureInfoResponse,
     GraduationCriterionResponse,
     GraduationResultResponse,
+    GraduationStageInfoResponse,
     IvDiagnosticsReportResponse,
     MethodologyResponse,
     MonthlyICBreakdownResponse,
     ParameterStabilityResponse,
     QuantileBinResponse,
+    RegimeBucketResponse,
     RegimeICResponse,
     RobustnessResponse,
     RollingTStatPointResponse,
@@ -35,8 +38,12 @@ from app.models.research_models import (
     RunOptionsFeatureResearchRequest,
     RunSignalEngineRequest,
     RunSignalEngineResponse,
+    SharpeCiResponse,
     SignalBehaviorMetricsResponse,
     SignalDiagnosticsResponse,
+    Stage0FailureResponse,
+    Stage0RejectionResponse,
+    StageAdvanceCriterionResponse,
     StructuralBreakPointResponse,
     TickerBatchResult,
     TrainTestSplitResponse,
@@ -298,15 +305,46 @@ async def run_signal_engine_endpoint(
                     t_stat=wf.alpha_decay.t_stat,
                     p_value=wf.alpha_decay.p_value,
                     r_squared=wf.alpha_decay.r_squared,
+                    n_folds_used=wf.alpha_decay.n_folds_used,
+                    is_test_valid=wf.alpha_decay.is_test_valid,
+                    is_significant=wf.alpha_decay.is_significant,
                 )
                 if wf.alpha_decay
                 else None,
             )
 
-        # Map graduation
+        # Map graduation (criteria + Stage 0 + ladder)
         graduation_response = None
         if report.graduation:
             g = report.graduation
+            stage0_response = Stage0RejectionResponse(
+                rejected=g.stage0_rejection.rejected,
+                failed_criteria=[
+                    Stage0FailureResponse(
+                        criterion_name=f.criterion_name,
+                        value=f.value,
+                        threshold_repr=f.threshold_repr,
+                        message=f.message,
+                    )
+                    for f in g.stage0_rejection.failed_criteria
+                ],
+            )
+            stage_info_response = GraduationStageInfoResponse(
+                stage=g.stage_info.stage,
+                label=g.stage_info.label,
+                description=g.stage_info.description,
+                next_stage_label=g.stage_info.next_stage_label,
+                advance_criteria=[
+                    StageAdvanceCriterionResponse(
+                        name=ac.name,
+                        description=ac.description,
+                        current_value=ac.current_value,
+                        required_repr=ac.required_repr,
+                        met=ac.met,
+                    )
+                    for ac in g.stage_info.advance_criteria
+                ],
+            )
             graduation_response = GraduationResultResponse(
                 criteria=[
                     GraduationCriterionResponse(
@@ -331,6 +369,8 @@ async def run_signal_engine_endpoint(
                 )
                 if g.parameter_stability
                 else None,
+                stage0_rejection=stage0_response,
+                stage_info=stage_info_response,
             )
 
         # Map diagnostics
@@ -406,6 +446,46 @@ async def run_signal_engine_endpoint(
                 cost_bps_options=m["cost_bps_options"],
             )
 
+        # Map Sharpe CI on combined OOS Sharpe
+        oos_sharpe_ci_response = None
+        if report.oos_sharpe_ci is not None:
+            ci = report.oos_sharpe_ci
+            oos_sharpe_ci_response = SharpeCiResponse(
+                point=ci.point,
+                se=ci.se,
+                ci_lower=ci.ci_lower,
+                ci_upper=ci.ci_upper,
+                confidence_level=ci.confidence_level,
+                n_eff_used=ci.n_eff_used,
+                valid=ci.valid,
+            )
+
+        # Map Deflated Sharpe on the IS grid headline
+        deflated_sharpe_response = None
+        if report.deflated_sharpe is not None:
+            ds = report.deflated_sharpe
+            deflated_sharpe_response = DeflatedSharpeResponse(
+                raw_sharpe=ds.raw_sharpe,
+                expected_max_under_null=ds.expected_max_under_null,
+                dsr_probability=ds.dsr_probability,
+                n_trials=ds.n_trials,
+                skewness=ds.skewness,
+                kurtosis=ds.kurtosis,
+                valid=ds.valid,
+            )
+
+        # Map joint regime coverage with effective-trades estimates
+        joint_regime_buckets = [
+            RegimeBucketResponse(
+                vol_label=b.vol_label,
+                trend_label=b.trend_label,
+                days=b.days,
+                effective_trades=b.effective_trades,
+                badge=b.badge,
+            )
+            for b in report.joint_regime_coverage
+        ]
+
         return RunSignalEngineResponse(
             success=report.error is None,
             ticker=report.ticker,
@@ -425,7 +505,10 @@ async def run_signal_engine_endpoint(
             data_sufficiency=ds_response,
             effective_sample=es_response,
             regime_coverage=report.regime_coverage,
+            joint_regime_coverage=joint_regime_buckets,
             signal_behavior=sb_response,
+            oos_sharpe_ci=oos_sharpe_ci_response,
+            deflated_sharpe=deflated_sharpe_response,
             methodology=meth_response,
             research_log=report.research_log,
             error=report.error,

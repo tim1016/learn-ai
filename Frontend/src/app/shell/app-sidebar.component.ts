@@ -109,7 +109,8 @@ const NAV: NavGroup[] = [
       { label: 'Strategy Docs', route: '/strategy-docs' },
       { label: 'Indicator Reference', route: '/data-lab-docs' },
       { label: 'Pipeline Docs', route: '/data-quality-docs' },
-      { label: 'Methodology', route: '/docs/indicator-reliability-methodology' },
+      { label: 'Indicator Reliability', route: '/docs/indicator-reliability-methodology' },
+      { label: 'Signal Engine', route: '/docs/signal-engine-methodology' },
     ],
   },
 ];

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 from scipy.stats import skew as scipy_skew
 
@@ -13,10 +14,16 @@ from app.research.signal.backtest import BacktestResult, run_backtest_grid
 from app.research.signal.config import SignalConfig
 from app.research.signal.diagnostics import (
     DataSufficiency,
+    DeflatedSharpe,
     EffectiveSampleSize,
+    RegimeBucket,
+    SharpeCi,
     SignalDiagnostics,
     compute_data_sufficiency,
+    compute_deflated_sharpe,
     compute_effective_sample_size,
+    compute_joint_regime_coverage,
+    compute_sharpe_ci,
     compute_signal_diagnostics,
 )
 from app.research.signal.graduation import GraduationResult, evaluate_graduation
@@ -60,7 +67,15 @@ class SignalEngineReport:
     data_sufficiency: DataSufficiency | None = None
     effective_sample: EffectiveSampleSize | None = None
     regime_coverage: dict[str, int] = field(default_factory=dict)
+    """Marginal day counts by regime label. Kept for backwards compat;
+    new consumers should use ``joint_regime_coverage`` which is a true
+    (vol × trend) joint distribution with effective-trades estimates."""
+    joint_regime_coverage: list[RegimeBucket] = field(default_factory=list)
     signal_behavior: SignalBehaviorMetrics | None = None
+    oos_sharpe_ci: SharpeCi | None = None
+    """Lo (2002) confidence interval for the headline OOS Sharpe."""
+    deflated_sharpe: DeflatedSharpe | None = None
+    """Bailey & López de Prado DSR for the in-sample grid headline."""
     methodology: dict | None = None
     research_log: str = ""
     error: str | None = None
@@ -135,7 +150,10 @@ def run_signal_engine(
             regime_gated_signal,
         )
 
-        # Step 4: Regime coverage
+        # Step 4: Regime coverage. The marginal day counts feed the legacy
+        # graduation criterion; the joint (vol × trend) bucket grid is
+        # populated below once N_eff and pct_active are available so we
+        # can attach an effective-trades estimate per cell.
         logger.info("[Signal] Step 3: Computing regime coverage")
         daily_regimes = compute_daily_regime_labels(bars)
         regime_cov: dict[str, int] = {}
@@ -159,10 +177,34 @@ def run_signal_engine(
         )
 
         # Find best config
+        best: BacktestResult | None = None
         if report.backtest_grid:
             best = max(report.backtest_grid, key=lambda r: r.net_sharpe)
             report.best_threshold = best.threshold
             report.best_cost_bps = best.cost_bps
+
+        # Step 5a: Deflated Sharpe on the in-sample grid headline.
+        # The grid evaluates ``len(thresholds) × len(cost_bps_options)``
+        # configurations and we report the maximum; under the null of
+        # zero true Sharpe, the maximum is upward-biased. DSR computes
+        # the probability that the true Sharpe exceeds zero given the
+        # selection — see authority doc § 4.7.
+        if best is not None and best.cumulative_returns:
+            best_bar_returns = np.diff(
+                np.asarray(best.cumulative_returns, dtype=float),
+                prepend=0.0,
+            )
+            if best_bar_returns.size >= 3:
+                best_n_eff = compute_effective_sample_size(
+                    pd.Series(best_bar_returns)
+                ).effective_n
+                n_trials = len(config.thresholds) * len(config.cost_bps_options)
+                report.deflated_sharpe = compute_deflated_sharpe(
+                    selected_sharpe_annual=best.net_sharpe,
+                    bar_returns=best_bar_returns,
+                    n_trials=n_trials,
+                    n_eff=best_n_eff,
+                )
 
         # Step 5b: Signal behavior metrics on best config
         logger.info("[Signal] Step 5b: Computing signal behavior metrics")
@@ -196,9 +238,41 @@ def run_signal_engine(
         logger.info("[Signal] Step 5: Running walk-forward validation")
         report.walk_forward = run_walk_forward(bars, feature_name, config)
 
+        # Step 6b: Lo (2002) confidence interval on the headline OOS Sharpe.
+        # Computed against the combined-OOS bar return series so the interval
+        # reflects the same data as the headline Sharpe. Authority § 4.6.
+        if (
+            report.walk_forward is not None
+            and report.walk_forward.combined_oos_bar_returns
+        ):
+            oos_bars_arr = np.asarray(
+                report.walk_forward.combined_oos_bar_returns, dtype=float
+            )
+            if oos_bars_arr.size >= 3:
+                oos_n_eff = compute_effective_sample_size(
+                    pd.Series(oos_bars_arr)
+                ).effective_n
+                report.oos_sharpe_ci = compute_sharpe_ci(
+                    bar_returns=oos_bars_arr,
+                    n_eff=oos_n_eff,
+                )
+
         # Step 7: Effective sample size
         logger.info("[Signal] Step 6: Computing effective sample size")
         report.effective_sample = compute_effective_sample_size(forward_returns)
+
+        # Step 7b: Joint regime coverage (vol × trend) with effective-trades
+        # estimate. Replaces the old marginal day-count grid that displayed
+        # the same value across every column of a row. Authority § 4.11.
+        if (
+            report.effective_sample is not None
+            and report.signal_diagnostics is not None
+        ):
+            report.joint_regime_coverage = compute_joint_regime_coverage(
+                daily_regimes=daily_regimes,
+                n_eff=report.effective_sample.effective_n,
+                pct_active=report.signal_diagnostics.pct_time_active,
+            )
 
         # Step 8: Data sufficiency
         train_bars = int(train_mask.sum())

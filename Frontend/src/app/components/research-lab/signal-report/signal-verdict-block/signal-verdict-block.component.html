@@ -1,0 +1,72 @@
+@let g = graduation();
+@let r = result();
+
+@if (g) {
+<div class="verdict-card" [attr.data-band]="band()">
+  <div class="verdict-head">
+    <!-- Stage badge — left-side hero element, mirrors the readiness ring -->
+    <div class="stage-badge" [attr.data-band]="band()">
+      <span class="badge-label">Stage</span>
+      <span class="badge-value">{{ stage() }}</span>
+      <span class="badge-meta">/ 3</span>
+    </div>
+
+    <!-- Headline column -->
+    <div class="verdict-headline">
+      <div class="headline-row">
+        <span class="headline-eyebrow">Signal Engine Verdict</span>
+        <span class="grade-chip" [attr.data-band]="gradeChipBand()">
+          Grade {{ g.overallGrade }}
+        </span>
+        <span class="stage-chip" [attr.data-band]="band()">{{ stageLabel() }}</span>
+      </div>
+
+      <div class="headline-feature">
+        <span class="feature-name">{{ featureLabel() }}</span>
+        <span class="feature-dates">{{ dateRange() }}</span>
+      </div>
+
+      @if (hasSharpe()) {
+        <div class="sharpe-row">
+          <div class="sharpe-display">
+            <span class="sharpe-label">OOS Sharpe</span>
+            <span class="sharpe-value" [attr.data-straddles-zero]="ciStraddlesZero()">
+              {{ sharpeDisplay() }}
+            </span>
+          </div>
+          @if (ciIntervalDisplay()) {
+            <div class="ci-display"
+              pTooltip="Lo (2002) confidence interval — adjusted for autocorrelation via N_eff. A CI that includes zero means the Sharpe is statistically indistinguishable from noise at this confidence level."
+              tooltipPosition="bottom"
+            >
+              <span class="ci-text">{{ ciIntervalDisplay() }}</span>
+              @if (ciStraddlesZero()) {
+                <span class="ci-warn-tag">straddles zero</span>
+              }
+            </div>
+          }
+        </div>
+      }
+
+      <p class="verdict-text">{{ verdictText() }}</p>
+
+      @if (nextActionText()) {
+        <p class="next-action">
+          <i class="pi pi-arrow-right" aria-hidden="true"></i>
+          <span>{{ nextActionText() }}</span>
+        </p>
+      }
+    </div>
+  </div>
+
+  <!-- Graduation ladder + advance criteria / rejection reasons -->
+  @if (g.stageInfo) {
+    <div class="ladder-slot">
+      <app-graduation-ladder
+        [stageInfo]="g.stageInfo"
+        [stage0Rejection]="g.stage0Rejection"
+      />
+    </div>
+  }
+</div>
+}

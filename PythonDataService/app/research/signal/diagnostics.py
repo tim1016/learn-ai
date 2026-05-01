@@ -1,4 +1,22 @@
-"""Signal diagnostics, data sufficiency, and effective sample size."""
+"""Signal diagnostics, data sufficiency, and effective sample size.
+
+Also hosts the inferential helpers used by the graduation ladder:
+
+* `compute_sharpe_ci` — Lo (2002) standard error of the annualized Sharpe,
+  using the autocorrelation-adjusted effective sample size as the
+  denominator. Drives the headline "OOS Sharpe = X ± Y, 95% CI [..]" on
+  the verdict block.
+* `compute_deflated_sharpe` — Bailey & López de Prado (2014) Deflated
+  Sharpe Ratio, used to deflate the in-sample grid's best Sharpe for
+  selection bias across N grid trials.
+* `compute_joint_regime_coverage` — replaces the marginal day counts with
+  a true joint (vol × trend) bucket count plus an estimate of effective
+  independent trades per bucket, so the "regime coverage" panel reflects
+  decision-relevant sample size, not bars-of-data.
+
+See `docs/signal-engine-authority.md` § 4 for the authority on every
+formula in this module.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +25,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
+from scipy import stats as scipy_stats
 
 
 @dataclass
@@ -45,6 +64,62 @@ class EffectiveSampleSize:
     independent_bets: int = 0
     max_lag_used: int = 0
     rho_sum: float = 0.0
+
+
+@dataclass
+class SharpeCi:
+    """Lo (2002) confidence interval for the annualized Sharpe ratio.
+
+    Reported on the combined out-of-sample equity curve. A CI that
+    straddles zero means the Sharpe is statistically indistinguishable
+    from noise at the requested confidence level.
+    """
+
+    point: float = 0.0
+    se: float = 0.0
+    ci_lower: float = 0.0
+    ci_upper: float = 0.0
+    confidence_level: float = 0.95
+    n_eff_used: float = 0.0
+    valid: bool = False
+    """False when N_eff is too small to compute a meaningful CI."""
+
+
+@dataclass
+class DeflatedSharpe:
+    """Bailey & López de Prado (2014) Deflated Sharpe Ratio.
+
+    Reports the probability that the observed maximum Sharpe across
+    `n_trials` grid configurations would have been achieved under a
+    null hypothesis of zero true Sharpe. Values below 0.5 mean the
+    headline Sharpe is plausibly the result of selection bias rather
+    than true edge.
+    """
+
+    raw_sharpe: float = 0.0
+    expected_max_under_null: float = 0.0
+    """SR_0 in annualized units; the expected maximum under the null."""
+    dsr_probability: float = 0.0
+    """P(true Sharpe > 0 | observed max Sharpe, n_trials). Range [0, 1]."""
+    n_trials: int = 0
+    skewness: float = 0.0
+    kurtosis: float = 0.0
+    valid: bool = False
+
+
+@dataclass
+class RegimeBucket:
+    """A single (vol × trend) cell of the joint regime coverage grid."""
+
+    vol_label: str = ""
+    trend_label: str = ""
+    days: int = 0
+    """Calendar days falling into this joint bucket."""
+    effective_trades: float = 0.0
+    """Estimated number of independent trades in this bucket. Computed as
+    `N_eff * pct_active * (days / total_days)` — see authority doc § 4.11."""
+    badge: str = "Empty"
+    """One of: ``Pass`` (≥ 30 trades), ``Sparse`` (1–29), ``Empty`` (0)."""
 
 
 def compute_signal_diagnostics(
@@ -173,3 +248,212 @@ def compute_effective_sample_size(returns: pd.Series) -> EffectiveSampleSize:
         max_lag_used=last_lag_used,
         rho_sum=rho_sum,
     )
+
+
+# Annualization factor: 1-minute bars × 390 minutes/session × 252 sessions/year.
+_BARS_PER_YEAR_DEFAULT = 252 * 390
+
+
+def compute_sharpe_ci(
+    bar_returns: np.ndarray | pd.Series,
+    n_eff: float | None = None,
+    bars_per_year: int = _BARS_PER_YEAR_DEFAULT,
+    confidence_level: float = 0.95,
+) -> SharpeCi:
+    """Lo (2002) confidence interval for the annualized Sharpe ratio.
+
+    Per Lo (2002, eq. 14), under IID returns the per-period Sharpe estimator
+    has variance ``(1 + 0.5·SR_p²)/T``. Annualization multiplies by the
+    bars-per-year factor under the square root. Replacing T with the
+    autocorrelation-adjusted N_eff folds in the autocorrelation correction
+    (Newey-West-style truncation done in `compute_effective_sample_size`).
+
+    Returns a `SharpeCi` with ``valid=False`` when N_eff is too small for a
+    meaningful interval (the UI should show "insufficient sample size"
+    instead of a misleading band).
+    """
+    arr = np.asarray(bar_returns, dtype=float)
+    arr = arr[~np.isnan(arr)]
+    n = len(arr)
+
+    if n < 3:
+        return SharpeCi(valid=False, n_eff_used=float(n))
+
+    mean_r = float(np.mean(arr))
+    std_r = float(np.std(arr, ddof=1))
+    if std_r < 1e-12:
+        return SharpeCi(valid=False, n_eff_used=float(n))
+
+    sqrt_bpy = math.sqrt(bars_per_year)
+    sr_period = mean_r / std_r
+    sr_annual = sr_period * sqrt_bpy
+
+    t_eff = float(n_eff) if (n_eff is not None and n_eff > 1) else float(n)
+    if t_eff <= 1:
+        return SharpeCi(point=sr_annual, valid=False, n_eff_used=t_eff)
+
+    var_sr_period = (1.0 + 0.5 * sr_period**2) / t_eff
+    if var_sr_period <= 0:
+        return SharpeCi(point=sr_annual, valid=False, n_eff_used=t_eff)
+
+    se_period = math.sqrt(var_sr_period)
+    se_annual = se_period * sqrt_bpy
+
+    # Two-sided z critical value
+    tail = (1.0 - confidence_level) / 2.0
+    z_critical = float(scipy_stats.norm.ppf(1.0 - tail))
+
+    return SharpeCi(
+        point=sr_annual,
+        se=se_annual,
+        ci_lower=sr_annual - z_critical * se_annual,
+        ci_upper=sr_annual + z_critical * se_annual,
+        confidence_level=confidence_level,
+        n_eff_used=t_eff,
+        valid=True,
+    )
+
+
+def compute_deflated_sharpe(
+    selected_sharpe_annual: float,
+    bar_returns: np.ndarray | pd.Series,
+    n_trials: int,
+    n_eff: float | None = None,
+    bars_per_year: int = _BARS_PER_YEAR_DEFAULT,
+) -> DeflatedSharpe:
+    """Bailey & López de Prado (2014) Deflated Sharpe Ratio.
+
+    Inflates the standard error of the observed maximum Sharpe by an
+    extreme-value-theory correction for `n_trials` independent grid
+    configurations, then computes the probability that the true Sharpe
+    exceeds zero.
+
+    All math is performed in per-period units (consistent with Lo's
+    denominator); the expected-max benchmark `SR_0` is reported back in
+    annualized units for display.
+    """
+    arr = np.asarray(bar_returns, dtype=float)
+    arr = arr[~np.isnan(arr)]
+    n_bars = len(arr)
+
+    if n_bars < 3 or n_trials < 1:
+        return DeflatedSharpe(
+            raw_sharpe=selected_sharpe_annual, n_trials=n_trials, valid=False
+        )
+
+    t_eff = float(n_eff) if (n_eff is not None and n_eff > 2) else float(n_bars)
+    if t_eff <= 2:
+        return DeflatedSharpe(
+            raw_sharpe=selected_sharpe_annual, n_trials=n_trials, valid=False
+        )
+
+    sqrt_bpy = math.sqrt(bars_per_year)
+    sr_period = selected_sharpe_annual / sqrt_bpy
+
+    # Higher moments of the per-bar return series.
+    skew = float(scipy_stats.skew(arr, bias=False))
+    # Pearson kurtosis (not Fisher / excess) — matches Bailey & López de Prado.
+    kurt = float(scipy_stats.kurtosis(arr, fisher=False, bias=False))
+
+    # Expected max under H_0 of zero true Sharpe across n_trials independent
+    # trials, in standardised (unit-SE) units. Bailey & López de Prado, eq 6.
+    if n_trials >= 2:
+        gamma_e = 0.5772156649015329  # Euler-Mascheroni
+        z_a = float(scipy_stats.norm.ppf(1.0 - 1.0 / n_trials))
+        z_b = float(scipy_stats.norm.ppf(1.0 - 1.0 / (n_trials * math.e)))
+        sr_0_standardised = (1.0 - gamma_e) * z_a + gamma_e * z_b
+    else:
+        sr_0_standardised = 0.0
+
+    # SE under the null is approximately 1 / sqrt(T_eff), so SR_0 in per-period
+    # units is the standardised value divided by sqrt(T_eff).
+    sr_0_period = sr_0_standardised / math.sqrt(t_eff)
+
+    # Lo's non-normality-corrected denominator (Bailey & López de Prado, eq 9).
+    denom_inner = 1.0 - skew * sr_period + (kurt - 1.0) / 4.0 * sr_period**2
+    if denom_inner <= 0:
+        return DeflatedSharpe(
+            raw_sharpe=selected_sharpe_annual,
+            expected_max_under_null=sr_0_period * sqrt_bpy,
+            n_trials=n_trials,
+            skewness=skew,
+            kurtosis=kurt,
+            valid=False,
+        )
+
+    z_stat = (sr_period - sr_0_period) * math.sqrt(t_eff - 1.0) / math.sqrt(denom_inner)
+    dsr = float(scipy_stats.norm.cdf(z_stat))
+
+    return DeflatedSharpe(
+        raw_sharpe=selected_sharpe_annual,
+        expected_max_under_null=sr_0_period * sqrt_bpy,
+        dsr_probability=dsr,
+        n_trials=n_trials,
+        skewness=skew,
+        kurtosis=kurt,
+        valid=True,
+    )
+
+
+def compute_joint_regime_coverage(
+    daily_regimes: pd.DataFrame,
+    n_eff: float,
+    pct_active: float,
+    min_trades_for_pass: int = 30,
+) -> list[RegimeBucket]:
+    """Joint (vol × trend) regime grid with effective-trades estimate.
+
+    Replaces the marginal day-count grid (which displayed equal counts in
+    every column of a row, because it was projecting a 1-D distribution
+    onto a 2-D layout) with a true joint count and an estimate of how
+    many decision-relevant trades fell into each cell.
+
+    The per-bucket effective-trades estimate is
+
+        ``trades_bucket ≈ N_eff · pct_active · (days_bucket / total_days)``
+
+    which assumes uniform signal activity across regimes. It is an
+    approximation, but materially more honest than presenting raw bar
+    counts as if they were independent observations.
+    """
+    if daily_regimes is None or len(daily_regimes) == 0:
+        return []
+
+    if "vol_regime" not in daily_regimes.columns or "trend_regime" not in daily_regimes.columns:
+        return []
+
+    total_days = len(daily_regimes)
+    if total_days == 0:
+        return []
+
+    # Build joint count using groupby.
+    joint = (
+        daily_regimes.groupby(["vol_regime", "trend_regime"]).size().reset_index(name="days")
+    )
+
+    buckets: list[RegimeBucket] = []
+    for _, row in joint.iterrows():
+        days = int(row["days"])
+        if total_days > 0 and pct_active > 0 and n_eff > 0:
+            trades = float(n_eff) * float(pct_active) * (days / float(total_days))
+        else:
+            trades = 0.0
+
+        if days == 0:
+            badge = "Empty"
+        elif trades >= float(min_trades_for_pass):
+            badge = "Pass"
+        else:
+            badge = "Sparse"
+
+        buckets.append(
+            RegimeBucket(
+                vol_label=str(row["vol_regime"]),
+                trend_label=str(row["trend_regime"]),
+                days=days,
+                effective_trades=trades,
+                badge=badge,
+            )
+        )
+
+    return buckets

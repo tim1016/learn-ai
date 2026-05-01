@@ -225,6 +225,8 @@ export interface GraduationResult {
   summary: string;
   statusLabel: string;
   parameterStability: ParameterStability | null;
+  stage0Rejection: Stage0Rejection | null;
+  stageInfo: GraduationStageInfo | null;
 }
 
 export interface SignalDiagnostics {
@@ -267,6 +269,70 @@ export interface AlphaDecayStats {
   tStat: number;
   pValue: number;
   rSquared: number;
+  nFoldsUsed: number;
+  /** False when fewer than 5 folds — UI must render "insufficient folds"
+   *  instead of the (uninformative) p-value in that case. */
+  isTestValid: boolean;
+  /** True only when ``isTestValid`` AND p < 0.05. */
+  isSignificant: boolean;
+}
+
+export interface SharpeCi {
+  point: number;
+  se: number;
+  ciLower: number;
+  ciUpper: number;
+  confidenceLevel: number;
+  nEffUsed: number;
+  valid: boolean;
+}
+
+export interface DeflatedSharpe {
+  rawSharpe: number;
+  expectedMaxUnderNull: number;
+  dsrProbability: number;
+  nTrials: number;
+  skewness: number;
+  kurtosis: number;
+  valid: boolean;
+}
+
+export interface RegimeBucket {
+  volLabel: string;
+  trendLabel: string;
+  days: number;
+  effectiveTrades: number;
+  badge: 'Pass' | 'Sparse' | 'Empty' | string;
+}
+
+export interface Stage0Failure {
+  criterionName: string;
+  value: number;
+  thresholdRepr: string;
+  message: string;
+}
+
+export interface Stage0Rejection {
+  rejected: boolean;
+  failedCriteria: Stage0Failure[];
+}
+
+export interface StageAdvanceCriterion {
+  name: string;
+  description: string;
+  currentValue: number;
+  requiredRepr: string;
+  met: boolean;
+}
+
+export interface GraduationStageInfo {
+  /** 0 = Rejected, 1 = Weak Candidate, 2 = Research Candidate, 3 = Promotion Candidate. */
+  stage: 0 | 1 | 2 | 3;
+  label: string;
+  description: string;
+  /** Empty when at the top of the ladder. */
+  nextStageLabel: string;
+  advanceCriteria: StageAdvanceCriterion[];
 }
 
 export interface SignalBehaviorMetrics {
@@ -312,7 +378,14 @@ export interface SignalEngineResult {
   dataSufficiency: DataSufficiency | null;
   effectiveSample: EffectiveSampleSize | null;
   regimeCoverage: RegimeCoverageEntry[];
+  /** Joint (vol × trend) regime distribution with effective-trades estimates.
+   *  Replaces the marginal `regimeCoverage` for new consumers. */
+  jointRegimeCoverage: RegimeBucket[];
   signalBehavior: SignalBehaviorMetrics | null;
+  /** Lo (2002) confidence interval for the headline OOS Sharpe. */
+  oosSharpeCi: SharpeCi | null;
+  /** Bailey & López de Prado DSR for the IS grid headline. */
+  deflatedSharpe: DeflatedSharpe | null;
   methodology: Methodology | null;
   researchLog: string;
   error?: string;
@@ -350,6 +423,8 @@ export interface RunSignalEngineInput {
 
 // ─── Batch / Cross-Sectional Interfaces ──────────────────
 
+export type TickerValidity = 'valid' | 'invalid_iv' | 'invalid_data' | 'error';
+
 export interface TickerBatchResult {
   ticker: string;
   meanIc: number;
@@ -362,6 +437,56 @@ export interface TickerBatchResult {
   passedValidation: boolean;
   dataPoints: number;
   error?: string;
+  /** New: distinguishes "FAIL — IC ran, signal weak" from "INVALID — IV
+   *  diagnostics failed, no IC computation". The legacy GraphQL endpoint
+   *  doesn't supply this; the new SSE-driven path does. */
+  validity?: TickerValidity;
+}
+
+export interface ValiditySummary {
+  valid: number;
+  invalidIv: number;
+  invalidData: number;
+  errored: number;
+}
+
+export interface AggregateIcCi {
+  point: number;
+  se: number;
+  ciLower: number;
+  ciUpper: number;
+  confidenceLevel: number;
+  weightingMethod: string;
+  nTickersUsed: number;
+  sumWeights: number;
+  valid: boolean;
+}
+
+export interface BinomialNullTest {
+  nValid: number;
+  nEffAssets: number;
+  nPassed: number;
+  alphaPerTicker: number;
+  pValue: number;
+  significant: boolean;
+}
+
+export interface CrossSectionalCriterion {
+  name: string;
+  description: string;
+  currentValue: number;
+  requiredRepr: string;
+  met: boolean;
+}
+
+export interface CrossSectionalStageInfo {
+  /** 0 = Rejected, 1 = Weak, 2 = Research candidate, 3 = Promotion. */
+  stage: 0 | 1 | 2 | 3;
+  label: string;
+  description: string;
+  nextStageLabel: string;
+  failedCriteria: CrossSectionalCriterion[];
+  advanceCriteria: CrossSectionalCriterion[];
 }
 
 export interface BatchResearchResult {
@@ -374,6 +499,16 @@ export interface BatchResearchResult {
   aggregateIc: number;
   tickerResults: TickerBatchResult[];
   summary: string;
+  // Optional — populated by the new SSE-driven path. The legacy GraphQL
+  // mutation will leave these undefined.
+  tickersTestedRaw?: number;
+  tickersValid?: number;
+  validitySummary?: ValiditySummary;
+  aggregateIcUniform?: number;
+  aggregateIcCi?: AggregateIcCi;
+  binomialTest?: BinomialNullTest;
+  nEffAssets?: number;
+  stageInfo?: CrossSectionalStageInfo;
   error?: string;
 }
 
@@ -506,7 +641,10 @@ const RUN_SIGNAL_ENGINE_MUTATION = `
         worstWindowSharpe bestWindowSharpe totalOosBars
         combinedOosDates combinedOosCumulativeReturns
         oosSharpeTrendSlope
-        alphaDecay { slope intercept tStat pValue rSquared }
+        alphaDecay {
+          slope intercept tStat pValue rSquared
+          nFoldsUsed isTestValid isSignificant
+        }
       }
       graduation {
         criteria {
@@ -516,6 +654,14 @@ const RUN_SIGNAL_ENGINE_MUTATION = `
         parameterStability {
           sharpeValuesByThreshold { threshold sharpe }
           stabilityScore stabilityLabel
+        }
+        stage0Rejection {
+          rejected
+          failedCriteria { criterionName value thresholdRepr message }
+        }
+        stageInfo {
+          stage label description nextStageLabel
+          advanceCriteria { name description currentValue requiredRepr met }
         }
       }
       signalDiagnostics {
@@ -533,9 +679,19 @@ const RUN_SIGNAL_ENGINE_MUTATION = `
         maxLagUsed rhoSum
       }
       regimeCoverage { regime count }
+      jointRegimeCoverage {
+        volLabel trendLabel days effectiveTrades badge
+      }
       signalBehavior {
         avgForwardReturnWhenActive skewnessActiveReturns
         avgWinReturn avgLossReturn hitRate
+      }
+      oosSharpeCi {
+        point se ciLower ciUpper confidenceLevel nEffUsed valid
+      }
+      deflatedSharpe {
+        rawSharpe expectedMaxUnderNull dsrProbability
+        nTrials skewness kurtosis valid
       }
       methodology {
         trainMonths testMonths windowType optimizationTarget
@@ -583,7 +739,10 @@ const GET_SIGNAL_EXPERIMENT_REPORT_QUERY = `
         worstWindowSharpe bestWindowSharpe totalOosBars
         combinedOosDates combinedOosCumulativeReturns
         oosSharpeTrendSlope
-        alphaDecay { slope intercept tStat pValue rSquared }
+        alphaDecay {
+          slope intercept tStat pValue rSquared
+          nFoldsUsed isTestValid isSignificant
+        }
       }
       graduation {
         criteria {
@@ -593,6 +752,14 @@ const GET_SIGNAL_EXPERIMENT_REPORT_QUERY = `
         parameterStability {
           sharpeValuesByThreshold { threshold sharpe }
           stabilityScore stabilityLabel
+        }
+        stage0Rejection {
+          rejected
+          failedCriteria { criterionName value thresholdRepr message }
+        }
+        stageInfo {
+          stage label description nextStageLabel
+          advanceCriteria { name description currentValue requiredRepr met }
         }
       }
       signalDiagnostics {
@@ -610,9 +777,19 @@ const GET_SIGNAL_EXPERIMENT_REPORT_QUERY = `
         maxLagUsed rhoSum
       }
       regimeCoverage { regime count }
+      jointRegimeCoverage {
+        volLabel trendLabel days effectiveTrades badge
+      }
       signalBehavior {
         avgForwardReturnWhenActive skewnessActiveReturns
         avgWinReturn avgLossReturn hitRate
+      }
+      oosSharpeCi {
+        point se ciLower ciUpper confidenceLevel nEffUsed valid
+      }
+      deflatedSharpe {
+        rawSharpe expectedMaxUnderNull dsrProbability
+        nTrials skewness kurtosis valid
       }
       methodology {
         trainMonths testMonths windowType optimizationTarget

@@ -38,6 +38,7 @@ public static class JobsApi
         ["backtest"] = "/api/jobs-internal/backtest",
         ["dataset-zip"] = "/api/jobs-internal/dataset-zip",
         ["engine_backtest"] = "/api/jobs-internal/engine-backtest",
+        ["cross_sectional"] = "/api/jobs-internal/cross-sectional",
     };
 
     public static void MapJobsEndpoints(this WebApplication app)

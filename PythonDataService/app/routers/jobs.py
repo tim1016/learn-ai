@@ -22,6 +22,7 @@ tests using snake_case kwargs.
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
@@ -31,6 +32,10 @@ from pydantic.alias_generators import to_camel
 from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.models.requests import DatasetGenerationRequest
+from app.research.batch_runner import (
+    CrossSectionalReport,
+    run_cross_sectional_study,
+)
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from app.services.dataset_service import RunCancelledError
 from app.services.polygon_client import PolygonClientService
@@ -95,6 +100,22 @@ class EngineBacktestJobRequest(_CamelCaseModel):
 
     job_id: str = Field(..., min_length=1)
     backtest: dict[str, Any] = Field(default_factory=dict)
+
+
+class CrossSectionalJobRequest(_CamelCaseModel):
+    """Body of POST /api/jobs-internal/cross-sectional.
+
+    The Frontend posts the same shape it currently sends to the GraphQL
+    ``runBatchOptionsResearch`` mutation, plus an injected ``job_id``
+    from the .NET JobsApi.
+    """
+
+    job_id: str = Field(..., min_length=1)
+    feature_name: str = Field(..., min_length=1)
+    tickers: list[str] = Field(..., min_length=1)
+    from_date: str
+    to_date: str
+    target_type: str = "directional"
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +320,103 @@ async def start_engine_backtest_job(req: EngineBacktestJobRequest) -> dict:
         return response.model_dump(mode="json")
 
     run_in_thread(req.job_id, work, thread_name=f"engine-{req.job_id[:8]}")
+    return {"job_id": req.job_id, "status": "queued"}
+
+
+@router.post("/cross-sectional", status_code=status.HTTP_202_ACCEPTED)
+async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
+    """Kick off a cross-sectional study in a worker thread. Returns 202.
+
+    The runner processes tickers sequentially — ~30–90 seconds per ticker
+    on Polygon Starter — so we wire ``ProgressEmitter`` into the runner's
+    optional ``on_phase`` / ``on_log`` / ``on_progress`` callbacks. The
+    Frontend's run-dock subscribes to the SSE stream and renders each
+    ticker's status as it lands.
+    """
+    if not req.tickers:
+        raise HTTPException(status_code=400, detail="tickers list is required")
+    if not req.feature_name.strip():
+        raise HTTPException(status_code=400, detail="feature_name is required")
+
+    def work(emit: ProgressEmitter, cancel) -> dict:
+        cancel.raise_if_cancelled()
+        emit.phase("starting")
+        emit.log(
+            f"Cross-sectional study: feature={req.feature_name}, "
+            f"target={req.target_type}, tickers={len(req.tickers)}"
+        )
+
+        def on_phase(phase: str) -> None:
+            cancel.raise_if_cancelled()
+            emit.phase(phase)
+
+        def on_log(message: str) -> None:
+            emit.log(message)
+
+        def on_progress(current: int, total: int, message: str) -> None:
+            emit.progress(
+                current=current,
+                total=total,
+                unit="tickers",
+                message=message,
+            )
+
+        def cancel_check() -> bool:
+            return cancel.should_cancel()
+
+        report: CrossSectionalReport = run_cross_sectional_study(
+            feature_name=req.feature_name,
+            tickers=[t.upper() for t in req.tickers],
+            start_date=req.from_date,
+            end_date=req.to_date,
+            polygon_client=polygon_client,
+            target_type=req.target_type,
+            on_phase=on_phase,
+            on_log=on_log,
+            on_progress=on_progress,
+            cancel_check=cancel_check,
+        )
+
+        cancel.raise_if_cancelled()
+        emit.phase("completed")
+        emit.log(report.summary)
+
+        # Snake-case dict the Frontend mapper transforms into camelCase
+        # ``BatchResearchResult``. ``tickers_tested`` is kept as a legacy
+        # alias for the raw count so any older consumer keeps working;
+        # new consumers should use ``tickers_tested_raw`` /
+        # ``tickers_valid`` / ``validity_summary``.
+        return {
+            "success": True,
+            "feature_name": report.feature_name,
+            "target_type": report.target_type,
+            "tickers_tested": report.tickers_tested_raw,
+            "tickers_tested_raw": report.tickers_tested_raw,
+            "tickers_valid": report.tickers_valid,
+            "tickers_passed": report.tickers_passed,
+            "pass_rate": report.pass_rate,
+            "cross_sectional_consistent": report.cross_sectional_consistent,
+            "aggregate_ic": report.aggregate_ic,
+            "aggregate_ic_uniform": report.aggregate_ic_uniform,
+            "aggregate_ic_ci": asdict(report.aggregate_ic_ci),
+            "binomial_test": asdict(report.binomial_test),
+            "n_eff_assets": report.n_eff_assets,
+            "validity_summary": asdict(report.validity_summary),
+            "stage_info": asdict(report.stage_info),
+            "ticker_results": report.ticker_results,
+            "summary": report.summary,
+        }
+
+    run_in_thread(
+        req.job_id,
+        work,
+        thread_name=f"cross-sectional-{req.job_id[:8]}",
+        # The cross-sectional loop calls cancel_check() once per ticker
+        # (every ~30–90s), and the runner's no-op callbacks otherwise
+        # make no calls. Force a Redis check on every call to honour
+        # cancel requests promptly even mid-ticker.
+        cancel_check_every_n=1,
+    )
     return {"job_id": req.job_id, "status": "queued"}
 
 

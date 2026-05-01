@@ -1,40 +1,41 @@
 <div class="mt-4">
 
-  <!-- 0. Research Conclusion -->
-  @if (executiveSummary) {
-    <div class="executive-summary-card mb-4">
-      <div class="executive-icon">
-        <i class="pi pi-flag"></i>
+  <!-- ═══════ Verdict Block (top of page) ═══════
+       Replaces the legacy "Research Conclusion" + "Signal Grade" cards.
+       Contains the graduation ladder, Stage 0 rejection details (when
+       applicable), advance criteria, and the headline OOS Sharpe with CI. -->
+  <app-signal-verdict-block [result]="result()" />
+
+  <!-- Stage 0 disclosure — when the kill switch fires, collapse downstream
+       panels behind a non-default-path button so the reader is not seduced
+       into reading meaning into noise. -->
+  @if (isStage0Rejected()) {
+    <div class="stage0-disclosure">
+      <div class="disclosure-explainer">
+        <i class="pi pi-info-circle" aria-hidden="true"></i>
+        <span>
+          Downstream metrics (walk-forward charts, backtest grid, regime coverage)
+          are <strong>not actionable</strong> for a Stage 0 signal. They are
+          available for audit but should not drive interpretation.
+        </span>
       </div>
-      <div class="executive-content">
-        <h4 class="executive-title">Research Conclusion</h4>
-        <p class="executive-text">{{ executiveSummary }}</p>
-      </div>
+      <p-button
+        [severity]="'secondary'"
+        [text]="true"
+        size="small"
+        [icon]="showDetailsAnyway() ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
+        [label]="showDetailsAnyway() ? 'Hide diagnostic details' : 'Show diagnostic details anyway'"
+        (onClick)="toggleDetailsAnyway()"
+      />
     </div>
   }
 
-  <!-- 1. Graduation Card -->
-  @if (result().graduation; as grad) {
-    <div class="graduation-card">
-      <div class="grade-display">
-        <div class="grade-letter" [style.color]="gradeColor">{{ grad.overallGrade }}</div>
-        <div class="grade-sub">Signal Grade</div>
-      </div>
-      <div class="grade-details">
-        <div class="grade-header">
-          <h3 class="grade-title">{{ result().featureName }} on {{ result().ticker }}</h3>
-          <p-tag [severity]="statusSeverity" [value]="grad.statusLabel" />
-          <p-tag
-            [severity]="grad.overallPassed ? 'success' : 'danger'"
-            [value]="grad.overallPassed ? 'Passed' : 'Failed'"
-            class="ml-2"
-          />
-        </div>
-        <p class="grade-summary">{{ grad.summary }}</p>
-      </div>
-    </div>
+  <!-- ═══════ Downstream panels ═══════
+       Collapsed by default at Stage 0; expanded otherwise. -->
+  @if (showDownstreamPanels()) {
 
-    <!-- Criteria rows -->
+  <!-- Legacy 5-criterion checklist (kept for the criteria-by-criteria audit). -->
+  @if (result().graduation; as grad) {
     <div class="criteria-grid">
       @for (c of grad.criteria; track c.name) {
         <div class="criterion-row" [class.criterion-failed]="!c.passed">
@@ -48,15 +49,12 @@
           @if (c.failureReason) {
             <div class="criterion-reason">{{ c.failureReason }}</div>
           }
-          @if (c.name === 'OOS Windows Positive' && !c.passed) {
-            <div class="criterion-annotation">60% threshold ensures edge persistence beyond random chance.</div>
-          }
         </div>
       }
     </div>
   }
 
-  <!-- 2. Execution Assumptions Panel -->
+  <!-- Execution Assumptions (corrected text) -->
   <div class="mt-6 mb-6">
     <p-accordion>
       <p-accordion-panel value="exec-assumptions">
@@ -64,18 +62,35 @@
           <i class="pi pi-cog mr-2"></i>Execution Assumptions
         </p-accordion-header>
         <p-accordion-content>
-          <div class="assumptions-grid">
+          <div class="assumptions-list">
             @for (a of executionAssumptions; track a.label) {
-              <span class="assumption-label">{{ a.label }}</span>
-              <span class="assumption-value">{{ a.value }}</span>
+              <div class="assumption-row">
+                <div class="assumption-row-main">
+                  <span class="assumption-label">{{ a.label }}</span>
+                  <span class="assumption-value">{{ a.value }}</span>
+                </div>
+                @if (a.note) {
+                  <div class="assumption-note">{{ a.note }}</div>
+                }
+              </div>
             }
+          </div>
+          <div class="assumption-footer">
+            <i class="pi pi-info-circle"></i>
+            <span>
+              Full timing model and realism caveats: see the
+              <a routerLink="/docs/signal-engine-methodology">
+                Signal Engine Methodology
+              </a>
+              page.
+            </span>
           </div>
         </p-accordion-content>
       </p-accordion-panel>
     </p-accordion>
   </div>
 
-  <!-- 2b. Walk-Forward Methodology Panel -->
+  <!-- Walk-Forward Methodology -->
   @if (result().methodology; as meth) {
     <div class="mb-6">
       <p-accordion>
@@ -92,13 +107,13 @@
               <span class="meth-label">Window Type</span>
               <span class="meth-value">{{ meth.windowType }}</span>
               <span class="meth-label">Optimization Target</span>
-              <span class="meth-value">{{ meth.optimizationTarget }}</span>
+              <span class="meth-value">{{ meth.optimizationTarget }} (per-fold, train-only)</span>
               <span class="meth-label">Annualization Factor</span>
-              <span class="meth-value">{{ meth.annualizationFactor | number }} ({{ meth.barsPerDay }} bars/day x 252 days)</span>
+              <span class="meth-value">{{ meth.annualizationFactor | number }} ({{ meth.barsPerDay }} bars/day × 252 days)</span>
               <span class="meth-label">Forward Horizon</span>
               <span class="meth-value">{{ meth.horizon }} bars</span>
               <span class="meth-label">Default Cost</span>
-              <span class="meth-value">{{ meth.defaultCostBps }} bps</span>
+              <span class="meth-value">{{ meth.defaultCostBps }} bps per side</span>
               <span class="meth-label">Min Bars Required</span>
               <span class="meth-value">{{ meth.minBarsForSignal | number }}</span>
               <span class="meth-label">Flip Sign</span>
@@ -116,7 +131,7 @@
     </div>
   }
 
-  <!-- 3. Data Sufficiency & Coverage -->
+  <!-- Data Sufficiency & Coverage -->
   @if (result().dataSufficiency; as ds) {
     <div class="sufficiency-card mb-6">
       <h4 class="table-title mb-3">
@@ -165,28 +180,42 @@
           <span>
             Neff adjusts raw sample size for autocorrelation using Newey-West truncation
             (max lag tested: {{ es.maxLagUsed }}, cumulative rho: {{ es.rhoSum | number: '1.4-4' }}).
+            Formula in the
+            <a routerLink="/docs/signal-engine-methodology">methodology page</a>.
           </span>
-        </div>
-        <div class="formula-annotation mb-3">
-          <span [appKatex]="neffFormula" [displayMode]="true"></span>
-          <div class="formula-note">where K is truncated when autocorrelation drops below 0.05</div>
         </div>
       }
 
-      <!-- Regime coverage grid -->
-      <div class="regime-grid">
-        <div class="regime-header"></div>
-        @for (trend of trendRegimes; track trend) {
-          <div class="regime-header">{{ trend }}</div>
-        }
-        @for (vol of volRegimes; track vol) {
-          <div class="regime-row-label">{{ vol }}</div>
+      <!-- Joint regime coverage (vol × trend with effective-trades estimate) -->
+      <div class="joint-regime-section">
+        <div class="joint-regime-eyebrow">
+          <span>Regime Coverage</span>
+          <span class="eyebrow-hint">
+            Joint vol × trend distribution. Effective-trade counts are estimates derived
+            from N<sub>eff</sub> × % active × bucket share.
+          </span>
+        </div>
+        <div class="joint-regime-grid">
+          <div class="grid-corner"></div>
           @for (trend of trendRegimes; track trend) {
-            <div class="regime-cell" [class.regime-covered]="regimeCovered(vol) && regimeCovered(trend)" [class.regime-missing]="!regimeCovered(vol) || !regimeCovered(trend)">
-              {{ regimeCovered(vol) && regimeCovered(trend) ? getRegimeCount(vol) : 0 }}
-            </div>
+            <div class="grid-col-header">{{ trend }}</div>
           }
-        }
+          @for (vol of volRegimes; track vol) {
+            <div class="grid-row-label">{{ vol }}</div>
+            @for (trend of trendRegimes; track trend) {
+              @let bucket = jointBucket(vol, trend);
+              <div class="joint-cell" [attr.data-band]="jointBucketBand(bucket)">
+                <div class="cell-days">
+                  {{ bucket?.days ?? 0 }}<span class="unit">d</span>
+                </div>
+                <div class="cell-trades">
+                  ≈ {{ (bucket?.effectiveTrades ?? 0) | number: '1.0-0' }} trades
+                </div>
+                <div class="cell-badge">{{ bucket?.badge ?? 'Empty' }}</div>
+              </div>
+            }
+          }
+        </div>
       </div>
 
       @if (ds.coverageWarnings.length > 0) {
@@ -202,7 +231,7 @@
     </div>
   }
 
-  <!-- 4. Signal Diagnostics -->
+  <!-- Signal Diagnostics -->
   @if (result().signalDiagnostics; as diag) {
     <div class="mb-6">
       <h4 class="table-title mb-3">
@@ -237,7 +266,7 @@
     </div>
   }
 
-  <!-- 4b. Signal Behavior Analysis -->
+  <!-- Signal Behavior Analysis -->
   @if (result().signalBehavior; as sb) {
     <div class="mb-6">
       <h4 class="table-title mb-3">
@@ -274,7 +303,7 @@
     </div>
   }
 
-  <!-- 5. Walk-Forward Summary -->
+  <!-- Walk-Forward Summary -->
   @if (result().walkForward; as wf) {
     @if (wf.windows.length > 0) {
       <div class="mb-6">
@@ -306,11 +335,51 @@
           </div>
         </div>
 
-        <!-- Sharpe formula annotation -->
-        <div class="formula-annotation mb-4">
-          <span [appKatex]="sharpeFormula" [displayMode]="true"></span>
-          <div class="formula-note">Annualized using 252 trading days x 390 bars/day</div>
-        </div>
+        <!-- Sharpe CI panel — Lo (2002) confidence interval. When the
+             backend flags ci.valid = false (e.g. N_eff too small), we
+             still render the card with an explicit caveat instead of
+             hiding it — "no band shown" must be distinguishable from
+             "computation never ran". -->
+        @if (result().oosSharpeCi; as ci) {
+          <div class="sharpe-ci-card mb-4" [class.sharpe-ci-invalid]="!ci.valid">
+            @if (ci.valid) {
+              <div class="sharpe-ci-row">
+                <div class="sharpe-ci-label">95% CI on combined OOS Sharpe</div>
+                <div class="sharpe-ci-value">
+                  [{{ ci.ciLower | number: '1.2-2' }}, {{ ci.ciUpper | number: '1.2-2' }}]
+                </div>
+                <div class="sharpe-ci-se">SE = {{ ci.se | number: '1.3-3' }}</div>
+                <div class="sharpe-ci-neff">N<sub>eff</sub> = {{ ci.nEffUsed | number: '1.0-0' }}</div>
+              </div>
+              <div class="sharpe-ci-note">
+                <i class="pi pi-info-circle"></i>
+                <span>
+                  Lo (2002) interval, autocorrelation-adjusted via N<sub>eff</sub>.
+                  @if (ci.ciLower < 0 && ci.ciUpper > 0) {
+                    <strong>This CI straddles zero — the headline Sharpe is statistically indistinguishable from noise at 95% confidence.</strong>
+                  }
+                </span>
+              </div>
+            } @else {
+              <div class="sharpe-ci-row">
+                <div class="sharpe-ci-label">95% CI on combined OOS Sharpe</div>
+                <div class="sharpe-ci-value sharpe-ci-value-na">unavailable</div>
+                @if (ci.nEffUsed > 0) {
+                  <div class="sharpe-ci-neff">N<sub>eff</sub> = {{ ci.nEffUsed | number: '1.0-0' }}</div>
+                }
+              </div>
+              <div class="sharpe-ci-note">
+                <i class="pi pi-exclamation-triangle"></i>
+                <span>
+                  CI could not be computed — the OOS sample is too small to
+                  produce a meaningful band. Treat the headline Sharpe as a
+                  point estimate without inferential weight until the run
+                  has more bars / folds.
+                </span>
+              </div>
+            }
+          </div>
+        }
 
         @if (hasSharpeDivergence) {
           <div class="divergence-note mb-3">
@@ -323,52 +392,68 @@
           </div>
         }
 
-        <!-- Alpha Decay Panel -->
+        <!-- Alpha Decay Panel — power-guarded -->
         @if (wf.alphaDecay; as decay) {
-          <div class="alpha-decay-panel mb-4">
-            <div class="alpha-decay-header">
-              <h5>Alpha Decay Regression</h5>
-              @if (alphaDecaySignificant) {
-                <p-tag severity="danger" value="Significant (p < 0.05)" />
-              } @else {
-                <p-tag severity="info" value="Not Significant" />
-              }
-            </div>
-            <div class="formula-annotation mb-3">
-              <span [appKatex]="alphaDecayFormula" [displayMode]="true"></span>
-            </div>
-            <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <div class="metric-card">
-                <div class="metric-label">Slope (beta1)</div>
-                <div class="metric-value" [class.text-red-700]="decay.slope < 0" [class.text-green-700]="decay.slope >= 0">
-                  {{ decay.slope | number: '1.4-4' }}
+          @if (alphaDecayTestValid) {
+            <div class="alpha-decay-panel mb-4">
+              <div class="alpha-decay-header">
+                <h5>Alpha Decay Regression</h5>
+                @if (decay.isSignificant) {
+                  <p-tag severity="danger" value="Significant (p < 0.05)" />
+                } @else {
+                  <p-tag severity="info" value="Not Significant" />
+                }
+                <span class="ml-2 text-xs text-gray-500">
+                  N = {{ decay.nFoldsUsed }} folds
+                </span>
+              </div>
+              <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div class="metric-card">
+                  <div class="metric-label">Slope (β₁)</div>
+                  <div class="metric-value" [class.text-red-700]="decay.slope < 0" [class.text-green-700]="decay.slope >= 0">
+                    {{ decay.slope | number: '1.4-4' }}
+                  </div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-label">Intercept (β₀)</div>
+                  <div class="metric-value">{{ decay.intercept | number: '1.4-4' }}</div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-label">t-statistic</div>
+                  <div class="metric-value">{{ decay.tStat | number: '1.2-2' }}</div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-label">p-value</div>
+                  <div class="metric-value" [class.text-red-700]="decay.pValue < 0.05">
+                    {{ decay.pValue | number: '1.4-4' }}
+                  </div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-label">R²</div>
+                  <div class="metric-value">{{ decay.rSquared | number: '1.4-4' }}</div>
                 </div>
               </div>
-              <div class="metric-card">
-                <div class="metric-label">Intercept (beta0)</div>
-                <div class="metric-value">{{ decay.intercept | number: '1.4-4' }}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-label">t-statistic</div>
-                <div class="metric-value">{{ decay.tStat | number: '1.2-2' }}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-label">p-value</div>
-                <div class="metric-value" [class.text-red-700]="decay.pValue < 0.05">
-                  {{ decay.pValue | number: '1.4-4' }}
+            </div>
+          } @else {
+            <div class="alpha-decay-placeholder mb-4">
+              <i class="pi pi-exclamation-triangle"></i>
+              <div>
+                <div class="placeholder-headline">
+                  Alpha-decay test requires ≥ 5 folds — currently
+                  N&nbsp;=&nbsp;{{ alphaDecayFoldCount }}.
                 </div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-label">R-squared</div>
-                <div class="metric-value">{{ decay.rSquared | number: '1.4-4' }}</div>
+                <p class="placeholder-body">
+                  The slope of the OOS Sharpe trend is descriptive
+                  (slope&nbsp;=&nbsp;{{ decay.slope | number: '1.3-3' }}) but with
+                  {{ alphaDecayFoldCount }} folds the regression has
+                  too few residual degrees of freedom to produce a
+                  meaningful p-value. Extend the date range or shorten the
+                  test window to reach the minimum fold count, then a
+                  significance test will be reported here.
+                </p>
               </div>
             </div>
-          </div>
-        } @else if (hasAlphaDecay) {
-          <div class="alpha-decay-warning">
-            <i class="pi pi-exclamation-triangle"></i>
-            <span>OOS Sharpe declining over time (slope: {{ wf.oosSharpeTrendSlope | number: '1.3-3' }}). Possible alpha decay detected.</span>
-          </div>
+          }
         }
 
         <!-- OOS Equity Curve -->
@@ -379,10 +464,13 @@
         }
       </div>
 
-      <!-- 6. Walk-Forward Windows Table -->
+      <!-- Walk-Forward Windows table — per-fold thresholds emphasised -->
       <div class="mb-6">
         <h4 class="table-title mb-3">
           <i class="pi pi-list mr-2"></i>Walk-Forward Windows
+          <span class="ml-2 text-xs text-gray-500">
+            Threshold is selected per-fold from train-only data — see methodology page.
+          </span>
         </h4>
         <p-table [value]="wf.windows" styleClass="p-datatable-sm" [tableStyle]="{ 'min-width': '50rem' }">
           <ng-template #header>
@@ -390,7 +478,7 @@
               <th>Fold</th>
               <th>Train Period</th>
               <th>Test Period</th>
-              <th>Threshold</th>
+              <th class="th-emphasis">θ (per-fold)</th>
               <th>OOS Sharpe</th>
               <th>OOS Return</th>
               <th>OOS Max DD</th>
@@ -402,7 +490,7 @@
               <td>{{ w.foldIndex }}</td>
               <td>{{ w.trainStart }} to {{ w.trainEnd }}</td>
               <td>{{ w.testStart }} to {{ w.testEnd }}</td>
-              <td>{{ w.bestThreshold | number: '1.1-1' }}</td>
+              <td class="td-emphasis">{{ w.bestThreshold | number: '1.1-1' }}</td>
               <td [class.text-green-700]="w.oosNetSharpe > 0" [class.text-red-700]="w.oosNetSharpe <= 0">
                 {{ w.oosNetSharpe | number: '1.2-2' }}
               </td>
@@ -418,12 +506,27 @@
     }
   }
 
-  <!-- 7. Backtest Grid - Net Sharpe -->
+  <!-- Backtest Grid - Net Sharpe (with DSR display on the headline) -->
   @if (result().backtestGrid.length > 0) {
     <div class="mb-6">
-      <h4 class="table-title mb-3">
-        <i class="pi pi-th-large mr-2"></i>Backtest Grid — Net Sharpe
-      </h4>
+      <div class="grid-headline-row">
+        <h4 class="table-title">
+          <i class="pi pi-th-large mr-2"></i>Backtest Grid — Net Sharpe (in-sample)
+        </h4>
+        @if (result().deflatedSharpe; as dsr) {
+          @if (dsr.valid) {
+            <div class="dsr-chip" [attr.data-band]="deflatedSharpeBand"
+                 pTooltip="Bailey & López de Prado Deflated Sharpe Ratio. P(true Sharpe > 0) after deflating the maximum-Sharpe selection across {{ dsr.nTrials }} grid trials."
+                 tooltipPosition="left">
+              <span class="dsr-label">Deflated Sharpe</span>
+              <span class="dsr-value">{{ dsr.dsrProbability | percent: '1.0-0' }}</span>
+              <span class="dsr-meta">
+                raw {{ dsr.rawSharpe | number: '1.2-2' }} · null max {{ dsr.expectedMaxUnderNull | number: '1.2-2' }} · n={{ dsr.nTrials }}
+              </span>
+            </div>
+          }
+        }
+      </div>
       <div class="grid-table-wrapper">
         <table class="grid-table">
           <thead>
@@ -451,7 +554,7 @@
       </div>
     </div>
 
-    <!-- 8. Backtest Grid - Turnover -->
+    <!-- Backtest Grid - Turnover -->
     <div class="mb-6">
       <h4 class="table-title mb-3">
         <i class="pi pi-replay mr-2"></i>Backtest Grid — Annualized Turnover
@@ -484,7 +587,7 @@
     </div>
   }
 
-  <!-- 9. Best Config Equity Curve -->
+  <!-- Best Config Equity Curve -->
   @if (bestBacktest?.dates?.length) {
     <div class="mb-6">
       <h4 class="table-title mb-3">
@@ -496,7 +599,7 @@
     </div>
   }
 
-  <!-- 10. Parameter Stability -->
+  <!-- Parameter Stability -->
   @if (result().graduation?.parameterStability; as ps) {
     <div class="mb-6">
       <h4 class="table-title mb-3">
@@ -508,22 +611,18 @@
         />
         <span class="ml-2 text-sm text-gray-500">Score: {{ ps.stabilityScore | number: '1.2-2' }}</span>
       </h4>
-      <div class="chart-container mb-3">
+      <div class="chart-container">
         <canvas #stabilityChart></canvas>
-      </div>
-      <div class="formula-annotation">
-        <span [appKatex]="stabilityFormula" [displayMode]="true"></span>
-        <div class="formula-note">Measures how sensitive the Sharpe ratio is to threshold changes</div>
       </div>
     </div>
   }
 
-  <!-- 11. Temporal Stability Analysis (renamed from Signal Lifespan) -->
+  <!-- Temporal Stability Analysis -->
   @if (result().walkForward?.windows?.length) {
     <div class="mb-6">
       <h4 class="table-title mb-3">
         <i class="pi pi-clock mr-2"></i>Temporal Stability Analysis
-        @if (hasAlphaDecay) {
+        @if (alphaDecayTestValid && hasAlphaDecay) {
           <p-tag severity="danger" value="Alpha Decay Detected" class="ml-2" />
         }
       </h4>
@@ -533,91 +632,7 @@
     </div>
   }
 
-  <!-- 12. Mathematical Appendix -->
-  <div class="mt-6 mb-6">
-    <p-accordion>
-      <p-accordion-panel value="math-appendix">
-        <p-accordion-header>
-          <i class="pi pi-calculator mr-2"></i>Mathematical Appendix
-        </p-accordion-header>
-        <p-accordion-content>
-          <div class="appendix-section">
-            <h5>Sharpe Ratio (Annualized)</h5>
-            <div class="formula-annotation">
-              <span [appKatex]="sharpeFormula" [displayMode]="true"></span>
-            </div>
-            <ul class="var-list">
-              <li><strong>r&#772;</strong> — mean bar return</li>
-              <li><strong>r_f</strong> — risk-free rate (assumed 0)</li>
-              <li><strong>sigma_r</strong> — standard deviation of bar returns</li>
-              <li>Annualized by sqrt(252 x 390) for 1-minute bars</li>
-            </ul>
-          </div>
-
-          <div class="appendix-section">
-            <h5>Effective Sample Size (Neff)</h5>
-            <div class="formula-annotation">
-              <span [appKatex]="neffFormula" [displayMode]="true"></span>
-            </div>
-            <ul class="var-list">
-              <li><strong>N</strong> — raw sample size</li>
-              <li><strong>rho_k</strong> — autocorrelation at lag k</li>
-              <li>Summation truncated (Newey-West) when rho_k &lt; 0.05</li>
-            </ul>
-          </div>
-
-          <div class="appendix-section">
-            <h5>Maximum Drawdown</h5>
-            <div class="formula-annotation">
-              <span [appKatex]="drawdownFormula" [displayMode]="true"></span>
-            </div>
-            <ul class="var-list">
-              <li><strong>P_t</strong> — portfolio value at time t</li>
-              <li>Measures peak-to-trough decline in equity curve</li>
-            </ul>
-          </div>
-
-          <div class="appendix-section">
-            <h5>Parameter Stability</h5>
-            <div class="formula-annotation">
-              <span [appKatex]="stabilityFormula" [displayMode]="true"></span>
-            </div>
-            <ul class="var-list">
-              <li><strong>sigma_Sharpe(theta)</strong> — std of Sharpe across thresholds</li>
-              <li><strong>S&#772;(theta)</strong> — mean Sharpe across thresholds</li>
-              <li>Higher is better: 1.0 = perfectly stable</li>
-            </ul>
-          </div>
-
-          <div class="appendix-section">
-            <h5>Alpha Decay (OOS Sharpe Trend)</h5>
-            <div class="formula-annotation">
-              <span [appKatex]="alphaDecayFormula" [displayMode]="true"></span>
-            </div>
-            <ul class="var-list">
-              <li><strong>S_i</strong> — OOS Sharpe of fold i</li>
-              <li><strong>beta_1</strong> — slope (negative = decay)</li>
-              <li>t-test assesses statistical significance of the trend</li>
-            </ul>
-          </div>
-
-          <div class="appendix-section">
-            <h5>Annualized Turnover</h5>
-            <div class="formula-annotation">
-              <span [appKatex]="turnoverFormula" [displayMode]="true"></span>
-            </div>
-            <ul class="var-list">
-              <li><strong>w_t</strong> — portfolio weight at time t</li>
-              <li>Measures frequency of position changes</li>
-              <li>Lower turnover reduces transaction costs</li>
-            </ul>
-          </div>
-        </p-accordion-content>
-      </p-accordion-panel>
-    </p-accordion>
-  </div>
-
-  <!-- 13. Research Log Snapshot -->
+  <!-- Research Log Snapshot -->
   @if (result().researchLog) {
     <div class="research-log">
       <h4 class="table-title mb-2">
@@ -627,10 +642,25 @@
     </div>
   }
 
+  <!-- Methodology link footer -->
+  <div class="methodology-footer">
+    <i class="pi pi-book"></i>
+    <span>
+      Full formulas, the execution timing diagram, and the graduation-ladder
+      criteria live on the
+      <a routerLink="/docs/signal-engine-methodology">Signal Engine Methodology</a>
+      page under <em>Documentation</em>. Source-of-truth implementation:
+      <code>app/research/signal/</code>; authority document:
+      <code>docs/signal-engine-authority.md</code>.
+    </span>
+  </div>
+
   <!-- Bars Footer -->
   <div class="bars-footer mt-4">
     <i class="pi pi-database mr-2"></i>
     Analysis based on <strong>{{ result().barsUsed | number }}</strong> bars
     ({{ result().startDate }} to {{ result().endDate }})
   </div>
+
+  } <!-- end @if (showDownstreamPanels()) -->
 </div>

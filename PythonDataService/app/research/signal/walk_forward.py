@@ -19,16 +19,35 @@ from app.research.target import compute_15min_forward_return
 
 logger = logging.getLogger(__name__)
 
+# Minimum folds required for the alpha-decay regression to be statistically
+# meaningful. Below this we report the slope but mark the test as invalid;
+# the UI must render a "trend test requires ≥ N folds" placeholder rather
+# than an uninformative p-value. Authority: signal-engine-authority.md § 4.9.
+ALPHA_DECAY_MIN_FOLDS = 5
+ALPHA_DECAY_SIGNIFICANCE_LEVEL = 0.05
+
 
 @dataclass
 class AlphaDecayStats:
-    """Regression statistics for OOS Sharpe trend (alpha decay)."""
+    """Regression statistics for OOS Sharpe trend (alpha decay).
+
+    The regression is `S_i = β₀ + β₁ · i + ε_i` over fold index `i`.
+    With fewer than `ALPHA_DECAY_MIN_FOLDS` folds the t-test has too few
+    residual degrees of freedom to be informative; in that regime
+    `is_test_valid` is False and consumers should render a
+    "insufficient folds" placeholder rather than a misleading p-value.
+    """
 
     slope: float = 0.0
     intercept: float = 0.0
     t_stat: float = 0.0
     p_value: float = 1.0
     r_squared: float = 0.0
+    n_folds_used: int = 0
+    is_test_valid: bool = False
+    """True when ``n_folds_used >= ALPHA_DECAY_MIN_FOLDS``."""
+    is_significant: bool = False
+    """True when ``is_test_valid`` and ``p_value < ALPHA_DECAY_SIGNIFICANCE_LEVEL``."""
 
 
 @dataclass
@@ -70,6 +89,10 @@ class WalkForwardResult:
     total_oos_bars: int = 0
     combined_oos_dates: list[str] = field(default_factory=list)
     combined_oos_cumulative_returns: list[float] = field(default_factory=list)
+    combined_oos_bar_returns: list[float] = field(default_factory=list)
+    """Concatenation of per-fold OOS bar returns. Used by ``compute_sharpe_ci``
+    to attach a Newey-West-style confidence interval to the headline OOS
+    Sharpe."""
     oos_sharpe_trend_slope: float = 0.0
     alpha_decay: AlphaDecayStats = field(default_factory=AlphaDecayStats)
 
@@ -209,6 +232,20 @@ def run_walk_forward(
     return _aggregate_walk_forward(windows)
 
 
+def _bar_returns_from_cumulative(cum: list[float]) -> list[float]:
+    """Recover bar-level returns from a cumulative-return series.
+
+    `cumulative[t] = sum(bar_returns[:t+1])`, so bar returns are the first
+    differences with bar_returns[0] = cumulative[0].
+    """
+    if not cum:
+        return []
+    bars: list[float] = [cum[0]]
+    for i in range(1, len(cum)):
+        bars.append(cum[i] - cum[i - 1])
+    return bars
+
+
 def _aggregate_walk_forward(windows: list[WalkForwardWindow]) -> WalkForwardResult:
     """Compute aggregate statistics from walk-forward windows."""
     sharpes = [w.oos_net_sharpe for w in windows]
@@ -223,19 +260,29 @@ def _aggregate_walk_forward(windows: list[WalkForwardWindow]) -> WalkForwardResu
 
     total_oos_bars = sum(w.test_bars for w in windows)
 
-    # Combined OOS equity curve
+    # Combined OOS equity curve. We recover per-fold bar returns from the
+    # per-fold cumulative series, then concatenate them — this gives the
+    # downstream Sharpe-CI machinery the underlying observation series
+    # without needing the backtest kernel to surface bar returns separately.
     combined_dates: list[str] = []
     combined_cum: list[float] = []
+    combined_bars: list[float] = []
     running_total = 0.0
     for w in windows:
+        fold_bars = _bar_returns_from_cumulative(w.oos_cumulative_returns)
         for i, d in enumerate(w.oos_dates):
             combined_dates.append(d)
             if i < len(w.oos_cumulative_returns):
                 combined_cum.append(running_total + w.oos_cumulative_returns[i])
+            if i < len(fold_bars):
+                combined_bars.append(fold_bars[i])
         if w.oos_cumulative_returns:
             running_total += w.oos_cumulative_returns[-1]
 
-    # Alpha decay: linear regression of OOS Sharpe vs fold index
+    # Alpha decay: linear regression of OOS Sharpe vs fold index. Below
+    # ``ALPHA_DECAY_MIN_FOLDS`` the t-test has too few residual degrees of
+    # freedom to be meaningful; the result still reports the slope but
+    # marks ``is_test_valid = False`` so the UI suppresses the p-value.
     decay = _compute_sharpe_trend_slope(sharpes)
 
     return WalkForwardResult(
@@ -250,16 +297,25 @@ def _aggregate_walk_forward(windows: list[WalkForwardWindow]) -> WalkForwardResu
         total_oos_bars=total_oos_bars,
         combined_oos_dates=combined_dates,
         combined_oos_cumulative_returns=combined_cum,
+        combined_oos_bar_returns=combined_bars,
         oos_sharpe_trend_slope=decay.slope,
         alpha_decay=decay,
     )
 
 
 def _compute_sharpe_trend_slope(sharpes: list[float]) -> AlphaDecayStats:
-    """Linear regression of OOS Sharpe over fold indices with t-stat/p-value."""
+    """Linear regression of OOS Sharpe over fold indices with t-stat/p-value.
+
+    The slope is always reported (it is descriptive). The t-statistic and
+    p-value are only reported as **valid inference** when the sample has at
+    least ``ALPHA_DECAY_MIN_FOLDS`` folds; below that threshold the test
+    has too few residual degrees of freedom to discriminate signal from
+    noise, so ``is_test_valid`` is False and the UI must render a
+    "insufficient folds" placeholder rather than a misleading p-value.
+    """
     n = len(sharpes)
     if n < 2:
-        return AlphaDecayStats()
+        return AlphaDecayStats(n_folds_used=n)
 
     x = np.arange(n, dtype=float)
     y = np.array(sharpes, dtype=float)
@@ -269,7 +325,7 @@ def _compute_sharpe_trend_slope(sharpes: list[float]) -> AlphaDecayStats:
     ss_xx = float(np.sum((x - x_mean) ** 2))
 
     if ss_xx < 1e-12:
-        return AlphaDecayStats()
+        return AlphaDecayStats(n_folds_used=n)
 
     slope = ss_xy / ss_xx
     intercept = y_mean - slope * x_mean
@@ -289,12 +345,18 @@ def _compute_sharpe_trend_slope(sharpes: list[float]) -> AlphaDecayStats:
         t_stat = 0.0
         p_value = 1.0
 
+    is_test_valid = n >= ALPHA_DECAY_MIN_FOLDS
+    is_significant = is_test_valid and p_value < ALPHA_DECAY_SIGNIFICANCE_LEVEL
+
     return AlphaDecayStats(
         slope=slope,
         intercept=intercept,
         t_stat=t_stat,
         p_value=p_value,
         r_squared=r_squared,
+        n_folds_used=n,
+        is_test_valid=is_test_valid,
+        is_significant=is_significant,
     )
 
 

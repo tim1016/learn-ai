@@ -60,7 +60,10 @@ public class SignalEngineReportDto
     public DataSufficiencyDto? DataSufficiency { get; set; }
     public EffectiveSampleSizeDto? EffectiveSample { get; set; }
     public Dictionary<string, int> RegimeCoverage { get; set; } = new();
+    public List<RegimeBucketDto> JointRegimeCoverage { get; set; } = [];
     public SignalBehaviorMetricsDto? SignalBehavior { get; set; }
+    public SharpeCiDto? OosSharpeCi { get; set; }
+    public DeflatedSharpeDto? DeflatedSharpe { get; set; }
     public MethodologyDto? Methodology { get; set; }
     public string ResearchLog { get; set; } = "";
     public string? Error { get; set; }
@@ -142,6 +145,38 @@ public class ParameterStabilityDto
     public string StabilityLabel { get; set; } = "Fragile";
 }
 
+public class Stage0FailureDto
+{
+    public string CriterionName { get; set; } = "";
+    public double Value { get; set; }
+    public string ThresholdRepr { get; set; } = "";
+    public string Message { get; set; } = "";
+}
+
+public class Stage0RejectionDto
+{
+    public bool Rejected { get; set; }
+    public List<Stage0FailureDto> FailedCriteria { get; set; } = [];
+}
+
+public class StageAdvanceCriterionDto
+{
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public double CurrentValue { get; set; }
+    public string RequiredRepr { get; set; } = "";
+    public bool Met { get; set; }
+}
+
+public class GraduationStageInfoDto
+{
+    public int Stage { get; set; }
+    public string Label { get; set; } = "Rejected";
+    public string Description { get; set; } = "";
+    public string NextStageLabel { get; set; } = "";
+    public List<StageAdvanceCriterionDto> AdvanceCriteria { get; set; } = [];
+}
+
 public class GraduationResultDto
 {
     public List<GraduationCriterionDto> Criteria { get; set; } = [];
@@ -150,6 +185,8 @@ public class GraduationResultDto
     public string Summary { get; set; } = "";
     public string StatusLabel { get; set; } = "Exploratory";
     public ParameterStabilityDto? ParameterStability { get; set; }
+    public Stage0RejectionDto? Stage0Rejection { get; set; }
+    public GraduationStageInfoDto? StageInfo { get; set; }
 }
 
 public class SignalDiagnosticsDto
@@ -191,6 +228,40 @@ public class AlphaDecayStatsDto
     public double TStat { get; set; }
     public double PValue { get; set; }
     public double RSquared { get; set; }
+    public int NFoldsUsed { get; set; }
+    public bool IsTestValid { get; set; }
+    public bool IsSignificant { get; set; }
+}
+
+public class SharpeCiDto
+{
+    public double Point { get; set; }
+    public double Se { get; set; }
+    public double CiLower { get; set; }
+    public double CiUpper { get; set; }
+    public double ConfidenceLevel { get; set; }
+    public double NEffUsed { get; set; }
+    public bool Valid { get; set; }
+}
+
+public class DeflatedSharpeDto
+{
+    public double RawSharpe { get; set; }
+    public double ExpectedMaxUnderNull { get; set; }
+    public double DsrProbability { get; set; }
+    public int NTrials { get; set; }
+    public double Skewness { get; set; }
+    public double Kurtosis { get; set; }
+    public bool Valid { get; set; }
+}
+
+public class RegimeBucketDto
+{
+    public string VolLabel { get; set; } = "";
+    public string TrendLabel { get; set; } = "";
+    public int Days { get; set; }
+    public double EffectiveTrades { get; set; }
+    public string Badge { get; set; } = "Empty";
 }
 
 public class SignalBehaviorMetricsDto

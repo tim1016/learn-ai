@@ -51,8 +51,8 @@
     </div>
   </div>
 
-  <!-- Run Button -->
-  <div class="mb-4">
+  <!-- Run controls -->
+  <div class="mb-4 flex gap-2 align-items-center">
     <p-button
       label="Run Cross-Sectional Study"
       icon="pi pi-play"
@@ -60,47 +60,252 @@
       [disabled]="loading() || selectedTickers().length === 0"
       (onClick)="runBatch()"
     />
+    @if (loading()) {
+      <p-button
+        label="Cancel"
+        icon="pi pi-times"
+        severity="danger"
+        [outlined]="true"
+        size="small"
+        (onClick)="cancelRun()"
+      />
+    }
+    @if (job() && !loading()) {
+      <p-button
+        label="New Run"
+        icon="pi pi-plus"
+        severity="secondary"
+        [text]="true"
+        size="small"
+        (onClick)="newRun()"
+      />
+    }
   </div>
 
-  @if (loading()) {
-    <p-progressBar mode="indeterminate" styleClass="mb-4" />
-    <p-message severity="info" text="Processing tickers sequentially. This may take several minutes..." />
+  <!-- Live progress + event log (data-lab style) -->
+  @if (job(); as j) {
+    <div class="run-card mb-4" [attr.data-status]="j.status">
+      <div class="run-card-head">
+        <div class="run-card-title">
+          <i class="pi"
+             [class.pi-spin]="loading()"
+             [class.pi-spinner]="loading()"
+             [class.pi-check-circle]="j.status === 'completed'"
+             [class.pi-times-circle]="j.status === 'failed' || j.status === 'cancelled'"
+          ></i>
+          <span class="run-card-headline">{{ progressMessage() }}</span>
+        </div>
+        @if (j.total) {
+          <span class="run-card-counter">
+            {{ j.current ?? 0 }} / {{ j.total }} {{ j.unit ?? 'tickers' }}
+          </span>
+        }
+      </div>
+
+      @if (j.total && loading()) {
+        <div class="run-card-progress">
+          <div class="progress-track">
+            <div class="progress-fill" [style.width.%]="progressPercent()"></div>
+          </div>
+          <span class="progress-percent">{{ progressPercent() }}%</span>
+        </div>
+      }
+
+      <!-- Inline event log — accumulated since the run started. -->
+      @if (cumulativeLogs().length > 0) {
+        <div class="event-log">
+          @for (log of cumulativeLogs(); track log.ts + '_' + $index) {
+            <div class="log-line" [ngClass]="logLevelClass(log.level)">
+              <span class="log-time">{{ formatLogTime(log.ts) }}</span>
+              <span class="log-message">{{ log.message }}</span>
+            </div>
+          }
+        </div>
+      }
+    </div>
   }
 
   @if (error(); as err) {
     <p-message severity="error" [text]="err" class="mb-4" />
   }
 
-  <!-- Results -->
+  <!-- Final aggregate result -->
   @if (result(); as res) {
-    <!-- Summary Card -->
+
+    <!-- Verdict block — Stage 0/1/2/3 -->
+    @if (stageInfo(); as stage) {
+      <div class="verdict-card mb-4" [attr.data-band]="stageBand()">
+        <div class="verdict-head">
+          <div class="stage-badge" [attr.data-band]="stageBand()">
+            <span class="badge-label">Stage</span>
+            <span class="badge-value">{{ stage.stage }}</span>
+            <span class="badge-meta">/ 3</span>
+          </div>
+          <div class="verdict-headline">
+            <div class="headline-row">
+              <span class="headline-eyebrow">Cross-Sectional Verdict</span>
+              <span class="stage-chip" [attr.data-band]="stageBand()">{{ stage.label }}</span>
+            </div>
+            <p class="verdict-text">{{ stage.description }}</p>
+
+            @if (aggregateIcCi(); as ci) {
+              @if (ci.valid) {
+                <div class="ic-row">
+                  <div class="ic-display">
+                    <span class="ic-label">Aggregate IC (precision-weighted)</span>
+                    <span class="ic-value" [attr.data-straddles-zero]="ciStraddlesZero()">
+                      {{ aggregateIcDisplay() }}
+                    </span>
+                  </div>
+                  @if (ciIntervalDisplay()) {
+                    <div class="ci-display"
+                      pTooltip="Lo-style 95% CI on the precision-weighted aggregate IC. Weights = per-ticker N_eff. CI that includes 0 means the aggregate is statistically indistinguishable from noise."
+                      tooltipPosition="bottom">
+                      <span class="ci-text">{{ ciIntervalDisplay() }}</span>
+                      @if (ciStraddlesZero()) {
+                        <span class="ci-warn-tag">straddles zero</span>
+                      }
+                    </div>
+                  }
+                </div>
+              }
+            }
+          </div>
+        </div>
+
+        @if (stage.stage === 0 && stage.failedCriteria.length > 0) {
+          <div class="rejection-block">
+            <div class="rejection-headline">
+              <i class="pi pi-times-circle"></i>
+              <span>Stage 0 kill criteria triggered</span>
+            </div>
+            <ul class="rejection-list">
+              @for (f of stage.failedCriteria; track f.name) {
+                <li class="rejection-item">
+                  <div class="rejection-row">
+                    <span class="rejection-name">{{ f.name }}</span>
+                    <span class="rejection-threshold">required {{ f.requiredRepr }}</span>
+                  </div>
+                  <p class="rejection-message">
+                    <strong>{{ f.currentValue | number: '1.2-4' }}</strong> — {{ f.description }}
+                  </p>
+                </li>
+              }
+            </ul>
+          </div>
+        } @else if (stage.advanceCriteria.length > 0) {
+          <div class="advance-block">
+            <div class="advance-headline">
+              <i class="pi pi-arrow-circle-up"></i>
+              <span>Criteria to reach <strong>{{ stage.nextStageLabel }}</strong></span>
+            </div>
+            <ul class="advance-list">
+              @for (c of stage.advanceCriteria; track c.name) {
+                <li class="advance-item" [class.advance-met]="c.met">
+                  <div class="advance-row">
+                    <span class="advance-name">
+                      @if (c.met) {
+                        <i class="pi pi-check-circle"></i>
+                      } @else {
+                        <i class="pi pi-circle"></i>
+                      }
+                      {{ c.name }}
+                    </span>
+                    <span class="advance-required">{{ c.requiredRepr }}</span>
+                  </div>
+                  <div class="advance-current">
+                    Current: <strong>{{ c.currentValue | number: '1.2-4' }}</strong> — {{ c.description }}
+                  </div>
+                </li>
+              }
+            </ul>
+          </div>
+        }
+      </div>
+    }
+
+    <!-- Aggregate metric cards -->
     <p-card styleClass="mb-4">
       <ng-template #header>
         <div class="p-3 flex align-items-center gap-3">
           <span class="text-xl font-bold">Cross-Sectional Results</span>
-          <p-tag [severity]="consistentSeverity" [value]="consistentLabel" />
+          @if (binomialTest(); as bt) {
+            <p-tag
+              [severity]="bt.significant ? 'success' : 'danger'"
+              [value]="bt.significant ? 'Significant' : 'Not Significant'"
+            />
+          } @else {
+            <p-tag [severity]="consistentSeverity" [value]="consistentLabel" />
+          }
         </div>
       </ng-template>
       <div class="grid">
         <div class="col-6 md:col-3">
-          <div class="text-sm text-color-secondary">Tickers Tested</div>
-          <div class="text-2xl font-bold">{{ res.tickersTested }}</div>
+          <div class="text-sm text-color-secondary">
+            @if (validitySummary()) { Valid / Tested } @else { Tickers Tested }
+          </div>
+          <div class="text-2xl font-bold">
+            @if (res.tickersValid !== undefined) {
+              {{ res.tickersValid }} / {{ res.tickersTestedRaw ?? res.tickersTested }}
+            } @else {
+              {{ res.tickersTested }}
+            }
+          </div>
+          @if (validitySummary(); as vs) {
+            <div class="text-xs text-color-secondary mt-1">
+              {{ vs.invalidIv }} invalid IV ·
+              {{ vs.invalidData }} no data ·
+              {{ vs.errored }} errored
+            </div>
+          }
         </div>
         <div class="col-6 md:col-3">
           <div class="text-sm text-color-secondary">Tickers Passed</div>
           <div class="text-2xl font-bold">{{ res.tickersPassed }}</div>
         </div>
         <div class="col-6 md:col-3">
-          <div class="text-sm text-color-secondary">Pass Rate</div>
-          <div class="text-2xl font-bold">{{ passRatePct | number:'1.0-0' }}%</div>
+          <div class="text-sm text-color-secondary">
+            Pass Rate
+            @if (validitySummary()) { <span class="text-xs">(of valid)</span> }
+          </div>
+          <div class="text-2xl font-bold">{{ passRatePct | number: '1.0-0' }}%</div>
         </div>
         <div class="col-6 md:col-3">
           <div class="text-sm text-color-secondary">Aggregate IC</div>
           <div class="text-2xl font-bold" [class]="getIcClass(res.aggregateIc)">
-            {{ res.aggregateIc | number:'1.4-4' }}
+            {{ res.aggregateIc | number: '1.4-4' }}
           </div>
+          @if (res.aggregateIcUniform !== undefined && res.aggregateIcUniform !== res.aggregateIc) {
+            <div class="text-xs text-color-secondary mt-1"
+                 pTooltip="Unweighted (uniform) aggregate IC for comparison. Differs from the headline because the precision-weighted version weights each ticker by its N_eff."
+                 tooltipPosition="top">
+              uniform: {{ res.aggregateIcUniform | number: '1.4-4' }}
+            </div>
+          }
         </div>
       </div>
+
+      @if (binomialTest(); as bt) {
+        <div class="stat-row">
+          <div class="stat-cell">
+            <span class="stat-label">Binomial null test (p-value)</span>
+            <span class="stat-value" [class.stat-significant]="bt.significant">
+              {{ bt.pValue | number: '1.4-4' }}
+            </span>
+            <span class="stat-meta">
+              {{ bt.nPassed }} of {{ bt.nValid }} passed at α = {{ bt.alphaPerTicker | number: '1.2-2' }}
+            </span>
+          </div>
+          <div class="stat-cell"
+               pTooltip="Effective number of independent assets via eigenvalue decomposition of the cross-asset correlation matrix. SPY/QQQ/AAPL are highly correlated, so N_eff_assets is typically much less than the raw ticker count."
+               tooltipPosition="top">
+            <span class="stat-label">N<sub>eff_assets</sub> (eigenvalue)</span>
+            <span class="stat-value">{{ bt.nEffAssets | number: '1.2-2' }}</span>
+            <span class="stat-meta">vs {{ bt.nValid }} valid (raw)</span>
+          </div>
+        </div>
+      }
+
       @if (res.summary) {
         <p class="mt-3 text-sm text-color-secondary">{{ res.summary }}</p>
       }
@@ -128,10 +333,10 @@
       <ng-template #body let-row>
         <tr>
           <td class="font-bold">{{ row.ticker }}</td>
-          <td [class]="getIcClass(row.meanIc)">{{ row.meanIc | number:'1.4-4' }}</td>
-          <td>{{ row.nwTStat | number:'1.2-2' }}</td>
-          <td>{{ row.nwPValue | number:'1.4-4' }}</td>
-          <td>{{ row.effectiveN | number:'1.0-0' }}</td>
+          <td [class]="getIcClass(row.meanIc)">{{ row.meanIc | number: '1.4-4' }}</td>
+          <td>{{ row.nwTStat | number: '1.2-2' }}</td>
+          <td>{{ row.nwPValue | number: '1.4-4' }}</td>
+          <td>{{ row.effectiveN | number: '1.0-0' }}</td>
           <td>
             <p-tag
               [severity]="row.isStationary ? 'success' : 'danger'"
@@ -140,8 +345,8 @@
           </td>
           <td>
             <p-tag
-              [severity]="getValidationSeverity(row.passedValidation)"
-              [value]="row.passedValidation ? 'PASS' : 'FAIL'"
+              [severity]="validityTagSeverity(row)"
+              [value]="validityTagLabel(row)"
             />
           </td>
           <td>{{ row.dataPoints }}</td>

@@ -42,7 +42,11 @@ public class SignalEngineResultType
     public DataSufficiencyType? DataSufficiency { get; set; }
     public EffectiveSampleSizeType? EffectiveSample { get; set; }
     public List<RegimeCoverageEntryType> RegimeCoverage { get; set; } = [];
+    public List<RegimeBucketType> JointRegimeCoverage { get; set; } = [];
     public SignalBehaviorMetricsType? SignalBehavior { get; set; }
+    [GraphQLName("oosSharpeCi")]
+    public SharpeCiType? OosSharpeCi { get; set; }
+    public DeflatedSharpeType? DeflatedSharpe { get; set; }
     public MethodologyType? Methodology { get; set; }
     public string ResearchLog { get; set; } = "";
     public string? Error { get; set; }
@@ -129,6 +133,40 @@ public class GraduationResultType
     public string Summary { get; set; } = "";
     public string StatusLabel { get; set; } = "Exploratory";
     public ParameterStabilityType? ParameterStability { get; set; }
+    public Stage0RejectionType? Stage0Rejection { get; set; }
+    public GraduationStageInfoType? StageInfo { get; set; }
+}
+
+public class Stage0FailureType
+{
+    public string CriterionName { get; set; } = "";
+    public double Value { get; set; }
+    public string ThresholdRepr { get; set; } = "";
+    public string Message { get; set; } = "";
+}
+
+public class Stage0RejectionType
+{
+    public bool Rejected { get; set; }
+    public List<Stage0FailureType> FailedCriteria { get; set; } = [];
+}
+
+public class StageAdvanceCriterionType
+{
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public double CurrentValue { get; set; }
+    public string RequiredRepr { get; set; } = "";
+    public bool Met { get; set; }
+}
+
+public class GraduationStageInfoType
+{
+    public int Stage { get; set; }
+    public string Label { get; set; } = "Rejected";
+    public string Description { get; set; } = "";
+    public string NextStageLabel { get; set; } = "";
+    public List<StageAdvanceCriterionType> AdvanceCriteria { get; set; } = [];
 }
 
 public class GraduationCriterionType
@@ -195,6 +233,43 @@ public class AlphaDecayStatsType
     public double TStat { get; set; }
     public double PValue { get; set; }
     public double RSquared { get; set; }
+    [GraphQLName("nFoldsUsed")]
+    public int NFoldsUsed { get; set; }
+    public bool IsTestValid { get; set; }
+    public bool IsSignificant { get; set; }
+}
+
+public class SharpeCiType
+{
+    public double Point { get; set; }
+    public double Se { get; set; }
+    public double CiLower { get; set; }
+    public double CiUpper { get; set; }
+    public double ConfidenceLevel { get; set; }
+    [GraphQLName("nEffUsed")]
+    public double NEffUsed { get; set; }
+    public bool Valid { get; set; }
+}
+
+public class DeflatedSharpeType
+{
+    public double RawSharpe { get; set; }
+    public double ExpectedMaxUnderNull { get; set; }
+    public double DsrProbability { get; set; }
+    [GraphQLName("nTrials")]
+    public int NTrials { get; set; }
+    public double Skewness { get; set; }
+    public double Kurtosis { get; set; }
+    public bool Valid { get; set; }
+}
+
+public class RegimeBucketType
+{
+    public string VolLabel { get; set; } = "";
+    public string TrendLabel { get; set; } = "";
+    public int Days { get; set; }
+    public double EffectiveTrades { get; set; }
+    public string Badge { get; set; } = "Empty";
 }
 
 public class SignalBehaviorMetricsType
