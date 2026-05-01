@@ -92,6 +92,12 @@ export interface FeatureValidationSpec {
   notes: string[];
 }
 
+export interface InvalidReasonCount {
+  /** "cross_session" | "window_gap" | "non_positive_close" | "window_runs_off_end" */
+  reason: string;
+  count: number;
+}
+
 export interface TargetMetadata {
   targetName: string;
   horizonMinutes: number;
@@ -102,9 +108,10 @@ export interface TargetMetadata {
   validCount: number;
   totalCount: number;
   validRatio: number;
-  /** Drop-reason breakdown: keys are "cross_session" |
-   *  "window_gap" | "non_positive_close" | "window_runs_off_end". */
-  invalidReasonCounts: Record<string, number>;
+  /** Drop-reason breakdown. Hot Chocolate exposes the underlying
+   *  Dictionary<string, int> as a list of objects, so this is a list
+   *  rather than a map. */
+  invalidReasonCounts: InvalidReasonCount[];
 }
 
 export interface IcCi {
@@ -697,7 +704,8 @@ const RUN_FEATURE_RESEARCH_MUTATION = `
       }
       targetMetadata {
         targetName horizonMinutes horizonBars barMinutes timezone
-        validCount totalCount validRatio invalidReasonCounts
+        validCount totalCount validRatio
+        invalidReasonCounts { reason count }
       }
       validationVerdict {
         statisticalScreen { name description passed requiredForStage1 failureReasons }
@@ -1000,7 +1008,8 @@ const RUN_OPTIONS_FEATURE_MUTATION = `
       }
       targetMetadata {
         targetName horizonMinutes horizonBars barMinutes timezone
-        validCount totalCount validRatio invalidReasonCounts
+        validCount totalCount validRatio
+        invalidReasonCounts { reason count }
       }
       validationVerdict {
         statisticalScreen { name description passed requiredForStage1 failureReasons }

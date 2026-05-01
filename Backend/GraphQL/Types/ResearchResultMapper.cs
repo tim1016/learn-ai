@@ -57,7 +57,9 @@ public static class ResearchResultMapper
             ValidCount = dto.ValidCount,
             TotalCount = dto.TotalCount,
             ValidRatio = dto.ValidRatio,
-            InvalidReasonCounts = new Dictionary<string, int>(dto.InvalidReasonCounts),
+            InvalidReasonCounts = dto.InvalidReasonCounts
+                .Select(kv => new InvalidReasonCountType { Reason = kv.Key, Count = kv.Value })
+                .ToList(),
         };
     }
 

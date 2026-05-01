@@ -180,11 +180,9 @@ export class FeatureReportComponent {
 
   get topInvalidReason(): string | null {
     const meta = this.targetMetadata;
-    if (!meta) return null;
-    const entries = Object.entries(meta.invalidReasonCounts);
-    if (entries.length === 0) return null;
-    const [reason, count] = entries.sort((a, b) => b[1] - a[1])[0];
-    return `${reason}: ${count}`;
+    if (!meta || meta.invalidReasonCounts.length === 0) return null;
+    const top = [...meta.invalidReasonCounts].sort((a, b) => b.count - a.count)[0];
+    return `${top.reason}: ${top.count}`;
   }
 
   get stageBadgeSeverity(): 'success' | 'info' | 'warn' | 'danger' {

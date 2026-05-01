@@ -77,7 +77,18 @@ public class TargetMetadataType
     public int ValidCount { get; set; }
     public int TotalCount { get; set; }
     public double ValidRatio { get; set; }
-    public Dictionary<string, int> InvalidReasonCounts { get; set; } = [];
+
+    // Hot Chocolate v15 exposes Dictionary<string, int> as
+    // KeyValuePairOfStringAndInt32 which forces clients to select
+    // sub-fields. Project to a list-of-DTO at the GraphQL boundary,
+    // matching the established pattern for RegimeCoverageEntry.
+    public List<InvalidReasonCountType> InvalidReasonCounts { get; set; } = [];
+}
+
+public class InvalidReasonCountType
+{
+    public string Reason { get; set; } = "";
+    public int Count { get; set; }
 }
 
 public class IcCiType
