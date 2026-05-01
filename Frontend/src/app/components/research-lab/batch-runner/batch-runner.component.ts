@@ -32,6 +32,12 @@ import {
   ValiditySummary,
 } from '../../../services/research.service';
 import { JobsService, JobState } from '../../../services/jobs.service';
+import {
+  glyphForLevel,
+  pythonLevelToEntryLevel,
+  RunLogBuffer,
+} from '../../../utils/run-log-buffer';
+import { RunProgressPanelComponent } from '../shared/run-progress-panel/run-progress-panel.component';
 
 const DEFAULT_TICKERS = ['SPY', 'QQQ', 'AAPL'];
 
@@ -128,12 +134,6 @@ interface CrossSectionalJobResultRaw {
   summary: string;
 }
 
-interface LogLine {
-  level: string;
-  message: string;
-  ts: number;
-}
-
 @Component({
   selector: 'app-batch-runner',
   standalone: true,
@@ -150,6 +150,7 @@ interface LogLine {
     MessageModule,
     CheckboxModule,
     CardModule,
+    RunProgressPanelComponent,
   ],
   templateUrl: './batch-runner.component.html',
   styleUrl: './batch-runner.component.scss',
@@ -172,7 +173,11 @@ export class BatchRunnerComponent {
   readonly jobId = signal<string | null>(null);
   readonly result = signal<BatchResearchResult | null>(null);
   readonly error = signal<string | null>(null);
-  readonly cumulativeLogs = signal<LogLine[]>([]);
+
+  /** Rolling FIFO log buffer (cap 500). Replaces the unbounded
+   *  cumulativeLogs signal that used to live inline. */
+  readonly logBuffer = new RunLogBuffer();
+  readonly logEntries = this.logBuffer.entries;
 
   // Surface the current JobState as a computed for the template.
   readonly job = computed<JobState | null>(() => {
@@ -181,28 +186,9 @@ export class BatchRunnerComponent {
     return this.jobsService.job(id) ?? null;
   });
 
-  // Tick the JobsService snapshot every 250ms so log streaming feels live
-  // without us subscribing to its private update channel. JobsService
-  // updates its internal map on each event; we just re-read it.
-  private readonly jobsTick = signal(0);
-
   readonly loading = computed<boolean>(() => {
     const j = this.job();
     return j !== null && (j.status === 'queued' || j.status === 'running');
-  });
-
-  readonly progressPercent = computed<number>(() => {
-    const j = this.job();
-    if (!j || !j.total) return 0;
-    return Math.min(100, Math.round((j.current ?? 0) / j.total * 100));
-  });
-
-  readonly progressMessage = computed<string>(() => {
-    const j = this.job();
-    if (!j) return '';
-    if (j.message) return j.message;
-    if (j.phase) return `Phase: ${j.phase.replaceAll('_', ' ')}`;
-    return j.status;
   });
 
   readonly features = OPTIONS_FEATURES;
@@ -227,12 +213,14 @@ export class BatchRunnerComponent {
       const j = this.jobsService.job(id);
       if (!j) return;
 
-      // Accumulate any new log lines. recentLogs is sliced to the most
-      // recent 5 by JobsService; we keep the full history here for the
-      // event-log panel.
+      // Accumulate any new log lines into the shared RunLogBuffer
+      // (capped at 500 entries; older lines drop off silently).
+      // JobsService.recentLogs is sliced to the last 5; this buffer keeps
+      // the rolling history for the panel.
       for (const log of j.recentLogs) {
         if (log.ts > lastLogTs) {
-          this.cumulativeLogs.update((arr) => [...arr, log]);
+          const level = pythonLevelToEntryLevel(log.level);
+          this.logBuffer.append(level, glyphForLevel(level), log.message);
           lastLogTs = log.ts;
         }
       }
@@ -385,7 +373,7 @@ export class BatchRunnerComponent {
 
     this.error.set(null);
     this.result.set(null);
-    this.cumulativeLogs.set([]);
+    this.logBuffer.clear();
 
     try {
       const id = await this.jobsService.startJob('cross_sectional', {
@@ -435,7 +423,7 @@ export class BatchRunnerComponent {
     this.jobId.set(null);
     this.result.set(null);
     this.error.set(null);
-    this.cumulativeLogs.set([]);
+    this.logBuffer.clear();
   }
 
   getValidationSeverity(passed: boolean): 'success' | 'danger' {
@@ -449,16 +437,8 @@ export class BatchRunnerComponent {
     return 'text-red-500';
   }
 
-  /** Map a log level to the colour band used in the inline event log. */
-  logLevelClass(level: string): string {
-    if (level === 'error') return 'log-error';
-    if (level === 'warn' || level === 'warning') return 'log-warn';
-    return 'log-info';
-  }
-
-  formatLogTime(ts: number): string {
-    const d = new Date(ts);
-    return d.toLocaleTimeString('en-US', { hour12: false });
+  async onPanelCancel(): Promise<void> {
+    await this.cancelRun();
   }
 
   private async handleCompleted(id: string): Promise<void> {

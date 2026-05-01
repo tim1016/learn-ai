@@ -30,6 +30,10 @@ export interface JobState {
   type: string;
   status: JobStatus;
   phase?: string;
+  /** User-facing label for the current phase. Set to the server-supplied
+   *  ``friendly`` field when present; falls back to a humanised form of
+   *  the phase id. UIs should prefer this over ``phase`` when rendering. */
+  phaseLabel?: string;
   current?: number;
   total?: number;
   unit?: string;
@@ -37,6 +41,12 @@ export interface JobState {
   errorCode?: string;
   errorMessage?: string;
   resultUrl?: string;
+  /** True when the result was served from the result cache instead of a
+   *  fresh run. UIs should skip the live-progress panel in this case and
+   *  render the report directly with a "Loaded from cache" badge. */
+  cached?: boolean;
+  /** Wall-clock millis when the cache entry was originally written. */
+  cachedAt?: number;
   // Last few log lines so the drawer can show them inline.
   recentLogs: { level: string; message: string; ts: number }[];
   // Wall-clock at which the job started/finished, for elapsed display.
@@ -223,9 +233,22 @@ export class JobsService {
 export function applyJobEvent(prev: JobState, evt: JobEvent): JobState {
   switch (evt.type) {
     case 'job.started':
-      return { ...prev, status: 'running', startedAt: Date.now() };
-    case 'job.phase':
-      return { ...prev, phase: evt['phase'] as string };
+      return {
+        ...prev,
+        status: 'running',
+        startedAt: Date.now(),
+        cached: (evt['cached'] as boolean) ?? prev.cached,
+      };
+    case 'job.phase': {
+      const phase = evt['phase'] as string;
+      return {
+        ...prev,
+        phase,
+        // Server may emit a friendly label inline; otherwise the UI
+        // falls back to humanising the phase id.
+        phaseLabel: (evt['friendly'] as string) ?? humanisePhase(phase),
+      };
+    }
     case 'job.progress':
       return {
         ...prev,
@@ -249,6 +272,8 @@ export function applyJobEvent(prev: JobState, evt: JobEvent): JobState {
         status: 'completed',
         finishedAt: Date.now(),
         resultUrl: evt['result_url'] as string,
+        cached: (evt['cached'] as boolean) ?? prev.cached ?? false,
+        cachedAt: (evt['cached_at'] as number) ?? prev.cachedAt,
       };
     case 'job.failed':
       return {
@@ -268,4 +293,16 @@ export function applyJobEvent(prev: JobState, evt: JobEvent): JobState {
     default:
       return prev;
   }
+}
+
+/** ``ticker_3_AAPL`` → ``Ticker 3 AAPL``. Mirrors the Python helper in
+ *  ``app/jobs/phases.py``; runners that don't ship a vocabulary entry
+ *  still produce a readable label. */
+export function humanisePhase(phaseId: string | undefined): string {
+  if (!phaseId) return '';
+  const parts = phaseId.replace(/-/g, '_').split('_').filter(Boolean);
+  if (parts.length === 0) return phaseId;
+  return parts
+    .map((p) => (p === p.toLowerCase() ? p[0].toUpperCase() + p.slice(1) : p))
+    .join(' ');
 }

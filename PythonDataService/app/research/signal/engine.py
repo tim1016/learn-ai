@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -33,6 +34,30 @@ from app.research.signal.walk_forward import WalkForwardResult, run_walk_forward
 from app.research.target import compute_15min_forward_return, validate_return_series
 
 logger = logging.getLogger(__name__)
+
+
+# Optional progress callbacks used by the Jobs/SSE wrapper. Default no-ops
+# keep synchronous callers (existing GraphQL endpoint, tests) unaffected.
+PhaseCallback = Callable[[str], None]
+LogCallback = Callable[[str, str], None]
+ProgressCallback = Callable[[int, int, str, "str | None"], None]
+CancelCallback = Callable[[], bool]
+
+
+def _noop_phase(phase: str) -> None:
+    return None
+
+
+def _noop_log(message: str, level: str = "info") -> None:
+    return None
+
+
+def _noop_progress(current: int, total: int, unit: str = "configs", message: str | None = None) -> None:
+    return None
+
+
+def _no_cancel() -> bool:
+    return False
 
 
 @dataclass
@@ -88,8 +113,22 @@ def run_signal_engine(
     start_date: str,
     end_date: str,
     config: SignalConfig | None = None,
+    on_phase: PhaseCallback = _noop_phase,
+    on_log: LogCallback = _noop_log,
+    on_progress: ProgressCallback = _noop_progress,
+    cancel_check: CancelCallback = _no_cancel,
 ) -> SignalEngineReport:
-    """Run the complete signal engine pipeline."""
+    """Run the complete signal engine pipeline.
+
+    Phases (emitted via ``on_phase``):
+      ``compute_feature`` → ``diagnostics`` → ``regime_coverage`` →
+      ``backtest_grid`` → ``walk_forward`` → ``effective_sample`` →
+      ``graduation``.
+
+    The Jobs/SSE wrapper passes a ``cancel_check`` that raises
+    ``JobCancelled`` when the user cancels the run; we let that
+    propagate so ``run_in_thread`` emits ``job.cancelled``.
+    """
     if config is None:
         config = SignalConfig()
 
@@ -120,20 +159,24 @@ def run_signal_engine(
         report.bars_used = len(bars)
         df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
 
-        # Step 1: Compute feature and forward returns
-        logger.info("[Signal] Step 1: Computing feature and forward returns")
+        # ── Step 1: Compute feature and forward returns ────────────────
+        cancel_check()
+        on_phase("compute_feature")
+        on_log(f"Computing the '{feature_name}' signal feature on {len(bars):,} bars")
         feature = TechnicalFeatures.compute_feature(feature_name, bars)
         forward_returns = compute_15min_forward_return(bars, config.horizon)
         if not validate_return_series(forward_returns):
             raise ValueError("Forward return series failed validation")
 
-        # Step 2: 70/30 train/test split
+        # ── Step 2: 70/30 train/test split ─────────────────────────────
         n = len(df)
         split_idx = int(n * 0.70)
         train_mask = pd.Series([True] * split_idx + [False] * (n - split_idx), index=df.index)
 
-        # Step 3: Signal diagnostics
-        logger.info("[Signal] Step 2: Computing signal diagnostics")
+        # ── Step 3: Signal diagnostics ─────────────────────────────────
+        cancel_check()
+        on_phase("diagnostics")
+        on_log("Running diagnostic checks (z-score on training set, threshold filter, regime gate)")
         z_scores = compute_train_zscore(feature, train_mask, config.flip_sign)
         default_threshold = config.thresholds[0] if config.thresholds else 1.0
         threshold_signal = apply_threshold_filter(z_scores, default_threshold)
@@ -149,12 +192,16 @@ def run_signal_engine(
             threshold_signal,
             regime_gated_signal,
         )
+        if report.signal_diagnostics is not None:
+            on_log(
+                f"Active on {report.signal_diagnostics.pct_time_active * 100:.1f}% of bars "
+                f"after thresholding"
+            )
 
-        # Step 4: Regime coverage. The marginal day counts feed the legacy
-        # graduation criterion; the joint (vol × trend) bucket grid is
-        # populated below once N_eff and pct_active are available so we
-        # can attach an effective-trades estimate per cell.
-        logger.info("[Signal] Step 3: Computing regime coverage")
+        # ── Step 4: Regime coverage ────────────────────────────────────
+        cancel_check()
+        on_phase("regime_coverage")
+        on_log("Computing daily regime labels across volatility and trend buckets")
         daily_regimes = compute_daily_regime_labels(bars)
         regime_cov: dict[str, int] = {}
         for _, row in daily_regimes.iterrows():
@@ -162,9 +209,17 @@ def run_signal_engine(
                 label = str(row[regime_type])
                 regime_cov[label] = regime_cov.get(label, 0) + 1
         report.regime_coverage = regime_cov
+        on_log(f"Observed {len(regime_cov)} regime labels over {len(daily_regimes)} trading days")
 
-        # Step 5: In-sample backtest grid
-        logger.info("[Signal] Step 4: Running backtest grid")
+        # ── Step 5: In-sample backtest grid ────────────────────────────
+        cancel_check()
+        on_phase("backtest_grid")
+        n_configs = len(config.thresholds) * len(config.cost_bps_options)
+        on_log(
+            f"Sweeping {n_configs} backtest configurations "
+            f"({len(config.thresholds)} thresholds × {len(config.cost_bps_options)} cost levels)"
+        )
+        on_progress(0, n_configs, "configs", "Starting in-sample sweep")
         report.backtest_grid = run_backtest_grid(
             feature=feature,
             forward_returns=forward_returns,
@@ -175,6 +230,7 @@ def run_signal_engine(
             cost_bps_options=config.cost_bps_options,
             timestamps=df["timestamp"],
         )
+        on_progress(n_configs, n_configs, "configs", "In-sample sweep complete")
 
         # Find best config
         best: BacktestResult | None = None
@@ -182,6 +238,10 @@ def run_signal_engine(
             best = max(report.backtest_grid, key=lambda r: r.net_sharpe)
             report.best_threshold = best.threshold
             report.best_cost_bps = best.cost_bps
+            on_log(
+                f"Best in-sample config: threshold = {best.threshold:.2f}σ, "
+                f"cost = {best.cost_bps:.0f} bps, net Sharpe = {best.net_sharpe:.2f}"
+            )
 
         # Step 5a: Deflated Sharpe on the in-sample grid headline.
         # The grid evaluates ``len(thresholds) × len(cost_bps_options)``
@@ -205,9 +265,13 @@ def run_signal_engine(
                     n_trials=n_trials,
                     n_eff=best_n_eff,
                 )
+                if report.deflated_sharpe is not None:
+                    on_log(
+                        f"Deflated Sharpe = {report.deflated_sharpe.raw_sharpe:.2f} "
+                        f"(P(true Sharpe > 0) = {report.deflated_sharpe.dsr_probability * 100:.1f}%)"
+                    )
 
         # Step 5b: Signal behavior metrics on best config
-        logger.info("[Signal] Step 5b: Computing signal behavior metrics")
         if report.best_threshold > 0:
             best_signal = apply_threshold_filter(z_scores, report.best_threshold)
             if regime_gate is not None:
@@ -216,6 +280,10 @@ def run_signal_engine(
                 best_signal,
                 forward_returns,
             )
+            if report.signal_behavior is not None:
+                on_log(
+                    f"Hit rate on active bars = {report.signal_behavior.hit_rate * 100:.1f}%"
+                )
 
         # Step 5c: Methodology metadata
         report.methodology = {
@@ -234,13 +302,23 @@ def run_signal_engine(
             "cost_bps_options": list(config.cost_bps_options),
         }
 
-        # Step 6: Walk-forward validation
-        logger.info("[Signal] Step 5: Running walk-forward validation")
+        # ── Step 6: Walk-forward validation ────────────────────────────
+        cancel_check()
+        on_phase("walk_forward")
+        on_log(
+            f"Running walk-forward validation: {config.walk_forward_train_months}-month train, "
+            f"{config.walk_forward_test_months}-month test, rolling windows"
+        )
         report.walk_forward = run_walk_forward(bars, feature_name, config)
+        if report.walk_forward is not None and report.walk_forward.windows:
+            wf = report.walk_forward
+            on_log(
+                f"Walk-forward complete: {len(wf.windows)} windows, "
+                f"mean OOS Sharpe = {wf.mean_oos_sharpe:.2f}, "
+                f"{wf.pct_windows_positive_sharpe * 100:.0f}% windows positive"
+            )
 
         # Step 6b: Lo (2002) confidence interval on the headline OOS Sharpe.
-        # Computed against the combined-OOS bar return series so the interval
-        # reflects the same data as the headline Sharpe. Authority § 4.6.
         if (
             report.walk_forward is not None
             and report.walk_forward.combined_oos_bar_returns
@@ -257,13 +335,18 @@ def run_signal_engine(
                     n_eff=oos_n_eff,
                 )
 
-        # Step 7: Effective sample size
-        logger.info("[Signal] Step 6: Computing effective sample size")
+        # ── Step 7: Effective sample size ──────────────────────────────
+        cancel_check()
+        on_phase("effective_sample")
+        on_log("Estimating effective sample size from autocorrelation structure")
         report.effective_sample = compute_effective_sample_size(forward_returns)
+        if report.effective_sample is not None:
+            on_log(
+                f"Effective N = {report.effective_sample.effective_n:.0f} "
+                f"(raw N = {report.effective_sample.raw_n:,})"
+            )
 
-        # Step 7b: Joint regime coverage (vol × trend) with effective-trades
-        # estimate. Replaces the old marginal day-count grid that displayed
-        # the same value across every column of a row. Authority § 4.11.
+        # Step 7b: Joint regime coverage (vol × trend)
         if (
             report.effective_sample is not None
             and report.signal_diagnostics is not None
@@ -288,8 +371,10 @@ def run_signal_engine(
             regime_coverage=regime_cov,
         )
 
-        # Step 9: Graduation
-        logger.info("[Signal] Step 7: Evaluating graduation criteria")
+        # ── Step 9: Graduation ─────────────────────────────────────────
+        cancel_check()
+        on_phase("graduation")
+        on_log("Evaluating graduation criteria across the 0/1/2/3 ladder")
         report.graduation = evaluate_graduation(
             walk_forward=report.walk_forward,
             backtest_grid=report.backtest_grid,
@@ -297,6 +382,12 @@ def run_signal_engine(
             signal_diagnostics=report.signal_diagnostics,
             data_sufficiency=report.data_sufficiency,
         )
+        if report.graduation is not None:
+            on_log(
+                f"Graduation: {report.graduation.status_label} "
+                f"(grade {report.graduation.overall_grade})",
+                level="info",
+            )
 
         # Step 10: Research log
         report.research_log = _generate_research_log(report, config)
@@ -310,6 +401,11 @@ def run_signal_engine(
         )
 
     except Exception as e:
+        # Cancellation propagates to the wrapper untouched (sniffed by
+        # name to avoid a layering import). Other exceptions land on the
+        # report so downstream consumers see a structured failure.
+        if type(e).__name__ == "JobCancelled":
+            raise
         logger.error("[Signal] Error: %s", str(e), exc_info=True)
         report.error = str(e)
 

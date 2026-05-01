@@ -4,6 +4,9 @@
       <div class="summary-content">
         <i class="pi pi-check-circle text-green-600"></i>
         <span class="summary-text">{{ runSummary }}</span>
+        @if (cached()) {
+          <p-tag value="Loaded from cache" severity="info" />
+        }
       </div>
       <div class="summary-actions">
         <p-button
@@ -91,7 +94,7 @@
         </div>
 
         <div class="flex flex-col gap-2">
-          <label class="font-semibold text-sm text-gray-700">Force Refresh</label>
+          <label class="font-semibold text-sm text-gray-700">Force Re-run (bypass cache)</label>
           <p-toggleswitch [(ngModel)]="forceRefresh" />
         </div>
       </div>
@@ -108,35 +111,17 @@
     </div>
   }
 
-  @if (loading()) {
-    <div class="my-6">
-      @if (fetchProgress(); as p) {
-        <div class="fetch-progress">
-          <div class="flex items-center gap-3 mb-2">
-            <p-progressSpinner
-              [style]="{ width: '24px', height: '24px' }"
-              strokeWidth="4"
-            />
-            <span class="text-gray-700 font-medium">
-              Fetching data &mdash; Window {{ p.completedWindows }} / {{ p.totalWindows }}
-              ({{ p.barsFetched | number }} bars)
-            </span>
-          </div>
-          <div class="progress-bar">
-            <div class="progress-fill" [style.width.%]="p.completedWindows / p.totalWindows * 100"></div>
-          </div>
-          <div class="text-xs text-gray-400 font-mono mt-1">{{ p.currentWindow }}</div>
-        </div>
-      } @else {
-        <div class="flex items-center gap-3">
-          <p-progressSpinner
-            [style]="{ width: '30px', height: '30px' }"
-            strokeWidth="4"
-          />
-          <span class="text-gray-500">Running signal engine pipeline...</span>
-        </div>
-      }
-    </div>
+  <!-- Live progress panel (skipped on cache hits). -->
+  @if (job(); as j) {
+    @if (!cached()) {
+      <app-run-progress-panel
+        class="block mb-4"
+        [job]="j"
+        [logs]="logEntries()"
+        title="Signal engine run"
+        (cancelRun)="cancelRun()"
+      />
+    }
   }
 
   @if (error(); as err) {

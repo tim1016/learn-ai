@@ -1,0 +1,58 @@
+@let j = job();
+@if (j) {
+  <div class="run-progress-panel">
+    <div class="panel-header">
+      <span class="panel-title">{{ title() }}</span>
+      <p-tag
+        [value]="statusLabel()"
+        [severity]="statusSeverity()"
+        class="status-pill"
+      />
+      @if (elapsedSeconds() !== null) {
+        <span class="elapsed">{{ elapsedSeconds() }}s</span>
+      }
+      @if (running()) {
+        <p-button
+          icon="pi pi-stop-circle"
+          label="Cancel"
+          severity="danger"
+          size="small"
+          [outlined]="true"
+          (click)="onCancelClick()"
+          class="cancel-btn"
+        />
+      }
+    </div>
+
+    @if (phaseLabel()) {
+      <div class="phase-line">
+        <span class="phase-label">{{ phaseLabel() }}</span>
+        @if (progressDetail()) {
+          <span class="phase-detail">· {{ progressDetail() }}</span>
+        }
+      </div>
+    }
+
+    @if (j.total && j.total > 0) {
+      <p-progressBar
+        [value]="progressPercent()"
+        [showValue]="false"
+        class="progress-bar"
+      />
+    } @else if (running()) {
+      <p-progressBar mode="indeterminate" [showValue]="false" class="progress-bar" />
+    }
+
+    <div #logsContainer class="logs-container">
+      @for (entry of logs(); track entry.id) {
+        <div [class]="logRowClass(entry.level)">
+          <span class="log-time">{{ formatTime(entry.timestamp) }}</span>
+          <span class="log-glyph">{{ entry.glyph }}</span>
+          <span class="log-message">{{ entry.message }}</span>
+        </div>
+      } @empty {
+        <div class="logs-empty">Waiting for events…</div>
+      }
+    </div>
+  </div>
+}
