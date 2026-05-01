@@ -18,7 +18,11 @@ from app.research.feature_validation import (
     evaluate_feature_validation,
 )
 from app.research.features.ta_features import TechnicalFeatures
-from app.research.target import compute_15min_forward_return, validate_return_series
+from app.research.target import (
+    TargetResult,
+    compute_forward_log_return,
+    validate_return_series,
+)
 from app.research.validation.ic import compute_information_coefficient
 from app.research.validation.quantile import compute_quantile_analysis
 from app.research.validation.robustness import RobustnessResult, compute_robustness
@@ -58,6 +62,11 @@ class ResearchReport:
 
     # Robustness
     robustness: RobustnessResult | None = None
+
+    # Target metadata — what was actually computed (horizon in minutes,
+    # bar spacing, timezone, valid ratio, drop-reason breakdown). Used
+    # by the UI disclosure to make "wrong target" mismatches visible.
+    target: TargetResult | None = None
 
     # Per-feature validation contract & multi-screen verdict (replaces the
     # legacy single-boolean ``passed_validation``; that boolean stays for
@@ -125,10 +134,23 @@ def run_feature_research(
         report.bars_used = len(bars)
         df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
 
-        # Step 1: Compute 15-min forward log return target
-        target_returns = compute_15min_forward_return(bars, config.horizon)
+        # Step 1: Compute forward log return target.
+        # ``config.horizon`` was historically "horizon in bars" assuming
+        # 1-minute spacing; the new API takes minutes explicitly and
+        # infers/validates bar spacing so a 5-minute-bar caller can't
+        # silently get a 75-minute target.
+        target_result = compute_forward_log_return(
+            bars=bars,
+            horizon_minutes=config.horizon_minutes,
+        )
+        report.target = target_result
+        target_returns = target_result.values
         if not validate_return_series(target_returns):
-            raise ValueError("Target return series failed validation (too many NaNs or zero variance)")
+            raise ValueError(
+                "Target return series failed validation "
+                f"({target_result.valid_count} valid / {target_result.total_count} total; "
+                f"reasons={target_result.invalid_reason_counts})."
+            )
 
         # Step 2: Compute feature
         feature_values = TechnicalFeatures.compute_feature(feature_name, bars)
@@ -197,11 +219,24 @@ def run_feature_research(
         test_mean_ic = train_test.test_mean_ic if train_test is not None else 0.0
         oos_retention = train_test.oos_retention if train_test is not None else 0.0
 
-        regimes_observed = (
-            len(report.robustness.volatility_regimes) + len(report.robustness.trend_regimes)
-            if report.robustness is not None
-            else 0
-        )
+        regimes_observed = 0
+        regime_sign_flip_fraction = 0.0
+        if report.robustness is not None:
+            all_regimes = (
+                report.robustness.volatility_regimes + report.robustness.trend_regimes
+            )
+            regimes_observed = len(all_regimes)
+            if regimes_observed > 0 and ic_result.mean_ic != 0:
+                # Sign of the headline IC; a regime "flips" when its IC sign
+                # disagrees. Anchored on the headline so the screen reflects
+                # "does the spec-direction story hold across regimes" rather
+                # than just bucket-by-bucket positivity.
+                overall_sign = 1 if ic_result.mean_ic > 0 else -1
+                flips = sum(
+                    1 for r in all_regimes
+                    if r.mean_ic != 0 and (1 if r.mean_ic > 0 else -1) != overall_sign
+                )
+                regime_sign_flip_fraction = flips / regimes_observed
 
         report.validation_verdict = evaluate_feature_validation(
             spec=spec,
@@ -216,13 +251,19 @@ def run_feature_research(
             test_mean_ic=test_mean_ic,
             oos_retention=oos_retention,
             regimes_observed=regimes_observed,
+            regime_sign_flip_fraction=regime_sign_flip_fraction,
         )
 
-        report.passed_validation = report.validation_verdict.stage_info.stage >= 1
+        # v2 review: passed_validation must collapse to "research-grade
+        # or better", not "any statistical association". Stage 1 means
+        # "in-sample IC is real but trading is dead-on-arrival" — that
+        # is **not** a passed-validation result for unmigrated callers.
+        report.passed_validation = report.validation_verdict.stage_info.stage >= 2
 
         logger.info(
             "[Research] Complete: %s %s — stage=%d (%s) IC=%.4f, NW p=%.4f, "
-            "stationary=%s, monotonic=%s, OOS retention=%.0f%%",
+            "stationary=%s, monotonic=%s, OOS retention=%.0f%%, "
+            "regime flips=%.0f%%",
             ticker,
             feature_name,
             report.validation_verdict.stage_info.stage,
@@ -232,6 +273,7 @@ def run_feature_research(
             report.is_stationary,
             report.is_monotonic,
             oos_retention * 100.0,
+            regime_sign_flip_fraction * 100.0,
         )
 
     except Exception as e:

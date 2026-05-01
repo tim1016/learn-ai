@@ -52,6 +52,7 @@ from app.models.research_models import (
     Stage0RejectionResponse,
     StageAdvanceCriterionResponse,
     StructuralBreakPointResponse,
+    TargetMetadataResponse,
     TickerBatchResult,
     TrainTestSplitResponse,
     ValidationScreenResponse,
@@ -73,6 +74,7 @@ from app.research.options_runner import run_options_feature_research
 from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
+from app.research.target import TargetResult
 from app.services.polygon_client import PolygonClientService
 
 router = APIRouter()
@@ -97,8 +99,23 @@ def _map_feature_spec(spec: FeatureValidationSpec) -> FeatureValidationSpecRespo
         expected_shape=spec.expected_shape,
         stationarity_required=spec.stationarity_required,
         monotonicity_required=spec.monotonicity_required,
+        is_signed_target_appropriate=spec.is_signed_target_appropriate,
         intent=spec.intent,
         notes=list(spec.notes),
+    )
+
+
+def _map_target_metadata(target: TargetResult) -> TargetMetadataResponse:
+    return TargetMetadataResponse(
+        target_name=target.target_name,
+        horizon_minutes=target.horizon_minutes,
+        horizon_bars=target.horizon_bars,
+        bar_minutes=target.bar_minutes,
+        timezone=target.timezone,
+        valid_count=target.valid_count,
+        total_count=target.total_count,
+        valid_ratio=target.valid_ratio,
+        invalid_reason_counts=dict(target.invalid_reason_counts),
     )
 
 
@@ -110,6 +127,7 @@ def _map_validation_verdict(
         economic_screen=_map_screen(verdict.economic_screen),
         oos_screen=_map_screen(verdict.oos_screen),
         multiple_testing_screen=_map_screen(verdict.multiple_testing_screen),
+        regime_stability_screen=_map_screen(verdict.regime_stability_screen),
         multiple_testing=MultipleTestingWarningResponse(
             raw_nw_p_value=verdict.multiple_testing.raw_nw_p_value,
             holm_p_value=verdict.multiple_testing.holm_p_value,
@@ -117,13 +135,17 @@ def _map_validation_verdict(
             note=verdict.multiple_testing.note,
         ),
         cost_viability=CostViabilityResponse(
-            gross_spread_bps=verdict.cost_viability.gross_spread_bps,
+            gross_spread_bps_signed=verdict.cost_viability.gross_spread_bps_signed,
+            directional_spread_bps=verdict.cost_viability.directional_spread_bps,
             cost_assumption_one_way_bps=verdict.cost_viability.cost_assumption_one_way_bps,
             cost_erasure_one_way_bps=verdict.cost_viability.cost_erasure_one_way_bps,
             net_spread_bps_at_assumption=verdict.cost_viability.net_spread_bps_at_assumption,
             viable_at_assumption=verdict.cost_viability.viable_at_assumption,
+            spec_direction=verdict.cost_viability.spec_direction,
             note=verdict.cost_viability.note,
         ),
+        direction_matches_spec=verdict.direction_matches_spec,
+        target_signed_appropriate=verdict.target_signed_appropriate,
         ic_ci=IcCiResponse(
             point=verdict.ic_ci.point,
             se=verdict.ic_ci.se,
@@ -285,6 +307,11 @@ async def run_feature_research_endpoint(
             feature_spec=(
                 _map_feature_spec(report.feature_spec)
                 if report.feature_spec is not None
+                else None
+            ),
+            target_metadata=(
+                _map_target_metadata(report.target)
+                if report.target is not None
                 else None
             ),
             validation_verdict=(

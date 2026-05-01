@@ -309,3 +309,32 @@
     }
   }
 }
+
+// ─── Blocker bar (v2 review addition) ─────────────────────
+.hero__blockers {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+
+  .hero__blockers-head {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--warn);
+    margin-bottom: 0.35rem;
+    letter-spacing: 0.02em;
+  }
+
+  .hero__blockers-list {
+    margin: 0;
+    padding-left: 1.1rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary, #b2b5be);
+    line-height: 1.45;
+
+    li {
+      margin-bottom: 0.2rem;
+    }
+  }
+}

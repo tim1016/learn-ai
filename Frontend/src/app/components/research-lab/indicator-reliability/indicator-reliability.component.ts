@@ -276,7 +276,7 @@ export class IndicatorReliabilityComponent {
 
     const oosHolds =
       best.oos_retention !== null ? best.oos_retention >= 0.6 : true;
-    const economicallyMeaningful = Math.abs(best.oos_mean_ic ?? best.is_mean_ic) > 0.1;
+    const largeStatisticalEffect = Math.abs(best.oos_mean_ic ?? best.is_mean_ic) > 0.1;
 
     const indicatorDisplay = res.display_name
       || `${res.indicator_name.toUpperCase()}`;
@@ -305,7 +305,7 @@ export class IndicatorReliabilityComponent {
       bonferroniSignificant: res.any_significant_after_bonferroni,
       oosHolds,
       zScore: best.ic_vs_random_zscore,
-      economicallyMeaningful,
+      largeStatisticalEffect,
       highVolHitRate: res.regime_results?.high_vol?.find((c) => c.horizon === best.horizon)?.hit_rate ?? null,
       lowVolHitRate: res.regime_results?.low_vol?.find((c) => c.horizon === best.horizon)?.hit_rate ?? null,
       highVolBoostPct,

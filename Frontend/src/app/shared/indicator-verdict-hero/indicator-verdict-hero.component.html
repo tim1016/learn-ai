@@ -1,7 +1,7 @@
 <section class="hero" [class]="tierCssClass(verdict().tier)">
   <!-- ── Verdict band ─────────────────────────────────────── -->
   <div class="hero__band">
-    <!-- Confidence gauge -->
+    <!-- Screens-passed gauge (replaces the 0-100 confidence scalar) -->
     <div class="gauge" aria-hidden="true">
       <svg viewBox="0 0 220 220" width="200" height="200">
         <circle
@@ -29,11 +29,11 @@
         />
       </svg>
       <div class="gauge__inner">
-        <div class="gauge__label">Confidence</div>
+        <div class="gauge__label">Screens passed</div>
         <div class="gauge__score mono" [style.color]="tierColor()">
-          {{ verdict().score }}
+          {{ verdict().screensPassed }}
         </div>
-        <div class="gauge__denom mono">/ 100</div>
+        <div class="gauge__denom mono">/ {{ verdict().screensTotal }}</div>
         <div
           class="gauge__tier mono"
           [style.color]="tierColor()"
@@ -59,15 +59,21 @@
         A <strong>{{ analysis().directionLabel }}</strong> signal.
         Out-of-sample IC
         <strong class="mono">{{ analysis().oosIc.toFixed(3) }}</strong>
-        @if (analysis().oosVsIsPct !== null) {
-          — <strong [style.color]="(analysis().oosVsIsPct ?? 0) >= 0 ? 'var(--bull)' : 'var(--bear)'">
-            {{ (analysis().oosVsIsPct ?? 0) >= 0 ? "+" : "" }}{{ analysis().oosVsIsPct }}% vs in-sample</strong>,
+        @if (oosVsIsPctRounded() !== null) {
+          — <strong [style.color]="(oosVsIsPctRounded() ?? 0) >= 0 ? 'var(--bull)' : 'var(--bear)'">
+            {{ (oosVsIsPctRounded() ?? 0) >= 0 ? "+" : "" }}{{ oosVsIsPctRounded() }}% vs in-sample</strong>,
         }
         @if (analysis().bonferroniSignificant) {
           survives Bonferroni,
         }
-        beats random by
-        <strong class="mono">{{ analysis().zScore | number: "1.1-1" }}σ</strong>.
+        @if (zScoreClaimIsLiteral()) {
+          beats random by
+          <strong class="mono">{{ analysis().zScore | number: "1.1-1" }}σ</strong>.
+        } @else {
+          outside {{ analysis().randomShuffles }}-shuffle null
+          (z = <strong class="mono">{{ analysis().zScore | number: "1.1-1" }}</strong>;
+          diagnostic only at this shuffle count).
+        }
       </p>
       <div class="hero__pills">
         @for (p of pills(); track p.label) {
@@ -81,6 +87,19 @@
           </span>
         }
       </div>
+
+      @if (blockers().length > 0) {
+        <div class="hero__blockers">
+          <div class="hero__blockers-head">
+            Blocked from pre-flight by:
+          </div>
+          <ul class="hero__blockers-list">
+            @for (b of blockers(); track $index) {
+              <li>{{ b }}</li>
+            }
+          </ul>
+        </div>
+      }
     </div>
 
     <!-- Actions -->
