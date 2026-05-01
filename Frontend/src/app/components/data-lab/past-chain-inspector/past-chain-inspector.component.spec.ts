@@ -96,9 +96,9 @@ describe('PastChainInspectorComponent', () => {
       expect(component.result()).toBeNull();
     });
 
-    it('defaults numStrikes to 5 and atmMethod to open', () => {
+    it('defaults numStrikes to 5 and atmMethod to prevClose', () => {
       expect(component.numStrikes()).toBe(5);
-      expect(component.atmMethod()).toBe('open');
+      expect(component.atmMethod()).toBe('prevClose');
     });
   });
 
