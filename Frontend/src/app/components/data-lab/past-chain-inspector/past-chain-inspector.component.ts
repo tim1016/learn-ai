@@ -56,7 +56,7 @@ export class PastChainInspectorComponent {
 
   /** Locally-controlled config — the host doesn't dictate these. */
   numStrikes = signal(5);
-  atmMethod = signal<AtmMethod>('open');
+  atmMethod = signal<AtmMethod>('prevClose');
 
   /** Three-state UX-Q3 lifecycle. */
   state = signal<'collapsed' | 'loading' | 'expanded'>('collapsed');
