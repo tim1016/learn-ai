@@ -38,8 +38,26 @@ public static class ResearchResultMapper
             PassedValidation = report.PassedValidation,
             Robustness = MapRobustness(report.Robustness),
             FeatureSpec = MapFeatureSpec(report.FeatureSpec),
+            TargetMetadata = MapTargetMetadata(report.TargetMetadata),
             ValidationVerdict = MapValidationVerdict(report.ValidationVerdict),
             Error = report.Error,
+        };
+    }
+
+    private static TargetMetadataType? MapTargetMetadata(TargetMetadataDto? dto)
+    {
+        if (dto is null) return null;
+        return new TargetMetadataType
+        {
+            TargetName = dto.TargetName,
+            HorizonMinutes = dto.HorizonMinutes,
+            HorizonBars = dto.HorizonBars,
+            BarMinutes = dto.BarMinutes,
+            Timezone = dto.Timezone,
+            ValidCount = dto.ValidCount,
+            TotalCount = dto.TotalCount,
+            ValidRatio = dto.ValidRatio,
+            InvalidReasonCounts = new Dictionary<string, int>(dto.InvalidReasonCounts),
         };
     }
 
@@ -119,6 +137,7 @@ public static class ResearchResultMapper
             ExpectedShape = dto.ExpectedShape,
             StationarityRequired = dto.StationarityRequired,
             MonotonicityRequired = dto.MonotonicityRequired,
+            IsSignedTargetAppropriate = dto.IsSignedTargetAppropriate,
             Intent = dto.Intent,
             Notes = [.. dto.Notes],
         };
@@ -133,6 +152,7 @@ public static class ResearchResultMapper
             EconomicScreen = MapScreen(dto.EconomicScreen),
             OosScreen = MapScreen(dto.OosScreen),
             MultipleTestingScreen = MapScreen(dto.MultipleTestingScreen),
+            RegimeStabilityScreen = MapScreen(dto.RegimeStabilityScreen),
             MultipleTesting = new MultipleTestingWarningType
             {
                 RawNwPValue = dto.MultipleTesting.RawNwPValue,
@@ -142,13 +162,17 @@ public static class ResearchResultMapper
             },
             CostViability = new CostViabilityType
             {
-                GrossSpreadBps = dto.CostViability.GrossSpreadBps,
+                GrossSpreadBpsSigned = dto.CostViability.GrossSpreadBpsSigned,
+                DirectionalSpreadBps = dto.CostViability.DirectionalSpreadBps,
                 CostAssumptionOneWayBps = dto.CostViability.CostAssumptionOneWayBps,
                 CostErasureOneWayBps = dto.CostViability.CostErasureOneWayBps,
                 NetSpreadBpsAtAssumption = dto.CostViability.NetSpreadBpsAtAssumption,
                 ViableAtAssumption = dto.CostViability.ViableAtAssumption,
+                SpecDirection = dto.CostViability.SpecDirection,
                 Note = dto.CostViability.Note,
             },
+            DirectionMatchesSpec = dto.DirectionMatchesSpec,
+            TargetSignedAppropriate = dto.TargetSignedAppropriate,
             IcCi = new IcCiType
             {
                 Point = dto.IcCi.Point,

@@ -121,8 +121,23 @@ class FeatureValidationSpecResponse(BaseModel):
     expected_shape: str = "none"
     stationarity_required: bool = False
     monotonicity_required: bool = False
+    is_signed_target_appropriate: bool = True
     intent: str = ""
     notes: list[str] = []
+
+
+class TargetMetadataResponse(BaseModel):
+    """Audit trail of what the target pipeline actually computed."""
+
+    target_name: str = "forward_log_return_15m"
+    horizon_minutes: int = 15
+    horizon_bars: int = 15
+    bar_minutes: int = 1
+    timezone: str = "America/New_York"
+    valid_count: int = 0
+    total_count: int = 0
+    valid_ratio: float = 0.0
+    invalid_reason_counts: dict[str, int] = {}
 
 
 class IcCiResponse(BaseModel):
@@ -148,13 +163,15 @@ class MultipleTestingWarningResponse(BaseModel):
 
 
 class CostViabilityResponse(BaseModel):
-    """Cost-adjusted Q5-Q1 spread."""
+    """Cost-adjusted long-short spread, anchored on spec direction."""
 
-    gross_spread_bps: float = 0.0
+    gross_spread_bps_signed: float = 0.0
+    directional_spread_bps: float = 0.0
     cost_assumption_one_way_bps: float = 1.0
     cost_erasure_one_way_bps: float = 0.0
     net_spread_bps_at_assumption: float = 0.0
     viable_at_assumption: bool = False
+    spec_direction: str = "unknown"
     note: str = ""
 
 
@@ -196,9 +213,12 @@ class FeatureValidationVerdictResponse(BaseModel):
     economic_screen: ValidationScreenResponse
     oos_screen: ValidationScreenResponse
     multiple_testing_screen: ValidationScreenResponse
+    regime_stability_screen: ValidationScreenResponse
     multiple_testing: MultipleTestingWarningResponse
     cost_viability: CostViabilityResponse
     ic_ci: IcCiResponse
+    direction_matches_spec: bool = True
+    target_signed_appropriate: bool = True
     stage_info: FeatureStageInfoResponse
     final_decision: str = ""
 
@@ -229,6 +249,7 @@ class RunFeatureResearchResponse(BaseModel):
     ic_dates: list[str] = []
     robustness: RobustnessResponse | None = None
     feature_spec: FeatureValidationSpecResponse | None = None
+    target_metadata: TargetMetadataResponse | None = None
     validation_verdict: FeatureValidationVerdictResponse | None = None
     error: str | None = None
 

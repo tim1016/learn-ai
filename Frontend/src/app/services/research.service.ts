@@ -83,8 +83,28 @@ export interface FeatureValidationSpec {
   expectedShape: string;
   stationarityRequired: boolean;
   monotonicityRequired: boolean;
+  /** False when signed forward return is the wrong question for this
+   *  feature (e.g. realized_vol_30). Triggers Stage 0 with a "wrong
+   *  target" reason instead of letting a near-zero IC look like a
+   *  feature failure. */
+  isSignedTargetAppropriate: boolean;
   intent: string;
   notes: string[];
+}
+
+export interface TargetMetadata {
+  targetName: string;
+  horizonMinutes: number;
+  horizonBars: number;
+  barMinutes: number;
+  /** Trading-session timezone used for cross-day masking. */
+  timezone: string;
+  validCount: number;
+  totalCount: number;
+  validRatio: number;
+  /** Drop-reason breakdown: keys are "cross_session" |
+   *  "window_gap" | "non_positive_close" | "window_runs_off_end". */
+  invalidReasonCounts: Record<string, number>;
 }
 
 export interface IcCi {
@@ -106,11 +126,19 @@ export interface MultipleTestingWarning {
 }
 
 export interface CostViability {
-  grossSpreadBps: number;
+  /** Raw Q5 - Q1 spread in bps, sign preserved. Negative when the top
+   *  quintile underperforms the bottom quintile. */
+  grossSpreadBpsSigned: number;
+  /** Spec-direction-aligned spread:
+   *  positive direction = Q5-Q1, negative = Q1-Q5,
+   *  two_sided/unknown = |Q5-Q1|. The economic gate uses this. */
+  directionalSpreadBps: number;
   costAssumptionOneWayBps: number;
   costErasureOneWayBps: number;
   netSpreadBpsAtAssumption: number;
   viableAtAssumption: boolean;
+  /** Direction the cost calc was anchored on. */
+  specDirection: string;
   note: string;
 }
 
@@ -145,9 +173,19 @@ export interface FeatureValidationVerdict {
   economicScreen: ValidationScreen;
   oosScreen: ValidationScreen;
   multipleTestingScreen: ValidationScreen;
+  /** Promoted from a hidden Stage 2 sub-criterion to a first-class
+   *  screen — gates Stage 2+. */
+  regimeStabilityScreen: ValidationScreen;
   multipleTesting: MultipleTestingWarning;
   costViability: CostViability;
   icCi: IcCi;
+  /** False when the headline IC sign disagrees with the spec's
+   *  `expectedDirection`. The statistical screen reports this as
+   *  "inverse signal discovered" rather than a clean pass. */
+  directionMatchesSpec: boolean;
+  /** False when the spec marks signed forward return as the wrong
+   *  target (e.g. realized_vol_30). Stage 0 fires immediately. */
+  targetSignedAppropriate: boolean;
   stageInfo: FeatureStageInfo;
   finalDecision: string;
 }
@@ -176,6 +214,8 @@ export interface ResearchResult {
   passedValidation: boolean;
   robustness?: Robustness;
   featureSpec?: FeatureValidationSpec | null;
+  /** Audit trail of what the target pipeline actually computed. */
+  targetMetadata?: TargetMetadata | null;
   validationVerdict?: FeatureValidationVerdict | null;
   error?: string;
 }
@@ -652,21 +692,30 @@ const RUN_FEATURE_RESEARCH_MUTATION = `
       }
       featureSpec {
         featureName defaultTarget expectedDirection expectedShape
-        stationarityRequired monotonicityRequired intent notes
+        stationarityRequired monotonicityRequired isSignedTargetAppropriate
+        intent notes
+      }
+      targetMetadata {
+        targetName horizonMinutes horizonBars barMinutes timezone
+        validCount totalCount validRatio invalidReasonCounts
       }
       validationVerdict {
         statisticalScreen { name description passed requiredForStage1 failureReasons }
         economicScreen { name description passed requiredForStage1 failureReasons }
         oosScreen { name description passed requiredForStage1 failureReasons }
         multipleTestingScreen { name description passed requiredForStage1 failureReasons }
+        regimeStabilityScreen { name description passed requiredForStage1 failureReasons }
         multipleTesting { rawNwPValue holmPValue nFamily note }
         costViability {
-          grossSpreadBps costAssumptionOneWayBps costErasureOneWayBps
-          netSpreadBpsAtAssumption viableAtAssumption note
+          grossSpreadBpsSigned directionalSpreadBps
+          costAssumptionOneWayBps costErasureOneWayBps
+          netSpreadBpsAtAssumption viableAtAssumption specDirection note
         }
         icCi {
           point se ciLower ciUpper confidenceLevel nEffUsed valid seApproximationNote
         }
+        directionMatchesSpec
+        targetSignedAppropriate
         stageInfo {
           stage label description nextStageLabel
           advanceCriteria { name description currentValue requiredRepr met }
@@ -946,21 +995,30 @@ const RUN_OPTIONS_FEATURE_MUTATION = `
       }
       featureSpec {
         featureName defaultTarget expectedDirection expectedShape
-        stationarityRequired monotonicityRequired intent notes
+        stationarityRequired monotonicityRequired isSignedTargetAppropriate
+        intent notes
+      }
+      targetMetadata {
+        targetName horizonMinutes horizonBars barMinutes timezone
+        validCount totalCount validRatio invalidReasonCounts
       }
       validationVerdict {
         statisticalScreen { name description passed requiredForStage1 failureReasons }
         economicScreen { name description passed requiredForStage1 failureReasons }
         oosScreen { name description passed requiredForStage1 failureReasons }
         multipleTestingScreen { name description passed requiredForStage1 failureReasons }
+        regimeStabilityScreen { name description passed requiredForStage1 failureReasons }
         multipleTesting { rawNwPValue holmPValue nFamily note }
         costViability {
-          grossSpreadBps costAssumptionOneWayBps costErasureOneWayBps
-          netSpreadBpsAtAssumption viableAtAssumption note
+          grossSpreadBpsSigned directionalSpreadBps
+          costAssumptionOneWayBps costErasureOneWayBps
+          netSpreadBpsAtAssumption viableAtAssumption specDirection note
         }
         icCi {
           point se ciLower ciUpper confidenceLevel nEffUsed valid seApproximationNote
         }
+        directionMatchesSpec
+        targetSignedAppropriate
         stageInfo {
           stage label description nextStageLabel
           advanceCriteria { name description currentValue requiredRepr met }

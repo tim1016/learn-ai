@@ -43,18 +43,35 @@ STAGE2_MAX_HOLM_P = 0.10
 STAGE2_MIN_REGIMES = 4
 
 # Stage 3 — paper-trading candidate.
-STAGE3_MIN_ABS_IC = 0.05
+# v2 review: Stage 3 should NOT be gated mainly by a bigger headline IC.
+# A flashy |IC| 0.08 with negative net-cost spread should not graduate
+# over a stable |IC| 0.035 with positive net spread and strong OOS.
+# We hold |IC| at the same 0.03 floor as Stage 2 and discriminate on
+# OOS retention, cost viability, and direction-match instead.
+STAGE3_MIN_ABS_IC = 0.03
 STAGE3_MIN_EFFECTIVE_N = 180
 STAGE3_MIN_TEST_DAYS = 60
 STAGE3_MIN_ABS_TEST_IC = 0.02
 STAGE3_MIN_OOS_RETENTION = 0.60
 STAGE3_MAX_HOLM_P = 0.05
 
+# Regime stability (Stage 2+ gating). Promoted from a hidden Stage 2
+# sub-criterion to its own screen so an allocator can see at a glance
+# that the signal works only in one market state.
+REGIME_STABILITY_MIN_REGIMES_OBSERVED = 4
+REGIME_STABILITY_MAX_SIGN_FLIP_FRACTION = 0.34
+"""Maximum fraction of regime buckets whose IC sign disagrees with the
+overall sign before the regime-stability screen fails. 0.34 ≈ "at most
+one in three buckets flip" — looser than 0.5 (would let half flip) but
+tighter than the prior implicit "any 4 regimes observed" gate."""
+
 # Multiple-testing correction.
 DEFAULT_NUM_FEATURE_FAMILY = 5
 """Holm-Bonferroni correction divisor used when the user hasn't
 explicitly declared how many features they're searching across.
-The five built-in features in the picker are the canonical default."""
+The five built-in features in the picker are the canonical default;
+the runner exposes ``n_family`` so a user running a wider search can
+override."""
 
 
 # ─── Result dataclasses ───────────────────────────────────────────────────
@@ -104,21 +121,45 @@ class MultipleTestingWarning:
 
 @dataclass
 class CostViability:
-    """Cost-adjusted Q5-Q1 spread.
+    """Cost-adjusted long-short spread, anchored on spec direction.
 
-    A statistically significant IC can correspond to an economically
-    untradeable spread — the v1 review's central point. This
-    structure isolates the economic-viability question from the
-    statistical question.
+    v1 review's central point: a statistically significant IC can
+    correspond to an economically untradeable spread. v2 review found
+    a related bug — the page reported a *signed* Q5-Q1 spread on the
+    headline (negative for momentum-on-RSI-style features) while the
+    cost table reported an *absolute* spread, so the same number
+    appeared with two different signs.
+
+    Resolution: report both. ``gross_spread_bps_signed`` is the raw
+    Q5-Q1 (top quintile minus bottom quintile, with sign). The
+    ``directional_spread_bps`` is what the spec-direction long-short
+    actually captures: positive direction = Q5-Q1, negative direction
+    = Q1-Q5, two-sided/unknown = ``|Q5-Q1|``. Viability is gated on
+    ``directional_spread_bps`` so a spec-mismatched IC sign cannot
+    sneak through the economic screen.
     """
 
-    gross_spread_bps: float = 0.0
-    """Q5-Q1 mean-return spread, expressed in bps (×10⁴)."""
+    gross_spread_bps_signed: float = 0.0
+    """Raw Q5-Q1 spread in bps (×10⁴), preserving sign. Negative when
+    the top quintile underperforms the bottom quintile."""
+    directional_spread_bps: float = 0.0
+    """Spec-direction-aligned spread:
+
+    * ``positive`` direction → Q5 − Q1
+    * ``negative`` direction → Q1 − Q5
+    * ``two_sided`` / ``unknown`` → ``|Q5 − Q1|``
+
+    This is the spread the trade actually captures, and the basis for
+    the economic-viability gate."""
     cost_assumption_one_way_bps: float = 1.0
     cost_erasure_one_way_bps: float = 0.0
-    """One-way cost at which net spread crosses zero."""
+    """One-way cost at which the net directional spread crosses zero."""
     net_spread_bps_at_assumption: float = 0.0
     viable_at_assumption: bool = False
+    spec_direction: str = "unknown"
+    """Direction the cost calc was anchored on; surfaced so the UI can
+    distinguish 'inverse-direction discovery' from 'spec-direction
+    works'."""
     note: str = ""
 
 
@@ -172,10 +213,30 @@ class FeatureValidationVerdict:
     economic_screen: ValidationScreen = field(default_factory=ValidationScreen)
     oos_screen: ValidationScreen = field(default_factory=ValidationScreen)
     multiple_testing_screen: ValidationScreen = field(default_factory=ValidationScreen)
+    regime_stability_screen: ValidationScreen = field(default_factory=ValidationScreen)
+    """Promoted from a Stage 2 sub-criterion to a first-class screen.
+    An allocator's chief concern is "does this signal work in more
+    than one market state"; hiding this inside ``regimes_observed >=
+    4`` was deferring the question."""
 
     multiple_testing: MultipleTestingWarning = field(default_factory=MultipleTestingWarning)
     cost_viability: CostViability = field(default_factory=CostViability)
     ic_ci: IcCi = field(default_factory=IcCi)
+
+    direction_matches_spec: bool = True
+    """False when the headline IC sign disagrees with
+    ``feature_spec.expected_direction``. A negative IC on a
+    ``positive``-direction feature is "inverse relationship discovered",
+    which is a different (and weaker) hypothesis than the one the spec
+    proposes; it is not an automatic failure but the statistical
+    screen reports it explicitly so the verdict isn't read as 'feature
+    passed'."""
+
+    target_signed_appropriate: bool = True
+    """False when the spec marks signed forward return as the wrong
+    target for this feature (e.g. realized_vol_30). Stage 0 fires
+    immediately so the headline IC is preserved as a diagnostic but
+    cannot be misread as a verdict."""
 
     stage_info: FeatureStageInfo = field(default_factory=FeatureStageInfo)
 
@@ -231,43 +292,90 @@ def compute_holm_p(
 def compute_cost_viability(
     quantile_bins: list[dict],
     cost_assumption_one_way_bps: float = 1.0,
+    expected_direction: str = "unknown",
 ) -> CostViability:
-    """Compute cost-adjusted Q5-Q1 spread.
+    """Compute cost-adjusted long-short spread, anchored on spec direction.
 
-    Assumes round-trip cost = 2 × one-way (i.e. enter long Q5, short Q1
-    + exit). Slippage / market impact not modelled. The 1-bp default
-    assumption is intentionally tight — cost erasure should be
-    obvious in the UI when the headline IC's tradeable form is
-    a fraction of a basis point.
+    Round-trip cost = 2 × one-way (enter + exit, both legs). Slippage
+    and market impact are not modelled. The 1-bp default is
+    intentionally tight — cost erasure should be obvious when the
+    headline IC's tradeable form is a fraction of a basis point.
+
+    Direction handling (v2 review fix): a negative-direction feature
+    (e.g. RSI) trades long-Q1, short-Q5. The signed Q5−Q1 is negative
+    when the spec works as intended, so gating on signed > 0 would
+    miss the entire point. We compute both:
+
+    * ``gross_spread_bps_signed`` = Q5 − Q1 with sign preserved
+      (audit / display only).
+    * ``directional_spread_bps`` = the spec-direction-aligned spread.
+      The economic gate checks this against the round-trip cost.
+
+    ``two_sided`` / ``unknown`` collapses to ``|Q5 − Q1|`` because the
+    sign cannot be claimed in advance.
     """
     if not quantile_bins:
-        return CostViability(note="No quantile bins available.")
+        return CostViability(
+            note="No quantile bins available.",
+            spec_direction=expected_direction,
+        )
 
     sorted_bins = sorted(quantile_bins, key=lambda b: b.get("bin_number", 0))
     if len(sorted_bins) < 2:
-        return CostViability(note="Need at least 2 quantile bins.")
+        return CostViability(
+            note="Need at least 2 quantile bins.",
+            spec_direction=expected_direction,
+        )
 
     bottom = float(sorted_bins[0].get("mean_return", 0.0))
     top = float(sorted_bins[-1].get("mean_return", 0.0))
-    gross_spread_bps = (top - bottom) * 10_000.0  # log-return → bps
+    gross_spread_signed_bps = (top - bottom) * 10_000.0
+
+    if expected_direction == "negative":
+        directional_spread_bps = -gross_spread_signed_bps
+    elif expected_direction == "positive":
+        directional_spread_bps = gross_spread_signed_bps
+    else:  # two_sided / unknown / anything else
+        directional_spread_bps = abs(gross_spread_signed_bps)
 
     round_trip_cost_bps = 2.0 * cost_assumption_one_way_bps
-    net_spread_bps = gross_spread_bps - round_trip_cost_bps
+    net_spread_bps = directional_spread_bps - round_trip_cost_bps
 
-    # Cost-erasure threshold = gross_spread_bps / 2 (because the
-    # round-trip cost is 2× the one-way cost).
-    erasure_one_way = abs(gross_spread_bps) / 2.0 if gross_spread_bps != 0 else 0.0
+    # Cost-erasure threshold = directional_spread_bps / 2 (round-trip
+    # cost equals 2× one-way). Reported on the directional spread, not
+    # the signed one — the signed value is illustrative.
+    erasure_one_way = (
+        directional_spread_bps / 2.0 if directional_spread_bps > 0 else 0.0
+    )
 
     return CostViability(
-        gross_spread_bps=gross_spread_bps,
+        gross_spread_bps_signed=gross_spread_signed_bps,
+        directional_spread_bps=directional_spread_bps,
         cost_assumption_one_way_bps=cost_assumption_one_way_bps,
         cost_erasure_one_way_bps=erasure_one_way,
         net_spread_bps_at_assumption=net_spread_bps,
         viable_at_assumption=net_spread_bps > 0,
+        spec_direction=expected_direction,
     )
 
 
 # ─── Screen evaluators ────────────────────────────────────────────────────
+
+
+def _direction_matches(mean_ic: float, expected_direction: str) -> bool:
+    """Check whether the IC sign matches the spec's prior.
+
+    ``unknown`` and ``two_sided`` accept either sign. ``positive``
+    requires IC > 0; ``negative`` requires IC < 0. A near-zero IC is
+    sign-ambiguous — the |IC| floor below catches that separately.
+    """
+    if expected_direction in {"unknown", "two_sided"}:
+        return True
+    if expected_direction == "positive":
+        return mean_ic > 0
+    if expected_direction == "negative":
+        return mean_ic < 0
+    return True  # unrecognised value — treat as no claim.
 
 
 def _evaluate_statistical_screen(
@@ -278,8 +386,20 @@ def _evaluate_statistical_screen(
     effective_n: float,
     is_stationary: bool,
     is_monotonic: bool,
+    direction_matches_spec: bool,
 ) -> ValidationScreen:
-    """Statistical-shape screen: |IC|, p-value, optional stationarity/monotonicity."""
+    """Statistical-shape screen: |IC|, p-value, sample size, spec gates,
+    direction match.
+
+    Direction handling (v2 review fix): a feature spec with
+    ``expected_direction="positive"`` and a strongly-negative observed
+    IC is **not** a Stage 1 pass on the intended hypothesis. It may
+    indicate an inverse-relationship discovery, but that is a
+    different (and weaker) claim than the spec's. We surface the
+    mismatch as a screen failure with a "discovered inverse signal"
+    message; the user can then explicitly run with
+    ``expected_direction="unknown"`` or flip the spec.
+    """
     reasons: list[str] = []
     if abs(mean_ic) < STAGE1_MIN_ABS_IC:
         reasons.append(
@@ -305,13 +425,20 @@ def _evaluate_statistical_screen(
             "Monotonicity required by feature spec but the quantile chart "
             "is not monotonic at the configured threshold."
         )
+    if not direction_matches_spec:
+        reasons.append(
+            f"IC sign disagrees with spec.expected_direction = "
+            f"'{spec.expected_direction}'. Possible inverse-relationship "
+            "discovery — a different hypothesis than this spec. Re-run "
+            "with expected_direction='unknown' to validate as exploratory."
+        )
 
     return ValidationScreen(
         name="Statistical association",
         description=(
-            "Daily IC is large enough, NW-significant, and the sample "
-            "is deep enough. Stationarity/monotonicity gate only when "
-            "the feature spec requires them."
+            "Daily IC is large enough, NW-significant, sample is deep "
+            "enough, IC sign matches the spec's expected direction, and "
+            "spec-required stationarity/monotonicity hold."
         ),
         passed=not reasons,
         required_for_stage1=True,
@@ -320,14 +447,22 @@ def _evaluate_statistical_screen(
 
 
 def _evaluate_economic_screen(cost: CostViability) -> ValidationScreen:
-    """Economic-viability screen: net Q5-Q1 spread > 0 at the assumed cost."""
-    if cost.gross_spread_bps == 0:
+    """Economic-viability screen: net directional spread > 0 at the assumed cost.
+
+    "Directional" = aligned with the spec's expected direction. For a
+    negative-direction feature we trade Q1 long / Q5 short, so the
+    relevant gross spread is Q1 − Q5, not the raw signed Q5 − Q1. See
+    ``compute_cost_viability`` for the direction-handling rules.
+    """
+    description = (
+        "Net spec-direction long-short spread must exceed the "
+        "assumed round-trip cost (2 × one-way)."
+    )
+
+    if cost.directional_spread_bps == 0 and cost.gross_spread_bps_signed == 0:
         return ValidationScreen(
             name="Economic viability",
-            description=(
-                "Net Q5-Q1 spread (long extreme − short extreme) must "
-                "exceed assumed round-trip cost."
-            ),
+            description=description,
             passed=False,
             required_for_stage1=False,
             failure_reasons=["No quantile spread to evaluate."],
@@ -336,29 +471,83 @@ def _evaluate_economic_screen(cost: CostViability) -> ValidationScreen:
     if cost.viable_at_assumption:
         return ValidationScreen(
             name="Economic viability",
-            description=(
-                "Net Q5-Q1 spread (long extreme − short extreme) must "
-                "exceed assumed round-trip cost."
-            ),
+            description=description,
             passed=True,
             required_for_stage1=False,
         )
 
+    sign_note = ""
+    if cost.spec_direction in {"positive", "negative"} and (
+        cost.gross_spread_bps_signed * cost.directional_spread_bps < 0
+    ):
+        # Signed and directional spreads disagree in sign → spec mismatch.
+        sign_note = (
+            f" Signed Q5−Q1 = {cost.gross_spread_bps_signed:.2f} bps; "
+            f"spec direction is '{cost.spec_direction}', so the "
+            f"trade is Q{('1' if cost.spec_direction == 'negative' else '5')}-long / "
+            f"Q{('5' if cost.spec_direction == 'negative' else '1')}-short — "
+            "the headline IC sign suggests the *opposite* trade would be "
+            "the moneymaker."
+        )
+
     return ValidationScreen(
         name="Economic viability",
-        description=(
-            "Net Q5-Q1 spread (long extreme − short extreme) must "
-            "exceed assumed round-trip cost."
-        ),
+        description=description,
         passed=False,
         required_for_stage1=False,
         failure_reasons=[
-            f"Gross spread = {cost.gross_spread_bps:.2f} bps; "
+            f"Directional spread = {cost.directional_spread_bps:.2f} bps; "
             f"round-trip cost (2 × one-way) at {cost.cost_assumption_one_way_bps:.1f} "
             f"bps assumption = {2 * cost.cost_assumption_one_way_bps:.1f} bps. "
             f"Net = {cost.net_spread_bps_at_assumption:.2f} bps. Cost erases the "
             f"alpha at approximately {cost.cost_erasure_one_way_bps:.2f} bps one-way."
+            + sign_note
         ],
+    )
+
+
+def _evaluate_regime_stability_screen(
+    *,
+    regimes_observed: int,
+    regime_sign_flip_fraction: float,
+) -> ValidationScreen:
+    """Regime stability screen (v2 review addition).
+
+    Promoted from a hidden Stage 2 sub-criterion to a first-class
+    screen. Allocators care whether a signal works in more than one
+    market state; we gate on:
+
+    * at least ``REGIME_STABILITY_MIN_REGIMES_OBSERVED`` (= 4) regime
+      buckets observed (vol low/normal/high × trend up/sideways/down),
+    * the fraction of buckets where the IC sign disagrees with the
+      overall sign is at most
+      ``REGIME_STABILITY_MAX_SIGN_FLIP_FRACTION`` (≈ 1 in 3).
+
+    Diagnostic at Stage 1, gating Stage 2+.
+    """
+    description = (
+        "Signal must be observed in enough regime buckets and not flip "
+        "sign across them — otherwise the signal works only in one "
+        "market state."
+    )
+    reasons: list[str] = []
+    if regimes_observed < REGIME_STABILITY_MIN_REGIMES_OBSERVED:
+        reasons.append(
+            f"Only {regimes_observed} regime buckets observed; need ≥ "
+            f"{REGIME_STABILITY_MIN_REGIMES_OBSERVED}."
+        )
+    if regime_sign_flip_fraction > REGIME_STABILITY_MAX_SIGN_FLIP_FRACTION:
+        reasons.append(
+            f"{regime_sign_flip_fraction:.0%} of regime buckets flip IC "
+            f"sign vs the overall sign; threshold is "
+            f"≤ {REGIME_STABILITY_MAX_SIGN_FLIP_FRACTION:.0%}."
+        )
+    return ValidationScreen(
+        name="Regime stability",
+        description=description,
+        passed=not reasons,
+        required_for_stage1=False,
+        failure_reasons=reasons,
     )
 
 
@@ -463,6 +652,7 @@ def _compute_stage_info(
     economic_screen: ValidationScreen,
     oos_screen: ValidationScreen,
     multiple_testing_screen: ValidationScreen,
+    regime_stability_screen: ValidationScreen,
     mean_ic: float,
     effective_n: float,
     test_days: int,
@@ -480,6 +670,7 @@ def _compute_stage_info(
             economic_screen,
             oos_screen,
             multiple_testing_screen,
+            regime_stability_screen,
         )
         if s.required_for_stage1 and not s.passed
     ]
@@ -499,6 +690,10 @@ def _compute_stage_info(
     abs_test_ic = abs(test_mean_ic)
 
     # Stage 3 — paper-trading candidate.
+    # v2: |IC| floor matches Stage 2 (no bigger-IC bonus). The
+    # discriminating factors are OOS retention, cost viability, and
+    # regime stability — i.e. is the result *implementable*, not just
+    # *flashy*.
     stage3_ok = (
         abs_ic >= STAGE3_MIN_ABS_IC
         and effective_n >= STAGE3_MIN_EFFECTIVE_N
@@ -507,6 +702,7 @@ def _compute_stage_info(
         and oos_retention >= STAGE3_MIN_OOS_RETENTION
         and holm_p_value <= STAGE3_MAX_HOLM_P
         and cost.viable_at_assumption
+        and regime_stability_screen.passed
     )
     if stage3_ok:
         return FeatureStageInfo(
@@ -530,6 +726,7 @@ def _compute_stage_info(
         and holm_p_value <= STAGE2_MAX_HOLM_P
         and cost.viable_at_assumption
         and regimes_observed >= STAGE2_MIN_REGIMES
+        and regime_stability_screen.passed
     )
     if stage2_ok:
         return FeatureStageInfo(
@@ -646,10 +843,47 @@ def evaluate_feature_validation(
     test_mean_ic: float,
     oos_retention: float,
     regimes_observed: int,
+    regime_sign_flip_fraction: float = 0.0,
     cost_assumption_one_way_bps: float = 1.0,
     n_family: int = DEFAULT_NUM_FEATURE_FAMILY,
 ) -> FeatureValidationVerdict:
-    """Combine screens and stage assignment into a single verdict."""
+    """Combine screens and stage assignment into a single verdict.
+
+    Order of operations:
+
+    1. **Wrong-target fast-path.** If the spec marks the signed
+       forward return as inappropriate (e.g. realized_vol_30), Stage 0
+       fires immediately. The IC against signed return is preserved
+       as a diagnostic but cannot graduate.
+    2. **Direction match.** Compute whether the IC sign agrees with
+       ``spec.expected_direction``. A mismatch is folded into the
+       statistical screen as a failure reason ("inverse signal
+       discovered").
+    3. **Five screens** (statistical / economic / OOS / multiple-testing
+       / regime stability) plus the IC CI.
+    4. **Stage assignment** combining screen passes with numeric
+       thresholds.
+    5. **Final-decision rendering** for the UI headline.
+
+    Parameters
+    ----------
+    n_family : int
+        Holm-Bonferroni divisor. Default = the 5 built-in features;
+        callers running a wider research family should pass the
+        actual count.
+    regime_sign_flip_fraction : float
+        Fraction of regime buckets whose IC sign disagrees with the
+        overall sign. Computed by the runner from the robustness
+        breakdown; passed in here to keep this module pure.
+    """
+    direction_matches_spec = _direction_matches(mean_ic, spec.expected_direction)
+
+    cost = compute_cost_viability(
+        quantile_bins=quantile_bins,
+        cost_assumption_one_way_bps=cost_assumption_one_way_bps,
+        expected_direction=spec.expected_direction,
+    )
+
     statistical = _evaluate_statistical_screen(
         spec=spec,
         mean_ic=mean_ic,
@@ -657,10 +891,7 @@ def evaluate_feature_validation(
         effective_n=effective_n,
         is_stationary=is_stationary,
         is_monotonic=is_monotonic,
-    )
-    cost = compute_cost_viability(
-        quantile_bins=quantile_bins,
-        cost_assumption_one_way_bps=cost_assumption_one_way_bps,
+        direction_matches_spec=direction_matches_spec,
     )
     economic = _evaluate_economic_screen(cost)
     oos = _evaluate_oos_screen(
@@ -673,13 +904,52 @@ def evaluate_feature_validation(
         nw_p_value=nw_p_value,
         n_family=n_family,
     )
+    regime_stability = _evaluate_regime_stability_screen(
+        regimes_observed=regimes_observed,
+        regime_sign_flip_fraction=regime_sign_flip_fraction,
+    )
     ic_ci = compute_ic_ci(mean_ic=mean_ic, n_eff=effective_n)
+
+    # Wrong-target fast-path: Stage 0 with explicit reason, headline
+    # IC kept for diagnostic display only.
+    if not spec.is_signed_target_appropriate:
+        stage_info = FeatureStageInfo(
+            stage=0,
+            label="Rejected",
+            description=(
+                f"Feature spec marks signed forward return as the wrong "
+                f"target for '{spec.feature_name}'. The headline IC is a "
+                "diagnostic only — graduation is blocked until the "
+                "runner supports feature-aware target dispatch."
+            ),
+            failed_screens=["Wrong target"],
+        )
+        return FeatureValidationVerdict(
+            statistical_screen=statistical,
+            economic_screen=economic,
+            oos_screen=oos,
+            multiple_testing_screen=multiple_testing_screen,
+            regime_stability_screen=regime_stability,
+            multiple_testing=multiple_testing,
+            cost_viability=cost,
+            ic_ci=ic_ci,
+            direction_matches_spec=direction_matches_spec,
+            target_signed_appropriate=False,
+            stage_info=stage_info,
+            final_decision=(
+                f"Do not trade. '{spec.feature_name}' predicts the size "
+                "of the next move, not its sign — signed-return IC is "
+                "the wrong test. Re-run with an absolute-return target "
+                "when feature-aware dispatch lands."
+            ),
+        )
 
     stage_info = _compute_stage_info(
         statistical_screen=statistical,
         economic_screen=economic,
         oos_screen=oos,
         multiple_testing_screen=multiple_testing_screen,
+        regime_stability_screen=regime_stability,
         mean_ic=mean_ic,
         effective_n=effective_n,
         test_days=test_days,
@@ -695,9 +965,12 @@ def evaluate_feature_validation(
         economic_screen=economic,
         oos_screen=oos,
         multiple_testing_screen=multiple_testing_screen,
+        regime_stability_screen=regime_stability,
         multiple_testing=multiple_testing,
         cost_viability=cost,
         ic_ci=ic_ci,
+        direction_matches_spec=direction_matches_spec,
+        target_signed_appropriate=True,
         stage_info=stage_info,
         final_decision=_render_final_decision(stage_info, cost, oos),
     )
@@ -714,7 +987,7 @@ def _render_final_decision(
         return f"Do not trade. Rejected at Stage 0 ({screens})."
     if stage_info.stage == 1:
         parts = ["Stage 1 — statistical association only. Not tradeable as shown."]
-        if not cost.viable_at_assumption and cost.gross_spread_bps != 0:
+        if not cost.viable_at_assumption and cost.directional_spread_bps != 0:
             parts.append(
                 f"Cost erases the spread at ≈ {cost.cost_erasure_one_way_bps:.2f} bps one-way."
             )

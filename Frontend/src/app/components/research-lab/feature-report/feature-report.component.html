@@ -69,6 +69,9 @@
           <span class="spec-pill">target: {{ spec.defaultTarget }}</span>
           <span class="spec-pill">expected direction: {{ spec.expectedDirection }}</span>
           <span class="spec-pill">expected shape: {{ spec.expectedShape }}</span>
+          @if (!spec.isSignedTargetAppropriate) {
+            <span class="spec-pill warn">signed return is the wrong target</span>
+          }
           @if (spec.intent) {
             <p class="spec-intent">{{ spec.intent }}</p>
           }
@@ -78,6 +81,19 @@
                 <li>{{ note }}</li>
               }
             </ul>
+          }
+        </div>
+      }
+
+      @if (targetMetadata; as meta) {
+        <div class="verdict-target-meta">
+          <strong>Target computed:</strong>
+          {{ meta.targetName }} — horizon {{ meta.horizonMinutes }}m
+          ({{ meta.horizonBars }} × {{ meta.barMinutes }}m bars), session {{ meta.timezone }}.
+          {{ meta.validCount | number }} of {{ meta.totalCount | number }}
+          rows valid ({{ meta.validRatio | percent: '1.0-1' }}).
+          @if (topInvalidReason) {
+            <span class="verdict-note">Top drop reason — {{ topInvalidReason }}.</span>
           }
         </div>
       }
@@ -108,20 +124,23 @@
 
       @if (v.icCi.valid) {
         <div class="verdict-ic-ci">
-          <strong>IC 95% CI:</strong>
+          <strong>Mean daily IC 95% CI:</strong>
           [{{ v.icCi.ciLower | number: '1.4-4' }}, {{ v.icCi.ciUpper | number: '1.4-4' }}]
-          (point {{ v.icCi.point | number: '1.4-4' }}, N_eff = {{ v.icCi.nEffUsed | number: '1.0-0' }})
+          (point {{ v.icCi.point | number: '1.4-4' }}, computed over
+          N_eff = {{ v.icCi.nEffUsed | number: '1.0-0' }} daily IC observations,
+          not bar-level samples).
           <span class="verdict-note">{{ v.icCi.seApproximationNote }}</span>
         </div>
       } @else {
         <div class="verdict-ic-ci muted">
-          IC CI unavailable — N_eff too small for a meaningful interval.
+          IC CI unavailable — N_eff (daily IC observations) too small for a meaningful interval.
         </div>
       }
 
       <div class="verdict-cost-line">
-        <strong>Cost viability:</strong>
-        Gross Q5-Q1 spread = {{ v.costViability.grossSpreadBps | number: '1.2-2' }} bps;
+        <strong>Cost viability ({{ v.costViability.specDirection }} direction):</strong>
+        Signed Q5−Q1 = {{ v.costViability.grossSpreadBpsSigned | number: '1.2-2' }} bps;
+        spec-direction spread = {{ v.costViability.directionalSpreadBps | number: '1.2-2' }} bps;
         net at {{ v.costViability.costAssumptionOneWayBps | number: '1.1-1' }} bps one-way =
         <span [class.text-green-700]="v.costViability.viableAtAssumption"
               [class.text-red-700]="!v.costViability.viableAtAssumption">

@@ -165,7 +165,26 @@ export class FeatureReportComponent {
   get verdictScreens(): ValidationScreen[] {
     const v = this.verdict;
     if (!v) return [];
-    return [v.statisticalScreen, v.economicScreen, v.oosScreen, v.multipleTestingScreen];
+    return [
+      v.statisticalScreen,
+      v.economicScreen,
+      v.oosScreen,
+      v.multipleTestingScreen,
+      v.regimeStabilityScreen,
+    ];
+  }
+
+  get targetMetadata() {
+    return this.result().targetMetadata ?? null;
+  }
+
+  get topInvalidReason(): string | null {
+    const meta = this.targetMetadata;
+    if (!meta) return null;
+    const entries = Object.entries(meta.invalidReasonCounts);
+    if (entries.length === 0) return null;
+    const [reason, count] = entries.sort((a, b) => b[1] - a[1])[0];
+    return `${reason}: ${count}`;
   }
 
   get stageBadgeSeverity(): 'success' | 'info' | 'warn' | 'danger' {

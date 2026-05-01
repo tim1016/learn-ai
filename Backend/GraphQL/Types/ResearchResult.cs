@@ -49,6 +49,7 @@ public class ResearchResultType
     public bool PassedValidation { get; set; }
     public RobustnessType? Robustness { get; set; }
     public FeatureValidationSpecType? FeatureSpec { get; set; }
+    public TargetMetadataType? TargetMetadata { get; set; }
     public FeatureValidationVerdictType? ValidationVerdict { get; set; }
     public string? Error { get; set; }
 }
@@ -61,8 +62,22 @@ public class FeatureValidationSpecType
     public string ExpectedShape { get; set; } = "none";
     public bool StationarityRequired { get; set; }
     public bool MonotonicityRequired { get; set; }
+    public bool IsSignedTargetAppropriate { get; set; } = true;
     public string Intent { get; set; } = "";
     public List<string> Notes { get; set; } = [];
+}
+
+public class TargetMetadataType
+{
+    public string TargetName { get; set; } = "forward_log_return_15m";
+    public int HorizonMinutes { get; set; } = 15;
+    public int HorizonBars { get; set; } = 15;
+    public int BarMinutes { get; set; } = 1;
+    public string Timezone { get; set; } = "America/New_York";
+    public int ValidCount { get; set; }
+    public int TotalCount { get; set; }
+    public double ValidRatio { get; set; }
+    public Dictionary<string, int> InvalidReasonCounts { get; set; } = [];
 }
 
 public class IcCiType
@@ -91,11 +106,13 @@ public class MultipleTestingWarningType
 
 public class CostViabilityType
 {
-    public double GrossSpreadBps { get; set; }
+    public double GrossSpreadBpsSigned { get; set; }
+    public double DirectionalSpreadBps { get; set; }
     public double CostAssumptionOneWayBps { get; set; } = 1.0;
     public double CostErasureOneWayBps { get; set; }
     public double NetSpreadBpsAtAssumption { get; set; }
     public bool ViableAtAssumption { get; set; }
+    public string SpecDirection { get; set; } = "unknown";
     public string Note { get; set; } = "";
 }
 
@@ -133,9 +150,12 @@ public class FeatureValidationVerdictType
     public ValidationScreenType EconomicScreen { get; set; } = new();
     public ValidationScreenType OosScreen { get; set; } = new();
     public ValidationScreenType MultipleTestingScreen { get; set; } = new();
+    public ValidationScreenType RegimeStabilityScreen { get; set; } = new();
     public MultipleTestingWarningType MultipleTesting { get; set; } = new();
     public CostViabilityType CostViability { get; set; } = new();
     public IcCiType IcCi { get; set; } = new();
+    public bool DirectionMatchesSpec { get; set; } = true;
+    public bool TargetSignedAppropriate { get; set; } = true;
     public FeatureStageInfoType StageInfo { get; set; } = new();
     public string FinalDecision { get; set; } = "";
 }

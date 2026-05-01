@@ -88,6 +88,18 @@ class FeatureValidationSpec:
     only. Set to True for clean rank signals where a non-monotonic
     quantile chart is genuinely a kill."""
 
+    is_signed_target_appropriate: bool = True
+    """Whether the default signed-forward-return target is the right
+    question for this feature.
+
+    Set to False for features whose mechanism predicts the **size** or
+    **absolute** direction of the next move rather than its sign
+    (volatility-level features are the canonical example). When False,
+    the feature is rejected at Stage 0 with a "wrong target" reason
+    rather than reporting a near-zero IC against a target it was never
+    going to predict; the headline IC is preserved as a diagnostic so
+    the reader can see the null result, but it cannot graduate."""
+
     min_effective_n_for_stage1: int = 60
     min_effective_n_for_stage2: int = 100
     min_effective_n_for_stage3: int = 180
@@ -155,12 +167,15 @@ _BUILTIN_SPECS: dict[str, FeatureValidationSpec] = {
     "realized_vol_30": FeatureValidationSpec(
         feature_name="realized_vol_30",
         # Vol level predicts |return| / forward vol, not signed return.
-        # Until the runner supports feature-aware targets, the spec
-        # reports two_sided so the UI flags the test as "wrong question".
+        # The runner reports the IC against signed return as a
+        # diagnostic but blocks graduation at Stage 0 via
+        # ``is_signed_target_appropriate=False`` so a near-zero IC is
+        # not mis-read as "feature failed".
         expected_direction="two_sided",
         expected_shape="none",
         stationarity_required=False,
         monotonicity_required=False,
+        is_signed_target_appropriate=False,
         intent=(
             "30-bar realized volatility level. Predicts the SIZE of the "
             "next move, not the SIGN. Validating against signed forward "
@@ -171,6 +186,8 @@ _BUILTIN_SPECS: dict[str, FeatureValidationSpec] = {
             "realized vol, not signed forward return.",
             "A near-zero IC against signed forward return is the "
             "expected null result here, not evidence of failure.",
+            "Stage 0 (rejected) until the runner supports feature-aware "
+            "target dispatch — the displayed IC is diagnostic only.",
         ),
     ),
     "volume_zscore": FeatureValidationSpec(

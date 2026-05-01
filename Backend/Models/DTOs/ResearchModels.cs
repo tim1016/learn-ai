@@ -44,6 +44,7 @@ public class ResearchReportDto
     public bool PassedValidation { get; set; }
     public RobustnessDto? Robustness { get; set; }
     public FeatureValidationSpecDto? FeatureSpec { get; set; }
+    public TargetMetadataDto? TargetMetadata { get; set; }
     public FeatureValidationVerdictDto? ValidationVerdict { get; set; }
     public string? Error { get; set; }
 }
@@ -56,8 +57,22 @@ public class FeatureValidationSpecDto
     public string ExpectedShape { get; set; } = "none";
     public bool StationarityRequired { get; set; }
     public bool MonotonicityRequired { get; set; }
+    public bool IsSignedTargetAppropriate { get; set; } = true;
     public string Intent { get; set; } = "";
     public List<string> Notes { get; set; } = [];
+}
+
+public class TargetMetadataDto
+{
+    public string TargetName { get; set; } = "forward_log_return_15m";
+    public int HorizonMinutes { get; set; } = 15;
+    public int HorizonBars { get; set; } = 15;
+    public int BarMinutes { get; set; } = 1;
+    public string Timezone { get; set; } = "America/New_York";
+    public int ValidCount { get; set; }
+    public int TotalCount { get; set; }
+    public double ValidRatio { get; set; }
+    public Dictionary<string, int> InvalidReasonCounts { get; set; } = [];
 }
 
 public class IcCiDto
@@ -82,11 +97,13 @@ public class MultipleTestingWarningDto
 
 public class CostViabilityDto
 {
-    public double GrossSpreadBps { get; set; }
+    public double GrossSpreadBpsSigned { get; set; }
+    public double DirectionalSpreadBps { get; set; }
     public double CostAssumptionOneWayBps { get; set; } = 1.0;
     public double CostErasureOneWayBps { get; set; }
     public double NetSpreadBpsAtAssumption { get; set; }
     public bool ViableAtAssumption { get; set; }
+    public string SpecDirection { get; set; } = "unknown";
     public string Note { get; set; } = "";
 }
 
@@ -124,9 +141,12 @@ public class FeatureValidationVerdictDto
     public ValidationScreenDto EconomicScreen { get; set; } = new();
     public ValidationScreenDto OosScreen { get; set; } = new();
     public ValidationScreenDto MultipleTestingScreen { get; set; } = new();
+    public ValidationScreenDto RegimeStabilityScreen { get; set; } = new();
     public MultipleTestingWarningDto MultipleTesting { get; set; } = new();
     public CostViabilityDto CostViability { get; set; } = new();
     public IcCiDto IcCi { get; set; } = new();
+    public bool DirectionMatchesSpec { get; set; } = true;
+    public bool TargetSignedAppropriate { get; set; } = true;
     public FeatureStageInfoDto StageInfo { get; set; } = new();
     public string FinalDecision { get; set; } = "";
 }

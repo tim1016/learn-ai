@@ -625,3 +625,22 @@
     }
   }
 }
+
+  .spec-pill.warn {
+    background: rgba($warn, 0.15);
+    color: $warn;
+  }
+
+  .verdict-target-meta {
+    margin-top: 0.55rem;
+    font-size: 0.85rem;
+    color: $text-secondary;
+    line-height: 1.45;
+
+    .verdict-note {
+      display: block;
+      margin-top: 0.2rem;
+      font-size: 0.78rem;
+      color: $text-muted;
+    }
+  }

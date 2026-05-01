@@ -127,11 +127,14 @@ def test_cost_viability_erasure_threshold_is_half_gross_spread():
         {"bin_number": 5, "mean_return": 0.0010},
     ]
 
-    cost = compute_cost_viability(bins, cost_assumption_one_way_bps=1.0)
+    cost = compute_cost_viability(
+        bins, cost_assumption_one_way_bps=1.0, expected_direction="positive"
+    )
 
-    assert cost.gross_spread_bps == pytest.approx(10.0, abs=1e-9)
+    assert cost.gross_spread_bps_signed == pytest.approx(10.0, abs=1e-9)
+    assert cost.directional_spread_bps == pytest.approx(10.0, abs=1e-9)
     assert cost.cost_erasure_one_way_bps == pytest.approx(5.0, abs=1e-9)
-    # net = gross - 2 × 1 = 8 bps; viable.
+    # net = directional − 2 × 1 = 8 bps; viable.
     assert cost.net_spread_bps_at_assumption == pytest.approx(8.0, abs=1e-9)
     assert cost.viable_at_assumption is True
 
@@ -142,7 +145,9 @@ def test_cost_viability_flips_to_not_viable_when_cost_high():
         {"bin_number": 5, "mean_return": 0.0001},  # 1 bp gross spread
     ]
 
-    cost = compute_cost_viability(bins, cost_assumption_one_way_bps=1.0)
+    cost = compute_cost_viability(
+        bins, cost_assumption_one_way_bps=1.0, expected_direction="positive"
+    )
 
     # gross = 1 bp, round-trip = 2 bps → net = -1 bp.
     assert cost.viable_at_assumption is False
@@ -152,9 +157,61 @@ def test_cost_viability_flips_to_not_viable_when_cost_high():
 def test_cost_viability_handles_empty_bins():
     cost = compute_cost_viability([], cost_assumption_one_way_bps=1.0)
 
-    assert cost.gross_spread_bps == 0.0
+    assert cost.gross_spread_bps_signed == 0.0
+    assert cost.directional_spread_bps == 0.0
     assert cost.viable_at_assumption is False
     assert "No quantile" in cost.note
+
+
+def test_cost_viability_negative_direction_uses_q1_minus_q5():
+    """Mean-reversion spec (negative direction) trades long Q1 / short Q5.
+    Signed Q5−Q1 is negative when the spec works as intended; the
+    directional spread inverts the sign so the economic gate is correct."""
+    bins = [
+        {"bin_number": 1, "mean_return": 0.0010},   # Q1 high (oversold rebound)
+        {"bin_number": 5, "mean_return": -0.0010},  # Q5 low (overbought reversal)
+    ]
+
+    cost = compute_cost_viability(
+        bins, cost_assumption_one_way_bps=1.0, expected_direction="negative"
+    )
+
+    # Signed Q5-Q1 = -20 bps; directional (Q1-Q5) = +20 bps.
+    assert cost.gross_spread_bps_signed == pytest.approx(-20.0, abs=1e-9)
+    assert cost.directional_spread_bps == pytest.approx(20.0, abs=1e-9)
+    assert cost.viable_at_assumption is True
+
+
+def test_cost_viability_two_sided_direction_uses_absolute_spread():
+    bins = [
+        {"bin_number": 1, "mean_return": 0.0010},
+        {"bin_number": 5, "mean_return": -0.0010},
+    ]
+
+    cost = compute_cost_viability(
+        bins, cost_assumption_one_way_bps=1.0, expected_direction="two_sided"
+    )
+
+    assert cost.directional_spread_bps == pytest.approx(20.0, abs=1e-9)
+
+
+def test_cost_viability_direction_mismatch_fails_economic_screen():
+    """Positive-direction spec but signed Q5-Q1 is negative → trade
+    captures −Q5+Q1, which is the opposite of what the spec expects."""
+    bins = [
+        {"bin_number": 1, "mean_return": 0.0005},   # Q1 outperforms
+        {"bin_number": 5, "mean_return": -0.0005},  # Q5 underperforms
+    ]
+
+    cost = compute_cost_viability(
+        bins, cost_assumption_one_way_bps=1.0, expected_direction="positive"
+    )
+
+    # Signed = -10 bps; directional (positive direction = Q5-Q1) = -10 bps.
+    # Net at 1 bp one-way = -12 bps. Not viable.
+    assert cost.gross_spread_bps_signed == pytest.approx(-10.0, abs=1e-9)
+    assert cost.directional_spread_bps == pytest.approx(-10.0, abs=1e-9)
+    assert cost.viable_at_assumption is False
 
 
 # ─── evaluate_feature_validation — stage assignment ──────────────────────
@@ -186,6 +243,7 @@ def _strong_args(spec: FeatureValidationSpec) -> dict:
         test_mean_ic=0.045,
         oos_retention=0.75,
         regimes_observed=6,
+        regime_sign_flip_fraction=0.0,  # all regimes consistent with overall sign
     )
 
 
@@ -366,3 +424,128 @@ def test_stage_thresholds_are_strictly_nested():
     assert STAGE3_MIN_OOS_RETENTION >= STAGE2_MIN_OOS_RETENTION
     assert STAGE2_MIN_REGIMES > 0
     assert STAGE1_MAX_NW_P > 0
+
+
+# ─── v2 review additions ─────────────────────────────────────────────────
+
+
+def test_evaluate_wrong_target_blocks_at_stage_0_for_realized_vol_30():
+    """``is_signed_target_appropriate=False`` on the spec must short-circuit
+    to Stage 0 with a 'Wrong target' reason regardless of how strong the
+    signed-IC numbers look."""
+    spec = get_spec("realized_vol_30")
+    args = _strong_args(spec)
+
+    verdict = evaluate_feature_validation(**args)
+
+    assert verdict.stage_info.stage == 0
+    assert verdict.target_signed_appropriate is False
+    assert "Wrong target" in verdict.stage_info.failed_screens
+    assert "wrong test" in verdict.final_decision.lower()
+
+
+def test_evaluate_direction_mismatch_fails_statistical_screen():
+    """A negative IC on a positive-direction feature must fail the
+    statistical screen as 'inverse signal discovered', even if every
+    other Stage 1 numeric threshold passes."""
+    spec = get_spec("momentum_5m")  # expected_direction = positive
+    args = _strong_args(spec)
+    args["mean_ic"] = -0.06  # strong but wrong sign
+    # Flip the quantile bins so the absolute spread still exists; the
+    # economic screen should also fail because directional spread is negative.
+    args["quantile_bins"] = [
+        {"bin_number": 1, "mean_return": 0.0010},   # Q1 high
+        {"bin_number": 5, "mean_return": -0.0010},  # Q5 low
+    ]
+
+    verdict = evaluate_feature_validation(**args)
+
+    assert verdict.direction_matches_spec is False
+    assert verdict.statistical_screen.passed is False
+    assert any(
+        "expected_direction" in r for r in verdict.statistical_screen.failure_reasons
+    )
+    assert verdict.stage_info.stage == 0
+
+
+def test_evaluate_direction_unknown_accepts_any_sign():
+    """expected_direction='unknown' shouldn't gate on sign match."""
+    bins = _strong_quantile_bins()
+    spec = FeatureValidationSpec(
+        feature_name="custom_feature",
+        expected_direction="unknown",
+    )
+    args = _strong_args(spec)
+    args["mean_ic"] = -0.06
+    args["quantile_bins"] = list(reversed(bins))  # match the negative IC
+
+    verdict = evaluate_feature_validation(**args)
+
+    assert verdict.direction_matches_spec is True
+
+
+def test_evaluate_regime_stability_screen_fails_when_too_few_buckets():
+    spec = get_spec("momentum_5m")
+    args = _strong_args(spec)
+    args["regimes_observed"] = 2  # below REGIME_STABILITY_MIN_REGIMES_OBSERVED = 4
+
+    verdict = evaluate_feature_validation(**args)
+
+    assert verdict.regime_stability_screen.passed is False
+    # Diagnostic at Stage 1 — does NOT pull to Stage 0.
+    assert verdict.stage_info.stage == 1
+
+
+def test_evaluate_regime_stability_screen_fails_when_signs_flip():
+    """Half the regime buckets disagreeing with the overall sign trips the screen."""
+    spec = get_spec("momentum_5m")
+    args = _strong_args(spec)
+    args["regime_sign_flip_fraction"] = 0.50  # above the 0.34 threshold
+
+    verdict = evaluate_feature_validation(**args)
+
+    assert verdict.regime_stability_screen.passed is False
+
+
+def test_evaluate_stage_3_blocked_when_regime_stability_fails():
+    """Even with all numeric Stage 3 thresholds met, regime instability
+    should keep the verdict at Stage 2."""
+    spec = get_spec("momentum_5m")
+    args = _strong_args(spec)
+    args["regime_sign_flip_fraction"] = 0.40  # above 0.34 threshold
+
+    verdict = evaluate_feature_validation(**args)
+
+    assert verdict.regime_stability_screen.passed is False
+    assert verdict.stage_info.stage <= 2
+
+
+def test_evaluate_n_family_override_changes_holm_correction():
+    spec = get_spec("momentum_5m")
+    args_default = _strong_args(spec)
+    args_default["nw_p_value"] = 0.04
+    args_wide = dict(args_default)
+    args_wide["n_family"] = 20
+
+    v_default = evaluate_feature_validation(**args_default)
+    v_wide = evaluate_feature_validation(**args_wide)
+
+    # Default 5-family: Holm = min(1, 0.04 × 5) = 0.20.
+    # 20-family: Holm = min(1, 0.04 × 20) = 0.80.
+    assert v_default.multiple_testing.holm_p_value == pytest.approx(0.20, abs=1e-12)
+    assert v_wide.multiple_testing.holm_p_value == pytest.approx(0.80, abs=1e-12)
+
+
+def test_evaluate_stage_3_no_longer_requires_higher_ic_than_stage_2():
+    """v2: Stage 3 floor matches Stage 2 (0.03), not 0.05. A stable
+    |IC|=0.035 with strong OOS + cost should reach Stage 3."""
+    spec = get_spec("momentum_5m")
+    args = _strong_args(spec)
+    args["mean_ic"] = 0.035  # between old Stage 3 floor (0.05) and Stage 2 floor (0.03)
+    args["test_mean_ic"] = 0.025
+
+    verdict = evaluate_feature_validation(**args)
+
+    # With |IC|=0.035, all other Stage 3 thresholds met, plus cost-viable,
+    # OOS retention > 0.60, regime stability passing → Stage 3.
+    assert verdict.stage_info.stage == 3
