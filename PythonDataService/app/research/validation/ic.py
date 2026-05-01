@@ -74,8 +74,15 @@ def _compute_newey_west_t_stat(
     mean_ic = float(np.mean(ic_array))
     demeaned = ic_array - mean_ic
 
-    # Automatic lag selection: Andrews (1991) rule for Bartlett kernel
-    max_lag = max(_andrews_lag(n), min_lag)
+    # Automatic lag selection: Andrews (1991) rule for Bartlett kernel.
+    # The caller's ``min_lag`` floor (typically 5 for daily options) is
+    # only respected when the sample can support it: at small N, enforcing
+    # min_lag = 5 with n ≈ 5 collapses N_eff to ~0 because the truncation
+    # eats the whole sample. Cap the floor at n // 4 so the lag scales
+    # down for short series but remains at the daily-options floor when
+    # the sample is comfortable.
+    effective_min_lag = min(min_lag, max(n // 4, 1))
+    max_lag = max(_andrews_lag(n), effective_min_lag)
     max_lag = min(max_lag, n - 2)
 
     # Gamma_0: variance
@@ -123,8 +130,12 @@ def _compute_effective_sample_size(ic_array: np.ndarray, min_lag: int = 0) -> fl
     if var < 1e-20:
         return float(n)
 
-    # Use Andrews (1991) bandwidth, consistent with Newey-West
-    max_lag = max(_andrews_lag(n), min_lag)
+    # Use Andrews (1991) bandwidth, consistent with Newey-West. Same
+    # adaptive cap on the caller's lag floor as in _compute_newey_west_t_stat:
+    # at small N, an over-aggressive floor truncates so much of the sum
+    # that N_eff collapses to ~0.
+    effective_min_lag = min(min_lag, max(n // 4, 1))
+    max_lag = max(_andrews_lag(n), effective_min_lag)
     max_lag = min(max_lag, n - 2)
     rho_sum = 0.0
 

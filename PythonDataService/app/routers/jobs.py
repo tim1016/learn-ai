@@ -22,6 +22,7 @@ tests using snake_case kwargs.
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
@@ -380,17 +381,28 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
         emit.phase("completed")
         emit.log(report.summary)
 
-        # Snake-case dict so the Frontend's existing BatchResearchResult
-        # interface (which deserializes camelCase from GraphQL) can be
-        # produced by a small mapper after fetchResult.
+        # Snake-case dict the Frontend mapper transforms into camelCase
+        # ``BatchResearchResult``. ``tickers_tested`` is kept as a legacy
+        # alias for the raw count so any older consumer keeps working;
+        # new consumers should use ``tickers_tested_raw`` /
+        # ``tickers_valid`` / ``validity_summary``.
         return {
             "success": True,
             "feature_name": report.feature_name,
-            "tickers_tested": report.tickers_tested,
+            "target_type": report.target_type,
+            "tickers_tested": report.tickers_tested_raw,
+            "tickers_tested_raw": report.tickers_tested_raw,
+            "tickers_valid": report.tickers_valid,
             "tickers_passed": report.tickers_passed,
             "pass_rate": report.pass_rate,
             "cross_sectional_consistent": report.cross_sectional_consistent,
             "aggregate_ic": report.aggregate_ic,
+            "aggregate_ic_uniform": report.aggregate_ic_uniform,
+            "aggregate_ic_ci": asdict(report.aggregate_ic_ci),
+            "binomial_test": asdict(report.binomial_test),
+            "n_eff_assets": report.n_eff_assets,
+            "validity_summary": asdict(report.validity_summary),
+            "stage_info": asdict(report.stage_info),
             "ticker_results": report.ticker_results,
             "summary": report.summary,
         }
