@@ -335,10 +335,14 @@
           </div>
         </div>
 
-        <!-- Sharpe CI panel — Lo (2002) confidence interval -->
+        <!-- Sharpe CI panel — Lo (2002) confidence interval. When the
+             backend flags ci.valid = false (e.g. N_eff too small), we
+             still render the card with an explicit caveat instead of
+             hiding it — "no band shown" must be distinguishable from
+             "computation never ran". -->
         @if (result().oosSharpeCi; as ci) {
-          @if (ci.valid) {
-            <div class="sharpe-ci-card mb-4">
+          <div class="sharpe-ci-card mb-4" [class.sharpe-ci-invalid]="!ci.valid">
+            @if (ci.valid) {
               <div class="sharpe-ci-row">
                 <div class="sharpe-ci-label">95% CI on combined OOS Sharpe</div>
                 <div class="sharpe-ci-value">
@@ -356,8 +360,25 @@
                   }
                 </span>
               </div>
-            </div>
-          }
+            } @else {
+              <div class="sharpe-ci-row">
+                <div class="sharpe-ci-label">95% CI on combined OOS Sharpe</div>
+                <div class="sharpe-ci-value sharpe-ci-value-na">unavailable</div>
+                @if (ci.nEffUsed > 0) {
+                  <div class="sharpe-ci-neff">N<sub>eff</sub> = {{ ci.nEffUsed | number: '1.0-0' }}</div>
+                }
+              </div>
+              <div class="sharpe-ci-note">
+                <i class="pi pi-exclamation-triangle"></i>
+                <span>
+                  CI could not be computed — the OOS sample is too small to
+                  produce a meaningful band. Treat the headline Sharpe as a
+                  point estimate without inferential weight until the run
+                  has more bars / folds.
+                </span>
+              </div>
+            }
+          </div>
         }
 
         @if (hasSharpeDivergence) {

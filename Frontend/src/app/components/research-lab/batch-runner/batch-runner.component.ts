@@ -380,10 +380,20 @@ export class BatchRunnerComponent {
     if (!id) return;
     try {
       await this.jobsService.cancelJob(id);
-    } catch (err) {
-      // Swallow — the worker may have just finished. The terminal event
-      // will land via SSE shortly.
-      void err;
+    } catch (err: unknown) {
+      // Tolerate the race where the worker terminated before the cancel
+      // request landed — the terminal SSE event makes the cancel moot.
+      // Surface every other failure so a real network or server error
+      // doesn't leave the UI silently stuck on "running".
+      const status = this.jobsService.job(id)?.status;
+      if (status === 'completed' || status === 'cancelled' || status === 'failed') {
+        return;
+      }
+      const msg =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message: unknown }).message)
+          : 'Failed to cancel cross-sectional run';
+      this.error.set(msg);
     }
   }
 

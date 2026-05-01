@@ -89,11 +89,19 @@ def test_alpha_decay_two_folds_reports_slope_but_test_remains_invalid():
     assert result.p_value == 1.0
 
 
-def test_alpha_decay_constant_x_returns_default():
-    """Edge-case: zero variance in fold index can't happen with > 1 fold,
-    but the helper should return safe defaults if it ever did."""
+def test_alpha_decay_single_fold_returns_default_via_n_lt_2_guard():
+    """A single fold takes the early ``n < 2`` fallback path.
+
+    The helper returns a defaults-only ``AlphaDecayStats`` (slope = 0,
+    p_value = 1, is_test_valid = False). Note: this exercises the
+    short-input guard, NOT the zero-variance branch on the fold index
+    — that branch is unreachable from the public surface because any
+    ``n >= 2`` produces ``ss_xx > 0``. If we ever expose a lower-level
+    helper that lets the caller pass collinear x, add a separate test
+    pinning the ``ss_xx < 1e-12`` path.
+    """
     result = _compute_sharpe_trend_slope([0.5])
 
-    # n < 2 path
+    assert result.n_folds_used == 1
     assert result.is_test_valid is False
     assert result.slope == pytest.approx(0.0, abs=1e-12)

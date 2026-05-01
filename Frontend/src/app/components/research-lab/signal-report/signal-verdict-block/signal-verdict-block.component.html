@@ -1,6 +1,7 @@
 @let g = graduation();
 @let r = result();
 
+@if (g) {
 <div class="verdict-card" [attr.data-band]="band()">
   <div class="verdict-head">
     <!-- Stage badge — left-side hero element, mirrors the readiness ring -->
@@ -14,12 +15,10 @@
     <div class="verdict-headline">
       <div class="headline-row">
         <span class="headline-eyebrow">Signal Engine Verdict</span>
-        @if (g) {
-          <span class="grade-chip" [attr.data-band]="gradeChipBand()">
-            Grade {{ g.overallGrade }}
-          </span>
-          <span class="stage-chip" [attr.data-band]="band()">{{ stageLabel() }}</span>
-        }
+        <span class="grade-chip" [attr.data-band]="gradeChipBand()">
+          Grade {{ g.overallGrade }}
+        </span>
+        <span class="stage-chip" [attr.data-band]="band()">{{ stageLabel() }}</span>
       </div>
 
       <div class="headline-feature">
@@ -61,7 +60,7 @@
   </div>
 
   <!-- Graduation ladder + advance criteria / rejection reasons -->
-  @if (g && g.stageInfo) {
+  @if (g.stageInfo) {
     <div class="ladder-slot">
       <app-graduation-ladder
         [stageInfo]="g.stageInfo"
@@ -70,3 +69,4 @@
     </div>
   }
 </div>
+}

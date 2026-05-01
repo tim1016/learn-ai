@@ -680,6 +680,12 @@
   border-radius: 6px;
   padding: 0.75rem 1rem;
 
+  &.sharpe-ci-invalid {
+    border-left-color: $warn;
+
+    .sharpe-ci-note i { color: $warn; }
+  }
+
   .sharpe-ci-row {
     display: flex;
     flex-wrap: wrap;
@@ -701,6 +707,12 @@
     font-size: 1rem;
     font-weight: 700;
     color: $text-primary;
+
+    &.sharpe-ci-value-na {
+      color: $text-muted;
+      font-style: italic;
+      font-weight: 600;
+    }
   }
 
   .sharpe-ci-se,
