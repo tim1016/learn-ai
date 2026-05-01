@@ -746,4 +746,5 @@ The Angular `feature-report` component renders, in order:
 Companion documents:
 
 - [`docs/signal-engine-authority.md`](signal-engine-authority.md)
+- [`docs/indicator-reliability-authority.md`](indicator-reliability-authority.md)
 - [`docs/references/sharpe-ci-and-deflated-sharpe.md`](references/sharpe-ci-and-deflated-sharpe.md)
