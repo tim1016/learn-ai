@@ -107,6 +107,102 @@ class RobustnessResponse(BaseModel):
     structural_breaks: list[StructuralBreakPointResponse] = []
 
 
+class FeatureValidationSpecResponse(BaseModel):
+    """Per-feature validation contract surfaced to the UI.
+
+    Documents the question the screens are answering for this feature
+    so the reader can spot a "wrong target" or "wrong shape" mismatch
+    before reading the verdict.
+    """
+
+    feature_name: str = ""
+    default_target: str = ""
+    expected_direction: str = "unknown"
+    expected_shape: str = "none"
+    stationarity_required: bool = False
+    monotonicity_required: bool = False
+    intent: str = ""
+    notes: list[str] = []
+
+
+class IcCiResponse(BaseModel):
+    """Lo-style confidence interval on the headline mean IC."""
+
+    point: float = 0.0
+    se: float = 0.0
+    ci_lower: float = 0.0
+    ci_upper: float = 0.0
+    confidence_level: float = 0.95
+    n_eff_used: float = 0.0
+    valid: bool = False
+    se_approximation_note: str = ""
+
+
+class MultipleTestingWarningResponse(BaseModel):
+    """Holm-Bonferroni-corrected p-value across the feature family."""
+
+    raw_nw_p_value: float = 1.0
+    holm_p_value: float = 1.0
+    n_family: int = 0
+    note: str = ""
+
+
+class CostViabilityResponse(BaseModel):
+    """Cost-adjusted Q5-Q1 spread."""
+
+    gross_spread_bps: float = 0.0
+    cost_assumption_one_way_bps: float = 1.0
+    cost_erasure_one_way_bps: float = 0.0
+    net_spread_bps_at_assumption: float = 0.0
+    viable_at_assumption: bool = False
+    note: str = ""
+
+
+class ValidationScreenResponse(BaseModel):
+    """One of the four screens (statistical / economic / OOS / multiple-testing)."""
+
+    name: str = ""
+    description: str = ""
+    passed: bool = False
+    required_for_stage1: bool = False
+    failure_reasons: list[str] = []
+
+
+class FeatureStageCriterionResponse(BaseModel):
+    """Single advance-criterion in the next-stage list."""
+
+    name: str = ""
+    description: str = ""
+    current_value: float = 0.0
+    required_repr: str = ""
+    met: bool = False
+
+
+class FeatureStageInfoResponse(BaseModel):
+    """Where the feature sits on the 0/1/2/3 ladder."""
+
+    stage: int = 0
+    label: str = "Rejected"
+    description: str = ""
+    next_stage_label: str = ""
+    advance_criteria: list[FeatureStageCriterionResponse] = []
+    failed_screens: list[str] = []
+
+
+class FeatureValidationVerdictResponse(BaseModel):
+    """Replaces the legacy single-boolean ``passed_validation``."""
+
+    statistical_screen: ValidationScreenResponse
+    economic_screen: ValidationScreenResponse
+    oos_screen: ValidationScreenResponse
+    multiple_testing_screen: ValidationScreenResponse
+    multiple_testing: MultipleTestingWarningResponse
+    cost_viability: CostViabilityResponse
+    ic_ci: IcCiResponse
+    stage_info: FeatureStageInfoResponse
+    final_decision: str = ""
+
+
 class RunFeatureResearchResponse(BaseModel):
     """Response body for POST /research/run-feature."""
 
@@ -132,6 +228,8 @@ class RunFeatureResearchResponse(BaseModel):
     ic_values: list[float] = []
     ic_dates: list[str] = []
     robustness: RobustnessResponse | None = None
+    feature_spec: FeatureValidationSpecResponse | None = None
+    validation_verdict: FeatureValidationVerdictResponse | None = None
     error: str | None = None
 
 

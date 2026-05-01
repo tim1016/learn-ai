@@ -9,7 +9,13 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ResearchResult } from '../../../services/research.service';
+import {
+  FeatureStageInfo,
+  FeatureValidationSpec,
+  FeatureValidationVerdict,
+  ResearchResult,
+  ValidationScreen,
+} from '../../../services/research.service';
 import { RobustnessReportComponent } from '../robustness-report/robustness-report.component';
 import { TagModule } from 'primeng/tag';
 import { TableModule } from 'primeng/table';
@@ -101,9 +107,13 @@ export class FeatureReportComponent {
     return 'danger';
   }
 
-  // ─── Confidence Tiers ───────────────────────────────────
+  // ─── Sample Coverage Tier (renamed from Confidence Tier) ─
+  // The label "Confidence Tier" was misleading — it conflated sample
+  // depth with statistical confidence. This tier only describes how
+  // many IC days were observed; the multi-screen verdict block below
+  // is the actual confidence story.
 
-  get confidenceTier(): 1 | 2 | 3 | 4 {
+  get sampleCoverageTier(): 1 | 2 | 3 | 4 {
     const days = this.icDaysCount;
     if (days >= 750) return 1;
     if (days >= 250) return 2;
@@ -111,17 +121,17 @@ export class FeatureReportComponent {
     return 4;
   }
 
-  get confidenceTierLabel(): string {
-    switch (this.confidenceTier) {
+  get sampleCoverageTierLabel(): string {
+    switch (this.sampleCoverageTier) {
       case 1: return 'Tier 1 — Extended Track Record';
-      case 2: return 'Tier 2 — Standard Validation';
-      case 3: return 'Tier 3 — Preliminary Analysis';
-      case 4: return 'Tier 4 — Exploratory Only';
+      case 2: return 'Tier 2 — Standard Sample';
+      case 3: return 'Tier 3 — Preliminary Sample';
+      case 4: return 'Tier 4 — Exploratory Sample';
     }
   }
 
-  get confidenceTierDescription(): string {
-    switch (this.confidenceTier) {
+  get sampleCoverageTierDescription(): string {
+    switch (this.sampleCoverageTier) {
       case 1: return `${this.icDaysCount} IC days (3+ years). Sufficient for regime-conditional analysis and allocation decisions.`;
       case 2: return `${this.icDaysCount} IC days (1+ year). Adequate for initial signal evaluation. Regime coverage may be incomplete.`;
       case 3: return `${this.icDaysCount} IC days (3-12 months). Preliminary results only. Statistical tests have limited power at this sample size.`;
@@ -129,14 +139,46 @@ export class FeatureReportComponent {
     }
   }
 
-  get confidenceTierSeverity(): 'success' | 'info' | 'warn' | 'danger' {
-    switch (this.confidenceTier) {
+  get sampleCoverageTierSeverity(): 'success' | 'info' | 'warn' | 'danger' {
+    switch (this.sampleCoverageTier) {
       case 1: return 'success';
       case 2: return 'info';
       case 3: return 'warn';
       case 4: return 'danger';
     }
   }
+
+  // ─── Validation Verdict (Stage 0/1/2/3 + 4 screens) ─────
+
+  get verdict(): FeatureValidationVerdict | null {
+    return this.result().validationVerdict ?? null;
+  }
+
+  get featureSpec(): FeatureValidationSpec | null {
+    return this.result().featureSpec ?? null;
+  }
+
+  get stageInfo(): FeatureStageInfo | null {
+    return this.verdict?.stageInfo ?? null;
+  }
+
+  get verdictScreens(): ValidationScreen[] {
+    const v = this.verdict;
+    if (!v) return [];
+    return [v.statisticalScreen, v.economicScreen, v.oosScreen, v.multipleTestingScreen];
+  }
+
+  get stageBadgeSeverity(): 'success' | 'info' | 'warn' | 'danger' {
+    const stage = this.stageInfo?.stage;
+    switch (stage) {
+      case 3: return 'success';
+      case 2: return 'info';
+      case 1: return 'warn';
+      case 0:
+      default: return 'danger';
+    }
+  }
+
 
   // ─── Self-Critical Auto-Override ────────────────────────
 
@@ -504,7 +546,7 @@ export class FeatureReportComponent {
 
   get icSignalStrength(): string {
     const ic = Math.abs(this.result().meanIC);
-    const tier = this.confidenceTier;
+    const tier = this.sampleCoverageTier;
     if (ic >= 0.1) return tier <= 2 ? 'Strong' : 'Strong (short-sample)';
     if (ic >= 0.05) return tier <= 2 ? 'Moderate' : 'Moderate (confirmation needed)';
     if (ic >= 0.03) return tier <= 2 ? 'Weak but detectable' : 'Marginal (low confidence)';

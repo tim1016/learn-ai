@@ -48,7 +48,96 @@ public class ResearchResultType
 
     public bool PassedValidation { get; set; }
     public RobustnessType? Robustness { get; set; }
+    public FeatureValidationSpecType? FeatureSpec { get; set; }
+    public FeatureValidationVerdictType? ValidationVerdict { get; set; }
     public string? Error { get; set; }
+}
+
+public class FeatureValidationSpecType
+{
+    public string FeatureName { get; set; } = "";
+    public string DefaultTarget { get; set; } = "";
+    public string ExpectedDirection { get; set; } = "unknown";
+    public string ExpectedShape { get; set; } = "none";
+    public bool StationarityRequired { get; set; }
+    public bool MonotonicityRequired { get; set; }
+    public string Intent { get; set; } = "";
+    public List<string> Notes { get; set; } = [];
+}
+
+public class IcCiType
+{
+    public double Point { get; set; }
+    public double Se { get; set; }
+    public double CiLower { get; set; }
+    public double CiUpper { get; set; }
+    public double ConfidenceLevel { get; set; } = 0.95;
+    public double NEffUsed { get; set; }
+    public bool Valid { get; set; }
+    public string SeApproximationNote { get; set; } = "";
+}
+
+public class MultipleTestingWarningType
+{
+    [GraphQLName("rawNwPValue")]
+    public double RawNwPValue { get; set; } = 1.0;
+
+    [GraphQLName("holmPValue")]
+    public double HolmPValue { get; set; } = 1.0;
+
+    public int NFamily { get; set; }
+    public string Note { get; set; } = "";
+}
+
+public class CostViabilityType
+{
+    public double GrossSpreadBps { get; set; }
+    public double CostAssumptionOneWayBps { get; set; } = 1.0;
+    public double CostErasureOneWayBps { get; set; }
+    public double NetSpreadBpsAtAssumption { get; set; }
+    public bool ViableAtAssumption { get; set; }
+    public string Note { get; set; } = "";
+}
+
+public class ValidationScreenType
+{
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public bool Passed { get; set; }
+    public bool RequiredForStage1 { get; set; }
+    public List<string> FailureReasons { get; set; } = [];
+}
+
+public class FeatureStageCriterionType
+{
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public double CurrentValue { get; set; }
+    public string RequiredRepr { get; set; } = "";
+    public bool Met { get; set; }
+}
+
+public class FeatureStageInfoType
+{
+    public int Stage { get; set; }
+    public string Label { get; set; } = "Rejected";
+    public string Description { get; set; } = "";
+    public string NextStageLabel { get; set; } = "";
+    public List<FeatureStageCriterionType> AdvanceCriteria { get; set; } = [];
+    public List<string> FailedScreens { get; set; } = [];
+}
+
+public class FeatureValidationVerdictType
+{
+    public ValidationScreenType StatisticalScreen { get; set; } = new();
+    public ValidationScreenType EconomicScreen { get; set; } = new();
+    public ValidationScreenType OosScreen { get; set; } = new();
+    public ValidationScreenType MultipleTestingScreen { get; set; } = new();
+    public MultipleTestingWarningType MultipleTesting { get; set; } = new();
+    public CostViabilityType CostViability { get; set; } = new();
+    public IcCiType IcCi { get; set; } = new();
+    public FeatureStageInfoType StageInfo { get; set; } = new();
+    public string FinalDecision { get; set; } = "";
 }
 
 public class MonthlyICBreakdownType
