@@ -433,3 +433,195 @@
     font-size: 0.9rem;
   }
 }
+
+// ─── Multi-Screen Verdict Block ───────────────────────────
+.verdict-block {
+  padding: 1.25rem 1.5rem;
+  border-radius: 10px;
+  background: $bg-elevated;
+  border: 1px solid $border;
+  margin-bottom: 1.25rem;
+
+  &.stage-0 { border-left: 4px solid $bear; }
+  &.stage-1 { border-left: 4px solid $warn; }
+  &.stage-2 { border-left: 4px solid $accent; }
+  &.stage-3 { border-left: 4px solid $bull; }
+
+  .verdict-block-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+
+    .verdict-block-title {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: $text-primary;
+    }
+  }
+
+  .verdict-final-decision {
+    margin: 0 0 0.4rem 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  .verdict-stage-desc {
+    margin: 0 0 0.9rem 0;
+    color: $text-secondary;
+    font-size: 0.9rem;
+    line-height: 1.45;
+  }
+
+  .verdict-spec-disclosure {
+    background: $bg-surface;
+    border: 1px solid $border;
+    border-radius: 8px;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 0.9rem;
+
+    .spec-pill {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      background: rgba($accent, 0.10);
+      color: $accent;
+      margin-right: 0.5rem;
+      margin-bottom: 0.25rem;
+      letter-spacing: 0.02em;
+    }
+
+    .spec-intent {
+      margin: 0.4rem 0 0 0;
+      font-size: 0.88rem;
+      color: $text-secondary;
+      line-height: 1.45;
+    }
+
+    .spec-notes {
+      margin: 0.4rem 0 0 1.25rem;
+      padding: 0;
+      font-size: 0.82rem;
+      color: $text-muted;
+
+      li { margin-bottom: 0.15rem; }
+    }
+  }
+
+  .verdict-screens {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+
+    .screen-row {
+      display: flex;
+      gap: 0.65rem;
+      align-items: flex-start;
+      padding: 0.5rem 0.7rem;
+      border-radius: 6px;
+      background: $bg-surface;
+      border: 1px solid $border;
+
+      &.passed { border-left: 3px solid $bull; }
+      &.failed { border-left: 3px solid $bear; }
+
+      i {
+        margin-top: 3px;
+        font-size: 0.95rem;
+      }
+      &.passed i { color: $bull; }
+      &.failed i { color: $bear; }
+
+      .screen-body {
+        flex: 1;
+      }
+
+      .screen-name {
+        font-weight: 600;
+        color: $text-primary;
+        font-size: 0.9rem;
+
+        .screen-note {
+          font-weight: 400;
+          font-size: 0.75rem;
+          color: $text-muted;
+          margin-left: 0.4rem;
+        }
+      }
+
+      .screen-desc {
+        font-size: 0.83rem;
+        color: $text-muted;
+        margin-top: 0.15rem;
+        line-height: 1.4;
+      }
+
+      .screen-reasons {
+        margin: 0.35rem 0 0 1.1rem;
+        padding: 0;
+        font-size: 0.83rem;
+        color: $bear;
+
+        li { margin-bottom: 0.1rem; }
+      }
+    }
+  }
+
+  .verdict-ic-ci,
+  .verdict-cost-line,
+  .verdict-mt-line {
+    margin-top: 0.55rem;
+    font-size: 0.88rem;
+    color: $text-secondary;
+    line-height: 1.5;
+
+    &.muted { color: $text-muted; }
+
+    .verdict-note {
+      display: block;
+      margin-top: 0.2rem;
+      font-size: 0.78rem;
+      color: $text-muted;
+    }
+  }
+
+  .verdict-advance {
+    margin-top: 0.9rem;
+    padding-top: 0.75rem;
+    border-top: 1px dashed $border;
+
+    .verdict-advance-header {
+      font-weight: 600;
+      font-size: 0.88rem;
+      color: $text-primary;
+      margin-bottom: 0.4rem;
+    }
+
+    .verdict-advance-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+
+      li {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.85rem;
+        padding: 0.2rem 0;
+
+        i { font-size: 0.8rem; }
+        &.met { color: $bull; i { color: $bull; } }
+        &.unmet { color: $text-secondary; i { color: $text-muted; } }
+
+        .advance-name { font-weight: 600; min-width: 11rem; }
+        .advance-current { color: $text-muted; min-width: 9rem; }
+        .advance-required { color: $text-muted; }
+      }
+    }
+  }
+}

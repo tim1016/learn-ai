@@ -43,7 +43,92 @@ public class ResearchReportDto
 
     public bool PassedValidation { get; set; }
     public RobustnessDto? Robustness { get; set; }
+    public FeatureValidationSpecDto? FeatureSpec { get; set; }
+    public FeatureValidationVerdictDto? ValidationVerdict { get; set; }
     public string? Error { get; set; }
+}
+
+public class FeatureValidationSpecDto
+{
+    public string FeatureName { get; set; } = "";
+    public string DefaultTarget { get; set; } = "";
+    public string ExpectedDirection { get; set; } = "unknown";
+    public string ExpectedShape { get; set; } = "none";
+    public bool StationarityRequired { get; set; }
+    public bool MonotonicityRequired { get; set; }
+    public string Intent { get; set; } = "";
+    public List<string> Notes { get; set; } = [];
+}
+
+public class IcCiDto
+{
+    public double Point { get; set; }
+    public double Se { get; set; }
+    public double CiLower { get; set; }
+    public double CiUpper { get; set; }
+    public double ConfidenceLevel { get; set; } = 0.95;
+    public double NEffUsed { get; set; }
+    public bool Valid { get; set; }
+    public string SeApproximationNote { get; set; } = "";
+}
+
+public class MultipleTestingWarningDto
+{
+    public double RawNwPValue { get; set; } = 1.0;
+    public double HolmPValue { get; set; } = 1.0;
+    public int NFamily { get; set; }
+    public string Note { get; set; } = "";
+}
+
+public class CostViabilityDto
+{
+    public double GrossSpreadBps { get; set; }
+    public double CostAssumptionOneWayBps { get; set; } = 1.0;
+    public double CostErasureOneWayBps { get; set; }
+    public double NetSpreadBpsAtAssumption { get; set; }
+    public bool ViableAtAssumption { get; set; }
+    public string Note { get; set; } = "";
+}
+
+public class ValidationScreenDto
+{
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public bool Passed { get; set; }
+    public bool RequiredForStage1 { get; set; }
+    public List<string> FailureReasons { get; set; } = [];
+}
+
+public class FeatureStageCriterionDto
+{
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public double CurrentValue { get; set; }
+    public string RequiredRepr { get; set; } = "";
+    public bool Met { get; set; }
+}
+
+public class FeatureStageInfoDto
+{
+    public int Stage { get; set; }
+    public string Label { get; set; } = "Rejected";
+    public string Description { get; set; } = "";
+    public string NextStageLabel { get; set; } = "";
+    public List<FeatureStageCriterionDto> AdvanceCriteria { get; set; } = [];
+    public List<string> FailedScreens { get; set; } = [];
+}
+
+public class FeatureValidationVerdictDto
+{
+    public ValidationScreenDto StatisticalScreen { get; set; } = new();
+    public ValidationScreenDto EconomicScreen { get; set; } = new();
+    public ValidationScreenDto OosScreen { get; set; } = new();
+    public ValidationScreenDto MultipleTestingScreen { get; set; } = new();
+    public MultipleTestingWarningDto MultipleTesting { get; set; } = new();
+    public CostViabilityDto CostViability { get; set; } = new();
+    public IcCiDto IcCi { get; set; } = new();
+    public FeatureStageInfoDto StageInfo { get; set; } = new();
+    public string FinalDecision { get; set; } = "";
 }
 
 public class MonthlyICBreakdownDto

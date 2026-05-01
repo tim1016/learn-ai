@@ -47,7 +47,115 @@
     </div>
   </div>
 
-  <!-- 4. Confidence Tier + Verdict Banner -->
+  <!-- 4. Multi-Screen Verdict Block (Stage 0/1/2/3 + four screens) -->
+  @if (verdict; as v) {
+    <div class="verdict-block" [class]="'stage-' + (stageInfo?.stage ?? 0)">
+      <div class="verdict-block-header">
+        <p-tag [severity]="stageBadgeSeverity"
+               [value]="'Stage ' + (stageInfo?.stage ?? 0) + ' — ' + (stageInfo?.label ?? 'Rejected')" />
+        <h3 class="verdict-block-title">
+          {{ result().featureName }} on {{ result().ticker }}
+        </h3>
+      </div>
+
+      <p class="verdict-final-decision">{{ v.finalDecision }}</p>
+
+      @if (stageInfo?.description) {
+        <p class="verdict-stage-desc">{{ stageInfo!.description }}</p>
+      }
+
+      @if (featureSpec; as spec) {
+        <div class="verdict-spec-disclosure">
+          <span class="spec-pill">target: {{ spec.defaultTarget }}</span>
+          <span class="spec-pill">expected direction: {{ spec.expectedDirection }}</span>
+          <span class="spec-pill">expected shape: {{ spec.expectedShape }}</span>
+          @if (spec.intent) {
+            <p class="spec-intent">{{ spec.intent }}</p>
+          }
+          @if (spec.notes.length > 0) {
+            <ul class="spec-notes">
+              @for (note of spec.notes; track $index) {
+                <li>{{ note }}</li>
+              }
+            </ul>
+          }
+        </div>
+      }
+
+      <div class="verdict-screens">
+        @for (screen of verdictScreens; track screen.name) {
+          <div class="screen-row" [class.passed]="screen.passed" [class.failed]="!screen.passed">
+            <i [class]="screen.passed ? 'pi pi-check-circle' : 'pi pi-times-circle'"></i>
+            <div class="screen-body">
+              <div class="screen-name">
+                {{ screen.name }}
+                @if (!screen.requiredForStage1) {
+                  <span class="screen-note">(diagnostic at Stage 1, gating Stage 2+)</span>
+                }
+              </div>
+              <div class="screen-desc">{{ screen.description }}</div>
+              @if (!screen.passed && screen.failureReasons.length > 0) {
+                <ul class="screen-reasons">
+                  @for (reason of screen.failureReasons; track $index) {
+                    <li>{{ reason }}</li>
+                  }
+                </ul>
+              }
+            </div>
+          </div>
+        }
+      </div>
+
+      @if (v.icCi.valid) {
+        <div class="verdict-ic-ci">
+          <strong>IC 95% CI:</strong>
+          [{{ v.icCi.ciLower | number: '1.4-4' }}, {{ v.icCi.ciUpper | number: '1.4-4' }}]
+          (point {{ v.icCi.point | number: '1.4-4' }}, N_eff = {{ v.icCi.nEffUsed | number: '1.0-0' }})
+          <span class="verdict-note">{{ v.icCi.seApproximationNote }}</span>
+        </div>
+      } @else {
+        <div class="verdict-ic-ci muted">
+          IC CI unavailable — N_eff too small for a meaningful interval.
+        </div>
+      }
+
+      <div class="verdict-cost-line">
+        <strong>Cost viability:</strong>
+        Gross Q5-Q1 spread = {{ v.costViability.grossSpreadBps | number: '1.2-2' }} bps;
+        net at {{ v.costViability.costAssumptionOneWayBps | number: '1.1-1' }} bps one-way =
+        <span [class.text-green-700]="v.costViability.viableAtAssumption"
+              [class.text-red-700]="!v.costViability.viableAtAssumption">
+          {{ v.costViability.netSpreadBpsAtAssumption | number: '1.2-2' }} bps
+        </span>.
+        Cost erases the alpha at ≈ {{ v.costViability.costErasureOneWayBps | number: '1.2-2' }} bps one-way.
+      </div>
+
+      <div class="verdict-mt-line">
+        <strong>Multiple-testing:</strong>
+        {{ v.multipleTesting.note }}
+      </div>
+
+      @if (stageInfo && stageInfo.advanceCriteria.length > 0) {
+        <div class="verdict-advance">
+          <div class="verdict-advance-header">
+            To advance to {{ stageInfo.nextStageLabel }}:
+          </div>
+          <ul class="verdict-advance-list">
+            @for (c of stageInfo.advanceCriteria; track c.name) {
+              <li [class.met]="c.met" [class.unmet]="!c.met">
+                <i [class]="c.met ? 'pi pi-check' : 'pi pi-circle'"></i>
+                <span class="advance-name">{{ c.name }}</span>
+                <span class="advance-current">current {{ c.currentValue | number: '1.2-4' }}</span>
+                <span class="advance-required">requires {{ c.requiredRepr }}</span>
+              </li>
+            }
+          </ul>
+        </div>
+      }
+    </div>
+  }
+
+  <!-- 4b. Sample Coverage Tier + Legacy Verdict Banner -->
   <div class="verdict-banner" [class]="validationSeverity">
     <div class="verdict-header">
       <i [class]="isExploratoryOverride ? 'pi pi-info-circle' : (result().passedValidation ? 'pi pi-verified' : 'pi pi-times-circle')" class="verdict-icon"></i>
@@ -55,10 +163,10 @@
         {{ result().featureName }} on {{ result().ticker }}
       </h3>
       <p-tag [severity]="validationSeverity" [value]="validationLabel" />
-      <p-tag [severity]="confidenceTierSeverity" [value]="confidenceTierLabel" class="ml-2" />
+      <p-tag [severity]="sampleCoverageTierSeverity" [value]="sampleCoverageTierLabel" class="ml-2" />
     </div>
     <p class="verdict-text">{{ validationVerdict }}</p>
-    <p class="verdict-tier-desc">{{ confidenceTierDescription }}</p>
+    <p class="verdict-tier-desc">{{ sampleCoverageTierDescription }}</p>
   </div>
 
   <!-- 5. t-Stat Method Selector -->

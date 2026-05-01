@@ -15,17 +15,24 @@ from app.models.research_models import (
     BacktestResultResponse,
     BuildIvHistoryRequest,
     BuildIvHistoryResponse,
+    CostViabilityResponse,
     CrossSectionalReportResponse,
     DataSufficiencyResponse,
     DeflatedSharpeResponse,
     EffectiveSampleSizeResponse,
     FeatureInfoResponse,
+    FeatureStageCriterionResponse,
+    FeatureStageInfoResponse,
+    FeatureValidationSpecResponse,
+    FeatureValidationVerdictResponse,
     GraduationCriterionResponse,
     GraduationResultResponse,
     GraduationStageInfoResponse,
+    IcCiResponse,
     IvDiagnosticsReportResponse,
     MethodologyResponse,
     MonthlyICBreakdownResponse,
+    MultipleTestingWarningResponse,
     ParameterStabilityResponse,
     QuantileBinResponse,
     RegimeBucketResponse,
@@ -47,12 +54,18 @@ from app.models.research_models import (
     StructuralBreakPointResponse,
     TickerBatchResult,
     TrainTestSplitResponse,
+    ValidationScreenResponse,
     WalkForwardResultResponse,
     WalkForwardWindowResponse,
 )
 from app.research.batch_runner import run_cross_sectional_study
 from app.research.config import ResearchConfig
 from app.research.documentation.formulas import get_all_documentation
+from app.research.feature_spec import FeatureValidationSpec
+from app.research.feature_validation import (
+    FeatureValidationVerdict,
+    ValidationScreen,
+)
 from app.research.features.registry import get_feature_metadata, list_available_features
 from app.research.options.diagnostics import run_iv_diagnostics
 from app.research.options.iv_builder import build_iv_history
@@ -64,6 +77,82 @@ from app.services.polygon_client import PolygonClientService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _map_screen(screen: ValidationScreen) -> ValidationScreenResponse:
+    return ValidationScreenResponse(
+        name=screen.name,
+        description=screen.description,
+        passed=screen.passed,
+        required_for_stage1=screen.required_for_stage1,
+        failure_reasons=list(screen.failure_reasons),
+    )
+
+
+def _map_feature_spec(spec: FeatureValidationSpec) -> FeatureValidationSpecResponse:
+    return FeatureValidationSpecResponse(
+        feature_name=spec.feature_name,
+        default_target=spec.default_target,
+        expected_direction=spec.expected_direction,
+        expected_shape=spec.expected_shape,
+        stationarity_required=spec.stationarity_required,
+        monotonicity_required=spec.monotonicity_required,
+        intent=spec.intent,
+        notes=list(spec.notes),
+    )
+
+
+def _map_validation_verdict(
+    verdict: FeatureValidationVerdict,
+) -> FeatureValidationVerdictResponse:
+    return FeatureValidationVerdictResponse(
+        statistical_screen=_map_screen(verdict.statistical_screen),
+        economic_screen=_map_screen(verdict.economic_screen),
+        oos_screen=_map_screen(verdict.oos_screen),
+        multiple_testing_screen=_map_screen(verdict.multiple_testing_screen),
+        multiple_testing=MultipleTestingWarningResponse(
+            raw_nw_p_value=verdict.multiple_testing.raw_nw_p_value,
+            holm_p_value=verdict.multiple_testing.holm_p_value,
+            n_family=verdict.multiple_testing.n_family,
+            note=verdict.multiple_testing.note,
+        ),
+        cost_viability=CostViabilityResponse(
+            gross_spread_bps=verdict.cost_viability.gross_spread_bps,
+            cost_assumption_one_way_bps=verdict.cost_viability.cost_assumption_one_way_bps,
+            cost_erasure_one_way_bps=verdict.cost_viability.cost_erasure_one_way_bps,
+            net_spread_bps_at_assumption=verdict.cost_viability.net_spread_bps_at_assumption,
+            viable_at_assumption=verdict.cost_viability.viable_at_assumption,
+            note=verdict.cost_viability.note,
+        ),
+        ic_ci=IcCiResponse(
+            point=verdict.ic_ci.point,
+            se=verdict.ic_ci.se,
+            ci_lower=verdict.ic_ci.ci_lower,
+            ci_upper=verdict.ic_ci.ci_upper,
+            confidence_level=verdict.ic_ci.confidence_level,
+            n_eff_used=verdict.ic_ci.n_eff_used,
+            valid=verdict.ic_ci.valid,
+            se_approximation_note=verdict.ic_ci.se_approximation_note,
+        ),
+        stage_info=FeatureStageInfoResponse(
+            stage=verdict.stage_info.stage,
+            label=verdict.stage_info.label,
+            description=verdict.stage_info.description,
+            next_stage_label=verdict.stage_info.next_stage_label,
+            advance_criteria=[
+                FeatureStageCriterionResponse(
+                    name=c.name,
+                    description=c.description,
+                    current_value=c.current_value,
+                    required_repr=c.required_repr,
+                    met=c.met,
+                )
+                for c in verdict.stage_info.advance_criteria
+            ],
+            failed_screens=list(verdict.stage_info.failed_screens),
+        ),
+        final_decision=verdict.final_decision,
+    )
 
 
 @router.post("/run-feature", response_model=RunFeatureResearchResponse)
@@ -193,6 +282,16 @@ async def run_feature_research_endpoint(
             ic_values=report.ic_values,
             ic_dates=report.ic_dates,
             robustness=robustness_response,
+            feature_spec=(
+                _map_feature_spec(report.feature_spec)
+                if report.feature_spec is not None
+                else None
+            ),
+            validation_verdict=(
+                _map_validation_verdict(report.validation_verdict)
+                if report.validation_verdict is not None
+                else None
+            ),
             error=report.error,
         )
 

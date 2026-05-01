@@ -74,6 +74,84 @@ export interface Robustness {
   structuralBreaks: StructuralBreakPoint[];
 }
 
+export interface FeatureValidationSpec {
+  featureName: string;
+  defaultTarget: string;
+  /** "positive" | "negative" | "two_sided" | "unknown" */
+  expectedDirection: string;
+  /** "monotonic_increasing" | "monotonic_decreasing" | "u_shaped" | "inverted_u" | "tail_only" | "none" */
+  expectedShape: string;
+  stationarityRequired: boolean;
+  monotonicityRequired: boolean;
+  intent: string;
+  notes: string[];
+}
+
+export interface IcCi {
+  point: number;
+  se: number;
+  ciLower: number;
+  ciUpper: number;
+  confidenceLevel: number;
+  nEffUsed: number;
+  valid: boolean;
+  seApproximationNote: string;
+}
+
+export interface MultipleTestingWarning {
+  rawNwPValue: number;
+  holmPValue: number;
+  nFamily: number;
+  note: string;
+}
+
+export interface CostViability {
+  grossSpreadBps: number;
+  costAssumptionOneWayBps: number;
+  costErasureOneWayBps: number;
+  netSpreadBpsAtAssumption: number;
+  viableAtAssumption: boolean;
+  note: string;
+}
+
+export interface ValidationScreen {
+  name: string;
+  description: string;
+  passed: boolean;
+  requiredForStage1: boolean;
+  failureReasons: string[];
+}
+
+export interface FeatureStageCriterion {
+  name: string;
+  description: string;
+  currentValue: number;
+  requiredRepr: string;
+  met: boolean;
+}
+
+export interface FeatureStageInfo {
+  /** 0 = Rejected, 1 = Statistical association, 2 = Research candidate, 3 = Paper-trading candidate. */
+  stage: 0 | 1 | 2 | 3;
+  label: string;
+  description: string;
+  nextStageLabel: string;
+  advanceCriteria: FeatureStageCriterion[];
+  failedScreens: string[];
+}
+
+export interface FeatureValidationVerdict {
+  statisticalScreen: ValidationScreen;
+  economicScreen: ValidationScreen;
+  oosScreen: ValidationScreen;
+  multipleTestingScreen: ValidationScreen;
+  multipleTesting: MultipleTestingWarning;
+  costViability: CostViability;
+  icCi: IcCi;
+  stageInfo: FeatureStageInfo;
+  finalDecision: string;
+}
+
 export interface ResearchResult {
   success: boolean;
   ticker: string;
@@ -97,6 +175,8 @@ export interface ResearchResult {
   monotonicityRatio: number;
   passedValidation: boolean;
   robustness?: Robustness;
+  featureSpec?: FeatureValidationSpec | null;
+  validationVerdict?: FeatureValidationVerdict | null;
   error?: string;
 }
 
@@ -570,6 +650,30 @@ const RUN_FEATURE_RESEARCH_MUTATION = `
         }
         structuralBreaks { date icBefore icAfter tStat significant }
       }
+      featureSpec {
+        featureName defaultTarget expectedDirection expectedShape
+        stationarityRequired monotonicityRequired intent notes
+      }
+      validationVerdict {
+        statisticalScreen { name description passed requiredForStage1 failureReasons }
+        economicScreen { name description passed requiredForStage1 failureReasons }
+        oosScreen { name description passed requiredForStage1 failureReasons }
+        multipleTestingScreen { name description passed requiredForStage1 failureReasons }
+        multipleTesting { rawNwPValue holmPValue nFamily note }
+        costViability {
+          grossSpreadBps costAssumptionOneWayBps costErasureOneWayBps
+          netSpreadBpsAtAssumption viableAtAssumption note
+        }
+        icCi {
+          point se ciLower ciUpper confidenceLevel nEffUsed valid seApproximationNote
+        }
+        stageInfo {
+          stage label description nextStageLabel
+          advanceCriteria { name description currentValue requiredRepr met }
+          failedScreens
+        }
+        finalDecision
+      }
       error
     }
   }
@@ -839,6 +943,30 @@ const RUN_OPTIONS_FEATURE_MUTATION = `
           overfitFlag oosRetention oosRetentionLabel
         }
         structuralBreaks { date icBefore icAfter tStat significant }
+      }
+      featureSpec {
+        featureName defaultTarget expectedDirection expectedShape
+        stationarityRequired monotonicityRequired intent notes
+      }
+      validationVerdict {
+        statisticalScreen { name description passed requiredForStage1 failureReasons }
+        economicScreen { name description passed requiredForStage1 failureReasons }
+        oosScreen { name description passed requiredForStage1 failureReasons }
+        multipleTestingScreen { name description passed requiredForStage1 failureReasons }
+        multipleTesting { rawNwPValue holmPValue nFamily note }
+        costViability {
+          grossSpreadBps costAssumptionOneWayBps costErasureOneWayBps
+          netSpreadBpsAtAssumption viableAtAssumption note
+        }
+        icCi {
+          point se ciLower ciUpper confidenceLevel nEffUsed valid seApproximationNote
+        }
+        stageInfo {
+          stage label description nextStageLabel
+          advanceCriteria { name description currentValue requiredRepr met }
+          failedScreens
+        }
+        finalDecision
       }
       error
     }
