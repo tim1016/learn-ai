@@ -164,16 +164,28 @@ masquerading as 15.
 
 ```python
 expected_delta_ms = horizon_minutes * 60_000
-if int(timestamp[i + horizon_bars] - timestamp[i]) != expected_delta_ms:
+upper_delta_ms    = expected_delta_ms + max_overshoot_minutes * 60_000
+
+delta = int(timestamp[i + horizon_bars] - timestamp[i])
+if delta < expected_delta_ms or delta > upper_delta_ms:
     forward_return[i] = NaN  # reason: window_gap
 ```
 
-Missing bars (halts, late-prints, feed gaps) cause the bar at
-`i + horizon_bars` to land at the wrong wall-clock time. Without the
-gate, a 1-minute series with one missing bar at `t=4` would silently
-compute a 16-minute return for the rows whose forward window crosses
-the gap. With the gate, those rows are NaN and the drop reason is
-attributed to `window_gap`.
+Missing bars (halts, late-prints, low-liquidity minutes in the
+Polygon Starter feed) cause the bar at `i + horizon_bars` to land at
+a slightly later wall-clock time than `t + horizon_minutes`.
+
+The gate accepts a tolerance of `max_overshoot_minutes`
+(default `min(horizon_minutes, 5)` — so 5 minutes for the standard
+15-minute horizon). Without any tolerance, real Polygon data was
+losing 30%+ of bars to single-minute gaps. With 5 minutes of slack,
+that drops to <2% on AAPL Q1 2025 — and the gate still catches the
+structural bug ChatGPT flagged: a 5-minute-bar caller asking for a
+"15-minute" horizon who somehow got a 75-minute window would land at
++60 minutes overshoot, far outside any sensible tolerance.
+
+`max_overshoot_minutes=0` recovers the strict gate; useful for
+regression tests asserting feed integrity.
 
 ### 4.3 Session masking (America/New_York)
 

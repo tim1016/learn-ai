@@ -121,6 +121,7 @@ def compute_forward_log_return(
     horizon_minutes: int = 15,
     bar_minutes: int | None = None,
     timezone: str = SESSION_TIMEZONE,
+    max_overshoot_minutes: int | None = None,
 ) -> TargetResult:
     """Time-aware, session-aware forward log return.
 
@@ -140,6 +141,17 @@ def compute_forward_log_return(
         IANA timezone for session-date masking. Default
         ``America/New_York``; pass another tz when validating non-US
         instruments.
+    max_overshoot_minutes : int | None
+        Tolerance on the forward-window timestamp delta. The bar at
+        ``t + horizon_bars`` is accepted if its actual delta from ``t``
+        is in ``[horizon_minutes, horizon_minutes + max_overshoot_minutes]``
+        wall-clock minutes. When None, defaults to
+        ``min(horizon_minutes, 5)`` — generous enough to absorb the
+        ~1-3 missing minutes that Polygon's 1-minute Starter feed leaves
+        in low-liquidity windows, but small enough that a 5-minute-bar
+        caller asking for "15-minute" can't quietly receive a 75-minute
+        target (75 vs 15 expected = 60 minute overshoot — well outside
+        any sensible tolerance).
 
     Returns
     -------
@@ -147,8 +159,8 @@ def compute_forward_log_return(
         Values + audit metadata. Values are NaN where any of:
 
         * the forward window crosses a session boundary,
-        * the bar at ``t + horizon_bars`` is not exactly
-          ``horizon_minutes * 60_000`` ms after ``t``,
+        * the bar at ``t + horizon_bars`` lands outside
+          ``[horizon_minutes, horizon_minutes + max_overshoot_minutes]``,
         * either close is non-positive,
         * the window would run off the end of the series.
 
@@ -186,6 +198,10 @@ def compute_forward_log_return(
 
     horizon_bars = horizon_minutes // bar_minutes
     expected_delta_ms = horizon_minutes * 60_000
+    if max_overshoot_minutes is None:
+        max_overshoot_minutes = min(horizon_minutes, 5)
+    max_overshoot_ms = max_overshoot_minutes * 60_000
+    upper_delta_ms = expected_delta_ms + max_overshoot_ms
 
     # Session date in caller-supplied tz (default NY) — UTC-date masking
     # would mis-classify the last few minutes of the US session.
@@ -208,7 +224,15 @@ def compute_forward_log_return(
         if sessions[i] != sessions[j]:
             reasons["cross_session"] += 1
             continue
-        if int(timestamps[j] - timestamps[i]) != expected_delta_ms:
+        delta_ms = int(timestamps[j] - timestamps[i])
+        # Accept the forward bar when the elapsed wall-clock time is
+        # in [horizon_minutes, horizon_minutes + max_overshoot_minutes].
+        # An overshoot up to ``max_overshoot_minutes`` is the natural
+        # consequence of missing minutes in the Polygon Starter feed
+        # (low-liquidity bars sometimes simply don't exist). An
+        # *undershoot* is impossible with strictly-monotone timestamps,
+        # but cheap to defend against; we still NaN it for safety.
+        if delta_ms < expected_delta_ms or delta_ms > upper_delta_ms:
             reasons["window_gap"] += 1
             continue
         if closes[i] <= 0 or closes[j] <= 0:
