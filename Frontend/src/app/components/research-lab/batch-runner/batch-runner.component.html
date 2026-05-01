@@ -82,47 +82,15 @@
     }
   </div>
 
-  <!-- Live progress + event log (data-lab style) -->
+  <!-- Shared live-progress panel — also used by feature-runner and signal-engine. -->
   @if (job(); as j) {
-    <div class="run-card mb-4" [attr.data-status]="j.status">
-      <div class="run-card-head">
-        <div class="run-card-title">
-          <i class="pi"
-             [class.pi-spin]="loading()"
-             [class.pi-spinner]="loading()"
-             [class.pi-check-circle]="j.status === 'completed'"
-             [class.pi-times-circle]="j.status === 'failed' || j.status === 'cancelled'"
-          ></i>
-          <span class="run-card-headline">{{ progressMessage() }}</span>
-        </div>
-        @if (j.total) {
-          <span class="run-card-counter">
-            {{ j.current ?? 0 }} / {{ j.total }} {{ j.unit ?? 'tickers' }}
-          </span>
-        }
-      </div>
-
-      @if (j.total && loading()) {
-        <div class="run-card-progress">
-          <div class="progress-track">
-            <div class="progress-fill" [style.width.%]="progressPercent()"></div>
-          </div>
-          <span class="progress-percent">{{ progressPercent() }}%</span>
-        </div>
-      }
-
-      <!-- Inline event log — accumulated since the run started. -->
-      @if (cumulativeLogs().length > 0) {
-        <div class="event-log">
-          @for (log of cumulativeLogs(); track log.ts + '_' + $index) {
-            <div class="log-line" [ngClass]="logLevelClass(log.level)">
-              <span class="log-time">{{ formatLogTime(log.ts) }}</span>
-              <span class="log-message">{{ log.message }}</span>
-            </div>
-          }
-        </div>
-      }
-    </div>
+    <app-run-progress-panel
+      class="block mb-4"
+      [job]="j"
+      [logs]="logEntries()"
+      title="Cross-sectional run"
+      (cancelRun)="onPanelCancel()"
+    />
   }
 
   @if (error(); as err) {

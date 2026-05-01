@@ -1,11 +1,19 @@
 """Research experiment orchestrator.
 
 Coordinates: data → feature → target → IC → stationarity → quantiles → report.
+
+Long-running for minute-bar studies, so the orchestrator accepts optional
+``on_phase`` / ``on_log`` / ``on_progress`` / ``cancel_check`` callables.
+The Jobs/SSE wrapper in ``app/routers/jobs.py`` plugs ``ProgressEmitter``
+into these so the run-progress panel shows what stage we're in. The
+callables are no-ops by default — synchronous callers (the existing
+GraphQL endpoint, tests) get the same behaviour as before.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
 import pandas as pd
@@ -28,6 +36,32 @@ from app.research.validation.quantile import compute_quantile_analysis
 from app.research.validation.robustness import RobustnessResult, compute_robustness
 
 logger = logging.getLogger(__name__)
+
+
+# Optional progress callbacks used by the Jobs/SSE wrapper. Default no-ops
+# keep synchronous callers (existing GraphQL endpoint, tests) unaffected.
+PhaseCallback = Callable[[str], None]
+LogCallback = Callable[[str, str], None]
+"""(message, level) — level is "info" / "warn" / "error"."""
+ProgressCallback = Callable[[int, int, str, "str | None"], None]
+"""(current, total, unit, message)."""
+CancelCallback = Callable[[], bool]
+
+
+def _noop_phase(phase: str) -> None:
+    return None
+
+
+def _noop_log(message: str, level: str = "info") -> None:
+    return None
+
+
+def _noop_progress(current: int, total: int, unit: str = "windows", message: str | None = None) -> None:
+    return None
+
+
+def _no_cancel() -> bool:
+    return False
 
 
 @dataclass
@@ -86,6 +120,10 @@ def run_feature_research(
     start_date: str,
     end_date: str,
     config: ResearchConfig | None = None,
+    on_phase: PhaseCallback = _noop_phase,
+    on_log: LogCallback = _noop_log,
+    on_progress: ProgressCallback = _noop_progress,
+    cancel_check: CancelCallback = _no_cancel,
 ) -> ResearchReport:
     """Run a complete feature validation experiment.
 
@@ -101,6 +139,8 @@ def run_feature_research(
         ISO date strings for the research window.
     config : ResearchConfig, optional
         Research parameters (uses defaults if None).
+    on_phase, on_log, on_progress, cancel_check :
+        Optional callbacks for the Jobs/SSE wrapper. Default no-ops.
 
     Returns
     -------
@@ -134,11 +174,13 @@ def run_feature_research(
         report.bars_used = len(bars)
         df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
 
-        # Step 1: Compute forward log return target.
-        # ``config.horizon`` was historically "horizon in bars" assuming
-        # 1-minute spacing; the new API takes minutes explicitly and
-        # infers/validates bar spacing so a 5-minute-bar caller can't
-        # silently get a 75-minute target.
+        # ── Phase: forward returns ───────────────────────────────────
+        cancel_check()
+        on_phase("compute_target")
+        on_log(
+            f"Computing forward log returns over {len(bars):,} bars "
+            f"(horizon = {config.horizon_minutes} min)"
+        )
         target_result = compute_forward_log_return(
             bars=bars,
             horizon_minutes=config.horizon_minutes,
@@ -152,10 +194,15 @@ def run_feature_research(
                 f"reasons={target_result.invalid_reason_counts})."
             )
 
-        # Step 2: Compute feature
+        # ── Phase: feature ───────────────────────────────────────────
+        on_phase("compute_feature")
+        on_log(f"Computing feature '{feature_name}' on {ticker}")
         feature_values = TechnicalFeatures.compute_feature(feature_name, bars)
 
-        # Step 3: Information Coefficient
+        # ── Phase: IC ────────────────────────────────────────────────
+        cancel_check()
+        on_phase("compute_ic")
+        on_log("Measuring information coefficient (rolling daily IC + Newey-West t-stat)")
         ic_result = compute_information_coefficient(
             feature_values,
             target_returns,
@@ -170,10 +217,16 @@ def run_feature_research(
         report.nw_t_stat = ic_result.nw_t_stat
         report.nw_p_value = ic_result.nw_p_value
         report.effective_n = ic_result.effective_n
+        on_log(
+            f"IC = {ic_result.mean_ic:+.4f} (Newey-West t = {ic_result.nw_t_stat:.2f}, "
+            f"p = {ic_result.nw_p_value:.4f}, effective N = {ic_result.effective_n:.0f})"
+        )
 
-        # Step 4: Stationarity test on the feature series
+        # ── Phase: stationarity ──────────────────────────────────────
+        on_phase("stationarity")
         clean_feature = feature_values.dropna().values
         if len(clean_feature) >= 20:
+            on_log("Running ADF and KPSS stationarity tests on the feature series")
             stationarity = run_stationarity_tests(
                 clean_feature,
                 adf_significance=config.adf_significance,
@@ -182,10 +235,18 @@ def run_feature_research(
             report.adf_pvalue = stationarity.adf_pvalue
             report.kpss_pvalue = stationarity.kpss_pvalue
             report.is_stationary = stationarity.is_stationary
+            on_log(
+                f"{'Stationary' if stationarity.is_stationary else 'Non-stationary'} "
+                f"(ADF p = {stationarity.adf_pvalue:.4f}, KPSS p = {stationarity.kpss_pvalue:.4f})"
+            )
         else:
+            on_log("Feature series too short for stationarity test — skipping", level="warn")
             logger.warning("[Research] Feature series too short for stationarity test")
 
-        # Step 5: Quantile analysis
+        # ── Phase: quantile ──────────────────────────────────────────
+        cancel_check()
+        on_phase("quantile")
+        on_log(f"Splitting feature into {config.n_bins} quantile buckets and checking monotonicity")
         quantile_result = compute_quantile_analysis(
             feature_values,
             target_returns,
@@ -195,18 +256,34 @@ def run_feature_research(
         report.quantile_bins = [asdict(b) for b in quantile_result.bins]
         report.is_monotonic = quantile_result.is_monotonic
         report.monotonicity_ratio = quantile_result.monotonicity_ratio
+        on_log(
+            f"{'Monotonic' if quantile_result.is_monotonic else 'Non-monotonic'} "
+            f"(monotonicity ratio = {quantile_result.monotonicity_ratio:.2f})"
+        )
 
-        # Step 6: Robustness analysis
+        # ── Phase: robustness ────────────────────────────────────────
+        cancel_check()
+        on_phase("robustness")
         if len(ic_result.daily_ic_values) >= 2:
+            on_log("Running robustness checks: monthly stability, regime breakdown, train/test split")
             report.robustness = compute_robustness(
                 daily_ic_values=ic_result.daily_ic_values,
                 daily_ic_dates=ic_result.daily_ic_dates,
                 bars=bars,
             )
+            if report.robustness is not None and report.robustness.train_test is not None:
+                tt = report.robustness.train_test
+                on_log(
+                    f"Out-of-sample retention = {tt.oos_retention:.0%} "
+                    f"(train IC {tt.train_mean_ic:+.4f} → test IC {tt.test_mean_ic:+.4f}, "
+                    f"{tt.test_days} test days)"
+                )
+        else:
+            on_log("Not enough daily IC values for robustness analysis — skipping", level="warn")
 
-        # Step 7: Per-feature validation verdict (4 screens + 0/1/2/3 ladder).
-        # Replaces the old single-boolean gate. ``passed_validation`` is
-        # retained as `stage >= 1` for callers that haven't migrated.
+        # ── Phase: validate ──────────────────────────────────────────
+        on_phase("validate")
+        on_log("Scoring feature against per-feature validation contract (4 screens, 0/1/2/3 ladder)")
         spec = get_spec(feature_name)
         report.feature_spec = spec
 
@@ -260,6 +337,13 @@ def run_feature_research(
         # is **not** a passed-validation result for unmigrated callers.
         report.passed_validation = report.validation_verdict.stage_info.stage >= 2
 
+        stage_label = report.validation_verdict.stage_info.label
+        on_log(
+            f"Verdict: Stage {report.validation_verdict.stage_info.stage} — {stage_label}",
+            level="info" if report.passed_validation else "warn",
+        )
+        on_progress(1, 1, "stages", "Validation complete")
+
         logger.info(
             "[Research] Complete: %s %s — stage=%d (%s) IC=%.4f, NW p=%.4f, "
             "stationary=%s, monotonic=%s, OOS retention=%.0f%%, "
@@ -277,6 +361,13 @@ def run_feature_research(
         )
 
     except Exception as e:
+        # Defer-to-wrapper: when the SSE wrapper's cancel_check raises
+        # JobCancelled, we let it propagate so run_in_thread emits
+        # job.cancelled instead of job.failed. We can't import
+        # JobCancelled here (research → jobs would be a layering
+        # inversion), so we sniff by exception class name.
+        if type(e).__name__ == "JobCancelled":
+            raise
         logger.error("[Research] Error: %s", str(e), exc_info=True)
         report.error = str(e)
         report.passed_validation = False

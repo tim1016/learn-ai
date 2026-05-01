@@ -1,0 +1,117 @@
+.run-progress-panel {
+  border: 1px solid var(--surface-border, #e5e7eb);
+  border-radius: 8px;
+  padding: 1rem;
+  background: var(--surface-card, #fff);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+
+  .panel-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+
+  .status-pill {
+    margin-left: 0.25rem;
+  }
+
+  .elapsed {
+    color: var(--text-color-secondary, #64748b);
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cancel-btn {
+    margin-left: auto;
+  }
+}
+
+.phase-line {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.9rem;
+
+  .phase-label {
+    font-weight: 500;
+  }
+
+  .phase-detail {
+    color: var(--text-color-secondary, #64748b);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.progress-bar {
+  ::ng-deep .p-progressbar {
+    height: 6px;
+  }
+}
+
+.logs-container {
+  max-height: 320px;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  background: var(--surface-50, #f8fafc);
+  border: 1px solid var(--surface-border, #e5e7eb);
+  border-radius: 4px;
+  padding: 0.5rem;
+}
+
+.logs-empty {
+  color: var(--text-color-secondary, #94a3b8);
+  font-style: italic;
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.log-row {
+  display: grid;
+  grid-template-columns: 4.5rem 1.5rem 1fr;
+  gap: 0.25rem;
+  padding: 0.1rem 0;
+  border-left: 3px solid transparent;
+  padding-left: 0.5rem;
+
+  .log-time {
+    color: var(--text-color-secondary, #94a3b8);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .log-glyph {
+    text-align: center;
+  }
+
+  .log-message {
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+}
+
+.log-info {
+  border-left-color: var(--blue-300, #93c5fd);
+}
+
+.log-success {
+  border-left-color: var(--green-400, #4ade80);
+  color: var(--green-700, #15803d);
+}
+
+.log-warn {
+  border-left-color: var(--yellow-400, #facc15);
+  color: var(--yellow-800, #854d0e);
+}
+
+.log-error {
+  border-left-color: var(--red-500, #ef4444);
+  color: var(--red-700, #b91c1c);
+}

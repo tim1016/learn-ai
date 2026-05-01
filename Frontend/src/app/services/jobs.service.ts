@@ -30,6 +30,10 @@ export interface JobState {
   type: string;
   status: JobStatus;
   phase?: string;
+  /** User-facing label for the current phase. Set to the server-supplied
+   *  ``friendly`` field when present; falls back to a humanised form of
+   *  the phase id. UIs should prefer this over ``phase`` when rendering. */
+  phaseLabel?: string;
   current?: number;
   total?: number;
   unit?: string;
@@ -37,8 +41,20 @@ export interface JobState {
   errorCode?: string;
   errorMessage?: string;
   resultUrl?: string;
-  // Last few log lines so the drawer can show them inline.
-  recentLogs: { level: string; message: string; ts: number }[];
+  /** True when the result was served from the result cache instead of a
+   *  fresh run. UIs should skip the live-progress panel in this case and
+   *  render the report directly with a "Loaded from cache" badge. */
+  cached?: boolean;
+  /** Wall-clock millis when the cache entry was originally written. */
+  cachedAt?: number;
+  // Last few log lines so the drawer can show them inline. ``seq`` is a
+  // monotonic per-job counter, used by consumers to dedupe entries that
+  // arrive in the same wall-clock millisecond (``Date.now()`` collisions
+  // happen under bursty SSE traffic).
+  recentLogs: { level: string; message: string; ts: number; seq: number }[];
+  // Next sequence number to assign to a log entry. Incremented every
+  // time a ``job.log`` event is folded in.
+  logSeq: number;
   // Wall-clock at which the job started/finished, for elapsed display.
   startedAt?: number;
   finishedAt?: number;
@@ -108,6 +124,7 @@ export class JobsService {
       type,
       status: 'queued',
       recentLogs: [],
+      logSeq: 0,
     });
     this.openStream(resp.id);
     return resp.id;
@@ -151,6 +168,7 @@ export class JobsService {
           phase: s.phase,
           startedAt: s.started_at ? Number(s.started_at) : undefined,
           recentLogs: [],
+          logSeq: 0,
         });
         if (!TERMINAL.includes(status)) {
           this.openStream(s.id);
@@ -223,9 +241,27 @@ export class JobsService {
 export function applyJobEvent(prev: JobState, evt: JobEvent): JobState {
   switch (evt.type) {
     case 'job.started':
-      return { ...prev, status: 'running', startedAt: Date.now() };
-    case 'job.phase':
-      return { ...prev, phase: evt['phase'] as string };
+      return {
+        ...prev,
+        status: 'running',
+        // Preserve the original start time on a replayed event:
+        // ``EventSource`` reconnects can redeliver historical events,
+        // and ``resumeActive()`` may have already populated this from
+        // the server-derived ``started_at``. Resetting to ``Date.now()``
+        // here would make the elapsed timer jump.
+        startedAt: prev.startedAt ?? Date.now(),
+        cached: (evt['cached'] as boolean) ?? prev.cached,
+      };
+    case 'job.phase': {
+      const phase = evt['phase'] as string;
+      return {
+        ...prev,
+        phase,
+        // Server may emit a friendly label inline; otherwise the UI
+        // falls back to humanising the phase id.
+        phaseLabel: (evt['friendly'] as string) ?? humanisePhase(phase),
+      };
+    }
     case 'job.progress':
       return {
         ...prev,
@@ -239,9 +275,10 @@ export function applyJobEvent(prev: JobState, evt: JobEvent): JobState {
         level: (evt['level'] as string) ?? 'info',
         message: (evt['message'] as string) ?? '',
         ts: Date.now(),
+        seq: prev.logSeq,
       };
       const recent = [...prev.recentLogs, log].slice(-MAX_RECENT_LOGS);
-      return { ...prev, recentLogs: recent };
+      return { ...prev, recentLogs: recent, logSeq: prev.logSeq + 1 };
     }
     case 'job.completed':
       return {
@@ -249,6 +286,8 @@ export function applyJobEvent(prev: JobState, evt: JobEvent): JobState {
         status: 'completed',
         finishedAt: Date.now(),
         resultUrl: evt['result_url'] as string,
+        cached: (evt['cached'] as boolean) ?? prev.cached ?? false,
+        cachedAt: (evt['cached_at'] as number) ?? prev.cachedAt,
       };
     case 'job.failed':
       return {
@@ -268,4 +307,16 @@ export function applyJobEvent(prev: JobState, evt: JobEvent): JobState {
     default:
       return prev;
   }
+}
+
+/** ``ticker_3_AAPL`` → ``Ticker 3 AAPL``. Mirrors the Python helper in
+ *  ``app/jobs/phases.py``; runners that don't ship a vocabulary entry
+ *  still produce a readable label. */
+export function humanisePhase(phaseId: string | undefined): string {
+  if (!phaseId) return '';
+  const parts = phaseId.replace(/-/g, '_').split('_').filter(Boolean);
+  if (parts.length === 0) return phaseId;
+  return parts
+    .map((p) => (p === p.toLowerCase() ? p[0].toUpperCase() + p.slice(1) : p))
+    .join(' ');
 }

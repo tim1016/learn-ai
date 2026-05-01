@@ -5,6 +5,9 @@
       <div class="summary-content">
         <i class="pi pi-check-circle text-green-600"></i>
         <span class="summary-text">{{ runSummary }}</span>
+        @if (cached()) {
+          <p-tag value="Loaded from cache" severity="info" />
+        }
       </div>
       <div class="summary-actions">
         <p-button
@@ -31,7 +34,6 @@
   @if (!formCollapsed()) {
     <div class="form-section">
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-        <!-- Ticker -->
         <div class="flex flex-col gap-2">
           <label for="ticker" class="font-semibold text-sm text-gray-700">Ticker</label>
           <input
@@ -44,7 +46,6 @@
           />
         </div>
 
-        <!-- Feature -->
         <div class="flex flex-col gap-2">
           <label for="feature" class="font-semibold text-sm text-gray-700">Feature</label>
           <p-select
@@ -58,7 +59,6 @@
           />
         </div>
 
-        <!-- Timespan -->
         <div class="flex flex-col gap-2">
           <label for="timespan" class="font-semibold text-sm text-gray-700">Timespan</label>
           <p-select
@@ -74,7 +74,6 @@
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-        <!-- From Date -->
         <div class="flex flex-col gap-2">
           <label for="fromDate" class="font-semibold text-sm text-gray-700">From Date</label>
           <input
@@ -87,7 +86,6 @@
           />
         </div>
 
-        <!-- To Date -->
         <div class="flex flex-col gap-2">
           <label for="toDate" class="font-semibold text-sm text-gray-700">To Date</label>
           <input
@@ -100,7 +98,6 @@
           />
         </div>
 
-        <!-- Multiplier -->
         <div class="flex flex-col gap-2">
           <label for="multiplier" class="font-semibold text-sm text-gray-700">Multiplier</label>
           <input
@@ -118,6 +115,18 @@
         <p-message severity="warn" [text]="warn" styleClass="w-full mb-3" />
       }
 
+      <div class="mb-3 flex items-center gap-2">
+        <p-checkbox
+          [binary]="true"
+          [ngModel]="forceRun()"
+          (ngModelChange)="forceRun.set($event)"
+          inputId="force-run"
+        />
+        <label for="force-run" class="text-sm text-gray-600">
+          Force re-run (bypass cache)
+        </label>
+      </div>
+
       <div class="mb-4">
         <p-button
           label="Run Feature Research"
@@ -130,14 +139,17 @@
     </div>
   }
 
-  @if (loading()) {
-    <div class="flex items-center gap-3 my-6">
-      <p-progressSpinner
-        [style]="{ width: '30px', height: '30px' }"
-        strokeWidth="4"
+  <!-- Live progress panel (skipped on cache hits — the report renders instantly). -->
+  @if (job(); as j) {
+    @if (!cached()) {
+      <app-run-progress-panel
+        class="block mb-4"
+        [job]="j"
+        [logs]="logEntries()"
+        title="Feature research run"
+        (cancelRun)="cancelRun()"
       />
-      <span class="text-gray-500">Running IC analysis...</span>
-    </div>
+    }
   }
 
   @if (error(); as err) {

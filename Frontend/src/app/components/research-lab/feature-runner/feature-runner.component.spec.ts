@@ -1,45 +1,50 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { HttpClientTestingModule } from '@angular/common/http/testing';
 import { NoopAnimationsModule } from '@angular/platform-browser/animations';
-import { FeatureRunnerComponent } from './feature-runner.component';
-import { ResearchService, ResearchResult } from '../../../services/research.service';
-import { of, throwError } from 'rxjs';
+import { signal, computed, type Signal } from '@angular/core';
 import { vi } from 'vitest';
+
+import { FeatureRunnerComponent } from './feature-runner.component';
+import { JobsService, type JobState } from '../../../services/jobs.service';
+
+/**
+ * The feature runner moved from a synchronous `ResearchService` call to a
+ * job-based SSE flow (`JobsService.startJob`). The component is now
+ * mostly a thin orchestrator over `JobsService`, so the unit test focuses
+ * on what the component actually owns: the `canRun` derived state and
+ * the `runResearch()` → `JobsService.startJob` wiring. The full
+ * SSE-driven completion flow is exercised end-to-end in the runner test
+ * suite under `tests/jobs` and via manual smoke tests; recreating it
+ * here would just be re-mocking `JobsService` internals.
+ */
+
+interface JobsServiceMock {
+  jobs: Signal<JobState[]>;
+  job: (id: string) => JobState | undefined;
+  startJob: ReturnType<typeof vi.fn>;
+  cancelJob: ReturnType<typeof vi.fn>;
+  fetchResult: ReturnType<typeof vi.fn>;
+  dismiss: ReturnType<typeof vi.fn>;
+}
 
 describe('FeatureRunnerComponent', () => {
   let component: FeatureRunnerComponent;
   let fixture: ComponentFixture<FeatureRunnerComponent>;
-  let researchServiceMock: { runFeatureResearch: ReturnType<typeof vi.fn> };
-
-  function createMockResult(): ResearchResult {
-    return {
-      success: true,
-      ticker: 'AAPL',
-      featureName: 'momentum_5m',
-      startDate: '2024-01-01',
-      endDate: '2024-03-31',
-      barsUsed: 200,
-      meanIC: 0.15,
-      icTStat: 2.5,
-      icPValue: 0.02,
-      icValues: [0.12, 0.18],
-      icDates: ['2024-01-01', '2024-01-02'],
-      adfPvalue: 0.001,
-      kpssPvalue: 0.3,
-      isStationary: true,
-      quantileBins: [],
-      isMonotonic: true,
-      monotonicityRatio: 1.0,
-      nwTStat: 2.3,
-      nwPValue: 0.025,
-      effectiveN: 180,
-      passedValidation: true,
-    };
-  }
+  let jobsServiceMock: JobsServiceMock;
+  // Backing signal so tests can simulate "this id is in a running job".
+  let jobsByIdSignal: ReturnType<typeof signal<Map<string, JobState>>>;
 
   beforeEach(async () => {
-    researchServiceMock = {
-      runFeatureResearch: vi.fn(),
+    jobsByIdSignal = signal<Map<string, JobState>>(new Map());
+    const jobsList = computed(() => Array.from(jobsByIdSignal().values()));
+
+    jobsServiceMock = {
+      jobs: jobsList,
+      job: (id: string) => jobsByIdSignal().get(id),
+      startJob: vi.fn().mockResolvedValue('job-id-1'),
+      cancelJob: vi.fn().mockResolvedValue(undefined),
+      fetchResult: vi.fn().mockResolvedValue({}),
+      dismiss: vi.fn(),
     };
 
     await TestBed.configureTestingModule({
@@ -49,7 +54,7 @@ describe('FeatureRunnerComponent', () => {
         NoopAnimationsModule,
       ],
       providers: [
-        { provide: ResearchService, useValue: researchServiceMock },
+        { provide: JobsService, useValue: jobsServiceMock },
       ],
     }).compileComponents();
 
@@ -62,47 +67,64 @@ describe('FeatureRunnerComponent', () => {
     expect(component).toBeTruthy();
   });
 
-  it('should have canRun true when all fields are filled and not loading', () => {
-    component.ticker.set('AAPL');
-    component.featureName.set('momentum_5m');
-    component.fromDate.set('2024-01-01');
-    component.toDate.set('2024-03-31');
-    component.loading.set(false);
-
+  it('canRun is true with the default form values and no in-flight job', () => {
+    // The component seeds AAPL / momentum_5m / 2024-01-01 / 2024-03-31
+    // in its signals; that's enough to satisfy `canRun`.
     expect(component.canRun()).toBe(true);
   });
 
-  it('should have canRun false when ticker is empty', () => {
+  it('canRun is false when the ticker is empty', () => {
     component.ticker.set('');
     expect(component.canRun()).toBe(false);
   });
 
-  it('should have canRun false when loading', () => {
-    component.loading.set(true);
+  it('canRun is false while a job is running', () => {
+    component.jobId.set('job-id-1');
+    jobsByIdSignal.set(
+      new Map<string, JobState>([
+        [
+          'job-id-1',
+          {
+            id: 'job-id-1',
+            type: 'feature_research',
+            status: 'running',
+            recentLogs: [],
+            logSeq: 0,
+          },
+        ],
+      ]),
+    );
+
+    expect(component.loading()).toBe(true);
     expect(component.canRun()).toBe(false);
   });
 
-  it('should call researchService and set result on success', () => {
-    const mockResult = createMockResult();
-    researchServiceMock.runFeatureResearch.mockReturnValue(of(mockResult));
+  it('runResearch dispatches the feature_research job via JobsService', async () => {
+    component.ticker.set('aapl'); // verify the upper-casing path
+    component.featureName.set('momentum_5m');
+    component.fromDate.set('2024-01-01');
+    component.toDate.set('2024-03-31');
 
-    component.runResearch();
+    await component.runResearch();
 
-    expect(researchServiceMock.runFeatureResearch).toHaveBeenCalledOnce();
-    expect(component.result()).toEqual(mockResult);
-    expect(component.loading()).toBe(false);
-    expect(component.error()).toBeNull();
+    expect(jobsServiceMock.startJob).toHaveBeenCalledOnce();
+    const [type, payload] = jobsServiceMock.startJob.mock.calls[0];
+    expect(type).toBe('feature_research');
+    expect(payload).toMatchObject({
+      ticker: 'AAPL',
+      feature_name: 'momentum_5m',
+      from_date: '2024-01-01',
+      to_date: '2024-03-31',
+    });
+    expect(component.jobId()).toBe('job-id-1');
   });
 
-  it('should set error on service failure', () => {
-    researchServiceMock.runFeatureResearch.mockReturnValue(
-      throwError(() => new Error('Network error'))
-    );
+  it('runResearch surfaces a startJob failure into the error signal', async () => {
+    jobsServiceMock.startJob.mockRejectedValueOnce(new Error('Network error'));
 
-    component.runResearch();
+    await component.runResearch();
 
     expect(component.error()).toBe('Network error');
-    expect(component.result()).toBeNull();
-    expect(component.loading()).toBe(false);
+    expect(component.jobId()).toBeNull();
   });
 });

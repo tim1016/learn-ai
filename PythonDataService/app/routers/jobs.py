@@ -23,12 +23,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from app.jobs import cache as result_cache
+from app.jobs.phases import friendly as friendly_phase
 from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.models.requests import DatasetGenerationRequest
@@ -36,6 +38,10 @@ from app.research.batch_runner import (
     CrossSectionalReport,
     run_cross_sectional_study,
 )
+from app.research.config import ResearchConfig
+from app.research.runner import run_feature_research
+from app.research.signal.config import SignalConfig
+from app.research.signal.engine import run_signal_engine
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from app.services.dataset_service import RunCancelledError
 from app.services.polygon_client import PolygonClientService
@@ -43,6 +49,12 @@ from app.services.rule_based_backtest import (
     RuleBasedBacktestResult,
     run_rule_based_backtest,
 )
+
+# Polygon-supported aggregate granularities; the runners only exercise
+# minute/hour/day/week today, but the broader set is allowed because the
+# rule-based backtest path accepts whatever the engine accepts.
+Timespan = Literal["minute", "hour", "day", "week", "month", "quarter", "year"]
+DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -116,6 +128,42 @@ class CrossSectionalJobRequest(_CamelCaseModel):
     from_date: str
     to_date: str
     target_type: str = "directional"
+    force: bool = False
+    """Skip the result cache and always re-run. Default: serve from
+    cache if a prior run with identical params is still warm."""
+
+
+class FeatureResearchJobRequest(_CamelCaseModel):
+    """Body of POST /api/jobs-internal/feature-research.
+
+    The runner fetches bars from Polygon itself — the Frontend sends only
+    the symbol + date range + feature, no payload of OHLCV. This keeps
+    the .NET round-trip small and matches the cross-sectional pattern.
+    """
+
+    job_id: str = Field(..., min_length=1)
+    ticker: str = Field(..., min_length=1)
+    feature_name: str = Field(..., min_length=1)
+    from_date: str = Field(..., pattern=DATE_PATTERN)
+    to_date: str = Field(..., pattern=DATE_PATTERN)
+    multiplier: int = Field(1, ge=1)
+    timespan: Timespan = "minute"
+    force: bool = False
+
+
+class SignalEngineJobRequest(_CamelCaseModel):
+    """Body of POST /api/jobs-internal/signal-engine."""
+
+    job_id: str = Field(..., min_length=1)
+    ticker: str = Field(..., min_length=1)
+    feature_name: str = Field(..., min_length=1)
+    from_date: str = Field(..., pattern=DATE_PATTERN)
+    to_date: str = Field(..., pattern=DATE_PATTERN)
+    multiplier: int = Field(15, ge=1)
+    timespan: Timespan = "minute"
+    flip_sign: bool = True
+    regime_gate_enabled: bool = True
+    force: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +264,10 @@ async def start_dataset_zip_job(req: DatasetZipJobRequest) -> dict:
             emit.emit_event(event.get("type", "event"), {k: v for k, v in event.items() if k != "type"})
 
         def cancel_check() -> bool:
-            return cancel.should_cancel()
+            # Raises JobCancelled when set; otherwise returns False so
+            # call sites can use it either as a poll or as a sync barrier.
+            cancel.raise_if_cancelled()
+            return False
 
         emit.phase("loading_bars")
         try:
@@ -332,18 +383,39 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
     optional ``on_phase`` / ``on_log`` / ``on_progress`` callbacks. The
     Frontend's run-dock subscribes to the SSE stream and renders each
     ticker's status as it lands.
+
+    A successful prior run with identical params is served from cache —
+    the response carries ``status=cached`` and the worker thread is
+    skipped. Pass ``force=true`` in the body to bypass the cache.
     """
     if not req.tickers:
         raise HTTPException(status_code=400, detail="tickers list is required")
     if not req.feature_name.strip():
         raise HTTPException(status_code=400, detail="feature_name is required")
 
+    cache_params = {
+        "feature_name": req.feature_name,
+        "tickers": req.tickers,
+        "from_date": req.from_date,
+        "to_date": req.to_date,
+        "target_type": req.target_type,
+    }
+    if not req.force:
+        hit = result_cache.lookup("cross_sectional", cache_params)
+        if hit is not None:
+            _, cached = hit
+            result_cache.serve_cached_result(req.job_id, "cross_sectional", cached)
+            return {"job_id": req.job_id, "status": "cached"}
+
     def work(emit: ProgressEmitter, cancel) -> dict:
         cancel.raise_if_cancelled()
         emit.phase("starting")
         emit.log(
-            f"Cross-sectional study: feature={req.feature_name}, "
-            f"target={req.target_type}, tickers={len(req.tickers)}"
+            f"Starting cross-sectional study on {len(req.tickers)} ticker"
+            f"{'' if len(req.tickers) == 1 else 's'} "
+            f"({', '.join(t.upper() for t in req.tickers[:5])}"
+            f"{'…' if len(req.tickers) > 5 else ''}) "
+            f"for feature '{req.feature_name}'"
         )
 
         def on_phase(phase: str) -> None:
@@ -362,7 +434,10 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
             )
 
         def cancel_check() -> bool:
-            return cancel.should_cancel()
+            # Raises JobCancelled when set; otherwise returns False so
+            # call sites can use it either as a poll or as a sync barrier.
+            cancel.raise_if_cancelled()
+            return False
 
         report: CrossSectionalReport = run_cross_sectional_study(
             feature_name=req.feature_name,
@@ -386,7 +461,7 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
         # alias for the raw count so any older consumer keeps working;
         # new consumers should use ``tickers_tested_raw`` /
         # ``tickers_valid`` / ``validity_summary``.
-        return {
+        result = {
             "success": True,
             "feature_name": report.feature_name,
             "target_type": report.target_type,
@@ -407,6 +482,8 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
             "ticker_results": report.ticker_results,
             "summary": report.summary,
         }
+        result_cache.store("cross_sectional", cache_params, result)
+        return result
 
     run_in_thread(
         req.job_id,
@@ -417,6 +494,250 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
         # make no calls. Force a Redis check on every call to honour
         # cancel requests promptly even mid-ticker.
         cancel_check_every_n=1,
+    )
+    return {"job_id": req.job_id, "status": "queued"}
+
+
+# ---------------------------------------------------------------------------
+# Feature research / signal engine — single-ticker job dispatch
+# ---------------------------------------------------------------------------
+
+
+def _emit_friendly_phase(
+    emit: ProgressEmitter,
+    cancel,
+    job_type: str,
+    phase_id: str,
+    message: str | None = None,
+) -> None:
+    """Emit a phase event plus a friendly log line for it.
+
+    Centralizes the pattern of ``cancel.raise_if_cancelled() →
+    emit.phase(id) → emit.log(<friendly label>)`` so each stage in a
+    runner reads as one line. ``message`` overrides the default
+    friendly label (used when the runner has more specific information,
+    like "Computing IC across 1,260 windows").
+    """
+    cancel.raise_if_cancelled()
+    emit.phase(phase_id)
+    label = message if message is not None else friendly_phase(job_type, phase_id)
+    emit.log(label)
+
+
+@router.post("/feature-research", status_code=status.HTTP_202_ACCEPTED)
+async def start_feature_research_job(req: FeatureResearchJobRequest) -> dict:
+    """Kick off a feature-validation experiment in a worker thread.
+
+    The runner fetches bars from Polygon, computes the feature, runs IC
+    + stationarity + quantile + robustness analysis, and assigns a
+    0/1/2/3 stage verdict via the per-feature validation contract.
+    Phases stream over SSE so the user sees what's happening.
+
+    A successful prior run with identical (ticker, feature, range,
+    bar resolution) is served from cache. Pass ``force=true`` to bypass.
+    """
+    if not req.ticker.strip():
+        raise HTTPException(status_code=400, detail="ticker is required")
+    if not req.feature_name.strip():
+        raise HTTPException(status_code=400, detail="feature_name is required")
+
+    cache_params = {
+        "ticker": req.ticker.upper(),
+        "feature_name": req.feature_name,
+        "from_date": req.from_date,
+        "to_date": req.to_date,
+        "multiplier": req.multiplier,
+        "timespan": req.timespan,
+    }
+    if not req.force:
+        hit = result_cache.lookup("feature_research", cache_params)
+        if hit is not None:
+            _, cached = hit
+            result_cache.serve_cached_result(req.job_id, "feature_research", cached)
+            return {"job_id": req.job_id, "status": "cached"}
+
+    def work(emit: ProgressEmitter, cancel) -> dict:
+        ticker = req.ticker.upper()
+
+        # ── Phase: load bars ─────────────────────────────────────────
+        _emit_friendly_phase(
+            emit,
+            cancel,
+            "feature_research",
+            "loading_bars",
+            f"Loading {ticker} {req.multiplier}{req.timespan} bars "
+            f"from {req.from_date} to {req.to_date}",
+        )
+
+        bars = polygon_client.fetch_aggregates(
+            ticker=ticker,
+            multiplier=req.multiplier,
+            timespan=req.timespan,
+            from_date=req.from_date,
+            to_date=req.to_date,
+        )
+        if not bars:
+            raise ValueError(f"No bars returned for {ticker} in date range")
+        emit.log(f"Loaded {len(bars):,} bars")
+        emit.progress(current=len(bars), total=len(bars), unit="bars", message="bars loaded")
+
+        # The runner emits its own phase events via callbacks; we forward
+        # them through the friendly-label table so the UI text reads
+        # cleanly without the runner having to know about phase ids.
+        def on_phase(phase: str) -> None:
+            cancel.raise_if_cancelled()
+            emit.phase(phase)
+
+        def on_log(message: str, level: str = "info") -> None:
+            emit.log(message, level=level)
+
+        def on_progress(current: int, total: int, unit: str = "windows", message: str | None = None) -> None:
+            emit.progress(current=current, total=total, unit=unit, message=message)
+
+        def cancel_check() -> bool:
+            # Raises JobCancelled when set; otherwise returns False so
+            # call sites can use it either as a poll or as a sync barrier.
+            cancel.raise_if_cancelled()
+            return False
+
+        report = run_feature_research(
+            ticker=ticker,
+            feature_name=req.feature_name,
+            bars=bars,
+            start_date=req.from_date,
+            end_date=req.to_date,
+            config=ResearchConfig(),
+            on_phase=on_phase,
+            on_log=on_log,
+            on_progress=on_progress,
+            cancel_check=cancel_check,
+        )
+
+        if report.error:
+            # Surface the failure as an exception so run_in_thread emits
+            # job.failed (the runner caught the exception internally to
+            # populate report.error; here we re-raise so the SSE consumer
+            # sees a clean terminal event instead of "completed but
+            # error_field=…").
+            raise ValueError(report.error)
+
+        cancel.raise_if_cancelled()
+        _emit_friendly_phase(emit, cancel, "feature_research", "completed")
+
+        result = _serialize_feature_report(report)
+        result_cache.store("feature_research", cache_params, result)
+        return result
+
+    run_in_thread(
+        req.job_id,
+        work,
+        thread_name=f"feature-{req.job_id[:8]}",
+        cancel_check_every_n=100,
+    )
+    return {"job_id": req.job_id, "status": "queued"}
+
+
+@router.post("/signal-engine", status_code=status.HTTP_202_ACCEPTED)
+async def start_signal_engine_job(req: SignalEngineJobRequest) -> dict:
+    """Kick off a signal-engine run in a worker thread.
+
+    Eight phases (load bars → graduation). Long phases (backtest grid,
+    walk-forward) emit fine-grained ``on_progress`` so the bar moves
+    while the worker is mid-sweep.
+    """
+    if not req.ticker.strip():
+        raise HTTPException(status_code=400, detail="ticker is required")
+    if not req.feature_name.strip():
+        raise HTTPException(status_code=400, detail="feature_name is required")
+
+    cache_params = {
+        "ticker": req.ticker.upper(),
+        "feature_name": req.feature_name,
+        "from_date": req.from_date,
+        "to_date": req.to_date,
+        "multiplier": req.multiplier,
+        "timespan": req.timespan,
+        "flip_sign": req.flip_sign,
+        "regime_gate_enabled": req.regime_gate_enabled,
+    }
+    if not req.force:
+        hit = result_cache.lookup("signal_engine", cache_params)
+        if hit is not None:
+            _, cached = hit
+            result_cache.serve_cached_result(req.job_id, "signal_engine", cached)
+            return {"job_id": req.job_id, "status": "cached"}
+
+    def work(emit: ProgressEmitter, cancel) -> dict:
+        ticker = req.ticker.upper()
+
+        _emit_friendly_phase(
+            emit,
+            cancel,
+            "signal_engine",
+            "loading_bars",
+            f"Loading {ticker} {req.multiplier}{req.timespan} bars "
+            f"from {req.from_date} to {req.to_date}",
+        )
+        bars = polygon_client.fetch_aggregates(
+            ticker=ticker,
+            multiplier=req.multiplier,
+            timespan=req.timespan,
+            from_date=req.from_date,
+            to_date=req.to_date,
+        )
+        if not bars:
+            raise ValueError(f"No bars returned for {ticker} in date range")
+        emit.log(f"Loaded {len(bars):,} bars")
+
+        def on_phase(phase: str) -> None:
+            cancel.raise_if_cancelled()
+            emit.phase(phase)
+
+        def on_log(message: str, level: str = "info") -> None:
+            emit.log(message, level=level)
+
+        def on_progress(current: int, total: int, unit: str = "configs", message: str | None = None) -> None:
+            emit.progress(current=current, total=total, unit=unit, message=message)
+
+        def cancel_check() -> bool:
+            # Raises JobCancelled when set; otherwise returns False so
+            # call sites can use it either as a poll or as a sync barrier.
+            cancel.raise_if_cancelled()
+            return False
+
+        config = SignalConfig(
+            feature_name=req.feature_name,
+            flip_sign=req.flip_sign,
+            regime_gate_enabled=req.regime_gate_enabled,
+        )
+        report = run_signal_engine(
+            ticker=ticker,
+            feature_name=req.feature_name,
+            bars=bars,
+            start_date=req.from_date,
+            end_date=req.to_date,
+            config=config,
+            on_phase=on_phase,
+            on_log=on_log,
+            on_progress=on_progress,
+            cancel_check=cancel_check,
+        )
+
+        if report.error:
+            raise ValueError(report.error)
+
+        cancel.raise_if_cancelled()
+        _emit_friendly_phase(emit, cancel, "signal_engine", "completed")
+
+        result = _serialize_signal_report(report)
+        result_cache.store("signal_engine", cache_params, result)
+        return result
+
+    run_in_thread(
+        req.job_id,
+        work,
+        thread_name=f"signal-{req.job_id[:8]}",
+        cancel_check_every_n=50,
     )
     return {"job_id": req.job_id, "status": "queued"}
 
@@ -472,4 +793,112 @@ def _serialize(r: RuleBasedBacktestResult) -> dict:
             for t in r.trades
         ],
         "error": r.error,
+    }
+
+
+def _serialize_target(target: Any) -> dict:
+    """Project a ``TargetResult`` to a JSON-friendly dict that mirrors
+    the GraphQL ``TargetMetadata`` shape the Frontend already consumes
+    via ``runFeatureResearch``. The bulky ``values``/``timestamps``
+    Series are intentionally dropped — only the metadata that drives
+    the UI disclosure travels with the report. ``invalid_reason_counts``
+    is emitted as a list of ``{reason, count}`` so the async path
+    matches the projection Hot Chocolate emits for the sync path.
+    """
+    return {
+        "target_name": target.target_name,
+        "horizon_minutes": target.horizon_minutes,
+        "horizon_bars": target.horizon_bars,
+        "bar_minutes": target.bar_minutes,
+        "timezone": target.timezone,
+        "valid_count": target.valid_count,
+        "total_count": target.total_count,
+        "valid_ratio": target.valid_ratio,
+        "invalid_reason_counts": [
+            {"reason": reason, "count": count}
+            for reason, count in target.invalid_reason_counts.items()
+        ],
+    }
+
+
+def _serialize_feature_report(report: Any) -> dict:
+    """Serialize a ResearchReport for storage in the result cache and
+    delivery to the Frontend.
+
+    Hand-rolled (rather than ``asdict``) so we can keep the Pydantic-
+    response-model shape stable: nested dataclasses become dicts and we
+    flatten the validation verdict.
+    """
+    return {
+        "success": report.error is None,
+        "ticker": report.ticker,
+        "feature_name": report.feature_name,
+        "start_date": report.start_date,
+        "end_date": report.end_date,
+        "bars_used": report.bars_used,
+        "mean_ic": report.mean_ic,
+        "ic_t_stat": report.ic_t_stat,
+        "ic_p_value": report.ic_p_value,
+        "nw_t_stat": report.nw_t_stat,
+        "nw_p_value": report.nw_p_value,
+        "effective_n": report.effective_n,
+        "ic_values": report.ic_values,
+        "ic_dates": report.ic_dates,
+        "adf_pvalue": report.adf_pvalue,
+        "kpss_pvalue": report.kpss_pvalue,
+        "is_stationary": report.is_stationary,
+        "quantile_bins": report.quantile_bins,
+        "is_monotonic": report.is_monotonic,
+        "monotonicity_ratio": report.monotonicity_ratio,
+        "robustness": asdict(report.robustness) if report.robustness is not None else None,
+        "feature_spec": asdict(report.feature_spec) if report.feature_spec is not None else None,
+        "validation_verdict": (
+            asdict(report.validation_verdict) if report.validation_verdict is not None else None
+        ),
+        "target": _serialize_target(report.target) if report.target is not None else None,
+        "passed_validation": report.passed_validation,
+        "error": report.error,
+    }
+
+
+def _serialize_signal_report(report: Any) -> dict:
+    """Serialize a SignalEngineReport for storage and delivery."""
+    return {
+        "success": report.error is None,
+        "ticker": report.ticker,
+        "feature_name": report.feature_name,
+        "start_date": report.start_date,
+        "end_date": report.end_date,
+        "bars_used": report.bars_used,
+        "flip_sign": report.flip_sign,
+        "thresholds_tested": report.thresholds_tested,
+        "cost_bps_options": report.cost_bps_options,
+        "best_threshold": report.best_threshold,
+        "best_cost_bps": report.best_cost_bps,
+        "backtest_grid": [asdict(bt) for bt in report.backtest_grid],
+        "walk_forward": asdict(report.walk_forward) if report.walk_forward is not None else None,
+        "graduation": asdict(report.graduation) if report.graduation is not None else None,
+        "signal_diagnostics": (
+            asdict(report.signal_diagnostics) if report.signal_diagnostics is not None else None
+        ),
+        "data_sufficiency": (
+            asdict(report.data_sufficiency) if report.data_sufficiency is not None else None
+        ),
+        "effective_sample": (
+            asdict(report.effective_sample) if report.effective_sample is not None else None
+        ),
+        "regime_coverage": report.regime_coverage,
+        "joint_regime_coverage": [asdict(b) for b in report.joint_regime_coverage],
+        "signal_behavior": (
+            asdict(report.signal_behavior) if report.signal_behavior is not None else None
+        ),
+        "oos_sharpe_ci": (
+            asdict(report.oos_sharpe_ci) if report.oos_sharpe_ci is not None else None
+        ),
+        "deflated_sharpe": (
+            asdict(report.deflated_sharpe) if report.deflated_sharpe is not None else None
+        ),
+        "methodology": report.methodology,
+        "research_log": report.research_log,
+        "error": report.error,
     }
