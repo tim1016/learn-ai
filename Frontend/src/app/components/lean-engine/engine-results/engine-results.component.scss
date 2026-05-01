@@ -1,4 +1,5 @@
 @use '../../../styles/tokens' as *;
+@use 'sass:color';
 
 :host {
   display: block;
@@ -372,10 +373,10 @@ $skeptical: #a855f7;
   padding: 0 4px;
   min-height: 1.8em; // keep cards height-consistent
 
-  .hero-card.graded[data-band="green"] & { color: mix($bull, $text-primary, 40%); }
-  .hero-card.graded[data-band="amber"] & { color: mix($warn, $text-primary, 40%); }
-  .hero-card.graded[data-band="red"] & { color: mix($bear, $text-primary, 40%); }
-  .hero-card.graded[data-band="skeptical"] & { color: mix($skeptical, $text-primary, 40%); }
+  .hero-card.graded[data-band="green"] & { color: color.mix($bull, $text-primary, 40%); }
+  .hero-card.graded[data-band="amber"] & { color: color.mix($warn, $text-primary, 40%); }
+  .hero-card.graded[data-band="red"] & { color: color.mix($bear, $text-primary, 40%); }
+  .hero-card.graded[data-band="skeptical"] & { color: color.mix($skeptical, $text-primary, 40%); }
 }
 
 // ─── Trade vs Portfolio Sharpe divergence card ────────
