@@ -51,8 +51,8 @@
     </div>
   </div>
 
-  <!-- Run Button -->
-  <div class="mb-4">
+  <!-- Run controls -->
+  <div class="mb-4 flex gap-2 align-items-center">
     <p-button
       label="Run Cross-Sectional Study"
       icon="pi pi-play"
@@ -60,20 +60,77 @@
       [disabled]="loading() || selectedTickers().length === 0"
       (onClick)="runBatch()"
     />
+    @if (loading()) {
+      <p-button
+        label="Cancel"
+        icon="pi pi-times"
+        severity="danger"
+        [outlined]="true"
+        size="small"
+        (onClick)="cancelRun()"
+      />
+    }
+    @if (job() && !loading()) {
+      <p-button
+        label="New Run"
+        icon="pi pi-plus"
+        severity="secondary"
+        [text]="true"
+        size="small"
+        (onClick)="newRun()"
+      />
+    }
   </div>
 
-  @if (loading()) {
-    <p-progressBar mode="indeterminate" styleClass="mb-4" />
-    <p-message severity="info" text="Processing tickers sequentially. This may take several minutes..." />
+  <!-- Live progress + event log (data-lab style) -->
+  @if (job(); as j) {
+    <div class="run-card mb-4" [attr.data-status]="j.status">
+      <div class="run-card-head">
+        <div class="run-card-title">
+          <i class="pi"
+             [class.pi-spin]="loading()"
+             [class.pi-spinner]="loading()"
+             [class.pi-check-circle]="j.status === 'completed'"
+             [class.pi-times-circle]="j.status === 'failed' || j.status === 'cancelled'"
+          ></i>
+          <span class="run-card-headline">{{ progressMessage() }}</span>
+        </div>
+        @if (j.total) {
+          <span class="run-card-counter">
+            {{ j.current ?? 0 }} / {{ j.total }} {{ j.unit ?? 'tickers' }}
+          </span>
+        }
+      </div>
+
+      @if (j.total && loading()) {
+        <div class="run-card-progress">
+          <div class="progress-track">
+            <div class="progress-fill" [style.width.%]="progressPercent()"></div>
+          </div>
+          <span class="progress-percent">{{ progressPercent() }}%</span>
+        </div>
+      }
+
+      <!-- Inline event log — accumulated since the run started. -->
+      @if (cumulativeLogs().length > 0) {
+        <div class="event-log">
+          @for (log of cumulativeLogs(); track log.ts + '_' + $index) {
+            <div class="log-line" [ngClass]="logLevelClass(log.level)">
+              <span class="log-time">{{ formatLogTime(log.ts) }}</span>
+              <span class="log-message">{{ log.message }}</span>
+            </div>
+          }
+        </div>
+      }
+    </div>
   }
 
   @if (error(); as err) {
     <p-message severity="error" [text]="err" class="mb-4" />
   }
 
-  <!-- Results -->
+  <!-- Final aggregate result -->
   @if (result(); as res) {
-    <!-- Summary Card -->
     <p-card styleClass="mb-4">
       <ng-template #header>
         <div class="p-3 flex align-items-center gap-3">
@@ -92,12 +149,12 @@
         </div>
         <div class="col-6 md:col-3">
           <div class="text-sm text-color-secondary">Pass Rate</div>
-          <div class="text-2xl font-bold">{{ passRatePct | number:'1.0-0' }}%</div>
+          <div class="text-2xl font-bold">{{ passRatePct | number: '1.0-0' }}%</div>
         </div>
         <div class="col-6 md:col-3">
           <div class="text-sm text-color-secondary">Aggregate IC</div>
           <div class="text-2xl font-bold" [class]="getIcClass(res.aggregateIc)">
-            {{ res.aggregateIc | number:'1.4-4' }}
+            {{ res.aggregateIc | number: '1.4-4' }}
           </div>
         </div>
       </div>
@@ -128,10 +185,10 @@
       <ng-template #body let-row>
         <tr>
           <td class="font-bold">{{ row.ticker }}</td>
-          <td [class]="getIcClass(row.meanIc)">{{ row.meanIc | number:'1.4-4' }}</td>
-          <td>{{ row.nwTStat | number:'1.2-2' }}</td>
-          <td>{{ row.nwPValue | number:'1.4-4' }}</td>
-          <td>{{ row.effectiveN | number:'1.0-0' }}</td>
+          <td [class]="getIcClass(row.meanIc)">{{ row.meanIc | number: '1.4-4' }}</td>
+          <td>{{ row.nwTStat | number: '1.2-2' }}</td>
+          <td>{{ row.nwPValue | number: '1.4-4' }}</td>
+          <td>{{ row.effectiveN | number: '1.0-0' }}</td>
           <td>
             <p-tag
               [severity]="row.isStationary ? 'success' : 'danger'"

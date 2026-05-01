@@ -1,7 +1,127 @@
+@use '../../../styles/tokens' as *;
+
 :host {
   display: block;
 }
 
 .batch-runner {
   padding: 1rem 0;
+}
+
+// ── Live run card with event log (data-lab style) ─────────────
+.run-card {
+  border-radius: 10px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-left: 4px solid $border-light;
+  padding: 0.875rem 1.125rem;
+
+  &[data-status="queued"],
+  &[data-status="running"] { border-left-color: $accent; }
+  &[data-status="completed"] { border-left-color: $bull; }
+  &[data-status="failed"] { border-left-color: $bear; }
+  &[data-status="cancelled"] { border-left-color: $warn; }
+}
+
+.run-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.run-card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+
+  i {
+    font-size: 1rem;
+    color: $accent;
+  }
+
+  .pi-check-circle { color: $bull; }
+  .pi-times-circle { color: $bear; }
+}
+
+.run-card-headline {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.run-card-counter {
+  font-family: $font-mono;
+  font-size: 0.8125rem;
+  color: $text-muted;
+}
+
+.run-card-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin-bottom: 0.625rem;
+}
+
+.progress-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: $bg-elevated;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: $accent;
+  border-radius: 3px;
+  transition: width 280ms ease;
+}
+
+.progress-percent {
+  font-family: $font-mono;
+  font-size: 0.75rem;
+  color: $text-muted;
+  min-width: 2.5rem;
+  text-align: right;
+}
+
+// ── Event log (terminal-style) ────────────────────────────────
+.event-log {
+  margin-top: 0.625rem;
+  padding: 0.5rem 0.625rem;
+  background: $bg-sunken;
+  border: 1px solid $border;
+  border-radius: 6px;
+  font-family: $font-mono;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  max-height: 14rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.log-line {
+  display: flex;
+  gap: 0.625rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+
+  &.log-info .log-message { color: $text-secondary; }
+  &.log-warn .log-message { color: $warn; }
+  &.log-error .log-message { color: $bear; }
+}
+
+.log-time {
+  flex-shrink: 0;
+  color: $text-muted;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.log-message {
+  flex: 1;
 }
