@@ -1,4 +1,21 @@
-"""Graduation criteria evaluation for signal promotion."""
+"""Graduation evaluation for the Signal Engine.
+
+The graduation step turns a bag of metrics into a single decision: does
+this signal warrant further research, and if so, how far has it gotten?
+
+The decision lives on two surfaces:
+
+1. **Graduation stage** (0/1/2/3) — the ladder rendered on the verdict
+   block. A signal is at the highest stage whose criteria it satisfies.
+2. **Stage 0 rejection** — a hard kill switch that fires *first* and
+   short-circuits interpretation of downstream metrics. When triggered,
+   the UI collapses the deeper panels behind a "show diagnostic details
+   anyway" disclosure (see `signal-engine-authority.md` § 5).
+
+The legacy A–F grade and "Robust Alpha / Conditional Alpha / Degrading"
+status labels are kept for now to avoid breaking the existing UI; they
+will be removed once the stage ladder is fully shipped.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +26,24 @@ import numpy as np
 from app.research.signal.backtest import BacktestResult
 from app.research.signal.diagnostics import DataSufficiency, SignalDiagnostics
 from app.research.signal.walk_forward import WalkForwardResult
+
+# ─── Stage 0 thresholds (authority: docs/signal-engine-authority.md § 5.1) ──
+
+STAGE0_STABILITY_MIN = 0.25
+STAGE0_MEDIAN_OOS_SHARPE_MIN = 0.0  # strict-greater, so ≤ 0 fails
+STAGE0_PCT_POSITIVE_FOLDS_MIN = 0.40
+STAGE0_TURNOVER_MAX = 200.0
+STAGE0_TURNOVER_SHARPE_MIN = 0.5
+
+# ─── Stage advancement thresholds (§ 5.2 – § 5.4) ──────────────────────────
+
+STAGE2_OOS_SHARPE_MIN = 0.30
+STAGE2_STABILITY_MIN = 0.30
+STAGE2_FOLDS_MIN = 4
+
+STAGE3_OOS_SHARPE_MIN = 0.50
+STAGE3_STABILITY_MIN = 0.50
+STAGE3_PCT_POSITIVE_FOLDS_MIN = 0.60
 
 
 @dataclass
@@ -34,6 +69,49 @@ class ParameterStability:
 
 
 @dataclass
+class Stage0Failure:
+    """A single Stage 0 kill criterion that this signal failed."""
+
+    criterion_name: str = ""
+    value: float = 0.0
+    threshold_repr: str = ""
+    """Human-readable threshold (e.g. ``< 0.25`` or ``> 200x AND Sharpe < 0.5``)."""
+    message: str = ""
+
+
+@dataclass
+class Stage0Rejection:
+    """Kill-switch evaluation. ``rejected=True`` short-circuits the page."""
+
+    rejected: bool = False
+    failed_criteria: list[Stage0Failure] = field(default_factory=list)
+
+
+@dataclass
+class StageAdvanceCriterion:
+    """One requirement to advance from the current stage to the next."""
+
+    name: str = ""
+    description: str = ""
+    current_value: float = 0.0
+    required_repr: str = ""
+    met: bool = False
+
+
+@dataclass
+class GraduationStageInfo:
+    """Where the signal sits on the 0 → 1 → 2 → 3 ladder, plus what advancement requires."""
+
+    stage: int = 0
+    """0 = Rejected, 1 = Weak, 2 = Research, 3 = Promotion."""
+    label: str = "Rejected"
+    description: str = ""
+    next_stage_label: str = ""
+    """Empty when at the top of the ladder."""
+    advance_criteria: list[StageAdvanceCriterion] = field(default_factory=list)
+
+
+@dataclass
 class GraduationResult:
     """Complete graduation assessment."""
 
@@ -44,6 +122,10 @@ class GraduationResult:
     status_label: str = "Exploratory"
     parameter_stability: ParameterStability = field(default_factory=ParameterStability)
 
+    # New: Stage 0 / ladder additions (authority doc § 5).
+    stage0_rejection: Stage0Rejection = field(default_factory=Stage0Rejection)
+    stage_info: GraduationStageInfo = field(default_factory=GraduationStageInfo)
+
 
 def evaluate_graduation(
     walk_forward: WalkForwardResult | None,
@@ -52,14 +134,14 @@ def evaluate_graduation(
     signal_diagnostics: SignalDiagnostics | None,
     data_sufficiency: DataSufficiency | None,
 ) -> GraduationResult:
-    """Evaluate all graduation criteria and determine overall grade."""
+    """Evaluate all graduation criteria and determine overall grade and stage."""
     # Find best in-sample result at default cost
     best_is = _find_best_insample(backtest_grid, default_cost=2.0)
 
     # Parameter stability
     param_stability = _compute_parameter_stability(backtest_grid, default_cost=2.0)
 
-    # Build criteria
+    # Build the legacy 5-criterion checklist (kept for the existing UI).
     criteria: list[GraduationCriterion] = []
 
     # 1. Net Sharpe > 0.75
@@ -144,12 +226,29 @@ def evaluate_graduation(
         )
     criteria.append(c5)
 
-    # Overall
+    # Overall (legacy)
     passed_count = sum(1 for c in criteria if c.passed)
     overall_passed = passed_count == len(criteria)
     overall_grade = _compute_grade(passed_count, len(criteria))
 
-    # Status label
+    # Stage 0 kill switch (authority § 5.1).
+    stage0 = _evaluate_stage0(
+        walk_forward=walk_forward,
+        param_stability=param_stability,
+        best_is=best_is,
+    )
+
+    # Graduation stage (authority § 5.2 – § 5.4).
+    stage_info = _compute_stage_info(
+        walk_forward=walk_forward,
+        param_stability=param_stability,
+        stage0=stage0,
+    )
+
+    # Status label (legacy) — only mark "Degrading" when the alpha-decay
+    # test is statistically valid and significant. Without the power
+    # guard the badge fired for any whisper of a negative slope, even
+    # with three folds.
     status_label = _compute_status_label(
         data_sufficiency=data_sufficiency,
         walk_forward=walk_forward,
@@ -166,7 +265,225 @@ def evaluate_graduation(
         summary=summary,
         status_label=status_label,
         parameter_stability=param_stability,
+        stage0_rejection=stage0,
+        stage_info=stage_info,
     )
+
+
+# ─── Stage 0 evaluation ────────────────────────────────────────────────────
+
+
+def _evaluate_stage0(
+    walk_forward: WalkForwardResult | None,
+    param_stability: ParameterStability,
+    best_is: BacktestResult | None,
+) -> Stage0Rejection:
+    """Run the four kill-switch checks. Any one failure rejects the signal.
+
+    The thresholds here are the project defaults adopted from external
+    methodology review (2026-04-30) and codified in
+    ``docs/signal-engine-authority.md`` § 5.1. Tuning them requires
+    updating the constants at the top of this module, the authority
+    document, and the matching test.
+    """
+    failures: list[Stage0Failure] = []
+
+    # Criterion A: Parameter stability < 0.25
+    stability_score = param_stability.stability_score
+    if stability_score < STAGE0_STABILITY_MIN:
+        failures.append(
+            Stage0Failure(
+                criterion_name="Parameter Stability",
+                value=stability_score,
+                threshold_repr=f"≥ {STAGE0_STABILITY_MIN:.2f}",
+                message=(
+                    f"Stability is {stability_score:.2f}. Below {STAGE0_STABILITY_MIN:.2f} "
+                    "the Sharpe ratio is highly sensitive to threshold selection — "
+                    "the apparent edge is most likely a noise fit."
+                ),
+            )
+        )
+
+    # Criterion B: Median OOS Sharpe ≤ 0
+    if walk_forward is not None and walk_forward.windows:
+        median_oos = walk_forward.median_oos_sharpe
+        if median_oos <= STAGE0_MEDIAN_OOS_SHARPE_MIN:
+            failures.append(
+                Stage0Failure(
+                    criterion_name="Median OOS Sharpe",
+                    value=median_oos,
+                    threshold_repr=f"> {STAGE0_MEDIAN_OOS_SHARPE_MIN:.1f}",
+                    message=(
+                        f"Median walk-forward OOS Sharpe is {median_oos:.2f}. "
+                        "When the median fold has zero or negative Sharpe, the "
+                        "headline mean is being carried by one or two outlier folds."
+                    ),
+                )
+            )
+
+        # Criterion C: % positive folds < 40%
+        pct_positive = walk_forward.pct_windows_positive_sharpe
+        if pct_positive < STAGE0_PCT_POSITIVE_FOLDS_MIN:
+            failures.append(
+                Stage0Failure(
+                    criterion_name="OOS Folds Positive",
+                    value=pct_positive,
+                    threshold_repr=f"≥ {STAGE0_PCT_POSITIVE_FOLDS_MIN * 100:.0f} %",
+                    message=(
+                        f"Only {pct_positive * 100:.0f}% of OOS folds had positive "
+                        "Sharpe. A signal with edge should win in most folds."
+                    ),
+                )
+            )
+
+    # Criterion D: turnover > 200x AND Sharpe < 0.5
+    if best_is is not None:
+        turnover = best_is.annualized_turnover
+        sharpe = best_is.net_sharpe
+        if turnover > STAGE0_TURNOVER_MAX and sharpe < STAGE0_TURNOVER_SHARPE_MIN:
+            failures.append(
+                Stage0Failure(
+                    criterion_name="Turnover vs Edge",
+                    value=turnover,
+                    threshold_repr=(
+                        f"≤ {STAGE0_TURNOVER_MAX:.0f}× / yr OR Sharpe ≥ "
+                        f"{STAGE0_TURNOVER_SHARPE_MIN:.1f}"
+                    ),
+                    message=(
+                        f"Best IS turnover is {turnover:.0f}× / yr at Sharpe "
+                        f"{sharpe:.2f}. With > {STAGE0_TURNOVER_MAX:.0f}× turnover, "
+                        "realistic transaction costs and slippage will eat any "
+                        "Sharpe below 0.5 — the signal is uneconomic regardless "
+                        "of its statistical properties."
+                    ),
+                )
+            )
+
+    return Stage0Rejection(rejected=len(failures) > 0, failed_criteria=failures)
+
+
+# ─── Stage ladder ──────────────────────────────────────────────────────────
+
+
+def _compute_stage_info(
+    walk_forward: WalkForwardResult | None,
+    param_stability: ParameterStability,
+    stage0: Stage0Rejection,
+) -> GraduationStageInfo:
+    """Determine current stage and the advance criteria to the next one."""
+    if stage0.rejected:
+        return GraduationStageInfo(
+            stage=0,
+            label="Rejected",
+            description=(
+                "Failed one or more Stage 0 kill criteria. Downstream metrics "
+                "are not actionable; consider trying a different feature, "
+                "horizon, or regime gate."
+            ),
+            next_stage_label="",
+            advance_criteria=[],
+        )
+
+    mean_oos = walk_forward.mean_oos_sharpe if walk_forward else 0.0
+    stability = param_stability.stability_score
+    n_folds = len(walk_forward.windows) if walk_forward else 0
+    pct_positive = walk_forward.pct_windows_positive_sharpe if walk_forward else 0.0
+
+    # Stage 3 — Promotion candidate
+    if (
+        mean_oos > STAGE3_OOS_SHARPE_MIN
+        and stability > STAGE3_STABILITY_MIN
+        and pct_positive > STAGE3_PCT_POSITIVE_FOLDS_MIN
+    ):
+        return GraduationStageInfo(
+            stage=3,
+            label="Promotion Candidate",
+            description=(
+                "Strong evidence of edge across folds, robust to threshold "
+                "choice, and consistent across most folds. Cross-asset "
+                "validation and deflated-Sharpe gating apply at this stage."
+            ),
+            next_stage_label="",
+            advance_criteria=[],
+        )
+
+    # Stage 2 — Research candidate
+    if (
+        mean_oos > STAGE2_OOS_SHARPE_MIN
+        and stability > STAGE2_STABILITY_MIN
+        and n_folds >= STAGE2_FOLDS_MIN
+    ):
+        return GraduationStageInfo(
+            stage=2,
+            label="Research Candidate",
+            description=(
+                "Survives walk-forward and parameter sensitivity checks. "
+                "Block-bootstrap CIs and cross-asset validation are enabled "
+                "at this stage."
+            ),
+            next_stage_label="Promotion Candidate",
+            advance_criteria=[
+                StageAdvanceCriterion(
+                    name="Mean OOS Sharpe",
+                    description="Headline annualised OOS Sharpe across all folds",
+                    current_value=mean_oos,
+                    required_repr=f"> {STAGE3_OOS_SHARPE_MIN:.2f}",
+                    met=mean_oos > STAGE3_OOS_SHARPE_MIN,
+                ),
+                StageAdvanceCriterion(
+                    name="Parameter Stability",
+                    description="1 − coefficient of variation of Sharpe across thresholds",
+                    current_value=stability,
+                    required_repr=f"> {STAGE3_STABILITY_MIN:.2f}",
+                    met=stability > STAGE3_STABILITY_MIN,
+                ),
+                StageAdvanceCriterion(
+                    name="OOS Folds Positive",
+                    description="Fraction of folds with positive Sharpe",
+                    current_value=pct_positive,
+                    required_repr=f"> {STAGE3_PCT_POSITIVE_FOLDS_MIN * 100:.0f} %",
+                    met=pct_positive > STAGE3_PCT_POSITIVE_FOLDS_MIN,
+                ),
+            ],
+        )
+
+    # Stage 1 — Weak candidate (survived Stage 0 but doesn't meet Stage 2)
+    return GraduationStageInfo(
+        stage=1,
+        label="Weak Candidate",
+        description=(
+            "Survived the Stage 0 kill switch. Sharpe CI and walk-forward "
+            "details are enabled. The signal needs more evidence before "
+            "deeper machinery (cross-asset, bootstrap) is worth running."
+        ),
+        next_stage_label="Research Candidate",
+        advance_criteria=[
+            StageAdvanceCriterion(
+                name="Mean OOS Sharpe",
+                description="Headline annualised OOS Sharpe across all folds",
+                current_value=mean_oos,
+                required_repr=f"> {STAGE2_OOS_SHARPE_MIN:.2f}",
+                met=mean_oos > STAGE2_OOS_SHARPE_MIN,
+            ),
+            StageAdvanceCriterion(
+                name="Parameter Stability",
+                description="1 − coefficient of variation of Sharpe across thresholds",
+                current_value=stability,
+                required_repr=f"> {STAGE2_STABILITY_MIN:.2f}",
+                met=stability > STAGE2_STABILITY_MIN,
+            ),
+            StageAdvanceCriterion(
+                name="Walk-Forward Folds",
+                description="Independent train/test splits evaluated",
+                current_value=float(n_folds),
+                required_repr=f"≥ {STAGE2_FOLDS_MIN}",
+                met=n_folds >= STAGE2_FOLDS_MIN,
+            ),
+        ],
+    )
+
+
+# ─── Helpers (legacy) ──────────────────────────────────────────────────────
 
 
 def _find_best_insample(
@@ -259,7 +576,12 @@ def _compute_status_label(
     overall_passed: bool,
     param_stability: ParameterStability,
 ) -> str:
-    """Determine signal status label."""
+    """Determine signal status label.
+
+    The "Degrading" label requires the alpha-decay test to be both valid
+    (≥ 5 folds) and statistically significant. With three or four folds
+    the regression is too underpowered to drive a label.
+    """
     # Exploratory: insufficient data
     if data_sufficiency and data_sufficiency.effective_oos_bars < 1000:
         return "Exploratory"
@@ -268,8 +590,13 @@ def _compute_status_label(
     if not walk_forward or not walk_forward.windows:
         return "Exploratory"
 
-    # Degrading: alpha decay
-    if walk_forward.oos_sharpe_trend_slope < -0.1:
+    # Degrading: alpha decay (only when statistically supported).
+    decay = walk_forward.alpha_decay
+    if (
+        getattr(decay, "is_test_valid", False)
+        and getattr(decay, "is_significant", False)
+        and decay.slope < 0
+    ):
         return "Degrading"
 
     # Robust Alpha

@@ -1,0 +1,320 @@
+@use '../../../../styles/tokens' as *;
+
+:host {
+  display: block;
+  margin-bottom: 1.25rem;
+}
+
+.ladder-card {
+  border-radius: 10px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  padding: 1.25rem 1.5rem;
+
+  &[data-current-stage="0"] { border-left: 4px solid $bear; }
+  &[data-current-stage="1"] { border-left: 4px solid $warn; }
+  &[data-current-stage="2"] { border-left: 4px solid $accent; }
+  &[data-current-stage="3"] { border-left: 4px solid $bull; }
+}
+
+// ── Eyebrow row ──────────────────────────────────────────────
+.ladder-eyebrow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+
+  .eyebrow-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: $text-muted;
+  }
+
+  .eyebrow-hint {
+    font-size: 0.875rem;
+    color: $text-secondary;
+    line-height: 1.5;
+
+    strong {
+      color: $text-primary;
+      font-weight: 600;
+    }
+  }
+}
+
+// ── Track ───────────────────────────────────────────────────
+.ladder-track {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.ladder-node {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: 8px;
+  cursor: default;
+  outline: none;
+  transition: background 120ms ease, transform 120ms ease;
+  min-width: 5rem;
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px rgba($accent, 0.6);
+  }
+
+  &[data-state="future"] {
+    opacity: 0.55;
+  }
+
+  &[data-state="current"] {
+    background: $bg-elevated;
+    transform: translateY(-1px);
+  }
+
+  .node-marker {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid $border-light;
+    background: $bg-sunken;
+
+    .node-stage {
+      font-family: $font-mono;
+      font-size: 1rem;
+      font-weight: 700;
+      color: $text-primary;
+    }
+  }
+
+  &[data-band="green"] .node-marker {
+    border-color: $bull;
+    background: rgba($bull, 0.18);
+    .node-stage { color: $bull; }
+  }
+  &[data-band="amber"] .node-marker {
+    border-color: $warn;
+    background: rgba($warn, 0.18);
+    .node-stage { color: $warn; }
+  }
+  &[data-band="red"] .node-marker {
+    border-color: $bear;
+    background: rgba($bear, 0.18);
+    .node-stage { color: $bear; }
+  }
+  &[data-band="na"] .node-marker {
+    border-color: $border-light;
+    background: $bg-sunken;
+    .node-stage { color: $text-muted; }
+  }
+
+  &[data-state="passed"] .node-marker {
+    border-color: $bull;
+    background: rgba($bull, 0.12);
+    .node-stage { color: $bull; }
+  }
+
+  .node-label {
+    text-align: center;
+    line-height: 1.2;
+  }
+
+  .node-label-full {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $text-primary;
+    letter-spacing: 0.02em;
+  }
+
+  .node-label-tag {
+    font-size: 0.6875rem;
+    color: $accent;
+    font-weight: 600;
+    margin-top: 0.125rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+}
+
+.ladder-connector {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 0.625rem; // align with circle midpoint
+
+  .connector-line {
+    display: block;
+    height: 2px;
+    width: 100%;
+    background: $border-light;
+    border-radius: 1px;
+
+    &.connector-passed {
+      background: linear-gradient(to right, $bull, rgba($bull, 0.6));
+    }
+  }
+}
+
+// ── Stage 0 rejection block ─────────────────────────────────
+.rejection-block {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid $border-light;
+
+  .rejection-headline {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $bear;
+    margin-bottom: 0.625rem;
+
+    i {
+      font-size: 1rem;
+    }
+  }
+}
+
+.rejection-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.rejection-item {
+  background: $bg-elevated;
+  border: 1px solid $border;
+  border-left: 3px solid $bear;
+  border-radius: 6px;
+  padding: 0.625rem 0.875rem;
+
+  .rejection-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .rejection-name {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  .rejection-threshold {
+    font-family: $font-mono;
+    font-size: 0.75rem;
+    color: $text-muted;
+  }
+
+  .rejection-message {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+  }
+}
+
+// ── Advance criteria block ──────────────────────────────────
+.advance-block {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid $border-light;
+
+  .advance-headline {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $text-primary;
+    margin-bottom: 0.625rem;
+
+    i { font-size: 1rem; color: $accent; }
+
+    strong { color: $accent; }
+  }
+}
+
+.advance-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.advance-item {
+  background: $bg-elevated;
+  border: 1px solid $border;
+  border-left: 3px solid $border-light;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+
+  &.advance-met {
+    border-left-color: $bull;
+
+    .advance-name i { color: $bull; }
+  }
+
+  .advance-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .advance-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $text-primary;
+
+    i {
+      font-size: 0.875rem;
+      color: $text-muted;
+    }
+  }
+
+  .advance-required {
+    font-family: $font-mono;
+    font-size: 0.75rem;
+    color: $text-muted;
+  }
+
+  .advance-current {
+    font-size: 0.75rem;
+    color: $text-secondary;
+
+    strong {
+      font-family: $font-mono;
+      color: $text-primary;
+    }
+
+    .advance-description {
+      color: $text-muted;
+    }
+  }
+}

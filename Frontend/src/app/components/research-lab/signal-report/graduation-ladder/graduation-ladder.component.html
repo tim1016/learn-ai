@@ -1,0 +1,99 @@
+@let info = stageInfo();
+@let s0 = stage0Rejection();
+@let nodes_ = nodes();
+
+<div class="ladder-card" [attr.data-current-stage]="info.stage">
+  <div class="ladder-eyebrow">
+    <span class="eyebrow-label">Graduation Ladder</span>
+    @if (atBottom()) {
+      <span class="eyebrow-hint">Signal failed Stage 0 — no advance possible without a different feature, horizon, or gating.</span>
+    } @else if (atTop()) {
+      <span class="eyebrow-hint">At the top of the ladder. Promotion-stage gates apply for live deployment.</span>
+    } @else {
+      <span class="eyebrow-hint">
+        Currently at <strong>{{ info.label }}</strong>. To advance to <strong>{{ info.nextStageLabel }}</strong>,
+        meet the criteria below.
+      </span>
+    }
+  </div>
+
+  <ol class="ladder-track" role="list" aria-label="Graduation ladder stages">
+    @for (node of nodes_; track node.stage; let last = $last) {
+      <li
+        class="ladder-node"
+        role="listitem"
+        [attr.data-state]="node.state"
+        [attr.data-band]="bandFor(node)"
+        [attr.aria-current]="node.state === 'current' ? 'step' : null"
+        [pTooltip]="node.tooltip"
+        tooltipPosition="top"
+        tabindex="0"
+      >
+        <div class="node-marker">
+          <span class="node-stage">{{ node.stage }}</span>
+        </div>
+        <div class="node-label">
+          <div class="node-label-full">{{ node.shortLabel }}</div>
+          @if (node.state === 'current') {
+            <div class="node-label-tag">You are here</div>
+          }
+        </div>
+      </li>
+      @if (!last) {
+        <li class="ladder-connector" aria-hidden="true">
+          <span class="connector-line" [class.connector-passed]="nodes_[$index + 1].state !== 'future'"></span>
+        </li>
+      }
+    }
+  </ol>
+
+  @if (info.stage === 0 && s0 && s0.failedCriteria.length > 0) {
+    <div class="rejection-block">
+      <div class="rejection-headline">
+        <i class="pi pi-times-circle" aria-hidden="true"></i>
+        <span>Stage 0 kill criteria triggered</span>
+      </div>
+      <ul class="rejection-list">
+        @for (f of s0.failedCriteria; track f.criterionName) {
+          <li class="rejection-item">
+            <div class="rejection-row">
+              <span class="rejection-name">{{ f.criterionName }}</span>
+              <span class="rejection-threshold">required {{ f.thresholdRepr }}</span>
+            </div>
+            <p class="rejection-message">{{ f.message }}</p>
+          </li>
+        }
+      </ul>
+    </div>
+  } @else if (advanceCriteria().length > 0) {
+    <div class="advance-block">
+      <div class="advance-headline">
+        <i class="pi pi-arrow-circle-up" aria-hidden="true"></i>
+        <span>Criteria to reach <strong>{{ info.nextStageLabel }}</strong></span>
+      </div>
+      <ul class="advance-list">
+        @for (c of advanceCriteria(); track c.name) {
+          <li class="advance-item" [class.advance-met]="c.met">
+            <div class="advance-row">
+              <span class="advance-name">
+                @if (c.met) {
+                  <i class="pi pi-check-circle" aria-hidden="true"></i>
+                } @else {
+                  <i class="pi pi-circle" aria-hidden="true"></i>
+                }
+                {{ c.name }}
+              </span>
+              <span class="advance-required">{{ c.requiredRepr }}</span>
+            </div>
+            <div class="advance-current">
+              Current: <strong>{{ c.currentValue | number: '1.2-2' }}</strong>
+              @if (c.description) {
+                <span class="advance-description"> — {{ c.description }}</span>
+              }
+            </div>
+          </li>
+        }
+      </ul>
+    </div>
+  }
+</div>

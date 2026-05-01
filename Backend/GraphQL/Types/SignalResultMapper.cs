@@ -79,6 +79,9 @@ public static class SignalResultMapper
                         TStat = report.WalkForward.AlphaDecay.TStat,
                         PValue = report.WalkForward.AlphaDecay.PValue,
                         RSquared = report.WalkForward.AlphaDecay.RSquared,
+                        NFoldsUsed = report.WalkForward.AlphaDecay.NFoldsUsed,
+                        IsTestValid = report.WalkForward.AlphaDecay.IsTestValid,
+                        IsSignificant = report.WalkForward.AlphaDecay.IsSignificant,
                     } : null,
             } : null,
             Graduation = report.Graduation != null ? new GraduationResultType
@@ -109,6 +112,36 @@ public static class SignalResultMapper
                             }).ToList(),
                         StabilityScore = report.Graduation.ParameterStability.StabilityScore,
                         StabilityLabel = report.Graduation.ParameterStability.StabilityLabel,
+                    } : null,
+                Stage0Rejection = report.Graduation.Stage0Rejection != null
+                    ? new Stage0RejectionType
+                    {
+                        Rejected = report.Graduation.Stage0Rejection.Rejected,
+                        FailedCriteria = report.Graduation.Stage0Rejection.FailedCriteria
+                            .Select(f => new Stage0FailureType
+                            {
+                                CriterionName = f.CriterionName,
+                                Value = f.Value,
+                                ThresholdRepr = f.ThresholdRepr,
+                                Message = f.Message,
+                            }).ToList(),
+                    } : null,
+                StageInfo = report.Graduation.StageInfo != null
+                    ? new GraduationStageInfoType
+                    {
+                        Stage = report.Graduation.StageInfo.Stage,
+                        Label = report.Graduation.StageInfo.Label,
+                        Description = report.Graduation.StageInfo.Description,
+                        NextStageLabel = report.Graduation.StageInfo.NextStageLabel,
+                        AdvanceCriteria = report.Graduation.StageInfo.AdvanceCriteria
+                            .Select(ac => new StageAdvanceCriterionType
+                            {
+                                Name = ac.Name,
+                                Description = ac.Description,
+                                CurrentValue = ac.CurrentValue,
+                                RequiredRepr = ac.RequiredRepr,
+                                Met = ac.Met,
+                            }).ToList(),
                     } : null,
             } : null,
             SignalDiagnostics = report.SignalDiagnostics != null ? new SignalDiagnosticsType
@@ -145,6 +178,14 @@ public static class SignalResultMapper
             RegimeCoverage = report.RegimeCoverage
                 .Select(kv => new RegimeCoverageEntryType { Regime = kv.Key, Count = kv.Value })
                 .ToList(),
+            JointRegimeCoverage = report.JointRegimeCoverage.Select(b => new RegimeBucketType
+            {
+                VolLabel = b.VolLabel,
+                TrendLabel = b.TrendLabel,
+                Days = b.Days,
+                EffectiveTrades = b.EffectiveTrades,
+                Badge = b.Badge,
+            }).ToList(),
             SignalBehavior = report.SignalBehavior != null ? new SignalBehaviorMetricsType
             {
                 AvgForwardReturnWhenActive = report.SignalBehavior.AvgForwardReturnWhenActive,
@@ -152,6 +193,26 @@ public static class SignalResultMapper
                 AvgWinReturn = report.SignalBehavior.AvgWinReturn,
                 AvgLossReturn = report.SignalBehavior.AvgLossReturn,
                 HitRate = report.SignalBehavior.HitRate,
+            } : null,
+            OosSharpeCi = report.OosSharpeCi != null ? new SharpeCiType
+            {
+                Point = report.OosSharpeCi.Point,
+                Se = report.OosSharpeCi.Se,
+                CiLower = report.OosSharpeCi.CiLower,
+                CiUpper = report.OosSharpeCi.CiUpper,
+                ConfidenceLevel = report.OosSharpeCi.ConfidenceLevel,
+                NEffUsed = report.OosSharpeCi.NEffUsed,
+                Valid = report.OosSharpeCi.Valid,
+            } : null,
+            DeflatedSharpe = report.DeflatedSharpe != null ? new DeflatedSharpeType
+            {
+                RawSharpe = report.DeflatedSharpe.RawSharpe,
+                ExpectedMaxUnderNull = report.DeflatedSharpe.ExpectedMaxUnderNull,
+                DsrProbability = report.DeflatedSharpe.DsrProbability,
+                NTrials = report.DeflatedSharpe.NTrials,
+                Skewness = report.DeflatedSharpe.Skewness,
+                Kurtosis = report.DeflatedSharpe.Kurtosis,
+                Valid = report.DeflatedSharpe.Valid,
             } : null,
             Methodology = report.Methodology != null ? new MethodologyType
             {

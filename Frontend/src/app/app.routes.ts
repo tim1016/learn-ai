@@ -219,6 +219,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "docs/signal-engine-methodology",
+    loadComponent: () =>
+      import("./components/docs/signal-engine-methodology-page.component").then(
+        (m) => m.SignalEngineMethodologyPageComponent
+      ),
+  },
+  {
     path: "edge",
     loadComponent: () =>
       import("./components/edge/edge.component").then((m) => m.EdgeComponent),

@@ -1,32 +1,68 @@
 import {
   Component,
   input,
+  signal,
+  computed,
   ChangeDetectionStrategy,
   ElementRef,
   viewChild,
   effect,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { SignalEngineResult, SignalBacktestResult } from '../../../services/research.service';
-import { KatexDirective } from '../../../shared/katex.directive';
+import { RouterModule } from '@angular/router';
+import {
+  SignalEngineResult,
+  SignalBacktestResult,
+  RegimeBucket,
+} from '../../../services/research.service';
 import { TagModule } from 'primeng/tag';
 import { TableModule } from 'primeng/table';
 import { TooltipModule } from 'primeng/tooltip';
 import { AccordionModule } from 'primeng/accordion';
+import { ButtonModule } from 'primeng/button';
 import { Chart, registerables } from 'chart.js';
+import { SignalVerdictBlockComponent } from './signal-verdict-block/signal-verdict-block.component';
 
 Chart.register(...registerables);
 
 @Component({
   selector: 'app-signal-report',
   standalone: true,
-  imports: [CommonModule, KatexDirective, TagModule, TableModule, TooltipModule, AccordionModule],
+  imports: [
+    CommonModule,
+    RouterModule,
+    TagModule,
+    TableModule,
+    TooltipModule,
+    AccordionModule,
+    ButtonModule,
+    SignalVerdictBlockComponent,
+  ],
   templateUrl: './signal-report.component.html',
   styleUrls: ['./signal-report.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class SignalReportComponent {
   result = input.required<SignalEngineResult>();
+
+  /** Stage 0 collapse — when the kill switch fires, downstream panels are
+   *  hidden behind a "Show diagnostic details anyway" disclosure so the
+   *  reader is not seduced into reading meaning into noise. */
+  readonly showDetailsAnyway = signal(false);
+
+  readonly graduationStage = computed<0 | 1 | 2 | 3>(() => {
+    return (this.result().graduation?.stageInfo?.stage ?? 0) as 0 | 1 | 2 | 3;
+  });
+
+  readonly isStage0Rejected = computed<boolean>(() => this.graduationStage() === 0);
+
+  readonly showDownstreamPanels = computed<boolean>(
+    () => !this.isStage0Rejected() || this.showDetailsAnyway(),
+  );
+
+  toggleDetailsAnyway(): void {
+    this.showDetailsAnyway.update((v) => !v);
+  }
 
   oosEquityCurveCanvas = viewChild<ElementRef<HTMLCanvasElement>>('oosEquityCurve');
   bestEquityCurveCanvas = viewChild<ElementRef<HTMLCanvasElement>>('bestEquityCurve');
@@ -141,16 +177,33 @@ export class SignalReportComponent {
 
   // ─── Execution Assumptions ──────────────────────────────
 
-  get executionAssumptions(): { label: string; value: string }[] {
+  /** Execution model as actually implemented in the backtest kernel. The
+   *  text was rewritten in this redesign — the previous "Next bar open"
+   *  label did not match what the code computes (1-bar lag with
+   *  close-to-close measurement). See ``docs/signal-engine-authority.md``
+   *  § 6 for the full timing model and the realism caveats. */
+  get executionAssumptions(): { label: string; value: string; note?: string }[] {
     const r = this.result();
     return [
-      { label: 'Signal Timestamp', value: 'Bar close' },
-      { label: 'Execution', value: 'Next bar open' },
-      { label: 'Return Measurement', value: 'Close-to-close 15m forward log return' },
-      { label: 'Transaction Cost Model', value: `Fixed ${r.bestCostBps}bps per turnover` },
-      { label: 'Position Sizing', value: 'Binary (sign only), max |w| = 1' },
-      { label: 'Max Leverage', value: '1x' },
-      { label: 'Slippage Model', value: 'Not modeled (limitation)' },
+      { label: 'Signal computed', value: 'At bar close of t−1' },
+      { label: 'Position effective', value: 'From bar t onward (1-bar lag)' },
+      {
+        label: 'Return measurement',
+        value: 'close_t → close_{t+15} (15-bar log return)',
+        note: 'No look-ahead: position[t-1] · return[t]. Equivalent to "filled at next bar close".',
+      },
+      { label: 'Position sizing', value: 'Binary (±1 / 0), max |w| = 1' },
+      { label: 'Max leverage', value: '1×' },
+      {
+        label: 'Transaction cost',
+        value: `Fixed ${r.bestCostBps}bps per side on |Δw|`,
+        note: 'Cost grid (1–5 bps) is optimistic at high turnover. See § 6 of the methodology authority.',
+      },
+      {
+        label: 'Slippage / market impact',
+        value: 'Not modelled',
+        note: 'Realistic at low turnover; materially understated above 200×/yr turnover.',
+      },
     ];
   }
 
@@ -167,6 +220,51 @@ export class SignalReportComponent {
 
   get hasAlphaDecay(): boolean {
     return (this.result().walkForward?.oosSharpeTrendSlope ?? 0) < -0.1;
+  }
+
+  /** True when the alpha-decay regression had enough folds (≥ 5) to be
+   *  statistically meaningful. Below that, the UI must render an
+   *  "insufficient folds" placeholder rather than a misleading p-value. */
+  get alphaDecayTestValid(): boolean {
+    return this.result().walkForward?.alphaDecay?.isTestValid ?? false;
+  }
+
+  get alphaDecayFoldCount(): number {
+    return this.result().walkForward?.alphaDecay?.nFoldsUsed ?? 0;
+  }
+
+  // ─── Joint regime coverage ───────────────────────────────
+
+  get jointRegimeBuckets(): RegimeBucket[] {
+    return this.result().jointRegimeCoverage ?? [];
+  }
+
+  /** Look up the joint bucket for a (vol, trend) pair. Returns ``null`` when
+   *  the pair has zero observations — the cell will render as Empty. */
+  jointBucket(vol: string, trend: string): RegimeBucket | null {
+    return (
+      this.jointRegimeBuckets.find(
+        (b) => b.volLabel === vol && b.trendLabel === trend,
+      ) ?? null
+    );
+  }
+
+  /** Visual band for a joint cell — drives the colored left border / chip. */
+  jointBucketBand(bucket: RegimeBucket | null): 'green' | 'amber' | 'red' | 'na' {
+    if (!bucket || bucket.days === 0) return 'na';
+    if (bucket.badge === 'Pass') return 'green';
+    if (bucket.badge === 'Sparse') return 'amber';
+    return 'red';
+  }
+
+  // ─── Deflated Sharpe ────────────────────────────────────
+
+  get deflatedSharpeBand(): 'green' | 'amber' | 'red' | 'na' {
+    const dsr = this.result().deflatedSharpe;
+    if (!dsr?.valid) return 'na';
+    if (dsr.dsrProbability >= 0.95) return 'green';
+    if (dsr.dsrProbability >= 0.5) return 'amber';
+    return 'red';
   }
 
   // ─── Executive Summary ────────────────────────────────────
@@ -214,15 +312,6 @@ export class SignalReportComponent {
     return 'Approximately symmetric return distribution.';
   }
 
-  // ─── KaTeX Formulas ──────────────────────────────────────
-
-  readonly sharpeFormula = 'S = \\frac{\\bar{r} - r_f}{\\sigma_r} \\times \\sqrt{\\frac{252 \\times 390}{1}}';
-  readonly neffFormula = 'N_{\\text{eff}} = \\frac{N}{1 + 2\\sum_{k=1}^{K}\\hat{\\rho}_k}';
-  readonly stabilityFormula = '\\text{Stability} = 1 - \\frac{\\sigma_{\\text{Sharpe}(\\theta)}}{|\\bar{S}(\\theta)|}';
-  readonly alphaDecayFormula = 'S_i = \\beta_0 + \\beta_1 \\cdot i + \\epsilon_i, \\quad i = 0, \\ldots, N_{\\text{folds}}-1';
-  readonly drawdownFormula = 'DD_t = \\frac{P_t - \\max_{s \\le t} P_s}{\\max_{s \\le t} P_s}';
-  readonly turnoverFormula = '\\text{Turnover} = \\frac{1}{T}\\sum_{t=1}^{T} |w_t - w_{t-1}| \\times 252';
-
   // ─── Charts ─────────────────────────────────────────────
 
   private renderOosEquityCurve(canvas: HTMLCanvasElement, res: SignalEngineResult): void {
@@ -260,7 +349,7 @@ export class SignalReportComponent {
     });
   }
 
-  private renderBestEquityCurve(canvas: HTMLCanvasElement, res: SignalEngineResult): void {
+  private renderBestEquityCurve(canvas: HTMLCanvasElement, _res: SignalEngineResult): void {
     if (this.bestChart) this.bestChart.destroy();
     const best = this.bestBacktest;
     if (!best?.dates?.length) return;

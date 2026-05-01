@@ -207,13 +207,32 @@ class WalkForwardWindowResponse(BaseModel):
 
 
 class AlphaDecayStatsResponse(BaseModel):
-    """Alpha decay regression statistics."""
+    """Alpha decay regression statistics with power-guard flags."""
 
     slope: float = 0.0
     intercept: float = 0.0
     t_stat: float = 0.0
     p_value: float = 1.0
     r_squared: float = 0.0
+    n_folds_used: int = 0
+    is_test_valid: bool = False
+    """True only when ``n_folds_used >= 5``. Below that, the regression's
+    t-statistic has too few residual degrees of freedom to be informative
+    and the UI must render an "insufficient folds" placeholder instead."""
+    is_significant: bool = False
+    """True when ``is_test_valid`` and ``p_value < 0.05``."""
+
+
+class SharpeCiResponse(BaseModel):
+    """Lo (2002) confidence interval for the annualised Sharpe ratio."""
+
+    point: float = 0.0
+    se: float = 0.0
+    ci_lower: float = 0.0
+    ci_upper: float = 0.0
+    confidence_level: float = 0.95
+    n_eff_used: float = 0.0
+    valid: bool = False
 
 
 class WalkForwardResultResponse(BaseModel):
@@ -254,6 +273,42 @@ class ParameterStabilityResponse(BaseModel):
     stability_label: str = "Fragile"
 
 
+class Stage0FailureResponse(BaseModel):
+    """A single Stage 0 kill criterion that the signal failed."""
+
+    criterion_name: str = ""
+    value: float = 0.0
+    threshold_repr: str = ""
+    message: str = ""
+
+
+class Stage0RejectionResponse(BaseModel):
+    """Stage 0 kill-switch evaluation."""
+
+    rejected: bool = False
+    failed_criteria: list[Stage0FailureResponse] = []
+
+
+class StageAdvanceCriterionResponse(BaseModel):
+    """A single requirement to advance from the current stage."""
+
+    name: str = ""
+    description: str = ""
+    current_value: float = 0.0
+    required_repr: str = ""
+    met: bool = False
+
+
+class GraduationStageInfoResponse(BaseModel):
+    """Where the signal sits on the 0/1/2/3 ladder, plus advancement criteria."""
+
+    stage: int = 0
+    label: str = "Rejected"
+    description: str = ""
+    next_stage_label: str = ""
+    advance_criteria: list[StageAdvanceCriterionResponse] = []
+
+
 class GraduationResultResponse(BaseModel):
     """Complete graduation assessment."""
 
@@ -263,6 +318,8 @@ class GraduationResultResponse(BaseModel):
     summary: str = ""
     status_label: str = "Exploratory"
     parameter_stability: ParameterStabilityResponse | None = None
+    stage0_rejection: Stage0RejectionResponse | None = None
+    stage_info: GraduationStageInfoResponse | None = None
 
 
 class SignalDiagnosticsResponse(BaseModel):
@@ -310,6 +367,28 @@ class SignalBehaviorMetricsResponse(BaseModel):
     hit_rate: float = 0.0
 
 
+class DeflatedSharpeResponse(BaseModel):
+    """Bailey & López de Prado Deflated Sharpe Ratio for the IS grid headline."""
+
+    raw_sharpe: float = 0.0
+    expected_max_under_null: float = 0.0
+    dsr_probability: float = 0.0
+    n_trials: int = 0
+    skewness: float = 0.0
+    kurtosis: float = 0.0
+    valid: bool = False
+
+
+class RegimeBucketResponse(BaseModel):
+    """One cell of the joint (vol × trend) regime grid."""
+
+    vol_label: str = ""
+    trend_label: str = ""
+    days: int = 0
+    effective_trades: float = 0.0
+    badge: str = "Empty"
+
+
 class MethodologyResponse(BaseModel):
     """Methodology metadata from signal engine configuration."""
 
@@ -349,7 +428,13 @@ class RunSignalEngineResponse(BaseModel):
     data_sufficiency: DataSufficiencyResponse | None = None
     effective_sample: EffectiveSampleSizeResponse | None = None
     regime_coverage: dict[str, int] = {}
+    """Marginal day counts (legacy). New consumers should prefer ``joint_regime_coverage``."""
+    joint_regime_coverage: list[RegimeBucketResponse] = []
     signal_behavior: SignalBehaviorMetricsResponse | None = None
+    oos_sharpe_ci: SharpeCiResponse | None = None
+    """Lo (2002) confidence interval for the headline OOS Sharpe."""
+    deflated_sharpe: DeflatedSharpeResponse | None = None
+    """Bailey & López de Prado DSR for the IS grid headline."""
     methodology: MethodologyResponse | None = None
     research_log: str = ""
     error: str | None = None
