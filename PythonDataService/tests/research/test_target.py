@@ -79,23 +79,62 @@ class TestComputeForwardLogReturn:
         expected = np.log(bars[3]["close"] / bars[0]["close"])
         np.testing.assert_allclose(result.values.iloc[0], expected, atol=1e-12)
 
-    def test_missing_bar_in_window_produces_nan_not_silent_15min(self) -> None:
-        """Drop the bar at t=4 from a 1-minute series. Rows whose forward window
-        crosses the gap must be NaN, not silently use a 16-minute target."""
+    def test_small_missing_gap_is_tolerated_within_overshoot(self) -> None:
+        """One missing minute in the forward window stretches the elapsed
+        time from 15 → 16 minutes. The default ``max_overshoot_minutes=5``
+        accepts that — Polygon Starter routinely drops 1-3 low-liquidity
+        minutes per session and rejecting all of them was killing > 30 %
+        of valid bars on real data."""
         full = [
             {"timestamp": 1_700_000_000_000 + i * 60_000, "close": 100.0 + i}
             for i in range(40)
         ]
-        # Drop t=4 (one missing minute).
-        bars = [b for i, b in enumerate(full) if i != 4]
+        bars = [b for i, b in enumerate(full) if i != 4]  # drop t=4
 
         result = compute_forward_log_return(bars, horizon_minutes=15)
 
-        # The bar at index 0 (t=0) wants its window at t=15; with the gap,
-        # row 14 of the truncated list lands at t=15 — but row 0's
-        # forward partner is now ambiguous. The timestamp-delta gate
-        # rejects whichever rows have a mismatched delta. Confirm at
-        # least one row whose original window crossed the gap is NaN.
+        # No window_gap drops — 16-minute deltas land inside [15, 20].
+        assert result.invalid_reason_counts.get("window_gap", 0) == 0
+        # And we still get valid forward returns for early rows.
+        assert result.values.iloc[0:5].notna().all()
+
+    def test_large_missing_gap_above_overshoot_is_dropped(self) -> None:
+        """An 8-minute gap inside the forward window pushes the elapsed
+        wall-clock time from 15 → 23 minutes — outside the 5-minute
+        tolerance — so it's NaN and attributed to ``window_gap``.
+        This still catches the structural "75-minute target on 5-minute
+        bars" bug: a 5-minute caller asking for 15 minutes who somehow
+        received a 75-minute window would land at +60 minutes overshoot,
+        far outside any sensible tolerance."""
+        full = [
+            {"timestamp": 1_700_000_000_000 + i * 60_000, "close": 100.0 + i}
+            for i in range(60)
+        ]
+        # Drop 8 consecutive minutes (t=4..t=11) inside the forward window
+        # of the early rows. Row 0 → row 7 still has elapsed = 15 min,
+        # but row 0 → row 15 has elapsed = 15 + 8 = 23 min, > tolerance.
+        bars = [b for i, b in enumerate(full) if not (4 <= i < 12)]
+
+        result = compute_forward_log_return(bars, horizon_minutes=15)
+
+        assert result.invalid_reason_counts.get("window_gap", 0) > 0
+
+    def test_max_overshoot_minutes_zero_recovers_strict_mode(self) -> None:
+        """``max_overshoot_minutes=0`` is the legacy-strict gate: any
+        non-exact match drops as ``window_gap``. Useful when the caller
+        wants the strictest possible interpretation (e.g. a regression
+        test asserting feed integrity)."""
+        full = [
+            {"timestamp": 1_700_000_000_000 + i * 60_000, "close": 100.0 + i}
+            for i in range(40)
+        ]
+        bars = [b for i, b in enumerate(full) if i != 4]
+
+        result = compute_forward_log_return(
+            bars, horizon_minutes=15, max_overshoot_minutes=0
+        )
+
+        # With strict gate, the 16-minute window for the early rows is rejected.
         assert result.invalid_reason_counts.get("window_gap", 0) > 0
 
     def test_horizon_not_multiple_of_bar_minutes_raises(self) -> None:
