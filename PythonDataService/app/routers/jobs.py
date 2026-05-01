@@ -401,6 +401,7 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
             "aggregate_ic_ci": asdict(report.aggregate_ic_ci),
             "binomial_test": asdict(report.binomial_test),
             "n_eff_assets": report.n_eff_assets,
+            "n_eff_assets_method": report.n_eff_assets_method,
             "validity_summary": asdict(report.validity_summary),
             "stage_info": asdict(report.stage_info),
             "ticker_results": report.ticker_results,

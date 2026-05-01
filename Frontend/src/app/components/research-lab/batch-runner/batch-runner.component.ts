@@ -19,6 +19,7 @@ import { ProgressBarModule } from 'primeng/progressbar';
 import { SelectModule } from 'primeng/select';
 import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
+import { TooltipModule } from 'primeng/tooltip';
 
 import {
   AggregateIcCi,
@@ -68,6 +69,7 @@ interface CrossSectionalJobResultRaw {
     ci_upper: number;
     confidence_level: number;
     weighting_method: string;
+    se_approximation_note?: string;
     n_tickers_used: number;
     sum_weights: number;
     valid: boolean;
@@ -81,6 +83,7 @@ interface CrossSectionalJobResultRaw {
     significant: boolean;
   };
   n_eff_assets?: number;
+  n_eff_assets_method?: 'ic' | 'returns';
   validity_summary?: {
     valid: number;
     invalid_iv: number;
@@ -120,6 +123,7 @@ interface CrossSectionalJobResultRaw {
     data_points: number;
     error: string | null;
     validity?: TickerValidity;
+    low_confidence?: boolean;
   }[];
   summary: string;
 }
@@ -141,6 +145,7 @@ interface LogLine {
     InputTextModule,
     TableModule,
     TagModule,
+    TooltipModule,
     ProgressBarModule,
     MessageModule,
     CheckboxModule,
@@ -327,8 +332,33 @@ export class BatchRunnerComponent {
     if (v === 'invalid_iv') return 'INVALID — IV';
     if (v === 'invalid_data') return 'INVALID — DATA';
     if (v === 'error') return 'ERROR';
+    if (row.lowConfidence) {
+      return row.passedValidation ? 'PASS · low conf' : 'FAIL · low conf';
+    }
     return row.passedValidation ? 'PASS' : 'FAIL';
   }
+
+  /** True when the CI half-width exceeds |IC| by a wide margin —
+   *  i.e. the band is much larger than the point estimate, so the CI
+   *  is technically computable but not interpretable. Used to render
+   *  a banner under the headline. */
+  readonly ciUnreliable = computed<boolean>(() => {
+    const ci = this.aggregateIcCi();
+    if (!ci?.valid) return false;
+    const halfWidth = Math.abs(ci.ciUpper - ci.ciLower) / 2;
+    const magnitude = Math.abs(ci.point);
+    // Heuristic: half-width > 5× |IC| means the CI is essentially
+    // uninformative even though the math went through.
+    return magnitude > 0 && halfWidth > 5 * magnitude;
+  });
+
+  /** Disclosure label for which input matrix drove `nEffAssets`. */
+  readonly nEffAssetsMethodLabel = computed<string>(() => {
+    const m = this.result()?.nEffAssetsMethod;
+    if (m === 'ic') return 'IC time series';
+    if (m === 'returns') return 'daily stock returns (Stage-1 fallback)';
+    return 'unknown';
+  });
 
   toggleTicker(ticker: string): void {
     const current = this.selectedTickers();
@@ -468,6 +498,7 @@ export class BatchRunnerComponent {
         dataPoints: r.data_points,
         error: r.error ?? undefined,
         validity: r.validity,
+        lowConfidence: r.low_confidence,
       })),
       summary: raw.summary,
       tickersTestedRaw: raw.tickers_tested_raw,
@@ -489,6 +520,7 @@ export class BatchRunnerComponent {
             ciUpper: raw.aggregate_ic_ci.ci_upper,
             confidenceLevel: raw.aggregate_ic_ci.confidence_level,
             weightingMethod: raw.aggregate_ic_ci.weighting_method,
+            seApproximationNote: raw.aggregate_ic_ci.se_approximation_note,
             nTickersUsed: raw.aggregate_ic_ci.n_tickers_used,
             sumWeights: raw.aggregate_ic_ci.sum_weights,
             valid: raw.aggregate_ic_ci.valid,
@@ -505,6 +537,7 @@ export class BatchRunnerComponent {
           }
         : undefined,
       nEffAssets: raw.n_eff_assets,
+      nEffAssetsMethod: raw.n_eff_assets_method,
       stageInfo: raw.stage_info
         ? {
             stage: raw.stage_info.stage as 0 | 1 | 2 | 3,

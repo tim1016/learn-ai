@@ -58,6 +58,18 @@ CROSS_SECTIONAL_THRESHOLD = 0.60
 # Per-ticker null α for the binomial test on the pass count.
 PER_TICKER_ALPHA = 0.05
 
+# Below this per-ticker N_eff, the ticker is flagged ``low_confidence``
+# even when it computes a valid IC. Used by the UI to render a soft
+# warning ("rate is technically defined but precision is poor") on
+# rows where the headline IC shouldn't be trusted at face value.
+LOW_CONFIDENCE_NEFF_THRESHOLD = 10.0
+
+# Minimum per-ticker IC observations before we trust the IC-time-series
+# correlation matrix for the ``N_eff_assets`` calculation. Below this the
+# IC sample per ticker is too short to estimate cross-ticker correlation
+# reliably and we fall back to the daily-stock-returns correlation.
+N_EFF_ASSETS_IC_OBS_MIN = 5
+
 # Stage 0 kill-switch thresholds (authority: see PR description).
 STAGE0_VALID_TICKERS_MIN = 2
 STAGE0_MEAN_NEFF_MIN = 20.0
@@ -116,7 +128,16 @@ class TickerValidity:
 
 @dataclass
 class AggregateIC:
-    """Precision-weighted aggregate IC with Lo-style confidence interval."""
+    """Precision-weighted aggregate IC with Lo-style confidence interval.
+
+    The SE is computed as ``1 / sqrt(sum(w_i))`` with ``w_i = N_eff_i``,
+    which assumes per-ticker IC variance ≈ ``1 / N_eff_i``. That is a
+    Stage 1 / Stage 2 approximation; the full Lo (2002) form
+    ``(1 + IC²) / N_eff_i`` is a Stage 3 upgrade. The
+    ``se_approximation_note`` field carries the disclaimer the UI
+    renders next to the CI so the reader knows what's pinned and what's
+    approximated.
+    """
 
     point: float = 0.0
     se: float = 0.0
@@ -124,6 +145,10 @@ class AggregateIC:
     ci_upper: float = 0.0
     confidence_level: float = 0.95
     weighting_method: str = "precision"
+    se_approximation_note: str = (
+        "SE assumes per-ticker IC variance ≈ 1/N_eff (Stage 1 approximation). "
+        "Lo (2002)'s full (1 + IC²)/N_eff form is a Stage 3 upgrade."
+    )
     n_tickers_used: int = 0
     sum_weights: float = 0.0
     valid: bool = False
@@ -204,6 +229,12 @@ class CrossSectionalReport:
     n_eff_assets: float = 0.0
     """Effective number of independent assets via the eigenvalue method
     on the cross-asset correlation matrix."""
+    n_eff_assets_method: str = "returns"
+    """Which correlation drove ``n_eff_assets`` — ``"ic"`` (per-ticker
+    IC time series, the Stage-2-correct version) or ``"returns"`` (daily
+    stock returns, Stage-1 fallback when IC sample per ticker is too
+    short for a stable estimate). Surfaced in the UI tooltip so the
+    reader knows which dependence structure was used."""
 
     # Legacy convenience
     cross_sectional_consistent: bool = False
@@ -242,6 +273,10 @@ def run_cross_sectional_study(
     # cross-asset correlation matrix at aggregation time. Only populated
     # for valid tickers.
     per_ticker_returns: dict[str, pd.Series] = {}
+    # Per-ticker IC time series, keyed by ticker. Used by the IC-based
+    # N_eff_assets when every valid ticker has enough IC observations;
+    # otherwise we fall back to per_ticker_returns.
+    per_ticker_ic_series: dict[str, pd.Series] = {}
 
     on_phase("starting")
     on_log(f"Cross-sectional study: feature={feature_name}, target={target_type}, tickers={n}")
@@ -344,17 +379,31 @@ def run_cross_sectional_study(
                 on_progress(i + 1, n, f"{ticker}: invalid")
             else:
                 result["validity"] = "valid"
-                # Stash the per-ticker daily return series for the
-                # cross-asset correlation matrix below.
+                # Flag tickers whose effective sample is too thin for
+                # the per-ticker IC to be trusted at face value. The
+                # row still counts toward the aggregate (N_eff weights
+                # it down naturally) but the UI annotates it.
+                result["low_confidence"] = (
+                    research_report.effective_n < LOW_CONFIDENCE_NEFF_THRESHOLD
+                )
+
+                # Stash daily returns + per-ticker IC series for the
+                # N_eff_assets calculation below.
                 returns = _extract_daily_returns(stock_bars)
                 if not returns.empty:
                     per_ticker_returns[ticker] = returns
+                if research_report.ic_values and research_report.ic_dates:
+                    per_ticker_ic_series[ticker] = pd.Series(
+                        research_report.ic_values,
+                        index=research_report.ic_dates,
+                    )
 
                 verdict = "PASS" if research_report.passed_validation else "FAIL"
                 on_log(
                     f"[{i + 1}/{n}] {ticker}: {verdict} — IC={research_report.mean_ic:.4f}, "
                     f"NW t={research_report.nw_t_stat:.2f}, p={research_report.nw_p_value:.4f}, "
                     f"N_eff={research_report.effective_n:.0f}"
+                    f"{' (low confidence)' if result['low_confidence'] else ''}"
                 )
                 on_progress(i + 1, n, f"{ticker}: {verdict} (IC={research_report.mean_ic:.4f})")
 
@@ -386,7 +435,10 @@ def run_cross_sectional_study(
         float(np.mean([r["mean_ic"] for r in valid_results])) if valid_results else 0.0
     )
 
-    n_eff_assets = _compute_n_eff_assets(per_ticker_returns)
+    n_eff_assets, n_eff_assets_method = _compute_n_eff_assets_with_method(
+        ic_series=per_ticker_ic_series,
+        returns=per_ticker_returns,
+    )
 
     binomial = _compute_binomial_null_test(valid_results, n_eff_assets)
 
@@ -428,6 +480,7 @@ def run_cross_sectional_study(
         aggregate_ic_ci=aggregate_ic_ci,
         binomial_test=binomial,
         n_eff_assets=n_eff_assets,
+        n_eff_assets_method=n_eff_assets_method,
         cross_sectional_consistent=pass_rate >= CROSS_SECTIONAL_THRESHOLD,
         stage_info=stage_info,
         ticker_results=ticker_results,
@@ -452,6 +505,7 @@ def _empty_ticker_result(ticker: str) -> dict[str, Any]:
         "data_points": 0,
         "error": None,
         "validity": "valid",  # overwritten if anything fails
+        "low_confidence": False,
     }
 
 
@@ -533,14 +587,17 @@ def _compute_n_eff_assets(per_ticker_returns: dict[str, pd.Series]) -> float:
 
     For correlation matrix R with eigenvalues λ_i,
     ``N_eff = (Σλ)² / Σλ²``. For a perfectly correlated set this is 1;
-    for orthogonal returns it equals the raw count. Caps at the raw
+    for orthogonal series it equals the raw count. Caps at the raw
     count and floors at 1.
+
+    Generic over the input series — pass returns or per-ticker IC time
+    series; the method is the same. ``_compute_n_eff_assets_with_method``
+    picks which to use based on sample sizes.
     """
     n_raw = len(per_ticker_returns)
     if n_raw < 2:
         return float(n_raw)
 
-    # Align by date — inner join.
     df = pd.DataFrame(per_ticker_returns)
     df = df.dropna()
     if len(df) < 5 or df.shape[1] < 2:
@@ -562,6 +619,34 @@ def _compute_n_eff_assets(per_ticker_returns: dict[str, pd.Series]) -> float:
 
     n_eff = (sum_lam**2) / sum_lam_sq
     return float(min(max(n_eff, 1.0), n_raw))
+
+
+def _compute_n_eff_assets_with_method(
+    ic_series: dict[str, pd.Series],
+    returns: dict[str, pd.Series],
+) -> tuple[float, str]:
+    """Pick the right input matrix for ``N_eff_assets`` and report which.
+
+    The Stage-2-correct version measures correlation across the
+    *per-ticker IC time series* — that is the actual dependence
+    structure being tested for cross-sectional consistency. But IC
+    series are short (typically 5–20 rolling-window observations),
+    so the correlation matrix on them is unstable when any ticker's
+    IC sample falls below ``N_EFF_ASSETS_IC_OBS_MIN``.
+
+    Decision rule:
+
+    * If every ticker has ≥ ``N_EFF_ASSETS_IC_OBS_MIN`` IC observations,
+      use the IC correlation matrix and tag the result ``"ic"``.
+    * Otherwise fall back to daily-returns correlation and tag the
+      result ``"returns"`` so the UI can disclose which structure was
+      used.
+
+    Returns ``(n_eff, method)``.
+    """
+    if ic_series and all(len(s) >= N_EFF_ASSETS_IC_OBS_MIN for s in ic_series.values()):
+        return _compute_n_eff_assets(ic_series), "ic"
+    return _compute_n_eff_assets(returns), "returns"
 
 
 def _compute_binomial_null_test(
@@ -654,9 +739,14 @@ def _compute_stage_info(
         failed.append(
             CrossSectionalCriterion(
                 name="Aggregate IC magnitude",
-                description="With CI overlapping zero, |IC| must exceed the noise floor",
+                description=(
+                    f"When the 95% CI overlaps zero (current behaviour), "
+                    f"|IC| must exceed {STAGE0_AGGREGATE_IC_FLOOR:.2f} to be "
+                    f"considered economically meaningful. Equivalently: a CI "
+                    f"that excludes zero passes regardless of |IC|."
+                ),
                 current_value=abs_ic,
-                required_repr=f"|IC| > {STAGE0_AGGREGATE_IC_FLOOR:.2f} OR CI excludes 0",
+                required_repr=f"|IC| > {STAGE0_AGGREGATE_IC_FLOOR:.2f} (since CI overlaps 0)",
                 met=False,
             )
         )
