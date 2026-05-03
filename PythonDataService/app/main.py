@@ -6,9 +6,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.broker.ibkr.client import (
+    BrokerError,
+    ConnectionRefusedDueToSentinelError,
+    IbkrClient,
+    set_client,
+)
 from app.config import settings
 from app.routers import (
     aggregates,
+    broker,
     chart,
     data_quality,
     dataset,
@@ -39,11 +46,42 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown events"""
+    """Startup and shutdown events.
+
+    The IBKR client is connected best-effort: a failure here logs and
+    leaves the broker endpoints in a 503 state, but the rest of the
+    service still boots. The ONLY failure that aborts startup is the
+    paper-vs-live sentinel mismatch — that's a safety violation and
+    must not be silently absorbed.
+    """
     logger.info(f"Starting Polygon Data Service on {settings.HOST}:{settings.PORT}")
     logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
-    yield
-    logger.info("Shutting down Polygon Data Service")
+
+    ibkr_client = IbkrClient()
+    try:
+        await ibkr_client.connect()
+        set_client(ibkr_client)
+        logger.info("IBKR client connected; broker endpoints available.")
+    except ConnectionRefusedDueToSentinelError:
+        # Hard fail — never proceed past a paper/live mismatch.
+        logger.exception("IBKR sentinel mismatch — aborting startup.")
+        raise
+    except (BrokerError, OSError) as exc:
+        # Soft fail — Gateway is probably not running locally. Broker
+        # endpoints will return 503 until a future reconnect.
+        logger.warning(
+            "IBKR client could not connect (%s). Broker endpoints will return 503.",
+            exc,
+        )
+        set_client(None)
+
+    try:
+        yield
+    finally:
+        if ibkr_client.is_connected():
+            await ibkr_client.disconnect()
+        set_client(None)
+        logger.info("Shutting down Polygon Data Service")
 
 
 app = FastAPI(
@@ -95,6 +133,9 @@ app.include_router(iv_recorder.router)
 # /research/data-divergence/* — dashboard + matrix endpoints. The router
 # carries its own prefix so we mount it bare.
 app.include_router(research_divergence.router)
+# Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
+# Router carries its own /api/broker prefix.
+app.include_router(broker.router)
 
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)

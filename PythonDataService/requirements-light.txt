@@ -20,3 +20,9 @@ py_vollib==1.0.1
 # Used by app.research.divergence.dashboard to render the TV vs Polygon
 # data-divergence dashboard (iframe target in the research lab).
 plotly>=5.20,<7
+# IBKR client. Active fork of ib_insync (Ewald de Wit, d. 2024) maintained
+# under github.com/ib-api-reloaded. Used by app.broker.ibkr.* for paper
+# trading integration (Phase 1: read-only option chain, see
+# docs/architecture/ibkr-integration-phase1.md). Pinned to 2.x — pin tight
+# because IBKR wire protocol revs are coupled to TWS Gateway version.
+ib_async>=2.0,<3.0

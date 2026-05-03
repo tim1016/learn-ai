@@ -1,0 +1,469 @@
+"""Paper-trading order placement (Phase 3a).
+
+Public surface (curated):
+
+* ``place_paper_order(client, spec)`` — places a market or limit order
+  via ``ib_async.IB.placeOrder``. Returns an ``IbkrOrderAck`` synchronously
+  once IBKR has assigned an ``orderId``. Status transitions after that
+  point arrive via Phase 3b's order event stream.
+
+Phase 3a refuses any non-paper context. The four safety layers — env-var
+mode, port validator, DU account sentinel (Phase 1), per-request
+``confirm_paper`` (this module) — must all be true. Any one false and
+the placeOrder call is never reached.
+
+Order types: MKT, LMT only. Time-in-force: DAY, GTC, IOC, OPG. Brackets,
+OCO, trailing stops, market-on-close, IB algos — all deferred to Phase 3b
+or later.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+
+from app.broker.ibkr.client import BrokerError, IbkrClient, _is_paper_account
+from app.broker.ibkr.contracts import expiry_ms_to_yyyymmdd
+from app.broker.ibkr.models import (
+    IbkrOpenOrder,
+    IbkrOrderAck,
+    IbkrOrderEvent,
+    IbkrOrderSpec,
+    OrderEventType,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# Process-level idempotency cache: maps client_order_id → previously-issued
+# IbkrOrderAck. Survives across requests within a single uvicorn worker;
+# does NOT survive container restart. For durable idempotency we'd need a
+# Redis or Postgres-backed cache — Phase 3.5 follow-up.
+_IDEMPOTENCY_CACHE: dict[str, IbkrOrderAck] = {}
+
+
+def _idempotency_lookup(client_order_id: str | None) -> IbkrOrderAck | None:
+    if client_order_id is None:
+        return None
+    return _IDEMPOTENCY_CACHE.get(client_order_id)
+
+
+def _idempotency_store(client_order_id: str | None, ack: IbkrOrderAck) -> None:
+    if client_order_id is None:
+        return
+    _IDEMPOTENCY_CACHE[client_order_id] = ack
+
+
+def _idempotency_clear_for_testing() -> None:
+    """Test-only helper. Clear the idempotency cache between tests."""
+    _IDEMPOTENCY_CACHE.clear()
+
+
+class OrderRefusedError(BrokerError):
+    """Order placement was refused by a safety check before reaching IBKR."""
+
+
+class OrderNotFoundError(BrokerError):
+    """Cancel or lookup targeted an order that IBKR doesn't know about."""
+
+
+def _now_ms() -> int:
+    return int(datetime.now(tz=UTC).timestamp() * 1000)
+
+
+def _enforce_paper_safety(client: IbkrClient, spec: IbkrOrderSpec) -> str:
+    """Run all four paper-mode safety checks. Returns the validated account id.
+
+    Any failure raises ``OrderRefusedError`` *before* any contract or order
+    is constructed. We never want to come close to placing an order under a
+    bad combination.
+    """
+    settings = client.settings
+    account_id = client.connected_account
+    if account_id is None:
+        raise OrderRefusedError("No account id on connected client.")
+
+    # Layer 1: env-var mode
+    if settings.mode != "paper":
+        raise OrderRefusedError(
+            f"Refusing to place order: IBKR_MODE is {settings.mode!r}, must be "
+            "'paper' for Phase 3a."
+        )
+
+    # Layer 2: port validator already ran at config time, but cross-check
+    # the actually-connected port for paranoia.
+    from app.broker.ibkr.config import LIVE_PORTS
+
+    if settings.port in LIVE_PORTS:
+        raise OrderRefusedError(
+            f"Refusing to place order: connected port {settings.port} is a "
+            "LIVE Gateway port. Paper-mode env said paper but port disagrees."
+        )
+
+    # Layer 3: account-id sentinel (re-check; client.connect already enforced)
+    if not _is_paper_account(account_id):
+        raise OrderRefusedError(
+            f"Refusing to place order: account {account_id!r} does NOT begin "
+            "with 'DU'. Paper-mode env said paper but the broker connected "
+            "us to a non-paper account."
+        )
+
+    # Layer 4: per-request confirm_paper
+    if not spec.confirm_paper:
+        raise OrderRefusedError(
+            "Refusing to place order: spec.confirm_paper is False. "
+            "Set confirm_paper=true in the request body to place a paper order."
+        )
+
+    return account_id
+
+
+def _build_contract(spec: IbkrOrderSpec):
+    """``IbkrOrderSpec`` → unqualified ``ib_async.Stock`` or ``Option``.
+
+    The router's caller must ``qualifyContractsAsync`` before the order
+    actually goes out — we do that inside ``place_paper_order``.
+    """
+    if spec.sec_type == "STK":
+        from ib_async import Stock
+
+        return Stock(symbol=spec.symbol, exchange="SMART", currency="USD")
+
+    if spec.sec_type == "OPT":
+        from ib_async import Option
+
+        if spec.expiry_ms is None or spec.strike is None or spec.right is None:
+            raise OrderRefusedError(
+                "OPT order requires expiry_ms, strike, and right."
+            )
+        return Option(
+            symbol=spec.symbol,
+            lastTradeDateOrContractMonth=expiry_ms_to_yyyymmdd(spec.expiry_ms),
+            strike=float(spec.strike),
+            right=spec.right,
+            exchange="SMART",
+            currency="USD",
+            multiplier=str(spec.multiplier),
+        )
+
+    raise OrderRefusedError(
+        f"sec_type={spec.sec_type!r} is not supported in Phase 3a (STK/OPT only)."
+    )
+
+
+def _build_order(spec: IbkrOrderSpec):
+    """``IbkrOrderSpec`` → ``ib_async.MarketOrder`` or ``LimitOrder``."""
+    if spec.order_type == "MKT":
+        from ib_async import MarketOrder
+
+        order = MarketOrder(action=spec.action, totalQuantity=spec.quantity)
+    elif spec.order_type == "LMT":
+        if spec.limit_price is None:
+            raise OrderRefusedError("LMT order requires limit_price.")
+        from ib_async import LimitOrder
+
+        order = LimitOrder(
+            action=spec.action,
+            totalQuantity=spec.quantity,
+            lmtPrice=float(spec.limit_price),
+        )
+    else:
+        raise OrderRefusedError(
+            f"order_type={spec.order_type!r} is not supported in Phase 3a (MKT/LMT only)."
+        )
+
+    order.tif = spec.time_in_force
+    return order
+
+
+async def place_paper_order(
+    client: IbkrClient,
+    spec: IbkrOrderSpec,
+) -> IbkrOrderAck:
+    """Place one paper order via ib_async.
+
+    Steps:
+    1. Run all four safety layers; refuse on any failure.
+    2. Build and qualify the contract (so we get a ``conId``).
+    3. Build the order. Submit via ``IB.placeOrder``.
+    4. Return ``IbkrOrderAck`` with the broker-assigned ``orderId``.
+
+    Status updates after this point arrive via Phase 3b's order event
+    stream — this function doesn't wait for fills.
+    """
+    client.require_connected()
+    account_id = _enforce_paper_safety(client, spec)
+
+    # Idempotency check: if the same client_order_id has been seen, return
+    # the cached ack and don't place a second order. The cache lives on the
+    # uvicorn worker for the process lifetime — see _IDEMPOTENCY_CACHE.
+    cached = _idempotency_lookup(spec.client_order_id)
+    if cached is not None:
+        logger.info(
+            "[PAPER ORDER] idempotent replay: client_order_id=%s → order_id=%d",
+            spec.client_order_id,
+            cached.order_id,
+        )
+        return cached
+
+    contract = _build_contract(spec)
+    qualified = await client.ib.qualifyContractsAsync(contract)
+    if not qualified:
+        raise BrokerError(
+            f"IBKR could not qualify contract for {spec.symbol} "
+            f"({spec.sec_type})."
+        )
+    qualified_contract = qualified[0]
+
+    order = _build_order(spec)
+    logger.info(
+        "[PAPER ORDER] account=%s %s %s %s%s%s%s",
+        account_id,
+        spec.action,
+        spec.quantity,
+        spec.symbol,
+        f" @ {spec.limit_price}" if spec.order_type == "LMT" else " MKT",
+        f" exp={expiry_ms_to_yyyymmdd(spec.expiry_ms)}" if spec.expiry_ms else "",
+        f" {spec.strike}{spec.right}" if spec.right else "",
+    )
+
+    trade = client.ib.placeOrder(qualified_contract, order)
+
+    # ib_async.placeOrder returns synchronously with a Trade whose
+    # order.orderId is set. Status starts as 'PendingSubmit' and updates
+    # via events; we capture the snapshot now.
+    order_status = getattr(trade.orderStatus, "status", "Unknown") or "Unknown"
+    ack = IbkrOrderAck(
+        account_id=account_id,
+        is_paper=True,  # already enforced by safety layers
+        order_id=int(trade.order.orderId),
+        perm_id=int(trade.order.permId) if trade.order.permId else None,
+        client_id=int(client.settings.client_id),
+        con_id=int(qualified_contract.conId),
+        symbol=spec.symbol,
+        action=spec.action,
+        quantity=float(spec.quantity),
+        order_type=spec.order_type,
+        limit_price=spec.limit_price,
+        status=order_status,
+        placed_at_ms=_now_ms(),
+    )
+    _idempotency_store(spec.client_order_id, ack)
+    return ack
+
+
+# ── Phase 3b: cancel, list open, event stream ──────────────────────────
+
+
+def _trade_to_open_order(
+    trade,
+    account_id: str,
+    client_id: int,
+) -> IbkrOpenOrder:
+    """``ib_async.Trade`` → ``IbkrOpenOrder`` wire model."""
+    contract = trade.contract
+    order = trade.order
+    status_obj = trade.orderStatus
+
+    sec_type = contract.secType
+    order_type = "LMT" if order.lmtPrice and order.lmtPrice > 0 else "MKT"
+    return IbkrOpenOrder(
+        account_id=account_id,
+        order_id=int(order.orderId),
+        perm_id=int(order.permId) if order.permId else None,
+        client_id=client_id,
+        con_id=int(contract.conId),
+        symbol=contract.symbol,
+        sec_type=sec_type,
+        action=order.action,
+        quantity=float(order.totalQuantity),
+        order_type=order_type,
+        limit_price=float(order.lmtPrice) if order.lmtPrice else None,
+        time_in_force=order.tif or "DAY",
+        status=getattr(status_obj, "status", "Unknown") or "Unknown",
+        cumulative_filled=float(getattr(status_obj, "filled", 0.0) or 0.0),
+        remaining=float(getattr(status_obj, "remaining", 0.0) or 0.0),
+        avg_fill_price=(
+            float(status_obj.avgFillPrice)
+            if getattr(status_obj, "avgFillPrice", 0.0)
+            else None
+        ),
+        fetched_at_ms=_now_ms(),
+    )
+
+
+async def list_open_orders(client: IbkrClient) -> list[IbkrOpenOrder]:
+    """All open orders the connected client has placed.
+
+    ``ib_async.IB.openOrdersAsync`` returns ``Trade`` objects across the
+    session; we filter to the currently-connected account.
+    """
+    client.require_connected()
+    account_id = client.connected_account
+    if account_id is None:
+        raise BrokerError("connected client has no account_id")
+
+    trades = await client.ib.reqAllOpenOrdersAsync()
+    out: list[IbkrOpenOrder] = []
+    for trade in trades:
+        if getattr(trade.order, "account", account_id) != account_id:
+            continue
+        try:
+            out.append(_trade_to_open_order(trade, account_id, client.settings.client_id))
+        except Exception as exc:
+            logger.warning(
+                "Skipping unparseable open order conId=%s: %s",
+                getattr(trade.contract, "conId", "?"),
+                exc,
+            )
+    return out
+
+
+async def cancel_paper_order(
+    client: IbkrClient,
+    order_id: int,
+) -> IbkrOpenOrder:
+    """Cancel one paper order by ``order_id``.
+
+    Looks up the open Trade by ``order.orderId``, calls
+    ``IB.cancelOrder``, and returns the snapshot post-cancel-request
+    (status will typically be ``PendingCancel``; the terminal
+    ``Cancelled`` status arrives via the order event stream).
+
+    Refuses if mode is not paper. Mirrors the safety pattern from
+    ``place_paper_order`` — we never want to cancel a live order from
+    a paper-mode build by accident.
+    """
+    client.require_connected()
+    account_id = client.connected_account
+    if account_id is None:
+        raise OrderNotFoundError("No account id on connected client.")
+
+    settings = client.settings
+    if settings.mode != "paper":
+        raise OrderRefusedError(
+            f"Refusing to cancel: IBKR_MODE is {settings.mode!r}, must be 'paper'."
+        )
+    if not _is_paper_account(account_id):
+        raise OrderRefusedError(
+            f"Refusing to cancel: account {account_id!r} is not a paper (DU) account."
+        )
+
+    # Find the open trade with this orderId. ib_async caches them on `trades()`.
+    matching = [t for t in client.ib.trades() if int(t.order.orderId) == int(order_id)]
+    if not matching:
+        raise OrderNotFoundError(
+            f"No open order with order_id={order_id} on this client."
+        )
+    trade = matching[0]
+    client.ib.cancelOrder(trade.order)
+    return _trade_to_open_order(trade, account_id, client.settings.client_id)
+
+
+def _resolve_event_type(
+    trade,
+    *,
+    is_fill: bool,
+) -> OrderEventType:
+    if is_fill:
+        return "fill"
+    status = getattr(trade.orderStatus, "status", "")
+    if status in {"Cancelled", "ApiCancelled"}:
+        return "cancel"
+    return "status"
+
+
+def _trade_to_status_event(
+    trade,
+    account_id: str,
+) -> IbkrOrderEvent:
+    """Translate the current Trade snapshot into a status-type event."""
+    return IbkrOrderEvent(
+        account_id=account_id,
+        order_id=int(trade.order.orderId),
+        perm_id=int(trade.order.permId) if trade.order.permId else None,
+        con_id=int(trade.contract.conId) if trade.contract else None,
+        event_type=_resolve_event_type(trade, is_fill=False),
+        status=getattr(trade.orderStatus, "status", None),
+        cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),
+        remaining=float(getattr(trade.orderStatus, "remaining", 0.0) or 0.0),
+        ts_ms=_now_ms(),
+    )
+
+
+def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
+    """Translate one Fill into a fill-type event."""
+    exec_obj = getattr(fill, "execution", None)
+    return IbkrOrderEvent(
+        account_id=account_id,
+        order_id=int(trade.order.orderId),
+        perm_id=int(trade.order.permId) if trade.order.permId else None,
+        con_id=int(trade.contract.conId) if trade.contract else None,
+        event_type="fill",
+        status=getattr(trade.orderStatus, "status", None),
+        fill_quantity=float(getattr(exec_obj, "shares", 0.0) or 0.0),
+        avg_fill_price=float(getattr(trade.orderStatus, "avgFillPrice", 0.0) or 0.0) or None,
+        cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),
+        remaining=float(getattr(trade.orderStatus, "remaining", 0.0) or 0.0),
+        last_fill_price=float(getattr(exec_obj, "price", 0.0) or 0.0) or None,
+        ts_ms=_now_ms(),
+    )
+
+
+async def stream_order_events(
+    client: IbkrClient,
+    *,
+    poll_seconds: float = 0.5,
+) -> AsyncIterator[IbkrOrderEvent]:
+    """Yield order lifecycle events as they happen on the connected client.
+
+    Implementation: ib_async fires ``orderStatusEvent`` and ``execDetailsEvent``
+    when transitions happen. Rather than wire those eventkit hooks (which
+    couples this module to ib_async's event model and complicates
+    cancellation), we poll the cached ``trades()`` list per
+    ``poll_seconds`` and diff against the last-seen snapshot. Any new
+    fills or status changes yield events.
+
+    Trade-off: a high-frequency burst could collapse two transitions
+    into a single yielded event. For paper trading at 1 Hz polling that
+    almost never matters — and the tests verify the per-transition
+    delta logic. If we ever need true edge-trigger semantics, swap to
+    ``orderStatusEvent`` subscription in a Phase 3.5 follow-up.
+    """
+    client.require_connected()
+    account_id = client.connected_account
+    if account_id is None:
+        raise BrokerError("connected client has no account_id")
+
+    # Last-seen snapshots keyed by orderId. We compare against these to
+    # detect transitions on the next poll.
+    last_status: dict[int, str] = {}
+    last_fill_count: dict[int, int] = {}
+
+    try:
+        while True:
+            trades = list(client.ib.trades())
+            for trade in trades:
+                if getattr(trade.order, "account", account_id) != account_id:
+                    continue
+                oid = int(trade.order.orderId)
+
+                # Status transition?
+                cur_status = getattr(trade.orderStatus, "status", "Unknown") or "Unknown"
+                if last_status.get(oid) != cur_status:
+                    last_status[oid] = cur_status
+                    yield _trade_to_status_event(trade, account_id)
+
+                # New fills?
+                fills = list(getattr(trade, "fills", []) or [])
+                prev = last_fill_count.get(oid, 0)
+                if len(fills) > prev:
+                    for fill in fills[prev:]:
+                        yield _fill_to_event(trade, fill, account_id)
+                    last_fill_count[oid] = len(fills)
+
+            await asyncio.sleep(poll_seconds)
+    except asyncio.CancelledError:
+        raise
