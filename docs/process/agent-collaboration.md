@@ -48,7 +48,7 @@ Sharper than generic dev/review because the repo has scientific constraints.
 - Reference source identified (repo + commit, paper + section, or vendored under `references/`)
 - Provenance block on the implementation (`Formula` / `Reference` / `Canonical implementation` / `Validated against`) — `learn-ai-validation` skill enforces this
 - Golden fixture present at `PythonDataService/tests/fixtures/golden/<name>/` (or the canonical owner's equivalent fixtures path if the math lives in another layer)
-- Tolerance stated and justified (default `atol=1e-9, rtol=0`)
+- Tolerance stated and justified per the category-specific defaults in `.claude/rules/numerical-rigor.md` § "Tolerance rules → Default tolerances" (indicators, accumulated PnL, options Greeks, probabilities each have different defaults; looser values require classifying the divergence first per the same rule)
 - `docs/references/<name>.md` updated
 - `docs/math-sources-of-truth.md` updated if authority changes
 - A parity test asserting equivalence with explicit tolerances; if the implementation is a duplicate, the test names the canonical file
