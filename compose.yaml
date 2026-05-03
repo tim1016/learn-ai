@@ -69,6 +69,24 @@ services:
       # per-minute cap; only the free Basic tier is 5/min. Set to a
       # positive integer here only if you're on the free tier.
       - POLYGON_RATE_LIMIT_PER_MIN=${POLYGON_RATE_LIMIT_PER_MIN:-0}
+      # IBKR paper-trading integration (Phase 1, see
+      # docs/architecture/ibkr-integration-phase1.md). Defaults match
+      # IbkrSettings; surfaced here so they're greppable in compose.
+      - IBKR_MODE=${IBKR_MODE:-paper}
+      # ``auto`` resolves to the container's default gateway, which is the
+      # host machine in every container runtime (Podman, Docker Desktop,
+      # plain Docker). Override to a specific IP only when pinning to a
+      # particular interface.
+      - IBKR_HOST=${IBKR_HOST:-auto}
+      - IBKR_PORT=${IBKR_PORT:-4002}
+      - IBKR_CLIENT_ID=${IBKR_CLIENT_ID:-1}
+      - IBKR_PERSIST_TICKS=${IBKR_PERSIST_TICKS:-false}
+    # Make host.docker.internal resolve to the Windows host's bridge IP.
+    # Docker Desktop adds this automatically; Podman does NOT — without
+    # this entry, the name resolves to a sentinel that doesn't reach
+    # IB Gateway running natively on Windows.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy

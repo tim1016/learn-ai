@@ -1,0 +1,64 @@
+"""Tests for the broker router — health endpoint and 503 fallback.
+
+The SSE option-chain endpoint integrates with a connected IBKR client
+and is covered by an integration test that runs against a live
+Gateway. This file covers only the synthetic-disconnected paths the
+router must handle with no Gateway present.
+"""
+
+from __future__ import annotations
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.broker.ibkr.client import set_client
+from app.main import app
+
+
+@pytest.mark.asyncio
+async def test_health_returns_disconnected_when_no_client(monkeypatch) -> None:
+    set_client(None)
+    monkeypatch.setenv("IBKR_MODE", "paper")
+    monkeypatch.setenv("IBKR_PORT", "4002")
+
+    # Force settings reset so monkeypatched env applies.
+    from app.broker.ibkr import config as cfg
+
+    cfg.reset_settings_for_testing()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["connected"] is False
+    assert body["mode"] == "paper"
+    assert body["port"] == 4002
+    assert body["account_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_expirations_returns_503_when_disconnected() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/expirations/SPY")
+
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_chain_returns_400_when_strike_max_lt_min() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/broker/option-chain/SPY",
+            params={
+                "expiry_ms": 1_800_000_000_000,
+                "strike_min": 500,
+                "strike_max": 400,
+            },
+        )
+
+    assert resp.status_code == 400
