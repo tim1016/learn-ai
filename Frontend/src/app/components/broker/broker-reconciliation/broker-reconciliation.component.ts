@@ -13,7 +13,6 @@ import { PageHeaderComponent } from '../../../shared/page-header/page-header.com
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
-import { QuantLibService } from '../../../services/quantlib.service';
 import type {
   IbkrAccountSummary,
   IbkrPnLTick,
@@ -78,7 +77,6 @@ interface AccountReconcileRow {
 export class BrokerReconciliationComponent implements OnDestroy {
   private readonly broker = inject(BrokerService);
   private readonly health = inject(BrokerHealthService);
-  private readonly quantlib = inject(QuantLibService);
   private readonly injector = inject(Injector);
 
   readonly positionsSnapshot = signal<IbkrPositionsSnapshot | null>(null);
@@ -216,8 +214,12 @@ export class BrokerReconciliationComponent implements OnDestroy {
   exportCsv(): void {
     const rows: string[] = ['section,metric,ibkr,engine,diff_bps'];
     for (const r of this.accountRows()) {
+      // Account rows store the dollar diff and a tolerance band but
+      // not the raw bps. Recompute bps here so the CSV column matches
+      // its header (consumers expect a number, not 'green'/'yellow'/'red').
+      const bps = diffBps(r.ibkr, r.engine);
       rows.push(
-        ['account', r.metric, r.ibkr ?? '', r.engine ?? '', r.band ?? '']
+        ['account', r.metric, r.ibkr ?? '', r.engine ?? '', bps ?? '']
           .map(csvCell)
           .join(','),
       );
@@ -279,66 +281,27 @@ export class BrokerReconciliationComponent implements OnDestroy {
     this.pnlStream.set(stream);
   }
 
-  private async repriceAllPositions(positions: IbkrPosition[]): Promise<void> {
-    const opts = positions.filter(
-      (p) =>
-        p.sec_type === 'OPT' &&
-        p.expiry_ms !== null &&
-        p.strike !== null &&
-        p.right !== null,
-    );
-    if (opts.length === 0) return;
-    // Use the last-known underlying mark from the position itself if
-    // available; otherwise we'd need a quote — out of scope for V1.
-    const next = new Map<number, number>();
-    await Promise.all(
-      opts.map(async (p) => {
-        const expiry = p.expiry_ms ?? null;
-        const strike = p.strike ?? null;
-        const right = p.right ?? null;
-        if (expiry === null || strike === null || right === null) return;
-        const spot = p.market_price ?? null;
-        if (spot === null) return;
-        const expirationDate = isoDateFromMs(expiry);
-        if (expirationDate === null) return;
-        try {
-          const result = await this.quantlib.priceOption({
-            spot,
-            strike,
-            volatility: 0.2,
-            expirationDate,
-            optionType: right === 'C' ? 'call' : 'put',
-          });
-          if (result.success) {
-            next.set(p.con_id, result.delta);
-          }
-        } catch {
-          // Skip on failure — the row reads ``—`` for engine delta.
-        }
-      }),
-    );
-    this.engineDeltaByConId.set(next);
+  private async repriceAllPositions(_positions: IbkrPosition[]): Promise<void> {
+    // Engine delta requires the **underlying** spot, not the option's
+    // own mark. ``IbkrPosition.market_price`` for an option position is
+    // the option premium per IBKR — feeding it into Black-Scholes as
+    // ``spot`` produces nonsense deltas. Until the reconciliation page
+    // joins against the live chain stream (so we can read the
+    // underlying's marketPrice from the chain snapshot), leave the
+    // engine delta column empty rather than display wrong numbers.
+    // Tracked as a follow-up — see the caveat in the template and the
+    // V1 scope note in this component's class docstring.
+    this.engineDeltaByConId.set(new Map());
   }
 }
 
-function csvCell(value: number | string | null | undefined | ToleranceBand): string {
+function csvCell(value: number | string | null | undefined): string {
   if (value === null || value === undefined || value === '') return '';
   const s = String(value);
   if (s.includes(',') || s.includes('"') || s.includes('\n')) {
     return `"${s.replace(/"/g, '""')}"`;
   }
   return s;
-}
-
-function isoDateFromMs(ms: number): string | null {
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return null;
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(d);
 }
 
 function extractMessage(err: unknown): string {

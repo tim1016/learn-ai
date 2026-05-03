@@ -333,11 +333,14 @@ function midOrNull(q: IbkrOptionQuote): number | null {
 function isoDateFromMs(ms: number): string | null {
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return null;
-  // Use ET date — option expiries are exchange-local. The QuantLib
-  // service's ``expirationDate`` argument expects ``YYYY-MM-DD`` and
-  // doesn't carry a timezone, so we render in ET.
+  // Convert in UTC. The backend stores option expiries as midnight-UTC
+  // date markers (``yyyymmdd_to_expiry_ms`` parses ``YYYYMMDD`` with
+  // ``tzinfo=UTC``), so the round-trip from ms back to ``YYYY-MM-DD``
+  // must also use UTC. Converting in ET would shift expiries one day
+  // earlier whenever ``expiry_ms`` lands at 00:00 UTC and skew
+  // QuantLib's time-to-expiry near the close.
   const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
+    timeZone: 'UTC',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

@@ -97,9 +97,11 @@
         </tbody>
       </table>
       <p class="caveat">
-        IBKR delta is null pending the per-position chain join (Phase
-        2.5). Engine delta uses the position's last mark and a placeholder
-        IV of 0.20 — replace with the live chain quote once integrated.
+        IBKR delta and engine delta are both null pending the per-position
+        chain join (Phase 2.5). Engine pricing needs the underlying spot
+        and a real IV from the live chain snapshot — the option position's
+        own mark is the option premium, not the underlying, and feeding
+        it into Black-Scholes as ``spot`` yields invalid deltas.
       </p>
     }
   </section>
