@@ -92,6 +92,18 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    id: 'broker',
+    title: 'Broker',
+    icon: 'pi pi-link',
+    items: [
+      { label: 'Status', route: '/broker' },
+      { label: 'Options Chain (Live)', route: '/broker/options-chain' },
+      { label: 'Account Monitor', route: '/broker/account-monitor' },
+      { label: 'Orders', route: '/broker/orders' },
+      { label: 'Reconciliation', route: '/broker/reconciliation' },
+    ],
+  },
+  {
     id: 'portfolio',
     title: 'Portfolio',
     icon: 'pi pi-briefcase',

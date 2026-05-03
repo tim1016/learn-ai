@@ -226,6 +226,41 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "broker",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-status/broker-status.component"
+      ).then((m) => m.BrokerStatusComponent),
+  },
+  {
+    path: "broker/options-chain",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-options-chain/broker-options-chain.component"
+      ).then((m) => m.BrokerOptionsChainComponent),
+  },
+  {
+    path: "broker/account-monitor",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-account-monitor/broker-account-monitor.component"
+      ).then((m) => m.BrokerAccountMonitorComponent),
+  },
+  {
+    path: "broker/orders",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-orders/broker-orders.component"
+      ).then((m) => m.BrokerOrdersComponent),
+  },
+  {
+    path: "broker/reconciliation",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-reconciliation/broker-reconciliation.component"
+      ).then((m) => m.BrokerReconciliationComponent),
+  },
+  {
     path: "edge",
     loadComponent: () =>
       import("./components/edge/edge.component").then((m) => m.EdgeComponent),

@@ -1,0 +1,104 @@
+<app-page-header
+  title="Account Monitor"
+  subtitle="Live account-level and per-position P&L."
+>
+  <button
+    slot="actions"
+    type="button"
+    class="ghost-btn"
+    (click)="loadPositions()"
+  >
+    <i class="pi pi-refresh" aria-hidden="true"></i>
+    Refresh positions
+  </button>
+</app-page-header>
+
+@if (!canStream()) {
+  <p class="muted">
+    Broker is disconnected. Connect IB Gateway to a paper account and
+    refresh.
+  </p>
+} @else {
+  <section class="cards">
+    <article class="card">
+      <header class="card-header">
+        Account-level P&amp;L
+        <span class="badge mono">{{ accountStatus() }}</span>
+      </header>
+      @if (accountError(); as err) {
+        <p class="error">Stream error: {{ err }}</p>
+      }
+      @let tick = accountTick();
+      @if (tick === null) {
+        <p class="muted">Waiting for first tick…</p>
+      } @else {
+        <dl class="kv-grid">
+          <dt>Day P&amp;L</dt>
+          <dd class="mono num">{{ fmtSignedCurrency(tick.daily_pnl) }}</dd>
+          <dt>Unrealized</dt>
+          <dd class="mono num">{{ fmtSignedCurrency(tick.unrealized_pnl) }}</dd>
+          <dt>Realized</dt>
+          <dd class="mono num">{{ fmtSignedCurrency(tick.realized_pnl) }}</dd>
+        </dl>
+      }
+    </article>
+  </section>
+
+  @if (positionsError(); as err) {
+    <p class="error">Positions error: {{ err }}</p>
+  }
+  @if (positionsStreamError(); as err) {
+    <p class="error">Per-position stream error: {{ err }}</p>
+  }
+
+  <section class="positions-section">
+    <header class="section-header">
+      Positions <span class="badge mono">{{ positionsStatus() }}</span>
+    </header>
+
+    @if (positionsLoading()) {
+      <p class="muted">Loading positions…</p>
+    } @else if (rows().length === 0) {
+      <p class="muted">No open positions.</p>
+    } @else {
+      <table class="positions-table">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Type</th>
+            <th>Strike</th>
+            <th>Right</th>
+            <th>Expiry</th>
+            <th class="num">Qty (live)</th>
+            <th class="num">Avg cost</th>
+            <th class="num">Mkt value</th>
+            <th class="num">Day P&amp;L</th>
+            <th class="num">Unrealized</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of rows(); track trackRow($index, row)) {
+            @let p = row.position;
+            @let pnl = row.pnl;
+            <tr>
+              <td class="mono">{{ p.symbol }}</td>
+              <td class="mono">{{ p.sec_type }}</td>
+              <td class="mono">
+                {{ p.strike === null || p.strike === undefined ? '—' : fmtCurrency(p.strike) }}
+              </td>
+              <td class="mono">{{ p.right ?? '—' }}</td>
+              <td class="mono">{{ fmtDateNy(p.expiry_ms) }}</td>
+              <td class="mono num">
+                {{ pnl?.position === null || pnl?.position === undefined ? p.quantity : fmtSignedNumber(pnl?.position, 0) }}
+              </td>
+              <td class="mono num">{{ fmtCurrency(p.avg_cost) }}</td>
+              <td class="mono num">{{ fmtCurrency(pnl?.market_value) }}</td>
+              <td class="mono num">{{ fmtSignedCurrency(pnl?.daily_pnl) }}</td>
+              <td class="mono num">{{ fmtSignedCurrency(pnl?.unrealized_pnl) }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </section>
+}

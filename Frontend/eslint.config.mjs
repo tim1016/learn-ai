@@ -5,7 +5,15 @@ import unusedImports from "eslint-plugin-unused-imports";
 
 export default tseslint.config(
   {
-    ignores: ["dist/", "node_modules/", ".angular/"],
+    ignores: [
+      "dist/",
+      "node_modules/",
+      ".angular/",
+      // Auto-generated from the Python service's OpenAPI spec — do not
+      // hand-edit. Regenerate with ``npx openapi-typescript`` (see
+      // src/app/api/broker-models.ts).
+      "src/app/api/broker.types.ts",
+    ],
   },
   {
     files: ["**/*.ts"],
