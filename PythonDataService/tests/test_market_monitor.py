@@ -1,5 +1,6 @@
 """Tests for market monitor endpoints and PolygonMarketMonitor class"""
 
+from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -109,6 +110,44 @@ class TestPolygonMarketMonitor:
         assert "NASDAQ" in result[0]["exchanges"]
         assert result[1]["name"] == "Independence Day"
         assert result[1]["status"] == "Early Close"
+
+    def test_get_upcoming_events_accepts_polygon_model_objects(self):
+        @dataclass
+        class HolidayModel:
+            date: str
+            name: str
+            status: str
+            exchange: str
+            open: str | None = None
+            close: str | None = None
+
+        monitor = self._make_monitor()
+        monitor.client.get_market_holidays.return_value = [
+            HolidayModel(date="2026-05-25", name="Memorial Day", status="closed", exchange="NYSE"),
+            HolidayModel(date="2026-05-25", name="Memorial Day", status="closed", exchange="NASDAQ"),
+            HolidayModel(
+                date="2026-07-03",
+                name="Independence Day",
+                status="early-close",
+                exchange="NYSE",
+                open="2026-07-03T09:30:00-04:00",
+                close="2026-07-03T13:00:00-04:00",
+            ),
+        ]
+
+        result = monitor.get_upcoming_events(limit=5)
+
+        assert len(result) == 2
+        assert result[0] == {
+            "date": "2026-05-25",
+            "name": "Memorial Day",
+            "status": "Closed",
+            "open": None,
+            "close": None,
+            "exchanges": ["NYSE", "NASDAQ"],
+        }
+        assert result[1]["status"] == "Early Close"
+        assert result[1]["open"] == "2026-07-03T09:30:00-04:00"
 
     def test_get_upcoming_events_respects_limit(self):
         monitor = self._make_monitor()

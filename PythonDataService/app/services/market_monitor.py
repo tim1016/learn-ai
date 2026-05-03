@@ -104,22 +104,28 @@ class PolygonMarketMonitor:
             # De-duplicate across exchanges
             events_map: dict[str, dict[str, Any]] = {}
             for h in raw_holidays:
-                key = f"{h.get('date')}|{h.get('name')}"
-                exchange = h.get("exchange", "")
+                date = self._get_holiday_value(h, "date")
+                name = self._get_holiday_value(h, "name")
+                status = self._get_holiday_value(h, "status", "")
+                status_text = status or ""
+                exchange = self._get_holiday_value(h, "exchange", "")
+                open_time = self._get_holiday_value(h, "open")
+                close_time = self._get_holiday_value(h, "close")
+                key = f"{date}|{name}"
 
                 if key not in events_map:
                     events_map[key] = {
-                        "date": h.get("date"),
-                        "name": h.get("name"),
-                        "status": self._normalize_status(h.get("status", "")),
-                        "open": h.get("open"),
-                        "close": h.get("close"),
+                        "date": date,
+                        "name": name,
+                        "status": self._normalize_status(status_text),
+                        "open": open_time,
+                        "close": close_time,
                         "exchanges": [exchange],
                     }
                 else:
                     events_map[key]["exchanges"].append(exchange)
                     # Prefer "closed" over "early-close"
-                    if h.get("status", "").lower() == "closed":
+                    if status_text.lower() == "closed":
                         events_map[key]["status"] = "Closed"
                         events_map[key]["open"] = None
                         events_map[key]["close"] = None
@@ -207,11 +213,20 @@ class PolygonMarketMonitor:
     @staticmethod
     def _normalize_status(raw: str) -> str:
         """Capitalise status labels consistently."""
+        if not raw:
+            return ""
         mapping = {
             "closed": "Closed",
             "early-close": "Early Close",
         }
         return mapping.get(raw.lower(), raw.title())
+
+    @staticmethod
+    def _get_holiday_value(holiday: Any, field: str, default: Any = None) -> Any:
+        """Read a Polygon holiday field from either a dict or SDK model object."""
+        if isinstance(holiday, dict):
+            return holiday.get(field, default)
+        return getattr(holiday, field, default)
 
     @staticmethod
     def _error_response(message: str) -> dict[str, Any]:
