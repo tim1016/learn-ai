@@ -33,7 +33,11 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.broker.ibkr.models import IbkrChainSnapshot
+from app.broker.ibkr.models import (
+    IbkrAccountSummary,
+    IbkrChainSnapshot,
+    IbkrPnLTick,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -163,3 +167,176 @@ def make_writer(persist: bool, persist_dir: str) -> TickWriter:
         datetime.now(tz=UTC).isoformat(),
     )
     return ParquetTickWriter(persist_dir)
+
+
+# ── Phase 2c: account + P&L writers ────────────────────────────────────
+
+
+class AccountSnapshotWriter(ABC):
+    """Append-only sink for ``IbkrAccountSummary`` snapshots."""
+
+    @abstractmethod
+    async def write(self, snapshot: IbkrAccountSummary) -> None: ...
+
+    @abstractmethod
+    async def flush(self) -> None: ...
+
+    @abstractmethod
+    async def close(self) -> None: ...
+
+
+class NoopAccountWriter(AccountSnapshotWriter):
+    """Default account writer — discards everything."""
+
+    async def write(self, snapshot: IbkrAccountSummary) -> None:
+        return
+
+    async def flush(self) -> None:
+        return
+
+    async def close(self) -> None:
+        return
+
+
+class ParquetAccountWriter(AccountSnapshotWriter):
+    """``{persist_dir}/{date}/account.parquet`` — one row per snapshot.
+
+    Same minimal-shape principle as ``ParquetTickWriter`` (Phase 1):
+    flush on demand, append-merge on existing file, no compaction.
+    """
+
+    def __init__(self, persist_dir: str, flush_every_n: int = 50) -> None:
+        self._dir = Path(persist_dir)
+        self._buffer: list[dict] = []
+        self._flush_every = max(1, flush_every_n)
+
+    async def write(self, snapshot: IbkrAccountSummary) -> None:
+        self._buffer.append(snapshot.model_dump())
+        if len(self._buffer) >= self._flush_every:
+            await self.flush()
+
+    async def flush(self) -> None:
+        if not self._buffer:
+            return
+        import pandas as pd
+
+        df = pd.DataFrame(self._buffer)
+        df["_date"] = pd.to_datetime(df["fetched_at_ms"], unit="ms", utc=True).dt.strftime(
+            "%Y-%m-%d"
+        )
+        for date_str, part in df.groupby("_date"):
+            out_dir = self._dir / date_str
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / "account.parquet"
+            part = part.drop(columns=["_date"])
+            try:
+                if out_path.exists():
+                    existing = pd.read_parquet(out_path)
+                    combined = pd.concat([existing, part], ignore_index=True)
+                else:
+                    combined = part
+                combined.to_parquet(out_path, index=False)
+            except Exception as exc:
+                logger.error("ParquetAccountWriter flush failed for %s: %s", out_path, exc)
+        self._buffer.clear()
+        logger.debug("Flushed account buffer to %s", self._dir)
+
+    async def close(self) -> None:
+        await self.flush()
+
+
+def make_account_writer(persist: bool, persist_dir: str) -> AccountSnapshotWriter:
+    """Phase 2c factory — flag-gated, default OFF."""
+    if not persist:
+        return NoopAccountWriter()
+    Path(persist_dir).mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "ParquetAccountWriter active. Archive: %s (started at %s)",
+        persist_dir,
+        datetime.now(tz=UTC).isoformat(),
+    )
+    return ParquetAccountWriter(persist_dir)
+
+
+class PnLTickWriter(ABC):
+    """Append-only sink for ``IbkrPnLTick`` rows.
+
+    Same row schema for account-level (``con_id`` NULL) and per-position;
+    consumers split on ``con_id`` IS NULL when querying the parquet.
+    """
+
+    @abstractmethod
+    async def write(self, tick: IbkrPnLTick) -> None: ...
+
+    @abstractmethod
+    async def flush(self) -> None: ...
+
+    @abstractmethod
+    async def close(self) -> None: ...
+
+
+class NoopPnLWriter(PnLTickWriter):
+    async def write(self, tick: IbkrPnLTick) -> None:
+        return
+
+    async def flush(self) -> None:
+        return
+
+    async def close(self) -> None:
+        return
+
+
+class ParquetPnLWriter(PnLTickWriter):
+    """``{persist_dir}/{date}/pnl_{account_id}.parquet`` — one row per tick."""
+
+    def __init__(self, persist_dir: str, flush_every_n: int = 200) -> None:
+        self._dir = Path(persist_dir)
+        self._buffer: list[dict] = []
+        self._flush_every = max(1, flush_every_n)
+
+    async def write(self, tick: IbkrPnLTick) -> None:
+        self._buffer.append(tick.model_dump())
+        if len(self._buffer) >= self._flush_every:
+            await self.flush()
+
+    async def flush(self) -> None:
+        if not self._buffer:
+            return
+        import pandas as pd
+
+        df = pd.DataFrame(self._buffer)
+        df["_date"] = pd.to_datetime(df["ts_ms"], unit="ms", utc=True).dt.strftime(
+            "%Y-%m-%d"
+        )
+        for (date_str, account_id), part in df.groupby(["_date", "account_id"]):
+            out_dir = self._dir / date_str
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"pnl_{account_id}.parquet"
+            part = part.drop(columns=["_date"])
+            try:
+                if out_path.exists():
+                    existing = pd.read_parquet(out_path)
+                    combined = pd.concat([existing, part], ignore_index=True)
+                else:
+                    combined = part
+                combined.to_parquet(out_path, index=False)
+            except Exception as exc:
+                logger.error("ParquetPnLWriter flush failed for %s: %s", out_path, exc)
+        self._buffer.clear()
+        logger.debug("Flushed pnl buffer to %s", self._dir)
+
+    async def close(self) -> None:
+        await self.flush()
+
+
+def make_pnl_writer(persist: bool, persist_dir: str) -> PnLTickWriter:
+    """Phase 2c factory — flag-gated, default OFF."""
+    if not persist:
+        return NoopPnLWriter()
+    Path(persist_dir).mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "ParquetPnLWriter active. Archive: %s (started at %s)",
+        persist_dir,
+        datetime.now(tz=UTC).isoformat(),
+    )
+    return ParquetPnLWriter(persist_dir)

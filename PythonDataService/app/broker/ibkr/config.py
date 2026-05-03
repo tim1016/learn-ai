@@ -80,8 +80,18 @@ class IbkrSettings(BaseSettings):
     # (Phase 1.5 follow-up — see persistence.py).
     persist_ticks: bool = False
 
-    # Where Parquet partitions land when ``persist_ticks`` is True.
-    # One file per (date, symbol). Created lazily.
+    # Account snapshot persistence (Phase 2c). Same pattern as ticks: the
+    # writer is in place, default OFF, flip when forensic queries become
+    # necessary. One file per UTC date, ``account.parquet``.
+    persist_account: bool = False
+
+    # P&L tick persistence (Phase 2c). Default OFF. One file per
+    # (UTC date, account_id), ``pnl.parquet`` with both account-level
+    # (con_id NULL) and per-position rows.
+    persist_pnl: bool = False
+
+    # Where Parquet partitions land when any persist flag is True.
+    # Created lazily under ``{persist_dir}/{date}/{topic}.parquet``.
     persist_dir: str = "/data/ibkr-ticks"
 
     @model_validator(mode="after")

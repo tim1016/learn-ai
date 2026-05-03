@@ -204,6 +204,92 @@ class IbkrChainSnapshot(BaseModel):
     as_of_ms: int
 
 
+OrderAction = Literal["BUY", "SELL"]
+OrderType = Literal["MKT", "LMT"]
+OrderTimeInForce = Literal["DAY", "GTC", "IOC", "OPG"]
+OrderStatus = Literal[
+    "PendingSubmit",
+    "PendingCancel",
+    "PreSubmitted",
+    "Submitted",
+    "ApiPending",
+    "ApiCancelled",
+    "Cancelled",
+    "Filled",
+    "Inactive",
+    "Unknown",
+]
+
+
+class IbkrOrderSpec(BaseModel):
+    """Inbound order request from the API.
+
+    Phase 3a supports MKT and LMT only on stocks and US equity options.
+    Brackets, OCO, trailing stops are Phase 3b. The
+    ``confirm_paper`` field is a defense-in-depth gate: even when
+    ``IBKR_MODE=paper`` and the connected account begins with ``DU``,
+    the request body must explicitly set ``confirm_paper=true`` for the
+    handler to dispatch ``placeOrder``. Phase 4 (live) will require
+    ``confirm_live=true`` symmetrically.
+
+    Option fields (``expiry_ms``, ``strike``, ``right``) are required
+    when ``sec_type="OPT"`` and ignored when ``sec_type="STK"``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    sec_type: SecType
+    action: OrderAction
+    quantity: float = Field(..., gt=0, description="Always positive; 'action' encodes side.")
+    order_type: OrderType
+    limit_price: float | None = Field(
+        default=None,
+        gt=0,
+        description="Required when order_type='LMT'.",
+    )
+    time_in_force: OrderTimeInForce = "DAY"
+
+    # Option-only fields
+    expiry_ms: int | None = None
+    strike: float | None = None
+    right: OptionRight | None = None
+    multiplier: int = 100
+
+    confirm_paper: bool = Field(
+        ...,
+        description=(
+            "Required True. Defense-in-depth on top of IBKR_MODE and the "
+            "DU account-id sentinel."
+        ),
+    )
+
+
+class IbkrOrderAck(BaseModel):
+    """Synchronous acknowledgement of a placed order.
+
+    The handler returns this immediately after ``IB.placeOrder`` returns
+    a Trade. Status updates after this point arrive on Phase 3b's order
+    event stream.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    is_paper: bool
+    order_id: int
+    perm_id: int | None = None
+    client_id: int
+    con_id: int
+    symbol: str
+    action: OrderAction
+    quantity: float
+    order_type: OrderType
+    limit_price: float | None = None
+    status: OrderStatus
+    placed_at_ms: int
+
+
 class IbkrPnLTick(BaseModel):
     """One P&L update from IBKR (account-level or per-position).
 
@@ -257,10 +343,16 @@ __all__ = [
     "IbkrChainSnapshot",
     "IbkrConnectionHealth",
     "IbkrOptionQuote",
+    "IbkrOrderAck",
+    "IbkrOrderSpec",
     "IbkrPnLTick",
     "IbkrPosition",
     "IbkrPositionsSnapshot",
     "OptionRight",
+    "OrderAction",
+    "OrderStatus",
+    "OrderTimeInForce",
+    "OrderType",
     "SecType",
     "_coerce_iv",
     "_coerce_optional_float",

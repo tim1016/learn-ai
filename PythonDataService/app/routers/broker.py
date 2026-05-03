@@ -39,10 +39,20 @@ from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrChainSnapshot,
     IbkrConnectionHealth,
+    IbkrOrderAck,
+    IbkrOrderSpec,
     IbkrPnLTick,
     IbkrPositionsSnapshot,
 )
-from app.broker.ibkr.persistence import make_writer
+from app.broker.ibkr.orders import (
+    OrderRefusedError,
+    place_paper_order,
+)
+from app.broker.ibkr.persistence import (
+    make_account_writer,
+    make_pnl_writer,
+    make_writer,
+)
 from app.broker.ibkr.pnl import (
     DEFAULT_PNL_DEBOUNCE_S,
     stream_account_pnl,
@@ -99,12 +109,26 @@ async def account_summary_endpoint() -> IbkrAccountSummary:
     Phase 2a is sync (single round-trip). Phase 2b adds the SSE P&L
     stream for live day-P&L; this endpoint is for the
     "what's my account state right now" landing card.
+
+    Phase 2c — every snapshot is offered to the configured account
+    writer (no-op unless ``IBKR_PERSIST_ACCOUNT=true``).
     """
     client = _require_connected_or_503()
     try:
-        return await ibkr_account.fetch_account_summary(client)
+        snapshot = await ibkr_account.fetch_account_summary(client)
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    writer = make_account_writer(
+        persist=client.settings.persist_account,
+        persist_dir=client.settings.persist_dir,
+    )
+    try:
+        await writer.write(snapshot)
+        await writer.flush()
+    finally:
+        await writer.close()
+    return snapshot
 
 
 # ── /positions (Phase 2a) ───────────────────────────────────────────────
@@ -234,6 +258,10 @@ async def pnl_account_stream(
     """
     client = _require_connected_or_503()
     debounce_seconds = debounce_ms / 1000.0
+    pnl_writer = make_pnl_writer(
+        persist=client.settings.persist_pnl,
+        persist_dir=client.settings.persist_dir,
+    )
 
     async def event_source():
         try:
@@ -241,6 +269,7 @@ async def pnl_account_stream(
                 client,
                 debounce_seconds=debounce_seconds,
             ):
+                await pnl_writer.write(tick)
                 yield _pnl_tick_to_sse(tick)
         except asyncio.CancelledError:
             raise
@@ -248,6 +277,8 @@ async def pnl_account_stream(
             logger.error("Broker error in account-pnl stream: %s", exc)
             err = json.dumps({"error": str(exc)})
             yield f"event: error\ndata: {err}\n\n"
+        finally:
+            await pnl_writer.close()
 
     return StreamingResponse(
         event_source(),
@@ -281,6 +312,10 @@ async def pnl_positions_stream(
 
     client = _require_connected_or_503()
     debounce_seconds = debounce_ms / 1000.0
+    pnl_writer = make_pnl_writer(
+        persist=client.settings.persist_pnl,
+        persist_dir=client.settings.persist_dir,
+    )
 
     async def event_source():
         try:
@@ -289,6 +324,7 @@ async def pnl_positions_stream(
                 con_ids,
                 debounce_seconds=debounce_seconds,
             ):
+                await pnl_writer.write(tick)
                 yield _pnl_tick_to_sse(tick)
         except asyncio.CancelledError:
             raise
@@ -296,6 +332,8 @@ async def pnl_positions_stream(
             logger.error("Broker error in positions-pnl stream: %s", exc)
             err = json.dumps({"error": str(exc)})
             yield f"event: error\ndata: {err}\n\n"
+        finally:
+            await pnl_writer.close()
 
     return StreamingResponse(
         event_source(),
@@ -305,6 +343,36 @@ async def pnl_positions_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── /orders (Phase 3a) — paper-only POST ────────────────────────────────
+
+
+@router.post("/orders", response_model=IbkrOrderAck, status_code=status.HTTP_201_CREATED)
+async def place_order_endpoint(spec: IbkrOrderSpec) -> IbkrOrderAck:
+    """Place one paper order.
+
+    All four safety layers run before any IBKR call:
+
+    1. ``IBKR_MODE=paper`` (env var, validated at config time).
+    2. Connected port is NOT a known live port.
+    3. Connected account id begins with ``DU``.
+    4. ``spec.confirm_paper`` is ``True``.
+
+    Any failure → ``HTTP 403`` and no broker call. Other broker errors
+    (contract qualification, etc.) → ``502``. Successful submission
+    returns the broker-assigned ``orderId`` and ``permId`` in the body.
+
+    Phase 3a supports MKT and LMT only on STK and OPT. Brackets, OCO,
+    cancels, and the order event stream are Phase 3b.
+    """
+    client = _require_connected_or_503()
+    try:
+        return await place_paper_order(client, spec)
+    except OrderRefusedError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
