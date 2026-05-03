@@ -50,11 +50,19 @@ def _coerce_iv(value: float | None) -> float | None:
     return out
 
 
+SecType = Literal["STK", "OPT", "FUT", "FOP", "CASH", "BOND", "CFD", "WAR", "IND", "BAG"]
+
+
 class IbkrAccountSummary(BaseModel):
     """Snapshot of an IBKR account.
 
     The ``account_id`` is what the paper-vs-live sentinel runs against;
     paper account IDs begin with ``DU``.
+
+    Margin and P&L fields are populated from the ``reqAccountSummary``
+    tags listed in the Phase 2a doc. Any field IBKR doesn't return for
+    the account type (cash accounts have no margin numbers, for example)
+    is left ``None``.
     """
 
     model_config = ConfigDict(populate_by_name=True, frozen=True)
@@ -67,7 +75,80 @@ class IbkrAccountSummary(BaseModel):
     base_currency: str = "USD"
     cash_balance: float | None = None
     net_liquidation: float | None = None
+
+    # ── Margin and buying power (Phase 2a additions) ──────────────────
+    buying_power: float | None = None
+    init_margin: float | None = None
+    maint_margin: float | None = None
+    excess_liquidity: float | None = None
+    equity_with_loan_value: float | None = None
+    available_funds: float | None = None
+
+    # ── Account-level P&L (Phase 2a additions; pnl.py adds streaming) ─
+    day_pnl: float | None = None
+    unrealized_pnl: float | None = None
+    realized_pnl: float | None = None
+
     fetched_at_ms: int = Field(..., description="UTC milliseconds since epoch.")
+
+
+class IbkrPosition(BaseModel):
+    """One held position. Stocks and options share the same model.
+
+    For options, ``expiry_ms``, ``strike``, and ``right`` are populated
+    from the IBKR contract; for stocks they are ``None``. ``quantity``
+    is signed — negative for short positions.
+
+    ``avg_cost`` is per-unit *as IBKR reports it*: per share for stocks,
+    per contract for options (i.e. already multiplied by 100 for an
+    equity option). Consumers reconciling against the engine's
+    ``FillModel`` should multiply by ``multiplier`` when comparing to
+    a per-share cost basis.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    con_id: int
+    symbol: str
+    sec_type: SecType
+    exchange: str | None = None
+    currency: str = "USD"
+
+    # Option-specific. None for non-option securities.
+    expiry_ms: int | None = None
+    strike: float | None = None
+    right: OptionRight | None = None
+    multiplier: int = 1
+
+    # Quantity is signed (negative = short). avg_cost is the IBKR-reported
+    # cost basis per unit (per share for stocks, per contract for options).
+    quantity: float
+    avg_cost: float
+
+    # Live mark, populated when ``reqMktData`` has fired at least once
+    # for the underlying contract. For positions-only fetches (no live
+    # subscription), these stay None — the caller can join against the
+    # option-chain stream if they need a live mark.
+    market_price: float | None = None
+    market_value: float | None = None
+
+    fetched_at_ms: int
+
+
+class IbkrPositionsSnapshot(BaseModel):
+    """All open positions for one account at a moment in time.
+
+    The router returns this directly; the engine's reconciliation pass
+    diffs ``positions`` against its own ``PortfolioService`` view.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    is_paper: bool
+    positions: list[IbkrPosition]
+    fetched_at_ms: int
 
 
 class IbkrOptionQuote(BaseModel):
@@ -149,7 +230,10 @@ __all__ = [
     "IbkrChainSnapshot",
     "IbkrConnectionHealth",
     "IbkrOptionQuote",
+    "IbkrPosition",
+    "IbkrPositionsSnapshot",
     "OptionRight",
+    "SecType",
     "_coerce_iv",
     "_coerce_optional_float",
 ]

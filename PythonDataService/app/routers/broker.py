@@ -27,6 +27,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
+from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr import contracts as ibkr_contracts
 from app.broker.ibkr.client import (
     BrokerError,
@@ -34,7 +35,12 @@ from app.broker.ibkr.client import (
     get_client,
 )
 from app.broker.ibkr.market_data import stream_option_chain
-from app.broker.ibkr.models import IbkrChainSnapshot, IbkrConnectionHealth
+from app.broker.ibkr.models import (
+    IbkrAccountSummary,
+    IbkrChainSnapshot,
+    IbkrConnectionHealth,
+    IbkrPositionsSnapshot,
+)
 from app.broker.ibkr.persistence import make_writer
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
@@ -75,6 +81,42 @@ async def broker_health() -> IbkrConnectionHealth:
             fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
         )
     return client.health()
+
+
+# ── /account (Phase 2a) ─────────────────────────────────────────────────
+
+
+@router.get("/account", response_model=IbkrAccountSummary)
+async def account_summary_endpoint() -> IbkrAccountSummary:
+    """One-shot account summary: cash, NLV, margin, account-level P&L.
+
+    Phase 2a is sync (single round-trip). Phase 2b adds the SSE P&L
+    stream for live day-P&L; this endpoint is for the
+    "what's my account state right now" landing card.
+    """
+    client = _require_connected_or_503()
+    try:
+        return await ibkr_account.fetch_account_summary(client)
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+
+# ── /positions (Phase 2a) ───────────────────────────────────────────────
+
+
+@router.get("/positions", response_model=IbkrPositionsSnapshot)
+async def positions_endpoint() -> IbkrPositionsSnapshot:
+    """All open positions for the connected account.
+
+    Phase 2a returns a flat list (stocks + options share one model).
+    Multi-leg strategy grouping is a Phase 2.5 follow-up; for now the
+    UI groups visually but the wire is raw legs.
+    """
+    client = _require_connected_or_503()
+    try:
+        return await ibkr_account.fetch_positions(client)
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
 
 # ── /expirations ────────────────────────────────────────────────────────

@@ -62,3 +62,26 @@ async def test_chain_returns_400_when_strike_max_lt_min() -> None:
         )
 
     assert resp.status_code == 400
+
+
+# ── Phase 2a endpoints ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_account_returns_503_when_disconnected() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/account")
+
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_positions_returns_503_when_disconnected() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/positions")
+
+    assert resp.status_code == 503
