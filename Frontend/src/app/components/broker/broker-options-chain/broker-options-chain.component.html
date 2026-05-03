@@ -1,0 +1,179 @@
+<app-page-header
+  title="Options Chain (Live)"
+  subtitle="Streaming SPY chain with side-by-side IBKR Greeks vs engine Greeks."
+/>
+
+@if (!canStream()) {
+  <p class="muted">
+    Broker is disconnected. Connect IB Gateway to a paper account and
+    refresh the Status page.
+  </p>
+} @else {
+  <section class="controls">
+    <label class="control">
+      <span class="control-label">Symbol</span>
+      <input
+        class="control-input mono"
+        type="text"
+        [value]="symbol()"
+        (input)="symbol.set($any($event.target).value)"
+        aria-label="Symbol"
+      />
+    </label>
+
+    <label class="control">
+      <span class="control-label">Expiry</span>
+      <select
+        class="control-input"
+        [ngModel]="selectedExpiry()"
+        (ngModelChange)="selectedExpiry.set($event)"
+        aria-label="Expiry"
+      >
+        @for (e of expirations(); track e.ms) {
+          <option [ngValue]="e.ms">{{ e.label }}</option>
+        }
+      </select>
+    </label>
+
+    <label class="control">
+      <span class="control-label">Strike min</span>
+      <input
+        class="control-input mono"
+        type="number"
+        [ngModel]="strikeMin()"
+        (ngModelChange)="strikeMin.set($event)"
+        aria-label="Strike min"
+      />
+    </label>
+
+    <label class="control">
+      <span class="control-label">Strike max</span>
+      <input
+        class="control-input mono"
+        type="number"
+        [ngModel]="strikeMax()"
+        (ngModelChange)="strikeMax.set($event)"
+        aria-label="Strike max"
+      />
+    </label>
+
+    <button
+      type="button"
+      class="ghost-btn"
+      (click)="applyStrikeBand()"
+      [disabled]="underlyingPrice() === null"
+    >
+      ATM ± $20
+    </button>
+
+    <button
+      type="button"
+      class="primary-btn"
+      (click)="startStream()"
+    >
+      Start
+    </button>
+
+    <button
+      type="button"
+      class="ghost-btn"
+      (click)="togglePause()"
+      [disabled]="streamStatus() === 'idle'"
+    >
+      {{ paused() ? 'Resume' : 'Pause' }}
+    </button>
+
+    <button
+      type="button"
+      class="ghost-btn"
+      (click)="loadExpirations()"
+    >
+      Refresh expirations
+    </button>
+  </section>
+
+  @if (setupError(); as err) {
+    <p class="error">Setup error: {{ err }}</p>
+  }
+
+  @if (streamError(); as err) {
+    <p class="error">Stream error: {{ err }}</p>
+  }
+
+  <section class="chain-status mono">
+    @let spot = underlyingPrice();
+    <span class="chain-status-cell">
+      Spot: <strong>{{ spot === null ? '—' : fmtCurrency(spot) }}</strong>
+    </span>
+    <span class="chain-status-cell">
+      Stream: <strong [class.bad]="streamStatus() === 'error'">{{ streamStatus() }}</strong>
+    </span>
+    @if (latestSnapshot(); as snap) {
+      <span class="chain-status-cell">Updated: {{ fmtTimestampNy(snap.as_of_ms) }}</span>
+    }
+  </section>
+
+  <section class="chain-table-wrap">
+    @if (rows().length === 0) {
+      <p class="muted">No quotes yet. Start the stream after picking strikes.</p>
+    } @else {
+      <table class="chain-table">
+        <thead>
+          <tr>
+            <th colspan="6" class="side-head">Calls</th>
+            <th class="strike-head">Strike</th>
+            <th colspan="6" class="side-head">Puts</th>
+          </tr>
+          <tr>
+            <th>Bid</th>
+            <th>Ask</th>
+            <th>IV</th>
+            <th>Δ IBKR</th>
+            <th>Δ Engine</th>
+            <th>Δ bps</th>
+            <th></th>
+            <th>Bid</th>
+            <th>Ask</th>
+            <th>IV</th>
+            <th>Δ IBKR</th>
+            <th>Δ Engine</th>
+            <th>Δ bps</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of rows(); track trackRow($index, row)) {
+            <tr>
+              <td class="num mono">{{ fmtCurrency(row.call?.bid) }}</td>
+              <td class="num mono">{{ fmtCurrency(row.call?.ask) }}</td>
+              <td class="num mono">{{ fmtPercent(row.call?.iv) }}</td>
+              <td class="num mono">{{ fmtNumber(row.call?.delta, 3) }}</td>
+              <td class="num mono">{{ fmtNumber(row.callEngineDelta, 3) }}</td>
+              <td
+                class="num mono band"
+                [class.band-green]="row.callDeltaBand === 'green'"
+                [class.band-yellow]="row.callDeltaBand === 'yellow'"
+                [class.band-red]="row.callDeltaBand === 'red'"
+              >
+                {{ fmtNumber(row.callDeltaBps, 0) }}
+              </td>
+              <td class="strike mono">{{ fmtCurrency(row.strike) }}</td>
+              <td class="num mono">{{ fmtCurrency(row.put?.bid) }}</td>
+              <td class="num mono">{{ fmtCurrency(row.put?.ask) }}</td>
+              <td class="num mono">{{ fmtPercent(row.put?.iv) }}</td>
+              <td class="num mono">{{ fmtNumber(row.put?.delta, 3) }}</td>
+              <td class="num mono">{{ fmtNumber(row.putEngineDelta, 3) }}</td>
+              <td
+                class="num mono band"
+                [class.band-green]="row.putDeltaBand === 'green'"
+                [class.band-yellow]="row.putDeltaBand === 'yellow'"
+                [class.band-red]="row.putDeltaBand === 'red'"
+              >
+                {{ fmtNumber(row.putDeltaBps, 0) }}
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </section>
+}

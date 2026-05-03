@@ -1,0 +1,39 @@
+:host {
+  display: block;
+}
+
+.broker-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+
+  &.is-paper {
+    background: var(--paper-banner-bg, #fef3c7);
+    color: var(--paper-banner-fg, #78350f);
+  }
+
+  &.is-live {
+    background: var(--live-banner-bg, #fee2e2);
+    color: var(--live-banner-fg, #7f1d1d);
+  }
+
+  &.is-disconnected {
+    background: var(--disc-banner-bg, #f3f4f6);
+    color: var(--disc-banner-fg, #4b5563);
+  }
+}
+
+.broker-banner-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.broker-banner-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+}

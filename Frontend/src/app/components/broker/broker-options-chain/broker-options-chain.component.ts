@@ -1,0 +1,355 @@
+import {
+  ChangeDetectionStrategy,
+  Component,
+  Injector,
+  computed,
+  effect,
+  inject,
+  runInInjectionContext,
+  signal,
+} from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
+import { BrokerService } from '../../../services/broker.service';
+import { BrokerHealthService } from '../../../services/broker-health.service';
+import { brokerSse, type SseStatus, type SseStream } from '../../../services/broker-sse';
+import { QuantLibService } from '../../../services/quantlib.service';
+import type {
+  IbkrChainSnapshot,
+  IbkrOptionQuote,
+  OptionRight,
+} from '../../../api/broker-models';
+import {
+  diffBps,
+  fmtCurrency,
+  fmtDateNy,
+  fmtNumber,
+  fmtPercent,
+  fmtTimestampNy,
+  toleranceBand,
+  type ToleranceBand,
+} from '../format';
+
+const DEFAULT_SYMBOL = 'SPY';
+const DEFAULT_DEBOUNCE_MS = 500;
+const DEFAULT_STRIKE_BAND = 20; // ± dollars from spot
+const ENGINE_REPRICE_THRESHOLD_CENTS = 1; // re-call engine when bid/ask mid moves >= 1 cent
+
+interface Row {
+  strike: number;
+  call: IbkrOptionQuote | null;
+  put: IbkrOptionQuote | null;
+  callEngineDelta: number | null;
+  putEngineDelta: number | null;
+  callEngineGamma: number | null;
+  putEngineGamma: number | null;
+  callDeltaBps: number | null;
+  putDeltaBps: number | null;
+  callDeltaBand: ToleranceBand | null;
+  putDeltaBand: ToleranceBand | null;
+}
+
+interface ExpirationOption {
+  ms: number;
+  label: string;
+}
+
+/**
+ * /broker/options-chain — live SPY chain with IBKR vs engine Greeks.
+ *
+ * Stream lifecycle: pick an expiry + strike band → open one SSE
+ * connection → re-render the table per snapshot. ``Pause`` closes the
+ * source so backend ``cancelMktData`` fires for every contract. The
+ * engine Greek column polls ``QuantLibService.priceOption`` per
+ * (strike, right) when the bid/ask mid moves more than a cent.
+ */
+@Component({
+  selector: 'app-broker-options-chain',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [FormsModule, PageHeaderComponent],
+  styleUrl: './broker-options-chain.component.scss',
+  templateUrl: './broker-options-chain.component.html',
+})
+export class BrokerOptionsChainComponent {
+  private readonly broker = inject(BrokerService);
+  private readonly health = inject(BrokerHealthService);
+  private readonly quantlib = inject(QuantLibService);
+  private readonly injector = inject(Injector);
+
+  readonly symbol = signal(DEFAULT_SYMBOL);
+  readonly expirations = signal<ExpirationOption[]>([]);
+  readonly selectedExpiry = signal<number | null>(null);
+  readonly strikeMin = signal<number | null>(null);
+  readonly strikeMax = signal<number | null>(null);
+  readonly setupError = signal<string | null>(null);
+  readonly setupLoading = signal(false);
+  readonly paused = signal(false);
+
+  /**
+   * Active SSE stream. Held in a signal so the template can read its
+   * status / latest signals via computed. ``startStream`` swaps it out
+   * after explicitly closing the previous one.
+   */
+  private readonly currentStream = signal<SseStream<IbkrChainSnapshot> | null>(null);
+  readonly streamStatus = computed<SseStatus | 'idle'>(() =>
+    this.currentStream()?.status() ?? 'idle',
+  );
+  readonly streamError = signal<string | null>(null);
+  readonly latestSnapshot = computed<IbkrChainSnapshot | null>(
+    () => this.currentStream()?.latest() ?? null,
+  );
+
+  /** Engine reprice cache keyed by `${strike}:${right}` → last bid/ask mid we priced at. */
+  private readonly engineMidByKey = new Map<string, number>();
+  private readonly engineGreeksByKey = signal<
+    Map<string, { delta: number; gamma: number }>
+  >(new Map());
+
+  readonly fmtCurrency = fmtCurrency;
+  readonly fmtNumber = fmtNumber;
+  readonly fmtPercent = fmtPercent;
+  readonly fmtTimestampNy = fmtTimestampNy;
+  readonly fmtDateNy = fmtDateNy;
+
+  readonly canStream = computed(() => {
+    const h = this.health.health();
+    return h !== null && h.connected;
+  });
+
+  /** Per-strike row, keyed by strike, sorted ascending. */
+  readonly rows = computed<Row[]>(() => {
+    const snap = this.latestSnapshot();
+    const engineGreeks = this.engineGreeksByKey();
+    if (snap === null) return [];
+    const byStrike = new Map<number, { call: IbkrOptionQuote | null; put: IbkrOptionQuote | null }>();
+    for (const q of snap.quotes) {
+      const slot = byStrike.get(q.strike) ?? { call: null, put: null };
+      if (q.right === 'C') slot.call = q;
+      else slot.put = q;
+      byStrike.set(q.strike, slot);
+    }
+    const sorted = [...byStrike.entries()].sort((a, b) => a[0] - b[0]);
+    return sorted.map(([strike, { call, put }]) => {
+      const callEng = engineGreeks.get(`${strike}:C`) ?? null;
+      const putEng = engineGreeks.get(`${strike}:P`) ?? null;
+      const callBps = diffBps(call?.delta ?? null, callEng?.delta ?? null);
+      const putBps = diffBps(put?.delta ?? null, putEng?.delta ?? null);
+      return {
+        strike,
+        call,
+        put,
+        callEngineDelta: callEng?.delta ?? null,
+        putEngineDelta: putEng?.delta ?? null,
+        callEngineGamma: callEng?.gamma ?? null,
+        putEngineGamma: putEng?.gamma ?? null,
+        callDeltaBps: callBps,
+        putDeltaBps: putBps,
+        callDeltaBand: toleranceBand(callBps),
+        putDeltaBand: toleranceBand(putBps),
+      };
+    });
+  });
+
+  readonly underlyingPrice = computed(() => this.latestSnapshot()?.underlying_price ?? null);
+  readonly snapshotAge = computed(() => {
+    const snap = this.latestSnapshot();
+    if (snap === null) return null;
+    return Date.now() - snap.as_of_ms;
+  });
+
+  constructor() {
+    void this.loadExpirations();
+
+    // Recompute engine Greeks any time a snapshot arrives. Throttled
+    // implicitly by the per-key mid threshold.
+    effect(() => {
+      const snap = this.latestSnapshot();
+      const expiry = this.selectedExpiry();
+      if (snap === null || expiry === null) return;
+      this.maybeRepriceEngine(snap, expiry);
+    });
+
+    // Mirror SSE error onto our local signal so it survives stream
+    // teardown and is presented uniformly with setup errors.
+    effect(() => {
+      const err = this.currentStream()?.lastError() ?? null;
+      this.streamError.set(err);
+    });
+  }
+
+  async loadExpirations(): Promise<void> {
+    if (!this.canStream()) return;
+    this.setupLoading.set(true);
+    this.setupError.set(null);
+    try {
+      const result = await this.broker.expirations(this.symbol());
+      const opts: ExpirationOption[] = result.expirations_ms.map((ms) => ({
+        ms,
+        label: fmtDateNy(ms),
+      }));
+      this.expirations.set(opts);
+      // Default to nearest expiry.
+      const now = Date.now();
+      const next = opts.find((o) => o.ms >= now) ?? opts[0];
+      if (next) this.selectedExpiry.set(next.ms);
+    } catch (err) {
+      this.setupError.set(extractMessage(err));
+    } finally {
+      this.setupLoading.set(false);
+    }
+  }
+
+  startStream(): void {
+    const expiry = this.selectedExpiry();
+    const min = this.strikeMin();
+    const max = this.strikeMax();
+    if (expiry === null) {
+      this.streamError.set('Pick an expiry first.');
+      return;
+    }
+    if (min === null || max === null) {
+      this.streamError.set('Set strike min/max.');
+      return;
+    }
+    if (max < min) {
+      this.streamError.set('strike_max must be >= strike_min.');
+      return;
+    }
+
+    // Tear down any previous stream first.
+    this.stopStream();
+
+    this.streamError.set(null);
+    this.paused.set(false);
+    this.engineMidByKey.clear();
+    this.engineGreeksByKey.set(new Map());
+
+    const url =
+      `/api/broker/option-chain/${encodeURIComponent(this.symbol())}` +
+      `?expiry_ms=${expiry}` +
+      `&strike_min=${min}` +
+      `&strike_max=${max}` +
+      `&debounce_ms=${DEFAULT_DEBOUNCE_MS}`;
+
+    // ``brokerSse`` calls ``inject(DestroyRef)`` to wire up cleanup —
+    // run it inside this component's injector so the EventSource gets
+    // closed when the route navigates away.
+    const stream = runInInjectionContext(this.injector, () =>
+      brokerSse<IbkrChainSnapshot>(url, 'chain', { maxBuffer: 1 }),
+    );
+    this.currentStream.set(stream);
+  }
+
+  stopStream(): void {
+    const stream = this.currentStream();
+    if (stream) {
+      stream.close();
+    }
+    this.currentStream.set(null);
+    this.paused.set(true);
+  }
+
+  togglePause(): void {
+    if (this.paused()) {
+      this.startStream();
+    } else {
+      this.stopStream();
+    }
+  }
+
+  applyStrikeBand(): void {
+    const spot = this.underlyingPrice();
+    if (spot === null) return;
+    this.strikeMin.set(Math.floor(spot - DEFAULT_STRIKE_BAND));
+    this.strikeMax.set(Math.ceil(spot + DEFAULT_STRIKE_BAND));
+  }
+
+  trackRow = (_: number, row: Row): number => row.strike;
+
+  private maybeRepriceEngine(snap: IbkrChainSnapshot, expiryMs: number): void {
+    const spot = snap.underlying_price;
+    if (spot === null) return;
+    const expirationDate = isoDateFromMs(expiryMs);
+    if (expirationDate === null) return;
+
+    const promises: Promise<void>[] = [];
+    for (const q of snap.quotes) {
+      const mid = midOrNull(q);
+      if (mid === null) continue;
+      const key = `${q.strike}:${q.right}`;
+      const lastMid = this.engineMidByKey.get(key);
+      if (lastMid !== undefined && Math.abs(lastMid - mid) < ENGINE_REPRICE_THRESHOLD_CENTS / 100) {
+        continue;
+      }
+      this.engineMidByKey.set(key, mid);
+      const iv = q.iv ?? 0.2; // when IBKR has no IV, keep a benign placeholder
+      promises.push(
+        this.repriceEngine({
+          strike: q.strike,
+          right: q.right,
+          spot,
+          iv,
+          expirationDate,
+        }),
+      );
+    }
+    void Promise.all(promises);
+  }
+
+  private async repriceEngine(args: {
+    strike: number;
+    right: OptionRight;
+    spot: number;
+    iv: number;
+    expirationDate: string;
+  }): Promise<void> {
+    try {
+      const result = await this.quantlib.priceOption({
+        spot: args.spot,
+        strike: args.strike,
+        volatility: args.iv,
+        expirationDate: args.expirationDate,
+        optionType: args.right === 'C' ? 'call' : 'put',
+      });
+      if (!result.success) return;
+      const key = `${args.strike}:${args.right}`;
+      this.engineGreeksByKey.update((m) => {
+        const next = new Map(m);
+        next.set(key, { delta: result.delta, gamma: result.gamma });
+        return next;
+      });
+    } catch {
+      // Engine reprice errors are non-fatal — the column simply stays
+      // blank for that row and the diff column reads ``—``.
+    }
+  }
+}
+
+function midOrNull(q: IbkrOptionQuote): number | null {
+  if (q.bid === null || q.ask === null) return null;
+  return (q.bid + q.ask) / 2;
+}
+
+function isoDateFromMs(ms: number): string | null {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return null;
+  // Use ET date — option expiries are exchange-local. The QuantLib
+  // service's ``expirationDate`` argument expects ``YYYY-MM-DD`` and
+  // doesn't carry a timezone, so we render in ET.
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return fmt.format(d); // en-CA emits YYYY-MM-DD
+}
+
+function extractMessage(err: unknown): string {
+  if (err == null) return 'Unknown error';
+  if (typeof err === 'string') return err;
+  if (typeof err === 'object' && 'message' in err) {
+    return String((err as { message: unknown }).message);
+  }
+  return 'Unknown error';
+}

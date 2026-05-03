@@ -1,0 +1,172 @@
+<app-page-header
+  title="Broker Status"
+  subtitle="Connection, account, and open positions for the configured IBKR client."
+>
+  <button
+    slot="actions"
+    type="button"
+    class="refresh-btn"
+    (click)="refresh()"
+    aria-label="Refresh broker status"
+  >
+    <i class="pi pi-refresh" aria-hidden="true"></i>
+    <span>Refresh</span>
+  </button>
+</app-page-header>
+
+@let h = health();
+@let banner = bannerState();
+
+<section class="cards">
+  <article
+    class="card connection-card"
+    [class.is-paper]="banner === 'paper'"
+    [class.is-live]="banner === 'live'"
+    [class.is-disconnected]="banner === 'disconnected'"
+  >
+    <header class="card-header">Connection</header>
+    @if (h === null) {
+      <p class="muted">Loading…</p>
+    } @else {
+      <dl class="kv-grid">
+        <dt>Mode</dt>
+        <dd class="mono">{{ h.mode | uppercase }}</dd>
+
+        <dt>Account</dt>
+        <dd class="mono">{{ h.account_id ?? '—' }}</dd>
+
+        <dt>Status</dt>
+        <dd>
+          @if (h.connected) {
+            <span class="status-pill ok">Connected</span>
+          } @else {
+            <span class="status-pill bad">Disconnected</span>
+          }
+        </dd>
+
+        <dt>Sentinel</dt>
+        @let ok = sentinelOk();
+        <dd>
+          @if (ok === true) {
+            <span class="status-pill ok">DU prefix matches paper</span>
+          } @else if (ok === false) {
+            <span class="status-pill bad">Mismatch — should not happen</span>
+          } @else {
+            <span class="muted">—</span>
+          }
+        </dd>
+
+        <dt>Server version</dt>
+        <dd class="mono">{{ h.server_version ?? '—' }}</dd>
+
+        <dt>Host</dt>
+        <dd class="mono">{{ h.host }}</dd>
+
+        <dt>Port</dt>
+        <dd class="mono">{{ h.port }}</dd>
+
+        <dt>Client ID</dt>
+        <dd class="mono">{{ h.client_id }}</dd>
+      </dl>
+    }
+  </article>
+
+  @if (showAccountAndPositions()) {
+    @let accountState = account();
+    <article class="card">
+      <header class="card-header">Account snapshot</header>
+      @if (accountState.loading) {
+        <p class="muted">Loading…</p>
+      } @else if (accountState.error) {
+        <p class="error">Error: {{ accountState.error }}</p>
+      } @else if (accountState.data; as a) {
+        <dl class="kv-grid">
+          <dt>Cash</dt>
+          <dd class="mono">{{ fmtCurrency(a.cash_balance) }}</dd>
+
+          <dt>Net liquidation</dt>
+          <dd class="mono">{{ fmtCurrency(a.net_liquidation) }}</dd>
+
+          <dt>Buying power</dt>
+          <dd class="mono">{{ fmtCurrency(a.buying_power) }}</dd>
+
+          <dt>Excess liquidity</dt>
+          <dd class="mono">{{ fmtCurrency(a.excess_liquidity) }}</dd>
+
+          <dt>Initial margin</dt>
+          <dd class="mono">{{ fmtCurrency(a.init_margin) }}</dd>
+
+          <dt>Maintenance margin</dt>
+          <dd class="mono">{{ fmtCurrency(a.maint_margin) }}</dd>
+
+          <dt>Day P&amp;L</dt>
+          <dd class="mono">{{ fmtSignedCurrency(a.day_pnl) }}</dd>
+
+          <dt>Unrealized P&amp;L</dt>
+          <dd class="mono">{{ fmtSignedCurrency(a.unrealized_pnl) }}</dd>
+
+          <dt>Realized P&amp;L</dt>
+          <dd class="mono">{{ fmtSignedCurrency(a.realized_pnl) }}</dd>
+        </dl>
+      } @else {
+        <p class="muted">No data.</p>
+      }
+    </article>
+
+    @let positionsState = positions();
+    <article class="card positions-card">
+      <header class="card-header">
+        Positions
+        @if (positionsState.data) {
+          <span class="muted">({{ positionsState.data.positions.length }})</span>
+        }
+      </header>
+      @if (positionsState.loading) {
+        <p class="muted">Loading…</p>
+      } @else if (positionsState.error) {
+        <p class="error">Error: {{ positionsState.error }}</p>
+      } @else if (positionsState.data; as snap) {
+        @if (snap.positions.length === 0) {
+          <p class="muted">No open positions.</p>
+        } @else {
+          <table class="positions-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Type</th>
+                <th>Strike</th>
+                <th>Right</th>
+                <th>Expiry</th>
+                <th class="num">Qty</th>
+                <th class="num">Avg cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (p of snap.positions; track trackPosition($index, p)) {
+                <tr>
+                  <td class="mono">{{ p.symbol }}</td>
+                  <td class="mono">{{ p.sec_type }}</td>
+                  <td class="mono">
+                    {{ p.strike === null || p.strike === undefined ? '—' : fmtCurrency(p.strike) }}
+                  </td>
+                  <td class="mono">{{ p.right ?? '—' }}</td>
+                  <td class="mono">{{ fmtDateNy(p.expiry_ms) }}</td>
+                  <td class="mono num">{{ p.quantity }}</td>
+                  <td class="mono num">{{ fmtCurrency(p.avg_cost) }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      }
+    </article>
+  } @else if (h !== null && !h.connected) {
+    <article class="card">
+      <header class="card-header">Account snapshot</header>
+      <p class="muted">
+        Broker is disconnected. Connect IB Gateway with a paper account
+        and refresh.
+      </p>
+    </article>
+  }
+</section>

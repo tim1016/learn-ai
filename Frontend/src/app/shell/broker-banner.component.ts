@@ -1,0 +1,64 @@
+import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { BrokerHealthService } from '../services/broker-health.service';
+
+/**
+ * Always-on global banner reflecting IBKR connection state.
+ *
+ * Renders in the shell above the router-outlet so every page sees it.
+ * Three visual states (yellow paper / red live / grey disconnected)
+ * driven by ``BrokerHealthService.bannerState`` — see the service
+ * docstring for why the truth source is ``health.is_paper`` and never
+ * the ``IBKR_MODE`` env var.
+ */
+@Component({
+  selector: 'app-broker-banner',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  styleUrl: './broker-banner.component.scss',
+  template: `
+    @let state = banner();
+    @if (state) {
+      <div
+        class="broker-banner"
+        [class.is-paper]="state.kind === 'paper'"
+        [class.is-live]="state.kind === 'live'"
+        [class.is-disconnected]="state.kind === 'disconnected'"
+        role="status"
+        [attr.aria-label]="state.aria"
+      >
+        <span class="broker-banner-icon" aria-hidden="true">{{ state.icon }}</span>
+        <span class="broker-banner-text">{{ state.text }}</span>
+      </div>
+    }
+  `,
+})
+export class BrokerBannerComponent {
+  private readonly healthService = inject(BrokerHealthService);
+
+  readonly banner = computed(() => {
+    const state = this.healthService.bannerState();
+    if (state === null) return null;
+    const h = this.healthService.health();
+    if (state === 'paper') {
+      return {
+        kind: 'paper' as const,
+        icon: '🟡',
+        text: `PAPER MODE — ${h?.account_id ?? 'unknown'} · IBKR connected`,
+        aria: 'Connected to IBKR paper account',
+      };
+    }
+    if (state === 'live') {
+      return {
+        kind: 'live' as const,
+        icon: '⚠️',
+        text: `LIVE MODE — ${h?.account_id ?? 'unknown'} · IBKR connected`,
+        aria: 'Connected to IBKR LIVE account — real money at risk',
+      };
+    }
+    return {
+      kind: 'disconnected' as const,
+      icon: '⛔',
+      text: 'BROKER DISCONNECTED',
+      aria: 'IBKR broker is disconnected',
+    };
+  });
+}
