@@ -257,7 +257,7 @@ async def place_paper_order(
 # ── Phase 3b: cancel, list open, event stream ──────────────────────────
 
 
-def _trade_to_open_order(  # noqa: ANN001
+def _trade_to_open_order(
     trade,
     account_id: str,
     client_id: int,
@@ -312,7 +312,7 @@ async def list_open_orders(client: IbkrClient) -> list[IbkrOpenOrder]:
             continue
         try:
             out.append(_trade_to_open_order(trade, account_id, client.settings.client_id))
-        except Exception as exc:  # noqa: BLE001 - one bad row mustn't drop the rest
+        except Exception as exc:
             logger.warning(
                 "Skipping unparseable open order conId=%s: %s",
                 getattr(trade.contract, "conId", "?"),
@@ -362,7 +362,7 @@ async def cancel_paper_order(
     return _trade_to_open_order(trade, account_id, client.settings.client_id)
 
 
-def _resolve_event_type(  # noqa: ANN001
+def _resolve_event_type(
     trade,
     *,
     is_fill: bool,
@@ -375,7 +375,7 @@ def _resolve_event_type(  # noqa: ANN001
     return "status"
 
 
-def _trade_to_status_event(  # noqa: ANN001
+def _trade_to_status_event(
     trade,
     account_id: str,
 ) -> IbkrOrderEvent:
@@ -393,7 +393,7 @@ def _trade_to_status_event(  # noqa: ANN001
     )
 
 
-def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:  # noqa: ANN001
+def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
     """Translate one Fill into a fill-type event."""
     exec_obj = getattr(fill, "execution", None)
     return IbkrOrderEvent(
