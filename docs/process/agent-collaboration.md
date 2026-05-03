@@ -16,7 +16,7 @@ This is the single source of truth for the workflow. Both agents should load thi
 - Reviews diffs against repo rules and the task's review rubric.
 - Strong on local correctness, minimality, mock/runtime mismatches, and "receipts" (file paths, test output, exact rule citations).
 - Does **not** auto-load `.claude/rules/*.md`; must be told which files to load per review.
-- Guards specifically: math leaking out of `PythonDataService/`, ISO timestamps escaping wire/storage, "looks right" ports without fixtures, silent exception handling, dependency creep, broad edits mixed into focused fixes.
+- Guards specifically: math authority drift (duplicate numerical implementations without a named canonical owner, provenance block, or parity test), ISO timestamps escaping wire/storage, "looks right" ports without fixtures, silent exception handling, dependency creep, broad edits mixed into focused fixes.
 
 **Tim — admin / mediator / merge authority**
 - Sets task and constraints.
@@ -36,8 +36,8 @@ Sharper than generic dev/review because the repo has scientific constraints.
 - Cross-stack feature integration along existing paths
 
 **Codex reviews especially hard:**
-- Any numerical computation
-- Anything in `PythonDataService/`
+- Any numerical computation, regardless of layer
+- Any duplicate numerical implementation — must name the canonical owner, carry a provenance block, and ship a parity test (`learn-ai-validation` skill encodes the rule, per `CLAUDE.md` rule 5)
 - Timestamp formats and boundary serialization
 - Backtest, fill, commission, P&L, signal, indicator, statistics, Greeks, volatility logic
 - Any change that introduces or moves a math authority path
@@ -46,11 +46,12 @@ Sharper than generic dev/review because the repo has scientific constraints.
 
 **For math ports specifically**, Codex must require all of:
 - Reference source identified (repo + commit, paper + section, or vendored under `references/`)
-- Golden fixture present at `PythonDataService/tests/fixtures/golden/<name>/`
+- Provenance block on the implementation (`Formula` / `Reference` / `Canonical implementation` / `Validated against`) — `learn-ai-validation` skill enforces this
+- Golden fixture present at `PythonDataService/tests/fixtures/golden/<name>/` (or the canonical owner's equivalent fixtures path if the math lives in another layer)
 - Tolerance stated and justified (default `atol=1e-9, rtol=0`)
 - `docs/references/<name>.md` updated
 - `docs/math-sources-of-truth.md` updated if authority changes
-- A test asserting equivalence with explicit tolerances
+- A parity test asserting equivalence with explicit tolerances; if the implementation is a duplicate, the test names the canonical file
 
 ## The loop
 
@@ -150,7 +151,7 @@ By disagreement type:
 
 ## Things to watch (composite list from both agents)
 
-- Math leaking into `Backend/` or `Frontend/`.
+- Math authority drift — duplicate numerical implementations without a named canonical owner, provenance block, or parity test. (Math may live in any layer; what's not negotiable is one canonical implementation per concept.)
 - ISO strings, `DateTime`, or naive `datetime` escaping into wire/storage boundaries (see `numerical-rigor.md` ban list).
 - Tests that only check shape, not numerical behavior.
 - "Looks right" ports without fixtures.
