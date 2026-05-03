@@ -15,9 +15,14 @@ import pytest
 from app.broker.ibkr.config import IbkrSettings
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.broker.ibkr.orders import (
+    OrderNotFoundError,
     OrderRefusedError,
     _enforce_paper_safety,
+    _idempotency_clear_for_testing,
+    cancel_paper_order,
+    list_open_orders,
     place_paper_order,
+    stream_order_events,
 )
 
 
@@ -168,3 +173,127 @@ async def test_place_paper_order_refuses_when_confirm_missing() -> None:
     with pytest.raises(OrderRefusedError, match="confirm_paper"):
         await place_paper_order(client, _spec(confirm_paper=False))
     client.ib.placeOrder.assert_not_called()
+
+
+# ── Phase 3b: idempotency ─────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _clean_idempotency_cache():
+    _idempotency_clear_for_testing()
+    yield
+    _idempotency_clear_for_testing()
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_idempotency_replay_returns_cached_ack() -> None:
+    client = _client()
+    spec = _spec(client_order_id="abc-123")
+
+    first = await place_paper_order(client, spec)
+    second = await place_paper_order(client, spec)
+
+    assert client.ib.placeOrder.call_count == 1
+    assert first.order_id == second.order_id
+    assert first.placed_at_ms == second.placed_at_ms
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_no_client_order_id_does_not_dedupe() -> None:
+    client = _client()
+    await place_paper_order(client, _spec())
+    await place_paper_order(client, _spec())
+    assert client.ib.placeOrder.call_count == 2
+
+
+# ── Phase 3b: list_open_orders / cancel ───────────────────────────────
+
+
+def _trade_namespace(*, account="DU1234567", order_id=42, perm_id=99,
+                     symbol="SPY", sec_type="STK", action="BUY",
+                     quantity=10.0, lmt_price=0.0, tif="DAY",
+                     status_str="Submitted", filled=0.0, remaining=10.0,
+                     avg_fill_price=0.0, con_id=12345):
+    contract = SimpleNamespace(secType=sec_type, conId=con_id, symbol=symbol)
+    order = SimpleNamespace(
+        account=account, orderId=order_id, permId=perm_id,
+        action=action, totalQuantity=quantity, lmtPrice=lmt_price, tif=tif,
+    )
+    order_status = SimpleNamespace(
+        status=status_str, filled=filled, remaining=remaining,
+        avgFillPrice=avg_fill_price,
+    )
+    return SimpleNamespace(
+        contract=contract, order=order,
+        orderStatus=order_status, fills=[],
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_open_orders_filters_to_connected_account() -> None:
+    trades = [
+        _trade_namespace(order_id=42, account="DU1234567"),
+        _trade_namespace(order_id=43, account="DU9999999"),
+    ]
+    client = _client()
+    client.ib.reqAllOpenOrdersAsync = AsyncMock(return_value=trades)
+
+    out = await list_open_orders(client)
+    assert len(out) == 1
+    assert out[0].order_id == 42
+
+
+@pytest.mark.asyncio
+async def test_cancel_paper_order_calls_cancel_order_with_matching_trade() -> None:
+    trade = _trade_namespace(order_id=42)
+    client = _client()
+    client.ib.trades = MagicMock(return_value=[trade])
+    client.ib.cancelOrder = MagicMock()
+
+    out = await cancel_paper_order(client, order_id=42)
+    assert out.order_id == 42
+    client.ib.cancelOrder.assert_called_once_with(trade.order)
+
+
+@pytest.mark.asyncio
+async def test_cancel_paper_order_raises_when_order_not_found() -> None:
+    client = _client()
+    client.ib.trades = MagicMock(return_value=[])
+    client.ib.cancelOrder = MagicMock()
+
+    with pytest.raises(OrderNotFoundError):
+        await cancel_paper_order(client, order_id=42)
+    client.ib.cancelOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel_paper_order_refuses_in_live_mode() -> None:
+    client = _client(mode="live", port=4001)
+    client.ib.trades = MagicMock(return_value=[_trade_namespace(order_id=42)])
+    client.ib.cancelOrder = MagicMock()
+
+    with pytest.raises(OrderRefusedError):
+        await cancel_paper_order(client, order_id=42)
+    client.ib.cancelOrder.assert_not_called()
+
+
+# ── Phase 3b: stream_order_events ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_stream_order_events_emits_status_transitions() -> None:
+    trade_v1 = _trade_namespace(order_id=42, status_str="Submitted")
+    trade_v2 = _trade_namespace(order_id=42, status_str="Filled", filled=10, remaining=0)
+    snapshots = iter([[trade_v1], [trade_v2], [trade_v2]])
+
+    client = _client()
+    client.ib.trades = MagicMock(side_effect=lambda: next(snapshots))
+
+    out = []
+    async for event in stream_order_events(client, poll_seconds=0.001):
+        out.append(event)
+        if len(out) >= 2:
+            break
+
+    assert out[0].status == "Submitted"
+    assert out[1].status == "Filled"

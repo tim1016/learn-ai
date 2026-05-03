@@ -4,17 +4,19 @@ This is the *only* place outside ``app.broker.*`` that touches IBKR.
 The .NET backend and Angular frontend reach IBKR via these endpoints —
 no tight coupling to ``ib_async`` types crosses this boundary.
 
-Endpoints:
+Endpoints (Phase 1 + Phase 2 + Phase 3):
 
-* ``GET /api/broker/health`` — connection status + paper/live sentinel
-  result. Always 200; the body's ``connected=False`` carries the
-  disconnected case.
-* ``GET /api/broker/expirations/{symbol}`` — list available expiries.
-* ``GET /api/broker/option-chain/{symbol}`` — Server-Sent Events stream
-  of ``IbkrChainSnapshot`` JSON, one event per debounce window.
-
-Phase 2 (out of scope here): ``/positions``, ``/pnl-stream``.
-Phase 3 (out of scope here): ``POST /orders``.
+* ``GET /api/broker/health`` — connection + sentinel.
+* ``GET /api/broker/expirations/{symbol}`` — list expiries.
+* ``GET /api/broker/option-chain/{symbol}`` — SSE chain stream.
+* ``GET /api/broker/account`` — one-shot account summary (Phase 2a).
+* ``GET /api/broker/positions`` — open positions (Phase 2a).
+* ``GET /api/broker/pnl/stream`` — account-level P&L SSE (Phase 2b).
+* ``GET /api/broker/pnl/positions/stream?con_ids=...`` — per-position P&L SSE.
+* ``POST /api/broker/orders`` — place paper order (Phase 3a).
+* ``GET /api/broker/orders/open`` — list open orders (Phase 3b).
+* ``DELETE /api/broker/orders/{order_id}`` — cancel paper order (Phase 3b).
+* ``GET /api/broker/orders/stream`` — order event SSE (Phase 3b).
 """
 
 from __future__ import annotations
@@ -39,14 +41,20 @@ from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrChainSnapshot,
     IbkrConnectionHealth,
+    IbkrOpenOrder,
     IbkrOrderAck,
+    IbkrOrderEvent,
     IbkrOrderSpec,
     IbkrPnLTick,
     IbkrPositionsSnapshot,
 )
 from app.broker.ibkr.orders import (
+    OrderNotFoundError,
     OrderRefusedError,
+    cancel_paper_order,
+    list_open_orders,
     place_paper_order,
+    stream_order_events,
 )
 from app.broker.ibkr.persistence import (
     make_account_writer,
@@ -63,23 +71,15 @@ router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)
 
 
-# ── /health ─────────────────────────────────────────────────────────────
+# ── /health ────────────────────────────────────────────────────────────
 
 
 @router.get("/health", response_model=IbkrConnectionHealth)
 async def broker_health() -> IbkrConnectionHealth:
-    """Connection diagnostic. Never raises on disconnect.
-
-    The Angular banner that renders the paper/live pill reads from
-    ``mode`` and ``is_paper``. Phase 1 contract: if ``connected=False``
-    the UI shows a yellow "BROKER DISCONNECTED" toast.
-    """
+    """Connection diagnostic. Never raises on disconnect."""
     try:
         client = get_client()
     except NotConnectedError:
-        # Lifespan never initialised the client — surface a synthetic
-        # disconnected payload rather than 500. The settings module is
-        # the source of truth for what "should have connected to" means.
         from datetime import UTC, datetime
 
         from app.broker.ibkr.config import get_settings
@@ -99,16 +99,12 @@ async def broker_health() -> IbkrConnectionHealth:
     return client.health()
 
 
-# ── /account (Phase 2a) ─────────────────────────────────────────────────
+# ── /account (Phase 2a) ────────────────────────────────────────────────
 
 
 @router.get("/account", response_model=IbkrAccountSummary)
 async def account_summary_endpoint() -> IbkrAccountSummary:
     """One-shot account summary: cash, NLV, margin, account-level P&L.
-
-    Phase 2a is sync (single round-trip). Phase 2b adds the SSE P&L
-    stream for live day-P&L; this endpoint is for the
-    "what's my account state right now" landing card.
 
     Phase 2c — every snapshot is offered to the configured account
     writer (no-op unless ``IBKR_PERSIST_ACCOUNT=true``).
@@ -131,17 +127,12 @@ async def account_summary_endpoint() -> IbkrAccountSummary:
     return snapshot
 
 
-# ── /positions (Phase 2a) ───────────────────────────────────────────────
+# ── /positions (Phase 2a) ──────────────────────────────────────────────
 
 
 @router.get("/positions", response_model=IbkrPositionsSnapshot)
 async def positions_endpoint() -> IbkrPositionsSnapshot:
-    """All open positions for the connected account.
-
-    Phase 2a returns a flat list (stocks + options share one model).
-    Multi-leg strategy grouping is a Phase 2.5 follow-up; for now the
-    UI groups visually but the wire is raw legs.
-    """
+    """All open positions for the connected account."""
     client = _require_connected_or_503()
     try:
         return await ibkr_account.fetch_positions(client)
@@ -149,7 +140,7 @@ async def positions_endpoint() -> IbkrPositionsSnapshot:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
 
-# ── /expirations ────────────────────────────────────────────────────────
+# ── /expirations ───────────────────────────────────────────────────────
 
 
 @router.get("/expirations/{symbol}")
@@ -162,7 +153,7 @@ async def list_expirations_endpoint(symbol: str) -> dict:
     return {"symbol": symbol.upper(), "expirations_ms": expirations}
 
 
-# ── /option-chain (SSE) ─────────────────────────────────────────────────
+# ── /option-chain (SSE) ────────────────────────────────────────────────
 
 
 @router.get("/option-chain/{symbol}")
@@ -173,16 +164,7 @@ async def option_chain_stream(
     strike_max: Annotated[float, Query(..., gt=0, description="Upper strike bound.")],
     debounce_ms: Annotated[int, Query(ge=50, le=5000)] = 250,
 ) -> StreamingResponse:
-    """SSE stream of chain snapshots.
-
-    The caller narrows strikes via [strike_min, strike_max] — one expiry,
-    one band, one stream. Snapshot interval is the debounce window;
-    typical clients pick 250 ms.
-
-    The strike list inside the band is fetched from IBKR once at
-    subscription time. Strikes added or removed by IBKR mid-stream are
-    not picked up — clients reconnect on a noticeable absence.
-    """
+    """SSE stream of chain snapshots."""
     if strike_max < strike_min:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -208,19 +190,12 @@ async def option_chain_stream(
     async def event_source():
         try:
             async for snapshot in stream_option_chain(
-                client,
-                sym,
-                expiry_ms,
-                band,
-                debounce_seconds=debounce_seconds,
+                client, sym, expiry_ms, band, debounce_seconds=debounce_seconds
             ):
                 await writer.write(snapshot)
                 payload = _snapshot_to_json(snapshot)
                 yield f"event: chain\ndata: {payload}\n\n"
         except asyncio.CancelledError:
-            # Consumer disconnected. SSE generators are expected to
-            # propagate cancellation; the stream's ``finally`` cancels
-            # IBKR subscriptions.
             raise
         except BrokerError as exc:
             logger.error("Broker error in option-chain stream: %s", exc)
@@ -232,14 +207,11 @@ async def option_chain_stream(
     return StreamingResponse(
         event_source(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # disable buffering on nginx-style proxies
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-# ── /pnl/stream and /pnl/positions/stream (Phase 2b) ────────────────────
+# ── /pnl/stream and /pnl/positions/stream (Phase 2b + 2c) ──────────────
 
 
 def _pnl_tick_to_sse(tick: IbkrPnLTick) -> str:
@@ -250,25 +222,16 @@ def _pnl_tick_to_sse(tick: IbkrPnLTick) -> str:
 async def pnl_account_stream(
     debounce_ms: Annotated[int, Query(ge=200, le=10_000)] = int(DEFAULT_PNL_DEBOUNCE_S * 1000),
 ) -> StreamingResponse:
-    """SSE stream of account-level P&L ticks.
-
-    Each event carries an ``IbkrPnLTick`` with ``con_id=None`` and
-    populated daily/unrealized/realized P&L. Consumer gets a tick on
-    subscribe (the initial PnL snapshot) plus one per debounce window.
-    """
+    """Account-level P&L SSE stream."""
     client = _require_connected_or_503()
     debounce_seconds = debounce_ms / 1000.0
     pnl_writer = make_pnl_writer(
-        persist=client.settings.persist_pnl,
-        persist_dir=client.settings.persist_dir,
+        persist=client.settings.persist_pnl, persist_dir=client.settings.persist_dir
     )
 
     async def event_source():
         try:
-            async for tick in stream_account_pnl(
-                client,
-                debounce_seconds=debounce_seconds,
-            ):
+            async for tick in stream_account_pnl(client, debounce_seconds=debounce_seconds):
                 await pnl_writer.write(tick)
                 yield _pnl_tick_to_sse(tick)
         except asyncio.CancelledError:
@@ -283,46 +246,29 @@ async def pnl_account_stream(
     return StreamingResponse(
         event_source(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
 @router.get("/pnl/positions/stream")
 async def pnl_positions_stream(
-    con_ids: Annotated[
-        list[int],
-        Query(
-            ...,
-            description="One or more IBKR conIds to subscribe to (?con_ids=123&con_ids=456).",
-        ),
-    ],
+    con_ids: Annotated[list[int], Query(...)],
     debounce_ms: Annotated[int, Query(ge=200, le=10_000)] = int(DEFAULT_PNL_DEBOUNCE_S * 1000),
 ) -> StreamingResponse:
-    """SSE stream of per-position P&L ticks for the requested contracts.
-
-    Caller pre-resolves contract IDs via ``GET /api/broker/positions``
-    (Phase 2a). One event per (contract × debounce window). Use the
-    ``con_id`` field on each tick to demultiplex on the client.
-    """
+    """Per-position P&L SSE stream."""
     if not con_ids:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "con_ids must be non-empty.")
 
     client = _require_connected_or_503()
     debounce_seconds = debounce_ms / 1000.0
     pnl_writer = make_pnl_writer(
-        persist=client.settings.persist_pnl,
-        persist_dir=client.settings.persist_dir,
+        persist=client.settings.persist_pnl, persist_dir=client.settings.persist_dir
     )
 
     async def event_source():
         try:
             async for tick in stream_position_pnl(
-                client,
-                con_ids,
-                debounce_seconds=debounce_seconds,
+                client, con_ids, debounce_seconds=debounce_seconds
             ):
                 await pnl_writer.write(tick)
                 yield _pnl_tick_to_sse(tick)
@@ -338,34 +284,16 @@ async def pnl_positions_stream(
     return StreamingResponse(
         event_source(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-# ── /orders (Phase 3a) — paper-only POST ────────────────────────────────
+# ── /orders POST (Phase 3a) ────────────────────────────────────────────
 
 
 @router.post("/orders", response_model=IbkrOrderAck, status_code=status.HTTP_201_CREATED)
 async def place_order_endpoint(spec: IbkrOrderSpec) -> IbkrOrderAck:
-    """Place one paper order.
-
-    All four safety layers run before any IBKR call:
-
-    1. ``IBKR_MODE=paper`` (env var, validated at config time).
-    2. Connected port is NOT a known live port.
-    3. Connected account id begins with ``DU``.
-    4. ``spec.confirm_paper`` is ``True``.
-
-    Any failure → ``HTTP 403`` and no broker call. Other broker errors
-    (contract qualification, etc.) → ``502``. Successful submission
-    returns the broker-assigned ``orderId`` and ``permId`` in the body.
-
-    Phase 3a supports MKT and LMT only on STK and OPT. Brackets, OCO,
-    cancels, and the order event stream are Phase 3b.
-    """
+    """Place one paper order. Four safety layers run before any IBKR call."""
     client = _require_connected_or_503()
     try:
         return await place_paper_order(client, spec)
@@ -375,7 +303,68 @@ async def place_order_endpoint(spec: IbkrOrderSpec) -> IbkrOrderAck:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
 
-# ── helpers ─────────────────────────────────────────────────────────────
+# ── /orders open + cancel + stream (Phase 3b) ──────────────────────────
+
+
+@router.get("/orders/open", response_model=list[IbkrOpenOrder])
+async def list_open_orders_endpoint() -> list[IbkrOpenOrder]:
+    """All open orders the connected paper-client has placed."""
+    client = _require_connected_or_503()
+    try:
+        return await list_open_orders(client)
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+
+@router.delete(
+    "/orders/{order_id}",
+    response_model=IbkrOpenOrder,
+    status_code=status.HTTP_200_OK,
+)
+async def cancel_order_endpoint(order_id: int) -> IbkrOpenOrder:
+    """Cancel one paper order by ``order_id``."""
+    client = _require_connected_or_503()
+    try:
+        return await cancel_paper_order(client, order_id)
+    except OrderRefusedError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    except OrderNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+
+def _order_event_to_sse(event: IbkrOrderEvent) -> str:
+    return f"event: order\ndata: {event.model_dump_json()}\n\n"
+
+
+@router.get("/orders/stream")
+async def order_events_stream_endpoint(
+    poll_ms: Annotated[int, Query(ge=100, le=5000)] = 500,
+) -> StreamingResponse:
+    """SSE stream of order lifecycle events: status, fill, cancel, error."""
+    client = _require_connected_or_503()
+    poll_seconds = poll_ms / 1000.0
+
+    async def event_source():
+        try:
+            async for event in stream_order_events(client, poll_seconds=poll_seconds):
+                yield _order_event_to_sse(event)
+        except asyncio.CancelledError:
+            raise
+        except BrokerError as exc:
+            logger.error("Broker error in order-event stream: %s", exc)
+            err = json.dumps({"error": str(exc)})
+            yield f"event: error\ndata: {err}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ── helpers ────────────────────────────────────────────────────────────
 
 
 def _require_connected_or_503():
@@ -395,5 +384,4 @@ def _require_connected_or_503():
 
 
 def _snapshot_to_json(snapshot: IbkrChainSnapshot) -> str:
-    """Pydantic v2 ``.model_dump_json`` keeps numeric None correct."""
     return snapshot.model_dump_json()

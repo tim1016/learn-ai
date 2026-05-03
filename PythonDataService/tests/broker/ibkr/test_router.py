@@ -1,9 +1,9 @@
 """Tests for the broker router — health endpoint and 503 fallback.
 
-The SSE option-chain endpoint integrates with a connected IBKR client
-and is covered by an integration test that runs against a live
-Gateway. This file covers only the synthetic-disconnected paths the
-router must handle with no Gateway present.
+The streaming endpoints integrate with a connected IBKR client and are
+covered by integration tests that run against a live Gateway. This file
+covers only the synthetic-disconnected paths the router must handle
+with no Gateway present.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.client import set_client
 from app.main import app
+
+# ── Phase 1 endpoints ──────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -64,7 +66,7 @@ async def test_chain_returns_400_when_strike_max_lt_min() -> None:
     assert resp.status_code == 400
 
 
-# ── Phase 2a endpoints ──────────────────────────────────────────────────
+# ── Phase 2a endpoints ─────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -87,108 +89,7 @@ async def test_positions_returns_503_when_disconnected() -> None:
     assert resp.status_code == 503
 
 
-# ── Phase 2b endpoints ──────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_pnl_account_stream_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/pnl/stream")
-
-    assert resp.status_code == 503
-
-
-@pytest.mark.asyncio
-async def test_pnl_positions_stream_returns_400_when_no_con_ids() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/pnl/positions/stream")
-
-    # FastAPI rejects missing required query before the handler runs.
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_pnl_positions_stream_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/pnl/positions/stream?con_ids=700001&con_ids=700002")
-
-    assert resp.status_code == 503
-
-
-# ── Phase 3a endpoints ──────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_post_orders_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.post(
-            "/api/broker/orders",
-            json={
-                "symbol": "SPY",
-                "sec_type": "STK",
-                "action": "BUY",
-                "quantity": 1,
-                "order_type": "MKT",
-                "confirm_paper": True,
-            },
-        )
-
-    assert resp.status_code == 503
-
-
-@pytest.mark.asyncio
-async def test_post_orders_rejects_missing_confirm_paper_field() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.post(
-            "/api/broker/orders",
-            json={
-                "symbol": "SPY",
-                "sec_type": "STK",
-                "action": "BUY",
-                "quantity": 1,
-                "order_type": "MKT",
-                # confirm_paper omitted entirely
-            },
-        )
-
-    # FastAPI validates required fields before the handler runs.
-    assert resp.status_code == 422
-
-
-# ── Phase 2a endpoints ──────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_account_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/account")
-
-    assert resp.status_code == 503
-
-
-@pytest.mark.asyncio
-async def test_positions_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/positions")
-
-    assert resp.status_code == 503
-
-
-# ── Phase 2b endpoints ──────────────────────────────────────────────────
+# ── Phase 2b endpoints ─────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -217,12 +118,14 @@ async def test_pnl_positions_stream_returns_503_when_disconnected() -> None:
     set_client(None)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/pnl/positions/stream?con_ids=700001&con_ids=700002")
+        resp = await ac.get(
+            "/api/broker/pnl/positions/stream?con_ids=700001&con_ids=700002"
+        )
 
     assert resp.status_code == 503
 
 
-# ── Phase 3a endpoints ──────────────────────────────────────────────────
+# ── Phase 3a endpoints ─────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -264,3 +167,36 @@ async def test_post_orders_rejects_missing_confirm_paper_field() -> None:
 
     # FastAPI validates required fields before the handler runs.
     assert resp.status_code == 422
+
+
+# ── Phase 3b endpoints ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_open_orders_returns_503_when_disconnected() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/orders/open")
+
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_delete_order_returns_503_when_disconnected() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.delete("/api/broker/orders/42")
+
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_order_event_stream_returns_503_when_disconnected() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/orders/stream")
+
+    assert resp.status_code == 503

@@ -264,6 +264,80 @@ class IbkrOrderSpec(BaseModel):
         ),
     )
 
+    client_order_id: str | None = Field(
+        default=None,
+        description=(
+            "Optional caller-supplied UUID for idempotent retries. If a POST "
+            "arrives with a client_order_id we've already seen, the original "
+            "ack is returned and no second order is placed. Phase 3b feature; "
+            "set None on Phase 3a callers."
+        ),
+        max_length=64,
+    )
+
+
+OrderEventType = Literal["status", "fill", "cancel", "error"]
+
+
+class IbkrOrderEvent(BaseModel):
+    """One transition on an order's lifecycle.
+
+    Emitted by the order event SSE stream (Phase 3b). The fill case
+    carries non-null ``fill_quantity`` and ``avg_fill_price``; the
+    error case carries non-null ``error_code`` / ``error_message``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    order_id: int
+    perm_id: int | None = None
+    con_id: int | None = None
+    event_type: OrderEventType
+    status: OrderStatus | None = None
+
+    # Fill payload (event_type == "fill")
+    fill_quantity: float | None = None
+    avg_fill_price: float | None = None
+    cumulative_filled: float | None = None
+    remaining: float | None = None
+    last_fill_price: float | None = None
+
+    # Error payload (event_type == "error")
+    error_code: int | None = None
+    error_message: str | None = None
+
+    ts_ms: int
+
+
+class IbkrOpenOrder(BaseModel):
+    """One open order as IBKR currently sees it.
+
+    Returned by ``GET /api/broker/orders/open``; mirrors the in-flight
+    state of a previously-placed order (status, partial fills, remaining
+    quantity).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    order_id: int
+    perm_id: int | None = None
+    client_id: int
+    con_id: int
+    symbol: str
+    sec_type: SecType
+    action: OrderAction
+    quantity: float
+    order_type: OrderType
+    limit_price: float | None = None
+    time_in_force: OrderTimeInForce
+    status: OrderStatus
+    cumulative_filled: float = 0.0
+    remaining: float = 0.0
+    avg_fill_price: float | None = None
+    fetched_at_ms: int
+
 
 class IbkrOrderAck(BaseModel):
     """Synchronous acknowledgement of a placed order.
@@ -342,14 +416,17 @@ __all__ = [
     "IbkrAccountSummary",
     "IbkrChainSnapshot",
     "IbkrConnectionHealth",
+    "IbkrOpenOrder",
     "IbkrOptionQuote",
     "IbkrOrderAck",
+    "IbkrOrderEvent",
     "IbkrOrderSpec",
     "IbkrPnLTick",
     "IbkrPosition",
     "IbkrPositionsSnapshot",
     "OptionRight",
     "OrderAction",
+    "OrderEventType",
     "OrderStatus",
     "OrderTimeInForce",
     "OrderType",
