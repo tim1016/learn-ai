@@ -125,29 +125,67 @@ Phase 2a lets the Angular page render side-by-side: **Engine vs IBKR**. Each per
 
 That decomposition is what makes Phase 2 worth building, not the table itself.
 
-## Phase 2b — P&L SSE streams (NEXT)
+## Phase 2b — P&L SSE streams (IMPLEMENTED)
 
-`app/broker/ibkr/pnl.py`:
-- `stream_account_pnl(client) -> AsyncIterator[IbkrPnLTick]` — wraps `IB.reqPnL(account)` and `IB.pnlEvent`.
-- `stream_position_pnl(client, con_id) -> AsyncIterator[IbkrPnLTick]` — wraps `IB.reqPnLSingle`.
+`app/broker/ibkr/pnl.py` — async iterators that wrap ib_async's
+in-place-updating PnL objects:
 
-New endpoints:
-- `GET /api/broker/pnl/stream` — SSE; account-level day P&L per second.
-- `GET /api/broker/pnl/positions/stream` — SSE; per-position; the position list comes from a query parameter or covers all open positions.
+- `stream_account_pnl(client, debounce_seconds=1.0)` — wraps
+  `IB.reqPnL(account)`. First yield is the initial snapshot;
+  subsequent yields re-read the same PnL object after each debounce.
+- `stream_position_pnl(client, con_ids, debounce_seconds=1.0)` —
+  wraps `IB.reqPnLSingle(account, '', con_id)` once per requested
+  contract. One tick per (contract × debounce window). Caller
+  pre-resolves `con_ids` from `GET /api/broker/positions` (Phase 2a).
 
-`IbkrPnLTick` lives in `models.py`; structure mirrors Phase 1's tick wire model:
+Both cancel their subscriptions in `finally` so consumer disconnect
+doesn't leak server-side streaming lines.
+
+### Endpoints
+
+#### `GET /api/broker/pnl/stream?debounce_ms=1000`
+
+Server-Sent Events. Each `event: pnl` carries an `IbkrPnLTick` with
+`con_id=null` and the account's daily/unrealised/realised P&L.
+
+```
+event: pnl
+data: {"account_id":"DU1234567","con_id":null,"daily_pnl":12.5,"unrealized_pnl":100.0,"realized_pnl":-5.0,"market_value":null,"position":null,"ts_ms":1761234568145}
+```
+
+#### `GET /api/broker/pnl/positions/stream?con_ids=700001&con_ids=700002&debounce_ms=1000`
+
+Server-Sent Events. One tick per requested contract per debounce
+window. Use the `con_id` field on each tick to demultiplex on the
+client.
+
+`IbkrPnLTick` (from `models.py`):
 
 ```python
 class IbkrPnLTick(BaseModel):
     account_id: str
     con_id: int | None       # None for account-level
-    daily_pnl: float
-    unrealized_pnl: float
-    realized_pnl: float
+    daily_pnl: float | None
+    unrealized_pnl: float | None
+    realized_pnl: float | None
     market_value: float | None
     position: float | None
     ts_ms: int
 ```
+
+### Reconciliation play in 2b
+
+The Angular `account-monitor` page (Phase 2a + 2b) joins the static
+`/positions` table with the live `/pnl/positions/stream`. Per-row the UI
+renders **engine-predicted unrealised P&L** vs **IBKR-streamed
+unrealised P&L** at 1 Hz. Persistent gaps decompose the same way as the
+Phase 2a static reconciliation:
+
+| Disagreement | Likely cause |
+|---|---|
+| Mark differs but quantity matches | Greeks-model error (Phase 1) |
+| Quantity matches but unrealised drifts cumulatively | Commission missed in `FillModel` |
+| Realised P&L disagrees on a closed leg | Slippage model |
 
 ## Phase 2c — Persistence (deferred)
 

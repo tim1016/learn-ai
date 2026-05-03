@@ -85,3 +85,37 @@ async def test_positions_returns_503_when_disconnected() -> None:
         resp = await ac.get("/api/broker/positions")
 
     assert resp.status_code == 503
+
+
+# ── Phase 2b endpoints ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pnl_account_stream_returns_503_when_disconnected() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/pnl/stream")
+
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_pnl_positions_stream_returns_400_when_no_con_ids() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/pnl/positions/stream")
+
+    # FastAPI rejects missing required query before the handler runs.
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_pnl_positions_stream_returns_503_when_disconnected() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/pnl/positions/stream?con_ids=700001&con_ids=700002")
+
+    assert resp.status_code == 503

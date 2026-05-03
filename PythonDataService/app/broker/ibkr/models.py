@@ -204,6 +204,33 @@ class IbkrChainSnapshot(BaseModel):
     as_of_ms: int
 
 
+class IbkrPnLTick(BaseModel):
+    """One P&L update from IBKR (account-level or per-position).
+
+    Account-level ticks have ``con_id=None`` and ``position=None``. Per-
+    position ticks carry the contract id and signed quantity. ``daily_pnl``
+    is the day-rolled change; ``unrealized_pnl`` and ``realized_pnl`` are
+    cumulative since position open.
+
+    All P&L numbers are in the account's base currency. Phase 2 is USD-
+    only; multi-currency is a separate ticket.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    con_id: int | None = Field(
+        default=None,
+        description="None for account-level ticks; contract id for per-position.",
+    )
+    daily_pnl: float | None = None
+    unrealized_pnl: float | None = None
+    realized_pnl: float | None = None
+    market_value: float | None = None
+    position: float | None = None
+    ts_ms: int
+
+
 class IbkrConnectionHealth(BaseModel):
     """Diagnostic snapshot used by ``GET /api/broker/health``.
 
@@ -230,6 +257,7 @@ __all__ = [
     "IbkrChainSnapshot",
     "IbkrConnectionHealth",
     "IbkrOptionQuote",
+    "IbkrPnLTick",
     "IbkrPosition",
     "IbkrPositionsSnapshot",
     "OptionRight",

@@ -39,9 +39,15 @@ from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrChainSnapshot,
     IbkrConnectionHealth,
+    IbkrPnLTick,
     IbkrPositionsSnapshot,
 )
 from app.broker.ibkr.persistence import make_writer
+from app.broker.ibkr.pnl import (
+    DEFAULT_PNL_DEBOUNCE_S,
+    stream_account_pnl,
+    stream_position_pnl,
+)
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)
@@ -205,6 +211,98 @@ async def option_chain_stream(
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",  # disable buffering on nginx-style proxies
+        },
+    )
+
+
+# ── /pnl/stream and /pnl/positions/stream (Phase 2b) ────────────────────
+
+
+def _pnl_tick_to_sse(tick: IbkrPnLTick) -> str:
+    return f"event: pnl\ndata: {tick.model_dump_json()}\n\n"
+
+
+@router.get("/pnl/stream")
+async def pnl_account_stream(
+    debounce_ms: Annotated[int, Query(ge=200, le=10_000)] = int(DEFAULT_PNL_DEBOUNCE_S * 1000),
+) -> StreamingResponse:
+    """SSE stream of account-level P&L ticks.
+
+    Each event carries an ``IbkrPnLTick`` with ``con_id=None`` and
+    populated daily/unrealized/realized P&L. Consumer gets a tick on
+    subscribe (the initial PnL snapshot) plus one per debounce window.
+    """
+    client = _require_connected_or_503()
+    debounce_seconds = debounce_ms / 1000.0
+
+    async def event_source():
+        try:
+            async for tick in stream_account_pnl(
+                client,
+                debounce_seconds=debounce_seconds,
+            ):
+                yield _pnl_tick_to_sse(tick)
+        except asyncio.CancelledError:
+            raise
+        except BrokerError as exc:
+            logger.error("Broker error in account-pnl stream: %s", exc)
+            err = json.dumps({"error": str(exc)})
+            yield f"event: error\ndata: {err}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/pnl/positions/stream")
+async def pnl_positions_stream(
+    con_ids: Annotated[
+        list[int],
+        Query(
+            ...,
+            description="One or more IBKR conIds to subscribe to (?con_ids=123&con_ids=456).",
+        ),
+    ],
+    debounce_ms: Annotated[int, Query(ge=200, le=10_000)] = int(DEFAULT_PNL_DEBOUNCE_S * 1000),
+) -> StreamingResponse:
+    """SSE stream of per-position P&L ticks for the requested contracts.
+
+    Caller pre-resolves contract IDs via ``GET /api/broker/positions``
+    (Phase 2a). One event per (contract × debounce window). Use the
+    ``con_id`` field on each tick to demultiplex on the client.
+    """
+    if not con_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "con_ids must be non-empty.")
+
+    client = _require_connected_or_503()
+    debounce_seconds = debounce_ms / 1000.0
+
+    async def event_source():
+        try:
+            async for tick in stream_position_pnl(
+                client,
+                con_ids,
+                debounce_seconds=debounce_seconds,
+            ):
+                yield _pnl_tick_to_sse(tick)
+        except asyncio.CancelledError:
+            raise
+        except BrokerError as exc:
+            logger.error("Broker error in positions-pnl stream: %s", exc)
+            err = json.dumps({"error": str(exc)})
+            yield f"event: error\ndata: {err}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
         },
     )
 
