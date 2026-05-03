@@ -17,7 +17,7 @@ The internal `app.broker.ibkr.*` package is tightly coupled to the `ib_async` AP
 
 ## File map
 
-```
+```text
 PythonDataService/
 ├── app/
 │   ├── broker/
@@ -55,7 +55,7 @@ Future Phase 4 (live) will add a fourth: per-request `confirm_live=true` on orde
 
 ## Data flow
 
-```
+```text
                   ┌─────────────────┐
                   │  IB Gateway     │
                   │  (Windows host) │
@@ -124,7 +124,7 @@ Always 200. The body is the `IbkrConnectionHealth` model. UI reads `mode` and `i
 
 Server-Sent Events. Each `event: chain` carries an `IbkrChainSnapshot` payload:
 
-```
+```text
 event: chain
 data: {"symbol":"SPY","expiry_ms":1778976000000,"underlying_price":420.42,"quotes":[...],"as_of_ms":1761234568145}
 
@@ -144,12 +144,12 @@ Each `IbkrOptionQuote` carries IBKR's IV/Greeks tagged with `greeks_source` (`"m
 2. Subscribe to "US Equity and Options Add-On Streaming Bundle" on the **live** account ($4.50/mo + $10 prerequisite); paper inherits.
 3. In Gateway: Configure → API → Settings: enable ActiveX and Socket Clients, port `4002`. If running the Python service in Podman/WSL on Windows, `IBKR_HOST` should target the Windows-side WSL bridge IP (for example `172.23.176.1`), but Gateway's trusted IPs must include the container/VM peer IP that Windows sees in `netstat` (for example `172.23.176.94`). `127.0.0.1` is only enough for native host processes.
 4. From the repo:
-   ```
+   ```bash
    ./restart.sh        # rebuild Python container with ib_async
    curl http://localhost:8000/api/broker/health
    ```
 5. SSE smoke:
-   ```
+   ```bash
    curl -N "http://localhost:8000/api/broker/option-chain/SPY?expiry_ms=<int64-ms>&strike_min=580&strike_max=600&debounce_ms=500"
    ```
 
@@ -165,7 +165,7 @@ Each `IbkrOptionQuote` carries IBKR's IV/Greeks tagged with `greeks_source` (`"m
 
 Run from project root:
 
-```
+```bash
 podman exec polygon-data-service python -m pytest /app/tests/broker -v
 ```
 

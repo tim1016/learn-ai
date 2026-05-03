@@ -75,6 +75,12 @@ class IbkrSettings(BaseSettings):
     # failure. Each attempt is a 5-second timeout inside ib_async.
     connect_attempts: int = Field(default=3, ge=1, le=10)
 
+    # API session read-only flag. When True, IB Gateway / TWS rejects
+    # ``placeOrder`` at the protocol boundary, so even an in-process bug
+    # cannot route a trade. Default True — operators must explicitly set
+    # ``IBKR_READONLY=false`` to enable Phase 3 order-placement endpoints.
+    readonly: bool = True
+
     # Tick stream → Parquet archive. Default OFF; flip to True once the
     # archive directory has been chosen and the writer is in place
     # (Phase 1.5 follow-up — see persistence.py).

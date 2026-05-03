@@ -169,7 +169,7 @@ class IbkrClient:
                     host=resolved_host,
                     port=s.port,
                     clientId=s.client_id,
-                    readonly=False,
+                    readonly=s.readonly,
                 )
                 break
             except Exception as exc:
@@ -193,14 +193,18 @@ class IbkrClient:
             raise BrokerError("Connected to IBKR but managedAccounts() returned empty.")
 
         # Single-account assumption holds for individual paper/live setups.
-        # Multi-account FA structures will need explicit selection — out of
-        # scope for Phase 1, but we surface the constraint clearly.
+        # Multi-account FA structures need explicit selection — fail closed
+        # rather than silently use ``accounts[0]``, because the sentinel
+        # check below would only validate one of the accessible accounts
+        # while orders could still route to a sibling account that
+        # disagrees with ``IBKR_MODE``.
         if len(accounts) > 1:
-            logger.warning(
-                "[STEP 2/3] IBKR returned %d managed accounts; using the first (%s). "
-                "Multi-account selection is a Phase 2 follow-up.",
-                len(accounts),
-                accounts[0],
+            await self._ib.disconnectAsync()
+            raise BrokerError(
+                f"IBKR returned {len(accounts)} managed accounts ({accounts!r}). "
+                "Multi-account selection is not yet implemented. Refusing to "
+                "proceed because the paper/live sentinel can only validate one "
+                "account at a time."
             )
         account_id = accounts[0]
         is_paper = _is_paper_account(account_id)

@@ -28,6 +28,7 @@ are ``int64`` ms UTC. No ISO strings, no naive datetimes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
@@ -131,29 +132,46 @@ class ParquetTickWriter(TickWriter):
         df["_date"] = pd.to_datetime(df["as_of_ms"], unit="ms", utc=True).dt.strftime(
             "%Y-%m-%d"
         )
+        # Per-partition write is synchronous parquet I/O; offload via
+        # ``asyncio.to_thread`` so flushes during SSE streaming don't
+        # stall the event loop. Failed partitions are kept in the buffer
+        # for the next flush rather than dropped.
+        failed_rows: list[dict] = []
         for (date_str, symbol), part in df.groupby(["_date", "symbol"]):
             out_dir = self._dir / date_str
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / f"{symbol}.parquet"
             part = part.drop(columns=["_date"])
             try:
-                if out_path.exists():
-                    existing = pd.read_parquet(out_path)
-                    combined = pd.concat([existing, part], ignore_index=True)
-                else:
-                    combined = part
-                combined.to_parquet(out_path, index=False)
+                await asyncio.to_thread(_write_parquet_partition, out_path, part)
             except Exception as exc:
                 logger.error(
                     "ParquetTickWriter flush failed for %s: %s",
                     out_path,
                     exc,
                 )
-        self._buffer.clear()
+                failed_rows.extend(part.to_dict("records"))
+        self._buffer = failed_rows
         logger.debug("Flushed tick buffer to %s", self._dir)
 
     async def close(self) -> None:
         await self.flush()
+
+
+def _write_parquet_partition(out_path: Path, part) -> None:
+    """Append ``part`` to ``out_path``, reading + concatenating if it exists.
+
+    Synchronous helper invoked from ``asyncio.to_thread`` so the heavy
+    pandas / pyarrow I/O never runs on the event loop.
+    """
+    import pandas as pd
+
+    if out_path.exists():
+        existing = pd.read_parquet(out_path)
+        combined = pd.concat([existing, part], ignore_index=True)
+    else:
+        combined = part
+    combined.to_parquet(out_path, index=False)
 
 
 def make_writer(persist: bool, persist_dir: str) -> TickWriter:
@@ -224,21 +242,18 @@ class ParquetAccountWriter(AccountSnapshotWriter):
         df["_date"] = pd.to_datetime(df["fetched_at_ms"], unit="ms", utc=True).dt.strftime(
             "%Y-%m-%d"
         )
+        failed_rows: list[dict] = []
         for date_str, part in df.groupby("_date"):
             out_dir = self._dir / date_str
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / "account.parquet"
             part = part.drop(columns=["_date"])
             try:
-                if out_path.exists():
-                    existing = pd.read_parquet(out_path)
-                    combined = pd.concat([existing, part], ignore_index=True)
-                else:
-                    combined = part
-                combined.to_parquet(out_path, index=False)
+                await asyncio.to_thread(_write_parquet_partition, out_path, part)
             except Exception as exc:
                 logger.error("ParquetAccountWriter flush failed for %s: %s", out_path, exc)
-        self._buffer.clear()
+                failed_rows.extend(part.to_dict("records"))
+        self._buffer = failed_rows
         logger.debug("Flushed account buffer to %s", self._dir)
 
     async def close(self) -> None:
@@ -308,21 +323,18 @@ class ParquetPnLWriter(PnLTickWriter):
         df["_date"] = pd.to_datetime(df["ts_ms"], unit="ms", utc=True).dt.strftime(
             "%Y-%m-%d"
         )
+        failed_rows: list[dict] = []
         for (date_str, account_id), part in df.groupby(["_date", "account_id"]):
             out_dir = self._dir / date_str
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / f"pnl_{account_id}.parquet"
             part = part.drop(columns=["_date"])
             try:
-                if out_path.exists():
-                    existing = pd.read_parquet(out_path)
-                    combined = pd.concat([existing, part], ignore_index=True)
-                else:
-                    combined = part
-                combined.to_parquet(out_path, index=False)
+                await asyncio.to_thread(_write_parquet_partition, out_path, part)
             except Exception as exc:
                 logger.error("ParquetPnLWriter flush failed for %s: %s", out_path, exc)
-        self._buffer.clear()
+                failed_rows.extend(part.to_dict("records"))
+        self._buffer = failed_rows
         logger.debug("Flushed pnl buffer to %s", self._dir)
 
     async def close(self) -> None:

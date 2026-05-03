@@ -201,6 +201,14 @@ async def option_chain_stream(
             logger.error("Broker error in option-chain stream: %s", exc)
             err = json.dumps({"error": str(exc)})
             yield f"event: error\ndata: {err}\n\n"
+        except ValueError as exc:
+            # Contract qualification (``qualify_underlying``,
+            # ``build_option_contract``) raises ValueError when IBKR
+            # cannot resolve a symbol/strike/right combination — surface
+            # those through the same SSE error path as broker errors.
+            logger.error("Invalid option-chain request: %s", exc)
+            err = json.dumps({"error": str(exc)})
+            yield f"event: error\ndata: {err}\n\n"
         finally:
             await writer.close()
 
@@ -252,12 +260,22 @@ async def pnl_account_stream(
 
 @router.get("/pnl/positions/stream")
 async def pnl_positions_stream(
-    con_ids: Annotated[list[int], Query(...)],
+    con_ids: Annotated[list[int] | None, Query()] = None,
     debounce_ms: Annotated[int, Query(ge=200, le=10_000)] = int(DEFAULT_PNL_DEBOUNCE_S * 1000),
 ) -> StreamingResponse:
-    """Per-position P&L SSE stream."""
+    """Per-position P&L SSE stream.
+
+    ``con_ids`` is a repeated query parameter. We accept it as optional
+    and reject missingness explicitly with 422 — declaring it required
+    via ``Query()`` triggers a known FastAPI 0.104 / Pydantic 2 encoder
+    bug where the missing-value validation error contains
+    ``PydanticUndefined`` and fails JSON serialisation, surfacing as a
+    500 instead of the documented 422.
+    """
     if not con_ids:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "con_ids must be non-empty.")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "con_ids must be non-empty."
+        )
 
     client = _require_connected_or_503()
     debounce_seconds = debounce_ms / 1000.0

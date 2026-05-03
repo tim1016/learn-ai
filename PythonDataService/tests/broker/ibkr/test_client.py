@@ -109,16 +109,23 @@ def test_resolve_host_resolves_auto_via_route_file(monkeypatch, tmp_path) -> Non
         "eth0\t00000000\t01001FAC\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
     )
     route = _write_route_file(tmp_path, body)
-    monkeypatch.setattr("app.broker.ibkr.client._detect_host_gateway", lambda: "172.31.0.1")
+    monkeypatch.setattr(
+        "app.broker.ibkr.client._detect_host_gateway",
+        lambda route_file="/proc/net/route": "172.31.0.1",
+    )
     assert _resolve_host("auto") == "172.31.0.1"
-    # Sanity-check the underlying helper too.
+    # Sanity-check the underlying helper too — call site passes a route
+    # path, so the patched callable must accept the same parameter.
     from app.broker.ibkr.client import _detect_host_gateway as real_detect
 
     assert real_detect(route) == "172.31.0.1"
 
 
 def test_resolve_host_falls_back_to_literal_when_detection_fails(monkeypatch) -> None:
-    monkeypatch.setattr("app.broker.ibkr.client._detect_host_gateway", lambda: None)
+    monkeypatch.setattr(
+        "app.broker.ibkr.client._detect_host_gateway",
+        lambda route_file="/proc/net/route": None,
+    )
     assert _resolve_host("auto") == "auto"
 
 

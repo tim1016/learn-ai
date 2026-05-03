@@ -10,8 +10,9 @@ Per ``docs/architecture/iv-ownership-research.md`` and the project
   ``gamma``, ``theta`` (per-day, negative for long options), ``vega``
   (per-1-vol-point), and ``iv`` is annualised.
 * IBKR can return ``-1`` or ``NaN`` as sentinel "no model" values for
-  Greeks and IV. The wire model stores ``None`` in those cases — the
-  conversion helper in this file does the translation.
+  Greeks and IV. The wire model stores ``None`` in those cases — see
+  ``_coerce_optional_float`` (NaN-only) and ``_coerce_iv`` (NaN + any
+  negative) for the conversion split.
 """
 
 from __future__ import annotations
@@ -25,13 +26,17 @@ OptionRight = Literal["C", "P"]
 
 
 def _coerce_optional_float(value: float | None) -> float | None:
-    """Treat IBKR's NaN / -1 sentinels as ``None``.
+    """Treat IBKR's ``NaN`` sentinel as ``None``.
 
-    ib_async surfaces "no model could compute this" as ``nan``, and a
-    handful of legacy fields use ``-1.0``. We funnel both into ``None``
-    so downstream consumers can rely on "value present ⇒ trustworthy
-    number." The ``-1`` rule is conservative for Greeks (a real delta
-    can be -1 for a deep ITM put — we never apply this rule to delta).
+    ``ib_async`` surfaces "no model could compute this" as ``nan``; we
+    funnel that into ``None`` so downstream consumers can rely on
+    "value present ⇒ trustworthy number."
+
+    Deliberately does **not** strip ``-1.0`` for the fields routed
+    through this helper: a real delta can be ``-1.0`` for a deep ITM
+    put, theta is routinely negative, and quote fields can occasionally
+    be zero or near-zero in legitimate ways. IV-specific stripping
+    (``-1`` and any negative ⇒ ``None``) lives in ``_coerce_iv``.
     """
     if value is None:
         return None

@@ -33,7 +33,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Literal
 
-from app.broker.ibkr.client import IbkrClient
+from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.contracts import (
     build_chain_contracts,
     qualify_underlying,
@@ -164,29 +164,43 @@ async def stream_option_chain(
     """
     client.require_connected()
 
-    # Underlying so we can populate ``underlying_price`` even when no
-    # option modelGreeks block has computed yet.
+    # Resolve and qualify everything before opening any market-data
+    # subscriptions. IBKR caps streaming-line quota per client, so a
+    # leaked ``reqMktData`` from a setup that fails partway through
+    # consumes a slot until the client reconnects.
     stock = await qualify_underlying(client, symbol)
-    stock_ticker = client.ib.reqMktData(stock, "", False, False)
-
     contracts = await build_chain_contracts(client, symbol, expiry_ms, strikes)
+
+    # ``build_chain_contracts`` qualifies call+put for every requested
+    # strike, so a complete chain has ``2 * len(strikes)`` contracts.
+    # Anything less means qualification silently dropped one or more
+    # contracts; rather than stream a half-shaped chain that the UI will
+    # render with phantom holes, fail fast so the caller can re-narrow.
+    expected = len(strikes) * 2
+    if len(contracts) != expected:
+        raise BrokerError(
+            f"Contract qualification dropped {expected - len(contracts)} of {expected} "
+            f"contracts for {symbol} expiry={expiry_ms}. Refusing to stream a partial chain."
+        )
 
     # Index contracts so the tick handler can recover (strike, right).
     by_conid: dict[int, tuple[float, OptionRight]] = {}
     tickers: list = []
-    for c in contracts:
-        by_conid[int(c.conId)] = (float(c.strike), c.right)
-        tickers.append(client.ib.reqMktData(c, GENERIC_TICK_LIST, False, False))
-
-    logger.info(
-        "Subscribed %d tickers for %s expiry=%s strikes=%s",
-        len(tickers),
-        symbol,
-        expiry_ms,
-        strikes,
-    )
-
+    stock_ticker = None
     try:
+        stock_ticker = client.ib.reqMktData(stock, "", False, False)
+        for c in contracts:
+            by_conid[int(c.conId)] = (float(c.strike), c.right)
+            tickers.append(client.ib.reqMktData(c, GENERIC_TICK_LIST, False, False))
+
+        logger.info(
+            "Subscribed %d tickers for %s expiry=%s strikes=%s",
+            len(tickers),
+            symbol,
+            expiry_ms,
+            strikes,
+        )
+
         while True:
             await asyncio.sleep(debounce_seconds)
             quotes: list[IbkrOptionQuote] = []

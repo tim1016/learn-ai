@@ -27,16 +27,22 @@ async def test_health_returns_disconnected_when_no_client(monkeypatch) -> None:
     from app.broker.ibkr import config as cfg
 
     cfg.reset_settings_for_testing()
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            resp = await ac.get("/api/broker/health")
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/health")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["connected"] is False
-    assert body["mode"] == "paper"
-    assert body["port"] == 4002
-    assert body["account_id"] is None
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["connected"] is False
+        assert body["mode"] == "paper"
+        assert body["port"] == 4002
+        assert body["account_id"] is None
+    finally:
+        # Drop the cached settings so subsequent tests see whatever env
+        # the surrounding fixtures set, not the IBKR_PORT=4002 from above.
+        cfg.reset_settings_for_testing()
 
 
 @pytest.mark.asyncio

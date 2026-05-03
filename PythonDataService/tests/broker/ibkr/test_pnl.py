@@ -3,10 +3,18 @@
 ib_async PnL / PnLSingle objects are stubbed with SimpleNamespace; the
 stream tests use a fake IB whose reqPnL / reqPnLSingle return mutable
 namespaces and whose cancel methods record their calls.
+
+The stream tests wrap the async iterator in ``contextlib.aclosing`` so
+the generator's ``finally`` block fires deterministically on consumer
+``break``. Without that wrapper, the cancellation only runs when the
+generator is garbage-collected, which is non-deterministic under
+pytest's loop. ``StreamingResponse`` calls ``aclose()`` on connection
+drop, so production code already gets this guarantee.
 """
 
 from __future__ import annotations
 
+from contextlib import aclosing
 from types import SimpleNamespace
 
 import pytest
@@ -76,12 +84,13 @@ async def test_stream_account_pnl_emits_initial_then_iterates() -> None:
     )
 
     out = []
-    async for tick in stream_account_pnl(client, debounce_seconds=0.001):
-        out.append(tick)
-        # Mutate underlying snapshot to verify we re-read
-        pnl_obj.dailyPnL = 9.0
-        if len(out) == 2:
-            break
+    async with aclosing(stream_account_pnl(client, debounce_seconds=0.001)) as stream:
+        async for tick in stream:
+            out.append(tick)
+            # Mutate underlying snapshot to verify we re-read
+            pnl_obj.dailyPnL = 9.0
+            if len(out) == 2:
+                break
 
     assert len(out) == 2
     assert out[0].daily_pnl == 1.0  # initial snapshot
@@ -104,8 +113,9 @@ async def test_stream_account_pnl_cancels_even_on_consumer_break() -> None:
         require_connected=lambda: None,
     )
 
-    async for _tick in stream_account_pnl(client, debounce_seconds=0.001):
-        break
+    async with aclosing(stream_account_pnl(client, debounce_seconds=0.001)) as stream:
+        async for _tick in stream:
+            break
 
     assert cancel_calls == ["DU1234567"]
 
@@ -140,12 +150,13 @@ async def test_stream_position_pnl_emits_one_tick_per_contract_per_pass() -> Non
     )
 
     out = []
-    async for tick in stream_position_pnl(
-        client, [700001, 700002], debounce_seconds=0.001
-    ):
-        out.append(tick)
-        if len(out) >= 4:
-            break
+    async with aclosing(
+        stream_position_pnl(client, [700001, 700002], debounce_seconds=0.001)
+    ) as stream:
+        async for tick in stream:
+            out.append(tick)
+            if len(out) >= 4:
+                break
 
     # First two ticks are the initial snapshots, one per contract.
     assert {out[0].con_id, out[1].con_id} == {700001, 700002}
@@ -180,12 +191,13 @@ async def test_stream_position_pnl_continues_on_subscribe_failure() -> None:
     )
 
     out = []
-    async for tick in stream_position_pnl(
-        client, [700001, 700002], debounce_seconds=0.001
-    ):
-        out.append(tick)
-        if len(out) >= 1:
-            break
+    async with aclosing(
+        stream_position_pnl(client, [700001, 700002], debounce_seconds=0.001)
+    ) as stream:
+        async for tick in stream:
+            out.append(tick)
+            if len(out) >= 1:
+                break
 
     # Only the second contract emitted.
     assert out[0].con_id == 700002
