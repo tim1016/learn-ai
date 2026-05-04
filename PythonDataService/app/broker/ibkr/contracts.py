@@ -152,6 +152,43 @@ async def build_option_contract(
     return qualified[0]
 
 
+async def list_qualified_strikes(
+    client: IbkrClient,
+    symbol: str,
+    expiry_ms: int,
+) -> list[float]:
+    """Return only strikes IBKR can actually qualify for one (symbol, expiry).
+
+    ``reqSecDefOptParams`` reports strikes at (symbol, exchange) granularity:
+    every $1 strike that exists on *any* expiry is included, even when the
+    chosen expiry only lists $5 multiples. ``list_strikes`` filters that
+    payload by expiry text but cannot tell which strikes are actually
+    instantiated as contracts. We probe by qualifying the call leg of each
+    candidate (calls and puts on a US equity option are listed together)
+    and return the survivors.
+    """
+    from ib_async import Option
+
+    candidates = await list_strikes(client, symbol, expiry_ms)
+    if not candidates:
+        return []
+    yyyymmdd = expiry_ms_to_yyyymmdd(expiry_ms)
+    contracts = [
+        Option(
+            symbol=symbol,
+            lastTradeDateOrContractMonth=yyyymmdd,
+            strike=float(k),
+            right="C",
+            exchange="SMART",
+            currency="USD",
+            multiplier="100",
+        )
+        for k in candidates
+    ]
+    qualified = await client.ib.qualifyContractsAsync(*contracts)
+    return sorted({float(c.strike) for c in qualified if c is not None})
+
+
 async def build_chain_contracts(
     client: IbkrClient,
     symbol: str,
@@ -182,7 +219,12 @@ async def build_chain_contracts(
                     multiplier="100",
                 )
             )
-    qualified = await client.ib.qualifyContractsAsync(*raw)
+    # ib_async's qualifyContractsAsync can return a length-matching list
+    # with None placeholders for contracts the gateway could not resolve.
+    # Strip them so the caller's length guard sees the true qualified
+    # count and fails fast with a clean error instead of crashing on
+    # ``None.strike`` downstream.
+    qualified = [c for c in await client.ib.qualifyContractsAsync(*raw) if c is not None]
     if len(qualified) != len(raw):
         logger.warning(
             "qualifyContractsAsync dropped %d/%d contracts for %s %s",

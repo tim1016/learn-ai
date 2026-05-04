@@ -192,6 +192,25 @@ class IbkrOptionQuote(BaseModel):
     ts_ms: int
 
 
+class IbkrStrikeList(BaseModel):
+    """Strikes IBKR has actually instantiated for one (symbol, expiry).
+
+    Distinct from the union returned by ``reqSecDefOptParams``: that
+    payload reports every strike listed on *any* expiry of the symbol,
+    so a Monday weekly with $5 increments still surfaces every $1 strike
+    that exists on a quarterly expiry. This model carries only strikes
+    that ``qualifyContractsAsync`` could resolve into real contracts —
+    the set the chain UI can safely subscribe to.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    expiry_ms: int
+    strikes: list[float]
+    fetched_at_ms: int
+
+
 class IbkrChainSnapshot(BaseModel):
     """A point-in-time slice of one expiry's chain.
 
@@ -429,6 +448,7 @@ __all__ = [
     "IbkrPnLTick",
     "IbkrPosition",
     "IbkrPositionsSnapshot",
+    "IbkrStrikeList",
     "OptionRight",
     "OrderAction",
     "OrderEventType",

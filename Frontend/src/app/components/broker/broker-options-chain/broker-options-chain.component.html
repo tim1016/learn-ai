@@ -35,41 +35,30 @@
       </select>
     </label>
 
-    <label class="control">
-      <span class="control-label">Strike min</span>
-      <input
-        class="control-input mono"
-        type="number"
-        [ngModel]="strikeMin()"
-        (ngModelChange)="strikeMin.set($event)"
-        aria-label="Strike min"
-      />
-    </label>
-
-    <label class="control">
-      <span class="control-label">Strike max</span>
-      <input
-        class="control-input mono"
-        type="number"
-        [ngModel]="strikeMax()"
-        (ngModelChange)="strikeMax.set($event)"
-        aria-label="Strike max"
-      />
-    </label>
-
     <button
       type="button"
       class="ghost-btn"
-      (click)="applyStrikeBand()"
-      [disabled]="underlyingPrice() === null"
+      (click)="selectAtmBand()"
+      [disabled]="underlyingPrice() === null || availableStrikes().length === 0"
+      title="Select all qualifiable strikes within ±$20 of spot"
     >
       ATM ± $20
     </button>
 
     <button
       type="button"
+      class="ghost-btn"
+      (click)="clearStrikeSelection()"
+      [disabled]="selectedStrikesCount() === 0"
+    >
+      Clear strikes
+    </button>
+
+    <button
+      type="button"
       class="primary-btn"
       (click)="startStream()"
+      [disabled]="selectedStrikesCount() === 0 || selectedExpiry() === null"
     >
       Start
     </button>
@@ -99,6 +88,40 @@
   @if (streamError(); as err) {
     <p class="error">Stream error: {{ err }}</p>
   }
+
+  <section class="strike-picker">
+    <div class="strike-picker-header mono">
+      <span>
+        Strikes (qualifiable):
+        <strong>{{ availableStrikes().length }}</strong>
+      </span>
+      <span>
+        Selected: <strong>{{ selectedStrikesCount() }}</strong>
+      </span>
+      @if (strikesLoading()) {
+        <span class="muted">Loading strikes…</span>
+      }
+    </div>
+    @if (!strikesLoading() && availableStrikes().length === 0 && selectedExpiry() !== null) {
+      <p class="muted">
+        IBKR didn't return any qualifiable strikes for this expiry. Pick another.
+      </p>
+    } @else {
+      <div class="strike-grid mono">
+        @for (k of availableStrikes(); track k) {
+          <button
+            type="button"
+            class="strike-chip"
+            [class.strike-chip-selected]="isStrikeSelected(k)"
+            (click)="toggleStrike(k)"
+            [attr.aria-pressed]="isStrikeSelected(k)"
+          >
+            {{ fmtNumber(k, 0) }}
+          </button>
+        }
+      </div>
+    }
+  </section>
 
   <section class="chain-status mono">
     @let spot = underlyingPrice();

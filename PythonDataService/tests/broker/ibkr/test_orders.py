@@ -50,9 +50,10 @@ def _client(
     account: str = "DU1234567",
     mode: str = "paper",
     port: int = 4002,
+    readonly: bool = False,
     place_order_return=None,
 ) -> SimpleNamespace:
-    settings = IbkrSettings(mode=mode, port=port, _env_file=None)
+    settings = IbkrSettings(mode=mode, port=port, readonly=readonly, _env_file=None)
     qualified = SimpleNamespace(conId=12345)
     place_order_return = place_order_return or SimpleNamespace(
         order=SimpleNamespace(orderId=42, permId=99),
@@ -93,6 +94,14 @@ def test_enforce_paper_safety_refuses_when_account_is_live_despite_paper_mode() 
 def test_enforce_paper_safety_refuses_when_confirm_paper_is_false() -> None:
     with pytest.raises(OrderRefusedError, match="confirm_paper"):
         _enforce_paper_safety(_client(), _spec(confirm_paper=False))
+
+
+def test_enforce_paper_safety_refuses_when_readonly_is_true() -> None:
+    # Regression: IBKR_READONLY was documented as the protocol-level gate
+    # but ib_async's connect-time `readonly` flag does not actually block
+    # placeOrder. Enforcement now lives in our own code as Layer 0.
+    with pytest.raises(OrderRefusedError, match="IBKR_READONLY"):
+        _enforce_paper_safety(_client(readonly=True), _spec())
 
 
 # ── place_paper_order happy path ───────────────────────────────────────

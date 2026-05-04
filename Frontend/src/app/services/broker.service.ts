@@ -9,6 +9,7 @@ import type {
   IbkrOrderAck,
   IbkrOrderSpec,
   IbkrPositionsSnapshot,
+  IbkrStrikeList,
 } from '../api/broker-models';
 
 /**
@@ -39,6 +40,15 @@ export class BrokerService {
   expirations(symbol: string): Promise<ExpirationsResponse> {
     return firstValueFrom(
       this.http.get<ExpirationsResponse>(`${this.base}/expirations/${symbol}`),
+    );
+  }
+
+  strikes(symbol: string, expiryMs: number): Promise<IbkrStrikeList> {
+    return firstValueFrom(
+      this.http.get<IbkrStrikeList>(
+        `${this.base}/strikes/${encodeURIComponent(symbol)}`,
+        { params: { expiry_ms: expiryMs } },
+      ),
     );
   }
 
