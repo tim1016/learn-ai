@@ -79,8 +79,19 @@ class _MinuteAccumulator:
         )
 
 
-def _decimal_attr(obj, name: str) -> Decimal:
-    return Decimal(str(getattr(obj, name)))
+def _decimal_attr(obj, *names: str) -> Decimal:
+    """Read the first present attribute from ``obj`` and coerce to ``Decimal``.
+
+    The bar protocol differs slightly between sources: ``ib_async``'s
+    ``RealTimeBar`` exposes the open as ``open_`` (trailing underscore to
+    avoid shadowing the ``open()`` builtin in dataclass code), while the
+    in-repo test fakes use plain ``open`` because the name is legal as
+    an attribute. Try each candidate in order; raise if none are present.
+    """
+    for name in names:
+        if hasattr(obj, name):
+            return Decimal(str(getattr(obj, name)))
+    raise IBKRBarStreamError(f"5-second bar missing all of: {names!r}")
 
 
 def _volume_attr(obj) -> int:
@@ -112,7 +123,10 @@ def aggregate_realtime_bar(
             )
 
     start_ms = _minute_start_ms(source_ms)
-    open_price = _decimal_attr(bar, "open")
+    # ib_async.RealTimeBar uses ``open_`` (trailing underscore to avoid
+    # shadowing the ``open()`` builtin); test fakes use plain ``open``.
+    # Accept either so this function works against both wire types.
+    open_price = _decimal_attr(bar, "open", "open_")
     high = _decimal_attr(bar, "high")
     low = _decimal_attr(bar, "low")
     close = _decimal_attr(bar, "close")

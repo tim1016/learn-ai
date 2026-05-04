@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
 from typing import Protocol, runtime_checkable
 
@@ -112,6 +113,8 @@ class LiveEngine:
         equity_curve: list[EquitySnapshot] = []
         submitted_order_ids: list[int] = []
         previous_bar: TradeBar | None = None
+        last_force_flat_date: date | None = None
+        force_flat_at = self._config.force_flat_at
 
         async for minute_bar in source:
             await self._process_replay_broker_bar(minute_bar)
@@ -119,6 +122,47 @@ class LiveEngine:
                 portfolio.record_broker_fill(event)
                 order_events.append(event)
                 strategy.on_order_event(event)
+
+            # Force-flat barrier: at most once per session date, when the
+            # bar's wall-clock time crosses ``force_flat_at``, cancel any
+            # in-flight orders and submit a market liquidation for every
+            # open position. Real-broker fills land on the next print after
+            # submission; under FakeBroker they fill on the next bar's open.
+            # Mirrors BacktestEngine's session-close barrier in spirit; the
+            # backtest synthesizes fills at the current bar's close so that
+            # path is not parity-equivalent in the strict sense (documented
+            # in the Phase 5 audit), but the operator-visible outcome — no
+            # position survives the session — is.
+            if (
+                force_flat_at is not None
+                and minute_bar.time.time() >= force_flat_at
+                and minute_bar.time.date() != last_force_flat_date
+            ):
+                # Clear any orders the strategy queued earlier in this bar
+                # that have not been submitted; they would otherwise compete
+                # with the liquidation about to be sent.
+                portfolio.pending_orders.clear()
+                cancelled = await self._broker.cancel_open_orders()
+                if cancelled:
+                    ctx.log(
+                        f"[FORCE-FLAT] {minute_bar.time}: cancelled "
+                        f"{len(cancelled)} open broker order(s) {cancelled!r}"
+                    )
+                liquidations = 0
+                for sym, pos in list(portfolio.positions.items()):
+                    if pos.quantity == 0:
+                        continue
+                    portfolio.liquidate(sym, minute_bar.end_time)
+                    liquidations += 1
+                if liquidations:
+                    flat_acks = await portfolio.submit_pending_orders()
+                    submitted_order_ids.extend(ack.order_id for ack in flat_acks)
+                    ctx.log(
+                        f"[FORCE-FLAT] {minute_bar.time}: submitted "
+                        f"{liquidations} liquidation order(s)"
+                    )
+                strategy.on_force_flat()
+                last_force_flat_date = minute_bar.time.date()
 
             portfolio.update_reference_price(symbol, minute_bar.close)
             for consolidator in ctx.get_consolidators(symbol):

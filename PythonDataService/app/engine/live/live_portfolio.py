@@ -18,7 +18,12 @@ from typing import Protocol
 from app.broker.ibkr.account import fetch_account_summary, fetch_positions
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
-from app.broker.ibkr.orders import place_paper_order
+from app.broker.ibkr.orders import (
+    OrderNotFoundError,
+    cancel_paper_order,
+    list_open_orders,
+    place_paper_order,
+)
 from app.engine.execution.order import Direction, Order, OrderEvent, OrderType
 from app.engine.execution.portfolio import Position
 
@@ -31,6 +36,15 @@ class BrokerAdapter(Protocol):
     async def fetch_positions(self): ...
 
     async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck: ...
+
+    async def cancel_open_orders(self) -> list[int]:
+        """Cancel every order the broker still considers open.
+
+        Returns the list of cancelled ``order_id`` values. Used by the
+        force-flat barrier so that any in-flight orders submitted on
+        prior bars do not survive the session-close cutoff.
+        """
+        ...
 
 
 class IbkrBrokerAdapter:
@@ -47,6 +61,19 @@ class IbkrBrokerAdapter:
 
     async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
         return await place_paper_order(self._client, spec)
+
+    async def cancel_open_orders(self) -> list[int]:
+        open_orders = await list_open_orders(self._client)
+        cancelled: list[int] = []
+        for order in open_orders:
+            try:
+                await cancel_paper_order(self._client, order.order_id)
+                cancelled.append(order.order_id)
+            except OrderNotFoundError:
+                # Filled or cancelled between the list call and ours; either
+                # way it's no longer open, so the force-flat goal is satisfied.
+                continue
+        return cancelled
 
 
 @dataclass
