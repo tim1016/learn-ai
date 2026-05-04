@@ -10,6 +10,9 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
+import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
+import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
+import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { brokerSse, type SseStatus, type SseStream } from '../../../services/broker-sse';
@@ -66,7 +69,13 @@ interface ExpirationOption {
 @Component({
   selector: 'app-broker-options-chain',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, PageHeaderComponent],
+  imports: [
+    FormsModule,
+    PageHeaderComponent,
+    PageGuideComponent,
+    DataSourceComponent,
+    SectionErrorComponent,
+  ],
   styleUrl: './broker-options-chain.component.scss',
   templateUrl: './broker-options-chain.component.html',
 })
@@ -82,7 +91,7 @@ export class BrokerOptionsChainComponent {
   readonly availableStrikes = signal<number[]>([]);
   readonly selectedStrikes = signal<ReadonlySet<number>>(new Set());
   readonly strikesLoading = signal(false);
-  readonly setupError = signal<string | null>(null);
+  readonly setupError = signal<unknown>(null);
   readonly setupLoading = signal(false);
   readonly paused = signal(false);
 
@@ -97,7 +106,7 @@ export class BrokerOptionsChainComponent {
   readonly streamStatus = computed<SseStatus | 'idle'>(() =>
     this.currentStream()?.status() ?? 'idle',
   );
-  readonly streamError = signal<string | null>(null);
+  readonly streamError = signal<unknown>(null);
   readonly latestSnapshot = computed<IbkrChainSnapshot | null>(
     () => this.currentStream()?.latest() ?? null,
   );
@@ -216,7 +225,7 @@ export class BrokerOptionsChainComponent {
       const next = opts.find((o) => o.ms >= now) ?? opts[0];
       if (next) this.selectedExpiry.set(next.ms);
     } catch (err) {
-      this.setupError.set(extractMessage(err));
+      this.setupError.set(err);
     } finally {
       this.setupLoading.set(false);
     }
@@ -226,11 +235,11 @@ export class BrokerOptionsChainComponent {
     const expiry = this.selectedExpiry();
     const strikes = [...this.selectedStrikes()].sort((a, b) => a - b);
     if (expiry === null) {
-      this.streamError.set('Pick an expiry first.');
+      this.streamError.set(new Error('Pick an expiry first.'));
       return;
     }
     if (strikes.length === 0) {
-      this.streamError.set('Pick at least one strike.');
+      this.streamError.set(new Error('Pick at least one strike.'));
       return;
     }
 
@@ -292,7 +301,7 @@ export class BrokerOptionsChainComponent {
       if (seq !== this.strikesRequestSeq) return;
       this.availableStrikes.set([]);
       this.selectedStrikes.set(new Set());
-      this.setupError.set(extractMessage(err));
+      this.setupError.set(err);
     } finally {
       if (seq === this.strikesRequestSeq) {
         this.strikesLoading.set(false);
@@ -411,11 +420,3 @@ function isoDateFromMs(ms: number): string | null {
   return fmt.format(d); // en-CA emits YYYY-MM-DD
 }
 
-function extractMessage(err: unknown): string {
-  if (err == null) return 'Unknown error';
-  if (typeof err === 'string') return err;
-  if (typeof err === 'object' && 'message' in err) {
-    return String((err as { message: unknown }).message);
-  }
-  return 'Unknown error';
-}
