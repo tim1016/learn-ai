@@ -44,6 +44,7 @@ from app.broker.ibkr.models import (
     OptionRight,
     _coerce_iv,
     _coerce_optional_float,
+    _coerce_quote,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,9 +95,13 @@ def _ticker_to_quote(
     ``greeks_source`` field so reconciliation against the engine can
     weight by source quality.
     """
-    bid = _coerce_optional_float(getattr(ticker, "bid", None))
-    ask = _coerce_optional_float(getattr(ticker, "ask", None))
-    last = _coerce_optional_float(getattr(ticker, "last", None))
+    # Bid/ask/last are coerced via _coerce_quote (NaN OR negative ⇒ None)
+    # so IBKR's "no quote available" sentinel ``-1.0`` is stripped at the
+    # ingestion boundary instead of leaking through to mid-price math
+    # and the UI table.
+    bid = _coerce_quote(getattr(ticker, "bid", None))
+    ask = _coerce_quote(getattr(ticker, "ask", None))
+    last = _coerce_quote(getattr(ticker, "last", None))
     bid_size = getattr(ticker, "bidSize", None)
     ask_size = getattr(ticker, "askSize", None)
     if bid_size is not None and (isinstance(bid_size, float) and math.isnan(bid_size)):

@@ -23,13 +23,13 @@ import type {
   OptionRight,
 } from '../../../api/broker-models';
 import {
-  diffBps,
+  absDiff,
+  deltaAbsBand,
   fmtCurrency,
   fmtDateNy,
   fmtNumber,
   fmtPercent,
   fmtTimestampNy,
-  toleranceBand,
   type ToleranceBand,
 } from '../format';
 
@@ -46,8 +46,16 @@ interface Row {
   putEngineDelta: number | null;
   callEngineGamma: number | null;
   putEngineGamma: number | null;
-  callDeltaBps: number | null;
-  putDeltaBps: number | null;
+  /**
+   * |IBKR Δ − Engine Δ| in native units. Replaces the old bps form,
+   * which divided by ``|engine Δ|`` and exploded to billions for OTM
+   * strikes where the engine delta rounds to ~1e-8 (e.g. SPY 639P at
+   * spot 717: IBKR=-0.003, Engine≈-0e-9 → -3,028,671,573 bps in
+   * the prior representation). The absolute form is stable across the
+   * whole strike range.
+   */
+  callDeltaAbsDiff: number | null;
+  putDeltaAbsDiff: number | null;
   callDeltaBand: ToleranceBand | null;
   putDeltaBand: ToleranceBand | null;
 }
@@ -148,8 +156,8 @@ export class BrokerOptionsChainComponent {
     return sorted.map(([strike, { call, put }]) => {
       const callEng = engineGreeks.get(`${strike}:C`) ?? null;
       const putEng = engineGreeks.get(`${strike}:P`) ?? null;
-      const callBps = diffBps(call?.delta ?? null, callEng?.delta ?? null);
-      const putBps = diffBps(put?.delta ?? null, putEng?.delta ?? null);
+      const callDiff = absDiff(call?.delta ?? null, callEng?.delta ?? null);
+      const putDiff = absDiff(put?.delta ?? null, putEng?.delta ?? null);
       return {
         strike,
         call,
@@ -158,10 +166,10 @@ export class BrokerOptionsChainComponent {
         putEngineDelta: putEng?.delta ?? null,
         callEngineGamma: callEng?.gamma ?? null,
         putEngineGamma: putEng?.gamma ?? null,
-        callDeltaBps: callBps,
-        putDeltaBps: putBps,
-        callDeltaBand: toleranceBand(callBps),
-        putDeltaBand: toleranceBand(putBps),
+        callDeltaAbsDiff: callDiff,
+        putDeltaAbsDiff: putDiff,
+        callDeltaBand: deltaAbsBand(callDiff),
+        putDeltaBand: deltaAbsBand(putDiff),
       };
     });
   });
@@ -399,7 +407,14 @@ export class BrokerOptionsChainComponent {
 
 function midOrNull(q: IbkrOptionQuote): number | null {
   if (q.bid === null || q.ask === null) return null;
-  return (q.bid + q.ask) / 2;
+  const mid = (q.bid + q.ask) / 2;
+  // Reject non-positive mids: (a) the engine reprice trigger compares
+  // mids with a 1¢ threshold, so a bogus negative mid would cause
+  // false-positive reprices; (b) once the Python side strips IBKR's
+  // ``-1`` "no quote" sentinel from bid/ask the upstream null-check
+  // already covers most cases, but a defensive bound here keeps the
+  // engine off bad inputs even if a future surface forgets to.
+  return mid > 0 ? mid : null;
 }
 
 function isoDateFromMs(ms: number): string | null {
