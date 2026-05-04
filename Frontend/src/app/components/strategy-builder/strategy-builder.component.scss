@@ -12,6 +12,9 @@
 .chain-panel {
   width: 100%;
   overflow-x: auto;
+  background: rgb(30, 41, 59);          // slate-800, matches expiration ribbon + header panel
+  border-radius: 0.5rem;                // rounded-lg
+  padding: 0.5rem;                      // 8px breathing room around the table
 }
 
 // ── Drawer Toggle Button ──────────────────────────────────────
