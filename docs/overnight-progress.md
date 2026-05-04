@@ -50,3 +50,9 @@
 - Wall-clock time: ~9 minutes.
 - Deviations: the collapsed lifecycle is modeled in the deterministic fake broker by recording PendingSubmit -> Submitted -> Filled internally while yielding only the final fill event to LiveEngine.
 - Flags: no Phase 8 or Phase 9 work started.
+
+[02:43] Final verification:
+- Tests: pytest tests/engine/live/ -x 12 passed; ruff check app/ tests/ passed; pre-existing broker/SPY command 106 passed.
+- Branch: pushed to origin/overnight/ibkr-paper-runtime-2026-05-04 through da29e7f.
+- Not completed: Phase 8 and Phase 9 intentionally not started per overnight scope.
+- Diagnostic: none written; no hard stop triggered.
