@@ -43,3 +43,10 @@
 - Wall-clock time: ~27 minutes.
 - Deviations: the external `/sessions/.../Lean/Data` mount referenced by older SPY scripts is absent in this workspace; the replay gate uses the checked-in local `PythonDataService/lean-cache` minute-bar cache (396,775 SPY bars) that is present here.
 - Flags: exact replay covered 162 order events, 81 completed trades, fees, equity curve, trade log, and insight signatures with Decimal("0") price/fee/trade tolerance.
+
+[02:28] Phase 7 summary:
+- Files created/modified: tests/engine/live/test_live_engine_collapse.py (73 lines), tests/engine/live/fixtures/fake_broker.py (139 lines).
+- Tests: phase test pytest tests/engine/live/test_live_engine_collapse.py -x 1 passed; ruff check app/ tests/ passed; pre-existing broker/SPY command 106 passed.
+- Wall-clock time: ~9 minutes.
+- Deviations: the collapsed lifecycle is modeled in the deterministic fake broker by recording PendingSubmit -> Submitted -> Filled internally while yielding only the final fill event to LiveEngine.
+- Flags: no Phase 8 or Phase 9 work started.

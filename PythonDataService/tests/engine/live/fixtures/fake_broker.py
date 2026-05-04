@@ -114,6 +114,26 @@ class FakeBroker:
         self.total_fees += event.fee
 
 
+class CollapsedLifecycleFakeBroker(FakeBroker):
+    """Fake broker that records full status churn but yields only fills."""
+
+    def __init__(self, initial_cash: Decimal = Decimal("100000")) -> None:
+        super().__init__(initial_cash=initial_cash)
+        self.internal_statuses: dict[int, list[str]] = {}
+        self.yielded_statuses: dict[int, list[str]] = {}
+
+    async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
+        ack = await super().place_order(spec)
+        self.internal_statuses[ack.order_id] = ["PendingSubmit", "Submitted", "Filled"]
+        return ack
+
+    def drain_order_events(self) -> list[OrderEvent]:
+        events = super().drain_order_events()
+        for event in events:
+            self.yielded_statuses.setdefault(event.order_id, []).append("Filled")
+        return events
+
+
 async def iter_bars(bars: Iterable[TradeBar]) -> AsyncIterator[TradeBar]:
     for bar in bars:
         yield bar
