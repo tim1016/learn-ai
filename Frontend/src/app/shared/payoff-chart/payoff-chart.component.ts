@@ -1,5 +1,5 @@
 import {
-  Component, input, computed, effect, viewChild, ElementRef,
+  Component, input, signal, computed, effect, viewChild, ElementRef,
   ChangeDetectionStrategy, OnDestroy, afterNextRender, inject, Injector,
 } from '@angular/core';
 import { TitleCasePipe } from '@angular/common';
@@ -39,9 +39,18 @@ export class PayoffChartComponent implements OnDestroy {
 
   // ── Chart instances ────────────────────────────────────────────────
   private chart: IChartApi | null = null;
+  private container: HTMLDivElement | null = null;
   private expSeries: ISeriesApi<'Baseline'> | null = null;
   private currSeries: ISeriesApi<'Line'> | null = null;
   private greekSeries: ISeriesApi<'Line'> | null = null;
+
+  // True once the user has wheeled or pinched the chart. While set,
+  // syncData() stops calling fitContent() so leg edits / what-if
+  // toggles don't snap the visible range back. Cleared by resetZoom().
+  // Detected via DOM wheel/touchstart on the container — more
+  // reliable than disambiguating user vs programmatic range changes
+  // through timeScale().subscribeVisibleLogicalRangeChange().
+  readonly userZoomed = signal(false);
   /**
    * Scenario-id → dashed line series. Lazily created when a scenario
    * is enabled; removed when disabled. Keying by label keeps the chart
@@ -74,6 +83,9 @@ export class PayoffChartComponent implements OnDestroy {
   private bootstrap(): void {
     const container = this.chartEl()?.nativeElement;
     if (!container) return;
+    this.container = container;
+    container.addEventListener('wheel', this.onUserZoom, { passive: true });
+    container.addEventListener('touchstart', this.onUserZoom, { passive: true });
 
     this.chart = createChart(container, {
       autoSize: true,
@@ -205,8 +217,27 @@ export class PayoffChartComponent implements OnDestroy {
     // What-if scenarios — one dashed series per enabled scenario
     this.syncWhatIfSeries(whatIfs);
 
-    this.chart.timeScale().fitContent();
+    // Preserve the user's zoom across data updates: leg edits and
+    // what-if toggles fire syncData(), but we only auto-fit when the
+    // user hasn't taken control of the visible range yet.
+    if (!this.userZoomed()) {
+      this.chart.timeScale().fitContent();
+    }
   }
+
+  /**
+   * Reset the visible range back to fit-all-data and clear the
+   * user-zoom flag so subsequent data updates resume auto-fitting.
+   * Called by the in-chart "Reset zoom" button.
+   */
+  resetZoom(): void {
+    this.chart?.timeScale().fitContent();
+    this.userZoomed.set(false);
+  }
+
+  private onUserZoom = (): void => {
+    this.userZoomed.set(true);
+  };
 
   /**
    * Reconcile the on-chart what-if series with the input list:
@@ -367,8 +398,13 @@ export class PayoffChartComponent implements OnDestroy {
   // ── Cleanup ────────────────────────────────────────────────────────
 
   ngOnDestroy(): void {
+    if (this.container) {
+      this.container.removeEventListener('wheel', this.onUserZoom);
+      this.container.removeEventListener('touchstart', this.onUserZoom);
+    }
     this.chart?.remove();
     this.chart = null;
+    this.container = null;
     this.expSeries = null;
     this.currSeries = null;
     this.greekSeries = null;
