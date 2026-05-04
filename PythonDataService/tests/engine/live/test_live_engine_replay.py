@@ -14,6 +14,7 @@ from app.engine.engine import BacktestEngine, BacktestResult, EquitySnapshot
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode, OrderEvent
 from app.engine.framework.insight import Insight
+from app.engine.live.config import LiveConfig
 from app.engine.live.live_engine import LiveEngine, LiveRunResult
 from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
 from app.engine.strategy.base import LoggedTrade
@@ -107,7 +108,12 @@ async def _run_live_from_backtest_window(backtest_strategy: SpyEmaCrossoverAlgor
         )
     )
     strategy = SpyEmaCrossoverAlgorithm()
-    result = await LiveEngine(None, broker=FakeBroker()).run(strategy, iter_bars(bars))
+    # BacktestEngine's ExecutionConfig defaults ``force_flat_at`` to None;
+    # explicitly disable the live force-flat barrier so the parity gate
+    # compares apples-to-apples. The barrier itself is exercised by
+    # ``test_live_engine.py::test_live_engine_force_flat_*``.
+    config = LiveConfig(force_flat_at=None)
+    result = await LiveEngine(None, config, broker=FakeBroker()).run(strategy, iter_bars(bars))
     return result, strategy
 
 

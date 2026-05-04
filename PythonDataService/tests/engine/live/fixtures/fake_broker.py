@@ -97,6 +97,11 @@ class FakeBroker:
         self._events.clear()
         return events
 
+    async def cancel_open_orders(self) -> list[int]:
+        cancelled = [item.order_id for item in self._pending]
+        self._pending.clear()
+        return cancelled
+
     def _resolve_order_id(self, spec: IbkrOrderSpec) -> int:
         if spec.client_order_id and spec.client_order_id.startswith("live-"):
             return int(spec.client_order_id.removeprefix("live-"))

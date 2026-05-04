@@ -162,3 +162,35 @@ async def test_stream_minute_bars_yields_closed_bar_and_cancels() -> None:
     assert emitted.close == Decimal("100.5")
     assert client.ib.use_rth_seen is True
     assert client.ib.cancelled is True
+
+
+def test_aggregate_handles_ib_async_open_underscore_attribute() -> None:
+    """Regression for the production wire type.
+
+    ``ib_async.RealTimeBar`` declares ``open_: float`` (trailing underscore
+    to avoid shadowing the ``open()`` builtin). The test fakes earlier in
+    this file use plain ``open`` for readability, which left the production
+    path uncovered until ``_decimal_attr`` learned the dual lookup.
+    """
+    raw = SimpleNamespace(
+        time=datetime(2026, 5, 4, 14, 30, 0, tzinfo=UTC),
+        open_=Decimal("100.00"),
+        high=Decimal("101.00"),
+        low=Decimal("99.00"),
+        close=Decimal("100.50"),
+        volume=10,
+    )
+
+    current, emitted, last_ms = aggregate_realtime_bar(
+        None, raw, symbol="SPY", last_source_ms=None,
+    )
+
+    assert current is not None
+    assert emitted is None
+    assert last_ms == int(raw.time.timestamp() * 1000)
+    minute = current.to_model()
+    assert minute.open == Decimal("100.00")
+    assert minute.high == Decimal("101.00")
+    assert minute.low == Decimal("99.00")
+    assert minute.close == Decimal("100.50")
+    assert minute.volume == 10
