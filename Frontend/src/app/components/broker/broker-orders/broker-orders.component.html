@@ -252,7 +252,10 @@
                   type="button"
                   class="ghost-btn small"
                   (click)="cancel(o.order_id)"
-                  [disabled]="o.remaining === 0"
+                  [disabled]="o.remaining === 0 || !isPaperConnected()"
+                  [attr.title]="!isPaperConnected()
+                    ? 'Disabled until IBKR is connected to a paper account (DU…)'
+                    : null"
                   aria-label="Cancel order"
                 >
                   ✕
@@ -307,85 +310,79 @@
   </article>
 </section>
 
-@if (confirmDialogOpen()) {
-  <div
-    class="confirm-backdrop"
-    (click)="cancelConfirmDialog()"
-    aria-hidden="true"
-  ></div>
-  <div
-    class="confirm-dialog"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="confirmDialogTitle"
-  >
-    <header class="confirm-dialog-head">
-      <span class="confirm-eyebrow">Paper-mode confirmation</span>
-      <h2 id="confirmDialogTitle" class="confirm-title">Review and confirm</h2>
-    </header>
-    <dl class="confirm-summary">
-      <dt>Account</dt>
-      <dd class="mono">{{ accountId() ?? '—' }}</dd>
-      <dt>Symbol</dt>
-      <dd class="mono">{{ symbol() }} ({{ secType() }})</dd>
-      <dt>Side</dt>
-      <dd class="mono">{{ action() }}</dd>
-      <dt>Quantity</dt>
-      <dd class="mono">{{ quantity() }}</dd>
-      <dt>Order type</dt>
-      <dd class="mono">{{ orderType() }} · {{ tif() }}</dd>
-      @if (orderType() === 'LMT') {
-        <dt>Limit price</dt>
-        <dd class="mono">{{ fmtCurrency(limitPrice()) }}</dd>
-      }
-      @if (secType() === 'OPT') {
-        <dt>Expiry</dt>
-        <dd class="mono">{{ fmtTimestampNy(expiryMs()) }}</dd>
-        <dt>Strike</dt>
-        <dd class="mono">{{ fmtCurrency(strike()) }}</dd>
-        <dt>Right</dt>
-        <dd class="mono">{{ right() }}</dd>
-      }
-    </dl>
-    <label class="confirm-check">
-      <input
-        type="checkbox"
-        [ngModel]="confirmCheckbox()"
-        (ngModelChange)="confirmCheckbox.set($event)"
-        name="dialogConfirm"
-      />
-      <span>I confirm this is a paper order on a paper account.</span>
-    </label>
-    <div class="confirm-actions">
-      <button
-        type="button"
-        class="ghost-btn"
-        (click)="cancelConfirmDialog()"
-        [disabled]="submitting()"
-      >
-        Cancel
-      </button>
-      <button
-        type="button"
-        class="primary-btn"
-        (click)="confirmAndSubmit()"
-        [disabled]="!confirmCanPlace()"
-      >
-        @if (submitting()) {
-          Submitting…
-        } @else if (confirmCooldownMs() > 0) {
-          Place in {{ (confirmCooldownMs() / 1000).toFixed(1) }}s
-        } @else {
-          Place paper order
-        }
-      </button>
-    </div>
-    @if (placeError(); as err) {
-      <app-section-error
-        [error]="err"
-        contextWhat="IBKR rejected the order."
-        [canRetry]="false"
-      />
+<dialog
+  #confirmDialog
+  class="confirm-dialog"
+  aria-labelledby="confirmDialogTitle"
+  (cancel)="onDialogClose()"
+  (close)="onDialogClose()"
+>
+  <header class="confirm-dialog-head">
+    <span class="confirm-eyebrow">Paper-mode confirmation</span>
+    <h2 id="confirmDialogTitle" class="confirm-title">Review and confirm</h2>
+  </header>
+  <dl class="confirm-summary">
+    <dt>Account</dt>
+    <dd class="mono">{{ accountId() ?? '—' }}</dd>
+    <dt>Symbol</dt>
+    <dd class="mono">{{ symbol() }} ({{ secType() }})</dd>
+    <dt>Side</dt>
+    <dd class="mono">{{ action() }}</dd>
+    <dt>Quantity</dt>
+    <dd class="mono">{{ quantity() }}</dd>
+    <dt>Order type</dt>
+    <dd class="mono">{{ orderType() }} · {{ tif() }}</dd>
+    @if (orderType() === 'LMT') {
+      <dt>Limit price</dt>
+      <dd class="mono">{{ fmtCurrency(limitPrice()) }}</dd>
     }
+    @if (secType() === 'OPT') {
+      <dt>Expiry</dt>
+      <dd class="mono">{{ fmtTimestampNy(expiryMs()) }}</dd>
+      <dt>Strike</dt>
+      <dd class="mono">{{ fmtCurrency(strike()) }}</dd>
+      <dt>Right</dt>
+      <dd class="mono">{{ right() }}</dd>
+    }
+  </dl>
+  <label class="confirm-check">
+    <input
+      type="checkbox"
+      [ngModel]="confirmCheckbox()"
+      (ngModelChange)="confirmCheckbox.set($event)"
+      name="dialogConfirm"
+    />
+    <span>I confirm this is a paper order on a paper account.</span>
+  </label>
+  <div class="confirm-actions">
+    <button
+      type="button"
+      class="ghost-btn"
+      (click)="cancelConfirmDialog()"
+      [disabled]="submitting()"
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      class="primary-btn"
+      (click)="confirmAndSubmit()"
+      [disabled]="!confirmCanPlace()"
+    >
+      @if (submitting()) {
+        Submitting…
+      } @else if (confirmCooldownMs() > 0) {
+        Place in {{ (confirmCooldownMs() / 1000).toFixed(1) }}s
+      } @else {
+        Place paper order
+      }
+    </button>
   </div>
-}
+  @if (placeError(); as err) {
+    <app-section-error
+      [error]="err"
+      contextWhat="IBKR rejected the order."
+      [canRetry]="false"
+    />
+  }
+</dialog>

@@ -266,28 +266,23 @@
   }
 }
 
-.confirm-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  z-index: 90;
-}
-
+// Native <dialog> handles centering, stacking, focus management, and
+// Escape-to-close via showModal(); only the visual chrome and the
+// ::backdrop tint live here.
 .confirm-dialog {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
   width: min(420px, calc(100vw - 2rem));
   max-height: calc(100vh - 2rem);
   overflow-y: auto;
-  z-index: 91;
   padding: 1.25rem 1.5rem 1.5rem;
   background: var(--bg-surface, #131722);
   border: 1px solid var(--border-light, #2a2e39);
   border-radius: 8px;
   box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, 0.5));
   color: var(--text-primary, #f0f3fa);
+
+  &::backdrop {
+    background: rgba(0, 0, 0, 0.55);
+  }
 }
 
 .confirm-dialog-head {

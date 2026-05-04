@@ -2,12 +2,14 @@ import {
   ChangeDetectionStrategy,
   Component,
   DestroyRef,
+  ElementRef,
   Injector,
   computed,
   effect,
   inject,
   runInInjectionContext,
   signal,
+  viewChild,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
@@ -87,10 +89,16 @@ export class BrokerOrdersComponent {
   // cooldown before the Place button enables. The cooldown is what
   // catches absent-minded muscle-memory clicks where the order summary
   // disagrees with what the user thought they were submitting.
+  //
+  // Rendered as a native ``<dialog>`` so focus moves into the dialog
+  // on showModal(), focus is trapped while open, Escape dispatches a
+  // cancel event, and focus is restored to the previously-focused
+  // element on close — no hand-rolled focus management.
   readonly confirmDialogOpen = signal(false);
   readonly confirmCheckbox = signal(false);
   readonly confirmCooldownMs = signal(0);
   private confirmTickHandle: ReturnType<typeof setInterval> | null = null;
+  private readonly confirmDialogRef = viewChild<ElementRef<HTMLDialogElement>>('confirmDialog');
   readonly confirmCanPlace = computed(
     () =>
       this.confirmDialogOpen() &&
@@ -155,10 +163,25 @@ export class BrokerOrdersComponent {
     });
 
     this.destroyRef.onDestroy(() => this.clearConfirmTick());
+
+    // Drive native <dialog> open/close from the confirmDialogOpen
+    // signal. showModal() gives focus management, focus trap, and
+    // Escape-to-cancel for free; close() restores focus.
+    effect(() => {
+      const open = this.confirmDialogOpen();
+      const dialog = this.confirmDialogRef()?.nativeElement;
+      if (!dialog) return;
+      if (open && !dialog.open) {
+        dialog.showModal();
+      } else if (!open && dialog.open) {
+        dialog.close();
+      }
+    });
   }
 
   openConfirmDialog(): void {
     if (!this.canSubmit()) return;
+    this.placeError.set(null);
     this.confirmCheckbox.set(false);
     this.confirmCooldownMs.set(CONFIRM_DIALOG_COOLDOWN_MS);
     this.confirmDialogOpen.set(true);
@@ -168,8 +191,23 @@ export class BrokerOrdersComponent {
   cancelConfirmDialog(): void {
     this.confirmDialogOpen.set(false);
     this.confirmCheckbox.set(false);
+    // Reset layer-4 confirmation so a subsequent direct call to
+    // submitOrder() (e.g. from a future code path) cannot inherit a
+    // sticky true value left behind by a previous open.
+    this.confirmPaper.set(false);
     this.confirmCooldownMs.set(0);
     this.clearConfirmTick();
+  }
+
+  /**
+   * Bound to the native dialog's ``cancel`` event (Escape key) and
+   * to its ``close`` event so the signal stays synchronized whatever
+   * causes the close.
+   */
+  onDialogClose(): void {
+    if (this.confirmDialogOpen()) {
+      this.cancelConfirmDialog();
+    }
   }
 
   async confirmAndSubmit(): Promise<void> {
@@ -240,14 +278,14 @@ export class BrokerOrdersComponent {
     try {
       const ack = await this.broker.placeOrder(spec);
       this.lastAck.set(ack);
-      // Don't auto-clear the form — the user wants to confirm what
-      // they placed. Reset the explicit-confirm flag so the next
-      // submit requires another deliberate click through the dialog.
-      this.confirmPaper.set(false);
       void this.refreshOpenOrders();
     } catch (err) {
       this.placeError.set(err);
     } finally {
+      // Always clear layer-4 confirmation, success or failure. The
+      // next submit must come back through the dialog so the cooldown
+      // and explicit checkbox tick are re-required.
+      this.confirmPaper.set(false);
       this.submitting.set(false);
     }
   }
