@@ -54,10 +54,14 @@ class EvalContext:
     indicators: dict[str, Indicator]  # keyed by spec indicator id
     current_bar_count: int  # consolidated bar handler invocations so far
     bar_close_time: datetime  # end_time of the current consolidated bar
+    bar_close_price: Decimal  # close price of the current consolidated bar
 
     # Position lifecycle: set when entry fires, cleared when exit fires.
     in_position: bool = False
     entry_bar_count: int | None = None  # bar count at the moment entry fired
+    # Entry fill price for the currently-open trade (None until the entry
+    # order has filled). Used by PnL primitives in survival rules.
+    entry_price: Decimal | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +185,43 @@ class BarsSinceEntryPrimitive(Primitive):
         return _compare(self.node.op, Decimal(elapsed), Decimal(self.node.value))
 
 
+class PnLPercentPrimitive(Primitive):
+    """Compares unrealized PnL fraction to a threshold.
+
+    PnL fraction = (current_close - entry_price) / entry_price.
+
+    Returns False when no position is open OR the entry has not yet
+    filled (``entry_price is None``). The latter case can happen on the
+    same bar entry signals fire in NEXT_BAR_OPEN fill mode.
+    """
+
+    def __init__(self, node: S.PnLPercent) -> None:
+        self.node = node
+
+    def evaluate(self, ctx: EvalContext) -> bool:
+        if not ctx.in_position or ctx.entry_price is None:
+            return False
+        pnl_frac = (ctx.bar_close_price - ctx.entry_price) / ctx.entry_price
+        return _compare(self.node.op, pnl_frac, Decimal(str(self.node.value)))
+
+
+class PnLPointsPrimitive(Primitive):
+    """Compares unrealized PnL in price points to a threshold.
+
+    Same gating as ``PnLPercent`` — returns False when no position is
+    open or the entry has not yet filled.
+    """
+
+    def __init__(self, node: S.PnLPoints) -> None:
+        self.node = node
+
+    def evaluate(self, ctx: EvalContext) -> bool:
+        if not ctx.in_position or ctx.entry_price is None:
+            return False
+        pnl_pts = ctx.bar_close_price - ctx.entry_price
+        return _compare(self.node.op, pnl_pts, Decimal(str(self.node.value)))
+
+
 class TimeOfDayPrimitive(Primitive):
     def __init__(self, node: S.TimeOfDay) -> None:
         self.node = node
@@ -296,7 +337,11 @@ def _build_leaf(node) -> Primitive:
         return BarsSinceEntryPrimitive(node)
     if isinstance(node, S.TimeOfDay):
         return TimeOfDayPrimitive(node)
-    raise NotImplementedError(f"primitive kind {type(node).__name__} not supported in Phase 1")
+    if isinstance(node, S.PnLPercent):
+        return PnLPercentPrimitive(node)
+    if isinstance(node, S.PnLPoints):
+        return PnLPointsPrimitive(node)
+    raise NotImplementedError(f"primitive kind {type(node).__name__} not supported")
 
 
 def _evaluate_compiled(node, ctx: EvalContext) -> bool:

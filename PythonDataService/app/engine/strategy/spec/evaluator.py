@@ -35,10 +35,10 @@ from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
-from app.engine.indicators.base import Indicator
+from app.engine.indicators.base import BarIndicator, Indicator
 from app.engine.strategy.base import LoggedTrade, Strategy
 from app.engine.strategy.spec import schema as S
-from app.engine.strategy.spec.indicators import build_indicator
+from app.engine.strategy.spec.indicators import build_indicator, is_bar_indicator
 from app.engine.strategy.spec.primitives import (
     CompiledBlock,
     EvalContext,
@@ -93,30 +93,35 @@ class SpecAlgorithm(Strategy):
         self._spec = spec
 
         # Runtime guards for forward-compatible spec features that the
-        # Phase 1 evaluator does not yet support. These run at construction
+        # current evaluator does not yet support. These run at construction
         # time so a user can't accidentally start a backtest against a
-        # Phase 2 spec and get silently-wrong results.
+        # later-phase spec and get silently-wrong results.
         if not isinstance(spec.position, S.EquityLongPosition):
             raise NotImplementedError(
-                f"Phase 1 evaluator supports EQUITY_LONG positions only "
+                f"evaluator supports EQUITY_LONG positions only "
                 f"(spec uses {type(spec.position).__name__})"
             )
-        if spec.survival:
-            raise NotImplementedError(
-                f"Phase 1 evaluator does not support survival rules "
-                f"(spec declares {len(spec.survival)} rules)"
-            )
+        # Survival rule actions: Phase 2.1 ships CLOSE_ALL only.
+        for rule in spec.survival:
+            if not isinstance(rule.action, S.CloseAllAction):
+                raise NotImplementedError(
+                    f"survival rule {rule.name!r}: action {type(rule.action).__name__} "
+                    f"not supported in Phase 2.1 (only CLOSE_ALL)"
+                )
         if spec.entry.pyramiding != 1:
             raise NotImplementedError(
-                f"Phase 1 evaluator supports pyramiding=1 only (spec uses {spec.entry.pyramiding})"
+                f"evaluator supports pyramiding=1 only (spec uses {spec.entry.pyramiding})"
             )
 
         self._symbol_name = spec.symbols[0].upper()
         self._symbol: str = ""
 
         # Engine indicators keyed by spec id. Populated in ``initialize``.
-        self._indicators: dict[str, Indicator] = {}
-        # Per-indicator source field (one for each block).
+        # Mixed Indicator (single-price) and BarIndicator (full-bar);
+        # the evaluator dispatches updates accordingly.
+        self._indicators: dict[str, Indicator | BarIndicator] = {}
+        # Per-indicator source field (one for each block). Single-price
+        # indicators read this; bar indicators ignore it.
         self._sources: dict[str, str] = {}
 
         # Compiled entry/exit blocks plus a flat list of every primitive
@@ -124,6 +129,9 @@ class SpecAlgorithm(Strategy):
         # in this list at the end of each bar.
         self._entry_block: CompiledBlock | None = None
         self._exit_block: CompiledBlock | None = None
+        # Survival rules in declaration order; first-match-wins per bar.
+        # Each tuple is (rule_name, compiled_when_block, action).
+        self._survival_rules: list[tuple[str, CompiledBlock, S.SurvivalAction]] = []
         self._all_primitives: list[Primitive] = []
 
         # Lifecycle state.
@@ -154,7 +162,9 @@ class SpecAlgorithm(Strategy):
             self._indicators[block.id] = build_indicator(block)
             self._sources[block.id] = block.source
 
-        # Compile entry / exit logic trees and collect every primitive.
+        # Compile entry / exit / survival logic trees and collect every
+        # primitive. observe_bar is called on every primitive every bar
+        # regardless of which block evaluated.
         self._all_primitives = []
         self._entry_block = CompiledBlock(
             self._spec.entry.logic, self._spec.entry.conditions, self._all_primitives
@@ -162,6 +172,12 @@ class SpecAlgorithm(Strategy):
         self._exit_block = CompiledBlock(
             self._spec.exit.logic, self._spec.exit.conditions, self._all_primitives
         )
+        self._survival_rules = []
+        for rule in self._spec.survival:
+            compiled_when = CompiledBlock(
+                rule.when.logic, rule.when.conditions, self._all_primitives
+            )
+            self._survival_rules.append((rule.name, compiled_when, rule.action))
 
         # Reset lifecycle state (in case initialize is called more than once
         # in a single instance — shouldn't happen, but be safe).
@@ -186,10 +202,15 @@ class SpecAlgorithm(Strategy):
         assert self._entry_block is not None
         assert self._exit_block is not None
 
-        # 1. Update every declared indicator with the bar's source value.
+        # 1. Update every declared indicator. Bar indicators (ADX,
+        # SUPERTREND) consume the full TradeBar; single-price indicators
+        # (SMA, EMA, RSI, MACD) consume the configured source field.
         for ind_id, ind in self._indicators.items():
-            source = self._sources[ind_id]
-            ind.update(bar.end_time, _bar_source_value(bar, source))
+            if is_bar_indicator(ind):
+                ind.update(bar)  # type: ignore[arg-type]
+            else:
+                source = self._sources[ind_id]
+                ind.update(bar.end_time, _bar_source_value(bar, source))  # type: ignore[arg-type]
 
         # 2. Bar count increments BEFORE evaluate so that BarsSinceEntry
         # reads the entry bar as 0 — entry fires on the bar where
@@ -199,19 +220,33 @@ class SpecAlgorithm(Strategy):
 
         # 3. Build evaluator context — captures position state at the
         # START of this bar (before any entry/exit decision flips it).
+        # ``entry_price`` is None on the entry bar (the fill hasn't
+        # happened yet) and on every bar while flat; PnL primitives
+        # gate on this.
+        entry_price = self._open_trade.entry_price if self._open_trade is not None else None
         ctx = EvalContext(
             indicators=self._indicators,
             current_bar_count=self._bar_count,
             bar_close_time=bar.end_time,
+            bar_close_price=bar.close,
             in_position=self._in_position,
             entry_bar_count=self._entry_bar_count,
+            entry_price=entry_price,
         )
 
         # 4. Choose the lifecycle block based on position state at the
-        # start of the bar. Mirrors the if/else in the hand-coded
-        # references: only one of {entry, exit} can fire per bar.
+        # start of the bar. While in position, survival rules are
+        # checked first (top-to-bottom, first match wins) and act as
+        # a higher-priority "manage" layer than the signal-flip exit
+        # block. While flat, entry runs.
         if self._in_position:
-            if self._exit_block.evaluate(ctx):
+            survival_fired = False
+            for rule_name, compiled_when, action in self._survival_rules:
+                if compiled_when.evaluate(ctx):
+                    self._apply_survival_action(rule_name, action, bar)
+                    survival_fired = True
+                    break
+            if not survival_fired and self._exit_block.evaluate(ctx):
                 self.ctx.liquidate(self._symbol)
                 self.ctx.log(
                     f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
@@ -264,6 +299,29 @@ class SpecAlgorithm(Strategy):
     @staticmethod
     def _format_snapshot(snapshot: dict[str, Decimal]) -> str:
         return " ".join(f"{k}={v}" for k, v in snapshot.items())
+
+    def _apply_survival_action(
+        self, rule_name: str, action: S.SurvivalAction, bar: TradeBar
+    ) -> None:
+        """Execute a survival rule's action.
+
+        Phase 2.1 supports CLOSE_ALL only — liquidate the entire position.
+        The ``__init__`` guard rejects other actions, so this is a small
+        match. Logged with the firing rule name so the trade log is
+        attributable to the specific rule.
+        """
+        assert self.ctx is not None
+        if isinstance(action, S.CloseAllAction):
+            self.ctx.liquidate(self._symbol)
+            self.ctx.log(
+                f"MANAGE FIRE: {rule_name!r} at {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+                f"Close={bar.close:.2f} → CLOSE_ALL"
+            )
+            self._in_position = False
+            self._entry_bar_count = None
+            return
+        # __init__ guard prevents this; defensive only.
+        raise NotImplementedError(f"survival action {type(action).__name__} not supported")
 
     def _submit_entry(self) -> None:
         """Submit the entry order according to the spec's size rule."""

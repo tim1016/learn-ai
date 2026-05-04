@@ -72,6 +72,21 @@ Subtract.model_rebuild()
 # Indicators block.
 # ---------------------------------------------------------------------------
 class IndicatorBlock(BaseModel):
+    """Declarative indicator description.
+
+    The ``period`` field is the primary period for every supported kind:
+      * SMA / EMA: window length
+      * RSI: window length (Wilders smoothing)
+      * ADX: Wilder DI / DX period (warmup = 2 × period)
+      * MACD: ``slow_period``; ``fast_period`` and ``signal_period``
+        default to 12 and 9 if omitted
+      * SUPERTREND: ATR period; ``multiplier`` defaults to 3.0
+
+    For SMA/EMA/RSI/MACD (single-price indicators) ``source`` selects which
+    bar field feeds the indicator. ADX and SUPERTREND consume full OHLC
+    bars and ignore ``source``.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     id: str
@@ -82,6 +97,15 @@ class IndicatorBlock(BaseModel):
     # RSI-only: Wilders smoothing toggle. Engine RSI is Wilders by default,
     # so this is included for explicitness in the spec.
     ma_type: Literal["wilders", "simple"] | None = None
+
+    # MACD-only: classical MACD has three knobs. ``period`` carries
+    # ``slow_period``; the other two are optional with defaults matching
+    # the LEAN / Pine convention (12 / 26 / 9).
+    fast_period: int | None = Field(default=None, ge=2)
+    signal_period: int | None = Field(default=None, ge=2)
+
+    # SUPERTREND-only: ATR-band multiplier. Defaults to 3.0 if omitted.
+    multiplier: float | None = Field(default=None, gt=0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -135,8 +159,43 @@ class TimeOfDay(_ConditionBase):
     tz: str = "America/New_York"
 
 
+class PnLPercent(_ConditionBase):
+    """Compares the open trade's unrealized PnL (as fraction of entry price)
+    against a threshold. Read as ``(current_close - entry_price) / entry_price``.
+    Values are unitless fractions, *not* percent — use ``-0.01`` for "-1%".
+
+    Returns False when no position is open. Survival rules using this
+    primitive are the standard form of stop-loss / profit-target in the
+    spec layer.
+    """
+
+    kind: Literal["PnLPercent"]
+    op: ComparisonOp
+    value: float
+
+
+class PnLPoints(_ConditionBase):
+    """Compares the open trade's unrealized PnL in price points
+    (``current_close - entry_price``) against a threshold.
+
+    Returns False when no position is open. Use ``PnLPercent`` for
+    risk-adjusted thresholds; use ``PnLPoints`` when the threshold has
+    natural absolute units (e.g., a fixed-dollar stop on a known asset).
+    """
+
+    kind: Literal["PnLPoints"]
+    op: ComparisonOp
+    value: float
+
+
 Condition = Annotated[
-    IndicatorComparison | IndicatorBetween | FreshCross | BarsSinceEntry | TimeOfDay,
+    IndicatorComparison
+    | IndicatorBetween
+    | FreshCross
+    | BarsSinceEntry
+    | TimeOfDay
+    | PnLPercent
+    | PnLPoints,
     Field(discriminator="kind"),
 ]
 
@@ -202,13 +261,40 @@ PositionSpec = Annotated[
 
 
 # ---------------------------------------------------------------------------
-# Survival rules (Phase 2).
+# Survival actions — what a survival rule does when its `when` fires.
+# Phase 2.1 ships CLOSE_ALL only. Phase 2 reserves CLOSE_FRACTION,
+# ROLL_OPTION_LEG, TIGHTEN_STOP, LOG.
+# ---------------------------------------------------------------------------
+class CloseAllAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["CLOSE_ALL"]
+
+
+SurvivalAction = Annotated[CloseAllAction, Field(discriminator="kind")]
+
+
+# ---------------------------------------------------------------------------
+# Survival rules.
 # ---------------------------------------------------------------------------
 class SurvivalRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
-    when: LogicNode
-    action: dict
+    when: LogicNodeOrConditions
+    action: SurvivalAction
+
+
+class LogicNodeOrConditions(BaseModel):
+    """A flat ``{logic, conditions}`` block — the same shape as a top-level
+    entry/exit block — used by survival rules.
+
+    Survival rules may use either a flat block or a nested ``LogicNode``;
+    Phase 2.1 accepts the flat shape (simpler authoring) and treats it
+    as an implicit single-level group.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    logic: Literal["AND", "OR"]
+    conditions: list[Condition | LogicNode]
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +404,8 @@ class StrategySpec(BaseModel):
         for child in self.exit.conditions:
             _walk_condition(child)
         for rule in self.survival:
-            _walk_condition(rule.when)
+            for child in rule.when.conditions:
+                _walk_condition(child)
         for snap_id in self.diagnostics.snapshot_at_entry:
             refs.append(snap_id)
         for snap_id in self.diagnostics.snapshot_at_exit:
