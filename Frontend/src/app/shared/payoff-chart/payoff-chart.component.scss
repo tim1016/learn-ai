@@ -108,6 +108,33 @@
   }
 }
 
+// ── Reset zoom button (overlay) ────────────────────────────────────
+
+.reset-zoom-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 11; // above .chart-tooltip (z-index: 10)
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #94a3b8;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 4px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+
+  &:hover {
+    color: #e2e8f0;
+    background: rgba(30, 41, 59, 0.9);
+    border-color: rgba(148, 163, 184, 0.5);
+  }
+}
+
 // ── Empty state ────────────────────────────────────────────────────
 
 .empty-overlay {
