@@ -539,19 +539,13 @@
         </div>
       }
 
-      <!-- Analyze Button -->
-      @if (legs().length > 0) {
-        <div class="panel-section">
-          <p-button
-            label="Analyze"
-            icon="pi pi-chart-line"
-            (onClick)="analyzeStrategy()"
-            [loading]="analyzing()"
-            [disabled]="!canAnalyze()"
-            severity="success"
-            size="small"
-            [style]="{ width: '100%' }"
-          />
+      <!-- Auto-analyze runs on a 300ms debounce after any leg / expiration /
+           spot change; this chip is the only visual cue for the in-flight
+           request. The Analyze button is gone. -->
+      @if (analyzing()) {
+        <div class="panel-section flex items-center gap-2 text-slate-400 text-xs">
+          <i class="pi pi-spin pi-spinner"></i>
+          Analyzing strategy…
         </div>
       }
 

@@ -1,5 +1,5 @@
 import {
-  Component, inject, signal, computed,
+  Component, inject, signal, computed, effect, untracked,
   ChangeDetectionStrategy, OnInit, OnDestroy,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -848,11 +848,45 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
 
   // ── Lifecycle ─────────────────────────────────────────────
 
+  /**
+   * Pending auto-analyze timer. Re-set on every relevant input change;
+   * cleared on destroy. Stored as a number (window.setTimeout return)
+   * rather than NodeJS.Timeout because we're in the browser.
+   */
+  private analyzeTimer: number | undefined;
+  private static readonly AUTO_ANALYZE_DEBOUNCE_MS = 300;
+
+  constructor() {
+    // Auto-analyze: when the user edits anything that affects the
+    // analysis (legs, expiration, spot), schedule analyzeStrategy()
+    // after a 300ms quiet window. canAnalyze() is read inside
+    // untracked() so the analyzing-flag flip during the in-flight
+    // request doesn't itself trigger another fire on completion.
+    effect(() => {
+      this.legs();
+      this.selectedExpiration();
+      this.spotPrice();
+
+      if (!untracked(() => this.canAnalyze())) return;
+
+      if (this.analyzeTimer !== undefined) {
+        clearTimeout(this.analyzeTimer);
+      }
+      this.analyzeTimer = window.setTimeout(() => {
+        this.analyzeTimer = undefined;
+        this.analyzeStrategy();
+      }, StrategyBuilderComponent.AUTO_ANALYZE_DEBOUNCE_MS);
+    });
+  }
+
   ngOnInit(): void {
     document.documentElement.classList.add('app-dark');
   }
 
   ngOnDestroy(): void {
+    if (this.analyzeTimer !== undefined) {
+      clearTimeout(this.analyzeTimer);
+    }
     document.documentElement.classList.remove('app-dark');
   }
 
