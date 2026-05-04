@@ -110,6 +110,68 @@ def test_nan_quote_fields_become_none() -> None:
     assert q.ask_size is None
 
 
+def test_negative_one_bid_ask_become_none() -> None:
+    """Regression: IBKR sends ``-1.0`` as the "no L1 quote" sentinel for
+    bid/ask/last. Pre-fix the values leaked through ``_coerce_optional_float``
+    and rendered as ``-$1.00`` in the options-chain table; mid-price math
+    produced bogus engine reprice triggers. Now stripped at ingestion via
+    ``_coerce_quote``."""
+    ticker = SimpleNamespace(
+        bid=-1.0,
+        ask=-1.0,
+        last=-1.0,
+        bidSize=None,
+        askSize=None,
+        modelGreeks=None,
+        bidGreeks=None,
+        askGreeks=None,
+        lastGreeks=None,
+    )
+    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    assert q.bid is None
+    assert q.ask is None
+    assert q.last is None
+
+
+def test_zero_bid_is_preserved() -> None:
+    """A real bid of ``$0.00`` (deep-OTM with no buyer at any positive
+    price) is legitimate and must NOT be stripped — only negatives are
+    sentinels for bid/ask/last."""
+    ticker = SimpleNamespace(
+        bid=0.0,
+        ask=0.05,
+        last=None,
+        bidSize=0,
+        askSize=10,
+        modelGreeks=None,
+        bidGreeks=None,
+        askGreeks=None,
+        lastGreeks=None,
+    )
+    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
+    assert q.bid == 0.0
+    assert q.ask == 0.05
+
+
+def test_negative_one_delta_is_preserved() -> None:
+    """``_coerce_quote`` only governs bid/ask/last. Delta still flows
+    through ``_coerce_optional_float`` so a deep-ITM put can legitimately
+    report ``delta = -1.0``."""
+    ticker = SimpleNamespace(
+        bid=10.0,
+        ask=10.5,
+        last=10.2,
+        bidSize=5,
+        askSize=5,
+        modelGreeks=_greeks(iv=0.18, delta=-1.0, gamma=0.0, theta=-0.01, vega=0.0, und=420.0),
+        bidGreeks=None,
+        askGreeks=None,
+        lastGreeks=None,
+    )
+    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "P")
+    assert q.delta == -1.0  # NOT stripped — legitimate Greek value
+
+
 def test_resolve_market_price_handles_method_returning_float() -> None:
     # Regression: ib_async Ticker.marketPrice is a method, not an attribute.
     # Passing the bound method to _coerce_optional_float raised TypeError.

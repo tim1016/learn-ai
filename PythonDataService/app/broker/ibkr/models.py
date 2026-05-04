@@ -56,6 +56,29 @@ def _coerce_iv(value: float | None) -> float | None:
     return out
 
 
+def _coerce_quote(value: float | None) -> float | None:
+    """Quote-specific coercion (bid / ask / last): NaN OR negative ⇒ ``None``.
+
+    IBKR sends ``-1.0`` as the "no bid/ask available" sentinel for L1
+    quote fields. A real bid can be ``$0.00`` (deep-OTM with no buyer)
+    but never negative — there is no rational seller offering free
+    options, no rational buyer paying negative dollars. Treating any
+    negative value as missing is safe and stops sentinels from
+    leaking into mid-price math (where ``(-1 + ask) / 2`` would
+    produce a bogus reprice trigger and a "-$1.00" cell in the UI).
+
+    Distinct from ``_coerce_optional_float`` because Greeks like
+    ``delta`` legitimately go to ``-1.0`` for deep-ITM puts — that
+    helper preserves the value, this one rejects it.
+    """
+    out = _coerce_optional_float(value)
+    if out is None:
+        return None
+    if out < 0.0:
+        return None
+    return out
+
+
 SecType = Literal["STK", "OPT", "FUT", "FOP", "CASH", "BOND", "CFD", "WAR", "IND", "BAG"]
 
 
@@ -521,4 +544,5 @@ __all__ = [
     "SecType",
     "_coerce_iv",
     "_coerce_optional_float",
+    "_coerce_quote",
 ]

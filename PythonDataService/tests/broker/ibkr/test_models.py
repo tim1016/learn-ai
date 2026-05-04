@@ -10,6 +10,7 @@ from app.broker.ibkr.models import (
     IbkrOptionQuote,
     _coerce_iv,
     _coerce_optional_float,
+    _coerce_quote,
 )
 
 
@@ -30,6 +31,19 @@ def test_coerce_iv_treats_negative_as_none() -> None:
     assert _coerce_iv(0.0) == 0.0  # zero IV is real (deep-ITM at expiry)
     assert _coerce_iv(0.18) == 0.18
     assert _coerce_iv(math.nan) is None
+
+
+def test_coerce_quote_strips_negative_and_nan_but_keeps_zero() -> None:
+    """Bid/ask/last sentinel handling: IBKR uses ``-1.0`` for "no quote",
+    NaN for "unset". A real bid of $0.00 (deep-OTM with no buyer) is
+    legitimate and must NOT be stripped."""
+    assert _coerce_quote(-1.0) is None  # IBKR "no quote" sentinel
+    assert _coerce_quote(-0.01) is None  # any negative price is meaningless
+    assert _coerce_quote(math.nan) is None
+    assert _coerce_quote(None) is None
+    assert _coerce_quote(0.0) == 0.0  # legitimate bid for deep-OTM
+    assert _coerce_quote(0.05) == 0.05
+    assert _coerce_quote(123.45) == 123.45
 
 
 def test_option_quote_round_trips_via_json() -> None:

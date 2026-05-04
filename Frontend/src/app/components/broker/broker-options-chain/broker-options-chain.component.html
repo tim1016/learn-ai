@@ -9,7 +9,7 @@
     why="Numerical-rigor cross-check. If the IBKR delta and the engine delta disagree by more than the tolerance band, it's a bug somewhere — not 'the broker is wrong'."
     [steps]="[
       'Pick an expiry, then click strike chips (or ATM ± $20).',
-      'Start the stream and watch the Δ bps column.',
+      'Start the stream and watch the |ΔΔ| (absolute delta disagreement) column.',
       'Green = within tolerance, yellow = inspect, red = file a math-divergence ticket.'
     ]"
     [related]="[
@@ -190,14 +190,14 @@
             <th>IV</th>
             <th>Δ IBKR</th>
             <th>Δ Engine</th>
-            <th>Δ bps</th>
+            <th title="|IBKR Δ − Engine Δ| in absolute units">|ΔΔ|</th>
             <th></th>
             <th>Bid</th>
             <th>Ask</th>
             <th>IV</th>
             <th>Δ IBKR</th>
             <th>Δ Engine</th>
-            <th>Δ bps</th>
+            <th title="|IBKR Δ − Engine Δ| in absolute units">|ΔΔ|</th>
           </tr>
         </thead>
         <tbody>
@@ -214,7 +214,7 @@
                 [class.band-yellow]="row.callDeltaBand === 'yellow'"
                 [class.band-red]="row.callDeltaBand === 'red'"
               >
-                {{ fmtNumber(row.callDeltaBps, 0) }}
+                {{ fmtNumber(row.callDeltaAbsDiff, 4) }}
               </td>
               <td class="strike mono">{{ fmtCurrency(row.strike) }}</td>
               <td class="num mono">{{ fmtCurrency(row.put?.bid) }}</td>
@@ -228,7 +228,7 @@
                 [class.band-yellow]="row.putDeltaBand === 'yellow'"
                 [class.band-red]="row.putDeltaBand === 'red'"
               >
-                {{ fmtNumber(row.putDeltaBps, 0) }}
+                {{ fmtNumber(row.putDeltaAbsDiff, 4) }}
               </td>
             </tr>
           }
