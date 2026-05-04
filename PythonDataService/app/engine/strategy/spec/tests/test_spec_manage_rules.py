@@ -24,6 +24,8 @@ from app.engine.strategy.spec import SpecAlgorithm, StrategySpec
 from app.engine.strategy.spec.tests._parity_helpers import (
     SYMBOL,
     build_minute_bars,
+    configure_script_logger,
+    logger,
     run_strategy,
 )
 
@@ -275,6 +277,7 @@ def test_survival_rule_does_not_fire_while_flat() -> None:
 # Script entry point.
 # ---------------------------------------------------------------------------
 def run_all() -> None:
+    configure_script_logger()
     failed = False
     tests = [
         ("stop loss fires on drawdown", test_stop_loss_fires_on_drawdown),
@@ -285,13 +288,13 @@ def run_all() -> None:
     for label, fn in tests:
         try:
             fn()
-            print(f"PASS: {label}")
+            logger.info("PASS: %s", label)
         except AssertionError as e:
             failed = True
-            print(f"FAIL: {label} — {e}")
+            logger.error("FAIL: %s — %s", label, e)
         except Exception as e:
             failed = True
-            print(f"ERROR: {label} — {type(e).__name__}: {e}")
+            logger.error("ERROR: %s — %s: %s", label, type(e).__name__, e)
     if failed:
         sys.exit(1)
 

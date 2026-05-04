@@ -82,10 +82,6 @@ def evaluate_operand(operand, ctx: EvalContext) -> Decimal | None:
         return ind.current_value
     if isinstance(operand, S.ConstOperand):
         return Decimal(str(operand.value))
-    if isinstance(operand, S.BarField):
-        # Reserved for Phase 2 (price-based comparisons). Phase 1 specs
-        # don't use BarField, but the schema admits it.
-        raise NotImplementedError("BarField operand is reserved for Phase 2")
     if isinstance(operand, S.Subtract):
         left = evaluate_operand(operand.left, ctx)
         right = evaluate_operand(operand.right, ctx)

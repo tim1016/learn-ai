@@ -23,7 +23,9 @@ from app.engine.strategy.spec.tests._parity_helpers import (
     assert_trade_logs_match,
     build_minute_bars,
     closes_for_spy_ema,
+    configure_script_logger,
     load_spec_algo,
+    logger,
     run_strategy,
 )
 
@@ -62,18 +64,18 @@ def test_spy_ema_spec_matches_hand_coded() -> None:
 
 
 def run_parity() -> None:
+    configure_script_logger()
     try:
         spec_trades, ref_trades = _run_parity()
     except Exception as e:
-        print(f"FAIL: setup error — {e}")
+        logger.error("FAIL: setup error — %s", e)
         sys.exit(1)
 
-    print(f"Reference trades : {len(ref_trades)}  → {[t.result for t in ref_trades]}")
-    print(f"Spec trades      : {len(spec_trades)} → {[t.result for t in spec_trades]}")
-    print()
+    logger.info("Reference trades : %d  → %s", len(ref_trades), [t.result for t in ref_trades])
+    logger.info("Spec trades      : %d → %s", len(spec_trades), [t.result for t in spec_trades])
 
     if len(ref_trades) < MIN_TRADES:
-        print(f"FAIL: too few trades ({len(ref_trades)}) — test is vacuous")
+        logger.error("FAIL: too few trades (%d) — test is vacuous", len(ref_trades))
         sys.exit(1)
 
     try:
@@ -81,12 +83,13 @@ def run_parity() -> None:
             spec_trades, ref_trades, label="SPY EMA crossover spec parity"
         )
     except AssertionError as e:
-        print(f"FAIL: {e}")
+        logger.error("FAIL: %s", e)
         sys.exit(1)
 
-    print(
-        f"PASS: spec SPY EMA crossover reproduces SpyEmaCrossoverAlgorithm "
-        f"({len(spec_trades)} trades, identical trade-by-trade)"
+    logger.info(
+        "PASS: spec SPY EMA crossover reproduces SpyEmaCrossoverAlgorithm "
+        "(%d trades, identical trade-by-trade)",
+        len(spec_trades),
     )
 
 

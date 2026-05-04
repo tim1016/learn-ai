@@ -17,7 +17,11 @@ from __future__ import annotations
 import sys
 
 from app.engine.strategy.spec import StrategySpec, load_spec_from_path
-from app.engine.strategy.spec.tests._parity_helpers import fixture_path
+from app.engine.strategy.spec.tests._parity_helpers import (
+    configure_script_logger,
+    fixture_path,
+    logger,
+)
 
 CANONICAL_SPECS = ("spy_ema_crossover", "sma_crossover", "rsi_mean_reversion")
 
@@ -133,6 +137,7 @@ def test_rejects_duplicate_indicator_ids() -> None:
 # Script entry point.
 # ---------------------------------------------------------------------------
 def run_all() -> None:
+    configure_script_logger()
     failed = False
     tests = [
         ("canonical fixtures load", test_canonical_specs_load),
@@ -147,10 +152,10 @@ def run_all() -> None:
     for label, fn in tests:
         try:
             fn()
-            print(f"PASS: {label}")
+            logger.info("PASS: %s", label)
         except Exception as e:
             failed = True
-            print(f"FAIL: {label} — {e}")
+            logger.error("FAIL: %s — %s", label, e)
     if failed:
         sys.exit(1)
 

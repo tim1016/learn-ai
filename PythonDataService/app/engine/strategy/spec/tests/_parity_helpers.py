@@ -1,5 +1,11 @@
 """Shared helpers for spec-vs-hand-coded parity tests.
 
+Also exposes ``configure_script_logger`` and a module-level ``logger`` so
+the script-mode entry points (``run_all``, ``run_parity``) emit pass/fail
+messages through the structured logger rather than ``print`` — keeping
+the package compliant with the repo's no-print rule while preserving
+human-readable stdout output when invoked directly.
+
 The parity contract is "given the same input bars, ``SpecAlgorithm``
 produces the same trades (entry time, entry price, exit time, exit
 price, PnL, win/loss, indicator snapshot values) as the hand-coded
@@ -17,7 +23,9 @@ synthetic close value.
 
 from __future__ import annotations
 
+import logging
 import math
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -38,6 +46,30 @@ RESOLUTION_MINUTES = 15
 START_TIME = datetime(2024, 1, 2, 10, 0, tzinfo=EASTERN)
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
+
+
+# ---------------------------------------------------------------------------
+# Script logging — used by run_all() / run_parity() entry points so test
+# scripts emit structured logs instead of bare print() calls.
+# ---------------------------------------------------------------------------
+logger = logging.getLogger("app.engine.strategy.spec.tests")
+
+
+def configure_script_logger() -> None:
+    """Attach a stdout handler at INFO level for ``python -m`` script runs.
+
+    The structured logger replaces the bare ``print()`` calls that
+    script-style test runners would otherwise use. Configured once per
+    process — re-entry is a no-op so calling this from multiple
+    ``run_*`` entry points is safe.
+    """
+    if logger.handlers:
+        return
+    handler = logging.StreamHandler(stream=sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 
 def fixture_path(name: str) -> Path:
@@ -139,7 +171,13 @@ class FakeDataReader:
     bars: list[TradeBar]
 
     def iter_bars(self, symbol: str, start: date, end: date) -> Iterator[TradeBar]:
+        # Filter by symbol in addition to date — without this, a strategy
+        # subscribed to the wrong ticker would still receive bars and
+        # silently mask a symbol-wiring regression.
+        target = symbol.upper()
         for b in self.bars:
+            if b.symbol.upper() != target:
+                continue
             if start <= b.time.date() <= end:
                 yield b
 

@@ -41,11 +41,6 @@ class IndicatorRef(_OperandBase):
     indicator: str  # must match an id in the indicators block
 
 
-class BarField(_OperandBase):
-    kind: Literal["BarField"]
-    field: Literal["open", "high", "low", "close", "volume"]
-
-
 class ConstOperand(_OperandBase):
     kind: Literal["Const"]
     value: float
@@ -57,12 +52,13 @@ class Subtract(_OperandBase):
     right: Operand
 
 
-# Phase 1 ships only IndicatorRef, BarField, Const, Subtract. Add/Multiply/
-# Divide/Abs are reserved kinds — including them would invite spec authors
-# to write Phase 2 shapes that the evaluator can't run yet, which contradicts
-# the "if it loads, it runs" contract for the Phase 1 vocabulary.
+# Phase 1 ships only IndicatorRef, Const, Subtract — every operand kind
+# the evaluator can actually run. Add/Multiply/Divide/Abs and BarField
+# (raw OHLCV references) are reserved for Phase 2; they are deliberately
+# absent from the union so a spec that loads is also a spec that runs,
+# rather than a spec that schema-validates and then crashes mid-backtest.
 Operand = Annotated[
-    IndicatorRef | BarField | ConstOperand | Subtract,
+    IndicatorRef | ConstOperand | Subtract,
     Field(discriminator="kind"),
 ]
 Subtract.model_rebuild()

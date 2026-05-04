@@ -1,30 +1,39 @@
 """``SpecAlgorithm`` — runs a validated ``StrategySpec`` through the engine.
 
-Phase 1 single-symbol equity-long evaluator. Reads a ``StrategySpec``,
-constructs the declared indicators, compiles the entry/exit logic trees,
-registers a consolidator at the configured resolution, and on every
-consolidated bar:
+Single-symbol equity-long evaluator. Reads a ``StrategySpec``, constructs
+the declared indicators, compiles the entry / survival / exit logic
+trees, registers a consolidator at the configured resolution, and on
+every consolidated bar:
 
-  1. Updates every declared indicator with the bar's source value.
+  1. Updates every declared indicator with the bar's source value
+     (single-price indicators) or the full bar (BarIndicator subclasses
+     like ADX and Supertrend).
   2. Builds an ``EvalContext`` from current state (position flag, bar
-     count, bar close time).
+     count, bar close time, bar close price, entry price).
   3. Picks the lifecycle block based on the strategy's position flag at
-     the start of the bar (entry block if flat, exit block if in
-     position). Survival rules are not yet supported.
-  4. Evaluates the chosen block. If it fires, snapshots indicator values
-     for diagnostics and submits a market order via ``set_holdings`` /
+     the start of the bar:
+       - Flat → evaluate the entry block.
+       - In position → walk survival rules in declaration order
+         (first-match-wins) and run the matching action; if no rule
+         fires, evaluate the exit block. Survival actions take
+         precedence over the signal-flip exit on the same bar.
+  4. If the chosen block fires, snapshots indicator values for
+     diagnostics and submits a market order via ``set_holdings`` /
      ``liquidate``.
-  5. Calls ``observe_bar`` on **every** compiled primitive — entry and
-     exit, regardless of which block evaluated this bar. Stateful
-     primitives like ``FreshCross`` rely on this to seed and re-seed
-     their internal state across position transitions, matching the
-     reference hand-coded algorithms.
+  5. Calls ``observe_bar`` on **every** compiled primitive — entry,
+     exit, and every survival rule's predicate — regardless of which
+     block evaluated this bar. Stateful primitives like ``FreshCross``
+     and ``DrawdownFromPeak`` rely on this to seed and re-seed their
+     internal state across position transitions, matching the reference
+     hand-coded algorithms.
 
 Trade log management mirrors the hand-coded references: signal time
 captures indicator snapshots into ``_pending_entry``; the entry fill in
 ``on_order_event`` pairs that snapshot with fill price/time to start an
-``_OpenTrade``; the exit fill closes the trade and appends a
-``LoggedTrade``.
+``_OpenTrade``; the exit fill closes the trade, appends a
+``LoggedTrade``, and resets the strategy's lifecycle flags so external
+flatten paths (force-flat at session close, manual liquidate, bracket
+TP/SL) leave the strategy in sync with the actual portfolio.
 """
 
 from __future__ import annotations
@@ -364,6 +373,17 @@ class SpecAlgorithm(Strategy):
             return
 
         # SHORT/FLAT fill → exit.
+        #
+        # Reset the strategy's lifecycle flags BEFORE the early return so
+        # external flatten paths (force-flat at session close, manual
+        # liquidate, bracket TP/SL) leave the strategy in sync with the
+        # actual portfolio. Otherwise ``_in_position`` stays True after
+        # the position is gone and the next bar would evaluate exit/
+        # survival rules against a phantom position. Mirrors the
+        # hand-coded references' ``on_force_flat`` semantics.
+        self._in_position = False
+        self._entry_bar_count = None
+        self._pending_entry = None
         if self._open_trade is None:
             return
         entry = self._open_trade
