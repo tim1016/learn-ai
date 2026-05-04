@@ -246,7 +246,6 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
   // ── Strategy State ────────────────────────────────────────
   legs = signal<LegConfig[]>([]);
   strategyType = signal<string>('custom');
-  drawerOpen = signal(false);
 
   // ── Drill-down State (UX-Q1, R0b) ─────────────────────────
   // The historical drill-down absorbed from the deleted /options-chain
@@ -298,9 +297,9 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
     { id: 'iv_down10', label: 'IV−10%', enabled: false, timeDeltaDays: 0, ivShift: -0.10, color: '#22c55e' },
   ]);
 
-  // ── Strategy Templates ────────────────────────────────────
-  readonly strategyOptions = [
-    { label: 'Custom', value: 'custom' },
+  // ── Strategy Presets (card grid in the inline builder) ────
+  readonly customPreset = { label: 'Custom', value: 'custom' };
+  readonly presetGroups: { label: string; items: { label: string; value: string }[] }[] = [
     {
       label: 'Bullish',
       items: [
@@ -975,11 +974,21 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
 
     this.strategyType.set('custom');
     this.analysisResult.set(null);
-    this.drawerOpen.set(true);
   }
 
   removeLeg(index: number): void {
     this.legs.update(legs => legs.filter((_, i) => i !== index));
+    this.analysisResult.set(null);
+  }
+
+  /**
+   * Update a leg's quantity from the per-chip stepper. Clamped to a
+   * minimum of 1 — removeLeg() handles the "go to zero" intent
+   * explicitly via the chip's × button so we never have a 0-qty leg.
+   */
+  setLegQty(index: number, qty: number): void {
+    if (qty < 1) return;
+    this.legs.update(legs => legs.map((l, i) => i === index ? { ...l, quantity: qty } : l));
     this.analysisResult.set(null);
   }
 
@@ -1034,7 +1043,6 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
 
     this.legs.set(newLegs);
     this.analysisResult.set(null);
-    this.drawerOpen.set(true);
   }
 
   // ── What-If ───────────────────────────────────────────────
