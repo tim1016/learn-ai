@@ -2,6 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import type {
+  DiagnosticReport,
   ExpirationsResponse,
   IbkrAccountSummary,
   IbkrConnectionHealth,
@@ -27,6 +28,10 @@ export class BrokerService {
 
   health(): Promise<IbkrConnectionHealth> {
     return firstValueFrom(this.http.get<IbkrConnectionHealth>(`${this.base}/health`));
+  }
+
+  diagnose(): Promise<DiagnosticReport> {
+    return firstValueFrom(this.http.get<DiagnosticReport>(`${this.base}/diagnose`));
   }
 
   account(): Promise<IbkrAccountSummary> {
