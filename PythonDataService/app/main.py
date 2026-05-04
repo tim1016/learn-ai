@@ -29,6 +29,7 @@ from app.routers import (
     market_monitor,
     options,
     portfolio,
+    quantlib_options,
     research,
     research_divergence,
     sanitize,
@@ -119,6 +120,10 @@ app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
 # Portfolio scenario / live-Greeks. Phase 2 of numerical-authority migration:
 # Python becomes canonical for portfolio Greeks; .NET becomes a passthrough.
 app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"])
+# QuantLib option pricing endpoints (/status, /price, /strategy, /compare).
+# Registration was dropped by 88b48ac (IV-surface refactor) on 2026-04-12;
+# the four endpoints silently 404'd until pricing-lab surfaced it.
+app.include_router(quantlib_options.router, prefix="/api/quantlib", tags=["quantlib"])
 # Internal job orchestration (Redis-backed). Mounted under /api/jobs-internal;
 # the public surface is the .NET /api/jobs facade in Backend/Jobs/JobsApi.cs.
 app.include_router(jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
