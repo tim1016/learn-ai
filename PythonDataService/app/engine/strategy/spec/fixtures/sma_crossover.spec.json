@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "name": "SMA(10)/SMA(30) Crossover",
+  "description": "Long-only golden-cross / death-cross. Entry: fresh up-cross of short SMA over long SMA. Exit: fresh down-cross. Defaults match SmaCrossoverAlgorithm.",
+  "symbols": ["SPY"],
+  "resolution": {"period_minutes": 15},
+  "indicators": [
+    {"id": "sma_s", "kind": "SMA", "period": 10, "source": "close"},
+    {"id": "sma_l", "kind": "SMA", "period": 30, "source": "close"}
+  ],
+  "entry": {
+    "logic": "AND",
+    "conditions": [
+      {"kind": "FreshCross", "left": "sma_s", "right": "sma_l", "direction": "up"}
+    ],
+    "size": {"kind": "SetHoldings", "fraction": 1.0},
+    "pyramiding": 1
+  },
+  "position": {"kind": "EQUITY_LONG"},
+  "survival": [],
+  "exit": {
+    "logic": "OR",
+    "conditions": [
+      {"kind": "FreshCross", "left": "sma_s", "right": "sma_l", "direction": "down"}
+    ]
+  },
+  "diagnostics": {
+    "snapshot_at_entry": ["sma_s", "sma_l"]
+  }
+}

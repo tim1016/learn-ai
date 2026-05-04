@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "name": "RSI(14) Mean Reversion",
+  "description": "Long-only RSI threshold mean reversion. Entry: RSI strictly below oversold. Exit: RSI strictly above overbought. Defaults match RsiMeanReversionAlgorithm.",
+  "symbols": ["SPY"],
+  "resolution": {"period_minutes": 15},
+  "indicators": [
+    {"id": "rsi", "kind": "RSI", "period": 14, "source": "close", "ma_type": "wilders"}
+  ],
+  "entry": {
+    "logic": "AND",
+    "conditions": [
+      {
+        "kind": "IndicatorComparison",
+        "left":  {"kind": "IndicatorRef", "indicator": "rsi"},
+        "op": "<",
+        "right": {"kind": "Const", "value": 30}
+      }
+    ],
+    "size": {"kind": "SetHoldings", "fraction": 1.0},
+    "pyramiding": 1
+  },
+  "position": {"kind": "EQUITY_LONG"},
+  "survival": [],
+  "exit": {
+    "logic": "OR",
+    "conditions": [
+      {
+        "kind": "IndicatorComparison",
+        "left":  {"kind": "IndicatorRef", "indicator": "rsi"},
+        "op": ">",
+        "right": {"kind": "Const", "value": 70}
+      }
+    ]
+  },
+  "diagnostics": {
+    "snapshot_at_entry": ["rsi"]
+  }
+}

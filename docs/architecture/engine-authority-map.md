@@ -1,7 +1,7 @@
 # Engine authority map
 
 **Status:** Active
-**Last reviewed:** 2026-04-26
+**Last reviewed:** 2026-05-04
 **Pairs with:** `docs/math-sources-of-truth.md` (concept-level registry), `docs/architecture/numerical-authority-migration-plan.md` (migration sequencing)
 
 This document answers exactly one question: **which engine owns which job?**
@@ -16,6 +16,7 @@ If two docs disagree, `math-sources-of-truth.md` wins for math and this doc wins
 |---|---|---|---|---|
 | Interactive backtest (stocks, indicator strategies) | **Engine Lab** | `PythonDataService/app/engine/` via router `app/routers/engine.py` | Canonical event-driven engine; LEAN-ported semantics | **canonical** — vendored LEAN reference at `references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/` |
 | Interactive backtest (options strategies) | **Engine Lab options layer** | `PythonDataService/app/engine/options/` + `app/engine/strategy/algorithms/spy_ema_crossover_options.py` | Same engine as stocks; options pricing routes through `bs_greeks.py` / `quantlib_pricer.py` | canonical |
+| Configurable strategy spec (declarative entry/exit/manage rules over indicators) | **Strategy Spec layer** | `PythonDataService/app/engine/strategy/spec/` (`schema.py` Pydantic models, `evaluator.py::SpecAlgorithm`, `primitives.py`, `indicators.py`); canonical fixtures at `app/engine/strategy/spec/fixtures/*.spec.json` | Phase 1 (shipped 2026-05-04): equity-only, single-symbol, indicator-driven entry/exit. Schema admits Phase 2 shapes (survival rules, options templates, multi-symbol) but the evaluator refuses to run them. Three parity-pinned secondary implementations (SPY EMA / SMA / RSI mean reversion) reproduce hand-coded twins trade-by-trade. | parity-pinned secondary — hand-coded `algorithms/*.py` remain math-authority per `docs/math-sources-of-truth.md`; spec layer drift = test failure. Replaces `app/services/rule_based_backtest.py` per migration **Phase 4** |
 | Research signal scoring (IC, walk-forward, diagnostics) | **Research signal backtester** | `PythonDataService/app/research/signal/backtest.py` (+ `engine.py`, `walk_forward.py`, `diagnostics.py`) | Research-metric infrastructure; produces IC, hit rates, regime splits, etc. | canonical — separate-purpose engine, not a duplicate of Engine Lab |
 | Volatility / edge research | **Edge research** | `PythonDataService/app/engine/edge/` (`edge_score.py`, `regime_clustering.py`, `vrp.py`, `cross_asset_runner.py`) | Edge / regime / VRP analysis; consumes Engine Lab outputs and Polygon snapshots | canonical |
 | Options strategy analysis (payoff, POP, Greeks for a hypothetical strategy) | **Options strategy analysis service** | `PythonDataService/app/services/strategy_engine.py::AnalyzeOptionsStrategy` (+ `app/routers/strategy.py`) | Server-side options-strategy analytics; consumed by GraphQL passthrough → Strategy Lab UI | canonical — **scheduled for payload extension in Phase 1.1** so Angular stops computing the same fields client-side |
@@ -32,7 +33,7 @@ If two docs disagree, `math-sources-of-truth.md` wins for math and this doc wins
 | `Backend/Services/Implementation/BacktestService.cs` | In-process .NET strategy execution (`RunSmaCrossover`, `RunRsiMeanReversion`, `RunMomentumRsiStochastic`, `RunRsiReversal`) + local Sharpe / drawdown helpers | `app/engine/` via GraphQL passthrough to `/api/engine/backtest` | **Phase 3** |
 | `Frontend/src/app/components/strategy-lab/strategy-lab.component.*` | Strategy Lab UI; deprecation banner present in template | Engine Lab UI (`Frontend/src/app/components/lean-engine/lean-engine.component.ts`) | Already declared deprecated — see `docs/engine-phase-1-2-refined-plan.md` |
 | `Frontend/src/app/utils/black-scholes.ts` | Client-side Black-Scholes price + Greeks for Strategy Lab UI | Server-extended `AnalyzeOptionsStrategy` payload | **Phase 1.1 → 1.3** |
-| `PythonDataService/app/services/rule_based_backtest.py` (as a separate engine) | Standalone rule-based backtest path | Adapter to `app/engine/` (config translation only; execution delegates) | **Phase 4** |
+| `PythonDataService/app/services/rule_based_backtest.py` (as a separate engine) | Standalone rule-based backtest path | `app/engine/strategy/spec/` (`StrategySpec` schema + `SpecAlgorithm` evaluator). Phase 1 of the spec layer shipped 2026-05-04 with parity-pinned ports of three reference strategies; Phase 4 will translate legacy `rule_based_backtest` params to a `StrategySpec` and delete this file. | **Phase 4** |
 | `Backend/Services/Implementation/PortfolioRiskService.cs` (Greek *computation*; aggregation is fine) | Shock-propagates from stored `EntryDelta` / `EntryVega` / `EntryTheta` | Python `/portfolio/scenario` and `/portfolio/live-greeks` endpoints | **Phase 2** |
 | `Backend/Services/Implementation/PortfolioValuationService.cs:80` (theoretical option-value path) | Computes option theoretical from entry Greeks | Same as above | **Phase 2** |
 
