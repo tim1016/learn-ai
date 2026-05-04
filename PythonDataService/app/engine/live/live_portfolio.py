@@ -165,6 +165,7 @@ class LivePortfolio:
             pos.average_price = Decimal(0)
         self.cash -= Decimal(event.fill_quantity) * event.fill_price
         self.cash -= event.fee
+        self.net_liquidation = Decimal(0)
         self.total_fees += event.fee
 
     async def submit_pending_orders(self) -> list[IbkrOrderAck]:

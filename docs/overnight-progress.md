@@ -36,3 +36,10 @@
 - Wall-clock time: ~34 minutes.
 - Deviations: finite supplied bars are accepted for deterministic replay; equity snapshots are retained per minute so Phase 6 can compare against BacktestEngine without aggregation loss.
 - Flags: production live streaming is wired through stream_minute_bars but remains unexercised without IB Gateway.
+
+[02:19] Phase 6 summary:
+- Files created/modified: tests/engine/live/test_live_engine_replay.py (138 lines), app/engine/live/live_portfolio.py (186 lines).
+- Tests: phase test pytest tests/engine/live/test_live_engine_replay.py -x 1 passed; ruff check app/ tests/ passed; pre-existing broker/SPY command 106 passed.
+- Wall-clock time: ~27 minutes.
+- Deviations: the external `/sessions/.../Lean/Data` mount referenced by older SPY scripts is absent in this workspace; the replay gate uses the checked-in local `PythonDataService/lean-cache` minute-bar cache (396,775 SPY bars) that is present here.
+- Flags: exact replay covered 162 order events, 81 completed trades, fees, equity curve, trade log, and insight signatures with Decimal("0") price/fee/trade tolerance.
