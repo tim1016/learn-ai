@@ -19,7 +19,7 @@ from app.broker.ibkr.account import fetch_account_summary, fetch_positions
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
 from app.broker.ibkr.orders import place_paper_order
-from app.engine.execution.order import Direction, Order, OrderType
+from app.engine.execution.order import Direction, Order, OrderEvent, OrderType
 from app.engine.execution.portfolio import Position
 
 
@@ -88,7 +88,8 @@ class LivePortfolio:
         return self.positions[sym]
 
     def total_value(self) -> Decimal:
-        if self.net_liquidation:
+        has_open_positions = any(pos.quantity != 0 for pos in self.positions.values())
+        if self.net_liquidation and (not has_open_positions or not self.reference_price):
             return self.net_liquidation
         value = self.cash
         for sym, pos in self.positions.items():
@@ -146,6 +147,25 @@ class LivePortfolio:
         orders = list(self.pending_orders)
         self.pending_orders.clear()
         return orders
+
+    def record_broker_fill(self, event: OrderEvent) -> None:
+        """Update the local cache from a broker-reported fill event."""
+        pos = self.get_position(event.symbol)
+        new_qty = pos.quantity + event.fill_quantity
+        if pos.quantity == 0 or (pos.quantity > 0) == (event.fill_quantity > 0):
+            if new_qty != 0:
+                pos.average_price = (
+                    pos.average_price * Decimal(pos.quantity)
+                    + event.fill_price * Decimal(event.fill_quantity)
+                ) / Decimal(new_qty)
+        elif new_qty != 0 and (pos.quantity > 0) != (new_qty > 0):
+            pos.average_price = event.fill_price
+        pos.quantity = new_qty
+        if pos.quantity == 0:
+            pos.average_price = Decimal(0)
+        self.cash -= Decimal(event.fill_quantity) * event.fill_price
+        self.cash -= event.fee
+        self.total_fees += event.fee
 
     async def submit_pending_orders(self) -> list[IbkrOrderAck]:
         """Submit all locally queued orders through the paper-order boundary."""

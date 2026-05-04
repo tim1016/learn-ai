@@ -8,59 +8,17 @@ from decimal import Decimal
 import pytest
 
 from app.broker.ibkr.models import (
-    IbkrAccountSummary,
-    IbkrOrderAck,
-    IbkrOrderSpec,
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
 from app.engine.live.live_portfolio import LivePortfolio
-
-
-class FakeBroker:
-    def __init__(self) -> None:
-        self.orders: list[IbkrOrderSpec] = []
-        self.account = IbkrAccountSummary(
-            account_id="DU123",
-            is_paper=True,
-            cash_balance=100_000.0,
-            net_liquidation=100_000.0,
-            fetched_at_ms=1,
-        )
-        self.positions = IbkrPositionsSnapshot(
-            account_id="DU123",
-            is_paper=True,
-            positions=[],
-            fetched_at_ms=1,
-        )
-
-    async def fetch_account_summary(self) -> IbkrAccountSummary:
-        return self.account
-
-    async def fetch_positions(self) -> IbkrPositionsSnapshot:
-        return self.positions
-
-    async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
-        self.orders.append(spec)
-        return IbkrOrderAck(
-            account_id="DU123",
-            is_paper=True,
-            order_id=len(self.orders),
-            client_id=1,
-            con_id=756733,
-            symbol=spec.symbol,
-            action=spec.action,
-            quantity=spec.quantity,
-            order_type=spec.order_type,
-            status="PendingSubmit",
-            placed_at_ms=1,
-        )
+from tests.engine.live.fixtures.fake_broker import FakeBroker
 
 
 @pytest.mark.asyncio
 async def test_refresh_from_broker_loads_account_and_positions() -> None:
     broker = FakeBroker()
-    broker.positions = IbkrPositionsSnapshot(
+    broker.position_snapshot = IbkrPositionsSnapshot(
         account_id="DU123",
         is_paper=True,
         positions=[

@@ -11,7 +11,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.framework.insight import Insight, InsightDirection
 from app.engine.live.live_context import LiveContext
 from app.engine.live.live_portfolio import LivePortfolio
-from tests.engine.live.test_live_portfolio import FakeBroker
+from tests.engine.live.fixtures.fake_broker import FakeBroker
 
 
 def _minute_bar(minute: int, close: str) -> TradeBar:
