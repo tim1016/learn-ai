@@ -81,6 +81,12 @@ services:
       - IBKR_PORT=${IBKR_PORT:-4002}
       - IBKR_CLIENT_ID=${IBKR_CLIENT_ID:-1}
       - IBKR_PERSIST_TICKS=${IBKR_PERSIST_TICKS:-false}
+      # Operator kill switch for order placement. Default true (matches
+      # IbkrSettings.readonly). Must be surfaced through compose because
+      # the container does NOT read host .env directly — without this
+      # line, flipping IBKR_READONLY=false in .env has no effect and the
+      # error message in orders.py is misleading.
+      - IBKR_READONLY=${IBKR_READONLY:-true}
     # Make host.docker.internal resolve to the Windows host's bridge IP.
     # Docker Desktop adds this automatically; Podman does NOT — without
     # this entry, the name resolves to a sentinel that doesn't reach
