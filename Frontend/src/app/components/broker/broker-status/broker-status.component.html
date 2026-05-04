@@ -12,6 +12,17 @@
     <i class="pi pi-refresh" aria-hidden="true"></i>
     <span>Refresh</span>
   </button>
+  <button
+    slot="actions"
+    type="button"
+    class="refresh-btn diagnose-btn"
+    (click)="runDiagnostics()"
+    [disabled]="diagnostics().loading"
+    aria-label="Diagnose broker connection"
+  >
+    <i class="pi pi-exclamation-circle" aria-hidden="true"></i>
+    <span>{{ diagnostics().loading ? 'Diagnosing…' : 'Diagnose' }}</span>
+  </button>
   <app-page-guide
     slot="guide"
     pulls="GET /api/broker/health (5 s poll), /account (snapshot), and /positions (snapshot)."
@@ -190,6 +201,53 @@
         Broker is disconnected. Connect IB Gateway with a paper account
         and refresh.
       </p>
+    </article>
+  }
+
+  @let diag = diagnostics();
+  @if (diag.loading || diag.data || diag.error) {
+    <article
+      class="card diagnostics-card"
+      [class.is-pass]="diag.data?.overall_status === 'pass'"
+      [class.is-warn]="diag.data?.overall_status === 'warn'"
+      [class.is-fail]="diag.data?.overall_status === 'fail'"
+    >
+      <header class="card-header">
+        Diagnostics
+        @if (diag.data) {
+          <span class="status-pill" [class]="'status-' + diag.data.overall_status">
+            {{ diag.data.overall_status | uppercase }}
+          </span>
+        }
+      </header>
+      @if (diag.loading) {
+        <p class="muted">Running checks…</p>
+      } @else if (diag.error) {
+        <app-section-error
+          [error]="diag.error"
+          contextWhat="We couldn't run the broker diagnostics."
+          (retry)="runDiagnostics()"
+        />
+      } @else if (diag.data; as report) {
+        <ul class="diagnostics-list">
+          @for (check of report.checks; track trackCheck($index, check)) {
+            <li class="diagnostic-row" [class]="'row-' + check.status">
+              <div class="diagnostic-head">
+                <span class="status-pill" [class]="'status-' + check.status">
+                  {{ check.status | uppercase }}
+                </span>
+                <span class="diagnostic-label">{{ check.label }}</span>
+              </div>
+              <p class="diagnostic-detail mono">{{ check.detail }}</p>
+              @if (check.fix) {
+                <p class="diagnostic-fix">
+                  <strong>Fix:</strong> {{ check.fix }}
+                </p>
+              }
+            </li>
+          }
+        </ul>
+      }
     </article>
   }
 </section>

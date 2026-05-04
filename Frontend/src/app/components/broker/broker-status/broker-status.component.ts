@@ -12,6 +12,7 @@ import { SectionErrorComponent } from '../../../shared/errors/section-error.comp
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import type {
+  DiagnosticReport,
   IbkrAccountSummary,
   IbkrPosition,
   IbkrPositionsSnapshot,
@@ -56,6 +57,7 @@ export class BrokerStatusComponent {
 
   readonly account = signal<AsyncCard<IbkrAccountSummary>>({ ...EMPTY_CARD });
   readonly positions = signal<AsyncCard<IbkrPositionsSnapshot>>({ ...EMPTY_CARD });
+  readonly diagnostics = signal<AsyncCard<DiagnosticReport>>({ ...EMPTY_CARD });
 
   /**
    * Visible only when we know the broker is connected. The auth banner
@@ -113,6 +115,18 @@ export class BrokerStatusComponent {
     }
   }
 
+  async runDiagnostics(): Promise<void> {
+    this.diagnostics.set({ data: null, loading: true, error: null });
+    try {
+      const data = await this.broker.diagnose();
+      this.diagnostics.set({ data, loading: false, error: null });
+    } catch (err) {
+      this.diagnostics.set({ data: null, loading: false, error: err });
+    }
+  }
+
   trackPosition = (_: number, p: IbkrPosition): string =>
     `${p.account_id}:${p.con_id}`;
+
+  trackCheck = (_: number, c: { name: string }): string => c.name;
 }

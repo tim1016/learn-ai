@@ -437,6 +437,43 @@ class IbkrPnLTick(BaseModel):
     ts_ms: int
 
 
+DiagnosticStatus = Literal["pass", "warn", "fail", "skip"]
+
+
+class DiagnosticCheck(BaseModel):
+    """One step in the broker connection self-test.
+
+    The ``status`` is the operator-facing verdict; ``detail`` reports what
+    we observed; ``fix`` carries a remediation hint when the check is not
+    passing. ``fix`` is ``None`` for ``pass`` (nothing to do) and may be
+    ``None`` for ``warn`` when the warning is informational only.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str = Field(..., description="Stable identifier for the check (e.g. 'tcp_reachable').")
+    label: str = Field(..., description="Human-readable check name shown to operators.")
+    status: DiagnosticStatus
+    detail: str
+    fix: str | None = None
+
+
+class DiagnosticReport(BaseModel):
+    """Aggregate broker self-test report served by ``GET /api/broker/diagnose``.
+
+    ``overall_status`` is the worst severity across ``checks`` (``fail`` >
+    ``warn`` > ``pass``; ``skip`` does not affect aggregate). The page
+    surface that renders this report should use ``overall_status`` to
+    pick a banner colour and ``checks`` to render the per-step list.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    overall_status: Literal["pass", "warn", "fail"]
+    checks: list[DiagnosticCheck]
+    fetched_at_ms: int
+
+
 class IbkrConnectionHealth(BaseModel):
     """Diagnostic snapshot used by ``GET /api/broker/health``.
 
@@ -459,6 +496,9 @@ class IbkrConnectionHealth(BaseModel):
 
 
 __all__ = [
+    "DiagnosticCheck",
+    "DiagnosticReport",
+    "DiagnosticStatus",
     "IbkrAccountSummary",
     "IbkrChainSnapshot",
     "IbkrConnectionHealth",

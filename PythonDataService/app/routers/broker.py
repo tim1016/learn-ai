@@ -36,8 +36,10 @@ from app.broker.ibkr.client import (
     NotConnectedError,
     get_client,
 )
+from app.broker.ibkr.diagnostics import run_diagnostics
 from app.broker.ibkr.market_data import stream_option_chain
 from app.broker.ibkr.models import (
+    DiagnosticReport,
     IbkrAccountSummary,
     IbkrChainSnapshot,
     IbkrConnectionHealth,
@@ -98,6 +100,22 @@ async def broker_health() -> IbkrConnectionHealth:
             fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
         )
     return client.health()
+
+
+# ── /diagnose ──────────────────────────────────────────────────────────
+
+
+@router.get("/diagnose", response_model=DiagnosticReport)
+async def broker_diagnose() -> DiagnosticReport:
+    """Run a layered self-test of the broker connection.
+
+    Used by the Broker Status page's "Diagnose" button. Walks settings,
+    host resolution, TCP reachability, the FastAPI lifespan client, and
+    the account sentinel; returns one row per check with a remediation
+    hint when something is not passing. Read-only — does not call
+    ``connect()`` and does not place orders.
+    """
+    return await run_diagnostics()
 
 
 # ── /account (Phase 2a) ────────────────────────────────────────────────

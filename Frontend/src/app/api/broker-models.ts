@@ -111,6 +111,27 @@ export interface IbkrOrderEvent {
   ts_ms: number;
 }
 
+// ── REST shape: /api/broker/diagnose ─────────────────────────────────
+// Hand-mirrored from app.broker.ibkr.models.DiagnosticCheck /
+// DiagnosticReport. Regenerate broker.types.ts when this file is next
+// regenerated to retire the hand mirror.
+
+export type DiagnosticStatus = 'pass' | 'warn' | 'fail' | 'skip';
+
+export interface DiagnosticCheck {
+  name: string;
+  label: string;
+  status: DiagnosticStatus;
+  detail: string;
+  fix: string | null;
+}
+
+export interface DiagnosticReport {
+  overall_status: 'pass' | 'warn' | 'fail';
+  checks: DiagnosticCheck[];
+  fetched_at_ms: number;
+}
+
 // ── REST shape: /api/broker/expirations/{symbol} ─────────────────────
 
 export interface ExpirationsResponse {
