@@ -229,6 +229,7 @@ class SpecAlgorithm(Strategy):
             current_bar_count=self._bar_count,
             bar_close_time=bar.end_time,
             bar_close_price=bar.close,
+            current_bar=bar,
             in_position=self._in_position,
             entry_bar_count=self._entry_bar_count,
             entry_price=entry_price,
