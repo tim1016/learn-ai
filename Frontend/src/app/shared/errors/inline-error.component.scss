@@ -1,0 +1,28 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+}
+
+.inline-error {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  color: $bear;
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.inline-error-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bear-soft);
+  font-family: $font-mono;
+  font-size: 0.7rem;
+  font-weight: var(--fw-bold);
+}

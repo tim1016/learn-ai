@@ -74,6 +74,16 @@
   text-wrap: pretty;
 }
 
+// ─── Guide slot ────────────────────────────────────────────────────────────
+// Empty by default; pages opt in by projecting <app-page-guide
+// slot="guide"> (or arbitrary markup). Sits below the title row so the
+// helper content reads as part of the header without crowding it.
+.page-header-guide {
+  &:empty {
+    display: none;
+  }
+}
+
 // ─── Actions slot ──────────────────────────────────────────────────────────
 // Any <a> or <button> placed in [slot=actions] gets a uniform chip style.
 // Components can add their own classes without fighting for specificity.

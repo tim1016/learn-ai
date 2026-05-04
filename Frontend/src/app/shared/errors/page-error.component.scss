@@ -1,0 +1,122 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+}
+
+.page-error {
+  margin: var(--space-6) auto;
+  max-width: 720px;
+  padding: var(--space-6);
+  background: var(--bg-surface);
+  border: 1px solid rgba(239, 83, 80, 0.35);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.page-error-head {
+  margin-bottom: var(--space-4);
+}
+
+.page-error-eyebrow {
+  display: inline-block;
+  margin-bottom: var(--space-2);
+  color: $bear;
+  font-family: $font-mono;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.page-error-title {
+  margin: 0 0 var(--space-2);
+  color: $text-primary;
+  font-size: var(--fs-h2);
+  font-weight: var(--fw-semi);
+  line-height: 1.2;
+}
+
+.page-error-try {
+  margin: 0;
+  color: $text-secondary;
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  max-width: 60ch;
+}
+
+.page-error-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.page-error-retry {
+  padding: 0.55rem 1rem;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--text-on-accent);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+  cursor: pointer;
+  transition: background var(--t-ui), border-color var(--t-ui);
+
+  &:hover:not(:disabled) {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.page-error-mathref {
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.page-error-details {
+  margin-top: var(--space-2);
+  border-top: 1px solid $border;
+  padding-top: var(--space-3);
+
+  summary {
+    cursor: pointer;
+    color: $text-subtle;
+    font-size: var(--fs-sm);
+    list-style: none;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &:hover {
+      color: $text-primary;
+    }
+  }
+
+  pre {
+    margin: var(--space-2) 0 0;
+    padding: var(--space-3);
+    background: var(--bg-sunken);
+    border-radius: var(--radius);
+    color: $text-secondary;
+    font-family: $font-mono;
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 320px;
+    overflow: auto;
+  }
+}

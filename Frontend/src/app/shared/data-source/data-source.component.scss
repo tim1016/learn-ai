@@ -1,0 +1,35 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+}
+
+.data-source {
+  margin: var(--space-1) 0 0;
+  color: $text-muted;
+  font-family: $font-mono;
+  font-size: var(--fs-xxs);
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+
+  &--delayed {
+    color: $warn;
+  }
+}
+
+.data-source-origin {
+  font-weight: var(--fw-semi);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-caps);
+}
+
+.data-source-sep {
+  margin: 0 var(--space-1);
+  opacity: 0.6;
+}
+
+.data-source-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
