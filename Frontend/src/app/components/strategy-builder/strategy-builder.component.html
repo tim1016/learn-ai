@@ -125,20 +125,6 @@
 
   <!-- Main Layout: Chain (full width) -->
   <div class="main-layout">
-    <!-- Drawer Toggle (floating) -->
-    @if (allContracts().length > 0 && !chainLoading()) {
-      <button
-        class="drawer-toggle-btn"
-        (click)="drawerOpen.set(true)"
-        [class.has-legs]="legs().length > 0"
-      >
-        <i class="pi pi-sliders-h"></i>
-        @if (legs().length > 0) {
-          <span class="leg-badge">{{ legs().length }}</span>
-        }
-      </button>
-    }
-
     <!-- Chain Panel (Full Width) -->
     <div class="chain-panel">
       @if (chainLoading()) {
@@ -370,55 +356,40 @@
 
   </div>
 
-  <!-- Strategy Drawer (slides from right) -->
-  @if (drawerOpen()) {
-    <div class="drawer-backdrop" (click)="drawerOpen.set(false)"></div>
-  }
-  <aside class="strategy-drawer" [class.open]="drawerOpen()">
-    <!-- Drawer Header -->
-    <div class="drawer-header">
-      <h2 class="drawer-title">
+  <!-- Inline Strategy Builder (replaces the right-slide drawer). -->
+  <!-- Hidden until a chain is loaded; the page header subtitle and -->
+  <!-- the chain-panel "no contracts" message cover the empty state. -->
+  @if (allContracts().length > 0) {
+    <section class="strategy-builder-inline mt-4 bg-slate-800 rounded-lg p-4">
+      <h2 class="sb-section-title">
         <i class="pi pi-sliders-h text-indigo-400"></i>
-        Strategy Preview
+        Strategy Builder
       </h2>
-      <button class="drawer-close" (click)="drawerOpen.set(false)">
-        <i class="pi pi-times"></i>
-      </button>
-    </div>
 
-    <div class="drawer-body">
-      <!-- Template Selector -->
+      <!-- Preset picker (cards) -->
       <div class="panel-section">
-        <label class="section-label">Template</label>
-        <select
-          class="template-select"
-          [ngModel]="strategyType()"
-          (ngModelChange)="strategyType.set($event); onStrategyTypeChanged()"
-        >
-          <option value="custom">Custom</option>
-          <optgroup label="Bullish">
-            <option value="bull_call_spread">Bull Call Spread</option>
-            <option value="covered_call">Covered Call</option>
-            <option value="naked_put">Naked Put</option>
-            <option value="ratio_call_spread">Ratio Call Spread</option>
-          </optgroup>
-          <optgroup label="Bearish">
-            <option value="bear_put_spread">Bear Put Spread</option>
-            <option value="protective_put">Protective Put</option>
-            <option value="naked_call">Naked Call</option>
-            <option value="ratio_put_spread">Ratio Put Spread</option>
-          </optgroup>
-          <optgroup label="Neutral / Volatility">
-            <option value="long_straddle">Long Straddle</option>
-            <option value="short_straddle">Short Straddle</option>
-            <option value="long_strangle">Long Strangle</option>
-            <option value="short_strangle">Short Strangle</option>
-            <option value="long_butterfly">Long Butterfly</option>
-            <option value="short_butterfly">Short Butterfly</option>
-            <option value="iron_condor">Iron Condor</option>
-            <option value="iron_butterfly">Iron Butterfly</option>
-          </optgroup>
-        </select>
+        <label class="section-label">Pick a starting point</label>
+        <div class="preset-grid">
+          <button
+            type="button"
+            class="preset-card preset-custom"
+            [class.active]="strategyType() === customPreset.value"
+            (click)="strategyType.set(customPreset.value); onStrategyTypeChanged()"
+          >{{ customPreset.label }}</button>
+          @for (group of presetGroups; track group.label) {
+            <div class="preset-group-divider">
+              <span>{{ group.label }}</span>
+            </div>
+            @for (item of group.items; track item.value) {
+              <button
+                type="button"
+                class="preset-card"
+                [class.active]="strategyType() === item.value"
+                (click)="strategyType.set(item.value); onStrategyTypeChanged()"
+              >{{ item.label }}</button>
+            }
+          }
+        </div>
       </div>
 
       <!-- Legs -->
@@ -431,7 +402,7 @@
         </div>
         @if (legs().length === 0) {
           <div class="text-slate-500 text-[11px] text-center py-3">
-            Click L/S in the chain to add legs
+            Click L/S in the chain to add legs, or pick a preset above.
           </div>
         } @else {
           <div class="legs-list">
@@ -439,25 +410,41 @@
               <div class="leg-chip" [class.long-chip]="leg.position === 'long'" [class.short-chip]="leg.position === 'short'">
                 <span class="leg-pos">{{ leg.position === 'long' ? 'BUY' : 'SELL' }}</span>
                 <span class="leg-detail">
-                  {{ leg.quantity }}x
                   <span [class.text-emerald-400]="leg.optionType === 'call'" [class.text-red-400]="leg.optionType === 'put'">
                     {{ leg.optionType === 'call' ? 'C' : 'P' }}
                   </span>
                   {{ leg.strike }}
                 </span>
+                <div class="leg-qty-stepper" role="group" aria-label="Leg quantity">
+                  <button
+                    type="button"
+                    class="qty-btn"
+                    [disabled]="leg.quantity <= 1"
+                    aria-label="Decrease quantity"
+                    (click)="setLegQty(i, leg.quantity - 1)"
+                  >&minus;</button>
+                  <span class="qty-value">{{ leg.quantity }}</span>
+                  <button
+                    type="button"
+                    class="qty-btn"
+                    aria-label="Increase quantity"
+                    (click)="setLegQty(i, leg.quantity + 1)"
+                  >+</button>
+                </div>
                 <span class="leg-premium">${{ leg.premium | number:'1.2-2' }}</span>
-                <button class="leg-remove" (click)="removeLeg(i)"><i class="pi pi-times"></i></button>
+                <button class="leg-remove" aria-label="Remove leg" (click)="removeLeg(i)">
+                  <i class="pi pi-times"></i>
+                </button>
               </div>
             }
           </div>
         }
       </div>
 
-      <!-- Summary + Greeks + Chart (only when legs produce a payoff curve) -->
+      <!-- Outcome (summary, Greeks, chart, what-if, analyze, results) -->
       @if (livePayoffCurve().length > 0) {
-        <!-- Summary & Greeks side by side -->
         <div class="panel-section">
-          <div class="drawer-summary-row">
+          <div class="outcome-row">
             <div class="summary-grid">
               <div class="summary-row">
                 <span class="summary-label">Net Cost</span>
@@ -558,7 +545,7 @@
           </div>
         }
 
-        <!-- Payoff Chart (taller in drawer) -->
+        <!-- Payoff Chart -->
         <div class="panel-section chart-section">
           <app-payoff-chart
             [expirationCurve]="livePayoffCurve()"
@@ -592,7 +579,7 @@
         </div>
       }
 
-      <!-- Analysis Results (inside drawer) -->
+      <!-- Analysis Results -->
       @if (analysisResult(); as result) {
         <div class="panel-section">
           <label class="section-label">Analysis Results</label>
@@ -624,8 +611,8 @@
           </div>
         </div>
       }
-    </div>
-  </aside>
+    </section>
+  }
 </div>
 
 <!--

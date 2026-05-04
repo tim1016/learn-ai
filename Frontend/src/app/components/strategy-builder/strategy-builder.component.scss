@@ -14,166 +14,152 @@
   overflow-x: auto;
 }
 
-// ── Drawer Toggle Button ──────────────────────────────────────
+// ── Inline Strategy Builder section ─────────────────────────
+// Replaces the previous right-slide drawer. Uses the same
+// bg-slate-800 + rounded-lg panel chrome as the expiration ribbon
+// and chain panel so the page reads as a stacked surface.
 
-.drawer-toggle-btn {
-  position: fixed;
-  right: 16px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  border: 1px solid rgba(99, 102, 241, 0.5);
-  background: rgba(30, 41, 59, 0.95);
-  color: #818cf8;
-  font-size: 16px;
-  cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  transition: all 0.2s;
-
-  &:hover {
-    background: rgba(99, 102, 241, 0.2);
-    border-color: #818cf8;
-    transform: translateY(-50%) scale(1.05);
-  }
-
-  &.has-legs {
-    border-color: #22c55e;
-    color: #4ade80;
-  }
-
-  .leg-badge {
-    position: absolute;
-    top: -4px;
-    right: -4px;
-    min-width: 16px;
-    height: 16px;
-    border-radius: 8px;
-    background: #6366f1;
-    color: white;
-    font-size: 9px;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 4px;
-  }
-}
-
-// ── Drawer Backdrop ───────────────────────────────────────────
-
-.drawer-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(2px);
-  animation: fadeIn 0.2s ease-out;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-// ── Strategy Drawer ───────────────────────────────────────────
-
-.strategy-drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 210;
-  width: 1200px;
-  max-width: 90vw;
-  background: #0f172a;
-  border-left: 1px solid rgba(71, 85, 105, 0.5);
-  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.5);
-  transform: translateX(100%);
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  display: flex;
-  flex-direction: column;
-
-  &.open {
-    transform: translateX(0);
-  }
-}
-
-.drawer-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 18px;
-  border-bottom: 1px solid rgba(71, 85, 105, 0.4);
-  background: rgba(15, 23, 42, 0.6);
-  flex-shrink: 0;
-}
-
-.drawer-title {
+.sb-section-title {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin: 0 0 12px;
   font-size: 14px;
   font-weight: 700;
   color: #f1f5f9;
-  margin: 0;
 }
 
-.drawer-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  border: 1px solid rgba(71, 85, 105, 0.4);
-  background: rgba(30, 41, 59, 0.5);
-  color: #94a3b8;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s;
+// ── Outcome layout (was drawer-summary-row) ─────────────────
 
-  &:hover {
-    color: #f1f5f9;
-    background: rgba(239, 68, 68, 0.15);
-    border-color: rgba(239, 68, 68, 0.5);
-  }
-}
-
-.drawer-body {
-  flex: 1;
-  overflow-y: auto;
-
-  &::-webkit-scrollbar {
-    width: 5px;
-  }
-  &::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  &::-webkit-scrollbar-thumb {
-    background: rgba(100, 116, 139, 0.4);
-    border-radius: 2px;
-  }
-}
-
-// ── Drawer layout helpers ─────────────────────────────────────
-
-.drawer-summary-row {
+.outcome-row {
   display: flex;
   gap: 16px;
   align-items: flex-start;
+  flex-wrap: wrap;
 
   .summary-grid {
     flex: 1;
+    min-width: 280px;
   }
 
   .greeks-mini {
     flex-shrink: 0;
+  }
+}
+
+// ── Preset card grid ────────────────────────────────────────
+// 4 cards per row at desktop, 3/2 at narrower viewports via the
+// auto-fill min track. Group dividers span the full grid row so
+// Bullish / Bearish / Neutral cohorts read as bands.
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.preset-group-divider {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+  font-weight: 600;
+
+  &::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: rgba(148, 163, 184, 0.2);
+  }
+}
+
+.preset-card {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 8px;
+  min-height: 38px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(71, 85, 105, 0.5);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+
+  &:hover {
+    background: rgba(30, 41, 59, 0.95);
+    border-color: rgba(99, 102, 241, 0.5);
+    color: #e2e8f0;
+  }
+
+  &.active {
+    background: rgba(99, 102, 241, 0.25);
+    border-color: #818cf8;
+    color: #c7d2fe;
+  }
+
+  &.preset-custom {
+    grid-column: 1 / -1;
+    @media (min-width: 640px) {
+      grid-column: 1;
+    }
+  }
+}
+
+// ── Per-leg quantity stepper ────────────────────────────────
+
+.leg-qty-stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(71, 85, 105, 0.5);
+  border-radius: 4px;
+  overflow: hidden;
+
+  .qty-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    background: rgba(71, 85, 105, 0.3);
+    color: #cbd5e1;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.1s;
+
+    &:hover:not(:disabled) {
+      background: rgba(99, 102, 241, 0.3);
+      color: #e0e7ff;
+    }
+
+    &:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+  }
+
+  .qty-value {
+    min-width: 24px;
+    padding: 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #f1f5f9;
+    text-align: center;
+    border-left: 1px solid rgba(71, 85, 105, 0.5);
+    border-right: 1px solid rgba(71, 85, 105, 0.5);
+    background: rgba(30, 41, 59, 0.4);
   }
 }
 
