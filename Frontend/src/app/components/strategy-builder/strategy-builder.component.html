@@ -155,10 +155,8 @@
         <div class="overflow-x-auto">
           <table class="chain-table w-full border-collapse text-xs">
             <colgroup>
-              <!-- UX-Q1: drill-down icon-per-side (📈 calls, leftmost) -->
-              <col class="col-drill" />
-              <col class="col-action" />
-              <col class="col-action" />
+              <!-- L · H · S action group (calls, leftmost) -->
+              <col class="col-actions" />
               @if (chainDensity() === 'greeks') {
                 <col class="col-greek" />
                 <col class="col-greek" />
@@ -178,17 +176,13 @@
                 <col class="col-greek" />
                 <col class="col-greek" />
               }
-              <col class="col-action" />
-              <col class="col-action" />
-              <!-- UX-Q1: drill-down icon-per-side (📉 puts, rightmost) -->
-              <col class="col-drill" />
+              <!-- L · H · S action group (puts, rightmost) -->
+              <col class="col-actions" />
             </colgroup>
             <thead>
-              @let callSpan = chainDensity() === 'greeks' ? 9 : 6;
-              @let putSpan  = chainDensity() === 'greeks' ? 9 : 6;
+              @let callSpan = chainDensity() === 'greeks' ? 8 : 5;
+              @let putSpan  = chainDensity() === 'greeks' ? 8 : 5;
               <tr class="border-b-2 border-slate-700">
-                <!-- UX-Q1: spacer for the call drill-down icon column -->
-                <th class="col-drill"></th>
                 <th [attr.colspan]="callSpan" class="text-center text-emerald-400 font-bold py-1.5 text-xs">
                   CALLS
                 </th>
@@ -209,14 +203,10 @@
                     >{{ chainDensity() === 'greeks' ? 'Full Greeks' : 'Quick' }}</button>
                   </div>
                 </th>
-                <!-- UX-Q1: spacer for the put drill-down icon column -->
-                <th class="col-drill"></th>
               </tr>
               <tr class="border-b border-slate-700 text-slate-400 text-[10px] uppercase tracking-wider">
-                <!-- UX-Q1: history label hint (calls side) -->
-                <th class="col-drill" pTooltip="Click to view contract history" tooltipPosition="top">Hist</th>
-                <th class="px-0.5 py-1 text-center" pTooltip="Buy (Long)" tooltipPosition="top">L</th>
-                <th class="px-0.5 py-1 text-center" pTooltip="Sell (Short)" tooltipPosition="top">S</th>
+                <!-- L · H · S action group (calls side) -->
+                <th class="col-actions text-center" pTooltip="Long · History · Short" tooltipPosition="top">L · H · S</th>
                 @if (chainDensity() === 'greeks') {
                   <th class="px-1.5 py-1 text-right" pTooltip="Vega" tooltipPosition="top">V</th>
                   <th class="px-1.5 py-1 text-right" pTooltip="Theta" tooltipPosition="top">Θ</th>
@@ -236,10 +226,8 @@
                   <th class="px-1.5 py-1 text-left" pTooltip="Theta" tooltipPosition="top">Θ</th>
                   <th class="px-1.5 py-1 text-left" pTooltip="Vega" tooltipPosition="top">V</th>
                 }
-                <th class="px-0.5 py-1 text-center" pTooltip="Buy (Long)" tooltipPosition="top">L</th>
-                <th class="px-0.5 py-1 text-center" pTooltip="Sell (Short)" tooltipPosition="top">S</th>
-                <!-- UX-Q1: history label hint (puts side) -->
-                <th class="col-drill" pTooltip="Click to view contract history" tooltipPosition="top">Hist</th>
+                <!-- L · H · S action group (puts side) -->
+                <th class="col-actions text-center" pTooltip="Long · History · Short" tooltipPosition="top">L · H · S</th>
               </tr>
             </thead>
             <tbody>
@@ -253,35 +241,37 @@
                   [class.row-otm-put]="row.otmPut"
                   [attr.data-atm]="row.isAtm ? 'true' : null"
                 >
-                  <!-- UX-Q1: call drill-down icon (📈) — opens history drawer -->
-                  <td class="col-drill text-center">
-                    <button
-                      type="button"
-                      class="drill-icon"
-                      [disabled]="!row.call"
-                      aria-label="View call contract history"
-                      pTooltip="View call history"
-                      tooltipPosition="top"
-                      (click)="openContractHistory(row.call, 'call')"
-                    >📈</button>
-                  </td>
-                  <!-- CALL Long -->
-                  <td class="col-call px-0.5 py-1 text-center">
-                    <button
-                      class="action-btn long-btn"
-                      [class.active]="isLegActive('call', row.strike, 'long')"
-                      [disabled]="!row.call"
-                      (click)="addLegFromChain(row.call, 'call', 'long')"
-                    >L</button>
-                  </td>
-                  <!-- CALL Short -->
-                  <td class="col-call px-0.5 py-1 text-center">
-                    <button
-                      class="action-btn short-btn"
-                      [class.active]="isLegActive('call', row.strike, 'short')"
-                      [disabled]="!row.call"
-                      (click)="addLegFromChain(row.call, 'call', 'short')"
-                    >S</button>
+                  <!-- L · H · S action group (calls) -->
+                  <td class="col-actions text-center">
+                    <div class="action-group" role="group" aria-label="Call actions">
+                      <button
+                        type="button"
+                        class="ag-btn ag-long"
+                        [class.active]="isLegActive('call', row.strike, 'long')"
+                        [disabled]="!row.call"
+                        pTooltip="Buy (Long)"
+                        tooltipPosition="top"
+                        (click)="addLegFromChain(row.call, 'call', 'long')"
+                      >L</button>
+                      <button
+                        type="button"
+                        class="ag-btn ag-hist"
+                        [disabled]="!row.call"
+                        aria-label="View call contract history"
+                        pTooltip="View call history"
+                        tooltipPosition="top"
+                        (click)="openContractHistory(row.call, 'call')"
+                      >H</button>
+                      <button
+                        type="button"
+                        class="ag-btn ag-short"
+                        [class.active]="isLegActive('call', row.strike, 'short')"
+                        [disabled]="!row.call"
+                        pTooltip="Sell (Short)"
+                        tooltipPosition="top"
+                        (click)="addLegFromChain(row.call, 'call', 'short')"
+                      >S</button>
+                    </div>
                   </td>
                   <!-- CALL V / Θ / Γ (UX-Q2: only when chainDensity === 'greeks') -->
                   @if (chainDensity() === 'greeks') {
@@ -326,35 +316,37 @@
                     <td class="col-put px-1.5 py-1 text-left text-slate-400">{{ row.putTheta }}</td>
                     <td class="col-put px-1.5 py-1 text-left text-slate-400">{{ row.putVega }}</td>
                   }
-                  <!-- PUT Long -->
-                  <td class="col-put px-0.5 py-1 text-center">
-                    <button
-                      class="action-btn long-btn"
-                      [class.active]="isLegActive('put', row.strike, 'long')"
-                      [disabled]="!row.put"
-                      (click)="addLegFromChain(row.put, 'put', 'long')"
-                    >L</button>
-                  </td>
-                  <!-- PUT Short -->
-                  <td class="col-put px-0.5 py-1 text-center">
-                    <button
-                      class="action-btn short-btn"
-                      [class.active]="isLegActive('put', row.strike, 'short')"
-                      [disabled]="!row.put"
-                      (click)="addLegFromChain(row.put, 'put', 'short')"
-                    >S</button>
-                  </td>
-                  <!-- UX-Q1: put drill-down icon (📉) — opens history drawer -->
-                  <td class="col-drill text-center">
-                    <button
-                      type="button"
-                      class="drill-icon"
-                      [disabled]="!row.put"
-                      aria-label="View put contract history"
-                      pTooltip="View put history"
-                      tooltipPosition="top"
-                      (click)="openContractHistory(row.put, 'put')"
-                    >📉</button>
+                  <!-- L · H · S action group (puts) -->
+                  <td class="col-actions text-center">
+                    <div class="action-group" role="group" aria-label="Put actions">
+                      <button
+                        type="button"
+                        class="ag-btn ag-long"
+                        [class.active]="isLegActive('put', row.strike, 'long')"
+                        [disabled]="!row.put"
+                        pTooltip="Buy (Long)"
+                        tooltipPosition="top"
+                        (click)="addLegFromChain(row.put, 'put', 'long')"
+                      >L</button>
+                      <button
+                        type="button"
+                        class="ag-btn ag-hist"
+                        [disabled]="!row.put"
+                        aria-label="View put contract history"
+                        pTooltip="View put history"
+                        tooltipPosition="top"
+                        (click)="openContractHistory(row.put, 'put')"
+                      >H</button>
+                      <button
+                        type="button"
+                        class="ag-btn ag-short"
+                        [class.active]="isLegActive('put', row.strike, 'short')"
+                        [disabled]="!row.put"
+                        pTooltip="Sell (Short)"
+                        tooltipPosition="top"
+                        (click)="addLegFromChain(row.put, 'put', 'short')"
+                      >S</button>
+                    </div>
                   </td>
                 </tr>
               }
