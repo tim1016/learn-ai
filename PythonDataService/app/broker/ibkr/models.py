@@ -18,6 +18,7 @@ Per ``docs/architecture/iv-ownership-research.md`` and the project
 from __future__ import annotations
 
 import math
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -226,6 +227,27 @@ class IbkrChainSnapshot(BaseModel):
     underlying_price: float | None = None
     quotes: list[IbkrOptionQuote]
     as_of_ms: int
+
+
+class IbkrMinuteBar(BaseModel):
+    """One closed 1-minute TRADES bar from IBKR real-time bars.
+
+    IBKR delivers 5-second bars via ``reqRealTimeBars``. The broker
+    boundary aggregates those into closed 1-minute bars and stores all
+    boundary timestamps as ``int64`` ms UTC.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    start_ms: int = Field(..., description="UTC milliseconds since epoch, inclusive.")
+    end_ms: int = Field(..., description="UTC milliseconds since epoch, exclusive.")
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+    fetched_at_ms: int
 
 
 OrderAction = Literal["BUY", "SELL"]
@@ -440,6 +462,7 @@ __all__ = [
     "IbkrAccountSummary",
     "IbkrChainSnapshot",
     "IbkrConnectionHealth",
+    "IbkrMinuteBar",
     "IbkrOpenOrder",
     "IbkrOptionQuote",
     "IbkrOrderAck",
