@@ -1,6 +1,6 @@
 <app-page-header
   title="Account Monitor"
-  subtitle="Live account-level and per-position P&L."
+  subtitle="Continuous account-level and per-position P&L. Account snapshot lives on the Status page; this page is the streaming counterpart."
 >
   <button
     slot="actions"
@@ -11,6 +11,20 @@
     <i class="pi pi-refresh" aria-hidden="true"></i>
     Refresh positions
   </button>
+  <app-page-guide
+    slot="guide"
+    pulls="Two SSE streams: /api/broker/pnl/stream (account-level Day / Unrealized / Realized) and /api/broker/pnl/positions/stream (per-conId mark + day P&L)."
+    why="The Status page shows a one-shot snapshot; this page is the live counterpart so you can watch Day P&L move while a paper position is open."
+    [steps]="[
+      'Confirm the broker is paper-connected on the Status page.',
+      'Open this page; the streams open automatically.',
+      'Refresh positions if you placed a new order to pick up its conId.'
+    ]"
+    [related]="[
+      { label: 'Broker Status', route: '/broker' },
+      { label: 'Orders', route: '/broker/orders' }
+    ]"
+  />
 </app-page-header>
 
 @if (!canStream()) {
@@ -26,8 +40,17 @@
         <span class="badge mono">{{ accountStatus() }}</span>
       </header>
       @if (accountError(); as err) {
-        <p class="error">Stream error: {{ err }}</p>
+        <app-section-error
+          [error]="err"
+          contextWhat="The account-level P&L stream stopped."
+          [canRetry]="false"
+        />
       }
+      <app-data-source
+        origin="IBKR"
+        method="pnl stream"
+        freshness="updates ~1 s (server-side debounce)"
+      />
       @let tick = accountTick();
       @if (tick === null) {
         <p class="muted">Waiting for first tick…</p>
@@ -45,10 +68,18 @@
   </section>
 
   @if (positionsError(); as err) {
-    <p class="error">Positions error: {{ err }}</p>
+    <app-section-error
+      [error]="err"
+      contextWhat="We couldn't load your IBKR positions."
+      (retry)="loadPositions()"
+    />
   }
   @if (positionsStreamError(); as err) {
-    <p class="error">Per-position stream error: {{ err }}</p>
+    <app-section-error
+      [error]="err"
+      contextWhat="The per-position P&L stream stopped."
+      [canRetry]="false"
+    />
   }
 
   <section class="positions-section">
@@ -61,6 +92,11 @@
     } @else if (rows().length === 0) {
       <p class="muted">No open positions.</p>
     } @else {
+      <app-data-source
+        origin="IBKR"
+        method="pnlSingle stream (per conId) · qty + market value + day P&L"
+        freshness="updates ~1 s (server-side debounce)"
+      />
       <table class="positions-table">
         <thead>
           <tr>

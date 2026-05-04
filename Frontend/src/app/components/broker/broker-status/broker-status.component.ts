@@ -7,6 +7,8 @@ import {
 } from '@angular/core';
 import { UpperCasePipe } from '@angular/common';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
+import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
+import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import type {
@@ -24,7 +26,7 @@ import {
 interface AsyncCard<T> {
   data: T | null;
   loading: boolean;
-  error: string | null;
+  error: unknown;
 }
 
 const EMPTY_CARD: AsyncCard<never> = { data: null, loading: false, error: null };
@@ -41,7 +43,7 @@ const EMPTY_CARD: AsyncCard<never> = { data: null, loading: false, error: null }
 @Component({
   selector: 'app-broker-status',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent, UpperCasePipe],
+  imports: [PageHeaderComponent, PageGuideComponent, SectionErrorComponent, UpperCasePipe],
   styleUrl: './broker-status.component.scss',
   templateUrl: './broker-status.component.html',
 })
@@ -91,43 +93,26 @@ export class BrokerStatusComponent {
     await Promise.all([this.loadAccount(), this.loadPositions()]);
   }
 
-  private async loadAccount(): Promise<void> {
+  async loadAccount(): Promise<void> {
     this.account.set({ data: null, loading: true, error: null });
     try {
       const data = await this.broker.account();
       this.account.set({ data, loading: false, error: null });
     } catch (err) {
-      this.account.set({
-        data: null,
-        loading: false,
-        error: extractMessage(err),
-      });
+      this.account.set({ data: null, loading: false, error: err });
     }
   }
 
-  private async loadPositions(): Promise<void> {
+  async loadPositions(): Promise<void> {
     this.positions.set({ data: null, loading: true, error: null });
     try {
       const data = await this.broker.positions();
       this.positions.set({ data, loading: false, error: null });
     } catch (err) {
-      this.positions.set({
-        data: null,
-        loading: false,
-        error: extractMessage(err),
-      });
+      this.positions.set({ data: null, loading: false, error: err });
     }
   }
 
   trackPosition = (_: number, p: IbkrPosition): string =>
     `${p.account_id}:${p.con_id}`;
-}
-
-function extractMessage(err: unknown): string {
-  if (err == null) return 'Unknown error';
-  if (typeof err === 'string') return err;
-  if (typeof err === 'object' && 'message' in err) {
-    return String((err as { message: unknown }).message);
-  }
-  return 'Unknown error';
 }

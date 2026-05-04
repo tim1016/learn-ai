@@ -1,0 +1,125 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+  margin: var(--space-3) 0 var(--space-5);
+}
+
+.page-guide {
+  background: var(--bg-elevated);
+  border: 1px solid $border-light;
+  border-radius: var(--radius-md);
+
+  &[open] {
+    background: var(--bg-surface);
+  }
+}
+
+.page-guide-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: $text-secondary;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+
+  &:hover {
+    color: $text-primary;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius);
+  }
+}
+
+.page-guide-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-faint);
+  color: var(--accent);
+  font-family: $font-mono;
+  font-size: 0.7rem;
+  font-weight: var(--fw-bold);
+  font-style: italic;
+}
+
+.page-guide-body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid $border;
+  color: $text-secondary;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+
+.page-guide-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0 0 var(--space-3);
+
+  > div {
+    display: contents;
+  }
+
+  dt {
+    color: $text-muted;
+    font-family: $font-mono;
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semi);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+    padding-top: 2px;
+  }
+
+  dd {
+    margin: 0;
+    color: $text-primary;
+  }
+}
+
+.page-guide-section {
+  margin-top: var(--space-3);
+
+  h4 {
+    margin: 0 0 var(--space-1);
+    color: $text-muted;
+    font-family: $font-mono;
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semi);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+  }
+
+  ol,
+  ul {
+    margin: 0;
+    padding-left: var(--space-5);
+  }
+
+  li + li {
+    margin-top: var(--space-1);
+  }
+}
+
+.page-guide-related a {
+  color: var(--accent);
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}

@@ -1,6 +1,7 @@
 <app-page-header
   title="Orders"
-  subtitle="Place, cancel, and watch paper-trading orders."
+  eyebrow="Phase 3a · Safety stack 4/4"
+  subtitle="Place market or limit paper orders against your DU account. Brackets, OCO, and bracket-children are deferred to a later phase."
 />
 
 @if (liveModeLocked()) {
@@ -22,7 +23,7 @@
 
     <form
       class="order-form"
-      (submit)="$event.preventDefault(); submitOrder()"
+      (submit)="$event.preventDefault(); openConfirmDialog()"
     >
       <div class="row">
         <label class="field">
@@ -34,7 +35,7 @@
             (ngModelChange)="symbol.set($event.toUpperCase())"
             name="symbol"
             required
-            [disabled]="!isPaperConnected()"
+            appPaperOnly
           />
         </label>
 
@@ -45,7 +46,7 @@
             [ngModel]="secType()"
             (ngModelChange)="secType.set($event)"
             name="secType"
-            [disabled]="!isPaperConnected()"
+            appPaperOnly
           >
             <option value="STK">Stock</option>
             <option value="OPT">Option</option>
@@ -59,7 +60,7 @@
             [ngModel]="action()"
             (ngModelChange)="action.set($event)"
             name="action"
-            [disabled]="!isPaperConnected()"
+            appPaperOnly
           >
             <option value="BUY">Buy</option>
             <option value="SELL">Sell</option>
@@ -75,7 +76,7 @@
             [ngModel]="quantity()"
             (ngModelChange)="quantity.set($event)"
             name="qty"
-            [disabled]="!isPaperConnected()"
+            appPaperOnly
           />
         </label>
       </div>
@@ -88,7 +89,7 @@
             [ngModel]="orderType()"
             (ngModelChange)="orderType.set($event)"
             name="orderType"
-            [disabled]="!isPaperConnected()"
+            appPaperOnly
           >
             <option value="MKT">Market</option>
             <option value="LMT">Limit</option>
@@ -116,7 +117,7 @@
             [ngModel]="tif()"
             (ngModelChange)="tif.set($event)"
             name="tif"
-            [disabled]="!isPaperConnected()"
+            appPaperOnly
           >
             <option value="DAY">DAY</option>
             <option value="GTC">GTC</option>
@@ -136,7 +137,7 @@
               [ngModel]="expiryMs()"
               (ngModelChange)="expiryMs.set($event)"
               name="expiryMs"
-              [disabled]="!isPaperConnected()"
+              appPaperOnly
             />
           </label>
           <label class="field">
@@ -148,7 +149,7 @@
               [ngModel]="strike()"
               (ngModelChange)="strike.set($event)"
               name="strike"
-              [disabled]="!isPaperConnected()"
+              appPaperOnly
             />
           </label>
           <label class="field">
@@ -158,7 +159,7 @@
               [ngModel]="right()"
               (ngModelChange)="right.set($event)"
               name="right"
-              [disabled]="!isPaperConnected()"
+              appPaperOnly
             >
               <option value="C">Call</option>
               <option value="P">Put</option>
@@ -167,29 +168,22 @@
         </div>
       }
 
-      <label class="confirm-row">
-        <input
-          type="checkbox"
-          [ngModel]="confirmPaper()"
-          (ngModelChange)="confirmPaper.set($event)"
-          name="confirmPaper"
-          [disabled]="!isPaperConnected()"
-        />
-        <span>I confirm this is a paper order on a paper account.</span>
-      </label>
-
       <div class="actions-row">
         <button
-          type="submit"
+          type="button"
           class="primary-btn"
+          (click)="openConfirmDialog()"
           [disabled]="!canSubmit()"
         >
-          {{ submitting() ? 'Submitting…' : 'Submit' }}
+          Review order…
         </button>
       </div>
 
       @if (placeError(); as err) {
-        <p class="error" role="alert">{{ err }}</p>
+        <app-section-error
+          [error]="err"
+          contextWhat="IBKR rejected the order."
+        />
       }
       @if (lastAck(); as ack) {
         <p class="ack" role="status">
@@ -215,7 +209,11 @@
     </header>
 
     @if (openOrdersError(); as err) {
-      <p class="error">{{ err }}</p>
+      <app-section-error
+        [error]="err"
+        contextWhat="We couldn't load open orders."
+        (retry)="refreshOpenOrders()"
+      />
     }
     @if (openOrdersLoading()) {
       <p class="muted">Loading…</p>
@@ -254,7 +252,10 @@
                   type="button"
                   class="ghost-btn small"
                   (click)="cancel(o.order_id)"
-                  [disabled]="o.remaining === 0"
+                  [disabled]="o.remaining === 0 || !isPaperConnected()"
+                  [attr.title]="!isPaperConnected()
+                    ? 'Disabled until IBKR is connected to a paper account (DU…)'
+                    : null"
                   aria-label="Cancel order"
                 >
                   ✕
@@ -274,7 +275,11 @@
     </header>
 
     @if (eventStreamError(); as err) {
-      <p class="error">{{ err }}</p>
+      <app-section-error
+        [error]="err"
+        contextWhat="Order-event stream disconnected."
+        [canRetry]="false"
+      />
     }
 
     @if (eventLines().length === 0) {
@@ -304,3 +309,80 @@
     }
   </article>
 </section>
+
+<dialog
+  #confirmDialog
+  class="confirm-dialog"
+  aria-labelledby="confirmDialogTitle"
+  (cancel)="onDialogClose()"
+  (close)="onDialogClose()"
+>
+  <header class="confirm-dialog-head">
+    <span class="confirm-eyebrow">Paper-mode confirmation</span>
+    <h2 id="confirmDialogTitle" class="confirm-title">Review and confirm</h2>
+  </header>
+  <dl class="confirm-summary">
+    <dt>Account</dt>
+    <dd class="mono">{{ accountId() ?? '—' }}</dd>
+    <dt>Symbol</dt>
+    <dd class="mono">{{ symbol() }} ({{ secType() }})</dd>
+    <dt>Side</dt>
+    <dd class="mono">{{ action() }}</dd>
+    <dt>Quantity</dt>
+    <dd class="mono">{{ quantity() }}</dd>
+    <dt>Order type</dt>
+    <dd class="mono">{{ orderType() }} · {{ tif() }}</dd>
+    @if (orderType() === 'LMT') {
+      <dt>Limit price</dt>
+      <dd class="mono">{{ fmtCurrency(limitPrice()) }}</dd>
+    }
+    @if (secType() === 'OPT') {
+      <dt>Expiry</dt>
+      <dd class="mono">{{ fmtTimestampNy(expiryMs()) }}</dd>
+      <dt>Strike</dt>
+      <dd class="mono">{{ fmtCurrency(strike()) }}</dd>
+      <dt>Right</dt>
+      <dd class="mono">{{ right() }}</dd>
+    }
+  </dl>
+  <label class="confirm-check">
+    <input
+      type="checkbox"
+      [ngModel]="confirmCheckbox()"
+      (ngModelChange)="confirmCheckbox.set($event)"
+      name="dialogConfirm"
+    />
+    <span>I confirm this is a paper order on a paper account.</span>
+  </label>
+  <div class="confirm-actions">
+    <button
+      type="button"
+      class="ghost-btn"
+      (click)="cancelConfirmDialog()"
+      [disabled]="submitting()"
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      class="primary-btn"
+      (click)="confirmAndSubmit()"
+      [disabled]="!confirmCanPlace()"
+    >
+      @if (submitting()) {
+        Submitting…
+      } @else if (confirmCooldownMs() > 0) {
+        Place in {{ (confirmCooldownMs() / 1000).toFixed(1) }}s
+      } @else {
+        Place paper order
+      }
+    </button>
+  </div>
+  @if (placeError(); as err) {
+    <app-section-error
+      [error]="err"
+      contextWhat="IBKR rejected the order."
+      [canRetry]="false"
+    />
+  }
+</dialog>

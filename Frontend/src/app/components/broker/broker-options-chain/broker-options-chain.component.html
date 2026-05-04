@@ -1,7 +1,23 @@
 <app-page-header
   title="Options Chain (Live)"
-  subtitle="Streaming SPY chain with side-by-side IBKR Greeks vs engine Greeks."
-/>
+  eyebrow="Third pricing authority"
+  subtitle="The same chain IBKR shows, with our Greeks beside theirs. Disagreement = bug somewhere; this page is the third independent pricing authority next to the in-process Black-Scholes and QuantLib paths."
+>
+  <app-page-guide
+    slot="guide"
+    pulls="Live IBKR option-chain stream (SPY only, OPRA top-of-book, SMART-routed) plus a per-row engine reprice via QuantLibService.priceOption()."
+    why="Numerical-rigor cross-check. If the IBKR delta and the engine delta disagree by more than the tolerance band, it's a bug somewhere — not 'the broker is wrong'."
+    [steps]="[
+      'Pick an expiry, then click strike chips (or ATM ± $20).',
+      'Start the stream and watch the Δ bps column.',
+      'Green = within tolerance, yellow = inspect, red = file a math-divergence ticket.'
+    ]"
+    [related]="[
+      { label: 'Pricing Lab', route: '/pricing-lab' },
+      { label: 'Strategy Builder', route: '/strategy-builder' }
+    ]"
+  />
+</app-page-header>
 
 @if (!canStream()) {
   <p class="muted">
@@ -82,11 +98,19 @@
   </section>
 
   @if (setupError(); as err) {
-    <p class="error">Setup error: {{ err }}</p>
+    <app-section-error
+      [error]="err"
+      contextWhat="We couldn't load expirations or strikes."
+      (retry)="loadExpirations()"
+    />
   }
 
   @if (streamError(); as err) {
-    <p class="error">Stream error: {{ err }}</p>
+    <app-section-error
+      [error]="err"
+      contextWhat="The chain stream stopped."
+      (retry)="startStream()"
+    />
   }
 
   <section class="strike-picker">
@@ -137,6 +161,19 @@
   </section>
 
   <section class="chain-table-wrap">
+    <!--
+      delayedFallback stays false until the Python service exposes
+      /api/broker/market-data-tier so we can flip the caption to
+      amber when no OPRA subscription is detected. Tracked as a
+      follow-up to PR 2.
+    -->
+    <app-data-source
+      origin="IBKR"
+      method="OPRA top-of-book, SMART-routed · engine column from QuantLibService"
+      [freshness]="latestSnapshot()
+        ? 'live · last tick ' + fmtTimestampNy(latestSnapshot()?.as_of_ms ?? 0)
+        : 'awaiting first snapshot'"
+    />
     @if (rows().length === 0) {
       <p class="muted">No quotes yet. Start the stream after picking strikes.</p>
     } @else {

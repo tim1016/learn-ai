@@ -1,6 +1,6 @@
 <app-page-header
   title="Broker Status"
-  subtitle="Connection, account, and open positions for the configured IBKR client."
+  subtitle="The control room for your IBKR paper-trading session. Confirm the connection here before using Options Chain, Account Monitor, or Orders."
 >
   <button
     slot="actions"
@@ -12,6 +12,21 @@
     <i class="pi pi-refresh" aria-hidden="true"></i>
     <span>Refresh</span>
   </button>
+  <app-page-guide
+    slot="guide"
+    pulls="GET /api/broker/health (5 s poll), /account (snapshot), and /positions (snapshot)."
+    why="Single place to verify the four-layer paper-safety stack agrees end-to-end before any other broker page can place an order or open a stream."
+    [steps]="[
+      'Check that Mode is PAPER and Sentinel reads DU prefix matches paper.',
+      'If Disconnected, start IB Gateway against the paper account and click Refresh.',
+      'Once green, navigate to Options Chain, Account Monitor, or Orders.'
+    ]"
+    [related]="[
+      { label: 'Options Chain (live)', route: '/broker/options-chain' },
+      { label: 'Account Monitor', route: '/broker/account-monitor' },
+      { label: 'Orders', route: '/broker/orders' }
+    ]"
+  />
 </app-page-header>
 
 @let h = health();
@@ -78,7 +93,11 @@
       @if (accountState.loading) {
         <p class="muted">Loading…</p>
       } @else if (accountState.error) {
-        <p class="error">Error: {{ accountState.error }}</p>
+        <app-section-error
+          [error]="accountState.error"
+          contextWhat="We couldn't load the IBKR account snapshot."
+          (retry)="loadAccount()"
+        />
       } @else if (accountState.data; as a) {
         <dl class="kv-grid">
           <dt>Cash</dt>
@@ -124,7 +143,11 @@
       @if (positionsState.loading) {
         <p class="muted">Loading…</p>
       } @else if (positionsState.error) {
-        <p class="error">Error: {{ positionsState.error }}</p>
+        <app-section-error
+          [error]="positionsState.error"
+          contextWhat="We couldn't load your IBKR positions."
+          (retry)="loadPositions()"
+        />
       } @else if (positionsState.data; as snap) {
         @if (snap.positions.length === 0) {
           <p class="muted">No open positions.</p>

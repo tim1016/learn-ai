@@ -1,0 +1,125 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+  margin: var(--space-2) 0;
+}
+
+.section-error {
+  border: 1px solid rgba(239, 83, 80, 0.4);
+  background: var(--bear-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  color: $text-primary;
+}
+
+.section-error-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.section-error-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: rgba(239, 83, 80, 0.25);
+  color: $bear;
+  font-family: $font-mono;
+  font-weight: var(--fw-bold);
+}
+
+.section-error-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.section-error-what {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+}
+
+.section-error-try {
+  margin: var(--space-1) 0 0;
+  color: $text-secondary;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.section-error-retry {
+  flex: 0 0 auto;
+  padding: 0.4rem 0.85rem;
+  background: var(--bg-elevated);
+  border: 1px solid $border-light;
+  border-radius: var(--radius);
+  color: $text-primary;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  transition: background var(--t-ui), border-color var(--t-ui);
+
+  &:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: $border-strong;
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.section-error-mathref {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-xs);
+
+  a {
+    color: var(--accent);
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+
+.section-error-details {
+  margin-top: var(--space-2);
+  border-top: 1px solid rgba(239, 83, 80, 0.25);
+  padding-top: var(--space-2);
+
+  summary {
+    cursor: pointer;
+    color: $text-subtle;
+    font-size: var(--fs-xs);
+    list-style: none;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &:hover {
+      color: $text-primary;
+    }
+  }
+
+  pre {
+    margin: var(--space-2) 0 0;
+    padding: var(--space-2);
+    background: var(--bg-sunken);
+    border-radius: var(--radius);
+    color: $text-secondary;
+    font-family: $font-mono;
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 280px;
+    overflow: auto;
+  }
+}

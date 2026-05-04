@@ -5,9 +5,16 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
  * actions slot so every route renders the same hierarchy, spacing, and
  * WCAG-AA subtitle contrast.
  *
+ * Slots:
+ *   - ``[slot=actions]`` — chips, links, or buttons aligned to the right.
+ *   - ``[slot=guide]``   — optional helper block that renders below the
+ *     title row. Intended for ``<app-page-guide>`` but accepts arbitrary
+ *     content so per-page bespoke guides keep working.
+ *
  * Usage:
  *   <app-page-header title="Engine Lab" subtitle="…">
  *     <button slot="actions">…</button>
+ *     <app-page-guide slot="guide" pulls="…" why="…" />
  *   </app-page-header>
  */
 @Component({
@@ -34,6 +41,9 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
         <ng-content select="[slot=actions]" />
       </div>
     </header>
+    <div class="page-header-guide">
+      <ng-content select="[slot=guide]" />
+    </div>
   `,
 })
 export class PageHeaderComponent {

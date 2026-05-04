@@ -9,6 +9,9 @@ import {
   signal,
 } from '@angular/core';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
+import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
+import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
+import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
@@ -46,7 +49,7 @@ interface PositionRow {
 @Component({
   selector: 'app-broker-account-monitor',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent],
+  imports: [PageHeaderComponent, PageGuideComponent, DataSourceComponent, SectionErrorComponent],
   styleUrl: './broker-account-monitor.component.scss',
   templateUrl: './broker-account-monitor.component.html',
 })
@@ -56,7 +59,7 @@ export class BrokerAccountMonitorComponent {
   private readonly injector = inject(Injector);
 
   readonly positionsLoading = signal(false);
-  readonly positionsError = signal<string | null>(null);
+  readonly positionsError = signal<unknown>(null);
   readonly positionsSnapshot = signal<IbkrPositionsSnapshot | null>(null);
 
   private readonly accountStream = signal<SseStream<IbkrPnLTick> | null>(null);
@@ -129,7 +132,7 @@ export class BrokerAccountMonitorComponent {
       this.positionsSnapshot.set(snap);
       this.openStreams(snap.positions);
     } catch (err) {
-      this.positionsError.set(extractMessage(err));
+      this.positionsError.set(err);
     } finally {
       this.positionsLoading.set(false);
     }
@@ -168,11 +171,3 @@ export class BrokerAccountMonitorComponent {
   trackRow = (_: number, row: PositionRow): number => row.position.con_id;
 }
 
-function extractMessage(err: unknown): string {
-  if (err == null) return 'Unknown error';
-  if (typeof err === 'string') return err;
-  if (typeof err === 'object' && 'message' in err) {
-    return String((err as { message: unknown }).message);
-  }
-  return 'Unknown error';
-}
