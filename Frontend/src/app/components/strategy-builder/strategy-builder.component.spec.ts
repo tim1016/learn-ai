@@ -543,4 +543,87 @@ describe('StrategyBuilderComponent', () => {
       expect(component.noForwardCurves()).toBe(false);
     });
   });
+
+  // ── Auto-analyze edge cases (PR #86 review feedback) ────────────
+  // The auto-analyze effect was shipped with two latent bugs that
+  // Codex flagged on PR #86 after the merge. These regressions guard
+  // the fixes: P1 — re-fire after in-flight completion if inputs
+  // changed; P2 — cancel pending timer when state becomes invalid.
+  describe('auto-analyze edge cases', () => {
+    /** Wait the 300ms debounce window plus a small safety buffer. */
+    const waitForDebounce = () => new Promise<void>(resolve => setTimeout(resolve, 350));
+
+    /** Set the minimum state needed for canAnalyze() to be true. */
+    function makeAnalyzable() {
+      const future = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      component.selectedExpiration.set(future);
+      // Spot of 100 via stockSnapshot.day.close (spotPrice computed).
+      component.stockSnapshot.set({
+        ticker: 'SPY',
+        day: { open: 100, high: 100, low: 100, close: 100, volume: 1, vwap: 100 },
+        prevDay: null, min: null,
+        todaysChange: 0, todaysChangePercent: 0, updated: Date.now(),
+      });
+      component.legs.set([
+        { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
+      ]);
+    }
+
+    /** Find every captured analyzeOptionsStrategy GraphQL request. */
+    function findAnalyzeRequests() {
+      return httpMock.match(r =>
+        r.url === GRAPHQL_URL
+        && typeof (r.body as { query?: string } | null)?.query === 'string'
+        && (r.body as { query: string }).query.includes('analyzeOptionsStrategy'));
+    }
+
+    function flushAnalyzeOk(req: ReturnType<typeof findAnalyzeRequests>[number]) {
+      req.flush({
+        data: {
+          analyzeOptionsStrategy: {
+            success: true, pop: 0.5, expectedValue: 10,
+            maxProfit: 100, maxLoss: -50, breakevens: [105], error: null,
+          },
+        },
+      });
+    }
+
+    it('P1: re-analyzes after completion when inputs changed mid-flight', async () => {
+      makeAnalyzable();
+      await waitForDebounce();
+
+      const firstReqs = findAnalyzeRequests();
+      expect(firstReqs.length).toBe(1);
+
+      // Edit while first analyze is in flight (analyzing()=true, so
+      // canAnalyze() is false). Pre-fix, the effect early-returned and
+      // the new leg was silently dropped.
+      component.legs.update(legs => [...legs, {
+        strike: 110, optionType: 'call', position: 'long', premium: 3, iv: 0.3, quantity: 1, enabled: true,
+      }]);
+
+      // Resolve first analyze; effect 2 should observe analyzing flip
+      // false + inputsDirtyDuringAnalysis=true and schedule a follow-up.
+      flushAnalyzeOk(firstReqs[0]);
+      await waitForDebounce();
+
+      const secondReqs = findAnalyzeRequests();
+      expect(secondReqs.length).toBe(1);
+      flushAnalyzeOk(secondReqs[0]);
+    });
+
+    it('P2: cancels pending debounce timer when legs are cleared mid-window', async () => {
+      makeAnalyzable();
+      // Wait less than the 300ms debounce — timer is still pending
+      await new Promise<void>(resolve => setTimeout(resolve, 100));
+      component.clearLegs();
+      // Wait past the original debounce expiry
+      await new Promise<void>(resolve => setTimeout(resolve, 300));
+
+      // Pre-fix the stale timer would fire and call analyzeStrategy()
+      // with empty legs. The fix cancels in scheduleAnalysisIfReady()
+      // before the canAnalyze() guard.
+      expect(findAnalyzeRequests().length).toBe(0);
+    });
+  });
 });
