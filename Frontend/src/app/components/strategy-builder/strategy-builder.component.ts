@@ -853,29 +853,66 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
    * rather than NodeJS.Timeout because we're in the browser.
    */
   private analyzeTimer: number | undefined;
+  /**
+   * Set when an input edit lands while a previous analyzeStrategy() is
+   * still in flight. The completion-watching effect consumes this and
+   * schedules a follow-up analysis so newer inputs don't get silently
+   * dropped (PR #86 P1 review feedback).
+   */
+  private inputsDirtyDuringAnalysis = false;
   private static readonly AUTO_ANALYZE_DEBOUNCE_MS = 300;
 
   constructor() {
-    // Auto-analyze: when the user edits anything that affects the
-    // analysis (legs, expiration, spot), schedule analyzeStrategy()
-    // after a 300ms quiet window. canAnalyze() is read inside
-    // untracked() so the analyzing-flag flip during the in-flight
-    // request doesn't itself trigger another fire on completion.
+    // Effect 1 — input changes drive a debounced analysis. While a
+    // previous request is in flight we don't queue another (the second
+    // would race with the first); instead we mark `inputsDirty` and let
+    // effect 2 schedule a follow-up the moment the in-flight one
+    // finishes. canAnalyze() is read inside untracked() so the
+    // analyzing-flag flip during the in-flight request doesn't itself
+    // trigger this effect.
     effect(() => {
       this.legs();
       this.selectedExpiration();
       this.spotPrice();
 
-      if (!untracked(() => this.canAnalyze())) return;
-
-      if (this.analyzeTimer !== undefined) {
-        clearTimeout(this.analyzeTimer);
+      if (untracked(() => this.analyzing())) {
+        this.inputsDirtyDuringAnalysis = true;
+        return;
       }
-      this.analyzeTimer = window.setTimeout(() => {
-        this.analyzeTimer = undefined;
-        this.analyzeStrategy();
-      }, StrategyBuilderComponent.AUTO_ANALYZE_DEBOUNCE_MS);
+
+      this.scheduleAnalysisIfReady();
     });
+
+    // Effect 2 — when an in-flight analysis finishes, re-check the
+    // dirty flag and schedule a follow-up if inputs changed during the
+    // request. The body only runs when analyzing flips false; the
+    // dirty-flag gate stops a benign initial run from looping.
+    effect(() => {
+      if (this.analyzing()) return;
+      untracked(() => {
+        if (!this.inputsDirtyDuringAnalysis) return;
+        this.inputsDirtyDuringAnalysis = false;
+        this.scheduleAnalysisIfReady();
+      });
+    });
+  }
+
+  /**
+   * Cancel any pending debounce timer and queue a new one if the
+   * current state is analyzable. Cancellation runs before the
+   * canAnalyze() guard so a previously queued analyze can't fire
+   * after the user has cleared their legs (PR #86 P2 review feedback).
+   */
+  private scheduleAnalysisIfReady(): void {
+    if (this.analyzeTimer !== undefined) {
+      clearTimeout(this.analyzeTimer);
+      this.analyzeTimer = undefined;
+    }
+    if (!untracked(() => this.canAnalyze())) return;
+    this.analyzeTimer = window.setTimeout(() => {
+      this.analyzeTimer = undefined;
+      this.analyzeStrategy();
+    }, StrategyBuilderComponent.AUTO_ANALYZE_DEBOUNCE_MS);
   }
 
   ngOnInit(): void {
