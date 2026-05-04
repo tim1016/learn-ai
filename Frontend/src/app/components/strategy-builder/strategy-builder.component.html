@@ -1,39 +1,10 @@
 <div class="builder-page bg-slate-900 text-slate-200 min-h-screen px-2 py-3">
   <app-page-header
     title="Strategy Builder"
-    subtitle="Compose multi-leg option strategies and price them against the live chain."
+    subtitle="Compose multi-leg option strategies and price them against the live chain (Black-Scholes)."
   />
   <!-- Header Bar -->
   <div class="flex items-center gap-3 mb-3 flex-wrap">
-
-    <!-- Pricing Engine Toggle -->
-    <div class="flex items-center gap-2 ml-auto mr-2">
-      <span class="text-xs text-slate-400 uppercase tracking-wide font-medium">Engine</span>
-      <p-selectButton
-        [options]="pricingEngineOptions"
-        [ngModel]="pricingEngine()"
-        (ngModelChange)="onPricingEngineChange($event)"
-        optionLabel="label"
-        optionValue="value"
-        size="small"
-      />
-      @if (pricingEngine() === 'quantlib') {
-        <p-select
-          [options]="quantlibEngineOptions"
-          [ngModel]="quantlibEngine()"
-          (ngModelChange)="quantlibEngine.set($event)"
-          optionLabel="label"
-          optionValue="value"
-          placeholder="Engine"
-          class="min-w-[130px]"
-        />
-        @if (quantlibAvailable() === false) {
-          <span class="text-xs text-amber-400 flex items-center gap-1">
-            <i class="pi pi-exclamation-triangle text-xs"></i> QuantLib N/A
-          </span>
-        }
-      }
-    </div>
     <input
       pInputText
       [ngModel]="ticker()"

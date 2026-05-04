@@ -68,8 +68,8 @@ describe('StrategyBuilderComponent', () => {
   });
 
   afterEach(() => {
-    // Drain any incidental requests (e.g. QuantLib status checks fired by
-    // changeDetection); the suite asserts only the requests it cares about.
+    // Drain any incidental requests fired by change detection so each
+    // test only asserts the requests it explicitly cares about.
     httpMock.match(() => true).forEach(req => {
       if (!req.cancelled) req.flush({ data: {} });
     });
