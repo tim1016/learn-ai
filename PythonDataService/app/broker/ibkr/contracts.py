@@ -15,8 +15,10 @@ qualifier called inside the chain stream.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
+from typing import Literal
 
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.models import OptionRight
@@ -163,9 +165,10 @@ async def list_qualified_strikes(
     every $1 strike that exists on *any* expiry is included, even when the
     chosen expiry only lists $5 multiples. ``list_strikes`` filters that
     payload by expiry text but cannot tell which strikes are actually
-    instantiated as contracts. We probe by qualifying the call leg of each
-    candidate (calls and puts on a US equity option are listed together)
-    and return the survivors.
+    instantiated as contracts. We probe by qualifying both the call and
+    put leg of each candidate and return the strikes whose **both** legs
+    qualified — the chain stream subscribes to both sides per strike, so
+    a one-sided strike would still trip the partial-qualification guard.
     """
     from ib_async import Option
 
@@ -173,20 +176,28 @@ async def list_qualified_strikes(
     if not candidates:
         return []
     yyyymmdd = expiry_ms_to_yyyymmdd(expiry_ms)
-    contracts = [
-        Option(
-            symbol=symbol,
-            lastTradeDateOrContractMonth=yyyymmdd,
-            strike=float(k),
-            right="C",
-            exchange="SMART",
-            currency="USD",
-            multiplier="100",
-        )
-        for k in candidates
-    ]
-    qualified = await client.ib.qualifyContractsAsync(*contracts)
-    return sorted({float(c.strike) for c in qualified if c is not None})
+
+    def _build(right: Literal["C", "P"]) -> list:
+        return [
+            Option(
+                symbol=symbol,
+                lastTradeDateOrContractMonth=yyyymmdd,
+                strike=float(k),
+                right=right,
+                exchange="SMART",
+                currency="USD",
+                multiplier="100",
+            )
+            for k in candidates
+        ]
+
+    qualified_calls, qualified_puts = await asyncio.gather(
+        client.ib.qualifyContractsAsync(*_build("C")),
+        client.ib.qualifyContractsAsync(*_build("P")),
+    )
+    call_strikes = {float(c.strike) for c in qualified_calls if c is not None}
+    put_strikes = {float(c.strike) for c in qualified_puts if c is not None}
+    return sorted(call_strikes & put_strikes)
 
 
 async def build_chain_contracts(

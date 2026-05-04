@@ -108,6 +108,10 @@ export class BrokerOptionsChainComponent {
     Map<string, { delta: number; gamma: number }>
   >(new Map());
 
+  // Monotonic sequence so a slow strike-fetch for an old (symbol, expiry)
+  // cannot overwrite the result of a newer one. Increment on every issue.
+  private strikesRequestSeq = 0;
+
   readonly fmtCurrency = fmtCurrency;
   readonly fmtNumber = fmtNumber;
   readonly fmtPercent = fmtPercent;
@@ -164,11 +168,14 @@ export class BrokerOptionsChainComponent {
     void this.loadExpirations();
 
     // When the expiry changes, refetch the qualifiable strikes for the
-    // new (symbol, expiry) and reset any previous selection.
+    // new (symbol, expiry) and reset any previous selection. Bumping the
+    // sequence in both branches invalidates any in-flight loadStrikes
+    // that is about to resolve from a now-stale request.
     effect(() => {
       const expiry = this.selectedExpiry();
       const sym = this.symbol();
       if (expiry === null) {
+        this.strikesRequestSeq++;
         this.availableStrikes.set([]);
         this.selectedStrikes.set(new Set());
         return;
@@ -270,18 +277,26 @@ export class BrokerOptionsChainComponent {
   }
 
   async loadStrikes(symbol: string, expiryMs: number): Promise<void> {
+    const seq = ++this.strikesRequestSeq;
     this.strikesLoading.set(true);
     this.setupError.set(null);
     try {
       const resp = await this.broker.strikes(symbol, expiryMs);
+      // Race guard: if a newer (symbol, expiry) has been requested while
+      // we were waiting, drop this response on the floor — applying it
+      // would rewrite the user's freshly-loaded strike chips.
+      if (seq !== this.strikesRequestSeq) return;
       this.availableStrikes.set(resp.strikes);
       this.selectedStrikes.set(new Set());
     } catch (err) {
+      if (seq !== this.strikesRequestSeq) return;
       this.availableStrikes.set([]);
       this.selectedStrikes.set(new Set());
       this.setupError.set(extractMessage(err));
     } finally {
-      this.strikesLoading.set(false);
+      if (seq === this.strikesRequestSeq) {
+        this.strikesLoading.set(false);
+      }
     }
   }
 

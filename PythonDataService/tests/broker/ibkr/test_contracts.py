@@ -86,21 +86,67 @@ async def test_build_chain_contracts_returns_full_list_when_all_qualify() -> Non
     assert [c.conId for c in result] == [1, 2, 3, 4]
 
 
-async def test_list_qualified_strikes_returns_only_strikes_that_qualify(monkeypatch) -> None:
-    # The metadata claims four strikes; IBKR can only qualify two of them
-    # (the call legs at 540 and 545 — 541 and 542 come back as None).
+def _mock_client_qualify_by_right(by_right: dict[str, list]):
+    """Mock client whose qualifyContractsAsync inspects the first contract's
+    `right` attribute and returns the matching pre-canned list."""
+
+    async def qualify(*contracts):
+        if not contracts:
+            return []
+        return by_right[contracts[0].right]
+
+    return SimpleNamespace(
+        require_connected=lambda: None,
+        ib=SimpleNamespace(qualifyContractsAsync=qualify),
+    )
+
+
+async def test_list_qualified_strikes_requires_both_call_and_put_legs(monkeypatch) -> None:
+    # Metadata claims four strikes; IBKR qualifies the call legs at 540/545
+    # but the put leg at 545 cannot be qualified. Only 540 has both legs and
+    # is therefore the only strike the chain stream can subscribe to without
+    # tripping its partial-qualification guard.
     async def fake_list_strikes(_client, _symbol, _expiry_ms):
         return [540.0, 541.0, 542.0, 545.0]
 
     monkeypatch.setattr(contracts_module, "list_strikes", fake_list_strikes)
 
-    qualified_call_legs = [
-        SimpleNamespace(conId=1, strike=540.0, right="C"),
-        None,
-        None,
-        SimpleNamespace(conId=4, strike=545.0, right="C"),
-    ]
-    client = _mock_client_with_qualify_result(qualified_call_legs)
+    client = _mock_client_qualify_by_right({
+        "C": [
+            SimpleNamespace(conId=1, strike=540.0, right="C"),
+            None,
+            None,
+            SimpleNamespace(conId=4, strike=545.0, right="C"),
+        ],
+        "P": [
+            SimpleNamespace(conId=11, strike=540.0, right="P"),
+            None,
+            None,
+            None,  # 545 put fails to qualify → 545 must be dropped
+        ],
+    })
+
+    result = await list_qualified_strikes(client, "SPY", 1_800_000_000_000)
+
+    assert result == [540.0]
+
+
+async def test_list_qualified_strikes_returns_intersection_when_both_legs_qualify(monkeypatch) -> None:
+    async def fake_list_strikes(_client, _symbol, _expiry_ms):
+        return [540.0, 545.0]
+
+    monkeypatch.setattr(contracts_module, "list_strikes", fake_list_strikes)
+
+    client = _mock_client_qualify_by_right({
+        "C": [
+            SimpleNamespace(conId=1, strike=540.0, right="C"),
+            SimpleNamespace(conId=2, strike=545.0, right="C"),
+        ],
+        "P": [
+            SimpleNamespace(conId=11, strike=540.0, right="P"),
+            SimpleNamespace(conId=12, strike=545.0, right="P"),
+        ],
+    })
 
     result = await list_qualified_strikes(client, "SPY", 1_800_000_000_000)
 
