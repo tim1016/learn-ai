@@ -32,7 +32,7 @@ import {
 
 const DEFAULT_SYMBOL = 'SPY';
 const DEFAULT_DEBOUNCE_MS = 500;
-const DEFAULT_STRIKE_BAND = 20; // ± dollars from spot
+const DEFAULT_ATM_BAND = 20; // ± dollars from spot when auto-selecting
 const ENGINE_REPRICE_THRESHOLD_CENTS = 1; // re-call engine when bid/ask mid moves >= 1 cent
 
 interface Row {
@@ -79,11 +79,14 @@ export class BrokerOptionsChainComponent {
   readonly symbol = signal(DEFAULT_SYMBOL);
   readonly expirations = signal<ExpirationOption[]>([]);
   readonly selectedExpiry = signal<number | null>(null);
-  readonly strikeMin = signal<number | null>(null);
-  readonly strikeMax = signal<number | null>(null);
+  readonly availableStrikes = signal<number[]>([]);
+  readonly selectedStrikes = signal<ReadonlySet<number>>(new Set());
+  readonly strikesLoading = signal(false);
   readonly setupError = signal<string | null>(null);
   readonly setupLoading = signal(false);
   readonly paused = signal(false);
+
+  readonly selectedStrikesCount = computed(() => this.selectedStrikes().size);
 
   /**
    * Active SSE stream. Held in a signal so the template can read its
@@ -104,6 +107,10 @@ export class BrokerOptionsChainComponent {
   private readonly engineGreeksByKey = signal<
     Map<string, { delta: number; gamma: number }>
   >(new Map());
+
+  // Monotonic sequence so a slow strike-fetch for an old (symbol, expiry)
+  // cannot overwrite the result of a newer one. Increment on every issue.
+  private strikesRequestSeq = 0;
 
   readonly fmtCurrency = fmtCurrency;
   readonly fmtNumber = fmtNumber;
@@ -160,6 +167,22 @@ export class BrokerOptionsChainComponent {
   constructor() {
     void this.loadExpirations();
 
+    // When the expiry changes, refetch the qualifiable strikes for the
+    // new (symbol, expiry) and reset any previous selection. Bumping the
+    // sequence in both branches invalidates any in-flight loadStrikes
+    // that is about to resolve from a now-stale request.
+    effect(() => {
+      const expiry = this.selectedExpiry();
+      const sym = this.symbol();
+      if (expiry === null) {
+        this.strikesRequestSeq++;
+        this.availableStrikes.set([]);
+        this.selectedStrikes.set(new Set());
+        return;
+      }
+      void this.loadStrikes(sym, expiry);
+    });
+
     // Recompute engine Greeks any time a snapshot arrives. Throttled
     // implicitly by the per-key mid threshold.
     effect(() => {
@@ -201,18 +224,13 @@ export class BrokerOptionsChainComponent {
 
   startStream(): void {
     const expiry = this.selectedExpiry();
-    const min = this.strikeMin();
-    const max = this.strikeMax();
+    const strikes = [...this.selectedStrikes()].sort((a, b) => a - b);
     if (expiry === null) {
       this.streamError.set('Pick an expiry first.');
       return;
     }
-    if (min === null || max === null) {
-      this.streamError.set('Set strike min/max.');
-      return;
-    }
-    if (max < min) {
-      this.streamError.set('strike_max must be >= strike_min.');
+    if (strikes.length === 0) {
+      this.streamError.set('Pick at least one strike.');
       return;
     }
 
@@ -224,12 +242,13 @@ export class BrokerOptionsChainComponent {
     this.engineMidByKey.clear();
     this.engineGreeksByKey.set(new Map());
 
+    const params = new URLSearchParams();
+    params.set('expiry_ms', String(expiry));
+    for (const k of strikes) params.append('strikes', String(k));
+    params.set('debounce_ms', String(DEFAULT_DEBOUNCE_MS));
     const url =
       `/api/broker/option-chain/${encodeURIComponent(this.symbol())}` +
-      `?expiry_ms=${expiry}` +
-      `&strike_min=${min}` +
-      `&strike_max=${max}` +
-      `&debounce_ms=${DEFAULT_DEBOUNCE_MS}`;
+      `?${params.toString()}`;
 
     // ``brokerSse`` calls ``inject(DestroyRef)`` to wire up cleanup —
     // run it inside this component's injector so the EventSource gets
@@ -257,11 +276,55 @@ export class BrokerOptionsChainComponent {
     }
   }
 
-  applyStrikeBand(): void {
+  async loadStrikes(symbol: string, expiryMs: number): Promise<void> {
+    const seq = ++this.strikesRequestSeq;
+    this.strikesLoading.set(true);
+    this.setupError.set(null);
+    try {
+      const resp = await this.broker.strikes(symbol, expiryMs);
+      // Race guard: if a newer (symbol, expiry) has been requested while
+      // we were waiting, drop this response on the floor — applying it
+      // would rewrite the user's freshly-loaded strike chips.
+      if (seq !== this.strikesRequestSeq) return;
+      this.availableStrikes.set(resp.strikes);
+      this.selectedStrikes.set(new Set());
+    } catch (err) {
+      if (seq !== this.strikesRequestSeq) return;
+      this.availableStrikes.set([]);
+      this.selectedStrikes.set(new Set());
+      this.setupError.set(extractMessage(err));
+    } finally {
+      if (seq === this.strikesRequestSeq) {
+        this.strikesLoading.set(false);
+      }
+    }
+  }
+
+  toggleStrike(strike: number): void {
+    this.selectedStrikes.update((current) => {
+      const next = new Set(current);
+      if (next.has(strike)) next.delete(strike);
+      else next.add(strike);
+      return next;
+    });
+  }
+
+  isStrikeSelected(strike: number): boolean {
+    return this.selectedStrikes().has(strike);
+  }
+
+  selectAtmBand(): void {
     const spot = this.underlyingPrice();
-    if (spot === null) return;
-    this.strikeMin.set(Math.floor(spot - DEFAULT_STRIKE_BAND));
-    this.strikeMax.set(Math.ceil(spot + DEFAULT_STRIKE_BAND));
+    const available = this.availableStrikes();
+    if (spot === null || available.length === 0) return;
+    const lo = spot - DEFAULT_ATM_BAND;
+    const hi = spot + DEFAULT_ATM_BAND;
+    const next = new Set<number>(available.filter((k) => k >= lo && k <= hi));
+    this.selectedStrikes.set(next);
+  }
+
+  clearStrikeSelection(): void {
+    this.selectedStrikes.set(new Set());
   }
 
   trackRow = (_: number, row: Row): number => row.strike;

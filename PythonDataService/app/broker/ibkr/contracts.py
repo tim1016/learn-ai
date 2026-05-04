@@ -15,8 +15,10 @@ qualifier called inside the chain stream.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
+from typing import Literal
 
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.models import OptionRight
@@ -152,6 +154,52 @@ async def build_option_contract(
     return qualified[0]
 
 
+async def list_qualified_strikes(
+    client: IbkrClient,
+    symbol: str,
+    expiry_ms: int,
+) -> list[float]:
+    """Return only strikes IBKR can actually qualify for one (symbol, expiry).
+
+    ``reqSecDefOptParams`` reports strikes at (symbol, exchange) granularity:
+    every $1 strike that exists on *any* expiry is included, even when the
+    chosen expiry only lists $5 multiples. ``list_strikes`` filters that
+    payload by expiry text but cannot tell which strikes are actually
+    instantiated as contracts. We probe by qualifying both the call and
+    put leg of each candidate and return the strikes whose **both** legs
+    qualified — the chain stream subscribes to both sides per strike, so
+    a one-sided strike would still trip the partial-qualification guard.
+    """
+    from ib_async import Option
+
+    candidates = await list_strikes(client, symbol, expiry_ms)
+    if not candidates:
+        return []
+    yyyymmdd = expiry_ms_to_yyyymmdd(expiry_ms)
+
+    def _build(right: Literal["C", "P"]) -> list:
+        return [
+            Option(
+                symbol=symbol,
+                lastTradeDateOrContractMonth=yyyymmdd,
+                strike=float(k),
+                right=right,
+                exchange="SMART",
+                currency="USD",
+                multiplier="100",
+            )
+            for k in candidates
+        ]
+
+    qualified_calls, qualified_puts = await asyncio.gather(
+        client.ib.qualifyContractsAsync(*_build("C")),
+        client.ib.qualifyContractsAsync(*_build("P")),
+    )
+    call_strikes = {float(c.strike) for c in qualified_calls if c is not None}
+    put_strikes = {float(c.strike) for c in qualified_puts if c is not None}
+    return sorted(call_strikes & put_strikes)
+
+
 async def build_chain_contracts(
     client: IbkrClient,
     symbol: str,
@@ -182,7 +230,12 @@ async def build_chain_contracts(
                     multiplier="100",
                 )
             )
-    qualified = await client.ib.qualifyContractsAsync(*raw)
+    # ib_async's qualifyContractsAsync can return a length-matching list
+    # with None placeholders for contracts the gateway could not resolve.
+    # Strip them so the caller's length guard sees the true qualified
+    # count and fails fast with a clean error instead of crashing on
+    # ``None.strike`` downstream.
+    qualified = [c for c in await client.ib.qualifyContractsAsync(*raw) if c is not None]
     if len(qualified) != len(raw):
         logger.warning(
             "qualifyContractsAsync dropped %d/%d contracts for %s %s",

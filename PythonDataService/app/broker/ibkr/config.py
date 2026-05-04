@@ -75,10 +75,14 @@ class IbkrSettings(BaseSettings):
     # failure. Each attempt is a 5-second timeout inside ib_async.
     connect_attempts: int = Field(default=3, ge=1, le=10)
 
-    # API session read-only flag. When True, IB Gateway / TWS rejects
-    # ``placeOrder`` at the protocol boundary, so even an in-process bug
-    # cannot route a trade. Default True — operators must explicitly set
-    # ``IBKR_READONLY=false`` to enable Phase 3 order-placement endpoints.
+    # Operator-controlled lockdown for order placement. Enforced in
+    # ``orders._enforce_paper_safety`` (Layer 0) — when True, every call
+    # to ``place_paper_order`` raises ``OrderRefusedError`` before any
+    # contract is built. Also passed to ``ib_async.IB.connectAsync`` for
+    # its startup-fetch optimization, but note that flag does NOT block
+    # placeOrder server-side; the real gate is in our Python code.
+    # Default True — operators must explicitly set ``IBKR_READONLY=false``
+    # in .env to enable Phase 3 order-placement endpoints.
     readonly: bool = True
 
     # Tick stream → Parquet archive. Default OFF; flip to True once the

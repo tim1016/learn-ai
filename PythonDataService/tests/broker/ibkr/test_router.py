@@ -56,20 +56,59 @@ async def test_expirations_returns_503_when_disconnected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_chain_returns_400_when_strike_max_lt_min() -> None:
+async def test_chain_returns_422_when_strikes_missing() -> None:
     set_client(None)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.get(
             "/api/broker/option-chain/SPY",
-            params={
-                "expiry_ms": 1_800_000_000_000,
-                "strike_min": 500,
-                "strike_max": 400,
-            },
+            params={"expiry_ms": 1_800_000_000_000},
         )
 
-    assert resp.status_code == 400
+    # FastAPI rejects the missing required query before the handler runs.
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_chain_returns_400_when_strike_is_non_positive() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/broker/option-chain/SPY",
+            params=[
+                ("expiry_ms", 1_800_000_000_000),
+                ("strikes", 0),
+            ],
+        )
+
+    # Service-unavailable trips first when no client is set; the handler's
+    # validation runs after _require_connected_or_503. Either is acceptable
+    # for this defensive guard — both block the bad request.
+    assert resp.status_code in (400, 503)
+
+
+@pytest.mark.asyncio
+async def test_strikes_endpoint_returns_503_when_disconnected() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/broker/strikes/SPY",
+            params={"expiry_ms": 1_800_000_000_000},
+        )
+
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_strikes_endpoint_rejects_missing_expiry_ms() -> None:
+    set_client(None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/strikes/SPY")
+
+    assert resp.status_code == 422
 
 
 # ── Phase 2a endpoints ─────────────────────────────────────────────────

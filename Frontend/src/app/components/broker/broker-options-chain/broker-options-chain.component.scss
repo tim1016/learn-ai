@@ -81,6 +81,69 @@
   font-size: 0.9rem;
 }
 
+.strike-picker {
+  margin: 0.75rem 0 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-subtle, #e5e7eb);
+  border-radius: 6px;
+  background: var(--bg-canvas-alt, #f9fafb);
+}
+
+.strike-picker-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: baseline;
+  font-size: 0.85rem;
+  color: var(--text-secondary, #6b7280);
+  margin-bottom: 0.5rem;
+
+  strong {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+}
+
+.strike-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.strike-chip {
+  padding: 0.25rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong, #d1d5db);
+  background: var(--bg-elevated, #ffffff);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  min-width: 56px;
+
+  &:hover {
+    background: var(--bg-hover, #f3f4f6);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent, #2563eb);
+    outline-offset: 2px;
+  }
+}
+
+.strike-chip-selected {
+  background: var(--accent, #2563eb);
+  border-color: var(--accent, #2563eb);
+  color: #ffffff;
+
+  &:hover {
+    filter: brightness(1.05);
+    background: var(--accent, #2563eb);
+  }
+}
+
 .muted {
   color: var(--text-secondary, #6b7280);
   font-size: 0.9rem;

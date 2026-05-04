@@ -62,6 +62,24 @@ def _greeks_block(ticker, attr: Literal["modelGreeks", "bidGreeks", "askGreeks",
     return getattr(ticker, attr, None)
 
 
+def _resolve_market_price(ticker) -> float | None:
+    """Read ``ticker.marketPrice`` whether it's a method or a plain attribute.
+
+    ``ib_async``'s ``Ticker.marketPrice`` is a method that derives the best
+    mark from last / bid / ask. Test shims and earlier versions sometimes
+    expose it as a plain attribute. Passing the bound method directly to
+    ``_coerce_optional_float`` raises ``TypeError`` because ``float()``
+    cannot accept a method, so callers route through this helper.
+    """
+    mp_attr = getattr(ticker, "marketPrice", None)
+    if callable(mp_attr):
+        try:
+            return _coerce_optional_float(mp_attr())
+        except Exception:
+            return None
+    return _coerce_optional_float(mp_attr)
+
+
 def _ticker_to_quote(
     ticker,
     symbol: str,
@@ -213,18 +231,7 @@ async def stream_option_chain(
                     _ticker_to_quote(t, symbol, expiry_ms, strike, right),
                 )
 
-            underlying_price = _coerce_optional_float(
-                getattr(stock_ticker, "marketPrice", None)
-            )
-            if underlying_price is None:
-                # ib_async ``marketPrice()`` is a method, not a field, on
-                # some Ticker variants — tolerate either shape.
-                mp = getattr(stock_ticker, "marketPrice", None)
-                if callable(mp):
-                    try:
-                        underlying_price = _coerce_optional_float(mp())
-                    except Exception:
-                        underlying_price = None
+            underlying_price = _resolve_market_price(stock_ticker)
 
             yield IbkrChainSnapshot(
                 symbol=symbol,

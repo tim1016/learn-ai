@@ -7,7 +7,7 @@ import math
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from app.broker.ibkr.market_data import _ticker_to_quote
+from app.broker.ibkr.market_data import _resolve_market_price, _ticker_to_quote
 
 
 def _greeks(*, iv, delta, gamma, theta, vega, und):
@@ -108,3 +108,33 @@ def test_nan_quote_fields_become_none() -> None:
     assert q.last is None
     assert q.bid_size is None
     assert q.ask_size is None
+
+
+def test_resolve_market_price_handles_method_returning_float() -> None:
+    # Regression: ib_async Ticker.marketPrice is a method, not an attribute.
+    # Passing the bound method to _coerce_optional_float raised TypeError.
+    ticker = SimpleNamespace(marketPrice=lambda: 580.42)
+    assert _resolve_market_price(ticker) == 580.42
+
+
+def test_resolve_market_price_handles_method_returning_nan() -> None:
+    ticker = SimpleNamespace(marketPrice=lambda: math.nan)
+    assert _resolve_market_price(ticker) is None
+
+
+def test_resolve_market_price_handles_plain_attribute() -> None:
+    ticker = SimpleNamespace(marketPrice=580.42)
+    assert _resolve_market_price(ticker) == 580.42
+
+
+def test_resolve_market_price_handles_method_raising() -> None:
+    def raise_runtime_error() -> float:
+        raise RuntimeError("boom")
+
+    ticker = SimpleNamespace(marketPrice=raise_runtime_error)
+    assert _resolve_market_price(ticker) is None
+
+
+def test_resolve_market_price_handles_missing_attribute() -> None:
+    ticker = SimpleNamespace()
+    assert _resolve_market_price(ticker) is None

@@ -117,3 +117,12 @@ export interface ExpirationsResponse {
   symbol: string;
   expirations_ms: number[];
 }
+
+// ── REST shape: /api/broker/strikes/{symbol} ─────────────────────────
+
+export interface IbkrStrikeList {
+  symbol: string;
+  expiry_ms: number;
+  strikes: number[];
+  fetched_at_ms: number;
+}

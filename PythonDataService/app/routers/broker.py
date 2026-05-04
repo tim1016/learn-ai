@@ -47,6 +47,7 @@ from app.broker.ibkr.models import (
     IbkrOrderSpec,
     IbkrPnLTick,
     IbkrPositionsSnapshot,
+    IbkrStrikeList,
 )
 from app.broker.ibkr.orders import (
     OrderNotFoundError,
@@ -153,6 +154,37 @@ async def list_expirations_endpoint(symbol: str) -> dict:
     return {"symbol": symbol.upper(), "expirations_ms": expirations}
 
 
+# ── /strikes ───────────────────────────────────────────────────────────
+
+
+@router.get("/strikes/{symbol}", response_model=IbkrStrikeList)
+async def list_strikes_endpoint(
+    symbol: str,
+    expiry_ms: Annotated[int, Query(..., description="Expiry timestamp in int64 ms UTC.")],
+) -> IbkrStrikeList:
+    """Strikes that IBKR can actually qualify for one (symbol, expiry).
+
+    Filters the raw ``reqSecDefOptParams`` payload by probing
+    ``qualifyContractsAsync`` per strike, so the response carries only
+    strikes the chain stream will accept without partial-qualification
+    rejection.
+    """
+    from datetime import UTC, datetime
+
+    client = _require_connected_or_503()
+    sym = symbol.upper()
+    try:
+        strikes = await ibkr_contracts.list_qualified_strikes(client, sym, expiry_ms)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return IbkrStrikeList(
+        symbol=sym,
+        expiry_ms=expiry_ms,
+        strikes=strikes,
+        fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+    )
+
+
 # ── /option-chain (SSE) ────────────────────────────────────────────────
 
 
@@ -160,26 +192,37 @@ async def list_expirations_endpoint(symbol: str) -> dict:
 async def option_chain_stream(
     symbol: str,
     expiry_ms: Annotated[int, Query(..., description="Expiry timestamp in int64 ms UTC.")],
-    strike_min: Annotated[float, Query(..., gt=0, description="Lower strike bound.")],
-    strike_max: Annotated[float, Query(..., gt=0, description="Upper strike bound.")],
+    strikes: Annotated[
+        list[float] | None,
+        Query(
+            description=(
+                "Strikes to subscribe. Pick from /api/broker/strikes/{symbol} "
+                "so every value is one IBKR can actually qualify."
+            ),
+        ),
+    ] = None,
     debounce_ms: Annotated[int, Query(ge=50, le=5000)] = 250,
 ) -> StreamingResponse:
-    """SSE stream of chain snapshots."""
-    if strike_max < strike_min:
+    """SSE stream of chain snapshots.
+
+    ``strikes`` is a repeated query parameter — same FastAPI/Pydantic
+    encoder bug as ``con_ids`` on the per-position pnl stream, so we
+    accept it as optional and 422 explicitly.
+    """
+    if not strikes:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "strikes must be non-empty.",
+        )
+    if any(k <= 0 for k in strikes):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "strike_max must be >= strike_min.",
+            "Strikes must be positive.",
         )
 
     client = _require_connected_or_503()
     sym = symbol.upper()
-    all_strikes = await ibkr_contracts.list_strikes(client, sym, expiry_ms)
-    band = [k for k in all_strikes if strike_min <= k <= strike_max]
-    if not band:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f"No strikes between {strike_min} and {strike_max} for {sym} expiry={expiry_ms}.",
-        )
+    band = sorted(set(float(k) for k in strikes))
 
     writer = make_writer(
         persist=client.settings.persist_ticks,
