@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "name": "SPY EMA(5)/EMA(10) Crossover with RSI gate",
+  "description": "LEAN-pinned reference. 15-min consolidator on SPY; entry on fresh EMA5>EMA10 cross with gap >= 0.20 and 50<=RSI<=70; exit after 5 consolidated bars.",
+  "symbols": ["SPY"],
+  "resolution": {"period_minutes": 15},
+  "indicators": [
+    {"id": "ema5",  "kind": "EMA", "period": 5,  "source": "close"},
+    {"id": "ema10", "kind": "EMA", "period": 10, "source": "close"},
+    {"id": "rsi14", "kind": "RSI", "period": 14, "source": "close", "ma_type": "wilders"}
+  ],
+  "entry": {
+    "logic": "AND",
+    "conditions": [
+      {"kind": "FreshCross", "left": "ema5", "right": "ema10", "direction": "up"},
+      {
+        "kind": "IndicatorComparison",
+        "left": {
+          "kind": "Subtract",
+          "left":  {"kind": "IndicatorRef", "indicator": "ema5"},
+          "right": {"kind": "IndicatorRef", "indicator": "ema10"}
+        },
+        "op": ">=",
+        "right": {"kind": "Const", "value": 0.20}
+      },
+      {"kind": "IndicatorBetween", "indicator": "rsi14", "lo": 50, "hi": 70, "inclusive": true}
+    ],
+    "size": {"kind": "SetHoldings", "fraction": 1.0},
+    "pyramiding": 1
+  },
+  "position": {"kind": "EQUITY_LONG"},
+  "survival": [],
+  "exit": {
+    "logic": "OR",
+    "conditions": [
+      {"kind": "BarsSinceEntry", "op": ">=", "value": 5}
+    ]
+  },
+  "diagnostics": {
+    "snapshot_at_entry": ["ema5", "ema10", "rsi14"]
+  }
+}
