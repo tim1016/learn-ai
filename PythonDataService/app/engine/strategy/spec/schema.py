@@ -184,6 +184,39 @@ class PnLPoints(_ConditionBase):
     value: float
 
 
+class DrawdownFromPeak(_ConditionBase):
+    """Trailing-stop primitive — fires when the current close has
+    retraced from the peak-since-entry by at least ``value``.
+
+    The peak is tracked from the entry fill onwards (resets on exit).
+    ``value`` is a non-negative fraction: ``0.005`` means "fired when
+    we've given back 0.5% from the high since entry".
+
+    Returns False when no position is open or before the entry fills
+    (peak is undefined until then). Stateful primitive — internal peak
+    state is reset by ``observe_bar`` when the position is flat.
+    """
+
+    kind: Literal["DrawdownFromPeak"]
+    value: float = Field(ge=0.0)
+
+
+class BarProperty(_ConditionBase):
+    """Compares a bar-derived property to a threshold. Stateless.
+
+    Properties:
+      * ``range`` — high - low (price points)
+      * ``body`` — abs(close - open) (price points)
+      * ``range_pct`` — (high - low) / close (unitless fraction)
+      * ``body_pct`` — abs(close - open) / close (unitless fraction)
+    """
+
+    kind: Literal["BarProperty"]
+    property: Literal["range", "body", "range_pct", "body_pct"]
+    op: ComparisonOp
+    value: float
+
+
 Condition = Annotated[
     IndicatorComparison
     | IndicatorBetween
@@ -191,7 +224,9 @@ Condition = Annotated[
     | BarsSinceEntry
     | TimeOfDay
     | PnLPercent
-    | PnLPoints,
+    | PnLPoints
+    | DrawdownFromPeak
+    | BarProperty,
     Field(discriminator="kind"),
 ]
 

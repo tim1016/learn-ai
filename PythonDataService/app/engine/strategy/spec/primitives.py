@@ -39,6 +39,7 @@ from zoneinfo import ZoneInfo
 from app.engine.strategy.spec import schema as S
 
 if TYPE_CHECKING:
+    from app.engine.data.trade_bar import TradeBar
     from app.engine.indicators.base import Indicator
 
 
@@ -55,6 +56,7 @@ class EvalContext:
     current_bar_count: int  # consolidated bar handler invocations so far
     bar_close_time: datetime  # end_time of the current consolidated bar
     bar_close_price: Decimal  # close price of the current consolidated bar
+    current_bar: TradeBar | None = None  # full OHLC bar for BarProperty primitives
 
     # Position lifecycle: set when entry fires, cleared when exit fires.
     in_position: bool = False
@@ -218,6 +220,75 @@ class PnLPointsPrimitive(Primitive):
         return _compare(self.node.op, pnl_pts, Decimal(str(self.node.value)))
 
 
+class DrawdownFromPeakPrimitive(Primitive):
+    """Trailing-stop primitive: fires when current close has retraced from
+    the peak-since-entry by at least ``value``.
+
+    Statefulness: tracks ``_peak`` since position open. On the first
+    in-position bar after entry, ``_peak`` seeds to the current close.
+    On every subsequent in-position bar, ``observe_bar`` updates ``_peak``
+    to ``max(_peak, current_close)`` AFTER ``evaluate`` has computed the
+    drawdown — so the first bar's drawdown is always 0 (no false fire on
+    the entry fill bar). ``observe_bar`` resets ``_peak`` to None when
+    flat, so a subsequent re-entry starts with a fresh peak rather than
+    inheriting the prior trade's high-water mark.
+    """
+
+    def __init__(self, node: S.DrawdownFromPeak) -> None:
+        self.node = node
+        self._peak: Decimal | None = None
+
+    def evaluate(self, ctx: EvalContext) -> bool:
+        if not ctx.in_position or ctx.entry_price is None:
+            return False
+        if self._peak is None:
+            return False  # first in-position bar: no peak yet
+        drawdown = (self._peak - ctx.bar_close_price) / self._peak
+        return drawdown >= Decimal(str(self.node.value))
+
+    def observe_bar(self, ctx: EvalContext) -> None:
+        if not ctx.in_position:
+            self._peak = None
+            return
+        if ctx.entry_price is None:
+            return  # entry not filled yet — defer seeding
+        if self._peak is None:
+            self._peak = ctx.bar_close_price
+            return
+        if ctx.bar_close_price > self._peak:
+            self._peak = ctx.bar_close_price
+
+
+class BarPropertyPrimitive(Primitive):
+    """Compares a bar-derived property (range, body, %-of-close) to a threshold.
+
+    Stateless — reads only the current bar. Phase 2.1 schema sets the
+    bar fields (``open``, ``high``, ``low``, ``close``) on ``EvalContext``
+    via ``bar_close_price`` only; this primitive needs the full bar so
+    we expose it through ``ctx.current_bar`` (added alongside).
+    """
+
+    def __init__(self, node: S.BarProperty) -> None:
+        self.node = node
+
+    def evaluate(self, ctx: EvalContext) -> bool:
+        bar = ctx.current_bar
+        if bar is None:
+            return False  # defensive — should always be set during evaluate
+        prop = self.node.property
+        if prop == "range":
+            v = bar.high - bar.low
+        elif prop == "body":
+            v = abs(bar.close - bar.open)
+        elif prop == "range_pct":
+            v = (bar.high - bar.low) / bar.close if bar.close > 0 else Decimal(0)
+        elif prop == "body_pct":
+            v = abs(bar.close - bar.open) / bar.close if bar.close > 0 else Decimal(0)
+        else:  # pragma: no cover — schema guards
+            raise ValueError(f"unknown bar property: {prop!r}")
+        return _compare(self.node.op, v, Decimal(str(self.node.value)))
+
+
 class TimeOfDayPrimitive(Primitive):
     def __init__(self, node: S.TimeOfDay) -> None:
         self.node = node
@@ -337,6 +408,10 @@ def _build_leaf(node) -> Primitive:
         return PnLPercentPrimitive(node)
     if isinstance(node, S.PnLPoints):
         return PnLPointsPrimitive(node)
+    if isinstance(node, S.DrawdownFromPeak):
+        return DrawdownFromPeakPrimitive(node)
+    if isinstance(node, S.BarProperty):
+        return BarPropertyPrimitive(node)
     raise NotImplementedError(f"primitive kind {type(node).__name__} not supported")
 
 

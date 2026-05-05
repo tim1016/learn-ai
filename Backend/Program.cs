@@ -80,6 +80,18 @@ builder.Services.AddHttpClient<ITechnicalAnalysisService, TechnicalAnalysisServi
 .AddPolicyHandler(retryPolicy)
 .AddPolicyHandler(circuitBreakerPolicy);
 
+// HttpClient for SpecStrategyService — passthrough to /api/spec-strategy/backtest.
+// 5-minute timeout matches the SPY EMA full-range backtest (2024-03-28 → 2026-03-27).
+// Retry is disabled because a backtest run is expensive; circuit breaker still trips
+// on a hard-down Python service.
+builder.Services.AddHttpClient<ISpecStrategyService, SpecStrategyService>(client =>
+{
+    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(300);
+})
+.AddPolicyHandler(circuitBreakerPolicy);
+
 // Add HttpClient for ResearchService — no retry policy.
 // Research requests are expensive (minutes long, hundreds of MB payloads).
 // If the first attempt fails, retrying burns another 3-10 minutes doing the
@@ -144,6 +156,7 @@ builder.Services
     .AddMutationType<Mutation>()
     .AddTypeExtension<PortfolioMutation>()
     .AddTypeExtension<DataLabMutation>()
+    .AddTypeExtension<SpecStrategyMutation>()
     .AddProjections()
     .AddFiltering()
     .AddSorting()
