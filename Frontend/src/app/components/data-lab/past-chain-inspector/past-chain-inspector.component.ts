@@ -22,8 +22,8 @@ import { Button } from 'primeng/button';
 import { Skeleton } from 'primeng/skeleton';
 import { Dialog } from 'primeng/dialog';
 import { Tooltip } from 'primeng/tooltip';
-import { LineChartComponent } from '../../market-data/line-chart/line-chart.component';
-import { VolumeChartComponent } from '../../market-data/volume-chart/volume-chart.component';
+import { LineChartComponent } from '../../../shared/charts/line-chart/line-chart.component';
+import { VolumeChartComponent } from '../../../shared/charts/volume-chart/volume-chart.component';
 import { MarketDataService } from '../../../services/market-data.service';
 import {
   PastChainService,

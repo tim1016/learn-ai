@@ -1,55 +1,13 @@
 import { Routes } from "@angular/router";
 
 export const routes: Routes = [
-  { path: "", redirectTo: "/market-data", pathMatch: "full" },
+  { path: "", redirectTo: "/data-lab", pathMatch: "full" },
   {
     path: "jobs-demo",
     loadComponent: () =>
       import("./components/jobs/backtest-job-page.component").then(
         (m) => m.BacktestJobPageComponent
       ),
-  },
-  {
-    path: "market-data",
-    loadComponent: () =>
-      import("./components/market-data/market-data.component").then(
-        (m) => m.MarketDataComponent
-      ),
-  },
-  {
-    path: "tickers",
-    loadComponent: () =>
-      import("./components/tickers/tickers.component").then(
-        (m) => m.TickersComponent
-      ),
-  },
-  {
-    path: "technical-analysis",
-    loadComponent: () =>
-      import(
-        "./components/tickers/technical-analysis/technical-analysis.component"
-      ).then((m) => m.TechnicalAnalysisComponent),
-  },
-  {
-    path: "stock-analysis",
-    loadComponent: () =>
-      import("./components/stock-analysis/stock-analysis.component").then(
-        (m) => m.StockAnalysisComponent
-      ),
-  },
-  {
-    path: "stock-analysis/chunk/:ticker/:fromDate/:toDate",
-    loadComponent: () =>
-      import(
-        "./components/stock-analysis/chunk-detail/chunk-detail.component"
-      ).then((m) => m.ChunkDetailComponent),
-  },
-  {
-    path: "stock-analysis/day/:ticker/:date",
-    loadComponent: () =>
-      import(
-        "./components/stock-analysis/day-detail/day-detail.component"
-      ).then((m) => m.DayDetailComponent),
   },
   {
     // Per docs/architecture/options-routes-research.md §7 D9 + §5.1 R0b:
@@ -62,25 +20,11 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
-    path: "strategy-lab",
-    loadComponent: () =>
-      import("./components/strategy-lab/strategy-lab.component").then(
-        (m) => m.StrategyLabComponent
-      ),
-  },
-  {
-    path: "strategy-lab-validation",
-    loadComponent: () =>
-      import(
-        "./components/strategy-lab-validation/strategy-lab-validation.component"
-      ).then((m) => m.StrategyLabValidationComponent),
-  },
-  {
     path: "strategy-docs",
     loadComponent: () =>
-      import(
-        "./components/strategy-lab/strategy-docs/strategy-docs.component"
-      ).then((m) => m.StrategyDocsComponent),
+      import("./components/strategy-docs/strategy-docs.component").then(
+        (m) => m.StrategyDocsComponent
+      ),
   },
   {
     // Per docs/architecture/options-routes-research.md §7 D8 + §5.1 R0a:
@@ -122,13 +66,6 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
-    path: "snapshots",
-    loadComponent: () =>
-      import("./components/snapshots/snapshots.component").then(
-        (m) => m.SnapshotsComponent
-      ),
-  },
-  {
     path: "tracked-instruments",
     loadComponent: () =>
       import(
@@ -141,13 +78,6 @@ export const routes: Routes = [
       import("./components/portfolio/portfolio.component").then(
         (m) => m.PortfolioComponent
       ),
-  },
-  {
-    path: "indicator-validation",
-    loadComponent: () =>
-      import(
-        "./components/indicator-validation/indicator-validation.component"
-      ).then((m) => m.IndicatorValidationComponent),
   },
   {
     path: "indicator-docs",
@@ -172,7 +102,7 @@ export const routes: Routes = [
     path: "indicator-report",
     loadComponent: () =>
       import(
-        "./components/indicator-validation/indicator-report/indicator-report.component"
+        "./components/indicator-report/indicator-report.component"
       ).then((m) => m.IndicatorReportComponent),
   },
   {

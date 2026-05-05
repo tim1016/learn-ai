@@ -1,0 +1,283 @@
+@use '../../styles/tokens' as *;
+
+.indicator-report {
+  padding: 1rem;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+
+  h2 {
+    margin: 0;
+    color: $text-primary;
+  }
+
+  .back-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.85rem;
+    color: $accent;
+    text-decoration: none;
+    font-weight: 500;
+
+    &:hover {
+      text-decoration: underline;
+    }
+
+    i {
+      font-size: 0.75rem;
+    }
+  }
+}
+
+// ─── Controls ───────────────────────────────────────────
+.controls {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-end;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+
+  .input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+
+    label {
+      font-size: 0.8rem;
+      color: $text-muted;
+    }
+
+    input {
+      padding: 0.4rem 0.6rem;
+      border: 1px solid $border;
+      border-radius: 4px;
+      background: $bg-surface;
+      color: $text-primary;
+      font-size: 0.9rem;
+
+      &[type='text'] {
+        width: 80px;
+      }
+    }
+  }
+
+  button {
+    padding: 0.5rem 1.2rem;
+    border: none;
+    border-radius: 4px;
+    background: $accent;
+    color: white;
+    cursor: pointer;
+    font-size: 0.9rem;
+
+    &:hover:not(:disabled) {
+      background: $accent-hover;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+}
+
+.csv-upload {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+
+  .file-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    border: 1px dashed $border;
+    border-radius: 4px;
+    cursor: pointer;
+    color: $text-secondary;
+    font-size: 0.85rem;
+
+    input[type='file'] {
+      display: none;
+    }
+
+    &:hover {
+      border-color: #4a9eff;
+      color: $accent;
+    }
+  }
+
+  .file-name {
+    color: $bull;
+    font-size: 0.85rem;
+  }
+}
+
+.error-msg {
+  color: #fca5a5;
+  background: rgba($bear, 0.1);
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+}
+
+// ─── Legend ──────────────────────────────────────────────
+.legend {
+  display: flex;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: $text-secondary;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 24px;
+  height: 3px;
+  border-radius: 2px;
+
+  &.pandas-ta {
+    background: $bull;
+  }
+
+  &.tradingview {
+    height: 2px;
+    background: repeating-linear-gradient(
+      90deg,
+      $accent 0px,
+      $accent 4px,
+      transparent 4px,
+      transparent 8px
+    );
+  }
+}
+
+// ─── Chart Grid ─────────────────────────────────────────
+.charts-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+
+.chart-panel {
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.chart-title {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: $text-secondary;
+  background: $bg-elevated;
+  border-bottom: 1px solid $border;
+}
+
+.chart-container {
+  width: 100%;
+}
+
+// ─── Stats Section ──────────────────────────────────────
+.stats-section {
+  margin-top: 1rem;
+
+  h3 {
+    color: $text-primary;
+    margin: 0 0 0.25rem;
+  }
+
+  .stats-subtitle {
+    color: $text-muted;
+    font-size: 0.85rem;
+    margin: 0 0 0.75rem;
+  }
+}
+
+.stats-table-wrap {
+  overflow-x: auto;
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+
+  th, td {
+    padding: 0.5rem 0.7rem;
+    border: 1px solid $border;
+    text-align: right;
+  }
+
+  th {
+    background: $bg-elevated;
+    color: $text-secondary;
+    position: sticky;
+    top: 0;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+  }
+
+  td {
+    color: $text-primary;
+    background: $bg-surface;
+  }
+
+  .field-name {
+    text-align: left;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  tbody tr:hover td {
+    background: $bg-hover;
+  }
+}
+
+// ─── Grade Badges ───────────────────────────────────────
+.grade-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.grade-exact {
+  background: rgba($bull, 0.12);
+  color: $bull;
+}
+
+.grade-close {
+  background: rgba($bull, 0.12);
+  color: $bull;
+}
+
+.grade-ok {
+  background: rgba($warn, 0.12);
+  color: $warn;
+}
+
+.grade-bad {
+  background: rgba($bear, 0.1);
+  color: #fca5a5;
+}

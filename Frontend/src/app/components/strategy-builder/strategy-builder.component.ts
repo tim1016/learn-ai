@@ -23,8 +23,8 @@ import {
 import { parseOccForDisplay, OccDisplayParts } from '../../utils/occ-ticker';
 import { getMinAllowedDate } from '../../utils/date-validation';
 import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
-import { CandlestickChartComponent } from '../market-data/candlestick-chart/candlestick-chart.component';
-import { VolumeChartComponent } from '../market-data/volume-chart/volume-chart.component';
+import { CandlestickChartComponent } from '../../shared/charts/candlestick-chart/candlestick-chart.component';
+import { VolumeChartComponent } from '../../shared/charts/volume-chart/volume-chart.component';
 import { PayoffChartComponent } from '../../shared/payoff-chart/payoff-chart.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
