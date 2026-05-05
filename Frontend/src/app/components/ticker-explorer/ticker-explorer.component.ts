@@ -5,11 +5,12 @@ import { firstValueFrom } from 'rxjs';
 import { MarketDataService } from '../../services/market-data.service';
 import { SnapshotUnderlyingResult, SnapshotContractResult } from '../../graphql/types';
 import { getMinAllowedDate } from '../../utils/date-validation';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 @Component({
   selector: 'app-ticker-explorer',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, PageHeaderComponent],
   templateUrl: './ticker-explorer.component.html',
   styleUrls: ['./ticker-explorer.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

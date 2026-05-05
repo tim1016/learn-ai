@@ -3,6 +3,7 @@ import { CommonModule } from "@angular/common";
 import { AccordionModule } from "primeng/accordion";
 import { DividerModule } from "primeng/divider";
 import { KatexDirective } from "../../../shared/katex.directive";
+import { PageHeaderComponent } from "../../../shared/page-header/page-header.component";
 import {
   BenchmarkScorecardComponent,
   ScorecardResultLike,
@@ -93,6 +94,7 @@ interface CopyBlock {
     AccordionModule,
     DividerModule,
     KatexDirective,
+    PageHeaderComponent,
     BenchmarkScorecardComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
