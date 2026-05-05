@@ -9,6 +9,8 @@ existing IBKR paper-order boundary asynchronously.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -17,15 +19,18 @@ from typing import Protocol
 
 from app.broker.ibkr.account import fetch_account_summary, fetch_positions
 from app.broker.ibkr.client import IbkrClient
-from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
+from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent, IbkrOrderSpec
 from app.broker.ibkr.orders import (
     OrderNotFoundError,
     cancel_paper_order,
     list_open_orders,
     place_paper_order,
+    stream_order_events,
 )
 from app.engine.execution.order import Direction, Order, OrderEvent, OrderType
 from app.engine.execution.portfolio import Position
+
+logger = logging.getLogger(__name__)
 
 
 class BrokerAdapter(Protocol):
@@ -38,20 +43,35 @@ class BrokerAdapter(Protocol):
     async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck: ...
 
     async def cancel_open_orders(self) -> list[int]:
-        """Cancel every order the broker still considers open.
+        """Cancel every order this runner still has open at the broker.
 
-        Returns the list of cancelled ``order_id`` values. Used by the
-        force-flat barrier so that any in-flight orders submitted on
-        prior bars do not survive the session-close cutoff.
+        Real adapters scope to the runner's own orders so that running
+        the live engine never touches an unrelated open order on the
+        same paper account. Returns the list of cancelled ``order_id``
+        values.
         """
         ...
 
 
 class IbkrBrokerAdapter:
-    """Production adapter over the existing broker module."""
+    """Production adapter over the existing broker module.
+
+    Tracks the set of order IDs this adapter has placed so that
+    ``cancel_open_orders`` only touches the live runner's own orders.
+    Any pre-existing or unrelated order on the paper account is left
+    alone, even if it shares the connected client. Buffers IBKR order
+    events so the live engine can drain real fills per bar.
+    """
 
     def __init__(self, client: IbkrClient) -> None:
         self._client = client
+        self._owned_order_ids: set[int] = set()
+        self._event_buffer: list[IbkrOrderEvent] = []
+        self._event_task: asyncio.Task[None] | None = None
+
+    @property
+    def owned_order_ids(self) -> set[int]:
+        return set(self._owned_order_ids)
 
     async def fetch_account_summary(self):
         return await fetch_account_summary(self._client)
@@ -60,12 +80,19 @@ class IbkrBrokerAdapter:
         return await fetch_positions(self._client)
 
     async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
-        return await place_paper_order(self._client, spec)
+        ack = await place_paper_order(self._client, spec)
+        self._owned_order_ids.add(int(ack.order_id))
+        return ack
 
     async def cancel_open_orders(self) -> list[int]:
         open_orders = await list_open_orders(self._client)
         cancelled: list[int] = []
         for order in open_orders:
+            if int(order.order_id) not in self._owned_order_ids:
+                # Foreign order on this paper account — never the
+                # runner's to cancel. Leaving it alone is the whole
+                # point of the ownership filter.
+                continue
             try:
                 await cancel_paper_order(self._client, order.order_id)
                 cancelled.append(order.order_id)
@@ -74,6 +101,41 @@ class IbkrBrokerAdapter:
                 # way it's no longer open, so the force-flat goal is satisfied.
                 continue
         return cancelled
+
+    async def start_event_stream(self) -> None:
+        """Begin draining IBKR order events into the local buffer."""
+        if self._event_task is not None:
+            return
+        self._event_task = asyncio.create_task(self._run_event_stream())
+
+    async def stop_event_stream(self) -> None:
+        if self._event_task is None:
+            return
+        self._event_task.cancel()
+        try:
+            await self._event_task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._event_task = None
+
+    async def _run_event_stream(self) -> None:
+        try:
+            async for event in stream_order_events(self._client):
+                if int(event.order_id) not in self._owned_order_ids:
+                    continue
+                self._event_buffer.append(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Surface the cause, then let the task retire — the engine's
+            # finally-block stop() must not raise on a dead stream.
+            logger.exception("IBKR order-event stream terminated unexpectedly")
+
+    def drain_broker_events(self) -> list[IbkrOrderEvent]:
+        events = list(self._event_buffer)
+        self._event_buffer.clear()
+        return events
 
 
 @dataclass
