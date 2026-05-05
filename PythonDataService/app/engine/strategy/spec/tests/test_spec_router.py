@@ -136,6 +136,68 @@ async def test_backtest_runs_sma_spec_on_synthetic_data() -> None:
     # Indicator snapshots present on each trade.
     assert all(t["indicators"] for t in body["trades"])
 
+    # Per ``.claude/rules/numerical-rigor.md`` § "Timestamp rigor",
+    # entry_time / exit_time on the wire are int64 ms UTC, not ISO
+    # strings. Verify the wire shape and that the values are roughly
+    # in the expected millisecond range.
+    first = body["trades"][0]
+    assert isinstance(first["entry_time"], int), (
+        f"entry_time should be int64 ms UTC, got {type(first['entry_time']).__name__}: "
+        f"{first['entry_time']!r}"
+    )
+    assert isinstance(first["exit_time"], int)
+    # 13-digit ms-since-epoch (~year 2001 onwards). The synthetic data
+    # starts in 2024, so anything below year 2001 indicates a unit bug.
+    assert first["entry_time"] > 1_000_000_000_000, (
+        f"entry_time looks like seconds, not ms: {first['entry_time']}"
+    )
+    assert first["exit_time"] > first["entry_time"], (
+        f"exit_time {first['exit_time']} should be after entry_time {first['entry_time']}"
+    )
+
+
+async def test_backtest_rejects_unsupported_spec_feature_with_400() -> None:
+    """A spec that schema-validates but uses a feature the evaluator
+    cannot run (Phase 2 ``FixedContracts`` sizing) must surface as 400,
+    not as a 200 + ``success=false``. Otherwise API consumers cannot
+    distinguish a client-side spec mistake from a transient run failure.
+
+    The unsupported feature surfaces from inside ``engine.run()`` (when
+    entry actually fires and ``_submit_entry`` is called), not from
+    ``SpecAlgorithm.__init__``, so the run-time exception path must
+    convert it to 4xx — which is what the route handler does.
+    """
+    app.dependency_overrides[get_data_source_factory] = _make_synthetic_factory
+
+    try:
+        async with await _client() as client:
+            spec_resp = await client.get("/api/spec-strategy/fixtures/sma_crossover")
+            assert spec_resp.status_code == 200
+            spec_payload = spec_resp.json()
+            spec_payload["symbols"] = [SYMBOL]
+            # Replace the SetHoldings sizing with a Phase-2 FixedContracts
+            # value. The schema accepts it (forward-compat); the
+            # evaluator raises NotImplementedError when entry fires.
+            spec_payload["entry"]["size"] = {"kind": "FixedContracts", "value": 1}
+
+            resp = await client.post(
+                "/api/spec-strategy/backtest",
+                json={
+                    "spec": spec_payload,
+                    "start_date": "2024-01-02",
+                    "end_date": "2024-12-31",
+                    "initial_cash": 100000.0,
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_data_source_factory, None)
+
+    assert resp.status_code == 400, (
+        f"expected 400 for unsupported feature, got {resp.status_code}: {resp.text}"
+    )
+    body = resp.json()
+    assert "unsupported feature" in body["detail"].lower()
+
 
 async def test_backtest_rejects_malformed_spec() -> None:
     """A spec with an unknown condition kind must be rejected with 4xx
@@ -175,6 +237,7 @@ def run_all() -> None:
         ("fixture detail endpoint", test_fixture_detail_endpoint),
         ("fixture detail unknown -> 404", test_fixture_detail_unknown_returns_404),
         ("backtest runs SMA spec on synthetic data", test_backtest_runs_sma_spec_on_synthetic_data),
+        ("backtest rejects unsupported feature with 400", test_backtest_rejects_unsupported_spec_feature_with_400),
         ("backtest rejects malformed spec", test_backtest_rejects_malformed_spec),
     ]
     for label, fn in tests:
