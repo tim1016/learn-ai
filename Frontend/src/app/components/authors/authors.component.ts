@@ -2,13 +2,14 @@ import { ChangeDetectionStrategy, Component, inject, OnInit, signal } from "@ang
 import { CommonModule } from "@angular/common";
 import { AuthorService } from "../../services/author.service";
 import { Author } from "../../graphql/types";
+import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
 
 @Component({
   selector: "app-authors",
-  imports: [CommonModule],
+  imports: [CommonModule, PageHeaderComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <h1>Authors</h1>
+    <app-page-header title="Authors" />
 
     @if (loading()) {
       <div class="loading">Loading authors...</div>

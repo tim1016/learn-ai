@@ -7,6 +7,7 @@ import {
   RouterOutlet,
 } from "@angular/router";
 import { filter, map, startWith } from "rxjs";
+import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
 import { EdgeMiniLineComponent } from "./charts/edge-charts";
 import { EdgeMockDataService } from "./services/edge-mock-data.service";
 
@@ -34,7 +35,7 @@ interface CapabilityRow {
   selector: "app-edge",
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterOutlet, EdgeMiniLineComponent],
+  imports: [RouterLink, RouterOutlet, EdgeMiniLineComponent, PageHeaderComponent],
   templateUrl: "./edge.component.html",
   styleUrls: ["./edge.component.scss"],
 })

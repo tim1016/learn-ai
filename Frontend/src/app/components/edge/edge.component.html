@@ -1,14 +1,10 @@
 @if (isRoot()) {
   <section class="edge-shell">
-    <header class="edge-header">
-      <div class="edge-eyebrow">QUANT TRADING LAB · /EDGE</div>
-      <h1>Edge — quantitative research views</h1>
-      <p class="lede">
-        Three views bound by two cross-cutting capabilities — the Trade Simulator and Edge Score.
-        Canonical engineering spec lives in
-        <code>docs/architecture/edge-feature-design.md</code>.
-      </p>
-    </header>
+    <app-page-header
+      eyebrow="Quant Trading Lab · /edge"
+      title="Edge — quantitative research views"
+      subtitle="Three views bound by two cross-cutting capabilities — the Trade Simulator and Edge Score. Canonical engineering spec lives in docs/architecture/edge-feature-design.md."
+    />
 
     <div class="card-grid">
       @for (card of cards(); track card.route) {

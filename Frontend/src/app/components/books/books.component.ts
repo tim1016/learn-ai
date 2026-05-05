@@ -2,13 +2,14 @@ import { ChangeDetectionStrategy, Component, inject, OnInit, signal } from "@ang
 import { CommonModule } from "@angular/common";
 import { BookService } from "../../services/book.service";
 import { Book } from "../../graphql/types";
+import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
 
 @Component({
   selector: "app-books",
-  imports: [CommonModule],
+  imports: [CommonModule, PageHeaderComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <h1>Books</h1>
+    <app-page-header title="Books" />
 
     @if (loading()) {
       <div class="loading">Loading books...</div>
