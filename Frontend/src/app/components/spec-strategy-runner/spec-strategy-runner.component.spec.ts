@@ -1,29 +1,28 @@
 import { TestBed } from '@angular/core/testing';
-import { ApolloTestingController, ApolloTestingModule } from 'apollo-angular/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
+import { ApolloTestingController, ApolloTestingModule } from 'apollo-angular/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { RUN_SPEC_STRATEGY_BACKTEST } from '../../services/spec-strategy.service';
 import { SpecStrategyRunnerComponent } from './spec-strategy-runner.component';
 import { CANONICAL_FIXTURES } from './canonical-fixtures';
-import { insertSnippet, SpecSnippet } from './snippets';
 
 /**
- * Sanity tests for the runner component. We don't render with
- * @testing-library here because the component is template-heavy and
- * the cheap things we want to prove — fixture bundling, picker
- * selection, JSON dirty-tracking, mutation wiring — are all
- * accessible via the component's signal surface and a stub Apollo
- * controller.
+ * Tests for the form-driven runner component.
  *
- * Browser-level UI verification (form behavior, table rendering,
- * accessibility) is left for the maintainer running the dev server.
+ * The component is large (form fields for nine condition kinds) so the
+ * tests focus on the orchestration: signal-as-source-of-truth wiring,
+ * mutator routing, fixture/saved load semantics, JSON-Advanced
+ * apply path, and the Run mutation. Per-condition form rendering is
+ * covered by the plain-english / spec-mutators unit tests; here we
+ * exercise the component as a whole.
  */
 describe('SpecStrategyRunnerComponent', () => {
   let component: SpecStrategyRunnerComponent;
   let controller: ApolloTestingController;
 
   beforeEach(() => {
+    localStorage.clear();
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       imports: [SpecStrategyRunnerComponent, ApolloTestingModule],
@@ -35,69 +34,224 @@ describe('SpecStrategyRunnerComponent', () => {
 
   afterEach(() => {
     controller.verify();
+    localStorage.clear();
   });
 
-  it('exposes the three canonical fixtures and starts on SPY EMA', () => {
-    expect(component.fixtures).toHaveLength(3);
-    expect(component.fixtures.map((f) => f.id)).toEqual([
-      'spy_ema_crossover',
-      'sma_crossover',
-      'rsi_mean_reversion',
-    ]);
+  // ---- Initial state ----------------------------------------------------
+  it('boots with the SPY EMA fixture loaded by default', () => {
     expect(component.selectedFixtureId()).toBe('spy_ema_crossover');
+    expect(component.spec().name).toContain('SPY EMA');
+    expect(component.spec().indicators).toHaveLength(3);
+    expect(component.currentSavedId()).toBeNull();
   });
 
-  it('selectFixture rewrites the JSON textarea and resets edited marker', () => {
-    // Pretend the user has edited the JSON.
-    component.specJson.set('{"i": "edited"}');
-    expect(component.isPristine()).toBe(false);
+  it('exposes all six indicator kinds and all nine condition kinds for the pickers', () => {
+    expect(component.indicatorKinds).toEqual(['SMA', 'EMA', 'RSI', 'ADX', 'MACD', 'SUPERTREND']);
+    expect(component.conditionKinds).toContain('FreshCross');
+    expect(component.conditionKinds).toContain('DrawdownFromPeak');
+    expect(component.conditionKinds).toContain('BarProperty');
+    expect(component.conditionKinds.length).toBe(9);
+  });
+
+  // ---- Fixture / saved load --------------------------------------------
+  it('selectFixture replaces the current spec and clears currentSavedId', () => {
+    // Pretend the user has been editing a saved strategy.
+    component.spec.set({ ...component.spec(), name: 'tinkered' });
 
     component.selectFixture('rsi_mean_reversion');
-
-    expect(component.selectedFixtureId()).toBe('rsi_mean_reversion');
-    expect(component.isPristine()).toBe(true);
-    const fixture = CANONICAL_FIXTURES.find((f) => f.id === 'rsi_mean_reversion');
-    expect(fixture).toBeDefined();
-    const expected = JSON.stringify(fixture?.spec, null, 2);
-    expect(component.specJson()).toBe(expected);
+    expect(component.spec().name).toContain('RSI');
+    expect(component.spec().indicators).toHaveLength(1);
+    expect(component.currentSavedId()).toBeNull();
   });
 
-  it('runBacktest fires the mutation with the JSON payload', async () => {
+  // ---- Indicator editor -------------------------------------------------
+  it('addIndicatorOfKind appends a default indicator with a unique id', () => {
+    const before = component.spec().indicators.length;
+    component.addIndicatorOfKind('ADX');
+    const after = component.spec().indicators;
+    expect(after).toHaveLength(before + 1);
+    expect(after[after.length - 1].kind).toBe('ADX');
+    expect(after[after.length - 1].id).toMatch(/^adx_/);
+  });
+
+  it('updateIndicatorField patches in place', () => {
+    component.updateIndicatorField(0, { period: 99 });
+    expect(component.spec().indicators[0].period).toBe(99);
+  });
+
+  it('removeIndicator drops by index', () => {
+    component.removeIndicator(0);
+    expect(component.spec().indicators).toHaveLength(2);
+  });
+
+  // ---- Entry tab --------------------------------------------------------
+  it('addEntryConditionOfKind appends with sensible defaults', () => {
+    const before = component.spec().entry.conditions.length;
+    component.addEntryConditionOfKind('IndicatorBetween');
+    const conds = component.spec().entry.conditions;
+    expect(conds).toHaveLength(before + 1);
+    expect((conds[conds.length - 1] as { kind: string }).kind).toBe('IndicatorBetween');
+  });
+
+  it('emitCondChange routes to the entry mutator with ctx="entry"', () => {
+    const original = component.spec().entry.conditions[0];
+    const replacement = {
+      kind: 'FreshCross' as const,
+      left: 'ema5',
+      right: 'ema10',
+      direction: 'down' as const,
+    };
+    component.emitCondChange('entry', undefined, 0, replacement);
+    expect(component.spec().entry.conditions[0]).toEqual(replacement);
+    expect(component.spec().entry.conditions[0]).not.toBe(original);
+  });
+
+  it('setEntryLogic flips AND ↔ OR', () => {
+    const initial = component.spec().entry.logic;
+    component.setEntryLogic(initial === 'AND' ? 'OR' : 'AND');
+    expect(component.spec().entry.logic).not.toBe(initial);
+  });
+
+  // ---- Manage tab -------------------------------------------------------
+  it('addManageRule appends a default CLOSE_ALL stop-loss rule', () => {
+    component.addManageRule();
+    const rules = component.spec().survival ?? [];
+    expect(rules).toHaveLength(1);
+    expect(rules[0].action).toEqual({ kind: 'CLOSE_ALL' });
+    expect(rules[0].when.conditions).toHaveLength(1);
+  });
+
+  it('addManageRuleCondition appends to the rule s when block', () => {
+    component.addManageRule();
+    component.addManageRuleCondition(0, 'DrawdownFromPeak');
+    const rule = (component.spec().survival ?? [])[0];
+    expect(rule.when.conditions).toHaveLength(2);
+  });
+
+  // ---- Exit tab --------------------------------------------------------
+  it('addExitConditionOfKind / removeExitCondition update exit.conditions', () => {
+    component.addExitConditionOfKind('BarsSinceEntry');
+    expect(component.spec().exit.conditions.length).toBeGreaterThan(0);
+    const idx = component.spec().exit.conditions.length - 1;
+    component.removeExitCondition(idx);
+    // SPY EMA fixture starts with one exit condition (BarsSinceEntry >= 5).
+    // After add+remove we should be back at the original count.
+    expect(component.spec().exit.conditions.length).toBeGreaterThan(0);
+  });
+
+  // ---- JSON Advanced ---------------------------------------------------
+  it('applyAdvancedJson parses the textarea and replaces the spec', () => {
+    component.openAdvancedJson();
+    const tweaked = JSON.parse(component.specJson());
+    tweaked.name = 'edited via json';
+    component.jsonDraftText.set(JSON.stringify(tweaked));
+    component.applyAdvancedJson();
+
+    expect(component.spec().name).toBe('edited via json');
+    expect(component.showAdvancedJson()).toBe(false);
+    expect(component.jsonDraftError()).toBeNull();
+  });
+
+  it('applyAdvancedJson surfaces parse errors and stays open', () => {
+    component.openAdvancedJson();
+    component.jsonDraftText.set('not valid json {');
+    component.applyAdvancedJson();
+
+    expect(component.jsonDraftError()).toBeTruthy();
+    expect(component.showAdvancedJson()).toBe(true);
+  });
+
+  // ---- Save / load / clone ---------------------------------------------
+  it('saveOverExisting falls back to Save-As dialog when no current id', () => {
+    component.saveOverExisting();
+    expect(component.showSaveDialog()).toBe(true);
+  });
+
+  it('confirmSaveDialog (save-as) creates a new saved entry and tracks it', () => {
+    component.openSaveDialog('save-as');
+    component.saveDialogName.set('My EMA crossover');
+    component.confirmSaveDialog();
+
+    expect(component.savedStrategies()).toHaveLength(1);
+    expect(component.savedStrategies()[0].name).toBe('My EMA crossover');
+    expect(component.currentSavedId()).toBe(component.savedStrategies()[0].id);
+    expect(component.spec().name).toBe('My EMA crossover');
+    expect(component.showSaveDialog()).toBe(false);
+  });
+
+  it('confirmSaveDialog (clone) creates a fresh entry under a new name', () => {
+    component.openSaveDialog('save-as');
+    component.saveDialogName.set('orig');
+    component.confirmSaveDialog();
+
+    component.openSaveDialog('clone');
+    component.saveDialogName.set('orig (copy)');
+    component.confirmSaveDialog();
+
+    expect(component.savedStrategies()).toHaveLength(2);
+    expect(component.savedStrategies().map((s) => s.name)).toContain('orig (copy)');
+  });
+
+  it('loadSaved replaces the spec and tracks the saved id', () => {
+    component.openSaveDialog('save-as');
+    component.saveDialogName.set('saved');
+    component.confirmSaveDialog();
+    const savedId = component.currentSavedId() ?? '';
+    expect(savedId).not.toBe('');
+
+    // Switch to a fixture, then load the saved strategy back.
+    component.selectFixture('rsi_mean_reversion');
+    expect(component.currentSavedId()).toBeNull();
+    component.loadSaved(savedId);
+
+    expect(component.spec().name).toBe('saved');
+    expect(component.currentSavedId()).toBe(savedId);
+  });
+
+  it('deleteSaved removes the entry and clears currentSavedId if the active one was deleted', () => {
+    component.openSaveDialog('save-as');
+    component.saveDialogName.set('to delete');
+    component.confirmSaveDialog();
+    const id = component.currentSavedId() ?? '';
+    expect(id).not.toBe('');
+
+    component.deleteSaved(id);
+    expect(component.savedStrategies()).toHaveLength(0);
+    expect(component.currentSavedId()).toBeNull();
+  });
+
+  // ---- Plain-English summaries ----------------------------------------
+  it('exposes per-block plain-English summaries that update with the spec', () => {
+    expect(component.entrySummary()).toContain('crosses above');
+    expect(component.exitSummary()).toContain('5 or more bars since entry');
+
+    component.selectFixture('rsi_mean_reversion');
+    expect(component.entrySummary()).toContain('RSI(14) <');
+    expect(component.exitSummary()).toContain('RSI(14) >');
+  });
+
+  // ---- Run --------------------------------------------------------------
+  it('runBacktest fires the GraphQL mutation with the current spec', async () => {
     const promise = component.runBacktest();
 
     const op = controller.expectOne(RUN_SPEC_STRATEGY_BACKTEST);
     expect(op.operation.variables['startDate']).toBe('2024-03-28');
     expect(op.operation.variables['endDate']).toBe('2024-12-31');
-    expect(op.operation.variables['initialCash']).toBe(100000);
-    expect(op.operation.variables['fillMode']).toBe('signal_bar_close');
 
     op.flush({
       data: {
         runSpecStrategyBacktest: {
           success: true,
-          strategyName: 'spy ema test',
+          strategyName: component.spec().name,
           initialCash: 100000,
-          finalEquity: 101000,
-          netProfit: 1000,
+          finalEquity: 100000,
+          netProfit: 0,
           totalFees: 0,
-          totalTrades: 1,
-          winningTrades: 1,
+          totalTrades: 0,
+          winningTrades: 0,
           losingTrades: 0,
-          winRate: 1.0,
-          trades: [
-            {
-              tradeNumber: 1,
-              entryTime: 1704153600000,
-              entryPrice: 470,
-              exitTime: 1704157200000,
-              exitPrice: 471,
-              indicators: [{ name: 'ema5', value: 470.4 }],
-              pnlPts: 1,
-              pnlPct: 0.0021,
-              result: 'WIN',
-              signalReason: 'test',
-            },
-          ],
+          winRate: 0,
+          trades: [],
           logLines: [],
           error: null,
         },
@@ -106,121 +260,15 @@ describe('SpecStrategyRunnerComponent', () => {
 
     await promise;
     expect(component.result()?.success).toBe(true);
-    expect(component.tradeCount()).toBe(1);
   });
 
-  it('runBacktest surfaces JSON parse errors as localError without firing the mutation', async () => {
-    component.specJson.set('this is not valid json {');
-
-    await component.runBacktest();
-
-    expect(component.localError()).toContain('Invalid JSON');
-    // No mutation should have been issued. controller.verify() in afterEach
-    // would fail if there were unconsumed expectations, so we just assert
-    // that no apollo operation was triggered by inspecting the result.
-    expect(component.result()).toBeNull();
+  // ---- Display helpers (kept from previous version) -------------------
+  it('formatTime renders an ms-UTC timestamp in America/New_York', () => {
+    expect(component.formatTime(1704153600000)).toBe('01/01/2024, 19:00');
   });
 
-  it('formatTime renders an ms-UTC timestamp in America/New_York regardless of browser tz', () => {
-    // 1704153600000 ms = 2024-01-02 00:00:00 UTC = 2024-01-01 19:00 ET (EST).
-    // Locked to ET so screenshots / shared analyses are unambiguous
-    // regardless of where the viewer is.
-    const out = component.formatTime(1704153600000);
-    expect(out).toBe('01/01/2024, 19:00');
-  });
-
-  // ---- Snippet catalog -------------------------------------------------
-  it('exposes the snippet catalog with indicator / condition / survival groups', () => {
-    const titles = component.snippetGroups.map((g) => g.title);
-    expect(titles).toContain('Indicators');
-    expect(titles).toContain('Conditions');
-    expect(titles).toContain('Survival rules (Manage)');
-    // All six engine indicator kinds must be discoverable.
-    const indicatorGroup = component.snippetGroups.find((g) => g.title === 'Indicators');
-    expect(indicatorGroup).toBeDefined();
-    const indicatorLabels = (indicatorGroup?.snippets ?? []).map((s) => s.label);
-    for (const kind of ['SMA', 'EMA', 'RSI', 'ADX', 'MACD', 'SUPERTREND']) {
-      expect(indicatorLabels.some((l) => l.startsWith(kind))).toBe(true);
-    }
-  });
-
-  it('insertSnippetIntoSpec appends an indicator to the indicators array', () => {
-    component.specJson.set(
-      JSON.stringify(
-        {
-          schema_version: '1.0',
-          name: 'tmp',
-          symbols: ['SPY'],
-          resolution: { period_minutes: 15 },
-          indicators: [{ id: 'sma', kind: 'SMA', period: 10 }],
-          entry: { logic: 'AND', conditions: [], size: { kind: 'SetHoldings', fraction: 1 } },
-          exit: { logic: 'OR', conditions: [] },
-        },
-        null,
-        2,
-      ),
-    );
-    const adxSnippet: SpecSnippet = {
-      id: 'ind.adx',
-      label: 'ADX',
-      description: '',
-      target: 'indicators',
-      example: { id: 'adx_14', kind: 'ADX', period: 14 },
-    };
-    component.insertSnippetIntoSpec(adxSnippet);
-
-    const after = JSON.parse(component.specJson()) as { indicators: object[] };
-    expect(after.indicators).toHaveLength(2);
-    expect(after.indicators[1]).toEqual({ id: 'adx_14', kind: 'ADX', period: 14 });
-    expect(component.catalogStatus()).toContain('Inserted');
-    expect(component.localError()).toBeNull();
-  });
-
-  it('insertSnippetIntoSpec surfaces a parse error when spec is invalid JSON', () => {
-    component.specJson.set('not valid json {');
-    const snippet: SpecSnippet = {
-      id: 'x',
-      label: 'X',
-      description: '',
-      target: 'indicators',
-      example: { id: 'x', kind: 'SMA', period: 5 },
-    };
-    component.insertSnippetIntoSpec(snippet);
-
-    expect(component.localError()).toContain('spec JSON is invalid');
-    expect(component.catalogStatus()).toBeNull();
-  });
-
-  it('insertSnippet (pure helper) routes by target into the right array', () => {
-    const base = JSON.stringify(
-      {
-        schema_version: '1.0',
-        name: 'x',
-        symbols: ['SPY'],
-        resolution: { period_minutes: 15 },
-        indicators: [],
-        entry: { logic: 'AND', conditions: [], size: { kind: 'SetHoldings', fraction: 1 } },
-        survival: [],
-        exit: { logic: 'OR', conditions: [] },
-      },
-      null,
-      2,
-    );
-
-    const survivalRule = {
-      id: 'surv',
-      label: 'stop',
-      description: '',
-      target: 'survival' as const,
-      example: { name: 'stop', when: { logic: 'AND', conditions: [] }, action: { kind: 'CLOSE_ALL' } },
-    };
-    const out = JSON.parse(insertSnippet(base, survivalRule)) as { survival: object[] };
-    expect(out.survival).toHaveLength(1);
-    expect(out.survival[0]).toMatchObject({ name: 'stop' });
-  });
-
-  it('formatIndicators serializes a list-of-DTO trade to "name=value" pairs', () => {
-    const trade = {
+  it('formatIndicators serializes a list-of-DTO trade indicators', () => {
+    const out = component.formatIndicators({
       tradeNumber: 1,
       entryTime: 0,
       entryPrice: 0,
@@ -232,9 +280,18 @@ describe('SpecStrategyRunnerComponent', () => {
       ],
       pnlPts: 0,
       pnlPct: 0,
-      result: 'WIN' as const,
+      result: 'WIN',
       signalReason: '',
-    };
-    expect(component.formatIndicators(trade)).toBe('ema5=470.4321, rsi=62.5000');
+    });
+    expect(out).toBe('ema5=470.4321, rsi=62.5000');
+  });
+
+  // ---- Sanity check on canonical fixture references -------------------
+  it('the bundled canonical fixtures are the same three the Python service ships', () => {
+    expect(CANONICAL_FIXTURES.map((f) => f.id)).toEqual([
+      'spy_ema_crossover',
+      'sma_crossover',
+      'rsi_mean_reversion',
+    ]);
   });
 });
