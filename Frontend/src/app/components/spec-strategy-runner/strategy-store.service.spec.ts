@@ -75,9 +75,9 @@ describe('SpecStrategyStore', () => {
     const original = store.save('original', SPEC);
     const cloned = store.clone(original.id, 'cloned');
     expect(cloned).toBeDefined();
-    expect(cloned!.id).not.toBe(original.id);
-    expect(cloned!.name).toBe('cloned');
-    expect(cloned!.spec).toEqual(SPEC);
+    expect(cloned?.id).not.toBe(original.id);
+    expect(cloned?.name).toBe('cloned');
+    expect(cloned?.spec).toEqual(SPEC);
     expect(store.entries()).toHaveLength(2);
   });
 
@@ -96,7 +96,7 @@ describe('SpecStrategyStore', () => {
   it('sorts entries by updatedAt descending (most recent first)', async () => {
     const a = store.save('a', SPEC);
     await new Promise((r) => setTimeout(r, 5));
-    const b = store.save('b', SPEC);
+    store.save('b', SPEC);
     await new Promise((r) => setTimeout(r, 5));
     store.save('a updated', SPEC, a.id);
 

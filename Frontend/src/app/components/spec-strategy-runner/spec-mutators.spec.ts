@@ -91,14 +91,14 @@ describe('spec-mutators', () => {
     });
     const after = addSurvivalRule(BASE, rule);
     expect(after.survival).toHaveLength(1);
-    expect(after.survival![0].name).toBe('stop');
-    expect(after.survival![0].action).toEqual({ kind: 'CLOSE_ALL' });
+    expect((after.survival ?? [])[0].name).toBe('stop');
+    expect((after.survival ?? [])[0].action).toEqual({ kind: 'CLOSE_ALL' });
 
     const renamed = updateSurvivalRuleAt(after, 0, {
       ...rule,
       name: 'tighter stop',
     });
-    expect(renamed.survival![0].name).toBe('tighter stop');
+    expect((renamed.survival ?? [])[0].name).toBe('tighter stop');
 
     expect(removeSurvivalRuleAt(renamed, 0).survival).toHaveLength(0);
   });

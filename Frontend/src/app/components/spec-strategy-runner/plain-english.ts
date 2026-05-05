@@ -27,7 +27,7 @@ const OP_LABEL: Record<string, string> = {
   '>': '>',
 };
 
-function indicatorLabel(id: string, indicators: ReadonlyArray<IndicatorBlock>): string {
+function indicatorLabel(id: string, indicators: readonly IndicatorBlock[]): string {
   const block = indicators.find((b) => b.id === id);
   if (!block) {
     // Unknown id — happens during editing while the user adds a condition
@@ -38,7 +38,7 @@ function indicatorLabel(id: string, indicators: ReadonlyArray<IndicatorBlock>): 
   return `${block.kind}(${block.period})`;
 }
 
-export function formatOperand(op: Operand, indicators: ReadonlyArray<IndicatorBlock>): string {
+export function formatOperand(op: Operand, indicators: readonly IndicatorBlock[]): string {
   switch (op.kind) {
     case 'IndicatorRef':
       return indicatorLabel(op.indicator, indicators);
@@ -59,7 +59,7 @@ function formatNumber(n: number): string {
 
 export function formatCondition(
   cond: Condition | LogicNode,
-  indicators: ReadonlyArray<IndicatorBlock>,
+  indicators: readonly IndicatorBlock[],
 ): string {
   // Logic groups recurse.
   if ('logic' in cond) {
@@ -135,7 +135,7 @@ export function formatCondition(
   }
 }
 
-export function formatEntryBlock(entry: EntryBlock, indicators: ReadonlyArray<IndicatorBlock>): string {
+export function formatEntryBlock(entry: EntryBlock, indicators: readonly IndicatorBlock[]): string {
   if (entry.conditions.length === 0) return 'Enter on every bar (no entry conditions configured).';
   const parts = entry.conditions.map((c) => formatCondition(c, indicators));
   const joiner = entry.logic === 'AND' ? ' AND ' : ' OR ';
@@ -155,7 +155,7 @@ function formatSize(entry: EntryBlock): string {
   return '';
 }
 
-export function formatExitBlock(exit: ExitBlock, indicators: ReadonlyArray<IndicatorBlock>): string {
+export function formatExitBlock(exit: ExitBlock, indicators: readonly IndicatorBlock[]): string {
   if (exit.conditions.length === 0) return 'No signal-flip exit configured.';
   const parts = exit.conditions.map((c) => formatCondition(c, indicators));
   const joiner = exit.logic === 'AND' ? ' AND ' : ' OR ';
@@ -164,7 +164,7 @@ export function formatExitBlock(exit: ExitBlock, indicators: ReadonlyArray<Indic
 
 export function formatSurvivalRule(
   rule: SurvivalRule,
-  indicators: ReadonlyArray<IndicatorBlock>,
+  indicators: readonly IndicatorBlock[],
 ): string {
   const parts = rule.when.conditions.map((c) => formatCondition(c, indicators));
   const joiner = rule.when.logic === 'AND' ? ' AND ' : ' OR ';
@@ -173,8 +173,8 @@ export function formatSurvivalRule(
 }
 
 export function formatSurvivalBlock(
-  rules: ReadonlyArray<SurvivalRule>,
-  indicators: ReadonlyArray<IndicatorBlock>,
+  rules: readonly SurvivalRule[],
+  indicators: readonly IndicatorBlock[],
 ): string {
   if (rules.length === 0) return 'No manage rules configured.';
   return rules.map((r) => '• ' + formatSurvivalRule(r, indicators)).join('\n');

@@ -8,7 +8,7 @@ import {
   formatSurvivalRule,
 } from './plain-english';
 
-const INDS: ReadonlyArray<IndicatorBlock> = [
+const INDS: readonly IndicatorBlock[] = [
   { id: 'ema5', kind: 'EMA', period: 5 },
   { id: 'ema10', kind: 'EMA', period: 10 },
   { id: 'rsi14', kind: 'RSI', period: 14 },

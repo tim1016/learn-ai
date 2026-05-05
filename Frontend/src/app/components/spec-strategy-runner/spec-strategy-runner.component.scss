@@ -1,15 +1,17 @@
 .ssr-page {
-  // Use the full viewport width — the trade table is wide and benefits
-  // from every pixel. Other pages cap at 1400; this one is data-heavy.
   max-width: 100%;
   margin: 0;
   padding: 1.5rem;
   color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
+// ---------------------------------------------------------------------------
+// Header
+// ---------------------------------------------------------------------------
 .ssr-header {
-  margin-bottom: 1.5rem;
-
   h1 {
     margin: 0 0 0.25rem;
     font-size: 1.5rem;
@@ -23,47 +25,42 @@
     font-size: 0.875rem;
     line-height: 1.4;
     max-width: 60rem;
-
-    code {
-      background: var(--bg-elevated);
-      color: var(--text-primary);
-      padding: 0.05rem 0.3rem;
-      border-radius: 3px;
-      font-size: 0.85em;
-      font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-    }
-  }
-}
-
-.ssr-grid {
-  display: grid;
-  // Form is fixed-ish at the left; results gets the rest. The trade
-  // table is 9 columns wide and needs ~700px for indicators to wrap
-  // gracefully — when the available content width (viewport minus
-  // sidebar minus padding) is below ~1100px we stack vertically so
-  // the table can use the full width without horizontal scrolling.
-  grid-template-columns: minmax(20rem, 26rem) minmax(0, 1fr);
-  gap: 1.5rem;
-  align-items: start;
-
-  @media (max-width: 1380px) {
-    grid-template-columns: 1fr;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Form column
+// Top bar (name + fixture + saved + actions)
 // ---------------------------------------------------------------------------
-.ssr-form {
+.ssr-top-bar {
   display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+  padding: 0.75rem;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 1rem;
 }
 
+.ssr-top-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-left: auto;
+  align-items: center;
+}
+
+.ssr-status-banner {
+  padding: 0.5rem 0.75rem;
+  background: var(--bull-soft);
+  border: 1px solid var(--bull);
+  border-radius: 4px;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+// ---------------------------------------------------------------------------
+// Generic form fields (shared across the page)
+// ---------------------------------------------------------------------------
 .ssr-field {
   display: flex;
   flex-direction: column;
@@ -71,8 +68,12 @@
   min-width: 0;
 }
 
+.ssr-field-name {
+  flex: 1 1 16rem;
+}
+
 .ssr-field-label {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--text-secondary);
@@ -82,7 +83,7 @@
 .ssr-input {
   font-family: inherit;
   font-size: 0.875rem;
-  padding: 0.45rem 0.6rem;
+  padding: 0.4rem 0.55rem;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg-elevated);
@@ -94,38 +95,346 @@
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent-soft);
   }
-}
 
-.ssr-textarea {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
-  font-size: 0.78rem;
-  line-height: 1.4;
-  resize: vertical;
-  min-height: 14rem;
-  // Cap so the textarea doesn't dominate the column when its grid cell
-  // is stretched by a tall results table on the right.
-  max-height: 22rem;
-}
-
-.ssr-row {
-  display: flex;
-  gap: 0.75rem;
-
-  // Equal-width fields only when laid out as a row.
-  > .ssr-field {
-    flex: 1;
+  &--narrow {
+    max-width: 14rem;
   }
 }
 
-.ssr-edited-marker {
+.ssr-textarea {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.ssr-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.ssr-inline-label {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.ssr-tz-label {
   font-size: 0.7rem;
+  color: var(--text-muted, var(--text-secondary));
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+// ---------------------------------------------------------------------------
+// Buttons
+// ---------------------------------------------------------------------------
+.ssr-btn-primary,
+.ssr-btn-secondary,
+.ssr-btn-danger,
+.ssr-pill-btn {
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: 0.4rem 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+  border: 1px solid transparent;
+}
+
+.ssr-btn-primary {
+  background: var(--accent);
+  color: var(--text-on-accent);
+
+  &:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.ssr-btn-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border-color: var(--border);
+
+  &:hover:not(:disabled) {
+    background: var(--bg-hover, var(--bg-elevated));
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.ssr-btn-danger {
+  background: transparent;
   color: var(--bear);
+  border-color: var(--bear);
+
+  &:hover {
+    background: var(--bear-soft);
+  }
+}
+
+.ssr-btn-icon {
+  padding: 0.25rem 0.5rem;
+  font-weight: 700;
+}
+
+.ssr-pill-btn {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--border);
+  font-weight: 500;
+
+  &:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Panels (indicators, tab content, run, etc.)
+// ---------------------------------------------------------------------------
+.ssr-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+
+  h2 {
+    margin: 0 0 0.6rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+}
+
+.ssr-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+
+  h2 { margin: 0; }
+}
+
+.ssr-add-picker {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+
+  &--inset {
+    margin-top: 0.5rem;
+  }
+}
+
+.ssr-add-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.ssr-empty-note {
+  margin: 0.5rem 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
   font-style: italic;
-  margin-left: 0.25rem;
+}
+
+// ---------------------------------------------------------------------------
+// Indicator cards
+// ---------------------------------------------------------------------------
+.ssr-indicator-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ssr-indicator-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+.ssr-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.ssr-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.6rem 1rem;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+
+  &:hover {
+    color: var(--text-primary);
+  }
+
+  &--active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Plain-English summary
+// ---------------------------------------------------------------------------
+.ssr-summary {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg-elevated);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+
+  &--multiline {
+    font-family: inherit;
+    white-space: pre-wrap;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rule controls (combine logic, position size)
+// ---------------------------------------------------------------------------
+.ssr-rule-controls {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+// ---------------------------------------------------------------------------
+// Condition card
+// ---------------------------------------------------------------------------
+.ssr-condition-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ssr-condition-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ssr-condition-kind {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.ssr-condition-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+// ---------------------------------------------------------------------------
+// Operand picker (used inside IndicatorComparison)
+// ---------------------------------------------------------------------------
+.ssr-operand {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+  padding: 0.25rem 0.4rem;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+// ---------------------------------------------------------------------------
+// Manage rule
+// ---------------------------------------------------------------------------
+.ssr-manage-rule {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin-bottom: 0.6rem;
+  background: var(--bg-elevated);
+}
+
+.ssr-manage-rule-header {
+  display: flex;
+  align-items: end;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.ssr-manage-help {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.ssr-action-pill {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.75rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+// ---------------------------------------------------------------------------
+// Run panel
+// ---------------------------------------------------------------------------
+.ssr-run-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.ssr-run-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.6rem;
 }
 
 .ssr-run {
-  margin-top: 0.5rem;
+  align-self: stretch;
   padding: 0.6rem 1rem;
   background: var(--accent);
   color: var(--text-on-accent);
@@ -147,7 +456,7 @@
 }
 
 .ssr-error {
-  padding: 0.6rem 0.75rem;
+  padding: 0.5rem 0.75rem;
   background: var(--bear-soft);
   border: 1px solid var(--bear);
   color: var(--text-primary);
@@ -157,14 +466,86 @@
 }
 
 // ---------------------------------------------------------------------------
-// Results column
+// Advanced JSON
+// ---------------------------------------------------------------------------
+.ssr-advanced {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+
+  > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    user-select: none;
+
+    &::-webkit-details-marker { display: none; }
+    &::before {
+      content: '▸';
+      display: inline-block;
+      margin-right: 0.4rem;
+      transition: transform 0.15s ease;
+      color: var(--text-secondary);
+    }
+  }
+
+  &[open] > summary::before {
+    transform: rotate(90deg);
+  }
+}
+
+.ssr-json-readonly {
+  margin: 0 0.75rem 0.75rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--text-primary);
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre;
+}
+
+.ssr-advanced .ssr-textarea {
+  display: block;
+  width: calc(100% - 1.5rem);
+  margin: 0 0.75rem 0.5rem;
+}
+
+.ssr-advanced .ssr-error {
+  margin: 0 0.75rem 0.5rem;
+}
+
+.ssr-advanced .ssr-btn-secondary,
+.ssr-advanced .ssr-btn-primary {
+  margin: 0 0.4rem 0.75rem;
+}
+
+.ssr-advanced .ssr-btn-secondary:first-of-type {
+  margin-left: 0.75rem;
+}
+
+.ssr-advanced-actions {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0 0.75rem 0.75rem;
+}
+
+// ---------------------------------------------------------------------------
+// Results panel
 // ---------------------------------------------------------------------------
 .ssr-results {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 1rem;
-  min-height: 20rem;
+  min-height: 16rem;
   overflow-x: auto;
   color: var(--text-primary);
 }
@@ -176,7 +557,7 @@
   color: var(--text-primary);
 }
 
-.ssr-summary {
+.ssr-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
   gap: 0.5rem 1rem;
@@ -235,16 +616,11 @@
     text-align: right;
   }
 
-  tr.ssr-win td {
-    background: var(--bull-soft);
-  }
-
-  tr.ssr-loss td {
-    background: var(--bear-soft);
-  }
+  tr.ssr-win td { background: var(--bull-soft); }
+  tr.ssr-loss td { background: var(--bear-soft); }
 
   .ssr-indicator-cell {
-    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
     font-size: 0.75rem;
     color: var(--text-secondary);
     white-space: normal;
@@ -260,166 +636,39 @@
 }
 
 // ---------------------------------------------------------------------------
-// Catalog — discoverable snippet picker for indicators / conditions /
-// survival rules. Native <details> for collapsibility (no JS state).
+// Save dialog (modal)
 // ---------------------------------------------------------------------------
-.ssr-catalog {
-  margin-top: 0.5rem;
+.ssr-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.ssr-modal {
+  background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-elevated);
-
-  > summary {
-    list-style: none;
-    cursor: pointer;
-    padding: 0.6rem 0.75rem;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 0.75rem;
-    user-select: none;
-
-    &::-webkit-details-marker { display: none; }
-    &::before {
-      content: '▸';
-      display: inline-block;
-      margin-right: 0.4rem;
-      transition: transform 0.15s ease;
-      color: var(--text-secondary);
-    }
-  }
-
-  &[open] > summary::before {
-    transform: rotate(90deg);
-  }
-
-  .ssr-catalog-hint {
-    font-size: 0.7rem;
-    font-weight: 400;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-  }
-}
-
-.ssr-catalog-status {
-  margin: 0 0.75rem 0.5rem;
-  padding: 0.4rem 0.6rem;
-  background: var(--bull-soft);
-  border: 1px solid var(--bull);
-  color: var(--text-primary);
-  border-radius: 3px;
-  font-size: 0.75rem;
-}
-
-.ssr-catalog-group {
-  padding: 0.25rem 0.75rem 0.75rem;
-  border-top: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.25rem;
+  min-width: 22rem;
+  max-width: 32rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
 
   h3 {
-    margin: 0.5rem 0 0.4rem;
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-secondary);
-  }
-
-  ul {
-    list-style: none;
     margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-  }
-}
-
-.ssr-catalog-group li > details {
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--bg-surface);
-
-  > summary {
-    list-style: none;
-    cursor: pointer;
-    padding: 0.4rem 0.6rem;
-    font-size: 0.8rem;
+    font-size: 1rem;
+    font-weight: 600;
     color: var(--text-primary);
-    display: flex;
-    justify-content: space-between;
-    gap: 0.5rem;
-    align-items: baseline;
-    user-select: none;
-
-    &::-webkit-details-marker { display: none; }
-  }
-
-  &[open] > summary {
-    border-bottom: 1px solid var(--border);
   }
 }
 
-.ssr-snippet-label {
-  font-weight: 500;
-}
-
-.ssr-snippet-target {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.7rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.ssr-snippet-desc {
-  margin: 0.5rem 0.6rem 0.4rem;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  line-height: 1.35;
-}
-
-.ssr-snippet-json {
-  margin: 0 0.6rem;
-  padding: 0.5rem 0.6rem;
-  background: var(--bg-canvas);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.72rem;
-  line-height: 1.35;
-  color: var(--text-primary);
-  overflow-x: auto;
-  white-space: pre;
-}
-
-.ssr-snippet-actions {
+.ssr-modal-actions {
   display: flex;
   gap: 0.4rem;
-  padding: 0.5rem 0.6rem 0.6rem;
+  justify-content: flex-end;
 }
-
-.ssr-snippet-btn {
-  font-family: inherit;
-  font-size: 0.75rem;
-  font-weight: 600;
-  padding: 0.3rem 0.6rem;
-  border-radius: 3px;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--text-on-accent);
-  cursor: pointer;
-  transition: background-color 0.15s ease;
-
-  &:hover {
-    background: var(--accent-hover);
-  }
-
-  &--secondary {
-    background: transparent;
-    color: var(--accent);
-  }
-}
-
