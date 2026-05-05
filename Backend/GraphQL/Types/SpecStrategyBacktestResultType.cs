@@ -2,6 +2,22 @@ using Backend.Models.DTOs;
 
 namespace Backend.GraphQL.Types;
 
+/// <summary>
+/// One indicator-value pair captured at a trade's entry signal.
+///
+/// Hot Chocolate v15 exposes <c>Dictionary&lt;string, decimal&gt;</c> as
+/// a key/value object type that forces clients to select sub-fields,
+/// which is awkward in Apollo queries (and inconsistent with the rest
+/// of the schema). Project to a list-of-DTO at the GraphQL boundary —
+/// matches the established pattern at
+/// <c>Backend/GraphQL/Types/ResearchResult.cs::InvalidReasonCountType</c>.
+/// </summary>
+public class IndicatorSnapshotEntry
+{
+    public string Name { get; set; } = string.Empty;
+    public decimal Value { get; set; }
+}
+
 public class SpecStrategyTradeType
 {
     public int TradeNumber { get; set; }
@@ -11,7 +27,8 @@ public class SpecStrategyTradeType
     /// <summary>Exit fill time as int64 ms since Unix epoch UTC.</summary>
     public long ExitTime { get; set; }
     public decimal ExitPrice { get; set; }
-    public Dictionary<string, decimal> Indicators { get; set; } = [];
+    /// <summary>Indicator-snapshot entries captured at the entry signal.</summary>
+    public List<IndicatorSnapshotEntry> Indicators { get; set; } = [];
     public decimal PnlPts { get; set; }
     public decimal PnlPct { get; set; }
     public string Result { get; set; } = string.Empty;
@@ -24,7 +41,9 @@ public class SpecStrategyTradeType
         EntryPrice = dto.EntryPrice,
         ExitTime = dto.ExitTime,
         ExitPrice = dto.ExitPrice,
-        Indicators = dto.Indicators,
+        Indicators = dto.Indicators
+            .Select(kvp => new IndicatorSnapshotEntry { Name = kvp.Key, Value = kvp.Value })
+            .ToList(),
         PnlPts = dto.PnlPts,
         PnlPct = dto.PnlPct,
         Result = dto.Result,
