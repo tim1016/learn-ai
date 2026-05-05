@@ -1,0 +1,185 @@
+"""Tests for IbkrBrokerAdapter — owned-set cancel scoping + event buffering."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from app.broker.ibkr import orders as orders_module
+from app.broker.ibkr.config import IbkrSettings
+from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
+from app.engine.live.live_portfolio import IbkrBrokerAdapter
+
+
+def _spec(**overrides) -> IbkrOrderSpec:
+    base = {
+        "symbol": "SPY",
+        "sec_type": "STK",
+        "action": "BUY",
+        "quantity": 1.0,
+        "order_type": "MKT",
+        "time_in_force": "DAY",
+        "confirm_paper": True,
+    }
+    base.update(overrides)
+    return IbkrOrderSpec(**base)
+
+
+def _trade_namespace(*, account="DU1234567", order_id, status_str="Submitted"):
+    contract = SimpleNamespace(secType="STK", conId=12345, symbol="SPY")
+    order = SimpleNamespace(
+        account=account,
+        orderId=order_id,
+        permId=order_id + 1000,
+        action="BUY",
+        totalQuantity=10.0,
+        lmtPrice=0.0,
+        tif="DAY",
+    )
+    order_status = SimpleNamespace(
+        status=status_str, filled=0.0, remaining=10.0, avgFillPrice=0.0,
+    )
+    return SimpleNamespace(
+        contract=contract, order=order,
+        orderStatus=order_status, fills=[],
+    )
+
+
+def _client(*, owned_open_id: int = 100, foreign_open_id: int = 999):
+    settings = IbkrSettings(mode="paper", port=4002, readonly=False, _env_file=None)
+    qualified = SimpleNamespace(conId=12345)
+    place_order_return = SimpleNamespace(
+        order=SimpleNamespace(orderId=owned_open_id, permId=999),
+        orderStatus=SimpleNamespace(status="PendingSubmit"),
+    )
+    open_trades = [
+        _trade_namespace(order_id=owned_open_id),
+        _trade_namespace(order_id=foreign_open_id),
+    ]
+    cancel_calls: list[int] = []
+
+    def _cancel_order(order):
+        cancel_calls.append(int(order.orderId))
+
+    ib = SimpleNamespace(
+        qualifyContractsAsync=AsyncMock(return_value=[qualified]),
+        placeOrder=MagicMock(return_value=place_order_return),
+        reqAllOpenOrdersAsync=AsyncMock(return_value=open_trades),
+        trades=MagicMock(return_value=open_trades),
+        cancelOrder=MagicMock(side_effect=_cancel_order),
+    )
+    client = SimpleNamespace(
+        ib=ib,
+        settings=settings,
+        connected_account="DU1234567",
+        is_connected=lambda: True,
+        require_connected=lambda: None,
+    )
+    return client, cancel_calls
+
+
+@pytest.fixture(autouse=True)
+def _clean_idempotency_cache():
+    orders_module._idempotency_clear_for_testing()
+    yield
+    orders_module._idempotency_clear_for_testing()
+
+
+@pytest.mark.asyncio
+async def test_cancel_open_orders_only_cancels_owned() -> None:
+    client, cancel_calls = _client(owned_open_id=100, foreign_open_id=999)
+    adapter = IbkrBrokerAdapter(client)
+
+    # Place one order so adapter records 100 as owned.
+    await adapter.place_order(_spec())
+    assert 100 in adapter.owned_order_ids
+    assert 999 not in adapter.owned_order_ids
+
+    cancelled = await adapter.cancel_open_orders()
+
+    assert cancelled == [100]
+    assert cancel_calls == [100]
+
+
+@pytest.mark.asyncio
+async def test_cancel_open_orders_empty_when_runner_owns_nothing() -> None:
+    """A fresh adapter with no placements never cancels foreign orders."""
+    client, cancel_calls = _client()
+    adapter = IbkrBrokerAdapter(client)
+
+    cancelled = await adapter.cancel_open_orders()
+
+    assert cancelled == []
+    assert cancel_calls == []
+
+
+@pytest.mark.asyncio
+async def test_event_stream_buffers_owned_fills_only() -> None:
+    """The streaming task drops events for non-owned order IDs."""
+    client, _ = _client(owned_open_id=100)
+    adapter = IbkrBrokerAdapter(client)
+    await adapter.place_order(_spec())
+
+    # Replace stream_order_events with a controllable async generator.
+    queued: asyncio.Queue[IbkrOrderEvent | None] = asyncio.Queue()
+
+    async def _fake_stream(*_args, **_kwargs) -> AsyncIterator[IbkrOrderEvent]:
+        while True:
+            event = await queued.get()
+            if event is None:
+                return
+            yield event
+
+    import app.engine.live.live_portfolio as live_portfolio_module
+
+    original = live_portfolio_module.stream_order_events
+    live_portfolio_module.stream_order_events = _fake_stream
+    try:
+        await adapter.start_event_stream()
+
+        owned = IbkrOrderEvent(
+            account_id="DU1234567",
+            order_id=100,
+            event_type="fill",
+            status="Filled",
+            fill_quantity=10.0,
+            avg_fill_price=500.0,
+            last_fill_price=500.0,
+            cumulative_filled=10.0,
+            remaining=0.0,
+            ts_ms=1,
+        )
+        foreign = IbkrOrderEvent(
+            account_id="DU1234567",
+            order_id=999,
+            event_type="fill",
+            status="Filled",
+            fill_quantity=5.0,
+            avg_fill_price=499.0,
+            last_fill_price=499.0,
+            cumulative_filled=5.0,
+            remaining=0.0,
+            ts_ms=2,
+        )
+        await queued.put(owned)
+        await queued.put(foreign)
+        # Give the task a chance to drain both events.
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if adapter.drain_broker_events.__self__ is adapter:
+                break
+        # Wait until the buffer reflects the owned event without polling forever.
+        for _ in range(100):
+            if adapter._event_buffer:
+                break
+            await asyncio.sleep(0.01)
+
+        drained = adapter.drain_broker_events()
+        assert [e.order_id for e in drained] == [100]
+    finally:
+        await adapter.stop_event_stream()
+        live_portfolio_module.stream_order_events = original

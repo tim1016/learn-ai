@@ -2,6 +2,16 @@
 
 **Status:** Draft v2, post-Codex review. Codex-executable.
 
+> **Implementation note (2026-05-04):** the live runtime now ingests
+> `IbkrMinuteBar` through `app/engine/live/bar_adapter.py`, drains real
+> IBKR fills via `IbkrBrokerAdapter.start_event_stream` (translated to
+> engine `OrderEvent` in `LiveEngine._convert_ibkr_fill`), and scopes
+> `cancel_open_orders` to the runner's own `_owned_order_ids` so we
+> never touch unrelated open orders on the paper account. Commission
+> reconciliation (IBKR's `commissionReport` callback) and the Phase 8
+> CLI / Phase 9 reconcile script are still pending — `fee=0` on
+> real-broker fills until Phase 9 wires the commission callback.
+
 **Owner:** to be assigned.
 
 **Goal:** Run the existing `SpyEmaCrossoverAlgorithm` against an Interactive Brokers **paper** account through a new live runtime that shares the strategy class with the backtest, and produce a reconciliation report (paper trades vs same-window backtest trades) as the stage-2 parity receipt.
