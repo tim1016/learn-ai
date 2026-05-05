@@ -229,11 +229,21 @@ export interface StrategySpec {
 // ---------------------------------------------------------------------------
 // Backtest response (camelCase from GraphQL → Apollo)
 // ---------------------------------------------------------------------------
+/**
+ * Single trade emitted by a spec backtest.
+ *
+ * Timestamps are int64 ms UTC per the repo-wide wire-format rule
+ * (.claude/rules/numerical-rigor.md § "Timestamp rigor"). UI components
+ * convert to local-time strings only at the display boundary — no other
+ * layer should be parsing or comparing these as strings.
+ */
 export interface SpecStrategyTrade {
   tradeNumber: number;
-  entryTime: string;
+  /** Entry fill time as int64 ms since Unix epoch UTC. */
+  entryTime: number;
   entryPrice: number;
-  exitTime: string;
+  /** Exit fill time as int64 ms since Unix epoch UTC. */
+  exitTime: number;
   exitPrice: number;
   indicators: Record<string, number>;
   pnlPts: number;

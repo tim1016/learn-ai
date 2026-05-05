@@ -70,11 +70,26 @@ describe('SpecStrategyService', () => {
           finalEquity: 51200,
           netProfit: 1200,
           totalFees: 0,
-          totalTrades: 4,
-          winningTrades: 3,
-          losingTrades: 1,
-          winRate: 0.75,
-          trades: [],
+          totalTrades: 1,
+          winningTrades: 1,
+          losingTrades: 0,
+          winRate: 1.0,
+          // entryTime / exitTime are int64 ms UTC (per the wire-format
+          // rule), not ISO strings. 1704153600000 = 2024-01-02 00:00 UTC.
+          trades: [
+            {
+              tradeNumber: 1,
+              entryTime: 1704153600000,
+              entryPrice: 470.5,
+              exitTime: 1704157200000,
+              exitPrice: 472.1,
+              indicators: { sma_s: 470.4, sma_l: 470.0 },
+              pnlPts: 1.6,
+              pnlPct: 0.0034,
+              result: 'WIN',
+              signalReason: 'test',
+            },
+          ],
           logLines: ['ok'],
           error: null,
         },
@@ -83,8 +98,13 @@ describe('SpecStrategyService', () => {
 
     const result = await promise;
     expect(result.success).toBe(true);
-    expect(result.totalTrades).toBe(4);
-    expect(result.winRate).toBe(0.75);
+    expect(result.totalTrades).toBe(1);
+    expect(result.winRate).toBe(1.0);
+    // Wire-format check — TS type declares entryTime/exitTime as number,
+    // and Apollo passes the JSON int through unchanged.
+    expect(typeof result.trades[0].entryTime).toBe('number');
+    expect(result.trades[0].entryTime).toBe(1704153600000);
+    expect(result.trades[0].exitTime).toBe(1704157200000);
   });
 
   it('exposes loading and result via signals', async () => {
