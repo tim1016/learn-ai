@@ -156,8 +156,8 @@ export const CONDITION_CATALOG: Record<ConditionKind, ConditionMeta> = {
  */
 export function conditionsForContext(
   ctx: 'entry' | 'exit' | 'manage',
-): ReadonlyArray<ConditionKind> {
-  const tradeOnly: ReadonlyArray<ConditionKind> = [
+): readonly ConditionKind[] {
+  const tradeOnly: readonly ConditionKind[] = [
     'BarsSinceEntry',
     'PnLPercent',
     'PnLPoints',
@@ -174,7 +174,7 @@ export function conditionsForContext(
  */
 export function groupedConditionsForContext(
   ctx: 'entry' | 'exit' | 'manage',
-): ReadonlyArray<{ group: ConditionGroup; meta: ConditionGroupMeta; kinds: ReadonlyArray<ConditionKind> }> {
+): readonly { group: ConditionGroup; meta: ConditionGroupMeta; kinds: readonly ConditionKind[] }[] {
   const allowed = conditionsForContext(ctx);
   const groups = Object.keys(CONDITION_GROUPS) as ConditionGroup[];
   const out: { group: ConditionGroup; meta: ConditionGroupMeta; kinds: ConditionKind[] }[] = [];

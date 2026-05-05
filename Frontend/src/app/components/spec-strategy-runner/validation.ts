@@ -13,7 +13,6 @@
 
 import {
   Condition,
-  IndicatorBlock,
   Operand,
   StrategySpec,
 } from '../../graphql/spec-strategy-types';
@@ -45,7 +44,7 @@ export function validateStrategy(
   spec: StrategySpec,
   runCfg: RunConfig | null = null,
   dataAvailability: DataAvailability | null = null,
-): ReadonlyArray<ValidationIssue> {
+): readonly ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const inds = spec.indicators ?? [];
   const indIds = new Set(inds.map((i) => i.id));

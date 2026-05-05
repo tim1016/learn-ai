@@ -65,7 +65,7 @@ import { SpecStrategyStore } from './strategy-store.service';
 
 type LifecycleTab = 'entry' | 'manage' | 'exit';
 
-const CONDITION_KINDS: ReadonlyArray<ConditionKind> = [
+const CONDITION_KINDS: readonly ConditionKind[] = [
   'IndicatorComparison',
   'IndicatorBetween',
   'FreshCross',

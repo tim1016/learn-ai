@@ -1,69 +1,72 @@
 <section class="ssr-page">
-  <header class="ssr-header">
-    <h1>Strategy Spec Runner</h1>
-    <p class="ssr-subtitle">
-      Build a strategy from typed building blocks. Pick indicators,
-      compose entry / manage / exit rules from the catalog, save your
-      strategy, and run a backtest. Use the Advanced JSON view for
-      power-user edits.
-    </p>
-  </header>
-
-  <!-- Top bar: strategy name + fixture + saved + save controls ------------- -->
-  <div class="ssr-top-bar">
-    <label class="ssr-field ssr-field-name">
-      <span class="ssr-field-label">Strategy name</span>
-      <input
-        type="text"
-        class="ssr-input"
-        [ngModel]="spec().name"
-        (ngModelChange)="setName($event)"
-        aria-label="Strategy name"
-      />
-    </label>
-
-    <label class="ssr-field">
-      <span class="ssr-field-label">Load fixture</span>
+  <!-- Page head ----------------------------------------------------------- -->
+  <header class="ssr-page-head">
+    <div>
+      <h1>Strategy Builder</h1>
+      <p class="ssr-subtitle">
+        Compose a typed strategy from indicators and trader-friendly conditions,
+        validate it, and run a backtest.
+      </p>
+    </div>
+    <div class="ssr-head-actions">
       <select
-        class="ssr-input"
+        class="ssr-input ssr-input--narrow"
         [ngModel]="selectedFixtureId()"
         (ngModelChange)="selectFixture($event)"
+        aria-label="Load a canonical fixture"
       >
         @for (f of fixtures; track f.id) {
           <option [value]="f.id">{{ f.label }}</option>
         }
       </select>
-    </label>
-
-    <label class="ssr-field">
-      <span class="ssr-field-label">Load saved</span>
       <select
-        class="ssr-input"
+        class="ssr-input ssr-input--narrow"
         [ngModel]="currentSavedId() || ''"
         (ngModelChange)="$event && loadSaved($event)"
-        [attr.aria-disabled]="savedStrategies().length === 0"
+        aria-label="Load a saved strategy"
       >
-        <option value="">— pick saved —</option>
+        <option value="">— Load saved —</option>
         @for (s of savedStrategies(); track s.id) {
           <option [value]="s.id">{{ s.name }}</option>
         }
       </select>
-    </label>
+    </div>
+  </header>
 
-    <div class="ssr-top-actions">
-      <button type="button" class="ssr-btn-secondary" (click)="saveOverExisting()" [disabled]="!currentSavedId()">
+  <!-- Identity card ------------------------------------------------------- -->
+  <div class="ssr-identity">
+    <div class="ssr-identity-name-block">
+      <input
+        class="ssr-id-name"
+        type="text"
+        [ngModel]="spec().name"
+        (ngModelChange)="setName($event)"
+        aria-label="Strategy name"
+      />
+      <div class="ssr-id-meta">
+        @if (currentSavedId()) {
+          @if (isDirty()) {
+            <span><span class="ssr-dirty-dot"></span>Unsaved changes</span>
+          } @else {
+            <span class="ssr-saved-mark">● Saved</span>
+          }
+        } @else {
+          <span class="ssr-saved-mark ssr-saved-mark--new">○ Not saved yet</span>
+        }
+        <span class="ssr-saved-badge">{{ spec().resolution.period_minutes }}-min · {{ spec().symbols[0] }}</span>
+        <span>schema v{{ spec().schema_version }}</span>
+      </div>
+    </div>
+    <div class="ssr-id-actions">
+      <button type="button" class="ssr-btn" (click)="saveOverExisting()" [disabled]="!currentSavedId() || !isDirty()">
         Save
       </button>
-      <button type="button" class="ssr-btn-secondary" (click)="openSaveDialog('save-as')">
-        Save as…
-      </button>
-      <button type="button" class="ssr-btn-secondary" (click)="openSaveDialog('clone')" [disabled]="!currentSavedId()">
+      <button type="button" class="ssr-btn" (click)="openSaveDialog('save-as')">Save as…</button>
+      <button type="button" class="ssr-btn" (click)="openSaveDialog('clone')" [disabled]="!currentSavedId()">
         Clone
       </button>
       @if (currentSavedId(); as cid) {
-        <button type="button" class="ssr-btn-danger" (click)="deleteSaved(cid)" aria-label="Delete saved strategy">
-          Delete
-        </button>
+        <button type="button" class="ssr-btn ssr-btn--danger" (click)="deleteSaved(cid)">Delete</button>
       }
     </div>
   </div>
@@ -72,329 +75,392 @@
     <div class="ssr-status-banner" role="status">{{ msg }}</div>
   }
 
-  <!-- Indicators panel ----------------------------------------------------- -->
-  <section class="ssr-panel">
-    <header class="ssr-panel-header">
-      <h2>Indicators</h2>
-      <div class="ssr-add-picker">
-        <span class="ssr-add-label">Add indicator:</span>
-        @for (k of indicatorKinds; track k) {
-          <button type="button" class="ssr-pill-btn" (click)="addIndicatorOfKind(k)">{{ k }}</button>
-        }
-      </div>
-    </header>
-
-    @if (spec().indicators.length === 0) {
-      <p class="ssr-empty-note">No indicators yet. Add one above to reference it from your conditions.</p>
-    }
-
-    <div class="ssr-indicator-list">
-      @for (ind of spec().indicators; track $index; let i = $index) {
-        <div class="ssr-indicator-card">
-          <label class="ssr-field">
-            <span class="ssr-field-label">id</span>
-            <input
-              type="text"
-              class="ssr-input ssr-input--narrow"
-              [ngModel]="ind.id"
-              (ngModelChange)="updateIndicatorField(i, { id: $event })"
-              [attr.aria-label]="'Indicator ' + i + ' id'"
-            />
-          </label>
-          <label class="ssr-field">
-            <span class="ssr-field-label">kind</span>
-            <select
-              class="ssr-input ssr-input--narrow"
-              [ngModel]="ind.kind"
-              (ngModelChange)="updateIndicatorField(i, { kind: $event })"
-            >
-              @for (k of indicatorKinds; track k) {
-                <option [value]="k">{{ k }}</option>
-              }
-            </select>
-          </label>
-          <label class="ssr-field">
-            <span class="ssr-field-label">period</span>
-            <input
-              type="number"
-              min="2"
-              class="ssr-input ssr-input--narrow"
-              [ngModel]="ind.period"
-              (ngModelChange)="updateIndicatorField(i, { period: +$event })"
-            />
-          </label>
-          @if (ind.kind === 'SMA' || ind.kind === 'EMA' || ind.kind === 'RSI' || ind.kind === 'MACD') {
-            <label class="ssr-field">
-              <span class="ssr-field-label">source</span>
-              <select
-                class="ssr-input ssr-input--narrow"
-                [ngModel]="ind.source || 'close'"
-                (ngModelChange)="updateIndicatorField(i, { source: $event })"
-              >
-                @for (s of sources; track s) {
-                  <option [value]="s">{{ s }}</option>
-                }
-              </select>
-            </label>
-          }
-          @if (ind.kind === 'MACD') {
-            <label class="ssr-field">
-              <span class="ssr-field-label">fast</span>
-              <input
-                type="number"
-                min="2"
-                class="ssr-input ssr-input--narrow"
-                [ngModel]="ind.fast_period"
-                (ngModelChange)="updateIndicatorField(i, { fast_period: +$event })"
-              />
-            </label>
-            <label class="ssr-field">
-              <span class="ssr-field-label">signal</span>
-              <input
-                type="number"
-                min="2"
-                class="ssr-input ssr-input--narrow"
-                [ngModel]="ind.signal_period"
-                (ngModelChange)="updateIndicatorField(i, { signal_period: +$event })"
-              />
-            </label>
-          }
-          @if (ind.kind === 'SUPERTREND') {
-            <label class="ssr-field">
-              <span class="ssr-field-label">multiplier</span>
-              <input
-                type="number"
-                step="0.1"
-                min="0.1"
-                class="ssr-input ssr-input--narrow"
-                [ngModel]="ind.multiplier"
-                (ngModelChange)="updateIndicatorField(i, { multiplier: +$event })"
-              />
-            </label>
-          }
-          <button type="button" class="ssr-btn-danger ssr-btn-icon" (click)="removeIndicator(i)" aria-label="Remove indicator">
-            ✕
-          </button>
-        </div>
-      }
+  <!-- Strategy summary hero ---------------------------------------------- -->
+  <div class="ssr-summary-hero">
+    <div class="ssr-eyebrow-row">
+      <span class="ssr-eye">Strategy summary</span>
     </div>
-  </section>
+    <p class="ssr-summary-text">
+      @for (frag of summaryFragments(); track $index) {
+        @switch (frag.kind) {
+          @case ('strong') { <strong>{{ frag.text }}</strong> }
+          @case ('verb') { <span class="ssr-frag-verb">{{ frag.text }}</span> }
+          @case ('ind') { <span class="ssr-frag-ind">{{ frag.text }}</span> }
+          @case ('num') { <span class="ssr-frag-num">{{ frag.text }}</span> }
+          @case ('muted') { <span class="ssr-frag-muted">{{ frag.text }}</span> }
+          @case ('bull') { <span class="ssr-frag-bull">{{ frag.text }}</span> }
+          @case ('bear') { <span class="ssr-frag-bear">{{ frag.text }}</span> }
+          @case ('warn') { <span class="ssr-frag-warn">{{ frag.text }}</span> }
+          @default { {{ frag.text }} }
+        }
+      }
+    </p>
+  </div>
 
-  <!-- Tabs --------------------------------------------------------------- -->
-  <nav class="ssr-tabs" role="tablist" aria-label="Lifecycle blocks">
-    <button
-      type="button"
-      class="ssr-tab"
-      [class.ssr-tab--active]="selectedTab() === 'entry'"
-      role="tab"
-      [attr.aria-selected]="selectedTab() === 'entry'"
-      (click)="selectTab('entry')"
-    >
-      Entry
-    </button>
-    <button
-      type="button"
-      class="ssr-tab"
-      [class.ssr-tab--active]="selectedTab() === 'manage'"
-      role="tab"
-      [attr.aria-selected]="selectedTab() === 'manage'"
-      (click)="selectTab('manage')"
-    >
-      Manage
-    </button>
-    <button
-      type="button"
-      class="ssr-tab"
-      [class.ssr-tab--active]="selectedTab() === 'exit'"
-      role="tab"
-      [attr.aria-selected]="selectedTab() === 'exit'"
-      (click)="selectTab('exit')"
-    >
-      Exit
-    </button>
+  <!-- Lifecycle pipeline ------------------------------------------------- -->
+  <nav class="ssr-pipeline" role="tablist" aria-label="Lifecycle blocks">
+    @for (s of [
+      { key: 'entry', num: 1, name: 'Entry', desc: 'When to open a position. All entry conditions are checked on every bar; when they all align, a trade fires.', count: spec().entry.conditions.length, lines: entryLines() },
+      { key: 'manage', num: 2, name: 'Manage', desc: 'Risk rules that run while a position is open — stops, trailing stops, profit targets. Each rule fires independently.', count: (spec().survival ?? []).length, lines: manageLines() },
+      { key: 'exit', num: 3, name: 'Exit', desc: 'When to close on a signal flip — e.g. opposite crossover, time-out, condition reversal.', count: spec().exit.conditions.length, lines: exitLines() }
+    ]; track s.key) {
+      <button
+        type="button"
+        class="ssr-stage"
+        [class.ssr-stage--active]="selectedTab() === s.key"
+        [class.ssr-stage--complete]="s.count > 0 && selectedTab() !== s.key"
+        [class.ssr-stage--empty]="s.count === 0"
+        role="tab"
+        [attr.aria-selected]="selectedTab() === s.key"
+        (click)="selectTab($any(s.key))"
+      >
+        <div class="ssr-stage-head">
+          <span class="ssr-stage-num">{{ s.num }}</span>
+          <span class="ssr-stage-name">{{ s.name }}</span>
+          <span class="ssr-stage-count" [class.ssr-stage-count--warn]="s.count === 0">
+            {{ s.count === 0 ? 'empty' : s.count + (s.count === 1 ? ' rule' : ' rules') }}
+          </span>
+        </div>
+        <div class="ssr-stage-desc">{{ s.desc }}</div>
+        @if (s.lines.length > 0) {
+          <ul class="ssr-stage-rules">
+            @for (line of s.lines.slice(0, 2); track $index) {
+              <li>{{ line }}</li>
+            }
+            @if (s.lines.length > 2) {
+              <li class="ssr-stage-rules-more">+ {{ s.lines.length - 2 }} more…</li>
+            }
+          </ul>
+        } @else {
+          <ul class="ssr-stage-rules"><li class="ssr-stage-rules-empty">+ click to configure</li></ul>
+        }
+      </button>
+    }
   </nav>
 
-  <!-- Entry tab ---------------------------------------------------------- -->
-  @if (selectedTab() === 'entry') {
-    <section class="ssr-panel" role="tabpanel" aria-label="Entry rules">
-      <p class="ssr-summary">{{ entrySummary() }}</p>
-
-      <div class="ssr-rule-controls">
-        <label class="ssr-field">
-          <span class="ssr-field-label">Combine with</span>
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="spec().entry.logic"
-            (ngModelChange)="setEntryLogic($event)"
-          >
-            <option value="AND">ALL of (AND)</option>
-            <option value="OR">ANY of (OR)</option>
-          </select>
-        </label>
-        <label class="ssr-field">
-          <span class="ssr-field-label">Position size (% of equity)</span>
-          <input
-            type="number"
-            min="1"
-            max="100"
-            step="1"
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="entrySizeFraction(spec().entry) * 100"
-            (ngModelChange)="setEntrySizeFraction($event / 100)"
-          />
-        </label>
-      </div>
-
-      @for (cond of spec().entry.conditions; track $index; let i = $index) {
-        <ng-container *ngTemplateOutlet="conditionCard; context: { cond: asCondition(cond), index: i, ctx: 'entry' }" />
-      }
-
-      <div class="ssr-add-picker">
-        <span class="ssr-add-label">Add condition:</span>
-        @for (k of conditionKinds; track k) {
-          <button type="button" class="ssr-pill-btn" (click)="addEntryConditionOfKind(k)">{{ k }}</button>
-        }
-      </div>
-    </section>
-  }
-
-  <!-- Manage tab --------------------------------------------------------- -->
-  @if (selectedTab() === 'manage') {
-    <section class="ssr-panel" role="tabpanel" aria-label="Manage rules">
-      <pre class="ssr-summary ssr-summary--multiline">{{ survivalSummary() }}</pre>
-
-      @for (rule of spec().survival; track $index; let ri = $index) {
-        <div class="ssr-manage-rule">
-          <header class="ssr-manage-rule-header">
-            <label class="ssr-field ssr-field-name">
-              <span class="ssr-field-label">Rule name</span>
-              <input
-                type="text"
-                class="ssr-input"
-                [ngModel]="rule.name"
-                (ngModelChange)="updateManageRuleName(ri, $event)"
-              />
-            </label>
-            <span class="ssr-action-pill">→ {{ rule.action.kind }}</span>
-            <button type="button" class="ssr-btn-danger ssr-btn-icon" (click)="removeManageRule(ri)" aria-label="Remove rule">
-              ✕
-            </button>
-          </header>
-
-          <p class="ssr-manage-help">When ALL of the conditions below are true, the rule fires:</p>
-
-          @for (cond of rule.when.conditions; track $index; let ci = $index) {
-            <ng-container *ngTemplateOutlet="conditionCard; context: { cond: asCondition(cond), index: ci, ctx: 'manage', ruleIndex: ri }" />
+  <!-- Indicator reference panel ----------------------------------------- -->
+  <details class="ssr-ref-panel" open>
+    <summary class="ssr-ref-head">
+      <span class="ssr-ref-title">
+        Indicator reference library
+        <span class="ssr-ref-meta">
+          {{ spec().indicators.length }} defined · {{ referencedIndicators().size }} in use
+        </span>
+      </span>
+    </summary>
+    <div class="ssr-ref-body">
+      @if (spec().indicators.length === 0) {
+        <p class="ssr-empty-note">No indicators yet. Pick one below or add inline as you build conditions.</p>
+      } @else {
+        <div class="ssr-ind-list">
+          @for (ind of spec().indicators; track $index; let i = $index) {
+            <div
+              class="ssr-ind-card"
+              [class.ssr-ind-card--unused]="!referencedIndicators().has(ind.id)"
+            >
+              <button
+                type="button"
+                class="ssr-ind-card-x ssr-icon-btn ssr-icon-btn--danger"
+                aria-label="Remove indicator"
+                (click)="removeIndicator(i)"
+              >×</button>
+              <div class="ssr-ind-id">{{ ind.id }}</div>
+              <div class="ssr-ind-formula">
+                {{ ind.kind }} · period <strong>{{ ind.period }}</strong>
+                @if (ind.kind === 'MACD' && ind.fast_period) { · fast <strong>{{ ind.fast_period }}</strong> · signal <strong>{{ ind.signal_period }}</strong> }
+                @if (ind.kind === 'SUPERTREND' && ind.multiplier) { · ×{{ ind.multiplier }} }
+              </div>
+              <div class="ssr-ind-row">
+                <input
+                  type="text"
+                  class="ssr-input ssr-input--tiny"
+                  [ngModel]="ind.id"
+                  (ngModelChange)="updateIndicatorField(i, { id: $event })"
+                  aria-label="Indicator id"
+                />
+                <input
+                  type="number"
+                  min="2"
+                  class="ssr-input ssr-input--tiny"
+                  [ngModel]="ind.period"
+                  (ngModelChange)="updateIndicatorField(i, { period: +$event })"
+                  aria-label="Indicator period"
+                />
+              </div>
+            </div>
           }
-
-          <div class="ssr-add-picker ssr-add-picker--inset">
-            <span class="ssr-add-label">Add condition:</span>
-            @for (k of conditionKinds; track k) {
-              <button type="button" class="ssr-pill-btn" (click)="addManageRuleCondition(ri, k)">{{ k }}</button>
-            }
-          </div>
         </div>
       }
+      <div class="ssr-ind-add-row">
+        <span class="ssr-add-label">Add:</span>
+        @for (k of indicatorKinds; track k) {
+          <button type="button" class="ssr-ind-pill" (click)="addIndicatorOfKind(k)">{{ k }}</button>
+        }
+      </div>
+    </div>
+  </details>
 
-      <button type="button" class="ssr-btn-primary" (click)="addManageRule()">+ Add manage rule</button>
+  <!-- Section card editor ----------------------------------------------- -->
+  @if (selectedTab() === 'entry') {
+    <section class="ssr-section">
+      <header class="ssr-section-head">
+        <h2>Entry — when to open a position</h2>
+      </header>
+      <div class="ssr-section-body">
+        <p class="ssr-editor-help">
+          Add conditions that must all (or any) hold for the strategy to enter a trade.
+          Conditions are checked on every closed bar.
+        </p>
+        <div class="ssr-combine-row">
+          <div class="ssr-field">
+            <span class="ssr-field-label">Combine conditions with</span>
+            <div class="ssr-seg">
+              <button
+                type="button"
+                [class.ssr-seg--active]="spec().entry.logic === 'AND'"
+                (click)="setEntryLogic('AND')"
+              >All of (AND)</button>
+              <button
+                type="button"
+                [class.ssr-seg--active]="spec().entry.logic === 'OR'"
+                (click)="setEntryLogic('OR')"
+              >Any of (OR)</button>
+            </div>
+          </div>
+          <div class="ssr-field">
+            <span class="ssr-field-label">Position size (% of equity)</span>
+            <div class="ssr-size-row">
+              <input
+                type="range"
+                min="10"
+                max="100"
+                step="5"
+                [ngModel]="entrySizeFraction(spec().entry) * 100"
+                (ngModelChange)="setEntrySizeFraction(+$event / 100)"
+                aria-label="Position size percent"
+              />
+              <span class="ssr-size-value">{{ entrySizeFraction(spec().entry) * 100 | number: '1.0-0' }}%</span>
+            </div>
+          </div>
+        </div>
+
+        @if (spec().entry.conditions.length === 0) {
+          <div class="ssr-empty-state">
+            <div class="ssr-empty-state-big">No entry conditions yet</div>
+            Pick a condition type below to start. The Strategy Summary above will update live as you add them.
+          </div>
+        }
+
+        @for (cond of spec().entry.conditions; track $index; let i = $index) {
+          <ng-container *ngTemplateOutlet="conditionCard; context: { cond: asCondition(cond), index: i, ctx: 'entry', ruleIndex: -1 }" />
+        }
+
+        <ng-container *ngTemplateOutlet="addConditionPicker; context: { ctx: 'entry', onAdd: 'entry' }" />
+      </div>
     </section>
   }
 
-  <!-- Exit tab ----------------------------------------------------------- -->
-  @if (selectedTab() === 'exit') {
-    <section class="ssr-panel" role="tabpanel" aria-label="Exit rules">
-      <p class="ssr-summary">{{ exitSummary() }}</p>
+  @if (selectedTab() === 'manage') {
+    <section class="ssr-section">
+      <header class="ssr-section-head">
+        <h2>Manage — what happens while we&apos;re in the trade</h2>
+      </header>
+      <div class="ssr-section-body">
+        <p class="ssr-editor-help">
+          Each manage rule independently watches the open position and fires when its
+          conditions are met. Use these for stop-losses, profit targets, and trailing stops.
+        </p>
 
-      <div class="ssr-rule-controls">
+        @if ((spec().survival ?? []).length === 0) {
+          <div class="ssr-empty-state">
+            <div class="ssr-empty-state-big">No manage rules yet</div>
+            Without a stop-loss or trailing rule, the strategy holds until your Exit conditions fire — which can lead to large drawdowns.
+          </div>
+        }
+
+        @for (rule of spec().survival; track $index; let ri = $index) {
+          <div class="ssr-rule">
+            <header class="ssr-rule-head">
+              <input
+                class="ssr-rule-name"
+                type="text"
+                [ngModel]="rule.name"
+                (ngModelChange)="updateManageRuleName(ri, $event)"
+                aria-label="Rule name"
+              />
+              <span class="ssr-rule-arrow">when triggered</span>
+              <span class="ssr-rule-action-pill">close position</span>
+              <button
+                type="button"
+                class="ssr-icon-btn ssr-icon-btn--danger"
+                aria-label="Remove rule"
+                (click)="removeManageRule(ri)"
+              >×</button>
+            </header>
+            <div class="ssr-rule-body">
+              @for (cond of rule.when.conditions; track $index; let ci = $index) {
+                <ng-container *ngTemplateOutlet="conditionCard; context: { cond: asCondition(cond), index: ci, ctx: 'manage', ruleIndex: ri }" />
+              }
+              <ng-container *ngTemplateOutlet="addConditionPicker; context: { ctx: 'manage', onAdd: 'manage', ruleIndex: ri }" />
+            </div>
+          </div>
+        }
+
+        <div class="ssr-rule-shortcuts">
+          <button type="button" class="ssr-btn" (click)="addManageRule()">+ Add manage rule</button>
+          @for (q of quickManageRules; track q.label) {
+            <button type="button" class="ssr-btn ssr-btn--ghost" (click)="addQuickManageRule(q)">{{ q.label }}</button>
+          }
+        </div>
+      </div>
+    </section>
+  }
+
+  @if (selectedTab() === 'exit') {
+    <section class="ssr-section">
+      <header class="ssr-section-head">
+        <h2>Exit — signal-flip close</h2>
+      </header>
+      <div class="ssr-section-body">
+        <p class="ssr-editor-help">
+          Conditions that close the trade on a signal change. Manage rules above run alongside these — whichever fires first wins.
+        </p>
+        <div class="ssr-combine-row">
+          <div class="ssr-field">
+            <span class="ssr-field-label">Combine conditions with</span>
+            <div class="ssr-seg">
+              <button type="button" [class.ssr-seg--active]="spec().exit.logic === 'AND'" (click)="setExitLogic('AND')">All of (AND)</button>
+              <button type="button" [class.ssr-seg--active]="spec().exit.logic === 'OR'" (click)="setExitLogic('OR')">Any of (OR)</button>
+            </div>
+          </div>
+        </div>
+
+        @if (spec().exit.conditions.length === 0) {
+          <div class="ssr-empty-state">
+            <div class="ssr-empty-state-big">No exit signal</div>
+            That&apos;s fine if you have manage rules with stops/targets — the trade will close on those.
+          </div>
+        }
+
+        @for (cond of spec().exit.conditions; track $index; let i = $index) {
+          <ng-container *ngTemplateOutlet="conditionCard; context: { cond: asCondition(cond), index: i, ctx: 'exit', ruleIndex: -1 }" />
+        }
+
+        <ng-container *ngTemplateOutlet="addConditionPicker; context: { ctx: 'exit', onAdd: 'exit' }" />
+      </div>
+    </section>
+  }
+
+  <!-- Run zone (config + validation) ------------------------------------ -->
+  <div class="ssr-run-zone">
+    <div class="ssr-run-config">
+      <h2 class="ssr-run-title">Backtest configuration</h2>
+      <div class="ssr-run-row">
         <label class="ssr-field">
-          <span class="ssr-field-label">Combine with</span>
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="spec().exit.logic"
-            (ngModelChange)="setExitLogic($event)"
-          >
-            <option value="AND">ALL of (AND)</option>
-            <option value="OR">ANY of (OR)</option>
+          <span class="ssr-field-label">Start date</span>
+          <input type="date" class="ssr-input" [ngModel]="startDate()" (ngModelChange)="startDate.set($event)" />
+        </label>
+        <label class="ssr-field">
+          <span class="ssr-field-label">End date</span>
+          <input type="date" class="ssr-input" [ngModel]="endDate()" (ngModelChange)="endDate.set($event)" />
+        </label>
+        <label class="ssr-field">
+          <span class="ssr-field-label">Initial cash</span>
+          <input type="number" min="0" step="1000" class="ssr-input" [ngModel]="initialCash()" (ngModelChange)="initialCash.set(+$event)" />
+        </label>
+        <label class="ssr-field">
+          <span class="ssr-field-label">Fill mode</span>
+          <select class="ssr-input" [ngModel]="fillMode()" (ngModelChange)="fillMode.set($event)">
+            <option value="signal_bar_close">signal_bar_close</option>
+            <option value="next_bar_open">next_bar_open</option>
           </select>
         </label>
       </div>
-
-      @for (cond of spec().exit.conditions; track $index; let i = $index) {
-        <ng-container *ngTemplateOutlet="conditionCard; context: { cond: asCondition(cond), index: i, ctx: 'exit' }" />
-      }
-
-      <div class="ssr-add-picker">
-        <span class="ssr-add-label">Add condition:</span>
-        @for (k of conditionKinds; track k) {
-          <button type="button" class="ssr-pill-btn" (click)="addExitConditionOfKind(k)">{{ k }}</button>
-        }
-      </div>
-    </section>
-  }
-
-  <!-- Run controls ------------------------------------------------------- -->
-  <section class="ssr-panel ssr-run-panel">
-    <h2>Run</h2>
-    <div class="ssr-run-row">
-      <label class="ssr-field">
-        <span class="ssr-field-label">Start date</span>
-        <input
-          type="date"
-          class="ssr-input"
-          [ngModel]="startDate()"
-          (ngModelChange)="startDate.set($event)"
-        />
-      </label>
-      <label class="ssr-field">
-        <span class="ssr-field-label">End date</span>
-        <input
-          type="date"
-          class="ssr-input"
-          [ngModel]="endDate()"
-          (ngModelChange)="endDate.set($event)"
-        />
-      </label>
-      <label class="ssr-field">
-        <span class="ssr-field-label">Initial cash</span>
-        <input
-          type="number"
-          min="0"
-          step="1000"
-          class="ssr-input"
-          [ngModel]="initialCash()"
-          (ngModelChange)="initialCash.set(+$event)"
-        />
-      </label>
-      <label class="ssr-field">
-        <span class="ssr-field-label">Fill mode</span>
-        <select
-          class="ssr-input"
-          [ngModel]="fillMode()"
-          (ngModelChange)="fillMode.set($event)"
-        >
-          <option value="signal_bar_close">signal_bar_close</option>
-          <option value="next_bar_open">next_bar_open</option>
-        </select>
-      </label>
     </div>
 
-    <button type="button" class="ssr-run" (click)="runBacktest()" [disabled]="loading()">
-      @if (loading()) { Running… } @else { Run backtest }
+    <div class="ssr-validation">
+      <header class="ssr-validation-head">
+        <span>Validation</span>
+        @if (errors().length > 0) {
+          <span class="ssr-v-status-err">{{ errors().length }} error{{ errors().length > 1 ? 's' : '' }} · blocks Run</span>
+        } @else if (warnings().length > 0) {
+          <span class="ssr-v-status-warn">{{ warnings().length }} warning{{ warnings().length > 1 ? 's' : '' }}</span>
+        } @else {
+          <span class="ssr-v-status-ok">Strategy looks good</span>
+        }
+      </header>
+      @if (issues().length === 0) {
+        <div class="ssr-v-item ssr-v-item--ok">
+          <span class="ssr-v-text">All checks pass. Press Run when ready.</span>
+        </div>
+      }
+      @for (it of errors(); track $index) {
+        <div class="ssr-v-item ssr-v-item--error">
+          <span class="ssr-v-text">
+            {{ it.text }}
+            @if (it.hint) { <span class="ssr-v-hint">{{ it.hint }}</span> }
+            @if (it.fix) { <button type="button" class="ssr-v-fix" (click)="applyValidationFix(it)">→ {{ it.fix }}</button> }
+          </span>
+        </div>
+      }
+      @for (it of warnings(); track $index) {
+        <div class="ssr-v-item ssr-v-item--warn">
+          <span class="ssr-v-text">
+            {{ it.text }}
+            @if (it.hint) { <span class="ssr-v-hint">{{ it.hint }}</span> }
+            @if (it.fix) { <button type="button" class="ssr-v-fix" (click)="applyValidationFix(it)">→ {{ it.fix }}</button> }
+          </span>
+        </div>
+      }
+      @for (it of infos().slice(0, 3); track $index) {
+        <div class="ssr-v-item ssr-v-item--info">
+          <span class="ssr-v-text">
+            {{ it.text }}
+            @if (it.hint) { <span class="ssr-v-hint">{{ it.hint }}</span> }
+          </span>
+        </div>
+      }
+      @if (infos().length > 3) {
+        <div class="ssr-v-more">+ {{ infos().length - 3 }} more nudges</div>
+      }
+    </div>
+  </div>
+
+  <!-- Sticky run bar ---------------------------------------------------- -->
+  <div class="ssr-runbar">
+    <div class="ssr-run-summary">
+      <div class="ssr-run-line">
+        @if (errors().length === 0 && warnings().length === 0) {
+          Ready to backtest <strong>{{ spec().name }}</strong> from
+          <span class="ssr-run-date">{{ startDate() }}</span> to
+          <span class="ssr-run-date">{{ endDate() }}</span>.
+        } @else if (errors().length > 0) {
+          <span class="ssr-run-blocked">{{ errors().length }} error{{ errors().length > 1 ? 's' : '' }} must be fixed before running.</span>
+        } @else {
+          <span class="ssr-run-warn">{{ warnings().length }} warning{{ warnings().length > 1 ? 's' : '' }} — review the validation panel before running.</span>
+        }
+      </div>
+    </div>
+    <button
+      type="button"
+      class="ssr-btn ssr-btn--primary ssr-btn--lg"
+      [disabled]="!canRun() || loading()"
+      (click)="runBacktest()"
+      [title]="canRun() ? '' : 'Resolve validation errors to enable Run'"
+    >
+      @if (loading()) { Running… } @else { ▶ Run backtest }
     </button>
+  </div>
 
-    @if (localError(); as err) { <div class="ssr-error" role="alert">{{ err }}</div> }
-    @if (serviceError(); as err) { <div class="ssr-error" role="alert">Backend error: {{ err }}</div> }
-  </section>
+  @if (localError(); as err) { <div class="ssr-error" role="alert">{{ err }}</div> }
+  @if (serviceError(); as err) { <div class="ssr-error" role="alert">Backend error: {{ err }}</div> }
 
-  <!-- Advanced JSON ------------------------------------------------------- -->
+  <!-- Advanced JSON ----------------------------------------------------- -->
   <details class="ssr-advanced">
-    <summary>
-      <span>Advanced — view / edit raw JSON</span>
-    </summary>
-
+    <summary>Advanced — view / edit raw JSON</summary>
     @if (!showAdvancedJson()) {
       <pre class="ssr-json-readonly">{{ specJson() }}</pre>
-      <button type="button" class="ssr-btn-secondary" (click)="openAdvancedJson()">Edit JSON</button>
+      <button type="button" class="ssr-btn" (click)="openAdvancedJson()">Edit JSON</button>
     } @else {
       <textarea
         class="ssr-input ssr-textarea"
@@ -408,8 +474,8 @@
         <div class="ssr-error" role="alert">JSON parse error: {{ err }}</div>
       }
       <div class="ssr-advanced-actions">
-        <button type="button" class="ssr-btn-primary" (click)="applyAdvancedJson()">Apply</button>
-        <button type="button" class="ssr-btn-secondary" (click)="cancelAdvancedJson()">Cancel</button>
+        <button type="button" class="ssr-btn ssr-btn--primary" (click)="applyAdvancedJson()">Apply</button>
+        <button type="button" class="ssr-btn" (click)="cancelAdvancedJson()">Cancel</button>
       </div>
     }
   </details>
@@ -429,7 +495,6 @@
         <div><dt>Net profit</dt><dd>{{ r.netProfit | number: '1.2-2' }}</dd></div>
         <div><dt>Total fees</dt><dd>{{ r.totalFees | number: '1.2-2' }}</dd></div>
       </dl>
-
       @if (tradeCount() > 0) {
         <table class="ssr-trade-table" aria-label="Trade log">
           <thead>
@@ -479,291 +544,192 @@
             [ngModel]="saveDialogName()"
             (ngModelChange)="saveDialogName.set($event)"
             (keyup.enter)="confirmSaveDialog()"
-            #saveInput
           />
         </label>
         <div class="ssr-modal-actions">
-          <button type="button" class="ssr-btn-primary" (click)="confirmSaveDialog()">
+          <button type="button" class="ssr-btn ssr-btn--primary" (click)="confirmSaveDialog()">
             {{ saveDialogMode() === 'clone' ? 'Clone' : 'Save' }}
           </button>
-          <button type="button" class="ssr-btn-secondary" (click)="cancelSaveDialog()">Cancel</button>
+          <button type="button" class="ssr-btn" (click)="cancelSaveDialog()">Cancel</button>
         </div>
       </div>
     </div>
   }
 </section>
 
-<!-- ========================================================================
-     Condition card template — re-used for entry / exit / manage tabs.
-     Inputs (template context): cond, index, ctx ('entry' | 'exit' | 'manage'),
-     ruleIndex (only when ctx === 'manage').
-     ======================================================================== -->
+<!-- Condition card template — reused by entry / exit / manage tabs ------ -->
 <ng-template #conditionCard let-cond="cond" let-index="index" let-ctx="ctx" let-ruleIndex="ruleIndex">
-  <div class="ssr-condition-card">
-    <header class="ssr-condition-header">
-      <span class="ssr-condition-kind">{{ cond.kind }}</span>
-      <button
-        type="button"
-        class="ssr-btn-danger ssr-btn-icon"
-        aria-label="Remove condition"
-        (click)="
-          ctx === 'entry'
-            ? removeEntryCondition(index)
-            : ctx === 'exit'
-              ? removeExitCondition(index)
-              : removeManageRuleCondition(ruleIndex, index)
-        "
-      >
-        ✕
-      </button>
-    </header>
-
-    @switch (cond.kind) {
-      @case ('IndicatorComparison') {
-        @let c = asIndicatorComparison(cond);
-        <div class="ssr-condition-row">
-          <ng-container *ngTemplateOutlet="operandPicker; context: { op: c.left, c: c, ctx: ctx, ruleIndex: ruleIndex, index: index, side: 'left' }" />
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.op"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchIndicatorComparison(c, { op: $event }))"
-          >
-            @for (op of comparisonOps; track op) { <option [value]="op">{{ op }}</option> }
-          </select>
-          <ng-container *ngTemplateOutlet="operandPicker; context: { op: c.right, c: c, ctx: ctx, ruleIndex: ruleIndex, index: index, side: 'right' }" />
-        </div>
-      }
-      @case ('IndicatorBetween') {
-        @let c = asIndicatorBetween(cond);
-        <div class="ssr-condition-row">
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.indicator"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchIndicatorBetween(c, { indicator: $event }))"
-          >
-            @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
-          </select>
-          <span class="ssr-inline-label">between</span>
-          <input
-            type="number"
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.lo"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchIndicatorBetween(c, { lo: +$event }))"
-          />
-          <span class="ssr-inline-label">and</span>
-          <input
-            type="number"
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.hi"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchIndicatorBetween(c, { hi: +$event }))"
-          />
-          <label class="ssr-checkbox">
-            <input
-              type="checkbox"
-              [ngModel]="c.inclusive !== false"
-              (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchIndicatorBetween(c, { inclusive: $event }))"
-            />
-            inclusive
-          </label>
-        </div>
-      }
-      @case ('FreshCross') {
-        @let c = asFreshCross(cond);
-        <div class="ssr-condition-row">
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.left"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchFreshCross(c, { left: $event }))"
-          >
-            @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
-          </select>
-          <span class="ssr-inline-label">crosses</span>
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.direction"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchFreshCross(c, { direction: $event }))"
-          >
-            <option value="up">above</option>
-            <option value="down">below</option>
-          </select>
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.right"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchFreshCross(c, { right: $event }))"
-          >
-            @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
-          </select>
-        </div>
-      }
-      @case ('BarsSinceEntry') {
-        @let c = asBarsSinceEntry(cond);
-        <div class="ssr-condition-row">
-          <span class="ssr-inline-label">bars since entry</span>
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.op"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchBarsSinceEntry(c, { op: $event }))"
-          >
-            @for (op of comparisonOps; track op) { <option [value]="op">{{ op }}</option> }
-          </select>
-          <input
-            type="number"
-            min="0"
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.value"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchBarsSinceEntry(c, { value: +$event }))"
-          />
-        </div>
-      }
-      @case ('TimeOfDay') {
-        @let c = asTimeOfDay(cond);
-        <div class="ssr-condition-row">
-          <span class="ssr-inline-label">after</span>
-          <input
-            type="time"
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.after"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchTimeOfDay(c, { after: $event }))"
-          />
-          <span class="ssr-inline-label">before</span>
-          <input
-            type="time"
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.before"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchTimeOfDay(c, { before: $event }))"
-          />
-          <span class="ssr-inline-label ssr-tz-label">{{ c.tz || 'America/New_York' }}</span>
-        </div>
-      }
-      @case ('PnLPercent') {
-        @let c = asPnLPercent(cond);
-        <div class="ssr-condition-row">
-          <span class="ssr-inline-label">unrealized PnL</span>
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.op"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchPnLPercent(c, { op: $event }))"
-          >
-            @for (op of comparisonOps; track op) { <option [value]="op">{{ op }}</option> }
-          </select>
-          <input
-            type="number"
-            step="0.1"
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.value * 100"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchPnLPercent(c, { value: +$event / 100 }))"
-          />
-          <span class="ssr-inline-label">%</span>
-        </div>
-      }
-      @case ('PnLPoints') {
-        @let c = asPnLPoints(cond);
-        <div class="ssr-condition-row">
-          <span class="ssr-inline-label">unrealized PnL points</span>
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.op"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchPnLPoints(c, { op: $event }))"
-          >
-            @for (op of comparisonOps; track op) { <option [value]="op">{{ op }}</option> }
-          </select>
-          <input
-            type="number"
-            step="0.01"
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.value"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchPnLPoints(c, { value: +$event }))"
-          />
-        </div>
-      }
-      @case ('DrawdownFromPeak') {
-        @let c = asDrawdownFromPeak(cond);
-        <div class="ssr-condition-row">
-          <span class="ssr-inline-label">retrace from peak ≥</span>
-          <input
-            type="number"
-            step="0.05"
-            min="0"
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.value * 100"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchDrawdownFromPeak(c, { value: +$event / 100 }))"
-          />
-          <span class="ssr-inline-label">%</span>
-        </div>
-      }
-      @case ('BarProperty') {
-        @let c = asBarProperty(cond);
-        <div class="ssr-condition-row">
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.property"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchBarProperty(c, { property: $event }))"
-          >
-            @for (p of barProperties; track p) { <option [value]="p">{{ p }}</option> }
-          </select>
-          <select
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.op"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchBarProperty(c, { op: $event }))"
-          >
-            @for (op of comparisonOps; track op) { <option [value]="op">{{ op }}</option> }
-          </select>
-          <input
-            type="number"
-            step="0.001"
-            class="ssr-input ssr-input--narrow"
-            [ngModel]="c.value"
-            (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchBarProperty(c, { value: +$event }))"
-          />
-        </div>
-      }
+  <div class="ssr-cond" [class.ssr-cond--editing]="isEditing(ctx, ruleIndex, index)">
+    <div class="ssr-cond-head">
+      <span class="ssr-cond-tag" [class]="'ssr-cond-tag--' + conditionGroup(cond.kind)">
+        {{ conditionLabel(cond.kind) }}
+      </span>
+      <span class="ssr-cond-plain">{{ conditionPlainText(cond) }}</span>
+      <span class="ssr-cond-actions">
+        <button
+          type="button"
+          class="ssr-icon-btn"
+          [attr.aria-label]="isEditing(ctx, ruleIndex, index) ? 'Done' : 'Edit'"
+          (click)="toggleEditing(ctx, ruleIndex, index)"
+        >{{ isEditing(ctx, ruleIndex, index) ? '✓' : '✎' }}</button>
+        <button
+          type="button"
+          class="ssr-icon-btn ssr-icon-btn--danger"
+          aria-label="Remove condition"
+          (click)="
+            ctx === 'entry'
+              ? removeEntryCondition(index)
+              : ctx === 'exit'
+                ? removeExitCondition(index)
+                : removeManageRuleCondition(ruleIndex, index)
+          "
+        >×</button>
+      </span>
+    </div>
+    @if (isEditing(ctx, ruleIndex, index)) {
+      <div class="ssr-cond-edit-row">
+        @switch (cond.kind) {
+          @case ('IndicatorComparison') {
+            @let c = asIndicatorComparison(cond);
+            <ng-container *ngTemplateOutlet="operandPicker; context: { op: c.left, c: c, ctx: ctx, ruleIndex: ruleIndex, index: index, side: 'left' }" />
+            <select class="ssr-input ssr-input--narrow" [ngModel]="c.op" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchIndicatorComparison(c, { op: $event }))">
+              @for (op of comparisonOps; track op) { <option [value]="op">{{ op }}</option> }
+            </select>
+            <ng-container *ngTemplateOutlet="operandPicker; context: { op: c.right, c: c, ctx: ctx, ruleIndex: ruleIndex, index: index, side: 'right' }" />
+          }
+          @case ('IndicatorBetween') {
+            @let c = asIndicatorBetween(cond);
+            <select class="ssr-input ssr-input--narrow" [ngModel]="c.indicator" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchIndicatorBetween(c, { indicator: $event }))">
+              @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
+            </select>
+            <span class="ssr-inline-label">between</span>
+            <input type="number" class="ssr-input ssr-input--narrow" [ngModel]="c.lo" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchIndicatorBetween(c, { lo: +$event }))" />
+            <span class="ssr-inline-label">and</span>
+            <input type="number" class="ssr-input ssr-input--narrow" [ngModel]="c.hi" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchIndicatorBetween(c, { hi: +$event }))" />
+          }
+          @case ('FreshCross') {
+            @let c = asFreshCross(cond);
+            <select class="ssr-input ssr-input--narrow" [ngModel]="c.left" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchFreshCross(c, { left: $event }))">
+              @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
+            </select>
+            <span class="ssr-inline-label">crosses</span>
+            <select class="ssr-input ssr-input--narrow" [ngModel]="c.direction" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchFreshCross(c, { direction: $event }))">
+              <option value="up">above</option>
+              <option value="down">below</option>
+            </select>
+            <select class="ssr-input ssr-input--narrow" [ngModel]="c.right" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchFreshCross(c, { right: $event }))">
+              @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
+            </select>
+          }
+          @case ('BarsSinceEntry') {
+            @let c = asBarsSinceEntry(cond);
+            <span class="ssr-inline-label">bars since entry</span>
+            <select class="ssr-input ssr-input--narrow" [ngModel]="c.op" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchBarsSinceEntry(c, { op: $event }))">
+              @for (op of comparisonOps; track op) { <option [value]="op">{{ op }}</option> }
+            </select>
+            <input type="number" min="0" class="ssr-input ssr-input--narrow" [ngModel]="c.value" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchBarsSinceEntry(c, { value: +$event }))" />
+          }
+          @case ('TimeOfDay') {
+            @let c = asTimeOfDay(cond);
+            <span class="ssr-inline-label">after</span>
+            <input type="time" class="ssr-input ssr-input--narrow" [ngModel]="c.after" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchTimeOfDay(c, { after: $event }))" />
+            <span class="ssr-inline-label">before</span>
+            <input type="time" class="ssr-input ssr-input--narrow" [ngModel]="c.before" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchTimeOfDay(c, { before: $event }))" />
+          }
+          @case ('PnLPercent') {
+            @let c = asPnLPercent(cond);
+            <span class="ssr-inline-label">unrealized P&amp;L</span>
+            <select class="ssr-input ssr-input--narrow" [ngModel]="c.op" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchPnLPercent(c, { op: $event }))">
+              @for (op of comparisonOps; track op) { <option [value]="op">{{ op }}</option> }
+            </select>
+            <input type="number" step="0.1" class="ssr-input ssr-input--narrow" [ngModel]="c.value * 100" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchPnLPercent(c, { value: +$event / 100 }))" />
+            <span class="ssr-inline-label">%</span>
+          }
+          @case ('PnLPoints') {
+            @let c = asPnLPoints(cond);
+            <span class="ssr-inline-label">unrealized P&amp;L points</span>
+            <select class="ssr-input ssr-input--narrow" [ngModel]="c.op" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchPnLPoints(c, { op: $event }))">
+              @for (op of comparisonOps; track op) { <option [value]="op">{{ op }}</option> }
+            </select>
+            <input type="number" step="0.01" class="ssr-input ssr-input--narrow" [ngModel]="c.value" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchPnLPoints(c, { value: +$event }))" />
+          }
+          @case ('DrawdownFromPeak') {
+            @let c = asDrawdownFromPeak(cond);
+            <span class="ssr-inline-label">retrace from peak ≥</span>
+            <input type="number" step="0.05" min="0" class="ssr-input ssr-input--narrow" [ngModel]="c.value * 100" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchDrawdownFromPeak(c, { value: +$event / 100 }))" />
+            <span class="ssr-inline-label">%</span>
+          }
+          @case ('BarProperty') {
+            @let c = asBarProperty(cond);
+            <select class="ssr-input ssr-input--narrow" [ngModel]="c.property" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchBarProperty(c, { property: $event }))">
+              @for (p of barProperties; track p) { <option [value]="p">{{ p }}</option> }
+            </select>
+            <select class="ssr-input ssr-input--narrow" [ngModel]="c.op" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchBarProperty(c, { op: $event }))">
+              @for (op of comparisonOps; track op) { <option [value]="op">{{ op }}</option> }
+            </select>
+            <input type="number" step="0.001" class="ssr-input ssr-input--narrow" [ngModel]="c.value" (ngModelChange)="emitCondChange(ctx, ruleIndex, index, patchBarProperty(c, { value: +$event }))" />
+          }
+        }
+      </div>
     }
   </div>
 </ng-template>
 
-<!-- Operand picker (used by IndicatorComparison) ------------------------ -->
+<!-- Add-condition picker — grouped by category --------------------------- -->
+<ng-template #addConditionPicker let-ctx="ctx" let-ruleIndex="ruleIndex">
+  <div class="ssr-add-cond">
+    <div class="ssr-add-cond-head">
+      <span class="ssr-add-title">+ Add condition</span>
+    </div>
+    @for (group of groupedConditions(ctx); track group.group) {
+      <div class="ssr-cond-group-row">
+        <div class="ssr-cond-group-label">{{ group.meta.label }}</div>
+        <div>
+          @for (k of group.kinds; track k) {
+            <button
+              type="button"
+              class="ssr-cond-pill"
+              [title]="conditionBlurb(k) + ' — e.g. ' + conditionExample(k)"
+              (click)="
+                ctx === 'entry'
+                  ? addEntryConditionOfKind(k)
+                  : ctx === 'exit'
+                    ? addExitConditionOfKind(k)
+                    : addManageRuleCondition(ruleIndex, k)
+              "
+            >
+              {{ conditionShort(k) }}
+            </button>
+          }
+        </div>
+      </div>
+    }
+  </div>
+</ng-template>
+
+<!-- Operand picker — for IndicatorComparison ----------------------------- -->
 <ng-template #operandPicker let-op="op" let-c="c" let-ctx="ctx" let-ruleIndex="ruleIndex" let-index="index" let-side="side">
   <div class="ssr-operand">
     <select
       class="ssr-input ssr-input--narrow"
       [ngModel]="operandKindOf(op)"
-      (ngModelChange)="
-        emitOperandChange(side, c, ctx, ruleIndex, index, changeOperandKind(op, $event, spec().indicators))
-      "
+      (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, changeOperandKind(op, $event, spec().indicators))"
     >
       <option value="IndicatorRef">indicator</option>
-      <option value="Const">constant</option>
+      <option value="Const">number</option>
       <option value="Subtract">indicator − indicator</option>
     </select>
     @if (op.kind === 'IndicatorRef') {
-      <select
-        class="ssr-input ssr-input--narrow"
-        [ngModel]="op.indicator"
-        (ngModelChange)="
-          emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'IndicatorRef', indicator: $event })
-        "
-      >
+      <select class="ssr-input ssr-input--narrow" [ngModel]="op.indicator" (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'IndicatorRef', indicator: $event })">
         @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
       </select>
     } @else if (op.kind === 'Const') {
-      <input
-        type="number"
-        step="0.01"
-        class="ssr-input ssr-input--narrow"
-        [ngModel]="op.value"
-        (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'Const', value: +$event })"
-      />
+      <input type="number" step="0.01" class="ssr-input ssr-input--narrow" [ngModel]="op.value" (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'Const', value: +$event })" />
     } @else if (op.kind === 'Subtract') {
       <select
         class="ssr-input ssr-input--narrow"
         [ngModel]="op.left.kind === 'IndicatorRef' ? op.left.indicator : ''"
-        (ngModelChange)="
-          emitOperandChange(side, c, ctx, ruleIndex, index, {
-            kind: 'Subtract',
-            left: { kind: 'IndicatorRef', indicator: $event },
-            right: op.right
-          })
-        "
+        (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'Subtract', left: { kind: 'IndicatorRef', indicator: $event }, right: op.right })"
       >
         @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
       </select>
@@ -771,13 +737,7 @@
       <select
         class="ssr-input ssr-input--narrow"
         [ngModel]="op.right.kind === 'IndicatorRef' ? op.right.indicator : ''"
-        (ngModelChange)="
-          emitOperandChange(side, c, ctx, ruleIndex, index, {
-            kind: 'Subtract',
-            left: op.left,
-            right: { kind: 'IndicatorRef', indicator: $event }
-          })
-        "
+        (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'Subtract', left: op.left, right: { kind: 'IndicatorRef', indicator: $event } })"
       >
         @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
       </select>
