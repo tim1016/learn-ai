@@ -98,6 +98,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "spec-strategy",
+    loadComponent: () =>
+      import(
+        "./components/spec-strategy-runner/spec-strategy-runner.component"
+      ).then((m) => m.SpecStrategyRunnerComponent),
+  },
+  {
     path: "pricing-lab",
     loadComponent: () =>
       import("./components/pricing-lab/pricing-lab.component").then(

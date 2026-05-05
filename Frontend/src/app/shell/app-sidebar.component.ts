@@ -46,6 +46,7 @@ const NAV: NavGroup[] = [
       { label: 'Technical Analysis', route: '/technical-analysis' },
       { label: 'Stock Analysis', route: '/stock-analysis' },
       { label: 'Snapshots', route: '/snapshots' },
+      { label: 'Strategy Spec', route: '/spec-strategy' },
       { label: 'Strategy Lab', route: '/strategy-lab', deprecated: true },
       { label: 'Strategy Validation', route: '/strategy-lab-validation' },
       { label: 'Indicator Validation', route: '/indicator-validation' },
