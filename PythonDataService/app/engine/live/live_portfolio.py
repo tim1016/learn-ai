@@ -33,6 +33,16 @@ from app.engine.execution.portfolio import Position
 logger = logging.getLogger(__name__)
 
 
+class LiveBrokerEventStreamError(RuntimeError):
+    """Raised when the IBKR order-event stream has terminated unexpectedly.
+
+    Once the background stream task dies, fills stop arriving at the
+    engine. Continuing to submit orders while the broker side is silent
+    would silently desync the portfolio from broker reality. The engine
+    surfaces this as a failed run rather than a degraded one.
+    """
+
+
 class BrokerAdapter(Protocol):
     """Async broker surface LivePortfolio needs."""
 
@@ -68,10 +78,22 @@ class IbkrBrokerAdapter:
         self._owned_order_ids: set[int] = set()
         self._event_buffer: list[IbkrOrderEvent] = []
         self._event_task: asyncio.Task[None] | None = None
+        self._stream_failure: BaseException | None = None
 
     @property
     def owned_order_ids(self) -> set[int]:
         return set(self._owned_order_ids)
+
+    @property
+    def stream_failure(self) -> BaseException | None:
+        """The exception that terminated the order-event stream, if any.
+
+        ``None`` while the stream is healthy (or hasn't been started).
+        Set once if the streaming task exits via an unhandled exception
+        — the engine reads this each iteration and fails the run, since
+        a dead stream means broker fills are no longer being ingested.
+        """
+        return self._stream_failure
 
     async def fetch_account_summary(self):
         return await fetch_account_summary(self._client)
@@ -106,6 +128,7 @@ class IbkrBrokerAdapter:
         """Begin draining IBKR order events into the local buffer."""
         if self._event_task is not None:
             return
+        self._stream_failure = None
         self._event_task = asyncio.create_task(self._run_event_stream())
 
     async def stop_event_stream(self) -> None:
@@ -127,10 +150,14 @@ class IbkrBrokerAdapter:
                 self._event_buffer.append(event)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            # Surface the cause, then let the task retire — the engine's
-            # finally-block stop() must not raise on a dead stream.
+        except Exception as exc:
+            # Record the cause so the engine can fail the run on the
+            # next iteration — silently retiring would leave the engine
+            # submitting orders while no fills arrive, desyncing the
+            # portfolio from broker reality. Logging here keeps the
+            # original traceback in the operator log.
             logger.exception("IBKR order-event stream terminated unexpectedly")
+            self._stream_failure = exc
 
     def drain_broker_events(self) -> list[IbkrOrderEvent]:
         events = list(self._event_buffer)

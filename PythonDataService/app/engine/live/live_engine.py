@@ -28,7 +28,12 @@ from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
 from app.engine.live.bar_adapter import trade_bars_from_ibkr
 from app.engine.live.config import LiveConfig
 from app.engine.live.live_context import LiveContext
-from app.engine.live.live_portfolio import BrokerAdapter, IbkrBrokerAdapter, LivePortfolio
+from app.engine.live.live_portfolio import (
+    BrokerAdapter,
+    IbkrBrokerAdapter,
+    LiveBrokerEventStreamError,
+    LivePortfolio,
+)
 from app.engine.strategy.base import Strategy
 
 logger = logging.getLogger(__name__)
@@ -71,6 +76,9 @@ class IbkrEventAdapter(BrokerAdapter, Protocol):
     async def stop_event_stream(self) -> None: ...
 
     def drain_broker_events(self) -> list[IbkrOrderEvent]: ...
+
+    @property
+    def stream_failure(self) -> BaseException | None: ...
 
 
 @dataclass
@@ -176,6 +184,7 @@ class LiveEngine:
 
         try:
             async for minute_bar in source:
+                self._raise_if_event_stream_failed()
                 await self._process_replay_broker_bar(minute_bar)
                 for event in self._drain_replay_order_events():
                     portfolio.record_broker_fill(event)
@@ -247,6 +256,21 @@ class LiveEngine:
                 )
                 retained_bars.append(minute_bar)
                 previous_bar = minute_bar
+
+            # Source exhausted. Stop the stream first so the task flushes
+            # any in-flight event into the buffer, then drain. Without
+            # this final pass, fills that arrive between the last per-bar
+            # drain and shutdown stay buffered and never reach the
+            # portfolio or strategy — common on finite test/replay
+            # streams and on real-broker shutdown.
+            if started_event_stream and isinstance(self._broker, IbkrEventAdapter):
+                await self._broker.stop_event_stream()
+                started_event_stream = False
+                self._raise_if_event_stream_failed()
+                for event in self._drain_real_broker_order_events():
+                    portfolio.record_broker_fill(event)
+                    order_events.append(event)
+                    strategy.on_order_event(event)
         finally:
             if started_event_stream and isinstance(self._broker, IbkrEventAdapter):
                 await self._broker.stop_event_stream()
@@ -295,6 +319,22 @@ class LiveEngine:
                 signed_qty=int(order.quantity),
             )
         return acks
+
+    def _raise_if_event_stream_failed(self) -> None:
+        """Fail the run if the broker event-stream task died.
+
+        Continuing to submit orders against a broker we can no longer
+        receive fills from would silently desync portfolio and strategy
+        state from broker reality.
+        """
+        if not isinstance(self._broker, IbkrEventAdapter):
+            return
+        failure = self._broker.stream_failure
+        if failure is None:
+            return
+        raise LiveBrokerEventStreamError(
+            "IBKR order-event stream terminated unexpectedly; aborting run"
+        ) from failure
 
     async def _process_replay_broker_bar(self, bar: TradeBar) -> None:
         if isinstance(self._broker, ReplayBrokerAdapter):

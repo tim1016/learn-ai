@@ -24,6 +24,7 @@ from app.broker.ibkr.models import (
 )
 from app.engine.data.trade_bar import TradeBar
 from app.engine.live.live_engine import LiveEngine
+from app.engine.live.live_portfolio import LiveBrokerEventStreamError
 from app.engine.strategy.base import Strategy
 
 
@@ -44,6 +45,7 @@ class _StubIbkrBroker:
         self._buffer: list[IbkrOrderEvent] = []
         self.stream_started = False
         self.stream_stopped = False
+        self.stream_failure: BaseException | None = None
 
     async def fetch_account_summary(self) -> IbkrAccountSummary:
         return IbkrAccountSummary(
@@ -322,6 +324,76 @@ async def test_real_broker_drops_fill_for_unknown_order() -> None:
 
     assert result.order_events == []
     assert result.open_positions == {}
+
+
+@pytest.mark.asyncio
+async def test_run_aborts_when_event_stream_terminates() -> None:
+    """A dead event-stream task must fail the run, not be silently ignored.
+
+    If the broker's stream exits via an unhandled exception, fills stop
+    arriving but order submission keeps going — the engine's portfolio
+    state would silently desync from broker reality. The engine reads
+    ``stream_failure`` each iteration and raises.
+    """
+    broker = _StubIbkrBroker()
+    engine = LiveEngine(None, broker=broker)
+    strategy = _RecordingStrategy()
+
+    bars = [
+        _ibkr_bar(datetime(2026, 5, 4, 14, 30, tzinfo=UTC)),
+        _ibkr_bar(datetime(2026, 5, 4, 14, 31, tzinfo=UTC)),
+    ]
+
+    async def _failing_after_first(
+        source: list[IbkrMinuteBar],
+    ) -> AsyncIterator[IbkrMinuteBar]:
+        for idx, bar in enumerate(source):
+            if idx == 1:
+                broker.stream_failure = ConnectionError("simulated stream death")
+            yield bar
+
+    with pytest.raises(LiveBrokerEventStreamError) as excinfo:
+        await engine.run(strategy, ibkr_bars=_failing_after_first(bars))
+
+    # Original cause is preserved on the chained exception.
+    assert isinstance(excinfo.value.__cause__, ConnectionError)
+    # The engine still tore down the stream on the way out.
+    assert broker.stream_stopped is True
+
+
+@pytest.mark.asyncio
+async def test_final_drain_captures_fill_after_last_bar() -> None:
+    """A fill queued after the last per-bar drain must still be applied.
+
+    Common on finite test/replay streams and on shutdown: IBKR reports
+    the fill *after* the last bar's drain step. Without a final drain
+    the fill stays buffered, the order count in the result is short by
+    one, and the strategy never sees the event.
+    """
+    broker = _StubIbkrBroker()
+    engine = LiveEngine(None, broker=broker)
+    strategy = _OneEntryStrategy()
+
+    bars = [
+        _ibkr_bar(datetime(2026, 5, 4, 14, 30, tzinfo=UTC)),
+        _ibkr_bar(datetime(2026, 5, 4, 14, 31, tzinfo=UTC)),
+    ]
+    fill_ts_ms = int(datetime(2026, 5, 4, 14, 32, tzinfo=UTC).timestamp() * 1000)
+
+    async def _push_fill_after_last_bar() -> AsyncIterator[IbkrMinuteBar]:
+        for bar in bars:
+            yield bar
+        # Source is now exhausted from the engine's perspective; queue
+        # the fill that must still be drained before run() returns.
+        broker.push_fill(order_id=100, fill_quantity=200.0, price=500.50, ts_ms=fill_ts_ms)
+
+    result = await engine.run(strategy, ibkr_bars=_push_fill_after_last_bar())
+
+    assert len(result.order_events) == 1
+    assert result.order_events[0].fill_quantity == 200
+    assert result.order_events[0].fill_price == Decimal("500.50")
+    assert strategy.events == result.order_events
+    assert result.open_positions == {"SPY": 200}
 
 
 async def _gated_ibkr_bars(
