@@ -20,12 +20,18 @@ public record SpecBacktestRequestDto(
 
 /// <summary>
 /// Single trade emitted by a spec backtest.
+///
+/// Timestamps are int64 ms UTC (per the repo-wide wire-format rule —
+/// see .claude/rules/numerical-rigor.md § "Timestamp rigor"). UI callers
+/// convert to local-time strings at the display boundary; intermediate
+/// layers (this DTO, the GraphQL output type, the TS service) all carry
+/// the canonical long form.
 /// </summary>
 public record SpecTradeDto(
     int TradeNumber,
-    string EntryTime,
+    long EntryTime,
     decimal EntryPrice,
-    string ExitTime,
+    long ExitTime,
     decimal ExitPrice,
     Dictionary<string, decimal> Indicators,
     decimal PnlPts,

@@ -5,9 +5,11 @@ namespace Backend.GraphQL.Types;
 public class SpecStrategyTradeType
 {
     public int TradeNumber { get; set; }
-    public string EntryTime { get; set; } = string.Empty;
+    /// <summary>Entry fill time as int64 ms since Unix epoch UTC.</summary>
+    public long EntryTime { get; set; }
     public decimal EntryPrice { get; set; }
-    public string ExitTime { get; set; } = string.Empty;
+    /// <summary>Exit fill time as int64 ms since Unix epoch UTC.</summary>
+    public long ExitTime { get; set; }
     public decimal ExitPrice { get; set; }
     public Dictionary<string, decimal> Indicators { get; set; } = [];
     public decimal PnlPts { get; set; }

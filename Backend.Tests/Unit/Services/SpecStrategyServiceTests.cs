@@ -26,6 +26,9 @@ public class SpecStrategyServiceTests
     }
     """;
 
+    // Single trade in the body so the int64-ms timestamp deserialization
+    // is actually exercised — empty Trades arrays would silently accept
+    // a wrong DTO type for entry_time/exit_time.
     private const string SuccessResponseBody = """
     {
       "success": true,
@@ -34,11 +37,24 @@ public class SpecStrategyServiceTests
       "final_equity": 102500.0,
       "net_profit": 2500.0,
       "total_fees": 0.0,
-      "total_trades": 5,
-      "winning_trades": 3,
-      "losing_trades": 2,
-      "win_rate": 0.6,
-      "trades": [],
+      "total_trades": 1,
+      "winning_trades": 1,
+      "losing_trades": 0,
+      "win_rate": 1.0,
+      "trades": [
+        {
+          "trade_number": 1,
+          "entry_time": 1704153600000,
+          "entry_price": 470.5,
+          "exit_time": 1704157200000,
+          "exit_price": 472.1,
+          "indicators": {"sma_s": 470.4, "sma_l": 470.0},
+          "pnl_pts": 1.6,
+          "pnl_pct": 0.0034,
+          "result": "WIN",
+          "signal_reason": "test"
+        }
+      ],
       "log_lines": ["Trade 1: WIN"],
       "error": null
     }
@@ -62,9 +78,16 @@ public class SpecStrategyServiceTests
 
         Assert.True(result.Success);
         Assert.Equal("test spec", result.StrategyName);
-        Assert.Equal(5, result.TotalTrades);
-        Assert.Equal(0.6m, result.WinRate);
+        Assert.Equal(1, result.TotalTrades);
+        Assert.Equal(1.0m, result.WinRate);
         Assert.Single(result.LogLines);
+
+        // Trade timestamps round-trip as int64 ms UTC — proves the
+        // long-typed DTO fields deserialize correctly from JSON ints.
+        // 1704153600000 ms = 2024-01-02 00:00:00 UTC.
+        var trade = Assert.Single(result.Trades);
+        Assert.Equal(1704153600000L, trade.EntryTime);
+        Assert.Equal(1704157200000L, trade.ExitTime);
     }
 
     [Fact]
