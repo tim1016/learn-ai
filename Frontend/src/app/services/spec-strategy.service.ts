@@ -41,7 +41,10 @@ const RUN_SPEC_STRATEGY_BACKTEST = gql`
         entryPrice
         exitTime
         exitPrice
-        indicators
+        indicators {
+          name
+          value
+        }
         pnlPts
         pnlPct
         result

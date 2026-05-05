@@ -230,6 +230,20 @@ export interface StrategySpec {
 // Backtest response (camelCase from GraphQL → Apollo)
 // ---------------------------------------------------------------------------
 /**
+ * One indicator-snapshot entry on a trade.
+ *
+ * The backend projects ``Dictionary<string, decimal>`` to a list of
+ * these at the GraphQL boundary because Hot Chocolate v15 exposes
+ * dictionaries as key/value object types that force awkward sub-field
+ * selection on the client. Same pattern as
+ * ``InvalidReasonCountType`` in ``Backend/GraphQL/Types/ResearchResult.cs``.
+ */
+export interface IndicatorSnapshotEntry {
+  name: string;
+  value: number;
+}
+
+/**
  * Single trade emitted by a spec backtest.
  *
  * Timestamps are int64 ms UTC per the repo-wide wire-format rule
@@ -245,7 +259,7 @@ export interface SpecStrategyTrade {
   /** Exit fill time as int64 ms since Unix epoch UTC. */
   exitTime: number;
   exitPrice: number;
-  indicators: Record<string, number>;
+  indicators: IndicatorSnapshotEntry[];
   pnlPts: number;
   pnlPct: number;
   result: 'WIN' | 'LOSS';

@@ -83,7 +83,14 @@ describe('SpecStrategyService', () => {
               entryPrice: 470.5,
               exitTime: 1704157200000,
               exitPrice: 472.1,
-              indicators: { sma_s: 470.4, sma_l: 470.0 },
+              // Indicators arrive as a list-of-DTO from GraphQL — Hot
+              // Chocolate v15's Dictionary<string, decimal> exposure
+              // would need awkward sub-field selection, so the backend
+              // projects to IndicatorSnapshotEntry[] at the boundary.
+              indicators: [
+                { name: 'sma_s', value: 470.4 },
+                { name: 'sma_l', value: 470.0 },
+              ],
               pnlPts: 1.6,
               pnlPct: 0.0034,
               result: 'WIN',
@@ -102,9 +109,14 @@ describe('SpecStrategyService', () => {
     expect(result.winRate).toBe(1.0);
     // Wire-format check — TS type declares entryTime/exitTime as number,
     // and Apollo passes the JSON int through unchanged.
-    expect(typeof result.trades[0].entryTime).toBe('number');
-    expect(result.trades[0].entryTime).toBe(1704153600000);
-    expect(result.trades[0].exitTime).toBe(1704157200000);
+    const trade = result.trades[0];
+    expect(typeof trade.entryTime).toBe('number');
+    expect(trade.entryTime).toBe(1704153600000);
+    expect(trade.exitTime).toBe(1704157200000);
+    // Indicators arrive as a list of {name, value} entries.
+    expect(Array.isArray(trade.indicators)).toBe(true);
+    expect(trade.indicators).toHaveLength(2);
+    expect(trade.indicators[0]).toEqual({ name: 'sma_s', value: 470.4 });
   });
 
   it('exposes loading and result via signals', async () => {
