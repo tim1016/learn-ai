@@ -125,6 +125,69 @@ describe('validateStrategy', () => {
     const errs = issues.filter((i) => i.sev === 'error');
     expect(errs).toHaveLength(0);
   });
+
+  it('descends into nested LogicNode groups for unknown-indicator checks', () => {
+    const issues = validateStrategy({
+      ...VALID_SPEC,
+      entry: {
+        ...VALID_SPEC.entry,
+        conditions: [
+          {
+            logic: 'OR',
+            conditions: [
+              { kind: 'FreshCross', left: 'ema5', right: 'ghost', direction: 'up' },
+            ],
+          },
+        ],
+      },
+    });
+    expect(
+      issues.some((i) => i.sev === 'error' && i.text.includes('"ghost"')),
+    ).toBe(true);
+  });
+
+  it('descends into nested LogicNode groups for reversed-range checks', () => {
+    const issues = validateStrategy({
+      ...VALID_SPEC,
+      indicators: [{ id: 'rsi', kind: 'RSI', period: 14 }],
+      entry: {
+        ...VALID_SPEC.entry,
+        conditions: [
+          {
+            logic: 'AND',
+            conditions: [
+              { kind: 'IndicatorBetween', indicator: 'rsi', lo: 70, hi: 30, inclusive: true },
+            ],
+          },
+        ],
+      },
+    });
+    expect(issues.some((i) => i.text.includes('range is reversed'))).toBe(true);
+  });
+
+  it('warns on out-of-range RSI bounds inside manage rules', () => {
+    const issues = validateStrategy({
+      ...VALID_SPEC,
+      indicators: [{ id: 'rsi', kind: 'RSI', period: 14 }],
+      survival: [
+        {
+          name: 'rsi exit',
+          when: {
+            logic: 'AND',
+            conditions: [
+              { kind: 'IndicatorBetween', indicator: 'rsi', lo: 0, hi: 120 },
+            ],
+          },
+          action: { kind: 'CLOSE_ALL' },
+        },
+      ],
+    });
+    expect(
+      issues.some(
+        (i) => i.sev === 'warn' && i.text.includes('RSI range') && i.text.includes('120'),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('collectIndicatorReferences', () => {
@@ -166,5 +229,27 @@ describe('collectIndicatorReferences', () => {
       ],
     });
     expect(refs.has('rsi_x')).toBe(true);
+  });
+
+  it('descends into nested LogicNode groups when collecting refs', () => {
+    const refs = collectIndicatorReferences({
+      ...VALID_SPEC,
+      indicators: [
+        ...VALID_SPEC.indicators,
+        { id: 'rsi_inner', kind: 'RSI', period: 14 },
+      ],
+      entry: {
+        ...VALID_SPEC.entry,
+        conditions: [
+          {
+            logic: 'OR',
+            conditions: [
+              { kind: 'IndicatorBetween', indicator: 'rsi_inner', lo: 30, hi: 70 },
+            ],
+          },
+        ],
+      },
+    });
+    expect(refs.has('rsi_inner')).toBe(true);
   });
 });

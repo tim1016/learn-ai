@@ -13,9 +13,30 @@
 
 import {
   Condition,
+  LogicNode,
   Operand,
   StrategySpec,
 } from '../../graphql/spec-strategy-types';
+
+type ConditionOrLogic = Condition | LogicNode;
+
+function isLogicNode(node: ConditionOrLogic): node is LogicNode {
+  return 'logic' in node && Array.isArray((node as LogicNode).conditions);
+}
+
+function walkConditions(
+  nodes: readonly ConditionOrLogic[] | undefined,
+  visit: (c: Condition) => void,
+): void {
+  if (!nodes) return;
+  for (const n of nodes) {
+    if (isLogicNode(n)) {
+      walkConditions(n.conditions, visit);
+    } else {
+      visit(n);
+    }
+  }
+}
 
 export type IssueSeverity = 'error' | 'warn' | 'info';
 
@@ -149,17 +170,23 @@ export function validateStrategy(
     }
   }
 
-  (spec.entry?.conditions ?? []).forEach((c, i) =>
-    checkCond(c as Condition, `Entry condition #${i + 1}`),
-  );
-  (spec.exit?.conditions ?? []).forEach((c, i) =>
-    checkCond(c as Condition, `Exit condition #${i + 1}`),
-  );
-  (spec.survival ?? []).forEach((r) =>
-    (r.when?.conditions ?? []).forEach((c, i) =>
-      checkCond(c as Condition, `Manage rule "${r.name}" condition #${i + 1}`),
-    ),
-  );
+  let entryIdx = 0;
+  walkConditions(spec.entry?.conditions, (c) => {
+    entryIdx += 1;
+    checkCond(c, `Entry condition #${entryIdx}`);
+  });
+  let exitIdx = 0;
+  walkConditions(spec.exit?.conditions, (c) => {
+    exitIdx += 1;
+    checkCond(c, `Exit condition #${exitIdx}`);
+  });
+  (spec.survival ?? []).forEach((r) => {
+    let mIdx = 0;
+    walkConditions(r.when?.conditions, (c) => {
+      mIdx += 1;
+      checkCond(c, `Manage rule "${r.name}" condition #${mIdx}`);
+    });
+  });
 
   if (!spec.entry || (spec.entry.conditions ?? []).length === 0) {
     issues.push({
@@ -204,9 +231,8 @@ export function validateStrategy(
     }
   }
 
-  // RSI bounds
-  [...(spec.entry?.conditions ?? []), ...(spec.exit?.conditions ?? [])].forEach((c) => {
-    const cond = c as Condition;
+  // RSI bounds — entry, exit, AND manage rules
+  const checkRsiBounds = (cond: Condition): void => {
     if (cond.kind === 'IndicatorBetween') {
       const ind = inds.find((b) => b.id === cond.indicator);
       if (ind && ind.kind === 'RSI' && (cond.lo < 0 || cond.hi > 100)) {
@@ -217,11 +243,15 @@ export function validateStrategy(
         });
       }
     }
-  });
+  };
+  walkConditions(spec.entry?.conditions, checkRsiBounds);
+  walkConditions(spec.exit?.conditions, checkRsiBounds);
+  (spec.survival ?? []).forEach((r) =>
+    walkConditions(r.when?.conditions, checkRsiBounds),
+  );
 
   // EMA fast/slow ordering
-  (spec.entry?.conditions ?? []).forEach((c) => {
-    const cond = c as Condition;
+  walkConditions(spec.entry?.conditions, (cond) => {
     if (cond.kind === 'FreshCross') {
       const a = inds.find((b) => b.id === cond.left);
       const b = inds.find((b) => b.id === cond.right);
@@ -261,9 +291,10 @@ export function validateStrategy(
   }
 
   // ── Best-practice nudges ──────────────────────────────────────────
-  const hasIntradayCondition = (spec.entry?.conditions ?? []).some(
-    (c) => (c as Condition).kind === 'TimeOfDay',
-  );
+  let hasIntradayCondition = false;
+  walkConditions(spec.entry?.conditions, (c) => {
+    if (c.kind === 'TimeOfDay') hasIntradayCondition = true;
+  });
   if (
     !hasIntradayCondition &&
     runCfg?.resolutionMinutes != null &&
@@ -344,10 +375,10 @@ export function collectIndicatorReferences(spec: StrategySpec): Set<string> {
       harvestOperand(c.right);
     }
   }
-  (spec.entry?.conditions ?? []).forEach((c) => harvestCond(c as Condition));
-  (spec.exit?.conditions ?? []).forEach((c) => harvestCond(c as Condition));
+  walkConditions(spec.entry?.conditions, harvestCond);
+  walkConditions(spec.exit?.conditions, harvestCond);
   (spec.survival ?? []).forEach((r) =>
-    (r.when?.conditions ?? []).forEach((c) => harvestCond(c as Condition)),
+    walkConditions(r.when?.conditions, harvestCond),
   );
   return refs;
 }
