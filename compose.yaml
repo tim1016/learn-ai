@@ -48,6 +48,10 @@ services:
       - "8000:8000"
     volumes:
       - ./PythonDataService/app:/app/app:z
+      # Mount pytest.ini so ad-hoc `podman exec polygon-data-service pytest`
+      # picks up `asyncio_mode = auto` without rebuilding the image after
+      # local config tweaks. Baked into the image too — see Dockerfile.
+      - ./PythonDataService/pytest.ini:/app/pytest.ini:ro,z
       - ../Lean/Data:/lean-data:ro,z
       - ./PythonDataService/lean-cache:/lean-cache:z
       # Divergence study artifacts (dashboard HTML + matrix CSV) live here.
