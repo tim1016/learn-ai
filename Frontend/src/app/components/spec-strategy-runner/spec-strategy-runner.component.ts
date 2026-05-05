@@ -112,7 +112,14 @@ export class SpecStrategyRunnerComponent {
     }
   }
 
-  /** Format an int64 ms UTC timestamp for display in the trade table. */
+  /** Format an int64 ms UTC timestamp for display in the trade table.
+   *
+   * Always renders in ``America/New_York`` regardless of browser locale —
+   * per ``.claude/rules/numerical-rigor.md`` § "Timestamp rigor → UI
+   * rendering", trading times are an ET concept and switching display
+   * timezones based on viewer location creates ambiguity in screenshots
+   * and shared analyses.
+   */
   formatTime(ms: number): string {
     return new Date(ms).toLocaleString('en-US', {
       year: 'numeric',
@@ -121,6 +128,7 @@ export class SpecStrategyRunnerComponent {
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
+      timeZone: 'America/New_York',
     });
   }
 

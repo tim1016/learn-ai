@@ -120,10 +120,12 @@ describe('SpecStrategyRunnerComponent', () => {
     expect(component.result()).toBeNull();
   });
 
-  it('formatTime renders an ms-UTC timestamp as a local string', () => {
+  it('formatTime renders an ms-UTC timestamp in America/New_York regardless of browser tz', () => {
+    // 1704153600000 ms = 2024-01-02 00:00:00 UTC = 2024-01-01 19:00 ET (EST).
+    // Locked to ET so screenshots / shared analyses are unambiguous
+    // regardless of where the viewer is.
     const out = component.formatTime(1704153600000);
-    // Don't lock to a specific timezone; just verify shape.
-    expect(out).toMatch(/\d{2}\/\d{2}\/\d{4}/);
+    expect(out).toBe('01/01/2024, 19:00');
   });
 
   it('formatIndicators serializes a list-of-DTO trade to "name=value" pairs', () => {

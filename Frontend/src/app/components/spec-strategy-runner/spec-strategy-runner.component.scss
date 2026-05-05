@@ -1,8 +1,10 @@
 .ssr-page {
-  max-width: 1400px;
-  margin: 0 auto;
+  // Use the full viewport width — the trade table is wide and benefits
+  // from every pixel. Other pages cap at 1400; this one is data-heavy.
+  max-width: 100%;
+  margin: 0;
   padding: 1.5rem;
-  color: var(--text-color, #111);
+  color: var(--text-primary);
 }
 
 .ssr-header {
@@ -12,30 +14,39 @@
     margin: 0 0 0.25rem;
     font-size: 1.5rem;
     font-weight: 600;
+    color: var(--text-primary);
   }
 
   .ssr-subtitle {
     margin: 0;
-    color: var(--text-color-secondary, #666);
+    color: var(--text-secondary);
     font-size: 0.875rem;
     line-height: 1.4;
     max-width: 60rem;
 
     code {
-      background: var(--surface-100, #f3f4f6);
+      background: var(--bg-elevated);
+      color: var(--text-primary);
       padding: 0.05rem 0.3rem;
       border-radius: 3px;
       font-size: 0.85em;
+      font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
     }
   }
 }
 
 .ssr-grid {
   display: grid;
-  grid-template-columns: minmax(0, 38rem) minmax(0, 1fr);
+  // Form is fixed-ish at the left; results gets the rest. The trade
+  // table is 9 columns wide and needs ~700px for indicators to wrap
+  // gracefully — when the available content width (viewport minus
+  // sidebar minus padding) is below ~1100px we stack vertically so
+  // the table can use the full width without horizontal scrolling.
+  grid-template-columns: minmax(20rem, 26rem) minmax(0, 1fr);
   gap: 1.5rem;
+  align-items: start;
 
-  @media (max-width: 980px) {
+  @media (max-width: 1380px) {
     grid-template-columns: 1fr;
   }
 }
@@ -47,8 +58,8 @@
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
-  background: var(--surface-50, #fafbfc);
-  border: 1px solid var(--surface-200, #e5e7eb);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 1rem;
 }
@@ -57,19 +68,14 @@
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  flex: 1;
   min-width: 0;
-
-  &--wide {
-    flex-basis: 100%;
-  }
 }
 
 .ssr-field-label {
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: var(--text-color-secondary, #6b7280);
+  color: var(--text-secondary);
   text-transform: uppercase;
 }
 
@@ -77,39 +83,43 @@
   font-family: inherit;
   font-size: 0.875rem;
   padding: 0.45rem 0.6rem;
-  border: 1px solid var(--surface-300, #d1d5db);
+  border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--surface-0, #fff);
-  color: inherit;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
   transition: border-color 0.15s ease;
 
   &:focus {
     outline: none;
-    border-color: var(--primary-color, #2563eb);
-    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
   }
 }
 
 .ssr-textarea {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
   font-size: 0.78rem;
   line-height: 1.4;
   resize: vertical;
-  min-height: 16rem;
+  min-height: 14rem;
+  // Cap so the textarea doesn't dominate the column when its grid cell
+  // is stretched by a tall results table on the right.
+  max-height: 22rem;
 }
 
 .ssr-row {
   display: flex;
   gap: 0.75rem;
 
-  .ssr-field {
+  // Equal-width fields only when laid out as a row.
+  > .ssr-field {
     flex: 1;
   }
 }
 
 .ssr-edited-marker {
   font-size: 0.7rem;
-  color: var(--orange-700, #c2410c);
+  color: var(--bear);
   font-style: italic;
   margin-left: 0.25rem;
 }
@@ -117,8 +127,8 @@
 .ssr-run {
   margin-top: 0.5rem;
   padding: 0.6rem 1rem;
-  background: var(--primary-color, #2563eb);
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
   border: none;
   border-radius: 4px;
   font-weight: 600;
@@ -127,20 +137,20 @@
   transition: background-color 0.15s ease;
 
   &:hover:not(:disabled) {
-    background: var(--primary-color-hover, #1d4ed8);
+    background: var(--accent-hover);
   }
 
   &:disabled {
-    background: var(--surface-300, #d1d5db);
+    opacity: 0.55;
     cursor: not-allowed;
   }
 }
 
 .ssr-error {
   padding: 0.6rem 0.75rem;
-  background: var(--red-50, #fef2f2);
-  border: 1px solid var(--red-200, #fecaca);
-  color: var(--red-800, #991b1b);
+  background: var(--bear-soft);
+  border: 1px solid var(--bear);
+  color: var(--text-primary);
   border-radius: 4px;
   font-size: 0.8125rem;
   white-space: pre-wrap;
@@ -150,18 +160,20 @@
 // Results column
 // ---------------------------------------------------------------------------
 .ssr-results {
-  background: var(--surface-50, #fafbfc);
-  border: 1px solid var(--surface-200, #e5e7eb);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 1rem;
   min-height: 20rem;
   overflow-x: auto;
+  color: var(--text-primary);
 }
 
 .ssr-results-title {
   margin: 0 0 0.75rem;
   font-size: 1.05rem;
   font-weight: 600;
+  color: var(--text-primary);
 }
 
 .ssr-summary {
@@ -180,7 +192,7 @@
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.02em;
-    color: var(--text-color-secondary, #6b7280);
+    color: var(--text-secondary);
     font-weight: 600;
   }
 
@@ -189,6 +201,7 @@
     font-size: 0.95rem;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
   }
 }
 
@@ -197,20 +210,24 @@
   border-collapse: collapse;
   font-size: 0.8125rem;
   font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
 
   th, td {
     padding: 0.4rem 0.6rem;
     text-align: left;
-    border-bottom: 1px solid var(--surface-200, #e5e7eb);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
   }
 
   th {
-    background: var(--surface-100, #f3f4f6);
+    background: var(--bg-elevated);
     font-weight: 600;
-    color: var(--text-color-secondary, #4b5563);
+    color: var(--text-secondary);
     text-transform: uppercase;
     font-size: 0.7rem;
     letter-spacing: 0.02em;
+    position: sticky;
+    top: 0;
   }
 
   td.ssr-num,
@@ -219,22 +236,25 @@
   }
 
   tr.ssr-win td {
-    background: rgba(34, 197, 94, 0.06);
+    background: var(--bull-soft);
   }
 
   tr.ssr-loss td {
-    background: rgba(239, 68, 68, 0.06);
+    background: var(--bear-soft);
   }
 
   .ssr-indicator-cell {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
     font-size: 0.75rem;
-    color: var(--text-color-secondary, #4b5563);
+    color: var(--text-secondary);
+    white-space: normal;
+    max-width: 18rem;
+    line-height: 1.3;
   }
 }
 
 .ssr-empty {
   margin: 1rem 0;
-  color: var(--text-color-secondary, #6b7280);
+  color: var(--text-secondary);
   font-size: 0.875rem;
 }
