@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RUN_SPEC_STRATEGY_BACKTEST } from '../../services/spec-strategy.service';
 import { SpecStrategyRunnerComponent } from './spec-strategy-runner.component';
 import { CANONICAL_FIXTURES } from './canonical-fixtures';
+import { insertSnippet, SpecSnippet } from './snippets';
 
 /**
  * Sanity tests for the runner component. We don't render with
@@ -126,6 +127,96 @@ describe('SpecStrategyRunnerComponent', () => {
     // regardless of where the viewer is.
     const out = component.formatTime(1704153600000);
     expect(out).toBe('01/01/2024, 19:00');
+  });
+
+  // ---- Snippet catalog -------------------------------------------------
+  it('exposes the snippet catalog with indicator / condition / survival groups', () => {
+    const titles = component.snippetGroups.map((g) => g.title);
+    expect(titles).toContain('Indicators');
+    expect(titles).toContain('Conditions');
+    expect(titles).toContain('Survival rules (Manage)');
+    // All six engine indicator kinds must be discoverable.
+    const indicatorGroup = component.snippetGroups.find((g) => g.title === 'Indicators');
+    expect(indicatorGroup).toBeDefined();
+    const indicatorLabels = (indicatorGroup?.snippets ?? []).map((s) => s.label);
+    for (const kind of ['SMA', 'EMA', 'RSI', 'ADX', 'MACD', 'SUPERTREND']) {
+      expect(indicatorLabels.some((l) => l.startsWith(kind))).toBe(true);
+    }
+  });
+
+  it('insertSnippetIntoSpec appends an indicator to the indicators array', () => {
+    component.specJson.set(
+      JSON.stringify(
+        {
+          schema_version: '1.0',
+          name: 'tmp',
+          symbols: ['SPY'],
+          resolution: { period_minutes: 15 },
+          indicators: [{ id: 'sma', kind: 'SMA', period: 10 }],
+          entry: { logic: 'AND', conditions: [], size: { kind: 'SetHoldings', fraction: 1 } },
+          exit: { logic: 'OR', conditions: [] },
+        },
+        null,
+        2,
+      ),
+    );
+    const adxSnippet: SpecSnippet = {
+      id: 'ind.adx',
+      label: 'ADX',
+      description: '',
+      target: 'indicators',
+      example: { id: 'adx_14', kind: 'ADX', period: 14 },
+    };
+    component.insertSnippetIntoSpec(adxSnippet);
+
+    const after = JSON.parse(component.specJson()) as { indicators: object[] };
+    expect(after.indicators).toHaveLength(2);
+    expect(after.indicators[1]).toEqual({ id: 'adx_14', kind: 'ADX', period: 14 });
+    expect(component.catalogStatus()).toContain('Inserted');
+    expect(component.localError()).toBeNull();
+  });
+
+  it('insertSnippetIntoSpec surfaces a parse error when spec is invalid JSON', () => {
+    component.specJson.set('not valid json {');
+    const snippet: SpecSnippet = {
+      id: 'x',
+      label: 'X',
+      description: '',
+      target: 'indicators',
+      example: { id: 'x', kind: 'SMA', period: 5 },
+    };
+    component.insertSnippetIntoSpec(snippet);
+
+    expect(component.localError()).toContain('spec JSON is invalid');
+    expect(component.catalogStatus()).toBeNull();
+  });
+
+  it('insertSnippet (pure helper) routes by target into the right array', () => {
+    const base = JSON.stringify(
+      {
+        schema_version: '1.0',
+        name: 'x',
+        symbols: ['SPY'],
+        resolution: { period_minutes: 15 },
+        indicators: [],
+        entry: { logic: 'AND', conditions: [], size: { kind: 'SetHoldings', fraction: 1 } },
+        survival: [],
+        exit: { logic: 'OR', conditions: [] },
+      },
+      null,
+      2,
+    );
+
+    const survivalRule = {
+      id: 'surv',
+      label: 'stop',
+      description: '',
+      target: 'survival' as const,
+      example: { name: 'stop', when: { logic: 'AND', conditions: [] }, action: { kind: 'CLOSE_ALL' } },
+    };
+    const out = JSON.parse(insertSnippet(base, survivalRule)) as { survival: object[] };
+    expect(out.survival).toHaveLength(1);
+    expect(out.survival[0]).toMatchObject({ name: 'stop' });
   });
 
   it('formatIndicators serializes a list-of-DTO trade to "name=value" pairs', () => {

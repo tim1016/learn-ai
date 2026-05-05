@@ -106,6 +106,56 @@
       @if (serviceError(); as err) {
         <div class="ssr-error" role="alert">Backend error: {{ err }}</div>
       }
+
+      <!-- Catalog ---------------------------------------------------- -->
+      <details class="ssr-catalog">
+        <summary>
+          <span>Add to spec</span>
+          <span class="ssr-catalog-hint">indicators, conditions, manage rules</span>
+        </summary>
+
+        @if (catalogStatus(); as msg) {
+          <div class="ssr-catalog-status" role="status">{{ msg }}</div>
+        }
+
+        @for (group of snippetGroups; track group.title) {
+          <section class="ssr-catalog-group">
+            <h3>{{ group.title }}</h3>
+            <ul>
+              @for (snippet of group.snippets; track snippet.id) {
+                <li>
+                  <details>
+                    <summary>
+                      <span class="ssr-snippet-label">{{ snippet.label }}</span>
+                      <span class="ssr-snippet-target">→ {{ snippet.target }}</span>
+                    </summary>
+                    <p class="ssr-snippet-desc">{{ snippet.description }}</p>
+                    <pre class="ssr-snippet-json">{{ snippetJson(snippet) }}</pre>
+                    <div class="ssr-snippet-actions">
+                      <button
+                        type="button"
+                        class="ssr-snippet-btn"
+                        (click)="insertSnippetIntoSpec(snippet)"
+                        [attr.aria-label]="'Insert ' + snippet.label + ' into spec'"
+                      >
+                        Insert
+                      </button>
+                      <button
+                        type="button"
+                        class="ssr-snippet-btn ssr-snippet-btn--secondary"
+                        (click)="copySnippetToClipboard(snippet)"
+                        [attr.aria-label]="'Copy ' + snippet.label + ' to clipboard'"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </details>
+                </li>
+              }
+            </ul>
+          </section>
+        }
+      </details>
     </div>
 
     <!-- Results column ---------------------------------------------------- -->

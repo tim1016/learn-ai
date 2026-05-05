@@ -258,3 +258,168 @@
   color: var(--text-secondary);
   font-size: 0.875rem;
 }
+
+// ---------------------------------------------------------------------------
+// Catalog — discoverable snippet picker for indicators / conditions /
+// survival rules. Native <details> for collapsibility (no JS state).
+// ---------------------------------------------------------------------------
+.ssr-catalog {
+  margin-top: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+
+  > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.75rem;
+    user-select: none;
+
+    &::-webkit-details-marker { display: none; }
+    &::before {
+      content: '▸';
+      display: inline-block;
+      margin-right: 0.4rem;
+      transition: transform 0.15s ease;
+      color: var(--text-secondary);
+    }
+  }
+
+  &[open] > summary::before {
+    transform: rotate(90deg);
+  }
+
+  .ssr-catalog-hint {
+    font-size: 0.7rem;
+    font-weight: 400;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+}
+
+.ssr-catalog-status {
+  margin: 0 0.75rem 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--bull-soft);
+  border: 1px solid var(--bull);
+  color: var(--text-primary);
+  border-radius: 3px;
+  font-size: 0.75rem;
+}
+
+.ssr-catalog-group {
+  padding: 0.25rem 0.75rem 0.75rem;
+  border-top: 1px solid var(--border);
+
+  h3 {
+    margin: 0.5rem 0 0.4rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+  }
+
+  ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+}
+
+.ssr-catalog-group li > details {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface);
+
+  > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    align-items: baseline;
+    user-select: none;
+
+    &::-webkit-details-marker { display: none; }
+  }
+
+  &[open] > summary {
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+.ssr-snippet-label {
+  font-weight: 500;
+}
+
+.ssr-snippet-target {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.ssr-snippet-desc {
+  margin: 0.5rem 0.6rem 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.ssr-snippet-json {
+  margin: 0 0.6rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text-primary);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.ssr-snippet-actions {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem 0.6rem;
+}
+
+.ssr-snippet-btn {
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.3rem 0.6rem;
+  border-radius: 3px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+
+  &:hover {
+    background: var(--accent-hover);
+  }
+
+  &--secondary {
+    background: transparent;
+    color: var(--accent);
+  }
+}
+

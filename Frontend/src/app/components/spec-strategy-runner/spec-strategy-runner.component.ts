@@ -13,6 +13,7 @@ import {
   SpecStrategyBacktestResult,
 } from '../../graphql/spec-strategy-types';
 import { CANONICAL_FIXTURES, CanonicalFixture } from './canonical-fixtures';
+import { SNIPPET_GROUPS, SnippetGroup, SpecSnippet, insertSnippet } from './snippets';
 
 /**
  * Minimal first-cut UI for running a declarative ``StrategySpec`` backtest.
@@ -44,6 +45,16 @@ export class SpecStrategyRunnerComponent {
   private readonly specService = inject(SpecStrategyService);
 
   readonly fixtures: readonly CanonicalFixture[] = CANONICAL_FIXTURES;
+
+  /** Discoverable catalog: every indicator kind, condition kind, and
+   * survival-rule template the evaluator currently supports.
+   * Each entry has an example JSON snippet plus a Copy and Insert
+   * button (rendered in the template).
+   */
+  readonly snippetGroups: readonly SnippetGroup[] = SNIPPET_GROUPS;
+
+  /** Transient banner shown after a successful Copy / Insert action. */
+  readonly catalogStatus = signal<string | null>(null);
 
   // ---- Form state -------------------------------------------------------
   readonly selectedFixtureId = signal<string>(CANONICAL_FIXTURES[0].id);
@@ -109,6 +120,43 @@ export class SpecStrategyRunnerComponent {
       });
     } catch {
       // Service signal already captures the error — nothing else to do here.
+    }
+  }
+
+  /** Pretty-printed example JSON for the catalog UI. */
+  snippetJson(snippet: SpecSnippet): string {
+    return JSON.stringify(snippet.example, null, 2);
+  }
+
+  /**
+   * Insert a snippet into the spec textarea at the appropriate array
+   * (indicators, entry.conditions, exit.conditions, or survival). On
+   * JSON-parse failure surfaces the error in the local-error banner so
+   * the user can fix their spec and retry.
+   */
+  insertSnippetIntoSpec(snippet: SpecSnippet): void {
+    try {
+      const next = insertSnippet(this.specJson(), snippet);
+      this.specJson.set(next);
+      this.localError.set(null);
+      this.catalogStatus.set(`Inserted ${snippet.label}.`);
+    } catch (e) {
+      this.localError.set(e instanceof Error ? e.message : String(e));
+      this.catalogStatus.set(null);
+    }
+  }
+
+  /** Copy a snippet's JSON to the clipboard. Falls back to silent no-op
+   * if the Clipboard API is unavailable (older browsers / non-secure
+   * contexts) — the Insert button is the primary path anyway.
+   */
+  async copySnippetToClipboard(snippet: SpecSnippet): Promise<void> {
+    const text = this.snippetJson(snippet);
+    try {
+      await navigator.clipboard.writeText(text);
+      this.catalogStatus.set(`Copied ${snippet.label} to clipboard.`);
+    } catch {
+      this.catalogStatus.set(null);
     }
   }
 
