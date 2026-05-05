@@ -37,6 +37,13 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY ./app ./app
 
+# Pytest config — the runtime image does not ship pytest, but operators
+# install it ad-hoc into the running container (`podman exec ... pytest
+# tests/`) and pytest needs ``asyncio_mode = auto`` from this file.
+# Without it, pytest defaults to strict mode and any un-decorated async
+# test errors out at collection.
+COPY ./pytest.ini ./pytest.ini
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
