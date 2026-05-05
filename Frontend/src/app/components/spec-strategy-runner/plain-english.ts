@@ -251,6 +251,7 @@ function formatNumberLocal(n: number): string {
 }
 
 function condFragments(cond: Condition, indicators: readonly IndicatorBlock[]): SummaryFragment[] {
+  // Reuse the OP_LABEL map declared at the top of this module.
   switch (cond.kind) {
     case 'FreshCross': {
       const verb = cond.direction === 'up' ? 'crosses above' : 'crosses below';
@@ -361,17 +362,8 @@ function condFragments(cond: Condition, indicators: readonly IndicatorBlock[]): 
   }
 }
 
-const OP_LABEL: Record<string, string> = {
-  '<': '<',
-  '<=': '≤',
-  '==': '=',
-  '!=': '≠',
-  '>=': '≥',
-  '>': '>',
-};
-
 function joinedConditionFragments(
-  conditions: readonly (Condition | { logic: 'AND' | 'OR' })[],
+  conditions: readonly (Condition | LogicNode)[],
   logic: 'AND' | 'OR',
   indicators: readonly IndicatorBlock[],
 ): SummaryFragment[] {
@@ -382,9 +374,10 @@ function joinedConditionFragments(
     if ('logic' in c) {
       // Nested logic group — bracket it.
       out.push(f('text', '('));
+      const inner = c as LogicNode;
       out.push(...joinedConditionFragments(
-        c.conditions as readonly (Condition | { logic: 'AND' | 'OR' })[],
-        c.logic,
+        inner.conditions,
+        inner.logic,
         indicators,
       ));
       out.push(f('text', ')'));

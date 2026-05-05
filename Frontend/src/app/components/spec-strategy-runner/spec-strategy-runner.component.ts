@@ -28,10 +28,20 @@ import {
 } from '../../graphql/spec-strategy-types';
 import { CANONICAL_FIXTURES, CanonicalFixture } from './canonical-fixtures';
 import {
+  CONDITION_CATALOG,
+  ConditionGroup,
+  ConditionKind,
+  groupedConditionsForContext,
+} from './condition-catalog';
+import {
+  buildSummaryFragments,
+  formatConditionLine,
   formatEntryBlock,
   formatExitBlock,
   formatSurvivalBlock,
+  SummaryFragment,
 } from './plain-english';
+import { collectIndicatorReferences, validateStrategy, ValidationIssue } from './validation';
 import {
   addEntryCondition,
   addExitCondition,
@@ -55,7 +65,7 @@ import { SpecStrategyStore } from './strategy-store.service';
 
 type LifecycleTab = 'entry' | 'manage' | 'exit';
 
-const CONDITION_KINDS = [
+const CONDITION_KINDS: ReadonlyArray<ConditionKind> = [
   'IndicatorComparison',
   'IndicatorBetween',
   'FreshCross',
@@ -65,9 +75,12 @@ const CONDITION_KINDS = [
   'PnLPoints',
   'DrawdownFromPeak',
   'BarProperty',
-] as const;
+];
 
-type ConditionKind = (typeof CONDITION_KINDS)[number];
+interface QuickManageRule {
+  readonly label: string;
+  readonly build: () => { name: string; conditionKind: ConditionKind; value: number };
+}
 
 /**
  * Form-driven Strategy Spec runner.
@@ -151,6 +164,72 @@ export class SpecStrategyRunnerComponent {
   readonly specJson = computed(() => JSON.stringify(this.spec(), null, 2));
   readonly tradeCount = computed<number>(() => this.result()?.totalTrades ?? 0);
 
+  /** Rich-fragment summary for the design's Strategy Summary hero card. */
+  readonly summaryFragments = computed<readonly SummaryFragment[]>(() =>
+    buildSummaryFragments(this.spec()),
+  );
+
+  /** Set of indicator ids referenced anywhere in the spec — used to dim
+   * unused indicators in the reference panel and flag them in validation. */
+  readonly referencedIndicators = computed<Set<string>>(() =>
+    collectIndicatorReferences(this.spec()),
+  );
+
+  /** All validation issues for the current spec + run config. */
+  readonly issues = computed<readonly ValidationIssue[]>(() =>
+    validateStrategy(this.spec(), {
+      start: this.startDate(),
+      end: this.endDate(),
+      initialCash: this.initialCash(),
+      fillMode: this.fillMode(),
+      resolutionMinutes: this.spec().resolution.period_minutes,
+    }),
+  );
+  readonly errors = computed(() => this.issues().filter((i) => i.sev === 'error'));
+  readonly warnings = computed(() => this.issues().filter((i) => i.sev === 'warn'));
+  readonly infos = computed(() => this.issues().filter((i) => i.sev === 'info'));
+  readonly canRun = computed(() => this.errors().length === 0);
+
+  /** Per-condition read/edit toggle state. Key format: "ctx:ruleIndex:index"
+   * (ruleIndex = -1 for entry/exit; positive for manage rule). */
+  readonly editingKeys = signal<Set<string>>(new Set());
+
+  /** One-line summary lines per stage — used by the lifecycle pipeline. */
+  readonly entryLines = computed<string[]>(() =>
+    (this.spec().entry?.conditions ?? []).map((c) => formatConditionLine(c, this.spec().indicators)),
+  );
+  readonly exitLines = computed<string[]>(() =>
+    (this.spec().exit?.conditions ?? []).map((c) => formatConditionLine(c, this.spec().indicators)),
+  );
+  readonly manageLines = computed<string[]>(() =>
+    (this.spec().survival ?? []).map((r) => `${r.name} → close`),
+  );
+
+  /** Dirty marker — whether the current spec differs from the last saved state. */
+  readonly lastSavedSnapshot = signal<string>('');
+  readonly isDirty = computed<boolean>(() => {
+    const cur = this.specJson();
+    const saved = this.lastSavedSnapshot();
+    if (this.currentSavedId() == null) return false; // never saved → no dirty marker
+    return cur !== saved;
+  });
+
+  // ---- Quick manage-rule presets (from the design) ---------------------
+  readonly quickManageRules: readonly QuickManageRule[] = [
+    {
+      label: '+ 1.5% stop-loss',
+      build: () => ({ name: 'Stop loss', conditionKind: 'PnLPercent', value: -0.015 }),
+    },
+    {
+      label: '+ 3% take-profit',
+      build: () => ({ name: 'Take profit', conditionKind: 'PnLPercent', value: 0.03 }),
+    },
+    {
+      label: '+ Trailing stop',
+      build: () => ({ name: 'Trailing stop', conditionKind: 'DrawdownFromPeak', value: 0.005 }),
+    },
+  ];
+
   // -----------------------------------------------------------------------
   // Fixture / saved load
   // -----------------------------------------------------------------------
@@ -169,6 +248,7 @@ export class SpecStrategyRunnerComponent {
     if (!saved) return;
     this.spec.set(structuredClone(saved.spec));
     this.currentSavedId.set(saved.id);
+    this.snapshotCurrentSpec();
     this.localError.set(null);
     this.statusMessage.set(`Loaded "${saved.name}".`);
   }
@@ -511,6 +591,7 @@ export class SpecStrategyRunnerComponent {
       const saved = this.store.save(name, namedSpec);
       this.spec.set(structuredClone(saved.spec));
       this.currentSavedId.set(saved.id);
+      this.snapshotCurrentSpec();
       this.statusMessage.set(`Cloned as "${name}".`);
     } else {
       // Save-as creates a new entry; update the spec.name to match.
@@ -518,6 +599,7 @@ export class SpecStrategyRunnerComponent {
       const saved = this.store.save(name, namedSpec);
       this.spec.set(structuredClone(saved.spec));
       this.currentSavedId.set(saved.id);
+      this.snapshotCurrentSpec();
       this.statusMessage.set(`Saved as "${name}".`);
     }
     this.showSaveDialog.set(false);
@@ -530,6 +612,7 @@ export class SpecStrategyRunnerComponent {
       return;
     }
     this.store.save(this.spec().name, this.spec(), id);
+    this.snapshotCurrentSpec();
     this.statusMessage.set('Saved.');
   }
 
@@ -652,5 +735,109 @@ export class SpecStrategyRunnerComponent {
     const next: IndicatorComparisonCondition =
       side === 'left' ? { ...base, left: op } : { ...base, right: op };
     this.emitCondChange(ctx, ruleIndex, index, next);
+  }
+
+  // -----------------------------------------------------------------------
+  // Read/edit toggle for condition cards.
+  //
+  // Cards default to read mode (colored category tag + plain English).
+  // Click the edit icon to expand into form-field mode. Keeping read mode
+  // as default makes the page much less noisy when scanning a many-rule
+  // strategy.
+  // -----------------------------------------------------------------------
+  private editingKeyFor(ctx: 'entry' | 'exit' | 'manage', ruleIndex: number, index: number): string {
+    return `${ctx}:${ruleIndex}:${index}`;
+  }
+
+  isEditing(ctx: 'entry' | 'exit' | 'manage', ruleIndex: number, index: number): boolean {
+    return this.editingKeys().has(this.editingKeyFor(ctx, ruleIndex, index));
+  }
+
+  toggleEditing(ctx: 'entry' | 'exit' | 'manage', ruleIndex: number, index: number): void {
+    const key = this.editingKeyFor(ctx, ruleIndex, index);
+    const next = new Set(this.editingKeys());
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    this.editingKeys.set(next);
+  }
+
+  // -----------------------------------------------------------------------
+  // Catalog accessors — let the template ask "what's the friendly label /
+  // group / blurb for this kind?" without re-importing the catalog file.
+  // -----------------------------------------------------------------------
+  conditionLabel(kind: string): string {
+    return CONDITION_CATALOG[kind as ConditionKind]?.label ?? kind;
+  }
+
+  conditionGroup(kind: string): ConditionGroup {
+    return CONDITION_CATALOG[kind as ConditionKind]?.group ?? 'signal';
+  }
+
+  conditionBlurb(kind: ConditionKind): string {
+    return CONDITION_CATALOG[kind].blurb;
+  }
+
+  conditionExample(kind: ConditionKind): string {
+    return CONDITION_CATALOG[kind].example;
+  }
+
+  conditionShort(kind: ConditionKind): string {
+    return CONDITION_CATALOG[kind].short;
+  }
+
+  groupedConditions(ctx: 'entry' | 'exit' | 'manage') {
+    return groupedConditionsForContext(ctx);
+  }
+
+  /** Plain-English line for a single condition — used in read-mode card. */
+  conditionPlainText(c: Condition): string {
+    return formatConditionLine(c, this.spec().indicators);
+  }
+
+  // -----------------------------------------------------------------------
+  // Quick manage-rule presets — from the design's "+ 1.5% stop-loss" /
+  // "+ 3% take-profit" / "+ Trailing stop" shortcut buttons.
+  // -----------------------------------------------------------------------
+  addQuickManageRule(preset: QuickManageRule): void {
+    const built = preset.build();
+    const cond: Condition =
+      built.conditionKind === 'PnLPercent'
+        ? { kind: 'PnLPercent', op: built.value < 0 ? '<=' : '>=', value: built.value }
+        : { kind: 'DrawdownFromPeak', value: built.value };
+    this.spec.update((s) =>
+      addSurvivalRule(s, {
+        name: built.name,
+        when: { logic: 'AND', conditions: [cond] },
+        action: { kind: 'CLOSE_ALL' },
+      }),
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // Validation fix shortcuts — when an issue carries a ``fix`` label,
+  // the template renders it as a clickable hint. This handler implements
+  // the small library of fixes the validation issues offer.
+  // -----------------------------------------------------------------------
+  applyValidationFix(issue: ValidationIssue): void {
+    if (!issue.fix) return;
+    if (issue.fix === 'Add EMA-9') {
+      this.spec.update((s) =>
+        addIndicator(s, { id: 'ema_9', kind: 'EMA', period: 9, source: 'close' }),
+      );
+      this.statusMessage.set('Added EMA-9 indicator.');
+      return;
+    }
+    if (issue.fix === 'Add a 1.5% stop-loss') {
+      this.addQuickManageRule(this.quickManageRules[0]);
+      this.statusMessage.set('Added 1.5% stop-loss manage rule.');
+      return;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Save snapshot tracking — used by the dirty marker.
+  // -----------------------------------------------------------------------
+  private snapshotCurrentSpec(): void {
+    this.lastSavedSnapshot.set(this.specJson());
   }
 }
