@@ -60,10 +60,18 @@ class SpecBacktestRequest(BaseModel):
 
 
 class SpecTradeResponse(BaseModel):
+    """Single trade emitted by a spec backtest.
+
+    Timestamps are ``int64 ms UTC`` per the repo-wide wire-format rule
+    (see ``.claude/rules/numerical-rigor.md`` § "Timestamp rigor"). UI
+    callers convert to local-time strings at the display boundary; no
+    other layer should be reading these fields as strings.
+    """
+
     trade_number: int
-    entry_time: str
+    entry_time: int  # int64 ms since Unix epoch, UTC
     entry_price: float
-    exit_time: str
+    exit_time: int  # int64 ms since Unix epoch, UTC
     exit_price: float
     indicators: dict[str, float] = Field(default_factory=dict)
     pnl_pts: float
@@ -153,12 +161,24 @@ def _parse_fill_mode(s: str) -> FillMode:
     )
 
 
+def _to_ms_utc(dt: datetime) -> int:
+    """Convert a tz-aware ``datetime`` to ``int64 ms`` since Unix epoch UTC.
+
+    LoggedTrade timestamps are tz-aware (the engine builds them from
+    ``TradeBar.end_time`` which carries an ``America/New_York`` zoneinfo).
+    ``datetime.timestamp()`` returns POSIX seconds independent of the
+    zone, so ``int(dt.timestamp() * 1000)`` is the canonical conversion
+    to int64 ms UTC at the wire boundary.
+    """
+    return int(dt.timestamp() * 1000)
+
+
 def _trade_to_response(i: int, t: LoggedTrade) -> SpecTradeResponse:
     return SpecTradeResponse(
         trade_number=i + 1,
-        entry_time=t.entry_time.isoformat(),
+        entry_time=_to_ms_utc(t.entry_time),
         entry_price=float(t.entry_price),
-        exit_time=t.exit_time.isoformat(),
+        exit_time=_to_ms_utc(t.exit_time),
         exit_price=float(t.exit_price),
         indicators={k: float(v) for k, v in t.indicators.items()},
         pnl_pts=float(t.pnl_pts),
@@ -286,6 +306,19 @@ def run_spec_backtest(
     )
     try:
         result = engine.run(strategy)
+    except NotImplementedError as exc:
+        # Spec asks the evaluator to do something this phase doesn't
+        # support yet — e.g. ``FixedContracts`` sizing surfaces from
+        # ``SpecAlgorithm._submit_entry`` only when entry actually fires,
+        # so the constructor guard at line 262 above can't catch it. The
+        # caller wrote a syntactically-valid spec that hit a
+        # capability gap, so 4xx is the right shape (matches the
+        # constructor-guard branch). 500 / success=false would mask the
+        # client error as a server failure.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"spec uses unsupported feature: {exc}",
+        ) from exc
     except Exception as exc:
         logger.exception("[SPEC] backtest failed for %s", spec.name)
         return SpecBacktestResponse(
