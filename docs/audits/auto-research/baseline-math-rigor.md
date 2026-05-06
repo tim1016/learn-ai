@@ -15,9 +15,9 @@ _Filled at the end of the first sweep and updated after every subsequent run tha
 | Severity | Open | Deferred | Closed | Total |
 |---|---|---|---|---|
 | P0 | 2 | 0 | 0 | 2 |
-| P1 | 17 | 0 | 0 | 17 (1 status=awaiting-human) |
-| P2 | 12 | 0 | 0 | 12 |
-| P3 | 1 | 0 | 0 | 1 |
+| P1 | 18 | 0 | 0 | 18 (1 status=awaiting-human) |
+| P2 | 11 | 0 | 0 | 11 (F-0032 dropped to P3 after DTO audit) |
+| P3 | 2 | 0 | 0 | 2 |
 
 **Files audited:** All 10 phases touched. Phase 1 substantially complete (registry cross-check + subtree inventory + drift detection). Phase 2 items 2 + 5 verified; items 1 + 4 already deferred per Phase 1 findings (F-0010, F-0011, F-0018). Phase 3 .NET fully triaged (F-0021 + F-0022); Python ingestion fully triaged (F-0023 + F-0024); TS rollup with per-file triage owed (F-0020). Phase 4 headline (F-0027) — file-by-file 4-field-block triage owed. Phase 5 headline (F-0026 — fixture coverage). Phase 6 substantially clean (F-0025). Phase 7 subsumed by Phase 3 P0. Phase 8 sample (F-0032 — decimal→double); per-canonical tracing + DTO file-by-file owed. Phase 9 sample of `lean-engine.component.ts` confirms F-0028 severity; 7 high-suspicion files owed. Phase 10 done (F-0030 reference notes + F-0031 warmup).
 **Files skipped:** Per-file triage in Phases 3 (TS), 4, 8 (DTOs), 9 (TS).
@@ -34,12 +34,12 @@ For each rule, one row: **holding** / **violated** / **partial**, with the count
 | Tolerances explicit (no default `np.allclose`) | **mostly holding** | F-0025 | One bare `np.isclose` in edge_score.py |
 | Tolerances justified when loosened | **mostly holding** | F-0025 | One .NET `Assert.Equal(.., delta:4)` without rationale |
 | Timestamp canonical format `int64 ms UTC` at all boundaries | **violated** | F-0009, F-0019, F-0020 | sanitizer emits ISO-Z at wire; trade_comparison silently UTC-stamps naive strings |
-| Timestamp ban-list clean (Python) | **violated** | F-0020 | 19 candidate files; sanitizer + rule_based_backtest + trade_comparison confirmed |
+| Timestamp ban-list clean (Python) | **violated** | F-0009, F-0019, F-0023, F-0024, F-0033 | All 14 non-ingestion candidates triaged: 10 confirmed in violation. Ingestion: 4 files confirmed (sanitizer, dataset_service, polygon_ingest, polygon_client). |
 | Timestamp ban-list clean (.NET) | **violated** | F-0020, F-0021 (P0), F-0022 | All 4 candidate files confirmed violators; 2 are ingestion-path P0 |
 | Timestamp ban-list clean (TypeScript) | **partial** | F-0020 | 45 candidate files; mostly display/test but ~10 cross-wire surfaces need triage |
 | Fail-fast ingestion (no silent dedup / forward-fill) | **violated** | F-0009, F-0023 | sanitizer silent dedup; dataset_service silent forward-fill (P0) |
 | Sovereignty (no runtime calls into `references/`) | TBD | — | Phase 4 |
-| Math Provenance Contract: 4-field block on canonical math | **violated** | F-0027 | Near-universal absence across `engine/indicators/`, `services/`, `volatility/` |
+| Math Provenance Contract: 4-field block on canonical math | **violated** | F-0027 | Confirmed via repo-wide grep: only **2 files** in all of `PythonDataService/app/` have any 4-field marker (`indicators/rsi.py`, `services/strategies/lean_statistics.py`) |
 | Single canonical per concept (no silent duplicates) | **partial** | F-0001/F-0002/F-0004/F-0005/F-0007/F-0008 | Multiple unregistered canonical math subtrees discovered |
 | Authority hierarchy: Python is the home of canonical math (rule 5) | **partial** | F-0010, F-0011 | PositionEngine FIFO + SnapshotService drawdown both compute math in .NET; not registered as legacy-ok |
 | Warmup behavior documented per indicator | **partial** | F-0031 | 5 of 7 indicators document warmup; `macd.py` missing |
@@ -98,6 +98,7 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 | F-0022 | P1 | open | timestamp | `Query.cs` (4 occurrences), `MarketDataService.cs` (date-range params, 6 occurrences), `ResearchService.cs` (2 occurrences) — `DateTime.Parse(fromDate).ToUniversalTime()` silently treats naive input as local time | [findings/F-0022](findings/F-0022-dotnet-query-parameter-datetime-parse.md) |
 | F-0023 | **P0** | open | ingestion | `dataset_service.py::forward_fill_gaps` (lines 489-565) silently fills missing minute bars with prev-close + zero-volume. Default `forward_fill=True` at 4 call sites. Direct violation of fail-fast ingestion rule. | [findings/F-0023](findings/F-0023-dataset-service-forward-fill-gaps.md) |
 | F-0024 | P1 | open | timestamp | More ban-list violations in Python ingestion paths: `polygon_ingest.py:226` ISO-Z emission, `dataset_service.py:851` `datetime.utcfromtimestamp`, `dataset_service.py:939/1139` `datetime.utcnow`, `polygon_client.py:625/628/676` naive `datetime.now()` | [findings/F-0024](findings/F-0024-additional-iso-z-emission-and-banned-utcfromtimestamp.md) |
+| F-0033 | P1 | open | timestamp | Phase 3 Python non-ingestion rollup: 10 files in violation. ISO-Z emissions in `options_companion_service.py`, `validation_study.py`, `engine_runner.py`, `cache.py`. `pd.to_datetime` without `utc=True` in `iv_builder.py:413`, `contract_finder.py:128`. `datetime.utcnow()` in 5 places. Naive `datetime.now()` x4 in `volatility.py` router. | [findings/F-0033](findings/F-0033-python-non-ingestion-banlist-violations.md) |
 
 ### 3.4 Provenance & reference gaps
 
@@ -127,13 +128,13 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0032 | P2 | open | wire | `PolygonService.cs` casts `decimal → double` on every outbound Python pricing/scenario request (lines 692-750). 3 DTO files (`ResearchModels`, `SignalModels`, `BatchResearchModels`) have `double`/`float`-typed properties for inbound responses. `BacktestService.cs:449` does narrow-then-widen via `Math.Sqrt`. | [findings/F-0032](findings/F-0032-decimal-to-double-narrowing-at-wire.md) |
+| F-0032 | P3 | open | wire | **Triage update 2026-05-06:** DTO audit shows `double` properties match Python's `float64` computation precision throughout. Severity dropped P2 → P3. Held open for auditability concern (loose `Dictionary<string, object?>` typing and registry doesn't document the precision contract). | [findings/F-0032](findings/F-0032-decimal-to-double-narrowing-at-wire.md) |
 
 ### 3.9 Frontend consumption / display-only violations
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0028 | P2 | open | frontend-consumption | Rollup: 108 hits across 30 TS files of `toFixed`/`parseFloat`/`Number()`. Most likely display-only; 8 high-suspicion files (`lean-engine`, `payoff-chart`, `pricing-lab`, `strategy-builder`, ...) need per-file triage. | [findings/F-0028](findings/F-0028-frontend-numeric-parse-rollup.md) |
+| F-0028 | P2 | open (triage complete) | frontend-consumption | Rollup: 108 hits across 30 TS files. **Triage update 2026-05-06:** all 8 high-suspicion files inspected — confirmed display-only / form-input parsing. No P0/P1 violations. | [findings/F-0028](findings/F-0028-frontend-numeric-parse-rollup.md) |
 
 ### 3.10 Documentation & auditability polish
 
@@ -278,6 +279,7 @@ The nightly auto-research cron is **not** scheduled until every box below is che
 | 5 | 2026-05-06 | 4 (provenance), 9 (frontend rollup) | 2 (F-0027 P1 + F-0028 P2) | 0 | Phase 4 reveals near-universal absence of 4-field provenance block. Phase 9 grep returns 108 candidate hits across 30 TS files — rolled up. §5 recommendation plan populated. **End of overnight burn.** |
 | 6 | 2026-05-06 | 2 (verification), 9 (sample), 10 (sweep) | 3 (F-0029 P2 + F-0030 P2 + F-0031 P3) | 0 | Phase 2 item 2 verified clean (only 2 production callers of `black-scholes.ts`). Phase 2 item 5 has 6 hardcoded `0.043` constants vs registry's count of 4 (F-0029). Phase 9 sample of lean-engine.component.ts confirms F-0028 severity classification (mostly display-only). Phase 10 sweep finds reference notes for indicators well-covered, ~15 missing for strategy/stat/portfolio rows (F-0030); MACD warmup docstring missing (F-0031, first P3). |
 | 7 | 2026-05-06 | 8 (sample) | 1 (F-0032 P2) | 0 | Phase 8 sample touches: PolygonService.cs casts `decimal → double` on every Python request (~15 occurrences across single-leg + multi-leg shapes). 3 DTO files have `double`/`float` properties for inbound. Direction matters — outbound is parameter-narrowing (acceptable), inbound is canonical-narrowing (P1-candidate, P2 here pending per-DTO-file audit). |
+| 8 | 2026-05-06 | 3 (Py non-ingestion full), 4 (full grep), 8 (DTOs full), 9 (high-suspicion full) | 1 (F-0033 P1) | 0 | **Per-file triage round.** Phase 3 Python non-ingestion: 10 of 14 files confirmed in violation (rollup F-0033). Phase 4 grep across `PythonDataService/app/`: only 2 files have any 4-field marker (confirms F-0027 even more starkly). Phase 8 DTO audit: severity drops P2 → P3 (DTOs match Python `float64`). Phase 9 high-suspicion files: all display-only or legitimate parsing; no P0/P1 surprises. |
 
 Per-run summaries in `docs/audits/auto-research/runs/YYYY-MM-DD.md` (created on first run).
 

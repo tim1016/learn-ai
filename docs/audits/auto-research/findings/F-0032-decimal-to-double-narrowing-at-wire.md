@@ -88,3 +88,17 @@ Per the rules' wire-fidelity heuristic ("Type narrowing on a numeric field that 
 ## Provenance of the finding itself
 
 Phase 8 / cursor: targeted grep of `(double)` in `Backend/`. Sample-sweep — full per-file audit of the 3 DTO files is owed.
+
+## Triage update (2026-05-06): DTO audit complete
+
+Full read of `ResearchModels.cs`, `SignalModels.cs`, `BatchResearchModels.cs` shows the inbound DTO `double` properties match Python's computation precision. Specifically:
+
+- **Research statistics (IC, t-stat, p-value, mean drawdown, Sharpe, etc.)** — computed in Python via numpy/scipy as `float64`, which is bit-equivalent to .NET `double`. **No precision loss.**
+- **IV measurements (`AtmIv`, `IvOtmPut`, `IvOtmCall`, etc. in `BatchResearchModels.cs`)** — computed by `bs_greeks.py` / `volatility/solver.py` in `float64` per the cross-engine parity test (`test_bs_cross_engine_parity.py` at `atol=1e-10`). `double` on the .NET side preserves this.
+- **`BuildIvHistoryResponseDto.IvData : List<Dictionary<string, object?>>`** — loose typing (P3 hygiene; not a precision issue, but auditability is poor).
+
+**Outbound `(double)` casts in `PolygonService.cs`** are similarly benign: the .NET `decimal` source is itself a UI/database approximation, and Python receives `float64` regardless.
+
+**Severity dropped from P2 → P3.** The narrowing is consistent with canonical computation precision throughout the chain. Held open as P3 for the auditability concern (loose `Dictionary<string, object?>` and the lack of explicit precision contract documented in the registry).
+
+If a future canonical math function is rewritten to use `Decimal` instead of `float64` in Python (which the rules permit when accumulation precision matters), the DTO `double` fields would need to widen — but that's a future concern.

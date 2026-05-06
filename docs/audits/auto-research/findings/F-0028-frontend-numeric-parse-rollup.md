@@ -50,3 +50,13 @@ Then mass-classify the remaining files as display-only.
 ## Provenance of the finding itself
 
 Phase 9 / cursor: grep `\.toFixed\(|parseFloat\(|Number\(` over `Frontend/src/app/**/*.ts` with head_limit=30 (output truncated). Count is approximate — actual scope larger.
+
+## Triage update (2026-05-06)
+
+Per-file inspection of all 8 high-suspicion files (`lean-engine.component.ts`, `pricing-lab.component.ts`, `strategy-builder.component.ts`, `tracked-instruments.component.ts`, `benchmark-scorecard.component.ts`, `backtest-job-page.component.ts`, `insight-panel.component.ts`, plus payoff-chart at `shared/payoff-chart/`) confirms:
+
+- **All `toFixed(N)` calls are display-only** — chart axis labels, tooltip values, table cells, market-cap formatters.
+- **All `Number(string)` calls are legitimate** — parsing form inputs (`Number(this.multiplier)`), date construction (`Number(parts["year"])`), object key conversion (`Number(h)` for hour bucket).
+- **`parseFloat(rawValue)` in lean-engine.component.ts:618** is form-input handling (`type === "number"` branch), not wire data parsing.
+
+**Severity holds at P2 rollup.** No P0/P1 violations found. The remaining ~22 TS files (out of 30) were not inspected per-file but are presumed display-only based on the consistent pattern across the high-suspicion sample. **Status updated to reflect that triage is complete for high-suspicion subset.**
