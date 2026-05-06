@@ -1,0 +1,266 @@
+<div class="run-detail">
+  <header class="rd-header">
+    <a routerLink="/research-lab" class="rd-back">← Research Lab</a>
+    @if (run(); as data) {
+      <div class="rd-title">
+        <h1>{{ data.ledger.strategy_spec_id }}</h1>
+        <p-tag
+          [value]="data.ledger.status"
+          [severity]="statusSeverity(data.ledger.status)"
+        />
+      </div>
+      <div class="rd-meta">
+        <span><strong>Symbol:</strong> {{ data.ledger.symbol }}</span>
+        <span><strong>Resolution:</strong> {{ data.ledger.resolution_minutes }}m</span>
+        <span>
+          <strong>Window:</strong>
+          {{ data.ledger.start_ms | date: 'yyyy-MM-dd' }} →
+          {{ data.ledger.end_ms | date: 'yyyy-MM-dd' }}
+        </span>
+        <span><strong>Run ID:</strong> <code>{{ data.ledger.run_id }}</code></span>
+      </div>
+    } @else {
+      @if (runId(); as id) {
+        <h1>Run <code>{{ id }}</code></h1>
+      }
+    }
+  </header>
+
+  @if (loading()) {
+    <p class="rd-loading">Loading run…</p>
+  }
+
+  @if (error(); as msg) {
+    <p-message severity="error" [text]="msg" class="rd-error" />
+  }
+
+  @if (run(); as data) {
+    @if (data.ledger.status === 'failed' && data.ledger.failure_reason; as reason) {
+      <p-message severity="warn" [text]="reason" class="rd-warn" />
+    }
+
+    @if (data.result.warnings.length > 0) {
+      <p-message severity="info" class="rd-warn">
+        <ng-template #content>
+          <ul class="rd-warning-list">
+            @for (w of data.result.warnings; track w; let i = $index) {
+              <li>{{ w }}</li>
+            }
+          </ul>
+        </ng-template>
+      </p-message>
+    }
+
+    <!-- Metrics -->
+    <section class="rd-section">
+      <h2>Metrics</h2>
+      <div class="rd-metrics-grid">
+        <div class="rd-metric">
+          <span class="rd-metric-label">Total return</span>
+          <span class="rd-metric-value">
+            {{ data.result.metrics.total_return_pct | percent: '1.2-2' }}
+          </span>
+        </div>
+        <div class="rd-metric">
+          <span class="rd-metric-label">Max drawdown</span>
+          <span class="rd-metric-value">
+            @if (data.result.metrics.max_drawdown_pct !== null) {
+              {{ data.result.metrics.max_drawdown_pct | percent: '1.2-2' }}
+            } @else { — }
+          </span>
+        </div>
+        <div class="rd-metric">
+          <span class="rd-metric-label">Sharpe</span>
+          <span class="rd-metric-value">
+            @if (data.result.metrics.sharpe_ratio !== null) {
+              {{ data.result.metrics.sharpe_ratio | number: '1.2-2' }}
+            } @else { — }
+          </span>
+        </div>
+        <div class="rd-metric">
+          <span class="rd-metric-label">Sortino</span>
+          <span class="rd-metric-value">
+            @if (data.result.metrics.sortino_ratio !== null) {
+              {{ data.result.metrics.sortino_ratio | number: '1.2-2' }}
+            } @else { — }
+          </span>
+        </div>
+        <div class="rd-metric">
+          <span class="rd-metric-label">Profit factor</span>
+          <span class="rd-metric-value">
+            @if (data.result.metrics.profit_factor !== null) {
+              {{ data.result.metrics.profit_factor | number: '1.2-2' }}
+            } @else { — }
+          </span>
+        </div>
+        <div class="rd-metric">
+          <span class="rd-metric-label">Payoff ratio</span>
+          <span class="rd-metric-value">
+            @if (data.result.metrics.payoff_ratio !== null) {
+              {{ data.result.metrics.payoff_ratio | number: '1.2-2' }}
+            } @else { — }
+          </span>
+        </div>
+        <div class="rd-metric">
+          <span class="rd-metric-label">Win rate</span>
+          <span class="rd-metric-value">
+            @if (data.result.metrics.win_rate !== null) {
+              {{ data.result.metrics.win_rate | percent: '1.1-1' }}
+            } @else { — }
+          </span>
+        </div>
+        <div class="rd-metric">
+          <span class="rd-metric-label">Trades</span>
+          <span class="rd-metric-value">
+            {{ data.result.metrics.total_trades }}
+            <small>
+              ({{ data.result.metrics.winning_trades }}W /
+              {{ data.result.metrics.losing_trades }}L)
+            </small>
+          </span>
+        </div>
+        <div class="rd-metric">
+          <span class="rd-metric-label">Expectancy</span>
+          <span class="rd-metric-value">
+            @if (data.result.metrics.expectancy_pct !== null) {
+              {{ data.result.metrics.expectancy_pct | percent: '1.2-2' }}
+            } @else { — }
+          </span>
+        </div>
+        <div class="rd-metric">
+          <span class="rd-metric-label">Exposure</span>
+          <span class="rd-metric-value">
+            @if (data.result.metrics.exposure_pct !== null) {
+              {{ data.result.metrics.exposure_pct | percent: '1.0-0' }}
+            } @else { — }
+          </span>
+        </div>
+        <div class="rd-metric">
+          <span class="rd-metric-label">Final equity</span>
+          <span class="rd-metric-value">
+            ${{ data.result.final_equity | number: '1.0-0' }}
+          </span>
+        </div>
+        <div class="rd-metric">
+          <span class="rd-metric-label">Initial cash</span>
+          <span class="rd-metric-value">
+            ${{ data.result.initial_cash | number: '1.0-0' }}
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Charts -->
+    <section class="rd-section">
+      <h2>Equity curve</h2>
+      <div #equityChart class="rd-chart"></div>
+    </section>
+    <section class="rd-section">
+      <h2>Drawdown</h2>
+      <div #drawdownChart class="rd-chart"></div>
+    </section>
+
+    <!-- Trades -->
+    <section class="rd-section">
+      <h2>Trades <small class="rd-section-count">({{ data.result.trades.length }})</small></h2>
+      <p-table
+        [value]="data.result.trades"
+        [paginator]="data.result.trades.length > 50"
+        [rows]="50"
+        [scrollable]="true"
+        scrollHeight="500px"
+        styleClass="rd-trade-table"
+      >
+        <ng-template #header>
+          <tr>
+            <th>#</th>
+            <th>Entry</th>
+            <th>Entry $</th>
+            <th>Exit</th>
+            <th>Exit $</th>
+            <th>Bars</th>
+            <th>PnL pts</th>
+            <th>PnL %</th>
+            <th>Result</th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-t>
+          <tr>
+            <td>{{ t.trade_number }}</td>
+            <td>{{ t.entry_time_ms | date: 'yyyy-MM-dd HH:mm' }}</td>
+            <td>${{ t.entry_price | number: '1.2-2' }}</td>
+            <td>{{ t.exit_time_ms | date: 'yyyy-MM-dd HH:mm' }}</td>
+            <td>${{ t.exit_price | number: '1.2-2' }}</td>
+            <td>{{ t.bars_held }}</td>
+            <td>{{ t.pnl_pts | number: '1.2-2' }}</td>
+            <td>{{ t.pnl_pct | percent: '1.2-2' }}</td>
+            <td>
+              <p-tag
+                [value]="t.result"
+                [severity]="t.result === 'WIN' ? 'success' : 'danger'"
+              />
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+    </section>
+
+    <!-- Provenance -->
+    <section class="rd-section">
+      <h2>Provenance</h2>
+      <dl class="rd-provenance">
+        <dt>Spec hash</dt>
+        <dd><code>{{ shortHash(data.ledger.strategy_spec_hash, 32) }}…</code></dd>
+
+        <dt>Result hash</dt>
+        <dd><code>{{ shortHash(data.ledger.result_hash, 32) }}…</code></dd>
+
+        <dt>Trade-log hash</dt>
+        <dd><code>{{ shortHash(data.ledger.trade_log_hash, 32) }}…</code></dd>
+
+        <dt>Metrics hash</dt>
+        <dd><code>{{ shortHash(data.ledger.metrics_hash, 32) }}…</code></dd>
+
+        <dt>Data snapshot</dt>
+        <dd><code>{{ data.ledger.data_snapshot_id }}</code></dd>
+
+        <dt>Engine</dt>
+        <dd>
+          {{ data.ledger.engine_name }}@{{ data.ledger.engine_version }}
+          <span class="rd-prov-aux">
+            (commit <code>{{ shortHash(data.ledger.engine_git_commit, 12) }}</code>)
+          </span>
+        </dd>
+
+        <dt>Fill model</dt>
+        <dd>
+          {{ data.ledger.fill_mode }}
+          <span class="rd-prov-aux">
+            commission ${{ data.ledger.commission_per_order | number: '1.2-2' }} /
+            slippage ${{ data.ledger.slippage_per_share | number: '1.4-4' }}/share
+          </span>
+        </dd>
+
+        <dt>Random seed</dt>
+        <dd><code>{{ data.ledger.random_seed }}</code></dd>
+
+        <dt>Created</dt>
+        <dd>{{ data.ledger.created_at_ms | date: 'yyyy-MM-dd HH:mm:ss' }}</dd>
+
+        @if (data.ledger.completed_at_ms; as completedMs) {
+          <dt>Completed</dt>
+          <dd>{{ completedMs | date: 'yyyy-MM-dd HH:mm:ss' }}</dd>
+        }
+
+        @if (data.ledger.parent_run_id; as parentId) {
+          <dt>Parent run</dt>
+          <dd>
+            <a [routerLink]="['/research-lab/strategy-runs', parentId]">
+              <code>{{ shortHash(parentId, 16) }}…</code>
+            </a>
+          </dd>
+        }
+      </dl>
+    </section>
+  }
+</div>

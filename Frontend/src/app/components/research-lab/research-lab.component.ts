@@ -10,6 +10,7 @@ import { BatchRunnerComponent } from './batch-runner/batch-runner.component';
 import { DataDivergenceComponent } from './data-divergence/data-divergence.component';
 import { StrategyPreflightComponent } from './strategy-preflight/strategy-preflight.component';
 import { IndicatorReliabilityComponent } from './indicator-reliability/indicator-reliability.component';
+import { StrategyRunsComponent } from './strategy-runs/strategy-runs.component';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 
 type TabId =
@@ -19,6 +20,7 @@ type TabId =
   | 'cross-sectional'
   | 'data-divergence'
   | 'strategy-preflight'
+  | 'strategy-runs'
   | 'experiment-history'
   | 'options-math'
   | 'signal-docs'
@@ -50,6 +52,7 @@ interface SubNavGroup {
     DataDivergenceComponent,
     StrategyPreflightComponent,
     IndicatorReliabilityComponent,
+    StrategyRunsComponent,
   ],
   templateUrl: './research-lab.component.html',
   styleUrls: ['./research-lab.component.scss'],
@@ -76,6 +79,7 @@ export class ResearchLabComponent {
         { id: 'cross-sectional', label: 'Cross-Sectional' },
         { id: 'data-divergence', label: 'Data Divergence' },
         { id: 'strategy-preflight', label: 'Pre-flight Check' },
+        { id: 'strategy-runs', label: 'Strategy Runs' },
       ],
     },
     {
