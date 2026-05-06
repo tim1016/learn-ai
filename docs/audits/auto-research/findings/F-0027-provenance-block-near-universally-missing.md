@@ -2,7 +2,7 @@
 id: F-0027
 severity: P1
 status: deferred
-remediation_progress: indicators-subtree-done-2026-05-06
+remediation_progress: indicators-subtree-done + 5-canonical-services-done 2026-05-06
 area: provenance
 canonical_file: cross-cutting (PythonDataService canonical math)
 reference: .claude/skills/learn-ai-validation/SKILL.md (Math Provenance Contract)
@@ -83,6 +83,13 @@ The existing prose docstrings remain (kept as "reproducibility details" prose); 
 **Also applied as part of this round (per F-0010 + F-0011 closures):**
 - `Backend/Services/Implementation/PositionEngine.cs` — class XML doc block (FIFO accounting)
 - `Backend/Services/Implementation/SnapshotService.cs::ComputeMetrics` — method XML doc block (Sharpe / Sortino / Calmar / MaxDD)
+
+**Stage F (2026-05-06) — 5 more canonical math files done:**
+- `app/services/bs_greeks.py` — closed-form BS-M (Hull §15.8 / §19); cross-engine parity at atol=1e-10
+- `app/services/quantlib_pricer.py` — QuantLib BS variant; companion canonical to bs_greeks.py
+- `app/volatility/solver.py` — IV solver (Hull §19.11 + Brent + Brenner-Subrahmanyam seed)
+- `app/volatility/vix_replication.py` — **CBOE VIX 2019 whitepaper / Demeterfi-Derman-Kamal-Zou 1999** (the highest-stakes provenance call per F-0007; cite the formula source explicitly)
+- `app/engine/results/statistics.py` — Sharpe/MaxDrawdown canonical (Sharpe 1994; Bacon §8.2)
 
 **Still owed (status remains `deferred` because the work continues):**
 - `app/services/{bs_greeks,quantlib_pricer,strategy_engine,fred_service,portfolio_scenario,sanitizer,...}.py` — 0 of ~20 done

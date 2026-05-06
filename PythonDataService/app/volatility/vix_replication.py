@@ -1,5 +1,10 @@
 """VIX-style variance replication of constant-maturity IV30.
 
+Formula: σ²_T = (2/T)·Σᵢ(ΔKᵢ/Kᵢ²)·e^(rT)·Q(Kᵢ) - (1/T)·(F/K₀ - 1)². See "Formula per expiry T" block below for full notation. Constant-maturity 30-day vol is variance-time interpolation between two expiries straddling 30 calendar days.
+Reference: CBOE VIX 2019 whitepaper "VIX Index Calculation: Step-by-Step" (the modern variant); the underlying mathematics goes back to Demeterfi, Derman, Kamal, Zou (1999) "More Than You Ever Wanted to Know About Volatility Swaps" (Goldman Sachs Quantitative Strategies Research Notes). Either citation is acceptable; CBOE 2019 is the operational definition.
+Canonical implementation: this file (registry: § Volatility surface and analytics, finding F-0007). Used as ground truth against the parametric IV30 (which interpolates fitted ATM σ in variance-space).
+Validated against: NONE — pending fixture against CBOE-published VIX values for a known date (e.g., a recent quarter-end where the official VIX is on cboe.com). High-stakes provenance: the formula must match CBOE 2019 exactly.
+
 Implements the CBOE VIX 2019 whitepaper formula on a chain of listed options.
 Used as **ground truth** for our parametric IV30 (which interpolates fitted
 ATM σ in variance-space) — Step 4 of the IV-RV alignment plan.
