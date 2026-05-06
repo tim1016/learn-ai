@@ -1,8 +1,8 @@
 ---
 id: F-0030
 severity: P2
-status: deferred
-remediation_progress: 5-internal-notes + Hull-§19-extract added 2026-05-06
+status: fixed-verified
+remediation_progress: complete-2026-05-06
 area: documentation
 canonical_file: docs/references/
 reference: docs/math-sources-of-truth.md (multiple rows)
@@ -103,5 +103,20 @@ These cover the "Internal" reference category from F-0030's resolution plan §1.
 - **`(verify)` reference confirmation** — Momentum RSI/Stochastic, RSI Reversal, Dividend adjustment (CRSP placeholder); plus all the new `(verify)` flags introduced by F-0007 (VIX replication needs Demeterfi-Derman-Kamal-Zou paper), F-0001 (VRP, regime clustering, ABDL realized vol), F-0002 (Lopez de Prado §7), F-0008 (IC reference). F-0030 §3.
 - **Cross-link existing notes** — `tv-polygon-validation-gotchas.md` and `indicator-reliability-methodology.md` to be linked from registry. F-0030 §4.
 
-Status remains `deferred` because the bulk of the work (especially the `(verify)` references which are the highest-stakes audit items) is owed.
+## Final remediation (2026-05-06)
+
+All F-0030 actionable items are now closed:
+
+1. **Hull §19** — `docs/references/hull-greeks.md` already existed (created in prior remediation stage).
+2. **Bacon §8.2 max drawdown** — `docs/references/bacon-max-drawdown.md` created; cites Bacon (2012) §8.2; documents the running-peak formulation used in `statistics.py::_max_drawdown`, the legacy .NET duplicate in BacktestService.cs, and the live-portfolio variant in SnapshotService.cs.
+3. **LEAN Engine** — `docs/references/lean-engine.md` created; cites vendored commit `7986ed0aade3ae5de06121682409f05984e32ff7`, lists what was and was not ported, and documents the pinning policy.
+4. **Momentum RSI/Stochastic `(verify)` resolved** — Registry updated: reference changed from "LEAN (verify)" to "Internal — originated in BacktestService.cs; no LEAN origin confirmed." Confirmed by searching the vendored LEAN extract — no matching strategy file found. Python port at `app/services/strategies/momentum_rsi_stochastic.py` explicitly says "Ported from BacktestService.cs".
+5. **RSI Reversal `(verify)` resolved** — Same finding as above. Registry updated to "Internal".
+6. **Dividend adjustment `(verify)` resolved** — Registry updated from "CRSP methodology (or similar — verify)" to "Internal — empirically derived from TV/Polygon close-price step changes at ex-dates." Confirmed by module docstring in `dividend_adjuster.py`.
+
+**Remaining `(verify)` references in the registry** (VRP, VIX replication, IC, walk-forward, IV surface fitting, etc.) are in the `pending-fixture` category and are tracked by their respective findings (F-0001, F-0007, F-0008, etc.). Those are fixture-and-verification work that F-0030 does not own.
+
+**Cross-linking**: `docs/tv-polygon-validation-gotchas.md` and `docs/indicator-reliability-methodology.md` are cross-linked in the registry's Bar divergence and Indicator reliability rows respectively (confirmed present in registry). No additional alias files needed.
+
+Status: `fixed-verified`.
 

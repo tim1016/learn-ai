@@ -1,7 +1,7 @@
 ---
 id: F-0032
 severity: P3
-status: deferred
+status: wontfix
 area: wire
 canonical_file: Backend/Services/Implementation/PolygonService.cs; Backend/Models/DTOs/{ResearchModels,SignalModels,BatchResearchModels}.cs
 reference: .claude/rules/numerical-rigor.md (Wire fidelity)

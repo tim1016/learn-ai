@@ -1,6 +1,6 @@
 ---
 id: F-0034
-severity: P1
+severity: P2
 status: deferred
 area: timestamp
 canonical_file: Frontend/src/app/components/lean-engine/engine-replay-v2/services/replay-engine-v2.service.ts; Frontend/src/app/services/replay-{engine,indicator,strategy}.service.ts; multiple lean-engine + research-lab + edge components
@@ -86,3 +86,13 @@ grep -rnE 'new Date\([a-zA-Z_][a-zA-Z0-9_]*\)|new Date\([a-zA-Z_][a-zA-Z0-9_]*\.
 ## Provenance of the finding itself
 
 Phase 3 / cursor: per-file triage of `new Date(<var>)` across `Frontend/src/`. Output cap was 80 lines so the actual scope is slightly larger; the tail looked similar in pattern based on the high-suspicion file inspection in F-0028 work.
+
+## Tier 1 resolution (2026-05-06)
+
+**Tier 1 (P1) is resolved by the producer-side fix.** F-0009 and F-0033 changed the Python service to emit `int64 ms` timestamps on the wire (70-file commit, Stage E–I of remediation). With `bar.timestamp` now a number, `new Date(number).getTime()` is idempotent and safe — no browser-dependent parse occurs.
+
+The Tier 4 band-aid in `engine-chart.component.ts:345` (appending `':00Z'` to naive ISO strings) is now dead code but harmless; it can be removed in a future cleanup PR.
+
+**Remaining concern**: Tier 2 (date-only query parameters — `new Date("YYYY-MM-DD")`) is still present. `"YYYY-MM-DD"` without a timezone designator is interpreted as UTC midnight per the HTML spec, so modern browsers handle this consistently, but `Date.UTC(y, m-1, d)` would be more explicit. This is the residual **P2** concern. Tier 3/4 are display-only P3 and do not need fixes.
+
+Severity downgraded from P1 → P2. Finding remains deferred (Tier 2 is a frontend-only cleanup, not a data-integrity issue).
