@@ -1,9 +1,9 @@
 # Math rigor baseline — learn-ai
 
-**Status:** in-progress
+**Status:** in-progress (all 10 phases touched at headline level; per-file triage owed for Phase 3 TS, Phase 4 4-field-blocks, Phase 8 DTOs, Phase 9 TS)
 **Started:** 2026-05-05
 **Last updated:** 2026-05-06
-**Run count:** 6
+**Run count:** 7
 **Generator:** `.claude/skills/auto-research-tick` (baseline mode)
 
 > This document is **frozen** once the baseline completes. Live state moves to a separate `current-state.md` after hardening. Do not edit this doc by hand once frozen except to append entries to the **Remediation log** at the bottom.
@@ -19,9 +19,9 @@ _Filled at the end of the first sweep and updated after every subsequent run tha
 | P2 | 12 | 0 | 0 | 12 |
 | P3 | 1 | 0 | 0 | 1 |
 
-**Files audited:** Phase 1 substantially complete — registry rows cross-checked; major engine/research/volatility subtrees inventoried; Backend secondary services + Python secondary services + parallel strategy implementations + migration-plan drift verified. Phase 3 ban-list grep run cross-stack (rolled up in F-0020).
-**Files skipped:** Per-file triage of the F-0020 ban-list candidates deferred to Phase 3 ticks.
-**Phases complete:** 1/10 substantially (Phase 1 cursor advanced to "Phase 1 complete pending P3 rollup classification"); Phase 3 grep prep done; Phases 2/4/5/6/7/8/9/10 not yet swept.
+**Files audited:** All 10 phases touched. Phase 1 substantially complete (registry cross-check + subtree inventory + drift detection). Phase 2 items 2 + 5 verified; items 1 + 4 already deferred per Phase 1 findings (F-0010, F-0011, F-0018). Phase 3 .NET fully triaged (F-0021 + F-0022); Python ingestion fully triaged (F-0023 + F-0024); TS rollup with per-file triage owed (F-0020). Phase 4 headline (F-0027) — file-by-file 4-field-block triage owed. Phase 5 headline (F-0026 — fixture coverage). Phase 6 substantially clean (F-0025). Phase 7 subsumed by Phase 3 P0. Phase 8 sample (F-0032 — decimal→double); per-canonical tracing + DTO file-by-file owed. Phase 9 sample of `lean-engine.component.ts` confirms F-0028 severity; 7 high-suspicion files owed. Phase 10 done (F-0030 reference notes + F-0031 warmup).
+**Files skipped:** Per-file triage in Phases 3 (TS), 4, 8 (DTOs), 9 (TS).
+**Phases complete:** 10/10 at headline level; 0/10 file-by-file. Baseline status remains `in-progress` because per-file triage is owed; transition to `baseline-complete-awaiting-remediation` is a human judgment call about whether headline coverage is sufficient given the §6 hardening gate scope.
 
 ## 1. Posture vs. `.claude/rules/numerical-rigor.md`
 
