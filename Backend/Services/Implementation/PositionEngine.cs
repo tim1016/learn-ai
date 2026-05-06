@@ -6,6 +6,29 @@ using Microsoft.Extensions.Logging;
 
 namespace Backend.Services.Implementation;
 
+/// <summary>
+/// Lot-level FIFO accounting engine for portfolio positions.
+///
+/// Formula: standard FIFO lot allocation. On each trade, allocate against open
+///   lots in chronological order; opening a long allocates new lots, closing
+///   allocates against the oldest first; realized PnL = (exit - entry) * qty
+///   per closed lot; net position = sum of remaining lot quantities;
+///   weighted-avg cost basis = sum(lot_qty * lot_cost) / sum(lot_qty).
+/// Reference: Standard accounting practice (FIFO inventory method, GAAP/IFRS).
+///   No external paper port; this is well-known accounting arithmetic with
+///   one canonical correct interpretation.
+/// Canonical implementation: this file. Per the contract's "single source of
+///   truth — math may live in any layer that fits the use case" rule, FIFO
+///   accounting lives in .NET because (a) the data lives in EF/Postgres,
+///   (b) it operates on persisted lot records via DbContext transactions,
+///   and (c) round-tripping every trade through Python would be gratuitous
+///   without simplifying anything. Documented in
+///   docs/math-sources-of-truth.md § Portfolio / valuation as
+///   canonical-in-dotnet-justified per finding F-0010 (closed 2026-05-06).
+/// Validated against: Backend.Tests/Unit/Services/PositionEngineTests.cs
+///   (FIFO determinism, mark-to-market, cost basis after partials);
+///   PortfolioValidationService.cs runtime suite Test1_FifoAccounting.
+/// </summary>
 public class PositionEngine : IPositionEngine
 {
     private readonly AppDbContext _context;

@@ -59,6 +59,28 @@ public class SnapshotService : ISnapshotService
         return ComputeDrawdownSeries(snapshots.Select(s => (s.Timestamp, s.Equity)).ToList());
     }
 
+    /// <summary>
+    /// Portfolio-level Sharpe / Sortino / Calmar / max-drawdown over snapshot
+    /// equity curve. **legacy-ok duplicate** of Python canonical at
+    /// PythonDataService/app/engine/results/statistics.py.
+    ///
+    /// Formula:
+    ///   Sharpe = mean(daily_returns) / stddev(daily_returns) * sqrt(252)
+    ///   Sortino = mean(daily_returns) / stddev(downside_returns) * sqrt(252)
+    ///   MaxDrawdown = max_t(running_peak_t − equity_t)
+    ///   Calmar = annualized_return / max_drawdown_pct
+    /// Reference: Sharpe (1994); Bacon, Practical Portfolio Performance
+    ///   Measurement (2e) §8.2; standard portfolio statistics.
+    /// Canonical implementation: PythonDataService/app/engine/results/statistics.py
+    ///   (TRADING_DAYS_PER_YEAR = 252 annualization). This .NET implementation
+    ///   is a legacy-ok duplicate kept for live-portfolio-snapshot read paths
+    ///   to avoid round-tripping equity curves through Python.
+    /// Validated against: NONE — pending parity test against the Python
+    ///   canonical (finding F-0011, partial-closure 2026-05-06; status
+    ///   legacy-ok-pending-parity). Until that parity test exists, treat
+    ///   this method as eventually-consistent with the canonical and prefer
+    ///   the Python canonical for any number a user compares against another.
+    /// </summary>
     public PortfolioMetrics ComputeMetrics(List<PortfolioSnapshot> snapshots)
     {
         if (snapshots.Count < 2)

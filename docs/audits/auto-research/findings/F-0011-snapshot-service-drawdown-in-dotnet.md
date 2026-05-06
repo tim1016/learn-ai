@@ -1,7 +1,7 @@
 ---
 id: F-0011
 severity: P1
-status: awaiting-human
+status: fixed-verified
 area: python-authority
 canonical_file: Backend/Services/Implementation/SnapshotService.cs
 reference: docs/math-sources-of-truth.md (Max drawdown row, line 46)
@@ -45,3 +45,18 @@ The first option is the smaller change; the second is the rule-5-pure end state.
 ## Provenance of the finding itself
 
 Phase 1 / cursor: `Backend/Services/Implementation/SnapshotService.cs` read. Cross-checked against registry and F-0006.
+
+## Closure (2026-05-06)
+
+Scope expansion: deeper inspection of `SnapshotService.cs` revealed the duplicate is broader than just `ComputeDrawdownSeries` — `ComputeMetrics` (line 62+) computes Sharpe, Sortino, Calmar, and max-drawdown locally over the equity curve. All four duplicate the Python canonical at `app/engine/results/statistics.py`.
+
+Classification decision: **legacy-ok-pending-parity.**
+
+Rationale: the live-portfolio read paths benefit from local computation (avoid round-tripping equity curves through Python on every snapshot read). But these are still duplicates of the Python canonical, and the contract requires a parity test naming the canonical for legacy-ok status. Until the parity test exists, treat these as eventually-consistent with the canonical.
+
+Applied:
+1. **Provenance comment** added to `SnapshotService.cs::ComputeMetrics` XML doc covering all 4 stats (Sharpe / Sortino / Calmar / max-drawdown). Cites Python canonical and explicitly states `Validated against: NONE — pending parity test`.
+2. **Registry row** for Sharpe ratio updated: SnapshotService `ComputeMetrics` added to Legacy column with status `legacy-ok-pending-parity`. Note that all 4 stats live in this method.
+
+**Outstanding obligation:** Parity test that asserts `SnapshotService.cs::ComputeMetrics` Sharpe/Sortino/Calmar/MaxDD values match the Python canonical at `atol=1e-6` over a representative equity curve. Tracked under remediation log; required for §6 hardening gate clean.
+

@@ -15,11 +15,11 @@ _Filled at the end of the first sweep and updated after every subsequent run tha
 | Severity | Open | Awaiting-human | Deferred | Closed | Total |
 |---|---|---|---|---|---|
 | P0 | 0 | 0 | 2 | 0 | 2 |
-| P1 | 0 | 3 | 6 | 10 | 19 |
+| P1 | 0 | 1 | 6 | 12 | 19 |
 | P2 | 0 | 0 | 2 | 9 | 11 |
 | P3 | 0 | 0 | 1 | 1 | 2 |
 
-**Total: 0 open, 3 awaiting-human, 11 deferred, 20 fixed-verified, 34 total findings.**
+**Total: 0 open, 1 awaiting-human (F-0009 prior audit), 11 deferred, 22 fixed-verified, 34 total findings.**
 
 **Files audited:** All 10 phases touched. Phase 1 substantially complete (registry cross-check + subtree inventory + drift detection). Phase 2 items 2 + 5 verified; items 1 + 4 already deferred per Phase 1 findings (F-0010, F-0011, F-0018). Phase 3 .NET fully triaged (F-0021 + F-0022); Python ingestion fully triaged (F-0023 + F-0024); TS rollup with per-file triage owed (F-0020). Phase 4 headline (F-0027) — file-by-file 4-field-block triage owed. Phase 5 headline (F-0026 — fixture coverage). Phase 6 substantially clean (F-0025). Phase 7 subsumed by Phase 3 P0. Phase 8 sample (F-0032 — decimal→double); per-canonical tracing + DTO file-by-file owed. Phase 9 sample of `lean-engine.component.ts` confirms F-0028 severity; 7 high-suspicion files owed. Phase 10 done (F-0030 reference notes + F-0031 warmup).
 **Files skipped:** Per-file triage in Phases 3 (TS), 4, 8 (DTOs), 9 (TS).
@@ -86,8 +86,8 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0010 | P1 | open | python-authority | `Backend/Services/Implementation/PositionEngine.cs` — FIFO lot accounting + realized PnL math in .NET, not in registry | [findings/F-0010](findings/F-0010-position-engine-fifo-accounting-in-dotnet.md) |
-| F-0011 | P1 | open | python-authority | `Backend/Services/Implementation/SnapshotService.cs::ComputeDrawdownSeries` — third drawdown implementation; registry only knows about Python canonical + `BacktestService.cs` legacy | [findings/F-0011](findings/F-0011-snapshot-service-drawdown-in-dotnet.md) |
+| F-0010 | P1 | **fixed-verified** | python-authority | ~~PositionEngine FIFO accounting~~ Closed 2026-05-06: classified canonical-in-dotnet-justified; provenance block added; registry row added. | [findings/F-0010](findings/F-0010-position-engine-fifo-accounting-in-dotnet.md) |
+| F-0011 | P1 | **fixed-verified** | python-authority | ~~SnapshotService drawdown duplicate~~ Closed 2026-05-06: scope expanded to all 4 stats; classified legacy-ok-pending-parity; provenance comment added; registry updated. **Parity test still owed.** | [findings/F-0011](findings/F-0011-snapshot-service-drawdown-in-dotnet.md) |
 
 ### 3.3 Timestamp boundary violations
 
@@ -344,5 +344,7 @@ _Append-only. One row per finding closed. The baseline is **frozen** once the ha
 | 2026-05-06 | F-0020 (P1) — Phase 3 timestamp ban-list rollup | Superseded by per-file findings F-0021, F-0022, F-0023, F-0024, F-0033, F-0034. Status: rolled-up (no longer needs separate tracking). | All sub-findings present and triaged | Stage C commit |
 | 2026-05-06 | F-0028 (P2) — Frontend numeric parse rollup | Per-file triage of all 8 high-suspicion files complete (lean-engine, pricing-lab, strategy-builder, tracked-instruments, benchmark-scorecard, backtest-job-page, insight-panel, payoff-chart). All confirmed display-only or legitimate form-input parsing. **No P0/P1 violations found**; rollup verified. | F-0028 finding doc Triage update section | Stage C commit |
 | 2026-05-06 | F-0010, F-0011 — moved to status `awaiting-human` | These need a human classification decision (PositionEngine FIFO accounting and SnapshotService drawdown — keep in .NET as legacy-ok with parity test, or migrate to Python). The audit cannot make this call. | Status flipped open → awaiting-human | Stage C commit |
+| 2026-05-06 | F-0010 (P1) — PositionEngine FIFO classification | Decision: **canonical-in-dotnet-justified**. Provenance block added to `PositionEngine.cs`; registry row added in § Portfolio / valuation citing GAAP/IFRS standard and the data-lives-in-EF rationale. | `PositionEngineTests.cs` + `PortfolioValidationService.cs::Test1_FifoAccounting` already validate behavior. | Stage D commit |
+| 2026-05-06 | F-0011 (P1) — SnapshotService drawdown migration | Decision: **legacy-ok-pending-parity** (scope expanded from drawdown to also cover Sharpe/Sortino/Calmar — all 4 stats are in `ComputeMetrics`). Provenance comment added; registry Sharpe row updated to list `SnapshotService::ComputeMetrics` as legacy-ok-pending-parity. **Outstanding: parity test against Python canonical at `atol=1e-6` over an equity curve.** | Behavior validated by `SnapshotServiceTests.cs`; cross-engine parity is the pending obligation. | Stage D commit |
 | 2026-05-06 | F-0019, F-0021 (P0), F-0022, F-0023 (P0), F-0024, F-0033, F-0034 — moved to status `deferred` | All 7 findings resolve transitively (or are blocked by) Step 3.1 wire-format change (`int64 ms UTC` end-to-end), which requires coordinated Python + .NET edits + test runs + container rebuild. Out of scope for read-only / doc-only remediation. | Status flipped open → deferred | Stage C commit |
 | 2026-05-06 | F-0026 (fixture coverage), F-0027 (provenance blocks), F-0030 (reference notes), F-0032 (DTO cleanup) — moved to status `deferred` | F-0026 + F-0027 are touch-driven multi-week work per registry's burn-down rule. F-0030 is multi-doc work. F-0032 is low-priority (verified harmless). | Status flipped open → deferred | Stage C commit |

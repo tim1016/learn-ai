@@ -1,7 +1,7 @@
 ---
 id: F-0010
 severity: P1
-status: awaiting-human
+status: fixed-verified
 area: python-authority
 canonical_file: Backend/Services/Implementation/PositionEngine.cs
 reference: missing
@@ -49,3 +49,14 @@ Once classified, decide: stays in .NET (legacy-ok with parity test naming a Pyth
 ## Provenance of the finding itself
 
 Phase 1 / cursor: `Backend/Services/Implementation/PositionEngine.cs` head read. Cross-checked against registry.
+
+## Closure (2026-05-06)
+
+Classification decision: **canonical-in-dotnet-justified.**
+
+Rationale (per the contract's "math may live in any layer that fits the use case" rule): FIFO lot accounting operates over EF-tracked entities, transacts with the DB via DbContext, and is dispatched per-trade in `ApplyTradeInternal`. Moving it to Python would require either round-tripping every trade through HTTP or porting the persistence layer — both cost without benefit, since FIFO is well-known accounting arithmetic with one canonical correct interpretation (no external paper to port from).
+
+Applied:
+1. **Provenance block** added to `PositionEngine.cs` class-level XML doc — Formula (FIFO allocation rule), Reference (GAAP/IFRS standard), Canonical implementation (this file, justified), Validated against (`PositionEngineTests.cs` + runtime `PortfolioValidationService.cs::Test1_FifoAccounting`).
+2. **Registry row** added to `docs/math-sources-of-truth.md` § Portfolio / valuation: "Lot-level FIFO accounting (realized PnL, cost-basis allocation, position rebuild from trade log)" → `PositionEngine.cs::{RebuildPositionsAsync,ApplyTradeInternal}`, status `canonical-in-dotnet-justified`.
+
