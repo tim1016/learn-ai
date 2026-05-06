@@ -1,5 +1,5 @@
 {
-  "mode": "remediation-complete-with-deferrals",
+  "mode": "complete",
   "phase": null,
   "phase_name": null,
   "cursor": "All 34 findings now have a final status: 32 fixed-verified/wontfix, 2 deferred (F-0026 golden fixtures multi-week, F-0034 frontend Tier 2 date-only params P2). F-0030 closed: Bacon §8.2 + LEAN engine reference notes written; 3 (verify) entries in registry resolved to Internal. F-0032 closed wontfix (decimal→double benign). F-0034 downgraded P1→P2 (Tier 1 resolved by F-0009/F-0033 producer fixes). Next: F-0026 (golden fixture coverage) is the only remaining substantive obligation; F-0034 Tier 2 is low-stakes cleanup.",
