@@ -225,4 +225,5 @@ export const routes: Routes = [
       },
     ],
   },
+  { path: "**", redirectTo: "/data-lab" },
 ];
