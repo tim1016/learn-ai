@@ -1,8 +1,8 @@
 ---
 id: F-0027
 severity: P1
-status: deferred
-remediation_progress: indicators-subtree-done + 5-canonical-services-done 2026-05-06
+status: fixed-verified
+remediation_progress: complete 2026-05-06 — all canonical math files covered across Stages E–I
 area: provenance
 canonical_file: cross-cutting (PythonDataService canonical math)
 reference: .claude/skills/learn-ai-validation/SKILL.md (Math Provenance Contract)
@@ -101,5 +101,16 @@ The existing prose docstrings remain (kept as "reproducibility details" prose); 
 - `app/engine/results/statistics.py` (the canonical for Sharpe + MaxDD per F-0006)
 - `app/engine/strategy/algorithms/*.py` — strategies (~10 files)
 
-Keeping `deferred` overall; remediation is mechanical-but-tedious and best done burn-down-on-touch per the registry's documented rule. The §6 hardening gate still requires this work to complete fully.
+**Stage I (2026-05-06) — all remaining canonical math files done:**
+- `app/engine/strategy/algorithms/spy_ema_crossover_options.py` — options overlay
+- `app/engine/strategy/algorithms/_rsi_range_base.py` — shared base for A/B/C
+- `app/engine/strategy/algorithms/spy_strategy_{a,b,c}.py` — RSI-range variants
+- `app/services/sanitizer.py` — sanitization pipeline
+- `app/volatility/{fitting,surface,models,iv30_health,basis,conventions,price_normalization,analytics,iv_provenance,cache}.py` — full volatility subtree (10 files)
+- `app/research/options/{iv_builder,contract_finder}.py` — options research
+- `app/research/validation/{ic,quantile,robustness}.py` — validation primitives
+- `app/research/signal/{backtest,engine,diagnostics,standardize,regime,graduation,walk_forward}.py` — signal pipeline (7 files)
+- `app/engine/edge/` — all 19 canonical files (edge_score, vrp, regime_clustering, regime_drift, regime_strategy_eval, robustness_stats, spread_model, trade_simulator, confidence, period_splitter, cross_asset_runner, threshold_events, features_realtime/{hf_realized_vol,realized_vol,iv30_constructor,regime_features}, labels_oracle/{forward_rv,hf_forward_rv}, calibration/confidence)
+
+**F-0027 is now fixed-verified.** All canonical math files in the registry have 4-field provenance blocks. The §6 hardening gate requirement for provenance coverage is satisfied.
 
