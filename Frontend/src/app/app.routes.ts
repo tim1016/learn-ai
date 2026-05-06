@@ -152,6 +152,13 @@ export const routes: Routes = [
       ).then((m) => m.SignalReportPageComponent),
   },
   {
+    path: "research-lab/strategy-runs/:run_id",
+    loadComponent: () =>
+      import(
+        "./components/research-lab/strategy-runs/run-detail-page/run-detail-page.component"
+      ).then((m) => m.RunDetailPageComponent),
+  },
+  {
     path: "docs/indicator-reliability-methodology",
     loadComponent: () =>
       import("./components/docs/methodology-page.component").then(

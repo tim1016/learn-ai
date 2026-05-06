@@ -1,0 +1,113 @@
+.strategy-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.sr-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.sr-header-text {
+  flex: 1 1 360px;
+  min-width: 0;
+
+  h2 {
+    margin: 0 0 0.35rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+  }
+
+  p {
+    margin: 0;
+    color: var(--text-color-secondary, #6b7280);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    max-width: 60ch;
+  }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 0.8125rem;
+  }
+}
+
+.sr-header-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.sr-error,
+.sr-flash {
+  display: block;
+}
+
+.sr-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--primary-color, #2563eb);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.sr-link:hover {
+  text-decoration-thickness: 2px;
+}
+
+::ng-deep .sr-table {
+  .p-datatable-table {
+    font-size: 0.875rem;
+  }
+
+  .sr-row {
+    cursor: pointer;
+  }
+
+  .sr-row:hover {
+    background-color: var(--surface-hover, rgba(0, 0, 0, 0.04));
+  }
+
+  .sr-spec-cell {
+    .sr-spec-label {
+      font-weight: 500;
+    }
+
+    .sr-parent-hint {
+      margin-left: 0.5rem;
+      padding: 1px 6px;
+      font-size: 0.6875rem;
+      border-radius: 999px;
+      background: var(--surface-200, #e5e7eb);
+      color: var(--text-color-secondary, #6b7280);
+      vertical-align: middle;
+    }
+  }
+
+  .sr-window-cell {
+    white-space: nowrap;
+
+    .sr-window-sep {
+      margin: 0 0.35rem;
+      color: var(--text-color-secondary, #9ca3af);
+    }
+
+    .sr-resolution {
+      margin-left: 0.5rem;
+      font-size: 0.75rem;
+      color: var(--text-color-secondary, #6b7280);
+    }
+  }
+
+  .sr-hash-cell {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 0.8125rem;
+    color: var(--text-color-secondary, #6b7280);
+  }
+}
