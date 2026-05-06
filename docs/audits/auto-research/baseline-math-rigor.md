@@ -14,9 +14,9 @@ _Filled at the end of the first sweep and updated after every subsequent run tha
 
 | Severity | Open | Deferred | Closed | Total |
 |---|---|---|---|---|
-| P0 | 1 | 0 | 0 | 1 |
-| P1 | 14 | 0 | 0 | 14 (1 status=awaiting-human) |
-| P2 | 7 | 0 | 0 | 7 |
+| P0 | 2 | 0 | 0 | 2 |
+| P1 | 16 | 0 | 0 | 16 (1 status=awaiting-human) |
+| P2 | 8 | 0 | 0 | 8 |
 | P3 | 0 | 0 | 0 | 0 |
 
 **Files audited:** Phase 1 substantially complete — registry rows cross-checked; major engine/research/volatility subtrees inventoried; Backend secondary services + Python secondary services + parallel strategy implementations + migration-plan drift verified. Phase 3 ban-list grep run cross-stack (rolled up in F-0020).
@@ -95,18 +95,29 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 | F-0020 | P1 | open | timestamp | **Phase 3 rollup** — 19 Python + 4 .NET + 45 TS files match ban-list patterns. Per-file triage deferred to Phase 3 ticks. Pinpoints prior-audit-known violators. | [findings/F-0020](findings/F-0020-timestamp-ban-list-rollup.md) |
 | F-0021 | **P0** | open | timestamp | `MarketDataService.cs:451` (aggregate ingestion) + `StudiesApi.cs:294-298` (`ParseUtc`) — banned `AssumeUniversal\|AdjustToUniversal` pattern silently coerces naive strings to UTC | [findings/F-0021](findings/F-0021-dotnet-ingestion-datetime-parse-assumeuniversal.md) |
 | F-0022 | P1 | open | timestamp | `Query.cs` (4 occurrences), `MarketDataService.cs` (date-range params, 6 occurrences), `ResearchService.cs` (2 occurrences) — `DateTime.Parse(fromDate).ToUniversalTime()` silently treats naive input as local time | [findings/F-0022](findings/F-0022-dotnet-query-parameter-datetime-parse.md) |
+| F-0023 | **P0** | open | ingestion | `dataset_service.py::forward_fill_gaps` (lines 489-565) silently fills missing minute bars with prev-close + zero-volume. Default `forward_fill=True` at 4 call sites. Direct violation of fail-fast ingestion rule. | [findings/F-0023](findings/F-0023-dataset-service-forward-fill-gaps.md) |
+| F-0024 | P1 | open | timestamp | More ban-list violations in Python ingestion paths: `polygon_ingest.py:226` ISO-Z emission, `dataset_service.py:851` `datetime.utcfromtimestamp`, `dataset_service.py:939/1139` `datetime.utcnow`, `polygon_client.py:625/628/676` naive `datetime.now()` | [findings/F-0024](findings/F-0024-additional-iso-z-emission-and-banned-utcfromtimestamp.md) |
 
 ### 3.4 Provenance & reference gaps
 _(none yet)_
 
 ### 3.5 Golden fixture gaps
-_(none yet)_
+
+| ID | Sev | Status | Area | Subject | Link |
+|---|---|---|---|---|---|
+| F-0026 | P1 | open | fixture | Only 3 fixture directories on disk (`bs-price-cross-engine`, `iv30`, `portfolio-scenario-3leg`). Most canonical math (SMA, EMA, RSI, all strategies, Sharpe, drawdown) has no fixture. `iv30/` is missing `attribution.md`. | [findings/F-0026](findings/F-0026-fixture-coverage-gap-most-canonicals-have-no-fixture.md) |
 
 ### 3.6 Tolerance hygiene
-_(none yet)_
+
+| ID | Sev | Status | Area | Subject | Link |
+|---|---|---|---|---|---|
+| F-0025 | P2 | open | tolerance | Sweep nearly clean. `edge_score.py:82` bare `np.isclose`; `PositionEngineTests.cs:332` precision-4 not justified; `test_regime_clustering.py:41` missing `rtol`. | [findings/F-0025](findings/F-0025-tolerance-hygiene-rollup.md) |
 
 ### 3.7 Ingestion fidelity
-_(none yet)_
+
+| ID | Sev | Status | Area | Subject | Link |
+|---|---|---|---|---|---|
+| F-0023 | **P0** | open | ingestion | `dataset_service.py::forward_fill_gaps` silently fabricates missing bars with prev-close + zero-volume. Default-on at 4 call sites. (Cross-listed under §3.3 timestamp because gaps surface as ingestion + boundary issue.) | [findings/F-0023](findings/F-0023-dataset-service-forward-fill-gaps.md) |
 
 ### 3.8 Wire fidelity (Python → Backend → GraphQL → Frontend)
 _(none yet)_
