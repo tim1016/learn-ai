@@ -65,8 +65,8 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0001 | P1 | open | inventory | `app/engine/edge/` subtree (~25 files) — entirely unregistered; engine-authority-map declares canonical | [findings/F-0001](findings/F-0001-engine-edge-subtree-unregistered.md) |
-| F-0002 | P1 | open | inventory | `app/research/signal/` subtree — unregistered; engine-authority-map declares canonical | [findings/F-0002](findings/F-0002-research-signal-subtree-unregistered.md) |
+| F-0001 | P1 | **fixed-verified** | inventory | ~~engine/edge subtree unregistered~~ Closed 2026-05-06: 21-row section added. | [findings/F-0001](findings/F-0001-engine-edge-subtree-unregistered.md) |
+| F-0002 | P1 | **fixed-verified** | inventory | ~~research/signal subtree unregistered~~ Closed 2026-05-06: 6-row section added. | [findings/F-0002](findings/F-0002-research-signal-subtree-unregistered.md) |
 | F-0003 | P1 | **fixed-verified** | inventory | ~~`app/research/options/bs_solver.py` cited by engine-authority-map line 27 — file does not exist~~ Closed 2026-05-06: dead reference removed. | [findings/F-0003](findings/F-0003-engine-authority-map-cites-missing-bs-solver.md) |
 | F-0004 | P1 | **fixed-verified** | inventory | ~~strategy_engine.py canonical, no registry row~~ Closed 2026-05-06: row added. | [findings/F-0004](findings/F-0004-strategy-engine-py-no-registry-row.md) |
 | F-0005 | P1 | **fixed-verified** | inventory | ~~engine/options/pricer.py dispatcher~~ Closed 2026-05-06: row added. | [findings/F-0005](findings/F-0005-engine-options-pricer-undocumented.md) |
