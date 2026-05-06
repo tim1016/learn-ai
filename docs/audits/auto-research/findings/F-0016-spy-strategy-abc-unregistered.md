@@ -1,7 +1,7 @@
 ---
 id: F-0016
 severity: P2
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/engine/strategy/algorithms/spy_strategy_{a,b,c}.py
 reference: missing
@@ -53,3 +53,8 @@ If they are research-only and not exposed to user runs, mark `Status: research-o
 ## Provenance of the finding itself
 
 Phase 1 / cursor: `app/engine/strategy/algorithms/spy_strategy_{a,b,c}.py` head reads.
+
+## Closure (2026-05-06)
+
+Four rows added to `docs/math-sources-of-truth.md` § Strategies: SPY RSI-range A (EMA-gap + MACD), B (Supertrend + ADX), C (ADX-rising), plus the shared `_rsi_range_base.py` as canonical-supporting. All marked Internal reference (no external port).
+

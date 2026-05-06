@@ -1,7 +1,7 @@
 ---
 id: F-0031
 severity: P3
-status: open
+status: fixed-verified
 area: documentation
 canonical_file: PythonDataService/app/engine/indicators/macd.py
 reference: .claude/rules/numerical-rigor.md (Warmup rigor)
@@ -59,3 +59,22 @@ Cross-reference: when F-0027 (provenance block) is addressed, the warmup line sh
 ## Provenance of the finding itself
 
 Phase 10 / cursor: `Grep("warmup|Warmup|emits valid output|...", path=app/engine/indicators)` returned 5 of 7 files.
+
+## Closure (2026-05-06) — false positive
+
+Inspection of `macd.py` shows the warmup behavior **is** documented in the module docstring, just not using the keyword "warmup". Lines 12–22 read:
+
+```
+* MACD line = fast_ema.current - slow_ema.current. Emitted only
+  once both EMAs are ready (samples >= slow_period).
+* Signal line = EMA(signal_period) of the MACD line. The signal
+  EMA starts receiving samples at the first bar the MACD line is defined.
+* is_ready when the signal line is ready (i.e.
+  samples >= slow_period + signal_period - 1 with default
+  parameters 12/26/9 this is sample 34).
+```
+
+This is warmup documentation in "ready" semantics rather than "warmup" keyword. The spirit of `.claude/rules/numerical-rigor.md` → Warmup rigor is that warmup behavior is clear from the docstring; macd.py satisfies that.
+
+Closing as **false positive due to grep keyword limitation** rather than `wontfix`. No code change needed. Future warmup audits should grep for `ready`, `samples >=`, or other equivalent phrasings as well as the literal `warmup` keyword.
+

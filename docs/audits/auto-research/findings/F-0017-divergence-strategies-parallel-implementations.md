@@ -1,7 +1,7 @@
 ---
 id: F-0017
 severity: P2
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/research/divergence/strategies/{s1,s2,s3}_*.py
 reference: docs/math-sources-of-truth.md (Strategies section, canonical engine algorithms)
@@ -51,3 +51,14 @@ Add a note to each: parity tests, if any, live in `app/research/divergence/`. If
 ## Provenance of the finding itself
 
 Phase 1 / cursor: `app/research/divergence/strategies/s{1,2,3}_*.py` head reads.
+
+## Closure (2026-05-06)
+
+Three existing strategy rows in `docs/math-sources-of-truth.md` § Strategies updated to add the divergence-research parallels in their Legacy column with status `divergence-research-only`:
+
+- SPY EMA Crossover row → adds `s1_ema_crossover.py`
+- RSI Mean Reversion row → adds `s2_rsi_mean_reversion.py`
+- SMA Crossover row → adds `s3_sma_crossover.py`
+
+Each notes the file is "vectorized parallel for divergence checking; not the authority and not expected to match exactly." Parity tests (if any) live separately under `app/research/divergence/`.
+

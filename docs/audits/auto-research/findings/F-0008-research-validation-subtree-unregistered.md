@@ -1,7 +1,7 @@
 ---
 id: F-0008
 severity: P1
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/research/validation/
 reference: missing (no map or registry citation)
@@ -50,3 +50,8 @@ Also add the subtree to `engine-authority-map.md` as a row under research engine
 ## Provenance of the finding itself
 
 Phase 1 / cursor: code-side scan of `PythonDataService/app/research/**`. Subtree found in glob, absent from both governance docs.
+
+## Closure (2026-05-06)
+
+New section "Research signal validation primitives" added to `docs/math-sources-of-truth.md`. Three rows: IC (`ic.py`), quantile statistics (`quantile.py`), robustness (`robustness.py`). All marked `pending-fixture` with `(verify)` flags on the references — Lopez de Prado for IC, Conover for quantile, Politis-Romano for block bootstrap. Reference verification is owed and tracked in F-0030.
+

@@ -15,9 +15,9 @@ _Filled at the end of the first sweep and updated after every subsequent run tha
 | Severity | Open | Deferred | Closed | Total |
 |---|---|---|---|---|
 | P0 | 2 | 0 | 0 | 2 |
-| P1 | 15 | 0 | 4 | 19 (1 status=awaiting-human) |
-| P2 | 6 | 0 | 5 | 11 |
-| P3 | 2 | 0 | 0 | 2 |
+| P1 | 14 | 0 | 5 | 19 (1 status=awaiting-human) |
+| P2 | 4 | 0 | 7 | 11 |
+| P3 | 1 | 0 | 1 | 2 |
 
 **Files audited:** All 10 phases touched. Phase 1 substantially complete (registry cross-check + subtree inventory + drift detection). Phase 2 items 2 + 5 verified; items 1 + 4 already deferred per Phase 1 findings (F-0010, F-0011, F-0018). Phase 3 .NET fully triaged (F-0021 + F-0022); Python ingestion fully triaged (F-0023 + F-0024); TS rollup with per-file triage owed (F-0020). Phase 4 headline (F-0027) — file-by-file 4-field-block triage owed. Phase 5 headline (F-0026 — fixture coverage). Phase 6 substantially clean (F-0025). Phase 7 subsumed by Phase 3 P0. Phase 8 sample (F-0032 — decimal→double); per-canonical tracing + DTO file-by-file owed. Phase 9 sample of `lean-engine.component.ts` confirms F-0028 severity; 7 high-suspicion files owed. Phase 10 done (F-0030 reference notes + F-0031 warmup).
 **Files skipped:** Per-file triage in Phases 3 (TS), 4, 8 (DTOs), 9 (TS).
@@ -70,13 +70,13 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 | F-0005 | P1 | **fixed-verified** | inventory | ~~engine/options/pricer.py dispatcher~~ Closed 2026-05-06: row added. | [findings/F-0005](findings/F-0005-engine-options-pricer-undocumented.md) |
 | F-0006 | P1 | **fixed-verified** | inventory | ~~Sharpe / max-drawdown / fill-model registry rows point at directory `PythonDataService/app/engine/`~~ Closed 2026-05-06: rows tightened to pinpoint files. (Provenance blocks on those files still owed via F-0027.) | [findings/F-0006](findings/F-0006-results-statistics-vague-canonical-path.md) |
 | F-0007 | P1 | open | inventory | `app/volatility/` — 12 of 14 modules unregistered; includes `vix_replication.py`, `fitting.py`, `surface.py`, `basis.py`, `iv30_health.py` | [findings/F-0007](findings/F-0007-volatility-subtree-mostly-unregistered.md) |
-| F-0008 | P1 | open | inventory | `app/research/validation/` — `ic.py`, `quantile.py`, `robustness.py` unregistered in both registry and authority map | [findings/F-0008](findings/F-0008-research-validation-subtree-unregistered.md) |
+| F-0008 | P1 | **fixed-verified** | inventory | ~~research/validation subtree unregistered~~ Closed 2026-05-06: new "Research signal validation primitives" section with 3 rows. | [findings/F-0008](findings/F-0008-research-validation-subtree-unregistered.md) |
 | F-0012 | P2 | **fixed-verified** | inventory | ~~4 Backend transport-only services need rows~~ Closed 2026-05-06: 4 rows added. | [findings/F-0012](findings/F-0012-backend-transport-services-unregistered.md) |
 | F-0013 | P2 | **fixed-verified** | inventory | ~~PortfolioValidationService unclassified~~ Closed 2026-05-06: validation-only row added to engine-authority-map. | [findings/F-0013](findings/F-0013-portfolio-validation-service-unregistered.md) |
 | F-0014 | P2 | **fixed-verified** | inventory | ~~data_quality_service + validation_service unregistered~~ Closed 2026-05-06: 2 rows added. | [findings/F-0014](findings/F-0014-data-quality-validation-services-unregistered.md) |
 | F-0015 | P2 | open | inventory | `app/research/features/{options_features,ta_features}.py` — feature-engineering math; `ta_features.py::compute_rsi_14` is a third RSI consumer (pandas-ta) | [findings/F-0015](findings/F-0015-research-features-unregistered.md) |
-| F-0016 | P2 | open | inventory | `app/engine/strategy/algorithms/spy_strategy_{a,b,c}.py` — three RSI-range strategy variants with no registry rows | [findings/F-0016](findings/F-0016-spy-strategy-abc-unregistered.md) |
-| F-0017 | P2 | open | inventory | `app/research/divergence/strategies/{s1,s2,s3}_*.py` — vectorized parallels of engine canonicals; need disposition (legacy-ok or divergence-research-only) | [findings/F-0017](findings/F-0017-divergence-strategies-parallel-implementations.md) |
+| F-0016 | P2 | **fixed-verified** | inventory | ~~spy_strategy_a/b/c unregistered~~ Closed 2026-05-06: 4 rows added (A/B/C + base). | [findings/F-0016](findings/F-0016-spy-strategy-abc-unregistered.md) |
+| F-0017 | P2 | **fixed-verified** | inventory | ~~divergence s1/s2/s3 unclassified~~ Closed 2026-05-06: existing strategy rows updated with `divergence-research-only` parallel notes. | [findings/F-0017](findings/F-0017-divergence-strategies-parallel-implementations.md) |
 | F-0018 | P2 | **fixed-verified** | inventory | ~~Phase 2.3 drift~~ Closed 2026-05-06: registry item 3 rewritten to ✅ CLOSED. | [findings/F-0018](findings/F-0018-migration-plan-vs-registry-phase-2-3-drift.md) |
 | F-0029 | P2 | **fixed-verified** | inventory | ~~Hardcoded `0.043` count drift~~ Closed 2026-05-06: registry item 5 rewritten with all 6 file:line locations. (Code-side migration to FRED still deferred.) | [findings/F-0029](findings/F-0029-hardcoded-risk-free-rate-additional-locations.md) |
 
@@ -142,7 +142,7 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
 | F-0030 | P2 | open | documentation | Reference notes well-covered for indicators (24 of 24); missing for ~15 strategy/statistic/portfolio rows. Including 3 `(verify)` references that need confirmation or demotion. | [findings/F-0030](findings/F-0030-reference-notes-missing-for-many-registry-cited-references.md) |
-| F-0031 | P3 | open | documentation | Warmup docstring missing on `macd.py`. 5 of 7 indicators have warmup notes; rollup placeholder for any future indicator gaps. | [findings/F-0031](findings/F-0031-warmup-docstring-coverage.md) |
+| F-0031 | P3 | **fixed-verified** | documentation | ~~MACD warmup missing~~ Closed 2026-05-06: false positive — `macd.py` documents warmup in "ready" semantics (samples >= N). | [findings/F-0031](findings/F-0031-warmup-docstring-coverage.md) |
 
 ## 4. Coverage map
 
@@ -330,3 +330,7 @@ _Append-only. One row per finding closed. The baseline is **frozen** once the ha
 | 2026-05-06 | F-0012 (P2) — 4 Backend transport services unregistered | 4 rows added to § Data / transport (Sanitization, Research, SpecStrategy, Portfolio services) | All 4 services now appear in the registry | Stage B commit |
 | 2026-05-06 | F-0013 (P2) — `PortfolioValidationService.cs` unclassified | Row added to `engine-authority-map.md` § Validation-only paths | Service now classified as validation-only | Stage B commit |
 | 2026-05-06 | F-0014 (P2) — `data_quality_service.py` + `validation_service.py` unregistered | 2 rows added to § Data / transport with `_EXACT/_CLOSE/_OK` threshold note | Both files in registry | Stage B commit |
+| 2026-05-06 | F-0008 (P1) — research/validation subtree unregistered | New § "Research signal validation primitives" added with 3 rows (IC, quantile, robustness) | Section visible in registry | Stage B Pt 2 commit |
+| 2026-05-06 | F-0016 (P2) — spy_strategy_a/b/c + base unregistered | 4 rows added to § Strategies | Variants A/B/C + `_rsi_range_base` in registry | Stage B Pt 2 commit |
+| 2026-05-06 | F-0017 (P2) — divergence s1/s2/s3 unclassified | Existing SPY EMA / RSI-MR / SMA-Cross rows updated to add s1/s2/s3 in Legacy column with `divergence-research-only` status | Diff visible in registry | Stage B Pt 2 commit |
+| 2026-05-06 | F-0031 (P3) — MACD warmup docstring | **False positive** — macd.py documents warmup in "ready" semantics (lines 12–22). No code change needed; closure note explains grep keyword limitation. | macd.py docstring inspection | Stage B Pt 2 commit |
