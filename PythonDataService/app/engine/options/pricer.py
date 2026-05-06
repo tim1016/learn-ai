@@ -1,5 +1,10 @@
 """Unified option pricer for the backtest engine.
 
+Formula: Routes pricing/Greek requests across three modes — `QUANTLIB_ONLY` (all values from QuantLib analytical BS), `MARKET_PREFERRED` (use observed mid where present, QuantLib fills gaps), `MARKET_REQUIRED` (only real market data; no theoretical fallback). Underlying math is composed from canonical Python options authorities — does not implement BS independently.
+Reference: Composes `app/services/bs_greeks.py` (closed-form BS-M; Hull §15.8/§19) and `app/services/quantlib_pricer.py` (QuantLib analytic_bs). Market path uses observed mid (bid/ask average) from Polygon snapshots.
+Canonical implementation: this file (registry § Options pricing and Greeks per finding F-0005). The dispatcher itself IS a math-authority surface because the choice of mode is consequential (mid vs analytical produces materially different results in low-liquidity contracts).
+Validated against: NONE — pending. Existing engine tests under `app/engine/tests/` exercise it indirectly via backtest runs; per-mode behavior tests are owed (registry: pending-fixture).
+
 Wraps QuantLib (or market data) into a single interface the engine uses
 for all pricing and Greeks.  The strategy never calls QuantLib directly —
 it calls this module, which routes to the appropriate source based on

@@ -1,5 +1,10 @@
 """Options strategy analysis engine.
 
+Formula: POP (Probability of Profit) and EV (Expected Value) under the BS-M lognormal model. Per-leg payoff curves at expiry; current-time PnL by composing per-leg theoretical values from `bs_greeks.py`; Greek curves per-spot grid; per-leg diagnostic table. Aggregates into a strategy-level response shape consumed by Strategy Lab.
+Reference: Hull, Options Futures and Other Derivatives (10e), §11–12 (payoff diagrams), §19 (Greek Letters); composes the canonical Python options authorities (`bs_greeks.py`, `quantlib_pricer.py`, `volatility/solver.py`).
+Canonical implementation: this file (`AnalyzeOptionsStrategy` per registry § Options pricing and Greeks; finding F-0004). The Frontend `OptionsStrategyLabComponent` consumes this response and is now a passthrough since Phase 1.2 (commit 451394d).
+Validated against: PythonDataService/tests/test_strategy_engine.py (POP, EV, strategy Greeks across spreads, single-legs, time-decay).
+
 All probability math lives here — Black-Scholes lognormal model
 for POP (Probability of Profit) and EV (Expected Value).
 """

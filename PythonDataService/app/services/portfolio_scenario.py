@@ -1,5 +1,10 @@
 """Portfolio scenario / live-Greeks computation.
 
+Formula: For each scenario point (spot_shift, time_shift, IV_shift), recompute per-leg theoretical option value via `bs_greeks.py` (continuous-time, works at any TTM including 0DTE) and aggregate to portfolio level. Stocks contribute delta=1, gamma=0, theta=0, vega=0 trivially. Live Greeks: same recompute path against current spot/time/IV (no scenario shift).
+Reference: Hull §19 (Greek Letters); put-call parity bounds; canonical Python options authorities (`bs_greeks.py` / `quantlib_pricer.py` / `volatility/solver.py`).
+Canonical implementation: this file (registry § Portfolio / valuation; Phase 2.1 shipped 2026-04-26 commit `d9738a5`). The .NET `PortfolioRiskService.cs::RunScenarioAsync` is a typed-HttpClient passthrough; `ComputeDollarDeltaAsync` / `ComputePortfolioVegaAsync` are passthroughs since Phase 2.3 (commit `334d419`, 2026-04-27).
+Validated against: PythonDataService/tests/services/test_portfolio_scenario.py — 8-case golden fixture for a 3-leg strategy across 5×5 (spot, time) grid at atol=1e-6 rtol=1e-6.
+
 Phase 2.1 of `docs/architecture/numerical-authority-migration-plan.md`:
 Python becomes the canonical owner of portfolio scenario math. The
 `.NET` services (`PortfolioRiskService.cs`, `PortfolioValuationService.cs`)

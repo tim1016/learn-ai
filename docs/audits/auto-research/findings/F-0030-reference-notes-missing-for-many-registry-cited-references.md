@@ -2,7 +2,7 @@
 id: F-0030
 severity: P2
 status: deferred
-remediation_progress: 5-internal-notes-added-2026-05-06
+remediation_progress: 5-internal-notes + Hull-§19-extract added 2026-05-06
 area: documentation
 canonical_file: docs/references/
 reference: docs/math-sources-of-truth.md (multiple rows)

@@ -1,5 +1,10 @@
 """FRED Treasury rate service for dynamic risk-free rate interpolation.
 
+Formula: Linear interpolation in DTE between the 4 published Treasury tenors (DTB4WK / DTB3 / DTB6 / DTB1YR). For DTE outside the tenor range, clamp to the nearest tenor. `FALLBACK_RATE = 0.043` is used when FRED is unreachable (logged warning).
+Reference: FRED data series — `https://fred.stlouisfed.org/series/{DTB4WK,DTB3,DTB6,DTB1YR}`. Per `docs/math-rigor.md` Upgrade 4 — variance-time / DTE interpolation across the published Treasury yield curve is the standard convention; CME options-pricing systems use the same family of tenors.
+Canonical implementation: this file (`get_rate`). The hardcoded `r = 0.043` constants in `iv_builder.py:18`, `contract_finder.py:26`, `models/strategy.py:48`, `models/portfolio.py:97/184` are pending migration to call `fred_service.get_rate()` — see registry § "Known rule-5 non-compliance" item 5 and finding F-0029.
+Validated against: PythonDataService/tests/test_fred_service.py (interpolation, fallback, parsing).
+
 Fetches daily Treasury bill/bond rates from FRED and interpolates
 to arbitrary DTE for use in Black-Scholes pricing.
 
