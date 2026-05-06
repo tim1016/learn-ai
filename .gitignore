@@ -48,3 +48,6 @@ PythonDataService/cache/
 
 # Local agent skill cache (Codex CLI / agents tooling)
 .agents/
+
+# Playwright MCP session snapshots (transient browser-test artifacts)
+.playwright-mcp/

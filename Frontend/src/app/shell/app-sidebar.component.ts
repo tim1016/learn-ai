@@ -37,27 +37,12 @@ interface NavGroup {
  */
 const NAV: NavGroup[] = [
   {
-    id: 'stocks',
-    title: 'Stocks',
-    icon: 'pi pi-chart-line',
-    items: [
-      { label: 'Market Data', route: '/market-data' },
-      { label: 'Tickers', route: '/tickers' },
-      { label: 'Technical Analysis', route: '/technical-analysis' },
-      { label: 'Stock Analysis', route: '/stock-analysis' },
-      { label: 'Snapshots', route: '/snapshots' },
-      { label: 'Strategy Lab', route: '/strategy-lab', deprecated: true },
-      { label: 'Strategy Validation', route: '/strategy-lab-validation' },
-      { label: 'Indicator Validation', route: '/indicator-validation' },
-      { label: 'Indicator Report', route: '/indicator-report' },
-    ],
-  },
-  {
     id: 'data-lab',
     title: 'Data Lab',
     icon: 'pi pi-database',
     items: [
       { label: 'Data Lab', route: '/data-lab' },
+      { label: 'Indicator Report', route: '/indicator-report' },
     ],
   },
   {

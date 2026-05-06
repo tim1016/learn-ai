@@ -8,7 +8,7 @@ import {
   SeriesMarker, createSeriesMarkers, ISeriesMarkersPluginApi,
   CrosshairMode, PriceLineOptions, LineStyle, IPriceLine,
 } from 'lightweight-charts';
-import { formatTickMark } from '../../../market-data/chart-utils';
+import { formatTickMark } from '../../../../shared/charts/chart-utils';
 import { ReplayEngineV2Service } from '../services/replay-engine-v2.service';
 
 const INDICATOR_COLORS = ['#ff9f43', '#54a0ff', '#c56cf0', '#1dd1a1', '#ee5253'];

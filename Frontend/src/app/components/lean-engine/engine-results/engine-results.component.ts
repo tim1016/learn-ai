@@ -5,7 +5,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { TooltipModule } from 'primeng/tooltip';
-import { LeanStatisticsComponent } from '../../strategy-lab/lean-statistics/lean-statistics.component';
+import { LeanStatisticsComponent } from '../lean-statistics/lean-statistics.component';
 import { ReadinessScoreCardComponent } from '../readiness-score-card/readiness-score-card.component';
 import {
   EngineChartComponent,
