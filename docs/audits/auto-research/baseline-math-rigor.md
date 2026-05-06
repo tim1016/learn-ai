@@ -3,7 +3,7 @@
 **Status:** in-progress
 **Started:** 2026-05-05
 **Last updated:** 2026-05-06
-**Run count:** 3
+**Run count:** 6
 **Generator:** `.claude/skills/auto-research-tick` (baseline mode)
 
 > This document is **frozen** once the baseline completes. Live state moves to a separate `current-state.md` after hardening. Do not edit this doc by hand once frozen except to append entries to the **Remediation log** at the bottom.
@@ -16,8 +16,8 @@ _Filled at the end of the first sweep and updated after every subsequent run tha
 |---|---|---|---|---|
 | P0 | 2 | 0 | 0 | 2 |
 | P1 | 17 | 0 | 0 | 17 (1 status=awaiting-human) |
-| P2 | 9 | 0 | 0 | 9 |
-| P3 | 0 | 0 | 0 | 0 |
+| P2 | 11 | 0 | 0 | 11 |
+| P3 | 1 | 0 | 0 | 1 |
 
 **Files audited:** Phase 1 substantially complete — registry rows cross-checked; major engine/research/volatility subtrees inventoried; Backend secondary services + Python secondary services + parallel strategy implementations + migration-plan drift verified. Phase 3 ban-list grep run cross-stack (rolled up in F-0020).
 **Files skipped:** Per-file triage of the F-0020 ban-list candidates deferred to Phase 3 ticks.
@@ -42,8 +42,8 @@ For each rule, one row: **holding** / **violated** / **partial**, with the count
 | Math Provenance Contract: 4-field block on canonical math | **violated** | F-0027 | Near-universal absence across `engine/indicators/`, `services/`, `volatility/` |
 | Single canonical per concept (no silent duplicates) | **partial** | F-0001/F-0002/F-0004/F-0005/F-0007/F-0008 | Multiple unregistered canonical math subtrees discovered |
 | Authority hierarchy: Python is the home of canonical math (rule 5) | **partial** | F-0010, F-0011 | PositionEngine FIFO + SnapshotService drawdown both compute math in .NET; not registered as legacy-ok |
-| Warmup behavior documented per indicator | TBD | — | Phase 10 |
-| Reconciliation reports exist for reconciled ports | TBD | — | Phase 10 |
+| Warmup behavior documented per indicator | **partial** | F-0031 | 5 of 7 indicators document warmup; `macd.py` missing |
+| Reconciliation reports exist for reconciled ports | **partial** | F-0030 | 24 of 24 indicator notes present; ~15 strategy/stat/portfolio notes missing |
 
 ## 2. Canonical math inventory
 
@@ -78,6 +78,7 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 | F-0016 | P2 | open | inventory | `app/engine/strategy/algorithms/spy_strategy_{a,b,c}.py` — three RSI-range strategy variants with no registry rows | [findings/F-0016](findings/F-0016-spy-strategy-abc-unregistered.md) |
 | F-0017 | P2 | open | inventory | `app/research/divergence/strategies/{s1,s2,s3}_*.py` — vectorized parallels of engine canonicals; need disposition (legacy-ok or divergence-research-only) | [findings/F-0017](findings/F-0017-divergence-strategies-parallel-implementations.md) |
 | F-0018 | P2 | open | inventory | `math-sources-of-truth.md` § "Known rule-5 non-compliance" item 3 says Phase 2.3 partial; migration plan says Phase 2.3 shipped 2026-04-27 (commit `334d419`). Drift. | [findings/F-0018](findings/F-0018-migration-plan-vs-registry-phase-2-3-drift.md) |
+| F-0029 | P2 | open | inventory | Hardcoded `0.043` risk-free rate at 6 production locations (registry undercounts to 4). Includes 2 instances in `models/portfolio.py` (lines 97, 184). | [findings/F-0029](findings/F-0029-hardcoded-risk-free-rate-additional-locations.md) |
 
 ### 3.2 Python math-authority violations
 
@@ -132,7 +133,11 @@ _(none yet)_
 | F-0028 | P2 | open | frontend-consumption | Rollup: 108 hits across 30 TS files of `toFixed`/`parseFloat`/`Number()`. Most likely display-only; 8 high-suspicion files (`lean-engine`, `payoff-chart`, `pricing-lab`, `strategy-builder`, ...) need per-file triage. | [findings/F-0028](findings/F-0028-frontend-numeric-parse-rollup.md) |
 
 ### 3.10 Documentation & auditability polish
-_(none yet)_
+
+| ID | Sev | Status | Area | Subject | Link |
+|---|---|---|---|---|---|
+| F-0030 | P2 | open | documentation | Reference notes well-covered for indicators (24 of 24); missing for ~15 strategy/statistic/portfolio rows. Including 3 `(verify)` references that need confirmation or demotion. | [findings/F-0030](findings/F-0030-reference-notes-missing-for-many-registry-cited-references.md) |
+| F-0031 | P3 | open | documentation | Warmup docstring missing on `macd.py`. 5 of 7 indicators have warmup notes; rollup placeholder for any future indicator gaps. | [findings/F-0031](findings/F-0031-warmup-docstring-coverage.md) |
 
 ## 4. Coverage map
 
@@ -268,6 +273,7 @@ The nightly auto-research cron is **not** scheduled until every box below is che
 | 3 | 2026-05-06 | 3 (.NET subset) | 2 (F-0021 P0 + F-0022 P1) | 0 | Phase 3 .NET triage of F-0020's 4 candidates. Both ingestion-path occurrences (`MarketDataService.cs:451` + `StudiesApi.cs:294-298 ParseUtc`) confirmed P0 — banned `AssumeUniversal\|AdjustToUniversal` pattern. Query-parameter occurrences (Query.cs, MarketDataService.cs date-range, ResearchService.cs) consolidated into one P1. **First P0 of the baseline.** |
 | 4 | 2026-05-06 | 3 (Python ingestion subset), 5, 6 | 4 (F-0023 P0 + F-0024 P1 + F-0025 P2 + F-0026 P1) | 0 | Phase 3 Python ingestion triage; Phase 5 fixture audit; Phase 6 tolerance audit. F-0023 forward-fill in `dataset_service.py` is **second P0**. Fixture coverage shockingly thin (3 fixtures on disk vs dozens of canonical math rows). Tolerance audit largely clean. |
 | 5 | 2026-05-06 | 4 (provenance), 9 (frontend rollup) | 2 (F-0027 P1 + F-0028 P2) | 0 | Phase 4 reveals near-universal absence of 4-field provenance block. Phase 9 grep returns 108 candidate hits across 30 TS files — rolled up. §5 recommendation plan populated. **End of overnight burn.** |
+| 6 | 2026-05-06 | 2 (verification), 9 (sample), 10 (sweep) | 3 (F-0029 P2 + F-0030 P2 + F-0031 P3) | 0 | Phase 2 item 2 verified clean (only 2 production callers of `black-scholes.ts`). Phase 2 item 5 has 6 hardcoded `0.043` constants vs registry's count of 4 (F-0029). Phase 9 sample of lean-engine.component.ts confirms F-0028 severity classification (mostly display-only). Phase 10 sweep finds reference notes for indicators well-covered, ~15 missing for strategy/stat/portfolio rows (F-0030); MACD warmup docstring missing (F-0031, first P3). |
 
 Per-run summaries in `docs/audits/auto-research/runs/YYYY-MM-DD.md` (created on first run).
 
