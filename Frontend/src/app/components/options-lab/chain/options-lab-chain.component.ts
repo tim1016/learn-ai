@@ -219,6 +219,11 @@ export class OptionsLabChainComponent implements OnInit {
   ngOnInit(): void {
     void this.fetchExpirations();
 
+    // Poll silently — transient backend/network failures must NOT latch the
+    // poller off (we never expose a manual retry button), so we don't gate
+    // on `error()`. Silent fetches don't write to the error signal, and a
+    // subsequent successful fetch clears any stale error from the initial
+    // load.
     interval(POLL_INTERVAL_MS)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(() => {
@@ -228,7 +233,6 @@ export class OptionsLabChainComponent implements OnInit {
         ) return;
         if (this.chainLoading() || this.expirationsLoading()) return;
         if (!this.selectedExpiration()) return;
-        if (this.error() !== null) return;
         void this.fetchChainSnapshot(true);
       });
   }
@@ -296,6 +300,9 @@ export class OptionsLabChainComponent implements OnInit {
       }
       this.underlying.set(result.underlying);
       this.allContracts.set(result.contracts);
+      // Clear any stale error from a prior failed load now that fresh
+      // data is in hand — keeps banner state in sync after a recovery.
+      this.error.set(null);
     } catch (err) {
       if (!silent) this.error.set(err instanceof Error ? err.message : String(err));
     } finally {

@@ -176,4 +176,41 @@ describe('OptionsLabChainComponent', () => {
     const before = httpMock.match(() => true).length;
     expect(before).toBe(0);
   });
+
+  // Regression for Codex P2 #2: a transient initial-load failure latched
+  // error() non-null, and the previous polling guard `if (error() !== null)
+  // return` then suppressed every subsequent refresh permanently. The fix
+  // (a) drops that guard and (b) clears error() on a successful fetch so
+  // the banner doesn't linger after a recovery.
+  it('clears stale error signal after a successful chain fetch', async () => {
+    component.ticker.set('SPY');
+    component.selectedExpiration.set('2026-05-15');
+    component.error.set('previous failure');
+
+    const fetchPromise = component.fetchChainSnapshot(true);
+
+    const req = httpMock.expectOne(r =>
+      r.url === 'http://localhost:5000/graphql' &&
+      typeof (r.body as { query?: string } | null)?.query === 'string' &&
+      (r.body as { query: string }).query.includes('getOptionsChainSnapshot'),
+    );
+    req.flush({
+      data: {
+        getOptionsChainSnapshot: {
+          success: true,
+          underlying: { ticker: 'SPY', price: 723.77, change: 5.76, changePercent: 0.8 },
+          contracts: [],
+          count: 0,
+          riskFreeRate: null,
+          dividendYield: null,
+          rateSource: null,
+          dividendSource: null,
+          error: null,
+        },
+      },
+    });
+
+    await fetchPromise;
+    expect(component.error()).toBeNull();
+  });
 });
