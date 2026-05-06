@@ -15,8 +15,8 @@ _Filled at the end of the first sweep and updated after every subsequent run tha
 | Severity | Open | Deferred | Closed | Total |
 |---|---|---|---|---|
 | P0 | 2 | 0 | 0 | 2 |
-| P1 | 16 | 0 | 0 | 16 (1 status=awaiting-human) |
-| P2 | 8 | 0 | 0 | 8 |
+| P1 | 17 | 0 | 0 | 17 (1 status=awaiting-human) |
+| P2 | 9 | 0 | 0 | 9 |
 | P3 | 0 | 0 | 0 | 0 |
 
 **Files audited:** Phase 1 substantially complete — registry rows cross-checked; major engine/research/volatility subtrees inventoried; Backend secondary services + Python secondary services + parallel strategy implementations + migration-plan drift verified. Phase 3 ban-list grep run cross-stack (rolled up in F-0020).
@@ -30,16 +30,16 @@ For each rule, one row: **holding** / **violated** / **partial**, with the count
 | Rule | Holding? | Findings | Notes |
 |---|---|---|---|
 | Equivalence levels declared per port | TBD | — | Phase 4 |
-| Golden fixtures present and attributed | TBD | — | Phase 5 |
-| Tolerances explicit (no default `np.allclose`) | TBD | — | Phase 6 |
-| Tolerances justified when loosened | TBD | — | Phase 6 |
+| Golden fixtures present and attributed | **violated** | F-0026 | Only 3 fixtures on disk; iv30 missing attribution |
+| Tolerances explicit (no default `np.allclose`) | **mostly holding** | F-0025 | One bare `np.isclose` in edge_score.py |
+| Tolerances justified when loosened | **mostly holding** | F-0025 | One .NET `Assert.Equal(.., delta:4)` without rationale |
 | Timestamp canonical format `int64 ms UTC` at all boundaries | **violated** | F-0009, F-0019, F-0020 | sanitizer emits ISO-Z at wire; trade_comparison silently UTC-stamps naive strings |
 | Timestamp ban-list clean (Python) | **violated** | F-0020 | 19 candidate files; sanitizer + rule_based_backtest + trade_comparison confirmed |
 | Timestamp ban-list clean (.NET) | **violated** | F-0020, F-0021 (P0), F-0022 | All 4 candidate files confirmed violators; 2 are ingestion-path P0 |
 | Timestamp ban-list clean (TypeScript) | **partial** | F-0020 | 45 candidate files; mostly display/test but ~10 cross-wire surfaces need triage |
-| Fail-fast ingestion (no silent dedup / forward-fill) | TBD | — | Phase 7 |
+| Fail-fast ingestion (no silent dedup / forward-fill) | **violated** | F-0009, F-0023 | sanitizer silent dedup; dataset_service silent forward-fill (P0) |
 | Sovereignty (no runtime calls into `references/`) | TBD | — | Phase 4 |
-| Math Provenance Contract: 4-field block on canonical math | TBD | — | Phase 4 |
+| Math Provenance Contract: 4-field block on canonical math | **violated** | F-0027 | Near-universal absence across `engine/indicators/`, `services/`, `volatility/` |
 | Single canonical per concept (no silent duplicates) | **partial** | F-0001/F-0002/F-0004/F-0005/F-0007/F-0008 | Multiple unregistered canonical math subtrees discovered |
 | Authority hierarchy: Python is the home of canonical math (rule 5) | **partial** | F-0010, F-0011 | PositionEngine FIFO + SnapshotService drawdown both compute math in .NET; not registered as legacy-ok |
 | Warmup behavior documented per indicator | TBD | — | Phase 10 |
@@ -99,7 +99,10 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 | F-0024 | P1 | open | timestamp | More ban-list violations in Python ingestion paths: `polygon_ingest.py:226` ISO-Z emission, `dataset_service.py:851` `datetime.utcfromtimestamp`, `dataset_service.py:939/1139` `datetime.utcnow`, `polygon_client.py:625/628/676` naive `datetime.now()` | [findings/F-0024](findings/F-0024-additional-iso-z-emission-and-banned-utcfromtimestamp.md) |
 
 ### 3.4 Provenance & reference gaps
-_(none yet)_
+
+| ID | Sev | Status | Area | Subject | Link |
+|---|---|---|---|---|---|
+| F-0027 | P1 | open | provenance | 4-field provenance block missing across nearly all canonical math: `app/engine/indicators/` (1 of 7 files have any field), `app/services/` (1 hit only, in `strategies/lean_statistics.py`), `app/volatility/` (0 of 14 files). | [findings/F-0027](findings/F-0027-provenance-block-near-universally-missing.md) |
 
 ### 3.5 Golden fixture gaps
 
@@ -123,7 +126,10 @@ _(none yet)_
 _(none yet)_
 
 ### 3.9 Frontend consumption / display-only violations
-_(none yet)_
+
+| ID | Sev | Status | Area | Subject | Link |
+|---|---|---|---|---|---|
+| F-0028 | P2 | open | frontend-consumption | Rollup: 108 hits across 30 TS files of `toFixed`/`parseFloat`/`Number()`. Most likely display-only; 8 high-suspicion files (`lean-engine`, `payoff-chart`, `pricing-lab`, `strategy-builder`, ...) need per-file triage. | [findings/F-0028](findings/F-0028-frontend-numeric-parse-rollup.md) |
 
 ### 3.10 Documentation & auditability polish
 _(none yet)_
@@ -153,20 +159,90 @@ What was audited, what was skipped, and why.
 
 ## 5. Recommendation plan (dependency-ordered)
 
-The order matters: each step unblocks the next. Severity is the sub-sort within each step.
+Concrete remediation steps, smallest-cost-first within each group. Severity tags reflect open findings as of the run-3 + run-4 + run-5 + run-6 set (28 findings, 2 P0 / 17 P1 / 9 P2).
 
-1. **Canonical math inventory / source-of-truth gaps** — fix `docs/math-sources-of-truth.md` first; everything downstream depends on a correct registry.
-2. **Python math-authority violations** — every authoritative number must have its canonical in Python (rule 5) or carry an explicit, parity-tested justification.
-3. **Timestamp boundary violations** — `int64 ms UTC` at every wire and storage point; ban-list clean across all layers.
-4. **Provenance & reference gaps** — every canonical math file carries the 4-field block.
-5. **Golden fixture gaps** — every canonical math has a fixture under `tests/fixtures/golden/<name>/` with attribution.
-6. **Tolerance hygiene** — every float comparison declares `atol`/`rtol`; loosened tolerances are justified.
-7. **Ingestion fidelity** — Polygon/IBKR ingestion preserves timestamp, dtype, ordering, monotonicity, and surfaces duplicates rather than silencing them.
-8. **Wire fidelity** — Python → Backend → GraphQL → Frontend signal preserves the value without recomputation, narrowing, or string mutation.
-9. **Frontend consumption / display-only violations** — UI displays without recomputing; `DatePipe` / `toFixed` / chart formatters are display-only and never round-tripped.
-10. **Documentation & auditability polish** — reference notes complete, reconciliation reports present, warmup documented per indicator.
+### Step 1 — Canonical math inventory / source-of-truth gaps
 
-_Per-step recommendations populate after the first sweep._
+**Smallest-edit items first** (1-line registry edits):
+
+1.1 (P1, 1-line) — Fix `engine-authority-map.md:27` — the `bs_solver.py` reference that doesn't exist (F-0003). Trim the dead reference.
+
+1.2 (P2, 1-line per item) — Update registry's "Known rule-5 non-compliance" item 3 to reflect Phase 2.3 shipped (F-0018).
+
+1.3 (P1, registry edits across multiple rows) — Replace directory-only canonical paths with pinpoint files (F-0006): Sharpe → `engine/results/statistics.py`; max drawdown → same; bar consolidation → `engine/consolidators/...`; fill models → `engine/execution/...`.
+
+**Larger inventory work** (per-row registry additions):
+
+1.4 (P1, ~25 row additions) — Add concept rows for `app/engine/edge/` subtree (F-0001) — VRP, realized vol, regime clustering, edge score, etc. Each row needs a Reference (paper or internal) and Validated-against (test or `NONE — pending`).
+
+1.5 (P1, ~8 row additions) — Add concept rows for `app/research/signal/` (F-0002) and `app/research/validation/` (F-0008) — IC, walk-forward, quantile, robustness.
+
+1.6 (P1, ~12 row additions) — Add concept rows for `app/volatility/` (F-0007) — surface fitting (cite SVI/SABR), VIX replication (cite Demeterfi-Derman-Kamal-Zou), basis, IV30, normalization, conventions.
+
+1.7 (P1, 1 row each) — Add row for `app/services/strategy_engine.py` (F-0004), `app/engine/options/pricer.py` (F-0005).
+
+1.8 (P2, transport rows) — Add transport-only rows for 4 Backend services (F-0012); validation-only row for `PortfolioValidationService.cs` (F-0013).
+
+1.9 (P2, ~7 rows) — Cover `data_quality_service.py` + `validation_service.py` (F-0014); `options_features.py` + `ta_features.py` with RSI duplicates note (F-0015); `spy_strategy_a/b/c.py` (F-0016); divergence s1/s2/s3 disposition (F-0017).
+
+### Step 2 — Python math-authority violations
+
+2.1 (P1) — Classify `PositionEngine.cs` FIFO accounting (F-0010). Decide: legacy-ok with parity test, or move to Python.
+2.2 (P1) — Classify `SnapshotService.cs::ComputeDrawdownSeries` (F-0011) as duplicate of `engine/results/statistics.py`. Add to registry's max-drawdown row, status pending-migration.
+
+### Step 3 — Timestamp boundary violations  (cluster of cluster of related fixes)
+
+**Wire-format change (the foundational fix that enables several other closes):**
+
+3.1 (P0 + sequencing) — Change the Python ↔ .NET wire format from ISO strings to `int64 ms UTC` for every timestamp field. Closes F-0009 (sanitizer ISO-Z), F-0021 (.NET ingestion `AssumeUniversal|AdjustToUniversal`), F-0024 (Python ban-list locations including `polygon_ingest.py:226`, `dataset_service.py:851`).
+
+3.2 (P0) — Same-PR-as-3.1: replace the dataset_service `forward_fill_gaps` default (F-0023). Make synthetic-bar generation opt-in. Surface gaps in response payload.
+
+3.3 (P1) — Replace `DateTime.Parse(fromDate).ToUniversalTime()` query-parameter parsing (F-0022) with `DateTimeOffset.ParseExact("yyyy-MM-dd", InvariantCulture)`. 12 occurrences across `Query.cs`, `MarketDataService.cs`, `ResearchService.cs`.
+
+3.4 (P1) — Fix `trade_comparison.py::_parse_ts` (F-0019). Drop naive formats; require explicit offset or accept `int` ms-epoch.
+
+3.5 (P2 + per-file triage) — TS `new Date(<var>)` mass triage (45 candidate files in F-0020). Most are display-only. Confirm + roll up.
+
+### Step 4 — Provenance & reference gaps
+
+4.1 (P1) — Add 4-field provenance block to canonical math files (F-0027). Recommended: bulk PR for `app/engine/indicators/` (7 files, mechanical) + bulk PR for the 5 named services (`bs_greeks`, `quantlib_pricer`, `strategy_engine`, `portfolio_scenario`, `fred_service`); burn-down-on-touch for the rest.
+
+### Step 5 — Golden fixture gaps
+
+5.1 (P2, 1 file) — Add `attribution.md` to `iv30/` fixture.
+5.2 (P1, multi-week) — Backfill golden fixtures for canonical math marked `pending-fixture` in registry (F-0026). Per the registry's own burn-down rule, this is touch-driven, not all-at-once.
+
+### Step 6 — Tolerance hygiene
+
+6.1 (P2) — Three-line fix per F-0025 — make `edge_score.py:82` explicit, document `PositionEngineTests.cs:332` precision-4 choice, add `rtol=0` to `test_regime_clustering.py:41`.
+
+### Step 7 — Ingestion fidelity
+
+7.1 — Subsumed by Step 3.1 + 3.2 (the forward-fill default and the wire-format change close most of this).
+
+### Step 8 — Wire fidelity (Python → Backend → GraphQL → Frontend)
+
+8.1 — **Not swept** in this baseline. Owed in the next round of ticks. Phase 8 needs per-canonical-output tracing — defer until Steps 1–4 reduce the surface.
+
+### Step 9 — Frontend consumption / display-only
+
+9.1 (P2 + per-file triage) — F-0028 rollup. Triage 8 high-suspicion files first.
+
+### Step 10 — Documentation & auditability polish
+
+10.1 — Owed: cross-check that `docs/references/<name>.md` exists for every reference cited in the registry (F-0007 implies many are missing for the volatility subtree); confirm warmup docstrings on every indicator (F-0027 implies many are missing).
+
+---
+
+**Strategic notes:**
+
+- **Step 3.1 is the highest-leverage fix** — closing the wire format simultaneously closes 5 findings (F-0009, F-0021, F-0024, parts of F-0019, F-0020 .NET subset) and removes a class of future regression. It is also the most invasive change.
+- **Step 1 looks like a lot of small registry edits** because it is — but the actual math is all already on disk. The work is documenting reality.
+- **Step 4 (provenance) is the largest by file count** but each file edit is mechanical. A scripted PR could touch 10+ files at once.
+- **The §6 hardening gate** has 10 boxes. Closing F-0023 + F-0021 (the two P0s), F-0027 (provenance block universally), F-0026 (fixture coverage), and the wire-format Step 3.1 covers ~6 of them. The other 4 (warmup docstrings, reference-note completeness, sovereignty no-runtime-references) are smaller.
+
+_Phases 2 (math-authority deeper sweep), 8 (wire fidelity), and 10 (doc polish) are owed in subsequent ticks; the headlines are captured but not exhaustively swept._
 
 ## 6. Definition of "rigor restored" (the hardening gate)
 
@@ -190,6 +266,8 @@ The nightly auto-research cron is **not** scheduled until every box below is che
 | 1 | 2026-05-05 | 1 (partial) | 8 (F-0001..F-0008, all P1) | 0 | Phase 1 inventory: major subtree gaps + authority-map drift identified. Backend secondary inventory and migration-plan drift check deferred to next tick. |
 | 2 | 2026-05-05 | 1 (substantially complete), 3 (grep prep) | 12 (F-0009..F-0020 — 5 P1 + 7 P2) | 0 | Phase 1 continuation: Backend secondary services classified, PythonDataService secondary services classified, divergence parallels found, migration-plan drift confirmed. Phase 3 ban-list grep run cross-stack (rolled up in F-0020). Per-file Phase 3 triage deferred. |
 | 3 | 2026-05-06 | 3 (.NET subset) | 2 (F-0021 P0 + F-0022 P1) | 0 | Phase 3 .NET triage of F-0020's 4 candidates. Both ingestion-path occurrences (`MarketDataService.cs:451` + `StudiesApi.cs:294-298 ParseUtc`) confirmed P0 — banned `AssumeUniversal\|AdjustToUniversal` pattern. Query-parameter occurrences (Query.cs, MarketDataService.cs date-range, ResearchService.cs) consolidated into one P1. **First P0 of the baseline.** |
+| 4 | 2026-05-06 | 3 (Python ingestion subset), 5, 6 | 4 (F-0023 P0 + F-0024 P1 + F-0025 P2 + F-0026 P1) | 0 | Phase 3 Python ingestion triage; Phase 5 fixture audit; Phase 6 tolerance audit. F-0023 forward-fill in `dataset_service.py` is **second P0**. Fixture coverage shockingly thin (3 fixtures on disk vs dozens of canonical math rows). Tolerance audit largely clean. |
+| 5 | 2026-05-06 | 4 (provenance), 9 (frontend rollup) | 2 (F-0027 P1 + F-0028 P2) | 0 | Phase 4 reveals near-universal absence of 4-field provenance block. Phase 9 grep returns 108 candidate hits across 30 TS files — rolled up. §5 recommendation plan populated. **End of overnight burn.** |
 
 Per-run summaries in `docs/audits/auto-research/runs/YYYY-MM-DD.md` (created on first run).
 
