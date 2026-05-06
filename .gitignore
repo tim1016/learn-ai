@@ -46,6 +46,11 @@ PythonDataService/lean-cache/
 # Derived analytics cache (parquet) — regenerated from Polygon data
 PythonDataService/cache/
 
+# Run-ledger artifacts (research-pipeline phase A) — persisted backtest
+# runs under <run_id>/{ledger,result}.json. Recreated on demand from
+# spec + data inputs.
+PythonDataService/artifacts/
+
 # Local agent skill cache (Codex CLI / agents tooling)
 .agents/
 

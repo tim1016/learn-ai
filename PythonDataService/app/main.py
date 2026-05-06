@@ -32,6 +32,7 @@ from app.routers import (
     quantlib_options,
     research,
     research_divergence,
+    research_runs,
     sanitize,
     snapshot,
     spec_strategy,
@@ -114,6 +115,8 @@ app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
+# Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
+app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
 app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
 app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
