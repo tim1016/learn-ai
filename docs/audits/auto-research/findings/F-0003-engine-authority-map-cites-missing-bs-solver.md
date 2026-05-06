@@ -1,7 +1,7 @@
 ---
 id: F-0003
 severity: P1
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/research/options/bs_solver.py
 reference: docs/architecture/engine-authority-map.md (line 27)
@@ -49,3 +49,8 @@ Also check whether the file ever existed (`git log --all --diff-filter=D -- "*bs
 ## Provenance of the finding itself
 
 Phase 1 / cursor: cross-check of authority-map cited paths against actual filesystem. Verified by `Glob("PythonDataService/app/research/options/bs_solver.py")` returning no results.
+
+## Closure (2026-05-06)
+
+`docs/architecture/engine-authority-map.md:27` updated to remove the dead `bs_solver.py` reference. The IV-solver canonical remains `app/volatility/solver.py` per the registry. No other docs needed updating (the migration plan's mention at line 51 is in a list-form reference to options-math-authorities.md which was already accurate).
+

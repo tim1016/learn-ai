@@ -1,7 +1,7 @@
 ---
 id: F-0006
 severity: P1
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/engine/results/statistics.py
 reference: docs/math-sources-of-truth.md (Backtesting engine and statistics section, vague path)
@@ -48,3 +48,14 @@ Cross-reference: this overlaps with the bigger §4 of the migration plan ("Backt
 ## Provenance of the finding itself
 
 Phase 1 / cursor: registry row scan. File presence verified with `Read`.
+
+## Closure (2026-05-06)
+
+`docs/math-sources-of-truth.md` registry rows updated:
+
+- **Max drawdown** canonical → `PythonDataService/app/engine/results/statistics.py`. Legacy column expanded to also list `SnapshotService.cs::ComputeDrawdownSeries` per F-0011.
+- **Sharpe ratio** canonical → `PythonDataService/app/engine/results/statistics.py` with `TRADING_DAYS_PER_YEAR = 252` annualization noted.
+- **Bar consolidation, event replay, fill models** canonical → split into specific files: `app/engine/engine.py` (orchestration), `app/engine/consolidators/trade_bar_consolidator.py` (consolidation), `app/engine/execution/{fill_model,intrabar_resolver,portfolio,order,execution_config}.py` (execution + accounting).
+
+The remaining work (4-field provenance block on each file) is tracked separately in F-0027 and is touch-driven per the registry's burn-down rule.
+

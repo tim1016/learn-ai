@@ -15,8 +15,8 @@ _Filled at the end of the first sweep and updated after every subsequent run tha
 | Severity | Open | Deferred | Closed | Total |
 |---|---|---|---|---|
 | P0 | 2 | 0 | 0 | 2 |
-| P1 | 19 | 0 | 0 | 19 (1 status=awaiting-human) |
-| P2 | 11 | 0 | 0 | 11 |
+| P1 | 17 | 0 | 2 | 19 (1 status=awaiting-human) |
+| P2 | 9 | 0 | 2 | 11 |
 | P3 | 2 | 0 | 0 | 2 |
 
 **Files audited:** All 10 phases touched. Phase 1 substantially complete (registry cross-check + subtree inventory + drift detection). Phase 2 items 2 + 5 verified; items 1 + 4 already deferred per Phase 1 findings (F-0010, F-0011, F-0018). Phase 3 .NET fully triaged (F-0021 + F-0022); Python ingestion fully triaged (F-0023 + F-0024); TS rollup with per-file triage owed (F-0020). Phase 4 headline (F-0027) — file-by-file 4-field-block triage owed. Phase 5 headline (F-0026 — fixture coverage). Phase 6 substantially clean (F-0025). Phase 7 subsumed by Phase 3 P0. Phase 8 sample (F-0032 — decimal→double); per-canonical tracing + DTO file-by-file owed. Phase 9 sample of `lean-engine.component.ts` confirms F-0028 severity; 7 high-suspicion files owed. Phase 10 done (F-0030 reference notes + F-0031 warmup).
@@ -65,10 +65,10 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 |---|---|---|---|---|---|
 | F-0001 | P1 | open | inventory | `app/engine/edge/` subtree (~25 files) — entirely unregistered; engine-authority-map declares canonical | [findings/F-0001](findings/F-0001-engine-edge-subtree-unregistered.md) |
 | F-0002 | P1 | open | inventory | `app/research/signal/` subtree — unregistered; engine-authority-map declares canonical | [findings/F-0002](findings/F-0002-research-signal-subtree-unregistered.md) |
-| F-0003 | P1 | open | inventory | `app/research/options/bs_solver.py` cited by engine-authority-map line 27 — file does not exist | [findings/F-0003](findings/F-0003-engine-authority-map-cites-missing-bs-solver.md) |
+| F-0003 | P1 | **fixed-verified** | inventory | ~~`app/research/options/bs_solver.py` cited by engine-authority-map line 27 — file does not exist~~ Closed 2026-05-06: dead reference removed. | [findings/F-0003](findings/F-0003-engine-authority-map-cites-missing-bs-solver.md) |
 | F-0004 | P1 | open | inventory | `app/services/strategy_engine.py::AnalyzeOptionsStrategy` — canonical per map, no registry row; outputs render to Strategy Lab UI | [findings/F-0004](findings/F-0004-strategy-engine-py-no-registry-row.md) |
 | F-0005 | P1 | open | inventory | `app/engine/options/pricer.py` — undocumented in-engine pricing dispatcher (`PricingMode` QUANTLIB_ONLY/MARKET_PREFERRED/MARKET_REQUIRED) | [findings/F-0005](findings/F-0005-engine-options-pricer-undocumented.md) |
-| F-0006 | P1 | open | inventory | Sharpe / max-drawdown / fill-model registry rows point at directory `PythonDataService/app/engine/` instead of `app/engine/results/statistics.py` and `app/engine/execution/*.py` | [findings/F-0006](findings/F-0006-results-statistics-vague-canonical-path.md) |
+| F-0006 | P1 | **fixed-verified** | inventory | ~~Sharpe / max-drawdown / fill-model registry rows point at directory `PythonDataService/app/engine/`~~ Closed 2026-05-06: rows tightened to pinpoint files. (Provenance blocks on those files still owed via F-0027.) | [findings/F-0006](findings/F-0006-results-statistics-vague-canonical-path.md) |
 | F-0007 | P1 | open | inventory | `app/volatility/` — 12 of 14 modules unregistered; includes `vix_replication.py`, `fitting.py`, `surface.py`, `basis.py`, `iv30_health.py` | [findings/F-0007](findings/F-0007-volatility-subtree-mostly-unregistered.md) |
 | F-0008 | P1 | open | inventory | `app/research/validation/` — `ic.py`, `quantile.py`, `robustness.py` unregistered in both registry and authority map | [findings/F-0008](findings/F-0008-research-validation-subtree-unregistered.md) |
 | F-0012 | P2 | open | inventory | 4 Backend transport-only services (`SanitizationService`, `ResearchService`, `SpecStrategyService`, `PortfolioService`) need explicit transport rows | [findings/F-0012](findings/F-0012-backend-transport-services-unregistered.md) |
@@ -77,8 +77,8 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 | F-0015 | P2 | open | inventory | `app/research/features/{options_features,ta_features}.py` — feature-engineering math; `ta_features.py::compute_rsi_14` is a third RSI consumer (pandas-ta) | [findings/F-0015](findings/F-0015-research-features-unregistered.md) |
 | F-0016 | P2 | open | inventory | `app/engine/strategy/algorithms/spy_strategy_{a,b,c}.py` — three RSI-range strategy variants with no registry rows | [findings/F-0016](findings/F-0016-spy-strategy-abc-unregistered.md) |
 | F-0017 | P2 | open | inventory | `app/research/divergence/strategies/{s1,s2,s3}_*.py` — vectorized parallels of engine canonicals; need disposition (legacy-ok or divergence-research-only) | [findings/F-0017](findings/F-0017-divergence-strategies-parallel-implementations.md) |
-| F-0018 | P2 | open | inventory | `math-sources-of-truth.md` § "Known rule-5 non-compliance" item 3 says Phase 2.3 partial; migration plan says Phase 2.3 shipped 2026-04-27 (commit `334d419`). Drift. | [findings/F-0018](findings/F-0018-migration-plan-vs-registry-phase-2-3-drift.md) |
-| F-0029 | P2 | open | inventory | Hardcoded `0.043` risk-free rate at 6 production locations (registry undercounts to 4). Includes 2 instances in `models/portfolio.py` (lines 97, 184). | [findings/F-0029](findings/F-0029-hardcoded-risk-free-rate-additional-locations.md) |
+| F-0018 | P2 | **fixed-verified** | inventory | ~~Phase 2.3 drift~~ Closed 2026-05-06: registry item 3 rewritten to ✅ CLOSED. | [findings/F-0018](findings/F-0018-migration-plan-vs-registry-phase-2-3-drift.md) |
+| F-0029 | P2 | **fixed-verified** | inventory | ~~Hardcoded `0.043` count drift~~ Closed 2026-05-06: registry item 5 rewritten with all 6 file:line locations. (Code-side migration to FRED still deferred.) | [findings/F-0029](findings/F-0029-hardcoded-risk-free-rate-additional-locations.md) |
 
 ### 3.2 Python math-authority violations
 
@@ -321,3 +321,7 @@ _Append-only. One row per finding closed. The baseline is **frozen** once the ha
 
 | Date | Finding | Closed by | Verification | Commit / PR |
 |---|---|---|---|---|
+| 2026-05-06 | F-0003 (P1) — engine-authority-map cites missing bs_solver.py | Removed dead reference at `engine-authority-map.md:27` | grep `bs_solver` returns no matches in `docs/` | this commit |
+| 2026-05-06 | F-0006 (P1) — Sharpe/MaxDrawdown/Bar-consolidation registry rows used directory-only paths | Tightened to specific files: `engine/results/statistics.py` for stats; `engine/engine.py` + `consolidators/` + `execution/` split for the bar-consolidation row | grep `app/engine/\` \|` (directory-only) returns no matches | this commit |
+| 2026-05-06 | F-0018 (P2) — Phase 2.3 drift (registry partial vs migration plan shipped) | Item 3 of registry rewritten to ✅ CLOSED, citing commit `334d419` (2026-04-27) | Both docs now agree | this commit |
+| 2026-05-06 | F-0029 (P2) — Hardcoded `0.043` count drift (registry knew 4, actual is 6) | Item 5 of registry rewritten with all 6 production locations + file:line | Diff visible at `docs/math-sources-of-truth.md` § Known rule-5 non-compliance | this commit |

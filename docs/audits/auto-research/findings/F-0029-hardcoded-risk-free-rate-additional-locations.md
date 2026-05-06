@@ -1,7 +1,7 @@
 ---
 id: F-0029
 severity: P2
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/models/{strategy,portfolio}.py; app/research/options/{iv_builder,contract_finder}.py
 reference: docs/math-sources-of-truth.md (Risk-free rate row + Known rule-5 non-compliance item 5)
@@ -48,3 +48,10 @@ The actual remediation (route every caller through `fred_service.get_rate()`) is
 ## Provenance of the finding itself
 
 Phase 2 / cursor: targeted grep of `0.043` and `DEFAULT_R*FR*` patterns across `PythonDataService/`. Cross-checked against registry's enumeration.
+
+## Closure (2026-05-06)
+
+`docs/math-sources-of-truth.md` § "Known rule-5 non-compliance" item 5 updated to enumerate all 6 production locations with file:line references (`iv_builder.py:18`, `contract_finder.py:26`, `strategy.py:48`, `portfolio.py:97`, `portfolio.py:184`, plus `fred_service.py:32 FALLBACK_RATE` as the canonical correct fallback). Cross-references finding F-0029.
+
+The actual code-side remediation (route every caller through `fred_service.get_rate()`) remains the deferred Phase work tracked in `docs/math-rigor.md` Upgrade 4. This finding closure is for the registry-tracking aspect only.
+

@@ -1,7 +1,7 @@
 ---
 id: F-0018
 severity: P2
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: docs/math-sources-of-truth.md (vs docs/architecture/numerical-authority-migration-plan.md)
 reference: docs/architecture/numerical-authority-migration-plan.md (Status as of 2026-04-27, Phase 2.3)
@@ -46,3 +46,8 @@ If the violation is fully closed, item 3 should move from "Known rule-5 non-comp
 ## Provenance of the finding itself
 
 Phase 1 / cursor: cross-check of `numerical-authority-migration-plan.md` § Status-as-of-2026-04-27 vs. `math-sources-of-truth.md` § "Known rule-5 non-compliance".
+
+## Closure (2026-05-06)
+
+`docs/math-sources-of-truth.md` § "Known rule-5 non-compliance" item 3 rewritten to reflect that Phase 2.3 shipped 2026-04-27 in commit `334d419`. Item now reads "✅ CLOSED" and notes that `ComputeDollarDeltaAsync` + `ComputePortfolioVegaAsync` were switched from stored entry Greeks to `IPolygonService.PortfolioLiveGreeksAsync`. The entry is retained as historical record rather than deleted, since the registry's "Known rule-5 non-compliance" section serves as a compliance audit trail.
+
