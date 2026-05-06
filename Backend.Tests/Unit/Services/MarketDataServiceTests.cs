@@ -121,13 +121,13 @@ public class MarketDataServiceTests
             [
                 new AggregateData
                 {
-                    Timestamp = "2026-01-15T00:00:00Z",
+                    Timestamp = 1768435200000L,
                     Open = 150m, High = 155m, Low = 148m, Close = 153m,
                     Volume = 1_000_000m, Vwap = 151.5m, Transactions = 5000
                 },
                 new AggregateData
                 {
-                    Timestamp = "2026-01-16T00:00:00Z",
+                    Timestamp = 1768521600000L,
                     Open = 153m, High = 158m, Low = 151m, Close = 156m,
                     Volume = 1_200_000m, Vwap = 154m, Transactions = 6000
                 }
@@ -193,7 +193,7 @@ public class MarketDataServiceTests
             [
                 new AggregateData
                 {
-                    Timestamp = "2026-01-15T00:00:00Z",
+                    Timestamp = 1768435200000L,
                     Open = 150m, High = 155m, Low = 148m, Close = 153m,
                     Volume = 1_000_000m, Vwap = 151.5m, Transactions = 5000
                 }
@@ -258,7 +258,7 @@ public class MarketDataServiceTests
             [
                 new AggregateData
                 {
-                    Timestamp = "2026-01-15T00:00:00Z",
+                    Timestamp = 1768435200000L,
                     Open = 5m, High = 6m, Low = 4m, Close = 5.5m,
                     Volume = 100m
                 }
@@ -316,13 +316,13 @@ public class MarketDataServiceTests
             [
                 new AggregateData
                 {
-                    Timestamp = "2026-01-15T00:00:00Z",
+                    Timestamp = 1768435200000L,
                     Open = 310m, High = 315m, Low = 308m, Close = 313m,
                     Volume = 900_000m
                 },
                 new AggregateData
                 {
-                    Timestamp = "2026-01-16T00:00:00Z",
+                    Timestamp = 1768521600000L,
                     Open = 313m, High = 320m, Low = 310m, Close = 318m,
                     Volume = 1_100_000m
                 }
@@ -390,7 +390,7 @@ public class MarketDataServiceTests
             [
                 new AggregateData
                 {
-                    Timestamp = "2026-01-15T00:00:00Z",
+                    Timestamp = 1768435200000L,
                     Open = 200m, High = 205m, Low = 198m, Close = 203m,
                     Volume = 700_000m
                 }
@@ -436,7 +436,7 @@ public class MarketDataServiceTests
             [
                 new AggregateData
                 {
-                    Timestamp = "2026-01-15T00:00:00Z",
+                    Timestamp = 1768435200000L,
                     Open = 800m, High = 810m, Low = 790m, Close = 805m,
                     Volume = 2_000_000m
                 }
@@ -547,7 +547,7 @@ public class MarketDataServiceTests
             [
                 new AggregateData
                 {
-                    Timestamp = "2024-01-01T00:00:00.000000Z",
+                    Timestamp = 1704067200000L,
                     Open = 150m, High = 155m, Low = 148m, Close = 153m,
                     Volume = 1_000_000m, Vwap = 151.5m, Transactions = 5000
                 }

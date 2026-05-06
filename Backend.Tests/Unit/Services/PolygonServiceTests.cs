@@ -43,7 +43,7 @@ public class PolygonServiceTests
             Success = true,
             Ticker = "AAPL",
             DataType = "aggregates",
-            Data = [new AggregateData { Open = 150m, High = 155m, Low = 148m, Close = 153m, Volume = 1000000, Timestamp = "2026-01-15T00:00:00Z" }],
+            Data = [new AggregateData { Open = 150m, High = 155m, Low = 148m, Close = 153m, Volume = 1000000, Timestamp = 1768435200000L }],
             Summary = new DataSummary { OriginalCount = 1, CleanedCount = 1, RemovedCount = 0 }
         };
         var handler = CreateHandler(HttpStatusCode.OK, response);
