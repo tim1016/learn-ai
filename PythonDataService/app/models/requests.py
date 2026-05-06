@@ -303,6 +303,10 @@ class DatasetGenerationRequest(BaseModel):
         True,
         description="Fill missing minute bars with previous close (volume=0) for continuous indicator calculation",
     )
+    fail_on_gaps: bool = Field(
+        False,
+        description="Raise an error if intra-day bar gaps are detected instead of forward-filling. Strict mode; use when gap-free data is required.",
+    )
     warmup: bool = Field(
         True,
         description="Fetch extra bars before from_date to warm up indicator calculations",

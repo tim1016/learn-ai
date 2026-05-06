@@ -153,6 +153,7 @@ def _fetch_and_process(
         indicator_entries=request.indicator_entries,
         session=request.session,
         forward_fill=request.forward_fill,
+        fail_on_gaps=request.fail_on_gaps,
         trim_from_ts=trim_from_ts,
         from_date=request.from_date,
         to_date=request.to_date,

@@ -1,7 +1,7 @@
 ---
 id: F-0023
 severity: P0
-status: deferred
+status: fixed-verified
 area: ingestion
 canonical_file: PythonDataService/app/services/dataset_service.py
 reference: .claude/rules/numerical-rigor.md (Timestamp rigor + "Never forward-fill or interpolate to align")

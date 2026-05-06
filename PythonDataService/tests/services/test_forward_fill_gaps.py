@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
-from app.services.dataset_service import forward_fill_gaps
+from app.services.dataset_service import forward_fill_gaps, preprocess_and_calculate
 
 _ET = ZoneInfo("US/Eastern")
 
@@ -112,3 +112,85 @@ def test_non_minute_returns_frame_unchanged(timespan: str):
     # Must return the input frame unchanged — every row keeps its real OHLC.
     assert len(out) == 3
     assert out["close"].tolist() == [100.0, 100.5, 101.0]
+
+
+# ---------------------------------------------------------------------------
+# fail_on_gaps tests
+# ---------------------------------------------------------------------------
+
+
+def _bars_with_gap() -> list[dict]:
+    """Two bars with a 5-minute gap between them (3 missing 1-min bars)."""
+    return [
+        _bar(_ms(2026, 1, 5, 9, 30), close=100.0),
+        _bar(_ms(2026, 1, 5, 9, 35), close=101.0),
+        # gap: 9:36, 9:37, 9:38 are missing
+        _bar(_ms(2026, 1, 5, 9, 39), close=102.0),
+        _bar(_ms(2026, 1, 5, 9, 40), close=103.0),
+    ]
+
+
+def test_fail_on_gaps_raises_on_gap():
+    """fail_on_gaps=True must raise ValueError when intra-day gaps exist."""
+    with pytest.raises(ValueError, match="fail_on_gaps=True"):
+        preprocess_and_calculate(
+            bars=_bars_with_gap(),
+            indicator_entries=[],
+            session="rth",
+            forward_fill=True,
+            fail_on_gaps=True,
+            timespan="minute",
+            multiplier=1,
+        )
+
+
+def test_fail_on_gaps_false_allows_fill():
+    """fail_on_gaps=False (default) must not raise even when gaps exist."""
+    df, _ = preprocess_and_calculate(
+        bars=_bars_with_gap(),
+        indicator_entries=[],
+        session="rth",
+        forward_fill=True,
+        fail_on_gaps=False,
+        timespan="minute",
+        multiplier=1,
+    )
+    # Gaps filled — the 4 input bars expanded to 390 RTH slots
+    assert len(df) == 390
+
+
+def test_fail_on_gaps_no_gap_does_not_raise():
+    """fail_on_gaps=True must not raise when the data is gap-free."""
+    contiguous = [
+        _bar(_ms(2026, 1, 5, 9, 30), close=100.0),
+        _bar(_ms(2026, 1, 5, 9, 31), close=100.5),
+        _bar(_ms(2026, 1, 5, 9, 32), close=101.0),
+    ]
+    df, _ = preprocess_and_calculate(
+        bars=contiguous,
+        indicator_entries=[],
+        session="rth",
+        forward_fill=False,
+        fail_on_gaps=True,
+        timespan="minute",
+        multiplier=1,
+    )
+    assert len(df) == 3
+
+
+def test_fail_on_gaps_skipped_for_non_minute():
+    """fail_on_gaps=True must be a no-op for hourly bars (gaps are expected)."""
+    hourly = [
+        _bar(_ms(2026, 1, 5, 9, 0), close=100.0),
+        _bar(_ms(2026, 1, 5, 11, 0), close=102.0),
+    ]
+    df, _ = preprocess_and_calculate(
+        bars=hourly,
+        indicator_entries=[],
+        session="rth",
+        forward_fill=False,
+        fail_on_gaps=True,
+        timespan="hour",
+        multiplier=1,
+    )
+    assert len(df) == 2

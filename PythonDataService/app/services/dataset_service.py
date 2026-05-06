@@ -660,11 +660,41 @@ def _tag_session_column(
     return df
 
 
+def _detect_gaps(
+    df: pd.DataFrame,
+    timespan: str,
+    multiplier: int,
+) -> list[dict[str, Any]]:
+    """Return records for each intra-day gap larger than expected bar delta.
+
+    Only applies to minute-resolution data. Higher resolutions (hour/day) are
+    already sparse by nature and are not gap-checked.
+    """
+    if df.empty or timespan != "minute":
+        return []
+    expected_ms = multiplier * 60 * 1000
+    dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    dt_et = dt_utc.dt.tz_convert(_ET)
+    gaps: list[dict[str, Any]] = []
+    for date, group in df.groupby(dt_et.dt.date):
+        group = group.sort_values("timestamp")
+        diffs = group["timestamp"].diff().dropna()
+        for idx, diff in diffs.items():
+            if diff > expected_ms * 1.5:
+                gaps.append({
+                    "date": str(date),
+                    "gap_at_ms": int(group.loc[idx, "timestamp"]),
+                    "gap_size_ms": int(diff),
+                })
+    return gaps
+
+
 def preprocess_and_calculate(
     bars: list[dict[str, Any]],
     indicator_entries: list[dict[str, Any]],
     session: str = "extended",
     forward_fill: bool = False,
+    fail_on_gaps: bool = False,
     trim_from_ts: int | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
@@ -676,9 +706,10 @@ def preprocess_and_calculate(
       1. Sort and deduplicate bars
       2. Session filter (RTH or extended)
       3. Tag session column (rth/pre/post) for CSV export
-      4. Forward-fill gaps (optional)
-      5. Calculate dynamic indicators
-      6. Trim warm-up rows (optional, by timestamp)
+      4. Gap check (optional, raises ValueError if fail_on_gaps=True and gaps exist)
+      5. Forward-fill gaps (optional)
+      6. Calculate dynamic indicators
+      7. Trim warm-up rows (optional, by timestamp)
     """
     df = pd.DataFrame(bars)
     df = df.sort_values("timestamp").reset_index(drop=True)
@@ -688,6 +719,16 @@ def preprocess_and_calculate(
     # Tag session column for CSV export (uses NYSE calendar)
     if from_date and to_date:
         df = _tag_session_column(df, from_date, to_date)
+
+    if fail_on_gaps:
+        gaps = _detect_gaps(df, timespan, multiplier)
+        if gaps:
+            raise ValueError(
+                f"fail_on_gaps=True: {len(gaps)} intra-day gap(s) detected. "
+                f"First gap: date={gaps[0]['date']}, at_ms={gaps[0]['gap_at_ms']}, "
+                f"size_ms={gaps[0]['gap_size_ms']}. "
+                f"Set fail_on_gaps=False to allow forward-filling."
+            )
 
     if forward_fill:
         df = forward_fill_gaps(df, session, timespan=timespan, multiplier=multiplier)
