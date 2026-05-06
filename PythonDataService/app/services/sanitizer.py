@@ -87,7 +87,16 @@ class DataSanitizer:
             df = df[mask]
 
             # Return timestamp as int64 ms UTC (canonical wire format).
-            df["timestamp"] = df["timestamp"].astype("datetime64[ms]").astype("int64")
+            # Pandas 3 defaults ``pd.to_datetime(..., unit="ms", utc=True)`` to
+            # ``datetime64[ms, UTC]`` precision, where pandas 2 returned
+            # ``datetime64[ns, UTC]``. The previous
+            # ``astype("datetime64[ms]").astype("int64")`` chain attempted to
+            # strip tz by going naive — illegal under recent pandas
+            # (``Cannot use .astype to convert from timezone-aware dtype to
+            # timezone-naive dtype``). Cast to ns explicitly so ``int64``
+            # always yields ns-since-epoch-UTC, then divide to ms — robust
+            # against pandas internal-precision defaults.
+            df["timestamp"] = df["timestamp"].astype("datetime64[ns, UTC]").astype("int64") // 1_000_000
 
             cleaned_count = len(df)
             removed_count = original_count - cleaned_count
@@ -154,8 +163,10 @@ class DataSanitizer:
             df = df[(df["price"] > 0) & (df["size"] > 0)]
 
             # Return timestamp as int64 ms UTC (canonical wire format).
-            # Input was nanoseconds; convert through datetime64[ms] for ms precision.
-            df["timestamp"] = df["timestamp"].astype("datetime64[ms]").astype("int64")
+            # Same precision-default story as ``sanitize_aggregates`` above:
+            # cast to ``datetime64[ns, UTC]`` first so ``int64`` always
+            # yields ns-since-epoch-UTC, then divide to ms.
+            df["timestamp"] = df["timestamp"].astype("datetime64[ns, UTC]").astype("int64") // 1_000_000
 
             cleaned_count = len(df)
 
