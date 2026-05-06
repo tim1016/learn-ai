@@ -2,8 +2,8 @@
 
 **Status:** in-progress
 **Started:** 2026-05-05
-**Last updated:** 2026-05-05
-**Run count:** 2
+**Last updated:** 2026-05-06
+**Run count:** 3
 **Generator:** `.claude/skills/auto-research-tick` (baseline mode)
 
 > This document is **frozen** once the baseline completes. Live state moves to a separate `current-state.md` after hardening. Do not edit this doc by hand once frozen except to append entries to the **Remediation log** at the bottom.
@@ -14,8 +14,8 @@ _Filled at the end of the first sweep and updated after every subsequent run tha
 
 | Severity | Open | Deferred | Closed | Total |
 |---|---|---|---|---|
-| P0 | 0 | 0 | 0 | 0 |
-| P1 | 13 | 0 | 0 | 13 (1 status=awaiting-human) |
+| P0 | 1 | 0 | 0 | 1 |
+| P1 | 14 | 0 | 0 | 14 (1 status=awaiting-human) |
 | P2 | 7 | 0 | 0 | 7 |
 | P3 | 0 | 0 | 0 | 0 |
 
@@ -35,7 +35,7 @@ For each rule, one row: **holding** / **violated** / **partial**, with the count
 | Tolerances justified when loosened | TBD | — | Phase 6 |
 | Timestamp canonical format `int64 ms UTC` at all boundaries | **violated** | F-0009, F-0019, F-0020 | sanitizer emits ISO-Z at wire; trade_comparison silently UTC-stamps naive strings |
 | Timestamp ban-list clean (Python) | **violated** | F-0020 | 19 candidate files; sanitizer + rule_based_backtest + trade_comparison confirmed |
-| Timestamp ban-list clean (.NET) | **partial** | F-0020 | 4 candidate files including `MarketDataService.cs` (ingestion); per-file triage pending |
+| Timestamp ban-list clean (.NET) | **violated** | F-0020, F-0021 (P0), F-0022 | All 4 candidate files confirmed violators; 2 are ingestion-path P0 |
 | Timestamp ban-list clean (TypeScript) | **partial** | F-0020 | 45 candidate files; mostly display/test but ~10 cross-wire surfaces need triage |
 | Fail-fast ingestion (no silent dedup / forward-fill) | TBD | — | Phase 7 |
 | Sovereignty (no runtime calls into `references/`) | TBD | — | Phase 4 |
@@ -93,6 +93,8 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 | F-0009 | P1 | awaiting-human | timestamp | `app/services/sanitizer.py:79` emits ISO-Z string at the wire; line 57 silently drops duplicates. Cross-refs prior audit `computational-fidelity-2026-04-22.md` top-10 #1/#2. | [findings/F-0009](findings/F-0009-sanitizer-iso-timestamp-wire.md) |
 | F-0019 | P1 | open | timestamp | `app/services/trade_comparison.py::_parse_ts` accepts 3 naive formats and silently `replace(tzinfo=UTC)`s them — same anti-pattern the .NET ban list calls out | [findings/F-0019](findings/F-0019-trade-comparison-naive-strptime-utc-assumption.md) |
 | F-0020 | P1 | open | timestamp | **Phase 3 rollup** — 19 Python + 4 .NET + 45 TS files match ban-list patterns. Per-file triage deferred to Phase 3 ticks. Pinpoints prior-audit-known violators. | [findings/F-0020](findings/F-0020-timestamp-ban-list-rollup.md) |
+| F-0021 | **P0** | open | timestamp | `MarketDataService.cs:451` (aggregate ingestion) + `StudiesApi.cs:294-298` (`ParseUtc`) — banned `AssumeUniversal\|AdjustToUniversal` pattern silently coerces naive strings to UTC | [findings/F-0021](findings/F-0021-dotnet-ingestion-datetime-parse-assumeuniversal.md) |
+| F-0022 | P1 | open | timestamp | `Query.cs` (4 occurrences), `MarketDataService.cs` (date-range params, 6 occurrences), `ResearchService.cs` (2 occurrences) — `DateTime.Parse(fromDate).ToUniversalTime()` silently treats naive input as local time | [findings/F-0022](findings/F-0022-dotnet-query-parameter-datetime-parse.md) |
 
 ### 3.4 Provenance & reference gaps
 _(none yet)_
@@ -176,6 +178,7 @@ The nightly auto-research cron is **not** scheduled until every box below is che
 |---|---|---|---|---|---|
 | 1 | 2026-05-05 | 1 (partial) | 8 (F-0001..F-0008, all P1) | 0 | Phase 1 inventory: major subtree gaps + authority-map drift identified. Backend secondary inventory and migration-plan drift check deferred to next tick. |
 | 2 | 2026-05-05 | 1 (substantially complete), 3 (grep prep) | 12 (F-0009..F-0020 — 5 P1 + 7 P2) | 0 | Phase 1 continuation: Backend secondary services classified, PythonDataService secondary services classified, divergence parallels found, migration-plan drift confirmed. Phase 3 ban-list grep run cross-stack (rolled up in F-0020). Per-file Phase 3 triage deferred. |
+| 3 | 2026-05-06 | 3 (.NET subset) | 2 (F-0021 P0 + F-0022 P1) | 0 | Phase 3 .NET triage of F-0020's 4 candidates. Both ingestion-path occurrences (`MarketDataService.cs:451` + `StudiesApi.cs:294-298 ParseUtc`) confirmed P0 — banned `AssumeUniversal\|AdjustToUniversal` pattern. Query-parameter occurrences (Query.cs, MarketDataService.cs date-range, ResearchService.cs) consolidated into one P1. **First P0 of the baseline.** |
 
 Per-run summaries in `docs/audits/auto-research/runs/YYYY-MM-DD.md` (created on first run).
 

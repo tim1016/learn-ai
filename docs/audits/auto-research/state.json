@@ -1,16 +1,17 @@
 {
   "mode": "baseline-in-progress",
-  "phase": 2,
-  "phase_name": "python-authority",
-  "cursor": "phase-2-not-started; phase-3-prep-complete (see F-0020 for the candidate file list); phase-1-leftovers: per-file triage of the 19 Python + 4 .NET + 45 TS Phase-3 ban-list candidates (this is technically Phase 3 work — picked up in next tick); also F-0001/F-0002/F-0007/F-0008 subtree contents have not yet been file-by-file checked for individual unregistered concepts (rolled up at the subtree level in this tick).",
-  "last_run": "2026-05-05T23:45:59-05:00",
+  "phase": 3,
+  "phase_name": "timestamp",
+  "cursor": "phase-3-continuation: .NET ban-list COMPLETE (F-0021 P0 + F-0022 P1 cover all 4 candidates from F-0020). Next: (a) Python ingestion-path triage of F-0020 candidates: polygon_client.py, polygon_ingest.py, dataset_service.py, data_quality_service.py; (b) Python non-ingestion candidates: rule_based_backtest.py (prior audit known), strategies/common.py, options_companion_service.py, market_monitor.py, validation_study.py, volatility.py, insight.py, spy_ema_crossover_options.py, contract_finder.py, iv_builder.py, build_dashboard.py, engine_runner.py, volatility/cache.py, validation_service.py; (c) TypeScript wire-crossing services: replay-strategy.service.ts (prior audit), replay-indicator.service.ts, replay-engine.service.ts, past-chain.service.ts, engine-history.component.ts, edge-api.service.ts, data-lab.component.ts, market-data.factory.ts; (d) TypeScript display-only mass classify (~37 files). Then Phase 2 (math-authority sweep), Phase 4-10.",
+  "last_run": "2026-05-06T00:05:00-05:00",
   "budget_used_seconds": 0,
-  "open_findings": ["F-0001", "F-0002", "F-0003", "F-0004", "F-0005", "F-0006", "F-0007", "F-0008", "F-0010", "F-0011", "F-0012", "F-0013", "F-0014", "F-0015", "F-0016", "F-0017", "F-0018", "F-0019", "F-0020"],
+  "open_findings": ["F-0001", "F-0002", "F-0003", "F-0004", "F-0005", "F-0006", "F-0007", "F-0008", "F-0010", "F-0011", "F-0012", "F-0013", "F-0014", "F-0015", "F-0016", "F-0017", "F-0018", "F-0019", "F-0020", "F-0021", "F-0022"],
   "open_findings_awaiting_human": ["F-0009"],
   "closed_findings": [],
   "runs": [
     {"date": "2026-05-05", "phases_touched": [1], "opened": 8, "closed": 0, "stop_reason": "manual-interrupt"},
-    {"date": "2026-05-05", "phases_touched": [1, 3], "opened": 12, "closed": 0, "stop_reason": "manual-interrupt"}
+    {"date": "2026-05-05", "phases_touched": [1, 3], "opened": 12, "closed": 0, "stop_reason": "manual-interrupt"},
+    {"date": "2026-05-06", "phases_touched": [3], "opened": 2, "closed": 0, "stop_reason": "manual-interrupt", "notes": "first P0 of baseline (F-0021)"}
   ],
   "baseline_started_at": "2026-05-05T23:34:32-05:00",
   "baseline_completed_at": null,
