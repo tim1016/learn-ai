@@ -1,5 +1,10 @@
 """SpyOpeningRangeBreakout — Pure price-action ORB strategy, zero warmup.
 
+Formula: Long-only ORB on 15-min SPY bars. Opening range = first 3 consolidated bars of RTH (9:30–10:15 ET). Entry: bar CLOSES above ORB high AND range ∈ [0.30%, 1.50%]. Position: SetHoldings(SPY, 1.0). Exit: 5 consolidated bars (75 minutes) after entry.
+Reference: TradingView Pine validation at `docs/validation/SPY_ORB_Strategy.pine`; design doc `docs/validation/SPY_ORB_Strategy_Plan.md`; cross-system validation report `docs/validation/ORB_Cross_System_Validation_Report.pdf`. No external port reference (designed in-house against TV Pine ground truth).
+Canonical implementation: this file.
+Validated against: TV Pine (manual cross-check) + PDF cross-system validation report. No automated golden fixture under `tests/fixtures/golden/`; behavior is exercised via `app/engine/tests/test_spy_orb_one_trade_per_day.py`.
+
 Strategy rules:
   * 15-minute bars consolidated from minute SPY data.
   * Long-only Opening Range Breakout (ORB).

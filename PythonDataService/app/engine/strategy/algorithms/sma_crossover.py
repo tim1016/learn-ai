@@ -1,5 +1,10 @@
 """SmaCrossoverAlgorithm — new-engine port of the legacy SMA crossover strategy.
 
+Formula: Long-only golden cross / death cross. Enter long when short SMA crosses above long SMA; exit when short SMA crosses below long SMA. Default periods follow `_rsi_range_base.py` conventions (50/200 for the divergence-research s3 variant; new engine accepts arbitrary).
+Reference: Internal port from legacy `app/services/strategies/sma_crossover.py` (pandas-ta version, parity target). LEAN inspiration but no line-for-line port.
+Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `spec/fixtures/sma_crossover.spec.json` reproduces the hand-coded twin trade-by-trade. Divergence-research-only parallel: `app/research/divergence/strategies/s3_sma_crossover.py` (vectorized pandas).
+Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_sma_parity.py`.
+
 Golden-cross / death-cross rule lifted from
 ``app/services/strategies/sma_crossover.py``:
 

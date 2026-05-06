@@ -1,5 +1,10 @@
 """RsiMeanReversionAlgorithm — new-engine port of the legacy RSI mean-reversion strategy.
 
+Formula: Long-only RSI mean reversion. Entry: RSI(window) drops strictly below `oversold` threshold (typically 30). Exit: RSI(window) rises strictly above `overbought` threshold (typically 50). End-of-run: any open position closed on `on_end_of_algorithm`.
+Reference: Internal port from legacy `app/services/strategies/rsi_mean_reversion.py` (pandas-ta version, parity target). LEAN inspiration but no line-for-line port.
+Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `spec/fixtures/rsi_mean_reversion.spec.json` reproduces the hand-coded twin trade-by-trade. Divergence-research-only parallel: `app/research/divergence/strategies/s2_rsi_mean_reversion.py` (vectorized pandas).
+Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_rsi_mean_reversion_parity.py`; engine-level test `test_rsi_mean_reversion_parity.py` validates trade-set contract against legacy module.
+
 Legacy source: ``app/services/strategies/rsi_mean_reversion.py``
 
 Rule set (unchanged from the pandas-ta reference):

@@ -1,5 +1,10 @@
 """SpyEmaCrossoverAlgorithm — Python port of LEAN's C# reference algorithm.
 
+Formula: Long-only EMA(5)/EMA(10) crossover on 15-min SPY bars with RSI(14) filter. Entry: fresh EMA5 > EMA10 crossover AND (EMA5 - EMA10) >= 0.20 AND 50 <= RSI <= 70. Position: SetHoldings(SPY, 1.0). Exit: 5 consolidated bars (75 minutes) after entry.
+Reference: Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs (Apr 2026 revision); TradingView Pine validation `docs/validation/SPY_EMA_Crossover_RSI.pine`; validation report `docs/validation/SPY_EMA_Crossover_Validation_Report.pdf`.
+Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json` reproduces the hand-coded twin trade-by-trade (Phase 1 acceptance gate, 2026-05-04).
+Validated against: PythonDataService/tests/test_strategy_engine.py (engine-level); TV parity via Pine; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_spy_ema_parity.py`.
+
 Line-for-line port of
 ``Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs`` (Apr 2026 revision).
 The intent is to produce the same trades, in the same order, at the same
