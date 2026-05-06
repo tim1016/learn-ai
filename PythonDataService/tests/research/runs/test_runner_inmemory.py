@@ -219,6 +219,61 @@ def test_changing_fill_mode_changes_ledger_but_data_snapshot_stable(fake_data_fa
     assert ledger_a.fill_mode != ledger_b.fill_mode
 
 
+def test_fill_mode_normalization_accepts_hyphen_and_case_variants(fake_data_factory):
+    """The router admits ``"SIGNAL-BAR-CLOSE"``; the runner stores the
+    normalized form and treats every variant as the same run identity.
+    """
+    spec = _build_test_spec()
+    canonical, _ = _run(spec, fake_data_factory, fill_mode="signal_bar_close")
+    hyphen, _ = _run(spec, fake_data_factory, fill_mode="SIGNAL-BAR-CLOSE")
+    upper_underscore, _ = _run(spec, fake_data_factory, fill_mode="Signal_Bar_Close")
+
+    # All three normalize to the same canonical fill_mode in the ledger.
+    assert canonical.fill_mode == "signal_bar_close"
+    assert hyphen.fill_mode == "signal_bar_close"
+    assert upper_underscore.fill_mode == "signal_bar_close"
+    # And produce identical content hashes.
+    assert canonical.result_hash == hyphen.result_hash == upper_underscore.result_hash
+
+
+def test_slippage_per_share_actually_changes_fills(fake_data_factory):
+    """``slippage_per_share`` must propagate into FillModel — recording
+    the value in the ledger without applying it would silently invalidate
+    any slippage-sensitivity research. Regression test for PR #107.
+    """
+    spec = _build_test_spec()
+
+    def run_with_slippage(slip: float):
+        return run_strategy_spec(
+            RunRequest(
+                spec=spec,
+                start_date=date(2024, 1, 2),
+                end_date=date(2024, 12, 31),
+                slippage_per_share=slip,
+            ),
+            data_source_factory=fake_data_factory,
+            data_root_revision="test-revision-1",
+        )
+
+    no_slip_ledger, no_slip_result = run_with_slippage(0.0)
+    with_slip_ledger, with_slip_result = run_with_slippage(0.05)
+
+    # Both runs must have at least one trade for the assertion to be
+    # meaningful — the synthetic series fires the EMA rule a handful of
+    # times, but skip if zero (the assertion is then vacuous).
+    if not no_slip_result.trades or not with_slip_result.trades:
+        pytest.skip("synthetic series produced zero trades")
+
+    # Identity columns differ — the ledger records the slippage.
+    assert no_slip_ledger.slippage_per_share == 0.0
+    assert with_slip_ledger.slippage_per_share == 0.05
+    # And so do the engine outputs — at least one trade price differs.
+    no_slip_prices = [(t.entry_price, t.exit_price) for t in no_slip_result.trades]
+    with_slip_prices = [(t.entry_price, t.exit_price) for t in with_slip_result.trades]
+    assert no_slip_prices != with_slip_prices
+    assert no_slip_ledger.result_hash != with_slip_ledger.result_hash
+
+
 # ---------------------------------------------------------------------------
 # Result shape.
 # ---------------------------------------------------------------------------

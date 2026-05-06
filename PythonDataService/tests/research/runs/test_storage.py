@@ -136,7 +136,8 @@ def test_save_writes_canonical_json_files(tmp_path: Path, fake_data_factory):
     assert ledger_payload["run_id"] == ledger.run_id
     assert ledger_payload["strategy_spec_hash"] == ledger.strategy_spec_hash
     assert result_payload["run_id"] == ledger.run_id
-    assert result_payload["metrics"]["total_trades"] == ledger_payload["strategy_spec_id"] is not None or True
+    assert ledger_payload["strategy_spec_id"]  # non-empty
+    assert isinstance(result_payload["metrics"]["total_trades"], int)
     # Result has the equity curve we expect.
     assert len(result_payload["equity_curve"]) == len(result.equity_curve)
 
@@ -145,8 +146,39 @@ def test_save_writes_canonical_json_files(tmp_path: Path, fake_data_factory):
 # Failure modes.
 # ---------------------------------------------------------------------------
 def test_load_missing_run_raises(tmp_path: Path):
+    # Valid UUID-hex format but no such run on disk → 404-equivalent.
     with pytest.raises(RunNotFoundError):
-        load_run("does-not-exist", root=tmp_path)
+        load_run("deadbeefdeadbeefdeadbeefdeadbeef", root=tmp_path)
+
+
+def test_load_run_with_malformed_run_id_raises_value_error(tmp_path: Path):
+    """Path-traversal defense: anything outside ``[0-9a-fA-F-]`` rejects fast."""
+    bad_ids = [
+        "../../../etc/passwd",
+        "..",
+        "/",
+        "abc/../def",
+        "abc def",                 # whitespace
+        "../" + "a" * 30,
+        "abcz",                    # 'z' not in hex alphabet, also too short
+        "a" * 7,                   # below min length
+    ]
+    for bad in bad_ids:
+        with pytest.raises(ValueError):
+            load_run(bad, root=tmp_path)
+
+
+def test_save_run_with_malformed_run_id_raises_value_error(tmp_path: Path, fake_data_factory):
+    """``save_run`` must reject malformed run_ids before any directory creation."""
+    spec = _build_test_spec()
+    ledger, result = _make_run(spec, fake_data_factory)
+    poisoned = ledger.model_copy(update={"run_id": "../escape"})
+    poisoned_result = result.model_copy(update={"run_id": "../escape"})
+
+    with pytest.raises(ValueError):
+        save_run(poisoned, poisoned_result, root=tmp_path)
+    # Nothing escaped above the root.
+    assert not (tmp_path.parent / "escape").exists()
 
 
 def test_save_refuses_to_overwrite_existing_run(tmp_path: Path, fake_data_factory):

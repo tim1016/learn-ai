@@ -251,8 +251,26 @@ async def test_post_unsupported_spec_feature_persists_failed_run(
 # GET — single run.
 # ---------------------------------------------------------------------------
 async def test_get_missing_run_returns_404(client):
-    response = await client.get("/api/research/strategy-runs/does-not-exist")
+    """Valid run_id format but no such run on disk → 404."""
+    response = await client.get(
+        "/api/research/strategy-runs/deadbeefdeadbeefdeadbeefdeadbeef"
+    )
     assert response.status_code == 404
+
+
+async def test_get_path_traversal_run_id_returns_400(client):
+    """Path traversal attempt is rejected by ``_run_dir`` and surfaces as 400.
+
+    The artifacts root never sees a directory matching ``../etc/passwd``;
+    the storage layer's regex rejects the run_id before any path
+    concatenation. This test guards the defense at the HTTP boundary.
+    """
+    response = await client.get("/api/research/strategy-runs/..%2Fetc%2Fpasswd")
+    # FastAPI / Starlette decode %2F so the handler sees ``../etc/passwd``;
+    # the storage validation raises ValueError → translated to 400.
+    assert response.status_code in {400, 404}, response.text
+    if response.status_code == 400:
+        assert "run_id" in response.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

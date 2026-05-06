@@ -25,6 +25,18 @@ response — clients introspect ``ledger.status`` and
 ``ledger.failure_reason``. This is a deliberate departure from
 ``spec_strategy.py``'s 400-on-NotImplementedError behavior; the
 research pipeline cares about discoverable failures across many runs.
+
+**Sync handlers, not async — deliberate**: the router uses ``def`` rather
+than ``async def`` because every operation here (engine run, file
+I/O via ``save_run`` / ``load_run`` / ``list_runs``) is fully blocking.
+FastAPI executes ``def`` handlers in a threadpool, which keeps the
+event loop responsive under concurrent requests. Converting to
+``async def`` without wrapping each call in ``run_in_executor`` (or
+adopting ``aiofiles``) would actively *block* the loop and degrade
+throughput, so the threadpool path is the right one for Phase A. If
+the runner ever grows real async I/O (Phase D's MC could parallelise
+folds), revisit per-handler. See ``.claude/rules/python.md`` § FastAPI
+for the project's general async-by-default rule.
 """
 
 from __future__ import annotations
@@ -41,6 +53,7 @@ from pydantic import BaseModel, Field
 from app.engine.strategy.spec import StrategySpec
 from app.research.runs import (
     BacktestRunResult,
+    RunCorruptError,
     RunLedger,
     RunNotFoundError,
     RunRequest,
@@ -74,7 +87,15 @@ class StrategyRunRequest(BaseModel):
     initial_cash: float = Field(100_000.0, ge=0)
     fill_mode: str = Field("signal_bar_close", description="signal_bar_close or next_bar_open")
     commission_per_order: float = Field(0.0, ge=0)
-    slippage_bps: float = Field(0.0, ge=0)
+    slippage_per_share: float = Field(
+        0.0,
+        ge=0,
+        description=(
+            "Per-share fill-price slippage in price points (Decimal-compatible). "
+            "Applied against the trade direction by FillModel — long fills "
+            "pay slippage above the bar price; short fills pay below."
+        ),
+    )
     random_seed: int = 0
     strategy_spec_id: str = Field("", description="Caller label; defaults to spec.name when empty")
     parent_run_id: str | None = Field(None, description="Set on fold/MC/sweep child runs")
@@ -180,7 +201,7 @@ def create_run(
         initial_cash=request.initial_cash,
         fill_mode=request.fill_mode,
         commission_per_order=request.commission_per_order,
-        slippage_bps=request.slippage_bps,
+        slippage_per_share=request.slippage_per_share,
         random_seed=request.random_seed,
         strategy_spec_id=request.strategy_spec_id,
         parent_run_id=request.parent_run_id,
@@ -217,13 +238,30 @@ def get_run(
     run_id: str,
     artifacts_root: Path | None = Depends(get_artifacts_root),
 ) -> StrategyRunResponse:
-    """Load a previously-persisted run by ``run_id``."""
+    """Load a previously-persisted run by ``run_id``.
+
+    A malformed ``run_id`` (path traversal attempt, wrong character set)
+    is rejected by the storage layer's ``_run_dir`` regex and surfaces
+    here as a ``ValueError`` — translated to 400 to keep the surface
+    actionable.
+    """
     try:
         ledger, result = load_run(run_id, root=artifacts_root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except RunNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"run not found: {run_id}",
+        ) from exc
+    except RunCorruptError as exc:
+        logger.exception("[RUNS] corrupt artifact for run_id=%s", run_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"run artifact is corrupt: {exc}",
         ) from exc
     return StrategyRunResponse(ledger=ledger, result=result)
 

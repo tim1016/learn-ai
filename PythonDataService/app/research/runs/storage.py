@@ -39,10 +39,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
+
+# Strict whitelist for ``run_id``. UUID4 hex is 32 chars; allowing 8-64
+# leaves room for callers that pad / truncate, while keeping the
+# alphabet small enough that a path-traversal attempt
+# (``run_id="../../etc/passwd"``) fails the regex before any path
+# concatenation. Tightened from "non-empty string" — see PR #107.
+_RUN_ID_PATTERN = re.compile(r"^[0-9a-fA-F-]{8,64}$")
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +91,29 @@ def default_artifacts_root() -> Path:
 
 
 def _run_dir(run_id: str, root: Path | None) -> Path:
-    if not run_id:
-        raise ValueError("run_id must be a non-empty string")
+    """Resolve a run directory, refusing anything that escapes the root.
+
+    Defense in depth against path traversal: the format check rejects
+    ``../`` segments and absolute paths; the resolved-path check
+    catches anything that slips past (e.g. symlinked roots, weird
+    Windows separators). ``run_id`` is user-controlled via
+    ``GET /api/research/strategy-runs/{run_id}`` so neither layer is
+    optional.
+    """
+    if not run_id or not _RUN_ID_PATTERN.match(run_id):
+        raise ValueError(
+            f"run_id must match {_RUN_ID_PATTERN.pattern} "
+            f"(got {run_id!r})"
+        )
     base = root if root is not None else default_artifacts_root()
+    candidate = (base / run_id).resolve()
+    base_resolved = base.resolve()
+    # Python 3.9+ has ``Path.is_relative_to``; use it as the second
+    # gate so a regex bypass through normalization (``run_id="aa/.."``
+    # passes the regex if the dot were allowed; it isn't here, but the
+    # check is cheap insurance) still gets rejected.
+    if not candidate.is_relative_to(base_resolved):
+        raise ValueError(f"run_id resolves outside the artifacts root: {run_id!r}")
     return base / run_id
 
 
@@ -128,8 +156,15 @@ def save_run(
             f"(pass replace=True to clobber)"
         )
 
-    _atomic_write_json(run_dir / "ledger.json", ledger.model_dump(mode="json"))
+    # Write order matters: ``ledger.json`` is the discovery key for
+    # ``list_runs`` and the existence check in ``load_run``. Writing
+    # ``result.json`` first means a crash between the two writes leaves
+    # a directory with only ``result.json`` — invisible to the listing
+    # and treated as missing by ``load_run``, instead of an orphan
+    # ledger pointing at a non-existent result. On retry, the orphan
+    # ``result.json`` is overwritten by the next attempt.
     _atomic_write_json(run_dir / "result.json", result.model_dump(mode="json"))
+    _atomic_write_json(run_dir / "ledger.json", ledger.model_dump(mode="json"))
     return run_dir
 
 
@@ -149,13 +184,19 @@ def load_run(run_id: str, *, root: Path | None = None) -> tuple[RunLedger, Backt
     if not ledger_path.is_file() or not result_path.is_file():
         raise RunNotFoundError(f"run not found: {run_id} (looked in {run_dir})")
 
+    # Parse each file separately so the error message names which one
+    # is actually corrupt — important when a partial-write recovery
+    # has left only one file readable.
     try:
         ledger = RunLedger.model_validate_json(ledger_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RunCorruptError(f"failed to parse {ledger_path}: {exc}") from exc
+    try:
         result = BacktestRunResult.model_validate_json(
             result_path.read_text(encoding="utf-8")
         )
     except Exception as exc:
-        raise RunCorruptError(f"failed to parse persisted run {run_id}: {exc}") from exc
+        raise RunCorruptError(f"failed to parse {result_path}: {exc}") from exc
 
     return ledger, result
 

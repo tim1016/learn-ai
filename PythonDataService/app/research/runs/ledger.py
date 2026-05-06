@@ -163,7 +163,7 @@ class RunLedger(BaseModel):
     initial_cash: float = Field(ge=0.0)
     fill_mode: str  # "signal_bar_close" | "next_bar_open"
     commission_per_order: float = Field(ge=0.0)
-    slippage_bps: float = Field(default=0.0, ge=0.0)
+    slippage_per_share: float = Field(default=0.0, ge=0.0)
     warmup_policy: Literal["spec_indicator_warmup"] = "spec_indicator_warmup"
     random_seed: int = 0
 

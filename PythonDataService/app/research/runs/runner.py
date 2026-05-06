@@ -15,10 +15,11 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from datetime import date as Date
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.engine.engine import BacktestEngine, BacktestResult, EquitySnapshot
 from app.engine.execution.fill_model import FillModel
@@ -63,7 +64,7 @@ class RunRequest:
     initial_cash: float = 100_000.0
     fill_mode: str = "signal_bar_close"
     commission_per_order: float = 0.0
-    slippage_bps: float = 0.0
+    slippage_per_share: float = 0.0
     random_seed: int = 0
     strategy_spec_id: str = ""  # caller label; defaults to spec.name when empty
     parent_run_id: str | None = None
@@ -74,10 +75,22 @@ class RunRequest:
 # Helpers.
 # ---------------------------------------------------------------------------
 _VALID_FILL_MODES = {"signal_bar_close", "next_bar_open"}
+_NY = ZoneInfo("America/New_York")
+
+
+def _normalize_fill_mode(s: str) -> str:
+    """Lowercase + replace ``-`` → ``_``. Identity for the canonical form.
+
+    The router accepts hyphen / case variants (``"SIGNAL-BAR-CLOSE"``);
+    the runner stores and validates against the canonical form so the
+    ledger doesn't carry style noise into ``data_snapshot_id`` or
+    cross-run comparisons.
+    """
+    return s.lower().replace("-", "_")
 
 
 def _parse_fill_mode(s: str) -> FillMode:
-    norm = s.lower().replace("-", "_")
+    norm = _normalize_fill_mode(s)
     if norm == "signal_bar_close":
         return FillMode.SIGNAL_BAR_CLOSE
     if norm == "next_bar_open":
@@ -96,9 +109,19 @@ def _to_ms_utc(dt: datetime) -> int:
     return int(dt.timestamp() * 1000)
 
 
-def _date_to_ms_utc(d: Date) -> int:
-    """Convert a calendar date to ``int64 ms`` UTC midnight start-of-day."""
-    return int(datetime(d.year, d.month, d.day, tzinfo=UTC).timestamp() * 1000)
+def _date_to_ny_midnight_ms(d: Date) -> int:
+    """Convert a calendar date to ``int64 ms`` UTC for ``America/New_York``
+    midnight on that date.
+
+    The engine interprets ``strategy.set_start_date(...)`` /
+    ``set_end_date(...)`` as NY-anchored: bars are filtered by NY-local
+    date, sessions run on NY hours. Recording UTC midnight in the
+    ledger would drift from the engine's actual window by 4-5 hours
+    (DST-dependent) and silently misalign any ``since_ms`` filter that
+    crosses midnight ET. The wire format is still ``int64 ms UTC``;
+    only the *moment* the date represents shifts to NY-local midnight.
+    """
+    return int(datetime(d.year, d.month, d.day, tzinfo=_NY).timestamp() * 1000)
 
 
 def _bars_held(entry_time: datetime, exit_time: datetime, resolution_minutes: int) -> int:
@@ -236,20 +259,31 @@ def run_strategy_spec(
     so the ledger identity is stable across runs.
     """
     spec = request.spec
-    if not isinstance(spec, StrategySpec):
-        raise TypeError("RunRequest.spec must be a validated StrategySpec instance")
-    if request.fill_mode not in _VALID_FILL_MODES:
-        raise ValueError(f"unknown fill_mode {request.fill_mode!r}")
+    # Normalize the fill mode early so the ledger and the engine see the
+    # same canonical form, and accept the same hyphen/case variants the
+    # HTTP layer accepts.
+    fill_mode_norm = _normalize_fill_mode(request.fill_mode)
+    if fill_mode_norm not in _VALID_FILL_MODES:
+        raise ValueError(
+            f"unknown fill_mode {request.fill_mode!r} — "
+            f"expected one of {sorted(_VALID_FILL_MODES)}"
+        )
     if request.start_date >= request.end_date:
         raise ValueError(
             f"start_date must be strictly before end_date "
             f"(got start={request.start_date}, end={request.end_date})"
         )
+    # ``StrategySpec`` validates ``len(symbols) == 1`` at construction (Phase 1
+    # boundary), so multi-symbol specs can't reach here. Still guard against
+    # an empty list — that's the one shape Pydantic admits at the type level
+    # but the engine can't run.
+    if not spec.symbols:
+        raise ValueError("StrategySpec.symbols must contain exactly one symbol")
 
     symbol = spec.symbols[0]
     resolution = spec.resolution.period_minutes
-    start_ms = _date_to_ms_utc(request.start_date)
-    end_ms = _date_to_ms_utc(request.end_date)
+    start_ms = _date_to_ny_midnight_ms(request.start_date)
+    end_ms = _date_to_ny_midnight_ms(request.end_date)
     revision = data_root_revision if data_root_revision is not None else resolve_data_root_revision()
 
     spec_dump = spec.model_dump(mode="json")
@@ -276,9 +310,9 @@ def run_strategy_spec(
         start_ms=start_ms,
         end_ms=end_ms,
         initial_cash=request.initial_cash,
-        fill_mode=request.fill_mode,
+        fill_mode=fill_mode_norm,
         commission_per_order=request.commission_per_order,
-        slippage_bps=request.slippage_bps,
+        slippage_per_share=request.slippage_per_share,
         random_seed=request.random_seed,
         data_snapshot_id=snapshot_id,
     )
@@ -316,12 +350,13 @@ def run_strategy_spec(
 
     strategy.initialize = _patched_init  # type: ignore[assignment]
 
-    fill_mode = _parse_fill_mode(request.fill_mode)
+    fill_mode = _parse_fill_mode(fill_mode_norm)
     engine = BacktestEngine(
         data_source=data_source,
         fill_model=FillModel(
             mode=fill_mode,
             commission_per_order=Decimal(str(request.commission_per_order)),
+            slippage_per_share=Decimal(str(request.slippage_per_share)),
         ),
     )
 
