@@ -51,10 +51,6 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-sliders-h',
     items: [
       { label: 'Options Lab', route: '/options-lab' },
-      { label: 'Options Chain', route: '/options-chain' },
-      { label: 'Strategy Builder', route: '/strategy-builder' },
-      { label: 'Options Strategy Lab', route: '/options-strategy-lab' },
-      { label: 'Options History', route: '/options-history' },
       { label: 'Pricing Lab', route: '/pricing-lab' },
     ],
   },

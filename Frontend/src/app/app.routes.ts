@@ -10,35 +10,10 @@ export const routes: Routes = [
       ),
   },
   {
-    // Per docs/architecture/options-routes-research.md §7 D9 + §5.1 R0b:
-    // /options-chain is deleted; /strategy-builder absorbs the chain
-    // viewer + per-contract drill-down (UX-Q1) + Greek toggle (UX-Q2).
-    // Redirect kept for ≥ 7 days to preserve bookmarks; remove in
-    // Phase 4.5.
-    path: "options-chain",
-    redirectTo: "/strategy-builder",
-    pathMatch: "full",
-  },
-  {
     path: "strategy-docs",
     loadComponent: () =>
       import("./components/strategy-docs/strategy-docs.component").then(
         (m) => m.StrategyDocsComponent
-      ),
-  },
-  {
-    // Per docs/architecture/options-routes-research.md §7 D8 + §5.1 R0a:
-    // /options-strategy-lab is deleted; /strategy-builder is the survivor.
-    // Redirect kept for ≥ 7 days to preserve bookmarks; remove in Phase 4.5.
-    path: "options-strategy-lab",
-    redirectTo: "/strategy-builder",
-    pathMatch: "full",
-  },
-  {
-    path: "strategy-builder",
-    loadComponent: () =>
-      import("./components/strategy-builder/strategy-builder.component").then(
-        (m) => m.StrategyBuilderComponent
       ),
   },
   {
@@ -92,16 +67,6 @@ export const routes: Routes = [
       import("./components/pricing-lab/pricing-lab.component").then(
         (m) => m.PricingLabComponent
       ),
-  },
-  {
-    // Per docs/architecture/options-routes-research.md §7 D10 + §5.1 R1:
-    // /options-history is deleted; the past-chain inspector is hosted
-    // inside /data-lab as a card on the options-companion config row
-    // (UX-Q3). Redirect kept for ≥ 7 days to preserve bookmarks;
-    // remove in Phase 4.5.
-    path: "options-history",
-    redirectTo: "/data-lab",
-    pathMatch: "full",
   },
   {
     path: "tracked-instruments",
