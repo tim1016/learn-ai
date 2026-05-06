@@ -1,7 +1,7 @@
 ---
 id: F-0024
 severity: P1
-status: open
+status: deferred
 area: timestamp
 canonical_file: PythonDataService/app/research/divergence/ingest/polygon_ingest.py; PythonDataService/app/services/dataset_service.py; PythonDataService/app/services/polygon_client.py
 reference: .claude/rules/numerical-rigor.md (Timestamp rigor → Ban list)

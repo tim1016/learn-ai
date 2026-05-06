@@ -1,7 +1,7 @@
 ---
 id: F-0034
 severity: P1
-status: open
+status: deferred
 area: timestamp
 canonical_file: Frontend/src/app/components/lean-engine/engine-replay-v2/services/replay-engine-v2.service.ts; Frontend/src/app/services/replay-{engine,indicator,strategy}.service.ts; multiple lean-engine + research-lab + edge components
 reference: docs/audits/computational-fidelity-2026-04-22.md (top-10 finding #2); .claude/rules/numerical-rigor.md (Timestamp rigor → Ban list)

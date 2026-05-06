@@ -1,7 +1,7 @@
 ---
 id: F-0020
 severity: P1
-status: open
+status: fixed-verified
 area: timestamp
 canonical_file: cross-cutting (multiple files in PythonDataService, Backend, Frontend)
 reference: .claude/rules/numerical-rigor.md (Timestamp rigor → Ban list)

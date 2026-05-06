@@ -79,7 +79,8 @@ def edge_score(
 ) -> EdgeScoreResult:
     """Compute the per-bar Edge Score and discrete action."""
     w = weights or DEFAULT_WEIGHTS
-    if not np.isclose(sum(w.values()), 1.0):
+    # Probability weights — strict tolerance per .claude/rules/numerical-rigor.md
+    if not np.isclose(sum(w.values()), 1.0, atol=1e-10, rtol=0):
         raise ValueError(f"weights must sum to 1.0, got {sum(w.values())}")
 
     components = pd.DataFrame(

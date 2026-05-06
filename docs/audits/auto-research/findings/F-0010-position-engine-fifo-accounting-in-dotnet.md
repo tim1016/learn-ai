@@ -1,7 +1,7 @@
 ---
 id: F-0010
 severity: P1
-status: open
+status: awaiting-human
 area: python-authority
 canonical_file: Backend/Services/Implementation/PositionEngine.cs
 reference: missing

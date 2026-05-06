@@ -1,7 +1,7 @@
 ---
 id: F-0011
 severity: P1
-status: open
+status: awaiting-human
 area: python-authority
 canonical_file: Backend/Services/Implementation/SnapshotService.cs
 reference: docs/math-sources-of-truth.md (Max drawdown row, line 46)

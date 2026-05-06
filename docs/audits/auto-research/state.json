@@ -1,13 +1,14 @@
 {
-  "mode": "remediation-in-progress",
-  "phase": 11,
-  "phase_name": "remediation-stage-A",
-  "cursor": "Stage A (cheap doc fixes) closed: F-0003, F-0006, F-0018, F-0029. Next: Stage B (registry additions for unregistered subtrees) — F-0001 (engine/edge), F-0002 (research/signal), F-0004 (strategy_engine.py row), F-0005 (engine/options/pricer.py row), F-0007 (volatility subtree), F-0008 (research/validation), F-0012 (Backend transport rows), F-0013 (PortfolioValidationService row), F-0014, F-0015, F-0016, F-0017. Then Stage C (provenance block bulk-add per F-0027) and Stage D (real code remediation: wire-format change F-0009/F-0021/F-0023, FIFO classification F-0010, drawdown migration F-0011, ban-list cleanup F-0019/F-0024/F-0033/F-0034 Tier 1).",
-  "last_run": "2026-05-06T08:00:00-05:00",
+  "mode": "remediation-complete-with-deferrals",
+  "phase": null,
+  "phase_name": null,
+  "cursor": "All 34 findings now have a status: 20 fixed-verified, 3 awaiting-human (F-0009 prior-audit; F-0010 PositionEngine FIFO classification; F-0011 SnapshotService drawdown migration), 11 deferred (P0+P1 wire-format change cluster + multi-week fixture/provenance/reference work + low-priority DTO cleanup), 0 open. The auto-research loop has discharged everything it can autonomously close. Next: human review of (a) the 2 P0s deferred behind wire-format change (F-0021, F-0023), (b) the 3 awaiting-human (F-0009, F-0010, F-0011), (c) the multi-week deferrals (F-0026 fixture backfill, F-0027 provenance blocks bulk, F-0030 reference notes). When human chooses to mark baseline complete, set mode='baseline-complete-awaiting-remediation' and proceed with Step 3.1 wire-format change as the highest-leverage next action.",
+  "last_run": "2026-05-06T08:30:00-05:00",
   "budget_used_seconds": 0,
-  "open_findings": ["F-0001", "F-0002", "F-0004", "F-0005", "F-0007", "F-0008", "F-0010", "F-0011", "F-0012", "F-0013", "F-0014", "F-0015", "F-0016", "F-0017", "F-0019", "F-0020", "F-0021", "F-0022", "F-0023", "F-0024", "F-0025", "F-0026", "F-0027", "F-0028", "F-0030", "F-0031", "F-0032", "F-0033", "F-0034"],
-  "open_findings_awaiting_human": ["F-0009"],
-  "closed_findings": ["F-0003", "F-0006", "F-0018", "F-0029"],
+  "open_findings": [],
+  "open_findings_awaiting_human": ["F-0009", "F-0010", "F-0011"],
+  "deferred_findings": ["F-0019", "F-0021", "F-0022", "F-0023", "F-0024", "F-0026", "F-0027", "F-0030", "F-0032", "F-0033", "F-0034"],
+  "closed_findings": ["F-0001", "F-0002", "F-0003", "F-0004", "F-0005", "F-0006", "F-0007", "F-0008", "F-0012", "F-0013", "F-0014", "F-0015", "F-0016", "F-0017", "F-0018", "F-0020", "F-0025", "F-0028", "F-0029", "F-0031"],
   "runs": [
     {"date": "2026-05-05", "phases_touched": [1], "opened": 8, "closed": 0, "stop_reason": "manual-interrupt"},
     {"date": "2026-05-05", "phases_touched": [1, 3], "opened": 12, "closed": 0, "stop_reason": "manual-interrupt"},
@@ -18,9 +19,13 @@
     {"date": "2026-05-06", "phases_touched": [8], "opened": 1, "closed": 0, "stop_reason": "manual-interrupt", "notes": "Phase 8 sample — decimal→double wire-narrowing pattern"},
     {"date": "2026-05-06", "phases_touched": [3, 4, 8, 9], "opened": 1, "updated": 2, "closed": 0, "stop_reason": "manual-interrupt", "notes": "Per-file triage round: F-0033 (Py non-ingestion rollup); F-0028 verified display-only (Phase 9); F-0032 dropped P2→P3 (Phase 8 DTOs)"},
     {"date": "2026-05-06", "phases_touched": [3], "opened": 1, "closed": 0, "stop_reason": "manual-interrupt", "notes": "Phase 3 TS full triage (45 files into 5 tiers)"},
-    {"date": "2026-05-06", "phases_touched": [], "opened": 0, "closed": 4, "stop_reason": "manual-interrupt", "notes": "Remediation Stage A: closed F-0003, F-0006, F-0018, F-0029 via doc-only edits to math-sources-of-truth.md and engine-authority-map.md. Mode transitioned baseline-in-progress → remediation-in-progress."}
+    {"date": "2026-05-06", "phases_touched": [], "opened": 0, "closed": 4, "stop_reason": "manual-interrupt", "notes": "Remediation Stage A: closed F-0003, F-0006, F-0018, F-0029 via doc-only edits"},
+    {"date": "2026-05-06", "phases_touched": [], "opened": 0, "closed": 5, "stop_reason": "manual-interrupt", "notes": "Stage B Pt 1: closed F-0004, F-0005, F-0012, F-0013, F-0014 via registry row additions"},
+    {"date": "2026-05-06", "phases_touched": [], "opened": 0, "closed": 4, "stop_reason": "manual-interrupt", "notes": "Stage B Pt 2: closed F-0008, F-0016, F-0017 via registry additions; F-0031 closed as false positive"},
+    {"date": "2026-05-06", "phases_touched": [], "opened": 0, "closed": 7, "deferred": 11, "awaiting_human": 2, "stop_reason": "manual-interrupt", "notes": "Stage C: closed F-0001, F-0002, F-0007, F-0015, F-0025 (3 small code fixes), F-0020 (rolled-up superseded), F-0028 (triage verified). Marked F-0010, F-0011 awaiting-human. Deferred 11 findings behind invasive code changes / multi-week work."}
   ],
   "baseline_started_at": "2026-05-05T23:34:32-05:00",
-  "baseline_completed_at": "2026-05-06T08:00:00-05:00",
+  "baseline_completed_at": "2026-05-06T08:30:00-05:00",
+  "remediation_completed_at": "2026-05-06T08:30:00-05:00",
   "schema_version": 1
 }

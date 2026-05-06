@@ -1,7 +1,7 @@
 ---
 id: F-0007
 severity: P1
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/volatility/
 reference: docs/architecture/engine-authority-map.md (line 27, partial)

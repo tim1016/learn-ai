@@ -1,7 +1,7 @@
 ---
 id: F-0030
 severity: P2
-status: open
+status: deferred
 area: documentation
 canonical_file: docs/references/
 reference: docs/math-sources-of-truth.md (multiple rows)

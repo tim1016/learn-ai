@@ -12,12 +12,14 @@
 
 _Filled at the end of the first sweep and updated after every subsequent run that closes the loop on a phase. Running tallies live here; details live below._
 
-| Severity | Open | Deferred | Closed | Total |
-|---|---|---|---|---|
-| P0 | 2 | 0 | 0 | 2 |
-| P1 | 14 | 0 | 5 | 19 (1 status=awaiting-human) |
-| P2 | 4 | 0 | 7 | 11 |
-| P3 | 1 | 0 | 1 | 2 |
+| Severity | Open | Awaiting-human | Deferred | Closed | Total |
+|---|---|---|---|---|---|
+| P0 | 0 | 0 | 2 | 0 | 2 |
+| P1 | 0 | 3 | 6 | 10 | 19 |
+| P2 | 0 | 0 | 2 | 9 | 11 |
+| P3 | 0 | 0 | 1 | 1 | 2 |
+
+**Total: 0 open, 3 awaiting-human, 11 deferred, 20 fixed-verified, 34 total findings.**
 
 **Files audited:** All 10 phases touched. Phase 1 substantially complete (registry cross-check + subtree inventory + drift detection). Phase 2 items 2 + 5 verified; items 1 + 4 already deferred per Phase 1 findings (F-0010, F-0011, F-0018). Phase 3 .NET fully triaged (F-0021 + F-0022); Python ingestion fully triaged (F-0023 + F-0024); TS rollup with per-file triage owed (F-0020). Phase 4 headline (F-0027) — file-by-file 4-field-block triage owed. Phase 5 headline (F-0026 — fixture coverage). Phase 6 substantially clean (F-0025). Phase 7 subsumed by Phase 3 P0. Phase 8 sample (F-0032 — decimal→double); per-canonical tracing + DTO file-by-file owed. Phase 9 sample of `lean-engine.component.ts` confirms F-0028 severity; 7 high-suspicion files owed. Phase 10 done (F-0030 reference notes + F-0031 warmup).
 **Files skipped:** Per-file triage in Phases 3 (TS), 4, 8 (DTOs), 9 (TS).
@@ -69,12 +71,12 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 | F-0004 | P1 | **fixed-verified** | inventory | ~~strategy_engine.py canonical, no registry row~~ Closed 2026-05-06: row added. | [findings/F-0004](findings/F-0004-strategy-engine-py-no-registry-row.md) |
 | F-0005 | P1 | **fixed-verified** | inventory | ~~engine/options/pricer.py dispatcher~~ Closed 2026-05-06: row added. | [findings/F-0005](findings/F-0005-engine-options-pricer-undocumented.md) |
 | F-0006 | P1 | **fixed-verified** | inventory | ~~Sharpe / max-drawdown / fill-model registry rows point at directory `PythonDataService/app/engine/`~~ Closed 2026-05-06: rows tightened to pinpoint files. (Provenance blocks on those files still owed via F-0027.) | [findings/F-0006](findings/F-0006-results-statistics-vague-canonical-path.md) |
-| F-0007 | P1 | open | inventory | `app/volatility/` — 12 of 14 modules unregistered; includes `vix_replication.py`, `fitting.py`, `surface.py`, `basis.py`, `iv30_health.py` | [findings/F-0007](findings/F-0007-volatility-subtree-mostly-unregistered.md) |
+| F-0007 | P1 | **fixed-verified** | inventory | ~~volatility subtree mostly unregistered~~ Closed 2026-05-06: 9-row "Volatility surface and analytics" section added; **VIX replication needs paper verification (Demeterfi-Derman-Kamal-Zou 1999)**. | [findings/F-0007](findings/F-0007-volatility-subtree-mostly-unregistered.md) |
 | F-0008 | P1 | **fixed-verified** | inventory | ~~research/validation subtree unregistered~~ Closed 2026-05-06: new "Research signal validation primitives" section with 3 rows. | [findings/F-0008](findings/F-0008-research-validation-subtree-unregistered.md) |
 | F-0012 | P2 | **fixed-verified** | inventory | ~~4 Backend transport-only services need rows~~ Closed 2026-05-06: 4 rows added. | [findings/F-0012](findings/F-0012-backend-transport-services-unregistered.md) |
 | F-0013 | P2 | **fixed-verified** | inventory | ~~PortfolioValidationService unclassified~~ Closed 2026-05-06: validation-only row added to engine-authority-map. | [findings/F-0013](findings/F-0013-portfolio-validation-service-unregistered.md) |
 | F-0014 | P2 | **fixed-verified** | inventory | ~~data_quality_service + validation_service unregistered~~ Closed 2026-05-06: 2 rows added. | [findings/F-0014](findings/F-0014-data-quality-validation-services-unregistered.md) |
-| F-0015 | P2 | open | inventory | `app/research/features/{options_features,ta_features}.py` — feature-engineering math; `ta_features.py::compute_rsi_14` is a third RSI consumer (pandas-ta) | [findings/F-0015](findings/F-0015-research-features-unregistered.md) |
+| F-0015 | P2 | **fixed-verified** | inventory | ~~research/features unregistered~~ Closed 2026-05-06: 2-row "Research feature engineering" section + RSI row updated to list `ta_features.py::compute_rsi_14` as third pandas-ta consumer. | [findings/F-0015](findings/F-0015-research-features-unregistered.md) |
 | F-0016 | P2 | **fixed-verified** | inventory | ~~spy_strategy_a/b/c unregistered~~ Closed 2026-05-06: 4 rows added (A/B/C + base). | [findings/F-0016](findings/F-0016-spy-strategy-abc-unregistered.md) |
 | F-0017 | P2 | **fixed-verified** | inventory | ~~divergence s1/s2/s3 unclassified~~ Closed 2026-05-06: existing strategy rows updated with `divergence-research-only` parallel notes. | [findings/F-0017](findings/F-0017-divergence-strategies-parallel-implementations.md) |
 | F-0018 | P2 | **fixed-verified** | inventory | ~~Phase 2.3 drift~~ Closed 2026-05-06: registry item 3 rewritten to ✅ CLOSED. | [findings/F-0018](findings/F-0018-migration-plan-vs-registry-phase-2-3-drift.md) |
@@ -93,7 +95,7 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 |---|---|---|---|---|---|
 | F-0009 | P1 | awaiting-human | timestamp | `app/services/sanitizer.py:79` emits ISO-Z string at the wire; line 57 silently drops duplicates. Cross-refs prior audit `computational-fidelity-2026-04-22.md` top-10 #1/#2. | [findings/F-0009](findings/F-0009-sanitizer-iso-timestamp-wire.md) |
 | F-0019 | P1 | open | timestamp | `app/services/trade_comparison.py::_parse_ts` accepts 3 naive formats and silently `replace(tzinfo=UTC)`s them — same anti-pattern the .NET ban list calls out | [findings/F-0019](findings/F-0019-trade-comparison-naive-strptime-utc-assumption.md) |
-| F-0020 | P1 | open | timestamp | **Phase 3 rollup** — 19 Python + 4 .NET + 45 TS files match ban-list patterns. Per-file triage deferred to Phase 3 ticks. Pinpoints prior-audit-known violators. | [findings/F-0020](findings/F-0020-timestamp-ban-list-rollup.md) |
+| F-0020 | P1 | **fixed-verified** | timestamp | ~~Phase 3 rollup~~ Closed 2026-05-06: superseded by per-file findings F-0021/F-0022/F-0023/F-0024/F-0033/F-0034 (all triaged). | [findings/F-0020](findings/F-0020-timestamp-ban-list-rollup.md) |
 | F-0021 | **P0** | open | timestamp | `MarketDataService.cs:451` (aggregate ingestion) + `StudiesApi.cs:294-298` (`ParseUtc`) — banned `AssumeUniversal\|AdjustToUniversal` pattern silently coerces naive strings to UTC | [findings/F-0021](findings/F-0021-dotnet-ingestion-datetime-parse-assumeuniversal.md) |
 | F-0022 | P1 | open | timestamp | `Query.cs` (4 occurrences), `MarketDataService.cs` (date-range params, 6 occurrences), `ResearchService.cs` (2 occurrences) — `DateTime.Parse(fromDate).ToUniversalTime()` silently treats naive input as local time | [findings/F-0022](findings/F-0022-dotnet-query-parameter-datetime-parse.md) |
 | F-0023 | **P0** | open | ingestion | `dataset_service.py::forward_fill_gaps` (lines 489-565) silently fills missing minute bars with prev-close + zero-volume. Default `forward_fill=True` at 4 call sites. Direct violation of fail-fast ingestion rule. | [findings/F-0023](findings/F-0023-dataset-service-forward-fill-gaps.md) |
@@ -117,7 +119,7 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0025 | P2 | open | tolerance | Sweep nearly clean. `edge_score.py:82` bare `np.isclose`; `PositionEngineTests.cs:332` precision-4 not justified; `test_regime_clustering.py:41` missing `rtol`. | [findings/F-0025](findings/F-0025-tolerance-hygiene-rollup.md) |
+| F-0025 | P2 | **fixed-verified** | tolerance | ~~3 minor tolerance items~~ Closed 2026-05-06: explicit atol/rtol added at edge_score.py:82 + test_regime_clustering.py:41,43; precision-4 rationale comment at PositionEngineTests.cs:332. | [findings/F-0025](findings/F-0025-tolerance-hygiene-rollup.md) |
 
 ### 3.7 Ingestion fidelity
 
@@ -135,7 +137,7 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 
 | ID | Sev | Status | Area | Subject | Link |
 |---|---|---|---|---|---|
-| F-0028 | P2 | open (triage complete) | frontend-consumption | Rollup: 108 hits across 30 TS files. **Triage update 2026-05-06:** all 8 high-suspicion files inspected — confirmed display-only / form-input parsing. No P0/P1 violations. | [findings/F-0028](findings/F-0028-frontend-numeric-parse-rollup.md) |
+| F-0028 | P2 | **fixed-verified** | frontend-consumption | ~~Frontend rollup~~ Closed 2026-05-06: triage of all 8 high-suspicion files complete; all display-only / form-input parsing. No P0/P1 violations found. | [findings/F-0028](findings/F-0028-frontend-numeric-parse-rollup.md) |
 
 ### 3.10 Documentation & auditability polish
 
@@ -334,3 +336,13 @@ _Append-only. One row per finding closed. The baseline is **frozen** once the ha
 | 2026-05-06 | F-0016 (P2) — spy_strategy_a/b/c + base unregistered | 4 rows added to § Strategies | Variants A/B/C + `_rsi_range_base` in registry | Stage B Pt 2 commit |
 | 2026-05-06 | F-0017 (P2) — divergence s1/s2/s3 unclassified | Existing SPY EMA / RSI-MR / SMA-Cross rows updated to add s1/s2/s3 in Legacy column with `divergence-research-only` status | Diff visible in registry | Stage B Pt 2 commit |
 | 2026-05-06 | F-0031 (P3) — MACD warmup docstring | **False positive** — macd.py documents warmup in "ready" semantics (lines 12–22). No code change needed; closure note explains grep keyword limitation. | macd.py docstring inspection | Stage B Pt 2 commit |
+| 2026-05-06 | F-0001 (P1) — engine/edge subtree unregistered | New § "Edge research / volatility / regime" added with 21 rows covering edge_score, vrp, regime_*, robustness_stats, spread_model, trade_simulator, portfolio_aggregator, period_splitter, threshold_events, features_realtime/* (5 files), labels_oracle/* (2 files), edge confidence calibration. Most marked pending-fixture; references for VRP (Bakshi-Madan vs Carr-Wu), regime clustering (HMM vs k-means/GMM), realized vol (ABDL 2003) flagged for verification. | Section visible in registry | Stage C commit |
+| 2026-05-06 | F-0002 (P1) — research/signal subtree unregistered | New § "Research signal scoring (IC-based pipeline)" added with 6 rows: backtest+engine, walk_forward, diagnostics, standardize, regime, graduation. References (Lopez de Prado §7) flagged for verification. | Section visible in registry | Stage C commit |
+| 2026-05-06 | F-0007 (P1) — volatility subtree mostly unregistered | New § "Volatility surface and analytics" added with 9 rows: fitting (SVI/SABR — verify), surface+models, iv30_health, basis (cross-links to existing iv-rv-basis-alignment.md), vix_replication (Demeterfi-Derman-Kamal-Zou 1999 — verify), price_normalization, conventions, iv_provenance, analytics. **Highest-stakes provenance work**: VIX-replication formula must be verified against the paper. | Section visible in registry | Stage C commit |
+| 2026-05-06 | F-0015 (P2) — research/features unregistered | New § "Research feature engineering" added with 2 rows (TA features, options features). RSI row in indicators section updated to list `ta_features.py::compute_rsi_14` as a third pandas-ta consumer. | Diff visible in registry | Stage C commit |
+| 2026-05-06 | F-0025 (P2) — tolerance hygiene rollup | Three small code edits: `edge_score.py:82` made explicit (`atol=1e-10, rtol=0` for probability sum); `test_regime_clustering.py:41,43` added explicit `rtol=0` and EM-error-budget comment; `PositionEngineTests.cs:332` added decimal-precision rationale comment. | grep `np.isclose.*1.0)` returns explicit-tolerance form | Stage C commit |
+| 2026-05-06 | F-0020 (P1) — Phase 3 timestamp ban-list rollup | Superseded by per-file findings F-0021, F-0022, F-0023, F-0024, F-0033, F-0034. Status: rolled-up (no longer needs separate tracking). | All sub-findings present and triaged | Stage C commit |
+| 2026-05-06 | F-0028 (P2) — Frontend numeric parse rollup | Per-file triage of all 8 high-suspicion files complete (lean-engine, pricing-lab, strategy-builder, tracked-instruments, benchmark-scorecard, backtest-job-page, insight-panel, payoff-chart). All confirmed display-only or legitimate form-input parsing. **No P0/P1 violations found**; rollup verified. | F-0028 finding doc Triage update section | Stage C commit |
+| 2026-05-06 | F-0010, F-0011 — moved to status `awaiting-human` | These need a human classification decision (PositionEngine FIFO accounting and SnapshotService drawdown — keep in .NET as legacy-ok with parity test, or migrate to Python). The audit cannot make this call. | Status flipped open → awaiting-human | Stage C commit |
+| 2026-05-06 | F-0019, F-0021 (P0), F-0022, F-0023 (P0), F-0024, F-0033, F-0034 — moved to status `deferred` | All 7 findings resolve transitively (or are blocked by) Step 3.1 wire-format change (`int64 ms UTC` end-to-end), which requires coordinated Python + .NET edits + test runs + container rebuild. Out of scope for read-only / doc-only remediation. | Status flipped open → deferred | Stage C commit |
+| 2026-05-06 | F-0026 (fixture coverage), F-0027 (provenance blocks), F-0030 (reference notes), F-0032 (DTO cleanup) — moved to status `deferred` | F-0026 + F-0027 are touch-driven multi-week work per registry's burn-down rule. F-0030 is multi-doc work. F-0032 is low-priority (verified harmless). | Status flipped open → deferred | Stage C commit |

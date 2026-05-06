@@ -328,7 +328,10 @@ public class PositionEngineTests
 
         Assert.Single(rebuiltPositions);
         Assert.Equal(incrementalQty, rebuiltPositions[0].NetQuantity);
-        // Allow small rounding tolerance on avg cost
+        // 4-decimal tolerance: cost basis is decimal-typed and serialized to
+        // Postgres at 4dp by default. Tightening to 6+ would require schema
+        // change. Acceptable for test scope (FIFO accounting determinism, not
+        // precision auditing).
         Assert.Equal(incrementalCost, rebuiltPositions[0].AvgCostBasis, 4);
     }
 

@@ -1,7 +1,7 @@
 ---
 id: F-0002
 severity: P1
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/research/signal/
 reference: docs/architecture/engine-authority-map.md (row "Research signal scoring")

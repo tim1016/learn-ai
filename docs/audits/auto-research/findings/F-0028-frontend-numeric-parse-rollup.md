@@ -1,7 +1,7 @@
 ---
 id: F-0028
 severity: P2
-status: open
+status: fixed-verified
 area: frontend-consumption
 canonical_file: Frontend/src/app/ (cross-cutting)
 reference: .claude/rules/numerical-rigor.md; learn-ai-validation/SKILL.md (display-only escape hatches)

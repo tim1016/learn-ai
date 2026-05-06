@@ -1,7 +1,7 @@
 ---
 id: F-0027
 severity: P1
-status: open
+status: deferred
 area: provenance
 canonical_file: cross-cutting (PythonDataService canonical math)
 reference: .claude/skills/learn-ai-validation/SKILL.md (Math Provenance Contract)

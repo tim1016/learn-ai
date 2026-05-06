@@ -1,7 +1,7 @@
 ---
 id: F-0015
 severity: P2
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/research/features/{options_features,ta_features}.py
 reference: missing

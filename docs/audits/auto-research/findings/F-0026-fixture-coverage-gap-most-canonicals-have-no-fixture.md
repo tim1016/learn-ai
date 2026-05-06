@@ -1,7 +1,7 @@
 ---
 id: F-0026
 severity: P1
-status: open
+status: deferred
 area: fixture
 canonical_file: PythonDataService/tests/fixtures/golden/
 reference: .claude/rules/numerical-rigor.md (Golden fixtures); docs/math-sources-of-truth.md

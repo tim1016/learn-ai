@@ -1,7 +1,7 @@
 ---
 id: F-0001
 severity: P1
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/engine/edge/
 reference: docs/architecture/engine-authority-map.md (row "Volatility / edge research")

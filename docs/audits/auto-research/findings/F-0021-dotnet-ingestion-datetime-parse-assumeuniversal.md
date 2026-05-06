@@ -1,7 +1,7 @@
 ---
 id: F-0021
 severity: P0
-status: open
+status: deferred
 area: timestamp
 canonical_file: Backend/Services/Implementation/MarketDataService.cs; Backend/StudiesApi.cs
 reference: .claude/rules/numerical-rigor.md (Timestamp rigor → Ban list)

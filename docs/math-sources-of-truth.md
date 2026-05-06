@@ -23,7 +23,7 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 |---|---|---|---|---|---|
 | SMA | `PythonDataService/app/engine/indicators/sma.py` | `PythonDataService/app/services/ta_service.py` (pandas-ta passthrough, used by `/api/indicators/calculate`) | `references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/SimpleMovingAverage.cs` | `PythonDataService/tests/test_indicator_parity.py` | canonical — provenance block pending on sma.py |
 | EMA | `PythonDataService/app/engine/indicators/ema.py` | `ta_service.py` (pandas-ta path) | `references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/ExponentialMovingAverage.cs` | `PythonDataService/tests/test_indicator_parity.py` | canonical — existing docstring cites LEAN; needs 4-field conversion on next touch |
-| RSI (Wilders) | `PythonDataService/app/engine/indicators/rsi.py` | `ta_service.py` | `references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/RelativeStrengthIndex.cs` with `MovingAverageType.Wilders` | `PythonDataService/tests/test_indicator_parity.py` | canonical — existing docstring is already close to the 4-field format |
+| RSI (Wilders) | `PythonDataService/app/engine/indicators/rsi.py` | `ta_service.py` (pandas-ta path); `app/research/features/ta_features.py::compute_rsi_14` (third pandas-ta consumer in research feature pipeline) | `references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/RelativeStrengthIndex.cs` with `MovingAverageType.Wilders` | `PythonDataService/tests/test_indicator_parity.py` | canonical — existing docstring is already close to the 4-field format |
 | MACD, Bollinger Bands | `PythonDataService/app/services/ta_service.py` (pandas-ta) | — | pandas-ta (external) | `PythonDataService/tests/test_indicators.py` | external-unvalidated — no LEAN parity yet; flag if strategy depends on exact match |
 
 ### Options pricing and Greeks
@@ -92,6 +92,62 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 | Information coefficient (IC) | `PythonDataService/app/research/validation/ic.py` | — | Lopez de Prado, *Advances in Financial Machine Learning* (2018), §8 (or whichever method is implemented — verify) | `NONE — pending` | pending-fixture — reference needs verification |
 | Quantile-based statistics (binning, monotonicity, returns by quantile) | `PythonDataService/app/research/validation/quantile.py` | — | Standard non-parametric statistics (Conover, *Practical Nonparametric Statistics*) | `NONE — pending` | pending-fixture |
 | Robustness statistics (block bootstrap, regime breakdowns) | `PythonDataService/app/research/validation/robustness.py` | — | Politis & Romano (1994) for block bootstrap (verify) | `NONE — pending` | pending-fixture — reference needs verification |
+
+### Volatility surface and analytics
+
+| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
+|---|---|---|---|---|---|
+| IV surface fitting | `PythonDataService/app/volatility/fitting.py` | — | (verify which parameterization is implemented — likely SVI per Gatheral 2014, or SABR per Hagan 2002) | `NONE — pending` | pending-fixture — reference verification owed |
+| IV surface representation / model objects | `PythonDataService/app/volatility/{surface.py,models.py}` | — | Internal — paired with `fitting.py` | `NONE — pending` | pending-fixture |
+| IV30 construction & health checks | `PythonDataService/app/volatility/iv30_health.py` | — | `docs/math-rigor.md` Upgrade 1 (variance-time interpolation, 30-day constant-maturity); related to `app/research/options/iv_builder.py` row above | `NONE — pending` | pending-fixture |
+| IV-RV basis (implied vs realized comparison) | `PythonDataService/app/volatility/basis.py` | — | `docs/references/iv-rv-basis-alignment.md` (existing reference doc) | `NONE — pending` | pending-fixture |
+| VIX replication (model-free fair-strike variance from option strip) | `PythonDataService/app/volatility/vix_replication.py` | — | Demeterfi, Derman, Kamal, Zou (1999) "More Than You Ever Wanted to Know About Volatility Swaps" — **verify the file matches the paper** | `NONE — pending` | pending-fixture — high-stakes provenance: VIX-replication math must cite the paper exactly |
+| Price normalization (forward / log-moneyness / strike scaling) | `PythonDataService/app/volatility/price_normalization.py` | — | Internal — verify which normalization is in use | `NONE — pending` | pending-fixture |
+| Day-count and annualization conventions | `PythonDataService/app/volatility/conventions.py` | — | Standard convention (ACT/365 or ACT/252 — verify) | `NONE — pending` | pending-fixture |
+| IV provenance metadata | `PythonDataService/app/volatility/iv_provenance.py` | — | Internal — infrastructure for IV traceability | `NONE — pending` | canonical-supporting |
+| IV analytics (aggregate IV statistics) | `PythonDataService/app/volatility/analytics.py` | — | Internal | `NONE — pending` | pending-fixture |
+
+### Edge research / volatility / regime
+
+| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
+|---|---|---|---|---|---|
+| Edge score (composite ranking) | `PythonDataService/app/engine/edge/edge_score.py` | — | Internal — composite of underlying signals (VRP, regime, realized vol, etc.) | `NONE — pending` | pending-fixture |
+| Variance Risk Premium (VRP) | `PythonDataService/app/engine/edge/vrp.py` | — | Bakshi & Madan (2000), or Carr & Wu (2009) — verify which definition | `NONE — pending` | pending-fixture — reference verification owed |
+| Regime clustering | `PythonDataService/app/engine/edge/regime_clustering.py` | — | Verify which method (HMM per Hamilton 1989, k-means, GMM); test in `tests/edge/test_regime_clustering.py` uses `fit_gaussian_hmm` | `tests/edge/test_regime_clustering.py` (partial — only EM convergence + posterior shape) | pending-fixture — reference verification owed |
+| Regime drift detection | `PythonDataService/app/engine/edge/regime_drift.py` | — | Internal | `NONE — pending` | pending-fixture |
+| Regime-conditioned strategy evaluation | `PythonDataService/app/engine/edge/regime_strategy_eval.py` | — | Internal | `NONE — pending` | pending-fixture |
+| Robustness statistics (edge-level) | `PythonDataService/app/engine/edge/robustness_stats.py` | — | (likely overlaps with `app/research/validation/robustness.py` — verify whether one calls the other or duplicates) | `NONE — pending` | pending-fixture |
+| Spread model (transaction cost / bid-ask) | `PythonDataService/app/engine/edge/spread_model.py` | — | Internal — verify whether linear, sqrt-impact, or empirical | `NONE — pending` | pending-fixture |
+| Trade simulator (edge-context fills) | `PythonDataService/app/engine/edge/trade_simulator.py` | — | Internal — separate from `engine/execution/fill_model.py`? verify | `NONE — pending` | pending-fixture |
+| Portfolio aggregator (cross-asset / cross-strategy combination) | `PythonDataService/app/engine/edge/portfolio_aggregator.py` | — | Internal | `NONE — pending` | pending-fixture |
+| Cross-asset runner | `PythonDataService/app/engine/edge/cross_asset_runner.py` | — | Internal — orchestration | `NONE — pending` | canonical-supporting |
+| Period splitter (train/test or in/out-of-sample slicing) | `PythonDataService/app/engine/edge/period_splitter.py` | — | Internal | `NONE — pending` | pending-fixture |
+| Threshold events (signal binarization) | `PythonDataService/app/engine/edge/threshold_events.py` | — | Internal | `NONE — pending` | pending-fixture |
+| Realized vol — high-frequency (intraday) | `PythonDataService/app/engine/edge/features_realtime/hf_realized_vol.py` | — | Andersen-Bollerslev-Diebold-Labys (2003) realized variance estimator family — verify | `NONE — pending` | pending-fixture — reference verification owed |
+| Realized vol — close-to-close | `PythonDataService/app/engine/edge/features_realtime/realized_vol.py` | — | Standard close-to-close σ estimator — verify | `NONE — pending` | pending-fixture |
+| IV30 constructor (realtime) | `PythonDataService/app/engine/edge/features_realtime/iv30_constructor.py` | — | Same family as `app/volatility/iv30_health.py` — possible duplicate; resolution owed | `NONE — pending` | pending-fixture — possible duplicate of `app/volatility/iv30_health.py` |
+| Delta inversion feature | `PythonDataService/app/engine/edge/features_realtime/delta_inversion.py` | — | Internal | `NONE — pending` | pending-fixture |
+| Regime features (realtime) | `PythonDataService/app/engine/edge/features_realtime/regime_features.py` | — | Internal | `NONE — pending` | pending-fixture |
+| Forward realized-vol labels | `PythonDataService/app/engine/edge/labels_oracle/forward_rv.py` (+ `hf_forward_rv.py` HF variant) | — | Internal — supervised-learning label generation | `NONE — pending` | pending-fixture |
+| Edge confidence calibration | `PythonDataService/app/engine/edge/{confidence.py,calibration/confidence.py}` | — | Verify which is canonical and which is consumer | `NONE — pending` | pending-fixture — internal duplication owed for resolution |
+
+### Research signal scoring (IC-based pipeline)
+
+| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
+|---|---|---|---|---|---|
+| Research signal backtest engine | `PythonDataService/app/research/signal/{backtest.py,engine.py}` | — | Internal — separate-purpose research engine, distinct from `app/engine/` (LEAN-ported event-driven backtester) | `NONE — pending` | pending-fixture |
+| Walk-forward analysis | `PythonDataService/app/research/signal/walk_forward.py` | — | Lopez de Prado, Advances in Financial ML (2018), §7 — verify | `NONE — pending` | pending-fixture |
+| Signal diagnostics (mean/std/active-pct/autocorrelation) | `PythonDataService/app/research/signal/diagnostics.py` | — | Internal | `NONE — pending` | pending-fixture |
+| Signal standardization (z-score / rank) | `PythonDataService/app/research/signal/standardize.py` | — | Standard z-score / rank transformation — verify | `NONE — pending` | pending-fixture |
+| Regime-conditioned scoring (research) | `PythonDataService/app/research/signal/regime.py` | — | Internal — overlaps with `app/engine/edge/regime_*` (resolution owed) | `NONE — pending` | pending-fixture |
+| Signal graduation criteria | `PythonDataService/app/research/signal/graduation.py` | — | Internal | `NONE — pending` | pending-fixture |
+
+### Research feature engineering
+
+| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
+|---|---|---|---|---|---|
+| Research TA features (momentum_5m, rsi_14, realized_vol_30, volume_zscore) | `PythonDataService/app/research/features/ta_features.py` | RSI computation overlaps with `engine/indicators/rsi.py` (Wilders, canonical) and `services/ta_service.py` (pandas-ta) — see RSI row above for the 3-way duplication | pandas-ta (external) | `NONE — pending` | pending-fixture — RSI duplication is the notable concern |
+| Research options features (IV30, IV rank) | `PythonDataService/app/research/features/options_features.py` (`compute_iv_30d`, `compute_iv_rank` over rolling 60-day window with `min_periods=30`) | — | Internal — IV rank is standard rolling (max−min)/(max−min) over window | `NONE — pending` | pending-fixture |
 
 ### Data / transport (rule-5 compliant by design)
 

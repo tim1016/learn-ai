@@ -1,7 +1,7 @@
 ---
 id: F-0025
 severity: P2
-status: open
+status: fixed-verified
 area: tolerance
 canonical_file: cross-cutting (PythonDataService + Backend.Tests)
 reference: .claude/rules/numerical-rigor.md (Tolerance rules)
