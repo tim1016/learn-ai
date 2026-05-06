@@ -32,11 +32,42 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 _NY = ZoneInfo("America/New_York")
-_MS_PER_DAY = 24 * 60 * 60 * 1000
+
+
+def _add_days_ny(ms: int, days: int) -> int:
+    """Advance an ``int64 ms UTC`` boundary by ``days`` *NY-local calendar days*.
+
+    Plain ms arithmetic (``ms + days * 86_400_000``) silently drifts
+    by one hour after a DST transition because UTC seconds-per-day is
+    constant but NY's wall-clock day length isn't. Stepping in the
+    NY zone preserves the "always at NY midnight" property the rest
+    of the policy code depends on.
+
+    Re-snaps to NY midnight after the addition because
+    ``timedelta(days=1)`` on a tz-aware datetime may land an hour off
+    on the DST boundary day; the ``replace(hour=0, …)`` call brings
+    it back to the local-midnight invariant.
+    """
+    dt = datetime.fromtimestamp(ms / 1000, tz=_NY) + timedelta(days=days)
+    midnight = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(midnight.timestamp() * 1000)
+
+
+def _ny_calendar_days_between(start_ms: int, end_ms: int) -> int:
+    """Return the calendar-day distance between two NY-midnight ms boundaries.
+
+    Counted in NY-local calendar days, so a window from 2024-03-01
+    through 2024-04-01 is 31 days regardless of the DST transition
+    inside it. Required because plain ``(end - start) // _MS_PER_DAY``
+    is off by ±1 across DST transitions.
+    """
+    start_date = datetime.fromtimestamp(start_ms / 1000, tz=_NY).date()
+    end_date = datetime.fromtimestamp(end_ms / 1000, tz=_NY).date()
+    return (end_date - start_date).days
 
 
 @dataclass(frozen=True)
@@ -177,31 +208,35 @@ class RollingSplitPolicy(SplitPolicy):
                 f"Window is empty or reversed (start={start_ms}, end={end_ms})"
             )
         total_days_needed = self.train_days + self.test_days
-        window_days = (end_ms - start_ms) // _MS_PER_DAY
+        window_days = _ny_calendar_days_between(start_ms, end_ms)
         if window_days < total_days_needed:
             raise ValueError(
                 f"Window of {window_days} days is too short to fit a "
                 f"{self.train_days}-day train + {self.test_days}-day test fold"
             )
-        train_ms = self.train_days * _MS_PER_DAY
-        test_ms = self.test_days * _MS_PER_DAY
-        step_ms = self.step_days * _MS_PER_DAY
 
+        # Step in NY-local calendar days so every fold boundary lands
+        # on NY midnight even after a DST transition (plain ms
+        # arithmetic drifts by an hour each spring/fall).
         folds: list[FoldWindow] = []
         fold_index = 0
         cursor = start_ms
-        while cursor + train_ms + test_ms <= end_ms:
+        while True:
+            train_end = _add_days_ny(cursor, self.train_days)
+            test_end = _add_days_ny(cursor, self.train_days + self.test_days)
+            if test_end > end_ms:
+                break
             folds.append(
                 FoldWindow(
                     fold_index=fold_index,
                     train_start_ms=cursor,
-                    train_end_ms=cursor + train_ms,
-                    test_start_ms=cursor + train_ms,
-                    test_end_ms=cursor + train_ms + test_ms,
+                    train_end_ms=train_end,
+                    test_start_ms=train_end,
+                    test_end_ms=test_end,
                 )
             )
             fold_index += 1
-            cursor += step_ms
+            cursor = _add_days_ny(cursor, self.step_days)
         return folds
 
     def describe(self) -> dict:
@@ -246,31 +281,33 @@ class AnchoredSplitPolicy(SplitPolicy):
             raise ValueError(
                 f"Window is empty or reversed (start={start_ms}, end={end_ms})"
             )
-        window_days = (end_ms - start_ms) // _MS_PER_DAY
+        window_days = _ny_calendar_days_between(start_ms, end_ms)
         if window_days < self.initial_train_days + self.test_days:
             raise ValueError(
                 f"Window of {window_days} days is too short for an anchored "
                 f"split with {self.initial_train_days}-day initial train + "
                 f"{self.test_days}-day test"
             )
-        test_ms = self.test_days * _MS_PER_DAY
-        step_ms = self.step_days * _MS_PER_DAY
 
+        # NY-local stepping (see RollingSplitPolicy for the DST rationale).
         folds: list[FoldWindow] = []
         fold_index = 0
-        train_end = start_ms + self.initial_train_days * _MS_PER_DAY
-        while train_end + test_ms <= end_ms:
+        train_end = _add_days_ny(start_ms, self.initial_train_days)
+        while True:
+            test_end = _add_days_ny(train_end, self.test_days)
+            if test_end > end_ms:
+                break
             folds.append(
                 FoldWindow(
                     fold_index=fold_index,
                     train_start_ms=start_ms,
                     train_end_ms=train_end,
                     test_start_ms=train_end,
-                    test_end_ms=train_end + test_ms,
+                    test_end_ms=test_end,
                 )
             )
             fold_index += 1
-            train_end += step_ms
+            train_end = _add_days_ny(train_end, self.step_days)
         return folds
 
     def describe(self) -> dict:

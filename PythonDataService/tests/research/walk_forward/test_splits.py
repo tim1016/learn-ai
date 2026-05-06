@@ -21,6 +21,7 @@ from app.research.walk_forward.splits import (
     ChronologicalSplitPolicy,
     FoldWindow,
     RollingSplitPolicy,
+    _ny_calendar_days_between,
     build_split_policy,
     date_str_to_ms,
 )
@@ -81,10 +82,11 @@ class TestRollingSplit:
         assert len(folds) >= 2  # at minimum two folds in 365 days
 
         for f in folds:
-            train_days = (f.train_end_ms - f.train_start_ms) // (24 * 60 * 60 * 1000)
-            test_days = (f.test_end_ms - f.test_start_ms) // (24 * 60 * 60 * 1000)
-            assert train_days == 180
-            assert test_days == 60
+            # Use NY-calendar-day counting so DST-spanning folds still
+            # come back as exactly the requested span. Plain ms division
+            # is off by ±1 hour after spring-forward / fall-back.
+            assert _ny_calendar_days_between(f.train_start_ms, f.train_end_ms) == 180
+            assert _ny_calendar_days_between(f.test_start_ms, f.test_end_ms) == 60
             # Train immediately precedes test.
             assert f.test_start_ms == f.train_end_ms
 
@@ -92,10 +94,32 @@ class TestRollingSplit:
         policy = RollingSplitPolicy(train_days=60, test_days=30, step_days=30)
         folds = policy.folds(START_MS, END_MS)
         for prev, cur in itertools.pairwise(folds):
-            advance_days = (cur.train_start_ms - prev.train_start_ms) // (
-                24 * 60 * 60 * 1000
+            assert (
+                _ny_calendar_days_between(prev.train_start_ms, cur.train_start_ms)
+                == 30
             )
-            assert advance_days == 30
+
+    def test_dst_spanning_window_produces_clean_day_counts(self):
+        """DST regression: a window that crosses spring-forward
+        (2024-03-10) must still produce folds whose ms boundaries
+        correspond to the requested *NY-local* day count.
+
+        Plain ``(end - start) // 86_400_000`` would drift by an hour
+        because DST shortens 2024-03-10 to 23 hours in NY local time.
+        """
+        # Window straddles spring-forward: 2024-02-15 → 2024-04-15.
+        start = date_str_to_ms("2024-02-15")
+        end = date_str_to_ms("2024-04-15")
+        policy = RollingSplitPolicy(train_days=20, test_days=10, step_days=10)
+        folds = policy.folds(start, end)
+        assert len(folds) >= 2
+
+        for f in folds:
+            # DST-safe day counting: every fold reports exactly the
+            # requested span regardless of whether it crosses the
+            # transition.
+            assert _ny_calendar_days_between(f.train_start_ms, f.train_end_ms) == 20
+            assert _ny_calendar_days_between(f.test_start_ms, f.test_end_ms) == 10
 
     def test_window_too_short_raises(self):
         policy = RollingSplitPolicy(train_days=400, test_days=60, step_days=30)

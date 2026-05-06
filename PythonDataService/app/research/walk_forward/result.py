@@ -33,6 +33,12 @@ class FoldResult(BaseModel):
     ``artifacts/runs/<test_run_id>/`` — clients can fetch the full
     ``BacktestRunResult`` (equity curve, trades, log) via the existing
     ``GET /api/research/strategy-runs/{run_id}`` endpoint.
+
+    ``status`` mirrors the underlying ``RunLedger.status`` for this
+    fold's test run. Aggregation metrics (``pct_profitable_folds``,
+    ``mean_oos_sharpe``) use this field to exclude failed folds from
+    the OOS scoreboard — a fold that crashed at the engine boundary
+    is an infrastructure problem, not a strategy story.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -45,6 +51,8 @@ class FoldResult(BaseModel):
     test_run_id: str
     test_metrics: RunMetrics
     test_trade_count: int
+    status: Literal["completed", "failed"] = "completed"
+    failure_reason: str | None = None
     # ``selected_parameters`` is empty under Phase 4A (fixed spec) and
     # reserved for Phase 4B (parameter selection on train, frozen on
     # test). Surfacing it now means the client never has to handle

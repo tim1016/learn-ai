@@ -312,6 +312,59 @@ def test_parent_run_id_is_recorded_on_walk_forward_result(
     assert len(fold_ledgers) == 1
 
 
+def test_failed_folds_are_excluded_from_pct_profitable_folds(
+    tmp_path: Path, fake_factory_long
+):
+    """``pct_profitable_folds`` denominator must exclude folds whose
+    underlying ``RunLedger`` is ``failed``. A WF with 3 successful
+    folds and 2 failed ones should not report a 0/5 = 0% profitable
+    rate when 2 of the 3 *successful* folds were profitable. Regression
+    test for PR #110 review.
+    """
+    bars = build_minute_bars(closes_for_spy_ema(5000))
+    fail_call_count = {"n": 0}
+
+    def factory(symbol: str, start: date, end: date):
+        # Make every other fold fail by raising at the data-source
+        # boundary. ``run_strategy_spec`` catches the exception and
+        # produces a failed-status ledger — the WF runner then records
+        # the fold with ``status='failed'``.
+        fail_call_count["n"] += 1
+        if fail_call_count["n"] % 2 == 0:
+            raise RuntimeError("synthetic factory failure for fold-N")
+        return FakeDataReader(bars=bars)
+
+    request = WalkForwardRequest(
+        spec=_build_test_spec(),
+        start_date="2024-01-02",
+        end_date="2024-02-22",
+        split_policy=RollingSplitPolicy(train_days=10, test_days=5, step_days=5),
+    )
+    _, result = run_walk_forward(
+        request,
+        data_source_factory=factory,
+        artifacts_root=tmp_path,
+        data_root_revision="test-rev",
+    )
+
+    failed = [f for f in result.folds if f.status == "failed"]
+    successful = [f for f in result.folds if f.status == "completed"]
+    assert len(failed) > 0, "test setup did not produce any failed folds"
+    assert len(successful) > 0, "test setup did not produce any successful folds"
+
+    # The denominator must be the successful-fold count, not the total.
+    profitable_count = sum(
+        1 for f in successful if f.test_metrics.total_return_pct > 0
+    )
+    expected = profitable_count / len(successful)
+    if result.pct_profitable_folds is None:
+        # Only happens when ``successful`` is empty, which we asserted
+        # is non-empty above. Promoting to a hard fail here surfaces a
+        # regression rather than a vacuous skip.
+        pytest.fail("pct_profitable_folds was None despite successful folds")
+    assert result.pct_profitable_folds == expected
+
+
 def test_repeat_walk_forward_runs_have_distinct_walk_forward_ids(
     tmp_path: Path, fake_factory_long
 ):

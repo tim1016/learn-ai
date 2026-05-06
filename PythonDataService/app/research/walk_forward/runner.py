@@ -28,7 +28,8 @@ import logging
 import statistics
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date as Date
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -43,7 +44,7 @@ from app.research.walk_forward.result import (
     WalkForwardConfig,
     WalkForwardResult,
 )
-from app.research.walk_forward.splits import SplitPolicy
+from app.research.walk_forward.splits import SplitPolicy, date_str_to_ms
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +102,8 @@ def run_walk_forward(
     symbol = request.spec.symbols[0]
     resolution = request.spec.resolution.period_minutes
 
-    start_ms = _date_str_to_ny_midnight_ms(request.start_date)
-    end_ms = _date_str_to_ny_midnight_ms(request.end_date)
+    start_ms = date_str_to_ms(request.start_date)
+    end_ms = date_str_to_ms(request.end_date)
 
     config = WalkForwardConfig(
         walk_forward_id=wf_id,
@@ -184,23 +185,29 @@ def run_walk_forward(
             fold_curves.append(result.equity_curve)
 
     # 3. Aggregate.
+    # ``pct_profitable_folds`` denominator counts only successful folds —
+    # a fold that crashed at the engine boundary is an infrastructure
+    # story, not a strategy story, and shouldn't dilute the OOS
+    # scoreboard. Same rule for ``mean/median_oos_sharpe`` and
+    # ``alpha_decay`` — they all key off ``FoldResult.status`` to
+    # exclude failed folds.
+    successful_folds = [f for f in folds if f.status == "completed"]
     sharpes = [
         f.test_metrics.sharpe_ratio
-        for f in folds
+        for f in successful_folds
         if f.test_metrics.sharpe_ratio is not None
     ]
     profitable_count = sum(
-        1 for f in folds if f.test_metrics.total_return_pct > 0
+        1 for f in successful_folds if f.test_metrics.total_return_pct > 0
     )
-    completed_folds = [f for f in folds if f.test_trade_count > 0 or _is_zero_metrics(f)]
     pct_profitable = (
-        profitable_count / len(folds) if folds else None
+        profitable_count / len(successful_folds) if successful_folds else None
     )
 
-    combined_curve = _compound_oos_curve(fold_curves, request.initial_cash)
-    alpha_decay = _alpha_decay(folds)
+    combined_curve = _compound_oos_curve(fold_curves)
+    alpha_decay = _alpha_decay(successful_folds)
 
-    if not completed_folds:
+    if not successful_folds:
         warnings.append("every fold failed — aggregate metrics are degenerate")
 
     completed_at = now_ms_utc()
@@ -230,26 +237,17 @@ def run_walk_forward(
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
-def _date_str_to_ny_midnight_ms(s: str) -> int:
-    """Convert ``YYYY-MM-DD`` to ``int64 ms UTC`` at NY midnight."""
-    dt = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=_NY)
-    return int(dt.timestamp() * 1000)
-
-
-_MS_PER_DAY = 24 * 60 * 60 * 1000
-
-
-def _ms_to_date(ms: int) -> Any:
+def _ms_to_date(ms: int) -> Date:
     """Convert ``int64 ms UTC`` (NY-midnight) to ``date`` for ``RunRequest``.
 
     ``RunRequest`` declares ``start_date: Date``; the runner internally
-    re-anchors via ``_date_to_ny_midnight_ms``, so producing a NY-local
-    date here keeps the round-trip correct.
+    re-anchors via NY-midnight, so producing a NY-local date here
+    keeps the round-trip correct.
     """
     return datetime.fromtimestamp(ms / 1000, tz=_NY).date()
 
 
-def _ms_to_inclusive_end_date(ms: int) -> Any:
+def _ms_to_inclusive_end_date(ms: int) -> Date:
     """Convert a half-open fold boundary to the *last day* of the fold.
 
     Split policies emit fold boundaries as half-open ms intervals
@@ -260,13 +258,20 @@ def _ms_to_inclusive_end_date(ms: int) -> Any:
     boundary day in *both* fold N and fold N+1, producing duplicate
     bars in the combined OOS curve.
 
-    Subtract one day before converting so fold N ends on the day
-    *before* the boundary, leaving the boundary day to fold N+1.
+    Subtract one calendar day in NY-local time (DST-safe — uses
+    ``timedelta(days=1)`` on a tz-aware datetime so spring-forward /
+    fall-back doesn't shift the resulting date).
     """
-    return datetime.fromtimestamp((ms - _MS_PER_DAY) / 1000, tz=_NY).date()
+    return (datetime.fromtimestamp(ms / 1000, tz=_NY) - timedelta(days=1)).date()
 
 
 def _fold_to_result(window, ledger: RunLedger, result: BacktestRunResult) -> FoldResult:
+    # Mirror the underlying ledger's lifecycle status onto the fold so
+    # aggregation can exclude failed folds without re-loading ledgers.
+    # Phase A's RunLedger.status is one of {"running", "completed",
+    # "failed"}; "running" is a transient state the runner never
+    # surfaces synchronously, so collapse to a 2-value field here.
+    fold_status = "failed" if ledger.status == "failed" else "completed"
     return FoldResult(
         fold_index=window.fold_index,
         train_start_ms=window.train_start_ms,
@@ -276,17 +281,9 @@ def _fold_to_result(window, ledger: RunLedger, result: BacktestRunResult) -> Fol
         test_run_id=ledger.run_id,
         test_metrics=result.metrics,
         test_trade_count=result.metrics.total_trades,
+        status=fold_status,
+        failure_reason=ledger.failure_reason,
     )
-
-
-def _is_zero_metrics(fold: FoldResult) -> bool:
-    """A fold is "completed but degenerate" when it ran cleanly but
-    produced no trades — common for narrow test windows that don't
-    contain any signal firings. Treated as completed for warnings but
-    excluded from the strict-completed list above.
-    """
-    m = fold.test_metrics
-    return m.total_trades == 0 and m.total_return_pct == 0.0
 
 
 def _alpha_decay(folds: list[FoldResult]) -> float | None:
@@ -318,15 +315,22 @@ def _alpha_decay(folds: list[FoldResult]) -> float | None:
 
 def _compound_oos_curve(
     fold_curves: list[list[EquityCurvePoint]],
-    initial_cash: float,
 ) -> list[EquityCurvePoint]:
     """Concatenate fold equity curves with compounding.
 
-    Each fold's curve normally starts at ``initial_cash`` and ends at
-    some terminal equity. To produce the "investor experience" curve
-    across all folds, fold N+1's curve is *scaled* so its first point
-    equals fold N's last point. The scale factor is
+    Each fold's curve normally starts at the same configured
+    ``initial_cash`` (because every fold runs through the same
+    ``RunRequest.initial_cash`` value) and ends at some terminal
+    equity. To produce the "investor experience" curve across all
+    folds, fold N+1's curve is *scaled* so its first point equals
+    fold N's last point. The scale factor is
     ``fold_N_last / fold_N+1_first``.
+
+    Fold 0's curve is emitted as-is — its first point is already at
+    ``initial_cash``, which is the correct starting equity for the
+    combined view. (An earlier draft accepted ``initial_cash`` as a
+    parameter but never used it — caller relied on per-fold inputs
+    being consistent. Dropped per PR #110 review.)
 
     Returns an empty list when there are no fold curves to combine.
     """
