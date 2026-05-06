@@ -1,0 +1,428 @@
+@use 'sass:color';
+
+:host {
+  --ol-bg: #131722;
+  --ol-surface: #1e222d;
+  --ol-surface-2: #1a1d27;
+  --ol-border: #2a2e39;
+  --ol-border-soft: #232631;
+  --ol-fg: #d1d4dc;
+  --ol-fg-strong: #e7e9ec;
+  --ol-fg-muted: #9aa0a6;
+  --ol-fg-dim: #6a7079;
+  --ol-accent: #2962ff;
+  --ol-call: #4dabf5;
+  --ol-call-soft: rgba(77, 171, 245, 0.18);
+  --ol-call-hover: rgba(77, 171, 245, 0.05);
+  --ol-put: #f06292;
+  --ol-put-soft: rgba(240, 98, 146, 0.18);
+  --ol-put-hover: rgba(240, 98, 146, 0.05);
+  --ol-pos: #26a69a;
+  --ol-neg: #ef5350;
+
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--ol-bg);
+  color: var(--ol-fg);
+}
+
+.mono {
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+// ─── Toolbar ────────────────────────────────────────────────
+.chain-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: var(--ol-surface);
+  border-bottom: 1px solid var(--ol-border);
+}
+
+.toolbar-spacer { flex: 1 1 auto; }
+
+.ticker-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--ol-border);
+  border-radius: 6px;
+  background: var(--ol-surface-2);
+  font-size: 12px;
+  font-weight: 600;
+
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ol-pos);
+    box-shadow: 0 0 6px rgba(38, 166, 154, 0.6);
+  }
+
+  .spot-price {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--ol-fg-strong);
+    min-width: 64px;
+    text-align: right;
+  }
+
+  .spot-change {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ol-fg-muted);
+
+    &.pos { color: var(--ol-pos); }
+    &.neg { color: var(--ol-neg); }
+  }
+}
+
+.strike-chips,
+.density-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--ol-border);
+  border-radius: 6px;
+  background: var(--ol-surface-2);
+}
+
+.chip-label {
+  margin: 0 8px 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--ol-fg-dim);
+}
+
+.chip {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ol-fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+
+  &:hover:not(.active) {
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--ol-fg-strong);
+  }
+
+  &.active {
+    background: rgba(41, 98, 255, 0.18);
+    color: #5b8def;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--ol-accent);
+    outline-offset: 1px;
+  }
+}
+
+// ─── Expirations ────────────────────────────────────────────
+.chain-expirations {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 20px 10px;
+  border-bottom: 1px solid var(--ol-border);
+  background: var(--ol-surface);
+}
+
+.expiration-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: var(--ol-surface-2);
+  font-size: 11px;
+
+  .exp-date {
+    color: var(--ol-fg-strong);
+    font-weight: 600;
+  }
+  .exp-dte {
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(41, 98, 255, 0.18);
+    color: #5b8def;
+    font-weight: 600;
+    font-size: 10px;
+  }
+}
+
+// ─── Banner ─────────────────────────────────────────────────
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  font-size: 12px;
+
+  &.error {
+    background: rgba(239, 83, 80, 0.08);
+    border-bottom: 1px solid rgba(239, 83, 80, 0.3);
+    color: var(--ol-neg);
+  }
+
+  .banner-icon { font-size: 14px; }
+}
+
+// ─── Grid wrap ──────────────────────────────────────────────
+.chain-grid-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.silent-refresh-pill {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: rgba(41, 98, 255, 0.15);
+  color: #5b8def;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+
+  .dot.pulsing {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #5b8def;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+// ─── Loading + empty ────────────────────────────────────────
+.loading-skel {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.skel-row {
+  height: 28px;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--ol-surface-2) 0%,
+    color.adjust(#1a1d27, $lightness: 4%) 50%,
+    var(--ol-surface-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.empty-state {
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--ol-fg-muted);
+  font-size: 13px;
+}
+
+// ─── Grid ───────────────────────────────────────────────────
+.chain-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  line-height: 1.4;
+
+  thead {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--ol-surface);
+  }
+
+  th, td {
+    padding: 4px 8px;
+    text-align: right;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--ol-border-soft);
+  }
+
+  th {
+    font-weight: 600;
+    color: var(--ol-fg-muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    user-select: none;
+  }
+
+  .hdr-tier-1 th {
+    text-align: center;
+    padding: 6px 8px;
+    font-size: 11px;
+    background: var(--ol-surface);
+    border-bottom: 1px solid var(--ol-border);
+  }
+
+  .side-header.calls { color: var(--ol-call); }
+  .side-header.puts { color: var(--ol-put); }
+  .center-header { color: var(--ol-fg-strong); }
+
+  .hdr-tier-2 {
+    background: var(--ol-surface-2);
+
+    .strike-col,
+    .iv-col {
+      color: var(--ol-fg-strong);
+    }
+    .vol-col {
+      color: var(--ol-fg);
+    }
+  }
+
+  // ─── Body ─────────────────────────────────────────────
+  tbody td {
+    color: var(--ol-fg);
+    font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .data-row {
+    transition: background 0.06s ease;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.035);
+
+      .strike-cell,
+      .iv-cell {
+        background: rgba(255, 255, 255, 0.06);
+      }
+    }
+
+    &.atm {
+      background: rgba(41, 98, 255, 0.08);
+
+      .strike-cell {
+        color: #5b8def;
+        font-weight: 700;
+      }
+      .iv-cell {
+        color: var(--ol-fg-strong);
+      }
+      td {
+        border-bottom-color: rgba(41, 98, 255, 0.4);
+        border-top: 1px solid rgba(41, 98, 255, 0.4);
+      }
+    }
+  }
+
+  .call-side {
+    color: var(--ol-fg);
+    background: var(--ol-call-hover);
+  }
+  .put-side {
+    color: var(--ol-fg);
+    background: var(--ol-put-hover);
+  }
+
+  // Last (most reliable price after-hours) emphasized; Bid/Ask in the side accent color
+  .call-side.last { color: var(--ol-fg-strong); font-weight: 600; }
+  .put-side.last { color: var(--ol-fg-strong); font-weight: 600; }
+  .call-side.bid,
+  .call-side.ask { color: var(--ol-call); }
+  .put-side.bid,
+  .put-side.ask { color: var(--ol-put); }
+
+  // Center spine
+  .strike-cell {
+    background: rgba(255, 255, 255, 0.025);
+    font-weight: 700;
+    color: var(--ol-fg-strong);
+    border-left: 1px solid var(--ol-border);
+    border-right: 1px solid var(--ol-border-soft);
+  }
+  .iv-cell {
+    background: rgba(255, 255, 255, 0.025);
+    color: var(--ol-fg-strong);
+    border-right: 1px solid var(--ol-border);
+  }
+
+  .data-row.itm-call {
+    .call-side { background: color.mix(#4dabf5, #131722, 8%); }
+  }
+  .data-row.itm-put {
+    .put-side { background: color.mix(#f06292, #131722, 8%); }
+  }
+
+  // Volume cells with directional bar — bar grows from the strike spine outward
+  .vol-cell {
+    position: relative;
+    overflow: hidden;
+    min-width: 80px;
+
+    .vol-text {
+      position: relative;
+      z-index: 1;
+    }
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: var(--bar-width, 0%);
+      background: var(--bar-color, transparent);
+      opacity: 0.55;
+      transition: width 0.25s ease;
+      z-index: 0;
+    }
+  }
+
+  .call-vol {
+    --bar-color: linear-gradient(to left, var(--ol-call-soft), rgba(77, 171, 245, 0));
+  }
+  .call-vol::before {
+    right: 0;
+    background: linear-gradient(to left, var(--ol-call-soft), rgba(77, 171, 245, 0));
+  }
+
+  .put-vol::before {
+    left: 0;
+    background: linear-gradient(to right, var(--ol-put-soft), rgba(240, 98, 146, 0));
+  }
+}
+
+// ─── Reduced motion ─────────────────────────────────────────
+@media (prefers-reduced-motion: reduce) {
+  .skel-row,
+  .silent-refresh-pill .dot.pulsing,
+  .vol-cell::before {
+    animation: none;
+    transition: none;
+  }
+}

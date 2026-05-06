@@ -1,0 +1,203 @@
+<div class="chain-shell">
+  <!-- Toolbar -->
+  <section class="chain-toolbar" role="toolbar" aria-label="Chain filters">
+    <div class="ticker-pill mono">
+      <span class="dot"></span>
+      <span>{{ ticker() }}</span>
+      <span
+        class="spot-price"
+        [class.pos]="spotChangeClass() === 'pos'"
+        [class.neg]="spotChangeClass() === 'neg'"
+      >
+        @if (spotPrice() > 0) {
+          {{ spotPrice() | number: '1.2-2' }}
+        } @else {
+          —
+        }
+      </span>
+      <span
+        class="spot-change"
+        [class.pos]="spotChangeClass() === 'pos'"
+        [class.neg]="spotChangeClass() === 'neg'"
+      >
+        @if (spotChange() !== 0) {
+          {{ spotChange() > 0 ? '+' : '' }}{{ spotChange() | number: '1.2-2' }}
+          ({{ spotChangePct() > 0 ? '+' : '' }}{{ spotChangePct() | number: '1.2-2' }}%)
+        }
+      </span>
+    </div>
+
+    <div class="toolbar-spacer"></div>
+
+    <div class="strike-chips" role="group" aria-label="Strike range">
+      <span class="chip-label">Strikes</span>
+      @for (n of strikeRangeOptions; track n) {
+        <button
+          type="button"
+          class="chip"
+          [class.active]="strikeRange() === n && !showAllStrikes()"
+          (click)="setStrikeRange(n)"
+          [attr.aria-pressed]="strikeRange() === n && !showAllStrikes()"
+        >±{{ n }}</button>
+      }
+      <button
+        type="button"
+        class="chip"
+        [class.active]="showAllStrikes()"
+        (click)="toggleShowAll()"
+        [attr.aria-pressed]="showAllStrikes()"
+      >All</button>
+    </div>
+
+    <div class="density-toggle" role="group" aria-label="Column density">
+      <button
+        type="button"
+        class="chip"
+        [class.active]="density() === 'standard'"
+        (click)="density() === 'greeks' ? toggleDensity() : null"
+        [attr.aria-pressed]="density() === 'standard'"
+      >Standard</button>
+      <button
+        type="button"
+        class="chip"
+        [class.active]="density() === 'greeks'"
+        (click)="density() === 'standard' ? toggleDensity() : null"
+        [attr.aria-pressed]="density() === 'greeks'"
+      >Greeks</button>
+    </div>
+  </section>
+
+  <!-- Expiration ribbon -->
+  <section class="chain-expirations">
+    <app-expiration-ribbon
+      [expirations]="availableExpirations()"
+      [selectedDate]="selectedExpiration()"
+      [loading]="expirationsLoading()"
+      (dateSelected)="onExpirationSelected($event)"
+    />
+    @if (selectedExpiration() !== null) {
+      <div class="expiration-summary mono">
+        <span class="exp-date">{{ expirationLabel() }}</span>
+        <span class="exp-dte">{{ daysToExpiry() }} DTE</span>
+      </div>
+    }
+  </section>
+
+  <!-- Errors / loading -->
+  @if (error(); as err) {
+    <div class="banner error" role="alert">
+      <span class="banner-icon">⚠</span>
+      <span>{{ err }}</span>
+    </div>
+  }
+
+  <!-- Grid -->
+  <div class="chain-grid-wrap">
+    @if (initialLoad() && (expirationsLoading() || chainLoading())) {
+      <div class="loading-skel" aria-busy="true">
+        @for (i of [1,2,3,4,5,6,7,8,9,10]; track i) {
+          <div class="skel-row"></div>
+        }
+      </div>
+    } @else if (rows().length === 0 && !chainLoading()) {
+      <div class="empty-state">
+        <p>No options data available for this expiration.</p>
+      </div>
+    } @else {
+      <table class="chain-grid" [attr.data-density]="density()">
+        <thead>
+          <tr class="hdr-tier-1">
+            <th class="side-header calls" [attr.colspan]="density() === 'greeks' ? 9 : 6">Calls</th>
+            <th class="center-header" colspan="2">Strike · IV</th>
+            <th class="side-header puts" [attr.colspan]="density() === 'greeks' ? 9 : 6">Puts</th>
+          </tr>
+          <tr class="hdr-tier-2">
+            <!-- Calls columns: left → right, ends adjacent to strike spine -->
+            @if (density() === 'greeks') {
+              <th class="num">V</th>
+              <th class="num">Θ</th>
+              <th class="num">Γ</th>
+            }
+            <th class="num">Δ</th>
+            <th class="num">Last</th>
+            <th class="num">Bid</th>
+            <th class="num">Ask</th>
+            <th class="num">Sprd</th>
+            <th class="num vol-col">Volume</th>
+
+            <!-- Center spine -->
+            <th class="num strike-col">Strike</th>
+            <th class="num iv-col">IV</th>
+
+            <!-- Puts columns: left → right, starts adjacent to strike spine -->
+            <th class="num vol-col">Volume</th>
+            <th class="num">Sprd</th>
+            <th class="num">Bid</th>
+            <th class="num">Ask</th>
+            <th class="num">Last</th>
+            <th class="num">Δ</th>
+            @if (density() === 'greeks') {
+              <th class="num">Γ</th>
+              <th class="num">Θ</th>
+              <th class="num">V</th>
+            }
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of rows(); track trackRow($index, row)) {
+            <tr
+              class="data-row"
+              [class.atm]="row.isAtm"
+              [class.itm-call]="row.itmCall"
+              [class.itm-put]="row.itmPut"
+              [attr.data-atm]="row.isAtm ? 'true' : null"
+            >
+              @if (density() === 'greeks') {
+                <td class="num call-side">{{ row.callVega }}</td>
+                <td class="num call-side">{{ row.callTheta }}</td>
+                <td class="num call-side">{{ row.callGamma }}</td>
+              }
+              <td class="num call-side">{{ row.callDelta }}</td>
+              <td class="num call-side last">{{ row.callLast }}</td>
+              <td class="num call-side bid">{{ row.callBid }}</td>
+              <td class="num call-side ask">{{ row.callAsk }}</td>
+              <td class="num call-side">{{ row.callSpread }}</td>
+              <td
+                class="num call-side vol-cell call-vol"
+                [style.--bar-width.%]="row.callVolumeBarWidth"
+              >
+                <span class="vol-text">{{ row.callVolume }}</span>
+              </td>
+
+              <td class="num strike-cell">{{ row.strikeFormatted }}</td>
+              <td class="num iv-cell">{{ row.centerIv }}</td>
+
+              <td
+                class="num put-side vol-cell put-vol"
+                [style.--bar-width.%]="row.putVolumeBarWidth"
+              >
+                <span class="vol-text">{{ row.putVolume }}</span>
+              </td>
+              <td class="num put-side">{{ row.putSpread }}</td>
+              <td class="num put-side bid">{{ row.putBid }}</td>
+              <td class="num put-side ask">{{ row.putAsk }}</td>
+              <td class="num put-side last">{{ row.putLast }}</td>
+              <td class="num put-side">{{ row.putDelta }}</td>
+              @if (density() === 'greeks') {
+                <td class="num put-side">{{ row.putGamma }}</td>
+                <td class="num put-side">{{ row.putTheta }}</td>
+                <td class="num put-side">{{ row.putVega }}</td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+
+    @if (chainLoading() && !initialLoad()) {
+      <div class="silent-refresh-pill mono" aria-live="polite">
+        <span class="dot pulsing"></span> refreshing
+      </div>
+    }
+  </div>
+</div>

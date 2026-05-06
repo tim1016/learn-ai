@@ -107,6 +107,46 @@ interface EngineTrade {
   signal_reason: string;
 }
 
+/**
+ * StudyTradeItem (camelCase) shape from GET /api/studies/{id}.
+ * Defined narrow + exported so the trade-mapper helper has a typed input
+ * and can be unit-tested in isolation.
+ */
+export interface StudyTradeApiItem {
+  entryTimestamp: string;
+  exitTimestamp: string;
+  entryPrice: number;
+  exitPrice: number;
+  pnL: number;
+  signalReason?: string | null;
+}
+
+/**
+ * Reconstruct an EngineTrade from a persisted StudyTradeItem. The .NET
+ * BacktestTrade entity does not store the percent return, so derive it
+ * from `pnL / entryPrice` — matches the Python engine's definition
+ * (`pnl_pct = pnl_pts / entry.entry_price`). Guard against entry_price
+ * <= 0 to avoid NaN/Infinity propagating into the trade-log table.
+ */
+export function mapStudyTradeToEngineTrade(
+  t: StudyTradeApiItem,
+  index: number,
+): EngineTrade {
+  const pnlPct = t.entryPrice > 0 ? t.pnL / t.entryPrice : 0;
+  return {
+    trade_number: index + 1,
+    entry_time: t.entryTimestamp,
+    entry_price: t.entryPrice,
+    exit_time: t.exitTimestamp,
+    exit_price: t.exitPrice,
+    pnl_pts: t.pnL,
+    pnl_pct: pnlPct,
+    result: t.pnL > 0 ? 'WIN' : 'LOSS',
+    signal_reason: t.signalReason ?? '',
+    indicators: {},
+  };
+}
+
 interface EngineBacktestResponse {
   success: boolean;
   strategy_name: string;
@@ -987,18 +1027,9 @@ export class LeanEngineComponent implements OnInit {
           profit_factor: detail.profitFactor,
         },
         lean_statistics: leanStats,
-        trades: (detail.trades ?? []).map((t: any, i: number) => ({
-          trade_number: i + 1,
-          entry_time: t.entryTimestamp,
-          entry_price: t.entryPrice,
-          exit_time: t.exitTimestamp,
-          exit_price: t.exitPrice,
-          pnl_pts: t.pnL,
-          pnl_pct: 0,
-          result: t.pnL > 0 ? 'WIN' : 'LOSS',
-          signal_reason: t.signalReason ?? '',
-          indicators: {},
-        })),
+        trades: (detail.trades ?? []).map((t: StudyTradeApiItem, i: number) =>
+          mapStudyTradeToEngineTrade(t, i),
+        ),
         log_lines: [],
         equity_curve: [],
         chart_bars: [],
