@@ -1,5 +1,10 @@
 """Strategy B — Supertrend + ADX(>threshold) + MACD + RSI-range, ADX(<20) exit.
 
+Formula: RSI(14) range + Supertrend long + ADX > 20 + MACD > 0 → entry; ADX < 20 → exit. Extends RsiRangeStrategy base.
+Reference: Internal — no external port reference; long-only 15-min RTH SPY strategy.
+Canonical implementation: app/engine/strategy/algorithms/spy_strategy_b.py
+Validated against: app/engine/tests/ (existing tests; no parity fixture identified).
+
 Entry gates (all evaluated each bar while flat):
     * ``rsi_low_gate <= RSI <= rsi_high_gate``.
     * Supertrend is long (price above the line).

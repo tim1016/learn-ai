@@ -1,5 +1,10 @@
 """Realized volatility estimators (close-to-close, Parkinson, Garman-Klass, Yang-Zhang).
 
+Formula: Close-to-close σ = std(log(Close_t/Close_{t-1})) * sqrt(252); Parkinson H = sqrt((1/(4N·ln2)) * Σ ln(Hi/Lo)²) * sqrt(252); Garman-Klass and Yang-Zhang per referenced papers
+Reference: Parkinson, M. (1980) "The Extreme Value Method for Estimating the Variance of the Rate of Return" J. Business 53(1); Garman, M.B. & Klass, M.J. (1980) "On the Estimation of Security Price Volatilities from Historical Data" J. Business 53(1); Yang, D. & Zhang, Q. (2000) "Drift-Independent Volatility Estimation Based on High, Low, Open, and Close Prices" J. Business 73(3)
+Canonical implementation: app/engine/edge/features_realtime/realized_vol.py
+Validated against: NONE — pending
+
 Math provenance:
 - Parkinson, M. (1980). "The Extreme Value Method for Estimating the Variance
   of the Rate of Return." Journal of Business 53(1).

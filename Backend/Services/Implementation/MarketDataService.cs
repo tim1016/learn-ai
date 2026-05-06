@@ -116,8 +116,8 @@ public class MarketDataService : IMarketDataService
         bool adjusted = true,
         CancellationToken cancellationToken = default)
     {
-        var from = DateTime.Parse(fromDate).ToUniversalTime();
-        var to = DateTime.Parse(toDate).ToUniversalTime().Date.AddDays(1).AddTicks(-1);
+        var from = DateOnly.ParseExact(fromDate, "yyyy-MM-dd", CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        var to = DateOnly.ParseExact(toDate, "yyyy-MM-dd", CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddDays(1).AddTicks(-1);
         var symbol = ticker.ToUpper();
 
         if (forceRefresh)
@@ -200,8 +200,8 @@ public class MarketDataService : IMarketDataService
     internal static List<(string FromDate, string ToDate)> GenerateFetchWindows(
         string fromDate, string toDate, string timespan)
     {
-        var from = DateTime.Parse(fromDate);
-        var to = DateTime.Parse(toDate);
+        var from = DateTime.ParseExact(fromDate, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var to = DateTime.ParseExact(toDate, "yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         // Only split for minute and hour timespans
         if (timespan is not ("minute" or "hour"))
@@ -331,8 +331,8 @@ public class MarketDataService : IMarketDataService
         string timespan,
         int multiplier)
     {
-        var from = DateTime.Parse(fromDate);
-        var to = DateTime.Parse(toDate);
+        var from = DateTime.ParseExact(fromDate, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var to = DateTime.ParseExact(toDate, "yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         // Count weekdays in the range
         var totalWeekdays = 0;
@@ -448,10 +448,7 @@ public class MarketDataService : IMarketDataService
             Close = dto.Close,
             Volume = dto.Volume,
             VolumeWeightedAveragePrice = dto.Vwap,
-            Timestamp = DateTime.Parse(
-                dto.Timestamp,
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal),
+            Timestamp = DateTimeOffset.FromUnixTimeMilliseconds(dto.Timestamp).UtcDateTime,
             Timespan = timespan,
             Multiplier = multiplier,
             TransactionCount = dto.Transactions.HasValue ? (long?)decimal.ToInt64(dto.Transactions.Value) : null,

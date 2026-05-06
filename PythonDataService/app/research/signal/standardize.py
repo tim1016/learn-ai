@@ -1,4 +1,10 @@
-"""Z-score standardization and threshold filtering."""
+"""Z-score standardization and threshold filtering.
+
+Formula: z = (x − mean_train) / std_train; rank-normalization = rank(x) / (N+1) ∈ (0,1); threshold filter = signal > threshold → +1, < −threshold → −1, else 0.
+Reference: Standard z-score / rank transformation. Rank-normalization per Spearman rank IC convention.
+Canonical implementation: app/research/signal/standardize.py
+Validated against: NONE — pending (pending-fixture per registry)
+"""
 
 from __future__ import annotations
 

@@ -1,5 +1,10 @@
 """IV basis conversion: ACT/365 (calendar) ↔ TRD/252 (trading-day).
 
+Formula: σ_TRD252 = σ_ACT365 · √((D · 252) / (365 · N)) where D = calendar tenor days, N = NYSE trading sessions in [asof, asof+D).
+Reference: Practitioner convention — variance accrues only on trading days. NYSE calendar via pandas_market_calendars. docs/references/iv-rv-basis-alignment.md.
+Canonical implementation: app/volatility/basis.py
+Validated against: NONE — pending (no golden fixture; pending-fixture per registry)
+
 Our IV solver returns ``σ`` on ACT/365 basis (``TTM = calendar_days / 365``,
 the market-screen / QuantLib convention). Our realized-vol pipeline annualizes
 per-bar variance with √252 — TRD/252 basis. ``vrp.compute_vrp`` subtracts

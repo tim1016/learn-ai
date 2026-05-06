@@ -1,5 +1,10 @@
 """Quantile analysis for feature monotonicity check.
 
+Formula: Divide feature into N quantile bins (default N=5); mean_return[bin] = mean(forward_return[feature ∈ bin_k]); monotonicity tested by Spearman rank correlation of means vs bin index.
+Reference: Standard non-parametric statistics — Conover, Practical Nonparametric Statistics (3e); quantile binning per pandas.qcut.
+Canonical implementation: app/research/validation/quantile.py
+Validated against: NONE — pending (pending-fixture per registry)
+
 Divides feature values into N bins (default 5) and computes the mean
 forward return in each bin.  A useful predictive feature should show
 monotonically increasing (or decreasing) mean returns across quantiles.

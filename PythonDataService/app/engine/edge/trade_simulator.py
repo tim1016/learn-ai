@@ -1,5 +1,10 @@
 """Pessimistic-first trade simulator for the Edge feature.
 
+Formula: PnL_trade = (exit_price - entry_price) * shares - spread_cost; time-stop exit after N bars or on opposing signal/stop/target condition
+Reference: Internal — no external reference
+Canonical implementation: app/engine/edge/trade_simulator.py
+Validated against: NONE — pending
+
 Execution rules (defaults):
 - Entry: T+1 bar open after signal.
 - Exit triggers (first to fire wins):

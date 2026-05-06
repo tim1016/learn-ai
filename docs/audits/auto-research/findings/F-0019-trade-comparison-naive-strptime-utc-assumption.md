@@ -1,12 +1,12 @@
 ---
 id: F-0019
 severity: P1
-status: deferred
+status: fixed-verified
 area: timestamp
 canonical_file: PythonDataService/app/services/trade_comparison.py
 reference: .claude/rules/numerical-rigor.md (Timestamp rigor → Ban list); docs/audits/computational-fidelity-2026-04-22.md (top-10 finding #2)
 first_seen: 2026-05-05
-last_seen: 2026-05-05
+last_seen: 2026-05-06
 phase: 1
 ---
 

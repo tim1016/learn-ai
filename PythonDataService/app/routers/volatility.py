@@ -24,7 +24,7 @@ import io
 import logging
 import math
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -535,7 +535,7 @@ async def build_from_csv(request: BuildFromCsvRequest) -> SurfaceBuildSummary:
     try:
         records = _parse_csv_to_records(
             csv_content=request.csv_content,
-            eval_date=datetime.now().strftime("%Y-%m-%d"),
+            eval_date=datetime.now(UTC).strftime("%Y-%m-%d"),
         )
     except Exception as e:
         logger.error("[IV Surface] CSV parsing failed: %s", e)
@@ -551,7 +551,7 @@ async def build_from_csv(request: BuildFromCsvRequest) -> SurfaceBuildSummary:
         )
 
     spot = request.spot
-    eval_date = datetime.now().strftime("%Y-%m-%d")
+    eval_date = datetime.now(UTC).strftime("%Y-%m-%d")
 
     try:
         surface = _build_surface_from_records(
@@ -687,7 +687,7 @@ async def get_grid(
 
     forwards = [surface.spot * math.exp((surface.rate - surface.dividend) * t) for t in ttm_unique]
 
-    expiry_dates = [(datetime.now() + timedelta(days=dte)).strftime("%Y-%m-%d") for dte in y_vals]
+    expiry_dates = [(datetime.now(UTC) + timedelta(days=dte)).strftime("%Y-%m-%d") for dte in y_vals]
 
     meta = GridMetaModel(
         spot=surface.spot,
@@ -737,7 +737,7 @@ async def get_smiles(
         dte = ttm_to_dte(ttm)
         forward = surface.spot * math.exp((surface.rate - surface.dividend) * ttm)
 
-        expiry_date = (datetime.now() + timedelta(days=dte)).strftime("%Y-%m-%d")
+        expiry_date = (datetime.now(UTC) + timedelta(days=dte)).strftime("%Y-%m-%d")
 
         strike_min = forward * 0.7
         strike_max = forward * 1.3

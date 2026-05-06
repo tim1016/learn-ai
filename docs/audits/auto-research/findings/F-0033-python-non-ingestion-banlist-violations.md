@@ -1,7 +1,7 @@
 ---
 id: F-0033
 severity: P1
-status: deferred
+status: fixed-verified
 area: timestamp
 canonical_file: PythonDataService (cross-cutting, non-ingestion)
 reference: .claude/rules/numerical-rigor.md (Timestamp rigor → Ban list)

@@ -65,7 +65,7 @@ def _load_lean_day(zip_path: Path, trading_date: date) -> pd.DataFrame:
     midnight = pd.Timestamp(trading_date.year, trading_date.month, trading_date.day, tz=EASTERN)
     df["et"] = midnight + pd.to_timedelta(df["ms"], unit="ms")
     df["time_utc"] = df["et"].dt.tz_convert("UTC")
-    df["iso_time"] = df["time_utc"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    df["iso_time"] = df["time_utc"].dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
     for col in ("open", "high", "low", "close"):
         df[col] = df[col].astype(float) / PRICE_SCALE
     return df.drop(columns=["ms"])

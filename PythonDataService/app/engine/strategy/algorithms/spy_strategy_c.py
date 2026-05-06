@@ -1,5 +1,10 @@
 """Strategy C — ADX(>threshold) + ADX-rising + RSI-range, ADX(<15) exit.
 
+Formula: RSI(14) range + ADX > 20 + ADX rising bar-over-bar → entry; ADX < 15 → exit. Extends RsiRangeStrategy base.
+Reference: Internal — no external port reference; long-only 15-min RTH SPY strategy.
+Canonical implementation: app/engine/strategy/algorithms/spy_strategy_c.py
+Validated against: app/engine/tests/ (existing tests; no parity fixture identified).
+
 Entry gates (all evaluated each bar while flat):
     * ``rsi_low_gate <= RSI <= rsi_high_gate``.
     * ADX > ``adx_entry_threshold`` (default 20).

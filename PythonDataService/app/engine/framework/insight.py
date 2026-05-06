@@ -21,7 +21,7 @@ Key design decisions vs LEAN's C# implementation:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from uuid import uuid4
@@ -83,7 +83,7 @@ class InsightScore:
             self.direction = clamped
         elif score_type == InsightScoreType.MAGNITUDE:
             self.magnitude = clamped
-        self.updated_time_utc = datetime.utcnow()
+        self.updated_time_utc = datetime.now(UTC)
 
     def get_score(self, score_type: InsightScoreType) -> float:
         """Read a score dimension."""

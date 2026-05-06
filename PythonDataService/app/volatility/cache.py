@@ -17,7 +17,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -170,7 +170,7 @@ class SurfaceCache:
         meta_with_info = {
             "schema_version": SCHEMA_VERSION,
             "quantlib_version": QuantLib.__version__,
-            "built_at": datetime.utcnow().isoformat() + "Z",
+            "built_at": datetime.now(UTC).isoformat(),
             **meta,
         }
 

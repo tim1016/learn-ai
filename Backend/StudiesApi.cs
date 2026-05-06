@@ -288,14 +288,14 @@ public static class StudiesApi
         return Results.NoContent();
     }
 
-    // Npgsql rejects DateTime values with Kind=Unspecified for `timestamp with
-    // time zone` columns. Incoming trade timestamps from the Python engine are
-    // UTC ISO-8601 strings; normalize kind here.
+    // Parse UTC ISO-8601 trade timestamps from the Python engine.
+    // Rejects naive strings (no offset) to fail-fast on malformed producer output.
     private static DateTime ParseUtc(string s) =>
-        DateTime.Parse(
+        DateTimeOffset.ParseExact(
             s,
+            new[] { "yyyy-MM-ddTHH:mm:ss'Z'", "yyyy-MM-ddTHH:mm:ss.ffffff'Z'" },
             CultureInfo.InvariantCulture,
-            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
+            System.Globalization.DateTimeStyles.None).UtcDateTime;
 }
 
 // ── Request / Response DTOs ──────────────────────────────────────

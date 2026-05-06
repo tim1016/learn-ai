@@ -1,5 +1,10 @@
 """Shared base class for the RSI-range strategy family (A / B / C).
 
+Formula: RSI(14) range filter [rsi_low_gate, rsi_high_gate] + ADX(14) exit gate (ADX < exit_threshold); subclass-specific entry gates added via template-method hooks.
+Reference: Internal — no external port reference; RSI indicator per LEAN Wilder's method (see app/engine/indicators/rsi.py), ADX per Wilder (1978) (see app/engine/indicators/adx.py).
+Canonical implementation: app/engine/strategy/algorithms/_rsi_range_base.py (base); SpyStrategyA/B/C are the leaf canonicals.
+Validated against: app/engine/tests/ (exercised transitively via SpyStrategyA/B/C tests).
+
 All three share the same skeleton:
 
 * 15-min consolidator (minute data → 15-min bars).

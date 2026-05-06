@@ -23,7 +23,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from polygon import RESTClient
@@ -622,10 +622,10 @@ class PolygonClientService:
                 f"Listing expirations for {underlying_ticker}, range=[{expiration_date_gte}, {expiration_date_lte}]"
             )
 
-            today = datetime.now().strftime("%Y-%m-%d")
+            today = datetime.now(UTC).strftime("%Y-%m-%d")
             start = datetime.strptime(expiration_date_gte or today, "%Y-%m-%d")
             end = datetime.strptime(
-                expiration_date_lte or (datetime.now() + timedelta(days=180)).strftime("%Y-%m-%d"),
+                expiration_date_lte or (datetime.now(UTC) + timedelta(days=180)).strftime("%Y-%m-%d"),
                 "%Y-%m-%d",
             )
 
@@ -673,7 +673,7 @@ class PolygonClientService:
         try:
             # Default to today's date to avoid fetching thousands of contracts
             if expiration_date is None:
-                expiration_date = datetime.now().strftime("%Y-%m-%d")
+                expiration_date = datetime.now(UTC).strftime("%Y-%m-%d")
 
             logger.info(f"Fetching options chain snapshot for {underlying_asset}, expiration={expiration_date}")
 

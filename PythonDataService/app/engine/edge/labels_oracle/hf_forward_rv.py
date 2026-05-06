@@ -1,5 +1,10 @@
 """Forward (oracle) HF realized vol — ex-post VRP analysis only.
 
+Formula: Forward-window two-component HF realized variance: RV²_forward[d] = HF realized vol of bars [d+1, d+W]; last W trading days are NaN
+Reference: Andersen, T.G., Bollerslev, T., Diebold, F.X., Labys, P. (2003) "Modeling and Forecasting Realized Volatility" Econometrica 71(2); Barndorff-Nielsen, O.E. & Shephard, N. (2002) two-component estimator
+Canonical implementation: app/engine/edge/labels_oracle/hf_forward_rv.py
+Validated against: NONE — pending
+
 This module is in ``labels_oracle/``. It is NEVER imported by
 ``features_realtime/`` or by any feature/regime pipeline (CI grep guard
 enforces this).

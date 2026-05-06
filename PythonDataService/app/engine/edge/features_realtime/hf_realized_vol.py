@@ -1,5 +1,10 @@
 """High-frequency two-component realized variance — Step 3 of IV-RV alignment.
 
+Formula: RV²_d = Σ r²_i (intraday) + r²_overnight; σ²_TRD252 = RV²_window · 252 / W; two-component separation of continuous and jump variation
+Reference: Andersen, T.G., Bollerslev, T., Diebold, F.X., Labys, P. (2003) "Modeling and Forecasting Realized Volatility" Econometrica 71(2); Barndorff-Nielsen, O.E. & Shephard, N. (2002) two-component estimator
+Canonical implementation: app/engine/edge/features_realtime/hf_realized_vol.py
+Validated against: NONE — pending
+
 Estimator
 ---------
 For each trading day d:

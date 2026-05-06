@@ -2,6 +2,11 @@
 Volatility Smile / Surface Fitting Models
 ==========================================
 
+Formula: Three smile models — (1) variance interpolation (QuantLib BlackVarianceSurface, non-parametric); (2) SABR σ_B(K,T;α,β,ρ,ν) per Hagan et al. 2002 eq. (2.17b); (3) SVI w(k) = a + b(ρ(k−m) + √((k−m)²+σ²)) per Gatheral 2004.
+Reference: Hagan, Kumar, Lesniewski, Woodward (2002) "Managing Smile Risk" Wilmott Magazine; Gatheral (2004) "A parsimonious arbitrage-free implied volatility parameterization with application to the valuation of volatility derivatives"; QuantLib C++ reference (BlackVarianceSurface, SabrSmileSection).
+Canonical implementation: app/volatility/fitting.py
+Validated against: NONE — pending (reference verification and golden fixture owed per registry row)
+
 Three fitting approaches, each producing a callable smile for a single expiry:
 
 1. **Variance interpolation** — QuantLib ``BlackVarianceSurface`` on a

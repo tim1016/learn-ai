@@ -1,5 +1,10 @@
 """Information Coefficient (IC) computation.
 
+Formula: IC_d = Spearman(rank(feature_d), rank(return_d)); mean_IC = (1/N)·Σ IC_d; t-stat = mean_IC / (std_IC / √N); t_NW = mean_IC / √(NW_var / N) (Newey-West HAC); N_eff = N / (1 + 2·Σ rho_k).
+Reference: López de Prado, Advances in Financial Machine Learning (2018) §8 (IC methodology); Newey-West (1987) "A Simple, Positive Semi-Definite, Heteroskedasticity and Autocorrelation Consistent Covariance Matrix" Econometrica 55(3) — verify which lag selection is used.
+Canonical implementation: app/research/validation/ic.py
+Validated against: NONE — pending (pending-fixture per registry; reference needs verification)
+
 The IC measures the daily Spearman rank correlation between a feature
 and the 15-minute forward log return.
 

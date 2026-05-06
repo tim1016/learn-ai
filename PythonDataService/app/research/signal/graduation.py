@@ -1,5 +1,10 @@
 """Graduation evaluation for the Signal Engine.
 
+Formula: Stage ladder (0/1/2/3) evaluated against IC t-stat, OOS Sharpe, regime coverage, and deflated Sharpe thresholds per docs/signal-engine-authority.md §4–5. Stage 0 rejection short-circuits all downstream.
+Reference: Internal — docs/signal-engine-authority.md §4 (authority for every formula); Bailey & López de Prado (2014) Deflated Sharpe for Stage 2+ gate.
+Canonical implementation: app/research/signal/graduation.py
+Validated against: NONE — pending (pending-fixture per registry)
+
 The graduation step turns a bag of metrics into a single decision: does
 this signal warrant further research, and if so, how far has it gotten?
 

@@ -1,4 +1,10 @@
-"""Backtesting engine: position sizing, cost modeling, performance metrics."""
+"""Backtesting engine: position sizing, cost modeling, performance metrics.
+
+Formula: PnL = Σ sign(signal) · (return[t+1] − cost); Sharpe = mean_PnL / std_PnL · √(bars_per_year); max_drawdown via running peak. Position sizing: unit or z-score proportional.
+Reference: Internal — distinct-purpose research engine (not the LEAN-ported event-driven backtester in app/engine/). No external port reference.
+Canonical implementation: app/research/signal/backtest.py
+Validated against: NONE — pending (pending-fixture per registry)
+"""
 
 from __future__ import annotations
 

@@ -40,7 +40,8 @@ class TestSanitizeAggregates:
         assert result["summary"]["removed_count"] == 0
         assert len(result["data"]) == 2
 
-    def test_duplicates_removed(self):
+    def test_duplicates_raise_error(self):
+        """Duplicate timestamps must raise ValueError (fail-fast per numerical-rigor rules)."""
         raw = [
             {
                 "timestamp": 1704067200000,
@@ -60,9 +61,8 @@ class TestSanitizeAggregates:
             },
         ]
 
-        result = DataSanitizer.sanitize_aggregates(raw)
-
-        assert result["summary"]["cleaned_count"] <= result["summary"]["original_count"]
+        with pytest.raises(ValueError, match="Duplicate timestamps detected"):
+            DataSanitizer.sanitize_aggregates(raw)
 
     def test_invalid_high_low_filtered(self):
         """Bars where high < low should be removed by the integrity filter"""
@@ -89,6 +89,25 @@ class TestSanitizeAggregates:
         result = DataSanitizer.sanitize_aggregates(raw)
 
         assert result["summary"]["cleaned_count"] == 0
+
+    def test_timestamps_returned_as_int64_ms(self):
+        """Timestamps must be returned as int64 ms UTC (canonical wire format)."""
+        raw = [
+            {
+                "timestamp": 1704067200000,
+                "open": 150.0,
+                "high": 155.0,
+                "low": 148.0,
+                "close": 153.0,
+                "volume": 1000000.0,
+            }
+        ]
+
+        result = DataSanitizer.sanitize_aggregates(raw)
+
+        ts = result["data"][0]["timestamp"]
+        assert isinstance(ts, (int, float)), f"Expected int64 ms, got {type(ts)}: {ts}"
+        assert int(ts) == 1704067200000, f"Timestamp should round-trip exactly, got {ts}"
 
     def test_data_sorted_by_timestamp(self):
         raw = [

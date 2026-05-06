@@ -1,5 +1,10 @@
 """Signal diagnostics, data sufficiency, and effective sample size.
 
+Formula: Sharpe CI per Lo (2002) SE = √((1 + SR²·(K₃/2) − SR²·(K₄−3)/4) / (n−1)); Deflated Sharpe (Bailey & López de Prado 2014); N_eff = N / (1 + 2·Σ rho_k); joint (vol×trend) regime coverage.
+Reference: Lo (2002) "The Statistics of Sharpe Ratios" FAJ 58(4); Bailey, López de Prado (2014) "The Deflated Sharpe Ratio" JPM 40(5); docs/signal-engine-authority.md §4.
+Canonical implementation: app/research/signal/diagnostics.py
+Validated against: NONE — pending (pending-fixture per registry)
+
 Also hosts the inferential helpers used by the graduation ladder:
 
 * `compute_sharpe_ci` — Lo (2002) standard error of the annualized Sharpe,

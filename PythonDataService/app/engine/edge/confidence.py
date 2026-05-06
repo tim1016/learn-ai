@@ -1,5 +1,10 @@
 """Continuous confidence formula shared by VRP gating and regime weighting.
 
+Formula: confidence = health_score * (1 - variance_contribution_synthetic), clamped to hard floor; feature_weight = max(0, 2 * health_score - 1) * (1 - vcs)
+Reference: Internal — docs/architecture/iv-ownership-research.md §4.7
+Canonical implementation: app/engine/edge/confidence.py
+Validated against: NONE — pending
+
 See ``docs/architecture/iv-ownership-research.md`` §4.7 for the consolidated
 rationale (multiplicative form, hard floor, imputed-prior policy for missing
 ``health_score``).

@@ -2,6 +2,11 @@
 Volatility Surface Builder
 ===========================
 
+Formula: Per-expiry IV solve (solver.py) → smile fit (fitting.py, choice of variance/SABR/SVI) → cross-expiry variance-time interpolation (σ²(T) · T linear in T, preserving no-calendar-arbitrage).
+Reference: Internal orchestration of app/volatility/solver.py + fitting.py; variance-time interpolation is industry standard per docs/math-rigor.md Upgrade 1.
+Canonical implementation: app/volatility/surface.py
+Validated against: NONE — pending (no golden fixture; pending-fixture per registry)
+
 Assembles per-expiry smile fits into a full implied volatility surface
 that can be queried at any (strike, expiry) pair.
 

@@ -2,8 +2,10 @@
 Surface Conventions Module
 ===========================
 
-Immutable conventions that anchor every surface build, ensuring
-deterministic forward definitions and consistent log(K/F) across builds.
+Formula: Forward F = S · exp((r − q) · T); log-moneyness k = log(K/F); discount df = exp(−r · T); day-count ACT/365 with TRADING_DAYS_PER_YEAR=252 for vol annualization.
+Reference: Standard Black-Scholes-Merton forward/discount conventions; ACT/365 per market convention (verify: QuantLib uses ACT/365 Fixed for equity vol surfaces).
+Canonical implementation: app/volatility/conventions.py
+Validated against: NONE — pending (constants validated transitively by surface build tests)
 """
 
 from __future__ import annotations

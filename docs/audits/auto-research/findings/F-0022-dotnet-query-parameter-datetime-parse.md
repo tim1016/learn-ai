@@ -1,7 +1,7 @@
 ---
 id: F-0022
 severity: P1
-status: deferred
+status: fixed-verified
 area: timestamp
 canonical_file: Backend/GraphQL/Query.cs; Backend/Services/Implementation/MarketDataService.cs; Backend/Services/Implementation/ResearchService.cs
 reference: .claude/rules/numerical-rigor.md (Timestamp rigor → Ban list)

@@ -203,8 +203,8 @@ public class Query
     {
         try
         {
-            var from = DateTime.Parse(fromDate).ToUniversalTime();
-            var to = DateTime.Parse(toDate).ToUniversalTime().Date.AddDays(1).AddTicks(-1);
+            var from = DateOnly.ParseExact(fromDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            var to = DateOnly.ParseExact(toDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddDays(1).AddTicks(-1);
             var symbol = ticker.ToUpper();
 
             var tickerEntity = await context.Tickers
@@ -428,8 +428,8 @@ public class Query
             var isCached = false;
             if (tickerEntity != null)
             {
-                var from = DateTime.Parse(range.FromDate).ToUniversalTime();
-                var to = DateTime.Parse(range.ToDate).ToUniversalTime().Date.AddDays(1).AddTicks(-1);
+                var from = DateOnly.ParseExact(range.FromDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+                var to = DateOnly.ParseExact(range.ToDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddDays(1).AddTicks(-1);
 
                 isCached = await context.StockAggregates.AnyAsync(
                     a => a.TickerId == tickerEntity.Id

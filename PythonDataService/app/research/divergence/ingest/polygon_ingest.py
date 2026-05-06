@@ -223,7 +223,7 @@ def ingest_polygon_aggregates(  # pragma: no cover — live API path
     )
     df = pd.DataFrame(bars)
     df["unix_ts"] = df["timestamp"].astype("Int64")
-    df["iso_time"] = pd.to_datetime(df["unix_ts"], unit="ms", utc=True).dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    df["iso_time"] = pd.to_datetime(df["unix_ts"], unit="ms", utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
     df["time_utc"] = pd.to_datetime(df["unix_ts"], unit="ms", utc=True)
     df["et"] = df["time_utc"].dt.tz_convert("America/New_York")
 

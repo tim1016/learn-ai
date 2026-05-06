@@ -1,5 +1,10 @@
 """Strategy A — EMA-gap + MACD + RSI-range, ADX(<15) exit.
 
+Formula: RSI(14) range + EMA(fast)−EMA(slow) > threshold + MACD > 0 → entry; ADX < 15 → exit. Extends RsiRangeStrategy base.
+Reference: Internal — no external port reference; long-only 15-min RTH SPY strategy.
+Canonical implementation: app/engine/strategy/algorithms/spy_strategy_a.py
+Validated against: app/engine/tests/ (existing tests; no parity fixture identified).
+
 Entry gates (all evaluated each bar while flat):
     * ``rsi_low_gate <= RSI <= rsi_high_gate`` (simple range filter).
     * ``EMA(fast) - EMA(slow) > ema_gap_threshold``.

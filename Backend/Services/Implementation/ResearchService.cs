@@ -364,8 +364,8 @@ public class ResearchService : IResearchService
 
         if (tickerEntity != null)
         {
-            var startDate = DateTime.Parse(fromDate);
-            var endDate = DateTime.Parse(toDate);
+            var startDate = DateOnly.ParseExact(fromDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            var endDate = DateOnly.ParseExact(toDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddDays(1).AddTicks(-1);
 
             ivData = await _context.OptionsIvSnapshots
                 .AsNoTracking()

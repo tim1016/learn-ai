@@ -415,7 +415,7 @@ def _process_contract(
         # Use the canonical underlying timestamp so option rows and the
         # underlying ticker's rows share unix_ts bit-for-bit.
         ts = aligned_key
-        iso_time = datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        iso_time = datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
         row: dict[str, Any] = {
             "unix_ts": ts,

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import html as html_mod
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -306,7 +306,7 @@ def _header_cards(merged: pd.DataFrame) -> str:
             f"{vol_ratio_pct:.2f}%",
             "How much of total SPY volume the BATS exchange captures (TradingView's feed).",
         ),
-        ("Built at", datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), "Time this dashboard was generated."),
+        ("Built at", datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"), "Time this dashboard was generated."),
     ]
     html = "<div class='summary-grid'>"
     for label, value, tooltip in cards:

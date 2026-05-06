@@ -1,9 +1,16 @@
+"""Options contract finder for research pipeline.
+
+Formula: Select bracketing contracts by target delta (BSM delta = N(d1) for calls, N(d1)-1 for puts, d1 = (ln(S/K) + (r + σ²/2)·T) / (σ·√T)); interpolate between nearest-delta contracts. Select bracketing expiries for IV30 construction.
+Reference: Internal — no external port reference; delta formula per Hull §19.4. Contract selection heuristics are repo-specific.
+Canonical implementation: app/research/options/contract_finder.py
+Validated against: NONE — pending (no golden fixture)
+"""
 from __future__ import annotations
 
 import asyncio
 import logging
 import math
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -122,10 +129,10 @@ def _get_trading_days(start_date: str, end_date: str, stock_bars: pd.DataFrame) 
     if stock_bars.empty:
         return []
 
-    start = pd.Timestamp(start_date)
-    end = pd.Timestamp(end_date)
+    start = pd.Timestamp(start_date, tz="UTC")
+    end = pd.Timestamp(end_date, tz="UTC")
 
-    dates = pd.to_datetime(stock_bars["date"]).sort_values().unique()
+    dates = pd.to_datetime(stock_bars["date"], utc=True).sort_values().unique()
     mask = (dates >= start) & (dates <= end)
     return [pd.Timestamp(d).to_pydatetime() for d in dates[mask]]
 
@@ -260,7 +267,7 @@ def find_bracket_contracts(
         close = bar.get("close") or bar.get("c")
         if ts is not None and close is not None:
             if isinstance(ts, (int, float)):
-                dt = datetime.utcfromtimestamp(ts / 1000)
+                dt = datetime.fromtimestamp(ts / 1000, tz=UTC)
             else:
                 dt = pd.Timestamp(ts).to_pydatetime()
             date_str = dt.strftime("%Y-%m-%d")

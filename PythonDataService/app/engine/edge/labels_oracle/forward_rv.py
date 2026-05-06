@@ -1,5 +1,10 @@
 """Forward (oracle) realized vol — for ex-post VRP and analysis only.
 
+Formula: Same estimator math as features_realtime/realized_vol.py applied over the forward window via .shift(-W); RV[t] = realized vol over [t, t+W]
+Reference: Parkinson, M. (1980) "The Extreme Value Method for Estimating the Variance of the Rate of Return" J. Business 53(1); Garman, M.B. & Klass, M.J. (1980) J. Business 53(1)
+Canonical implementation: app/engine/edge/labels_oracle/forward_rv.py
+Validated against: NONE — pending (oracle labels, not for model use)
+
 This module is in labels_oracle/. It is NEVER imported by features_realtime/
 or by any model/feature pipeline. CI grep guard enforces this.
 

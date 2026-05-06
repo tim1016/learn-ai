@@ -8,7 +8,7 @@ import io
 import json
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -848,7 +848,7 @@ def build_csv_bytes(df: pd.DataFrame, columns: list[str]) -> bytes:
 
     for _, row in df.iterrows():
         ts = int(row["timestamp"])
-        iso = datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%dT%H:%M:%SZ")
+        iso = datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00")
         values = [ts, iso] + [_fmt(row.get(col)) for col in columns]
         writer.writerow(values)
     return output.getvalue().encode("utf-8")
@@ -936,7 +936,7 @@ def build_metadata_json(
             "timespan": "minute",
             "multiplier": 1,
             "bar_count": bar_count,
-            "generated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00"),
         },
         "data_source": {
             "provider": "Polygon.io",

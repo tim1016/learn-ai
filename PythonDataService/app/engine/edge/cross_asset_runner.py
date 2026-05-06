@@ -1,5 +1,10 @@
 """Cross-asset strategy runner for the Edge feature.
 
+Formula: Orchestration only — runs trade_simulator per symbol, aggregates results; no standalone arithmetic
+Reference: Internal — no external reference
+Canonical implementation: app/engine/edge/cross_asset_runner.py
+Validated against: NONE — pending
+
 Wires a registered strategy (placeholder buy-and-hold for v1) across a list
 of symbols, runs the trade simulator on each, and aggregates results.
 

@@ -1,12 +1,12 @@
 ---
 id: F-0009
 severity: P1
-status: awaiting-human
+status: fixed-verified
 area: timestamp
 canonical_file: PythonDataService/app/services/sanitizer.py
 reference: docs/audits/computational-fidelity-2026-04-22.md (top-10 finding #1, #2)
 first_seen: 2026-05-05
-last_seen: 2026-05-05
+last_seen: 2026-05-06
 phase: 1
 ---
 

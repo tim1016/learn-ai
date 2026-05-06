@@ -1,4 +1,10 @@
-"""Walk-forward validation with rolling train/test windows."""
+"""Walk-forward validation with rolling train/test windows.
+
+Formula: Anchored walk-forward: train [t0, t0+L], test (t0+L, t0+L+H], slide by H; OOS Sharpe aggregated over test windows.
+Reference: López de Prado, Advances in Financial Machine Learning (2018) §7 (Combinatorial Purged Cross-Validation) — verify which walk-forward variant is implemented.
+Canonical implementation: app/research/signal/walk_forward.py
+Validated against: NONE — pending (pending-fixture per registry; reference needs verification)
+"""
 
 from __future__ import annotations
 

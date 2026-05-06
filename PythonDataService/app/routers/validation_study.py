@@ -606,7 +606,7 @@ def _build_csv(rows: list[dict], columns: list[str]) -> str:
 
 def _bar_row(bar: dict) -> dict:
     ts = bar.get("timestamp", 0)
-    iso = datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ") if ts else ""
+    iso = datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00") if ts else ""
     return {**bar, "iso_time": iso}
 
 

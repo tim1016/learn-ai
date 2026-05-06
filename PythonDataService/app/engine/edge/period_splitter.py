@@ -1,5 +1,10 @@
 """Time-period splits for cross-asset robustness validation.
 
+Formula: Rolling windows: slide fixed-width window; walk-forward: anchored train [t0, t0+L], test (t0+L, t0+L+H], slide by H
+Reference: Internal — docs/architecture/edge-feature-design.md §5.2
+Canonical implementation: app/engine/edge/period_splitter.py
+Validated against: NONE — pending
+
 Three modes (per docs/architecture/edge-feature-design.md §5.2):
 - Rolling N-year windows           — slide a fixed-width window
 - Calendar buckets                  — one bucket per calendar year

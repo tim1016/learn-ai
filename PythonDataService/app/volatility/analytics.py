@@ -2,8 +2,10 @@
 Volatility Surface Analytics
 =============================
 
-Derives skew metrics and diagnostics from a fitted VolSurface.
-Computes risk reversals, butterflies, and ATM smiles for single expiries.
+Formula: Risk reversal = IV(call, Δ=0.25) − IV(put, Δ=0.25); butterfly = (IV(call, Δ=0.25) + IV(put, Δ=0.25))/2 − IV(ATM); ATM strike solved via Brent on the fitted surface.
+Reference: Standard volatility market conventions for risk-reversal and butterfly quoting (practitioner standard; see Hull §20 for smile metrics).
+Canonical implementation: app/volatility/analytics.py
+Validated against: NONE — pending (no golden fixture)
 """
 
 from __future__ import annotations

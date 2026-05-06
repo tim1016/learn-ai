@@ -43,15 +43,30 @@ class MatchStats:
     avg_pnl_delta: float
 
 
-def _parse_ts(ts_str: str) -> float:
-    """Parse a timestamp string to epoch seconds. Handles ISO 8601 and common formats."""
-    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+def _parse_ts(ts_val: str | int | float) -> float:
+    """Parse a timestamp to epoch seconds.
+
+    Accepts only:
+    - int/float: treated as epoch seconds (or ms if > 1e10) — no ambiguity.
+    - ISO 8601 strings with an explicit UTC offset (e.g. '2024-01-01T09:30:00Z',
+      '2024-01-01T09:30:00+00:00'). Naive strings are rejected to fail-fast on
+      producer-side format violations per numerical-rigor.md timestamp rules.
+    """
+    if isinstance(ts_val, (int, float)):
+        # Epoch seconds vs ms heuristic: values > 1e10 are ms
+        return float(ts_val) / 1000.0 if ts_val > 1e10 else float(ts_val)
+
+    ts_str = ts_val.strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z"):
         try:
-            dt = datetime.strptime(ts_str.strip(), fmt).replace(tzinfo=UTC)
+            dt = datetime.strptime(ts_str, fmt)
             return dt.timestamp()
         except ValueError:
             continue
-    raise ValueError(f"Cannot parse timestamp: {ts_str}")
+    raise ValueError(
+        f"Cannot parse timestamp '{ts_str}': only ISO 8601 strings with explicit UTC offset "
+        "are accepted (e.g. '2024-01-01T09:30:00Z'). Naive strings indicate a producer-side bug."
+    )
 
 
 def match_trades(

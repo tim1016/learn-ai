@@ -1,5 +1,10 @@
 """Edge Score — single per-bar composite signal.
 
+Formula: E_t = w1·S_VRP + w2·S_Regime + w3·S_IV + w4·S_Trend
+Reference: Internal — docs/architecture/edge-feature-design.md §8
+Canonical implementation: app/engine/edge/edge_score.py
+Validated against: NONE — pending
+
 Per docs/architecture/edge-feature-design.md §8:
 
     E_t = w1 · S_VRP + w2 · S_Regime + w3 · S_IV + w4 · S_Trend

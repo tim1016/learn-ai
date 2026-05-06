@@ -1,5 +1,10 @@
 """Confidence-shape calibration harness.
 
+Formula: Offline calibration of the multiplicative confidence product (health * (1 - vcs)) to historical forward signal distribution; shape families: identity f(c)=c, power f(c)=c**p, logistic f(c)=1/(1+exp(-a*(c-b)))
+Reference: Internal — companion to app/engine/edge/confidence.py
+Canonical implementation: app/engine/edge/calibration/confidence.py
+Validated against: NONE — pending
+
 The production confidence path is the multiplicative product
 ``health * (1 - vcs)`` clamped to a hard floor (see
 ``app.engine.edge.confidence``). This module is the **offline**

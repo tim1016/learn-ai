@@ -1,5 +1,10 @@
 """Structured event emitters for IV30 / VRP threshold-firing audit.
 
+Formula: Schema/orchestration only — structured logging of threshold-firing events; no arithmetic
+Reference: Internal — no external reference
+Canonical implementation: app/engine/edge/threshold_events.py
+Validated against: NONE — pending
+
 Companion to the recorder burn-in: every threshold or gate that can
 silently kill a signal emits a structured log line tagged with
 ``event=<name>``. After ~100 forward signals, ``grep "event="`` over

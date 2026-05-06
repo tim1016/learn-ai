@@ -1,5 +1,10 @@
 """SpyEmaCrossoverOptionsAlgorithm V1 — Options spread overlay.
 
+Formula: EMA(5)/EMA(10) crossover + RSI(14) range filter → bull call or put spread entry; same signal logic as SpyEmaCrossoverAlgorithm with option-leg execution overlay.
+Reference: Internal — no external port reference; signal logic mirrors SpyEmaCrossoverAlgorithm (LEAN-ported, see spy_ema_crossover.py provenance block). Option pricing via app/engine/options/pricer.py (QuantLib).
+Canonical implementation: app/engine/strategy/algorithms/spy_ema_crossover_options.py
+Validated against: app/engine/tests/ (indirect); signal-for-signal parity with spy_ema_crossover.py asserted by design (same indicator params, same entry/exit conditions).
+
 Uses the same 15-minute EMA(5)/EMA(10) crossover + RSI(14) signal engine
 as ``SpyEmaCrossoverAlgorithm``, but instead of buying the underlying
 equity, enters a bull call spread or bull put spread on the underlying's
@@ -22,7 +27,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
@@ -612,7 +617,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
 
                 synthetic_bar = TB(
                     symbol=self._symbol_name,
-                    time=self.ctx.current_time or datetime.now(),
+                    time=self.ctx.current_time or datetime.now(UTC),
                     open=last_price,
                     high=last_price,
                     low=last_price,

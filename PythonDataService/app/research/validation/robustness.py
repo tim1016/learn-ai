@@ -1,5 +1,10 @@
 """Robustness analysis for feature validation.
 
+Formula: Rolling-window IC stability = std(IC over windows) / mean(IC); regime breakdown = IC per regime label; train/test split = walk-forward with anchored train [t0, t0+L], test (t0+L, t0+L+H].
+Reference: Internal — Politis and Romano (1994) "The Stationary Bootstrap" JASA 89 for block bootstrap (verify if used); regime segmentation via app/research/signal/regime.py.
+Canonical implementation: app/research/validation/robustness.py
+Validated against: NONE — pending (pending-fixture per registry; reference needs verification)
+
 Computes rolling window stability metrics, regime segmentation,
 and train/test split to detect regime bias and overfitting.
 """

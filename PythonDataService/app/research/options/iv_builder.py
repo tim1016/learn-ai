@@ -1,9 +1,16 @@
+"""IV term-structure builder for research options pipeline.
+
+Formula: 30-day constant-maturity IV via linear-in-σ interpolation between the two nearest expiries bracketing 30 calendar days (T1 < 30 ≤ T2). Correct interpolation is variance-time: σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2 — scheduled upgrade per docs/math-rigor.md Upgrade 1.
+Reference: Internal — docs/math-rigor.md Upgrade 1 (variance interpolation spec, industry standard); CBOE VIX Whitepaper (2019) for variance-time basis.
+Canonical implementation: app/research/options/iv_builder.py
+Validated against: NONE — pending (pending-fixture per registry; current linear-in-σ implementation has known bias per math-rigor.md)
+"""
 from __future__ import annotations
 
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -79,7 +86,7 @@ def _prefetch_all_bars(
                 ts = bar.get("timestamp") or bar.get("t")
                 if ts is not None:
                     if isinstance(ts, (int, float)):
-                        dt = datetime.utcfromtimestamp(ts / 1000)
+                        dt = datetime.fromtimestamp(ts / 1000, tz=UTC)
                     else:
                         dt = pd.Timestamp(ts).to_pydatetime()
                     date_map[dt.strftime("%Y-%m-%d")] = bar
@@ -410,7 +417,7 @@ def build_iv_history(
     df["iv_quality"] = df.apply(_quality_flag, axis=1)
 
     # Forward-fill gaps <= 2 days (weekends/holidays)
-    df["date"] = pd.to_datetime(df["date"])
+    df["date"] = pd.to_datetime(df["date"], utc=True)
     df = df.set_index("date").asfreq("B")  # Business day frequency
     for col in ["iv_30d_atm", "iv_30d_put", "iv_30d_call", "stock_close"]:
         if col in df.columns:

@@ -1,5 +1,10 @@
 """Typed provenance for IV30 outputs.
 
+Formula: Provenance schema only — no arithmetic. Key computed fields: variance_contribution_synthetic (weighted by VIX-replication integration weight, not raw count); strike_coverage_score (wing extension as fraction of 5σ); max_single_strike_share.
+Reference: Internal — docs/architecture/iv-ownership-research.md §4.6 (schema) and §7.3 (variance-share vs count-share rationale).
+Canonical implementation: app/volatility/iv_provenance.py
+Validated against: NONE — pending (schema/type validation owed)
+
 See ``docs/architecture/iv-ownership-research.md`` §4.6 for the consolidated
 schema rationale and §7.3 for why count-share *and* variance-share are both
 recorded.

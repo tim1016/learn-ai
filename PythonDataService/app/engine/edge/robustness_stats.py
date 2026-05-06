@@ -1,5 +1,10 @@
 """Robustness diagnostics: Deflated Sharpe Ratio + Probability of Backtest Overfitting.
 
+Formula: DSR = (SR_observed - E[SR_max]) / sqrt(Var[SR_max]); PBO from combinatorially symmetric cross-validation on strategy returns
+Reference: López de Prado, M. (2014) "The Deflated Sharpe Ratio" J. Portfolio Mgmt 40(5); Bailey, D. & López de Prado, M. (2014) "The Probability of Backtest Overfitting" J. Computational Finance
+Canonical implementation: app/engine/edge/robustness_stats.py
+Validated against: NONE — pending
+
 References:
 - López de Prado, M. (2014), "The Deflated Sharpe Ratio", J. Portfolio Mgmt 40(5).
 - Bailey, D., López de Prado, M. (2014), "The Probability of Backtest Overfitting",

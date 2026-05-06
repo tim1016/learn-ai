@@ -1,5 +1,10 @@
 """Per-regime evaluation of a trade ledger.
 
+Formula: Regime-conditional Sharpe = mean_return[regime] / std_return[regime] * sqrt(252); win_rate = trades_positive / trades_total
+Reference: Internal — no external reference
+Canonical implementation: app/engine/edge/regime_strategy_eval.py
+Validated against: NONE — pending
+
 Pure post-hoc analysis: takes a trade ledger from trade_simulator + a regime
 label series, returns regime-conditional Sharpe / win-rate / etc.
 """

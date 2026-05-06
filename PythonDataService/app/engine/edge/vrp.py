@@ -1,5 +1,10 @@
 """Variance Risk Premium series, signals, and z-scores.
 
+Formula: VRP_forward[t] = IV30[t]² - RV_forward[t]²; VRP_realtime[t] = IV30[t]² - RV_trailing[t]²
+Reference: Bollerslev, T., Tauchen, G., Zhou, H. (2009) "Expected Stock Returns and Variance Risk Premia" RFS 22(11)
+Canonical implementation: app/engine/edge/vrp.py
+Validated against: NONE — pending
+
 Definitions:
     VRP_forward[t]     = IV30[t]² - RV_forward[t]²      (ex-post; oracle-only)
     VRP_realtime[t]    = IV30[t]² - RV_trailing[t]²     (realistic proxy)

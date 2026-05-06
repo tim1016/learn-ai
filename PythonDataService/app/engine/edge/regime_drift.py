@@ -1,5 +1,10 @@
 """Regime drift control: rolling refit + Hungarian label alignment + stability score.
 
+Formula: Hungarian assignment: minimize Σ_ij cost_ij·x_ij subject to assignment constraints (via scipy.optimize.linear_sum_assignment); stability = sym_KL(T_old, T_new) + mean centroid displacement
+Reference: Kuhn, H.W. (1955) "The Hungarian Method for the Assignment Problem" Naval Research Logistics Quarterly 2(1-2); Internal for rolling-refit logic
+Canonical implementation: app/engine/edge/regime_drift.py
+Validated against: NONE — pending
+
 Hungarian (linear-sum-assignment) label alignment solves the canonical
 HMM/k-means label-switching problem: state 0 in window 1 may correspond to
 state 2 in window 2 even when the underlying regime is unchanged. We align

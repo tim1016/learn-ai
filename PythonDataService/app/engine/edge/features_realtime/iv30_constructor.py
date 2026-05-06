@@ -1,5 +1,10 @@
 """Construct constant-maturity IV30 ATM, 25Δ skew, term-structure slope, and vol-of-vol.
 
+Formula: σ²_target·T_target = w·σ²_T1·T1 + (1−w)·σ²_T2·T2 where w = (T2−T_target)/(T2−T1)
+Reference: CBOE VIX Whitepaper (2019) — VIX Methodology, Chicago Board Options Exchange
+Canonical implementation: app/engine/edge/features_realtime/iv30_constructor.py
+Validated against: NONE — pending
+
 For a given (timestamp, set of expiries with σ at deltas), this module:
 1. Interpolates IV between expiries in *variance space* per the CBOE VIX whitepaper:
        σ²_target * T_target = w · σ²_T1 · T1 + (1-w) · σ²_T2 · T2

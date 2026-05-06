@@ -1,4 +1,10 @@
-"""Data sanitization using native pandas/numpy (replaces pandas-dq Fix_DQ)"""
+"""Data sanitization using native pandas/numpy (replaces pandas-dq Fix_DQ).
+
+Formula: Gap detection (NaN/0-volume/OHLC-violation checks), outlier clipping (99th-percentile quantile), monotonicity enforcement, fail-fast duplicate detection.
+Reference: Internal — no external algorithmic reference; gap/monotonicity rules are repo-invariants per .claude/rules/numerical-rigor.md (Timestamp rigor → Two and only two conversion boundaries).
+Canonical implementation: app/services/sanitizer.py
+Validated against: PythonDataService/tests/test_sanitizer.py
+"""
 
 import logging
 from typing import Any
@@ -48,13 +54,18 @@ class DataSanitizer:
 
             logger.info(f"Sanitizing {original_count} aggregate records")
 
-            # Convert timestamp from ms to datetime for proper time-series handling.
-            # utc=True so downstream .strftime('...Z') is honest (not a naive-Z lie).
+            # Convert timestamp from ms to datetime for processing.
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
 
-            # Remove duplicates
+            # Fail-fast on duplicates — they indicate upstream corruption.
             if settings.REMOVE_DUPLICATES:
-                df = df.drop_duplicates(subset=["timestamp"])
+                dup_mask = df["timestamp"].duplicated(keep=False)
+                if dup_mask.any():
+                    dup_ts = df.loc[dup_mask, "timestamp"].unique()[:3].tolist()
+                    raise ValueError(
+                        f"Duplicate timestamps detected ({dup_mask.sum()} rows): {dup_ts}. "
+                        "Callers must deduplicate before sanitizing."
+                    )
 
             # Sort by timestamp
             df = df.sort_values("timestamp").reset_index(drop=True)
@@ -75,8 +86,8 @@ class DataSanitizer:
             mask = (df["high"] >= df["low"]) & (df["volume"] >= 0)
             df = df[mask]
 
-            # Convert timestamp to ISO format for JSON serialization
-            df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            # Return timestamp as int64 ms UTC (canonical wire format).
+            df["timestamp"] = df["timestamp"].astype("datetime64[ms]").astype("int64")
 
             cleaned_count = len(df)
             removed_count = original_count - cleaned_count
@@ -109,15 +120,19 @@ class DataSanitizer:
 
             logger.info(f"Sanitizing {original_count} trade records")
 
-            # Convert timestamp (nanoseconds for trades); utc=True so .strftime('...Z') is honest.
+            # Convert timestamp (nanoseconds for trades).
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ns", utc=True)
 
-            # Remove duplicates
+            # Fail-fast on duplicates — they indicate upstream corruption.
             if settings.REMOVE_DUPLICATES:
-                if "trade_id" in df.columns:
-                    df = df.drop_duplicates(subset=["timestamp", "trade_id"])
-                else:
-                    df = df.drop_duplicates(subset=["timestamp"])
+                subset = ["timestamp", "trade_id"] if "trade_id" in df.columns else ["timestamp"]
+                dup_mask = df.duplicated(subset=subset, keep=False)
+                if dup_mask.any():
+                    dup_ts = df.loc[dup_mask, "timestamp"].unique()[:3].tolist()
+                    raise ValueError(
+                        f"Duplicate trade records detected ({dup_mask.sum()} rows): {dup_ts}. "
+                        "Callers must deduplicate before sanitizing."
+                    )
 
             df = df.sort_values("timestamp").reset_index(drop=True)
 
@@ -138,7 +153,9 @@ class DataSanitizer:
             # Basic validity: price > 0, size > 0
             df = df[(df["price"] > 0) & (df["size"] > 0)]
 
-            df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            # Return timestamp as int64 ms UTC (canonical wire format).
+            # Input was nanoseconds; convert through datetime64[ms] for ms precision.
+            df["timestamp"] = df["timestamp"].astype("datetime64[ms]").astype("int64")
 
             cleaned_count = len(df)
 

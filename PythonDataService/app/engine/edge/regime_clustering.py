@@ -1,5 +1,10 @@
 """K-means and Gaussian HMM regime clustering.
 
+Formula: K-means: minimize Σ_k Σ_{x∈C_k} ||x - μ_k||²; HMM: Baum-Welch EM via forward-backward in log-space
+Reference: Hamilton, J.D. (1989) "A New Approach to the Economic Analysis of Nonstationary Time Series" Econometrica 57(2); Lloyd, S.P. (1982) "Least Squares Quantization in PCM" IEEE Trans. Inf. Theory 28(2)
+Canonical implementation: app/engine/edge/regime_clustering.py
+Validated against: tests/edge/test_regime_clustering.py (partial — only EM convergence + posterior shape)
+
 Hand-rolled implementations to avoid adding hmmlearn / scikit-learn dependencies.
 Per CLAUDE.md "Sovereign over the math" — the only third-party math here is
 scipy.stats.multivariate_normal (already in the existing dependency set).

@@ -1,5 +1,10 @@
 """Real-time features for regime clustering.
 
+Formula: OHLCV-derived features (trend_slope, rv_yz, atr_pct, volume_z); only .shift(N) with N>=0 applied (forward-look-free); all features rolling-z-scored on 60-bar lookback
+Reference: Internal — no external reference
+Canonical implementation: app/engine/edge/features_realtime/regime_features.py
+Validated against: NONE — pending
+
 Hard rule: every column produced uses .shift(N) with N >= 0 only.
 Never .shift(-N). Never imports from app.engine.edge.labels_oracle.
 

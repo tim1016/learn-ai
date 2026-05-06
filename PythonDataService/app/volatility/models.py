@@ -2,7 +2,10 @@
 Pydantic Models for the Implied Volatility Surface API
 =======================================================
 
-Request / response schemas for the ``/api/volatility`` endpoints.
+Formula: API schema definitions only — no math. Wire types for surface build requests and surface query responses.
+Reference: Internal — no algorithmic reference; schema pairs with app/volatility/surface.py and app/routers/volatility.py.
+Canonical implementation: app/volatility/models.py
+Validated against: NONE (schema only; validated transitively by endpoint integration tests)
 """
 
 from __future__ import annotations
