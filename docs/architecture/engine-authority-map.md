@@ -47,6 +47,7 @@ If two docs disagree, `math-sources-of-truth.md` wins for math and this doc wins
 | `Backend/Services/Implementation/TechnicalAnalysisService.cs` | HTTP passthrough to `/api/indicators/calculate` | Compute indicators locally |
 | `Backend/Services/Implementation/MarketDataService.cs` | Polygon API client for bars / aggregates | Compute indicators or strategy results |
 | `docs/validation/*.pine` | TradingView Pine reference for strategy validation | Run in production; one-time validation only |
+| `Backend/Services/Implementation/PortfolioValidationService.cs` | Runtime validation suite asserting FIFO accounting correctness, position rebuild determinism, cash accounting integrity, unrealized PnL valuation | Be the canonical implementation of any of those quantities — it's a checker, not a producer. The math under test belongs to `PositionEngine.cs` (F-0010) and `PortfolioValuationService.cs::ComputeValuationInternal`. |
 
 ## Reading guide for future contributors
 

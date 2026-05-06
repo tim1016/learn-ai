@@ -1,7 +1,7 @@
 ---
 id: F-0013
 severity: P2
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: Backend/Services/Implementation/PortfolioValidationService.cs
 reference: missing
@@ -42,3 +42,8 @@ Optionally add a parallel row to `math-sources-of-truth.md` § "Data / transport
 ## Provenance of the finding itself
 
 Phase 1 / cursor: `Backend/Services/Implementation/PortfolioValidationService.cs` head read.
+
+## Closure (2026-05-06)
+
+Row added to `docs/architecture/engine-authority-map.md` § Validation-only paths. Notes the runtime suite asserts FIFO + rebuild determinism + cash accounting + unrealized PnL valuation; must NOT be the canonical implementation of any of those (math belongs to `PositionEngine.cs` per F-0010 + `PortfolioValuationService.cs::ComputeValuationInternal`).
+

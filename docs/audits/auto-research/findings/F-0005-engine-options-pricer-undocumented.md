@@ -1,7 +1,7 @@
 ---
 id: F-0005
 severity: P1
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/engine/options/pricer.py
 reference: docs/architecture/engine-authority-map.md (line 18, generic)
@@ -46,3 +46,8 @@ The provenance block on the file should also cite which path is preferred when b
 ## Provenance of the finding itself
 
 Phase 1 / cursor: code-side scan of `PythonDataService/app/engine/**`. File header read with `Read` tool.
+
+## Closure (2026-05-06)
+
+Row added to `docs/math-sources-of-truth.md` § Options pricing and Greeks: "In-engine option pricing dispatch (QuantLib-only / market-preferred / market-required)" canonical = `app/engine/options/pricer.py`. Phase 4 follow-up tracked in F-0027.
+

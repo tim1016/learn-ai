@@ -1,7 +1,7 @@
 ---
 id: F-0004
 severity: P1
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/services/strategy_engine.py
 reference: docs/architecture/engine-authority-map.md (line 22)
@@ -49,3 +49,8 @@ Once the row exists, Phase 4 (provenance) will check whether `strategy_engine.py
 ## Provenance of the finding itself
 
 Phase 1 / cursor: cross-check of authority-map canonical engines against the registry.
+
+## Closure (2026-05-06)
+
+Row added to `docs/math-sources-of-truth.md` § Options pricing and Greeks: "Options strategy analysis (payoff, POP, current-time PnL curve, Greek curves, per-leg diagnostics)" canonical = `app/services/strategy_engine.py::AnalyzeOptionsStrategy`. Phase 4 follow-up (4-field provenance block on the file itself) is tracked in F-0027.
+

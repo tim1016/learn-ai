@@ -1,7 +1,7 @@
 ---
 id: F-0014
 severity: P2
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: PythonDataService/app/services/{data_quality_service,validation_service}.py
 reference: missing
@@ -44,3 +44,8 @@ Add rows to `math-sources-of-truth.md`:
 ## Provenance of the finding itself
 
 Phase 1 / cursor: `PythonDataService/app/services/{data_quality_service,validation_service}.py` head reads.
+
+## Closure (2026-05-06)
+
+Two rows added to `docs/math-sources-of-truth.md` § Data / transport: "Data quality metrics" canonical = `data_quality_service.py` (status: canonical, no external reference); "Pandas-ta vs TradingView validation report" canonical = `validation_service.py` with the `_EXACT/_CLOSE/_OK` thresholds noted as needing provenance verification (status: validation-only, comparator not producer).
+

@@ -1,7 +1,7 @@
 ---
 id: F-0012
 severity: P2
-status: open
+status: fixed-verified
 area: inventory
 canonical_file: Backend/Services/Implementation/{SanitizationService,ResearchService,SpecStrategyService,PortfolioService}.cs
 reference: missing
@@ -43,3 +43,8 @@ Add four rows to `docs/math-sources-of-truth.md` § "Data / transport (rule-5 co
 ## Provenance of the finding itself
 
 Phase 1 / cursor: `Backend/Services/Implementation/*.cs` head reads.
+
+## Closure (2026-05-06)
+
+Four transport rows added to `docs/math-sources-of-truth.md` § Data / transport: SanitizationService, ResearchService, SpecStrategyService, PortfolioService. Each marked `not math` or `persistence` with a brief role description. PortfolioService row notes that FIFO accounting math lives in `PositionEngine.cs` (F-0010).
+
