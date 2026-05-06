@@ -16,7 +16,7 @@ _Filled at the end of the first sweep and updated after every subsequent run tha
 |---|---|---|---|---|
 | P0 | 2 | 0 | 0 | 2 |
 | P1 | 17 | 0 | 0 | 17 (1 status=awaiting-human) |
-| P2 | 11 | 0 | 0 | 11 |
+| P2 | 12 | 0 | 0 | 12 |
 | P3 | 1 | 0 | 0 | 1 |
 
 **Files audited:** Phase 1 substantially complete — registry rows cross-checked; major engine/research/volatility subtrees inventoried; Backend secondary services + Python secondary services + parallel strategy implementations + migration-plan drift verified. Phase 3 ban-list grep run cross-stack (rolled up in F-0020).
@@ -124,7 +124,10 @@ Full per-finding files live in `docs/audits/auto-research/findings/`. Sort here 
 | F-0023 | **P0** | open | ingestion | `dataset_service.py::forward_fill_gaps` silently fabricates missing bars with prev-close + zero-volume. Default-on at 4 call sites. (Cross-listed under §3.3 timestamp because gaps surface as ingestion + boundary issue.) | [findings/F-0023](findings/F-0023-dataset-service-forward-fill-gaps.md) |
 
 ### 3.8 Wire fidelity (Python → Backend → GraphQL → Frontend)
-_(none yet)_
+
+| ID | Sev | Status | Area | Subject | Link |
+|---|---|---|---|---|---|
+| F-0032 | P2 | open | wire | `PolygonService.cs` casts `decimal → double` on every outbound Python pricing/scenario request (lines 692-750). 3 DTO files (`ResearchModels`, `SignalModels`, `BatchResearchModels`) have `double`/`float`-typed properties for inbound responses. `BacktestService.cs:449` does narrow-then-widen via `Math.Sqrt`. | [findings/F-0032](findings/F-0032-decimal-to-double-narrowing-at-wire.md) |
 
 ### 3.9 Frontend consumption / display-only violations
 
@@ -274,6 +277,7 @@ The nightly auto-research cron is **not** scheduled until every box below is che
 | 4 | 2026-05-06 | 3 (Python ingestion subset), 5, 6 | 4 (F-0023 P0 + F-0024 P1 + F-0025 P2 + F-0026 P1) | 0 | Phase 3 Python ingestion triage; Phase 5 fixture audit; Phase 6 tolerance audit. F-0023 forward-fill in `dataset_service.py` is **second P0**. Fixture coverage shockingly thin (3 fixtures on disk vs dozens of canonical math rows). Tolerance audit largely clean. |
 | 5 | 2026-05-06 | 4 (provenance), 9 (frontend rollup) | 2 (F-0027 P1 + F-0028 P2) | 0 | Phase 4 reveals near-universal absence of 4-field provenance block. Phase 9 grep returns 108 candidate hits across 30 TS files — rolled up. §5 recommendation plan populated. **End of overnight burn.** |
 | 6 | 2026-05-06 | 2 (verification), 9 (sample), 10 (sweep) | 3 (F-0029 P2 + F-0030 P2 + F-0031 P3) | 0 | Phase 2 item 2 verified clean (only 2 production callers of `black-scholes.ts`). Phase 2 item 5 has 6 hardcoded `0.043` constants vs registry's count of 4 (F-0029). Phase 9 sample of lean-engine.component.ts confirms F-0028 severity classification (mostly display-only). Phase 10 sweep finds reference notes for indicators well-covered, ~15 missing for strategy/stat/portfolio rows (F-0030); MACD warmup docstring missing (F-0031, first P3). |
+| 7 | 2026-05-06 | 8 (sample) | 1 (F-0032 P2) | 0 | Phase 8 sample touches: PolygonService.cs casts `decimal → double` on every Python request (~15 occurrences across single-leg + multi-leg shapes). 3 DTO files have `double`/`float` properties for inbound. Direction matters — outbound is parameter-narrowing (acceptable), inbound is canonical-narrowing (P1-candidate, P2 here pending per-DTO-file audit). |
 
 Per-run summaries in `docs/audits/auto-research/runs/YYYY-MM-DD.md` (created on first run).
 
