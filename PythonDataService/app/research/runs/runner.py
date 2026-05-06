@@ -284,7 +284,14 @@ def run_strategy_spec(
     resolution = spec.resolution.period_minutes
     start_ms = _date_to_ny_midnight_ms(request.start_date)
     end_ms = _date_to_ny_midnight_ms(request.end_date)
-    revision = data_root_revision if data_root_revision is not None else resolve_data_root_revision()
+    # Truthy check rather than ``is not None``: an empty string would
+    # produce a trailing-pipe ``data_snapshot_id`` indistinguishable
+    # from a regression in ``resolve_data_root_revision``. Treat it as
+    # missing and resolve the real revision.
+    # TODO(phase-e): memoize ``resolve_data_root_revision()`` keyed on
+    # ``LEAN_DATA_ROOT`` so 10×10 sensitivity sweeps don't pay for 100
+    # ``git rev-parse`` subprocess starts.
+    revision = data_root_revision if data_root_revision else resolve_data_root_revision()
 
     spec_dump = spec.model_dump(mode="json")
     spec_hash = hash_payload(spec_dump)

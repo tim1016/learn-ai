@@ -152,7 +152,9 @@ def test_load_missing_run_raises(tmp_path: Path):
 
 
 def test_load_run_with_malformed_run_id_raises_value_error(tmp_path: Path):
-    """Path-traversal defense: anything outside ``[0-9a-fA-F-]`` rejects fast."""
+    """Path-traversal defense: regex is ``^[0-9a-f]{32}$``, so anything
+    that isn't exactly 32 lowercase hex chars rejects fast.
+    """
     bad_ids = [
         "../../../etc/passwd",
         "..",
@@ -160,8 +162,11 @@ def test_load_run_with_malformed_run_id_raises_value_error(tmp_path: Path):
         "abc/../def",
         "abc def",                 # whitespace
         "../" + "a" * 30,
-        "abcz",                    # 'z' not in hex alphabet, also too short
-        "a" * 7,                   # below min length
+        "abcz",                    # 'z' not in hex alphabet
+        "a" * 7,                   # below length
+        "a" * 33,                  # above length
+        "-" * 32,                  # hyphens — used to pass the loose regex (PR #107 round 2)
+        "ABCDEFABCDEFABCDEFABCDEFABCDEFAB",  # 32 chars but uppercase
     ]
     for bad in bad_ids:
         with pytest.raises(ValueError):
@@ -338,7 +343,12 @@ def test_list_limit_truncates(tmp_path: Path, fake_data_factory):
 
 
 def test_list_skips_corrupt_ledger(tmp_path: Path, fake_data_factory, caplog):
-    """A single broken ledger should not blind the rest of the listing."""
+    """A single broken ledger should not blind the rest of the listing,
+    and the corruption must be loud in the logs — silent skip would
+    let a refactor that drops the warning slip past CI.
+    """
+    import logging
+
     spec = _build_test_spec()
     good_ledger, good_result = _make_run(spec, fake_data_factory)
     save_run(good_ledger, good_result, root=tmp_path)
@@ -349,8 +359,13 @@ def test_list_skips_corrupt_ledger(tmp_path: Path, fake_data_factory, caplog):
     (bad_dir / "ledger.json").write_text("{not valid json")
     (bad_dir / "result.json").write_text("{}")
 
-    listed = list_runs(root=tmp_path)
+    with caplog.at_level(logging.WARNING, logger="app.research.runs.storage"):
+        listed = list_runs(root=tmp_path)
     assert [lg.run_id for lg in listed] == [good_ledger.run_id]
+    assert any(
+        "skipping corrupt ledger" in rec.message and rec.levelname == "WARNING"
+        for rec in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------

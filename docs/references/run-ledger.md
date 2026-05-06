@@ -17,7 +17,7 @@
 | `start_ms` / `end_ms` | `int64 ms UTC` for **`America/New_York` midnight** on the requested calendar date. The engine interprets `set_start_date` / `set_end_date` as NY-local — the ledger matches that anchoring so `data_snapshot_id` and `since_ms` filters agree with what the engine actually fetched. |
 | `engine_name` / `engine_version` | Hard-coded constants in `ledger.py`. Bump `ENGINE_VERSION` (currently `"0.1.0"`) when the engine's *semantic* output for a given input changes — fill model semantics, drawdown definition, statistics annualization choices, etc. Not for cosmetic refactors. |
 | `engine_git_commit` | Captured once per process via `subprocess` of `git rev-parse HEAD`, memoized. Falls back to `"unknown"` outside a git checkout. The ledger field is informational (replay diagnostics across commits); it is **not** part of the deterministic identity contract. |
-| `fill_mode`, `commission_per_order`, `slippage_bps` | Cost model is part of identity. Two runs with the same spec and data window but different cost assumptions are different runs. |
+| `fill_mode`, `commission_per_order`, `slippage_per_share` | Cost model is part of identity. Two runs with the same spec and data window but different cost assumptions are different runs. `slippage_per_share` is an absolute price-points fraction (Decimal-compatible float) applied against the trade direction by `FillModel`; long fills pay the slippage above the bar price, short fills pay below. |
 | `random_seed` | Recorded even though the v1 engine has no RNG. Locks Phase D (Monte Carlo) determinism contract before MC code lands so we don't have to migrate ledger schema later. |
 | `parent_run_id` / `parent_spec_hash` | Optional lineage columns set on Phase C/D/E child runs (folds, MC simulations, sensitivity sweeps). Cheap to include now; ugly to migrate later. |
 
@@ -40,7 +40,7 @@ The chosen `data_root_revision` resolution order in `ledger.py::resolve_data_roo
 
 ## On-disk layout
 
-```
+```text
 <root>/<run_id>/
 ├── ledger.json     # RunLedger.model_dump(mode='json')
 └── result.json     # BacktestRunResult.model_dump(mode='json')

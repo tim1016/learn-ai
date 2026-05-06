@@ -53,6 +53,7 @@ from pydantic import BaseModel, Field
 from app.engine.strategy.spec import StrategySpec
 from app.research.runs import (
     BacktestRunResult,
+    RunAlreadyExistsError,
     RunCorruptError,
     RunLedger,
     RunNotFoundError,
@@ -215,11 +216,27 @@ def create_run(
 
     try:
         save_run(ledger, result, root=artifacts_root)
+    except RunAlreadyExistsError as exc:
+        # UUID4 collision (~10⁻³⁷ for a few thousand runs) — paranoid
+        # but the contract is explicit. 409 Conflict is the right shape
+        # because the resource literally exists.
+        logger.exception("[RUNS] run_id collision: %s", ledger.run_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"run_id collision: {ledger.run_id}",
+        ) from exc
+    except ValueError as exc:
+        # ``_run_dir`` rejects malformed run_ids. The runner generates
+        # UUID4 hex which always passes, so this branch is defensive
+        # against future callers that thread a custom ``run_id`` in.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
-        # Persistence failure is an infrastructure problem distinct
-        # from a strategy failure. Surface as 500 — the run *did*
-        # complete, but we couldn't record it, and silently dropping
-        # would lie to the client about durability.
+        # Genuine persistence failure (disk full, EROFS, permission).
+        # The run completed; we couldn't record it. 500 is right —
+        # silently dropping would lie about durability.
         logger.exception(
             "[RUNS] failed to persist run_id=%s spec=%s",
             ledger.run_id,

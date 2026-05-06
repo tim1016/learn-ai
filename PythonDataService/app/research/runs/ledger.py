@@ -22,6 +22,7 @@ to migrate later:
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import time
@@ -33,6 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 ENGINE_VERSION = "0.1.0"
 """Bumped on engine semantic change. See ``docs/references/run-ledger.md``."""
 
+logger = logging.getLogger(__name__)
 
 _GIT_COMMIT_CACHE: str | None = None
 
@@ -66,8 +68,16 @@ def _capture_git_commit() -> str:
             if sha:
                 _GIT_COMMIT_CACHE = sha
                 return sha
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        pass
+        logger.debug(
+            "[RUNS] git rev-parse HEAD returned %d; engine_git_commit will be 'unknown'",
+            proc.returncode,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        # FileNotFoundError → git binary missing (CI image without git).
+        # TimeoutExpired → process hang. OSError → fork/exec failure.
+        # Any of these are diagnostic, not fatal: the ledger field is
+        # informational, not part of the deterministic identity contract.
+        logger.debug("[RUNS] git rev-parse HEAD unavailable: %s", exc)
     _GIT_COMMIT_CACHE = "unknown"
     return _GIT_COMMIT_CACHE
 
@@ -119,12 +129,26 @@ def resolve_data_root_revision() -> str:
                 sha = proc.stdout.strip()
                 if sha:
                     return sha
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            pass
+            logger.debug(
+                "[RUNS] data root %s: git rev-parse returned %d; "
+                "falling back to mtime",
+                root,
+                proc.returncode,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+            logger.debug(
+                "[RUNS] data root %s: git unavailable (%s); falling back to mtime",
+                root,
+                exc,
+            )
         try:
             return f"mtime:{int(root.stat().st_mtime)}"
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug(
+                "[RUNS] data root %s: mtime unavailable (%s); falling back to 'unknown'",
+                root,
+                exc,
+            )
     return "unknown"
 
 

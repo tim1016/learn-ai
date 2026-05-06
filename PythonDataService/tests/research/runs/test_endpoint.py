@@ -273,6 +273,28 @@ async def test_get_path_traversal_run_id_returns_400(client):
         assert "run_id" in response.json()["detail"]
 
 
+async def test_post_run_id_collision_returns_409(configured_app, tmp_path: Path, monkeypatch):
+    """UUID4 collision (astronomically unlikely but explicitly handled).
+
+    Forces two runs to share a ``run_id`` by monkey-patching ``uuid4``
+    to a constant, then asserts the second POST gets 409 Conflict — not
+    a generic 500. The contract should be readable from the client.
+    """
+    import uuid
+
+    fixed = uuid.UUID("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    monkeypatch.setattr("app.research.runs.runner.uuid.uuid4", lambda: fixed)
+
+    transport = ASGITransport(app=configured_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        first = await c.post("/api/research/strategy-runs", json=_request_body())
+        assert first.status_code == 200
+        second = await c.post("/api/research/strategy-runs", json=_request_body())
+
+    assert second.status_code == 409, second.text
+    assert "collision" in second.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # GET — listing.
 # ---------------------------------------------------------------------------

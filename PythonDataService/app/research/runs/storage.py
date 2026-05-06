@@ -45,12 +45,15 @@ from pathlib import Path
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
 
-# Strict whitelist for ``run_id``. UUID4 hex is 32 chars; allowing 8-64
-# leaves room for callers that pad / truncate, while keeping the
-# alphabet small enough that a path-traversal attempt
-# (``run_id="../../etc/passwd"``) fails the regex before any path
-# concatenation. Tightened from "non-empty string" — see PR #107.
-_RUN_ID_PATTERN = re.compile(r"^[0-9a-fA-F-]{8,64}$")
+# Strict whitelist for ``run_id`` — exactly what ``uuid.uuid4().hex``
+# emits: 32 lowercase hex chars, no separators. The runner is the only
+# producer of run_ids, so widening the alphabet would only widen the
+# attack surface without admitting any real caller. Tighter than the
+# initial PR #107 fix (``[0-9a-fA-F-]{8,64}``) per PR-review nitpick:
+# uppercase + hyphens admit nothing the runner generates, but accept
+# IDs like ``--------`` that pass the regex. Path-resolution check at
+# ``_run_dir`` line 115 stays as defense in depth.
+_RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 logger = logging.getLogger(__name__)
 
