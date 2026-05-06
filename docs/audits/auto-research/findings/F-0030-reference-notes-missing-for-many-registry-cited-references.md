@@ -2,6 +2,7 @@
 id: F-0030
 severity: P2
 status: deferred
+remediation_progress: 5-internal-notes-added-2026-05-06
 area: documentation
 canonical_file: docs/references/
 reference: docs/math-sources-of-truth.md (multiple rows)
@@ -85,3 +86,22 @@ For the §6 hardening gate ("Reference notes (`docs/references/<name>.md`) exist
 ## Provenance of the finding itself
 
 Phase 10 / cursor: `Glob("docs/references/*.md")` listed 28 files. Cross-checked against registry rows in `docs/math-sources-of-truth.md`.
+
+## Partial remediation (2026-05-06)
+
+**Added 5 internal-only reference notes (the cheapest items per F-0030's recommendation §1):**
+- `docs/references/portfolio-valuation.md`
+- `docs/references/portfolio-reconciliation.md`
+- `docs/references/replay-determinism.md`
+- `docs/references/trade-divergence.md`
+- `docs/references/fifo-accounting.md` (new — supports F-0010 closure)
+
+These cover the "Internal" reference category from F-0030's resolution plan §1. Each is a short note documenting the math, the canonical implementation, the validation surface, and (where applicable) the conditions under which the .NET-resident classification would change.
+
+**Still owed:**
+- **Hull citation extracts** (Greeks / scenario / live-Greeks / max-drawdown rows) — F-0030 §2.
+- **`(verify)` reference confirmation** — Momentum RSI/Stochastic, RSI Reversal, Dividend adjustment (CRSP placeholder); plus all the new `(verify)` flags introduced by F-0007 (VIX replication needs Demeterfi-Derman-Kamal-Zou paper), F-0001 (VRP, regime clustering, ABDL realized vol), F-0002 (Lopez de Prado §7), F-0008 (IC reference). F-0030 §3.
+- **Cross-link existing notes** — `tv-polygon-validation-gotchas.md` and `indicator-reliability-methodology.md` to be linked from registry. F-0030 §4.
+
+Status remains `deferred` because the bulk of the work (especially the `(verify)` references which are the highest-stakes audit items) is owed.
+

@@ -1,5 +1,10 @@
 """AverageDirectionalIndex — Wilder's ADX with +DI / -DI.
 
+Formula: +DM/-DM from prior bar comparison; TR = max(H-L, |H-prevC|, |L-prevC|); +DI = 100·smoothed_+DM/smoothed_TR; DX = 100·|+DI - -DI|/(+DI + -DI); ADX = Wilder average of DX (samples >= 2·period).
+Reference: Wilder, J. Welles, *New Concepts in Technical Trading Systems* (1978); references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/AverageDirectionalIndex.cs; Pine Script ta.dmi().
+Canonical implementation: this file.
+Validated against: PythonDataService/app/engine/tests/test_adx.py; golden fixture at app/engine/tests/fixtures/golden/adx_14/
+
 Mirrors LEAN's Indicators/AverageDirectionalIndex.cs and the definition
 in Wilder, J. Welles, *New Concepts in Technical Trading Systems* (1978).
 Pine Script's ``ta.dmi()`` uses the same spec.

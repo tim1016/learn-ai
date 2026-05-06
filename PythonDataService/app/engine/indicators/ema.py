@@ -1,5 +1,10 @@
 """ExponentialMovingAverage — mirrors LEAN's Indicators/ExponentialMovingAverage.cs.
 
+Formula: EMA[n] = input[n] · k + EMA[n-1] · (1 - k), where k = 2 / (1 + period); SMA-seeded warmup.
+Reference: references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/ExponentialMovingAverage.cs
+Canonical implementation: this file.
+Validated against: PythonDataService/tests/test_indicator_parity.py
+
 Critical reproducibility details:
   * Smoothing constant: ``k = 2 / (1 + period)``
   * Seed: the first ``period`` samples are averaged as a simple moving

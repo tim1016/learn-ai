@@ -1,5 +1,10 @@
 """MovingAverageConvergenceDivergence — classical MACD.
 
+Formula: MACD = EMA(fast) - EMA(slow); Signal = EMA(signal_period) of MACD; Histogram = MACD - Signal.
+Reference: references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/MovingAverageConvergenceDivergence.cs; Pine Script ta.macd().
+Canonical implementation: this file (streaming variant for engine). Note: the registry's MACD row points at app/services/ta_service.py (pandas-ta one-shot variant) for non-engine callers; this streaming implementation is the engine-internal canonical and has no concept-row of its own.
+Validated against: PythonDataService/app/engine/tests/test_macd.py
+
 Mirrors LEAN's ``Indicators/MovingAverageConvergenceDivergence.cs`` and
 Pine Script's ``ta.macd()`` when both use simple-moving-average-seeded
 EMAs with ``adjust=False`` semantics.

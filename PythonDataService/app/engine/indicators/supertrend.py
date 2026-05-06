@@ -1,5 +1,10 @@
 """Supertrend — ATR-based trailing-stop indicator.
 
+Formula: hl2 = (H+L)/2; basic upper = hl2 + multiplier·ATR; basic lower = hl2 - multiplier·ATR; band-clamp on direction-preserved bars; direction flips on close crossing prior band.
+Reference: Pine Script ta.supertrend(factor, atrPeriod); pandas-ta ta.supertrend(); no LEAN port (Pine is the authority for this indicator's classical form).
+Canonical implementation: this file (streaming Decimal variant for engine).
+Validated against: PythonDataService/app/engine/tests/test_supertrend.py; golden fixture at app/engine/tests/fixtures/golden/supertrend_10_3/
+
 Mirrors the classical Pine Script ``ta.supertrend(factor, atrPeriod)``
 and pandas-ta's ``ta.supertrend(high, low, close, length, multiplier)``.
 

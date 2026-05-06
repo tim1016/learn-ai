@@ -1,5 +1,10 @@
 """RelativeStrengthIndex with Wilders smoothing.
 
+Formula: RSI = 100 - 100/(1 + RS), where RS = avg_gain / avg_loss; Wilders smoothing avg_new = (avg_old·(period-1) + sample) / period.
+Reference: references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/RelativeStrengthIndex.cs with MovingAverageType.Wilders
+Canonical implementation: this file.
+Validated against: PythonDataService/tests/test_indicator_parity.py
+
 Mirrors LEAN's Indicators/RelativeStrengthIndex.cs with
 ``MovingAverageType.Wilders``.
 

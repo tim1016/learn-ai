@@ -2,6 +2,7 @@
 id: F-0027
 severity: P1
 status: deferred
+remediation_progress: indicators-subtree-done-2026-05-06
 area: provenance
 canonical_file: cross-cutting (PythonDataService canonical math)
 reference: .claude/skills/learn-ai-validation/SKILL.md (Math Provenance Contract)
@@ -66,3 +67,32 @@ Suggest: **B for `app/engine/indicators/` + the 5 named canonical service files*
 ## Provenance of the finding itself
 
 Phase 4 / cursor: cross-stack grep over canonical-math directories with the contract's 4 field labels. Counts confirm near-universal absence.
+
+## Partial remediation (2026-05-06)
+
+**`PythonDataService/app/engine/indicators/` subtree — 4-field block added to all 6 canonical math files:**
+- `sma.py` — SMA(n) formula + LEAN reference
+- `ema.py` — recursion formula + smoothing constant
+- `rsi.py` — Wilders RS/RSI formula
+- `macd.py` — EMA difference + signal line + histogram
+- `adx.py` — DM/TR/DI/DX/ADX recursion (Wilder 1978)
+- `supertrend.py` — band formulas + direction flip
+
+The existing prose docstrings remain (kept as "reproducibility details" prose); the 4-field block is prepended.
+
+**Also applied as part of this round (per F-0010 + F-0011 closures):**
+- `Backend/Services/Implementation/PositionEngine.cs` — class XML doc block (FIFO accounting)
+- `Backend/Services/Implementation/SnapshotService.cs::ComputeMetrics` — method XML doc block (Sharpe / Sortino / Calmar / MaxDD)
+
+**Still owed (status remains `deferred` because the work continues):**
+- `app/services/{bs_greeks,quantlib_pricer,strategy_engine,fred_service,portfolio_scenario,sanitizer,...}.py` — 0 of ~20 done
+- `app/volatility/*.py` — 0 of 14 done
+- `app/research/options/iv_builder.py`, `contract_finder.py` — 0 of ~5 done
+- `app/research/signal/*.py` — 0 of 6 done (per F-0002 new section)
+- `app/research/validation/*.py` — 0 of 3 done (per F-0008 new section)
+- `app/engine/edge/*.py` — 0 of ~21 done (per F-0001 new section)
+- `app/engine/results/statistics.py` (the canonical for Sharpe + MaxDD per F-0006)
+- `app/engine/strategy/algorithms/*.py` — strategies (~10 files)
+
+Keeping `deferred` overall; remediation is mechanical-but-tedious and best done burn-down-on-touch per the registry's documented rule. The §6 hardening gate still requires this work to complete fully.
+

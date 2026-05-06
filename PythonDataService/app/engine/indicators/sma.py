@@ -1,5 +1,10 @@
 """SimpleMovingAverage — used internally to seed the EMA.
 
+Formula: SMA(n) = (1/n) · Σ x_{t-i}, i ∈ [0, n-1]
+Reference: references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/Indicators/SimpleMovingAverage.cs
+Canonical implementation: this file.
+Validated against: PythonDataService/tests/test_indicator_parity.py
+
 Mirrors LEAN's Indicators/SimpleMovingAverage.cs. The indicator becomes
 ``is_ready`` once ``period`` samples have been received, at which point
 ``current_value`` equals the arithmetic mean of the most recent ``period``
