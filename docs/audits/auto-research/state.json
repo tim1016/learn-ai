@@ -1,0 +1,14 @@
+{
+  "mode": "baseline-not-started",
+  "phase": null,
+  "phase_name": null,
+  "cursor": null,
+  "last_run": null,
+  "budget_used_seconds": 0,
+  "open_findings": [],
+  "closed_findings": [],
+  "runs": [],
+  "baseline_started_at": null,
+  "baseline_completed_at": null,
+  "schema_version": 1
+}

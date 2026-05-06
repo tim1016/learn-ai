@@ -1,6 +1,6 @@
 import {
   Component, inject, signal, computed, effect, untracked,
-  ChangeDetectionStrategy, OnInit, OnDestroy,
+  ChangeDetectionStrategy, OnDestroy,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DecimalPipe } from '@angular/common';
@@ -129,7 +129,7 @@ function formatPayoffExtremum(value: number | null): string {
   styleUrls: ['./strategy-builder.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class StrategyBuilderComponent implements OnInit, OnDestroy {
+export class StrategyBuilderComponent implements OnDestroy {
   private marketDataService = inject(MarketDataService);
 
   // ── Input & Loading ───────────────────────────────────────
@@ -915,15 +915,10 @@ export class StrategyBuilderComponent implements OnInit, OnDestroy {
     }, StrategyBuilderComponent.AUTO_ANALYZE_DEBOUNCE_MS);
   }
 
-  ngOnInit(): void {
-    document.documentElement.classList.add('app-dark');
-  }
-
   ngOnDestroy(): void {
     if (this.analyzeTimer !== undefined) {
       clearTimeout(this.analyzeTimer);
     }
-    document.documentElement.classList.remove('app-dark');
   }
 
   // ── Data Fetching ─────────────────────────────────────────
