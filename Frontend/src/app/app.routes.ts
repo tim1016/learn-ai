@@ -42,6 +42,44 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "options-lab",
+    loadComponent: () =>
+      import("./components/options-lab/options-lab.component").then(
+        (m) => m.OptionsLabComponent
+      ),
+    children: [
+      { path: "", redirectTo: "chain", pathMatch: "full" },
+      {
+        path: "chain",
+        loadComponent: () =>
+          import(
+            "./components/options-lab/chain/options-lab-chain.component"
+          ).then((m) => m.OptionsLabChainComponent),
+      },
+      {
+        path: "strategy-builder",
+        loadComponent: () =>
+          import(
+            "./components/strategy-builder/strategy-builder.component"
+          ).then((m) => m.StrategyBuilderComponent),
+      },
+      {
+        path: "strategy-finder",
+        loadComponent: () =>
+          import(
+            "./components/options-lab/strategy-finder-stub/strategy-finder-stub.component"
+          ).then((m) => m.StrategyFinderStubComponent),
+      },
+      {
+        path: "volatility",
+        loadComponent: () =>
+          import(
+            "./components/options-lab/volatility-stub/volatility-stub.component"
+          ).then((m) => m.VolatilityStubComponent),
+      },
+    ],
+  },
+  {
     path: "spec-strategy",
     loadComponent: () =>
       import(

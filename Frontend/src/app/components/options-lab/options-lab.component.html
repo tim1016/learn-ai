@@ -1,0 +1,40 @@
+<div class="ol-shell">
+  <header class="ol-header">
+    <div class="ol-header-row">
+      <h1 class="ol-title">Options Lab</h1>
+      <span class="ol-badge mono">SPY</span>
+    </div>
+    <nav class="ol-tabs" role="tablist" aria-label="Options Lab views">
+      <a
+        class="ol-tab"
+        routerLink="chain"
+        routerLinkActive="active"
+        role="tab"
+      >Chain</a>
+      <a
+        class="ol-tab"
+        routerLink="strategy-builder"
+        routerLinkActive="active"
+        role="tab"
+      >Strategy builder</a>
+      <a
+        class="ol-tab"
+        routerLink="strategy-finder"
+        routerLinkActive="active"
+        role="tab"
+      >
+        Strategy finder
+        <span class="ol-tab-badge mono">BETA</span>
+      </a>
+      <a
+        class="ol-tab"
+        routerLink="volatility"
+        routerLinkActive="active"
+        role="tab"
+      >Volatility</a>
+    </nav>
+  </header>
+  <main class="ol-content">
+    <router-outlet />
+  </main>
+</div>
