@@ -202,6 +202,42 @@ async def test_post_sample_count_above_cap_returns_422(client, parent_run_id):
     assert response.status_code == 422
 
 
+async def test_post_omitted_sample_count_defaults_per_method(client, parent_run_id):
+    """Regression: ``buy_and_hold`` defaults to 1 (not 30).
+
+    The flat default of 30 used to apply to every method. Buy-and-
+    hold is deterministic and parameter-free, so 30 reps just
+    duplicate work and inflate ``N`` in the small-sample p-value's
+    ``(1 + count) / (N + 1)`` denominator. ``random_ema_windows``
+    keeps its 30-default since 30 random pairs give a stable null
+    distribution.
+    """
+    bh_response = await client.post(
+        "/api/research/strategy-runs/baselines",
+        json={
+            "parent_run_id": parent_run_id,
+            "method": "buy_and_hold",
+            # sample_count omitted on purpose.
+        },
+    )
+    assert bh_response.status_code == 200, bh_response.text
+    bh_body = bh_response.json()
+    assert bh_body["config"]["sample_count"] == 1
+    assert len(bh_body["result"]["baselines"]) == 1
+
+    rema_response = await client.post(
+        "/api/research/strategy-runs/baselines",
+        json={
+            "parent_run_id": parent_run_id,
+            "method": "random_ema_windows",
+            # sample_count omitted on purpose.
+        },
+    )
+    assert rema_response.status_code == 200, rema_response.text
+    rema_body = rema_response.json()
+    assert rema_body["config"]["sample_count"] == 30
+
+
 async def test_post_zero_sample_count_returns_422(client, parent_run_id):
     response = await client.post(
         "/api/research/strategy-runs/baselines",
