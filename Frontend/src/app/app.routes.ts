@@ -139,45 +139,10 @@ export const routes: Routes = [
   },
   {
     path: "research-lab",
-    loadComponent: () =>
-      import("./components/research-lab/research-lab.component").then(
-        (m) => m.ResearchLabComponent
+    loadChildren: () =>
+      import("./components/research-lab/research-lab.routes").then(
+        (m) => m.researchLabRoutes
       ),
-  },
-  {
-    path: "research-lab/signal-report/:id",
-    loadComponent: () =>
-      import(
-        "./components/research-lab/signal-report-page/signal-report-page.component"
-      ).then((m) => m.SignalReportPageComponent),
-  },
-  {
-    path: "research-lab/strategy-runs/:run_id",
-    loadComponent: () =>
-      import(
-        "./components/research-lab/strategy-runs/run-detail-page/run-detail-page.component"
-      ).then((m) => m.RunDetailPageComponent),
-  },
-  {
-    path: "research-lab/walk-forward/:wf_id",
-    loadComponent: () =>
-      import(
-        "./components/research-lab/walk-forward/walk-forward-detail-page/walk-forward-detail-page.component"
-      ).then((m) => m.WalkForwardDetailPageComponent),
-  },
-  {
-    path: "research-lab/monte-carlo/:mc_id",
-    loadComponent: () =>
-      import(
-        "./components/research-lab/monte-carlo/monte-carlo-detail-page/monte-carlo-detail-page.component"
-      ).then((m) => m.MonteCarloDetailPageComponent),
-  },
-  {
-    path: "research-lab/baselines/:baseline_id",
-    loadComponent: () =>
-      import(
-        "./components/research-lab/baselines/baselines-detail-page/baselines-detail-page.component"
-      ).then((m) => m.BaselinesDetailPageComponent),
   },
   {
     path: "docs/indicator-reliability-methodology",
