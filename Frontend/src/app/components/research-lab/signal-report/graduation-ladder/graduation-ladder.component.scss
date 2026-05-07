@@ -334,3 +334,9 @@
     }
   }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .ladder-node[data-state="next"] .node-marker {
+    animation: none;
+  }
+}
