@@ -26,7 +26,7 @@
 
     @if (phases().length) {
       <div class="phase-rail" role="list" aria-label="Run phases">
-        @for (stop of phases(); track stop.label; let i = $index, let last = $last) {
+        @for (stop of phases(); track stop.label; let i = $index, last = $last) {
           @let reached = i < activeStopIndex();
           @let isCurrent = i === activeStopIndex();
           <div class="phase-stop"
