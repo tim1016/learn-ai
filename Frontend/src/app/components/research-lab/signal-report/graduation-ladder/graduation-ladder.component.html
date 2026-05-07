@@ -41,7 +41,7 @@
       </li>
       @if (!last) {
         <li class="ladder-connector" aria-hidden="true">
-          <span class="connector-line" [class.connector-passed]="nodes_[$index + 1].state !== 'future'"></span>
+          <span class="connector-line" [class.connector-passed]="nodes_[$index + 1].state === 'current' || nodes_[$index + 1].state === 'passed'"></span>
         </li>
       }
     }

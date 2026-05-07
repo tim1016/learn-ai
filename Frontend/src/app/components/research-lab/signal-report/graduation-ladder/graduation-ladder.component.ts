@@ -11,8 +11,8 @@ interface LadderNode {
   stage: 0 | 1 | 2 | 3;
   label: string;
   shortLabel: string;
-  /** "current" | "passed" | "future" — drives the visual treatment. */
-  state: 'current' | 'passed' | 'future';
+  /** "current" | "passed" | "next" | "future" — drives the visual treatment. */
+  state: 'current' | 'passed' | 'next' | 'future';
   /** Description shown in the tooltip when the node has focus / is hovered. */
   tooltip: string;
 }
@@ -52,6 +52,8 @@ export class GraduationLadderComponent {
         state = 'current';
       } else if (s < current) {
         state = 'passed';
+      } else if (s === current + 1) {
+        state = 'next';
       } else {
         state = 'future';
       }
@@ -79,7 +81,7 @@ export class GraduationLadderComponent {
    *  semantics (green / amber / red / na) so the page reads consistent with
    *  Engine Lab. */
   bandFor(node: LadderNode): 'green' | 'amber' | 'red' | 'na' {
-    if (node.state === 'future') return 'na';
+    if (node.state === 'future' || node.state === 'next') return 'na';
     if (node.stage === 0) return 'red';
     if (node.stage === 1) return 'amber';
     return 'green';
