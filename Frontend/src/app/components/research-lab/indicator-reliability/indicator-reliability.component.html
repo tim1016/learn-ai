@@ -1,33 +1,27 @@
 <div class="indicator-reliability">
-  <!-- Header -->
-  <div class="flex items-center justify-between mb-4">
-    <div>
-      <h3 class="text-xl font-semibold">Indicator Reliability Analysis</h3>
-      <p class="text-sm text-slate-400 mt-1">
-        Test if an indicator has predictive power using Information Coefficient (IC) with out-of-sample validation.
-      </p>
-    </div>
-    <div class="flex items-center gap-2">
+
+  <!-- Action bar — methodology link + secondary run controls -->
+  <div class="rl-action-bar">
+    <div class="rl-action-bar-spacer"></div>
+    <button
+      type="button"
+      class="methodology-btn"
+      (click)="methodologyDrawer.open('1-context-and-scope')"
+    >
+      <i class="pi pi-book" aria-hidden="true"></i>
+      Methodology
+    </button>
+    @if (result() && formCollapsed()) {
       <button
-        type="button"
-        class="methodology-btn"
-        (click)="methodologyDrawer.open('1-context-and-scope')"
+        pButton
+        label="New Analysis"
+        icon="pi pi-plus"
+        class="p-button-outlined p-button-sm"
+        (click)="newRun()"
       >
-        <i class="pi pi-book" aria-hidden="true"></i>
-        Methodology
+        <span class="sr-only">Start new analysis</span>
       </button>
-      @if (result() && formCollapsed()) {
-        <button
-          pButton
-          label="New Analysis"
-          icon="pi pi-plus"
-          class="p-button-outlined p-button-sm"
-          (click)="newRun()"
-        >
-          <span class="sr-only">Start new analysis</span>
-        </button>
-      }
-    </div>
+    }
   </div>
 
   <!-- Controls Panel -->
@@ -211,6 +205,41 @@
   @if (result() && result()!.success && !loading()) {
     @let res = result()!;
     @let best = getBestRow();
+
+    <!-- Run strip — compact "what produced this?" metadata -->
+    <div class="rl-runstrip">
+      <div class="rl-runstrip-field">
+        <span class="rl-runstrip-label">Indicator</span>
+        <span class="rl-runstrip-value">{{ res.display_name }}</span>
+      </div>
+      <div class="rl-runstrip-field">
+        <span class="rl-runstrip-label">Ticker</span>
+        <span class="rl-runstrip-value mono">{{ res.ticker }}</span>
+      </div>
+      <div class="rl-runstrip-field">
+        <span class="rl-runstrip-label">Period</span>
+        <span class="rl-runstrip-value">{{ res.start_date }} → {{ res.end_date }}</span>
+      </div>
+      <div class="rl-runstrip-field">
+        <span class="rl-runstrip-label">Bars</span>
+        <span class="rl-runstrip-value">{{ res.bar_count | number }}</span>
+      </div>
+      <div class="rl-runstrip-field">
+        <span class="rl-runstrip-label">Horizons</span>
+        <span class="rl-runstrip-value">{{ res.results.length }}-bar sweep</span>
+      </div>
+      <div class="rl-runstrip-spacer"></div>
+      <div class="rl-runstrip-status">
+        <span class="rl-runstrip-dot" style="background: var(--bull); box-shadow: 0 0 0 3px rgba(38,166,154,.15)"></span>
+        <span>Complete</span>
+      </div>
+      <div class="rl-runstrip-actions">
+        <button type="button" class="methodology-btn" style="font-size: 0.72rem; padding: 4px 10px" (click)="toggleForm()">
+          <i class="pi pi-pencil" aria-hidden="true"></i>
+          Modify
+        </button>
+      </div>
+    </div>
 
     <!-- Verdict hero — decide-for-me summary up top -->
     @if (verdictAnalysis(); as va) {

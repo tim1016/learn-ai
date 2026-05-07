@@ -937,8 +937,8 @@ export class IndicatorReliabilityComponent {
           {
             label: 'Daily IC (In-Sample)',
             data: res.daily_ic_values,
-            borderColor: '#93c5fd',
-            backgroundColor: 'rgba(147, 197, 253, 0.15)',
+            borderColor: 'rgba(41, 98, 255, 0.9)',
+            backgroundColor: 'rgba(41, 98, 255, 0.08)',
             fill: true,
             tension: 0.3,
             pointRadius: 1,
@@ -948,7 +948,7 @@ export class IndicatorReliabilityComponent {
           {
             label: `${this.ROLLING_IC_WINDOW}-day Rolling Mean`,
             data: rolling,
-            borderColor: '#1d4ed8',
+            borderColor: '#5c87ff',
             backgroundColor: 'transparent',
             fill: false,
             tension: 0.25,
@@ -959,7 +959,7 @@ export class IndicatorReliabilityComponent {
           {
             label: `Mean IC (${meanIc.toFixed(4)})`,
             data: meanLine,
-            borderColor: '#f97316',
+            borderColor: '#ff9800',
             borderDash: [6, 4],
             pointRadius: 0,
             borderWidth: 2,
@@ -967,7 +967,7 @@ export class IndicatorReliabilityComponent {
           {
             label: 'Zero',
             data: zeroLine,
-            borderColor: '#cbd5e1',
+            borderColor: 'rgba(107, 111, 122, 0.4)',
             borderDash: [3, 3],
             pointRadius: 0,
             borderWidth: 1,
@@ -982,21 +982,21 @@ export class IndicatorReliabilityComponent {
             display: true,
             text: `Daily IC Time Series — In-Sample Period (${res.train_start} to ${res.train_end})`,
             font: { size: 15, weight: 'bold' },
-            color: '#1e293b',
+            color: '#b2b5be',
             padding: { bottom: 16 },
           },
           legend: {
             position: 'bottom',
             labels: {
               font: { size: 12 },
-              color: '#475569',
+              color: '#9598a1',
               padding: 16,
               usePointStyle: true,
               filter: item => item.text !== 'Zero',
             },
           },
           tooltip: {
-            backgroundColor: '#1e293b',
+            backgroundColor: '#131722',
             titleFont: { size: 13 },
             bodyFont: { size: 12 },
             padding: 10,
@@ -1015,21 +1015,21 @@ export class IndicatorReliabilityComponent {
               display: true,
               text: 'IC (Spearman ρ)',
               font: { size: 13, weight: 'bold' },
-              color: '#475569',
+              color: '#9598a1',
             },
             ticks: { font: { size: 12 }, color: '#64748b' },
-            grid: { color: '#f1f5f9' },
+            grid: { color: 'rgba(30, 34, 45, 0.8)' },
           },
           x: {
             title: {
               display: true,
               text: 'Date',
               font: { size: 13, weight: 'bold' },
-              color: '#475569',
+              color: '#9598a1',
             },
             ticks: {
               font: { size: 11 },
-              color: '#64748b',
+              color: '#6b6f7a',
               maxRotation: 45,
               maxTicksLimit: 12,
             },
@@ -1065,8 +1065,8 @@ export class IndicatorReliabilityComponent {
           {
             label: 'Upper 95% CI',
             data: upper,
-            borderColor: 'rgba(59, 130, 246, 0.25)',
-            backgroundColor: 'rgba(59, 130, 246, 0.12)',
+            borderColor: 'rgba(41, 98, 255, 0.2)',
+            backgroundColor: 'rgba(41, 98, 255, 0.08)',
             borderWidth: 1,
             pointRadius: 0,
             fill: '+1', // fill to next dataset (lower bound)
@@ -1075,8 +1075,8 @@ export class IndicatorReliabilityComponent {
           {
             label: 'Lower 95% CI',
             data: lower,
-            borderColor: 'rgba(59, 130, 246, 0.25)',
-            backgroundColor: 'rgba(59, 130, 246, 0.12)',
+            borderColor: 'rgba(41, 98, 255, 0.2)',
+            backgroundColor: 'rgba(41, 98, 255, 0.08)',
             borderWidth: 1,
             pointRadius: 0,
             fill: false,
@@ -1085,7 +1085,7 @@ export class IndicatorReliabilityComponent {
           {
             label: 'IC',
             data: ics,
-            borderColor: '#1d4ed8',
+            borderColor: '#2962ff',
             backgroundColor: 'transparent',
             borderWidth: 2.5,
             tension: 0.2,
@@ -1098,7 +1098,7 @@ export class IndicatorReliabilityComponent {
           {
             label: 'Zero',
             data: zero,
-            borderColor: '#cbd5e1',
+            borderColor: 'rgba(107, 111, 122, 0.4)',
             borderDash: [3, 3],
             pointRadius: 0,
             borderWidth: 1,
@@ -1113,14 +1113,14 @@ export class IndicatorReliabilityComponent {
             display: true,
             text: `IC Decay Curve — Peak at ${peak.horizon}-bar (IC = ${peak.ic.toFixed(4)})`,
             font: { size: 15, weight: 'bold' },
-            color: '#1e293b',
+            color: '#b2b5be',
             padding: { bottom: 16 },
           },
           legend: {
             position: 'bottom',
             labels: {
               font: { size: 12 },
-              color: '#475569',
+              color: '#9598a1',
               padding: 16,
               usePointStyle: true,
               filter: item =>
@@ -1130,7 +1130,7 @@ export class IndicatorReliabilityComponent {
             },
           },
           tooltip: {
-            backgroundColor: '#1e293b',
+            backgroundColor: '#131722',
             callbacks: {
               label: ctx => {
                 if (ctx.dataset.label === 'Zero') return '';
@@ -1145,17 +1145,17 @@ export class IndicatorReliabilityComponent {
               display: true,
               text: 'IC (Spearman ρ)',
               font: { size: 13, weight: 'bold' },
-              color: '#475569',
+              color: '#9598a1',
             },
             ticks: { font: { size: 12 }, color: '#64748b' },
-            grid: { color: '#f1f5f9' },
+            grid: { color: 'rgba(30, 34, 45, 0.8)' },
           },
           x: {
             title: {
               display: true,
               text: 'Forward horizon (bars)',
               font: { size: 13, weight: 'bold' },
-              color: '#475569',
+              color: '#9598a1',
             },
             ticks: { font: { size: 11 }, color: '#64748b' },
             grid: { display: false },
@@ -1195,10 +1195,10 @@ export class IndicatorReliabilityComponent {
 
     // Highlight the bin that contains the actual IC.
     const bgColors = bins.map((_, i) =>
-      i === actualBinIdx ? 'rgba(234, 88, 12, 0.85)' : 'rgba(100, 116, 139, 0.5)',
+      i === actualBinIdx ? 'rgba(255, 152, 0, 0.85)' : 'rgba(107, 111, 122, 0.4)',
     );
     const borderColors = bins.map((_, i) =>
-      i === actualBinIdx ? '#ea580c' : '#64748b',
+      i === actualBinIdx ? '#ff9800' : '#6b6f7a',
     );
 
     this.baselineHistChart = new Chart(canvas, {
@@ -1223,12 +1223,12 @@ export class IndicatorReliabilityComponent {
             display: true,
             text: `Random-shuffle IC distribution — actual IC = ${actualIc.toFixed(4)} (orange bin)`,
             font: { size: 14, weight: 'bold' },
-            color: '#1e293b',
+            color: '#b2b5be',
             padding: { bottom: 12 },
           },
           legend: { display: false },
           tooltip: {
-            backgroundColor: '#1e293b',
+            backgroundColor: '#131722',
             callbacks: {
               label: ctx =>
                 `Bin center ${binCenters[ctx.dataIndex].toFixed(4)}: ${ctx.raw} sims`,
@@ -1239,7 +1239,7 @@ export class IndicatorReliabilityComponent {
           y: {
             title: { display: true, text: 'Count', color: '#475569' },
             ticks: { precision: 0, color: '#64748b' },
-            grid: { color: '#f1f5f9' },
+            grid: { color: 'rgba(30, 34, 45, 0.8)' },
           },
           x: {
             title: { display: true, text: 'IC bin', color: '#475569' },

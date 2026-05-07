@@ -1,7 +1,7 @@
 <div class="mt-4">
   <div class="flex items-end gap-3 mb-4">
     <div class="flex flex-col gap-2">
-      <label for="historyTicker" class="font-semibold text-sm text-gray-700">Ticker</label>
+      <label for="historyTicker" class="font-semibold text-sm">Ticker</label>
       <input
         pInputText
         id="historyTicker"
@@ -89,7 +89,7 @@
       </ng-template>
       <ng-template #body let-exp>
         <tr>
-          <td class="font-semibold text-gray-800">{{ exp.featureName }}</td>
+          <td class="font-semibold">{{ exp.featureName }}</td>
           <td [class]="icSeverityClass(exp.meanIC)">{{ exp.meanIC | number: '1.4-4' }}</td>
           <td [class]="tStatSeverityClass(exp.icTStat)">{{ exp.icTStat | number: '1.2-2' }}</td>
           <td [class]="adfSeverityClass(exp.adfPValue)">{{ exp.adfPValue | number: '1.4-4' }}</td>
@@ -105,20 +105,20 @@
               [value]="validationLabel(exp.passedValidation)"
             />
           </td>
-          <td class="text-sm text-gray-600">{{ exp.startDate }} — {{ exp.endDate }}</td>
-          <td class="text-sm text-gray-600">{{ exp.createdAt | date: 'short' }}</td>
+          <td class="text-sm">{{ exp.startDate }} — {{ exp.endDate }}</td>
+          <td class="text-sm">{{ exp.createdAt | date: 'short' }}</td>
         </tr>
       </ng-template>
       <ng-template #emptymessage>
         <tr>
-          <td [attr.colspan]="8" class="text-center text-gray-400 py-4">
+          <td [attr.colspan]="8" class="text-center py-4">
             No experiments found for this ticker.
           </td>
         </tr>
       </ng-template>
     </p-table>
   } @else if (!loading()) {
-    <p class="text-gray-500">Enter a ticker and click "Load History" to view past experiments.</p>
+    <p>Enter a ticker and click "Load History" to view past experiments.</p>
   }
 
   <!-- Help Dialog -->
