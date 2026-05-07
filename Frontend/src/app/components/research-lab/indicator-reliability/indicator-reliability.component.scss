@@ -445,46 +445,99 @@
     cursor: pointer;
   }
 
-  // ── Horizon compact cards ────────────────────────────────────────
-  .horizon-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  // ── Horizon dense table ──────────────────────────────────────────
+  .horizon-table-wrap {
     border-top: 1px solid var(--border);
+    overflow-x: auto;
   }
-  .horizon-card {
-    padding: 10px 12px;
-    border-right: 1px solid var(--border);
-    border-bottom: 2px solid transparent;
 
-    &:last-child { border-right: 0; }
-    &.is-best {
-      background: rgba(59, 130, 246, 0.08);
-      border-bottom-color: var(--accent);
-    }
+  .horizon-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+    font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
 
-    .horizon-card-head {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 4px;
-    }
-    .horizon-card-best-tag {
-      font-size: 0.58rem;
-      background: var(--warn);
-      color: #000;
-      padding: 1px 5px;
-      border-radius: 3px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-    }
-    .horizon-card-ic {
-      font-size: 1rem;
+    thead tr { border-bottom: 1px solid var(--border); }
+
+    th {
+      padding: 7px 10px;
+      text-align: right;
+      font-size: 0.62rem;
+      color: var(--text-muted);
       font-weight: 600;
-      letter-spacing: -0.01em;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+
+      &:first-child { text-align: left; }
     }
-    .horizon-card-stats {
-      margin-top: 1px;
+
+    .num-col { text-align: right; }
+  }
+
+  .ht-row {
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    border-left: 2px solid transparent;
+    transition: background 0.1s;
+
+    &:last-child { border-bottom: 0; }
+    &:hover { background: var(--bg-hover); }
+
+    &--selected {
+      background: rgba(59, 130, 246, 0.07);
+      border-left-color: var(--accent);
     }
+  }
+
+  .ht-cell {
+    padding: 8px 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    vertical-align: middle;
+    white-space: nowrap;
+
+    &.num-col { text-align: right; }
+
+    &--horizon {
+      text-align: left;
+      font-weight: 500;
+    }
+  }
+
+  .ht-horizon-label { margin-right: 5px; }
+
+  .ht-muted { color: var(--text-muted) !important; }
+  .ht-bold  { font-weight: 600; }
+
+  .ht-best-tag {
+    font-size: 0.55rem;
+    background: var(--warn);
+    color: #000;
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+
+  .ht-strength {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+  }
+
+  .ht-footer {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    padding: 7px 12px;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+
+    .ht-bull { color: var(--bull); }
   }
 
   // ── Regime panel ─────────────────────────────────────────────────

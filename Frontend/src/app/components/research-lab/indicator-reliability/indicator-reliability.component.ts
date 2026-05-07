@@ -260,6 +260,7 @@ export class IndicatorReliabilityComponent {
   result = signal<IndicatorReliabilityResponse | null>(null);
   error = signal<string | null>(null);
   formCollapsed = signal(false);
+  selectedHorizon = signal<number | null>(null);
 
   /**
    * Slim projection of the current result into the shape the shared
@@ -485,6 +486,7 @@ export class IndicatorReliabilityComponent {
             this.error.set(res.error);
           } else if (res.success) {
             this.formCollapsed.set(true);
+            this.selectedHorizon.set(res.best_horizon);
           }
         }
       });
@@ -826,9 +828,13 @@ export class IndicatorReliabilityComponent {
     return this.getHorizonRows().filter(r => r.fdr_p < 0.05).length;
   }
 
-  /** Horizon compact cards — used in the content grid. Preserves input order. */
+  /** Horizon compact cards / table rows — used in the content grid. Preserves input order. */
   getHorizonCards(): HorizonICResult[] {
     return this.getHorizonRows();
+  }
+
+  selectHorizon(h: number): void {
+    this.selectedHorizon.set(h);
   }
 
   /** Prompt + re-run with a new ticker (only wired CTA). */
