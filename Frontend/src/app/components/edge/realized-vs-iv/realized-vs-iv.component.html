@@ -1,11 +1,6 @@
 <section class="route">
-  <!-- Route toolbar -->
+  <!-- Route action bar — score + simulator (breadcrumb now in shell sub-nav) -->
   <header class="route-toolbar">
-    <div class="crumbs">
-      <a [routerLink]="['/edge']" class="crumb-link">/edge</a>
-      <span class="crumb-sep">›</span>
-      <span class="crumb-cur">/realized-vs-iv</span>
-    </div>
     <div class="toolbar-spacer"></div>
     <button class="score-pill" type="button" (click)="scoreOpen.set(true)">
       <span class="score-dot" [style.background]="currentScoreColor()"></span>

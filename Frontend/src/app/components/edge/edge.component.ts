@@ -4,6 +4,7 @@ import {
   NavigationEnd,
   Router,
   RouterLink,
+  RouterLinkActive,
   RouterOutlet,
 } from "@angular/router";
 import { filter, map, startWith } from "rxjs";
@@ -33,9 +34,8 @@ interface CapabilityRow {
 
 @Component({
   selector: "app-edge",
-  standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterOutlet, EdgeMiniLineComponent, PageHeaderComponent],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet, EdgeMiniLineComponent, PageHeaderComponent],
   templateUrl: "./edge.component.html",
   styleUrls: ["./edge.component.scss"],
 })
