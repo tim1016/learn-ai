@@ -31,6 +31,7 @@ import type {
   RunLedger,
   StrategyRunResponse,
 } from '../../../../services/strategy-runs.types';
+import { MonteCarloSectionComponent } from './monte-carlo-section/monte-carlo-section.component';
 import { WalkForwardSectionComponent } from './walk-forward-section/walk-forward-section.component';
 
 const CHART_THEME = {
@@ -77,6 +78,7 @@ const DRAWDOWN_COLOR = '#f87171';
     DecimalPipe,
     PercentPipe,
     WalkForwardSectionComponent,
+    MonteCarloSectionComponent,
   ],
   templateUrl: './run-detail-page.component.html',
   styleUrls: ['./run-detail-page.component.scss'],
