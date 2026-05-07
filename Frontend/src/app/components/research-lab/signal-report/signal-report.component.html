@@ -457,7 +457,7 @@
         }
 
         <!-- OOS Equity Curve -->
-        @if (wf.combinedOosDates.length > 0) {
+        @if (wf.combinedOosDates?.length) {
           <div class="chart-container mb-4">
             <canvas #oosEquityCurve></canvas>
           </div>
