@@ -82,6 +82,19 @@
     </div>
   }
 
+  <!-- Templates bar — flat pill row above the chain (UX-Q4) -->
+  <div class="templates-bar" role="group" aria-label="Strategy templates">
+    <span class="templates-label">Templates</span>
+    @for (t of flatTemplates; track t.value) {
+      <button
+        type="button"
+        class="tpl-pill"
+        [class.active]="strategyType() === t.value"
+        (click)="strategyType.set(t.value); onStrategyTypeChanged()"
+      >{{ t.label }}</button>
+    }
+  </div>
+
   <!-- Expiration Ribbon -->
   @if (availableExpirations().length > 0) {
     <div class="mb-3 bg-slate-800 rounded-lg px-3 py-2">
@@ -94,9 +107,9 @@
     </div>
   }
 
-  <!-- Main Layout: Chain (full width) -->
+  <!-- Main Layout: two-column 60/40 (UX-Q4) -->
   <div class="main-layout">
-    <!-- Chain Panel (Full Width) -->
+    <!-- Left: chain (60%) -->
     <div class="chain-panel">
       @if (chainLoading()) {
         <div class="space-y-2 p-3">
@@ -317,44 +330,9 @@
       }
     </div>
 
-  </div>
-
-  <!-- Inline Strategy Builder (replaces the right-slide drawer). -->
-  <!-- Hidden until a chain is loaded; the page header subtitle and -->
-  <!-- the chain-panel "no contracts" message cover the empty state. -->
-  @if (allContracts().length > 0) {
-    <section class="strategy-builder-inline mt-4 bg-slate-800 rounded-lg p-4">
-      <h2 class="sb-section-title">
-        <i class="pi pi-sliders-h text-indigo-400"></i>
-        Strategy Builder
-      </h2>
-
-      <!-- Preset picker (cards) -->
-      <div class="panel-section">
-        <label class="section-label">Pick a starting point</label>
-        <div class="preset-grid">
-          <button
-            type="button"
-            class="preset-card preset-custom"
-            [class.active]="strategyType() === customPreset.value"
-            (click)="strategyType.set(customPreset.value); onStrategyTypeChanged()"
-          >{{ customPreset.label }}</button>
-          @for (group of presetGroups; track group.label) {
-            <div class="preset-group-divider">
-              <span>{{ group.label }}</span>
-            </div>
-            @for (item of group.items; track item.value) {
-              <button
-                type="button"
-                class="preset-card"
-                [class.active]="strategyType() === item.value"
-                (click)="strategyType.set(item.value); onStrategyTypeChanged()"
-              >{{ item.label }}</button>
-            }
-          }
-        </div>
-      </div>
-
+    <!-- Right: build + payoff (40%) — UX-Q4 two-column layout -->
+    @if (allContracts().length > 0) {
+      <div class="right-panel">
       <!-- Legs -->
       <div class="panel-section">
         <div class="flex items-center justify-between mb-2">
@@ -568,8 +546,9 @@
           </div>
         </div>
       }
-    </section>
-  }
+      </div>
+    }
+  </div>
 </div>
 
 <!--
