@@ -1,106 +1,61 @@
-import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
-import { CommonModule } from '@angular/common';
-import { FeatureRunnerComponent } from './feature-runner/feature-runner.component';
-import { InfoPanelComponent } from './info-panel/info-panel.component';
-import { ExperimentHistoryComponent } from './experiment-history/experiment-history.component';
-import { SignalRunnerComponent } from './signal-runner/signal-runner.component';
-import { SignalInfoPanelComponent } from './signal-info-panel/signal-info-panel.component';
-import { SignalHistoryComponent } from './signal-history/signal-history.component';
-import { BatchRunnerComponent } from './batch-runner/batch-runner.component';
-import { DataDivergenceComponent } from './data-divergence/data-divergence.component';
-import { StrategyPreflightComponent } from './strategy-preflight/strategy-preflight.component';
-import { IndicatorReliabilityComponent } from './indicator-reliability/indicator-reliability.component';
-import { StrategyRunsComponent } from './strategy-runs/strategy-runs.component';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  inject,
+} from '@angular/core';
+import {
+  ActivatedRoute,
+  NavigationEnd,
+  Router,
+  RouterLink,
+  RouterLinkActive,
+  RouterOutlet,
+} from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { filter, map, startWith } from 'rxjs/operators';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
-
-type TabId =
-  | 'feature-runner'
-  | 'indicator-reliability'
-  | 'signal-engine'
-  | 'cross-sectional'
-  | 'data-divergence'
-  | 'strategy-preflight'
-  | 'strategy-runs'
-  | 'experiment-history'
-  | 'options-math'
-  | 'signal-docs'
-  | 'signal-history'
-  | 'documentation';
-
-interface SubNavItem {
-  id: TabId;
-  label: string;
-}
-
-interface SubNavGroup {
-  label: string;
-  items: SubNavItem[];
-}
+import { RESEARCH_LAB_NAV } from './research-lab-nav.config';
 
 @Component({
   selector: 'app-research-lab',
   imports: [
-    CommonModule,
-    FeatureRunnerComponent,
+    RouterLink,
+    RouterLinkActive,
+    RouterOutlet,
     PageHeaderComponent,
-    InfoPanelComponent,
-    ExperimentHistoryComponent,
-    SignalRunnerComponent,
-    SignalInfoPanelComponent,
-    SignalHistoryComponent,
-    BatchRunnerComponent,
-    DataDivergenceComponent,
-    StrategyPreflightComponent,
-    IndicatorReliabilityComponent,
-    StrategyRunsComponent,
   ],
   templateUrl: './research-lab.component.html',
   styleUrls: ['./research-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ResearchLabComponent {
-  /**
-   * Visual grouping of the 11 sub-pages into three meta-sections.
-   * Matches the SubNav pattern from the Claude Design bundle
-   * (quant-trading-lab-design-system/project/research_lab_redesign/shared/header.jsx).
-   */
-  readonly groups: SubNavGroup[] = [
-    {
-      label: 'Validate',
-      items: [
-        { id: 'feature-runner', label: 'Feature Runner' },
-        { id: 'indicator-reliability', label: 'Indicator Reliability' },
-        { id: 'signal-engine', label: 'Signal Engine' },
-      ],
-    },
-    {
-      label: 'Inspect',
-      items: [
-        { id: 'cross-sectional', label: 'Cross-Sectional' },
-        { id: 'data-divergence', label: 'Data Divergence' },
-        { id: 'strategy-preflight', label: 'Pre-flight Check' },
-        { id: 'strategy-runs', label: 'Strategy Runs' },
-      ],
-    },
-    {
-      label: 'Reference',
-      items: [
-        { id: 'experiment-history', label: 'Experiments' },
-        { id: 'options-math', label: 'Options Math' },
-        { id: 'signal-docs', label: 'Signal Docs' },
-        { id: 'signal-history', label: 'Signal History' },
-        { id: 'documentation', label: 'Feature Docs' },
-      ],
-    },
-  ];
+  readonly groups = RESEARCH_LAB_NAV;
 
-  /**
-   * Indicator Reliability is the showcase page — lands here by default to
-   * match the design-bundle intent. Users can switch with the sub-nav.
-   */
-  readonly active = signal<TabId>('indicator-reliability');
+  private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
 
-  setActive(id: TabId): void {
-    this.active.set(id);
+  /** Snapshot of the deepest active route's `data`, refreshed on every
+   *  successful navigation. Page header pulls title + subtitle from here. */
+  private readonly activeData = toSignal(
+    this.router.events.pipe(
+      filter((e): e is NavigationEnd => e instanceof NavigationEnd),
+      startWith(null),
+      map(() => this.deepestData()),
+    ),
+    { initialValue: this.deepestData() },
+  );
+
+  readonly title = computed<string>(
+    () => (this.activeData()?.['title'] as string | undefined) ?? 'Research Lab',
+  );
+  readonly subtitle = computed<string>(
+    () => (this.activeData()?.['subtitle'] as string | undefined) ?? '',
+  );
+
+  private deepestData(): Record<string, unknown> {
+    let r: ActivatedRoute | null = this.route;
+    while (r?.firstChild) r = r.firstChild;
+    return r?.snapshot?.data ?? {};
   }
 }
