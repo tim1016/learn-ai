@@ -15,6 +15,7 @@ from app.broker.ibkr.client import (
 from app.config import settings
 from app.routers import (
     aggregates,
+    baselines,
     broker,
     chart,
     data_quality,
@@ -131,6 +132,13 @@ app.include_router(
     monte_carlo.router,
     prefix="/api/research/strategy-runs/monte-carlo",
     tags=["research-monte-carlo"],
+)
+# Research-pipeline null baselines (Phase E1). Same pre-research_runs
+# placement so the literal ``/baselines`` segment wins.
+app.include_router(
+    baselines.router,
+    prefix="/api/research/strategy-runs/baselines",
+    tags=["research-baselines"],
 )
 # Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
 app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
