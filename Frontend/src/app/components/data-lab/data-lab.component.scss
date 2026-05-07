@@ -1530,8 +1530,6 @@
   // Keep content padding consistent by zeroing any extra margins.
   margin-top: 0;
 
-  > summary { display: none; } // summary handled by .dl-advanced-summary
-
   > .options-row {
     margin-top: 0.5rem;
   }
