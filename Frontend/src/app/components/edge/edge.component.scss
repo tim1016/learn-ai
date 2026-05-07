@@ -51,13 +51,41 @@
   }
   &.active {
     color: $text-primary;
-    border-bottom-color: $accent;
+    border-bottom-color: var(--tab-accent, #{$accent});
     font-weight: $fw-semi;
   }
 }
 
 .edge-subnav-spacer { flex: 1; }
 .edge-subnav-tz { font-size: $fs-xs; font-family: $font-mono; color: $text-muted; }
+
+.edge-subnav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  background: transparent;
+  border: 1px solid $border-light;
+  border-radius: $radius;
+  color: $text-secondary;
+  font-size: $fs-xs;
+  cursor: pointer;
+  margin-left: 6px;
+  transition: border-color $t-ui, color $t-ui;
+
+  i { font-size: 10px; }
+
+  &:hover {
+    border-color: $border;
+    color: $text-primary;
+  }
+
+  &:focus-visible {
+    outline: 2px solid $accent;
+    outline-offset: 2px;
+  }
+}
 
 // ── Root landing section ──────────────────────────────────────────────────
 .edge-root {
