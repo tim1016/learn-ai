@@ -1042,3 +1042,15 @@
 // ─── Sign-coloured value utilities ──────────────────────
 .val-bull { color: $bull; }
 .val-bear { color: $bear; }
+
+// ─── Inline section annotation (after section headings) ──
+.title-annotation {
+  margin-left: 0.5rem;
+  font-size: 0.75rem;
+  color: $text-muted;
+  font-weight: 400;
+}
+
+.title-annotation--sm {
+  font-size: 0.875rem;
+}
