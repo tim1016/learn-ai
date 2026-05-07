@@ -41,7 +41,7 @@ import {
   RunLogBuffer,
 } from '../../../utils/run-log-buffer';
 import { SignalReportComponent } from '../signal-report/signal-report.component';
-import { RunProgressPanelComponent } from '../shared/run-progress-panel/run-progress-panel.component';
+import { RunProgressPanelComponent, PhaseRailStop } from '../shared/run-progress-panel/run-progress-panel.component';
 import { Select } from 'primeng/select';
 import { InputText } from 'primeng/inputtext';
 import { ButtonModule } from 'primeng/button';
@@ -103,6 +103,13 @@ interface SignalEngineJobResultRaw {
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class SignalRunnerComponent {
+  protected readonly signalEngineRail: readonly PhaseRailStop[] = [
+    { label: 'Fetch',        ids: ['loading_bars'] },
+    { label: 'Walk-forward', ids: ['compute_feature', 'diagnostics', 'regime_coverage', 'backtest_grid', 'walk_forward'] },
+    { label: 'Stability',    ids: ['effective_sample'] },
+    { label: 'Graduation',   ids: ['graduation'] },
+  ];
+
   private jobsService = inject(JobsService);
   private destroyRef = inject(DestroyRef);
 
