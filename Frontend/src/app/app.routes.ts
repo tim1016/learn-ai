@@ -166,6 +166,13 @@ export const routes: Routes = [
       ).then((m) => m.WalkForwardDetailPageComponent),
   },
   {
+    path: "research-lab/monte-carlo/:mc_id",
+    loadComponent: () =>
+      import(
+        "./components/research-lab/monte-carlo/monte-carlo-detail-page/monte-carlo-detail-page.component"
+      ).then((m) => m.MonteCarloDetailPageComponent),
+  },
+  {
     path: "docs/indicator-reliability-methodology",
     loadComponent: () =>
       import("./components/docs/methodology-page.component").then(
