@@ -914,6 +914,7 @@
       <div class="catalog-search" role="search">
         <i class="pi pi-search catalog-search-icon" aria-hidden="true"></i>
         <input
+          #catalogSearchInput
           type="search"
           class="catalog-search-input"
           placeholder="Search (rsi, bollinger, volume…)"
@@ -1003,6 +1004,12 @@
                   }
                 </select>
               </label>
+              <button class="entries-add" type="button"
+                      (click)="focusCatalogSearch()"
+                      aria-label="Add an indicator — focus catalog search">
+                <i class="pi pi-plus" aria-hidden="true"></i>
+                Add indicator
+              </button>
             </div>
           </div>
           <div class="entries-grid">

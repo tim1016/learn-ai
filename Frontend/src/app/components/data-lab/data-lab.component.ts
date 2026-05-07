@@ -1,5 +1,5 @@
 import {
-  Component, signal, computed, effect, inject, untracked, viewChild,
+  Component, signal, computed, effect, inject, untracked, viewChild, ElementRef,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -335,6 +335,8 @@ export class DataLabComponent {
 
   /** Reference to the chart child so we can call loadCachedData(). */
   chartComponent = viewChild<DataLabChartComponent>('chartComponent');
+
+  readonly catalogSearchInput = viewChild<ElementRef<HTMLInputElement>>('catalogSearchInput');
 
   /** Whether the chart has been requested at least once. The chart is
    *  hidden via @if until the user clicks Fetch — initial page load
@@ -1280,6 +1282,10 @@ export class DataLabComponent {
     } finally {
       this.loadingIndicators.set(false);
     }
+  }
+
+  focusCatalogSearch(): void {
+    this.catalogSearchInput()?.nativeElement.focus();
   }
 
   toggleCategory(catName: string): void {
