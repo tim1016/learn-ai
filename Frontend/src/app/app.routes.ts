@@ -159,6 +159,13 @@ export const routes: Routes = [
       ).then((m) => m.RunDetailPageComponent),
   },
   {
+    path: "research-lab/walk-forward/:wf_id",
+    loadComponent: () =>
+      import(
+        "./components/research-lab/walk-forward/walk-forward-detail-page/walk-forward-detail-page.component"
+      ).then((m) => m.WalkForwardDetailPageComponent),
+  },
+  {
     path: "docs/indicator-reliability-methodology",
     loadComponent: () =>
       import("./components/docs/methodology-page.component").then(

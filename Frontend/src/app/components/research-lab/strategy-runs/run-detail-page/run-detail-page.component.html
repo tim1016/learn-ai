@@ -205,6 +205,13 @@
       </p-table>
     </section>
 
+    <!-- Walk-forward (Phase C frontend) -->
+    @if (data.ledger.status === 'completed') {
+      <section class="rd-section">
+        <app-walk-forward-section [run]="data.ledger" />
+      </section>
+    }
+
     <!-- Provenance -->
     <section class="rd-section">
       <h2>Provenance</h2>

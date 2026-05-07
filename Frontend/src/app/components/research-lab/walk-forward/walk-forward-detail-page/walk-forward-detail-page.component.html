@@ -1,0 +1,186 @@
+<div class="wf-detail">
+  <header class="wfd-header">
+    <a routerLink="/research-lab" class="wfd-back">← Research Lab</a>
+    @if (walkForward(); as data) {
+      <div class="wfd-title">
+        <h1>Walk-forward</h1>
+        <p-tag
+          [value]="data.result.status"
+          [severity]="statusSeverity(data.result.status)"
+        />
+      </div>
+      <div class="wfd-meta">
+        <span><strong>Symbol:</strong> {{ data.config.symbol }}</span>
+        <span><strong>Resolution:</strong> {{ data.config.resolution_minutes }}m</span>
+        <span>
+          <strong>Window:</strong>
+          {{ data.config.start_ms | date: 'yyyy-MM-dd' }} →
+          {{ data.config.end_ms | date: 'yyyy-MM-dd' }}
+        </span>
+        <span><strong>Split:</strong> {{ splitSummary(data.config.split_policy) }}</span>
+        <span><strong>WF ID:</strong> <code>{{ data.config.walk_forward_id }}</code></span>
+      </div>
+      @if (data.config.parent_run_id; as parentId) {
+        <div class="wfd-parent">
+          <strong>Parent run:</strong>
+          <a [routerLink]="['/research-lab/strategy-runs', parentId]">
+            <code>{{ shortHash(parentId, 16) }}…</code>
+          </a>
+        </div>
+      }
+    } @else if (wfId(); as id) {
+      <h1>Walk-forward <code>{{ id }}</code></h1>
+    }
+  </header>
+
+  @if (loading()) {
+    <p class="wfd-loading">Loading walk-forward…</p>
+  }
+
+  @if (error(); as msg) {
+    <p-message severity="error" [text]="msg" class="wfd-error" />
+  }
+
+  @if (walkForward(); as data) {
+    @if (data.result.status === 'failed' && data.result.failure_reason; as reason) {
+      <p-message severity="warn" [text]="reason" class="wfd-warn" />
+    }
+
+    @if (data.result.warnings.length > 0) {
+      <p-message severity="info" class="wfd-warn">
+        <ng-template #content>
+          <ul class="wfd-warning-list">
+            @for (w of data.result.warnings; track w) {
+              <li>{{ w }}</li>
+            }
+          </ul>
+        </ng-template>
+      </p-message>
+    }
+
+    <!-- Aggregate metrics -->
+    <section class="wfd-section">
+      <h2>OOS aggregates</h2>
+      <div class="wfd-metrics-grid">
+        <div class="wfd-metric">
+          <span class="wfd-metric-label">Folds</span>
+          <span class="wfd-metric-value">{{ data.result.folds.length }}</span>
+        </div>
+        <div class="wfd-metric">
+          <span class="wfd-metric-label">% profitable</span>
+          <span class="wfd-metric-value">
+            @if (data.result.pct_profitable_folds !== null) {
+              {{ data.result.pct_profitable_folds | percent: '1.0-0' }}
+            } @else { — }
+          </span>
+        </div>
+        <div class="wfd-metric">
+          <span class="wfd-metric-label">Mean OOS Sharpe</span>
+          <span class="wfd-metric-value">
+            @if (data.result.mean_oos_sharpe !== null) {
+              {{ data.result.mean_oos_sharpe | number: '1.2-2' }}
+            } @else { — }
+          </span>
+        </div>
+        <div class="wfd-metric">
+          <span class="wfd-metric-label">Median OOS Sharpe</span>
+          <span class="wfd-metric-value">
+            @if (data.result.median_oos_sharpe !== null) {
+              {{ data.result.median_oos_sharpe | number: '1.2-2' }}
+            } @else { — }
+          </span>
+        </div>
+        <div class="wfd-metric">
+          <span class="wfd-metric-label">Alpha decay</span>
+          <span class="wfd-metric-value">
+            @if (data.result.alpha_decay !== null) {
+              {{ data.result.alpha_decay | number: '1.3-3' }}
+              <small>per fold</small>
+            } @else { — }
+          </span>
+        </div>
+        <div class="wfd-metric">
+          <span class="wfd-metric-label">OOS retention</span>
+          <span class="wfd-metric-value">
+            @if (data.result.oos_retention !== null) {
+              {{ data.result.oos_retention | percent: '1.0-0' }}
+            } @else { — }
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Combined OOS curve -->
+    <section class="wfd-section">
+      <h2>Combined OOS equity curve</h2>
+      <p class="wfd-section-hint">
+        Compounded across folds — fold N+1's curve is rebased so its first
+        point equals fold N's terminal equity. The investor-experience
+        view of holding through every test window in order.
+      </p>
+      <div #combinedChart class="wfd-chart"></div>
+    </section>
+
+    <!-- Fold table -->
+    <section class="wfd-section">
+      <h2>Folds <small class="wfd-section-count">({{ data.result.folds.length }})</small></h2>
+      <p-table
+        [value]="data.result.folds"
+        [rowTrackBy]="trackByFoldIndex"
+        [paginator]="data.result.folds.length > 50"
+        [rows]="50"
+        styleClass="wfd-fold-table"
+      >
+        <ng-template #header>
+          <tr>
+            <th>#</th>
+            <th>Status</th>
+            <th>Train</th>
+            <th>Test</th>
+            <th>Trades</th>
+            <th>Return</th>
+            <th>Max DD</th>
+            <th>Sharpe</th>
+            <th>Run ID</th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-fold>
+          <tr class="wfd-fold-row">
+            <td>{{ fold.fold_index }}</td>
+            <td>
+              <p-tag
+                [value]="fold.status"
+                [severity]="statusSeverity(fold.status)"
+              />
+            </td>
+            <td class="wfd-window-cell">
+              {{ fold.train_start_ms | date: 'yyyy-MM-dd' }} →
+              {{ fold.train_end_ms | date: 'yyyy-MM-dd' }}
+            </td>
+            <td class="wfd-window-cell">
+              {{ fold.test_start_ms | date: 'yyyy-MM-dd' }} →
+              {{ fold.test_end_ms | date: 'yyyy-MM-dd' }}
+            </td>
+            <td>{{ fold.test_metrics.total_trades }}</td>
+            <td>{{ fold.test_metrics.total_return_pct | percent: '1.2-2' }}</td>
+            <td>
+              @if (fold.test_metrics.max_drawdown_pct !== null) {
+                {{ fold.test_metrics.max_drawdown_pct | percent: '1.2-2' }}
+              } @else { — }
+            </td>
+            <td>
+              @if (fold.test_metrics.sharpe_ratio !== null) {
+                {{ fold.test_metrics.sharpe_ratio | number: '1.2-2' }}
+              } @else { — }
+            </td>
+            <td class="wfd-hash-cell">
+              <a [routerLink]="['/research-lab/strategy-runs', fold.test_run_id]">
+                {{ shortHash(fold.test_run_id, 12) }}…
+              </a>
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+    </section>
+  }
+</div>

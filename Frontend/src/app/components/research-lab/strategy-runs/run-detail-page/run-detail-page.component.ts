@@ -31,6 +31,7 @@ import type {
   RunLedger,
   StrategyRunResponse,
 } from '../../../../services/strategy-runs.types';
+import { WalkForwardSectionComponent } from './walk-forward-section/walk-forward-section.component';
 
 const CHART_THEME = {
   bg: '#0f172a',
@@ -75,6 +76,7 @@ const DRAWDOWN_COLOR = '#f87171';
     DatePipe,
     DecimalPipe,
     PercentPipe,
+    WalkForwardSectionComponent,
   ],
   templateUrl: './run-detail-page.component.html',
   styleUrls: ['./run-detail-page.component.scss'],
