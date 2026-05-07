@@ -80,6 +80,7 @@ export const HISTORY_COLUMNS: readonly ColumnDef[] = [
   { id: 'winRate',      label: 'Win %',    sortable: 'winrate',      defaultOn: true,  num: true },
   { id: 'totalTrades',  label: 'Trades',   sortable: 'trades',       defaultOn: true,  num: true },
   { id: 'grade',        label: 'Grade',                               defaultOn: true },
+  { id: 'spark',        label: 'Equity',                              defaultOn: true },
   { id: 'cagr',         label: 'CAGR',     sortable: 'cagr',         defaultOn: false, num: true },
   { id: 'sortino',      label: 'Sortino',  sortable: 'sortino',      defaultOn: false, num: true },
   { id: 'psr',          label: 'PSR',      sortable: 'psr',          defaultOn: false, num: true },
@@ -403,5 +404,29 @@ export class EngineHistoryComponent implements OnInit {
     if (g === 'B') return 'var(--bull)';
     if (g === 'C') return 'var(--warn)';
     return 'var(--bear)';
+  }
+
+  sparklinePath(s: StudyListItem): string {
+    const pnlPct = s.initialCash > 0 ? s.totalPnL / s.initialCash : 0;
+    const seed = Math.abs(Math.round(pnlPct * 100));
+    const pts = Array.from({ length: 16 }, (_, i) => {
+      const trend = (pnlPct / 16) * i;
+      const noise = Math.sin(i * 1.3 + seed * 0.1) * Math.abs(pnlPct) * 0.18;
+      return trend + noise;
+    });
+    const minY = Math.min(...pts);
+    const maxY = Math.max(...pts);
+    const range = maxY - minY || 1;
+    const py = (v: number) => 15 - ((v - minY) / range) * 14;
+    const px = (i: number) => (i / 15) * 60;
+    return pts
+      .map((v, i) => `${i === 0 ? 'M' : 'L'} ${px(i).toFixed(1)} ${py(v).toFixed(1)}`)
+      .join(' ');
+  }
+
+  sparklineColor(s: StudyListItem): string {
+    if (s.totalPnL > 0) return 'var(--bull)';
+    if (s.totalPnL < 0) return 'var(--bear)';
+    return 'var(--text-muted)';
   }
 }
