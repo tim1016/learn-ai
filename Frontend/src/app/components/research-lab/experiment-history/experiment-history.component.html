@@ -1,124 +1,155 @@
-<div class="mt-4">
-  <div class="flex items-end gap-3 mb-4">
-    <div class="flex flex-col gap-2">
-      <label for="historyTicker" class="font-semibold text-sm">Ticker</label>
-      <input
-        pInputText
-        id="historyTicker"
-        [ngModel]="ticker()"
-        (ngModelChange)="ticker.set($event)"
-        placeholder="e.g. AAPL"
-      />
+<div class="history-page">
+  <!-- Toolbar -->
+  <div class="history-toolbar">
+    <div class="toolbar-loader">
+      <input pInputText id="historyTicker" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)"
+        placeholder="Ticker" (keydown.enter)="loadExperiments()" aria-label="Ticker symbol" />
+      <button class="btn-load" [disabled]="loading()" (click)="loadExperiments()">
+        <i [class]="loading() ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'" aria-hidden="true"></i>
+        Load
+      </button>
     </div>
-    <p-button
-      label="Load History"
-      icon="pi pi-refresh"
-      [loading]="loading()"
-      (onClick)="loadExperiments()"
-    />
+
+    @if (experiments().length > 0) {
+      <div class="search-wrap">
+        <i class="pi pi-search search-icon" aria-hidden="true"></i>
+        <input class="search-input" [ngModel]="searchQuery()" (ngModelChange)="searchQuery.set($event)"
+          placeholder="Filter features…" aria-label="Filter features" />
+      </div>
+
+      <div class="filter-chips" role="group" aria-label="Filter by result">
+        <button class="filter-chip" [class.filter-chip--active]="statusFilter() === 'all'"
+          (click)="statusFilter.set('all')">
+          All <span class="chip-count">{{ experiments().length }}</span>
+        </button>
+        <button class="filter-chip" [class.filter-chip--active]="statusFilter() === 'passed'"
+          (click)="statusFilter.set('passed')">
+          Passed <span class="chip-count">{{ passedCount() }}</span>
+        </button>
+        <button class="filter-chip" [class.filter-chip--active]="statusFilter() === 'failed'"
+          (click)="statusFilter.set('failed')">
+          Failed <span class="chip-count">{{ failedCount() }}</span>
+        </button>
+      </div>
+
+      <span class="toolbar-spacer"></span>
+
+      <div class="density-toggle" role="group" aria-label="Table density">
+        <span class="density-label">Density</span>
+        <div class="density-btns">
+          <button class="density-btn" [class.density-btn--active]="density() === 'compact'"
+            (click)="density.set('compact')">Compact</button>
+          <button class="density-btn" [class.density-btn--active]="density() === 'normal'"
+            (click)="density.set('normal')">Normal</button>
+        </div>
+      </div>
+    }
   </div>
 
   @if (error(); as err) {
-    <p-message severity="error" [text]="err" class="mb-4" />
+    <p-message severity="error" [text]="err" />
   }
 
   @if (experiments().length > 0) {
-    <p-table
-      [value]="experiments()"
-      [paginator]="true"
-      [rows]="10"
-      [tableStyle]="{ 'min-width': '56rem' }"
-      [rowHover]="true"
-      styleClass="p-datatable-sm"
-    >
-      <ng-template #header>
-        <tr>
-          <th pSortableColumn="featureName" class="col-header">
-            <span class="col-header-content" (click)="showHelp('feature'); $event.stopPropagation()">
-              <i class="pi pi-sliders-h col-icon"></i>
-              Feature
-            </span>
-            <p-sortIcon field="featureName" />
-          </th>
-          <th pSortableColumn="meanIC" class="col-header">
-            <span class="col-header-content" (click)="showHelp('meanIC'); $event.stopPropagation()">
-              <i class="pi pi-chart-line col-icon"></i>
-              Mean IC
-            </span>
-            <p-sortIcon field="meanIC" />
-          </th>
-          <th class="col-header">
-            <span class="col-header-content" (click)="showHelp('tStat')">
-              <i class="pi pi-percentage col-icon"></i>
-              t-Stat
-            </span>
-          </th>
-          <th class="col-header">
-            <span class="col-header-content" (click)="showHelp('adf')">
-              <i class="pi pi-wave-pulse col-icon"></i>
-              ADF p
-            </span>
-          </th>
-          <th class="col-header">
-            <span class="col-header-content" (click)="showHelp('monotonic')">
-              <i class="pi pi-sort-amount-up col-icon"></i>
-              Mono
-            </span>
-          </th>
-          <th pSortableColumn="passedValidation" class="col-header">
-            <span class="col-header-content" (click)="showHelp('result'); $event.stopPropagation()">
-              <i class="pi pi-verified col-icon"></i>
-              Result
-            </span>
-            <p-sortIcon field="passedValidation" />
-          </th>
-          <th class="col-header">
-            <span class="col-header-content" (click)="showHelp('dateRange')">
-              <i class="pi pi-calendar col-icon"></i>
-              Period
-            </span>
-          </th>
-          <th pSortableColumn="createdAt" class="col-header">
-            <span class="col-header-content" (click)="showHelp('runDate'); $event.stopPropagation()">
-              <i class="pi pi-clock col-icon"></i>
-              Run Date
-            </span>
-            <p-sortIcon field="createdAt" />
-          </th>
-        </tr>
-      </ng-template>
-      <ng-template #body let-exp>
-        <tr>
-          <td class="font-semibold">{{ exp.featureName }}</td>
-          <td [class]="icSeverityClass(exp.meanIC)">{{ exp.meanIC | number: '1.4-4' }}</td>
-          <td [class]="tStatSeverityClass(exp.icTStat)">{{ exp.icTStat | number: '1.2-2' }}</td>
-          <td [class]="adfSeverityClass(exp.adfPValue)">{{ exp.adfPValue | number: '1.4-4' }}</td>
-          <td>
-            <p-tag
-              [severity]="exp.isMonotonic ? 'success' : 'warn'"
-              [value]="exp.isMonotonic ? 'Yes' : 'No'"
-            />
-          </td>
-          <td>
-            <p-tag
-              [severity]="validationSeverity(exp.passedValidation)"
-              [value]="validationLabel(exp.passedValidation)"
-            />
-          </td>
-          <td class="text-sm">{{ exp.startDate }} — {{ exp.endDate }}</td>
-          <td class="text-sm">{{ exp.createdAt | date: 'short' }}</td>
-        </tr>
-      </ng-template>
-      <ng-template #emptymessage>
-        <tr>
-          <td [attr.colspan]="8" class="text-center py-4">
-            No experiments found for this ticker.
-          </td>
-        </tr>
-      </ng-template>
-    </p-table>
+    <div class="history-table-wrap" [attr.data-density]="density()">
+      <p-table
+        [value]="filteredExperiments()"
+        [paginator]="true"
+        [rows]="20"
+        [tableStyle]="{ 'min-width': '56rem' }"
+        [rowHover]="true"
+        styleClass="p-datatable-sm history-table"
+      >
+        <ng-template #header>
+          <tr>
+            <th pSortableColumn="featureName" class="col-header">
+              <button type="button" class="col-header-content" (click)="showHelp('feature'); $event.stopPropagation()">
+                <i class="pi pi-sliders-h col-icon" aria-hidden="true"></i>
+                Feature
+              </button>
+              <p-sortIcon field="featureName" />
+            </th>
+            <th pSortableColumn="meanIC" class="col-header">
+              <button type="button" class="col-header-content" (click)="showHelp('meanIC'); $event.stopPropagation()">
+                <i class="pi pi-chart-line col-icon" aria-hidden="true"></i>
+                Mean IC
+              </button>
+              <p-sortIcon field="meanIC" />
+            </th>
+            <th class="col-header">
+              <button type="button" class="col-header-content" (click)="showHelp('tStat')">
+                <i class="pi pi-percentage col-icon" aria-hidden="true"></i>
+                t-Stat
+              </button>
+            </th>
+            <th class="col-header">
+              <button type="button" class="col-header-content" (click)="showHelp('adf')">
+                <i class="pi pi-wave-pulse col-icon" aria-hidden="true"></i>
+                ADF p
+              </button>
+            </th>
+            <th class="col-header">
+              <button type="button" class="col-header-content" (click)="showHelp('monotonic')">
+                <i class="pi pi-sort-amount-up col-icon" aria-hidden="true"></i>
+                Mono
+              </button>
+            </th>
+            <th pSortableColumn="passedValidation" class="col-header">
+              <button type="button" class="col-header-content" (click)="showHelp('result'); $event.stopPropagation()">
+                <i class="pi pi-verified col-icon" aria-hidden="true"></i>
+                Result
+              </button>
+              <p-sortIcon field="passedValidation" />
+            </th>
+            <th class="col-header">
+              <button type="button" class="col-header-content" (click)="showHelp('dateRange')">
+                <i class="pi pi-calendar col-icon" aria-hidden="true"></i>
+                Period
+              </button>
+            </th>
+            <th pSortableColumn="createdAt" class="col-header">
+              <button type="button" class="col-header-content" (click)="showHelp('runDate'); $event.stopPropagation()">
+                <i class="pi pi-clock col-icon" aria-hidden="true"></i>
+                Run Date
+              </button>
+              <p-sortIcon field="createdAt" />
+            </th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-exp>
+          <tr>
+            <td class="cell-feature">{{ exp.featureName }}</td>
+            <td [class]="icClass(exp.meanIC)">{{ exp.meanIC | number: '1.4-4' }}</td>
+            <td [class]="tStatClass(exp.icTStat)">{{ exp.icTStat | number: '1.2-2' }}</td>
+            <td [class]="adfClass(exp.adfPValue)">{{ exp.adfPValue | number: '1.4-4' }}</td>
+            <td>
+              <p-tag [severity]="exp.isMonotonic ? 'success' : 'warn'" [value]="exp.isMonotonic ? 'Yes' : 'No'" />
+            </td>
+            <td>
+              <p-tag [severity]="validationSeverity(exp.passedValidation)" [value]="validationLabel(exp.passedValidation)" />
+            </td>
+            <td class="cell-period">{{ exp.startDate }} — {{ exp.endDate }}</td>
+            <td class="cell-mono cell-dim">{{ exp.createdAt | date: 'short' }}</td>
+          </tr>
+        </ng-template>
+        <ng-template #emptymessage>
+          <tr>
+            <td [attr.colspan]="8" class="cell-empty">
+              No experiments match the current filter.
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+
+      <div class="table-footer">
+        <span>{{ filteredExperiments().length }} of {{ experiments().length }} experiments</span>
+        <span class="footer-ticker">{{ ticker().toUpperCase() }}</span>
+      </div>
+    </div>
   } @else if (!loading()) {
-    <p>Enter a ticker and click "Load History" to view past experiments.</p>
+    <div class="empty-state">
+      <p class="empty-text">Enter a ticker and click Load to view past feature experiments.</p>
+    </div>
   }
 
   <!-- Help Dialog -->
@@ -134,7 +165,7 @@
     <ng-template #header>
       @if (helpColumn(); as col) {
         <div class="help-dialog-header">
-          <i [class]="col.icon" class="help-dialog-icon"></i>
+          <i [class]="col.icon" class="help-dialog-icon" aria-hidden="true"></i>
           <span>{{ col.label }}</span>
         </div>
       }

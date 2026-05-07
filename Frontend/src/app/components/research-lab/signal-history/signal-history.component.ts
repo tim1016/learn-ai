@@ -1,6 +1,7 @@
 import {
   Component,
   signal,
+  computed,
   inject,
   DestroyRef,
   ChangeDetectionStrategy,
@@ -50,6 +51,23 @@ export class SignalHistoryComponent {
   loading = signal(false);
   experiments = signal<SignalExperiment[]>([]);
   error = signal<string | null>(null);
+
+  searchQuery = signal('');
+  statusFilter = signal<string>('all');
+  density = signal<'compact' | 'normal'>('compact');
+
+  readonly productionCount = computed(() => this.experiments().filter(e => e.statusLabel === 'Production-Ready').length);
+  readonly rejectCount = computed(() => this.experiments().filter(e => e.statusLabel === 'Reject').length);
+
+  readonly filteredExperiments = computed(() => {
+    const q = this.searchQuery().toLowerCase();
+    const filter = this.statusFilter();
+    return this.experiments().filter(exp => {
+      if (filter !== 'all' && exp.statusLabel !== filter) return false;
+      if (q && !exp.featureName.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  });
 
   helpVisible = signal(false);
   helpColumn = signal<ColumnHelp | null>(null);
@@ -132,17 +150,18 @@ export class SignalHistoryComponent {
     }
   }
 
-  gradeSeverityClass(grade: string): string {
-    if (grade === 'A' || grade === 'B') return 'text-green-700 font-bold';
-    if (grade === 'C') return 'text-amber-600 font-semibold';
-    return 'text-red-600';
+  gradeClass(grade: string): string {
+    if (grade?.startsWith('A')) return 'cell-mono val-bull font-bold';
+    if (grade?.startsWith('B')) return 'cell-mono val-bull';
+    if (grade?.startsWith('C')) return 'cell-mono val-warn';
+    return 'cell-mono val-bear';
   }
 
-  sharpeSeverityClass(sharpe: number): string {
-    if (sharpe >= 1.0) return 'text-green-700 font-bold';
-    if (sharpe >= 0.5) return 'text-green-600 font-semibold';
-    if (sharpe >= 0) return 'text-gray-600';
-    return 'text-red-600';
+  sharpeClass(sharpe: number): string {
+    if (sharpe >= 1.0) return 'cell-mono val-bull font-bold';
+    if (sharpe >= 0.5) return 'cell-mono val-bull';
+    if (sharpe >= 0) return 'cell-mono val-dim';
+    return 'cell-mono val-bear';
   }
 
   showHelp(key: string): void {
