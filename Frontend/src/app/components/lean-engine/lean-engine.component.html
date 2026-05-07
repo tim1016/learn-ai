@@ -77,9 +77,13 @@
               (advisoryAction)="onPickerAdvisoryAction($event)"
             />
 
-            <div class="options-card">
-              <h3 data-section="03">Run options</h3>
-              <div class="form-grid">
+            <!-- Strategy + Execution — side-by-side per design spec -->
+            <div class="config-two-col">
+              <div class="options-card">
+                <h3 data-section="02">
+                  <i class="pi pi-cog" aria-hidden="true"></i>
+                  Strategy
+                </h3>
                 <label class="field">
                   <span class="label">Strategy</span>
                   <select
@@ -97,29 +101,47 @@
                     </span>
                   }
                 </label>
+                @if (selectedStrategy(); as strat) {
+                  <div class="strategy-meta">
+                    <div class="strategy-meta__desc">{{ strat.description }}</div>
+                    <div class="strategy-meta__badges">
+                      @if (strat.pine_available) {
+                        <span class="meta-badge meta-badge--pine">pine v6</span>
+                      }
+                    </div>
+                  </div>
+                }
+              </div>
 
-                <label class="field">
-                  <span class="label">Fill mode</span>
-                  <select [ngModel]="fillMode()" (ngModelChange)="fillMode.set($event)">
-                    <option value="signal_bar_close">Signal bar close</option>
-                    <option value="next_bar_open">Next bar open</option>
-                  </select>
-                </label>
+              <div class="options-card">
+                <h3 data-section="03">
+                  <i class="pi pi-bolt" aria-hidden="true"></i>
+                  Execution
+                </h3>
+                <div class="form-grid">
+                  <label class="field">
+                    <span class="label">Fill mode</span>
+                    <select [ngModel]="fillMode()" (ngModelChange)="fillMode.set($event)">
+                      <option value="signal_bar_close">Signal bar close</option>
+                      <option value="next_bar_open">Next bar open</option>
+                    </select>
+                  </label>
 
-                <label class="field">
-                  <span class="label">Initial cash</span>
-                  <input type="number" min="0" step="1000"
-                    [ngModel]="initialCash()" (ngModelChange)="initialCash.set($event)" />
-                </label>
+                  <label class="field">
+                    <span class="label">Initial cash</span>
+                    <input type="number" min="0" step="1000"
+                      [ngModel]="initialCash()" (ngModelChange)="initialCash.set($event)" />
+                  </label>
 
-                <label class="field">
-                  <span class="label">
-                    Commission / order
-                    <span class="hint" title="Fee charged per filled order. $1.00 matches LEAN's InteractiveBrokers model.">?</span>
-                  </span>
-                  <input type="number" min="0" step="0.01"
-                    [ngModel]="commissionPerOrder()" (ngModelChange)="commissionPerOrder.set($event)" />
-                </label>
+                  <label class="field">
+                    <span class="label">
+                      Commission / order
+                      <span class="hint" title="Fee charged per filled order. $1.00 matches LEAN's InteractiveBrokers model.">?</span>
+                    </span>
+                    <input type="number" min="0" step="0.01"
+                      [ngModel]="commissionPerOrder()" (ngModelChange)="commissionPerOrder.set($event)" />
+                  </label>
+                </div>
               </div>
             </div>
 

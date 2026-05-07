@@ -188,7 +188,6 @@ interface DataAvailability {
 
 @Component({
   selector: "app-lean-engine",
-  standalone: true,
   imports: [
     CommonModule, FormsModule, RouterModule, ButtonModule,
     Tabs, TabList, Tab, TabPanel, TabPanels,

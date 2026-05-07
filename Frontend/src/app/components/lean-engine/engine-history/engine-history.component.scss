@@ -44,10 +44,163 @@
 .history-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.5rem;
-  padding: 0 2px;
+  gap: 8px;
+  padding: 10px 12px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: $radius-md;
+  margin-bottom: 10px;
+}
+
+.toolbar-spacer { flex: 1; }
+
+// Search input
+.history-search {
+  position: relative;
+  flex: 0 0 280px;
+
+  &__icon {
+    position: absolute;
+    left: 9px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 11px;
+    color: $text-muted;
+    pointer-events: none;
+  }
+
+  &__input {
+    width: 100%;
+    height: 30px;
+    padding: 0 10px 0 28px;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: $radius;
+    color: $text-primary;
+    font-size: 12px;
+    font-family: inherit;
+    outline: none;
+
+    &::placeholder { color: $text-muted; }
+    &:focus { border-color: $accent; }
+  }
+}
+
+// Filter tabs
+.history-filter-tabs {
+  display: flex;
+  height: 30px;
+  background: $bg-elevated;
+  border: 1px solid $border-light;
+  border-radius: $radius;
+  overflow: hidden;
+}
+
+.filter-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  background: transparent;
+  color: $text-subtle;
+  border: none;
+  border-right: 1px solid $border;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background $t-fast, color $t-fast;
+
+  &:last-child { border-right: none; }
+  &:hover:not(.filter-tab--active) { background: $bg-hover; color: $text-primary; }
+
+  &--active {
+    background: var(--accent-faint);
+    color: $accent;
+    font-weight: 700;
+  }
+
+  &__count {
+    font-family: $font-mono;
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    background: $bg-hover;
+    color: $text-muted;
+
+    .filter-tab--active & {
+      background: var(--accent-soft);
+      color: $accent;
+    }
+  }
+}
+
+// Density toggle
+.density-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  &__label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    color: $text-muted;
+  }
+
+  &__seg {
+    display: flex;
+    height: 26px;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: $radius-sm;
+    overflow: hidden;
+
+    button {
+      padding: 0 10px;
+      background: transparent;
+      color: $text-subtle;
+      border: none;
+      border-right: 1px solid $border;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background $t-fast, color $t-fast;
+
+      &:last-child { border-right: none; }
+
+      &.on {
+        background: var(--accent-faint);
+        color: $accent;
+        font-weight: 700;
+      }
+
+      &:not(.on):hover { background: $bg-hover; color: $text-primary; }
+    }
+  }
+}
+
+// Export button
+.export-btn {
+  height: 30px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid $border-light;
+  border-radius: $radius;
+  color: $text-secondary;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  transition: border-color $t-ui, color $t-ui;
+
+  &:hover { border-color: $accent; color: $accent; }
+  .pi { font-size: 10px; }
 }
 
 .column-chooser {
@@ -168,67 +321,6 @@
   border: 1px solid rgba($bear, 0.25);
   border-radius: 8px;
   color: $bear;
-}
-
-.history-summary {
-  font-size: 12px;
-  color: $text-subtle;
-  padding: 0 2px;
-
-  strong { color: $text-primary; font-weight: 600; }
-  &__sep { color: $text-muted; margin: 0 4px; }
-}
-
-// ── Sort + view-mode controls in the toolbar ──────────────────────
-.history-toolbar__actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sort-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: $text-subtle;
-
-  &__label {
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    font-size: 9px;
-    font-weight: 700;
-  }
-
-  select {
-    height: 28px;
-    padding: 0 6px;
-    background: $bg-elevated;
-    border: 1px solid $border-light;
-    border-radius: $radius;
-    color: $text-primary;
-    font-size: 11px;
-    font-family: inherit;
-
-    &:focus { outline: none; border-color: $accent; }
-  }
-}
-
-.sort-direction {
-  width: 28px;
-  height: 28px;
-  background: $bg-elevated;
-  border: 1px solid $border-light;
-  border-radius: $radius;
-  color: $text-secondary;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background $t-ui, color $t-ui;
-
-  &:hover { background: $bg-hover; color: $text-primary; }
-  .pi { font-size: 12px; }
 }
 
 .view-mode {
@@ -431,11 +523,57 @@
   .pi { font-size: 8px; }
 }
 
+// ─── Grade badge ──────────────────────────────────────
+.grade-cell { text-align: center; }
+
+.grade-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: $font-mono;
+  font-weight: 700;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: $bg-elevated;
+
+  &.grade-failed {
+    background: rgba($bear, 0.10);
+    border: 1px solid rgba($bear, 0.32);
+    color: $bear;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+
+    .pi { font-size: 8px; }
+  }
+}
+
 // ─── Table ────────────────────────────────────────────
 .table-wrapper {
   overflow-x: auto;
   border: 1px solid $border;
   border-radius: 8px;
+
+  // Compact density — 28px rows, smaller text
+  &.compact {
+    table { font-size: 0.68rem; }
+    th, td { padding: 4px 8px; }
+  }
+
+  // Normal density — 38px rows
+  &.normal {
+    th, td { padding: 10px 8px; }
+  }
+}
+
+.table-footer {
+  padding: 8px 12px;
+  background: $bg-elevated;
+  border-top: 1px solid $border;
+  font-size: 11px;
+  color: $text-subtle;
+  font-family: $font-mono;
 }
 
 table {

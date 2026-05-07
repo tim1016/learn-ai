@@ -79,6 +79,7 @@ export const HISTORY_COLUMNS: readonly ColumnDef[] = [
   { id: 'maxDrawdown',  label: 'Max DD',   sortable: 'drawdown',     defaultOn: true,  num: true },
   { id: 'winRate',      label: 'Win %',    sortable: 'winrate',      defaultOn: true,  num: true },
   { id: 'totalTrades',  label: 'Trades',   sortable: 'trades',       defaultOn: true,  num: true },
+  { id: 'grade',        label: 'Grade',                               defaultOn: true },
   { id: 'cagr',         label: 'CAGR',     sortable: 'cagr',         defaultOn: false, num: true },
   { id: 'sortino',      label: 'Sortino',  sortable: 'sortino',      defaultOn: false, num: true },
   { id: 'psr',          label: 'PSR',      sortable: 'psr',          defaultOn: false, num: true },
@@ -92,7 +93,6 @@ const COLUMN_PREF_KEY = 'engine-history.columns.v1';
 
 @Component({
   selector: 'app-engine-history',
-  standalone: true,
   imports: [CommonModule, FormsModule],
   templateUrl: './engine-history.component.html',
   styleUrls: ['./engine-history.component.scss'],
@@ -134,11 +134,49 @@ export class EngineHistoryComponent implements OnInit {
   /** Open/closed state for the column-chooser dropdown. */
   readonly chooserOpen = signal(false);
 
-  /** Card vs table view. Cards are the default — better readability and
-   *  matches the design hand-off. The table is preserved as a power-user
-   *  alternative since it surfaces every column and supports the
-   *  per-column chooser. Persisted via localStorage. */
+  /** Card vs table view. Table is the primary view per the design hand-off.
+   *  Cards preserved as an alternative for broader context. Persisted. */
   readonly viewMode = signal<'card' | 'table'>(this.loadViewMode());
+
+  /** Toolbar search query — client-side filter across the loaded page. */
+  readonly searchQuery = signal('');
+
+  /** Status filter: 'ok' = runs with trades, 'failed' = zero trades. */
+  readonly statusFilter = signal<'all' | 'ok' | 'failed' | 'pinned'>('all');
+
+  /** Table row density. */
+  readonly density = signal<'compact' | 'normal'>('compact');
+
+  /** Studies filtered by searchQuery + statusFilter (client-side only). */
+  readonly filteredStudies = computed(() => {
+    let list = this.studies();
+    const q = this.searchQuery().toLowerCase().trim();
+    const f = this.statusFilter();
+    if (q) {
+      list = list.filter(s =>
+        s.symbol.toLowerCase().includes(q) ||
+        s.strategyName.toLowerCase().includes(q) ||
+        this.parseParams(s.parameters).toLowerCase().includes(q)
+      );
+    }
+    if (f === 'ok')     list = list.filter(s => s.totalTrades > 0);
+    if (f === 'failed') list = list.filter(s => s.totalTrades === 0);
+    return list;
+  });
+
+  readonly statusCounts = computed(() => ({
+    all:    this.studies().length,
+    ok:     this.studies().filter(s => s.totalTrades > 0).length,
+    failed: this.studies().filter(s => s.totalTrades === 0).length,
+    pinned: 0,
+  }));
+
+  readonly filterOptions = computed(() => [
+    { id: 'all',    label: 'All',    count: this.statusCounts().all },
+    { id: 'ok',     label: 'OK',     count: this.statusCounts().ok },
+    { id: 'failed', label: 'Failed', count: this.statusCounts().failed },
+    { id: 'pinned', label: 'Pinned', count: this.statusCounts().pinned },
+  ]);
 
   private loadViewMode(): 'card' | 'table' {
     try {
@@ -347,5 +385,23 @@ export class EngineHistoryComponent implements OnInit {
 
   pnlClass(val: number): string {
     return val > 0 ? 'positive' : val < 0 ? 'negative' : '';
+  }
+
+  gradeLabel(s: StudyListItem): string {
+    const psr = s.probabilisticSharpeRatio ?? 0;
+    const sh = s.sharpeRatio ?? 0;
+    if (psr >= 0.95 && sh >= 1.5) return 'A';
+    if (psr >= 0.80 && sh >= 1.0) return 'B';
+    if (psr >= 0.60 && sh >= 0.5) return 'C';
+    if (psr >= 0.40)               return 'D';
+    return 'F';
+  }
+
+  gradeColor(s: StudyListItem): string {
+    const g = this.gradeLabel(s);
+    if (g === 'A') return 'var(--bull)';
+    if (g === 'B') return 'var(--bull)';
+    if (g === 'C') return 'var(--warn)';
+    return 'var(--bear)';
   }
 }
