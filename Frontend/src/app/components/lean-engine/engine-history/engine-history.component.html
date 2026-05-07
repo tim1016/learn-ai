@@ -14,119 +14,103 @@
 }
 
 @if (studies().length > 0) {
-  <!-- ═════════ History toolbar — count + sort + view-mode + columns ═════════ -->
+  <!-- ═════════ History toolbar ═════════ -->
   <div class="history-toolbar">
-    <div class="history-summary">
-      <strong class="mono">{{ totalCount() }}</strong>
-      {{ totalCount() === 1 ? 'study' : 'studies' }}
-      <span class="history-summary__sep">·</span>
-      sorted by
-      <strong>{{ sortLabel() }}</strong>,
-      {{ sortDirectionLabel() }}
+    <!-- Search -->
+    <div class="history-search">
+      <i class="pi pi-search history-search__icon" aria-hidden="true"></i>
+      <input type="search" class="history-search__input"
+             placeholder="Filter by ticker, strategy, params…"
+             [value]="searchQuery()"
+             (input)="searchQuery.set($any($event.target).value)" />
     </div>
 
-    <div class="history-toolbar__actions">
-      <label class="sort-control">
-        <span class="sort-control__label">Sort</span>
-        <select [ngModel]="sort().column"
-                (ngModelChange)="changeSortColumn($event)">
-          <option value="executedat">Run date</option>
-          <option value="totalpnl">Net P&amp;L</option>
-          <option value="cagr">CAGR</option>
-          <option value="sharpe">Sharpe</option>
-          <option value="sortino">Sortino</option>
-          <option value="psr">PSR</option>
-          <option value="drawdown">Max DD</option>
-          <option value="winrate">Win rate</option>
-          <option value="trades">Trades</option>
-          <option value="profitfactor">Profit factor</option>
-        </select>
-        <button type="button" class="sort-direction"
-                [attr.aria-label]="sort().direction === 'desc' ? 'Sort ascending' : 'Sort descending'"
-                (click)="toggleSortDirection()">
-          <i class="pi" [class]="sort().direction === 'desc' ? 'pi-sort-amount-down' : 'pi-sort-amount-up'"></i>
+    <!-- Filter tabs -->
+    <div class="history-filter-tabs" role="group" aria-label="Run filter">
+      @for (f of filterOptions(); track f.id) {
+        <button type="button" class="filter-tab"
+                [class.filter-tab--active]="statusFilter() === f.id"
+                (click)="statusFilter.set($any(f.id))">
+          {{ f.label }}
+          <span class="filter-tab__count">{{ f.count }}</span>
         </button>
-      </label>
-
-      <div class="view-mode" role="group" aria-label="View mode">
-        <button type="button" class="view-mode__btn"
-                [class.view-mode__btn--active]="viewMode() === 'card'"
-                (click)="viewMode.set('card')"
-                aria-label="Card view">
-          <i class="pi pi-th-large"></i> Cards
-        </button>
-        <button type="button" class="view-mode__btn"
-                [class.view-mode__btn--active]="viewMode() === 'table'"
-                (click)="viewMode.set('table')"
-                aria-label="Table view">
-          <i class="pi pi-table"></i> Table
-        </button>
-      </div>
-
-      @if (viewMode() === 'table') {
-        <div class="column-chooser">
-          <button
-            type="button"
-            class="chooser-trigger"
-            [attr.aria-expanded]="chooserOpen()"
-            (click)="toggleChooser()"
-          >
-            <i class="pi pi-sliders-h"></i>
-            Columns ({{ visibleColumns().length }}/{{ allColumns.length }})
-          </button>
-          @if (chooserOpen()) {
-            <div class="chooser-panel" role="menu">
-              <div class="chooser-header">
-                <span>Columns</span>
-                <button type="button" class="chooser-reset" (click)="resetColumns()">Reset to defaults</button>
-              </div>
-              <div class="chooser-section-label">Core</div>
-              <ul class="chooser-list">
-                @for (col of allColumns; track col.id) {
-                  @if (col.defaultOn) {
-                    <li>
-                      <label>
-                        <input
-                          type="checkbox"
-                          [checked]="visibleIds().has(col.id)"
-                          (change)="toggleColumn(col.id)"
-                        />
-                        <span class="chooser-label">{{ col.label }}</span>
-                        @if (col.num) { <span class="chooser-type-tag">num</span> }
-                      </label>
-                    </li>
-                  }
-                }
-              </ul>
-              <div class="chooser-section-label">Advanced</div>
-              <ul class="chooser-list">
-                @for (col of allColumns; track col.id) {
-                  @if (!col.defaultOn) {
-                    <li>
-                      <label>
-                        <input
-                          type="checkbox"
-                          [checked]="visibleIds().has(col.id)"
-                          (change)="toggleColumn(col.id)"
-                        />
-                        <span class="chooser-label">{{ col.label }}</span>
-                        @if (col.num) { <span class="chooser-type-tag">num</span> }
-                      </label>
-                    </li>
-                  }
-                }
-              </ul>
-            </div>
-          }
-        </div>
       }
     </div>
+
+    <span class="toolbar-spacer"></span>
+
+    <!-- View mode -->
+    <div class="view-mode" role="group" aria-label="View mode">
+      <button type="button" class="view-mode__btn"
+              [class.view-mode__btn--active]="viewMode() === 'card'"
+              (click)="viewMode.set('card')"
+              aria-label="Card view">
+        <i class="pi pi-th-large"></i>
+      </button>
+      <button type="button" class="view-mode__btn"
+              [class.view-mode__btn--active]="viewMode() === 'table'"
+              (click)="viewMode.set('table')"
+              aria-label="Table view">
+        <i class="pi pi-table"></i>
+      </button>
+    </div>
+
+    <!-- Density toggle (table only) -->
+    @if (viewMode() === 'table') {
+      <div class="density-toggle" role="group" aria-label="Table density">
+        <span class="density-toggle__label">Density</span>
+        <div class="density-toggle__seg">
+          <button type="button"
+                  [class.on]="density() === 'compact'"
+                  (click)="density.set('compact')">Compact</button>
+          <button type="button"
+                  [class.on]="density() === 'normal'"
+                  (click)="density.set('normal')">Normal</button>
+        </div>
+      </div>
+
+      <!-- Column chooser -->
+      <div class="column-chooser">
+        <button type="button" class="chooser-trigger"
+                [attr.aria-expanded]="chooserOpen()"
+                (click)="toggleChooser()">
+          <i class="pi pi-sliders-h"></i>
+          Cols ({{ visibleColumns().length }})
+        </button>
+        @if (chooserOpen()) {
+          <div class="chooser-panel" role="menu">
+            <div class="chooser-header">
+              <span>Columns</span>
+              <button type="button" class="chooser-reset" (click)="resetColumns()">Reset</button>
+            </div>
+            <ul class="chooser-list">
+              @for (col of allColumns; track col.id) {
+                <li>
+                  <label>
+                    <input type="checkbox"
+                           [checked]="visibleIds().has(col.id)"
+                           (change)="toggleColumn(col.id)" />
+                    <span class="chooser-label">{{ col.label }}</span>
+                    @if (col.num) { <span class="chooser-type-tag">num</span> }
+                  </label>
+                </li>
+              }
+            </ul>
+          </div>
+        }
+      </div>
+    }
+
+    <!-- Export -->
+    <button type="button" class="export-btn" title="Export visible runs as CSV">
+      <i class="pi pi-download" aria-hidden="true"></i> Export CSV
+    </button>
   </div>
 
   <!-- ═════════ Card view ═════════ -->
   @if (viewMode() === 'card') {
     <ul class="study-cards" role="list">
-      @for (s of studies(); track s.id) {
+      @for (s of filteredStudies(); track s.id) {
         <li class="study-card" (click)="onRowClick(s)" tabindex="0"
             (keydown.enter)="onRowClick(s)">
           <div class="study-card__main">
@@ -215,9 +199,9 @@
     </ul>
   }
 
-  <!-- ═════════ Table view (legacy, still available) ═════════ -->
+  <!-- ═════════ Table view ═════════ -->
   @if (viewMode() === 'table') {
-    <div class="table-wrapper">
+    <div class="table-wrapper" [class.compact]="density() === 'compact'" [class.normal]="density() === 'normal'">
       <table>
         <thead>
           <tr>
@@ -237,7 +221,7 @@
           </tr>
         </thead>
         <tbody>
-          @for (s of studies(); track s.id) {
+          @for (s of filteredStudies(); track s.id) {
             <tr class="study-row" (click)="onRowClick(s)">
               @for (col of visibleColumns(); track col.id) {
                 @switch (col.id) {
@@ -256,6 +240,17 @@
                   @case ('profitFactor') { <td class="num">{{ s.profitFactor.toFixed(2) }}</td> }
                   @case ('var95')       { <td class="num">{{ formatPct(s.valueAtRisk95) }}</td> }
                   @case ('params')      { <td class="params-cell mono" [title]="s.parameters">{{ parseParams(s.parameters) }}</td> }
+                  @case ('grade') {
+                    <td class="grade-cell">
+                      @if (s.totalTrades === 0) {
+                        <span class="grade-badge grade-failed">
+                          <i class="pi pi-times"></i> failed
+                        </span>
+                      } @else {
+                        <span class="grade-badge" [style.color]="gradeColor(s)">{{ gradeLabel(s) }}</span>
+                      }
+                    </td>
+                  }
                   @case ('notes') {
                     <td class="notes-cell" (click)="startEditNotes(s, $event)">
                       @if (editingNotesId() === s.id) {
@@ -289,6 +284,9 @@
           }
         </tbody>
       </table>
+      <div class="table-footer">
+        <span>{{ filteredStudies().length }} of {{ totalCount() }} runs</span>
+      </div>
     </div>
   }
 }
