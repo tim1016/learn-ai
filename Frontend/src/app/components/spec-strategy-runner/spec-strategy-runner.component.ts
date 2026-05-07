@@ -773,6 +773,18 @@ export class SpecStrategyRunnerComponent {
     return CONDITION_CATALOG[kind as ConditionKind]?.group ?? 'signal';
   }
 
+  conditionGroupIcon(kind: string): string {
+    const group = this.conditionGroup(kind);
+    const map: Record<ConditionGroup, string> = {
+      signal: 'pi-chart-line',
+      filter: 'pi-filter',
+      risk:   'pi-dollar',
+      timing: 'pi-clock',
+      shape:  'pi-chart-bar',
+    };
+    return map[group];
+  }
+
   conditionBlurb(kind: ConditionKind): string {
     return CONDITION_CATALOG[kind].blurb;
   }
