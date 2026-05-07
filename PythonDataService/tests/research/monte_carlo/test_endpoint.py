@@ -225,6 +225,24 @@ async def test_post_zero_simulation_count_returns_422(client, parent_run_id):
     assert response.status_code == 422
 
 
+async def test_post_negative_random_seed_returns_422(client, parent_run_id):
+    """Pydantic ``Field(ge=0)`` rejects negative seeds at the wire
+    boundary before they reach ``numpy.random.default_rng`` (which
+    would raise ``ValueError`` and surface as 500). Regression for
+    PR #112 Codex P1.
+    """
+    response = await client.post(
+        "/api/research/strategy-runs/monte-carlo",
+        json={
+            "parent_run_id": parent_run_id,
+            "method": "reshuffle",
+            "simulation_count": 100,
+            "random_seed": -1,
+        },
+    )
+    assert response.status_code == 422
+
+
 async def test_post_simulation_count_above_cap_returns_422(client, parent_run_id):
     response = await client.post(
         "/api/research/strategy-runs/monte-carlo",

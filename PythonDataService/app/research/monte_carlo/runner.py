@@ -108,7 +108,10 @@ def run_monte_carlo(
             mc_id, request, created_at, f"parent_run_id rejected: {exc}"
         )
 
-    # Validate request shape.
+    # Validate request shape. The router's Pydantic layer catches most
+    # of these for HTTP callers, but ``run_monte_carlo`` is also called
+    # by internal code paths (parity tests, future programmatic
+    # consumers) that bypass the router. Belt-and-suspenders.
     if request.simulation_count <= 0:
         return _failed(
             mc_id, request, created_at, "simulation_count must be >= 1"
@@ -119,6 +122,16 @@ def run_monte_carlo(
             request,
             created_at,
             f"projection_trade_count must be >= 0 (got {request.projection_trade_count})",
+        )
+    if request.random_seed < 0:
+        # ``numpy.random.default_rng`` raises ValueError for negative
+        # seeds; catch here so non-HTTP callers get a failed-status
+        # record instead of an unhandled exception.
+        return _failed(
+            mc_id,
+            request,
+            created_at,
+            f"random_seed must be >= 0 (got {request.random_seed})",
         )
     for t in request.breach_thresholds:
         if not 0.0 <= t <= 1.0:
@@ -188,9 +201,15 @@ def run_monte_carlo(
 
     # Aggregate across simulations.
     bands = _build_equity_bands(equity_matrix)
-    dd_quantiles = _quantile_dict(drawdowns, fmt="float")
-    pnl_quantiles = _quantile_dict(terminal_pnls, fmt="float")
-    streak_quantiles = _quantile_dict(streaks.astype(float), fmt="int")
+    dd_quantiles = _quantile_dict(drawdowns)
+    pnl_quantiles = _quantile_dict(terminal_pnls)
+    # Streak quantiles use ``method='nearest'`` so values are actual
+    # observations from the streak distribution, not interpolated
+    # fractions. ``int(np.percentile(values, 95))`` previously *floored*
+    # interpolated values like 4.95 to 4 — under-reporting the tail.
+    # ``method='nearest'`` returns the nearest actual streak length, an
+    # integer-valued float we cast cleanly. (PR #112 review.)
+    streak_quantiles = _streak_quantile_dict(streaks)
     breach_probs = [
         BreachProbability(
             threshold=t,
@@ -222,9 +241,7 @@ def run_monte_carlo(
         equity_bands=bands,
         drawdown_quantiles=dd_quantiles,
         terminal_pnl_quantiles=pnl_quantiles,
-        max_losing_streak_quantiles={
-            k: int(v) for k, v in streak_quantiles.items()
-        },
+        max_losing_streak_quantiles=streak_quantiles,
         breach_probabilities=breach_probs,
         warnings=warnings,
         created_at_ms=created_at,
@@ -258,15 +275,13 @@ def _build_equity_bands(equity_matrix: np.ndarray) -> list[EquityBandPoint]:
     ]
 
 
-def _quantile_dict(values: np.ndarray, *, fmt: str) -> dict[str, float]:
-    """Return ``{p5, p50, p95}`` quantiles of a 1-D array.
+def _quantile_dict(values: np.ndarray) -> dict[str, float]:
+    """Return ``{p5, p50, p95}`` quantiles of a 1-D array via
+    NumPy's default linear interpolation.
 
-    ``fmt='int'`` is purely a marker for caller-side casting — this
-    function always returns floats; the runner re-casts to int for
-    the streak quantiles. Done this way because ``np.percentile``
-    interpolates by default; an integer streak's percentile may be
-    fractional (e.g. P50 of [3, 5] is 4.0), and the spec wants the
-    streak summary as ints — caller decides the rounding.
+    Used for continuous quantities (drawdown fractions, terminal PnL).
+    For streak counts (integer-valued), use ``_streak_quantile_dict``
+    instead — ``method='nearest'`` keeps values discrete.
     """
     if values.size == 0:
         return {"p5": 0.0, "p50": 0.0, "p95": 0.0}
@@ -274,6 +289,25 @@ def _quantile_dict(values: np.ndarray, *, fmt: str) -> dict[str, float]:
         "p5": float(np.percentile(values, 5)),
         "p50": float(np.percentile(values, 50)),
         "p95": float(np.percentile(values, 95)),
+    }
+
+
+def _streak_quantile_dict(streaks: np.ndarray) -> dict[str, int]:
+    """Return ``{p5, p50, p95}`` losing-streak quantiles as integers.
+
+    Streaks are by definition non-negative integer counts. NumPy's
+    default linear interpolation can produce fractional percentiles
+    (e.g. P95 of ``[0, 1]`` is ``0.95``); flooring those to ``int(v)``
+    under-reports the tail (PR #112 review). Switch to
+    ``method='nearest'`` so the percentile picks the closest *actual*
+    streak observation — always an integer, no rounding ambiguity.
+    """
+    if streaks.size == 0:
+        return {"p5": 0, "p50": 0, "p95": 0}
+    return {
+        "p5": int(np.percentile(streaks, 5, method="nearest")),
+        "p50": int(np.percentile(streaks, 50, method="nearest")),
+        "p95": int(np.percentile(streaks, 95, method="nearest")),
     }
 
 

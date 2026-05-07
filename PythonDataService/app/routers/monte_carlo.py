@@ -75,7 +75,15 @@ class MonteCarloHttpRequest(BaseModel):
             "``resample``."
         ),
     )
-    random_seed: int = 0
+    random_seed: int = Field(
+        0,
+        ge=0,
+        description=(
+            "Non-negative integer seed for ``numpy.random.default_rng``. "
+            "Negative values raise inside NumPy and would surface as 500; "
+            "rejecting them at Pydantic with 422 keeps the contract clean."
+        ),
+    )
     breach_thresholds: list[float] = Field(
         default_factory=list,
         description="Drawdown thresholds in [0, 1] to compute breach probabilities for",

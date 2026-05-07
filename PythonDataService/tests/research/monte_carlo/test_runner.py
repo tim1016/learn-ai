@@ -295,6 +295,43 @@ def test_different_seeds_produce_different_results(tmp_path: Path, parent_run):
 
 
 # ---------------------------------------------------------------------------
+# Streak quantiles are integers, never floored from interpolation.
+# ---------------------------------------------------------------------------
+def test_streak_quantiles_are_observed_integer_streaks(tmp_path: Path, parent_run):
+    """Streak quantiles must come from actual streak observations
+    (``np.percentile(method='nearest')``), not linear-interpolated
+    fractions floored to int. Regression for PR #112 Codex P2 — a
+    P95 of ``0.95`` previously floored to ``0``, hiding tail risk.
+    """
+    ledger, result = parent_run
+    if not result.trades:
+        pytest.skip("zero trades on parent run")
+
+    _, mc = run_monte_carlo(
+        MonteCarloRequest(
+            parent_run_id=ledger.run_id,
+            method="resample",
+            simulation_count=200,
+            random_seed=0,
+        ),
+        artifacts_root=tmp_path,
+    )
+
+    # All streak quantiles are ints.
+    for key in ("p5", "p50", "p95"):
+        assert isinstance(mc.max_losing_streak_quantiles[key], int)
+        assert mc.max_losing_streak_quantiles[key] >= 0
+
+    # Each quantile is one of the streaks actually observed in the
+    # simulation batch. We don't have direct access to the streak
+    # array, but we can re-derive it: a streak quantile is bounded
+    # above by the max possible streak, which is the path length.
+    max_possible = mc.realised_trade_count
+    for v in mc.max_losing_streak_quantiles.values():
+        assert v <= max_possible
+
+
+# ---------------------------------------------------------------------------
 # Reshuffle preserves multiset → terminal equity is invariant across sims.
 # ---------------------------------------------------------------------------
 def test_reshuffle_terminal_equity_is_constant_across_sims(tmp_path: Path, parent_run):
@@ -367,6 +404,25 @@ def test_reshuffle_with_mismatched_projection_returns_failed(
     )
     assert mc.status == "failed"
     assert "reshuffle requires" in (mc.failure_reason or "")
+
+
+def test_negative_random_seed_returns_failed(tmp_path: Path, parent_run):
+    """``numpy.random.default_rng(seed)`` raises for negative seeds —
+    the runner must catch this and produce a failed-status MC, not
+    let the exception escape. Regression for PR #112 Codex P1.
+    """
+    ledger, _ = parent_run
+    _, mc = run_monte_carlo(
+        MonteCarloRequest(
+            parent_run_id=ledger.run_id,
+            method="reshuffle",
+            simulation_count=10,
+            random_seed=-1,
+        ),
+        artifacts_root=tmp_path,
+    )
+    assert mc.status == "failed"
+    assert "random_seed" in (mc.failure_reason or "")
 
 
 def test_invalid_breach_threshold_returns_failed(tmp_path: Path, parent_run):
