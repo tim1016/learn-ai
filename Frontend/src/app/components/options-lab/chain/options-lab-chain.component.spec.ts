@@ -58,7 +58,7 @@ describe('OptionsLabChainComponent', () => {
   it('creates the component with default state', () => {
     expect(component).toBeTruthy();
     expect(component.ticker()).toBe('SPY');
-    expect(component.density()).toBe('standard');
+    expect(component.density()).toBe('quick');
     expect(component.strikeRange()).toBe(15);
     expect(component.showAllStrikes()).toBe(false);
   });
@@ -142,10 +142,13 @@ describe('OptionsLabChainComponent', () => {
   });
 
   it('persists density preference to localStorage', () => {
-    expect(component.density()).toBe('standard');
-    component.toggleDensity();
+    expect(component.density()).toBe('quick');
+    component.setDensity('greeks');
     expect(component.density()).toBe('greeks');
     expect(localStorage.getItem('optionsLab.chain.density')).toBe('greeks');
+    component.setDensity('flow');
+    expect(component.density()).toBe('flow');
+    expect(localStorage.getItem('optionsLab.chain.density')).toBe('flow');
   });
 
   it('formats missing bid/ask as em-dash and shows volume when present', () => {

@@ -53,17 +53,24 @@
       <button
         type="button"
         class="chip"
-        [class.active]="density() === 'standard'"
-        (click)="density() === 'greeks' ? toggleDensity() : null"
-        [attr.aria-pressed]="density() === 'standard'"
-      >Standard</button>
+        [class.active]="density() === 'quick'"
+        (click)="setDensity('quick')"
+        [attr.aria-pressed]="density() === 'quick'"
+      >Quick</button>
       <button
         type="button"
         class="chip"
         [class.active]="density() === 'greeks'"
-        (click)="density() === 'standard' ? toggleDensity() : null"
+        (click)="setDensity('greeks')"
         [attr.aria-pressed]="density() === 'greeks'"
       >Greeks</button>
+      <button
+        type="button"
+        class="chip"
+        [class.active]="density() === 'flow'"
+        (click)="setDensity('flow')"
+        [attr.aria-pressed]="density() === 'flow'"
+      >Flow</button>
     </div>
   </section>
 
@@ -107,40 +114,56 @@
       <table class="chain-grid" [attr.data-density]="density()">
         <thead>
           <tr class="hdr-tier-1">
-            <th class="side-header calls" [attr.colspan]="density() === 'greeks' ? 9 : 6">Calls</th>
+            <th class="side-header calls" [attr.colspan]="density() === 'greeks' ? 10 : density() === 'flow' ? 5 : 4">Calls</th>
             <th class="center-header" colspan="2">Strike · IV</th>
-            <th class="side-header puts" [attr.colspan]="density() === 'greeks' ? 9 : 6">Puts</th>
+            <th class="side-header puts" [attr.colspan]="density() === 'greeks' ? 10 : density() === 'flow' ? 5 : 4">Puts</th>
           </tr>
           <tr class="hdr-tier-2">
-            <!-- Calls columns: left → right, ends adjacent to strike spine -->
+            <!-- Calls: L/S action column (outermost), then data left→right toward strike -->
+            <th class="num ls-col" aria-label="Add leg"></th>
             @if (density() === 'greeks') {
               <th class="num">V</th>
               <th class="num">Θ</th>
               <th class="num">Γ</th>
+              <th class="num">Δ</th>
+              <th class="num">Last</th>
+              <th class="num">Bid</th>
+              <th class="num">Ask</th>
+              <th class="num">Sprd</th>
+            } @else if (density() === 'flow') {
+              <th class="num">Bid</th>
+              <th class="num">Ask</th>
+              <th class="num">OI</th>
+            } @else {
+              <th class="num">Δ</th>
+              <th class="num">Last</th>
             }
-            <th class="num">Δ</th>
-            <th class="num">Last</th>
-            <th class="num">Bid</th>
-            <th class="num">Ask</th>
-            <th class="num">Sprd</th>
             <th class="num vol-col">Volume</th>
 
             <!-- Center spine -->
             <th class="num strike-col">Strike</th>
             <th class="num iv-col">IV</th>
 
-            <!-- Puts columns: left → right, starts adjacent to strike spine -->
+            <!-- Puts: data left→right from strike, then L/S action column (outermost) -->
             <th class="num vol-col">Volume</th>
-            <th class="num">Sprd</th>
-            <th class="num">Bid</th>
-            <th class="num">Ask</th>
-            <th class="num">Last</th>
-            <th class="num">Δ</th>
             @if (density() === 'greeks') {
+              <th class="num">Sprd</th>
+              <th class="num">Bid</th>
+              <th class="num">Ask</th>
+              <th class="num">Last</th>
+              <th class="num">Δ</th>
               <th class="num">Γ</th>
               <th class="num">Θ</th>
               <th class="num">V</th>
+            } @else if (density() === 'flow') {
+              <th class="num">OI</th>
+              <th class="num">Bid</th>
+              <th class="num">Ask</th>
+            } @else {
+              <th class="num">Last</th>
+              <th class="num">Δ</th>
             }
+            <th class="num ls-col" aria-label="Add leg"></th>
           </tr>
         </thead>
         <tbody>
@@ -152,16 +175,32 @@
               [class.itm-put]="row.itmPut"
               [attr.data-atm]="row.isAtm ? 'true' : null"
             >
+              <!-- Calls: L/S action cell, then data toward strike -->
+              <td class="ls-cell call-side">
+                <button class="ls-btn long" type="button"
+                  (click)="addLeg(row.strike, 'CALL', 'LONG')"
+                  [attr.aria-label]="'Add long call at ' + row.strikeFormatted">L</button>
+                <button class="ls-btn short" type="button"
+                  (click)="addLeg(row.strike, 'CALL', 'SHORT')"
+                  [attr.aria-label]="'Add short call at ' + row.strikeFormatted">S</button>
+              </td>
               @if (density() === 'greeks') {
                 <td class="num call-side">{{ row.callVega }}</td>
                 <td class="num call-side">{{ row.callTheta }}</td>
                 <td class="num call-side">{{ row.callGamma }}</td>
+                <td class="num call-side">{{ row.callDelta }}</td>
+                <td class="num call-side last">{{ row.callLast }}</td>
+                <td class="num call-side bid">{{ row.callBid }}</td>
+                <td class="num call-side ask">{{ row.callAsk }}</td>
+                <td class="num call-side">{{ row.callSpread }}</td>
+              } @else if (density() === 'flow') {
+                <td class="num call-side bid">{{ row.callBid }}</td>
+                <td class="num call-side ask">{{ row.callAsk }}</td>
+                <td class="num call-side">{{ row.callOI }}</td>
+              } @else {
+                <td class="num call-side">{{ row.callDelta }}</td>
+                <td class="num call-side last">{{ row.callLast }}</td>
               }
-              <td class="num call-side">{{ row.callDelta }}</td>
-              <td class="num call-side last">{{ row.callLast }}</td>
-              <td class="num call-side bid">{{ row.callBid }}</td>
-              <td class="num call-side ask">{{ row.callAsk }}</td>
-              <td class="num call-side">{{ row.callSpread }}</td>
               <td
                 class="num call-side vol-cell call-vol"
                 [style.--bar-width.%]="row.callVolumeBarWidth"
@@ -172,22 +211,38 @@
               <td class="num strike-cell">{{ row.strikeFormatted }}</td>
               <td class="num iv-cell">{{ row.centerIv }}</td>
 
+              <!-- Puts: data from strike outward, then L/S action cell -->
               <td
                 class="num put-side vol-cell put-vol"
                 [style.--bar-width.%]="row.putVolumeBarWidth"
               >
                 <span class="vol-text">{{ row.putVolume }}</span>
               </td>
-              <td class="num put-side">{{ row.putSpread }}</td>
-              <td class="num put-side bid">{{ row.putBid }}</td>
-              <td class="num put-side ask">{{ row.putAsk }}</td>
-              <td class="num put-side last">{{ row.putLast }}</td>
-              <td class="num put-side">{{ row.putDelta }}</td>
               @if (density() === 'greeks') {
+                <td class="num put-side">{{ row.putSpread }}</td>
+                <td class="num put-side bid">{{ row.putBid }}</td>
+                <td class="num put-side ask">{{ row.putAsk }}</td>
+                <td class="num put-side last">{{ row.putLast }}</td>
+                <td class="num put-side">{{ row.putDelta }}</td>
                 <td class="num put-side">{{ row.putGamma }}</td>
                 <td class="num put-side">{{ row.putTheta }}</td>
                 <td class="num put-side">{{ row.putVega }}</td>
+              } @else if (density() === 'flow') {
+                <td class="num put-side">{{ row.putOI }}</td>
+                <td class="num put-side bid">{{ row.putBid }}</td>
+                <td class="num put-side ask">{{ row.putAsk }}</td>
+              } @else {
+                <td class="num put-side last">{{ row.putLast }}</td>
+                <td class="num put-side">{{ row.putDelta }}</td>
               }
+              <td class="ls-cell put-side">
+                <button class="ls-btn long" type="button"
+                  (click)="addLeg(row.strike, 'PUT', 'LONG')"
+                  [attr.aria-label]="'Add long put at ' + row.strikeFormatted">L</button>
+                <button class="ls-btn short" type="button"
+                  (click)="addLeg(row.strike, 'PUT', 'SHORT')"
+                  [attr.aria-label]="'Add short put at ' + row.strikeFormatted">S</button>
+              </td>
             </tr>
           }
         </tbody>
