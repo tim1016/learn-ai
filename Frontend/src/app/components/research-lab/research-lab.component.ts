@@ -13,9 +13,16 @@ import {
   RouterOutlet,
 } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { filter, map, startWith } from 'rxjs/operators';
+import { filter, map } from 'rxjs/operators';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
-import { RESEARCH_LAB_NAV } from './research-lab-nav.config';
+import { NavGroup, RESEARCH_LAB_NAV } from './research-lab-nav.config';
+
+interface NavState {
+  data: Record<string, unknown>;
+  /** Matched route config path of the deepest active route, e.g.
+   *  `'build/validate'` or `'inspect/strategy-runs'`. */
+  path: string | null;
+}
 
 @Component({
   selector: 'app-research-lab',
@@ -35,27 +42,50 @@ export class ResearchLabComponent {
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
 
-  /** Snapshot of the deepest active route's `data`, refreshed on every
-   *  successful navigation. Page header pulls title + subtitle from here. */
-  private readonly activeData = toSignal(
+  /** Refreshes on every successful navigation; powers title, subtitle,
+   *  and which parent group's children should be shown in row 2. */
+  private readonly navState = toSignal(
     this.router.events.pipe(
       filter((e): e is NavigationEnd => e instanceof NavigationEnd),
-      startWith(null),
-      map(() => this.deepestData()),
+      map(() => this.snapshotNavState()),
     ),
-    { initialValue: this.deepestData() },
+    { initialValue: this.snapshotNavState() },
   );
 
   readonly title = computed<string>(
-    () => (this.activeData()?.['title'] as string | undefined) ?? 'Research Lab',
+    () => (this.navState().data['title'] as string | undefined) ?? 'Research Lab',
   );
   readonly subtitle = computed<string>(
-    () => (this.activeData()?.['subtitle'] as string | undefined) ?? '',
+    () => (this.navState().data['subtitle'] as string | undefined) ?? '',
   );
 
-  private deepestData(): Record<string, unknown> {
+  /** Group whose child is currently active. Falls back to the first group
+   *  for the brief moment between landing on `/research-lab` and the
+   *  redirect to `build/validate` resolving. */
+  readonly activeGroup = computed<NavGroup>(() => {
+    const path = this.navState().path;
+    const match = this.groups.find((g) =>
+      g.items.some((item) => item.path === path),
+    );
+    return match ?? this.groups[0];
+  });
+
+  /** Click handler for a parent pill — navigates to its first child.
+   *  No-op when the clicked parent is already the active one, so
+   *  re-clicking doesn't bounce the user out of a sibling page. */
+  selectGroup(group: NavGroup): void {
+    if (group === this.activeGroup()) return;
+    const first = group.items[0];
+    if (!first) return;
+    void this.router.navigate([first.path], { relativeTo: this.route });
+  }
+
+  private snapshotNavState(): NavState {
     let r: ActivatedRoute | null = this.route;
     while (r?.firstChild) r = r.firstChild;
-    return r?.snapshot?.data ?? {};
+    return {
+      data: r?.snapshot?.data ?? {},
+      path: r?.snapshot?.routeConfig?.path ?? null,
+    };
   }
 }

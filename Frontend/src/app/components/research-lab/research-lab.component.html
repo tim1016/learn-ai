@@ -5,24 +5,38 @@
     [hasTabs]="true"
   />
 
-  <nav class="rl-subnav" role="navigation" aria-label="Research Lab sections">
-    @for (group of groups; track group.label; let last = $last) {
-      <div class="rl-subnav-group">
-        <span class="rl-subnav-eyebrow">{{ group.label }}</span>
-        @for (item of group.items; track item.path) {
-          <a
-            class="rl-subnav-tab"
-            [routerLink]="item.path"
-            routerLinkActive="active"
-          >
-            {{ item.label }}
-          </a>
-        }
-        @if (!last) {
-          <span class="rl-subnav-divider" aria-hidden="true"></span>
-        }
-      </div>
-    }
+  <nav
+    class="rl-subnav rl-subnav--two-row"
+    role="navigation"
+    aria-label="Research Lab sections"
+  >
+    <div class="rl-parent-segmented">
+      @for (group of groups; track group.label) {
+        @let isActive = group === activeGroup();
+        <button
+          type="button"
+          class="rl-parent-tab"
+          [class.active]="isActive"
+          [attr.aria-current]="isActive ? 'section' : null"
+          (click)="selectGroup(group)"
+        >
+          <span class="parent-label">{{ group.label }}</span>
+          <span class="parent-count">{{ group.items.length }}</span>
+        </button>
+      }
+    </div>
+
+    <div class="rl-children-row">
+      @for (item of activeGroup().items; track item.path) {
+        <a
+          class="rl-tab"
+          [routerLink]="item.path"
+          routerLinkActive="active"
+        >
+          {{ item.label }}
+        </a>
+      }
+    </div>
   </nav>
 
   <div class="rl-panel">
