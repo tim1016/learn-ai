@@ -204,7 +204,7 @@
   @if (selectedTab() === 'entry') {
     <section class="ssr-section">
       <header class="ssr-section-head">
-        <h2>Entry — when to open a position</h2>
+        <h2><i class="pi pi-arrow-circle-up" aria-hidden="true"></i> Entry — when to open a position</h2>
       </header>
       <div class="ssr-section-body">
         <p class="ssr-editor-help">
@@ -263,7 +263,7 @@
   @if (selectedTab() === 'manage') {
     <section class="ssr-section">
       <header class="ssr-section-head">
-        <h2>Manage — what happens while we&apos;re in the trade</h2>
+        <h2><i class="pi pi-shield" aria-hidden="true"></i> Manage — what happens while we&apos;re in the trade</h2>
       </header>
       <div class="ssr-section-body">
         <p class="ssr-editor-help">
@@ -319,7 +319,7 @@
   @if (selectedTab() === 'exit') {
     <section class="ssr-section">
       <header class="ssr-section-head">
-        <h2>Exit — signal-flip close</h2>
+        <h2><i class="pi pi-arrow-circle-right" aria-hidden="true"></i> Exit — signal-flip close</h2>
       </header>
       <div class="ssr-section-body">
         <p class="ssr-editor-help">
@@ -354,7 +354,7 @@
   <!-- Run zone (config + validation) ------------------------------------ -->
   <div class="ssr-run-zone">
     <div class="ssr-run-config">
-      <h2 class="ssr-run-title">Backtest configuration</h2>
+      <h2 class="ssr-run-title"><i class="pi pi-play-circle" aria-hidden="true"></i> Backtest configuration</h2>
       <div class="ssr-run-row">
         <label class="ssr-field">
           <span class="ssr-field-label">Start date</span>
@@ -371,8 +371,8 @@
         <label class="ssr-field">
           <span class="ssr-field-label">Fill mode</span>
           <select class="ssr-input" [ngModel]="fillMode()" (ngModelChange)="fillMode.set($event)">
-            <option value="signal_bar_close">signal_bar_close</option>
-            <option value="next_bar_open">next_bar_open</option>
+            <option value="signal_bar_close">Signal bar close</option>
+            <option value="next_bar_open">Next bar open</option>
           </select>
         </label>
       </div>
@@ -391,11 +391,13 @@
       </header>
       @if (issues().length === 0) {
         <div class="ssr-v-item ssr-v-item--ok">
+          <i class="pi pi-check-circle ssr-v-icon ssr-v-icon--ok" aria-hidden="true"></i>
           <span class="ssr-v-text">All checks pass. Press Run when ready.</span>
         </div>
       }
       @for (it of errors(); track $index) {
         <div class="ssr-v-item ssr-v-item--error">
+          <i class="pi pi-times-circle ssr-v-icon ssr-v-icon--error" aria-hidden="true"></i>
           <span class="ssr-v-text">
             {{ it.text }}
             @if (it.hint) { <span class="ssr-v-hint">{{ it.hint }}</span> }
@@ -405,6 +407,7 @@
       }
       @for (it of warnings(); track $index) {
         <div class="ssr-v-item ssr-v-item--warn">
+          <i class="pi pi-exclamation-triangle ssr-v-icon ssr-v-icon--warn" aria-hidden="true"></i>
           <span class="ssr-v-text">
             {{ it.text }}
             @if (it.hint) { <span class="ssr-v-hint">{{ it.hint }}</span> }
@@ -414,6 +417,7 @@
       }
       @for (it of infos().slice(0, 3); track $index) {
         <div class="ssr-v-item ssr-v-item--info">
+          <i class="pi pi-info-circle ssr-v-icon ssr-v-icon--info" aria-hidden="true"></i>
           <span class="ssr-v-text">
             {{ it.text }}
             @if (it.hint) { <span class="ssr-v-hint">{{ it.hint }}</span> }
@@ -562,6 +566,7 @@
   <div class="ssr-cond" [class.ssr-cond--editing]="isEditing(ctx, ruleIndex, index)">
     <div class="ssr-cond-head">
       <span class="ssr-cond-tag" [class]="'ssr-cond-tag--' + conditionGroup(cond.kind)">
+        <i class="pi" [class]="conditionGroupIcon(cond.kind)" aria-hidden="true"></i>
         {{ conditionLabel(cond.kind) }}
       </span>
       <span class="ssr-cond-plain">{{ conditionPlainText(cond) }}</span>

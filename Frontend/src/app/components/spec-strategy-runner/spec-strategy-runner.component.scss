@@ -458,6 +458,11 @@
     font-weight: 700;
     margin: 0;
     color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+
+    .pi { font-size: 0.9rem; color: var(--accent); }
   }
 }
 
@@ -702,6 +707,11 @@
   font-weight: 700;
   border: 1px solid var(--border);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+
+  .pi { font-size: 0.6rem; }
 
   &--signal { color: var(--accent); border-color: rgba(59, 130, 246, 0.4); background: var(--accent-soft); }
   &--filter { color: #a78bfa; border-color: rgba(167, 139, 250, 0.4); background: rgba(167, 139, 250, 0.1); }
@@ -885,6 +895,11 @@
   font-size: 1rem;
   font-weight: 700;
   color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  .pi { font-size: 0.9rem; color: var(--accent); }
 }
 
 .ssr-run-row {
@@ -932,6 +947,17 @@
   &--warn { border-left-color: var(--warn, #f59e0b); }
   &--info { border-left-color: var(--accent); }
   &--ok { border-left-color: var(--bull); }
+}
+
+.ssr-v-icon {
+  font-size: 0.82rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+
+  &--error { color: var(--bear); }
+  &--warn  { color: var(--warn, #f59e0b); }
+  &--info  { color: var(--accent); }
+  &--ok    { color: var(--bull); }
 }
 
 .ssr-v-text {
