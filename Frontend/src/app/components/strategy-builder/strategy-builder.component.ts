@@ -297,7 +297,7 @@ export class StrategyBuilderComponent implements OnDestroy {
     { id: 'iv_down10', label: 'IV−10%', enabled: false, timeDeltaDays: 0, ivShift: -0.10, color: '#22c55e' },
   ]);
 
-  // ── Strategy Presets (card grid in the inline builder) ────
+  // ── Strategy Presets ──────────────────────────────────────
   readonly customPreset = { label: 'Custom', value: 'custom' };
   readonly presetGroups: { label: string; items: { label: string; value: string }[] }[] = [
     {
@@ -455,6 +455,12 @@ export class StrategyBuilderComponent implements OnDestroy {
       ],
     },
   };
+
+  /** Flat list of all templates for the templates bar — Custom first, then all groups. */
+  readonly flatTemplates: { label: string; value: string }[] = [
+    this.customPreset,
+    ...this.presetGroups.flatMap(g => g.items),
+  ];
 
   // ── Computed Signals ──────────────────────────────────────
 

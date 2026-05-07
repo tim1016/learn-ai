@@ -3,33 +3,99 @@
   min-height: 100vh;
 }
 
-// ── Main Layout ─────────────────────────────────────────────
+// ── Templates bar ────────────────────────────────────────────
+
+.templates-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar { display: none; }
+}
+
+.templates-label {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: rgb(100, 116, 139);  // slate-500
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 4px;
+}
+
+.tpl-pill {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgb(51, 65, 85);   // slate-700
+  background: rgb(30, 41, 59);          // slate-800
+  color: rgb(148, 163, 184);            // slate-400
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+
+  &:hover:not(.active) {
+    background: rgb(51, 65, 85);
+    color: rgb(226, 232, 240);
+  }
+
+  &.active {
+    background: rgba(99, 102, 241, 0.2);  // indigo tint
+    color: rgb(165, 180, 252);            // indigo-300
+    border-color: rgba(99, 102, 241, 0.5);
+  }
+
+  &:focus-visible {
+    outline: 2px solid rgb(99, 102, 241);
+    outline-offset: 2px;
+  }
+}
+
+// ── Main Layout — two-column 60/40 (UX-Q4) ──────────────────
 
 .main-layout {
-  position: relative;
+  display: grid;
+  grid-template-columns: 60% 40%;
+  gap: 12px;
+  align-items: start;
+
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+  }
 }
 
 .chain-panel {
-  width: 100%;
+  min-width: 0;                           // allow grid cell to shrink
   overflow-x: auto;
-  background: rgb(30, 41, 59);          // slate-800, matches expiration ribbon + header panel
-  border-radius: 0.5rem;                // rounded-lg
-  padding: 0.5rem;                      // 8px breathing room around the table
+  background: rgb(30, 41, 59);
+  border-radius: 0.5rem;
+  padding: 0.5rem;
 }
 
-// ── Inline Strategy Builder section ─────────────────────────
-// Replaces the previous right-slide drawer. Uses the same
-// bg-slate-800 + rounded-lg panel chrome as the expiration ribbon
-// and chain panel so the page reads as a stacked surface.
+// ── Right panel (legs + payoff) ──────────────────────────────
 
-.sb-section-title {
+.right-panel {
+  min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 12px;
-  font-size: 14px;
-  font-weight: 700;
-  color: #f1f5f9;
+  flex-direction: column;
+  gap: 0;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  background: rgb(30, 41, 59);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(51, 65, 85) transparent;
+
+  @media (max-width: 900px) {
+    max-height: none;
+  }
 }
 
 // ── Outcome layout (was drawer-summary-row) ─────────────────
