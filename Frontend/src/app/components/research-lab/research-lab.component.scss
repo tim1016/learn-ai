@@ -6,6 +6,91 @@
   color: var(--text-primary);
 }
 
+// ── RunStrip — "what produced this result?" bar ───────────────────────────
+// Used by all child route components to show run metadata inline.
+// Rendered inside .rl-panel or standalone above result sections.
+.rl-runstrip {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 8px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.rl-runstrip-field {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 12px;
+  border-right: 1px solid var(--border);
+
+  &:first-child { padding-left: 0; }
+  &:last-of-type { border-right: 0; }
+}
+
+.rl-runstrip-label {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.rl-runstrip-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.rl-runstrip-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.rl-runstrip-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.rl-runstrip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.rl-runstrip-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+}
+
+// ── Page action bar — Methodology + secondary controls ────────────────────
+// Sits below the sub-nav, above the controls panel.
+// Replaces the old inline header that duplicated the page-header title.
+.rl-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--space-4);
+
+  .rl-action-bar-spacer { flex: 1; }
+}
+
 // ── Page header ↔ sub-nav cohesion ───────────────────────────────────────
 // When the page header opts into hasTabs, lift its surface to --bg-surface
 // and round only the top corners so the sub-nav below joins flush as one
