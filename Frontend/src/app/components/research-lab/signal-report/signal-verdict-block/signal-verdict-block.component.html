@@ -50,10 +50,20 @@
       <p class="verdict-text">{{ verdictText() }}</p>
 
       @if (nextActionText()) {
-        <p class="next-action">
-          <i class="pi pi-arrow-right" aria-hidden="true"></i>
-          <span>{{ nextActionText() }}</span>
-        </p>
+        @if (stage() === 0) {
+          <div class="prescription-block">
+            <div class="prescription-eyebrow">
+              <i class="pi pi-lightbulb" aria-hidden="true"></i>
+              Prescription
+            </div>
+            <p class="prescription-text">{{ nextActionText() }}</p>
+          </div>
+        } @else {
+          <p class="next-action">
+            <i class="pi pi-arrow-right" aria-hidden="true"></i>
+            <span>{{ nextActionText() }}</span>
+          </p>
+        }
       }
     </div>
   </div>
