@@ -38,6 +38,7 @@ interface ChainRow {
   callVega: string;
   callVolume: string;
   callVolumeBarWidth: number;
+  callOI: string;
 
   putLast: string;
   putBid: string;
@@ -49,9 +50,10 @@ interface ChainRow {
   putVega: string;
   putVolume: string;
   putVolumeBarWidth: number;
+  putOI: string;
 }
 
-type ChainDensity = 'standard' | 'greeks';
+type ChainDensity = 'quick' | 'greeks' | 'flow';
 const DENSITY_STORAGE_KEY = 'optionsLab.chain.density';
 const POLL_INTERVAL_MS = 5_000;
 const EM_DASH = '—';
@@ -192,6 +194,7 @@ export class OptionsLabChainComponent implements OnInit {
         callVega: this.fmtGreek(call?.greeks?.vega),
         callVolume: this.fmtVolume(call?.day?.volume),
         callVolumeBarWidth: this.barWidth(call?.day?.volume, maxCallVol),
+        callOI: this.fmtVolume(call?.openInterest),
 
         putLast: this.resolveLast(put),
         putBid: this.fmtPrice(put?.lastQuote?.bid),
@@ -203,6 +206,7 @@ export class OptionsLabChainComponent implements OnInit {
         putVega: this.fmtGreek(put?.greeks?.vega),
         putVolume: this.fmtVolume(put?.day?.volume),
         putVolumeBarWidth: this.barWidth(put?.day?.volume, maxPutVol),
+        putOI: this.fmtVolume(put?.openInterest),
       };
     });
   });
@@ -320,20 +324,25 @@ export class OptionsLabChainComponent implements OnInit {
     this.showAllStrikes.update(v => !v);
   }
 
-  toggleDensity(): void {
-    const next: ChainDensity = this.density() === 'standard' ? 'greeks' : 'standard';
-    this.density.set(next);
+  setDensity(d: ChainDensity): void {
+    this.density.set(d);
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(DENSITY_STORAGE_KEY, next);
+      localStorage.setItem(DENSITY_STORAGE_KEY, d);
     }
+  }
+
+  addLeg(strike: number, right: 'CALL' | 'PUT', action: 'LONG' | 'SHORT'): void {
+    // stub: future integration with options strategy builder
+    void strike; void right; void action;
   }
 
   trackRow = (_: number, r: ChainRow): number => r.strike;
 
   private readDensityFromStorage(): ChainDensity {
-    if (typeof localStorage === 'undefined') return 'standard';
+    if (typeof localStorage === 'undefined') return 'quick';
     const v = localStorage.getItem(DENSITY_STORAGE_KEY);
-    return v === 'greeks' ? 'greeks' : 'standard';
+    if (v === 'quick' || v === 'greeks' || v === 'flow') return v;
+    return 'quick';
   }
 
   private fmtPrice(v: number | null | undefined): string {
