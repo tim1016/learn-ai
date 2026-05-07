@@ -143,4 +143,37 @@ export class SignalVerdictBlockComponent {
     if (grade === 'C') return 'amber';
     return 'red';
   });
+
+  /** CSS color for the current band — used in the barbell SVG stroke. */
+  bandColor(): string {
+    switch (this.band()) {
+      case 'green': return 'var(--bull)';
+      case 'amber': return 'var(--warn)';
+      case 'red':   return 'var(--bear)';
+      default:      return 'var(--text-muted)';
+    }
+  }
+
+  /** Pixel coordinates for the barbell SVG (240px wide).
+   *  Returns null when the CI is not available. */
+  readonly barbellCoords = computed<{
+    zeroPct: number; loPct: number; hiPct: number; pointPct: number;
+  } | null>(() => {
+    const ci = this.sharpeCi();
+    const sharpe = this.headlineSharpe();
+    if (!ci?.valid || ci.ciLower == null || ci.ciUpper == null) return null;
+    const lo = Math.min(ci.ciLower, 0, sharpe);
+    const hi = Math.max(ci.ciUpper, 0, sharpe);
+    const margin = Math.max((hi - lo) * 0.15, 0.15);
+    const rmin = lo - margin;
+    const rmax = hi + margin;
+    const span = rmax - rmin;
+    const pct = (v: number) => Math.max(0, Math.min(100, ((v - rmin) / span) * 100));
+    return {
+      zeroPct:  pct(0),
+      loPct:    pct(ci.ciLower),
+      hiPct:    pct(ci.ciUpper),
+      pointPct: pct(sharpe),
+    };
+  });
 }
