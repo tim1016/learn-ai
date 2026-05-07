@@ -31,6 +31,7 @@ import type {
   RunLedger,
   StrategyRunResponse,
 } from '../../../../services/strategy-runs.types';
+import { BaselinesSectionComponent } from './baselines-section/baselines-section.component';
 import { MonteCarloSectionComponent } from './monte-carlo-section/monte-carlo-section.component';
 import { WalkForwardSectionComponent } from './walk-forward-section/walk-forward-section.component';
 
@@ -79,6 +80,7 @@ const DRAWDOWN_COLOR = '#f87171';
     PercentPipe,
     WalkForwardSectionComponent,
     MonteCarloSectionComponent,
+    BaselinesSectionComponent,
   ],
   templateUrl: './run-detail-page.component.html',
   styleUrls: ['./run-detail-page.component.scss'],
