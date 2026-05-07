@@ -99,6 +99,13 @@ export class MonteCarloDetailPageComponent implements AfterViewInit, OnDestroy {
   private p50Series: ISeriesApi<'Line'> | null = null;
   private p95Series: ISeriesApi<'Line'> | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  // Monotonic load token. Each call to ``load()`` increments it and
+  // captures the new value; after the awaited fetch resolves, the
+  // call only applies its response if its captured token still
+  // matches the current one. This prevents an out-of-order earlier
+  // response from overwriting a later one when the user navigates
+  // between mc_ids in quick succession.
+  private loadToken = 0;
 
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((params) => {
@@ -128,15 +135,27 @@ export class MonteCarloDetailPageComponent implements AfterViewInit, OnDestroy {
   }
 
   async load(mcId: string): Promise<void> {
+    const token = ++this.loadToken;
+    // Drop any prior payload before fetching so a failed load (404,
+    // network error) doesn't leave the previous mc_id's quantiles
+    // and bands rendered alongside the new error message.
+    this.monteCarlo.set(null);
     this.loading.set(true);
     this.error.set(null);
     try {
       const data = await this.service.getMonteCarlo(mcId);
+      // Stale-response guard: another ``load()`` started while this
+      // one was in flight. The newer call owns ``monteCarlo``; this
+      // call's response would be for the previous mc_id.
+      if (token !== this.loadToken) return;
       this.monteCarlo.set(data);
     } catch (err) {
+      if (token !== this.loadToken) return;
       this.error.set(this.formatError(err));
     } finally {
-      this.loading.set(false);
+      if (token === this.loadToken) {
+        this.loading.set(false);
+      }
     }
   }
 

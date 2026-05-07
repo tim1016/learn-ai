@@ -135,4 +135,47 @@ describe('MonteCarloDetailPageComponent', () => {
     fixture.detectChanges();
     expect(component.error()).toBe('not found');
   });
+
+  it('clears stale payload before a new load — failed load does not show old data', async () => {
+    expect(component.monteCarlo()).not.toBeNull();
+    service.getMonteCarlo.mockRejectedValueOnce(new Error('not found'));
+    await component.load('e'.repeat(32));
+    expect(component.monteCarlo()).toBeNull();
+    expect(component.error()).toBe('not found');
+  });
+
+  it('discards out-of-order responses when a newer load is in flight', async () => {
+    // Resolve the *first* call slowly, *second* call quickly. Verify
+    // the first's response is dropped because the second changed the
+    // load token.
+    let resolveFirst: ((v: MonteCarloResponse) => void) | null = null;
+    const firstPromise = new Promise<MonteCarloResponse>((res) => {
+      resolveFirst = res;
+    });
+    const stalePayload: MonteCarloResponse = {
+      ...makeMcResponse(),
+      config: { ...makeMcResponse().config, monte_carlo_id: 'd'.repeat(32) },
+    };
+    const newerPayload: MonteCarloResponse = {
+      ...makeMcResponse(),
+      config: { ...makeMcResponse().config, monte_carlo_id: 'e'.repeat(32) },
+    };
+    service.getMonteCarlo.mockReset();
+    service.getMonteCarlo.mockReturnValueOnce(firstPromise);
+    service.getMonteCarlo.mockResolvedValueOnce(newerPayload);
+
+    const firstLoad = component.load('d'.repeat(32));
+    const secondLoad = component.load('e'.repeat(32));
+    await secondLoad;
+    expect(component.monteCarlo()?.config.monte_carlo_id).toBe('e'.repeat(32));
+
+    // Now the first call resolves — late. Its payload must NOT
+    // overwrite the newer one, and ``loading`` must NOT be flipped
+    // back on by the late call (the second load's finally already
+    // set it false).
+    resolveFirst!(stalePayload);
+    await firstLoad;
+    expect(component.monteCarlo()?.config.monte_carlo_id).toBe('e'.repeat(32));
+    expect(component.loading()).toBe(false);
+  });
 });
