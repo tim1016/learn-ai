@@ -207,6 +207,12 @@ export class SignalReportComponent {
     ];
   }
 
+  readonly executionCaveats: { warn: boolean; text: string }[] = [
+    { warn: true,  text: 'Slippage is not modelled. Cost grid (1–5 bps) is optimistic at high turnover.' },
+    { warn: true,  text: 'Last-print fills assume sufficient liquidity at the close auction.' },
+    { warn: false, text: 'See Methodology page for full caveats and Lo-adjusted significance treatment.' },
+  ];
+
   // ─── Best Config ────────────────────────────────────────
 
   get bestBacktest(): SignalBacktestResult | undefined {
