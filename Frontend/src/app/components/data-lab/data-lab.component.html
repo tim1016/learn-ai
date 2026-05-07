@@ -142,8 +142,9 @@
     </div>
   }
 
-  <!-- Controls -->
-  <div class="controls-card">
+  <!-- Card 1 — Instrument & Range -->
+  <div class="dl-section-card">
+    <h2 class="dl-card-head" data-card="01">Instrument &amp; Range</h2>
     <app-ticker-range-picker
       [(value)]="rangeState"
       [tickerPool]="tickerPool"
@@ -153,8 +154,12 @@
       [showAutoFetch]="false"
       (advisoryAction)="onPickerAdvisoryAction($event)"
     />
+  </div>
 
-    <div class="options-row" style="margin-top: 0.75rem;">
+  <!-- Card 2 — Fetch Config -->
+  <div class="dl-section-card">
+    <h2 class="dl-card-head" data-card="02">Fetch Config</h2>
+    <div class="options-row">
       <fieldset class="option-group fieldset-radio">
         <legend>Bar timeframe</legend>
         <div class="radio-pair" role="radiogroup" aria-label="Bar timeframe mode">
@@ -218,8 +223,14 @@
       </fieldset>
     </div>
 
-    <details class="advanced-settings">
-      <summary>Advanced</summary>
+  </div>
+
+  <!-- Card 3 — Advanced (collapsed by default, card styling on the details) -->
+  <details class="advanced-settings dl-section-card dl-section-card--advanced">
+    <summary class="dl-advanced-summary">
+      <span class="dl-card-head" data-card="03">Advanced</span>
+      <i class="pi pi-chevron-right dl-advanced-chevron" aria-hidden="true"></i>
+    </summary>
 
       <div class="advanced-group">
         <h4 class="advanced-group__title">Price adjustments</h4>
@@ -314,15 +325,19 @@
           </div>
         </div>
       </div>
-    </details>
 
-    <div class="selected-summary">
-      <span class="badge">{{ entryCount() }} indicator instances</span>
-      <span class="badge col-badge">~{{ estimatedColumns().length }} columns</span>
-      <button class="btn-text" (click)="resetDefaults()">Reset defaults</button>
-      <button class="btn-text danger" (click)="clearAll()">Clear all</button>
-    </div>
+  </details>
+
+  <div class="selected-summary">
+    <span class="badge">{{ entryCount() }} indicator instances</span>
+    <span class="badge col-badge">~{{ estimatedColumns().length }} columns</span>
+    <button class="btn-text" (click)="resetDefaults()">Reset defaults</button>
+    <button class="btn-text danger" (click)="clearAll()">Clear all</button>
   </div>
+
+  <!-- Card 4 — Include With Fetch -->
+  <div class="dl-section-card">
+    <h2 class="dl-card-head" data-card="04">Include with Fetch</h2>
 
   <!-- Options Companion -->
   <details class="companion-section">
@@ -720,6 +735,8 @@
     </div>
   </details>
 
+  </div><!-- end Card 4 -->
+
   @if (error()) {
     <div class="error-msg">{{ error() }}</div>
   }
@@ -730,10 +747,9 @@
     </div>
   }
 
-  <!-- Run bar — only shows the always-on action button + summary now.
-       Progress, log, fetch summary and error states all live in the
-       bottom-docked <app-run-dock> component below. -->
+  <!-- Card 5 — Run -->
   <div class="run-card" role="region" aria-label="Run controls">
+    <h2 class="dl-card-head" data-card="05">Run</h2>
     <div class="run-card__summary">
       {{ ticker() || '—' }} · {{ fromDate() }} → {{ toDate() }} ·
       {{ activeBarTimeframe() === 'custom' ? (multiplier() + ' × ' + timespan()) : activeBarTimeframe() }} ·
