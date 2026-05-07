@@ -1,0 +1,199 @@
+.mc-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1.5rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.mcd-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mcd-back {
+  font-size: 0.875rem;
+  color: var(--text-color-secondary, #6b7280);
+  text-decoration: none;
+}
+
+.mcd-back:hover {
+  text-decoration: underline;
+}
+
+.mcd-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+
+  h1 {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 600;
+  }
+}
+
+.mcd-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  font-size: 0.875rem;
+  color: var(--text-color-secondary, #6b7280);
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 0.8125rem;
+    color: var(--text-color, #111827);
+  }
+}
+
+.mcd-parent {
+  font-size: 0.875rem;
+  color: var(--text-color-secondary, #6b7280);
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 0.8125rem;
+  }
+
+  a {
+    color: var(--primary-color, #2563eb);
+    text-decoration: none;
+  }
+
+  a:hover {
+    text-decoration: underline;
+  }
+}
+
+.mcd-loading,
+.mcd-error,
+.mcd-warn {
+  display: block;
+}
+
+.mcd-warning-list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.mcd-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+
+  h2 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-color, #111827);
+  }
+
+  .mcd-section-hint {
+    margin: 0;
+    color: var(--text-color-secondary, #6b7280);
+    font-size: 0.8125rem;
+    max-width: 70ch;
+  }
+}
+
+.mcd-legend {
+  font-weight: 600;
+
+  &.mcd-legend-p5 {
+    color: rgb(248, 113, 113);
+  }
+  &.mcd-legend-p50 {
+    color: #60a5fa;
+  }
+  &.mcd-legend-p95 {
+    color: rgb(74, 222, 128);
+  }
+}
+
+.mcd-quantile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.mcd-quantile-card {
+  padding: 0.75rem 1rem;
+  background: var(--surface-50, #f9fafb);
+  border: 1px solid var(--surface-border, #e5e7eb);
+  border-radius: 6px;
+
+  h3 {
+    margin: 0 0 0.5rem;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-color-secondary, #6b7280);
+    font-weight: 600;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.875rem;
+
+    td {
+      padding: 0.15rem 0;
+
+      &:first-child {
+        color: var(--text-color-secondary, #6b7280);
+        width: 30%;
+      }
+
+      &:last-child {
+        text-align: right;
+        font-weight: 600;
+      }
+    }
+  }
+}
+
+.mcd-chart {
+  width: 100%;
+  height: 320px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.mcd-provenance {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 1.25rem;
+  row-gap: 0.4rem;
+  margin: 0;
+  font-size: 0.875rem;
+
+  dt {
+    font-weight: 500;
+    color: var(--text-color-secondary, #6b7280);
+  }
+
+  dd {
+    margin: 0;
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      font-size: 0.8125rem;
+    }
+  }
+
+  .mcd-prov-aux {
+    margin-left: 0.5rem;
+    color: var(--text-color-secondary, #6b7280);
+  }
+}
+
+::ng-deep .mcd-breach-table {
+  .p-datatable-table {
+    font-size: 0.875rem;
+    font-variant-numeric: tabular-nums;
+  }
+}

@@ -1,0 +1,191 @@
+<div class="mc-detail">
+  <header class="mcd-header">
+    <a routerLink="/research-lab" class="mcd-back">← Research Lab</a>
+    @if (monteCarlo(); as data) {
+      <div class="mcd-title">
+        <h1>Monte Carlo</h1>
+        <p-tag
+          [value]="data.result.status"
+          [severity]="statusSeverity(data.result.status)"
+        />
+      </div>
+      <div class="mcd-meta">
+        <span><strong>Method:</strong> {{ data.config.method }}</span>
+        <span><strong>Simulations:</strong> {{ data.config.simulation_count }}</span>
+        <span><strong>Path length:</strong> {{ data.result.realised_trade_count }} trades</span>
+        <span><strong>Seed:</strong> <code>{{ data.config.random_seed }}</code></span>
+        <span><strong>MC ID:</strong> <code>{{ data.config.monte_carlo_id }}</code></span>
+      </div>
+      <div class="mcd-parent">
+        <strong>Parent run:</strong>
+        <a [routerLink]="['/research-lab/strategy-runs', data.config.parent_run_id]">
+          <code>{{ shortHash(data.config.parent_run_id, 16) }}…</code>
+        </a>
+      </div>
+    } @else if (mcId(); as id) {
+      <h1>Monte Carlo <code>{{ id }}</code></h1>
+    }
+  </header>
+
+  @if (loading()) {
+    <p class="mcd-loading">Loading Monte Carlo…</p>
+  }
+
+  @if (error(); as msg) {
+    <p-message severity="error" [text]="msg" class="mcd-error" />
+  }
+
+  @if (monteCarlo(); as data) {
+    @if (data.result.status === 'failed' && data.result.failure_reason; as reason) {
+      <p-message severity="warn" [text]="reason" class="mcd-warn" />
+    }
+
+    @if (data.result.warnings.length > 0) {
+      <p-message severity="info" class="mcd-warn">
+        <ng-template #content>
+          <ul class="mcd-warning-list">
+            @for (w of data.result.warnings; track w) {
+              <li>{{ w }}</li>
+            }
+          </ul>
+        </ng-template>
+      </p-message>
+    }
+
+    <!-- Quantile cards -->
+    <section class="mcd-section">
+      <h2>Quantile summary</h2>
+      <p class="mcd-section-hint">
+        P5 / P50 / P95 across {{ data.config.simulation_count }} simulations.
+        Wide gaps = high path uncertainty.
+      </p>
+      <div class="mcd-quantile-grid">
+        <article class="mcd-quantile-card">
+          <h3>Max drawdown</h3>
+          <table>
+            <tr>
+              <td>P5</td>
+              <td>{{ data.result.drawdown_quantiles['p5'] | percent: '1.2-2' }}</td>
+            </tr>
+            <tr>
+              <td>P50</td>
+              <td>{{ data.result.drawdown_quantiles['p50'] | percent: '1.2-2' }}</td>
+            </tr>
+            <tr>
+              <td>P95</td>
+              <td>{{ data.result.drawdown_quantiles['p95'] | percent: '1.2-2' }}</td>
+            </tr>
+          </table>
+        </article>
+        <article class="mcd-quantile-card">
+          <h3>Terminal P&amp;L</h3>
+          <table>
+            <tr>
+              <td>P5</td>
+              <td>${{ data.result.terminal_pnl_quantiles['p5'] | number: '1.0-0' }}</td>
+            </tr>
+            <tr>
+              <td>P50</td>
+              <td>${{ data.result.terminal_pnl_quantiles['p50'] | number: '1.0-0' }}</td>
+            </tr>
+            <tr>
+              <td>P95</td>
+              <td>${{ data.result.terminal_pnl_quantiles['p95'] | number: '1.0-0' }}</td>
+            </tr>
+          </table>
+        </article>
+        <article class="mcd-quantile-card">
+          <h3>Max losing streak</h3>
+          <table>
+            <tr>
+              <td>P5</td>
+              <td>{{ data.result.max_losing_streak_quantiles['p5'] }} trades</td>
+            </tr>
+            <tr>
+              <td>P50</td>
+              <td>{{ data.result.max_losing_streak_quantiles['p50'] }} trades</td>
+            </tr>
+            <tr>
+              <td>P95</td>
+              <td>{{ data.result.max_losing_streak_quantiles['p95'] }} trades</td>
+            </tr>
+          </table>
+        </article>
+      </div>
+    </section>
+
+    <!-- Equity-band fan chart -->
+    <section class="mcd-section">
+      <h2>Equity bands</h2>
+      <p class="mcd-section-hint">
+        Three lines: <span class="mcd-legend mcd-legend-p5">P5 (pessimistic)</span>,
+        <span class="mcd-legend mcd-legend-p50">P50 (median)</span>,
+        <span class="mcd-legend mcd-legend-p95">P95 (optimistic)</span>.
+        X-axis is trade index (0 = before any trade); Y is simulated equity.
+      </p>
+      <div #bandChart class="mcd-chart"></div>
+    </section>
+
+    <!-- Breach probabilities -->
+    @if (data.result.breach_probabilities.length > 0) {
+      <section class="mcd-section">
+        <h2>Drawdown-breach probabilities</h2>
+        <p class="mcd-section-hint">
+          For each threshold T, the fraction of simulations whose realised
+          max-drawdown was at least T. ``P(MDD ≥ 0) = 1.0`` always — every
+          equity curve has non-negative drawdown by definition.
+        </p>
+        <p-table
+          [value]="data.result.breach_probabilities"
+          styleClass="mcd-breach-table"
+        >
+          <ng-template #header>
+            <tr>
+              <th>Threshold</th>
+              <th>P(MDD ≥ threshold)</th>
+            </tr>
+          </ng-template>
+          <ng-template #body let-bp>
+            <tr>
+              <td>{{ bp.threshold | percent: '1.0-0' }}</td>
+              <td>{{ bp.probability | percent: '1.1-1' }}</td>
+            </tr>
+          </ng-template>
+        </p-table>
+      </section>
+    }
+
+    <!-- Provenance -->
+    <section class="mcd-section">
+      <h2>Provenance</h2>
+      <dl class="mcd-provenance">
+        <dt>Initial equity</dt>
+        <dd>${{ data.config.initial_equity | number: '1.0-0' }}</dd>
+
+        <dt>Random seed</dt>
+        <dd><code>{{ data.config.random_seed }}</code></dd>
+
+        <dt>Projection trade count</dt>
+        <dd>
+          @if (data.config.projection_trade_count > 0) {
+            {{ data.config.projection_trade_count }}
+            <span class="mcd-prov-aux">(forward projection)</span>
+          } @else {
+            inherited from parent ({{ data.result.realised_trade_count }})
+          }
+        </dd>
+
+        <dt>Parent trade-log hash</dt>
+        <dd><code>{{ shortHash(data.config.parent_trade_log_hash, 32) }}…</code></dd>
+
+        <dt>Created</dt>
+        <dd>{{ data.config.created_at_ms | date: 'yyyy-MM-dd HH:mm:ss' }}</dd>
+
+        @if (data.result.completed_at_ms; as completedMs) {
+          <dt>Completed</dt>
+          <dd>{{ completedMs | date: 'yyyy-MM-dd HH:mm:ss' }}</dd>
+        }
+      </dl>
+    </section>
+  }
+</div>

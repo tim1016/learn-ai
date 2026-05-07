@@ -1,0 +1,86 @@
+.mc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+
+  h2 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+  }
+}
+
+.mc-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.mc-section-text {
+  flex: 1 1 360px;
+  min-width: 0;
+
+  p {
+    margin: 0.35rem 0 0;
+    color: var(--text-color-secondary, #6b7280);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    max-width: 70ch;
+  }
+}
+
+.mc-section-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.mc-error,
+.mc-flash {
+  display: block;
+}
+
+.mc-empty {
+  margin: 0;
+  padding: 1rem;
+  border: 1px dashed var(--surface-border, #e5e7eb);
+  border-radius: 6px;
+  color: var(--text-color-secondary, #6b7280);
+  font-size: 0.875rem;
+}
+
+.mc-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--primary-color, #2563eb);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.mc-link:hover {
+  text-decoration-thickness: 2px;
+}
+
+::ng-deep .mc-table {
+  .p-datatable-table {
+    font-size: 0.875rem;
+  }
+
+  .mc-row {
+    cursor: pointer;
+  }
+
+  .mc-row:hover {
+    background-color: var(--surface-hover, rgba(0, 0, 0, 0.04));
+  }
+
+  .mc-hash-cell {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 0.8125rem;
+    color: var(--text-color-secondary, #6b7280);
+  }
+}
