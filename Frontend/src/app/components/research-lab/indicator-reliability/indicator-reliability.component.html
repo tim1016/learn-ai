@@ -386,24 +386,81 @@
               </div>
             </div>
             @if (getHorizonCards().length > 0) {
-              <div class="horizon-cards">
-                @for (h of getHorizonCards(); track h.horizon) {
-                  <div class="horizon-card" [class.is-best]="h.horizon === res.best_horizon">
-                    <div class="horizon-card-head">
-                      <span class="mono text-slate-400 text-xs">{{ h.horizon }}-bar</span>
-                      @if (h.horizon === res.best_horizon) {
-                        <span class="horizon-card-best-tag">BEST</span>
-                        <app-info-icon refKey="bestHorizonTag" />
-                      }
-                    </div>
-                    <div class="horizon-card-ic mono" [style.color]="h.is_mean_ic < 0 ? 'var(--bear)' : 'var(--bull)'">
-                      {{ h.is_mean_ic.toFixed(3) }}
-                    </div>
-                    <div class="horizon-card-stats mono text-slate-500 text-xs">
-                      t {{ (h.is_nw_t_stat ?? h.is_t_stat).toFixed(1) }} · {{ h.ic_vs_random_zscore.toFixed(0) }}σ
-                    </div>
-                  </div>
-                }
+              <div class="horizon-table-wrap">
+                <table class="horizon-table" role="grid" aria-label="IC by forward horizon">
+                  <thead>
+                    <tr>
+                      <th scope="col">Horizon</th>
+                      <th scope="col" class="num-col">IC (IS)</th>
+                      <th scope="col" class="num-col">NW t</th>
+                      <th scope="col" class="num-col">p (FDR)</th>
+                      <th scope="col" class="num-col">IC (OOS)</th>
+                      <th scope="col" class="num-col">OOS t</th>
+                      <th scope="col" class="num-col">OOS vs IS</th>
+                      <th scope="col" class="num-col">vs Random</th>
+                      <th scope="col" class="num-col">Sharpe</th>
+                      <th scope="col" class="num-col">n</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (h of getHorizonCards(); track h.horizon) {
+                      @let isSel = selectedHorizon() === h.horizon;
+                      @let isBest = h.horizon === res.best_horizon;
+                      <tr
+                        class="ht-row"
+                        [class.ht-row--selected]="isSel"
+                        [class.ht-row--best]="isBest"
+                        (click)="selectHorizon(h.horizon)"
+                        (keydown.enter)="selectHorizon(h.horizon)"
+                        tabindex="0"
+                        role="row"
+                        [attr.aria-selected]="isSel"
+                      >
+                        <td class="ht-cell ht-cell--horizon">
+                          <span class="ht-horizon-label">{{ h.horizon }}-bar</span>
+                          @if (isBest) {
+                            <span class="ht-best-tag">BEST</span>
+                          }
+                          <span class="ht-strength">{{ h.strength_label }}</span>
+                        </td>
+                        <td class="ht-cell num-col" [style.color]="h.is_mean_ic < 0 ? 'var(--bear)' : 'var(--bull)'">
+                          {{ h.is_mean_ic.toFixed(4) }}
+                        </td>
+                        <td class="ht-cell num-col ht-muted">
+                          {{ (h.is_nw_t_stat ?? h.is_t_stat).toFixed(2) }}
+                        </td>
+                        <td class="ht-cell num-col" [style.color]="h.fdr_p < 0.05 ? 'var(--bull)' : 'var(--text-muted)'">
+                          {{ formatPValue(h.fdr_p) }}
+                        </td>
+                        <td class="ht-cell num-col ht-bold" [style.color]="h.oos_mean_ic !== null ? (h.oos_mean_ic < 0 ? 'var(--bear)' : 'var(--bull)') : 'var(--text-muted)'">
+                          {{ h.oos_mean_ic !== null ? h.oos_mean_ic.toFixed(4) : '—' }}
+                        </td>
+                        <td class="ht-cell num-col ht-muted">
+                          {{ h.oos_t_stat !== null ? h.oos_t_stat.toFixed(2) : '—' }}
+                        </td>
+                        <td class="ht-cell num-col" [style.color]="h.retention_delta_pct !== null ? (h.retention_delta_pct >= -20 ? 'var(--bull)' : 'var(--bear)') : 'var(--text-muted)'">
+                          {{ h.retention_delta_pct !== null ? formatRetentionDelta(h.retention_delta_pct) : '—' }}
+                        </td>
+                        <td class="ht-cell num-col" [style.color]="Math.abs(h.ic_vs_random_zscore) > 3 ? 'var(--bull)' : 'var(--text-muted)'">
+                          {{ formatZScore(h.ic_vs_random_zscore) }}
+                        </td>
+                        <td class="ht-cell num-col ht-muted">
+                          {{ h.sharpe_estimate.toFixed(2) }}
+                        </td>
+                        <td class="ht-cell num-col ht-muted">
+                          {{ h.is_effective_n }}
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+                <div class="ht-footer">
+                  <span><b class="ht-bull">●</b> {{ countFdrPasses() }}/{{ res.results.length }} horizons pass FDR</span>
+                  @if (res.any_significant_after_bonferroni) {
+                    <span><b class="ht-bull">●</b> Bonferroni-corrected</span>
+                  }
+                  <span>Click a row to focus that horizon</span>
+                </div>
               </div>
             }
           </div>
