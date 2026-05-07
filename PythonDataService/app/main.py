@@ -39,6 +39,7 @@ from app.routers import (
     strategy,
     tickers,
     volatility,
+    walk_forward,
 )
 from app.utils.error_handlers import polygon_exception_handler
 
@@ -115,6 +116,14 @@ app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
+# Research-pipeline walk-forward (Phase C). Registered BEFORE
+# ``research_runs`` so the literal ``/walk-forward`` segment wins
+# against the ``GET /{run_id}`` route on the parent router.
+app.include_router(
+    walk_forward.router,
+    prefix="/api/research/strategy-runs/walk-forward",
+    tags=["research-walk-forward"],
+)
 # Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
 app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
 app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
