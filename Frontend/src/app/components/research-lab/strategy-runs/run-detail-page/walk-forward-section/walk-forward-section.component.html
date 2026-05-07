@@ -1,0 +1,83 @@
+<section class="wf-section">
+  <header class="wf-section-header">
+    <div class="wf-section-text">
+      <h2>Walk-forward</h2>
+      <p>
+        Run the same strategy across train/test folds to see whether
+        the result is OOS-robust or only worked once. Each fold is a
+        full backtest of the test window using this run's spec — fold
+        runs appear in the run listing with this run as their parent.
+      </p>
+    </div>
+    <div class="wf-section-actions">
+      <p-button
+        icon="pi pi-refresh"
+        label="Refresh"
+        severity="secondary"
+        [loading]="loading()"
+        [disabled]="loading() || running()"
+        (onClick)="refresh()"
+      />
+      <p-button
+        icon="pi pi-th-large"
+        label="Run rolling walk-forward (60/30/30)"
+        [loading]="running()"
+        [disabled]="loading() || running()"
+        (onClick)="runRollingWalkForward()"
+      />
+    </div>
+  </header>
+
+  @if (error(); as msg) {
+    <p-message severity="error" [text]="msg" class="wf-error" />
+  }
+
+  @if (lastWfId(); as id) {
+    <p-message severity="success" class="wf-flash">
+      <ng-template #content>
+        <span>
+          Walk-forward submitted:
+          <button type="button" class="wf-link" (click)="openById(id)">
+            {{ shortHash(id, 12) }}…
+          </button>
+        </span>
+      </ng-template>
+    </p-message>
+  }
+
+  @if (hasWalkForwards()) {
+    <p-table
+      [value]="walkForwards()"
+      [rowTrackBy]="trackByWfId"
+      styleClass="wf-table"
+      selectionMode="single"
+    >
+      <ng-template #header>
+        <tr>
+          <th>Created</th>
+          <th>Split policy</th>
+          <th>Window</th>
+          <th>Walk-forward ID</th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-wf>
+        <tr class="wf-row" (click)="open(wf)">
+          <td>{{ wf.created_at_ms | date: 'yyyy-MM-dd HH:mm' }}</td>
+          <td class="wf-policy-cell">{{ splitSummary(wf.split_policy) }}</td>
+          <td class="wf-window-cell">
+            {{ wf.start_ms | date: 'yyyy-MM-dd' }} →
+            {{ wf.end_ms | date: 'yyyy-MM-dd' }}
+          </td>
+          <td class="wf-hash-cell">{{ shortHash(wf.walk_forward_id, 16) }}…</td>
+        </tr>
+      </ng-template>
+    </p-table>
+  } @else if (loading()) {
+    <p class="wf-empty">Loading walk-forwards…</p>
+  } @else {
+    <p class="wf-empty">
+      No walk-forwards yet for this run. Click the button above to fold the
+      window into 60-day train + 30-day test segments stepping every 30 days.
+    </p>
+  }
+</section>
