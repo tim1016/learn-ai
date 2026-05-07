@@ -208,7 +208,12 @@
                 <span class="vol-text">{{ row.callVolume }}</span>
               </td>
 
-              <td class="num strike-cell">{{ row.strikeFormatted }}</td>
+              <td class="num strike-cell">
+                {{ row.strikeFormatted }}
+                @if (row.isAtm && spotPrice() > 0) {
+                  <span class="atm-badge">ATM {{ spotPrice() | number:'1.2-2' }}</span>
+                }
+              </td>
               <td class="num iv-cell">{{ row.centerIv }}</td>
 
               <!-- Puts: data from strike outward, then L/S action cell -->
@@ -255,4 +260,21 @@
       </div>
     }
   </div>
+
+  <!-- Legend strip — color zone explanation -->
+  @if (rows().length > 0) {
+    <div class="chain-legend" role="note" aria-label="Options chain color legend">
+      <span class="legend-item">
+        <span class="legend-swatch legend-swatch--call" aria-hidden="true"></span>ITM call
+      </span>
+      <span class="legend-item">
+        <span class="legend-swatch legend-swatch--put" aria-hidden="true"></span>ITM put
+      </span>
+      <span class="legend-item">
+        <span class="legend-swatch legend-swatch--atm" aria-hidden="true"></span>ATM row
+      </span>
+      <span class="legend-sep" aria-hidden="true"></span>
+      <span class="legend-hint">Strike prices rise top → bottom · volume bars grow toward spine</span>
+    </div>
+  }
 </div>

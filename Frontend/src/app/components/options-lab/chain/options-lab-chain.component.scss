@@ -360,6 +360,7 @@
 
   // Center spine
   .strike-cell {
+    position: relative;
     background: rgba(255, 255, 255, 0.025);
     font-weight: 700;
     color: var(--ol-fg-strong);
@@ -474,6 +475,65 @@
     outline: 2px solid var(--ol-accent);
     outline-offset: 1px;
   }
+}
+
+// ─── ATM badge ──────────────────────────────────────────────
+.atm-badge {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: -7px;
+  background: rgba(41, 98, 255, 0.9);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  padding: 1px 5px;
+  border-radius: 2px;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  z-index: 3;
+  pointer-events: none;
+}
+
+// ─── Legend strip ────────────────────────────────────────────
+.chain-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 14px;
+  background: var(--ol-surface);
+  border-top: 1px solid var(--ol-border);
+  font-size: 10px;
+  color: var(--ol-fg-dim);
+  flex-shrink: 0;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+
+  &--call { background: var(--ol-call-soft); }
+  &--put  { background: var(--ol-put-soft); }
+  &--atm  { background: rgba(41, 98, 255, 0.18); border: 1px solid rgba(41, 98, 255, 0.4); }
+}
+
+.legend-sep {
+  flex: 1;
+}
+
+.legend-hint {
+  font-size: 9px;
+  color: var(--ol-fg-dim);
+  font-style: italic;
 }
 
 // ─── Reduced motion ─────────────────────────────────────────
