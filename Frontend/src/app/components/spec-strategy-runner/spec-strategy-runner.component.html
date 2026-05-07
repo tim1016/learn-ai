@@ -1,14 +1,9 @@
 <section class="ssr-page">
-  <!-- Page head ----------------------------------------------------------- -->
-  <header class="ssr-page-head">
-    <div>
-      <h1>Strategy Builder</h1>
-      <p class="ssr-subtitle">
-        Compose a typed strategy from indicators and trader-friendly conditions,
-        validate it, and run a backtest.
-      </p>
-    </div>
-    <div class="ssr-head-actions">
+  <app-page-header
+    title="Strategy Builder"
+    subtitle="Compose a typed strategy from indicators and trader-friendly conditions, validate it, and run a backtest."
+  >
+    <div slot="actions" class="ssr-head-actions">
       <select
         class="ssr-input ssr-input--narrow"
         [ngModel]="selectedFixtureId()"
@@ -31,7 +26,7 @@
         }
       </select>
     </div>
-  </header>
+  </app-page-header>
 
   <!-- Identity card ------------------------------------------------------- -->
   <div class="ssr-identity">

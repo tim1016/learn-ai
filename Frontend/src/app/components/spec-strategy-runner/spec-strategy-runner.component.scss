@@ -13,31 +13,6 @@
   gap: 1rem;
 }
 
-// ─── Page head ────────────────────────────────────────────────────────────
-.ssr-page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
-
-  h1 {
-    margin: 0 0 0.25rem;
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: var(--text-primary);
-    letter-spacing: -0.02em;
-  }
-
-  .ssr-subtitle {
-    margin: 0;
-    color: var(--text-secondary);
-    font-size: 0.875rem;
-    line-height: 1.5;
-    max-width: 60rem;
-  }
-}
-
 .ssr-head-actions {
   display: flex;
   gap: 0.5rem;
