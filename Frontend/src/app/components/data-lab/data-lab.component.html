@@ -780,56 +780,6 @@
     </div>
   }
 
-  <!-- Active Entries (configured indicators) -->
-  @if (entries().length) {
-    <div class="entries-section">
-      <div class="entries-toolbar">
-        <span class="entries-toolbar-eyebrow">
-          Active Indicators · <span class="entries-toolbar-count">{{ entries().length }}</span>
-        </span>
-        <div class="entries-toolbar-actions">
-          <label class="entries-sort">
-            Sort
-            <select [ngModel]="entriesSortMode()" (ngModelChange)="entriesSortMode.set($event)">
-              @for (mode of entriesSortModes; track mode.value) {
-                <option [value]="mode.value">{{ mode.label }}</option>
-              }
-            </select>
-          </label>
-          <button class="entries-add" type="button" (click)="scrollToCatalog()">
-            <i class="pi pi-plus"></i> Add indicator
-          </button>
-        </div>
-      </div>
-      <div class="entries-grid">
-        @for (block of groupedEntriesView(); track $index) {
-          @switch (block.kind) {
-            @case ('single') {
-              <app-active-indicator-card
-                [entry]="block.item.entry"
-                [paramConfigs]="getConfigParams(block.item.entry.name)"
-                [timeframeWarning]="timeframeWarnings()[block.item.originalIndex]"
-                (configure)="openConfigure(block.item.originalIndex)"
-                (resetDefaults)="resetEntryToDefaults(block.item.originalIndex)"
-                (remove)="removeEntry(block.item.originalIndex)" />
-            }
-            @case ('group') {
-              <app-active-indicator-group
-                [name]="block.name"
-                [items]="block.items"
-                [paramConfigs]="getConfigParams(block.name)"
-                (configurePill)="openConfigure($event)"
-                (removePill)="removeEntry($event)"
-                (addAnother)="addInstanceByName(block.name)"
-                (resetGroup)="resetGroupToDefaults(block.name)"
-                (removeGroup)="removeGroupByName(block.name)" />
-            }
-          }
-        }
-      </div>
-    </div>
-  }
-
   <!-- Indicator configuration modal (shared instance) -->
   <app-indicator-config-modal
     [visible]="modalVisible()"
@@ -847,10 +797,36 @@
 
   <!-- CSV Column Preview -->
   <div class="columns-section">
-    <h3>CSV Column Preview</h3>
-    <div class="column-chips">
-      @for (col of estimatedColumns(); track col) {
-        <code class="col-chip" [class.base]="['unix_ts','iso_time','open','high','low','close','volume','vwap','transactions'].includes(col)">{{ col }}</code>
+    <div class="columns-section-header">
+      <h3>CSV Column Preview</h3>
+      <span class="columns-count">{{ estimatedColumns().length }} columns</span>
+    </div>
+    <div class="col-preview">
+      <div class="col-preview-group">
+        <span class="col-group-label col-group-label--base">Base</span>
+        <div class="column-chips">
+          @for (col of columnGroups().base; track col) {
+            <code class="col-chip col-chip--base">{{ col }}</code>
+          }
+        </div>
+      </div>
+      <div class="col-preview-group">
+        <span class="col-group-label col-group-label--ohlcv">OHLCV</span>
+        <div class="column-chips">
+          @for (col of columnGroups().ohlcv; track col) {
+            <code class="col-chip col-chip--ohlcv">{{ col }}</code>
+          }
+        </div>
+      </div>
+      @if (columnGroups().indicators.length) {
+        <div class="col-preview-group">
+          <span class="col-group-label col-group-label--indicator">Indicators ({{ columnGroups().indicators.length }})</span>
+          <div class="column-chips">
+            @for (col of columnGroups().indicators; track col) {
+              <code class="col-chip col-chip--indicator">{{ col }}</code>
+            }
+          </div>
+        </div>
       }
     </div>
   </div>
@@ -909,70 +885,146 @@
     }
   </div>
 
-  <!-- Indicator Catalog -->
-  <div class="indicator-section" id="data-lab-indicator-catalog">
-    <h3>Indicator Catalog</h3>
-    <p class="section-desc">
-      Click to toggle an indicator. Use <strong>+</strong> to add another instance with different parameters.
-      All calculations use the <code>pandas-ta</code> library.
-    </p>
+  <!-- Indicator workspace — 2-column: catalog left, active instances right -->
+  <div class="indicator-workspace">
 
-    @if (loadingIndicators()) {
-      <div class="loading-msg">Loading available indicators...</div>
-    }
+    <!-- Left: searchable catalog -->
+    <div class="indicator-catalog-col" id="data-lab-indicator-catalog">
+      <div class="catalog-col-header">
+        <span class="catalog-col-eyebrow">Indicator Catalog</span>
+        <span class="catalog-col-hint">All calculations use <code>pandas-ta</code></span>
+      </div>
 
-    <div class="categories">
-      @for (cat of categories(); track cat.name) {
-        @let count = categorySelectedCount(cat.name);
-        <div class="category-card">
-          <div class="category-header" (click)="toggleCategory(cat.name)">
-            <div class="category-title">
-              <i class="pi" [class.pi-chevron-right]="!isCategoryExpanded(cat.name)"
-                 [class.pi-chevron-down]="isCategoryExpanded(cat.name)"></i>
-              <span class="cat-name">{{ cat.name }}</span>
-              <span class="cat-count">{{ cat.indicators.length }}</span>
-              @if (count > 0) {
-                <span class="cat-selected">{{ count }} selected</span>
-              }
+      <div class="catalog-search" role="search">
+        <i class="pi pi-search catalog-search-icon" aria-hidden="true"></i>
+        <input
+          type="search"
+          class="catalog-search-input"
+          placeholder="Search (rsi, bollinger, volume…)"
+          [ngModel]="catalogQuery()"
+          (ngModelChange)="catalogQuery.set($event)"
+          aria-label="Search indicator catalog"
+        />
+      </div>
+
+      @if (loadingIndicators()) {
+        <div class="loading-msg">Loading available indicators...</div>
+      }
+
+      <div class="categories">
+        @for (cat of filteredCategories(); track cat.name) {
+          @let count = categorySelectedCount(cat.name);
+          <div class="category-card">
+            <div class="category-header" (click)="toggleCategory(cat.name)">
+              <div class="category-title">
+                <i class="pi" [class.pi-chevron-right]="!isCategoryExpanded(cat.name)"
+                   [class.pi-chevron-down]="isCategoryExpanded(cat.name)"></i>
+                <span class="cat-name">{{ cat.name }}</span>
+                <span class="cat-count">{{ cat.indicators.length }}</span>
+                @if (count > 0) {
+                  <span class="cat-selected">{{ count }} selected</span>
+                }
+              </div>
+            </div>
+
+            @if (isCategoryExpanded(cat.name)) {
+              <div class="indicator-grid">
+                @for (ind of cat.indicators; track ind.name) {
+                  <div class="indicator-item" [class.selected]="isSelected(ind.name)">
+                    <label>
+                      <input
+                        type="checkbox"
+                        [checked]="isSelected(ind.name)"
+                        (change)="toggleIndicator(ind)" />
+                      <app-indicator-tooltip [indicatorKey]="ind.name"
+                                             [paramConfigs]="ind.configurable_params"
+                                             [fallbackDescription]="ind.description">
+                        <div class="indicator-info">
+                          <span class="ind-name">{{ ind.name }}</span>
+                          <span class="ind-desc">{{ ind.description }}</span>
+                        </div>
+                      </app-indicator-tooltip>
+                    </label>
+                    <button class="btn-preview" type="button"
+                            (click)="openPreview(ind.name)"
+                            pTooltip="Preview before adding" tooltipPosition="top"
+                            [attr.aria-label]="'Preview ' + ind.name">
+                      <i class="pi pi-info-circle"></i>
+                    </button>
+                    @if (ind.configurable_params.length) {
+                      <button class="btn-add" title="Add another instance with different params" (click)="addInstance(ind)">
+                        <i class="pi pi-plus"></i>
+                      </button>
+                    }
+                  </div>
+                }
+              </div>
+            }
+          </div>
+        }
+        @if (filteredCategories().length === 0 && !loadingIndicators()) {
+          <div class="catalog-no-results">
+            No indicators match "{{ catalogQuery() }}".
+          </div>
+        }
+      </div>
+    </div>
+
+    <!-- Right: active instances -->
+    <div class="indicator-active-col">
+      @if (entries().length) {
+        <div class="entries-section">
+          <div class="entries-toolbar">
+            <span class="entries-toolbar-eyebrow">
+              Active · <span class="entries-toolbar-count">{{ entries().length }}</span>
+            </span>
+            <div class="entries-toolbar-actions">
+              <label class="entries-sort">
+                Sort
+                <select [ngModel]="entriesSortMode()" (ngModelChange)="entriesSortMode.set($event)">
+                  @for (mode of entriesSortModes; track mode.value) {
+                    <option [value]="mode.value">{{ mode.label }}</option>
+                  }
+                </select>
+              </label>
             </div>
           </div>
-
-          @if (isCategoryExpanded(cat.name)) {
-            <div class="indicator-grid">
-              @for (ind of cat.indicators; track ind.name) {
-                <div class="indicator-item" [class.selected]="isSelected(ind.name)">
-                  <label>
-                    <input
-                      type="checkbox"
-                      [checked]="isSelected(ind.name)"
-                      (change)="toggleIndicator(ind)" />
-                    <app-indicator-tooltip [indicatorKey]="ind.name"
-                                           [paramConfigs]="ind.configurable_params"
-                                           [fallbackDescription]="ind.description">
-                      <div class="indicator-info">
-                        <span class="ind-name">{{ ind.name }}</span>
-                        <span class="ind-desc">{{ ind.description }}</span>
-                      </div>
-                    </app-indicator-tooltip>
-                  </label>
-                  <button class="btn-preview" type="button"
-                          (click)="openPreview(ind.name)"
-                          pTooltip="Preview before adding" tooltipPosition="top"
-                          [attr.aria-label]="'Preview ' + ind.name">
-                    <i class="pi pi-info-circle"></i>
-                  </button>
-                  @if (ind.configurable_params.length) {
-                    <button class="btn-add" title="Add another instance with different params" (click)="addInstance(ind)">
-                      <i class="pi pi-plus"></i>
-                    </button>
-                  }
-                </div>
+          <div class="entries-grid">
+            @for (block of groupedEntriesView(); track $index) {
+              @switch (block.kind) {
+                @case ('single') {
+                  <app-active-indicator-card
+                    [entry]="block.item.entry"
+                    [paramConfigs]="getConfigParams(block.item.entry.name)"
+                    [timeframeWarning]="timeframeWarnings()[block.item.originalIndex]"
+                    (configure)="openConfigure(block.item.originalIndex)"
+                    (resetDefaults)="resetEntryToDefaults(block.item.originalIndex)"
+                    (remove)="removeEntry(block.item.originalIndex)" />
+                }
+                @case ('group') {
+                  <app-active-indicator-group
+                    [name]="block.name"
+                    [items]="block.items"
+                    [paramConfigs]="getConfigParams(block.name)"
+                    (configurePill)="openConfigure($event)"
+                    (removePill)="removeEntry($event)"
+                    (addAnother)="addInstanceByName(block.name)"
+                    (resetGroup)="resetGroupToDefaults(block.name)"
+                    (removeGroup)="removeGroupByName(block.name)" />
+                }
               }
-            </div>
-          }
+            }
+          </div>
+        </div>
+      } @else {
+        <div class="active-empty">
+          <i class="pi pi-sliders-h" aria-hidden="true"></i>
+          <p class="active-empty-primary">OHLCV only — the simple path.</p>
+          <p class="active-empty-hint">Click an indicator in the catalog to add it to your export.</p>
         </div>
       }
     </div>
+
   </div>
 </div>
 

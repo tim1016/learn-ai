@@ -723,6 +723,9 @@ export class DataLabComponent {
 
   expandedCategories = signal<Set<string>>(new Set());
 
+  /** Search query for the indicator catalog — filters by name or description. */
+  catalogQuery = signal('');
+
   // Volume warning — set after chart data loads
   volumeWarning = signal('');
 
@@ -732,6 +735,19 @@ export class DataLabComponent {
   // a param input triggered ~1,040 Set allocations (audit § 4.3).
   // As a computed it memoizes until entries() changes.
   selectedNames = computed<Set<string>>(() => new Set(this.entries().map(e => e.name)));
+
+  filteredCategories = computed<CategoryData[]>(() => {
+    const q = this.catalogQuery().trim().toLowerCase();
+    if (!q) return this.categories();
+    return this.categories()
+      .map(c => ({
+        ...c,
+        indicators: c.indicators.filter(
+          i => i.name.toLowerCase().includes(q) || i.description.toLowerCase().includes(q),
+        ),
+      }))
+      .filter(c => c.indicators.length > 0);
+  });
 
   entryCount = computed(() => this.entries().length);
 
@@ -790,6 +806,24 @@ export class DataLabComponent {
       }
     }
     return [...base, ...indicatorCols];
+  });
+
+  private static readonly BASE_COL_SET = new Set(['unix_ts', 'iso_time']);
+  private static readonly OHLCV_COL_SET = new Set([
+    'open', 'high', 'low', 'close', 'volume', 'vwap', 'transactions',
+  ]);
+
+  /** Columns split into Base / OHLCV / Indicators for the color-coded preview. */
+  columnGroups = computed(() => {
+    const base: string[] = [];
+    const ohlcv: string[] = [];
+    const indicators: string[] = [];
+    for (const col of this.estimatedColumns()) {
+      if (DataLabComponent.BASE_COL_SET.has(col)) base.push(col);
+      else if (DataLabComponent.OHLCV_COL_SET.has(col)) ohlcv.push(col);
+      else indicators.push(col);
+    }
+    return { base, ohlcv, indicators };
   });
 
   constructor() {
