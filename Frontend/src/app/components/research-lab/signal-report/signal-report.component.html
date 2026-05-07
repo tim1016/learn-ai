@@ -473,9 +473,7 @@
                 } @else {
                   <p-tag severity="info" value="Not Significant" />
                 }
-                <span class="ml-2 text-xs text-gray-500">
-                  N = {{ decay.nFoldsUsed }} folds
-                </span>
+                <span class="title-annotation">N = {{ decay.nFoldsUsed }} folds</span>
               </div>
               <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
                 <div class="metric-card">
@@ -538,9 +536,7 @@
       <div class="mb-6">
         <h4 class="table-title mb-3">
           <i class="pi pi-list mr-2"></i>Walk-Forward Windows
-          <span class="ml-2 text-xs text-gray-500">
-            Threshold is selected per-fold from train-only data — see methodology page.
-          </span>
+          <span class="title-annotation">Threshold is selected per-fold from train-only data — see methodology page.</span>
         </h4>
         <p-table [value]="wf.windows" styleClass="p-datatable-sm" [tableStyle]="{ 'min-width': '50rem' }">
           <ng-template #header>
@@ -679,7 +675,7 @@
           [value]="ps.stabilityLabel"
           class="ml-2"
         />
-        <span class="ml-2 text-sm text-gray-500">Score: {{ ps.stabilityScore | number: '1.2-2' }}</span>
+        <span class="title-annotation title-annotation--sm">Score: {{ ps.stabilityScore | number: '1.2-2' }}</span>
       </h4>
       <div class="chart-container">
         <canvas #stabilityChart></canvas>
