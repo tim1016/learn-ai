@@ -1,72 +1,148 @@
-@if (isRoot()) {
-  <section class="edge-shell">
-    <app-page-header
-      eyebrow="Quant Trading Lab · /edge"
-      title="Edge — quantitative research views"
-      subtitle="Three views bound by two cross-cutting capabilities — the Trade Simulator and Edge Score. Canonical engineering spec lives in docs/architecture/edge-feature-design.md."
-    />
+<div class="edge-wrap">
+  <app-page-header
+    eyebrow="Quant Trading Lab · /edge"
+    title="Edge — quantitative research views"
+    subtitle="Three views bound by two cross-cutting capabilities — the Trade Simulator and Edge Score. Canonical engineering spec lives in docs/architecture/edge-feature-design.md."
+    [hasTabs]="true"
+  />
 
-    <div class="card-grid">
-      @for (card of cards(); track card.route) {
-        <a
-          class="edge-card"
-          [routerLink]="['/edge', card.route]"
-          [style.--card-accent]="card.catColor"
-          [style.--card-soft]="card.catSoft"
-        >
-          <span class="card-rail" aria-hidden="true"></span>
-          <div class="card-head">
-            <span class="card-eyebrow" [style.color]="card.catColor">{{ card.eyebrow }}</span>
-            <span class="card-arrow" aria-hidden="true">→</span>
+  <!-- Persistent sub-nav — visible across root and all sub-routes -->
+  <nav class="edge-subnav" aria-label="Edge navigation">
+    <a class="edge-tab"
+       routerLink="/edge"
+       routerLinkActive="active"
+       [routerLinkActiveOptions]="{ exact: true }">
+      <i class="pi pi-bolt" aria-hidden="true"></i>
+      Edge
+    </a>
+    <a class="edge-tab"
+       routerLink="/edge/realized-vs-iv"
+       routerLinkActive="active">
+      <i class="pi pi-chart-bar" aria-hidden="true"></i>
+      Realized vs IV
+    </a>
+    <a class="edge-tab"
+       routerLink="/edge/cross-asset"
+       routerLinkActive="active">
+      <i class="pi pi-share-alt" aria-hidden="true"></i>
+      Cross-Asset
+    </a>
+    <a class="edge-tab"
+       routerLink="/edge/regimes"
+       routerLinkActive="active">
+      <i class="pi pi-th-large" aria-hidden="true"></i>
+      Regimes
+    </a>
+    <div class="edge-subnav-spacer"></div>
+    <span class="edge-subnav-tz">America/New_York</span>
+  </nav>
+
+  @if (isRoot()) {
+    <section class="edge-root">
+      <!-- KPI score cards — composite edge signal overview -->
+      <div class="edge-kpi-row">
+        <div class="edge-kpi ok">
+          <div class="edge-kpi-label">Edge composite</div>
+          <div class="edge-kpi-value">+0.41</div>
+          <div class="edge-kpi-sub">long-vol bias</div>
+        </div>
+        <div class="edge-kpi ok">
+          <div class="edge-kpi-label">DSR (mean)</div>
+          <div class="edge-kpi-value">0.74</div>
+          <div class="edge-kpi-sub">López de Prado 2014</div>
+        </div>
+        <div class="edge-kpi warn">
+          <div class="edge-kpi-label">PBO</div>
+          <div class="edge-kpi-value">0.31</div>
+          <div class="edge-kpi-sub">CSCV @ 200 combos</div>
+        </div>
+        <div class="edge-kpi-contrib">
+          <div class="edge-eyebrow">SCORE COMPONENTS</div>
+          <div class="edge-contrib-row">
+            <span class="edge-contrib-label">VRP contrib</span>
+            <span class="edge-contrib-val" style="color:var(--ind-cat-volatility)">+0.30</span>
           </div>
-          <h2>{{ card.title }}</h2>
-          <p class="card-tag">{{ card.tagline }}</p>
-
-          <div class="card-spark">
-            <div class="card-spark-head">
-              <span class="card-spark-label">{{ card.sparkLabel }}</span>
-              <span class="card-spark-value" [style.color]="card.catColor">{{ card.sparkValue }}</span>
-            </div>
-            <div class="card-spark-canvas">
-              <app-edge-mini-line
-                [width]="380" [height]="36"
-                [values]="card.sparkValues"
-                [color]="card.catColor"
-                [fill]="card.catSoft" />
-            </div>
+          <div class="edge-contrib-row">
+            <span class="edge-contrib-label">Regime contrib</span>
+            <span class="edge-contrib-val" style="color:var(--ind-cat-momentum)">+0.16</span>
           </div>
-
-          <ul class="card-bullets">
-            @for (b of card.bullets; track b) {
-              <li><span class="bullet-dot" [style.background]="card.catColor"></span>{{ b }}</li>
-            }
-          </ul>
-        </a>
-      }
-    </div>
-
-    <section class="capabilities">
-      <div class="edge-eyebrow">CROSS-CUTTING CAPABILITIES</div>
-      <div class="cap-grid">
-        @for (cap of capabilities; track cap.title) {
-          <div class="cap-row">
-            <span class="cap-icon">{{ cap.icon }}</span>
-            <div class="cap-text">
-              <div class="cap-title">{{ cap.title }}</div>
-              <div class="cap-sub">{{ cap.subtitle }}</div>
-            </div>
-            <span class="cap-badge">{{ cap.badge }}</span>
+          <div class="edge-contrib-row">
+            <span class="edge-contrib-label">IV contrib</span>
+            <span class="edge-contrib-val">−0.04</span>
           </div>
+          <div class="edge-contrib-row">
+            <span class="edge-contrib-label">Trend contrib</span>
+            <span class="edge-contrib-val">−0.01</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Three route nav cards -->
+      <div class="card-grid">
+        @for (card of cards(); track card.route) {
+          <a
+            class="edge-card"
+            [routerLink]="['/edge', card.route]"
+            [style.--card-accent]="card.catColor"
+            [style.--card-soft]="card.catSoft"
+          >
+            <span class="card-rail" aria-hidden="true"></span>
+            <div class="card-head">
+              <span class="card-eyebrow" [style.color]="card.catColor">{{ card.eyebrow }}</span>
+              <span class="card-arrow" aria-hidden="true">→</span>
+            </div>
+            <h2>{{ card.title }}</h2>
+            <p class="card-tag">{{ card.tagline }}</p>
+
+            <div class="card-spark">
+              <div class="card-spark-head">
+                <span class="card-spark-label">{{ card.sparkLabel }}</span>
+                <span class="card-spark-value" [style.color]="card.catColor">{{ card.sparkValue }}</span>
+              </div>
+              <div class="card-spark-canvas">
+                <app-edge-mini-line
+                  [width]="380" [height]="36"
+                  [values]="card.sparkValues"
+                  [color]="card.catColor"
+                  [fill]="card.catSoft" />
+              </div>
+            </div>
+
+            <ul class="card-bullets">
+              @for (b of card.bullets; track b) {
+                <li>
+                  <span class="bullet-arrow" [style.color]="card.catColor" aria-hidden="true">→</span>
+                  {{ b }}
+                </li>
+              }
+            </ul>
+          </a>
         }
       </div>
-    </section>
 
-    <footer class="edge-foot">
-      v1 ships fixed defaults. Edge Score weights are not auto-tuned;
-      Bayesian sensitivity is opt-in. All signals are research artifacts —
-      not investment advice.
-    </footer>
-  </section>
-} @else {
-  <router-outlet />
-}
+      <section class="capabilities">
+        <div class="edge-eyebrow">CROSS-CUTTING CAPABILITIES</div>
+        <div class="cap-grid">
+          @for (cap of capabilities; track cap.title) {
+            <div class="cap-row">
+              <span class="cap-icon">{{ cap.icon }}</span>
+              <div class="cap-text">
+                <div class="cap-title">{{ cap.title }}</div>
+                <div class="cap-sub">{{ cap.subtitle }}</div>
+              </div>
+              <span class="cap-badge">{{ cap.badge }}</span>
+            </div>
+          }
+        </div>
+      </section>
+
+      <footer class="edge-foot">
+        v1 ships fixed defaults. Edge Score weights are not auto-tuned;
+        Bayesian sensitivity is opt-in. All signals are research artifacts —
+        not investment advice.
+      </footer>
+    </section>
+  } @else {
+    <router-outlet />
+  }
+</div>

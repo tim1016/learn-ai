@@ -1,5 +1,4 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from "@angular/core";
-import { RouterLink } from "@angular/router";
 import {
   EDGE_TOK,
   EdgeRegimePriceChartComponent,
@@ -16,10 +15,8 @@ type ViewMode = "viterbi" | "posterior";
 
 @Component({
   selector: "app-edge-regimes",
-  standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    RouterLink,
     EdgeRegimePriceChartComponent,
     EdgeTransitionMatrixComponent,
     EdgeRegimeRadarComponent,

@@ -1,5 +1,4 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from "@angular/core";
-import { RouterLink } from "@angular/router";
 import {
   EdgePriceIVChartComponent,
   EdgeVrpHistogramComponent,
@@ -12,10 +11,8 @@ import { EdgeMockDataService, type EdgeData } from "../services/edge-mock-data.s
 
 @Component({
   selector: "app-edge-realized-vs-iv",
-  standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    RouterLink,
     EdgePriceIVChartComponent,
     EdgeVrpHistogramComponent,
     EdgeScoreDrawerComponent,

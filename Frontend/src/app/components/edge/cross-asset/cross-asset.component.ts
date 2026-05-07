@@ -1,5 +1,4 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from "@angular/core";
-import { RouterLink } from "@angular/router";
 import {
   EDGE_TOK,
   EdgeMiniLineComponent,
@@ -15,10 +14,8 @@ type Composite = "per-asset" | "equal-weight" | "vol-weighted";
 
 @Component({
   selector: "app-edge-cross-asset",
-  standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    RouterLink,
     EdgeMiniLineComponent,
     EdgeSharpeHeatmapComponent,
     EdgeScoreDrawerComponent,
