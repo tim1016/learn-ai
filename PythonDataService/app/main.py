@@ -27,6 +27,7 @@ from app.routers import (
     iv_recorder,
     jobs,
     market_monitor,
+    monte_carlo,
     options,
     portfolio,
     quantlib_options,
@@ -123,6 +124,13 @@ app.include_router(
     walk_forward.router,
     prefix="/api/research/strategy-runs/walk-forward",
     tags=["research-walk-forward"],
+)
+# Research-pipeline Monte Carlo (Phase D). Same pre-research_runs
+# placement so the literal ``/monte-carlo`` segment wins.
+app.include_router(
+    monte_carlo.router,
+    prefix="/api/research/strategy-runs/monte-carlo",
+    tags=["research-monte-carlo"],
 )
 # Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
 app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
