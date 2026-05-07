@@ -345,7 +345,7 @@
       <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-3">
         <div class="metric-card">
           <div class="metric-label">Avg Return (Active)</div>
-          <div class="metric-value" [class.text-green-700]="sb.avgForwardReturnWhenActive > 0" [class.text-red-700]="sb.avgForwardReturnWhenActive <= 0">
+          <div class="metric-value" [class.val-bull]="sb.avgForwardReturnWhenActive > 0" [class.val-bear]="sb.avgForwardReturnWhenActive <= 0">
             {{ sb.avgForwardReturnWhenActive | number: '1.6-6' }}
           </div>
         </div>
@@ -359,11 +359,11 @@
         </div>
         <div class="metric-card">
           <div class="metric-label">Avg Win Return</div>
-          <div class="metric-value text-green-700">{{ sb.avgWinReturn | number: '1.6-6' }}</div>
+          <div class="metric-value val-bull">{{ sb.avgWinReturn | number: '1.6-6' }}</div>
         </div>
         <div class="metric-card">
           <div class="metric-label">Avg Loss Return</div>
-          <div class="metric-value text-red-700">{{ sb.avgLossReturn | number: '1.6-6' }}</div>
+          <div class="metric-value val-bear">{{ sb.avgLossReturn | number: '1.6-6' }}</div>
         </div>
       </div>
       <div class="interpretation-note">
@@ -383,7 +383,7 @@
         <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
           <div class="metric-card">
             <div class="metric-label">Mean OOS Sharpe</div>
-            <div class="metric-value" [class.text-green-700]="wf.meanOosSharpe > 0" [class.text-red-700]="wf.meanOosSharpe <= 0">
+            <div class="metric-value" [class.val-bull]="wf.meanOosSharpe > 0" [class.val-bear]="wf.meanOosSharpe <= 0">
               {{ wf.meanOosSharpe | number: '1.2-2' }}
             </div>
           </div>
@@ -480,7 +480,7 @@
               <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
                 <div class="metric-card">
                   <div class="metric-label">Slope (β₁)</div>
-                  <div class="metric-value" [class.text-red-700]="decay.slope < 0" [class.text-green-700]="decay.slope >= 0">
+                  <div class="metric-value" [class.val-bear]="decay.slope < 0" [class.val-bull]="decay.slope >= 0">
                     {{ decay.slope | number: '1.4-4' }}
                   </div>
                 </div>
@@ -494,7 +494,7 @@
                 </div>
                 <div class="metric-card">
                   <div class="metric-label">p-value</div>
-                  <div class="metric-value" [class.text-red-700]="decay.pValue < 0.05">
+                  <div class="metric-value" [class.val-bear]="decay.pValue < 0.05">
                     {{ decay.pValue | number: '1.4-4' }}
                   </div>
                 </div>
@@ -561,10 +561,10 @@
               <td>{{ w.trainStart }} to {{ w.trainEnd }}</td>
               <td>{{ w.testStart }} to {{ w.testEnd }}</td>
               <td class="td-emphasis">{{ w.bestThreshold | number: '1.1-1' }}</td>
-              <td [class.text-green-700]="w.oosNetSharpe > 0" [class.text-red-700]="w.oosNetSharpe <= 0">
+              <td [class.val-bull]="w.oosNetSharpe > 0" [class.val-bear]="w.oosNetSharpe <= 0">
                 {{ w.oosNetSharpe | number: '1.2-2' }}
               </td>
-              <td [class.text-green-700]="w.oosNetReturn > 0" [class.text-red-700]="w.oosNetReturn <= 0">
+              <td [class.val-bull]="w.oosNetReturn > 0" [class.val-bear]="w.oosNetReturn <= 0">
                 {{ w.oosNetReturn | number: '1.4-4' }}
               </td>
               <td>{{ w.oosMaxDrawdown | number: '1.4-4' }}</td>
