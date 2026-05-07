@@ -20,7 +20,7 @@ import { NavGroup, RESEARCH_LAB_NAV } from './research-lab-nav.config';
 interface NavState {
   data: Record<string, unknown>;
   /** Matched route config path of the deepest active route, e.g.
-   *  `'build/validate'` or `'inspect/strategy-runs'`. */
+   *  `'features/validate'` or `'signals/engine'`. */
   path: string | null;
 }
 
@@ -61,7 +61,7 @@ export class ResearchLabComponent {
 
   /** Group whose child is currently active. Falls back to the first group
    *  for the brief moment between landing on `/research-lab` and the
-   *  redirect to `build/validate` resolving. */
+   *  redirect to `features/validate` resolving. */
   readonly activeGroup = computed<NavGroup>(() => {
     const path = this.navState().path;
     const match = this.groups.find((g) =>

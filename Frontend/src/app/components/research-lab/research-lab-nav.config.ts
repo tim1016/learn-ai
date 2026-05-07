@@ -1,5 +1,5 @@
 export interface NavItem {
-  /** Path relative to `/research-lab` (e.g. `'build/validate'`). */
+  /** Path relative to `/research-lab` (e.g. `'features/validate'`). */
   readonly path: string;
   /** Short label for the sub-nav tab. */
   readonly label: string;
@@ -12,22 +12,25 @@ export interface NavGroup {
 
 export const RESEARCH_LAB_NAV: readonly NavGroup[] = [
   {
-    label: 'Build',
+    label: 'Features',
     items: [
-      { path: 'build/validate', label: 'Validate' },
-      { path: 'build/indicator-reliability', label: 'Reliability' },
-      { path: 'build/signal-engine', label: 'Signal Engine' },
+      { path: 'features/validate', label: 'Validate' },
+      { path: 'features/cross-sectional', label: 'Cross-Sectional' },
+      { path: 'features/experiments', label: 'Experiments' },
     ],
   },
   {
-    label: 'Inspect',
+    label: 'Signals',
     items: [
-      { path: 'inspect/cross-sectional', label: 'Cross-Sectional' },
-      { path: 'inspect/data-divergence', label: 'Data Divergence' },
-      { path: 'inspect/pre-flight', label: 'Pre-flight' },
-      { path: 'inspect/strategy-runs', label: 'Strategy Runs' },
-      { path: 'inspect/experiments', label: 'Experiments' },
-      { path: 'inspect/signal-history', label: 'Signal History' },
+      { path: 'signals/engine', label: 'Signal Engine' },
+      { path: 'signals/history', label: 'Signal History' },
+    ],
+  },
+  {
+    label: 'Backtests',
+    items: [
+      { path: 'backtests/reliability', label: 'Reliability' },
+      { path: 'backtests/strategy-runs', label: 'Strategy Runs' },
     ],
   },
 ];
