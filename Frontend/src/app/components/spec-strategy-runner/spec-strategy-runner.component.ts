@@ -6,6 +6,7 @@ import {
   inject,
   signal,
 } from '@angular/core';
+import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { FormsModule } from '@angular/forms';
 import { SpecStrategyService } from '../../services/spec-strategy.service';
 import {
@@ -101,7 +102,7 @@ interface QuickManageRule {
  */
 @Component({
   selector: 'app-spec-strategy-runner',
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, PageHeaderComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './spec-strategy-runner.component.html',
   styleUrl: './spec-strategy-runner.component.scss',
