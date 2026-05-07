@@ -6,16 +6,22 @@
 
 **Canonical implementation**: `PythonDataService/app/research/baselines/generators.py` (spec generators), `runner.py` (orchestration + aggregation), `result.py` (DTOs), `storage.py` (file-backed persistence), `app/routers/baselines.py` (HTTP boundary). Registry row in `docs/architecture/engine-authority-map.md` § "Null-baseline analysis". Phase E1 of the build-alpha-style research pipeline.
 
-**Validated against**: `PythonDataService/tests/research/baselines/test_*.py` — 52 tests + 1 informational skip covering generator correctness (B&H tautology shape, EMA-pair invariants, parameter-range validation), runner orchestration (B&H equity metrics, random-EMA generates N runs, null-distribution coverage, percentile and p-value invariants), storage round-trip with path-traversal defense, and HTTP boundary including route-clash regression.
+**Validated against**: `PythonDataService/tests/research/baselines/test_*.py` — 55 tests + 1 informational skip covering generator correctness (B&H tautology shape, EMA-pair invariants, parameter-range validation), runner orchestration (B&H equity metrics, random-EMA generates N runs, null-distribution coverage, percentile and p-value invariants, **failed-parent guard**, **child-window-matches-parent regression**), storage round-trip with path-traversal defense, and HTTP boundary including route-clash regression and **per-method `sample_count` default dispatch**. The three bolded cases were added in PR #117 to pin post-review-feedback behavior.
 
 ## Two baseline methods
 
-| Method | What it samples | When to use | Output count |
+| Method | What it samples | When to use | Default `sample_count` |
 |---|---|---|---|
-| **`buy_and_hold`** | Single deterministic spec — enter on bar 1 via a `BarProperty: range >= 0` tautology, hold through end-of-algorithm flush. | "Did this strategy beat just holding the market?" | `sample_count` (typically 1; >1 only for engine-determinism sanity-checking) |
-| **`random_ema_windows`** | `(fast, slow)` EMA period pairs from a bounded family (default `fast ∈ [3, 12]`, `slow ∈ [10, 30]`, `slow > fast`); each pair becomes a SPY-EMA-style spec on the parent's symbol. | "Did the parent's specific EMA(5,10) choice beat a random pair from the same family?" | `sample_count` |
+| **`buy_and_hold`** | Single deterministic spec — enter on bar 1 via a `BarProperty: range >= 0` tautology, hold through end-of-algorithm flush. | "Did this strategy beat just holding the market?" | **1** — deterministic + parameter-free; >1 only for engine-determinism sanity-checking |
+| **`random_ema_windows`** | `(fast, slow)` EMA period pairs from a bounded family (default `fast ∈ [3, 12]`, `slow ∈ [10, 30]`, `slow > fast`); each pair becomes a SPY-EMA-style spec on the parent's symbol. | "Did the parent's specific EMA(5,10) choice beat a random pair from the same family?" | **30** — the smallest count that gives a stable null distribution |
 
 Both are deterministic given a `random_seed` (stored on `BaselineConfig`) — same seed → identical sampled parameter list, same baseline runs, same null distribution. Pinned by `test_random_ema_windows_same_seed_produces_identical_parameters`.
+
+### Default `sample_count` is per-method
+
+The HTTP request shape declares `sample_count: int | None` and the router resolves the default per-method in `_DEFAULT_SAMPLE_COUNT_BY_METHOD`. Explicit caller-supplied values are honoured for both methods; only `null`/omitted requests pick up the per-method default.
+
+This matters statistically. The Phipson-Smyth p-value is `(1 + count(null >= parent)) / (N + 1)` — a larger `N` shrinks the denominator. A flat default of 30 applied to deterministic `buy_and_hold` would create 30 *identical* runs, all of which either tie or fail the comparison the same way, **inflating `N` without adding statistical information**. The fix landed in PR #117; the regression `test_post_omitted_sample_count_defaults_per_method` pins both methods' defaults at the wire boundary.
 
 ## v1 deferred (architecture spec called for these but they don't ship today)
 
@@ -28,6 +34,14 @@ Both are deterministic given a `random_seed` (stored on `BaselineConfig`) — sa
 `StrategySpec` has no "always true" primitive. To run a single-trade buy-and-hold without modifying the schema, the generator builds an entry condition `BarProperty: property=range, op=">=", value=0.0` — tautologically true because the OHLC invariant `high >= low` (validated at engine ingestion) makes `range >= 0` always satisfied. The exit uses `BarsSinceEntry: op=">=" value=999_999`, an unreachable threshold. Result: enter on bar 1, hold through the engine's `on_end_of_algorithm` flush.
 
 **Known limitation:** the engine's `on_end_of_algorithm` calls `ctx.liquidate(symbol)` which submits a pending order, but the main bar loop has already exited so the closing fill is never drained. The position is correctly tracked through equity (`RunMetrics.total_return_pct` and `max_drawdown_pct` are computed from the real equity curve), but `RunLedger.trade_log` ends up empty for buy-and-hold. `RunMetrics.total_trades = 0` and `exposure_pct = 0.0` are artefacts of this. Null-distribution aggregation works on the equity-derived metrics, which are correct, so the baseline still answers the right question. Fixing the engine flush is tracked as a follow-up; not blocking for null-baseline research.
+
+## Parent window is reproduced exactly
+
+Each child baseline runs on the parent's `(symbol, start_ms, end_ms, fill_mode, commission_per_order, slippage_per_share, random_seed)` — *only the strategy logic varies* across baselines. The runner converts `parent.start_ms` and `parent.end_ms` directly to NY-local dates via `datetime.fromtimestamp(ms / 1000, tz=NY).date()` with **no day adjustment**. Pinned by `test_child_run_window_matches_parent_exactly`.
+
+This is unlike walk-forward, whose `_ms_to_inclusive_end_date` *does* subtract one calendar day — but only because WF's split policies emit half-open `[start_ms, end_ms)` fold boundaries (fold N+1's `start_ms` equals fold N's `end_ms`, and the engine's date filter is inclusive on both ends, so the day-overlap has to be removed). Phase A's `RunLedger.end_ms` is the NY-midnight of the *inclusive* end date — same convention as the input `end_date` to `RunRequest` — so passing it through requires no shift. **Different convention; do not import the WF helper here.**
+
+Why this is in the doc: an early version (between PR #114's merge and PR #117's fix) copied the WF day-shift trick into the baseline runner, shaving a calendar day off every baseline window. The bug shipped briefly to master between 2026-05-07T02:18Z (PR #114 merge) and 2026-05-07T02:48Z (PR #117 merge) — roughly 30 minutes of master. Any baseline analyses persisted in that window are window-shifted by one day relative to their parents and should be regenerated if the final-day return was material.
 
 ## Null-distribution aggregation
 
@@ -58,10 +72,13 @@ The per-baseline child runs are **not** persisted under `<baselines>/...` — th
 
 * **Missing parent run** → `status='failed'` with reason. Persisted normally.
 * **Malformed `parent_run_id`** (Phase A's regex rejects it) → `status='failed'`.
+* **Failed parent run** (parent's `RunLedger.status == 'failed'`) → `status='failed'` *before* generating any child specs. Parent metrics are placeholder when the parent failed, so any null distribution computed against them would be meaningless. Pinned by `test_failed_parent_run_returns_failed`. Added in PR #117.
 * **Generator failure** (e.g., unsatisfiable EMA constraints, count <= 0, negative seed) → `status='failed'` before any baseline runs, no child runs created.
 * **Per-baseline failure** (engine refuses an unsupported spec, infrastructure error) → that baseline's `BaselineRunRecord.status='failed'` with `failure_reason`, excluded from null-distribution aggregation. The overall analysis stays `status='completed'`.
 
 This matches the Phase A/C/D "failed runs are first-class research records" contract — persist failures so they're discoverable, don't raise from the runner.
+
+The `POST` 500 response on a *persistence* failure (after the runner has already produced a `(config, result)`) returns a generic `"baselines completed but persistence failed; see server logs"` detail. The full trace (including the resolved on-disk path that the underlying `OSError` carries) lives in the structured log via `logger.exception` and is not exposed to the client. Hardened in PR #117.
 
 ## Server-side caps
 
@@ -83,4 +100,7 @@ Mounted **before** `research_runs` in `app/main.py` so the literal `/baselines` 
 1. **`random_entries` / `random_signal_timestamps`** baselines: requires either a `BarIndex` spec primitive (fire on a pre-computed list of bar indices) or a parallel-engine strategy class that bypasses spec. Spec extension is cleaner; tracked as a future PR.
 2. **Cross-symbol naive baseline**: needs multi-symbol data wiring + a way to derive a target-symbol from the parent's symbol (e.g., "if parent is on SPY, baseline against QQQ + IWM").
 3. **Random spec generation**: pulls from the spec primitive set with a complexity budget. This is part of Build Alpha's automated-discovery feature, not the baseline feature — separate phase.
-4. **Phase E1-frontend**: section on the run-detail page mirroring Phase C/D-frontend's pattern + a new `/research-lab/baselines/:baseline_id` detail route showing per-metric null distribution charts + the parent's empirical position.
+
+## Frontend (shipped)
+
+Phase E1-frontend landed via PR #118 (mirror of orphan-restore PR #115). The run-detail page (`research-lab/strategy-runs/:run_id`) shows a `<app-baselines-section>` next to the walk-forward and Monte Carlo sections; clicking a row routes to `research-lab/baselines/:baseline_id` (`BaselinesDetailPageComponent`) which renders the per-metric null distribution as parent-value / percentile / p-value cards + locally-computed P5/P50/P95 of the null array (server values are authoritative; client quantiles are visualisation only). The two CTAs (`Run buy-and-hold baseline`, `Run random EMA windows baseline (30 samples)`) call `BaselinesService.runFromRun(run, method)` which respects the per-method default `sample_count` documented above (1 for B&H, 30 for random EMA).
