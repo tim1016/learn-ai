@@ -6,93 +6,154 @@
   color: var(--text-primary);
 }
 
-.rl-header {
-  padding: 8px 0 16px;
-
-  h2 {
-    font-size: 1.6rem;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    margin: 0 0 4px;
-    color: var(--text-primary);
-  }
+// ── Page header ↔ sub-nav cohesion ───────────────────────────────────────
+// When the page header opts into hasTabs, lift its surface to --bg-surface
+// and round only the top corners so the sub-nav below joins flush as one
+// connected card. Scoped via :host ::ng-deep so this only affects the
+// research-lab shell; other pages using <app-page-header [hasTabs]="true">
+// keep their existing borderless behaviour until their own design pass
+// lands. ::ng-deep is deprecated but still emitted; the alternative would
+// be adding a [surface] input to PageHeaderComponent itself.
+:host ::ng-deep .page-header.page-header--with-tabs {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  padding: var(--space-4) var(--space-5) var(--space-3);
+  margin-bottom: 0;
 }
 
-.rl-subtitle {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  margin: 0;
-  line-height: 1.5;
-}
-
-// ── Sub-nav (Validate / Inspect / Reference) ─────────────────────
+// ── Sub-nav (two-row contextual) ─────────────────────────────────────────
+// Row 1: segmented parent pill (Build · Inspect, with item counts).
+// Row 2: only the active parent's children — kills the Inspect overflow
+// problem the one-row layout had at <1200px.
 .rl-subnav {
   display: flex;
-  align-items: center;
-  gap: 24px;
-  padding: 0 0 16px;
-  margin-bottom: 16px;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  font-size: 12px;
-
-  &::-webkit-scrollbar { height: 4px; }
-  &::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  flex-direction: column;
+  align-items: stretch;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  margin-bottom: var(--space-5);
 }
 
-.rl-subnav-group {
-  display: flex;
-  align-items: center;
+// Row 1 — segmented parent pill
+.rl-parent-segmented {
+  display: inline-flex;
+  align-self: flex-start;
+  width: max-content;
+  margin: var(--space-3) var(--space-5) 0;
+  padding: 3px;
   gap: 2px;
-  height: 32px;
-  flex-shrink: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
 }
 
-.rl-subnav-eyebrow {
-  font-size: 10px;
-  font-weight: 600;
+.rl-parent-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  margin-right: 10px;
-  white-space: nowrap;
-}
-
-.rl-subnav-tab {
+  letter-spacing: var(--ls-caps);
+  color: var(--text-secondary);
   background: transparent;
   border: 0;
-  padding: 8px 10px;
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 400;
+  border-radius: var(--radius-pill);
   cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -17px; // align bottom border with the sub-nav's own border
-  height: 32px;
-  display: flex;
-  align-items: center;
-  white-space: nowrap;
-  transition: color 0.1s;
+  transition: color var(--t-ui), background var(--t-ui);
 
   &:hover {
     color: var(--text-primary);
   }
 
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+
   &.active {
-    color: var(--text-primary);
-    font-weight: 500;
-    border-bottom-color: var(--accent);
+    background: var(--accent);
+    color: var(--text-on-accent);
+
+    .parent-count {
+      background: rgba(255, 255, 255, 0.2);
+      color: var(--text-on-accent);
+    }
+  }
+
+  .parent-count {
+    padding: 1px 6px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: var(--fw-semi);
+    letter-spacing: 0;
+    color: var(--text-subtle);
+    background: rgba(136, 146, 168, 0.18);
+    border-radius: var(--radius-pill);
   }
 }
 
-.rl-subnav-divider {
-  width: 1px;
-  height: 14px;
-  background: var(--border);
-  margin-left: 16px;
+// Row 2 — children of the active parent
+.rl-children-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(28, 31, 46, 0.4), transparent);
 }
 
-.rl-panel {
-  // Each sub-component handles its own layout.
+// ── Tab atom (used for child links) ──────────────────────────────────────
+.rl-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 7px 12px;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--t-ui), background var(--t-ui);
+
+  &:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px var(--accent-soft);
+    z-index: 2;
+  }
+
+  &.active {
+    color: var(--accent);
+    background: var(--accent-soft);
+    font-weight: var(--fw-semi);
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: -7px;
+      height: 2px;
+      background: var(--accent);
+      border-radius: 2px 2px 0 0;
+    }
+  }
 }
