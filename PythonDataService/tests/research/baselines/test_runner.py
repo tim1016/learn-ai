@@ -341,6 +341,71 @@ def test_negative_random_seed_returns_failed(tmp_path: Path, parent_run):
     assert "random_seed" in (result.failure_reason or "")
 
 
+def test_failed_parent_run_returns_failed(tmp_path: Path, parent_run):
+    """Refuse to derive a baseline from a failed parent run.
+
+    The parent's metrics are placeholders when status='failed', so
+    comparing baselines against them yields meaningless percentiles
+    and p-values. The runner should short-circuit before generating
+    any child baselines and surface the cause as a failed-status
+    record (Phase A/C/D contract).
+    """
+    parent_ledger, parent_result, factory = parent_run
+    # Re-persist the same ledger with status='failed' so the loader
+    # returns a parent in failed state.
+    failed_ledger = parent_ledger.model_copy(
+        update={"status": "failed", "failure_reason": "engine refused spec"}
+    )
+    save_run(failed_ledger, parent_result, root=tmp_path, replace=True)
+
+    _, result = run_baselines(
+        BaselineRequest(
+            parent_run_id=parent_ledger.run_id,
+            method="buy_and_hold",
+            sample_count=1,
+        ),
+        data_source_factory=factory,
+        artifacts_root=tmp_path,
+        data_root_revision="test-revision-1",
+    )
+    assert result.status == "failed"
+    assert "status='failed'" in (result.failure_reason or "")
+    # No child runs persisted.
+    assert result.baselines == []
+
+
+def test_child_run_window_matches_parent_exactly(tmp_path: Path, parent_run):
+    """Regression: child run's start_ms / end_ms must equal parent's.
+
+    Earlier the runner subtracted one calendar day from
+    ``parent.end_ms`` (a stale walk-forward half-open trick), shaving
+    a trading day off every baseline window and skewing null
+    distributions whenever the final day contained material returns.
+    """
+    parent_ledger, _, factory = parent_run
+    config, result = run_baselines(
+        BaselineRequest(
+            parent_run_id=parent_ledger.run_id,
+            method="buy_and_hold",
+            sample_count=1,
+        ),
+        data_source_factory=factory,
+        artifacts_root=tmp_path,
+        data_root_revision="test-revision-1",
+    )
+    assert result.status == "completed"
+    assert len(result.baselines) == 1
+
+    # Reload the child ledger to compare its persisted window to the
+    # parent's. The child is referenced by config.baseline_id (its
+    # parent_run_id field), per the runner's lineage convention.
+    listed = list_runs(root=tmp_path, parent_run_id=config.baseline_id)
+    assert len(listed) == 1
+    child_ledger = listed[0]
+    assert child_ledger.start_ms == parent_ledger.start_ms
+    assert child_ledger.end_ms == parent_ledger.end_ms
+
+
 def test_zero_sample_count_returns_failed(tmp_path: Path, parent_run):
     ledger, _, factory = parent_run
     _, result = run_baselines(

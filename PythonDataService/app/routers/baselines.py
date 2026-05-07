@@ -54,6 +54,16 @@ logger = logging.getLogger(__name__)
 # of seconds against real LEAN data. Above-cap requests return 422.
 _MAX_SAMPLE_COUNT = 200
 
+# Per-method default sample counts, applied when the request omits
+# ``sample_count``. ``buy_and_hold`` is deterministic and parameter-
+# free — repeating it inflates the (1 + count) / (N + 1) p-value's
+# denominator without adding statistical information. Random methods
+# need ≥ ~30 for a stable null distribution.
+_DEFAULT_SAMPLE_COUNT_BY_METHOD: dict[BaselineMethodLiteral, int] = {
+    "buy_and_hold": 1,
+    "random_ema_windows": 30,
+}
+
 
 # ---------------------------------------------------------------------------
 # Request / response shapes.
@@ -71,14 +81,18 @@ class BaselineHttpRequest(BaseModel):
             "against random alternatives)"
         ),
     )
-    sample_count: int = Field(
-        30,
+    sample_count: int | None = Field(
+        None,
         ge=1,
         le=_MAX_SAMPLE_COUNT,
         description=(
-            "Number of baseline runs. Buy-and-hold is parameter-less so "
-            "``sample_count=1`` is the sensible default; random methods "
-            "want 30-100 for stable null distributions."
+            "Number of baseline runs. Default is method-dependent: "
+            "``buy_and_hold`` defaults to 1 (deterministic, parameter-"
+            "free — replicates would only duplicate work and inflate "
+            "the small-sample p-value's N denominator); "
+            "``random_ema_windows`` defaults to 30, the smallest count "
+            "that gives a stable null distribution. Explicit values are "
+            "honoured for both methods."
         ),
     )
     random_seed: int = Field(
@@ -115,10 +129,15 @@ def create_baselines(
     artifacts_root: Path | None = Depends(get_artifacts_root),
 ) -> BaselineResponse:
     """Run a null-baseline analysis, persist, return ``(config, result)``."""
+    sample_count = (
+        request.sample_count
+        if request.sample_count is not None
+        else _DEFAULT_SAMPLE_COUNT_BY_METHOD[request.method]
+    )
     baseline_request = BaselineRequest(
         parent_run_id=request.parent_run_id,
         method=request.method,
-        sample_count=request.sample_count,
+        sample_count=sample_count,
         random_seed=request.random_seed,
         fast_range=tuple(request.fast_range),
         slow_range=tuple(request.slow_range),
@@ -148,9 +167,14 @@ def create_baselines(
             "[BASELINES] failed to persist baseline_id=%s",
             config.baseline_id,
         )
+        # Don't interpolate ``exc`` into the response detail —
+        # ``OSError``/``PermissionError`` from the storage layer
+        # include the resolved on-disk path, which is server
+        # infrastructure the client should not see. The full trace
+        # is in the structured log above.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"baselines completed but persistence failed: {exc}",
+            detail="baselines completed but persistence failed; see server logs",
         ) from exc
 
     return BaselineResponse(config=config, result=result)

@@ -117,6 +117,19 @@ def run_baselines(
     except ValueError as exc:
         return _failed(bid, request, created_at, f"parent_run_id rejected: {exc}")
 
+    # Refuse to derive a baseline from a failed parent. The parent's
+    # metrics are placeholders in that case (engine never produced
+    # them); comparing baselines against placeholders yields
+    # meaningless percentiles and p-values. Surface as a failed
+    # baseline record so the caller sees the cause.
+    if parent_ledger.status == "failed":
+        return _failed(
+            bid,
+            request,
+            created_at,
+            f"parent run is in status='failed' (run_id={request.parent_run_id})",
+        )
+
     if request.sample_count <= 0:
         return _failed(bid, request, created_at, "sample_count must be >= 1")
     if request.random_seed < 0:
@@ -153,7 +166,7 @@ def run_baselines(
         run_request = RunRequest(
             spec=spec,
             start_date=_ms_to_date(parent_ledger.start_ms),
-            end_date=_ms_to_inclusive_end_date(parent_ledger.end_ms),
+            end_date=_ms_to_date(parent_ledger.end_ms),
             initial_cash=parent_ledger.initial_cash,
             fill_mode=parent_ledger.fill_mode,
             commission_per_order=parent_ledger.commission_per_order,
@@ -362,27 +375,20 @@ def _maybe_float(v: Any) -> float | None:
 
 
 # ---------------------------------------------------------------------------
-# Window helpers — same shape as walk_forward.runner so fold-vs-baseline
-# date conversions agree.
+# Window helpers.
 # ---------------------------------------------------------------------------
+# Phase A persists ``RunLedger.end_ms`` as the NY-midnight of the
+# *inclusive* end date the parent ran with — same convention as the
+# input ``end_date`` to ``RunRequest`` (see ``runs/runner.py``
+# ``_date_to_ny_midnight_ms``). The engine's date filter is inclusive
+# on both ends. So converting parent.end_ms back to its NY-local date
+# directly reproduces the parent's window verbatim — no day
+# subtraction. (Walk-forward's ``_ms_to_inclusive_end_date`` does
+# subtract one day, but only because split policies emit half-open
+# ``[start_ms, end_ms)`` fold boundaries. Different convention.)
 def _ms_to_date(ms: int) -> Any:
     """Convert ``int64 ms UTC`` (NY-midnight) to ``date``."""
     return datetime.fromtimestamp(ms / 1000, tz=_NY).date()
-
-
-def _ms_to_inclusive_end_date(ms: int) -> Any:
-    """Half-open ms boundary → inclusive end date.
-
-    Same trick as ``walk_forward.runner._ms_to_inclusive_end_date``:
-    the engine's date filter is inclusive on both ends, so subtract
-    one calendar day (DST-safe via ``timedelta(days=1)``) before
-    converting. For baselines this keeps the run's ledger window
-    identical to the parent's (``parent.end_ms`` is half-open by
-    convention from Phase A's runner).
-    """
-    from datetime import timedelta
-
-    return (datetime.fromtimestamp(ms / 1000, tz=_NY) - timedelta(days=1)).date()
 
 
 # ---------------------------------------------------------------------------
