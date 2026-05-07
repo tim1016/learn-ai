@@ -412,6 +412,8 @@ export class DataLabComponent {
    */
   adjustForDividends = signal(false);
   warmup = signal(true);
+  includeVwapColumn = signal(true);
+  includeTransactionsColumn = signal(true);
   computeAllIndicators = signal(false);
   /** Auto-pick bar timeframe from the date range so fetch time stays sane. */
   autoBarTimeframe = signal(true);
@@ -784,7 +786,9 @@ export class DataLabComponent {
 
   // Estimated output columns
   estimatedColumns = computed(() => {
-    const base = ['unix_ts', 'iso_time', 'open', 'high', 'low', 'close', 'volume', 'vwap', 'transactions'];
+    const base = ['unix_ts', 'iso_time', 'open', 'high', 'low', 'close', 'volume'];
+    if (this.includeVwapColumn()) base.push('vwap');
+    if (this.includeTransactionsColumn()) base.push('transactions');
     const indicatorCols: string[] = [];
     for (const entry of this.entries()) {
       const info = this.indicatorMap()[entry.name];
