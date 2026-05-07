@@ -58,7 +58,7 @@ describe('OptionsLabChainComponent', () => {
   it('creates the component with default state', () => {
     expect(component).toBeTruthy();
     expect(component.ticker()).toBe('SPY');
-    expect(component.density()).toBe('standard');
+    expect(component.density()).toBe('quick');
     expect(component.strikeRange()).toBe(15);
     expect(component.showAllStrikes()).toBe(false);
   });
