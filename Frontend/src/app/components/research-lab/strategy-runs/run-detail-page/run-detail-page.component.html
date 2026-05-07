@@ -212,6 +212,20 @@
       </section>
     }
 
+    <!-- Monte Carlo (Phase D frontend) -->
+    @if (data.ledger.status === 'completed') {
+      <section class="rd-section">
+        <app-monte-carlo-section [run]="data.ledger" />
+      </section>
+    }
+
+    <!-- Null baselines (Phase E1 frontend) -->
+    @if (data.ledger.status === 'completed') {
+      <section class="rd-section">
+        <app-baselines-section [run]="data.ledger" />
+      </section>
+    }
+
     <!-- Provenance -->
     <section class="rd-section">
       <h2>Provenance</h2>
