@@ -115,3 +115,79 @@
   border-left-color: var(--red-500, #ef4444);
   color: var(--red-700, #b91c1c);
 }
+
+// ─── Phase Rail ───────────────────────────────────────────
+.phase-rail {
+  display: flex;
+  align-items: center;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--border, #1e222d);
+}
+
+.phase-stop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.4;
+
+  &--reached,
+  &--current {
+    opacity: 1;
+  }
+}
+
+.phase-node {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  background: var(--bg-surface, #131722);
+  border: 1.5px solid var(--border-light, #2a2e39);
+  color: var(--text-muted, #6b6f7a);
+
+  .phase-stop--reached & {
+    background: var(--bull, #26a69a);
+    border-color: var(--bull, #26a69a);
+    color: #0a0d12;
+  }
+
+  .phase-stop--current & {
+    background: var(--accent, #2962ff);
+    border-color: var(--accent, #2962ff);
+    color: #ffffff;
+  }
+}
+
+.phase-stop-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.7rem;
+  color: var(--text-secondary, #b2b5be);
+  white-space: nowrap;
+
+  .phase-stop--current & {
+    font-weight: 600;
+    color: var(--text-primary, #f0f3fa);
+  }
+
+  .phase-stop--reached & {
+    color: var(--text-secondary, #b2b5be);
+  }
+}
+
+.phase-connector {
+  flex: 1;
+  height: 1px;
+  min-width: 8px;
+  margin: 0 6px;
+  background: var(--border, #1e222d);
+
+  &--reached {
+    background: var(--bull, #26a69a);
+  }
+}

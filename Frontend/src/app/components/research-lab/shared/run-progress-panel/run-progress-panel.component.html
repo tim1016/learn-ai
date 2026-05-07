@@ -24,6 +24,27 @@
       }
     </div>
 
+    @if (phases().length) {
+      <div class="phase-rail" role="list" aria-label="Run phases">
+        @for (stop of phases(); track stop.label; let i = $index, let last = $last) {
+          @let reached = i < activeStopIndex();
+          @let isCurrent = i === activeStopIndex();
+          <div class="phase-stop"
+               [class.phase-stop--reached]="reached"
+               [class.phase-stop--current]="isCurrent"
+               role="listitem">
+            <span class="phase-node" [attr.aria-current]="isCurrent ? 'step' : null">
+              @if (reached) { ✓ } @else { {{ i + 1 }} }
+            </span>
+            <span class="phase-stop-label">{{ stop.label }}</span>
+          </div>
+          @if (!last) {
+            <div class="phase-connector" [class.phase-connector--reached]="reached"></div>
+          }
+        }
+      </div>
+    }
+
     @if (phaseLabel()) {
       <div class="phase-line">
         <span class="phase-label">{{ phaseLabel() }}</span>

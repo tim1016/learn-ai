@@ -13,6 +13,11 @@ import {
   viewChild,
 } from '@angular/core';
 
+export interface PhaseRailStop {
+  label: string;
+  ids: readonly string[];
+}
+
 import { ButtonModule } from 'primeng/button';
 import { ProgressBarModule } from 'primeng/progressbar';
 import { TagModule } from 'primeng/tag';
@@ -36,7 +41,6 @@ type Severity = 'info' | 'success' | 'warn' | 'danger' | 'secondary';
  */
 @Component({
   selector: 'app-run-progress-panel',
-  standalone: true,
   imports: [CommonModule, ButtonModule, ProgressBarModule, TagModule],
   templateUrl: './run-progress-panel.component.html',
   styleUrls: ['./run-progress-panel.component.scss'],
@@ -57,6 +61,12 @@ export class RunProgressPanelComponent {
   /** Auto-scroll-to-bottom toggle is on by default. The user can flip
    *  it off to read older lines without the feed pulling them away. */
   readonly autoScroll = input<boolean>(true);
+
+  /** Optional phase rail definition. When provided, a horizontal stop-rail
+   *  renders above the log feed showing Fetch → Walk-forward → etc.
+   *  Each stop's ``ids`` list maps the job's ``phase`` field to that stop.
+   *  Leave empty (default) to hide the rail entirely. */
+  readonly phases = input<readonly PhaseRailStop[]>([]);
 
   /** Emitted when the user clicks Cancel. Parent calls JobsService.cancelJob.
    *  Named ``cancelRun`` (not ``cancel``) to avoid shadowing the native
@@ -122,6 +132,16 @@ export class RunProgressPanelComponent {
     const unit = j.unit ?? 'items';
     const current = j.current ?? 0;
     return `${current.toLocaleString()} / ${j.total.toLocaleString()} ${unit}`;
+  });
+
+  readonly activeStopIndex = computed<number>(() => {
+    const j = this.job();
+    const stops = this.phases();
+    if (!stops.length) return -1;
+    if (j?.status === 'completed') return stops.length;
+    const phaseId = j?.phase ?? '';
+    const idx = stops.findIndex(s => s.ids.includes(phaseId));
+    return idx >= 0 ? idx : -1;
   });
 
   // Reactive ``now`` that ticks every second while a job is running so
