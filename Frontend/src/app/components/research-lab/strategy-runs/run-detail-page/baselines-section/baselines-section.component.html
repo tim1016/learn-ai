@@ -1,0 +1,96 @@
+<section class="bl-section">
+  <header class="bl-section-header">
+    <div class="bl-section-text">
+      <h2>Null baselines</h2>
+      <p>
+        Compare this run against simple alternatives to test whether
+        the strategy beats random. Buy-and-hold answers "did it beat
+        just owning the asset?"; random EMA windows answers "did the
+        specific (5, 10) choice beat a random pair from the same
+        family?".
+      </p>
+    </div>
+    <div class="bl-section-actions">
+      <p-button
+        icon="pi pi-refresh"
+        label="Refresh"
+        severity="secondary"
+        [loading]="loading()"
+        [disabled]="loading() || anyRunning()"
+        (onClick)="refresh()"
+      />
+      <p-button
+        icon="pi pi-bookmark"
+        label="Run buy-and-hold baseline"
+        severity="secondary"
+        [loading]="running() === 'buy_and_hold'"
+        [disabled]="loading() || anyRunning()"
+        (onClick)="runBuyAndHold()"
+      />
+      <p-button
+        icon="pi pi-sliders-h"
+        label="Run random EMA windows baseline (30 samples)"
+        [loading]="running() === 'random_ema_windows'"
+        [disabled]="loading() || anyRunning()"
+        (onClick)="runRandomEmaWindows()"
+      />
+    </div>
+  </header>
+
+  @if (error(); as msg) {
+    <p-message severity="error" [text]="msg" class="bl-error" />
+  }
+
+  @if (lastBaselineId(); as id) {
+    <p-message severity="success" class="bl-flash">
+      <ng-template #content>
+        <span>
+          Baseline submitted:
+          <button type="button" class="bl-link" (click)="openById(id)">
+            {{ shortHash(id, 12) }}…
+          </button>
+        </span>
+      </ng-template>
+    </p-message>
+  }
+
+  @if (hasBaselines()) {
+    <p-table
+      [value]="baselines()"
+      [rowTrackBy]="trackByBaselineId"
+      styleClass="bl-table"
+      selectionMode="single"
+    >
+      <ng-template #header>
+        <tr>
+          <th>Created</th>
+          <th>Method</th>
+          <th>Samples</th>
+          <th>Seed</th>
+          <th>Baseline ID</th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-bl>
+        <tr class="bl-row" (click)="open(bl)">
+          <td>{{ bl.created_at_ms | date: 'yyyy-MM-dd HH:mm' }}</td>
+          <td>
+            <p-tag
+              [value]="bl.method"
+              [severity]="bl.method === 'buy_and_hold' ? 'info' : 'warn'"
+            />
+          </td>
+          <td>{{ bl.sample_count }}</td>
+          <td class="bl-hash-cell">{{ bl.random_seed }}</td>
+          <td class="bl-hash-cell">{{ shortHash(bl.baseline_id, 16) }}…</td>
+        </tr>
+      </ng-template>
+    </p-table>
+  } @else if (loading()) {
+    <p class="bl-empty">Loading baselines…</p>
+  } @else {
+    <p class="bl-empty">
+      No baselines yet for this run. Pick a method above to compare against
+      a null distribution.
+    </p>
+  }
+</section>

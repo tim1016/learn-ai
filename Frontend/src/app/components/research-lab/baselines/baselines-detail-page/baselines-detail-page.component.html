@@ -1,0 +1,230 @@
+<div class="bl-detail">
+  <header class="bld-header">
+    <a routerLink="/research-lab" class="bld-back">← Research Lab</a>
+    @if (baseline(); as data) {
+      <div class="bld-title">
+        <h1>Null baseline</h1>
+        <p-tag
+          [value]="data.result.status"
+          [severity]="statusSeverity(data.result.status)"
+        />
+      </div>
+      <div class="bld-meta">
+        <span><strong>Method:</strong> {{ data.config.method }}</span>
+        <span><strong>Samples:</strong> {{ data.config.sample_count }}</span>
+        <span><strong>Seed:</strong> <code>{{ data.config.random_seed }}</code></span>
+        <span><strong>Baseline ID:</strong> <code>{{ data.config.baseline_id }}</code></span>
+      </div>
+      <div class="bld-parent">
+        <strong>Parent run:</strong>
+        <a [routerLink]="['/research-lab/strategy-runs', data.config.parent_run_id]">
+          <code>{{ shortHash(data.config.parent_run_id, 16) }}…</code>
+        </a>
+      </div>
+    } @else if (baselineId(); as id) {
+      <h1>Baseline <code>{{ id }}</code></h1>
+    }
+  </header>
+
+  @if (loading()) {
+    <p class="bld-loading">Loading baseline…</p>
+  }
+
+  @if (error(); as msg) {
+    <p-message severity="error" [text]="msg" class="bld-error" />
+  }
+
+  @if (baseline(); as data) {
+    @if (data.result.status === 'failed' && data.result.failure_reason; as reason) {
+      <p-message severity="warn" [text]="reason" class="bld-warn" />
+    }
+
+    @if (data.result.warnings.length > 0) {
+      <p-message severity="info" class="bld-warn">
+        <ng-template #content>
+          <ul class="bld-warning-list">
+            @for (w of data.result.warnings; track w) {
+              <li>{{ w }}</li>
+            }
+          </ul>
+        </ng-template>
+      </p-message>
+    }
+
+    <!-- Null-distribution summary cards -->
+    @if (nullSummaries().length > 0) {
+      <section class="bld-section">
+        <h2>Null distributions</h2>
+        <p class="bld-section-hint">
+          Each card compares the parent run's metric against the
+          distribution of values from the {{ data.config.sample_count }}
+          baseline runs. ``p_value`` is the small-sample
+          ``(1 + #null ≥ parent) / (N + 1)`` (Phipson &amp; Smyth 2010).
+          ``percentile`` is the share of nulls strictly below the parent.
+        </p>
+        <div class="bld-null-grid">
+          @for (s of nullSummaries(); track s.metric_name) {
+            <article class="bld-null-card">
+              <h3>{{ s.metric_name }}</h3>
+              <table>
+                <tr>
+                  <td>Parent</td>
+                  <td>
+                    @if (s.parent_value !== null) {
+                      {{ s.parent_value | number: '1.4-4' }}
+                    } @else { — }
+                  </td>
+                </tr>
+                <tr>
+                  <td>Percentile</td>
+                  <td>
+                    @if (s.empirical_percentile !== null) {
+                      {{ s.empirical_percentile | percent: '1.1-1' }}
+                    } @else { — }
+                  </td>
+                </tr>
+                <tr>
+                  <td>p-value</td>
+                  <td>
+                    @if (s.empirical_p_value !== null) {
+                      {{ s.empirical_p_value | number: '1.4-4' }}
+                    } @else { — }
+                  </td>
+                </tr>
+                <tr class="bld-null-quantile-row">
+                  <td>Null P5</td>
+                  <td>
+                    @if (s.p5 !== null) {
+                      {{ s.p5 | number: '1.4-4' }}
+                    } @else { — }
+                  </td>
+                </tr>
+                <tr>
+                  <td>Null P50</td>
+                  <td>
+                    @if (s.p50 !== null) {
+                      {{ s.p50 | number: '1.4-4' }}
+                    } @else { — }
+                  </td>
+                </tr>
+                <tr>
+                  <td>Null P95</td>
+                  <td>
+                    @if (s.p95 !== null) {
+                      {{ s.p95 | number: '1.4-4' }}
+                    } @else { — }
+                  </td>
+                </tr>
+                <tr>
+                  <td>Null N</td>
+                  <td>{{ s.null_count }}</td>
+                </tr>
+              </table>
+            </article>
+          }
+        </div>
+      </section>
+    }
+
+    <!-- Sample runs -->
+    <section class="bld-section">
+      <h2>Sample runs <small class="bld-section-count">({{ data.result.baselines.length }})</small></h2>
+      <p-table
+        [value]="data.result.baselines"
+        styleClass="bld-runs-table"
+        [paginator]="data.result.baselines.length > 25"
+        [rows]="25"
+        [scrollable]="true"
+        scrollHeight="500px"
+      >
+        <ng-template #header>
+          <tr>
+            <th>#</th>
+            <th>Status</th>
+            <th>Parameters</th>
+            <th>Trades</th>
+            <th>Sharpe</th>
+            <th>Total return</th>
+            <th>Max DD</th>
+            <th>Win rate</th>
+            <th>Run ID</th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-b let-i="rowIndex">
+          <tr>
+            <td>{{ i + 1 }}</td>
+            <td>
+              <p-tag
+                [value]="b.status"
+                [severity]="b.status === 'completed' ? 'success' : 'danger'"
+              />
+            </td>
+            <td class="bld-param-cell">{{ parametersLabel(b.parameters) }}</td>
+            <td>{{ b.test_trade_count }}</td>
+            <td>
+              @if (b.test_metrics.sharpe_ratio !== null) {
+                {{ b.test_metrics.sharpe_ratio | number: '1.2-2' }}
+              } @else { — }
+            </td>
+            <td>{{ b.test_metrics.total_return_pct | percent: '1.2-2' }}</td>
+            <td>
+              @if (b.test_metrics.max_drawdown_pct !== null) {
+                {{ b.test_metrics.max_drawdown_pct | percent: '1.2-2' }}
+              } @else { — }
+            </td>
+            <td>
+              @if (b.test_metrics.win_rate !== null) {
+                {{ b.test_metrics.win_rate | percent: '1.1-1' }}
+              } @else { — }
+            </td>
+            <td class="bld-hash-cell">
+              <a [routerLink]="['/research-lab/strategy-runs', b.baseline_run_id]">
+                {{ shortHash(b.baseline_run_id, 12) }}…
+              </a>
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+    </section>
+
+    <!-- Provenance -->
+    <section class="bld-section">
+      <h2>Provenance</h2>
+      <dl class="bld-provenance">
+        <dt>Target metrics</dt>
+        <dd>
+          @if (data.config.target_metrics.length > 0) {
+            <code>{{ data.config.target_metrics.join(', ') }}</code>
+          } @else {
+            —
+          }
+        </dd>
+
+        @if (methodParamsEntries().length > 0) {
+          <dt>Method parameters</dt>
+          <dd>
+            @for (entry of methodParamsEntries(); track entry[0]) {
+              <span class="bld-prov-aux">
+                <code>{{ entry[0] }}</code>: {{ entry[1] | json }}
+              </span>
+            }
+          </dd>
+        }
+
+        <dt>Parent trade-log hash</dt>
+        <dd><code>{{ shortHash(data.config.parent_trade_log_hash, 32) }}…</code></dd>
+
+        <dt>Random seed</dt>
+        <dd><code>{{ data.config.random_seed }}</code></dd>
+
+        <dt>Created</dt>
+        <dd>{{ data.config.created_at_ms | date: 'yyyy-MM-dd HH:mm:ss' }}</dd>
+
+        @if (data.result.completed_at_ms; as completedMs) {
+          <dt>Completed</dt>
+          <dd>{{ completedMs | date: 'yyyy-MM-dd HH:mm:ss' }}</dd>
+        }
+      </dl>
+    </section>
+  }
+</div>
