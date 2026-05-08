@@ -23,8 +23,8 @@ Seed (after period=3 deltas):
   avg_loss = mean(loss[0..2])
 
 Wilder smoothing (post-seed):
-  avg_gain = (avg_gain * 2 + gain) / 3
-  avg_loss = (avg_loss * 2 + loss) / 3
+  `avg_gain = (avg_gain * 2 + gain) / 3`
+  `avg_loss = (avg_loss * 2 + loss) / 3`
 
 RSI = 100 - 100/(1 + avg_gain/avg_loss)
 Edge: if round(avg_loss, 10) == 0, RSI = 100
