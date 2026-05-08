@@ -296,7 +296,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + numpy.std(ddof=1), annualized by sqrt(252)",
-        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) Â§IV. Verified by hand for 3 synthetic 5-element cases."
+        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) §IV. Verified by hand for 3 synthetic 5-element cases."
       },
       "market_input": {
         "source": "synthetic",
@@ -336,7 +336,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + downside variance (all-N denominator)",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) Â§8.3. Denominator: all-N (matches canonical _sortino convention)."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.3. Denominator: all-N (matches canonical _sortino convention)."
       },
       "market_input": {
         "source": "synthetic",
@@ -376,7 +376,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.maximum.accumulate + vectorized fraction (running_max - equity) / running_max",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) Â§8.2."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.2."
       },
       "market_input": {
         "source": "synthetic",
@@ -656,7 +656,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "sigma_known — BSM pricing formula generates market_price; solver must recover sigma_known",
-        "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) Â§19.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives Â§4."
+        "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) §19.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives §4."
       },
       "market_input": {
         "source": "synthetic",

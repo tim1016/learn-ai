@@ -56,6 +56,30 @@ Comments too complex for the monitor agent to resolve autonomously. Claude handl
 
 ---
 
+## PR #163 — Hard-coded GENERATION_DATE and justification not propagated (comment 3209215238)
+
+**Comment (3209215238):** CodeRabbit flagged that `GENERATION_DATE = date(2026, 5, 8).isoformat()` is hard-coded, and all six generator functions ignore their `justification` parameter when writing attribution templates. A `--force --justification ...` run would create a new version with a stale date and no recorded reason, breaking the fixture audit trail.
+
+**Why complex:** Requires replacing the hard-coded `GENERATION_DATE` constant with a dynamic `date.today().isoformat()` call and threading the `justification` argument into every attribution template across all 6 generator functions (`generate_rp001`, `generate_rp002`, `generate_rp003`, `generate_rp004`, `generate_rel001`, `generate_rel004`). This also requires regenerating all committed attribution.md files (which are derived from the generators) and re-running the golden manifest validate CI step. The change is mechanical but has broad fixture impact.
+
+**Date:** 2026-05-08
+
+**Status:** OPEN
+
+---
+
+## PR #163 — REL-004 synthetic calendar includes Saturday (comment 3209215252)
+
+**Comment (3209215252):** `_timestamps_for_days(5, ...)` in `generate_rel004` generates consecutive calendar days starting 2024-01-02, so day 5 lands on 2024-01-06 (Saturday). The attribution says "2024-01-02..2024-01-08" (five trading days). This inconsistency means the fixture data contains a Saturday session, which violates exchange-aligned bar semantics. The oracle IC values and SHA hashes would change if fixed.
+
+**Why complex:** Fixing requires either (a) making `_timestamps_for_days` business-day-aware (skipping Sat/Sun), or (b) documenting this as "5 calendar days" and removing the "trading days" claim. Option (a) changes the oracle IC values and SHA hashes in the committed fixture, requiring a fixture rebuild inside the Docker container and a new commit to update all generated files. This is a fixture regeneration event and must be documented with justification.
+
+**Date:** 2026-05-08
+
+**Status:** OPEN
+
+---
+
 ## PR #162 — RV-001 test_nan_before_window misses last warmup bar (comment 3208850490)
 
 **Comment (3208850490):** `range(self._WINDOW - 1)` misses bar index `_WINDOW - 1` which should still be NaN.

@@ -468,7 +468,7 @@ Canonical: PythonDataService/app/research/signal/standardize.py::compute_train_z
 ## Formula
 
 mu_train    = mean(feature[train_mask])
-sigma_train = std(feature[train_mask])    (pandas/numpy ddof=1 default)
+sigma_train = std(feature[train_mask], ddof=1)    (pandas default ddof=1; NumPy default is ddof=0 — explicit ddof=1 required)
 z           = (feature - mu_train) / sigma_train
 z_flipped   = -z   (when flip_sign=True, for negative-IC signals)
 
