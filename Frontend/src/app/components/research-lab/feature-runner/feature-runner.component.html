@@ -1,149 +1,97 @@
-<div class="mt-4">
-  <!-- Collapsed summary bar when form is hidden -->
+<div class="runner-page">
   @if (formCollapsed()) {
-    <div class="collapsed-summary">
-      <div class="summary-content">
-        <i class="pi pi-check-circle text-green-600"></i>
-        <span class="summary-text">{{ runSummary }}</span>
+    <div class="run-summary">
+      <div class="run-summary-left">
+        <i class="pi pi-check-circle run-summary-icon" aria-hidden="true"></i>
+        <span class="run-summary-text">{{ runSummary }}</span>
         @if (cached()) {
-          <p-tag value="Loaded from cache" severity="info" />
+          <span class="cache-chip">from cache</span>
         }
       </div>
-      <div class="summary-actions">
-        <p-button
-          label="Modify & Re-run"
-          icon="pi pi-pencil"
-          severity="secondary"
-          [text]="true"
-          size="small"
-          (onClick)="toggleForm()"
-        />
-        <p-button
-          label="New Run"
-          icon="pi pi-plus"
-          severity="secondary"
-          [text]="true"
-          size="small"
-          (onClick)="newRun()"
-        />
+      <div class="run-summary-right">
+        <p-button label="Modify & Re-run" icon="pi pi-pencil" severity="secondary" [text]="true" size="small" (onClick)="toggleForm()" />
+        <p-button label="New Run" icon="pi pi-plus" severity="secondary" [text]="true" size="small" (onClick)="newRun()" />
       </div>
     </div>
   }
 
-  <!-- Form fields (collapsible) -->
   @if (!formCollapsed()) {
-    <div class="form-section">
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-        <div class="flex flex-col gap-2">
-          <label for="ticker" class="font-semibold text-sm">Ticker</label>
-          <input
-            pInputText
-            id="ticker"
-            [ngModel]="ticker()"
-            (ngModelChange)="ticker.set($event)"
-            placeholder="e.g. AAPL"
-            class="w-full"
-          />
+    <div class="runner-cards">
+      <!-- Feature card -->
+      <div class="runner-card">
+        <div class="card-head">
+          <span class="card-title">
+            <i class="pi pi-chart-bar" aria-hidden="true"></i>
+            Feature
+          </span>
         </div>
-
-        <div class="flex flex-col gap-2">
-          <label for="feature" class="font-semibold text-sm">Feature</label>
-          <p-select
-            id="feature"
-            [options]="features"
-            [ngModel]="featureName()"
-            (ngModelChange)="featureName.set($event)"
-            optionLabel="label"
-            optionValue="value"
-            class="w-full"
-          />
-        </div>
-
-        <div class="flex flex-col gap-2">
-          <label for="timespan" class="font-semibold text-sm">Timespan</label>
-          <p-select
-            id="timespan"
-            [options]="timespanOptions"
-            [ngModel]="timespan()"
-            (ngModelChange)="timespan.set($event)"
-            optionLabel="label"
-            optionValue="value"
-            class="w-full"
-          />
+        <div class="field-group field-group--3col">
+          <div class="field">
+            <label class="field-label" for="ticker">Ticker</label>
+            <input pInputText id="ticker" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="e.g. AAPL" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="feature">Feature</label>
+            <p-select id="feature" [options]="features" [ngModel]="featureName()" (ngModelChange)="featureName.set($event)" optionLabel="label" optionValue="value" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="timespan">Timespan</label>
+            <p-select id="timespan" [options]="timespanOptions" [ngModel]="timespan()" (ngModelChange)="timespan.set($event)" optionLabel="label" optionValue="value" />
+          </div>
         </div>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-        <div class="flex flex-col gap-2">
-          <label for="fromDate" class="font-semibold text-sm">From Date</label>
-          <input
-            pInputText
-            id="fromDate"
-            [ngModel]="fromDate()"
-            (ngModelChange)="fromDate.set($event)"
-            placeholder="YYYY-MM-DD"
-            class="w-full"
-          />
+      <!-- Execution card -->
+      <div class="runner-card">
+        <div class="card-head">
+          <span class="card-title">
+            <i class="pi pi-bolt" aria-hidden="true"></i>
+            Execution
+          </span>
         </div>
-
-        <div class="flex flex-col gap-2">
-          <label for="toDate" class="font-semibold text-sm">To Date</label>
-          <input
-            pInputText
-            id="toDate"
-            [ngModel]="toDate()"
-            (ngModelChange)="toDate.set($event)"
-            placeholder="YYYY-MM-DD"
-            class="w-full"
-          />
-        </div>
-
-        <div class="flex flex-col gap-2">
-          <label for="multiplier" class="font-semibold text-sm">Multiplier</label>
-          <input
-            pInputText
-            id="multiplier"
-            type="number"
-            [ngModel]="multiplier()"
-            (ngModelChange)="multiplier.set($event)"
-            class="w-full"
-          />
+        <div class="field-group">
+          <div class="field">
+            <label class="field-label" for="fromDate">From Date</label>
+            <input pInputText id="fromDate" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" placeholder="YYYY-MM-DD" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="toDate">To Date</label>
+            <input pInputText id="toDate" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" placeholder="YYYY-MM-DD" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="multiplier">Multiplier</label>
+            <input pInputText id="multiplier" type="number" [ngModel]="multiplier()" (ngModelChange)="multiplier.set($event)" />
+          </div>
+          <div class="field field--toggle">
+            <p-checkbox [binary]="true" [ngModel]="forceRun()" (ngModelChange)="forceRun.set($event)" inputId="force-run" />
+            <label class="toggle-label" for="force-run">Force re-run (bypass cache)</label>
+          </div>
         </div>
       </div>
+    </div>
 
-      @if (rangeWarning(); as warn) {
-        <p-message severity="warn" [text]="warn" styleClass="w-full mb-3" />
-      }
+    @if (rangeWarning(); as warn) {
+      <p-message severity="warn" [text]="warn" styleClass="w-full" />
+    }
 
-      <div class="mb-3 flex items-center gap-2">
-        <p-checkbox
-          [binary]="true"
-          [ngModel]="forceRun()"
-          (ngModelChange)="forceRun.set($event)"
-          inputId="force-run"
-        />
-        <label for="force-run" class="text-sm text-gray-600">
-          Force re-run (bypass cache)
-        </label>
-      </div>
-
-      <div class="mb-4">
-        <p-button
-          label="Run Feature Research"
-          icon="pi pi-play"
-          [disabled]="!canRun()"
-          [loading]="loading()"
-          (onClick)="runResearch()"
-        />
+    <div class="run-bar">
+      <span class="run-hint">
+        Ready to analyze <strong>{{ selectedFeatureLabel }}</strong> on
+        <span class="mono">{{ ticker().toUpperCase() }}</span>
+      </span>
+      <div class="run-bar-actions">
+        <button class="btn-run" [disabled]="!canRun() || loading()" (click)="runResearch()">
+          <i [class]="loading() ? 'pi pi-spin pi-spinner' : 'pi pi-play'" aria-hidden="true"></i>
+          Run Feature Research
+        </button>
       </div>
     </div>
   }
 
-  <!-- Live progress panel (skipped on cache hits — the report renders instantly). -->
   @if (job(); as j) {
     @if (!cached()) {
       <app-run-progress-panel
-        class="block mb-4"
+        class="block"
         [job]="j"
         [logs]="logEntries()"
         title="Feature research run"
@@ -153,7 +101,7 @@
   }
 
   @if (error(); as err) {
-    <p-message severity="error" [text]="err" class="mb-4" />
+    <p-message severity="error" [text]="err" />
   }
 
   @if (result(); as res) {

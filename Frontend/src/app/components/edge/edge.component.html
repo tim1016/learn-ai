@@ -11,31 +11,56 @@
     <a class="edge-tab"
        routerLink="/edge"
        routerLinkActive="active"
-       [routerLinkActiveOptions]="{ exact: true }">
+       [routerLinkActiveOptions]="{ exact: true }"
+       [style.--tab-accent]="'var(--accent)'">
       <i class="pi pi-bolt" aria-hidden="true"></i>
       Edge
     </a>
     <a class="edge-tab"
        routerLink="/edge/realized-vs-iv"
-       routerLinkActive="active">
+       routerLinkActive="active"
+       [style.--tab-accent]="'var(--ind-cat-volatility)'">
       <i class="pi pi-chart-bar" aria-hidden="true"></i>
       Realized vs IV
     </a>
     <a class="edge-tab"
        routerLink="/edge/cross-asset"
-       routerLinkActive="active">
+       routerLinkActive="active"
+       [style.--tab-accent]="'var(--ind-cat-trend)'">
       <i class="pi pi-share-alt" aria-hidden="true"></i>
       Cross-Asset
     </a>
     <a class="edge-tab"
        routerLink="/edge/regimes"
-       routerLinkActive="active">
+       routerLinkActive="active"
+       [style.--tab-accent]="'var(--ind-cat-momentum)'">
       <i class="pi pi-th-large" aria-hidden="true"></i>
       Regimes
     </a>
     <div class="edge-subnav-spacer"></div>
-    <span class="edge-subnav-tz">America/New_York</span>
+    <button type="button" class="edge-subnav-btn"
+            (click)="scoreOpen.set(true)"
+            aria-label="Open Edge Score inspector">
+      <i class="pi pi-chart-line" aria-hidden="true"></i>
+      Edge Score
+    </button>
+    <button type="button" class="edge-subnav-btn"
+            (click)="tradeSimOpen.set(true)"
+            aria-label="Open Trade Simulator">
+      <i class="pi pi-refresh" aria-hidden="true"></i>
+      Trade Sim
+    </button>
   </nav>
+
+  <app-edge-score-drawer
+    [data]="edgeData()"
+    [open]="scoreOpen()"
+    (closed)="scoreOpen.set(false)" />
+
+  <app-trade-sim-drawer
+    [data]="edgeData()"
+    [open]="tradeSimOpen()"
+    (closed)="tradeSimOpen.set(false)" />
 
   @if (isRoot()) {
     <section class="edge-root">

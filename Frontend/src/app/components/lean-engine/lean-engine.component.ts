@@ -465,6 +465,16 @@ export class LeanEngineComponent implements OnInit {
       .map(([name, prop]) => ({ name, prop }));
   });
 
+  readonly runBarContext = computed(() => {
+    const strat = this.selectedStrategy();
+    const symbol = this.effectiveSymbol();
+    const from = this.startDate();
+    const to = this.endDate();
+    const res = this.resolution();
+    if (!strat || !symbol || !from || !to) return null;
+    return { name: strat.display_name, symbol, from, to, res };
+  });
+
   constructor() {
     // Bridge JobsService events → run banner state.
     this.wireEngineJobEffect();

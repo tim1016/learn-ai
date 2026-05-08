@@ -106,6 +106,7 @@
                     <div class="strategy-meta__desc">{{ strat.description }}</div>
                     <div class="strategy-meta__badges">
                       @if (strat.pine_available) {
+                        <span class="meta-badge meta-badge--parity">parity ✓</span>
                         <span class="meta-badge meta-badge--pine">pine v6</span>
                       }
                     </div>
@@ -192,18 +193,16 @@
               [indicators]="strategyIndicators()"
               (preflightStatus)="onPreflightUpdate($event)" />
 
-            <!-- Run bar — context summary + action buttons -->
             <div class="run-bar">
-              <div class="run-bar__summary">
-                @if (selectedStrategy(); as strat) {
+              <div class="run-bar-context">
+                @if (runBarContext(); as ctx) {
                   Ready to run
-                  <strong class="mono">{{ strat.display_name }}</strong>
-                  on
-                  <strong class="mono">{{ effectiveSymbol() }}</strong>
-                  <span class="mono">({{ startDate() }} → {{ endDate() }}, {{ resolution() }})</span>
+                  <strong class="mono">{{ ctx.name }}</strong> on
+                  <strong class="mono">{{ ctx.symbol }}</strong>
+                  <span class="mono run-bar-range">({{ ctx.from }} → {{ ctx.to }}, {{ ctx.res }})</span>
                 }
               </div>
-              <div class="run-bar__btns">
+              <div class="run-bar-actions">
                 @if (selectedStrategy()?.pine_available) {
                   <button
                     type="button"
@@ -228,7 +227,7 @@
                 >
                   <i class="pi pi-play" aria-hidden="true"></i>
                   @if (running()) { Running… }
-                  @else if (preflightBlocks()) { Run blocked — fix pre-flight }
+                  @else if (preflightBlocks()) { Run blocked }
                   @else { Run backtest }
                 </button>
               </div>

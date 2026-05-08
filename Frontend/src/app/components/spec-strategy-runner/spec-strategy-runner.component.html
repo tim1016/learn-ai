@@ -293,6 +293,15 @@
               >×</button>
             </header>
             <div class="ssr-rule-body">
+              <div class="ssr-combine-row">
+                <div class="ssr-field">
+                  <span class="ssr-field-label">Combine conditions with</span>
+                  <div class="ssr-seg">
+                    <button type="button" [class.ssr-seg--active]="rule.when.logic === 'AND'" (click)="setManageRuleLogic(ri, 'AND')">All of (AND)</button>
+                    <button type="button" [class.ssr-seg--active]="rule.when.logic === 'OR'" (click)="setManageRuleLogic(ri, 'OR')">Any of (OR)</button>
+                  </div>
+                </div>
+              </div>
               @for (cond of rule.when.conditions; track $index; let ci = $index) {
                 <ng-container *ngTemplateOutlet="conditionCard; context: { cond: asCondition(cond), index: ci, ctx: 'manage', ruleIndex: ri }" />
               }
