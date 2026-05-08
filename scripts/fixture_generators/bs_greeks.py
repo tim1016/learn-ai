@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from datetime import date
 
 import pyarrow as pa
 
@@ -47,7 +46,7 @@ sys.path.insert(0, str(REPO_ROOT / "PythonDataService"))
 from golden_support.hashing import compute_hashes
 from golden_support.io import write_arrow
 
-from fixture_generators.bs_price import SPOTS, STRIKES, TTMS, RATES, VOLS, DIVIDEND, GENERATION_DATE, ORACLE_LIB
+from fixture_generators.bs_price import SPOTS, STRIKES, TTMS, RATES, VOLS, DIVIDEND, _generation_date, ORACLE_LIB
 
 
 def _build_delta_grid(is_call: bool) -> tuple[pa.Table, pa.Table]:
@@ -165,7 +164,7 @@ No unit declaration needed — delta has no canonical scaling ambiguity.
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: {ORACLE_LIB}
 Script: scripts/fixture_generators/bs_greeks.py
 {'Justification: ' + justification if justification else '(initial generation)'}

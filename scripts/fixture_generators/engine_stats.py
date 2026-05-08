@@ -39,7 +39,8 @@ sys.path.insert(0, str(REPO_ROOT / "PythonDataService"))
 from golden_support.hashing import compute_hashes
 from golden_support.io import write_arrow
 
-GENERATION_DATE = date(2026, 5, 8).isoformat()
+def _generation_date() -> str:
+    return date.today().isoformat()
 ORACLE_DESCRIPTION = "hand_computed — numpy mean/std(ddof=1) independent of canonical pure-Python loops"
 
 # Fixed 5-element return cases, hand-verifiable
@@ -153,7 +154,7 @@ dimensionless (annualized Sharpe ratio)
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: {ORACLE_DESCRIPTION}
 Script: scripts/fixture_generators/engine_stats.py
 {'Justification: ' + justification if justification else '(initial generation)'}
@@ -238,7 +239,7 @@ dimensionless (annualized Sortino ratio)
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: {ORACLE_DESCRIPTION}
 Script: scripts/fixture_generators/engine_stats.py
 {'Justification: ' + justification if justification else '(initial generation)'}

@@ -31,7 +31,6 @@ import sys
 from pathlib import Path
 from datetime import date
 
-import numpy as np
 import pyarrow as pa
 
 REPO_ROOT = Path(__file__).parent.parent.parent
@@ -51,7 +50,8 @@ RATES = [0.05]
 VOLS = [0.15, 0.20, 0.30]
 DIVIDEND = 0.0
 
-GENERATION_DATE = date(2026, 5, 8).isoformat()
+def _generation_date() -> str:
+    return date.today().isoformat()
 ORACLE_LIB = "py_vollib==1.0.1"
 ORACLE_CITATION = (
     "py_vollib.black_scholes.black_scholes(flag, S, K, t, r, sigma); "
@@ -186,7 +186,7 @@ Verify: python -m pytest PythonDataService/tests/fixtures/test_options_pricing_f
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle version: {ORACLE_LIB}
 Script: scripts/fixture_generators/bs_price.py
 {'Justification for regeneration: ' + justification if justification else '(initial generation)'}

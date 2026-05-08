@@ -34,7 +34,6 @@ Prices chosen to produce non-trivial, hand-verifiable values:
 """
 from __future__ import annotations
 
-import math
 import sys
 from datetime import date
 from pathlib import Path
@@ -48,7 +47,8 @@ sys.path.insert(0, str(REPO_ROOT / "PythonDataService"))
 from golden_support.hashing import compute_hashes  # noqa: E402
 from golden_support.io import write_arrow  # noqa: E402
 
-GENERATION_DATE = date(2026, 5, 9).isoformat()
+def _generation_date() -> str:
+    return date.today().isoformat()
 PERIOD = 3
 
 PRICE_CASES: list[list[float]] = [
@@ -297,7 +297,7 @@ because the EMA always returns a value (warmup returns the running SMA).
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — pure-Python SMA-seeded EMA formula without calling canonical
 Script: scripts/fixture_generators/indicators.py
 {'Justification: ' + justification if justification else '(initial generation)'}
@@ -370,7 +370,7 @@ All bars produce a value (warmup is rolling mean, not NaN).
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — pure-Python rolling window without calling canonical
 Script: scripts/fixture_generators/indicators.py
 {'Justification: ' + justification if justification else '(initial generation)'}
@@ -474,7 +474,7 @@ atol=1e-9, rtol=0.0
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — pure-Python Wilder RSI without calling canonical
 Script: scripts/fixture_generators/indicators.py
 {'Justification: ' + justification if justification else '(initial generation)'}
