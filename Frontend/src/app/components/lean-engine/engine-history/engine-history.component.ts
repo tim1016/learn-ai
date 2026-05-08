@@ -279,8 +279,8 @@ export class EngineHistoryComponent implements OnInit {
       );
       this.studies.set(resp.items);
       this.totalCount.set(resp.totalCount);
-    } catch (err: any) {
-      this.error.set(err?.message ?? 'Failed to load studies');
+    } catch (err: unknown) {
+      this.error.set((err instanceof Error ? err.message : null) ?? 'Failed to load studies');
     } finally {
       this.loading.set(false);
     }
@@ -386,6 +386,12 @@ export class EngineHistoryComponent implements OnInit {
 
   pnlClass(val: number): string {
     return val > 0 ? 'positive' : val < 0 ? 'negative' : '';
+  }
+
+  sharpeClass(v: number): string {
+    if (v >= 1) return 'num positive';
+    if (v < 0)  return 'num negative';
+    return 'num';
   }
 
   gradeLabel(s: StudyListItem): string {
