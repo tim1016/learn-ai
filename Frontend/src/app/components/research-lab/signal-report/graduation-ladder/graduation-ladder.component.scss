@@ -219,10 +219,27 @@
     color: $text-primary;
   }
 
-  .rejection-threshold {
+  .rejection-value-vs {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
     font-family: $font-mono;
     font-size: 0.75rem;
-    color: $text-muted;
+    white-space: nowrap;
+
+    .actual-val {
+      color: $bear;
+      font-weight: 700;
+    }
+
+    .vs-sep {
+      color: $text-muted;
+      font-size: 0.6875rem;
+    }
+
+    .threshold-val {
+      color: $text-muted;
+    }
   }
 
   .rejection-message {

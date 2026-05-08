@@ -34,8 +34,8 @@
   gap: 6px;
   height: 100%;
   padding: 0 14px;
-  font-size: $fs-sm;
-  font-weight: $fw-medium;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
   color: $text-secondary;
   text-decoration: none;
   border-bottom: 2px solid transparent;
@@ -52,12 +52,12 @@
   &.active {
     color: $text-primary;
     border-bottom-color: var(--tab-accent, #{$accent});
-    font-weight: $fw-semi;
+    font-weight: var(--fw-semi);
   }
 }
 
 .edge-subnav-spacer { flex: 1; }
-.edge-subnav-tz { font-size: $fs-xs; font-family: $font-mono; color: $text-muted; }
+.edge-subnav-tz { font-size: var(--fs-xs); font-family: $font-mono; color: $text-muted; }
 
 .edge-subnav-btn {
   display: inline-flex;
@@ -69,7 +69,7 @@
   border: 1px solid $border-light;
   border-radius: $radius;
   color: $text-secondary;
-  font-size: $fs-xs;
+  font-size: var(--fs-xs);
   cursor: pointer;
   margin-left: 6px;
   transition: border-color $t-ui, color $t-ui;

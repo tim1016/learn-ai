@@ -1,50 +1,351 @@
+@use '../../../styles/tokens' as *;
+
 :host {
   display: block;
 }
 
+// ── Page layout ────────────────────────────────────────────
+.history-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 16px;
+}
+
+// ── Toolbar ────────────────────────────────────────────────
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: $radius-md;
+}
+
+.toolbar-loader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.btn-load {
+  height: 30px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid $border-light;
+  border-radius: $radius;
+  color: $text-secondary;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: color $t-ui, border-color $t-ui;
+
+  &:hover:not(:disabled) { color: $text-primary; border-color: $border-strong; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+// ── Search ─────────────────────────────────────────────────
+.search-wrap {
+  position: relative;
+  flex: 0 0 220px;
+}
+
+.search-icon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: $text-muted;
+  pointer-events: none;
+}
+
+.search-input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 28px;
+  background: $bg-elevated;
+  border: 1px solid $border-light;
+  border-radius: $radius;
+  color: $text-primary;
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+
+  &:focus { border-color: $accent; box-shadow: 0 0 0 1px rgba($accent, 0.3); }
+  &::placeholder { color: $text-muted; }
+}
+
+// ── Filter chips ───────────────────────────────────────────
+.filter-chips {
+  display: flex;
+  height: 30px;
+  background: $bg-elevated;
+  border: 1px solid $border-light;
+  border-radius: $radius;
+  overflow: hidden;
+}
+
+.filter-chip {
+  padding: 0 12px;
+  background: transparent;
+  color: $text-subtle;
+  border: none;
+  border-right: 1px solid $border;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background $t-ui, color $t-ui;
+
+  &:last-child { border-right: none; }
+
+  &.filter-chip--active {
+    background: var(--accent-faint);
+    color: $accent;
+    font-weight: 700;
+
+    .chip-count { background: var(--accent-soft); color: $accent; }
+  }
+}
+
+.chip-count {
+  font-family: $font-mono;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: $bg-hover;
+  color: $text-muted;
+  transition: background $t-ui, color $t-ui;
+}
+
+.toolbar-spacer { flex: 1; }
+
+// ── Density toggle ─────────────────────────────────────────
+.density-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.density-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: $text-muted;
+}
+
+.density-btns {
+  display: flex;
+  height: 26px;
+  background: $bg-elevated;
+  border: 1px solid $border-light;
+  border-radius: $radius-sm;
+  overflow: hidden;
+}
+
+.density-btn {
+  padding: 0 10px;
+  background: transparent;
+  color: $text-subtle;
+  border: none;
+  border-right: 1px solid $border;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  text-transform: capitalize;
+  transition: background $t-ui, color $t-ui;
+
+  &:last-child { border-right: none; }
+
+  &.density-btn--active {
+    background: var(--accent-faint);
+    color: $accent;
+    font-weight: 700;
+  }
+}
+
+// ── Table wrapper ──────────────────────────────────────────
+.history-table-wrap {
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: $radius-md;
+  overflow: hidden;
+}
+
+// ── PrimeNG table overrides ────────────────────────────────
+:host ::ng-deep {
+  .p-datatable .p-datatable-thead > tr > th {
+    background: $bg-elevated;
+    border-color: $border;
+    padding: 0 12px;
+    height: 28px;
+    white-space: nowrap;
+  }
+
+  .p-datatable .p-datatable-tbody > tr > td {
+    border-color: $border;
+    padding: 0 12px;
+    height: 30px;
+    font-size: 12px;
+    color: $text-secondary;
+
+    .history-table-wrap[data-density="normal"] & {
+      height: 38px;
+      font-size: 13px;
+    }
+  }
+
+  .p-datatable .p-datatable-tbody > tr:hover > td {
+    background: $bg-hover;
+  }
+
+  .p-datatable .p-datatable-paginator-bottom {
+    background: $bg-elevated;
+    border-top: 1px solid $border;
+    border-bottom: none;
+    padding: 6px 12px;
+  }
+
+  .toolbar-loader .p-inputtext {
+    height: 30px;
+    width: 100px;
+    padding: 0 10px;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: $radius;
+    color: $text-primary;
+    font-family: $font-mono;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+}
+
+// ── Column headers ─────────────────────────────────────────
 .col-header {
   .col-header-content {
+    background: none;
+    border: none;
+    padding: 0;
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
     cursor: help;
-    border-bottom: 1px dashed #94a3b8;
+    border-bottom: 1px dashed $border-strong;
     padding-bottom: 1px;
-    transition: color 0.15s;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: $text-muted;
+    transition: color $t-ui;
 
     &:hover {
-      color: #2563eb;
-
-      .col-icon {
-        color: #2563eb;
-      }
+      color: $accent;
+      .col-icon { color: $accent; }
     }
   }
 
   .col-icon {
-    font-size: 0.85rem;
-    color: #64748b;
-    transition: color 0.15s;
+    font-size: 0.8rem;
+    color: $text-muted;
+    transition: color $t-ui;
   }
 }
 
+// ── Cell utilities ─────────────────────────────────────────
+.val-bull { color: $bull; }
+.val-bear { color: $bear; }
+.val-warn { color: $warn; }
+.val-dim  { color: $text-muted; }
+
+.cell-mono {
+  font-family: $font-mono;
+  font-variant-numeric: tabular-nums;
+}
+
+.cell-feature {
+  font-weight: 600;
+  color: $text-primary;
+}
+
+.cell-period {
+  font-family: $font-mono;
+  font-size: 11px;
+  color: $text-muted;
+}
+
+.cell-dim {
+  color: $text-muted;
+}
+
+.cell-empty {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: $text-muted;
+  font-size: 13px;
+}
+
+// ── Footer ─────────────────────────────────────────────────
+.table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: $bg-elevated;
+  border-top: 1px solid $border;
+  font-size: 11px;
+  font-family: $font-mono;
+  color: $text-subtle;
+}
+
+.footer-ticker {
+  font-weight: 700;
+  color: $text-muted;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+// ── Empty state ────────────────────────────────────────────
+.empty-state {
+  padding: 1.5rem 0;
+}
+
+.empty-text {
+  margin: 0;
+  font-size: 13px;
+  color: $text-muted;
+}
+
+// ── Help dialog ────────────────────────────────────────────
 .help-dialog-header {
   display: flex;
   align-items: center;
   gap: 0.6rem;
   font-weight: 700;
   font-size: 1.05rem;
-  color: #1e293b;
+  color: $text-primary;
 
   .help-dialog-icon {
     font-size: 1.1rem;
-    color: #3b82f6;
+    color: $accent;
   }
 }
 
 .help-dialog-body {
   font-size: 0.9rem;
-  color: #475569;
+  color: $text-secondary;
   line-height: 1.7;
   margin: 0;
 }

@@ -40,14 +40,11 @@
   </button>
 </div>
 
-<!-- ═════════ Hero columns — three lead metrics ═════════
-     Net P&L · Sharpe · Max Drawdown. Picked over the prior 6-card grid
-     for at-a-glance density on a 1440-tall screen. The remaining
-     hero metrics (Sortino, PF, Win Rate, Expectancy) move into the
-     readiness sidebar's expanded view.
-     Each card carries a subtle traffic-light stripe and a verdict
-     subtitle from the existing grade utilities. -->
-<div class="hero-cols">
+<!-- ═════════ Hero strip — 7 KPIs in a single row ═════════
+     Design: HeroStrip layout — all headline metrics visible without
+     requiring drawer expansion. Bottom border carries the verdict color.
+     P&L · Max DD · Sharpe · Sortino · PF · Win Rate · Expectancy -->
+<div class="hero-strip">
   <!-- Net Profit -->
   <article class="hero-col" [attr.data-band]="netProfitGrade().band">
     <header class="hero-col__head">
@@ -64,22 +61,6 @@
          [class.negative]="r.net_profit < 0">
       {{ r.net_profit >= 0 ? '+' : '' }}{{ formatPct(r.net_profit / r.initial_cash) }}
     </div>
-    <div class="hero-col__verdict">{{ netProfitGrade().subtitle }}</div>
-  </article>
-
-  <!-- Sharpe -->
-  <article class="hero-col" [attr.data-band]="sharpeGrade().band">
-    <header class="hero-col__head">
-      <span class="hero-col__label">Sharpe</span>
-      <span class="hero-col__sub">annualized · risk-adjusted</span>
-    </header>
-    <div class="hero-col__value mono">
-      {{ formatNumber(r.statistics['sharpe_ratio'], 2) }}
-    </div>
-    <div class="hero-col__delta mono">
-      target {{ sharpeGrade().targetRange }}
-    </div>
-    <div class="hero-col__verdict">{{ sharpeGrade().subtitle }}</div>
   </article>
 
   <!-- Max Drawdown -->
@@ -91,10 +72,57 @@
     <div class="hero-col__value mono negative">
       {{ formatPct(r.statistics['max_drawdown_pct'] ?? 0) }}
     </div>
-    <div class="hero-col__delta mono">
-      target {{ maxDrawdownGrade().targetRange }}
-    </div>
-    <div class="hero-col__verdict">{{ maxDrawdownGrade().subtitle }}</div>
+    <div class="hero-col__delta mono">{{ maxDrawdownGrade().subtitle }}</div>
+  </article>
+
+  <!-- Sharpe -->
+  <article class="hero-col" [attr.data-band]="sharpeGrade().band">
+    <header class="hero-col__head">
+      <span class="hero-col__label">Sharpe</span>
+      <span class="hero-col__sub">annualized</span>
+    </header>
+    <div class="hero-col__value mono">{{ formatNumber(r.statistics['sharpe_ratio'], 2) }}</div>
+    <div class="hero-col__delta mono">target {{ sharpeGrade().targetRange }}</div>
+  </article>
+
+  <!-- Sortino -->
+  <article class="hero-col" [attr.data-band]="sortinoGrade().band">
+    <header class="hero-col__head">
+      <span class="hero-col__label">Sortino</span>
+      <span class="hero-col__sub">downside vol</span>
+    </header>
+    <div class="hero-col__value mono">{{ formatNumber(r.statistics['sortino_ratio'], 2) }}</div>
+    <div class="hero-col__delta mono">{{ sortinoGrade().subtitle }}</div>
+  </article>
+
+  <!-- Profit Factor -->
+  <article class="hero-col" [attr.data-band]="profitFactorGrade().band">
+    <header class="hero-col__head">
+      <span class="hero-col__label">Profit Factor</span>
+      <span class="hero-col__sub">gross</span>
+    </header>
+    <div class="hero-col__value mono">{{ formatNumber(r.statistics['profit_factor'], 2) }}</div>
+    <div class="hero-col__delta mono">{{ profitFactorGrade().subtitle }}</div>
+  </article>
+
+  <!-- Win Rate -->
+  <article class="hero-col" [attr.data-band]="winRateGrade().band">
+    <header class="hero-col__head">
+      <span class="hero-col__label">Win Rate</span>
+      <span class="hero-col__sub">{{ r.winning_trades }}W / {{ r.losing_trades }}L</span>
+    </header>
+    <div class="hero-col__value mono">{{ formatPct(r.win_rate) }}</div>
+    <div class="hero-col__delta mono">{{ winRateGrade().subtitle }}</div>
+  </article>
+
+  <!-- Expectancy -->
+  <article class="hero-col" [attr.data-band]="expectancyGrade().band">
+    <header class="hero-col__head">
+      <span class="hero-col__label">Expectancy</span>
+      <span class="hero-col__sub">per trade</span>
+    </header>
+    <div class="hero-col__value mono">{{ formatPct(r.statistics['expectancy_pct'] ?? 0) }}</div>
+    <div class="hero-col__delta mono">{{ expectancyGrade().subtitle }}</div>
   </article>
 </div>
 
@@ -124,54 +152,14 @@
   <summary class="secondary-drawer__head">
     <i class="pi" [class.pi-chevron-right]="!showFeeDrawer()"
                   [class.pi-chevron-down]="showFeeDrawer()"></i>
-    <span>Edge quality &amp; fee analytics</span>
+    <span>Fee &amp; sequencing analytics</span>
     <span class="secondary-drawer__hint">
-      Win {{ formatPct(r.win_rate) }} · PF {{ formatNumber(r.statistics['profit_factor'], 2) }}
-      · Sortino {{ formatNumber(r.statistics['sortino_ratio'], 2) }}
-      · Fees {{ formatCurrency(totalFees()) }}
+      Fees {{ formatCurrency(totalFees()) }} · fee drag {{ formatPct(feeDragPct()) }}
+      · fee/trade {{ formatCurrency(feePerTrade()) }}
     </span>
   </summary>
 
   <div class="secondary-drawer__body">
-    <!-- Edge-quality cards -->
-    <div class="hero-cols hero-cols--four">
-      <article class="hero-col" [attr.data-band]="sortinoGrade().band">
-        <header class="hero-col__head">
-          <span class="hero-col__label">Sortino</span>
-          <span class="hero-col__sub">downside-only vol</span>
-        </header>
-        <div class="hero-col__value mono">{{ formatNumber(r.statistics['sortino_ratio'], 2) }}</div>
-        <div class="hero-col__verdict">{{ sortinoGrade().subtitle }}</div>
-      </article>
-
-      <article class="hero-col" [attr.data-band]="profitFactorGrade().band">
-        <header class="hero-col__head">
-          <span class="hero-col__label">Profit Factor</span>
-          <span class="hero-col__sub">gross wins / losses</span>
-        </header>
-        <div class="hero-col__value mono">{{ formatNumber(r.statistics['profit_factor'], 2) }}</div>
-        <div class="hero-col__verdict">{{ profitFactorGrade().subtitle }}</div>
-      </article>
-
-      <article class="hero-col" [attr.data-band]="winRateGrade().band">
-        <header class="hero-col__head">
-          <span class="hero-col__label">Win Rate</span>
-          <span class="hero-col__sub">{{ r.winning_trades }}W / {{ r.losing_trades }}L</span>
-        </header>
-        <div class="hero-col__value mono">{{ formatPct(r.win_rate) }}</div>
-        <div class="hero-col__verdict">{{ winRateGrade().subtitle }}</div>
-      </article>
-
-      <article class="hero-col" [attr.data-band]="expectancyGrade().band">
-        <header class="hero-col__head">
-          <span class="hero-col__label">Expectancy / trade</span>
-          <span class="hero-col__sub">avg PnL per round-trip</span>
-        </header>
-        <div class="hero-col__value mono">{{ formatPct(r.statistics['expectancy_pct'] ?? 0) }}</div>
-        <div class="hero-col__verdict">{{ expectancyGrade().subtitle }}</div>
-      </article>
-    </div>
-
     <!-- Trade vs Portfolio Sharpe divergence -->
     @let div = sharpeDivergence();
     <div class="divergence-card" [attr.data-band]="div.band">

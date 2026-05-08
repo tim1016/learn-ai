@@ -4,39 +4,236 @@
   display: block;
 }
 
-.collapsed-summary {
+// ── Page layout ────────────────────────────────────────────
+.runner-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+}
+
+// ── Collapsed run summary ──────────────────────────────────
+.run-summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 1.25rem;
-  border-radius: 8px;
-  background: rgba(0, 200, 150, 0.12);
-  border: 1px solid rgba(0, 200, 150, 0.3);
-  margin-bottom: 1.5rem;
+  padding: 10px 14px;
+  background: rgba($bull, 0.08);
+  border: 1px solid rgba($bull, 0.30);
+  border-radius: $radius-md;
+}
 
-  .summary-content {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
+.run-summary-left {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
 
-    .summary-text {
-      font-size: 0.95rem;
-      font-weight: 600;
-      color: $bull;
-    }
-  }
+.run-summary-icon {
+  color: $bull;
+  font-size: 1rem;
+}
 
-  .summary-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
+.run-summary-text {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: $bull;
+}
+
+.cache-chip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: $info;
+  background: rgba($info, 0.10);
+  border: 1px solid rgba($info, 0.28);
+  border-radius: $radius-sm;
+  padding: 2px 6px;
+}
+
+.run-summary-right {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+// ── Cards row ──────────────────────────────────────────────
+.runner-cards {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 12px;
+
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
   }
 }
 
-.form-section {
-  padding: 1.25rem;
-  border-radius: 8px;
+.runner-card {
   background: $bg-surface;
   border: 1px solid $border;
-  margin-bottom: 1.5rem;
+  border-radius: $radius-md;
+  padding: 14px;
+}
+
+// ── Card header ────────────────────────────────────────────
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid $border;
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: $text-subtle;
+
+  i { color: $accent; }
+}
+
+// ── Field layout ───────────────────────────────────────────
+.field-group {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+
+  &.field-group--3col {
+    grid-template-columns: repeat(3, 1fr);
+
+    @media (max-width: 900px) {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  &.field-group--2col {
+    grid-template-columns: repeat(2, 1fr);
+
+    @media (max-width: 900px) {
+      grid-template-columns: 1fr;
+    }
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  &.field--toggle {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    grid-column: 1 / -1;
+  }
+}
+
+.field-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: $text-subtle;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.toggle-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: $text-secondary;
+  cursor: pointer;
+}
+
+// ── PrimeNG input overrides ────────────────────────────────
+:host ::ng-deep {
+  .p-inputtext {
+    height: 32px;
+    padding: 0 10px;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: $radius;
+    color: $text-primary;
+    font-family: $font-mono;
+    font-size: 12px;
+    width: 100%;
+
+    &:enabled:focus {
+      border-color: $accent;
+      box-shadow: 0 0 0 1px rgba($accent, 0.3);
+    }
+  }
+
+  .p-select {
+    height: 32px;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: $radius;
+    width: 100%;
+
+    &:not(.p-disabled):hover { border-color: $border-strong; }
+    &:not(.p-disabled).p-focus { border-color: $accent; box-shadow: 0 0 0 1px rgba($accent, 0.3); }
+  }
+
+  .p-select-label {
+    font-size: 12px;
+    color: $text-primary;
+    font-family: $font-mono;
+    padding: 0 10px;
+    line-height: 30px;
+  }
+
+  .p-select-dropdown { color: $text-muted; }
+}
+
+// ── Run bar ────────────────────────────────────────────────
+.run-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: $bg-sunken;
+  border: 1px solid $border;
+  border-radius: $radius-md;
+  padding: 10px 14px;
+}
+
+.run-hint {
+  font-size: 12px;
+  color: $text-subtle;
+
+  strong { color: $text-primary; font-family: $font-mono; }
+  .mono  { font-family: $font-mono; color: $text-primary; }
+}
+
+.run-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-run {
+  height: 36px;
+  padding: 0 18px;
+  background: $bull;
+  color: $bg-canvas;
+  border: none;
+  border-radius: $radius;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: $font-sans;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: filter $t-ui;
+
+  &:hover:not(:disabled) { filter: brightness(1.1); }
+  &:disabled { opacity: 0.45; cursor: not-allowed; }
 }

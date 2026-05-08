@@ -345,7 +345,7 @@
       <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-3">
         <div class="metric-card">
           <div class="metric-label">Avg Return (Active)</div>
-          <div class="metric-value" [class.text-green-700]="sb.avgForwardReturnWhenActive > 0" [class.text-red-700]="sb.avgForwardReturnWhenActive <= 0">
+          <div class="metric-value" [class.val-bull]="sb.avgForwardReturnWhenActive > 0" [class.val-bear]="sb.avgForwardReturnWhenActive <= 0">
             {{ sb.avgForwardReturnWhenActive | number: '1.6-6' }}
           </div>
         </div>
@@ -359,11 +359,11 @@
         </div>
         <div class="metric-card">
           <div class="metric-label">Avg Win Return</div>
-          <div class="metric-value text-green-700">{{ sb.avgWinReturn | number: '1.6-6' }}</div>
+          <div class="metric-value val-bull">{{ sb.avgWinReturn | number: '1.6-6' }}</div>
         </div>
         <div class="metric-card">
           <div class="metric-label">Avg Loss Return</div>
-          <div class="metric-value text-red-700">{{ sb.avgLossReturn | number: '1.6-6' }}</div>
+          <div class="metric-value val-bear">{{ sb.avgLossReturn | number: '1.6-6' }}</div>
         </div>
       </div>
       <div class="interpretation-note">
@@ -383,7 +383,7 @@
         <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
           <div class="metric-card">
             <div class="metric-label">Mean OOS Sharpe</div>
-            <div class="metric-value" [class.text-green-700]="wf.meanOosSharpe > 0" [class.text-red-700]="wf.meanOosSharpe <= 0">
+            <div class="metric-value" [class.val-bull]="wf.meanOosSharpe > 0" [class.val-bear]="wf.meanOosSharpe <= 0">
               {{ wf.meanOosSharpe | number: '1.2-2' }}
             </div>
           </div>
@@ -473,14 +473,12 @@
                 } @else {
                   <p-tag severity="info" value="Not Significant" />
                 }
-                <span class="ml-2 text-xs text-gray-500">
-                  N = {{ decay.nFoldsUsed }} folds
-                </span>
+                <span class="title-annotation">N = {{ decay.nFoldsUsed }} folds</span>
               </div>
               <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
                 <div class="metric-card">
                   <div class="metric-label">Slope (β₁)</div>
-                  <div class="metric-value" [class.text-red-700]="decay.slope < 0" [class.text-green-700]="decay.slope >= 0">
+                  <div class="metric-value" [class.val-bear]="decay.slope < 0" [class.val-bull]="decay.slope >= 0">
                     {{ decay.slope | number: '1.4-4' }}
                   </div>
                 </div>
@@ -494,7 +492,7 @@
                 </div>
                 <div class="metric-card">
                   <div class="metric-label">p-value</div>
-                  <div class="metric-value" [class.text-red-700]="decay.pValue < 0.05">
+                  <div class="metric-value" [class.val-bear]="decay.pValue < 0.05">
                     {{ decay.pValue | number: '1.4-4' }}
                   </div>
                 </div>
@@ -527,7 +525,7 @@
         }
 
         <!-- OOS Equity Curve -->
-        @if (wf.combinedOosDates?.length) {
+        @if (wf.combinedOosDates.length) {
           <div class="chart-container mb-4">
             <canvas #oosEquityCurve></canvas>
           </div>
@@ -538,9 +536,7 @@
       <div class="mb-6">
         <h4 class="table-title mb-3">
           <i class="pi pi-list mr-2"></i>Walk-Forward Windows
-          <span class="ml-2 text-xs text-gray-500">
-            Threshold is selected per-fold from train-only data — see methodology page.
-          </span>
+          <span class="title-annotation">Threshold is selected per-fold from train-only data — see methodology page.</span>
         </h4>
         <p-table [value]="wf.windows" styleClass="p-datatable-sm" [tableStyle]="{ 'min-width': '50rem' }">
           <ng-template #header>
@@ -561,10 +557,10 @@
               <td>{{ w.trainStart }} to {{ w.trainEnd }}</td>
               <td>{{ w.testStart }} to {{ w.testEnd }}</td>
               <td class="td-emphasis">{{ w.bestThreshold | number: '1.1-1' }}</td>
-              <td [class.text-green-700]="w.oosNetSharpe > 0" [class.text-red-700]="w.oosNetSharpe <= 0">
+              <td [class.val-bull]="w.oosNetSharpe > 0" [class.val-bear]="w.oosNetSharpe <= 0">
                 {{ w.oosNetSharpe | number: '1.2-2' }}
               </td>
-              <td [class.text-green-700]="w.oosNetReturn > 0" [class.text-red-700]="w.oosNetReturn <= 0">
+              <td [class.val-bull]="w.oosNetReturn > 0" [class.val-bear]="w.oosNetReturn <= 0">
                 {{ w.oosNetReturn | number: '1.4-4' }}
               </td>
               <td>{{ w.oosMaxDrawdown | number: '1.4-4' }}</td>
@@ -679,7 +675,7 @@
           [value]="ps.stabilityLabel"
           class="ml-2"
         />
-        <span class="ml-2 text-sm text-gray-500">Score: {{ ps.stabilityScore | number: '1.2-2' }}</span>
+        <span class="title-annotation title-annotation--sm">Score: {{ ps.stabilityScore | number: '1.2-2' }}</span>
       </h4>
       <div class="chart-container">
         <canvas #stabilityChart></canvas>

@@ -1,121 +1,103 @@
-<div class="mt-4">
+<div class="runner-page">
   @if (formCollapsed()) {
-    <div class="collapsed-summary">
-      <div class="summary-content">
-        <i class="pi pi-check-circle text-green-600"></i>
-        <span class="summary-text">{{ runSummary }}</span>
+    <div class="run-summary">
+      <div class="run-summary-left">
+        <i class="pi pi-check-circle run-summary-icon" aria-hidden="true"></i>
+        <span class="run-summary-text">{{ runSummary }}</span>
         @if (cached()) {
-          <p-tag value="Loaded from cache" severity="info" />
+          <span class="cache-chip">from cache</span>
         }
       </div>
-      <div class="summary-actions">
-        <p-button
-          label="Modify & Re-run"
-          icon="pi pi-pencil"
-          severity="secondary"
-          [text]="true"
-          size="small"
-          (onClick)="toggleForm()"
-        />
-        <p-button
-          label="New Run"
-          icon="pi pi-plus"
-          severity="secondary"
-          [text]="true"
-          size="small"
-          (onClick)="newRun()"
-        />
+      <div class="run-summary-right">
+        <p-button label="Modify & Re-run" icon="pi pi-pencil" severity="secondary" [text]="true" size="small" (onClick)="toggleForm()" />
+        <p-button label="New Run" icon="pi pi-plus" severity="secondary" [text]="true" size="small" (onClick)="newRun()" />
       </div>
     </div>
   }
 
   @if (!formCollapsed()) {
-    <div class="form-section">
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-        <div class="flex flex-col gap-2">
-          <label for="sig-ticker" class="font-semibold text-sm text-gray-700">Ticker</label>
-          <input
-            pInputText
-            id="sig-ticker"
-            [ngModel]="ticker()"
-            (ngModelChange)="ticker.set($event)"
-            placeholder="e.g. AAPL"
-            class="w-full"
-          />
+    <div class="runner-cards">
+      <!-- Signal card -->
+      <div class="runner-card">
+        <div class="card-head">
+          <span class="card-title">
+            <i class="pi pi-wave-pulse" aria-hidden="true"></i>
+            Signal
+          </span>
         </div>
-
-        <div class="flex flex-col gap-2">
-          <label for="sig-feature" class="font-semibold text-sm text-gray-700">Feature</label>
-          <p-select
-            id="sig-feature"
-            [options]="features"
-            [ngModel]="featureName()"
-            (ngModelChange)="featureName.set($event)"
-            optionLabel="label"
-            optionValue="value"
-            class="w-full"
-          />
-        </div>
-
-        <div class="flex flex-col gap-2">
-          <label for="sig-from" class="font-semibold text-sm text-gray-700">From Date</label>
-          <input
-            pInputText
-            id="sig-from"
-            [ngModel]="fromDate()"
-            (ngModelChange)="fromDate.set($event)"
-            placeholder="YYYY-MM-DD"
-            class="w-full"
-          />
+        <div class="field-group field-group--2col">
+          <div class="field">
+            <label class="field-label" for="sig-ticker">Ticker</label>
+            <input pInputText id="sig-ticker" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="e.g. AAPL" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="sig-feature">Feature</label>
+            <p-select id="sig-feature" [options]="features" [ngModel]="featureName()" (ngModelChange)="featureName.set($event)" optionLabel="label" optionValue="value" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="sig-from">From Date</label>
+            <input pInputText id="sig-from" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" placeholder="YYYY-MM-DD" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="sig-to">To Date</label>
+            <input pInputText id="sig-to" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" placeholder="YYYY-MM-DD" />
+          </div>
         </div>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-        <div class="flex flex-col gap-2">
-          <label for="sig-to" class="font-semibold text-sm text-gray-700">To Date</label>
-          <input
-            pInputText
-            id="sig-to"
-            [ngModel]="toDate()"
-            (ngModelChange)="toDate.set($event)"
-            placeholder="YYYY-MM-DD"
-            class="w-full"
-          />
+      <!-- Options card -->
+      <div class="runner-card">
+        <div class="card-head">
+          <span class="card-title">
+            <i class="pi pi-sliders-h" aria-hidden="true"></i>
+            Options
+          </span>
         </div>
-
-        <div class="flex flex-col gap-2">
-          <label class="font-semibold text-sm text-gray-700">Flip Sign (mean-reversion)</label>
-          <p-toggleswitch [(ngModel)]="flipSign" />
-        </div>
-
-        <div class="flex flex-col gap-2">
-          <label class="font-semibold text-sm text-gray-700">Regime Gate</label>
-          <p-toggleswitch [(ngModel)]="regimeGateEnabled" />
-        </div>
-
-        <div class="flex flex-col gap-2">
-          <label class="font-semibold text-sm text-gray-700">Force Re-run (bypass cache)</label>
-          <p-toggleswitch [(ngModel)]="forceRefresh" />
+        <div class="field-group">
+          <div class="field field--toggle">
+            <p-toggleswitch [ngModel]="flipSign()" (ngModelChange)="flipSign.set($event)" inputId="flip-sign" />
+            <div class="toggle-body">
+              <label class="toggle-label" for="flip-sign">Flip Sign</label>
+              <span class="toggle-hint">Mean-reversion mode (short the signal)</span>
+            </div>
+          </div>
+          <div class="field field--toggle">
+            <p-toggleswitch [ngModel]="regimeGateEnabled()" (ngModelChange)="regimeGateEnabled.set($event)" inputId="regime-gate" />
+            <div class="toggle-body">
+              <label class="toggle-label" for="regime-gate">Regime Gate</label>
+              <span class="toggle-hint">Filter entries by regime state</span>
+            </div>
+          </div>
+          <div class="field field--toggle">
+            <p-toggleswitch [ngModel]="forceRefresh()" (ngModelChange)="forceRefresh.set($event)" inputId="force-refresh" />
+            <div class="toggle-body">
+              <label class="toggle-label" for="force-refresh">Force Re-run</label>
+              <span class="toggle-hint">Bypass cache</span>
+            </div>
+          </div>
         </div>
       </div>
+    </div>
 
-      <div class="mb-4">
-        <p-button
-          label="Run Signal Engine"
-          icon="pi pi-bolt"
-          [disabled]="!canRun()"
-          [loading]="loading()"
-          (onClick)="runSignalEngine()"
-        />
+    <div class="run-bar">
+      <span class="run-hint">
+        Ready to run signal engine on
+        <strong>{{ selectedFeatureLabel }}</strong> ·
+        <span class="mono">{{ ticker().toUpperCase() }}</span>
+      </span>
+      <div class="run-bar-actions">
+        <button class="btn-run" [disabled]="!canRun() || loading()" (click)="runSignalEngine()">
+          <i [class]="loading() ? 'pi pi-spin pi-spinner' : 'pi pi-bolt'" aria-hidden="true"></i>
+          Run Signal Engine
+        </button>
       </div>
     </div>
   }
 
-  <!-- Live progress panel (skipped on cache hits). -->
   @if (job(); as j) {
     @if (!cached()) {
       <app-run-progress-panel
-        class="block mb-4"
+        class="block"
         [job]="j"
         [logs]="logEntries()"
         [phases]="signalEngineRail"
@@ -126,7 +108,7 @@
   }
 
   @if (error(); as err) {
-    <p-message severity="error" [text]="err" class="mb-4" />
+    <p-message severity="error" [text]="err" />
   }
 
   @if (result(); as res) {
