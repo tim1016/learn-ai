@@ -17,7 +17,7 @@
 
   @if (!formCollapsed()) {
     <div class="runner-cards">
-      <!-- Signal card -->
+      <!-- Signal card — ticker + dates only; feature picker moves to the workspace below. -->
       <div class="runner-card">
         <div class="card-head">
           <span class="card-title">
@@ -29,10 +29,6 @@
           <div class="field">
             <label class="field-label" for="sig-ticker">Ticker</label>
             <input pInputText id="sig-ticker" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="e.g. AAPL" />
-          </div>
-          <div class="field">
-            <label class="field-label" for="sig-feature">Feature</label>
-            <p-select id="sig-feature" [options]="features" [ngModel]="featureName()" (ngModelChange)="featureName.set($event)" optionLabel="label" optionValue="value" />
           </div>
           <div class="field">
             <label class="field-label" for="sig-from">From Date</label>
@@ -79,6 +75,36 @@
       </div>
     </div>
 
+    <!-- Feature workspace — same 2-column treatment as data-lab. -->
+    <div class="indicator-workspace">
+      <app-indicator-catalog
+        selectionMode="single"
+        [selectedNames]="selectedNames()"
+        eyebrow="Feature Catalog"
+        hint="Pick the indicator the signal will be built from"
+        (indicatorSelected)="onCatalogSelect($event)" />
+
+      <div class="indicator-active-col">
+        @if (activeParamConfigs().length > 0) {
+          <app-active-indicator-card
+            [entry]="activeEntry()"
+            [paramConfigs]="activeParamConfigs()"
+            (configure)="openConfigure()"
+            (resetDefaults)="resetSelectedToDefaults()" />
+        } @else {
+          <div class="active-empty">
+            <i class="pi pi-sliders-h" aria-hidden="true"></i>
+            <p class="active-empty-primary">Pick an indicator from the catalog.</p>
+            <p class="active-empty-hint">The signal engine runs on the chosen indicator + params.</p>
+          </div>
+        }
+      </div>
+    </div>
+
+    @if (unsupportedReason(); as reason) {
+      <p-message severity="info" [text]="reason" styleClass="w-full" />
+    }
+
     <div class="run-bar">
       <span class="run-hint">
         Ready to run signal engine on
@@ -116,4 +142,14 @@
       <app-signal-report [result]="res" />
     }
   }
+
+  <!-- Right-anchored config modal for the picked feature. -->
+  <app-indicator-config-modal
+    [(visible)]="configureModalOpen"
+    mode="configure"
+    [entry]="activeEntry()"
+    [paramConfigs]="activeParamConfigs()"
+    (paramChange)="onModalParamChange($event)"
+    (resetDefaults)="resetSelectedToDefaults()"
+    (resetParam)="resetSelectedParam($event)" />
 </div>

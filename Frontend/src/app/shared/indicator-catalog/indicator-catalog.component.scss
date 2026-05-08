@@ -1,0 +1,231 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.catalog-col-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.625rem;
+}
+
+.catalog-col-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: $text-subtle;
+}
+
+.catalog-col-hint {
+  font-size: 0.7rem;
+  color: $text-muted;
+
+  code {
+    font-family: $font-mono;
+    font-size: 0.68rem;
+    background: $bg-elevated;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    color: $text-secondary;
+  }
+}
+
+.catalog-search {
+  position: relative;
+  margin-bottom: 0.5rem;
+}
+
+.catalog-search-icon {
+  position: absolute;
+  left: 0.625rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: $text-muted;
+  font-size: 0.78rem;
+  pointer-events: none;
+}
+
+.catalog-search-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 0.625rem 0 2rem;
+  background: $bg-elevated;
+  border: 1px solid $border-light;
+  border-radius: 6px;
+  color: $text-primary;
+  font-size: 0.83rem;
+  font-family: inherit;
+  outline: none;
+
+  &:focus { border-color: $accent; }
+  &::-webkit-search-cancel-button { display: none; }
+}
+
+.loading-msg {
+  padding: 0.75rem;
+  font-size: 0.78rem;
+  color: $text-muted;
+}
+
+.catalog-no-results {
+  padding: 1.25rem;
+  text-align: center;
+  font-size: 0.82rem;
+  color: $text-muted;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 6px;
+}
+
+.categories {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.category-card {
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.category-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 0.85rem;
+  cursor: pointer;
+  user-select: none;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+
+  &:hover { background: $bg-hover; }
+}
+
+.category-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+
+  i { font-size: 0.7rem; color: $text-muted; }
+  .cat-name {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: $text-primary;
+    text-transform: capitalize;
+  }
+  .cat-count {
+    font-size: 0.7rem;
+    color: $text-muted;
+    background: $bg-elevated;
+    padding: 0.1rem 0.4rem;
+    border-radius: 9999px;
+  }
+  .cat-selected {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: $accent;
+    background: rgba($accent, 0.15);
+    padding: 0.1rem 0.45rem;
+    border-radius: 9999px;
+  }
+}
+
+.indicator-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0;
+  border-top: 1px solid $border;
+}
+
+.indicator-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba($border, 0.5);
+
+  &:hover { background: $bg-hover; }
+  &.selected { background: rgba($accent, 0.08); }
+
+  label.indicator-row {
+    display: flex;
+    align-items: flex-start;
+    cursor: pointer;
+    flex: 1;
+    min-width: 0;
+  }
+
+  input[type='checkbox'],
+  input[type='radio'] {
+    margin-top: 2px;
+    accent-color: $accent;
+    flex-shrink: 0;
+  }
+}
+
+.btn-add {
+  background: none;
+  border: 1px solid $border;
+  border-radius: 4px;
+  color: $text-muted;
+  cursor: pointer;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.65rem;
+  flex-shrink: 0;
+  margin-left: auto;
+
+  &:hover {
+    background: rgba($accent, 0.12);
+    color: $accent;
+    border-color: rgba($accent, 0.3);
+  }
+}
+
+.btn-preview {
+  background: none;
+  border: none;
+  color: $text-muted;
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.7rem;
+  flex-shrink: 0;
+  border-radius: 4px;
+
+  &:hover {
+    color: $accent;
+    background: rgba($accent, 0.10);
+  }
+}
+
+.indicator-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+
+  .ind-name {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: $text-primary;
+    font-family: ui-monospace, monospace;
+  }
+
+  .ind-desc {
+    font-size: 0.7rem;
+    color: $text-muted;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

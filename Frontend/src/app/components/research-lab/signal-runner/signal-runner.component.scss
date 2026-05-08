@@ -4,6 +4,56 @@
   display: block;
 }
 
+// ── Indicator workspace (mirrors data-lab) ─────────────────
+.indicator-workspace {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 1rem;
+  align-items: start;
+
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.indicator-active-col {
+  min-width: 0;
+}
+
+.active-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  padding: 2rem;
+  gap: 0.5rem;
+  text-align: center;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 8px;
+  border-style: dashed;
+
+  .pi {
+    font-size: 2rem;
+    color: $text-muted;
+    margin-bottom: 0.25rem;
+  }
+}
+
+.active-empty-primary {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: $text-secondary;
+  margin: 0;
+}
+
+.active-empty-hint {
+  font-size: 0.78rem;
+  color: $text-muted;
+  margin: 0;
+}
+
 // ── Page layout ────────────────────────────────────────────
 .runner-page {
   display: flex;

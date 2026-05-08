@@ -1,0 +1,87 @@
+<div class="catalog-col-header">
+  <span class="catalog-col-eyebrow">{{ eyebrow() }}</span>
+  <span class="catalog-col-hint">{{ hint() }}</span>
+</div>
+
+<div class="catalog-search" role="search">
+  <i class="pi pi-search catalog-search-icon" aria-hidden="true"></i>
+  <input
+    #searchInput
+    type="search"
+    class="catalog-search-input"
+    placeholder="Search (rsi, bollinger, volume…)"
+    [ngModel]="catalogQuery()"
+    (ngModelChange)="catalogQuery.set($event)"
+    aria-label="Search indicator catalog"
+  />
+</div>
+
+@if (loading()) {
+  <div class="loading-msg">Loading available indicators...</div>
+}
+
+<div class="categories">
+  @for (cat of filteredCategories(); track cat.name) {
+    @let count = categorySelectedCount(cat.name);
+    <div class="category-card">
+      <button type="button" class="category-header"
+              [attr.aria-expanded]="isCategoryExpanded(cat.name)"
+              (click)="toggleCategory(cat.name)">
+        <div class="category-title">
+          <i class="pi"
+             [class.pi-chevron-right]="!isCategoryExpanded(cat.name)"
+             [class.pi-chevron-down]="isCategoryExpanded(cat.name)"></i>
+          <span class="cat-name">{{ cat.name }}</span>
+          <span class="cat-count">{{ cat.indicators.length }}</span>
+          @if (count > 0) {
+            <span class="cat-selected">{{ count }} selected</span>
+          }
+        </div>
+      </button>
+
+      @if (isCategoryExpanded(cat.name)) {
+        <div class="indicator-grid">
+          @for (ind of cat.indicators; track ind.name) {
+            <div class="indicator-item" [class.selected]="isSelected(ind.name)">
+              <input
+                [id]="'cat-pick-' + ind.name"
+                [type]="selectionMode() === 'multi' ? 'checkbox' : 'radio'"
+                [attr.name]="selectionMode() === 'single' ? 'catalog-select' : null"
+                [checked]="isSelected(ind.name)"
+                (change)="onIndicatorClick(ind)" />
+              <label class="indicator-row" [attr.for]="'cat-pick-' + ind.name">
+                <app-indicator-tooltip
+                  [indicatorKey]="ind.name"
+                  [paramConfigs]="ind.configurable_params"
+                  [fallbackDescription]="ind.description">
+                  <span class="indicator-info">
+                    <span class="ind-name">{{ ind.name }}</span>
+                    <span class="ind-desc">{{ ind.description }}</span>
+                  </span>
+                </app-indicator-tooltip>
+              </label>
+              <button class="btn-preview" type="button"
+                      (click)="onPreviewClick(ind.name, $event)"
+                      pTooltip="Preview before adding" tooltipPosition="top"
+                      [attr.aria-label]="'Preview ' + ind.name">
+                <i class="pi pi-info-circle"></i>
+              </button>
+              @if (selectionMode() === 'multi' && ind.configurable_params.length) {
+                <button class="btn-add" type="button"
+                        title="Add another instance with different params"
+                        (click)="onAddInstanceClick(ind, $event)">
+                  <i class="pi pi-plus"></i>
+                </button>
+              }
+            </div>
+          }
+        </div>
+      }
+    </div>
+  }
+  @if (filteredCategories().length === 0 && !loading()) {
+    <div class="catalog-no-results">
+      No indicators match "{{ catalogQuery() }}".
+    </div>
+  }
+</div>

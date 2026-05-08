@@ -42,6 +42,14 @@ import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
 import { CheckboxModule } from 'primeng/checkbox';
 import { TagModule } from 'primeng/tag';
+import { IndicatorCatalogComponent } from '../../../shared/indicator-catalog/indicator-catalog.component';
+import {
+  IndicatorCatalogService,
+  IndicatorInfo,
+} from '../../../shared/indicator-catalog/indicator-catalog.service';
+import { findFeatureId } from '../../../shared/indicator-catalog/feature-mapping';
+import { ActiveIndicatorCardComponent } from '../../data-lab/active-indicator-card/active-indicator-card.component';
+import { IndicatorConfigModalComponent } from '../../data-lab/indicator-config-modal/indicator-config-modal.component';
 
 interface FeatureOption {
   label: string;
@@ -107,6 +115,9 @@ interface FeatureResearchJobResultRaw {
     MessageModule,
     CheckboxModule,
     TagModule,
+    IndicatorCatalogComponent,
+    ActiveIndicatorCardComponent,
+    IndicatorConfigModalComponent,
   ],
   templateUrl: './feature-runner.component.html',
   styleUrls: ['./feature-runner.component.scss'],
@@ -115,15 +126,51 @@ interface FeatureResearchJobResultRaw {
 export class FeatureRunnerComponent {
   private jobsService = inject(JobsService);
   private destroyRef = inject(DestroyRef);
+  private catalog = inject(IndicatorCatalogService);
 
   // Form inputs
   ticker = signal('AAPL');
-  featureName = signal('momentum_5m');
+  /** Catalog-driven selection: indicator key + params (matches data-lab's
+   *  ``IndicatorEntry`` shape). The ``featureName`` sent to the backend is
+   *  derived from this via ``findFeatureId`` so the IC test still routes
+   *  through the existing fixed-ID feature_research worker. */
+  selectedIndicator = signal<string>('rsi');
+  selectedParams = signal<Record<string, number>>({ length: 14 });
   fromDate = signal('2024-01-01');
   toDate = signal('2024-03-31');
   timespan = signal('minute');
   multiplier = signal(1);
   forceRun = signal(false);
+
+  /** Selected-name set fed to the catalog (single element, single-select). */
+  readonly selectedNames = computed<ReadonlySet<string>>(
+    () => new Set([this.selectedIndicator()]),
+  );
+
+  /** Synthetic active-indicator entry rendered on the right of the workspace. */
+  readonly activeEntry = computed(() => ({
+    name: this.selectedIndicator(),
+    params: this.selectedParams(),
+  }));
+
+  /** Param schema for the selected indicator (drives the config modal). */
+  readonly activeParamConfigs = computed(
+    () => this.catalog.get(this.selectedIndicator())?.configurable_params ?? [],
+  );
+
+  /** Backend feature mapping for the current pick — null when the combo
+   *  isn't backend-supported yet. */
+  readonly featureMapping = computed(() =>
+    findFeatureId(this.selectedIndicator(), this.selectedParams()),
+  );
+
+  /** Computed string ID for the worker payload (e.g. ``rsi_14``). */
+  readonly featureName = computed<string>(
+    () => this.featureMapping()?.featureId ?? '',
+  );
+
+  /** Right-anchored config modal state. */
+  readonly configureModalOpen = signal<boolean>(false);
 
   // Run state
   readonly jobId = signal<string | null>(null);
@@ -147,14 +194,6 @@ export class FeatureRunnerComponent {
   });
 
   readonly cached = computed<boolean>(() => this.job()?.cached === true);
-
-  features: FeatureOption[] = [
-    { label: '5-Minute Momentum', value: 'momentum_5m' },
-    { label: 'RSI (14)', value: 'rsi_14' },
-    { label: 'Realized Volatility (30)', value: 'realized_vol_30' },
-    { label: 'Volume Z-Score', value: 'volume_zscore' },
-    { label: 'MACD Signal', value: 'macd_signal' },
-  ];
 
   timespanOptions: FeatureOption[] = [
     { label: 'Minute', value: 'minute' },
@@ -195,7 +234,7 @@ export class FeatureRunnerComponent {
   canRun = computed(() => {
     return (
       this.ticker().trim().length > 0 &&
-      this.featureName().trim().length > 0 &&
+      this.featureMapping() !== null &&
       this.fromDate().trim().length > 0 &&
       this.toDate().trim().length > 0 &&
       this.rangeWarning() === null &&
@@ -203,13 +242,51 @@ export class FeatureRunnerComponent {
     );
   });
 
+  /** Block reason shown next to a disabled run button when the user has
+   *  picked a catalog indicator the backend can't compute as a feature yet. */
+  readonly unsupportedReason = computed<string | null>(() => {
+    if (this.featureMapping() !== null) return null;
+    const ind = this.selectedIndicator();
+    return `${ind.toUpperCase()} with the current parameters isn't backend-supported as a feature yet. Try RSI(14), MACD(12/26/9), or MOM(5).`;
+  });
+
   get selectedFeatureLabel(): string {
-    const found = this.features.find(f => f.value === this.featureName());
-    return found ? found.label : this.featureName();
+    return this.featureMapping()?.label ?? this.selectedIndicator().toUpperCase();
   }
 
   get runSummary(): string {
     return `${this.selectedFeatureLabel} on ${this.ticker().toUpperCase()} (${this.fromDate()} to ${this.toDate()})`;
+  }
+
+  /** Catalog click in single-select mode → replace the active selection. */
+  onCatalogSelect(ind: IndicatorInfo): void {
+    this.selectedIndicator.set(ind.name);
+    this.selectedParams.set(this.catalog.defaultParams(ind.name));
+  }
+
+  openConfigure(): void {
+    this.configureModalOpen.set(true);
+  }
+
+  closeConfigure(open: boolean): void {
+    if (!open) this.configureModalOpen.set(false);
+  }
+
+  onModalParamChange(change: { name: string; value: number }): void {
+    this.selectedParams.update((p) => ({ ...p, [change.name]: change.value }));
+  }
+
+  resetSelectedToDefaults(): void {
+    this.selectedParams.set(this.catalog.defaultParams(this.selectedIndicator()));
+  }
+
+  resetSelectedParam(paramName: string): void {
+    const def = this.catalog
+      .get(this.selectedIndicator())
+      ?.configurable_params.find((p) => p.name === paramName)?.default;
+    if (typeof def === 'number') {
+      this.selectedParams.update((p) => ({ ...p, [paramName]: def }));
+    }
   }
 
   // Tracks which job id we've already settled (fetched result, surfaced
@@ -260,9 +337,14 @@ export class FeatureRunnerComponent {
     this.logBuffer.clear();
 
     try {
+      const featureId = this.featureName();
+      if (!featureId) {
+        this.error.set(this.unsupportedReason() ?? 'No feature selected');
+        return;
+      }
       const id = await this.jobsService.startJob('feature_research', {
         ticker: this.ticker().toUpperCase(),
-        feature_name: this.featureName(),
+        feature_name: featureId,
         from_date: this.fromDate(),
         to_date: this.toDate(),
         timespan: this.timespan(),

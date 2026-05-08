@@ -101,7 +101,10 @@ describe('FeatureRunnerComponent', () => {
 
   it('runResearch dispatches the feature_research job via JobsService', async () => {
     component.ticker.set('aapl'); // verify the upper-casing path
-    component.featureName.set('momentum_5m');
+    // The catalog drives feature selection — pick the indicator + params
+    // that map to the legacy feature_name='momentum_5m' worker call.
+    component.selectedIndicator.set('mom');
+    component.selectedParams.set({ length: 5 });
     component.fromDate.set('2024-01-01');
     component.toDate.set('2024-03-31');
 
