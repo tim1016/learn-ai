@@ -119,4 +119,4 @@ Two sub-decisions needed before fixing:
 
 **Date:** 2026-05-08
 
-**Status:** OPEN
+**Status:** ✅ RESOLVED — separated `intrinsic_violation` from convergence failures in `test_solver_converges_on_all_contracts`; the 7 deep-ITM contracts are now tracked as a documented edge case (asserted ≤ `_MAX_INTRINSIC_VIOLATIONS = 15`) rather than test failures. `test_solver_iv_matches_ibkr_within_tolerance` already skipped them via `result.iv is None`. Created `docs/references/golden-fixtures/options-pricing/OPT-IB-002.md`. 2026-05-08.
