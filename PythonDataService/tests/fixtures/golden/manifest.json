@@ -995,7 +995,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "justification": "Initial fixture — Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
@@ -1037,7 +1037,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "justification": "Initial fixture — Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "73c16d4b565de82de5d49eed5a62b44d5f8f205e49dd745431a99cd7308a9c5a",
@@ -1079,7 +1079,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "justification": "Initial fixture — Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "43d5af3d86f030fb251438cfc46041d3d73a4aba1d695856abf8c0e074968524",
@@ -1121,7 +1121,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system. Oracle corrected to ddof=1 to match canonical pandas std().",
+          "justification": "Initial fixture — Phase 3 golden fixture system. Oracle corrected to ddof=1 to match canonical pandas std().",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "62a703e6a8dcc50cb24359537d713bc3aca7e82b1d6bed81472a2be487fc3e1c",
@@ -1163,7 +1163,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "justification": "Initial fixture — Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
@@ -1205,7 +1205,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "justification": "Initial fixture — Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "a03cf8af86dbc3673e0486273504425f379f6496f6d73d8f654272cdfed86b2e",
@@ -1218,6 +1218,32 @@
         }
       },
       "status": "active"
+    },
+    {
+      "id": "OPT-IB-002",
+      "name": "IBKR Reported IV vs NR/Brent BSM Solver",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/volatility/solver.py",
+      "canonical_callable": "implied_volatility",
+      "reference": {
+        "kind": "vendor_observed",
+        "oracle": "Interactive Brokers TWS API modelGreeks.impliedVol (standard option market-data request)",
+        "citation": "IBKR TWS API snapshot; capture script: scripts/capture_ibkr_snapshot.py; oracle price: modelGreeks.optPrice"
+      },
+      "market_input": {
+        "source": "vendored",
+        "vendor": "Interactive Brokers",
+        "generated_by": "scripts/capture_ibkr_snapshot.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.001,
+        "rtol": 0.0,
+        "note": "Both IBKR and our solver invert BSM against modelGreeks.optPrice (the IBKR model price). 1e-3 (0.1 vol) accounts for IBKR proprietary model adjustments (discrete dividends, calibration) vs our pure continuous-dividend BSM. Contracts with bid < 0.05, ask <= 0, or crossed quotes excluded at capture."
+      },
+      "active_version": 1,
+      "versions": {},
+      "status": "planned"
     }
   ]
 }

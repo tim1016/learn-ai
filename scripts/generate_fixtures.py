@@ -348,6 +348,11 @@ def _rel004_generator(version_dir: Path, justification: str = "") -> None:
     generate_rel004(version_dir, justification=justification)
 
 
+def _optib002_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.ibkr_iv import generate_optib002
+    generate_optib002(version_dir, justification=justification)
+
+
 FIXTURE_GENERATORS: dict[str, object] = {
     "BS-001": _bs001_generator,
     "BS-002": _bs002_generator,
@@ -379,6 +384,7 @@ FIXTURE_GENERATORS: dict[str, object] = {
     "RP-004": _rp004_generator,
     "REL-001": _rel001_generator,
     "REL-004": _rel004_generator,
+    "OPT-IB-002": _optib002_generator,
 }
 
 
