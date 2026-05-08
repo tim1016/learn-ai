@@ -10,7 +10,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -50,7 +50,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -90,7 +90,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -130,7 +130,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -170,7 +170,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -212,7 +212,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -254,7 +254,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -296,7 +296,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + numpy.std(ddof=1), annualized by sqrt(252)",
-        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) \u00c2\u00a7IV. Verified by hand for 3 synthetic 5-element cases."
+        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) Â§IV. Verified by hand for 3 synthetic 5-element cases."
       },
       "market_input": {
         "source": "synthetic",
@@ -336,7 +336,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + downside variance (all-N denominator)",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) \u00c2\u00a78.3. Denominator: all-N (matches canonical _sortino convention)."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) Â§8.3. Denominator: all-N (matches canonical _sortino convention)."
       },
       "market_input": {
         "source": "synthetic",
@@ -376,7 +376,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.maximum.accumulate + vectorized fraction (running_max - equity) / running_max",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) \u00c2\u00a78.2."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) Â§8.2."
       },
       "market_input": {
         "source": "synthetic",
@@ -609,7 +609,7 @@
     },
     {
       "id": "IND-003",
-      "name": "RSI \u2014 Relative Strength Index (period=3, Wilder's smoothing)",
+      "name": "RSI — Relative Strength Index (period=3, Wilder's smoothing)",
       "category": "indicators",
       "canonical_module": "PythonDataService/app/engine/indicators/rsi.py",
       "canonical_callable": "RelativeStrengthIndex",
@@ -649,14 +649,14 @@
     },
     {
       "id": "IV-001",
-      "name": "Implied Volatility Solver \u2014 Round-Trip Recovery",
+      "name": "Implied Volatility Solver — Round-Trip Recovery",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/solver.py",
       "canonical_callable": "implied_volatility",
       "reference": {
         "kind": "hand_computed",
-        "oracle": "sigma_known \u2014 BSM pricing formula generates market_price; solver must recover sigma_known",
-        "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) \u00c2\u00a719.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives \u00c2\u00a74."
+        "oracle": "sigma_known — BSM pricing formula generates market_price; solver must recover sigma_known",
+        "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) Â§19.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives Â§4."
       },
       "market_input": {
         "source": "synthetic",
@@ -689,7 +689,7 @@
     },
     {
       "id": "IV-002",
-      "name": "SVI Total Variance Surface \u2014 Gatheral Raw Parameterisation",
+      "name": "SVI Total Variance Surface — Gatheral Raw Parameterisation",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/fitting.py",
       "canonical_callable": "fit_svi",
@@ -729,7 +729,7 @@
     },
     {
       "id": "IV-003",
-      "name": "IV30 Constant-Maturity \u2014 Variance-Time Interpolation",
+      "name": "IV30 Constant-Maturity — Variance-Time Interpolation",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
       "canonical_callable": "vix_style_iv30",
@@ -809,7 +809,7 @@
     },
     {
       "id": "RV-002",
-      "name": "HF Two-Component Realized Volatility \u2014 ABDL (window=3 days, ETH)",
+      "name": "HF Two-Component Realized Volatility — ABDL (window=3 days, ETH)",
       "category": "realized-volatility",
       "canonical_module": "PythonDataService/app/engine/edge/features_realtime/hf_realized_vol.py",
       "canonical_callable": "hf_realized_vol_trd252",
@@ -849,7 +849,7 @@
     },
     {
       "id": "RV-004",
-      "name": "Model-Free Variance Replication \u2014 CBOE VIX 2019 Formula",
+      "name": "Model-Free Variance Replication — CBOE VIX 2019 Formula",
       "category": "realized-volatility",
       "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
       "canonical_callable": "replicate_expiry_variance",
@@ -962,6 +962,258 @@
           "file_sha256": {
             "input.arrow": "a8819919f00e0f2e0929f5eeec64ca06614292547e1fc5b9f9955db321701711",
             "output.arrow": "67ae79c043fe140222c4f83798bd6bbbe1d3f679cf71b2619e5eb2d2aeb9ea17"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "RP-001",
+      "name": "Information Coefficient (Spearman IC)",
+      "category": "research-primitives",
+      "canonical_module": "PythonDataService/app/research/validation/ic.py",
+      "canonical_callable": "compute_information_coefficient",
+      "reference": {
+        "kind": "literature_formula",
+        "oracle": "scipy.stats.spearmanr per calendar day",
+        "citation": "Grinold & Kahn (1999): IC = Spearman rank correlation of signal vs next-day return. Phipson & Smyth (2010) two-sided t-stat."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/research.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Spearman IC via scipy; strict float64 arithmetic."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "generated": "2026-05-08",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
+            "output.arrow": "1d84cbdcf6e07489b8d571ec4b2a807a93124be81eaa1398e4555935be2a676d"
+          },
+          "file_sha256": {
+            "input.arrow": "3072ef70ae14ac3907de340e1cc1e0ae7ee44b8643d6ea2bf4aad67a11b94620",
+            "output.arrow": "cf67132ed719af95eafaa78ddba2feca854f47ed7efb2a912a1762f788a6b14e"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "RP-002",
+      "name": "Quantile Monotonicity Analysis",
+      "category": "research-primitives",
+      "canonical_module": "PythonDataService/app/research/validation/quantile.py",
+      "canonical_callable": "compute_quantile_analysis",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "pd.qcut into 5 quantiles, mean return per bin",
+        "citation": "Standard quantile IC methodology: Grinold & Kahn (1999) Ch. 6. Monotonicity: Spearman rank correlation > 0 for a good factor."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/research.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Bin means computed via pandas groupby.mean(); strict float64."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "generated": "2026-05-08",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "73c16d4b565de82de5d49eed5a62b44d5f8f205e49dd745431a99cd7308a9c5a",
+            "output.arrow": "f88405acebde3d4425a83cc17a012341ca0c60d4d9d1e53b36a2a4e8e39df31a"
+          },
+          "file_sha256": {
+            "input.arrow": "d907f96cb930a3af60e1b4cd21915254cf21fb6e9fd193adb398abcac081e54b",
+            "output.arrow": "6619569076cdac62216ddbe603df9817fa5aeb47b214a7ed907487897095f9f9"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "RP-003",
+      "name": "Empirical P-value (Phipson-Smyth)",
+      "category": "research-primitives",
+      "canonical_module": "PythonDataService/app/research/baselines/runner.py",
+      "canonical_callable": "_empirical_position",
+      "reference": {
+        "kind": "literature_formula",
+        "oracle": "Phipson-Smyth (2010) p = (1 + count(null >= obs)) / (N + 1)",
+        "citation": "Phipson B & Smyth GK (2010). Permutation P-values Should Never Be Zero: Calculating Exact P-values When Permutations Are Randomly Drawn. Statistical Applications in Genetics and Molecular Biology 9(1)."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/research.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Exact arithmetic on integer counts; float64 division."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "generated": "2026-05-08",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "43d5af3d86f030fb251438cfc46041d3d73a4aba1d695856abf8c0e074968524",
+            "output.arrow": "ee6cd02c1aadca0995ddef4bfc7a97f9003d8cbda13c518e5fd9eeffe25df084"
+          },
+          "file_sha256": {
+            "input.arrow": "6ec1f7db802a4825ba2d564d5294642be529ce97fd86e09fe1648ac82d93a1bf",
+            "output.arrow": "e672f343af9efc0a4617039ff7df7125976ab5dc7688c846c862979bc7ee4c04"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "RP-004",
+      "name": "Signal Z-score (Train-period Standardization)",
+      "category": "research-primitives",
+      "canonical_module": "PythonDataService/app/research/signal/standardize.py",
+      "canonical_callable": "compute_train_zscore",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "z = (x - mu_train) / sigma_train (ddof=1)",
+        "citation": "Standard z-score normalization with train/test split. ddof=1 matches pandas Series.std() default."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/research.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Exact float64 arithmetic. Oracle and canonical both use ddof=1 sample std."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "generated": "2026-05-08",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system. Oracle corrected to ddof=1 to match canonical pandas std().",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "62a703e6a8dcc50cb24359537d713bc3aca7e82b1d6bed81472a2be487fc3e1c",
+            "output.arrow": "336ebc4d3c22ba473d3f061a1c29cbd10b2c1edf5a3774500996a2dde1ba5238"
+          },
+          "file_sha256": {
+            "input.arrow": "db49e9965a65e0d50eabf9746270dccc9be5fd4c1a1913b369a3ddcde8bea52d",
+            "output.arrow": "bc6c02df41ba1aba248de99608f45afd2d16ddf5b45e9b1fe72da5c669821074"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "REL-001",
+      "name": "IC Hit Rate (Directional Consistency)",
+      "category": "indicator-reliability",
+      "canonical_module": "PythonDataService/app/research/validation/ic.py",
+      "canonical_callable": "compute_information_coefficient",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "hit_rate = count(daily_ic * sign(mean_ic) > 0) / N_days",
+        "citation": "Grinold & Kahn (1999): IC hit rate measures directional consistency. hit_rate > 0.5 indicates a factor with persistent directional signal."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/research.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Exact rational arithmetic (hit rate is a fraction); float64 comparison."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "generated": "2026-05-08",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
+            "output.arrow": "bf2f04a54c6dfcf52aef0d08c1a7451e534a60dfda93fed195d85ddbd0eff85b"
+          },
+          "file_sha256": {
+            "input.arrow": "3072ef70ae14ac3907de340e1cc1e0ae7ee44b8643d6ea2bf4aad67a11b94620",
+            "output.arrow": "8e890586eb72d66b7ecd72e2b4f0d1b0350f5c2db312e848972be952a7cdcdb4"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "REL-004",
+      "name": "IC Decay Curve",
+      "category": "indicator-reliability",
+      "canonical_module": "PythonDataService/app/research/indicator_reliability.py",
+      "canonical_callable": "compute_ic_decay_curve",
+      "reference": {
+        "kind": "literature_formula",
+        "oracle": "scipy.stats.spearmanr per horizon 1..max_horizon with overnight masking",
+        "citation": "Grinold & Kahn (1999): IC decay quantifies signal persistence. Measured as Spearman IC of signal vs forward-h-bar return, horizons h=1..H."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/research.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Spearman IC per horizon via scipy; strict float64."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "generated": "2026-05-08",
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "a03cf8af86dbc3673e0486273504425f379f6496f6d73d8f654272cdfed86b2e",
+            "output.arrow": "d88d46c84656d6d291ac6543ee0fda013b175bad121ce3ec521e55d8edb7cd94"
+          },
+          "file_sha256": {
+            "input.arrow": "20b0789772c3cc030bb79bc25761f7460548f80d5ad16370670afb31e99b5777",
+            "output.arrow": "6c51ae6519b6ab2c6b262c091d3c3ef60a452d8472d57078ccc5236a11805e49"
           }
         }
       },
