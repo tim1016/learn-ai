@@ -220,12 +220,78 @@ def _eng001b_generator(version_dir: Path, justification: str = "") -> None:
     generate_eng001b(version_dir, justification=justification)
 
 
+def _eng002_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.engine_stats_extended import generate_eng002
+    generate_eng002(version_dir, justification=justification)
+
+
+def _eng003_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.engine_stats_extended import generate_eng003
+    generate_eng003(version_dir, justification=justification)
+
+
+def _eng004_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.engine_stats_extended import generate_eng004
+    generate_eng004(version_dir, justification=justification)
+
+
+def _eng005_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.engine_stats_extended import generate_eng005
+    generate_eng005(version_dir, justification=justification)
+
+
+def _bs004_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.bs_greeks_extended import generate_bs004
+    generate_bs004(version_dir, justification=justification)
+
+
+def _bs005_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.bs_greeks_extended import generate_bs005
+    generate_bs005(version_dir, justification=justification)
+
+
+def _bs006_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.bs_greeks_extended import generate_bs006
+    generate_bs006(version_dir, justification=justification)
+
+
+def _bs007_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.bs_greeks_extended import generate_bs007
+    generate_bs007(version_dir, justification=justification)
+
+
+def _ind001_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.indicators import generate_ind001
+    generate_ind001(version_dir, justification=justification)
+
+
+def _ind002_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.indicators import generate_ind002
+    generate_ind002(version_dir, justification=justification)
+
+
+def _ind003_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.indicators import generate_ind003
+    generate_ind003(version_dir, justification=justification)
+
+
 FIXTURE_GENERATORS: dict[str, object] = {
     "BS-001": _bs001_generator,
     "BS-002": _bs002_generator,
     "BS-003": _bs003_generator,
+    "BS-004": _bs004_generator,
+    "BS-005": _bs005_generator,
+    "BS-006": _bs006_generator,
+    "BS-007": _bs007_generator,
     "ENG-001": _eng001_generator,
     "ENG-001b": _eng001b_generator,
+    "ENG-002": _eng002_generator,
+    "ENG-003": _eng003_generator,
+    "ENG-004": _eng004_generator,
+    "ENG-005": _eng005_generator,
+    "IND-001": _ind001_generator,
+    "IND-002": _ind002_generator,
+    "IND-003": _ind003_generator,
 }
 
 

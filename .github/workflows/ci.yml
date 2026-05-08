@@ -126,5 +126,5 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: PythonDataService/requirements*.txt
-      - run: pip install pydantic jsonschema pyarrow
+      - run: pip install pydantic jsonschema pyarrow pytest
       - run: python -m pytest tests/fixtures/test_golden_manifest.py -v --tb=short --noconftest
