@@ -63,10 +63,20 @@ Default root: `<package_root>/artifacts/runs/`, overridable via `LEARN_AI_ARTIFA
 
 When the runner can't complete (data source unavailable, spec uses a Phase-2 feature the evaluator refuses, engine crash), it produces a `status='failed'` ledger paired with a zeroed `BacktestRunResult` that carries the failure reason in `warnings`. Result hashes are still computed over the zeroed payload so two failed runs with the same identity columns share a result hash — useful for the "did this fail before with the same inputs?" lookup. The HTTP endpoint persists failures alongside successes and returns 200 (clients introspect `ledger.status`); this is a deliberate departure from `spec_strategy.py`'s 400-on-NotImplementedError because the research pipeline cares about discoverable failure across many runs.
 
+## Exposure metric
+
+`BacktestMetrics.exposure_pct` is the fraction of base data bars during which the strategy held a position, stored as a 0..1 ratio:
+
+```text
+exposure_pct = min(1, max(0, bars_held_total * resolution_minutes / total_bars))
+```
+
+`bars_held_total` is measured in the strategy's consolidated resolution bars (for example, 15-minute bars), while `total_bars` is measured from the minute-level equity curve. The multiplication by `resolution_minutes` converts held consolidated bars back to the minute-bar base unit before division. Without that conversion, a 15-minute strategy understates exposure by a factor of 15.
+
 ## Validated against
 
 - `PythonDataService/tests/research/runs/test_hashing.py` — canonical-JSON properties (key order, non-ASCII, separators, stability), data-snapshot id formatting, every-field-changes-the-id sweep.
-- `tests/research/runs/test_runner_inmemory.py` — replay determinism, parameter / window / fill-mode propagation, failure-path hash stability, lineage round-trip.
+- `tests/research/runs/test_runner_inmemory.py` — replay determinism, parameter / window / fill-mode propagation, exposure unit conversion, failure-path hash stability, lineage round-trip.
 - `tests/research/runs/test_storage.py` — atomic-write guarantee, round-trip, every list filter, corrupt-ledger skip-and-warn.
 - `tests/research/runs/test_endpoint.py` — HTTP-boundary hash determinism, int64-ms wire-format compliance, error mapping.
 - `tests/research/runs/test_ema_acceptance.py` — Phase A acceptance gate against the canonical SPY EMA crossover fixture end-to-end.

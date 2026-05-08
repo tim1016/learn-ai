@@ -14,8 +14,8 @@
         <span><strong>Resolution:</strong> {{ data.ledger.resolution_minutes }}m</span>
         <span>
           <strong>Window:</strong>
-          {{ data.ledger.start_ms | date: 'yyyy-MM-dd' }} →
-          {{ data.ledger.end_ms | date: 'yyyy-MM-dd' }}
+          {{ data.ledger.start_ms | date: 'yyyy-MM-dd': 'UTC' }} →
+          {{ data.ledger.end_ms | date: 'yyyy-MM-dd': 'UTC' }}
         </span>
         <span><strong>Run ID:</strong> <code>{{ data.ledger.run_id }}</code></span>
       </div>
@@ -131,7 +131,7 @@
           <span class="rd-metric-label">Exposure</span>
           <span class="rd-metric-value">
             @if (data.result.metrics.exposure_pct !== null) {
-              {{ data.result.metrics.exposure_pct | percent: '1.0-0' }}
+              {{ data.result.metrics.exposure_pct | percent: '1.2-2' }}
             } @else { — }
           </span>
         </div>

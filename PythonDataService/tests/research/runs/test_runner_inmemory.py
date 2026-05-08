@@ -14,10 +14,13 @@ its declared symbol.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.engine.engine import EquitySnapshot
 from app.engine.strategy.spec import StrategySpec
 from app.engine.strategy.spec.tests._parity_helpers import (
     FakeDataReader,
@@ -27,6 +30,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
 from app.research.runs import RunRequest, run_strategy_spec
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
+from app.research.runs.runner import _summarize_metrics
 
 
 def _build_test_spec(
@@ -332,6 +336,37 @@ def test_metrics_match_summarize_output(fake_data_factory):
         expected = metrics.winning_trades / metrics.total_trades
         assert metrics.win_rate is not None
         assert abs(metrics.win_rate - expected) < 1e-12
+
+
+def test_exposure_uses_consolidated_bar_resolution():
+    """Exposure converts held 15-minute bars into the minute equity-curve unit.
+
+    Regression for the Build Alpha functionality validation report
+    F-BA-001: ``bars_held_total`` is counted in consolidated bars,
+    while ``total_bars`` is the engine's minute-bar equity curve
+    length. Dividing directly understates exposure by ``resolution``.
+    """
+    ts = datetime(2024, 1, 2, 9, 30, tzinfo=ZoneInfo("America/New_York"))
+    equity_curve = [
+        EquitySnapshot(
+            timestamp=ts,
+            equity=Decimal("100000"),
+            cash=Decimal("100000"),
+            holdings_value=Decimal("0"),
+        )
+    ]
+
+    metrics = _summarize_metrics(
+        initial_cash=100_000.0,
+        final_equity=100_000.0,
+        trades=[],
+        equity_curve=equity_curve,
+        bars_held_total=5,
+        total_bars=100,
+        resolution_minutes=15,
+    )
+
+    assert metrics.exposure_pct == pytest.approx(0.75, abs=1e-12, rel=0)
 
 
 # ---------------------------------------------------------------------------
