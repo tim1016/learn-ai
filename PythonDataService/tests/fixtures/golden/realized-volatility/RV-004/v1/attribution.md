@@ -36,11 +36,20 @@ Q   = put_mid  for K < K0
 
 ## Tolerance
 
-atol=1e-6, rtol=0.0. Rationale: oracle uses Python's `math.exp/log` while
-canonical uses `math.exp` in the same way; BSM-priced chains have no bid-ask
-noise so σ²(T) deviates from the Black-Scholes model only through strike
-discretization. The 1e-6 floor is deliberately loose to accommodate chains with
-a small number of strikes (< 1e-4 discretization error expected).
+atol=1e-6, rtol=0.0. Two distinct error sources apply here:
+
+1. **Oracle vs canonical agreement**: oracle and canonical implement the same
+   discrete CBOE sum using the same `math.exp`/`math.log` calls; float64
+   rounding only, keeping oracle-vs-canonical disagreement < 1e-15.
+
+2. **Discrete formula vs continuous BSM variance**: the CBOE sum approximates
+   a continuous integral; for chains with few strikes (5–7 here) the
+   discretization error between σ²(T)_discrete and σ²(T)_continuous can reach
+   ~1e-4. This is a model-accuracy gap, not an oracle-vs-canonical gap.
+
+The `atol=1e-6` floor is a deliberate safety margin above float rounding
+noise (not above the discretization error). A future maintainer should not
+loosen atol to ~1e-4; that would mask oracle-canonical regressions.
 
 ## Regeneration
 

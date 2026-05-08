@@ -363,7 +363,7 @@ class TestRV001CloseToClose:
     def test_nan_before_window(self) -> None:
         _inp, out, _atol, _rtol = _load("RV-001")
         oracle = [float(out[f"rv_{i}"][0].as_py()) for i in range(self._N_BARS)]
-        for i in range(self._WINDOW - 1):
+        for i in range(self._WINDOW):
             assert np.isnan(oracle[i]), f"Bar {i}: expected NaN before window={self._WINDOW}"
 
     def test_rv_positive_after_warmup(self) -> None:
