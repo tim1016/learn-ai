@@ -59,7 +59,7 @@
         [selectedNames]="selectedNames()"
         eyebrow="Feature Catalog"
         hint="Pick the indicator to IC-test"
-        (select)="onCatalogSelect($event)" />
+        (indicatorSelected)="onCatalogSelect($event)" />
 
       <div class="indicator-active-col">
         @if (activeParamConfigs().length > 0) {
