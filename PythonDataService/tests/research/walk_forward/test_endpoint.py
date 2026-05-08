@@ -143,6 +143,48 @@ async def test_post_rolling_creates_multiple_folds(client):
     assert len(folds) >= 5
 
 
+async def test_post_with_parent_run_computes_oos_retention(client):
+    parent = await client.post(
+        "/api/research/strategy-runs",
+        json={
+            "spec": _spec_dict(),
+            "start_date": "2024-01-02",
+            "end_date": "2024-02-22",
+            "initial_cash": 100_000.0,
+            "fill_mode": "signal_bar_close",
+            "commission_per_order": 0.0,
+        },
+    )
+    parent_payload = parent.json()
+    parent_id = parent_payload["ledger"]["run_id"]
+    parent_sharpe = parent_payload["result"]["metrics"]["sharpe_ratio"]
+    if parent_sharpe in (None, 0):
+        pytest.skip("synthetic parent run produced no finite Sharpe")
+
+    body = _request_body(
+        split_policy={
+            "kind": "rolling",
+            "train_days": 10,
+            "test_days": 5,
+            "step_days": 5,
+        },
+        parent_run_id=parent_id,
+    )
+    response = await client.post(
+        "/api/research/strategy-runs/walk-forward", json=body
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    if result["mean_oos_sharpe"] is None:
+        pytest.skip("synthetic folds produced no finite mean OOS Sharpe")
+    assert result["oos_retention"] == pytest.approx(
+        result["mean_oos_sharpe"] / parent_sharpe,
+        abs=1e-12,
+        rel=0,
+    )
+
+
 async def test_post_then_get_round_trips(client):
     body = _request_body(split_policy={"kind": "chronological"})
     posted = (
@@ -256,7 +298,19 @@ async def test_list_returns_recent_first(client):
 
 
 async def test_list_filter_by_parent_run_id(client):
-    parent_id = "p" * 32  # informational; not validated against an actual run
+    parent = await client.post(
+        "/api/research/strategy-runs",
+        json={
+            "spec": _spec_dict(),
+            "start_date": "2024-01-02",
+            "end_date": "2024-02-22",
+            "initial_cash": 100_000.0,
+            "fill_mode": "signal_bar_close",
+            "commission_per_order": 0.0,
+        },
+    )
+    assert parent.status_code == 200, parent.text
+    parent_id = parent.json()["ledger"]["run_id"]
     a = await client.post(
         "/api/research/strategy-runs/walk-forward",
         json=_request_body(

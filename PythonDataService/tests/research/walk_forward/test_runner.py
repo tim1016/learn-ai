@@ -214,6 +214,32 @@ def test_rolling_aggregates_only_count_completed_folds(
     assert 0.0 <= result.pct_profitable_folds <= 1.0
 
 
+def test_oos_retention_uses_parent_sharpe(tmp_path: Path, fake_factory_long):
+    request = WalkForwardRequest(
+        spec=_build_test_spec(),
+        start_date="2024-01-02",
+        end_date="2024-02-22",
+        split_policy=RollingSplitPolicy(train_days=10, test_days=5, step_days=5),
+        parent_run_id="abcabcabcabcabcabcabcabcabcabcab",
+    )
+    _, result = run_walk_forward(
+        request,
+        data_source_factory=fake_factory_long,
+        artifacts_root=tmp_path,
+        data_root_revision="test-rev",
+        parent_sharpe=2.0,
+    )
+
+    if result.mean_oos_sharpe is None:
+        pytest.skip("synthetic series produced no finite fold Sharpe")
+
+    assert result.oos_retention == pytest.approx(
+        result.mean_oos_sharpe / 2.0,
+        abs=1e-12,
+        rel=0,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Combined OOS curve — compounded across folds.
 # ---------------------------------------------------------------------------

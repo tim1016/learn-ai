@@ -185,8 +185,14 @@ def _summarize_metrics(
     equity_curve: list[EquitySnapshot],
     bars_held_total: int,
     total_bars: int,
+    resolution_minutes: int,
 ) -> RunMetrics:
     """Project ``statistics.summarize`` output onto the typed ``RunMetrics``.
+
+    Formula: exposure_pct = min(1, max(0, bars_held_total * resolution_minutes / total_bars)).
+    Reference: Internal run-ledger metric; see docs/references/run-ledger.md.
+    Canonical implementation: this file.
+    Validated against: tests/research/runs/test_runner_inmemory.py::test_exposure_uses_consolidated_bar_resolution
 
     ``summarize`` returns a flat ``dict[str, float | int | None]`` with
     inf/-inf/NaN already coerced to None. We fan it into the typed
@@ -212,7 +218,8 @@ def _summarize_metrics(
 
     exposure: float | None = None
     if total_bars > 0:
-        exposure = max(0.0, min(1.0, bars_held_total / total_bars))
+        held_base_bars = bars_held_total * resolution_minutes
+        exposure = max(0.0, min(1.0, held_base_bars / total_bars))
 
     avg_bars: float | None = None
     if trades:
@@ -386,6 +393,7 @@ def run_strategy_spec(
         equity_curve=engine_result.equity_curve,
         bars_held_total=bars_held_total,
         total_bars=total_bars,
+        resolution_minutes=resolution,
     )
 
     result = BacktestRunResult(

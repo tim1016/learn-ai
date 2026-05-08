@@ -6,7 +6,7 @@
 
 **Canonical implementation**: `PythonDataService/app/research/walk_forward/` (`splits.py`, `result.py`, `runner.py`, `storage.py`) + `app/routers/walk_forward.py`. Registry row in `docs/architecture/engine-authority-map.md` § "Walk-forward analysis". Phase C of the build-alpha-style research pipeline.
 
-**Validated against**: `PythonDataService/tests/research/walk_forward/test_*.py` — 55 tests covering split-policy correctness, runner orchestration (fold count, parent linkage, persistence, aggregation math), storage round-trip with path-traversal defense, and HTTP boundary (request validation, 404/400/422 mapping, list filtering).
+**Validated against**: `PythonDataService/tests/research/walk_forward/test_*.py` — tests covering split-policy correctness, runner orchestration (fold count, parent linkage, persistence, aggregation math, OOS retention), storage round-trip with path-traversal defense, and HTTP boundary (request validation, parent-run Sharpe lookup, 404/400/422 mapping, list filtering).
 
 ## Milestone scope
 
@@ -50,7 +50,7 @@ If a future caller wants the rebased view, it's an additive switch on the runner
 | `mean_oos_sharpe` | Arithmetic mean of fold `test_metrics.sharpe_ratio` | Every fold's sharpe is None |
 | `median_oos_sharpe` | Median of fold sharpes | Every fold's sharpe is None |
 | `pct_profitable_folds` | Fraction of folds with `total_return_pct > 0` | No folds (split policy emitted zero) |
-| `oos_retention` | `(mean OOS sharpe) / (parent run's full-window sharpe)` | No `parent_run_id` supplied — router-level concern, not currently auto-resolved |
+| `oos_retention` | `(mean OOS sharpe) / (parent run's full-window sharpe)` | No `parent_run_id` supplied, mean OOS sharpe is None, parent Sharpe is None, or parent Sharpe is 0 |
 | `alpha_decay` | OLS slope of fold sharpe vs `fold_index`. Negative = decay; positive = strategy still working | Fewer than 2 folds with non-None sharpe |
 
 `alpha_decay` is **directional, not a pass/fail gate**. The point is to surface "this strategy was good in 2022 but stopped working in 2024" — interpretation belongs to the researcher.
@@ -85,10 +85,11 @@ This is the same "failed runs are first-class research records" contract Phase A
 
 The walk-forward router is mounted **before** `research_runs` in `app/main.py` so the literal `/walk-forward` segment wins against the parameterised `GET /{run_id}` route on the parent. Validated by `test_walk_forward_path_does_not_clash_with_run_id_route`.
 
+When `parent_run_id` is supplied on `POST`, the router loads the parent strategy run from the same artifacts root and passes the parent run's Sharpe ratio into the walk-forward runner so `oos_retention` is filled. If the parent id is malformed, missing, or points to an unreadable/corrupt strategy run, the endpoint returns HTTP 400 instead of persisting a child analysis with unverifiable lineage.
+
 GraphQL passthrough is intentionally not implemented — Phase B's UI consumed FastAPI directly via `HttpClient`, and the walk-forward UI (deferred Phase C-frontend) follows the same pattern.
 
 ## Upgrade path
 
 1. **Per-fold parallelism**: folds are independent; the runner currently executes them serially. A future change could `concurrent.futures` the fold loop. Sequential is fine for v1 — a 10-fold WF over a synthetic year completes in seconds.
-2. **`oos_retention` auto-resolution**: when `parent_run_id` is supplied, the runner could load the parent run's `BacktestRunResult` and fill `oos_retention` automatically. Currently left None; client computes if needed.
-3. **Phase 4B (parameter selection)**: requires the sensitivity-sweep machinery from Feature 8. The fold list has `selected_parameters: dict` ready for non-empty values; the runner just needs the inner search loop.
+2. **Phase 4B (parameter selection)**: requires the sensitivity-sweep machinery from Feature 8. The fold list has `selected_parameters: dict` ready for non-empty values; the runner just needs the inner search loop.

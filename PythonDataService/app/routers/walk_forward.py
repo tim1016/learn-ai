@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.engine.strategy.spec import StrategySpec
+from app.research.runs import RunCorruptError, RunNotFoundError, load_run
 from app.research.walk_forward import (
     SplitPolicySpec,
     WalkForwardAlreadyExistsError,
@@ -150,11 +151,16 @@ def create_walk_forward(
         random_seed=request.random_seed,
         parent_run_id=request.parent_run_id,
     )
+    parent_sharpe = _load_parent_sharpe(
+        request.parent_run_id,
+        artifacts_root=artifacts_root,
+    )
 
     config, result = run_walk_forward(
         wf_request,
         data_source_factory=data_source_factory,
         artifacts_root=artifacts_root,
+        parent_sharpe=parent_sharpe,
         # Resolve the data root revision via the same env-driven path
         # the runner uses by default — ``None`` triggers the default
         # ``resolve_data_root_revision()`` lookup inside
@@ -236,3 +242,20 @@ def list_walk_forwards_endpoint(
         limit=limit,
     )
     return WalkForwardListResponse(walk_forwards=items)
+
+
+def _load_parent_sharpe(
+    parent_run_id: str | None,
+    *,
+    artifacts_root: Path | None,
+) -> float | None:
+    if not parent_run_id:
+        return None
+    try:
+        _, parent_result = load_run(parent_run_id, root=artifacts_root)
+    except (ValueError, RunNotFoundError, RunCorruptError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"parent_run_id is not a readable strategy run: {parent_run_id}",
+        ) from exc
+    return parent_result.metrics.sharpe_ratio

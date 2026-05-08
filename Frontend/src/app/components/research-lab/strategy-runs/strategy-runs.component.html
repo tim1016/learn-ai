@@ -79,9 +79,9 @@
         </td>
         <td>{{ run.symbol }}</td>
         <td class="sr-window-cell">
-          {{ run.start_ms | date: 'yyyy-MM-dd' }}
+          {{ run.start_ms | date: 'yyyy-MM-dd': 'UTC' }}
           <span class="sr-window-sep">→</span>
-          {{ run.end_ms | date: 'yyyy-MM-dd' }}
+          {{ run.end_ms | date: 'yyyy-MM-dd': 'UTC' }}
           <span class="sr-resolution">{{ run.resolution_minutes | number: '1.0-0' }}m</span>
         </td>
         <td>

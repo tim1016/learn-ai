@@ -1,11 +1,11 @@
 ---
 name: auto-research-tick
-description: Single entry point for the learn-ai auto-research loop. Reads docs/audits/auto-research/state.json to determine mode (baseline / nightly / dormant) and runs that mode's instructions. Use when invoked manually as `/auto-research-tick`, when fired by the nightly cron (after hardening), or when explicitly told to "run auto-research" or "do an auto-research tick". Auto-trigger only on those exact phrases — do not invoke this skill speculatively. Currently only baseline mode is implemented; nightly mode is dormant until the hardening gate in baseline-math-rigor.md is clear.
+description: Single entry point for the learn-ai auto-research loop. Reads docs/audits/auto-research/state.json to determine mode (baseline / Build Alpha functionality validation / nightly / dormant) and runs that mode's instructions. Use when invoked manually as `/auto-research-tick`, when fired by the nightly cron (after hardening), or when explicitly told to "run auto-research" or "do an auto-research tick". Auto-trigger only on those exact phrases — do not invoke this skill speculatively. Baseline and Build Alpha functionality validation modes are implemented; nightly mode is dormant until the hardening gate in baseline-math-rigor.md is clear.
 ---
 
 # Auto-research tick
 
-The auto-research loop has two long-term modes (**baseline**, **nightly**) plus dormant states. This skill is the single entry point for both. The current mode lives in `docs/audits/auto-research/state.json`.
+The auto-research loop has two long-term modes (**baseline**, **nightly**) plus dormant states, and may also run a bounded one-shot **Build Alpha functionality validation** pass when the state asks for it. This skill is the single entry point. The current mode lives in `docs/audits/auto-research/state.json`.
 
 ## Mode dispatch
 
@@ -16,6 +16,8 @@ Read `docs/audits/auto-research/state.json` first. Branch on `mode`:
 | `baseline-not-started` | Initialize the baseline (see §Baseline mode → kickoff). |
 | `baseline-in-progress` | Resume the baseline from `cursor` (see §Baseline mode → resume). |
 | `baseline-complete-awaiting-remediation` | The baseline is done. Print a one-paragraph status from the most recent run summary, list open P0/P1 findings, and exit. Do not start nightly mode. |
+| `build-alpha-validation-pending` | Run the one-shot Build Alpha functionality validation pass (see §Build Alpha functionality validation mode). |
+| `build-alpha-validation-complete-awaiting-review` | The validation pass is done. Print the latest Build Alpha validation report path, the executive verdict, and the top architect recommendations; then exit. |
 | `hardened-nightly` | **Not implemented yet.** When you see this, refuse and tell the user to manually invoke the (future) nightly skill — the baseline must be acknowledged complete by a human before nightly mode goes live. |
 
 Anything else: stop and ask the user. Do not guess.
@@ -29,9 +31,10 @@ These never change. If a constraint conflicts with the user's instruction in a s
 - **No new dependencies.** Not in `requirements-*.txt`, `*.csproj`, `package.json`, anywhere.
 - **No regenerating golden fixtures.** Ever.
 - **No loosening tolerances.** Ever.
-- **No restarting containers.** If a container is required and down, record the check as `not run, container down: <container_name>` and continue. Do not run `./restart.sh` or `podman compose up`.
+- **No restarting containers.** If a container is required and down, record the check as `not run, container down: <container_name>` and continue. Do not run `./restart.sh`, `podman compose up`, or any rebuild/restart command. Functionality-validation mode may inspect already-running services, logs, browser output, and HTTP responses; it may not mutate the runtime to make a check pass.
 - **No external network fetches** (WebFetch / GitHub MCP) without an explicit user authorization recorded in the finding doc. Default to vendored references only: `references/`, `docs/references/`, and the framework docs already cited in `.claude/rules/`.
 - **No running LEAN, no running QuantLib outside its existing Python wrapper, no installing anything.**
+- **No installing Playwright.** Functionality-validation mode should use Playwright only if an existing runtime/tool is already available. Do not run commands that download browsers or packages during the audit.
 - **Targeted tests only.** Run `pytest -k <name>`, `dotnet test --filter <name>`, or `vitest run -t <name>` to verify a specific static finding. **Never the full test suite** during a baseline tick.
 - **No "greenwashing" tests** — never write a test asserting current behavior just to make a finding "go away".
 
@@ -50,7 +53,7 @@ Per tick:
 
 ```json
 {
-  "mode": "baseline-not-started | baseline-in-progress | baseline-complete-awaiting-remediation | hardened-nightly",
+  "mode": "baseline-not-started | baseline-in-progress | baseline-complete-awaiting-remediation | build-alpha-validation-pending | build-alpha-validation-complete-awaiting-review | hardened-nightly",
   "phase": 1,
   "phase_name": "inventory",
   "cursor": "PythonDataService/app/engine/indicators/sma.py",
@@ -328,6 +331,129 @@ When phase 10 finishes:
 4. Set `mode` to `baseline-complete-awaiting-remediation`. Set `baseline_completed_at`.
 5. Write a final run summary noting "baseline sweep complete".
 6. Tell the user (in the run summary) that the next step is human remediation, and that the nightly cron should not be scheduled until the §6 gate is clear.
+
+# ============================================================
+# BUILD ALPHA FUNCTIONALITY VALIDATION MODE
+# ============================================================
+
+This is a one-shot functionality validation pass for the recently added Build Alpha-style research features. It is not a replacement for the numerical-rigor baseline and it must not modify production code. It writes evidence and conclusions only under `docs/audits/auto-research/`.
+
+The detailed test charter lives at `docs/audits/auto-research/build-alpha-functionality-validation.md`. Read that file before doing any work.
+
+## Purpose
+
+Act like a quant analyst and a system architect reviewing a research workstation:
+
+- Visually inspect the actual UI output where the app is running.
+- Capture Playwright screenshots/snapshots of each inspected Build Alpha / Research Lab screen when an existing Playwright runtime or browser automation tool is available.
+- Trace the displayed numbers back to Python-owned API output whenever possible.
+- Record the exact parameters/configurations tried.
+- Judge functional correctness, numerical plausibility, reproducibility, and leakage risk.
+- Conclude what should be fixed or built next, ordered by correctness impact.
+
+Accuracy and functional correctness are more important than broad coverage. Do not call a feature "validated" because the screen renders; a feature is validated only when the request, response, displayed values, and domain interpretation all agree.
+
+## Preflight
+
+1. Read:
+   - `docs/audits/auto-research/build-alpha-functionality-validation.md`
+   - `docs/architecture/build-alpha-style-features-1-8-research-spec.md`
+   - `docs/audits/auto-research/state.json`
+   - The latest Build Alpha / Research Lab implementation files discovered by static search.
+2. Capture environment facts in the report:
+   - current git branch and commit
+   - service/container status
+   - frontend URL checked
+   - backend/Python endpoint health if available
+   - Playwright/runtime availability and browser/preview availability
+3. If the app is not running, record visual checks as `not run, service down` and continue with static/API checks that do not require restarting containers.
+4. If Playwright is unavailable, record visual evidence as `not run, Playwright unavailable` and continue with API/static checks. Do not install Playwright or download browser binaries during the tick.
+
+## Validation Targets
+
+Validate only implemented surfaces. Compare the spec's Features 1-8 against the actual app and classify each target:
+
+- `validated`
+- `partially validated`
+- `not implemented`
+- `not run: dependency unavailable`
+- `failed functional correctness`
+- `failed numerical correctness`
+
+Targets:
+
+1. Strategy spec + run ledger / reproducibility.
+2. Signal catalog and primitive metadata.
+3. Backtest results workbench: equity, drawdown, trade log, metrics, provenance.
+4. Walk-forward / OOS validation.
+5. Monte Carlo risk lab.
+6. Noise, shifted-data, slippage, and cost perturbation tests.
+7. Null baselines and distribution comparison.
+8. Parameter sensitivity and parsimony scoring.
+
+## Required Evidence
+
+The report must include:
+
+- **Parameter matrix tried:** exact symbol, resolution, data window, EMA/RSI parameters, hold/cost/fill settings, seeds, simulation counts, fold settings, perturbation configs, null baseline settings, sensitivity grid.
+- **Playwright visual evidence:** each screen inspected, viewport used, interaction path, screenshot/snapshot path under `docs/audits/auto-research/snapshots/YYYY-MM-DD/`, what looked correct/incorrect, and whether cards/tables/charts were populated with coherent values.
+- **Numerical trace:** for every headline metric shown in the UI, identify the source field from Python/API output and compare UI value vs source value. Use explicit tolerances for display rounding.
+- **Quant conclusions:** whether the result is plausible, overfit-looking, under-sampled, unstable, or merely a plumbing proof.
+- **Architect recommendations:** specific fixes or next builds, ordered by correctness risk and dependency sequence.
+- **Open risks:** anything not proven because data, endpoint, browser, or service availability blocked it.
+
+## Playwright Snapshot Requirements
+
+Use Playwright as the preferred visual evidence mechanism. Acceptable sources:
+
+- A Claude/browser automation tool backed by Playwright.
+- An already-installed local Node package that resolves `playwright` or `@playwright/test`.
+- An already-available `playwright` CLI on PATH.
+
+Do not install packages or browsers. If no acceptable source is available, state that directly in the report.
+
+For each implemented screen, capture at least:
+
+- Initial loaded state.
+- Configured EMA control parameters before submit/run.
+- Completed results state after the run finishes.
+- Any error/empty state encountered.
+
+Use at least desktop viewport `1440x1000`. If time permits, also capture mobile/tablet only for layout-breaking evidence; numerical correctness is the priority. Screenshots should be full-page where practical and saved under:
+
+`docs/audits/auto-research/snapshots/YYYY-MM-DD/<feature>-<state>.png`
+
+## Default EMA Control Parameters
+
+Use these defaults unless the implemented UI/API only supports a narrower set. Record any substitutions.
+
+- Symbol: `SPY`
+- Resolution: 15-minute regular-session bars
+- Strategy: EMA crossover
+- Fast EMA: 5
+- Slow EMA: 10
+- RSI filter: off for the baseline run; if supported, also test RSI(14) with thresholds 30/70
+- Exit: 5-bar hold or the implemented declarative hold-period exit
+- Costs: zero-cost baseline; if supported, also test 1 bps slippage/commission sensitivity
+- Seeds: 42 for deterministic validations; 43 as a sanity check that stochastic paths change
+- Walk-forward: fixed-spec validation first; optimize-on-train only if explicitly implemented
+- Monte Carlo: use the implemented default; if configurable, use 100 simulations for a quick validation and record that it is a smoke-level sample, not a production confidence run
+- Sensitivity grid: fast EMA 3-12, slow EMA 8-30, reject `fast >= slow`
+
+## Output
+
+Create or update today's report:
+
+`docs/audits/auto-research/runs/YYYY-MM-DD-build-alpha-functionality-validation.md`
+
+At the end:
+
+1. Set `state.json.mode` to `build-alpha-validation-complete-awaiting-review`.
+2. Set `state.json.last_run` to the current ISO timestamp with offset.
+3. Set `state.json.cursor` to the report path and one-line verdict.
+4. Do not change `baseline_completed_at`, `remediation_completed_at`, or historical baseline finding state.
+
+If interrupted, leave `mode` as `build-alpha-validation-pending`, update `cursor` with the last completed target, and write a partial report.
 
 # ============================================================
 # RUN SUMMARY TEMPLATE

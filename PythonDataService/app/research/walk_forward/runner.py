@@ -79,6 +79,7 @@ def run_walk_forward(
     data_source_factory: Any,
     artifacts_root: Any | None = None,
     data_root_revision: str | None = None,
+    parent_sharpe: float | None = None,
     walk_forward_id: str | None = None,
 ) -> tuple[WalkForwardConfig, WalkForwardResult]:
     """Execute a walk-forward analysis and return ``(config, result)``.
@@ -206,6 +207,9 @@ def run_walk_forward(
 
     combined_curve = _compound_oos_curve(fold_curves)
     alpha_decay = _alpha_decay(successful_folds)
+    mean_oos_sharpe = statistics.fmean(sharpes) if sharpes else None
+    median_oos_sharpe = statistics.median(sharpes) if sharpes else None
+    oos_retention = _oos_retention(mean_oos_sharpe, parent_sharpe)
 
     if not successful_folds:
         warnings.append("every fold failed — aggregate metrics are degenerate")
@@ -219,12 +223,10 @@ def run_walk_forward(
         split_policy=config.split_policy,
         folds=folds,
         combined_oos_equity_curve=combined_curve,
-        mean_oos_sharpe=statistics.fmean(sharpes) if sharpes else None,
-        median_oos_sharpe=statistics.median(sharpes) if sharpes else None,
+        mean_oos_sharpe=mean_oos_sharpe,
+        median_oos_sharpe=median_oos_sharpe,
         pct_profitable_folds=pct_profitable,
-        # ``oos_retention`` requires a parent-run sharpe to compare against;
-        # leave None until the caller wires that in (router-level concern).
-        oos_retention=None,
+        oos_retention=oos_retention,
         alpha_decay=alpha_decay,
         warnings=warnings,
         created_at_ms=created_at,
@@ -313,6 +315,20 @@ def _alpha_decay(folds: list[FoldResult]) -> float | None:
     return (n * sum_xy - sum_x * sum_y) / denom
 
 
+def _oos_retention(mean_oos_sharpe: float | None, parent_sharpe: float | None) -> float | None:
+    """Ratio of OOS Sharpe to the parent full-window Sharpe.
+
+    Formula: oos_retention = mean_oos_sharpe / parent_sharpe.
+    Reference: Internal Build Alpha-style validation contract; see
+      docs/references/walk-forward.md.
+    Canonical implementation: this file.
+    Validated against: tests/research/walk_forward/test_runner.py::test_oos_retention_uses_parent_sharpe
+    """
+    if mean_oos_sharpe is None or parent_sharpe is None or parent_sharpe == 0:
+        return None
+    return mean_oos_sharpe / parent_sharpe
+
+
 def _compound_oos_curve(
     fold_curves: list[list[EquityCurvePoint]],
 ) -> list[EquityCurvePoint]:
@@ -386,5 +402,4 @@ def _failed_wf_result(
         status="failed",
         failure_reason=reason,
     )
-
 
