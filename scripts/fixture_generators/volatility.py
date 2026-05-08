@@ -731,13 +731,17 @@ rolling_min[i] = min(iv[max(0, i-59)..i])  if count >= 30 else NaN
 rolling_max[i] = max(iv[max(0, i-59)..i])  if count >= 30 else NaN
 denom = rolling_max - rolling_min
 rank[i] = (iv[i] - rolling_min[i]) / denom  if denom > 1e-10 else 0.5
-         NaN                                 if count < 30
+         0.5                                 if count < 30
 ```
 
-## NaN Convention
+Note: pre-warmup bars return 0.5 (not NaN). The canonical uses
+`np.where(denom > 1e-10, rank, 0.5)` where NaN comparisons evaluate to False,
+so bars below min_periods get 0.5 as the fallback value.
 
-Bars 0..{_IV004_MIN_PERIODS - 2} (first {_IV004_MIN_PERIODS - 1}): NaN (below min_periods={_IV004_MIN_PERIODS}).
-First non-NaN bar: {first_non_nan} (bar index {_IV004_MIN_PERIODS - 1}, 0-indexed).
+## Warmup Convention
+
+Bars 0..{_IV004_MIN_PERIODS - 2} (first {_IV004_MIN_PERIODS - 1}): 0.5 (below min_periods={_IV004_MIN_PERIODS}).
+First bar with computed rank: bar index {_IV004_MIN_PERIODS - 1} (0-indexed).
 
 ## Canonical Implementation
 

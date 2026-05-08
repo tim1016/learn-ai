@@ -10,7 +10,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed \u00e2\u20ac\u201d generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -50,7 +50,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed \u00e2\u20ac\u201d generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -90,7 +90,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed \u00e2\u20ac\u201d generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -130,7 +130,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed \u00e2\u20ac\u201d generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -170,7 +170,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed \u00e2\u20ac\u201d generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -212,7 +212,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed \u00e2\u20ac\u201d generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -254,7 +254,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed \u00e2\u20ac\u201d generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -609,7 +609,7 @@
     },
     {
       "id": "IND-003",
-      "name": "RSI \u00e2\u20ac\u201d Relative Strength Index (period=3, Wilder's smoothing)",
+      "name": "RSI \u2014 Relative Strength Index (period=3, Wilder's smoothing)",
       "category": "indicators",
       "canonical_module": "PythonDataService/app/engine/indicators/rsi.py",
       "canonical_callable": "RelativeStrengthIndex",
@@ -649,13 +649,13 @@
     },
     {
       "id": "IV-001",
-      "name": "Implied Volatility Solver \u00e2\u20ac\u201d Round-Trip Recovery",
+      "name": "Implied Volatility Solver \u2014 Round-Trip Recovery",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/solver.py",
       "canonical_callable": "implied_volatility",
       "reference": {
         "kind": "hand_computed",
-        "oracle": "sigma_known \u00e2\u20ac\u201d BSM pricing formula generates market_price; solver must recover sigma_known",
+        "oracle": "sigma_known \u2014 BSM pricing formula generates market_price; solver must recover sigma_known",
         "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) \u00c2\u00a719.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives \u00c2\u00a74."
       },
       "market_input": {
@@ -689,7 +689,7 @@
     },
     {
       "id": "IV-002",
-      "name": "SVI Total Variance Surface \u00e2\u20ac\u201d Gatheral Raw Parameterisation",
+      "name": "SVI Total Variance Surface \u2014 Gatheral Raw Parameterisation",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/fitting.py",
       "canonical_callable": "fit_svi",
@@ -809,7 +809,7 @@
     },
     {
       "id": "RV-002",
-      "name": "HF Two-Component Realized Volatility \u00e2\u20ac\u201d ABDL (window=3 days, ETH)",
+      "name": "HF Two-Component Realized Volatility \u2014 ABDL (window=3 days, ETH)",
       "category": "realized-volatility",
       "canonical_module": "PythonDataService/app/engine/edge/features_realtime/hf_realized_vol.py",
       "canonical_callable": "hf_realized_vol_trd252",
@@ -849,7 +849,7 @@
     },
     {
       "id": "RV-004",
-      "name": "Model-Free Variance Replication \u00e2\u20ac\u201d CBOE VIX 2019 Formula",
+      "name": "Model-Free Variance Replication \u2014 CBOE VIX 2019 Formula",
       "category": "realized-volatility",
       "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
       "canonical_callable": "replicate_expiry_variance",
