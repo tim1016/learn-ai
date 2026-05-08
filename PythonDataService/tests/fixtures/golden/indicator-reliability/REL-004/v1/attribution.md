@@ -7,9 +7,11 @@ Canonical: PythonDataService/app/research/indicator_reliability.py::compute_ic_d
 
 ## Formula
 
+```text
 For each horizon h in 1..5:
   fwd_return[i] = log(close[i+h] / close[i])  if same calendar day else NaN
   IC[h] = mean over days d of Spearman(ema[day_d], fwd_return[h][day_d])
+```
 
 EMA formula: k = 2/(1+10); s_t = k×close_t + (1-k)×s_{t-1}, s_0 = close_0.
 Note: standard exponential smoothing (k=2/(1+period)), NOT Wilder smoothing (k=1/period).
