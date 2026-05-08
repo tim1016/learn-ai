@@ -1,270 +1,243 @@
 @use '../../../styles/tokens' as *;
 
-.preflight-root {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 4px 0 24px;
-  max-width: 1100px;
-
-  header h3 {
-    margin: 0 0 4px;
-    font-size: 18px;
-    font-weight: 600;
-    color: $text-primary;
-  }
-  .subtitle {
-    margin: 0;
-    color: $text-secondary;
-    font-size: 13px;
-  }
+:host {
+  display: block;
 }
 
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+// ── Page layout ────────────────────────────────────────────
+.runner-page {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  background: $bg-elevated;
-  border: 1px solid $border;
-  border-radius: 8px;
-  padding: 14px 16px;
+  padding-top: 16px;
+}
 
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 13px;
-    color: $text-secondary;
+// ── Collapsed run summary ──────────────────────────────────
+.run-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba($bull, 0.08);
+  border: 1px solid rgba($bull, 0.30);
+  border-radius: $radius-md;
+}
 
-    &.full { grid-column: 1 / -1; }
-    &.inline {
-      flex-direction: row;
-      align-items: center;
-      gap: 8px;
-      grid-column: 1 / -1;
-    }
+.run-summary-left {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
 
-    input[type='text'],
-    input[type='date'],
-    input[type='number'],
-    select {
-      padding: 5px 8px;
-      border: 1px solid $border;
-      border-radius: 6px;
-      background: $bg-surface;
-      font-size: 13px;
-    }
-  }
+.run-summary-icon {
+  color: $bull;
+  font-size: 1rem;
+}
 
-  @media (max-width: 780px) {
+.run-summary-text {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: $bull;
+}
+
+.cache-chip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: $info;
+  background: rgba($info, 0.10);
+  border: 1px solid rgba($info, 0.28);
+  border-radius: $radius-sm;
+  padding: 2px 6px;
+}
+
+.run-summary-right {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+// ── Cards row ──────────────────────────────────────────────
+.runner-cards {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 12px;
+
+  @media (max-width: 900px) {
     grid-template-columns: 1fr;
   }
 }
 
-.indicators {
-  border: 1px solid $border;
-  border-radius: 8px;
-  padding: 14px 16px;
+.runner-card {
   background: $bg-surface;
-
-  h4 {
-    margin: 0 0 4px;
-    font-size: 14px;
-    font-weight: 600;
-    color: $text-primary;
-  }
-
-  .indicator-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 10px;
-    font-size: 13px;
-
-    th, td {
-      padding: 5px 8px;
-      text-align: left;
-      border-bottom: 1px solid $border;
-    }
-    th {
-      background: $bg-elevated;
-      font-weight: 600;
-      color: $text-primary;
-    }
-    .add-row td {
-      background: $bg-hover;
-      border-bottom: none;
-    }
-    select, input {
-      padding: 4px 6px;
-      border: 1px solid $border;
-      border-radius: 4px;
-      background: $bg-surface;
-      font-size: 13px;
-    }
-  }
-
-  .btn-mini {
-    padding: 3px 10px;
-    font-size: 12px;
-    border: 1px solid $border;
-    border-radius: 5px;
-    background: $bg-surface;
-    cursor: pointer;
-    &:hover { background: $bg-hover; }
-    &.primary {
-      background: $accent;
-      color: #fff;
-      border-color: $accent;
-      &:hover { background: $accent-hover; }
-    }
-  }
+  border: 1px solid $border;
+  border-radius: $radius-md;
+  padding: 14px;
 }
 
-.run-row {
+// ── Card header ────────────────────────────────────────────
+.card-head {
   display: flex;
   align-items: center;
-  gap: 12px;
-
-  .btn {
-    border: none;
-    border-radius: 6px;
-    padding: 8px 18px;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    &.btn-primary {
-      background: $accent;
-      color: #fff;
-      &:hover:not(:disabled) { background: $accent-hover; }
-      &:disabled { opacity: 0.6; cursor: wait; }
-    }
-  }
-  .error {
-    color: $bear;
-    font-size: 13px;
-  }
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid $border;
 }
 
-.verdict-banner {
+.card-title {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 16px 20px;
-  border-radius: 8px;
-  border: 1px solid;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: $text-subtle;
 
-  &[data-severity='ok'] {
-    background: rgba($bull, 0.1);
-    border-color: rgba($bull, 0.3);
-    .big-icon { color: $bull; }
-    .verdict-title { color: $bull; }
-  }
-  &[data-severity='warning'] {
-    background: rgba($warn, 0.08);
-    border-color: rgba($warn, 0.2);
-    .big-icon { color: $warn; }
-    .verdict-title { color: $warn; }
-  }
-  &[data-severity='blocking'] {
-    background: rgba($bear, 0.1);
-    border-color: rgba($bear, 0.3);
-    .big-icon { color: $bear; }
-    .verdict-title { color: $bear; }
-  }
+  i { color: $accent; }
+}
 
-  .big-icon {
-    font-size: 32px;
-    font-weight: 700;
-    line-height: 1;
-    min-width: 40px;
-    text-align: center;
-  }
-  .verdict-text {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .verdict-title {
-    font-size: 15px;
-    font-weight: 600;
-  }
-  .verdict-summary {
-    font-size: 13px;
-    color: $text-secondary;
+// ── Field layout ───────────────────────────────────────────
+.field-group {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+
+  &.field-group--2col {
+    grid-template-columns: repeat(2, 1fr);
+
+    @media (max-width: 900px) {
+      grid-template-columns: 1fr;
+    }
   }
 }
 
-.checks-list {
+.field {
   display: flex;
   flex-direction: column;
+  gap: 4px;
+
+  &.field--toggle {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 10px;
+  }
+}
+
+.field-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: $text-subtle;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.toggle-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: $text-primary;
+  cursor: pointer;
+  line-height: 1.3;
+}
+
+.toggle-hint {
+  font-size: 11px;
+  color: $text-muted;
+  line-height: 1.4;
+}
+
+// ── PrimeNG input overrides ────────────────────────────────
+:host ::ng-deep {
+  .p-inputtext {
+    height: 32px;
+    padding: 0 10px;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: $radius;
+    color: $text-primary;
+    font-family: $font-mono;
+    font-size: 12px;
+    width: 100%;
+
+    &:enabled:focus {
+      border-color: $accent;
+      box-shadow: 0 0 0 1px rgba($accent, 0.3);
+    }
+  }
+
+  .p-select {
+    height: 32px;
+    background: $bg-elevated;
+    border: 1px solid $border-light;
+    border-radius: $radius;
+    width: 100%;
+
+    &:not(.p-disabled):hover { border-color: $border-strong; }
+    &:not(.p-disabled).p-focus { border-color: $accent; box-shadow: 0 0 0 1px rgba($accent, 0.3); }
+  }
+
+  .p-select-label {
+    font-size: 12px;
+    color: $text-primary;
+    font-family: $font-mono;
+    padding: 0 10px;
+    line-height: 30px;
+  }
+
+  .p-select-dropdown { color: $text-muted; }
+}
+
+// ── Run bar ────────────────────────────────────────────────
+.run-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: $bg-sunken;
+  border: 1px solid $border;
+  border-radius: $radius-md;
+  padding: 10px 14px;
+}
+
+.run-hint {
+  font-size: 12px;
+  color: $text-subtle;
+
+  strong { color: $text-primary; font-family: $font-mono; }
+  .mono  { font-family: $font-mono; color: $text-primary; }
+}
+
+.run-bar-actions {
+  display: flex;
+  align-items: center;
   gap: 8px;
 }
 
-.check-row {
-  display: flex;
-  gap: 14px;
-  padding: 12px 14px;
-  border: 1px solid;
-  border-radius: 8px;
-  align-items: flex-start;
+.btn-run {
+  height: 36px;
+  padding: 0 18px;
+  background: $bull;
+  color: $bg-canvas;
+  border: none;
+  border-radius: $radius;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: $font-sans;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: filter $t-ui;
 
-  &[data-severity='ok'] {
-    background: rgba($bull, 0.08);
-    border-color: rgba($bull, 0.3);
-    .check-icon { background: $bull; }
-  }
-  &[data-severity='warning'] {
-    background: rgba($warn, 0.08);
-    border-color: rgba($warn, 0.2);
-    .check-icon { background: $warn; }
-  }
-  &[data-severity='blocking'] {
-    background: rgba($bear, 0.08);
-    border-color: rgba($bear, 0.3);
-    .check-icon { background: $bear; }
-  }
-
-  .check-icon {
-    min-width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    color: #fff;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 13px;
-    margin-top: 2px;
-  }
-  .check-body {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .check-label {
-    font-weight: 600;
-    font-size: 13.5px;
-    color: $text-primary;
-  }
-  .check-message {
-    font-size: 13px;
-    color: $text-secondary;
-    line-height: 1.45;
-  }
-  .check-fix {
-    font-size: 12.5px;
-    color: $text-secondary;
-    background: $bg-elevated;
-    border-left: 3px solid $accent;
-    padding: 4px 8px;
-    border-radius: 0 4px 4px 0;
-    b { color: $accent; }
-  }
-  .check-docs {
-    font-size: 12px;
-    color: $accent;
-    text-decoration: none;
-    &:hover { text-decoration: underline; }
-  }
+  &:hover:not(:disabled) { filter: brightness(1.1); }
+  &:disabled { opacity: 0.45; cursor: not-allowed; }
 }

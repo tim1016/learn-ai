@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from "@angular/core";
 import { toSignal } from "@angular/core/rxjs-interop";
 import {
   NavigationEnd,
@@ -11,6 +11,8 @@ import { filter, map, startWith } from "rxjs";
 import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
 import { EdgeMiniLineComponent } from "./charts/edge-charts";
 import { EdgeMockDataService } from "./services/edge-mock-data.service";
+import { EdgeScoreDrawerComponent } from "./drawers/edge-score-drawer.component";
+import { TradeSimDrawerComponent } from "./drawers/trade-sim-drawer.component";
 
 interface EdgeNavCard {
   readonly route: string;
@@ -35,13 +37,21 @@ interface CapabilityRow {
 @Component({
   selector: "app-edge",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterLinkActive, RouterOutlet, EdgeMiniLineComponent, PageHeaderComponent],
+  imports: [
+    RouterLink, RouterLinkActive, RouterOutlet,
+    EdgeMiniLineComponent, PageHeaderComponent,
+    EdgeScoreDrawerComponent, TradeSimDrawerComponent,
+  ],
   templateUrl: "./edge.component.html",
   styleUrls: ["./edge.component.scss"],
 })
 export class EdgeComponent {
   private readonly router = inject(Router);
   private readonly mockData = inject(EdgeMockDataService);
+
+  readonly scoreOpen = signal(false);
+  readonly tradeSimOpen = signal(false);
+  readonly edgeData = computed(() => this.mockData.get());
 
   readonly isRoot = toSignal(
     this.router.events.pipe(

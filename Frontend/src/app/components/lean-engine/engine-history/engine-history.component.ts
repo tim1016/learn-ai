@@ -429,4 +429,39 @@ export class EngineHistoryComponent implements OnInit {
     if (s.totalPnL < 0) return 'var(--bear)';
     return 'var(--text-muted)';
   }
+
+  exportCsv(): void {
+    const rows = this.filteredStudies();
+    const headers = [
+      'id', 'executed_at', 'symbol', 'strategy', 'params',
+      'start_date', 'end_date', 'resolution', 'fill_mode',
+      'initial_cash', 'final_equity', 'total_pnl',
+      'sharpe', 'sortino', 'max_dd', 'win_rate',
+      'total_trades', 'profit_factor', 'grade',
+    ];
+    const escape = (v: string | number | null | undefined): string => {
+      const s = v == null ? '' : String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n')
+        ? `"${s.replace(/"/g, '""')}"`
+        : s;
+    };
+    const lines = [
+      headers.join(','),
+      ...rows.map(s => [
+        s.id, s.executedAt, s.symbol, s.strategyName,
+        this.parseParams(s.parameters),
+        s.startDate, s.endDate, s.timespan, s.fillMode,
+        s.initialCash, s.finalEquity, s.totalPnL,
+        s.sharpeRatio, s.sortinoRatio, s.maxDrawdown, s.winRate,
+        s.totalTrades, s.profitFactor, this.gradeLabel(s),
+      ].map(escape).join(',')),
+    ];
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `backtest-history-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 }

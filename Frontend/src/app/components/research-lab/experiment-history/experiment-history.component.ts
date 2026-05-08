@@ -1,6 +1,7 @@
 import {
   Component,
   signal,
+  computed,
   inject,
   DestroyRef,
   ChangeDetectionStrategy,
@@ -50,6 +51,24 @@ export class ExperimentHistoryComponent {
   loading = signal(false);
   experiments = signal<ResearchExperiment[]>([]);
   error = signal<string | null>(null);
+
+  searchQuery = signal('');
+  statusFilter = signal<'all' | 'passed' | 'failed'>('all');
+  density = signal<'compact' | 'normal'>('compact');
+
+  readonly passedCount = computed(() => this.experiments().filter(e => e.passedValidation).length);
+  readonly failedCount = computed(() => this.experiments().filter(e => !e.passedValidation).length);
+
+  readonly filteredExperiments = computed(() => {
+    const q = this.searchQuery().toLowerCase();
+    const filter = this.statusFilter();
+    return this.experiments().filter(exp => {
+      if (filter === 'passed' && !exp.passedValidation) return false;
+      if (filter === 'failed' && exp.passedValidation) return false;
+      if (q && !exp.featureName.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  });
 
   // Help dialog state
   helpVisible = signal(false);
@@ -134,20 +153,20 @@ export class ExperimentHistoryComponent {
     }
   }
 
-  icSeverityClass(ic: number): string {
+  icClass(ic: number): string {
     const abs = Math.abs(ic);
-    if (abs >= 0.05) return 'text-green-700 font-bold';
-    if (abs >= 0.03) return 'text-green-600 font-semibold';
-    return 'text-gray-600';
+    if (abs >= 0.05) return 'cell-mono val-bull font-bold';
+    if (abs >= 0.03) return 'cell-mono val-bull';
+    return 'cell-mono val-dim';
   }
 
-  tStatSeverityClass(t: number): string {
-    if (t >= 1.65) return 'text-green-700 font-bold';
-    return 'text-gray-600';
+  tStatClass(t: number): string {
+    if (t >= 1.65) return 'cell-mono val-bull font-bold';
+    return 'cell-mono val-dim';
   }
 
-  adfSeverityClass(p: number): string {
-    if (p < 0.05) return 'text-green-700';
-    return 'text-amber-600';
+  adfClass(p: number): string {
+    if (p < 0.05) return 'cell-mono val-bull';
+    return 'cell-mono val-warn';
   }
 }

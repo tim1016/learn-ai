@@ -98,20 +98,33 @@
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Hero columns — three lead metrics
+// Hero strip — 7 KPIs in a single row (design: HeroStrip layout)
 //
-// Replaces the prior 6+2-card grid. Net P&L · Sharpe · Max DD as the
-// always-visible lead; the rest move into the secondary drawer.
+// Single card with vertical dividers between cells; verdict color on
+// bottom border rather than top. Combines the prior 3-col lead row
+// with the 4 metrics that used to live in the secondary drawer.
 // ═══════════════════════════════════════════════════════════════════
+.hero-strip {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: $radius-md;
+  overflow: hidden;
+  margin: 0 0 12px;
+
+  @media (max-width: 1200px) { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 768px)  { grid-template-columns: repeat(2, 1fr); }
+}
+
+// Keep .hero-cols for any remaining uses (secondary drawer four-col grid)
 .hero-cols {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
   margin: 0 0 12px;
 
-  &--four {
-    grid-template-columns: repeat(4, 1fr);
-  }
+  &--four { grid-template-columns: repeat(4, 1fr); }
 
   @media (max-width: 1100px) {
     grid-template-columns: repeat(2, 1fr);
@@ -127,19 +140,35 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 12px 14px 14px;
-  background: $bg-surface;
-  border: 1px solid $border;
-  border-top: 3px solid $border-light;
-  border-radius: 8px;
+  padding: 12px 14px 10px;
   min-width: 0;
 
-  // Traffic-light stripe by grade band — same logic as old .hero-card
-  &[data-band="green"]     { border-top-color: $bull; }
-  &[data-band="amber"]     { border-top-color: $warn; }
-  &[data-band="red"]       { border-top-color: $bear; }
-  &[data-band="skeptical"] { border-top-color: #a855f7; }
-  &[data-band="na"]        { border-top-color: $text-muted; }
+  // Inside hero-strip: border-right dividers + bottom verdict band
+  .hero-strip & {
+    border-right: 1px solid $border;
+    border-bottom: 2px solid $border-light;
+
+    &:last-child { border-right: none; }
+    &[data-band="green"]     { border-bottom-color: $bull; }
+    &[data-band="amber"]     { border-bottom-color: $warn; }
+    &[data-band="red"]       { border-bottom-color: $bear; }
+    &[data-band="skeptical"] { border-bottom-color: #a855f7; }
+    &[data-band="na"]        { border-bottom-color: $text-muted; }
+  }
+
+  // Standalone (used in secondary drawer grid)
+  .hero-cols & {
+    background: $bg-surface;
+    border: 1px solid $border;
+    border-top: 3px solid $border-light;
+    border-radius: 8px;
+
+    &[data-band="green"]     { border-top-color: $bull; }
+    &[data-band="amber"]     { border-top-color: $warn; }
+    &[data-band="red"]       { border-top-color: $bear; }
+    &[data-band="skeptical"] { border-top-color: #a855f7; }
+    &[data-band="na"]        { border-top-color: $text-muted; }
+  }
 
   &__head {
     display: flex;

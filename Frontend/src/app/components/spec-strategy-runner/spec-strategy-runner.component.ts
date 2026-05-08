@@ -359,6 +359,18 @@ export class SpecStrategyRunnerComponent {
     this.spec.update((s) => removeSurvivalRuleAt(s, index));
   }
 
+  setManageRuleLogic(ruleIndex: number, logic: 'AND' | 'OR'): void {
+    this.spec.update((s) => {
+      const rules = s.survival ?? [];
+      const rule = rules[ruleIndex];
+      if (!rule) return s;
+      return updateSurvivalRuleAt(s, ruleIndex, {
+        ...rule,
+        when: { ...rule.when, logic },
+      });
+    });
+  }
+
   updateManageRuleName(index: number, name: string): void {
     this.spec.update((s) => {
       const rules = s.survival ?? [];

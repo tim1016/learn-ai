@@ -43,6 +43,30 @@
                 <span class="ci-warn-tag">straddles zero</span>
               }
             </div>
+            @if (barbellCoords(); as coords) {
+              <svg class="ci-barbell" width="240" height="18" viewBox="0 0 240 18" aria-hidden="true">
+                <!-- axis -->
+                <line x1="0" x2="240" y1="9" y2="9" class="barbell-axis" />
+                <!-- zero tick -->
+                <line
+                  [attr.x1]="coords.zeroPct * 2.4"
+                  [attr.x2]="coords.zeroPct * 2.4"
+                  y1="2" y2="16"
+                  class="barbell-zero" />
+                <!-- CI range bar -->
+                <line
+                  [attr.x1]="coords.loPct * 2.4"
+                  [attr.x2]="coords.hiPct * 2.4"
+                  y1="9" y2="9"
+                  [attr.stroke]="bandColor()"
+                  stroke-width="3" />
+                <!-- end caps -->
+                <line [attr.x1]="coords.loPct * 2.4" [attr.x2]="coords.loPct * 2.4" y1="5" y2="13" [attr.stroke]="bandColor()" stroke-width="1.5" />
+                <line [attr.x1]="coords.hiPct * 2.4" [attr.x2]="coords.hiPct * 2.4" y1="5" y2="13" [attr.stroke]="bandColor()" stroke-width="1.5" />
+                <!-- point estimate -->
+                <circle [attr.cx]="coords.pointPct * 2.4" cy="9" r="3.5" [attr.fill]="bandColor()" />
+              </svg>
+            }
           }
         </div>
       }
@@ -50,10 +74,20 @@
       <p class="verdict-text">{{ verdictText() }}</p>
 
       @if (nextActionText()) {
-        <p class="next-action">
-          <i class="pi pi-arrow-right" aria-hidden="true"></i>
-          <span>{{ nextActionText() }}</span>
-        </p>
+        @if (stage() === 0) {
+          <div class="prescription-block">
+            <div class="prescription-eyebrow">
+              <i class="pi pi-lightbulb" aria-hidden="true"></i>
+              Prescription
+            </div>
+            <p class="prescription-text">{{ nextActionText() }}</p>
+          </div>
+        } @else {
+          <p class="next-action">
+            <i class="pi pi-arrow-right" aria-hidden="true"></i>
+            <span>{{ nextActionText() }}</span>
+          </p>
+        }
       }
     </div>
   </div>

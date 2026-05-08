@@ -58,7 +58,11 @@
           <li class="rejection-item">
             <div class="rejection-row">
               <span class="rejection-name">{{ f.criterionName }}</span>
-              <span class="rejection-threshold">required {{ f.thresholdRepr }}</span>
+              <span class="rejection-value-vs">
+                <span class="actual-val">{{ f.value | number:'1.2-2' }}</span>
+                <span class="vs-sep">vs</span>
+                <span class="threshold-val">{{ f.thresholdRepr }}</span>
+              </span>
             </div>
             <p class="rejection-message">{{ f.message }}</p>
           </li>
