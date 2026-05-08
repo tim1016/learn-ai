@@ -122,6 +122,166 @@
       "status": "active"
     },
     {
+      "id": "BS-004",
+      "name": "Black-Scholes Call Gamma",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/services/bs_greeks.py",
+      "canonical_callable": "black_scholes_greeks",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "py_vollib==1.0.1",
+        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/bs_greeks_extended.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-10,
+        "rtol": 0.0,
+        "note": "Cross-library float64. Unit ratio verified empirically = 1.000000 vs canonical."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "c21493a6865a7ac7d65cefa05304a0262c67a1064b617c8e134123e4a138fa87",
+            "output.arrow": "7c91de2ca0e1b18993c7ff158307a7a70cd8e0af3f7243c2f9eec86b4f16c7ae"
+          },
+          "file_sha256": {
+            "input.arrow": "3f604803f6b0a5ed0c2d8fae46b85520151659786ecd1271e4818288df0607d3",
+            "output.arrow": "8b64cc98a0ebeededae0b03462fdf99b6360b35c9c5d5e1f8ab9239ca59e1be1"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "BS-005",
+      "name": "Black-Scholes Call Theta",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/services/bs_greeks.py",
+      "canonical_callable": "black_scholes_greeks",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "py_vollib==1.0.1",
+        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/bs_greeks_extended.py"
+      },
+      "units": {"theta": "per_day"},
+      "tolerance": {
+        "atol": 1e-10,
+        "rtol": 0.0,
+        "note": "Cross-library float64. Unit ratio verified empirically = 1.000000 vs canonical."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "c21493a6865a7ac7d65cefa05304a0262c67a1064b617c8e134123e4a138fa87",
+            "output.arrow": "a8fb8fed4cd8c2dda011bf18e43eecefca0a01ce0d95f618f7aeae485137a85c"
+          },
+          "file_sha256": {
+            "input.arrow": "3f604803f6b0a5ed0c2d8fae46b85520151659786ecd1271e4818288df0607d3",
+            "output.arrow": "a0af8a16fe21a17656ffc3a8346eb243ad491f822ba52a0453c096ae0e6a578c"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "BS-006",
+      "name": "Black-Scholes Call Vega",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/services/bs_greeks.py",
+      "canonical_callable": "black_scholes_greeks",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "py_vollib==1.0.1",
+        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/bs_greeks_extended.py"
+      },
+      "units": {"vega": "per_one_vol"},
+      "tolerance": {
+        "atol": 1e-10,
+        "rtol": 0.0,
+        "note": "Cross-library float64. Unit ratio verified empirically = 1.000000 vs canonical."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "c21493a6865a7ac7d65cefa05304a0262c67a1064b617c8e134123e4a138fa87",
+            "output.arrow": "ec611f16e2200a7e2fcbbfb180c4e0dfa7098ec9df2112524ea06e17f8410e7b"
+          },
+          "file_sha256": {
+            "input.arrow": "3f604803f6b0a5ed0c2d8fae46b85520151659786ecd1271e4818288df0607d3",
+            "output.arrow": "955151cd81424607653479c48d3e45301539e37497168720ea6799710ecb4be0"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "BS-007",
+      "name": "Black-Scholes Call Rho",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/services/bs_greeks.py",
+      "canonical_callable": "black_scholes_greeks",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "py_vollib==1.0.1",
+        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/bs_greeks_extended.py"
+      },
+      "units": {"rho": "per_one_rate"},
+      "tolerance": {
+        "atol": 1e-10,
+        "rtol": 0.0,
+        "note": "Cross-library float64. Unit ratio verified empirically = 1.000000 vs canonical."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "c21493a6865a7ac7d65cefa05304a0262c67a1064b617c8e134123e4a138fa87",
+            "output.arrow": "f4ff1f08e2fd14c2caa7c84fbaa05edaf44b684b13e60d00d2c8ae6099fcef02"
+          },
+          "file_sha256": {
+            "input.arrow": "3f604803f6b0a5ed0c2d8fae46b85520151659786ecd1271e4818288df0607d3",
+            "output.arrow": "fbf48992d9b187549000ab9348a125137f545291f33a3060866afcdb2956fea6"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
       "id": "ENG-001",
       "name": "Sharpe Ratio (Daily Returns, Annualized)",
       "category": "engine-statistics",
@@ -196,6 +356,286 @@
           "file_sha256": {
             "input.arrow": "bfa7c019896856c9c48848a886b88f07b06b3d71aacf43a1bf0414051947ec13",
             "output.arrow": "f4d380030eb25f4bbf54b8f3014315aaee0a2e692bdefebfb271de3c7fd14ed0"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "ENG-002",
+      "name": "Maximum Drawdown",
+      "category": "engine-statistics",
+      "canonical_module": "PythonDataService/app/engine/results/statistics.py",
+      "canonical_callable": "_max_drawdown",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "numpy.maximum.accumulate + vectorized fraction (running_max - equity) / running_max",
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.2."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/engine_stats_extended.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-9,
+        "rtol": 0.0,
+        "note": "numpy accumulate vs pure-Python loop. Observed max abs error < 1e-16."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "1aa702b886961471b2bc21f9bfb5dc9583231c7d833f81c9c2d08e4138a93ec2",
+            "output.arrow": "d5ae0b901cec70286e6bf8a67fe1faf91f48a7ad549683a1aaab55ee21b03fb4"
+          },
+          "file_sha256": {
+            "input.arrow": "4d526496ee3045784b31b4eb52ba4d37bd5fa9f89e00b6875c756d6efd66e763",
+            "output.arrow": "ac39a52d755339b195e9eded8cd9c53523d9a82fb7d9f9d83eb30ccf38e918b5"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "ENG-003",
+      "name": "Trade Statistics",
+      "category": "engine-statistics",
+      "canonical_module": "PythonDataService/app/engine/results/statistics.py",
+      "canonical_callable": "compute_trade_statistics",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "explicit Python formula (win/loss sums, profit factor, payoff ratio) without calling canonical",
+        "citation": "Standard portfolio statistics. win_rate, profit_factor, payoff_ratio, expectancy as defined in Bacon (2e)."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/engine_stats_extended.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-12,
+        "rtol": 0.0,
+        "note": "Integer columns: exact. Float columns: same arithmetic path, error < 1e-15."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "5697cf6f8693d3d0331c06d022e5d4201dbf6e02b4ad44e769f939f75aa610d0",
+            "output.arrow": "9a380641a35ed8d070adbc2c3fd52a4ada940535287d0ba3fed0eceae402104a"
+          },
+          "file_sha256": {
+            "input.arrow": "983d7a3869672871d6860be116ab3bec21e6498c7dc8bd4f1ec822d06949e8cc",
+            "output.arrow": "f6941783296120971cc7232cbb54f24a8ea72c0662142e99309955fd15ef5448"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "ENG-004",
+      "name": "CAGR (Compound Annual Growth Rate)",
+      "category": "engine-statistics",
+      "canonical_module": "PythonDataService/app/engine/results/statistics.py",
+      "canonical_callable": "compute_portfolio_statistics",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "numpy power: (final/initial)^(1/years) - 1",
+        "citation": "Standard finance definition. years = trading_days / 252."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/engine_stats_extended.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-9,
+        "rtol": 0.0,
+        "note": "numpy power vs pure-Python **. Observed max abs error < 1e-15."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "e019ba7ce66954fabad32a33208aa31006bdf2fd83fec3a68a5905e1c7d2dd62",
+            "output.arrow": "4b01e5e5151e634185c34b902429cf205c3541cefd51c5060687e8d834f5e00a"
+          },
+          "file_sha256": {
+            "input.arrow": "d8ab988ae0eb5993eb4faeab7adf441c91b41dcdead06ec3cd06255caa6bdce4",
+            "output.arrow": "c9e78fdd0ff98b98150b10ca86cb5ee4b1697d7153f74344c9dd6b87324335dd"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "ENG-005",
+      "name": "Calmar Ratio",
+      "category": "engine-statistics",
+      "canonical_module": "PythonDataService/app/engine/results/statistics.py",
+      "canonical_callable": "compute_portfolio_statistics",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "_oracle_cagr / _oracle_mdd (composed numpy paths from ENG-002 and ENG-004)",
+        "citation": "Young (1991), The Calmar Ratio: A Smoother Tool. Calmar = CAGR / max_drawdown."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/engine_stats_extended.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-9,
+        "rtol": 0.0,
+        "note": "Composed from ENG-002 and ENG-004 numpy paths."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "5fb164dda44bfab903cc9336ca77ee8dadd4848f4c39d6b5db6cd83bf64b63c6",
+            "output.arrow": "8e7f6de013a97ab48da45f571667234f21382417323078ca7317b9a9b1063fcc"
+          },
+          "file_sha256": {
+            "input.arrow": "4e346d7e7b7ea4d0fc36d0344657e7ddc56db8a0be02c9062fa3db4277be360a",
+            "output.arrow": "71922b6eb4cf9f315c5fbf8de10fd0d6c75c53d2bde18e0e1c19f4ba04e4a6bc"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "IND-001",
+      "name": "Exponential Moving Average (period=3)",
+      "category": "indicators",
+      "canonical_module": "PythonDataService/app/engine/indicators/ema.py",
+      "canonical_callable": "ExponentialMovingAverage",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "pure-Python SMA-seeded EMA formula (k=0.5) without calling canonical class",
+        "citation": "LEAN Indicators/ExponentialMovingAverage.cs (vendored at references/lean/7986ed0...). k=2/(1+period)."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/indicators.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-9,
+        "rtol": 0.0,
+        "note": "Both oracle and canonical use the same formula; Decimal vs float64. Error < 1e-12."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "49ddfb76c7a10d9eeb8e0ef346b5323dc32e22c20640fbe561713cdc8fdc933a",
+            "output.arrow": "73340b7329868cfee24166be16463c0cdf0ed49fa2e51b4296a86bc8cd01b885"
+          },
+          "file_sha256": {
+            "input.arrow": "7e9925b83bcaaecb77ed9027dd272013b35c2a9ae129efad5be713fe9be3573e",
+            "output.arrow": "218c8e0f08a83bbdacc879cd0cc09b27f0c44f3d4ad30a8d602b7d7f48148530"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "IND-002",
+      "name": "Simple Moving Average (period=3)",
+      "category": "indicators",
+      "canonical_module": "PythonDataService/app/engine/indicators/sma.py",
+      "canonical_callable": "SimpleMovingAverage",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "pure-Python rolling-window mean without calling canonical class",
+        "citation": "LEAN Indicators/SimpleMovingAverage.cs (vendored at references/lean/7986ed0...)."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/indicators.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-9,
+        "rtol": 0.0,
+        "note": "Decimal vs float64 on same formula. Error < 1e-12."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "49ddfb76c7a10d9eeb8e0ef346b5323dc32e22c20640fbe561713cdc8fdc933a",
+            "output.arrow": "5be994d78b927e9a8f3e48cd8b0c8c103fe8b06ad78d98bab831c4fada56bb59"
+          },
+          "file_sha256": {
+            "input.arrow": "7e9925b83bcaaecb77ed9027dd272013b35c2a9ae129efad5be713fe9be3573e",
+            "output.arrow": "6e7f1a806a28ad5b564c74c3544c0a550fe4e802b01c4fb36d5a621747826997"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "IND-003",
+      "name": "RSI — Relative Strength Index (period=3, Wilder's smoothing)",
+      "category": "indicators",
+      "canonical_module": "PythonDataService/app/engine/indicators/rsi.py",
+      "canonical_callable": "RelativeStrengthIndex",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "pure-Python Wilder RSI formula without calling canonical class",
+        "citation": "LEAN Indicators/RelativeStrengthIndex.cs with MovingAverageType.Wilders (vendored at references/lean/7986ed0...). Seed: simple mean of first period deltas."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/indicators.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-9,
+        "rtol": 0.0,
+        "note": "Decimal (canonical) vs float64 (oracle) Wilder smoothing. Error < 1e-10."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "49ddfb76c7a10d9eeb8e0ef346b5323dc32e22c20640fbe561713cdc8fdc933a",
+            "output.arrow": "99cf7e8a74ea58c5a6e6890838538f6f5cce2819cf8bf63c8c7d8744c99aa83e"
+          },
+          "file_sha256": {
+            "input.arrow": "7e9925b83bcaaecb77ed9027dd272013b35c2a9ae129efad5be713fe9be3573e",
+            "output.arrow": "c89ae2c215cbdbcf77f51cb5cfd61ba4d63a0d8e7bfc231921dd66d2f7f05dd1"
           }
         }
       },
