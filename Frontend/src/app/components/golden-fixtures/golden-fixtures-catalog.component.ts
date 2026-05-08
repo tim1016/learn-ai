@@ -5,6 +5,7 @@ import {
   inject,
   resource,
 } from '@angular/core';
+import { SlicePipe } from '@angular/common';
 import { GoldenFixturesService } from '../../services/golden-fixtures.service';
 import type { FixtureSummary } from '../../services/golden-fixtures.types';
 import {
@@ -47,6 +48,7 @@ function badgeFor(f: FixtureSummary): BadgeLevel {
   templateUrl: './golden-fixtures-catalog.component.html',
   styleUrl: './golden-fixtures-catalog.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [SlicePipe],
 })
 export class GoldenFixturesCatalogComponent {
   private readonly svc = inject(GoldenFixturesService);
