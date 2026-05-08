@@ -38,7 +38,8 @@ sys.path.insert(0, str(REPO_ROOT / "PythonDataService"))
 from golden_support.hashing import compute_hashes  # noqa: E402
 from golden_support.io import write_arrow  # noqa: E402
 
-GENERATION_DATE = date(2026, 5, 8).isoformat()
+def _generation_date() -> str:
+    return date.today().isoformat()
 
 
 # ── Standalone oracles (no app imports) ──────────────────────────────────────
@@ -294,7 +295,7 @@ python scripts/generate_fixtures.py --id IV-001 --force \\
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — BSM pricing formula; sigma_known is the round-trip answer
 Script: scripts/fixture_generators/volatility.py
 {'Justification: ' + just if just else '(initial generation)'}
@@ -428,7 +429,7 @@ python scripts/generate_fixtures.py --id IV-002 --force \\
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: literature_formula — Gatheral (2004) SVI w(k) formula applied directly
 Script: scripts/fixture_generators/volatility.py
 {'Justification: ' + just if just else '(initial generation)'}
@@ -633,7 +634,7 @@ python scripts/generate_fixtures.py --id IV-003 --force \\
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — CBOE per-expiry formula + variance-time interpolation in Python
 Script: scripts/fixture_generators/volatility.py
 {'Justification: ' + just if just else '(initial generation)'}
@@ -705,9 +706,6 @@ def generate_iv004(version_dir: Path, justification: str = "") -> None:
     )
 
     def _attr(path: Path, just: str) -> None:
-        first_non_nan = next(
-            (i for i in range(_IV004_N_BARS) if not np.isnan(oracle[i])), None
-        )
         path.write_text(
             f"""# IV-004 — IV Rank Rolling 60-Day Window
 
@@ -762,7 +760,7 @@ python scripts/generate_fixtures.py --id IV-004 --force \\
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — rolling (iv-min)/(max-min) in pure Python
 Script: scripts/fixture_generators/volatility.py
 {'Justification: ' + just if just else '(initial generation)'}
@@ -884,7 +882,7 @@ python scripts/generate_fixtures.py --id RV-001 --force \\
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — rolling var(log_ret, ddof=1)*252, pure Python
 Script: scripts/fixture_generators/volatility.py
 {'Justification: ' + just if just else '(initial generation)'}
@@ -954,7 +952,6 @@ def _oracle_hf_rv(
     Ffill onto bar grid.
     """
     # Group bars by day index
-    n = len(ts_ms)
     day_groups: list[list[tuple[int, float]]] = []  # [(bar_idx_in_series, close)]
     bars_per_day = _RV002_BARS_PER_DAY
     for d in range(_RV002_N_DAYS):
@@ -965,7 +962,6 @@ def _oracle_hf_rv(
     # Per-day RV²
     daily_rv_sq: list[float] = []
     for d, group in enumerate(day_groups):
-        bar_indices = [idx for idx, _ in group]
         close_vals = [c for _, c in group]
 
         # Intraday squared returns (within-day consecutive closes)
@@ -1079,7 +1075,7 @@ python scripts/generate_fixtures.py --id RV-002 --force \\
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — per-day ABDL two-component formula, pure Python
 Script: scripts/fixture_generators/volatility.py
 {'Justification: ' + just if just else '(initial generation)'}
@@ -1199,7 +1195,7 @@ python scripts/generate_fixtures.py --id RV-003 --force \\
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: literature_formula — σ_TRD252=σ_ACT365·√(D·252/(365·N)) with N from pandas_market_calendars
 Script: scripts/fixture_generators/volatility.py
 {'Justification: ' + just if just else '(initial generation)'}
@@ -1370,7 +1366,7 @@ python scripts/generate_fixtures.py --id RV-004 --force \\
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: literature_formula — CBOE VIX 2019 whitepaper formula in pure Python
 Script: scripts/fixture_generators/volatility.py
 {'Justification: ' + just if just else '(initial generation)'}

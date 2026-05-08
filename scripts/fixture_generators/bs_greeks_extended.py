@@ -49,7 +49,7 @@ from fixture_generators.bs_price import (
     RATES,
     VOLS,
     DIVIDEND,
-    GENERATION_DATE,
+    _generation_date,
     ORACLE_LIB,
 )
 
@@ -215,7 +215,7 @@ abs error across {_N_CASES} cases is < 1e-15.
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: {ORACLE_LIB}
 Script: scripts/fixture_generators/bs_greeks_extended.py
 {'Justification: ' + justification if justification else '(initial generation)'}
@@ -286,7 +286,7 @@ abs error across {_N_CASES} cases is < 1e-15.
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: {ORACLE_LIB}
 Script: scripts/fixture_generators/bs_greeks_extended.py
 {'Justification: ' + justification if justification else '(initial generation)'}
@@ -358,7 +358,7 @@ implicitly covers put vega.
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: {ORACLE_LIB}
 Script: scripts/fixture_generators/bs_greeks_extended.py
 {'Justification: ' + justification if justification else '(initial generation)'}
@@ -429,7 +429,7 @@ abs error across {_N_CASES} cases is < 1e-15.
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: {ORACLE_LIB}
 Script: scripts/fixture_generators/bs_greeks_extended.py
 {'Justification: ' + justification if justification else '(initial generation)'}

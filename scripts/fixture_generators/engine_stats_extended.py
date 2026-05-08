@@ -52,7 +52,8 @@ sys.path.insert(0, str(REPO_ROOT / "PythonDataService"))
 from golden_support.hashing import compute_hashes  # noqa: E402
 from golden_support.io import write_arrow  # noqa: E402
 
-GENERATION_DATE = date(2026, 5, 9).isoformat()
+def _generation_date() -> str:
+    return date.today().isoformat()
 TRADING_DAYS_PER_YEAR = 252
 
 # ── ENG-002: Max Drawdown ─────────────────────────────────────────────────────
@@ -248,7 +249,7 @@ dimensionless fraction (0.20 = 20% max drawdown)
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: numpy accumulate-max + vectorized fraction
 Script: scripts/fixture_generators/engine_stats_extended.py
 {'Justification: ' + justification if justification else '(initial generation)'}
@@ -330,7 +331,7 @@ Accepts Sequence of _TradeLike (pnl_pcts extracted as float).
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — explicit formula matching canonical arithmetic
 Script: scripts/fixture_generators/engine_stats_extended.py
 {'Justification: ' + justification if justification else '(initial generation)'}
@@ -419,7 +420,7 @@ dimensionless annualized rate (0.10 = 10% CAGR)
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: numpy power (final/initial)^(1/years) - 1
 Script: scripts/fixture_generators/engine_stats_extended.py
 {'Justification: ' + justification if justification else '(initial generation)'}
@@ -505,7 +506,7 @@ dimensionless (annualized CAGR per unit of max drawdown)
 
 ## Generation Metadata
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: _oracle_cagr / _oracle_mdd (numpy paths)
 Script: scripts/fixture_generators/engine_stats_extended.py
 {'Justification: ' + justification if justification else '(initial generation)'}
