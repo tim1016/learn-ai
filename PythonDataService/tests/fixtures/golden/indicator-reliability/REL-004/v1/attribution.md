@@ -19,8 +19,9 @@ RSI uses Wilder; EMA uses standard. See app/engine/indicators/ema.py:11.
 
 ## Input
 
-5 trading days × 20 bars each = 100 bars.
-Close: GBM(S₀=100, σ=0.005, seed=7). Timestamps: 2024-01-02..2024-01-08, 15-min cadence.
+5 calendar days × 20 bars each = 100 bars.
+Close: GBM(S₀=100, σ=0.005, seed=7). Timestamps: 2024-01-02..2024-01-06, 15-min cadence.
+Note: days are consecutive calendar days (includes 2024-01-06, Saturday), not exchange trading days.
 
 ## Oracle computed values (mean IC per horizon)
 
@@ -33,6 +34,10 @@ Close: GBM(S₀=100, σ=0.005, seed=7). Timestamps: 2024-01-02..2024-01-08, 15-m
 ## Tolerance
 
 atol=1e-9, rtol=0.0
+
+## Justification
+
+Initial generation.
 
 ## SHA-256
 

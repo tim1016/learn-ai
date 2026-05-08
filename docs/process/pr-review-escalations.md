@@ -64,7 +64,7 @@ Comments too complex for the monitor agent to resolve autonomously. Claude handl
 
 **Date:** 2026-05-08
 
-**Status:** OPEN
+**Status:** ✅ RESOLVED — replaced hard-coded `GENERATION_DATE` constant with `_generation_date()` function calling `date.today()`; threaded `justification` into all 6 attribution templates (RP-001–004, REL-001, REL-004); updated all 6 committed attribution.md files to add `## Justification: Initial generation.` section.
 
 ---
 
@@ -76,7 +76,7 @@ Comments too complex for the monitor agent to resolve autonomously. Claude handl
 
 **Date:** 2026-05-08
 
-**Status:** OPEN
+**Status:** ✅ RESOLVED (option b) — changed attribution wording from "trading days" to "calendar days" and corrected the date range from "2024-01-02..2024-01-08" to "2024-01-02..2024-01-06"; added explicit note that day 5 is 2024-01-06 (Saturday). No arrow file changes; oracle values unchanged.
 
 ---
 

@@ -27,6 +27,10 @@ p_value:    0.009950249
 
 atol=1e-9, rtol=0.0
 
+## Justification
+
+Initial generation.
+
 ## SHA-256
 
 input.arrow:  43d5af3d86f030fb251438cfc46041d3d73a4aba1d695856abf8c0e074968524

@@ -23,7 +23,8 @@ sys.path.insert(0, str(REPO_ROOT / "PythonDataService"))
 from golden_support.hashing import compute_hashes  # noqa: E402
 from golden_support.io import write_arrow  # noqa: E402
 
-GENERATION_DATE = date(2026, 5, 8).isoformat()
+def _generation_date() -> str:
+    return date.today().isoformat()
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -237,7 +238,7 @@ def generate_rp001(version_dir: Path, justification: str = "") -> dict:
     (version_dir / "attribution.md").write_text(
         f"""# RP-001 — Information Coefficient (Spearman IC)
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: literature_formula — scipy.stats.spearmanr per calendar day; mean ± t-stat
 Canonical: PythonDataService/app/research/validation/ic.py::compute_information_coefficient
 
@@ -265,6 +266,10 @@ daily ICs: {[f'{x:.9f}' for x in daily_ics]}
 ## Tolerance
 
 atol=1e-9, rtol=0.0
+
+## Justification
+
+{justification or "Initial generation."}
 
 ## SHA-256
 
@@ -315,7 +320,7 @@ def generate_rp002(version_dir: Path, justification: str = "") -> dict:
     (version_dir / "attribution.md").write_text(
         f"""# RP-002 — Quantile Monotonicity
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — pd.qcut into {_RP002_N_BINS} quantiles, mean return per bin
 Canonical: PythonDataService/app/research/validation/quantile.py::compute_quantile_analysis
 
@@ -340,6 +345,10 @@ bin means: {[f'{m:.9f}' for m in bin_means]}
 ## Tolerance
 
 atol=1e-9, rtol=0.0
+
+## Justification
+
+{justification or "Initial generation."}
 
 ## SHA-256
 
@@ -385,7 +394,7 @@ def generate_rp003(version_dir: Path, justification: str = "") -> dict:
     (version_dir / "attribution.md").write_text(
         f"""# RP-003 — Phipson-Smyth Permutation P-value
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: literature_formula — Phipson-Smyth (2010) p = (1+count(null≥obs))/(N+1)
 Canonical: PythonDataService/app/research/baselines/runner.py::_empirical_position
 
@@ -411,6 +420,10 @@ p_value:    {p_value:.9f}
 ## Tolerance
 
 atol=1e-9, rtol=0.0
+
+## Justification
+
+{justification or "Initial generation."}
 
 ## SHA-256
 
@@ -461,7 +474,7 @@ def generate_rp004(version_dir: Path, justification: str = "") -> dict:
     (version_dir / "attribution.md").write_text(
         f"""# RP-004 — Signal Z-score (Train-period Standardization)
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — direct formula: z = (x - mu_train) / sigma_train
 Canonical: PythonDataService/app/research/signal/standardize.py::compute_train_zscore
 
@@ -484,6 +497,10 @@ sigma_train: {train_sigma:.9f}
 ## Tolerance
 
 atol=1e-9, rtol=0.0
+
+## Justification
+
+{justification or "Initial generation."}
 
 ## SHA-256
 
@@ -528,7 +545,7 @@ def generate_rel001(version_dir: Path, justification: str = "") -> dict:
     (version_dir / "attribution.md").write_text(
         f"""# REL-001 — IC Hit Rate (Win-rate Stability)
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: hand_computed — count(daily_ic × sign(mean_ic) > 0) / N
 Canonical: PythonDataService/app/research/validation/ic.py::compute_information_coefficient (hit_rate field)
 
@@ -550,6 +567,10 @@ n_days:   {n}
 ## Tolerance
 
 atol=1e-9, rtol=0.0
+
+## Justification
+
+{justification or "Initial generation."}
 
 ## SHA-256
 
@@ -601,7 +622,7 @@ def generate_rel004(version_dir: Path, justification: str = "") -> dict:
     (version_dir / "attribution.md").write_text(
         f"""# REL-004 — IC Decay Curve (EMA-{_REL004_EMA_PERIOD} Signal)
 
-Generated: {GENERATION_DATE}
+Generated: {_generation_date()}
 Oracle: literature_formula — direct Spearman rank-correlation per horizon,
   masking forward returns that cross a session boundary (mask_overnight=True)
 Canonical: PythonDataService/app/research/indicator_reliability.py::compute_ic_decay_curve
@@ -618,8 +639,8 @@ RSI uses Wilder; EMA uses standard. See app/engine/indicators/ema.py:11.
 
 ## Input
 
-{_REL004_N_DAYS} trading days × {_REL004_BARS_PER_DAY} bars each = {n_bars} bars.
-Close: GBM(S₀=100, σ=0.005, seed=7). Timestamps: 2024-01-02..2024-01-08, 15-min cadence.
+{_REL004_N_DAYS} calendar days × {_REL004_BARS_PER_DAY} bars each = {n_bars} bars.
+Close: GBM(S₀=100, σ=0.005, seed=7). Timestamps: 2024-01-02..2024-01-06, 15-min cadence.
 
 ## Oracle computed values (mean IC per horizon)
 
@@ -628,6 +649,10 @@ Close: GBM(S₀=100, σ=0.005, seed=7). Timestamps: 2024-01-02..2024-01-08, 15-m
 ## Tolerance
 
 atol=1e-9, rtol=0.0
+
+## Justification
+
+{justification or "Initial generation."}
 
 ## SHA-256
 
