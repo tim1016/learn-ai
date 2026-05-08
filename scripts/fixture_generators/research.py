@@ -439,7 +439,7 @@ def generate_rp004(version_dir: Path, justification: str = "") -> dict:
     oracle_z_flipped = _oracle_zscore(feature, train_mask, flip_sign=True)
 
     train_mu = float(feature[:_RP004_N_TRAIN].mean())
-    train_sigma = float(feature[:_RP004_N_TRAIN].std())
+    train_sigma = float(feature[:_RP004_N_TRAIN].std(ddof=1))
 
     inp = pa.table(
         {

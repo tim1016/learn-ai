@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         print(f"[dry-run] Would create: {version_dir}/")
-        print(f"[dry-run]   input.arrow, output.arrow, attribution.md")
+        print("[dry-run]   input.arrow, output.arrow, attribution.md")
         if existing is None:
             print(f"[dry-run] Would add manifest entry for {fixture_id!r} with status=planned")
         else:
@@ -167,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Done. Files written to {version_dir}")
 
     if existing is None:
-        print(f"  Manifest: no existing entry — fixture must be added to manifest.json manually.")
+        print("  Manifest: no existing entry — fixture must be added to manifest.json manually.")
         print(f"  Run: edit {MANIFEST_PATH}")
     else:
         print(f"  Manifest: version {next_ver} created. active_version={existing['active_version']} unchanged.")
@@ -320,32 +320,32 @@ def _rv004_generator(version_dir: Path, justification: str = "") -> None:
 
 def _rp001_generator(version_dir: Path, justification: str = "") -> None:
     from fixture_generators.research import generate_rp001
-    generate_rp001(version_dir)
+    generate_rp001(version_dir, justification=justification)
 
 
 def _rp002_generator(version_dir: Path, justification: str = "") -> None:
     from fixture_generators.research import generate_rp002
-    generate_rp002(version_dir)
+    generate_rp002(version_dir, justification=justification)
 
 
 def _rp003_generator(version_dir: Path, justification: str = "") -> None:
     from fixture_generators.research import generate_rp003
-    generate_rp003(version_dir)
+    generate_rp003(version_dir, justification=justification)
 
 
 def _rp004_generator(version_dir: Path, justification: str = "") -> None:
     from fixture_generators.research import generate_rp004
-    generate_rp004(version_dir)
+    generate_rp004(version_dir, justification=justification)
 
 
 def _rel001_generator(version_dir: Path, justification: str = "") -> None:
     from fixture_generators.research import generate_rel001
-    generate_rel001(version_dir)
+    generate_rel001(version_dir, justification=justification)
 
 
 def _rel004_generator(version_dir: Path, justification: str = "") -> None:
     from fixture_generators.research import generate_rel004
-    generate_rel004(version_dir)
+    generate_rel004(version_dir, justification=justification)
 
 
 FIXTURE_GENERATORS: dict[str, object] = {

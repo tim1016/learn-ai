@@ -18,7 +18,7 @@ z_flipped   = -z   (when flip_sign=True, for negative-IC signals)
 ## Oracle computed parameters
 
 mu_train:    5.415703357
-sigma_train: 2.292234925
+sigma_train: 2.325699978
 
 ## Tolerance
 

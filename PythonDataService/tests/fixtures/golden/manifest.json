@@ -1181,7 +1181,7 @@
       "id": "REL-004",
       "name": "IC Decay Curve",
       "category": "indicator-reliability",
-      "canonical_module": "PythonDataService/app/research/validation/ic.py",
+      "canonical_module": "PythonDataService/app/research/indicator_reliability.py",
       "canonical_callable": "compute_ic_decay_curve",
       "reference": {
         "kind": "literature_formula",
