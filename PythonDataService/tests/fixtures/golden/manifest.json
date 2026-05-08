@@ -1242,8 +1242,24 @@
         "note": "Both IBKR and our solver invert BSM against modelGreeks.optPrice (the IBKR model price). 1e-3 (0.1 vol) accounts for IBKR proprietary model adjustments (discrete dividends, calibration) vs our pure continuous-dividend BSM. Contracts with bid < 0.05, ask <= 0, or crossed quotes excluded at capture."
       },
       "active_version": 1,
-      "versions": {},
-      "status": "planned"
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "generated": "2026-05-08",
+          "justification": "Initial IBKR IV fixture, snapshot 20260508_153906",
+          "content_sha256": {
+            "input.arrow": "2353ab56a3e88a6c5b27f213e95c29db511d6f5917c54ead19b19ea5564e79b2",
+            "output.arrow": "17c0ed5eea02ba866d6ba5a30d7d88500639d61ab9cf8be0c63cc5915f9f20bd"
+          },
+          "file_sha256": {
+            "input.arrow": "104484e15683e971bf0fdf7f62ff6db4545014fbf4f783412004477e6219a73c",
+            "output.arrow": "214a3bc9add602e470e7eaf021cb0603ca5ce6145621700a29e171b9e47b4969"
+          }
+        }
+      },
+      "status": "active"
     }
   ]
 }

@@ -81,12 +81,19 @@ def _intrinsic_value(
     is_call: bool,
     rate: float,
     ttm: float,
+    dividend: float = 0.0,
 ) -> float:
-    """Discounted intrinsic value for a European option."""
-    df = math.exp(-rate * ttm)
+    """Discounted intrinsic value for a European option.
+
+    Uses continuous-dividend adjusted forward: S·exp(-q·T) - K·exp(-r·T).
+    Without the dividend term the lower bound is overestimated for dividend-paying
+    underlyings, causing false INTRINSIC_VIOLATION on deep ITM options.
+    """
+    spot_df = math.exp(-dividend * ttm)
+    rate_df = math.exp(-rate * ttm)
     if is_call:
-        return max(spot - strike * df, 0.0)
-    return max(strike * df - spot, 0.0)
+        return max(spot * spot_df - strike * rate_df, 0.0)
+    return max(strike * rate_df - spot * spot_df, 0.0)
 
 
 def _build_ql_process(
@@ -170,7 +177,7 @@ def implied_volatility(
             message=f"ttm={ttm:.6f} below minimum {effective_min_ttm}",
         )
 
-    intrinsic = _intrinsic_value(spot, strike, is_call, rate, ttm)
+    intrinsic = _intrinsic_value(spot, strike, is_call, rate, ttm, dividend)
 
     if option_price < MIN_OPTION_PRICE:
         return ImpliedVolResult(
