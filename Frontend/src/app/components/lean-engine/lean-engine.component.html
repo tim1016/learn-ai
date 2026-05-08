@@ -163,57 +163,7 @@
               </div>
             }
 
-            <!-- Data Availability Panel -->
-            @if (startDate() && endDate()) {
-              <div class="availability-card">
-                <div class="availability-header">
-                  <h4>
-                    Data availability — {{ effectiveSymbol() }}
-                    <span class="availability-resolution">({{ resolution() }})</span>
-                  </h4>
-                  @if (availabilityLoading()) {
-                    <span class="availability-status loading">Checking…</span>
-                  } @else if (availability(); as av) {
-                    @if (av.is_complete) {
-                      <span class="availability-status ok">
-                        ✓ Complete ({{ av.available_days }}/{{ av.expected_days }} weekdays)
-                      </span>
-                    } @else {
-                      <span class="availability-status partial">
-                        {{ av.available_days }} / {{ av.expected_days }} weekdays on disk
-                        ({{ av.missing_days.length }} missing)
-                      </span>
-                    }
-                  }
-                </div>
-
-                @if (availabilityError(); as err) {
-                  <div class="availability-error">{{ err }}</div>
-                }
-
-                @if (availability(); as av) {
-                  <div class="availability-sources">
-                    @for (chip of availabilitySourceChips(av); track chip.label) {
-                      <span class="source-chip">{{ chip.label }}: {{ chip.days }} days</span>
-                    }
-                    @if (availabilitySourceChips(av).length === 0) {
-                      <span class="source-chip empty">no data on disk yet</span>
-                    }
-                  </div>
-
-                  @if (!av.is_complete && !autoFetch()) {
-                    <div class="availability-hint">
-                      Enable <strong>Auto-fetch</strong> above to pull the missing
-                      {{ av.missing_days.length }} weekdays from Polygon.
-                    </div>
-                  }
-                }
-              </div>
-            }
-
             @if (selectedStrategy(); as strategy) {
-              <div class="strategy-description" [style.white-space]="'pre-line'">{{ strategy.description }}</div>
-
               @if (strategy.algorithm_pseudocode) {
                 <details class="strategy-algorithm">
                   <summary>Algorithm</summary>
