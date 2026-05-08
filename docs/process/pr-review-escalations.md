@@ -89,3 +89,34 @@ Comments too complex for the monitor agent to resolve autonomously. Claude handl
 **Date:** 2026-05-08
 
 **Status:** ✅ RESOLVED — commit 6d6453f changed to `range(self._WINDOW)` to cover all 10 NaN bars (indices 0..9) for RV-001 with window=10. Replied to comment 2026-05-08.
+
+---
+
+## PR #170 — OPT-IB-002 test uses mid price instead of ibkr_model_price (CI failure)
+
+**Comment:** CI failure — Python Tests fail with 1775/2332 contracts exceeding tolerance and 7 contracts returning intrinsic_violation.
+
+Failure pattern in test_solver_iv_matches_ibkr_within_tolerance:
+- Calls diverge ~0.06 vol (e.g. row=0 C K=664: our_iv=0.3855, ibkr_iv=0.3195, diff=6.6e-2)
+- Puts diverge only ~0.002–0.003 vol (e.g. row=1 P K=664: our_iv=0.3172, ibkr_iv=0.3195, diff=2.25e-3)
+
+Failure pattern in test_solver_converges_on_all_contracts:
+- 7 deep-ITM calls return status=intrinsic_violation (mid price < intrinsic value)
+  e.g. row=201 C K=670.0 mid=67.64 ttm=0.0279
+
+**Why complex:** The call/put divergence split is the diagnostic fingerprint that
+IBKR backed out ibkr_iv from modelGreeks.optPrice (not mid). The test currently
+passes mid to implied_volatility(), causing our solver to invert a different
+price than IBKR used. The correct fix is to invert ibkr_model_price (already
+captured in input.arrow), matching what CodeRabbit flagged in PR #168.
+
+Two sub-decisions needed before fixing:
+1. Should intrinsic_violation rows be excluded from the convergence assertion
+   (accept as a known solver limitation for deep ITM) or should the capture
+   filter also exclude contracts where mid < intrinsic value?
+2. The test_mid_positive sanity check is still valid (bid/ask mid is still
+   stored and should be positive), but solver tests must use ibkr_model_price.
+
+**Date:** 2026-05-08
+
+**Status:** OPEN
