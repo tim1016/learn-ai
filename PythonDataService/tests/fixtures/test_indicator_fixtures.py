@@ -91,15 +91,16 @@ def _run_rsi(prices: list[float]) -> list[float | None]:
     return result
 
 
-def _assert_sequence(canonical: list[float | None], oracle: list[float | None], atol: float, label: str) -> None:
+def _assert_sequence(canonical: list[float | None], oracle: list[float | None], atol: float, rtol: float, label: str) -> None:
     assert len(canonical) == len(oracle), f"{label}: length mismatch"
     for bar, (c, o) in enumerate(zip(canonical, oracle, strict=True)):
         if o is None:
             assert c is None, f"{label} bar {bar}: expected None, got {c}"
         else:
             assert c is not None, f"{label} bar {bar}: expected {o}, got None"
-            assert abs(c - o) <= atol, (
-                f"{label} bar {bar}: canonical={c} oracle={o} diff={abs(c-o):.2e} atol={atol:.2e}"
+            tol = atol + rtol * abs(o)
+            assert abs(c - o) <= tol, (
+                f"{label} bar {bar}: canonical={c} oracle={o} diff={abs(c-o):.2e} atol={atol:.2e} rtol={rtol:.2e}"
             )
 
 
@@ -114,12 +115,12 @@ class TestIND001EMA:
         assert len(inp) == 3
 
     def test_ema_matches_oracle_all_cases(self) -> None:
-        inp, out, atol, _rtol = _load("IND-001")
+        inp, out, atol, rtol = _load("IND-001")
         for row in range(len(inp)):
             prices = _prices(inp, row)
             canonical = _run_ema(prices)
             oracle = _oracle_vals(out, row)
-            _assert_sequence(canonical, oracle, atol, f"IND-001 row={row}")
+            _assert_sequence(canonical, oracle, atol, rtol, f"IND-001 row={row}")
 
     def test_ema_always_produces_value(self) -> None:
         """EMA produces a value at every bar (SMA warmup, not None)."""
@@ -163,12 +164,12 @@ class TestIND002SMA:
         assert len(inp) == 3
 
     def test_sma_matches_oracle_all_cases(self) -> None:
-        inp, out, atol, _rtol = _load("IND-002")
+        inp, out, atol, rtol = _load("IND-002")
         for row in range(len(inp)):
             prices = _prices(inp, row)
             canonical = _run_sma(prices)
             oracle = _oracle_vals(out, row)
-            _assert_sequence(canonical, oracle, atol, f"IND-002 row={row}")
+            _assert_sequence(canonical, oracle, atol, rtol, f"IND-002 row={row}")
 
     def test_sma_always_produces_value(self) -> None:
         inp, _out, _atol, _rtol = _load("IND-002")
@@ -207,12 +208,12 @@ class TestIND003RSI:
         assert len(inp) == 3
 
     def test_rsi_matches_oracle_all_cases(self) -> None:
-        inp, out, atol, _rtol = _load("IND-003")
+        inp, out, atol, rtol = _load("IND-003")
         for row in range(len(inp)):
             prices = _prices(inp, row)
             canonical = _run_rsi(prices)
             oracle = _oracle_vals(out, row)
-            _assert_sequence(canonical, oracle, atol, f"IND-003 row={row}")
+            _assert_sequence(canonical, oracle, atol, rtol, f"IND-003 row={row}")
 
     def test_rsi_nan_before_ready(self) -> None:
         """RSI(3) is None for bars 0..period (first period+1 bars)."""
