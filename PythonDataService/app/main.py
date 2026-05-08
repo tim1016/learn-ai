@@ -22,6 +22,7 @@ from app.routers import (
     dataset,
     edge,
     engine,
+    golden_fixtures,
     indicator_reliability,
     indicators,
     iv30,
@@ -171,6 +172,9 @@ app.include_router(research_divergence.router)
 # Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
 # Router carries its own /api/broker prefix.
 app.include_router(broker.router)
+# Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
+# No live computation at request time (see docs/process/autonomous-decisions.md D-010).
+app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])
 
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)
