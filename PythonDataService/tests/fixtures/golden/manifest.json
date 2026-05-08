@@ -995,10 +995,15 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
-          "hashes": {
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "attribution": "attribution.md",
+          "content_sha256": {
             "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
             "output.arrow": "1d84cbdcf6e07489b8d571ec4b2a807a93124be81eaa1398e4555935be2a676d"
+          },
+          "file_sha256": {
+            "input.arrow": "3072ef70ae14ac3907de340e1cc1e0ae7ee44b8643d6ea2bf4aad67a11b94620",
+            "output.arrow": "cf67132ed719af95eafaa78ddba2feca854f47ed7efb2a912a1762f788a6b14e"
           }
         }
       },
@@ -1032,10 +1037,15 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
-          "hashes": {
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "attribution": "attribution.md",
+          "content_sha256": {
             "input.arrow": "73c16d4b565de82de5d49eed5a62b44d5f8f205e49dd745431a99cd7308a9c5a",
             "output.arrow": "f88405acebde3d4425a83cc17a012341ca0c60d4d9d1e53b36a2a4e8e39df31a"
+          },
+          "file_sha256": {
+            "input.arrow": "d907f96cb930a3af60e1b4cd21915254cf21fb6e9fd193adb398abcac081e54b",
+            "output.arrow": "6619569076cdac62216ddbe603df9817fa5aeb47b214a7ed907487897095f9f9"
           }
         }
       },
@@ -1069,10 +1079,15 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
-          "hashes": {
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "attribution": "attribution.md",
+          "content_sha256": {
             "input.arrow": "43d5af3d86f030fb251438cfc46041d3d73a4aba1d695856abf8c0e074968524",
             "output.arrow": "ee6cd02c1aadca0995ddef4bfc7a97f9003d8cbda13c518e5fd9eeffe25df084"
+          },
+          "file_sha256": {
+            "input.arrow": "6ec1f7db802a4825ba2d564d5294642be529ce97fd86e09fe1648ac82d93a1bf",
+            "output.arrow": "e672f343af9efc0a4617039ff7df7125976ab5dc7688c846c862979bc7ee4c04"
           }
         }
       },
@@ -1106,10 +1121,15 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system. Oracle corrected to ddof=1 to match canonical pandas std().",
-          "hashes": {
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system. Oracle corrected to ddof=1 to match canonical pandas std().",
+          "attribution": "attribution.md",
+          "content_sha256": {
             "input.arrow": "62a703e6a8dcc50cb24359537d713bc3aca7e82b1d6bed81472a2be487fc3e1c",
             "output.arrow": "336ebc4d3c22ba473d3f061a1c29cbd10b2c1edf5a3774500996a2dde1ba5238"
+          },
+          "file_sha256": {
+            "input.arrow": "db49e9965a65e0d50eabf9746270dccc9be5fd4c1a1913b369a3ddcde8bea52d",
+            "output.arrow": "bc6c02df41ba1aba248de99608f45afd2d16ddf5b45e9b1fe72da5c669821074"
           }
         }
       },
@@ -1143,10 +1163,15 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
-          "hashes": {
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "attribution": "attribution.md",
+          "content_sha256": {
             "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
             "output.arrow": "bf2f04a54c6dfcf52aef0d08c1a7451e534a60dfda93fed195d85ddbd0eff85b"
+          },
+          "file_sha256": {
+            "input.arrow": "3072ef70ae14ac3907de340e1cc1e0ae7ee44b8643d6ea2bf4aad67a11b94620",
+            "output.arrow": "8e890586eb72d66b7ecd72e2b4f0d1b0350f5c2db312e848972be952a7cdcdb4"
           }
         }
       },
@@ -1180,10 +1205,15 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture — Phase 3 golden fixture system",
-          "hashes": {
+          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "attribution": "attribution.md",
+          "content_sha256": {
             "input.arrow": "a03cf8af86dbc3673e0486273504425f379f6496f6d73d8f654272cdfed86b2e",
             "output.arrow": "d88d46c84656d6d291ac6543ee0fda013b175bad121ce3ec521e55d8edb7cd94"
+          },
+          "file_sha256": {
+            "input.arrow": "20b0789772c3cc030bb79bc25761f7460548f80d5ad16370670afb31e99b5777",
+            "output.arrow": "6c51ae6519b6ab2c6b262c091d3c3ef60a452d8472d57078ccc5236a11805e49"
           }
         }
       },
