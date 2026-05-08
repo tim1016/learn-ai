@@ -189,6 +189,8 @@ def _get_category(fixture_id: str, manifest: dict) -> str:
         "eng": "engine-statistics",
         "ind": "indicators",
         "rv": "realized-volatility",
+        "rp": "research-primitives",
+        "rel": "indicator-reliability",
     }.get(prefix, "unknown")
 
 
@@ -316,6 +318,36 @@ def _rv004_generator(version_dir: Path, justification: str = "") -> None:
     generate_rv004(version_dir, justification=justification)
 
 
+def _rp001_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.research import generate_rp001
+    generate_rp001(version_dir)
+
+
+def _rp002_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.research import generate_rp002
+    generate_rp002(version_dir)
+
+
+def _rp003_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.research import generate_rp003
+    generate_rp003(version_dir)
+
+
+def _rp004_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.research import generate_rp004
+    generate_rp004(version_dir)
+
+
+def _rel001_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.research import generate_rel001
+    generate_rel001(version_dir)
+
+
+def _rel004_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.research import generate_rel004
+    generate_rel004(version_dir)
+
+
 FIXTURE_GENERATORS: dict[str, object] = {
     "BS-001": _bs001_generator,
     "BS-002": _bs002_generator,
@@ -341,6 +373,12 @@ FIXTURE_GENERATORS: dict[str, object] = {
     "RV-002": _rv002_generator,
     "RV-003": _rv003_generator,
     "RV-004": _rv004_generator,
+    "RP-001": _rp001_generator,
+    "RP-002": _rp002_generator,
+    "RP-003": _rp003_generator,
+    "RP-004": _rp004_generator,
+    "REL-001": _rel001_generator,
+    "REL-004": _rel004_generator,
 }
 
 
