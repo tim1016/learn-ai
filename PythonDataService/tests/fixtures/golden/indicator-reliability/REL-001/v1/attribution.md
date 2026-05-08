@@ -23,6 +23,10 @@ n_days:   4
 
 atol=1e-9, rtol=0.0
 
+## Justification
+
+Initial generation.
+
 ## SHA-256
 
 input.arrow:  70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb

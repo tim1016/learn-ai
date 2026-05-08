@@ -24,6 +24,10 @@ sigma_train: 2.325699978
 
 atol=1e-9, rtol=0.0
 
+## Justification
+
+Initial generation.
+
 ## SHA-256
 
 input.arrow:  62a703e6a8dcc50cb24359537d713bc3aca7e82b1d6bed81472a2be487fc3e1c

@@ -26,6 +26,10 @@ bin means: ['-0.005197735', '-0.002894925', '0.000518001', '0.002073041', '0.004
 
 atol=1e-9, rtol=0.0
 
+## Justification
+
+Initial generation.
+
 ## SHA-256
 
 input.arrow:  73c16d4b565de82de5d49eed5a62b44d5f8f205e49dd745431a99cd7308a9c5a
