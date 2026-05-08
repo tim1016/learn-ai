@@ -16,62 +16,73 @@
   }
 
   @if (!formCollapsed()) {
-    <div class="runner-cards">
-      <!-- Feature card -->
-      <div class="runner-card">
-        <div class="card-head">
-          <span class="card-title">
-            <i class="pi pi-chart-bar" aria-hidden="true"></i>
-            Feature
-          </span>
+    <!-- Execution card — full width above the feature workspace. -->
+    <div class="runner-card">
+      <div class="card-head">
+        <span class="card-title">
+          <i class="pi pi-bolt" aria-hidden="true"></i>
+          Execution
+        </span>
+      </div>
+      <div class="field-group">
+        <div class="field">
+          <label class="field-label" for="ticker">Ticker</label>
+          <input pInputText id="ticker" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="e.g. AAPL" />
         </div>
-        <div class="field-group field-group--3col">
-          <div class="field">
-            <label class="field-label" for="ticker">Ticker</label>
-            <input pInputText id="ticker" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="e.g. AAPL" />
-          </div>
-          <div class="field">
-            <label class="field-label" for="feature">Feature</label>
-            <p-select id="feature" [options]="features" [ngModel]="featureName()" (ngModelChange)="featureName.set($event)" optionLabel="label" optionValue="value" />
-          </div>
-          <div class="field">
-            <label class="field-label" for="timespan">Timespan</label>
-            <p-select id="timespan" [options]="timespanOptions" [ngModel]="timespan()" (ngModelChange)="timespan.set($event)" optionLabel="label" optionValue="value" />
-          </div>
+        <div class="field">
+          <label class="field-label" for="fromDate">From Date</label>
+          <input pInputText id="fromDate" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" placeholder="YYYY-MM-DD" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="toDate">To Date</label>
+          <input pInputText id="toDate" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" placeholder="YYYY-MM-DD" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="timespan">Timespan</label>
+          <p-select id="timespan" [options]="timespanOptions" [ngModel]="timespan()" (ngModelChange)="timespan.set($event)" optionLabel="label" optionValue="value" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="multiplier">Multiplier</label>
+          <input pInputText id="multiplier" type="number" [ngModel]="multiplier()" (ngModelChange)="multiplier.set($event)" />
+        </div>
+        <div class="field field--toggle">
+          <p-checkbox [binary]="true" [ngModel]="forceRun()" (ngModelChange)="forceRun.set($event)" inputId="force-run" />
+          <label class="toggle-label" for="force-run">Force re-run (bypass cache)</label>
         </div>
       </div>
+    </div>
 
-      <!-- Execution card -->
-      <div class="runner-card">
-        <div class="card-head">
-          <span class="card-title">
-            <i class="pi pi-bolt" aria-hidden="true"></i>
-            Execution
-          </span>
-        </div>
-        <div class="field-group">
-          <div class="field">
-            <label class="field-label" for="fromDate">From Date</label>
-            <input pInputText id="fromDate" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" placeholder="YYYY-MM-DD" />
+    <!-- Feature workspace — same 2-column treatment as data-lab. -->
+    <div class="indicator-workspace">
+      <app-indicator-catalog
+        selectionMode="single"
+        [selectedNames]="selectedNames()"
+        eyebrow="Feature Catalog"
+        hint="Pick the indicator to IC-test"
+        (select)="onCatalogSelect($event)" />
+
+      <div class="indicator-active-col">
+        @if (activeParamConfigs().length > 0) {
+          <app-active-indicator-card
+            [entry]="activeEntry()"
+            [paramConfigs]="activeParamConfigs()"
+            (configure)="openConfigure()"
+            (resetDefaults)="resetSelectedToDefaults()" />
+        } @else {
+          <div class="active-empty">
+            <i class="pi pi-sliders-h" aria-hidden="true"></i>
+            <p class="active-empty-primary">Pick an indicator from the catalog.</p>
+            <p class="active-empty-hint">The IC test runs against the chosen indicator + params.</p>
           </div>
-          <div class="field">
-            <label class="field-label" for="toDate">To Date</label>
-            <input pInputText id="toDate" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" placeholder="YYYY-MM-DD" />
-          </div>
-          <div class="field">
-            <label class="field-label" for="multiplier">Multiplier</label>
-            <input pInputText id="multiplier" type="number" [ngModel]="multiplier()" (ngModelChange)="multiplier.set($event)" />
-          </div>
-          <div class="field field--toggle">
-            <p-checkbox [binary]="true" [ngModel]="forceRun()" (ngModelChange)="forceRun.set($event)" inputId="force-run" />
-            <label class="toggle-label" for="force-run">Force re-run (bypass cache)</label>
-          </div>
-        </div>
+        }
       </div>
     </div>
 
     @if (rangeWarning(); as warn) {
       <p-message severity="warn" [text]="warn" styleClass="w-full" />
+    }
+    @if (unsupportedReason(); as reason) {
+      <p-message severity="info" [text]="reason" styleClass="w-full" />
     }
 
     <div class="run-bar">
@@ -109,4 +120,14 @@
       <app-feature-report [result]="res" />
     }
   }
+
+  <!-- Right-anchored config modal for the picked feature. -->
+  <app-indicator-config-modal
+    [(visible)]="configureModalOpen"
+    mode="configure"
+    [entry]="activeEntry()"
+    [paramConfigs]="activeParamConfigs()"
+    (paramChange)="onModalParamChange($event)"
+    (resetDefaults)="resetSelectedToDefaults()"
+    (resetParam)="resetSelectedParam($event)" />
 </div>
