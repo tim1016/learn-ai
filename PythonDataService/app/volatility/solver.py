@@ -1,15 +1,16 @@
 """
-QuantLib-based Implied Volatility Solver
-=========================================
+Implied Volatility Solver
+=========================
 
-Formula: Find σ such that BS(S, K, T, r, q, σ) = market_premium. Newton-Raphson via QuantLib's `VanillaOption.impliedVolatility()` is primary; scipy.optimize.brentq is fallback for non-convergence; Brenner-Subrahmanyam closed-form approximation seeds the initial guess (σ₀ ≈ √(2π/T) · price/S for ATM).
+Formula: Find σ such that BS(S, K, T, r, q, σ) = market_premium. Three-stage cascade: (1) pure-Python Newton-Raphson with vega step (primary — quadratic convergence, warm-start friendly); (2) QuantLib's ``VanillaOption.impliedVolatility()`` for T ≥ 1 calendar day when NR fails (QuantLib day-count arithmetic cannot resolve sub-day TTM); (3) scipy.optimize.brentq fallback for sub-day TTM or QuantLib non-convergence. Brenner-Subrahmanyam closed-form approximation seeds the initial guess (σ₀ ≈ √(2π/T) · price/S for ATM).
 Reference: Hull §19.11 (implied volatility); Brent (1973) "Algorithms for Minimization Without Derivatives" §4 for Brent's method; Brenner-Subrahmanyam (1988) Financial Analysts Journal for the seed approximation.
 Canonical implementation: this file (the canonical IV solver per docs/math-sources-of-truth.md § Options pricing and Greeks). Companion: `app/services/quantlib_pricer.py::implied_volatility` (QuantLib bisection — second path for callers wanting the QuantLib pricer in the loop). Cross-engine parity is pending-fixture.
 Validated against: NONE — pending cross-engine parity fixture between this file and the quantlib_pricer.py companion. Behavior tests exist; equivalence proof does not.
 
-Uses QuantLib's ``VanillaOption.impliedVolatility()`` as the primary solver,
-with a custom Brent root-finder as fallback for edge cases where the QuantLib
-solver fails to converge.
+Solver order: Newton-Raphson (custom Python) → QuantLib ``impliedVolatility``
+(T ≥ 1 day only) → scipy Brent. QuantLib's date arithmetic cannot resolve
+sub-day TTM (a 0.75-day option rounds to 1 full day), so sub-day calls skip
+stage 2 and go directly to Brent.
 
 Design goals
 ------------
