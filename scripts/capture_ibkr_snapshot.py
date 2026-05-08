@@ -31,7 +31,8 @@ Contract filter (applied to avoid degenerate IV comparisons)
 ------------------------------------------------------------
     - Strike within ±10% of spot
     - Expiry between 7 and 90 calendar days from now
-    - Bid ≥ $0.05 (avoids illiquid near-zero options)
+    - Bid ≥ $0.05, ask > 0, ask ≥ bid (rejects one-sided and crossed quotes)
+    - IBKR modelGreeks.optPrice > 0 (model price must be present)
     - IBKR modelGreeks.impliedVol between 0.05 and 2.0
 
 Rates
@@ -182,13 +183,15 @@ def main(argv: list[str] | None = None) -> int:
         contracts = [c for c in contracts if c.conId]  # drop unqualified
         print(f"  Qualified: {len(contracts)}")
 
-        # Request market data with model computation (generic tick 225)
+        # Request option market data. Empty genericTickList causes TWS to return
+        # modelGreeks automatically for options (including optPrice and impliedVol).
+        # Tick 225 is auction data, not option Greeks.
         tickers: list[ibi.Ticker] = []
         BATCH = 50
         for i in range(0, len(contracts), BATCH):
             batch = contracts[i : i + BATCH]
             for c in batch:
-                t = ib.reqMktData(c, "225", False, False)
+                t = ib.reqMktData(c, "", False, False)
                 tickers.append(t)
             ib.sleep(3.0)
 
@@ -198,21 +201,24 @@ def main(argv: list[str] | None = None) -> int:
         # ── Collect rows ──────────────────────────────────────────────────────
         rows: list[dict] = []
         for t, c in zip(tickers, contracts):
+            # Reject missing, one-sided, or crossed quotes.
             if t.bid is None or t.ask is None:
                 continue
-            bid = float(t.bid) if t.bid > 0 else 0.0
-            ask = float(t.ask) if t.ask > 0 else 0.0
-            if bid <= 0 and ask <= 0:
+            bid = float(t.bid)
+            ask = float(t.ask)
+            if bid < 0.05 or ask <= 0 or ask < bid:
                 continue
             mid = (bid + ask) / 2.0
-            if mid < 0.05:
-                continue
 
-            ibkr_iv = None
-            if t.modelGreeks and t.modelGreeks.impliedVol and t.modelGreeks.impliedVol > 0:
-                ibkr_iv = float(t.modelGreeks.impliedVol)
-            if ibkr_iv is None or not (0.05 <= ibkr_iv <= 2.0):
+            # Oracle: IBKR model IV and the model price it was backed out from.
+            if not (t.modelGreeks and t.modelGreeks.impliedVol and t.modelGreeks.impliedVol > 0):
                 continue
+            ibkr_iv = float(t.modelGreeks.impliedVol)
+            if not (0.05 <= ibkr_iv <= 2.0):
+                continue
+            if not (t.modelGreeks.optPrice and t.modelGreeks.optPrice > 0):
+                continue
+            ibkr_model_price = float(t.modelGreeks.optPrice)
 
             exp_ms = _expiry_close_ms(c.lastTradeDateOrContractMonth)
             ttm = _ttm_years(snapshot_ms, exp_ms)
@@ -229,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
                 "bid": bid,
                 "ask": ask,
                 "mid": mid,
+                "ibkr_model_price": ibkr_model_price,
                 "ibkr_iv": ibkr_iv,
                 "ttm_years": ttm,
                 "rate": args.rate,
@@ -258,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
         "bid": pa.array([r["bid"] for r in rows], type=pa.float64()),
         "ask": pa.array([r["ask"] for r in rows], type=pa.float64()),
         "mid": pa.array([r["mid"] for r in rows], type=pa.float64()),
+        "ibkr_model_price": pa.array([r["ibkr_model_price"] for r in rows], type=pa.float64()),
         "ibkr_iv": pa.array([r["ibkr_iv"] for r in rows], type=pa.float64()),
         "ttm_years": pa.array([r["ttm_years"] for r in rows], type=pa.float64()),
         "rate": pa.array([r["rate"] for r in rows], type=pa.float64()),

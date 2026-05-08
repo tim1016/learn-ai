@@ -65,8 +65,9 @@ def generate_optib002(version_dir: Path, justification: str = "") -> dict:
     n = len(snap)
 
     # ── Build input.arrow — contract params + market prices ──────────────────
-    # Columns our solver needs: mid_price, spot, strike, ttm_years, rate, dividend, is_call
-    # Plus provenance columns retained for audit: symbol, right, expiry_ms, snapshot_ms, ibkr_iv
+    # ibkr_model_price is the price IBKR's own model used when it computed
+    # impliedVol (modelGreeks.optPrice). Our solver must invert this same price
+    # so both oracles answer the same question.
     inp = pa.table({
         "symbol": snap["symbol"],
         "right": snap["right"],
@@ -77,6 +78,7 @@ def generate_optib002(version_dir: Path, justification: str = "") -> dict:
         "bid": snap["bid"],
         "ask": snap["ask"],
         "mid": snap["mid"],
+        "ibkr_model_price": snap["ibkr_model_price"],
         "ttm_years": snap["ttm_years"],
         "rate": snap["rate"],
         "dividend": snap["dividend"],
@@ -112,7 +114,7 @@ def generate_optib002(version_dir: Path, justification: str = "") -> dict:
         f"""# OPT-IB-002 — Implied Volatility: IBKR Reported vs NR/Brent BSM Solver
 
 Generated: {datetime.now(timezone.utc).strftime("%Y-%m-%d")}
-Oracle: vendor_observed — IBKR TWS API modelGreeks.impliedVol (reqMktData genericTick 225)
+Oracle: vendor_observed — IBKR TWS API modelGreeks.impliedVol
 Canonical: PythonDataService/app/volatility/solver.py::implied_volatility
 
 ## Formula
@@ -122,9 +124,13 @@ Our solver uses a three-stage cascade:
   2. QuantLib impliedVolatility (T ≥ 1 calendar day only)
   3. scipy.optimize.brentq fallback ([MIN_IV=0.005, MAX_IV=5.0])
 
-Solves for σ such that BSM(S, K, T, r, q, σ) = mid_price.
+Solves for σ such that BSM(S, K, T, r, q, σ) = ibkr_model_price.
 
-Seed: Brenner-Subrahmanyam approximation σ₀ ≈ √(2π/T) · mid_price/spot for ATM.
+Both the oracle and our solver invert the same price: modelGreeks.optPrice
+(the option price IBKR's model used to back out impliedVol). Using mid-price
+as input would compare two quantities from different prices and is incorrect.
+
+Seed: Brenner-Subrahmanyam approximation σ₀ ≈ √(2π/T) · price/spot for ATM.
 
 Reference: Hull §19.11 (IV); Brent (1973) §4; Brenner-Subrahmanyam (1988) FAJ.
 Solver source: app/volatility/solver.py (canonical per docs/math-sources-of-truth.md).
@@ -143,8 +149,9 @@ Dividend: {div_val:.4f} (continuously compounded SPY trailing yield at capture)
 
 ## Oracle
 
-IBKR's modelGreeks.impliedVol from reqMktData with genericTickList="225".
-This is the IV that IBKR's own model engine backs out from the same market price.
+IBKR's modelGreeks.impliedVol from a standard option market-data request
+(reqMktData with empty genericTickList — TWS returns modelGreeks automatically
+for options). modelGreeks.optPrice is the model price IBKR backed this IV from.
 IBKR's methodology is proprietary; their model may use discrete dividends or
 adjustments not present in our pure BSM. The tolerance floor is set accordingly.
 
@@ -156,11 +163,10 @@ IBKR IV range in this snapshot: [{iv_min:.4f}, {iv_max:.4f}]
 
 atol=1e-3, rtol=0.0
 
-IBKR and our solver both invert BSM against the same mid-price; the 1e-3 floor
-accounts for IBKR's internal model adjustments (discrete dividends, proprietary
-calibration) vs our pure continuous-dividend BSM. Contracts with bid < $0.05
-or IBKR IV outside [0.05, 2.0] are excluded during capture to avoid degenerate
-regimes where BSM model differences are most pronounced.
+Both IBKR and our solver invert BSM against modelGreeks.optPrice; the 1e-3
+floor accounts for IBKR's proprietary model adjustments (discrete dividends,
+calibration) vs our pure continuous-dividend BSM. Contracts with bid < $0.05,
+ask ≤ 0, crossed quotes, or IBKR IV outside [0.05, 2.0] excluded at capture.
 
 ## Justification
 
@@ -174,7 +180,12 @@ output.arrow: {content_h['output.arrow']}
         encoding="utf-8",
     )
 
-    return {
-        "input.arrow": content_h["input.arrow"],
-        "output.arrow": content_h["output.arrow"],
+    import json as _json
+    version_entry = {
+        "content_sha256": content_h,
+        "file_sha256": file_h,
     }
+    print("\nPaste into manifest.json OPT-IB-002 versions[\"1\"]:")
+    print(_json.dumps(version_entry, indent=6))
+
+    return version_entry

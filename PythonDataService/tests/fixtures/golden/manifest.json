@@ -10,7 +10,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -50,7 +50,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -90,7 +90,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -130,7 +130,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -170,7 +170,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -212,7 +212,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -254,7 +254,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -296,7 +296,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + numpy.std(ddof=1), annualized by sqrt(252)",
-        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) \u00a7IV. Verified by hand for 3 synthetic 5-element cases."
+        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) §IV. Verified by hand for 3 synthetic 5-element cases."
       },
       "market_input": {
         "source": "synthetic",
@@ -336,7 +336,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + downside variance (all-N denominator)",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) \u00a78.3. Denominator: all-N (matches canonical _sortino convention)."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.3. Denominator: all-N (matches canonical _sortino convention)."
       },
       "market_input": {
         "source": "synthetic",
@@ -376,7 +376,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.maximum.accumulate + vectorized fraction (running_max - equity) / running_max",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) \u00a78.2."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.2."
       },
       "market_input": {
         "source": "synthetic",
@@ -609,7 +609,7 @@
     },
     {
       "id": "IND-003",
-      "name": "RSI \u2014 Relative Strength Index (period=3, Wilder's smoothing)",
+      "name": "RSI — Relative Strength Index (period=3, Wilder's smoothing)",
       "category": "indicators",
       "canonical_module": "PythonDataService/app/engine/indicators/rsi.py",
       "canonical_callable": "RelativeStrengthIndex",
@@ -649,14 +649,14 @@
     },
     {
       "id": "IV-001",
-      "name": "Implied Volatility Solver \u2014 Round-Trip Recovery",
+      "name": "Implied Volatility Solver — Round-Trip Recovery",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/solver.py",
       "canonical_callable": "implied_volatility",
       "reference": {
         "kind": "hand_computed",
-        "oracle": "sigma_known \u2014 BSM pricing formula generates market_price; solver must recover sigma_known",
-        "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) \u00a719.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives \u00a74."
+        "oracle": "sigma_known — BSM pricing formula generates market_price; solver must recover sigma_known",
+        "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) §19.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives §4."
       },
       "market_input": {
         "source": "synthetic",
@@ -689,7 +689,7 @@
     },
     {
       "id": "IV-002",
-      "name": "SVI Total Variance Surface \u2014 Gatheral Raw Parameterisation",
+      "name": "SVI Total Variance Surface — Gatheral Raw Parameterisation",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/fitting.py",
       "canonical_callable": "fit_svi",
@@ -729,7 +729,7 @@
     },
     {
       "id": "IV-003",
-      "name": "IV30 Constant-Maturity \u2014 Variance-Time Interpolation",
+      "name": "IV30 Constant-Maturity — Variance-Time Interpolation",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
       "canonical_callable": "vix_style_iv30",
@@ -809,7 +809,7 @@
     },
     {
       "id": "RV-002",
-      "name": "HF Two-Component Realized Volatility \u2014 ABDL (window=3 days, ETH)",
+      "name": "HF Two-Component Realized Volatility — ABDL (window=3 days, ETH)",
       "category": "realized-volatility",
       "canonical_module": "PythonDataService/app/engine/edge/features_realtime/hf_realized_vol.py",
       "canonical_callable": "hf_realized_vol_trd252",
@@ -849,7 +849,7 @@
     },
     {
       "id": "RV-004",
-      "name": "Model-Free Variance Replication \u2014 CBOE VIX 2019 Formula",
+      "name": "Model-Free Variance Replication — CBOE VIX 2019 Formula",
       "category": "realized-volatility",
       "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
       "canonical_callable": "replicate_expiry_variance",
@@ -995,7 +995,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "justification": "Initial fixture — Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
@@ -1037,7 +1037,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "justification": "Initial fixture — Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "73c16d4b565de82de5d49eed5a62b44d5f8f205e49dd745431a99cd7308a9c5a",
@@ -1079,7 +1079,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "justification": "Initial fixture — Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "43d5af3d86f030fb251438cfc46041d3d73a4aba1d695856abf8c0e074968524",
@@ -1121,7 +1121,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system. Oracle corrected to ddof=1 to match canonical pandas std().",
+          "justification": "Initial fixture — Phase 3 golden fixture system. Oracle corrected to ddof=1 to match canonical pandas std().",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "62a703e6a8dcc50cb24359537d713bc3aca7e82b1d6bed81472a2be487fc3e1c",
@@ -1163,7 +1163,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "justification": "Initial fixture — Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "70aa7cd04aa1bc2f10f343e7265da135337ef0ece59eabb7183c4ef9ca25ddbb",
@@ -1205,7 +1205,7 @@
           "input": "input.arrow",
           "output": "output.arrow",
           "generated": "2026-05-08",
-          "justification": "Initial fixture \u2014 Phase 3 golden fixture system",
+          "justification": "Initial fixture — Phase 3 golden fixture system",
           "attribution": "attribution.md",
           "content_sha256": {
             "input.arrow": "a03cf8af86dbc3673e0486273504425f379f6496f6d73d8f654272cdfed86b2e",
@@ -1221,14 +1221,14 @@
     },
     {
       "id": "OPT-IB-002",
-      "name": "Implied Volatility \u2014 IBKR Reported vs Newton-Raphson/Brent BSM Solver",
+      "name": "IBKR Reported IV vs NR/Brent BSM Solver",
       "category": "options-pricing",
       "canonical_module": "PythonDataService/app/volatility/solver.py",
       "canonical_callable": "implied_volatility",
       "reference": {
         "kind": "vendor_observed",
-        "oracle": "Interactive Brokers TWS API modelGreeks.impliedVol (reqMktData genericTick 225)",
-        "citation": "IBKR TWS API snapshot; capture script: scripts/capture_ibkr_snapshot.py"
+        "oracle": "Interactive Brokers TWS API modelGreeks.impliedVol (standard option market-data request)",
+        "citation": "IBKR TWS API snapshot; capture script: scripts/capture_ibkr_snapshot.py; oracle price: modelGreeks.optPrice"
       },
       "market_input": {
         "source": "vendored",
@@ -1239,7 +1239,7 @@
       "tolerance": {
         "atol": 0.001,
         "rtol": 0.0,
-        "note": "IBKR and our solver both invert BSM against the same mid-price. 1e-3 (0.1 vol) accounts for IBKR proprietary model adjustments (discrete dividends, calibration) vs our pure continuous-dividend BSM. Contracts with bid < $0.05 or IBKR IV outside [0.05, 2.0] excluded at capture."
+        "note": "Both IBKR and our solver invert BSM against modelGreeks.optPrice (the IBKR model price). 1e-3 (0.1 vol) accounts for IBKR proprietary model adjustments (discrete dividends, calibration) vs our pure continuous-dividend BSM. Contracts with bid < 0.05, ask <= 0, or crossed quotes excluded at capture."
       },
       "active_version": 1,
       "versions": {},
