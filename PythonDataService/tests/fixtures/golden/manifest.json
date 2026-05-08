@@ -10,7 +10,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -50,7 +50,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -90,7 +90,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -130,7 +130,7 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.gamma(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
@@ -170,14 +170,16 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.theta(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
         "vendor": null,
         "generated_by": "scripts/fixture_generators/bs_greeks_extended.py"
       },
-      "units": {"theta": "per_day"},
+      "units": {
+        "theta": "per_day"
+      },
       "tolerance": {
         "atol": 1e-10,
         "rtol": 0.0,
@@ -210,14 +212,16 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.vega(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
         "vendor": null,
         "generated_by": "scripts/fixture_generators/bs_greeks_extended.py"
       },
-      "units": {"vega": "per_one_vol"},
+      "units": {
+        "vega": "per_one_vol"
+      },
       "tolerance": {
         "atol": 1e-10,
         "rtol": 0.0,
@@ -250,14 +254,16 @@
       "reference": {
         "kind": "external_reference",
         "oracle": "py_vollib==1.0.1",
-        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+        "citation": "py_vollib.black_scholes.greeks.analytical.rho(flag='c', S, K, t, r, sigma). GPL-licensed \u2014 generation-only."
       },
       "market_input": {
         "source": "synthetic",
         "vendor": null,
         "generated_by": "scripts/fixture_generators/bs_greeks_extended.py"
       },
-      "units": {"rho": "per_one_rate"},
+      "units": {
+        "rho": "per_one_rate"
+      },
       "tolerance": {
         "atol": 1e-10,
         "rtol": 0.0,
@@ -290,7 +296,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + numpy.std(ddof=1), annualized by sqrt(252)",
-        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) §IV. Verified by hand for 3 synthetic 5-element cases."
+        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) \u00c2\u00a7IV. Verified by hand for 3 synthetic 5-element cases."
       },
       "market_input": {
         "source": "synthetic",
@@ -299,7 +305,7 @@
       },
       "units": null,
       "tolerance": {
-        "atol": 1e-9,
+        "atol": 1e-09,
         "rtol": 0.0,
         "note": "numpy vs pure-Python float64 on same formula. Observed max abs error < 1e-15."
       },
@@ -330,7 +336,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.mean + downside variance (all-N denominator)",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.3. Denominator: all-N (matches canonical _sortino convention)."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) \u00c2\u00a78.3. Denominator: all-N (matches canonical _sortino convention)."
       },
       "market_input": {
         "source": "synthetic",
@@ -339,7 +345,7 @@
       },
       "units": null,
       "tolerance": {
-        "atol": 1e-9,
+        "atol": 1e-09,
         "rtol": 0.0,
         "note": "numpy vs pure-Python float64 on same formula. Observed max abs error < 1e-15."
       },
@@ -370,7 +376,7 @@
       "reference": {
         "kind": "hand_computed",
         "oracle": "numpy.maximum.accumulate + vectorized fraction (running_max - equity) / running_max",
-        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.2."
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) \u00c2\u00a78.2."
       },
       "market_input": {
         "source": "synthetic",
@@ -379,7 +385,7 @@
       },
       "units": null,
       "tolerance": {
-        "atol": 1e-9,
+        "atol": 1e-09,
         "rtol": 0.0,
         "note": "numpy accumulate vs pure-Python loop. Observed max abs error < 1e-16."
       },
@@ -459,7 +465,7 @@
       },
       "units": null,
       "tolerance": {
-        "atol": 1e-9,
+        "atol": 1e-09,
         "rtol": 0.0,
         "note": "numpy power vs pure-Python **. Observed max abs error < 1e-15."
       },
@@ -499,7 +505,7 @@
       },
       "units": null,
       "tolerance": {
-        "atol": 1e-9,
+        "atol": 1e-09,
         "rtol": 0.0,
         "note": "Composed from ENG-002 and ENG-004 numpy paths."
       },
@@ -539,7 +545,7 @@
       },
       "units": null,
       "tolerance": {
-        "atol": 1e-9,
+        "atol": 1e-09,
         "rtol": 0.0,
         "note": "Both oracle and canonical use the same formula; Decimal vs float64. Error < 1e-12."
       },
@@ -579,7 +585,7 @@
       },
       "units": null,
       "tolerance": {
-        "atol": 1e-9,
+        "atol": 1e-09,
         "rtol": 0.0,
         "note": "Decimal vs float64 on same formula. Error < 1e-12."
       },
@@ -603,7 +609,7 @@
     },
     {
       "id": "IND-003",
-      "name": "RSI — Relative Strength Index (period=3, Wilder's smoothing)",
+      "name": "RSI \u2014 Relative Strength Index (period=3, Wilder's smoothing)",
       "category": "indicators",
       "canonical_module": "PythonDataService/app/engine/indicators/rsi.py",
       "canonical_callable": "RelativeStrengthIndex",
@@ -619,7 +625,7 @@
       },
       "units": null,
       "tolerance": {
-        "atol": 1e-9,
+        "atol": 1e-09,
         "rtol": 0.0,
         "note": "Decimal (canonical) vs float64 (oracle) Wilder smoothing. Error < 1e-10."
       },
@@ -636,6 +642,326 @@
           "file_sha256": {
             "input.arrow": "7e9925b83bcaaecb77ed9027dd272013b35c2a9ae129efad5be713fe9be3573e",
             "output.arrow": "c89ae2c215cbdbcf77f51cb5cfd61ba4d63a0d8e7bfc231921dd66d2f7f05dd1"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "IV-001",
+      "name": "Implied Volatility Solver \u2014 Round-Trip Recovery",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/volatility/solver.py",
+      "canonical_callable": "implied_volatility",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "sigma_known \u2014 BSM pricing formula generates market_price; solver must recover sigma_known",
+        "citation": "Hull, J. (2022) Options, Futures, and Other Derivatives (11e) \u00c2\u00a719.11; Brent, R. (1973) Algorithms for Minimization Without Derivatives \u00c2\u00a74."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/volatility.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-06,
+        "rtol": 0.0,
+        "note": "Solver convergence criterion is 1e-7 (Newton-Raphson) / 1e-10 (Brent); 1e-6 provides one order of headroom."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "e5a212146c9ed66ca48815d7379e1e307ca5bfc67b39d4dfa2d295df13fb52d7",
+            "output.arrow": "d1adc6ef176cd026117acaf5ed13a6b11b1f31aebce4157e36029b4cbaa24cc5"
+          },
+          "file_sha256": {
+            "input.arrow": "f47c470aa84afab288f5df46a493641fc87d08fcaae15b5d8d89a1a92aff3ee2",
+            "output.arrow": "193792efac318749c48d2586be607277e45d72e833f0c6cae1897ba79fef8b27"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "IV-002",
+      "name": "SVI Total Variance Surface \u2014 Gatheral Raw Parameterisation",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/volatility/fitting.py",
+      "canonical_callable": "fit_svi",
+      "reference": {
+        "kind": "literature_formula",
+        "oracle": "Gatheral (2004) SVI formula w(k)=a+b(rho*(k-m)+sqrt((k-m)^2+sigma^2)) applied directly",
+        "citation": "Gatheral, J. (2004). A parsimonious arbitrage-free implied volatility parameterization with application to the valuation of volatility derivatives. Presentation at Global Derivatives & Risk Management 2004."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/volatility.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-06,
+        "rtol": 0.0,
+        "note": "scipy least_squares converges to ~1e-7 residuals on noiseless SVI input; 1e-6 provides one order of headroom."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "eea965438cdae196ae7b35cf05632bcbd2a98b4c22ad83c844a68384d620ee20",
+            "output.arrow": "d5e3a18ae6dc772ea832cf215ac854841db0639fa492a07142be1f4e9fe839fe"
+          },
+          "file_sha256": {
+            "input.arrow": "8de355055c315d765fdffff4ad3439e369c2a1ad8953fc55a6481633e48bb7fc",
+            "output.arrow": "fc72c31a43ae8b5b2c32587636bfe2634f7ec46bb318bbe6d839366e52660841"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "IV-003",
+      "name": "IV30 Constant-Maturity \u2014 Variance-Time Interpolation",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
+      "canonical_callable": "vix_style_iv30",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "CBOE per-expiry formula + variance-time interpolation in Python (independent of canonical)",
+        "citation": "CBOE VIX 2019 whitepaper 'VIX Index Calculation: Step-by-Step'; Demeterfi, Derman, Kamal, Zou (1999) Goldman Sachs Quantitative Strategies Research Notes."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/volatility.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-06,
+        "rtol": 0.0,
+        "note": "Oracle and canonical implement identical arithmetic; observed discrepancy < 1e-12. 1e-6 provides headroom for any platform variance in transcendental functions."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "d685551dffdf3d519dbd5cd0e54e555ec63e629cae27c26972327679530cc6eb",
+            "output.arrow": "2fc38ead62ca16099fb5954933349882dd0c47e1d630bbda5d8459c6bcb61ce6"
+          },
+          "file_sha256": {
+            "input.arrow": "6b1a12d6f80a48508f53639714c873f137ac5fb827c2a1d01c391c5ac3da07ae",
+            "output.arrow": "5ff32489eb87ee1e07f7657adb6caa9784e57597d637a1ee7c1b963c25754794"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "IV-004",
+      "name": "IV Rank Rolling 60-Day Window",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/research/features/options_features.py",
+      "canonical_callable": "OptionsFeatures.compute_iv_rank",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "Pure-Python rolling (iv-min)/(max-min) loop; pre-warmup bars return 0.5 matching np.where(NaN>1e-10) behavior",
+        "citation": "Market practitioners; no standard citation"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/volatility.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Oracle and canonical apply identical arithmetic; pre-warmup bars return 0.5 (not NaN) from np.where semantics."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "5f6ae058deb5f88e16270e2681e831ea5241b16c2c85c0312cc2174f45cfb3a4",
+            "output.arrow": "8b687b6a663c42901bf545b655e1bf3b35ba489a246bdffe3d4660391229ae94"
+          },
+          "file_sha256": {
+            "input.arrow": "b16de153c09bfd812d03c2b2d4654b122326f639815a206e5561e8f8fc2dc7b5",
+            "output.arrow": "70cc08a771c1298df5baadf574a731182fc94296912e078baf0a5300f6310b8a"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "RV-002",
+      "name": "HF Two-Component Realized Volatility \u2014 ABDL (window=3 days, ETH)",
+      "category": "realized-volatility",
+      "canonical_module": "PythonDataService/app/engine/edge/features_realtime/hf_realized_vol.py",
+      "canonical_callable": "hf_realized_vol_trd252",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "pure-Python per-day ABDL formula (intra-sq + overnight-sq, rolling sum annualized)",
+        "citation": "Andersen, T.G., Bollerslev, T., Diebold, F.X., Labys, P. (2003). Modeling and Forecasting Realized Volatility. Econometrica 71(2); Barndorff-Nielsen, O.E. & Shephard, N. (2002) two-component estimator."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/volatility.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-08,
+        "rtol": 0.0,
+        "note": "Oracle uses math.log; canonical uses np.log. Float64 accumulation over 4 bars/day produces < 1e-13 discrepancy; 1e-8 provides five orders of headroom."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "86a72090b7ba91391c65e996782e2acce654f91d4bb001317b04b5aa31d78de8",
+            "output.arrow": "f437cad622c948f24b9506bb917200adc9e1c9f5e812665d155164980de77fd1"
+          },
+          "file_sha256": {
+            "input.arrow": "9129cdfad592c760e2099c811ff953eb7296ee29c646f7126b70c2703810b9e9",
+            "output.arrow": "114a8f84bbe25ced00d10e2d0c127b3728765a684409a643402580fa10442276"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "RV-004",
+      "name": "Model-Free Variance Replication \u2014 CBOE VIX 2019 Formula",
+      "category": "realized-volatility",
+      "canonical_module": "PythonDataService/app/volatility/vix_replication.py",
+      "canonical_callable": "replicate_expiry_variance",
+      "reference": {
+        "kind": "literature_formula",
+        "oracle": "CBOE VIX 2019 whitepaper formula in pure Python (independent of canonical)",
+        "citation": "CBOE VIX 2019 whitepaper 'VIX Index Calculation: Step-by-Step'; Demeterfi, Derman, Kamal, Zou (1999) Goldman Sachs Quantitative Strategies Research Notes."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/volatility.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-06,
+        "rtol": 0.0,
+        "note": "BSM-priced chains have no bid-ask noise; sigma^2(T) deviates from BSM model only through strike discretization. 1e-6 is deliberately loose to accommodate 5-7 strike chains."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "05641a69b723881b5fe0553f79edb7b7404c098910f6819b611b53e9b3ac385e",
+            "output.arrow": "c07078a68f8f20974e4bfb705f6416015de7108a86af9bd3f31a5f79189c266c"
+          },
+          "file_sha256": {
+            "input.arrow": "e10a577758b9218108dfd1cb4703fb02a48ee8c993eab4a264d7e1684ff638bc",
+            "output.arrow": "fc191b1f5feaeddc679fc19c033dc2aaded6dee83da138fd310c6e1a1b287fc6"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "RV-001",
+      "name": "Close-to-Close Realized Volatility",
+      "category": "realized-volatility",
+      "canonical_module": "PythonDataService/app/engine/edge/features_realtime/realized_vol.py",
+      "canonical_callable": "close_to_close",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "Pure-Python rolling var(log_ret, ddof=1)*252; requires full window of non-NaN returns",
+        "citation": "Parkinson (1980); standard close-to-close estimator"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/volatility.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Oracle and canonical use identical ddof=1 variance on same float64 data; max abs error < 1e-15."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "b4f256b4dc90f351f216692f8c637ad6cd60254d2086752a887c2324e8a7e7c6",
+            "output.arrow": "c55aea04b21e9158e9eca49e13605b1d3aeef214c17ce78d11475ba63c11278f"
+          },
+          "file_sha256": {
+            "input.arrow": "167021f8bbaab2fba1dbf6760155dbc41a24e401154bd7b357d4abea105c5b3b",
+            "output.arrow": "76f7bef06836026eef660336941e8926009901ce575f8747e23c51998cfd0ea0"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "RV-003",
+      "name": "IV-RV Basis Conversion (ACT/365 to TRD/252)",
+      "category": "realized-volatility",
+      "canonical_module": "PythonDataService/app/volatility/basis.py",
+      "canonical_callable": "convert_iv_act365_to_trading252",
+      "reference": {
+        "kind": "literature_formula",
+        "oracle": "sigma_TRD252=sigma_ACT365 * sqrt(D*252/(365*N)) with N from NYSE calendar (ET-date aligned)",
+        "citation": "Practitioner convention; variance accrues only on trading days"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/volatility.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Oracle uses identical formula via same ET-date alignment as canonical; N pinned for traceability."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "4148db152f8fe98129e2477ee1044f40b1ef31a65a02b0ea5ab1d764c2f88e46",
+            "output.arrow": "bbcbd549d27776238148486e2a4ff9ceebeff3ee448428c6a3e7a71fb70d2b4e"
+          },
+          "file_sha256": {
+            "input.arrow": "a8819919f00e0f2e0929f5eeec64ca06614292547e1fc5b9f9955db321701711",
+            "output.arrow": "67ae79c043fe140222c4f83798bd6bbbe1d3f679cf71b2619e5eb2d2aeb9ea17"
           }
         }
       },

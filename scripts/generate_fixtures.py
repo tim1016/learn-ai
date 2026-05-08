@@ -188,6 +188,7 @@ def _get_category(fixture_id: str, manifest: dict) -> str:
         "svi": "options-pricing",
         "eng": "engine-statistics",
         "ind": "indicators",
+        "rv": "realized-volatility",
     }.get(prefix, "unknown")
 
 
@@ -275,6 +276,46 @@ def _ind003_generator(version_dir: Path, justification: str = "") -> None:
     generate_ind003(version_dir, justification=justification)
 
 
+def _iv001_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.volatility import generate_iv001
+    generate_iv001(version_dir, justification=justification)
+
+
+def _iv002_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.volatility import generate_iv002
+    generate_iv002(version_dir, justification=justification)
+
+
+def _iv003_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.volatility import generate_iv003
+    generate_iv003(version_dir, justification=justification)
+
+
+def _iv004_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.volatility import generate_iv004
+    generate_iv004(version_dir, justification=justification)
+
+
+def _rv001_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.volatility import generate_rv001
+    generate_rv001(version_dir, justification=justification)
+
+
+def _rv002_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.volatility import generate_rv002
+    generate_rv002(version_dir, justification=justification)
+
+
+def _rv003_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.volatility import generate_rv003
+    generate_rv003(version_dir, justification=justification)
+
+
+def _rv004_generator(version_dir: Path, justification: str = "") -> None:
+    from fixture_generators.volatility import generate_rv004
+    generate_rv004(version_dir, justification=justification)
+
+
 FIXTURE_GENERATORS: dict[str, object] = {
     "BS-001": _bs001_generator,
     "BS-002": _bs002_generator,
@@ -292,6 +333,14 @@ FIXTURE_GENERATORS: dict[str, object] = {
     "IND-001": _ind001_generator,
     "IND-002": _ind002_generator,
     "IND-003": _ind003_generator,
+    "IV-001": _iv001_generator,
+    "IV-002": _iv002_generator,
+    "IV-003": _iv003_generator,
+    "IV-004": _iv004_generator,
+    "RV-001": _rv001_generator,
+    "RV-002": _rv002_generator,
+    "RV-003": _rv003_generator,
+    "RV-004": _rv004_generator,
 }
 
 
