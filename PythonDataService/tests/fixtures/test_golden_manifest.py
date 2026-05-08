@@ -167,3 +167,129 @@ def test_schema_version_is_1() -> None:
         f"Expected schema_version=1, got {data.get('schema_version')}. "
         "Bump this test if the schema version intentionally advances."
     )
+
+
+def test_file_hashes_match_disk() -> None:
+    """file_sha256 values in the manifest must match the actual bytes on disk.
+
+    This catches any fixture file that was modified after the manifest was
+    written (silent edit, accidental overwrite, or regeneration without a
+    manifest update).
+    """
+    import sys
+
+    sys.path.insert(0, str(FIXTURES_DIR))
+    from golden_support.hashing import file_sha256 as compute_file_sha256
+    from golden_support.registry import Registry
+
+    reg = Registry(MANIFEST_PATH)
+    mismatches: list[str] = []
+    for fixture in reg.all():
+        if fixture.status in ("planned", "deprecated"):
+            continue
+        files = fixture.active_files
+        if files is None:
+            continue
+        fixture_dir = reg.fixture_dir(fixture.id)
+        for fname, expected in files.file_sha256.items():
+            path = fixture_dir / fname
+            if not path.exists():
+                continue  # already caught by test_active_fixture_files_exist
+            actual = compute_file_sha256(path)
+            if actual != expected:
+                mismatches.append(
+                    f"{fixture.id} v{fixture.active_version} {fname!r}: "
+                    f"manifest={expected[:16]}…, disk={actual[:16]}…"
+                )
+    assert not mismatches, (
+        "file_sha256 mismatches — fixture files modified after manifest was written:\n"
+        + "\n".join(mismatches)
+    )
+
+
+def test_content_hashes_match_disk() -> None:
+    """content_sha256 values in the manifest must match the normalized content on disk.
+
+    content_sha256 is the canonical identity of the fixture data (Arrow columns
+    sorted, dtypes normalized). This catches logical data changes even if the raw
+    file bytes differ due to re-serialization.
+    """
+    import sys
+
+    sys.path.insert(0, str(FIXTURES_DIR))
+    from golden_support.hashing import compute_hashes
+    from golden_support.registry import Registry
+
+    reg = Registry(MANIFEST_PATH)
+    mismatches: list[str] = []
+    for fixture in reg.all():
+        if fixture.status in ("planned", "deprecated"):
+            continue
+        files = fixture.active_files
+        if files is None:
+            continue
+        fixture_dir = reg.fixture_dir(fixture.id)
+        # Compute content hashes only for files that exist and are in the manifest dict
+        covered = [
+            fname
+            for fname in files.content_sha256
+            if (fixture_dir / fname).exists()
+        ]
+        if not covered:
+            continue
+        content_hashes, _ = compute_hashes(fixture_dir, covered)
+        for fname, actual in content_hashes.items():
+            expected = files.content_sha256[fname]
+            if actual != expected:
+                mismatches.append(
+                    f"{fixture.id} v{fixture.active_version} {fname!r}: "
+                    f"manifest={expected[:16]}…, disk={actual[:16]}…"
+                )
+    assert not mismatches, (
+        "content_sha256 mismatches — fixture data changed without a manifest update:\n"
+        + "\n".join(mismatches)
+    )
+
+
+def test_attribution_hashes_match_disk() -> None:
+    """When attribution files are covered by file_sha256, hashes must match disk.
+
+    attribution.md files are not required to be hashed (legacy fixtures predate
+    this enforcement), but any fixture that includes the attribution filename in
+    file_sha256 must have a hash that matches the actual file.
+
+    New fixtures should include attribution.md in file_sha256 to prevent silent
+    modifications to the audit trail.
+    """
+    import sys
+
+    sys.path.insert(0, str(FIXTURES_DIR))
+    from golden_support.hashing import file_sha256 as compute_file_sha256
+    from golden_support.registry import Registry
+
+    reg = Registry(MANIFEST_PATH)
+    mismatches: list[str] = []
+    for fixture in reg.all():
+        if fixture.status in ("planned", "deprecated"):
+            continue
+        files = fixture.active_files
+        if files is None:
+            continue
+        fixture_dir = reg.fixture_dir(fixture.id)
+        attribution_fname = files.attribution
+        expected = files.file_sha256.get(attribution_fname)
+        if expected is None:
+            continue  # not yet hashed — not enforced for legacy fixtures
+        path = fixture_dir / attribution_fname
+        if not path.exists():
+            continue  # already caught by test_active_fixture_files_exist
+        actual = compute_file_sha256(path)
+        if actual != expected:
+            mismatches.append(
+                f"{fixture.id} v{fixture.active_version} {attribution_fname!r}: "
+                f"manifest={expected[:16]}…, disk={actual[:16]}…"
+            )
+    assert not mismatches, (
+        "attribution file_sha256 mismatches — attribution.md modified after manifest was written:\n"
+        + "\n".join(mismatches)
+    )

@@ -1,73 +1,69 @@
 ---
 id: F-0026
-severity: P1
-status: deferred
+severity: P2
+status: partially_resolved
 area: fixture
 canonical_file: PythonDataService/tests/fixtures/golden/
 reference: .claude/rules/numerical-rigor.md (Golden fixtures); docs/math-sources-of-truth.md
 first_seen: 2026-05-06
-last_seen: 2026-05-06
+last_seen: 2026-05-08
 phase: 5
 ---
 
 ## What
 
-`PythonDataService/tests/fixtures/golden/` contains exactly **3 fixture directories**:
+**Original finding (2026-05-06):** The golden fixture directory contained only 3 directories. The overwhelming majority of canonical math had no golden fixture under `tests/fixtures/golden/`.
+
+**Current state (2026-05-08):** The manifest now governs **31 active fixtures** across 7 categories (`options-pricing`, `engine-statistics`, `indicators`, `realized-volatility`, `options-pricing`, `research-primitives`, `indicator-reliability`). Programmatic parity tests (`test_indicator_parity.py`) remain outside the golden-fixture system, but the fixture catalog is substantially built out.
+
+## Remaining gaps
+
+### 1. Three legacy directories are outside manifest governance
 
 ```
 tests/fixtures/golden/bs-price-cross-engine/   { attribution.md, cases.json }
-tests/fixtures/golden/iv30/                    { spy-2024-12-20-chain.meta.json, *.parquet }
 tests/fixtures/golden/portfolio-scenario-3leg/ { attribution.md, cases.json }
+tests/fixtures/golden/iv30/                    { spy-2024-12-20-chain.meta.json, *.parquet }
 ```
 
-`docs/math-sources-of-truth.md` lists **dozens** of canonical math concepts. Cross-checking the registry against the fixture directory shows that the overwhelming majority of canonical math has **no golden fixture under `tests/fixtures/golden/`**. Per `.claude/rules/numerical-rigor.md`: "Every port from a reference source ships with (a) a golden fixture test, (b) a `docs/references/` note, (c) the tolerance used and why."
+These predate the manifest system and have never been registered. The `manifest.json` API reads only `manifest.json`; these directories are invisible to the catalog and the UI.
 
-## Where
+- `bs-price-cross-engine` and `portfolio-scenario-3leg` are live-parity fixtures with no stored output — both engines compute at runtime. They do not fit the golden-fixture schema (which requires stored `output.arrow`). These should be explicitly documented in `README.md` as "live-parity directories" and excluded from manifest governance by design.
+- `iv30/` holds a real Polygon market-data parquet snapshot used by `test_vix_replication.py`. It is missing an `attribution.md`. It could either be registered in the manifest (if converted to Arrow format) or documented in `README.md` as a "vendor market-data fixture" outside manifest governance.
 
-### Concepts with NO fixture (sample, not exhaustive)
+### 2. Hash governance does not cover attribution files
 
-- **Indicators (LEAN-ported):** SMA, EMA, RSI (Wilders), MACD, Bollinger Bands, ADX, Supertrend
-  - Registry says `Validated against: PythonDataService/tests/test_indicator_parity.py`. That test exists but produces parity *programmatically* (not via fixture). No `tests/fixtures/golden/sma_*/` etc.
-- **Greeks cross-engine parity** (registry: `pending-fixture`)
-- **IV solver cross-engine parity** (registry: `pending-fixture`)
-- **IV term-structure interpolation** (registry: `pending-fixture`)
-- **Bar consolidation, event replay, fill models** (registry: `pending-migration` with no fixture pointer)
-- **Max drawdown, Sharpe ratio** (registry: `pending-migration` with `Backend.Tests` only)
-- **Strategies:** SPY EMA Crossover, SPY ORB, RSI Mean Reversion, SMA Crossover (none have a fixture under `tests/fixtures/golden/`; tests call into the engine directly)
-- **Trade divergence** (registry: `pending-fixture`)
-- **Dividend adjustment** (registry: `pending-fixture` + reference is "CRSP placeholder")
+The `content_sha256` and `file_sha256` dicts in each manifest entry cover `input.arrow` and `output.arrow` but not `attribution.md`. An attribution file can be silently modified without the manifest detecting it. No test catches this.
 
-### Concepts with fixture but missing attribution
+No test in `test_golden_manifest.py` recomputes file hashes and compares them against the manifest — the existing hash validation (`test_hash_fields_are_valid_hex`) only checks that stored values are valid hex strings. A modified fixture file would not be caught by CI.
 
-- **`iv30/`** — has `meta.json` and `.parquet` but no `attribution.md`. Per `.claude/rules/numerical-rigor.md` → Golden fixtures → Required contents: each fixture must include reference source, generation date, command used to regenerate, and parameters.
+### 3. Programmatic parity tests remain outside the golden-fixture pattern
+
+`test_indicator_parity.py` asserts parity programmatically (no stored reference output). Per `.claude/rules/numerical-rigor.md`, full equivalence proof requires a stored golden fixture with attributed reference output. These indicators (SMA, EMA, RSI, MACD, etc.) remain under `pending-fixture` debt. Burn down on touch per the legacy-debt rule.
+
+### 4. Remaining `pending-fixture` rows in `docs/math-sources-of-truth.md`
+
+Several canonical math concepts still lack any fixture or parity test:
+- Bar consolidation, event replay, fill models
+- Dividend adjustment (reference: "CRSP placeholder")
+- Strategy-level golden fixtures (SPY EMA Crossover, ORB, etc.)
 
 ## Why this severity
 
-P1 — The Math Provenance Contract requires golden fixtures for ported math. The registry already openly tracks 5 `pending-fixture` rows. The actual coverage is worse: **most canonical implementations** (indicators, strategies, statistics) have no fixture at all, even when the registry doesn't flag them as `pending-fixture`. The registry implies "validated against test X" but those tests don't follow the golden-fixture pattern — they assert programmatically.
+Downgraded to P2 (was P1) because:
+- The manifest system is now built and governs 31 active fixtures
+- The remaining gaps are documentation/governance gaps, not a missing fixture system
+- The programmatic parity tests likely cover the math correctly even without stored fixtures
+- The hash-recompute gap is a new sub-finding that can be addressed independently
 
-This is the **largest single finding** in the baseline by remediation cost. Building golden fixtures for every canonical math is weeks of work. Closing it is a precondition for the §6 hardening gate.
+## Suggested resolution
 
-Bumping to P0 is defensible because the registry says some canonicals are NOT pending-fixture (e.g., SMA, EMA, RSI marked "canonical") but on inspection they have no fixture either. That is the registry lying about a fixture that doesn't exist — the Phase-5 P0 trigger.
-
-I'm holding at P1 because the underlying parity tests (`test_indicator_parity.py`) likely cover the math correctly even without a fixture file on disk; the *contract* failure is documentation, not correctness. A human should rule on whether to escalate.
-
-## Reproduction
-
-```
-ls PythonDataService/tests/fixtures/golden/
-# Compare to canonical-math rows in:
-grep -E '^\| [A-Z]' docs/math-sources-of-truth.md
-```
-
-## Suggested resolution (NOT auto-applied)
-
-This is a **multi-week remediation**, not a one-PR fix. Recommended sequencing:
-
-1. **Add `attribution.md` to `iv30/`** (immediate; trivial).
-2. **Audit `test_indicator_parity.py`** — confirm whether it loads golden fixtures or computes parity programmatically. If the latter, decide whether the parity-test pattern is "fixture-equivalent" (and update the registry's "fixture" requirement to reflect that), or whether to backfill golden fixtures.
-3. **Backfill golden fixtures one canonical at a time on touch** (consistent with the registry's "Legacy-debt burn-down rule (not a backfill mandate)" — don't open one PR that creates 30 fixtures, accept the debt and burn it down as files are touched).
-4. **For each `pending-fixture` registry row, write a follow-up issue** (or finding doc) with the specific reference source, generation command, and target tolerance. The `pending-fixture` status without any of those metadata is itself thin.
+1. **Immediate:** Document `bs-price-cross-engine` and `portfolio-scenario-3leg` in `README.md` as live-parity directories excluded from manifest governance by design. Add `attribution.md` to `iv30/` and document it similarly.
+2. **Immediate:** Add a `test_file_hashes_match_disk()` test to `test_golden_manifest.py` that recomputes `file_sha256` for each active fixture and compares against the manifest. Add a parallel `test_content_hashes_match_disk()` test.
+3. **Immediate:** Add a test that validates attribution file hashes when present in the manifest (forward-looking enforcement for new fixtures).
+4. **Burn-down:** Add golden fixtures for indicator parity on touch. Do not batch-create 30 fixtures in one PR.
+5. **Burn-down:** Address each `pending-fixture` registry row as the corresponding canonical is touched.
 
 ## Provenance of the finding itself
 
-Phase 5 / cursor: `Glob("PythonDataService/tests/fixtures/golden/**/*")` returned 6 paths in 3 directories. Cross-checked against the dozens of canonical-math rows in `docs/math-sources-of-truth.md`.
+Phase 5 / cursor: `Glob("PythonDataService/tests/fixtures/golden/**/*")` returned 6 paths in 3 directories (2026-05-06). Updated 2026-05-08 after manifest system was built out to 31 active fixtures.
