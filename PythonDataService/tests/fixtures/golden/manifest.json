@@ -1239,7 +1239,7 @@
       "tolerance": {
         "atol": 0.001,
         "rtol": 0.0,
-        "note": "Both IBKR and our solver invert BSM against modelGreeks.optPrice (the IBKR model price). 1e-3 (0.1 vol) accounts for IBKR proprietary model adjustments (discrete dividends, calibration) vs our pure continuous-dividend BSM. Contracts with bid < 0.05, ask <= 0, or crossed quotes excluded at capture."
+        "note": "Both IBKR and our solver invert BSM against modelGreeks.optPrice (the IBKR model price). 1e-3 (0.001 absolute volatility, ≈0.1 vol points) accounts for IBKR proprietary model adjustments (discrete dividends, calibration) vs our pure continuous-dividend BSM. Contracts with bid < 0.05, ask <= 0, or crossed quotes excluded at capture."
       },
       "active_version": 1,
       "versions": {},

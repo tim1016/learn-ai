@@ -29,6 +29,7 @@ One row per option contract. Columns:
 | bid | float64 | Option bid |
 | ask | float64 | Option ask |
 | mid | float64 | (bid + ask) / 2 |
+| ibkr_model_price | float64 | IBKR modelGreeks.optPrice — the model price IBKR used to back out ibkr_iv |
 | ibkr_iv | float64 | IBKR modelGreeks implied volatility |
 | ttm_years | float64 | (expiry_ms - snapshot_ms) / (365.25 × 24 × 3600 × 1000) |
 | rate | float64 | Risk-free rate used (continuously compounded) |

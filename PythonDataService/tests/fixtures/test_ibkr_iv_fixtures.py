@@ -77,13 +77,13 @@ class TestOPTIB002IBKRImpliedVol:
             ttm = float(inp["ttm_years"][row].as_py())
             rate = float(inp["rate"][row].as_py())
             dividend = float(inp["dividend"][row].as_py())
-            mid = float(inp["mid"][row].as_py())
+            model_price = float(inp["ibkr_model_price"][row].as_py())
             is_call = bool(inp["is_call"][row].as_py())
             right = inp["right"][row].as_py()
             expiry_ms = inp["expiry_ms"][row].as_py()
 
             result = implied_volatility(
-                option_price=mid,
+                option_price=model_price,
                 spot=spot,
                 strike=strike,
                 ttm=ttm,
@@ -94,7 +94,7 @@ class TestOPTIB002IBKRImpliedVol:
             if result.status not in _OK_STATUSES:
                 failures.append(
                     f"row={row} {right} K={strike:.1f} expiry_ms={expiry_ms} "
-                    f"mid={mid:.4f} ttm={ttm:.4f}: status={result.status}"
+                    f"model_price={model_price:.4f} ttm={ttm:.4f}: status={result.status}"
                 )
 
         assert not failures, (
@@ -103,7 +103,7 @@ class TestOPTIB002IBKRImpliedVol:
         )
 
     def test_solver_iv_matches_ibkr_within_tolerance(self) -> None:
-        """Our solver IV must match IBKR-reported IV within atol=1e-3 (0.1 vol)."""
+        """Our solver IV must match IBKR-reported IV within atol=1e-3 (0.001 absolute vol)."""
         inp, out, atol, rtol = _load()
         mismatches: list[str] = []
         skipped = 0
@@ -114,13 +114,13 @@ class TestOPTIB002IBKRImpliedVol:
             ttm = float(inp["ttm_years"][row].as_py())
             rate = float(inp["rate"][row].as_py())
             dividend = float(inp["dividend"][row].as_py())
-            mid = float(inp["mid"][row].as_py())
+            model_price = float(inp["ibkr_model_price"][row].as_py())
             is_call = bool(inp["is_call"][row].as_py())
             right = inp["right"][row].as_py()
             oracle_iv = float(out["oracle_ibkr_iv"][row].as_py())
 
             result = implied_volatility(
-                option_price=mid,
+                option_price=model_price,
                 spot=spot,
                 strike=strike,
                 ttm=ttm,
@@ -162,8 +162,8 @@ class TestOPTIB002IBKRImpliedVol:
         bad = [t for t in ttms if t <= 0]
         assert not bad, f"Non-positive TTM values: {bad}"
 
-    def test_mid_positive(self) -> None:
+    def test_model_price_positive(self) -> None:
         inp, _out, _atol, _rtol = _load()
-        mids = inp["mid"].to_pylist()
-        bad = [m for m in mids if m <= 0]
-        assert not bad, f"Non-positive mid prices: {bad}"
+        model_prices = inp["ibkr_model_price"].to_pylist()
+        bad = [p for p in model_prices if p <= 0]
+        assert not bad, f"Non-positive ibkr_model_price values: {bad}"

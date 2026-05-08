@@ -181,11 +181,12 @@ output.arrow: {content_h['output.arrow']}
     )
 
     import json as _json
+    version_key = version_dir.name[1:] if version_dir.name.startswith("v") else "1"
     version_entry = {
         "content_sha256": content_h,
         "file_sha256": file_h,
     }
-    print("\nPaste into manifest.json OPT-IB-002 versions[\"1\"]:")
+    print(f"\nPaste into manifest.json OPT-IB-002 versions[\"{version_key}\"]:")
     print(_json.dumps(version_entry, indent=6))
 
     return version_entry
