@@ -252,6 +252,18 @@
                       }
                     </td>
                   }
+                  @case ('spark') {
+                    <td class="spark-cell">
+                      @if (s.totalTrades === 0) {
+                        <span class="mono" style="color: var(--text-muted); font-size: 10px;">—</span>
+                      } @else {
+                        <svg width="60" height="16" style="display: block;" aria-hidden="true">
+                          <line x1="0" y1="8" x2="60" y2="8" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="2 2" />
+                          <path [attr.d]="sparklinePath(s)" fill="none" [attr.stroke]="sparklineColor(s)" stroke-width="1.2" />
+                        </svg>
+                      }
+                    </td>
+                  }
                   @case ('notes') {
                     <td class="notes-cell" (click)="startEditNotes(s, $event)">
                       @if (editingNotesId() === s.id) {

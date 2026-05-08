@@ -523,6 +523,13 @@
   .pi { font-size: 8px; }
 }
 
+// ─── Sparkline cell ───────────────────────────────────
+.spark-cell {
+  width: 68px;
+  padding: 0 4px;
+  vertical-align: middle;
+}
+
 // ─── Grade badge ──────────────────────────────────────
 .grade-cell { text-align: center; }
 
