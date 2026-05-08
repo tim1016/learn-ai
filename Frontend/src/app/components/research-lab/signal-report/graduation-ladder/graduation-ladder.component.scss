@@ -5,6 +5,11 @@
   margin-bottom: 1.25rem;
 }
 
+@keyframes pulse-next {
+  0%, 100% { box-shadow: 0 0 0 0 rgba($accent, 0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba($accent, 0); }
+}
+
 .ladder-card {
   border-radius: 10px;
   background: $bg-surface;
@@ -73,7 +78,18 @@
   }
 
   &[data-state="future"] {
-    opacity: 0.55;
+    opacity: 0.4;
+  }
+
+  &[data-state="next"] {
+    opacity: 0.75;
+
+    .node-marker {
+      border-color: $accent;
+      background: rgba($accent, 0.1);
+      animation: pulse-next 1.6s ease-in-out infinite;
+      .node-stage { color: $accent; }
+    }
   }
 
   &[data-state="current"] {
@@ -333,5 +349,11 @@
     .advance-description {
       color: $text-muted;
     }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ladder-node[data-state="next"] .node-marker {
+    animation: none;
   }
 }
