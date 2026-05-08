@@ -60,6 +60,29 @@
     gap: 0.125rem;
   }
 
+  // Grade-letter variant (shown when a grade is available)
+  .ring-grade {
+    font-size: 1.5rem;
+    font-weight: 700;
+    font-family: $font-mono;
+    line-height: 1;
+    letter-spacing: -0.02em;
+
+    &[data-band="green"] { color: $bull; }
+    &[data-band="amber"] { color: $warn; }
+    &[data-band="red"]   { color: $bear; }
+    &[data-band="na"]    { color: $text-muted; }
+  }
+
+  .ring-score {
+    font-size: 0.625rem;
+    color: $text-muted;
+    font-family: $font-mono;
+    font-weight: 600;
+    margin-top: 0.125rem;
+  }
+
+  // Numeric fallback (shown when no letter grade)
   .ring-value {
     font-size: 1.875rem;
     font-weight: 700;

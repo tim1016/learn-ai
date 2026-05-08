@@ -15,8 +15,13 @@
           />
         </svg>
         <div class="ring-center">
-          <div class="ring-value">{{ rpt.composite }}</div>
-          <div class="ring-denom">/ 100</div>
+          @if (rpt.grade) {
+            <div class="ring-grade" [attr.data-band]="band()">{{ rpt.grade }}</div>
+            <div class="ring-score">{{ rpt.composite }}/100</div>
+          } @else {
+            <div class="ring-value">{{ rpt.composite }}</div>
+            <div class="ring-denom">/ 100</div>
+          }
         </div>
       } @else {
         <div class="score-empty">—</div>

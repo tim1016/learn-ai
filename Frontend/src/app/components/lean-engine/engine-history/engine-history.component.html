@@ -232,7 +232,7 @@
                   @case ('range')       { <td class="range-cell mono">{{ s.startDate }} → {{ s.endDate }}</td> }
                   @case ('totalPnl')    { <td class="num" [class]="pnlClass(s.totalPnL)">{{ formatCurrency(s.totalPnL) }}</td> }
                   @case ('cagr')        { <td class="num" [class]="pnlClass(s.compoundingAnnualReturn)">{{ formatPct(s.compoundingAnnualReturn) }}</td> }
-                  @case ('sharpe')      { <td class="num">{{ s.sharpeRatio.toFixed(3) }}</td> }
+                  @case ('sharpe')      { <td [class]="sharpeClass(s.sharpeRatio)">{{ s.sharpeRatio.toFixed(3) }}</td> }
                   @case ('sortino')     { <td class="num">{{ s.sortinoRatio.toFixed(3) }}</td> }
                   @case ('psr')         { <td class="num">{{ formatPct(s.probabilisticSharpeRatio) }}</td> }
                   @case ('maxDrawdown') { <td class="num negative">{{ formatPct(s.maxDrawdown) }}</td> }
