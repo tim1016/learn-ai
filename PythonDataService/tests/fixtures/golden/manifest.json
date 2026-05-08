@@ -1,4 +1,205 @@
 {
   "schema_version": 1,
-  "fixtures": []
+  "fixtures": [
+    {
+      "id": "BS-001",
+      "name": "Black-Scholes European Call Price",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/services/bs_greeks.py",
+      "canonical_callable": "bs_european_price",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "py_vollib==1.0.1",
+        "citation": "py_vollib.black_scholes.black_scholes(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/bs_price.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-10,
+        "rtol": 0.0,
+        "note": "Cross-library float64 comparison. Observed max abs error < 1e-14. Floor 1e-10 per conventions.py (1e-12 excluded: CI/dev platform divergence for transcendental functions)."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "c21493a6865a7ac7d65cefa05304a0262c67a1064b617c8e134123e4a138fa87",
+            "output.arrow": "6df11523fd6838401df4f23ee64fdfdc25e98ce767a3036c46852ff94729ae21"
+          },
+          "file_sha256": {
+            "input.arrow": "3f604803f6b0a5ed0c2d8fae46b85520151659786ecd1271e4818288df0607d3",
+            "output.arrow": "6093866ae76cb706095a1186c0d0d79488633d2477f317b72c40a2b319b1a6c5"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "BS-002",
+      "name": "Black-Scholes European Put Price",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/services/bs_greeks.py",
+      "canonical_callable": "bs_european_price",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "py_vollib==1.0.1",
+        "citation": "py_vollib.black_scholes.black_scholes(flag='p', S, K, t, r, sigma). GPL-licensed — generation-only."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/bs_price.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-10,
+        "rtol": 0.0,
+        "note": "Cross-library float64 comparison. Observed max abs error < 1e-14. Floor 1e-10 per conventions.py."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "7dbcd92eac0d0f4d1d06488cd92984dba4d908cbb28e5b8dda6a80721d97933b",
+            "output.arrow": "a1d43df5329d22289ac9efc3664591916ff1b9fb334c601a33aef17de0461e07"
+          },
+          "file_sha256": {
+            "input.arrow": "bce6786162efef68df363ad036d806b4abe3f30dfa145b3cb4ffc3f649e15e54",
+            "output.arrow": "7cbc678045b06d4e7ec75ac3abc4bc10a8731ec7c03309875dff5f03bc4522d7"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "BS-003",
+      "name": "Black-Scholes Call Delta",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/services/bs_greeks.py",
+      "canonical_callable": "black_scholes_greeks",
+      "reference": {
+        "kind": "external_reference",
+        "oracle": "py_vollib==1.0.1",
+        "citation": "py_vollib.black_scholes.greeks.analytical.delta(flag='c', S, K, t, r, sigma). GPL-licensed — generation-only."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/bs_greeks.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-10,
+        "rtol": 0.0,
+        "note": "Cross-library float64 comparison. Observed max abs delta error < 1e-15. Floor 1e-10 per conventions.py."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "c21493a6865a7ac7d65cefa05304a0262c67a1064b617c8e134123e4a138fa87",
+            "output.arrow": "e86c48cd3eaa6d4d5237fad771a6319ac1f5c8f9faaa2992c1e8ab0782ac08de"
+          },
+          "file_sha256": {
+            "input.arrow": "3f604803f6b0a5ed0c2d8fae46b85520151659786ecd1271e4818288df0607d3",
+            "output.arrow": "a4eba6a05bbe95c4c0aeb2e07e3286c7607c8353fb8c9e18ed63ded94e4fa629"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "ENG-001",
+      "name": "Sharpe Ratio (Daily Returns, Annualized)",
+      "category": "engine-statistics",
+      "canonical_module": "PythonDataService/app/engine/results/statistics.py",
+      "canonical_callable": "_sharpe",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "numpy.mean + numpy.std(ddof=1), annualized by sqrt(252)",
+        "citation": "Sharpe (1994), Journal of Portfolio Management 21(1) §IV. Verified by hand for 3 synthetic 5-element cases."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/engine_stats.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-9,
+        "rtol": 0.0,
+        "note": "numpy vs pure-Python float64 on same formula. Observed max abs error < 1e-15."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "1a274f007c7a64f71fd5da06deb60ce83431576816bcf1b4abcbd95b19d34932",
+            "output.arrow": "862d99069b93298ae899a386dd0a5f7aa9c678b85c4a8a2bdf07182b792f5f66"
+          },
+          "file_sha256": {
+            "input.arrow": "bfa7c019896856c9c48848a886b88f07b06b3d71aacf43a1bf0414051947ec13",
+            "output.arrow": "deddbb35ec70a95fe806720847916fea4ca7357cbfb04ffffcec8a8cee99f205"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
+      "id": "ENG-001b",
+      "name": "Sortino Ratio (Daily Returns, Annualized)",
+      "category": "engine-statistics",
+      "canonical_module": "PythonDataService/app/engine/results/statistics.py",
+      "canonical_callable": "_sortino",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "numpy.mean + downside variance (all-N denominator)",
+        "citation": "Bacon, Practical Portfolio Performance Measurement (2e) §8.3. Denominator: all-N (matches canonical _sortino convention)."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "scripts/fixture_generators/engine_stats.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-9,
+        "rtol": 0.0,
+        "note": "numpy vs pure-Python float64 on same formula. Observed max abs error < 1e-15."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.arrow",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "1a274f007c7a64f71fd5da06deb60ce83431576816bcf1b4abcbd95b19d34932",
+            "output.arrow": "74bd13efe18b30b402dc74ec594f32e8e1ad7363500bb0cf95d3a807564c59b4"
+          },
+          "file_sha256": {
+            "input.arrow": "bfa7c019896856c9c48848a886b88f07b06b3d71aacf43a1bf0414051947ec13",
+            "output.arrow": "f4d380030eb25f4bbf54b8f3014315aaee0a2e692bdefebfb271de3c7fd14ed0"
+          }
+        }
+      },
+      "status": "active"
+    }
+  ]
 }
