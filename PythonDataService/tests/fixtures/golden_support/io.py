@@ -10,12 +10,12 @@ Existing Parquet fixtures are left alone (additive, not migrative).
 from __future__ import annotations
 
 import json
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
-
 
 # ── Timestamp normalizer ──────────────────────────────────────────────────────
 
@@ -102,7 +102,7 @@ def _numeric_to_ms(value: int | float, precision: str) -> int:
 
 
 def _iso_string_to_ms(value: str) -> int:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     if not (value.endswith("Z") or "+00:00" in value or "+0000" in value):
         raise TimestampNormalizationError(
@@ -116,7 +116,7 @@ def _iso_string_to_ms(value: str) -> int:
         raise TimestampNormalizationError(f"Cannot parse ISO string {value!r}: {exc}") from exc
     if dt.tzinfo is None:
         raise TimestampNormalizationError(f"Parsed datetime has no tzinfo: {value!r}")
-    utc_dt = dt.astimezone(timezone.utc)
+    utc_dt = dt.astimezone(UTC)
     return int(utc_dt.timestamp() * 1000)
 
 

@@ -17,9 +17,8 @@ from __future__ import annotations
 
 from functools import cached_property
 from pathlib import Path
-from typing import Optional
 
-from .manifest import Fixture, FixtureFiles, Manifest, MANIFEST_PATH
+from .manifest import MANIFEST_PATH, Fixture, FixtureFiles, Manifest
 
 GOLDEN_ROOT = MANIFEST_PATH.parent
 
@@ -99,7 +98,7 @@ class Registry:
         Raises VersionFileNotFoundError if the file does not exist on disk.
         """
         files = self.active_files(fixture_id)
-        filename: Optional[str] = getattr(files, file_key, None)
+        filename: str | None = getattr(files, file_key, None)
         if filename is None:
             valid = ["input", "output", "attribution"]
             raise ValueError(

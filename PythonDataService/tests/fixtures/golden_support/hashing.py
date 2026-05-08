@@ -18,7 +18,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
 
 import pyarrow as pa
 import pyarrow.ipc as pa_ipc
@@ -125,7 +124,7 @@ def _hash_arrow_table(table: pa.Table) -> str:
             casted_arrays.append(col.cast(target))
         else:
             casted_arrays.append(col)
-    table = pa.table(dict(zip(sorted_names, casted_arrays)), schema=new_schema)
+    table = pa.table(dict(zip(sorted_names, casted_arrays, strict=True)), schema=new_schema)
 
     # Serialize to IPC stream (no compression, no schema metadata)
     sink = pa.BufferOutputStream()

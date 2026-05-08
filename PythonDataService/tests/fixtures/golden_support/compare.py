@@ -22,9 +22,8 @@ Usage:
 """
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -40,11 +39,11 @@ class CompareResult:
     tolerance_note: str
     n_compared: int
     n_failed: int
-    max_abs_error: Optional[float]
-    max_rel_error: Optional[float]
-    first_failure_idx: Optional[int]
-    first_actual: Optional[float]
-    first_expected: Optional[float]
+    max_abs_error: float | None
+    max_rel_error: float | None
+    first_failure_idx: int | None
+    first_actual: float | None
+    first_expected: float | None
 
     def summary(self) -> str:
         if self.passed:
@@ -65,8 +64,8 @@ class CompareResult:
 
 
 def assert_close(
-    actual: "np.ndarray | Sequence[float] | float",
-    expected: "np.ndarray | Sequence[float] | float",
+    actual: np.ndarray | Sequence[float] | float,
+    expected: np.ndarray | Sequence[float] | float,
     *,
     atol: float,
     rtol: float,
@@ -138,9 +137,9 @@ def assert_close(
         rel_errors = np.where(np.abs(e) > 0, abs_errors / np.abs(e), abs_errors)
     max_rel_error = float(np.max(rel_errors)) if n > 0 else None
 
-    first_idx: Optional[int] = None
-    first_actual_val: Optional[float] = None
-    first_expected_val: Optional[float] = None
+    first_idx: int | None = None
+    first_actual_val: float | None = None
+    first_expected_val: float | None = None
     if n_failed > 0:
         first_idx = int(np.argmax(failed_mask))
         first_actual_val = float(a[first_idx])

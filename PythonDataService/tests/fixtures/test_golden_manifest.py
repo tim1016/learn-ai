@@ -75,7 +75,7 @@ def test_manifest_pydantic_roundtrip() -> None:
     m2 = Manifest.model_validate_json(serialized)
     assert m1.schema_version == m2.schema_version
     assert len(m1.fixtures) == len(m2.fixtures)
-    for f1, f2 in zip(m1.fixtures, m2.fixtures):
+    for f1, f2 in zip(m1.fixtures, m2.fixtures, strict=True):
         assert f1.id == f2.id
         assert f1.active_version == f2.active_version
 

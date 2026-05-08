@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -36,8 +36,8 @@ class Tolerance(BaseModel):
 
 class MarketInput(BaseModel):
     source: Literal["synthetic", "polygon", "massive", "vendored"]
-    vendor: Optional[str] = None
-    generated_by: Optional[str] = None  # script path if synthetic
+    vendor: str | None = None
+    generated_by: str | None = None  # script path if synthetic
 
 
 class Reference(BaseModel):
@@ -58,9 +58,9 @@ class Reference(BaseModel):
 
 
 class Units(BaseModel):
-    theta: Optional[Literal["per_day", "per_year"]] = None
-    vega: Optional[Literal["per_vol_point", "per_one_vol"]] = None
-    rho: Optional[Literal["per_rate_point", "per_bp", "per_one_rate"]] = None
+    theta: Literal["per_day", "per_year"] | None = None
+    vega: Literal["per_vol_point", "per_one_vol"] | None = None
+    rho: Literal["per_rate_point", "per_bp", "per_one_rate"] | None = None
 
 
 class FixtureFiles(BaseModel):
@@ -87,14 +87,14 @@ class Fixture(BaseModel):
     canonical_callable: str
     reference: Reference
     market_input: MarketInput
-    units: Optional[Units] = None
+    units: Units | None = None
     tolerance: Tolerance
     active_version: int
     versions: dict[int, FixtureFiles]
     status: Literal["planned", "active", "breach", "deprecated"]
 
     @model_validator(mode="after")
-    def _active_version_exists(self) -> "Fixture":
+    def _active_version_exists(self) -> Fixture:
         if self.status != "planned" and self.active_version not in self.versions:
             raise ValueError(
                 f"Fixture {self.id!r}: active_version={self.active_version} "
@@ -103,7 +103,7 @@ class Fixture(BaseModel):
         return self
 
     @property
-    def active_files(self) -> Optional[FixtureFiles]:
+    def active_files(self) -> FixtureFiles | None:
         return self.versions.get(self.active_version)
 
 
@@ -111,14 +111,14 @@ class Manifest(BaseModel):
     schema_version: int = 1
     fixtures: list[Fixture]
 
-    def by_id(self, fixture_id: str) -> Optional[Fixture]:
+    def by_id(self, fixture_id: str) -> Fixture | None:
         for f in self.fixtures:
             if f.id == fixture_id:
                 return f
         return None
 
     @classmethod
-    def load(cls, path: Path = MANIFEST_PATH) -> "Manifest":
+    def load(cls, path: Path = MANIFEST_PATH) -> Manifest:
         return cls.model_validate_json(path.read_text(encoding="utf-8"))
 
     def save(self, path: Path = MANIFEST_PATH) -> None:
