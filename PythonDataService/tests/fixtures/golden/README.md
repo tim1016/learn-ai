@@ -152,7 +152,7 @@ Same reasoning as `bs-price-cross-engine/`: no stored output, so the manifest sc
 **Files:** `spy-2024-12-20-chain.parquet` (Polygon options chain), `spy-2024-12-20-chain.meta.json` (metadata + computed IV30 reference values)
 **Purpose:** Hold a real Polygon SPY options chain snapshot (2024-12-20) used to validate the VIX-style IV30 computation against observed market data. The `.meta.json` captures the reference IV30 values at capture time.
 
-This fixture is stored in Parquet format (not Arrow IPC) and lacks an `attribution.md`. See `attribution.md` in this directory for source and capture metadata. It is not registered in `manifest.json` because converting to Arrow IPC and adding SHA-256 governance is deferred (the file is small, stable, and covered by Git). If the parquet is regenerated, update `attribution.md` and the meta.json computed values.
+This fixture is stored in Parquet format (not Arrow IPC). See `attribution.md` in this directory for source and capture metadata. It is not registered in `manifest.json` because converting to Arrow IPC and adding SHA-256 governance is deferred (the file is small, stable, and covered by Git). If the parquet is regenerated, update `attribution.md` and the meta.json computed values.
 
 ## Links
 

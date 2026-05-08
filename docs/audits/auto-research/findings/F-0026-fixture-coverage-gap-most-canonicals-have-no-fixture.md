@@ -29,7 +29,7 @@ tests/fixtures/golden/iv30/                    { spy-2024-12-20-chain.meta.json,
 These predate the manifest system and have never been registered. The `manifest.json` API reads only `manifest.json`; these directories are invisible to the catalog and the UI.
 
 - `bs-price-cross-engine` and `portfolio-scenario-3leg` are live-parity fixtures with no stored output — both engines compute at runtime. They do not fit the golden-fixture schema (which requires stored `output.arrow`). These should be explicitly documented in `README.md` as "live-parity directories" and excluded from manifest governance by design.
-- `iv30/` holds a real Polygon market-data parquet snapshot used by `test_vix_replication.py`. It is missing an `attribution.md`. It could either be registered in the manifest (if converted to Arrow format) or documented in `README.md` as a "vendor market-data fixture" outside manifest governance.
+- `iv30/` holds a real Polygon market-data parquet snapshot used by `test_vix_replication.py`. It now has an `attribution.md` and is documented in `README.md` as a "vendor market-data fixture" outside manifest governance. Registering in the manifest (after converting to Arrow format) remains optional/deferred.
 
 ### 2. Hash governance does not cover attribution files
 
