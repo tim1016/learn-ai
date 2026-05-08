@@ -1,0 +1,92 @@
+<div class="gf-catalog">
+  <header class="gf-header">
+    <h1>Golden Fixtures</h1>
+    <p class="gf-subtitle">Certified numerical equivalence proofs for every canonical implementation.</p>
+  </header>
+
+  @if (catalog.isLoading()) {
+    <div class="gf-loading" aria-live="polite" aria-busy="true">Loading fixtures…</div>
+  }
+
+  @if (catalog.error()) {
+    <div class="gf-error" role="alert">
+      Failed to load fixture catalog. Is the Python service running?
+    </div>
+  }
+
+  @if (catalog.value(); as cat) {
+    <!-- Stats bar -->
+    <section class="gf-stats" aria-label="Fixture statistics">
+      <div class="stat-card">
+        <span class="stat-value">{{ totalFixtures() }}</span>
+        <span class="stat-label">Total Fixtures</span>
+      </div>
+      <div class="stat-card certified">
+        <span class="stat-value">{{ certifiedCount() }}</span>
+        <span class="stat-label">Certified</span>
+      </div>
+      @if (validation(); as v) {
+        <div class="stat-card" [class]="validationStatusClass()">
+          <span class="stat-value">{{ v.passed }}</span>
+          <span class="stat-label">Tests Passed</span>
+        </div>
+        @if (v.failed > 0) {
+          <div class="stat-card status-fail">
+            <span class="stat-value">{{ v.failed }}</span>
+            <span class="stat-label">Failed</span>
+          </div>
+        }
+        @if (v.errors > 0) {
+          <div class="stat-card status-fail">
+            <span class="stat-value">{{ v.errors }}</span>
+            <span class="stat-label">Errors</span>
+          </div>
+        }
+        <div class="stat-card stat-timestamp">
+          <span class="stat-label">Last run: {{ v.generated_at | slice: 0 : 16 }}</span>
+        </div>
+      }
+    </section>
+
+    <!-- Category sections -->
+    @for (group of categoryGroups(); track group.key) {
+      <section class="gf-category" [attr.aria-labelledby]="'cat-' + group.key">
+        <h2 class="cat-title" [id]="'cat-' + group.key">{{ group.label }}</h2>
+        <table class="gf-table" role="table" [attr.aria-label]="group.label + ' fixtures'">
+          <thead>
+            <tr>
+              <th scope="col">ID</th>
+              <th scope="col">Name</th>
+              <th scope="col">Oracle</th>
+              <th scope="col">Tolerance</th>
+              <th scope="col">Version</th>
+              <th scope="col">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of group.rows; track row.fixture.id) {
+              <tr>
+                <td class="col-id">
+                  <code>{{ row.fixture.id }}</code>
+                </td>
+                <td class="col-name">{{ row.fixture.name }}</td>
+                <td class="col-oracle">
+                  <span class="badge badge-{{ row.badge }}" [attr.aria-label]="'Oracle: ' + row.badgeLabel">
+                    {{ row.badgeLabel }}
+                  </span>
+                </td>
+                <td class="col-tol">
+                  <code>{{ formatAtol(row.fixture.tolerance.atol) }}</code>
+                </td>
+                <td class="col-ver">v{{ row.fixture.active_version }}</td>
+                <td class="col-status">
+                  <span class="status status-{{ row.fixture.status }}">{{ row.fixture.status }}</span>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </section>
+    }
+  }
+</div>

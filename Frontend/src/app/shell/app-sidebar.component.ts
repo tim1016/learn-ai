@@ -60,6 +60,7 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-compass',
     items: [
       { label: 'Research Lab', route: '/research-lab' },
+      { label: 'Golden Fixtures', route: '/golden-fixtures' },
     ],
   },
   {

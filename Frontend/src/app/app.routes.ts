@@ -221,5 +221,12 @@ export const routes: Routes = [
       },
     ],
   },
+  {
+    path: "golden-fixtures",
+    loadComponent: () =>
+      import(
+        "./components/golden-fixtures/golden-fixtures-catalog.component"
+      ).then((m) => m.GoldenFixturesCatalogComponent),
+  },
   { path: "**", redirectTo: "/data-lab" },
 ];
