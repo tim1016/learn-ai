@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.ticker_request import Session, TickerRequest
+
 
 class AggregateRequest(BaseModel):
     """Request schema for fetching aggregate bars (OHLCV)"""
@@ -189,14 +191,25 @@ class RelatedTickersRequest(BaseModel):
     ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")
 
 
-class IndicatorTableRequest(BaseModel):
-    """Request to generate a full TradingView-style indicator table from Polygon minute data"""
+class IndicatorTableRequest(TickerRequest):
+    """Request to generate a full TradingView-style indicator table from Polygon minute data.
 
-    ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")
-    from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
-    to_date: str = Field(..., description="End date (YYYY-MM-DD)")
-    multiplier: int = Field(1, ge=1, description="Timespan multiplier for aggregates")
-    timespan: str = Field("minute", description="Timespan: minute, hour, day")
+    Inherits ``symbol`` / ``from_date`` / ``to_date`` / ``timespan`` /
+    ``multiplier`` / ``session`` from the canonical ``TickerRequest``.
+    Legacy field names (``ticker`` / ``start_date`` / ``end_date``) are
+    still accepted during the PR (ii) → (iii) migration window via
+    Pydantic ``AliasChoices``.
+
+    **Default override**: ``session`` defaults to ``"extended"`` here
+    (vs the base's ``"rth"``) to preserve pre-migration behavior — this
+    endpoint operates on the full session by default.
+    """
+
+    # Override base default — preserves pre-migration behavior. Without
+    # this override the inherited "rth" would silently change the
+    # endpoint's default session window.
+    session: Session = "extended"  # type: ignore[assignment]
+
     ema_periods: list[int] = Field(
         default=[5, 10, 20, 30, 40, 50, 100, 200],
         description="EMA periods to calculate",
@@ -211,23 +224,11 @@ class IndicatorTableRequest(BaseModel):
     macd_slow: int = Field(26, ge=1, description="MACD slow period")
     macd_signal: int = Field(9, ge=1, description="MACD signal period")
     adx_length: int = Field(14, ge=1, description="ADX period")
-    session: str = Field(
-        "extended",
-        description="'rth' for regular trading hours (09:30-16:00 ET), 'extended' for all hours",
-    )
     forward_fill: bool = Field(
         False,
         description="Fill missing minute bars with previous close (volume=0)",
     )
     adjusted: bool = Field(True, description="Adjust for splits/dividends (Polygon default: true)")
-
-    @field_validator("timespan")
-    @classmethod
-    def validate_timespan(cls, v: str) -> str:
-        valid = ["minute", "hour", "day"]
-        if v not in valid:
-            raise ValueError(f"timespan must be one of {valid}")
-        return v
 
 
 class OptionsCompanionConfig(BaseModel):

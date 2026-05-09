@@ -87,12 +87,12 @@ async def generate_indicator_table(request: IndicatorTableRequest):
         )
 
         logger.info(
-            f"[STEP 1] Fetching {request.timespan} bars for {request.ticker} "
+            f"[STEP 1] Fetching {request.timespan} bars for {request.symbol} "
             f"from {warmup_start} (warmup) to {request.to_date} "
             f"(requested from {request.from_date})"
         )
         bars = polygon_client.fetch_aggregates(
-            ticker=request.ticker,
+            ticker=request.symbol,
             multiplier=request.multiplier,
             timespan=request.timespan,
             from_date=warmup_start,
@@ -103,7 +103,7 @@ async def generate_indicator_table(request: IndicatorTableRequest):
         if not bars:
             return IndicatorTableResponse(
                 success=False,
-                ticker=request.ticker,
+                ticker=request.symbol,
                 error="No bars returned from Polygon",
             )
 
@@ -143,7 +143,7 @@ async def generate_indicator_table(request: IndicatorTableRequest):
 
         return IndicatorTableResponse(
             success=True,
-            ticker=request.ticker,
+            ticker=request.symbol,
             row_count=len(rows),
             columns=columns,
             rows=rows,
