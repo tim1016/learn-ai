@@ -56,6 +56,7 @@ import {
 import { findFeatureId } from '../../../shared/indicator-catalog/feature-mapping';
 import { ActiveIndicatorCardComponent } from '../../data-lab/active-indicator-card/active-indicator-card.component';
 import { IndicatorConfigModalComponent } from '../../data-lab/indicator-config-modal/indicator-config-modal.component';
+import { PolygonDateRangeComponent } from '../../../shared/polygon-date-range';
 
 /** Snake-case shape returned by /api/jobs-internal/signal-engine worker. */
 interface SignalEngineJobResultRaw {
@@ -103,6 +104,7 @@ interface SignalEngineJobResultRaw {
     IndicatorCatalogComponent,
     ActiveIndicatorCardComponent,
     IndicatorConfigModalComponent,
+    PolygonDateRangeComponent,
   ],
   templateUrl: './signal-runner.component.html',
   styleUrls: ['./signal-runner.component.scss'],
