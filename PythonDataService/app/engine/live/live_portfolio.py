@@ -158,6 +158,14 @@ class IbkrBrokerAdapter:
                 # foreigns from the portfolio side. The halt-detection
                 # consumer (Phase C-2c-b2-ii) reads the unfiltered
                 # buffer instead.
+                #
+                # Filter to fills only — § 7 only cares about
+                # executions, and the engine doesn't act on
+                # status/cancel/error transitions for foreign orders.
+                # Buffering them would force the engine to no-op
+                # over them on every drain. (CodeRabbit P2 from #191.)
+                if event.event_type != "fill":
+                    continue
                 self._event_buffer.append(event)
         except asyncio.CancelledError:
             raise

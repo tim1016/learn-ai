@@ -508,9 +508,15 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
             return 2
         liquidated = 0
         for pos in snapshot.positions:
-            if pos.quantity == 0:
+            qty_signed = float(pos.quantity)
+            if qty_signed == 0:
                 continue
-            qty_signed = int(pos.quantity)
+            # Preserve fractional quantities — IbkrOrderSpec.quantity
+            # is float and IBKR supports fractional shares for many
+            # equities. Casting to int here would truncate (e.g.
+            # 0.5 → 0) and submit a zero-sized order that IBKR
+            # rejects, leaving the fractional position un-flattened.
+            # (CodeRabbit P2 from #193.)
             action = "SELL" if qty_signed > 0 else "BUY"
             spec = IbkrOrderSpec(
                 symbol=pos.symbol,
