@@ -56,3 +56,15 @@ PythonDataService/artifacts/
 
 # Playwright MCP session snapshots (transient browser-test artifacts)
 .playwright-mcp/
+
+# Claude Code runtime state
+.claude/scheduled_tasks.lock
+
+# Superpowers tooling session cache
+.superpowers/
+
+# Scratch / temp working files
+Temp*.json
+
+# IBKR snapshot data (runtime-generated Arrow files)
+scripts/ibkr_snapshots/**/*.arrow
