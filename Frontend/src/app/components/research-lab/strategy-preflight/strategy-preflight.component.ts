@@ -11,6 +11,7 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../../../environments/environment';
+import { PolygonDateRangeComponent } from '../../../shared/polygon-date-range';
 
 type Severity = 'ok' | 'warning' | 'blocking';
 type SessionFilter = 'rth_only' | 'full_session' | 'unspecified';
@@ -39,7 +40,7 @@ interface PreflightResponse {
 @Component({
   selector: 'app-strategy-preflight',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, PolygonDateRangeComponent],
   templateUrl: './strategy-preflight.component.html',
   styleUrls: ['./strategy-preflight.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -50,8 +51,8 @@ export class StrategyPreflightComponent {
   // Form state — pre-populated with the canonical EMA-crossover example.
   readonly strategyName = signal('spy_ema_crossover');
   readonly symbol = signal('SPY');
-  readonly startDate = signal('2024-03-28');
-  readonly endDate = signal('2026-03-27');
+  readonly fromDate = signal('2024-03-28');
+  readonly toDate = signal('2026-03-27');
   readonly timeframe = signal<Timeframe>('15m');
   readonly sessionFilter = signal<SessionFilter>('unspecified');
   readonly warmupDays = signal<number>(0);
@@ -110,8 +111,8 @@ export class StrategyPreflightComponent {
       const body = {
         strategy_name: this.strategyName(),
         symbol: this.symbol(),
-        start_date: this.startDate(),
-        end_date: this.endDate(),
+        start_date: this.fromDate(),
+        end_date: this.toDate(),
         timeframe: this.timeframe(),
         indicators: this.indicators(),
         session_filter: this.sessionFilter(),
