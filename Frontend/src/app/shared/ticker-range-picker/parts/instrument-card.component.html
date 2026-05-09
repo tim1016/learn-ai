@@ -1,0 +1,132 @@
+<section #rootEl class="group" aria-label="Instrument">
+  <header class="group__head">
+    <span class="group__eyebrow">
+      <span class="group__eyebrow-dot group__eyebrow-dot--accent"></span>
+      Instrument
+    </span>
+    <span class="group__helper mono">{{ selectedExchange() }}</span>
+  </header>
+
+  <div class="ticker-box-wrap">
+    <div
+      class="ticker-box"
+      role="combobox"
+      tabindex="0"
+      [class.ticker-box--open]="open()"
+      [attr.aria-expanded]="open()"
+      aria-haspopup="listbox"
+      aria-controls="ticker-range-picker-listbox"
+      (click)="openDropdown()"
+      (keydown.enter)="onTickerBoxEnter($event)"
+      (keydown.space)="onTickerBoxSpace($event)"
+      (keydown.escape)="closeDropdown()"
+    >
+      <i class="pi pi-search ticker-box__icon" aria-hidden="true"></i>
+      @if (!open()) {
+        <span class="ticker-box__symbol mono">{{ value().symbol }}</span>
+        <span class="ticker-box__name">
+          {{ selectedTicker()?.name || '' }}
+        </span>
+        <span class="ticker-box__chip mono"
+              [pTooltip]="selectedExchangeTooltip()"
+              tooltipPosition="top"
+              tabindex="0"
+              role="img"
+              [attr.aria-label]="selectedExchangeTooltip()">{{ selectedExchange() }}</span>
+        <i class="pi pi-angle-down ticker-box__chev" aria-hidden="true"></i>
+      } @else {
+        <input
+          type="text"
+          class="ticker-box__input mono"
+          placeholder="Search symbol or name…"
+          [ngModel]="query()"
+          (ngModelChange)="onSearchInput($event)"
+          (click)="$event.stopPropagation()"
+          (keydown)="$event.stopPropagation()"
+          #searchInput
+        />
+      }
+
+      @if (open()) {
+        <div class="dropdown" id="ticker-range-picker-listbox" role="listbox">
+          <div class="dropdown__scroll">
+            @if (query() === "" && recentTickers().length > 0) {
+              <div class="dropdown__header">Recent</div>
+              @for (t of recentTickers(); track trackBySymbol($index, t)) {
+                <button
+                  type="button"
+                  class="row"
+                  [class.row--active]="t.symbol === value().symbol"
+                  role="option"
+                  [attr.aria-selected]="t.symbol === value().symbol"
+                  (click)="pickTicker(t); $event.stopPropagation()"
+                >
+                  <span class="row__symbol mono">{{ t.symbol }}</span>
+                  <span class="row__name">{{ t.name }}</span>
+                  <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
+                  <span
+                    class="row__cache mono"
+                    [style.color]="cacheTextColor(t.cache)"
+                  >
+                    {{ cacheLabel(t.cache) }}
+                  </span>
+                </button>
+              }
+            }
+            <div class="dropdown__header">
+              @if (query() === "") {
+                All tracked instruments
+              } @else {
+                {{ filteredTickers().length }} match{{
+                  filteredTickers().length === 1 ? "" : "es"
+                }}
+              }
+            </div>
+            @for (t of filteredTickers(); track trackBySymbol($index, t)) {
+              <button
+                type="button"
+                class="row"
+                [class.row--active]="t.symbol === value().symbol"
+                role="option"
+                [attr.aria-selected]="t.symbol === value().symbol"
+                (click)="pickTicker(t); $event.stopPropagation()"
+              >
+                <span class="row__symbol mono">{{ t.symbol }}</span>
+                <span class="row__name">{{ t.name }}</span>
+                <span class="row__meta mono">{{ t.exchange ?? "—" }}</span>
+                <span
+                  class="row__cache mono"
+                  [style.color]="cacheTextColor(t.cache)"
+                >
+                  {{ cacheLabel(t.cache) }}
+                </span>
+              </button>
+            }
+            @if (filteredTickers().length === 0) {
+              <div class="dropdown__empty">
+                No matches. Add via
+                <a routerLink="/tracked-instruments">Tracked Instruments</a>.
+              </div>
+            }
+          </div>
+        </div>
+      }
+    </div>
+  </div>
+
+  @if (selectedTickerCachePct() !== null || selectedTickerLast()) {
+    <div class="instrument-foot mono">
+      <span class="instrument-foot__cache">
+        cache
+        <strong [style.color]="cacheTextColor(selectedTickerCachePct() ?? undefined)">
+          {{ cacheLabel(selectedTickerCachePct() ?? undefined) }}
+        </strong>
+      </span>
+      @if (selectedTickerLast()) {
+        <span class="instrument-foot__last">
+          last <span class="instrument-foot__last-val">{{ selectedTickerLast() }}</span>
+        </span>
+      }
+    </div>
+  }
+</section>
