@@ -241,3 +241,131 @@ def test_pre_flight_halts_when_halt_flag_present(
         ]
     )
     assert rc == 1
+
+
+@requires_git
+def test_pre_flight_halts_when_positions_json_has_foreign_symbol(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """CodeRabbit P1 fix — positions check is now actually wired into cmd_pre_flight."""
+    repo, _, _ = repo_with_inputs
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_ledger.json").write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
+
+    positions_json = tmp_path / "positions.json"
+    positions_json.write_text(
+        json.dumps({"positions": [{"symbol": "QQQ", "quantity": 100}]}), encoding="utf-8"
+    )
+
+    rc = main(
+        [
+            "pre-flight",
+            "--repo-root", str(repo),
+            "--clean-tree-scope", "PythonDataService",
+            "--run-dir", str(run_dir),
+            "--skip-ntp",
+            "--positions-json", str(positions_json),
+        ]
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "FAIL unexpected_position" in out
+
+
+@requires_git
+def test_pre_flight_passes_when_positions_json_matches_expected(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, _, _ = repo_with_inputs
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_ledger.json").write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
+
+    positions_json = tmp_path / "positions.json"
+    positions_json.write_text(
+        json.dumps({"positions": [{"symbol": "SPY", "quantity": 200}]}), encoding="utf-8"
+    )
+
+    rc = main(
+        [
+            "pre-flight",
+            "--repo-root", str(repo),
+            "--clean-tree-scope", "PythonDataService",
+            "--run-dir", str(run_dir),
+            "--skip-ntp",
+            "--positions-json", str(positions_json),
+        ]
+    )
+    assert rc == 0
+
+
+@requires_git
+def test_pre_flight_skips_position_check_when_no_positions_json(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """No --positions-json ⇒ skip with a clear message; check the live runner does the wired check."""
+    repo, _, _ = repo_with_inputs
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_ledger.json").write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
+
+    rc = main(
+        [
+            "pre-flight",
+            "--repo-root", str(repo),
+            "--clean-tree-scope", "PythonDataService",
+            "--run-dir", str(run_dir),
+            "--skip-ntp",
+        ]
+    )
+    assert rc == 0
+    assert "skipping unexpected-position check" in capsys.readouterr().out
+
+
+@requires_git
+def test_init_ledger_returns_2_on_malformed_live_config_json(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """CodeRabbit P2 fix — malformed JSON returns the documented exit 2 instead of crashing."""
+    repo, spec, qc = repo_with_inputs
+    rc = main(
+        [
+            "init-ledger",
+            "--repo-root", str(repo),
+            "--clean-tree-scope", "PythonDataService", "references/qc-shadow",
+            "--strategy-spec-path", str(spec),
+            "--qc-audit-copy-path", str(qc),
+            "--qc-cloud-backtest-id", "bt-1",
+            "--account-id", "DU111",
+            "--start-date-ms", "1700000000000",
+            "--live-config-json", "not-valid-json{{{",
+            "--run-root", str(tmp_path / "live_runs"),
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "not valid JSON" in err
+
+
+@requires_git
+def test_init_ledger_returns_2_when_live_config_json_is_not_an_object(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    repo, spec, qc = repo_with_inputs
+    rc = main(
+        [
+            "init-ledger",
+            "--repo-root", str(repo),
+            "--clean-tree-scope", "PythonDataService", "references/qc-shadow",
+            "--strategy-spec-path", str(spec),
+            "--qc-audit-copy-path", str(qc),
+            "--qc-cloud-backtest-id", "bt-1",
+            "--account-id", "DU111",
+            "--start-date-ms", "1700000000000",
+            "--live-config-json", '"a-string-not-an-object"',
+            "--run-root", str(tmp_path / "live_runs"),
+        ]
+    )
+    assert rc == 2
+    assert "must be a JSON object" in capsys.readouterr().err

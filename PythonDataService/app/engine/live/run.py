@@ -28,6 +28,7 @@ import json
 import logging
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.engine.live.pre_flight import (
@@ -35,6 +36,7 @@ from app.engine.live.pre_flight import (
     check_no_halt_flag,
     check_ntp_offset,
     check_run_state_intact,
+    check_unexpected_position,
     check_yesterday_artifacts_valid,
     run_pre_flight,
 )
@@ -86,7 +88,23 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
 
     code_sha = _git_head_sha(repo_root)
 
-    live_config = json.loads(args.live_config_json) if args.live_config_json else {}
+    if args.live_config_json:
+        try:
+            live_config = json.loads(args.live_config_json)
+        except json.JSONDecodeError as exc:
+            print(
+                f"[INIT-LEDGER] --live-config-json is not valid JSON: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+        if not isinstance(live_config, dict):
+            print(
+                f"[INIT-LEDGER] --live-config-json must be a JSON object, got {type(live_config).__name__}",
+                file=sys.stderr,
+            )
+            return 2
+    else:
+        live_config = {}
 
     try:
         ledger = build_ledger(
@@ -119,6 +137,29 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
 # ──────────────────────────── pre-flight subcommand ──────────────────
 
 
+@dataclass(frozen=True)
+class _PositionStub:
+    symbol: str
+    quantity: float
+
+
+@dataclass(frozen=True)
+class _PositionsStubSnapshot:
+    positions: list
+
+
+def _load_positions_snapshot(json_path: Path) -> _PositionsStubSnapshot:
+    """Load a positions snapshot JSON for the standalone pre-flight subcommand.
+
+    Expected JSON shape: ``{"positions": [{"symbol": "SPY", "quantity": 200}, ...]}``.
+    Live runner integrations don't go through this helper — they pass an
+    ``IbkrPositionsSnapshot`` straight into ``check_unexpected_position``.
+    """
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    positions = [_PositionStub(symbol=p["symbol"], quantity=p["quantity"]) for p in payload["positions"]]
+    return _PositionsStubSnapshot(positions=positions)
+
+
 def cmd_pre_flight(args: argparse.Namespace) -> int:
     """Run all morning-gate halt checks. Non-zero exit on any halt."""
     repo_root: Path = args.repo_root.resolve()
@@ -138,6 +179,22 @@ def cmd_pre_flight(args: argparse.Namespace) -> int:
                 max_offset_seconds=args.ntp_max_offset_seconds,
                 timeout_seconds=args.ntp_timeout_seconds,
             )
+        )
+
+    if args.positions_json is not None:
+        try:
+            snapshot = _load_positions_snapshot(args.positions_json)
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+            print(
+                f"[PRE-FLIGHT] --positions-json could not be read as a positions snapshot: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+        checks.append(check_unexpected_position(snapshot, expected_symbol=args.expected_symbol))
+    else:
+        print(
+            "[PRE-FLIGHT] skipping unexpected-position check "
+            "(no --positions-json supplied; the live runner enforces this when connected to IB)"
         )
 
     if args.yesterday_day_n is not None:
@@ -230,6 +287,22 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--ntp-server", default="pool.ntp.org")
     pre.add_argument("--ntp-max-offset-seconds", type=float, default=1.0)
     pre.add_argument("--ntp-timeout-seconds", type=float, default=5.0)
+    pre.add_argument(
+        "--positions-json",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a JSON file with shape "
+            '`{"positions": [{"symbol": "SPY", "quantity": 200}, ...]}`. '
+            "When provided, exercises check_unexpected_position. The live runner passes "
+            "this in directly from the IBKR connection."
+        ),
+    )
+    pre.add_argument(
+        "--expected-symbol",
+        default="SPY",
+        help="Symbol expected for the running strategy (long-only). Used by the position check.",
+    )
     pre.set_defaults(func=cmd_pre_flight)
 
     return parser

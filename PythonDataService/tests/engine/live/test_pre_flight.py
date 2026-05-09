@@ -306,14 +306,20 @@ def test_yesterday_artifacts_passes_when_all_hashes_match(tmp_path: Path) -> Non
     def sha(p: Path) -> str:
         return hashlib.sha256(p.read_bytes()).hexdigest()
 
+    # Spec § 6.5 manifest carries all seven keys — null for the ones
+    # whose artifacts don't exist for this scenario (no python
+    # executions / trades / run ledger in this minimal fixture).
     sidecar = run_dir / "reconcile" / "day-1.hashes.json"
     sidecar.write_text(
         json.dumps(
             {
                 "reconcile_json": sha(json_path),
                 "reconcile_parquet": sha(parquet_path),
+                "python_executions_parquet": None,
+                "python_trades_parquet": None,
                 "qc_export_trades": sha(qc_trades),
                 "qc_export_indicators": sha(qc_indicators),
+                "run_ledger": None,
             }
         ),
         encoding="utf-8",
@@ -323,6 +329,80 @@ def test_yesterday_artifacts_passes_when_all_hashes_match(tmp_path: Path) -> Non
         run_dir=run_dir, qc_dir=qc_dir, docs_dir=docs_dir, yesterday_day_n=1
     )
     assert result.passed is True
+
+
+def test_yesterday_artifacts_fails_when_required_key_missing_from_manifest(tmp_path: Path) -> None:
+    """CodeRabbit P1 fix — a sidecar missing one of the seven required
+    keys is no longer treated as 'pass'; it's a missing-from-manifest halt."""
+    run_dir = tmp_path / "run"
+    qc_dir = tmp_path / "qc"
+    docs_dir = tmp_path / "docs"
+    (run_dir / "reconcile").mkdir(parents=True)
+    qc_dir.mkdir()
+    docs_dir.mkdir()
+    (docs_dir / "day-1.md").write_text("# day 1\n")
+
+    sidecar = run_dir / "reconcile" / "day-1.hashes.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                # 'reconcile_json' is intentionally absent.
+                "reconcile_parquet": None,
+                "python_executions_parquet": None,
+                "python_trades_parquet": None,
+                "qc_export_trades": None,
+                "qc_export_indicators": None,
+                "run_ledger": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = check_yesterday_artifacts_valid(
+        run_dir=run_dir, qc_dir=qc_dir, docs_dir=docs_dir, yesterday_day_n=1
+    )
+    assert result.passed is False
+    assert "missing_from_manifest" in str(result.data)
+
+
+def test_yesterday_artifacts_fails_when_manifest_null_but_file_present(tmp_path: Path) -> None:
+    """A null manifest entry must not silently skip when the artifact actually exists.
+
+    That would mean the reconciler said 'no artifact here' but something
+    else wrote one — broker-state divergence by another name.
+    """
+    run_dir = tmp_path / "run"
+    qc_dir = tmp_path / "qc"
+    docs_dir = tmp_path / "docs"
+    (run_dir / "reconcile").mkdir(parents=True)
+    qc_dir.mkdir()
+    docs_dir.mkdir()
+    (docs_dir / "day-1.md").write_text("# day 1\n")
+
+    # File present on disk, sidecar says null.
+    (run_dir / "executions.parquet").write_bytes(b"unexpected")
+
+    sidecar = run_dir / "reconcile" / "day-1.hashes.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "reconcile_json": None,
+                "reconcile_parquet": None,
+                "python_executions_parquet": None,
+                "python_trades_parquet": None,
+                "qc_export_trades": None,
+                "qc_export_indicators": None,
+                "run_ledger": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = check_yesterday_artifacts_valid(
+        run_dir=run_dir, qc_dir=qc_dir, docs_dir=docs_dir, yesterday_day_n=1
+    )
+    assert result.passed is False
+    assert "manifest_null_but_file_present" in str(result.data)
 
 
 def test_yesterday_artifacts_fails_when_sidecar_missing(tmp_path: Path) -> None:
@@ -349,10 +429,19 @@ def test_yesterday_artifacts_fails_when_artifact_hash_mismatches(tmp_path: Path)
     (docs_dir / "day-1.md").write_text("# day 1\n")
 
     sidecar = run_dir / "reconcile" / "day-1.hashes.json"
+    # Complete manifest with all seven required keys; only
+    # reconcile_json carries a (wrong) hash so the test isolates the
+    # hash-mismatch detection path.
     sidecar.write_text(
         json.dumps(
             {
                 "reconcile_json": "0" * 64,  # wrong hash
+                "reconcile_parquet": None,
+                "python_executions_parquet": None,
+                "python_trades_parquet": None,
+                "qc_export_trades": None,
+                "qc_export_indicators": None,
+                "run_ledger": None,
             }
         ),
         encoding="utf-8",

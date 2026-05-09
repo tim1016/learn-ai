@@ -358,9 +358,12 @@ def check_yesterday_artifacts_valid(
             data={"error": str(exc)},
         )
 
-    # Per § 6.5, the sidecar records hashes for the four uncommitted
-    # artifacts the day's md summarizes. We re-hash each and report the
-    # first mismatch (if any) with which file failed.
+    # Per § 6.5, the sidecar records hashes for these seven artifacts
+    # the day's md summarizes. We iterate over the *expected* keyset
+    # (not just whatever the sidecar happens to carry) so a sidecar
+    # missing one of the required keys is caught as a halt rather than
+    # silently passing — that was a CodeRabbit P1 from the original
+    # Phase C-1 PR.
     targets: dict[str, Path] = {
         "reconcile_json": run_dir / "reconcile" / f"day-{yesterday_day_n}.json",
         "reconcile_parquet": run_dir / "reconcile" / f"day-{yesterday_day_n}.parquet",
@@ -372,11 +375,21 @@ def check_yesterday_artifacts_valid(
     }
 
     mismatches: list[dict] = []
-    for key, recorded in manifest.items():
+    for key, path in targets.items():
+        if key not in manifest:
+            mismatches.append({"key": key, "reason": "missing_from_manifest"})
+            continue
+        recorded = manifest[key]
         if recorded is None:
-            continue  # Spec § 6.5: ``~`` / null in the manifest means "this artifact wasn't expected"
-        path = targets.get(key)
-        if path is None:
+            # Spec § 6.5: explicit ``~`` / null means this artifact
+            # wasn't part of yesterday's receipt (e.g. no QC export
+            # because day 0). Tolerated only if the path is also
+            # absent on disk — otherwise something wrote the file
+            # outside the reconciler.
+            if path.exists():
+                mismatches.append(
+                    {"key": key, "path": str(path), "reason": "manifest_null_but_file_present"}
+                )
             continue
         if not path.exists():
             mismatches.append({"key": key, "path": str(path), "reason": "missing"})
