@@ -1,0 +1,175 @@
+"""Live-runtime run identity — ``LiveRunLedger`` and builder.
+
+Per spec ``docs/superpowers/specs/2026-05-08-ibkr-paper-shadow-deployment-design.md``
+section 10. Distinct from the backtest-side ``app.research.runs.ledger.RunLedger``
+which captures deterministic-replay identity for a backtest; this ledger
+captures the inputs that pin a *live* paper run's identity.
+
+``run_id`` = ``sha256(canonical_json(identity_payload))`` over:
+  * ``code_sha`` — git HEAD on run-start commit. Required, must be non-empty.
+    The dirty-tree refusal in ``pre_flight.check_clean_tree`` is what makes
+    this meaningful — runs from a dirty tree do not start.
+  * ``strategy_spec_path`` + ``strategy_spec_sha256`` — the
+    ``StrategySpec`` JSON contract being run.
+  * ``qc_audit_copy_sha256`` — sha256 of the checked-in QC audit copy
+    (``references/qc-shadow/SpyEmaCrossoverAlgorithm.py``).
+  * ``qc_cloud_backtest_id`` — operator-supplied identifier of the QC
+    Cloud backtest that proves the QC Cloud execution copy is in sync
+    with the audit copy.
+  * ``live_config`` — resolved values, not raw env vars.
+  * ``account_id`` — DU… account id from IBKR.
+  * ``start_date_ms`` — int64 ms UTC, the first bar's session start.
+
+Reuses the canonical-JSON SHA-256 helper at
+``app.research.runs.hashing`` rather than reinventing the contract.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.research.runs.hashing import canonical_json, hash_payload
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _now_ms_utc() -> int:
+    return int(time.time() * 1000)
+
+
+class LiveRunLedger(BaseModel):
+    """Immutable identity record for a single live paper run.
+
+    Persisted as ``run_ledger.json`` under
+    ``live_runs/<run_id>/run_ledger.json``. Once written it is treated
+    as read-only — a halted run keeps its ledger; a resumed run gets a
+    new ``run_id`` (§ 7.2 #5).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1.0"] = "1.0"
+
+    run_id: str
+    code_sha: str
+
+    strategy_spec_path: str
+    strategy_spec_sha256: str
+
+    qc_audit_copy_path: str
+    qc_audit_copy_sha256: str
+    qc_cloud_backtest_id: str
+
+    account_id: str
+    start_date_ms: int
+
+    # Resolved live config (not raw env vars). Kept as a dict so the
+    # ledger remains stable across LiveConfig field additions.
+    live_config: dict
+
+    created_at_ms: int = Field(default_factory=_now_ms_utc)
+
+
+def compute_run_id(
+    *,
+    code_sha: str,
+    strategy_spec_sha256: str,
+    qc_audit_copy_sha256: str,
+    qc_cloud_backtest_id: str,
+    account_id: str,
+    start_date_ms: int,
+    live_config: dict,
+) -> str:
+    """Hash the run-identity payload to produce a stable ``run_id``.
+
+    Excludes ``created_at_ms`` so re-running the same identity inputs
+    yields the same id (the ledger persists the timestamp separately,
+    but the hash is over the identity, not the wall-clock).
+    """
+    payload = {
+        "code_sha": code_sha,
+        "strategy_spec_sha256": strategy_spec_sha256,
+        "qc_audit_copy_sha256": qc_audit_copy_sha256,
+        "qc_cloud_backtest_id": qc_cloud_backtest_id,
+        "account_id": account_id,
+        "start_date_ms": start_date_ms,
+        "live_config": live_config,
+    }
+    return hash_payload(payload)
+
+
+def build_ledger(
+    *,
+    code_sha: str,
+    strategy_spec_path: Path,
+    qc_audit_copy_path: Path,
+    qc_cloud_backtest_id: str,
+    account_id: str,
+    start_date_ms: int,
+    live_config: dict,
+) -> LiveRunLedger:
+    """Build a ``LiveRunLedger`` from on-disk inputs and resolved config.
+
+    Reads the spec JSON and the QC audit copy file, hashes them, and
+    constructs the identity. Raises ``FileNotFoundError`` if either
+    referenced path is missing — fail fast at run-start before any
+    broker connection.
+    """
+    if not strategy_spec_path.exists():
+        raise FileNotFoundError(f"strategy_spec_path does not exist: {strategy_spec_path}")
+    if not qc_audit_copy_path.exists():
+        raise FileNotFoundError(f"qc_audit_copy_path does not exist: {qc_audit_copy_path}")
+
+    strategy_spec_sha256 = _file_sha256(strategy_spec_path)
+    qc_audit_copy_sha256 = _file_sha256(qc_audit_copy_path)
+    run_id = compute_run_id(
+        code_sha=code_sha,
+        strategy_spec_sha256=strategy_spec_sha256,
+        qc_audit_copy_sha256=qc_audit_copy_sha256,
+        qc_cloud_backtest_id=qc_cloud_backtest_id,
+        account_id=account_id,
+        start_date_ms=start_date_ms,
+        live_config=live_config,
+    )
+    return LiveRunLedger(
+        run_id=run_id,
+        code_sha=code_sha,
+        strategy_spec_path=str(strategy_spec_path),
+        strategy_spec_sha256=strategy_spec_sha256,
+        qc_audit_copy_path=str(qc_audit_copy_path),
+        qc_audit_copy_sha256=qc_audit_copy_sha256,
+        qc_cloud_backtest_id=qc_cloud_backtest_id,
+        account_id=account_id,
+        start_date_ms=start_date_ms,
+        live_config=live_config,
+    )
+
+
+def write_ledger(path: Path, ledger: LiveRunLedger) -> None:
+    """Write the ledger as canonical JSON for stable on-disk hashing.
+
+    Uses the same canonical-JSON formatter as ``compute_run_id`` so the
+    on-disk bytes are identical across runs with identical inputs — this
+    means the SHA-256 of ``run_ledger.json`` (which appears in the daily
+    Markdown's hash manifest, § 6.5) is deterministic.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = ledger.model_dump(mode="json")
+    path.write_text(canonical_json(payload), encoding="utf-8")
+
+
+def read_ledger(path: Path) -> LiveRunLedger:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return LiveRunLedger.model_validate(payload)

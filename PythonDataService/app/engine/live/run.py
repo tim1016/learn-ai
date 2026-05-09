@@ -1,28 +1,244 @@
-"""Command-line entrypoint for the live runtime."""
+"""Command-line entrypoint for the live runtime.
+
+Implements the operator-facing CLI for the IBKR paper-shadow run.
+
+Subcommands implemented in this PR (Phase C-1):
+  * ``init-ledger`` — build and write ``run_ledger.json`` for a new run.
+    Refuses if the source tree is dirty (§ 9 dirty-tree halt) so the
+    captured ``code_sha`` is meaningful.
+  * ``pre-flight`` — run the morning-gate halt checks (§ 6.4 + § 9)
+    against an existing run directory. Exits non-zero on halt.
+
+Subcommands deferred to subsequent PRs:
+  * ``start`` — wire ``LiveEngine`` and the artifact writers (Phase C-2).
+  * ``reconcile`` — invoke ``app.engine.live.reconcile`` post-force-flat.
+  * ``emergency-flatten`` — manual operator path for the contaminated-account
+    case in § 7.2 #6.
+
+CLI exit codes:
+  0  — success / pre-flight passed
+  1  — pre-flight failed (halt)
+  2  — operator error (bad args, missing files at init time)
+"""
 
 from __future__ import annotations
 
 import argparse
+import json
+import logging
+import subprocess
+import sys
+from pathlib import Path
+
+from app.engine.live.pre_flight import (
+    check_clean_tree,
+    check_no_halt_flag,
+    check_ntp_offset,
+    check_run_state_intact,
+    check_yesterday_artifacts_valid,
+    run_pre_flight,
+)
+from app.engine.live.run_ledger import (
+    build_ledger,
+    write_ledger,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _git_head_sha(repo_root: Path) -> str:
+    proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=str(repo_root),
+        timeout=5.0,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"git rev-parse HEAD failed in {repo_root}: rc={proc.returncode} stderr={proc.stderr!r}"
+        )
+    sha = proc.stdout.strip()
+    if not sha:
+        raise RuntimeError(f"git rev-parse HEAD returned empty in {repo_root}")
+    return sha
+
+
+# ──────────────────────────── init-ledger subcommand ─────────────────
+
+
+def cmd_init_ledger(args: argparse.Namespace) -> int:
+    """Build a new live-run ledger and write it under ``--run-root/<run_id>/``.
+
+    Refuses to start with a dirty source tree — see § 9. The clean-tree
+    check is the gate that makes ``code_sha`` (set to git HEAD) the
+    *actual* identity of the running code, not just a "close enough"
+    hint.
+    """
+    repo_root: Path = args.repo_root.resolve()
+    scope_paths = [Path(p) for p in args.clean_tree_scope]
+
+    clean = check_clean_tree(scope_paths, repo_root=repo_root)
+    if not clean.passed:
+        print(f"[INIT-LEDGER] dirty-tree halt: {clean.detail}", file=sys.stderr)
+        return 1
+
+    code_sha = _git_head_sha(repo_root)
+
+    live_config = json.loads(args.live_config_json) if args.live_config_json else {}
+
+    try:
+        ledger = build_ledger(
+            code_sha=code_sha,
+            strategy_spec_path=args.strategy_spec_path,
+            qc_audit_copy_path=args.qc_audit_copy_path,
+            qc_cloud_backtest_id=args.qc_cloud_backtest_id,
+            account_id=args.account_id,
+            start_date_ms=args.start_date_ms,
+            live_config=live_config,
+        )
+    except FileNotFoundError as exc:
+        print(f"[INIT-LEDGER] missing input: {exc}", file=sys.stderr)
+        return 2
+
+    run_dir = args.run_root / ledger.run_id
+    if run_dir.exists() and not args.force:
+        print(
+            f"[INIT-LEDGER] run directory already exists: {run_dir}. "
+            f"Pass --force to overwrite (rare — usually means re-running with identical inputs).",
+            file=sys.stderr,
+        )
+        return 2
+
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    print(f"[INIT-LEDGER] wrote {run_dir}/run_ledger.json (run_id={ledger.run_id})")
+    return 0
+
+
+# ──────────────────────────── pre-flight subcommand ──────────────────
+
+
+def cmd_pre_flight(args: argparse.Namespace) -> int:
+    """Run all morning-gate halt checks. Non-zero exit on any halt."""
+    repo_root: Path = args.repo_root.resolve()
+    scope_paths = [Path(p) for p in args.clean_tree_scope]
+
+    checks = []
+    checks.append(check_clean_tree(scope_paths, repo_root=repo_root))
+    checks.append(check_run_state_intact(args.run_dir))
+    checks.append(check_no_halt_flag(args.run_dir))
+
+    if args.skip_ntp:
+        print("[PRE-FLIGHT] skipping NTP check (--skip-ntp)")
+    else:
+        checks.append(
+            check_ntp_offset(
+                server=args.ntp_server,
+                max_offset_seconds=args.ntp_max_offset_seconds,
+                timeout_seconds=args.ntp_timeout_seconds,
+            )
+        )
+
+    if args.yesterday_day_n is not None:
+        checks.append(
+            check_yesterday_artifacts_valid(
+                run_dir=args.run_dir,
+                qc_dir=args.qc_dir,
+                docs_dir=args.docs_dir,
+                yesterday_day_n=args.yesterday_day_n,
+            )
+        )
+
+    all_passed, results = run_pre_flight(checks)
+    for r in results:
+        marker = "OK " if r.passed else "FAIL"
+        print(f"[PRE-FLIGHT] {marker} {r.name}: {r.detail}")
+    if not all_passed:
+        print("[PRE-FLIGHT] HALT — at least one check failed; refusing to place orders today.")
+        return 1
+    print("[PRE-FLIGHT] all checks passed; runner may proceed.")
+    return 0
+
+
+# ──────────────────────────── Argparse ───────────────────────────────
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the live-runtime CLI parser."""
     parser = argparse.ArgumentParser(
         prog="python -m app.engine.live.run",
         description="Run the SPY EMA crossover strategy against IBKR paper trading.",
     )
-    parser.add_argument("--config", help="Optional paper runtime config file.", default=None)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # init-ledger
+    init = sub.add_parser(
+        "init-ledger",
+        help="Build run_ledger.json for a new live run.",
+    )
+    init.add_argument("--repo-root", type=Path, required=True, help="Repository root for git ops.")
+    init.add_argument(
+        "--clean-tree-scope",
+        nargs="+",
+        default=["PythonDataService", "references/qc-shadow"],
+        help="Paths included in the dirty-tree refusal (relative to --repo-root).",
+    )
+    init.add_argument("--strategy-spec-path", type=Path, required=True)
+    init.add_argument("--qc-audit-copy-path", type=Path, required=True)
+    init.add_argument("--qc-cloud-backtest-id", required=True)
+    init.add_argument("--account-id", required=True, help="IBKR account ID, e.g. DU1234567.")
+    init.add_argument("--start-date-ms", type=int, required=True, help="int64 ms UTC of the run-start session.")
+    init.add_argument(
+        "--live-config-json",
+        default=None,
+        help="JSON object of resolved LiveConfig values (NOT raw env vars).",
+    )
+    init.add_argument(
+        "--run-root",
+        type=Path,
+        default=Path("PythonDataService/artifacts/live_runs"),
+        help="Parent directory under which the per-run-id directory is created.",
+    )
+    init.add_argument("--force", action="store_true", help="Overwrite an existing run directory.")
+    init.set_defaults(func=cmd_init_ledger)
+
+    # pre-flight
+    pre = sub.add_parser(
+        "pre-flight",
+        help="Run morning-gate halt checks; non-zero exit on halt.",
+    )
+    pre.add_argument("--repo-root", type=Path, required=True)
+    pre.add_argument(
+        "--clean-tree-scope",
+        nargs="+",
+        default=["PythonDataService", "references/qc-shadow"],
+    )
+    pre.add_argument("--run-dir", type=Path, required=True, help="live_runs/<run_id>/ directory.")
+    pre.add_argument("--qc-dir", type=Path, default=Path("artifacts/qc"))
+    pre.add_argument(
+        "--docs-dir",
+        type=Path,
+        default=Path("docs/references/reconciliations"),
+    )
+    pre.add_argument(
+        "--yesterday-day-n",
+        type=int,
+        default=None,
+        help="If set, verify yesterday's day-N reconciliation artifacts hash-match.",
+    )
+    pre.add_argument("--skip-ntp", action="store_true", help="Skip the NTP-offset check (offline / CI).")
+    pre.add_argument("--ntp-server", default="pool.ntp.org")
+    pre.add_argument("--ntp-max-offset-seconds", type=float, default=1.0)
+    pre.add_argument("--ntp-timeout-seconds", type=float, default=5.0)
+    pre.set_defaults(func=cmd_pre_flight)
+
     return parser
 
 
-def main() -> None:
-    """Parse CLI args.
-
-    Phase 8 wires execution; Phase 1 only proves the entrypoint imports.
-    """
-    build_parser().parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    return args.func(args)
 
 
 if __name__ == "__main__":
-    main()
-
+    sys.exit(main())
