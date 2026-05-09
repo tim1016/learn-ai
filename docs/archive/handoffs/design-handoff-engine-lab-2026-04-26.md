@@ -1,3 +1,8 @@
+> **Status:** Archived — per-session design handoff, Engine Lab shipped.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/engine-authority-map.md`.
+> Archived because: Engine Lab phases delivered 2026-04-26; engine authority map is the canonical reference.
+
 # Design handoff — Engine Lab (and shared ticker picker)
 
 **Date**: 2026-04-26

@@ -1,3 +1,8 @@
+> **Status:** Archived — prompt snippet for external LLM review, not a design doc.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/iv-ownership-research.md` (full IV pipeline research), `docs/architecture/options-math-authorities.md`.
+> Archived because: verbatim paste-prompt for a one-off external quant review; `iv-ownership-research.md` is the authoritative research record.
+
 # IV Pipeline — External Quant Review Prompt
 
 > Paste the section below into ChatGPT (o1 / GPT-5 / Claude / equivalent quant

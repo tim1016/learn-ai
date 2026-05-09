@@ -1,3 +1,8 @@
+> **Status:** Archived — session-level challenge/design note, superseded.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/engine-authority-map.md` (engine ownership), `docs/architecture/options-math-authorities.md` (options math).
+> Archived because: specific to a single strategy iteration; engine and options pipeline are now fully documented in canonical authority docs.
+
 # Options Strategy V1 — Implementation Challenges (Revised)
 
 **Strategy:** SpyEmaCrossoverOptionsAlgorithm V1 (Bull Call / Bull Put Spread overlay)  

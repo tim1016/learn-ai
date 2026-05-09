@@ -224,4 +224,4 @@ Adequate for "we thought about real-world failure modes." Not a deep test, but d
 
 ✅ The headline claim — "live runtime produces identical trades to backtest under controlled conditions" — is true and proven by `test_live_engine_replay.py` at `Decimal("0")` tolerance.
 
-Demo flow + Q&A prep at `docs/demo-2026-05-05.md`.
+Demo flow + Q&A prep at `docs/archive/handoffs/demo-2026-05-05.md` (archived).

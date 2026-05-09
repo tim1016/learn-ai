@@ -976,7 +976,7 @@ decisions; they affect what gets built but not how the built parts work.
 - [`docs/architecture/options-math-authorities.md`](options-math-authorities.md) — single sources of truth for options calculations (PR #25).
 - [`docs/architecture/edge-feature-design.md`](edge-feature-design.md) — Edge feature canonical spec (PR #26).
 - [`docs/architecture/edge-functionality-testing.md`](edge-functionality-testing.md) — Edge testing guide.
-- [`docs/architecture/design-handoff-edge-2026-04-25.md`](design-handoff-edge-2026-04-25.md) — Edge design handoff.
+- [`docs/archive/handoffs/design-handoff-edge-2026-04-25.md`](../archive/handoffs/design-handoff-edge-2026-04-25.md) — Edge design handoff (archived).
 - [`docs/architecture/vol-surface-dashboard-plan.md`](vol-surface-dashboard-plan.md) — phased build plan + open questions.
 - [`PythonDataService/app/research/options/README.md`](../../PythonDataService/app/research/options/README.md) — IV pipeline data-fetching reference.
 

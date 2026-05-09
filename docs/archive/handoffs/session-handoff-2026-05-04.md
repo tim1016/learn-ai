@@ -1,3 +1,8 @@
+> **Status:** Archived — session handoff from 2026-05-04, ephemeral operational record.
+> **Do not use as implementation authority.**
+> Current authority: `docs/ibkr-integration-authority.md`, `docs/ibkr-paper-deployment-plan.md`.
+> Archived because: end-of-session context dump for the 2026-05-04 IBKR paper-trading work; authority docs supersede this.
+
 # Session Handoff — IBKR Paper-Trading Live Runtime
 
 **Context for a fresh agent or future session.** Read this top to bottom before doing anything; the conversation that produced these artifacts was long and the framing shifted twice.

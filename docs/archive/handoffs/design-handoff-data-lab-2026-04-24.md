@@ -1,3 +1,8 @@
+> **Status:** Archived — per-session design handoff, work completed.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/engine-authority-map.md` (Engine Lab authority), `.claude/rules/angular.md` (Angular conventions).
+> Archived because: Data Lab redesign delivered 2026-04-24; implementation is reflected in the current codebase.
+
 # Claude Design — Data Lab follow-up pass (2026-04-24)
 
 This prompt covers a focused redesign of the **Data Lab** page (`/data-lab`) and a consolidation of indicator documentation across the app. Read the **"What's already done"** section first — it lists what just landed and constrains what to revisit. Areas marked **"Open question for design"** are explicit asks.

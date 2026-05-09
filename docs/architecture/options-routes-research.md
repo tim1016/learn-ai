@@ -985,7 +985,7 @@ DEFER UX decisions to a "Claude Design" prompt deliverable (ratified
 hash `Ld_D7E4LcbEWqq4z2WPl0g`,
 `quant-trading-lab-design-system/project/options_ux_design/`. All four
 UX questions answered; the picks are recorded inline in
-[`options-ux-design-prompt.md`](options-ux-design-prompt.md) under each
+[`options-ux-design-prompt.md`](../archive/prompts/options-ux-design-prompt.md) under each
 UX-Q heading. Headline answers:
 
 - **UX-Q1** — drill-down trigger = **icon button per side**
@@ -1065,7 +1065,7 @@ tolerance choices, route surface choices, data-format choices, test
 coverage choices. These are engineering decisions the implementer owns.
 
 *Format of each entry:* see the seed at
-[docs/architecture/options-ux-design-prompt.md](options-ux-design-prompt.md).
+[docs/architecture/options-ux-design-prompt.md](../archive/prompts/options-ux-design-prompt.md).
 Each entry is a self-contained section with: title, context, what was
 done as a working default, screenshots-or-paths-to-component, and the
 specific UX questions the design pass should answer.
@@ -1443,7 +1443,7 @@ reviewer-feedback log entry.
 authored with the full per-phase ledger, deferred-work rationale,
 duplication delta (baseline vs measured-after), and file-change
 inventory. The UX design prompt
-([`docs/architecture/options-ux-design-prompt.md`](options-ux-design-prompt.md))
+([`docs/architecture/options-ux-design-prompt.md`](../archive/prompts/options-ux-design-prompt.md))
 is the D11 accumulator with all four UX questions answered by the
 2026-04-29 Claude Design pass; UX-Q1, UX-Q2, and UX-Q3 have all
 been implemented (R0b drill-down, R0b chain density, R1

@@ -344,7 +344,7 @@ Key skeleton points planned:
   click). UX details deferred to the design-pass per
   [§7 D11](options-routes-research.md#7-decisions-log) of the
   research plan; entries UX-Q1, UX-Q2, UX-Q4 in
-  [`options-ux-design-prompt.md`](options-ux-design-prompt.md).
+  [`options-ux-design-prompt.md`](../archive/prompts/options-ux-design-prompt.md).
 - End-to-end fixture: SPY 2024-12-20 multi-leg strategy with
   golden POP + breakevens.
 
@@ -379,7 +379,7 @@ Key skeleton points planned:
   → batched `getOrFetchStockAggregates(occTicker, ...)` → renders.
 - UX details deferred to the design-pass per
   [§7 D11](options-routes-research.md#7-decisions-log); entry UX-Q3
-  in [`options-ux-design-prompt.md`](options-ux-design-prompt.md).
+  in [`options-ux-design-prompt.md`](../archive/prompts/options-ux-design-prompt.md).
 
 ### 5.4 Companion data formats
 
