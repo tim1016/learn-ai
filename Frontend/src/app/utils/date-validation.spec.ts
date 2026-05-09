@@ -186,12 +186,12 @@ describe('buildHolidayMap', () => {
 describe('parseYmd', () => {
   it('parses YYYY-MM-DD to a local-midnight Date', () => {
     const d = parseYmd('2025-05-31');
-    expect(d).not.toBeNull();
-    expect(d!.getFullYear()).toBe(2025);
-    expect(d!.getMonth()).toBe(4); // May (0-indexed)
-    expect(d!.getDate()).toBe(31);
-    expect(d!.getHours()).toBe(0);
-    expect(d!.getMinutes()).toBe(0);
+    if (d === null) throw new Error('parseYmd returned null for a valid date');
+    expect(d.getFullYear()).toBe(2025);
+    expect(d.getMonth()).toBe(4); // May (0-indexed)
+    expect(d.getDate()).toBe(31);
+    expect(d.getHours()).toBe(0);
+    expect(d.getMinutes()).toBe(0);
   });
 
   it('returns null for empty string', () => {
@@ -224,7 +224,7 @@ describe('formatYmd', () => {
   it('round-trips with parseYmd', () => {
     const original = '2024-02-29'; // leap day
     const parsed = parseYmd(original);
-    expect(parsed).not.toBeNull();
+    if (parsed === null) throw new Error('parseYmd returned null for a valid leap day');
     expect(formatYmd(parsed)).toBe(original);
   });
 });

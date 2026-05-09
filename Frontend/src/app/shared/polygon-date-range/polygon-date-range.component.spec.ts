@@ -122,8 +122,8 @@ describe('PolygonDateRangeComponent', () => {
 
     const root = fixture.nativeElement as HTMLElement;
     const warning = root.querySelector('.pdr__warning');
-    expect(warning).not.toBeNull();
-    expect(warning!.textContent).toContain('2-year historical data limit');
+    if (warning === null) throw new Error('expected warning advisory to be rendered');
+    expect(warning.textContent).toContain('2-year historical data limit');
   });
 
   it('hides the warning advisory when the range is valid', async () => {
