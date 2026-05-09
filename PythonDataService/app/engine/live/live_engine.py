@@ -9,6 +9,7 @@ IBKR.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
@@ -54,6 +55,15 @@ logger = logging.getLogger(__name__)
 
 
 _ENGINE_TZ = ZoneInfo("America/New_York")
+
+# How long to wait for broker.cancel_open_orders during a fatal halt
+# before giving up. The whole point of _fatal_halt is to land
+# poisoned.flag on disk, and the cancel is best-effort cleanup —
+# operator reconciliation handles any straggling orders. Without a
+# cap, a hung broker (which is the contamination scenario this path
+# exists for) blocks the cancel await indefinitely and the flag
+# never gets written. (CodeRabbit P1 from #194.)
+FATAL_HALT_CANCEL_TIMEOUT_S = 5.0
 
 
 class MaxOrdersPerDayExceeded(RuntimeError):
@@ -400,6 +410,24 @@ class LiveEngine:
                         writers, strategy, last_written_decision_ms
                     )
 
+                # § 7.1 trigger B runs BEFORE _submit_pending_with_meta
+                # so any order overdue from a prior bar gates new
+                # submissions on this bar — without this ordering, an
+                # overdue prior order would let new orders through and
+                # only halt afterwards, contaminating the broker state
+                # we're already failing to reconcile. Just-submitted
+                # orders aren't overdue (age ≈ 0 ≪ fill_window) so
+                # being invisible to the check this iteration is fine
+                # — they age normally and get caught next bar.
+                # (CodeRabbit P1 from #194 reversed the prior #194
+                # change that moved this AFTER the submit.)
+                if self._halt_enabled:
+                    last_clean_ms = int(minute_bar.end_time.timestamp() * 1000)
+                    await self._check_halt_lost_fill(
+                        seen_executions, last_clean_bar_close_ms=last_clean_ms,
+                        portfolio=portfolio, writers=writers,
+                    )
+
                 submitted = await self._submit_pending_with_meta(portfolio)
                 submitted_order_ids.extend(ack.order_id for ack in submitted)
                 orders_submitted_today += len(submitted)
@@ -410,20 +438,6 @@ class LiveEngine:
                     raise MaxOrdersPerDayExceeded(
                         f"submitted {orders_submitted_today} orders on {current_session_date} "
                         f"(cap={self._max_orders_per_day})"
-                    )
-
-                # § 7.1 trigger B runs AFTER _submit_pending_with_meta
-                # so any order the strategy queued this bar is already
-                # in _order_meta with its submitted_at_ms. Otherwise
-                # the just-submitted order would be invisible to the
-                # check until the next bar, leaving a one-bar window
-                # where a botched-submission scenario isn't caught.
-                # (CodeRabbit P1 from #193.)
-                if self._halt_enabled:
-                    last_clean_ms = int(minute_bar.end_time.timestamp() * 1000)
-                    await self._check_halt_lost_fill(
-                        seen_executions, last_clean_bar_close_ms=last_clean_ms,
-                        portfolio=portfolio, writers=writers,
                     )
 
                 current_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
@@ -744,12 +758,26 @@ class LiveEngine:
         """
         portfolio.pending_orders.clear()
         try:
-            cancelled = await self._broker.cancel_open_orders()
+            cancelled = await asyncio.wait_for(
+                self._broker.cancel_open_orders(),
+                timeout=FATAL_HALT_CANCEL_TIMEOUT_S,
+            )
             if cancelled:
                 logger.info(
                     "fatal halt cancelled %d Python-owned broker order(s): %r",
                     len(cancelled), cancelled,
                 )
+        except TimeoutError:
+            # CodeRabbit P1 from #194: an unresponsive broker
+            # (which is exactly the contamination scenario this
+            # path exists for) used to block the cancel await
+            # indefinitely, swallowing poisoned.flag entirely.
+            # Cap it — the flag matters more than the cancellation.
+            logger.exception(
+                "broker.cancel_open_orders timed out after %ss during fatal halt; "
+                "operator must reconcile any open orders manually",
+                FATAL_HALT_CANCEL_TIMEOUT_S,
+            )
         except Exception:
             # The broker is presumed unhealthy at this point — don't
             # block the halt waiting for cancellation. The poisoned
