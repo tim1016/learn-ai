@@ -34,6 +34,7 @@ import {
   type VerdictAnalysis,
   type VerdictCta,
 } from '../../../shared/indicator-verdict-hero';
+import { PolygonDateRangeComponent } from '../../../shared/polygon-date-range';
 
 Chart.register(...registerables);
 
@@ -212,6 +213,7 @@ interface HorizonOption {
     MultiSelect,
     InfoIconComponent,
     IndicatorVerdictHeroComponent,
+    PolygonDateRangeComponent,
   ],
 })
 export class IndicatorReliabilityComponent {
