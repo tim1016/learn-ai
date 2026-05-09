@@ -145,8 +145,19 @@ class IbkrBrokerAdapter:
     async def _run_event_stream(self) -> None:
         try:
             async for event in stream_order_events(self._client):
-                if int(event.order_id) not in self._owned_order_ids:
-                    continue
+                # Per spec § 7: persist all received executions to
+                # executions.parquet whether or not Python originated
+                # them, regardless of clientId. The previous
+                # ``order_id in owned`` filter dropped foreign fills
+                # entirely — defeating the outside-mutation halt
+                # check that needs to see foreign executions to fire.
+                # Downstream ownership filtering for the engine's
+                # portfolio-update path lives in
+                # ``LiveEngine._convert_ibkr_fill`` (which checks
+                # ``_order_meta`` per fill); it correctly drops
+                # foreigns from the portfolio side. The halt-detection
+                # consumer (Phase C-2c-b2-ii) reads the unfiltered
+                # buffer instead.
                 self._event_buffer.append(event)
         except asyncio.CancelledError:
             raise

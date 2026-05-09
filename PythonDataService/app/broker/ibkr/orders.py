@@ -412,8 +412,17 @@ def _trade_to_status_event(
 
 
 def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
-    """Translate one Fill into a fill-type event."""
+    """Translate one Fill into a fill-type event.
+
+    ``exec_id`` and ``client_id`` come from the underlying ib_async
+    ``Execution`` object — those are the broker primary keys the
+    live-runtime § 7 fatal-halt check needs to detect outside-mutation
+    (any execution under our DU account whose clientId is not ours,
+    or whose execId we never originated, is foreign).
+    """
     exec_obj = getattr(fill, "execution", None)
+    exec_id = getattr(exec_obj, "execId", None) if exec_obj is not None else None
+    client_id_raw = getattr(exec_obj, "clientId", None) if exec_obj is not None else None
     return IbkrOrderEvent(
         account_id=account_id,
         order_id=int(trade.order.orderId),
@@ -421,6 +430,8 @@ def _fill_to_event(trade, fill, account_id: str) -> IbkrOrderEvent:
         con_id=int(trade.contract.conId) if trade.contract else None,
         event_type="fill",
         status=getattr(trade.orderStatus, "status", None),
+        exec_id=str(exec_id) if exec_id else None,
+        client_id=int(client_id_raw) if client_id_raw is not None else None,
         fill_quantity=float(getattr(exec_obj, "shares", 0.0) or 0.0),
         avg_fill_price=float(getattr(trade.orderStatus, "avgFillPrice", 0.0) or 0.0) or None,
         cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),

@@ -306,3 +306,71 @@ async def test_stream_order_events_emits_status_transitions() -> None:
 
     assert out[0].status == "Submitted"
     assert out[1].status == "Filled"
+
+
+@pytest.mark.asyncio
+async def test_stream_order_events_populates_exec_id_and_client_id_on_fill() -> None:
+    """Phase C-2c-b2-i: fill events surface execId + clientId so the live
+    runtime's § 7 outside-mutation halt can index by broker primary keys."""
+    # First snapshot: order placed, no fill yet.
+    trade_v1 = _trade_namespace(order_id=42, status_str="Submitted")
+    # Second snapshot: order filled with an execution row carrying
+    # execId="exec-abc-1" and clientId=42 (our owning client).
+    fill_exec = SimpleNamespace(
+        execId="exec-abc-1",
+        clientId=42,
+        shares=10.0,
+        price=500.5,
+    )
+    trade_v2 = _trade_namespace(
+        order_id=42, status_str="Filled", filled=10, remaining=0
+    )
+    trade_v2.fills = [SimpleNamespace(execution=fill_exec)]
+    # Use itertools.chain to terminate with infinite repeats of the
+    # final snapshot, avoiding StopIteration if extra polls occur.
+    from itertools import chain, repeat
+
+    snapshots = chain([[trade_v1]], repeat([trade_v2]))
+    client = _client()
+    client.ib.trades = MagicMock(side_effect=lambda: next(snapshots))
+
+    # Collect 3 events: Submitted status, Filled status, and the fill event.
+    out = []
+    async for event in stream_order_events(client, poll_seconds=0.001):
+        out.append(event)
+        if len(out) >= 3:
+            break
+
+    fill_event = next(e for e in out if e.event_type == "fill")
+    assert fill_event.exec_id == "exec-abc-1"
+    assert fill_event.client_id == 42
+    assert fill_event.fill_quantity == 10.0
+    assert fill_event.last_fill_price == 500.5
+
+
+@pytest.mark.asyncio
+async def test_stream_order_events_handles_fill_with_no_execution_object() -> None:
+    """Defensive: a Fill without an execution attribute (degenerate ib_async
+    state) yields a fill event with exec_id=None / client_id=None rather
+    than crashing. The downstream halt check treats null client_order_id
+    as foreign by definition, so this still surfaces correctly."""
+    trade_v1 = _trade_namespace(order_id=42, status_str="Submitted")
+    trade_v2 = _trade_namespace(order_id=42, status_str="Filled", filled=10, remaining=0)
+    trade_v2.fills = [SimpleNamespace(execution=None)]
+    # Use itertools.chain to terminate with infinite repeats of the
+    # final snapshot, avoiding StopIteration if extra polls occur.
+    from itertools import chain, repeat
+
+    snapshots = chain([[trade_v1]], repeat([trade_v2]))
+    client = _client()
+    client.ib.trades = MagicMock(side_effect=lambda: next(snapshots))
+
+    out = []
+    async for event in stream_order_events(client, poll_seconds=0.001):
+        out.append(event)
+        if len(out) >= 3:
+            break
+
+    fill_event = next(e for e in out if e.event_type == "fill")
+    assert fill_event.exec_id is None
+    assert fill_event.client_id is None

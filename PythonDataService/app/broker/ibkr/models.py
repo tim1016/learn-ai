@@ -354,6 +354,13 @@ class IbkrOrderEvent(BaseModel):
     Emitted by the order event SSE stream (Phase 3b). The fill case
     carries non-null ``fill_quantity`` and ``avg_fill_price``; the
     error case carries non-null ``error_code`` / ``error_message``.
+
+    ``exec_id`` and ``client_id`` are populated on fill events so the
+    live runtime's § 7 fatal-halt check can index by broker primary
+    keys (``execId`` is IBKR's globally unique execution identifier,
+    ``clientId`` lets the runtime see when a fill was placed by some
+    other client — including a manual TWS click — under the same DU
+    account). Both are ``None`` for non-fill events.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -366,6 +373,8 @@ class IbkrOrderEvent(BaseModel):
     status: OrderStatus | None = None
 
     # Fill payload (event_type == "fill")
+    exec_id: str | None = None
+    client_id: int | None = None
     fill_quantity: float | None = None
     avg_fill_price: float | None = None
     cumulative_filled: float | None = None
