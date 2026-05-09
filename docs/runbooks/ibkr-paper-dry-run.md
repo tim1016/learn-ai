@@ -36,8 +36,46 @@ Before kicking off the dry run, confirm:
 - [ ] NTP is reachable from the host (the pre-flight queries
       `pool.ntp.org` by default; offset must be < 1 s).
 - [ ] The polygon-data-service container is running (`podman ps`).
+- [ ] The compose file mounts `./PythonDataService/artifacts:/app/artifacts:z`
+      (the existing compose only mounts `./PythonDataService/app:/app/app`,
+      so the runner's parquets would otherwise vanish on container
+      restart and not be visible to the host-side reconcile in Step 4).
+      This mount is added by the Phase C-2b compose-config PR; for now,
+      add it manually to `compose.yaml` under the `python-service`
+      `volumes:` block before the dry run.
 
-## Step 1 — Initialize the dry-run ledger
+## A note on where commands run
+
+This runbook is a mix of **host-side** commands (most of it) and one
+**container-side** command (Step 3 only). The reasons are:
+
+- `init-ledger`, `pre-flight`, and `reconcile` need git access (clean-tree
+  refusal, code_sha capture) and visibility into the full repo
+  (`references/qc-shadow/`, `docs/references/reconciliations/`,
+  `PythonDataService/artifacts/`). Only the host satisfies all of those.
+- The `polygon-data-service` container compose-mounts only
+  `./PythonDataService/app:/app/app:z` — `tests/`, `references/`, and
+  `docs/` are NOT visible inside the container. Running the CLI from
+  there fails with missing-path errors.
+- The host has its own Python venv at `PythonDataService/.venv/` with
+  the same dependencies as the container; activate it before each
+  command.
+
+Step 3 (`start --readonly`, the long-running broker connection) is the
+exception — it runs in the container because the IBKR Gateway sidecar
+is on the same network. That step uses paths under `/app/...` because
+those *are* visible to the container.
+
+```bash
+# Activate the venv once per shell. All host commands below assume it's active.
+cd C:/Users/inkan/Documents/learn-ai/PythonDataService
+source .venv/Scripts/activate    # Git Bash on Windows
+# or:  .venv\Scripts\Activate.ps1 (PowerShell)
+# or:  source .venv/bin/activate  (Linux/macOS)
+cd ..
+```
+
+## Step 1 — Initialize the dry-run ledger (host)
 
 Build the run ledger. This writes
 `PythonDataService/artifacts/live_runs/<run_id>/run_ledger.json` and
@@ -45,20 +83,25 @@ records the run identity (§10) — strategy spec hash, QC audit copy
 hash, account id, start-of-session UTC ms.
 
 ```bash
-podman exec polygon-data-service python -m app.engine.live.run init-ledger \
-  --repo-root /workspace \
-  --strategy-spec-path /app/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json \
-  --qc-audit-copy-path /workspace/references/qc-shadow/SpyEmaCrossoverAlgorithm.py \
+python -m app.engine.live.run init-ledger \
+  --repo-root . \
+  --clean-tree-scope PythonDataService references/qc-shadow \
+  --strategy-spec-path PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json \
+  --qc-audit-copy-path references/qc-shadow/SpyEmaCrossoverAlgorithm.py \
   --qc-cloud-backtest-id <PASTE FROM QC CLOUD UI> \
   --account-id DU<your-paper-account> \
   --start-date-ms $(date -u -d "today 09:30 EDT" +%s000) \
   --live-config-json '{"symbol":"SPY","force_flat_at":"15:55","client_id":42}' \
-  --run-root /app/artifacts/live_runs
+  --run-root PythonDataService/artifacts/live_runs
 ```
+
+Run from the repo root. The `python` invocation needs `PythonDataService/`
+on `sys.path`; either run from that directory (and adjust paths) or
+prepend `PYTHONPATH=PythonDataService` to the command.
 
 Expected outcome:
 - Exit 0
-- Stdout: `[INIT-LEDGER] wrote /app/artifacts/live_runs/<sha>/run_ledger.json (run_id=<sha>)`
+- Stdout: `[INIT-LEDGER] wrote PythonDataService/artifacts/live_runs/<sha>/run_ledger.json (run_id=<sha>)`
 
 Failure modes to expect:
 - **Dirty tree** → exit 1, message "dirty-tree halt: working tree has N uncommitted change(s)…". Fix: commit or stash within scope.
@@ -67,15 +110,16 @@ Failure modes to expect:
 
 Record the resulting `run_id`; you'll use it in subsequent steps.
 
-## Step 2 — Pre-flight gate (morning gate)
+## Step 2 — Pre-flight gate (morning gate, host)
 
 Run all the `pre_flight.py` halt checks. This is the same code path
 that fires every morning during paper week (§6.4).
 
 ```bash
-podman exec polygon-data-service python -m app.engine.live.run pre-flight \
-  --repo-root /workspace \
-  --run-dir /app/artifacts/live_runs/<run_id>
+PYTHONPATH=PythonDataService python -m app.engine.live.run pre-flight \
+  --repo-root . \
+  --clean-tree-scope PythonDataService references/qc-shadow \
+  --run-dir PythonDataService/artifacts/live_runs/<run_id>
 ```
 
 Expected outcome — every line should be `OK`:
@@ -95,7 +139,7 @@ Failure modes to expect:
 
 If any check fails, **stop the dry run**. The morning gate must be green before placing any orders, even fake ones.
 
-## Step 3 — Read-only run
+## Step 3 — Read-only run (container)
 
 Start the runner with `--readonly` (Phase C-2 flag). The runner connects
 to IB Gateway, subscribes to the SPY 5-second bar stream (aggregated to
@@ -103,6 +147,13 @@ to IB Gateway, subscribes to the SPY 5-second bar stream (aggregated to
 but never submits an order. Decisions, indicators, and bars all land in
 the artifact parquets exactly as they would in a live run; the
 difference is that `--readonly` short-circuits `place_order`.
+
+This command runs in the container (where the IBKR Gateway sidecar
+network is reachable). The artifact parquets it writes land at
+`/app/artifacts/live_runs/<run_id>/` inside the container, which is
+the same path as `PythonDataService/artifacts/live_runs/<run_id>/`
+on the host via the existing `./PythonDataService/app:/app/app`
+compose mount.
 
 ```bash
 podman exec polygon-data-service python -m app.engine.live.run start \
@@ -125,7 +176,7 @@ Expected runtime behavior:
 If a halt rule trips intra-day (rare in dry-run mode), the runner stops
 and writes `halt.json` under the run directory. Inspect, fix, restart.
 
-## Step 4 — End-of-session reconciliation
+## Step 4 — End-of-session reconciliation (host)
 
 After force-flat (or end of session in dry-run mode), invoke the daily
 reconciliation. This compares the runner's decisions against a
@@ -137,20 +188,21 @@ runner's own decisions (so the comparison should classify everything as
 `none`):
 
 ```bash
-mkdir -p /tmp/qc-dry-run/2026-05-04
+mkdir -p PythonDataService/artifacts/qc-dry-run/2026-05-04
 # Hand-craft indicators.csv from the runner's decisions.parquet — see
 # the reconcile.py docstring for the exact column set. Or, easier: run
 # the reconcile module on the runner's own output as both sides for a
 # self-consistency check. Either way, no QC Cloud involvement on dry-run day.
 ```
 
-Then:
+Then run reconcile from the host (no IBKR access needed, and the host
+has visibility into the docs/ tree where the day Markdown lands):
 
 ```bash
-podman exec polygon-data-service python -m app.engine.live.reconcile \
-  --run-dir /app/artifacts/live_runs/<run_id> \
-  --qc-dir /tmp/qc-dry-run/2026-05-04 \
-  --docs-dir /workspace/docs/references/reconciliations/dry-run-2026-05-04 \
+PYTHONPATH=PythonDataService python -m app.engine.live.reconcile \
+  --run-dir PythonDataService/artifacts/live_runs/<run_id> \
+  --qc-dir PythonDataService/artifacts/qc-dry-run/2026-05-04 \
+  --docs-dir docs/references/reconciliations/dry-run-2026-05-04 \
   --run-label dry-run-2026-05-04 \
   --day-n 0 \
   --day-date 2026-05-04
@@ -166,17 +218,22 @@ Expected outcome:
 Inspect the Markdown by hand. The day-0 receipt is your dry-run
 deliverable; commit it to the docs tree as evidence the pipeline ran.
 
-## Step 5 — Phases 1–7 regression check
+## Step 5 — Phases 1–7 regression check (host)
 
 Re-run the existing live-engine test suite on the run-start commit to
-verify nothing regressed:
+verify nothing regressed. Run from the host because the container only
+mounts `app/` — `tests/` is not visible inside it.
 
 ```bash
-podman exec polygon-data-service python -m pytest tests/engine/live/ -v
+cd PythonDataService
+python -m pytest tests/engine/live/ -v
+cd ..
 ```
 
-Expected: every prior test passes; the new Phase A consumers may skip
-(if QC exports aren't yet committed) but should not error.
+Expected: every prior test passes; some Phase A consumers and
+git-required tests may skip (the former waits on QC exports, the
+latter on the `git` binary — both are valid skip conditions, not
+failures).
 
 ## Success criteria
 
