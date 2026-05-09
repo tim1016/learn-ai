@@ -158,3 +158,142 @@ def test_now_ms_utc_returns_int_milliseconds() -> None:
     assert isinstance(ts, int)
     # Sanity: post-2020 UTC ms is 13 digits.
     assert ts > 1_577_836_800_000  # 2020-01-01 UTC
+
+
+# ──────────────────────────── check_outside_mutation ─────────────────
+
+
+def test_outside_mutation_returns_none_when_all_executions_owned() -> None:
+    from app.engine.live.halt import check_outside_mutation
+
+    executions = [
+        {"client_order_id": "live-1", "exec_id": "e1", "perm_id": 9001, "account_id": "DU123"},
+        {"client_order_id": "live-2", "exec_id": "e2", "perm_id": 9002, "account_id": "DU123"},
+    ]
+    owned = {"live-1", "live-2"}
+    assert check_outside_mutation(
+        executions, owned, halted_at_ms=1_000, last_clean_bar_close_ms=900
+    ) is None
+
+
+def test_outside_mutation_flags_first_foreign_execution() -> None:
+    """A foreign execution under the DU account fires the halt regardless
+    of clientId — § 7.1 trigger A."""
+    from app.engine.live.halt import (
+        PoisonedHaltTrigger,
+        check_outside_mutation,
+    )
+
+    executions = [
+        {"client_order_id": "live-1", "exec_id": "e1", "perm_id": 9001, "account_id": "DU123"},
+        # Foreign — placed by a different client (e.g. TWS manual click).
+        {
+            "client_order_id": "manual-tws-7",
+            "exec_id": "e2-foreign",
+            "perm_id": 9002,
+            "account_id": "DU123",
+            "client_id": 0,
+        },
+    ]
+    reason = check_outside_mutation(
+        executions, owned_client_order_ids={"live-1"},
+        halted_at_ms=1_000, last_clean_bar_close_ms=900,
+    )
+    assert reason is not None
+    assert reason.trigger == PoisonedHaltTrigger.OUTSIDE_MUTATION
+    assert reason.details["client_order_id"] == "manual-tws-7"
+    assert reason.details["exec_id"] == "e2-foreign"
+    assert reason.details["perm_id"] == 9002
+    assert reason.details["client_id"] == 0
+
+
+def test_outside_mutation_flags_execution_with_no_client_order_id() -> None:
+    """An execution with a missing/null client_order_id is foreign by definition."""
+    from app.engine.live.halt import check_outside_mutation
+
+    executions = [
+        {"client_order_id": None, "exec_id": "e-foreign", "perm_id": 1, "account_id": "DU123"},
+    ]
+    reason = check_outside_mutation(
+        executions, owned_client_order_ids={"live-1"},
+        halted_at_ms=1_000, last_clean_bar_close_ms=900,
+    )
+    assert reason is not None
+    assert reason.details["client_order_id"] is None
+
+
+# ──────────────────────────── check_lost_fill ────────────────────────
+
+
+def test_lost_fill_returns_none_when_all_orders_filled() -> None:
+    from app.engine.live.halt import check_lost_fill
+
+    orders = [{"client_order_id": "live-1", "submitted_at_ms": 100}]
+    executions = [{"client_order_id": "live-1", "exec_id": "e1"}]
+    assert check_lost_fill(
+        orders, executions,
+        fill_window_ms=60_000, current_time_ms=200, last_clean_bar_close_ms=0,
+    ) is None
+
+
+def test_lost_fill_returns_none_when_unfilled_order_still_within_window() -> None:
+    """An order placed 30s ago with a 60s window is still hopeful — no halt yet."""
+    from app.engine.live.halt import check_lost_fill
+
+    orders = [{"client_order_id": "live-1", "submitted_at_ms": 100_000}]
+    assert check_lost_fill(
+        orders, executions=[],
+        fill_window_ms=60_000, current_time_ms=130_000, last_clean_bar_close_ms=100_000,
+    ) is None
+
+
+def test_lost_fill_flags_order_past_its_window() -> None:
+    from app.engine.live.halt import (
+        PoisonedHaltTrigger,
+        check_lost_fill,
+    )
+
+    orders = [{"client_order_id": "live-1", "submitted_at_ms": 100_000}]
+    reason = check_lost_fill(
+        orders, executions=[],
+        fill_window_ms=60_000, current_time_ms=200_000, last_clean_bar_close_ms=180_000,
+    )
+    assert reason is not None
+    assert reason.trigger == PoisonedHaltTrigger.LOST_FILL
+    assert reason.details["client_order_id"] == "live-1"
+    assert reason.details["age_ms"] == 100_000
+    assert reason.details["fill_window_ms"] == 60_000
+    assert reason.halted_at_ms == 200_000
+    assert reason.last_clean_bar_close_ms == 180_000
+
+
+def test_lost_fill_reports_oldest_overdue_when_multiple() -> None:
+    """When multiple orders are overdue, the oldest is reported first
+    (the operator should chase that one's lifecycle)."""
+    from app.engine.live.halt import check_lost_fill
+
+    orders = [
+        {"client_order_id": "live-2", "submitted_at_ms": 110_000},
+        {"client_order_id": "live-1", "submitted_at_ms": 100_000},  # older
+    ]
+    reason = check_lost_fill(
+        orders, executions=[],
+        fill_window_ms=60_000, current_time_ms=200_000, last_clean_bar_close_ms=180_000,
+    )
+    assert reason is not None
+    assert reason.details["client_order_id"] == "live-1"
+    assert reason.details["overdue_count"] == 2
+
+
+def test_lost_fill_skips_orders_with_no_client_order_id() -> None:
+    """Internal/anonymous orders without a client_order_id are not
+    Python-owned — the check is scoped to ownership, not all orders."""
+    from app.engine.live.halt import check_lost_fill
+
+    orders = [
+        {"client_order_id": None, "submitted_at_ms": 100_000},
+    ]
+    assert check_lost_fill(
+        orders, executions=[],
+        fill_window_ms=60_000, current_time_ms=200_000, last_clean_bar_close_ms=180_000,
+    ) is None
