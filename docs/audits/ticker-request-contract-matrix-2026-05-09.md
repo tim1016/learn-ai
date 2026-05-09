@@ -9,7 +9,6 @@ PR (ii)'s Task 0 deliverable. Each candidate router/model from the spec was audi
 | `DataQualityRequest` (data_quality.py:25) | `ticker` | `from_date`/`to_date` | n/a | n/a | n/a | none — base defaults are unused |
 | `IndicatorReliabilityRequest` (models/indicator_reliability_models.py:28) | `ticker` | **`start_date`/`end_date`** | 1 | "minute" | n/a | none — `AliasChoices` accepts `start_date`/`end_date` |
 | `IndicatorTableRequest` (models/requests.py:192) | `ticker` | `from_date`/`to_date` | 1 | "minute" | **"extended"** | **override session="extended"** |
-| `DatasetGenerationRequest` (models/requests.py:287) | `ticker` | `from_date`/`to_date` | 1 | "minute" | **"extended"** | **override session="extended"** |
 | `RuleBasedBacktestJobRequest` (jobs.py:79) | `ticker` | `from_date`/`to_date` | **15** | "minute" | n/a | **override multiplier=15** |
 | `FeatureResearchJobRequest` (jobs.py:136) | `ticker` | `from_date`/`to_date` | 1 | "minute" | n/a | none — defaults match base |
 | `SignalEngineJobRequest` (jobs.py:154) | `ticker` | `from_date`/`to_date` | **15** | "minute" | n/a | **override multiplier=15** |
@@ -23,6 +22,7 @@ The spec listed these as candidates; the audit reveals they don't actually match
 | Model (file:line) | Why excluded |
 |---|---|
 | `AggregateRequest` (models/requests.py:8) | `timespan` validator allows `["minute","hour","day","week","month","quarter","year"]` — broader than the base's `Literal["minute","hour","day"]`. Cannot widen via inheritance in Pydantic v2. Plus `limit`/`adjusted` add Polygon-specific fields. Stays as-is. |
+| `DatasetGenerationRequest` (models/requests.py:287) | Same problem — `validate_dataset_timespan` allows `["second","minute","hour","day","week","month","quarter","year"]` (even broader than `AggregateRequest`). Inheriting would narrow accepted values from 8 to 3, silently rejecting any caller currently using `week`/`month`/etc. Stays as-is. **Net effect**: dataset generation is excluded from this PR's schema unification. |
 | `IndicatorRequest` (models/requests.py:36) | Different shape — `indicator_type`/`window`/`timestamp`, no date range. |
 | `CalculateIndicatorsRequest` (models/requests.py:166) | Takes pre-fetched `bars: list[OhlcvBar]` instead of dates — different shape. |
 | All `volatility.py` endpoints | Use path/query params directly (`ticker: str` as function arg). No BaseModel request bodies to inherit. |
@@ -34,7 +34,7 @@ The spec listed these as candidates; the audit reveals they don't actually match
 
 Three places where the base's defaults silently differ from the route's pre-migration default; explicit overrides on the inheriting class preserve current behavior:
 
-- `IndicatorTableRequest` and `DatasetGenerationRequest`: `session="extended"` (base default `"rth"`)
+- `IndicatorTableRequest`: `session="extended"` (base default `"rth"`)
 - `RuleBasedBacktestJobRequest` and `SignalEngineJobRequest`: `multiplier=15` (base default `1`)
 
 Each override carries an inline comment naming the pre-migration default it preserves; each gets a regression test in the corresponding test file.
@@ -47,7 +47,7 @@ Each override carries an inline comment naming the pre-migration default it pres
 
 - Plan Task 5 (`indicators.py`) becomes "migrate `IndicatorTableRequest` (in models/requests.py)" rather than touching indicators.py directly.
 - Plan Task 7 (volatility) is removed.
-- Plan Task 8 (dataset) becomes "migrate `DatasetGenerationRequest` (in models/requests.py)".
+- Plan Task 8 (dataset) is **removed** — `DatasetGenerationRequest`'s `validate_dataset_timespan` accepts 8 values; the base's Literal accepts 3. Inheriting would silently reject 5 valid values.
 - Plan Task 2 (`aggregates.py`) is **removed** — `AggregateRequest`'s broader timespan vocab makes inheritance lossy.
 
-Net inheritor count: **9 models** (down from 11+ implied by the original spec).
+Net inheritor count: **8 models** (down from 11+ implied by the original spec).
