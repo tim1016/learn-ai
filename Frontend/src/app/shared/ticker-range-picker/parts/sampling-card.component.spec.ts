@@ -44,7 +44,9 @@ describe('SamplingCardComponent', () => {
       '.multiplier__select',
     );
     expect(select).not.toBeNull();
-    expect(select!.querySelectorAll('option').length).toBe(3);
+    if (select) {
+      expect(select.querySelectorAll('option').length).toBe(3);
+    }
   });
 
   it('setMultiplier updates value().multiplier', () => {

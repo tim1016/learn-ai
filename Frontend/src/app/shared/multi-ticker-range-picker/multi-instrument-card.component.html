@@ -42,6 +42,7 @@
               type="button"
               class="suggestion"
               role="option"
+              [attr.aria-selected]="false"
               (click)="add(t.symbol)"
             >
               <span class="suggestion__symbol mono">{{ t.symbol }}</span>

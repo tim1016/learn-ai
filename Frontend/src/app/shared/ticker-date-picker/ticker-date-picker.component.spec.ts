@@ -43,7 +43,7 @@ describe('TickerDatePickerComponent', () => {
   it('rangeProjection() collapses from/to to the snapshot date', () => {
     fixture.detectChanges();
     const projection = (
-      component as unknown as { rangeProjection: { (): { from: string; to: string } } }
+      component as unknown as { rangeProjection: () => { from: string; to: string } }
     ).rangeProjection();
     expect(projection.from).toBe('2025-04-30');
     expect(projection.to).toBe('2025-04-30');
@@ -80,8 +80,10 @@ describe('TickerDatePickerComponent', () => {
     fixture.detectChanges();
     const d = (component as unknown as { dateValue: Date | null }).dateValue;
     expect(d).not.toBeNull();
-    expect(d!.getFullYear()).toBe(2025);
-    expect(d!.getMonth()).toBe(3);
-    expect(d!.getDate()).toBe(30);
+    if (d) {
+      expect(d.getFullYear()).toBe(2025);
+      expect(d.getMonth()).toBe(3);
+      expect(d.getDate()).toBe(30);
+    }
   });
 });

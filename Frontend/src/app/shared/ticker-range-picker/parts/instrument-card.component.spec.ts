@@ -61,7 +61,7 @@ describe('InstrumentCardComponent', () => {
     const tickerBox: HTMLElement | null =
       fixture.nativeElement.querySelector('[role="combobox"]');
     expect(tickerBox).not.toBeNull();
-    tickerBox!.click();
+    if (tickerBox) tickerBox.click();
     fixture.detectChanges();
 
     const text: string = fixture.nativeElement.textContent ?? '';

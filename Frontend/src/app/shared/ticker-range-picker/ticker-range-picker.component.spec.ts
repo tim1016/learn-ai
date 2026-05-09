@@ -158,9 +158,13 @@ describe('TickerRangePickerComponent (flags)', () => {
   it('passes availableMultipliers through to the Sampling card', () => {
     fixture.componentRef.setInput('availableMultipliers', [1, 5, 15]);
     fixture.detectChanges();
-    const select = fixture.nativeElement.querySelector('.multiplier__select');
+    const select: HTMLSelectElement | null = fixture.nativeElement.querySelector(
+      '.multiplier__select',
+    );
     expect(select).not.toBeNull();
-    expect(select!.querySelectorAll('option').length).toBe(3);
+    if (select) {
+      expect(select.querySelectorAll('option').length).toBe(3);
+    }
   });
 
   it('does not render multiplier dropdown by default', () => {

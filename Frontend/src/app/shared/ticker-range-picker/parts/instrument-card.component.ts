@@ -5,7 +5,6 @@ import {
   effect,
   ElementRef,
   HostListener,
-  inject,
   input,
   model,
   signal,
