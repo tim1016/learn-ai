@@ -45,7 +45,7 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.framework.insight import Insight, InsightDirection
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
-from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy
 
 
 @dataclass
@@ -165,6 +165,13 @@ class SpyEmaCrossoverAlgorithm(Strategy):
         current_above = ema5_val > ema10_val
         ema_gap = ema5_val - ema10_val
 
+        # Per-bar action label tracked locally; published at end of
+        # handler via ``last_decision_snapshot`` for the live runtime's
+        # DecisionWriter (Phase C-2 observability hook). Trading logic
+        # is unchanged — the variable is set inside existing branches
+        # and read only at the bottom.
+        bar_signal = "HOLD"
+
         if self._in_position:
             # Decrement bars-until-exit and liquidate when we hit zero.
             self._bars_until_exit -= 1
@@ -175,6 +182,7 @@ class SpyEmaCrossoverAlgorithm(Strategy):
                 self.ctx.liquidate(self._symbol)
                 self.ctx.log(f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
                 self._in_position = False
+                bar_signal = "EXIT"
         else:
             # Entry check.
             fresh_crossover = current_above and not self._prev_ema5_above_ema10
@@ -189,6 +197,7 @@ class SpyEmaCrossoverAlgorithm(Strategy):
                 self.ctx.set_holdings(self._symbol, Decimal(1))
                 self._in_position = True
                 self._bars_until_exit = 5
+                bar_signal = "ENTER"
 
                 # ── Emit Insight (Phase 1) ──
                 # Dual-mode: the strategy still trades via set_holdings()
@@ -221,6 +230,20 @@ class SpyEmaCrossoverAlgorithm(Strategy):
 
         # Update the crossover state for the next bar.
         self._prev_ema5_above_ema10 = current_above
+
+        # Publish the per-bar decision snapshot (observability only —
+        # live engine reads this to populate decisions.parquet; backtest
+        # paths and unit tests that don't observe it see no change).
+        # ``bar.end_time`` is already an aware datetime in the engine's
+        # exchange tz, so .timestamp() is the correct UTC seconds.
+        self.last_decision_snapshot = DecisionSnapshot(
+            bar_close_ms=int(bar.end_time.timestamp() * 1000),
+            ema5=float(ema5_val),
+            ema10=float(ema10_val),
+            rsi=float(rsi_val),
+            signal=bar_signal,
+            intended_price=float(bar.close),
+        )
 
     # ------------------------------------------------------------------
     # Fill-driven trade bookkeeping.
