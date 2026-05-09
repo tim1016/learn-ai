@@ -99,4 +99,36 @@ describe('PolygonDateRangeComponent', () => {
     const root = fixture.nativeElement as HTMLElement;
     expect(root.querySelector('#test-from')).not.toBeNull();
   });
+
+  it('shows the warning advisory when fromDate is before the 2-year window', async () => {
+    @Component({
+      imports: [PolygonDateRangeComponent],
+      template: `<app-polygon-date-range [(fromDate)]="from" [(toDate)]="to" idPrefix="warn" />`,
+    })
+    class WarnHost {
+      from = signal('2010-01-01'); // far older than the 2-year limit
+      to = signal('2025-03-31');
+    }
+
+    await TestBed.configureTestingModule({
+      imports: [WarnHost, NoopAnimationsModule],
+      providers: [{ provide: MarketMonitorService, useValue: makeMonitor() }],
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(WarnHost);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const warning = root.querySelector('.pdr__warning');
+    expect(warning).not.toBeNull();
+    expect(warning!.textContent).toContain('2-year historical data limit');
+  });
+
+  it('hides the warning advisory when the range is valid', async () => {
+    const fixture = await mount(makeMonitor());
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('.pdr__warning')).toBeNull();
+  });
 });
