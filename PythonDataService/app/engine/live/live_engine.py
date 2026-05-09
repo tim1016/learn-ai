@@ -312,7 +312,7 @@ class LiveEngine:
                         else int(minute_bar.time.timestamp() * 1000)
                     )
                     self._extend_seen_executions(seen_executions, raw_real_events)
-                    self._check_halt_outside_mutation(
+                    await self._check_halt_outside_mutation(
                         seen_executions, last_clean_bar_close_ms=last_clean_ms,
                         portfolio=portfolio, writers=writers,
                     )
@@ -400,19 +400,6 @@ class LiveEngine:
                         writers, strategy, last_written_decision_ms
                     )
 
-                # § 7.1 trigger B: any owned order that hasn't filled
-                # within its expected window halts the run. Run after
-                # the bar handler so any brand-new order this bar just
-                # submitted is considered (it'll be too young to halt
-                # this iteration, but we want the check to fire on
-                # subsequent iterations).
-                if self._halt_enabled:
-                    last_clean_ms = int(minute_bar.end_time.timestamp() * 1000)
-                    self._check_halt_lost_fill(
-                        seen_executions, last_clean_bar_close_ms=last_clean_ms,
-                        portfolio=portfolio, writers=writers,
-                    )
-
                 submitted = await self._submit_pending_with_meta(portfolio)
                 submitted_order_ids.extend(ack.order_id for ack in submitted)
                 orders_submitted_today += len(submitted)
@@ -423,6 +410,20 @@ class LiveEngine:
                     raise MaxOrdersPerDayExceeded(
                         f"submitted {orders_submitted_today} orders on {current_session_date} "
                         f"(cap={self._max_orders_per_day})"
+                    )
+
+                # § 7.1 trigger B runs AFTER _submit_pending_with_meta
+                # so any order the strategy queued this bar is already
+                # in _order_meta with its submitted_at_ms. Otherwise
+                # the just-submitted order would be invisible to the
+                # check until the next bar, leaving a one-bar window
+                # where a botched-submission scenario isn't caught.
+                # (CodeRabbit P1 from #193.)
+                if self._halt_enabled:
+                    last_clean_ms = int(minute_bar.end_time.timestamp() * 1000)
+                    await self._check_halt_lost_fill(
+                        seen_executions, last_clean_bar_close_ms=last_clean_ms,
+                        portfolio=portfolio, writers=writers,
                     )
 
                 current_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
@@ -456,7 +457,7 @@ class LiveEngine:
                         else 0
                     )
                     self._extend_seen_executions(seen_executions, final_raw_events)
-                    self._check_halt_outside_mutation(
+                    await self._check_halt_outside_mutation(
                         seen_executions, last_clean_bar_close_ms=last_clean_ms,
                         portfolio=portfolio, writers=writers,
                     )
@@ -670,7 +671,7 @@ class LiveEngine:
                 }
             )
 
-    def _check_halt_outside_mutation(
+    async def _check_halt_outside_mutation(
         self,
         seen_executions: list[dict],
         *,
@@ -688,9 +689,9 @@ class LiveEngine:
         )
         if reason is None:
             return
-        self._fatal_halt(reason, portfolio=portfolio, writers=writers)
+        await self._fatal_halt(reason, portfolio=portfolio, writers=writers)
 
-    def _check_halt_lost_fill(
+    async def _check_halt_lost_fill(
         self,
         seen_executions: list[dict],
         *,
@@ -712,9 +713,9 @@ class LiveEngine:
         )
         if reason is None:
             return
-        self._fatal_halt(reason, portfolio=portfolio, writers=writers)
+        await self._fatal_halt(reason, portfolio=portfolio, writers=writers)
 
-    def _fatal_halt(
+    async def _fatal_halt(
         self,
         reason,
         *,
@@ -723,19 +724,38 @@ class LiveEngine:
     ) -> None:
         """Cleanup + write poisoned.flag + raise FatalHaltError.
 
-        Order matters: writers flush BEFORE the flag is written so the
-        partial parquets are on-disk by the time the operator inspects
-        the run dir. The flag write is best-effort — a pre-existing
-        flag (rare; e.g. a second halt firing on the same bar) is
-        silently kept since the first-halt-wins invariant is enforced
-        at the OS level by halt.write_poisoned_flag's ``open(..., 'x')``.
-        Cancellation of Python-owned orders is best-effort too — the
-        broker may not respond cleanly during a contaminated session,
-        and we'd rather raise than block on it.
+        Order:
+          1. Clear strategy's still-queued pending orders so a
+             finally-block consumer doesn't try to submit them after
+             the halt fires.
+          2. Cancel any already-submitted Python-owned broker orders
+             (§ 7.2 #2). Best-effort — the broker may not respond
+             cleanly during a contaminated session, and we'd rather
+             raise than block on it.
+          3. Flush writers so partial parquets are on-disk before the
+             flag.
+          4. Write poisoned.flag (atomic via open('x') from #190;
+             first-halt-wins enforced at the OS level).
+          5. Raise FatalHaltError carrying the reason.
+
+        (CodeRabbit P1 from #193 added step 2 — the prior version
+        only cleared local pending_orders and missed the in-flight
+        broker orders.)
         """
-        # Clear the strategy's still-pending queue so a finally-block
-        # consumer doesn't try to submit them after the halt fires.
         portfolio.pending_orders.clear()
+        try:
+            cancelled = await self._broker.cancel_open_orders()
+            if cancelled:
+                logger.info(
+                    "fatal halt cancelled %d Python-owned broker order(s): %r",
+                    len(cancelled), cancelled,
+                )
+        except Exception:
+            # The broker is presumed unhealthy at this point — don't
+            # block the halt waiting for cancellation. The poisoned
+            # flag still gets written; operator reconciliation
+            # cleans up any straggling orders manually.
+            logger.exception("broker.cancel_open_orders failed during fatal halt")
         if writers is not None:
             try:
                 writers.flush_all()

@@ -157,6 +157,24 @@ def test_emergency_flatten_liquidates_each_nonzero_position(tmp_path: Path) -> N
     assert all(o.client_order_id.startswith("emergency-flatten-") for o in broker.placed)
 
 
+def test_emergency_flatten_preserves_fractional_quantities(tmp_path: Path) -> None:
+    """Fractional positions (e.g. 0.5 share of FRAC) must produce a
+    fractional liquidation order — not get truncated to zero by an
+    int cast. (CodeRabbit P2 from #193.)"""
+    broker = _FakeFlattenBroker(
+        positions=[
+            _pos("SPY", 100.5),
+            _pos("FRAC", 0.25),
+        ]
+    )
+    rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker))
+    assert rc == 0
+    assert len(broker.placed) == 2
+    by_symbol = {o.symbol: o for o in broker.placed}
+    assert by_symbol["SPY"].quantity == 100.5
+    assert by_symbol["FRAC"].quantity == 0.25
+
+
 def test_emergency_flatten_does_nothing_on_empty_account(tmp_path: Path) -> None:
     broker = _FakeFlattenBroker(positions=[])
     rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker))
@@ -176,10 +194,11 @@ def test_emergency_flatten_log_records_every_action(tmp_path: Path) -> None:
     log = (tmp_path / "emergency_flatten.log").read_text()
     # Start, two liquidation lines, complete. Exact format checked
     # loosely so the field-by-field message can evolve without
-    # re-pinning every test.
+    # re-pinning every test. ``qty`` is float-formatted because
+    # IbkrOrderSpec.quantity is float (fractional-share support).
     assert "start: account=DU123" in log
-    assert "liquidated: symbol=SPY qty=100 action=SELL" in log
-    assert "liquidated: symbol=QQQ qty=50 action=SELL" in log
+    assert "liquidated: symbol=SPY qty=100.0 action=SELL" in log
+    assert "liquidated: symbol=QQQ qty=50.0 action=SELL" in log
     assert "complete: liquidated=2" in log
 
 
