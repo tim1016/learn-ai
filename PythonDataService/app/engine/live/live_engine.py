@@ -14,6 +14,7 @@ from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
@@ -25,6 +26,12 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import EquitySnapshot
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
+from app.engine.live.artifacts import (
+    DecisionRow,
+    ExecutionRow,
+    LiveArtifactWriters,
+    TradeRow,
+)
 from app.engine.live.bar_adapter import trade_bars_from_ibkr
 from app.engine.live.config import LiveConfig
 from app.engine.live.live_context import LiveContext
@@ -34,7 +41,7 @@ from app.engine.live.live_portfolio import (
     LiveBrokerEventStreamError,
     LivePortfolio,
 )
-from app.engine.strategy.base import Strategy
+from app.engine.strategy.base import LoggedTrade, Strategy
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +115,8 @@ class LiveEngine:
         config: LiveConfig | None = None,
         *,
         broker: BrokerAdapter | None = None,
+        output_dir: Path | None = None,
+        account_id: str = "",
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -120,6 +129,16 @@ class LiveEngine:
         # Per-order metadata captured at submit time; used to expand
         # IBKR fill events back into engine OrderEvents.
         self._order_meta: dict[int, _OrderMeta] = {}
+        # Optional artifact-writer integration. When ``output_dir`` is
+        # set, the run() loop opens a LiveArtifactWriters bundle, feeds
+        # decisions / executions / trades per Phase B's reconcile schemas,
+        # and closes the bundle in finally. Tests and replay paths that
+        # don't pass an output_dir see exactly the prior behavior.
+        # ``account_id`` populates the executions row's account_id
+        # column; defaults to empty string when no broker connection
+        # exists (replay tests).
+        self._output_dir = output_dir
+        self._account_id = account_id
 
     def _validate_paper_client(self) -> None:
         if self._client is None:
@@ -177,6 +196,17 @@ class LiveEngine:
         last_force_flat_date: date | None = None
         force_flat_at = self._config.force_flat_at
 
+        # Artifact-writer integration. Bundle is None when no
+        # output_dir is configured — keeps replay tests (FakeBroker
+        # paths) free of file IO. Per-bar dedupe state for the
+        # decision writer: we only write when last_decision_snapshot
+        # carries a bar_close_ms we haven't seen.
+        writers: LiveArtifactWriters | None = None
+        last_written_decision_ms: int | None = None
+        last_written_trade_count = 0
+        if self._output_dir is not None:
+            writers = LiveArtifactWriters.open(self._output_dir)
+
         started_event_stream = False
         if isinstance(self._broker, IbkrEventAdapter):
             await self._broker.start_event_stream()
@@ -190,10 +220,20 @@ class LiveEngine:
                     portfolio.record_broker_fill(event)
                     order_events.append(event)
                     strategy.on_order_event(event)
+                    if writers is not None:
+                        self._write_execution(writers, event)
+                        last_written_trade_count = self._flush_new_trades(
+                            writers, strategy, last_written_trade_count
+                        )
                 for event in self._drain_real_broker_order_events():
                     portfolio.record_broker_fill(event)
                     order_events.append(event)
                     strategy.on_order_event(event)
+                    if writers is not None:
+                        self._write_execution(writers, event)
+                        last_written_trade_count = self._flush_new_trades(
+                            writers, strategy, last_written_trade_count
+                        )
 
                 # Force-flat barrier: at most once per session date, when the
                 # bar's wall-clock time crosses ``force_flat_at``, cancel the
@@ -241,6 +281,15 @@ class LiveEngine:
                 for consolidator in ctx.get_consolidators(symbol):
                     consolidator.update(minute_bar)
 
+                # Snapshot publication runs inside the strategy bar
+                # handler; capture it here, deduped by bar_close_ms so
+                # we never write the same consolidated bar twice (a
+                # consolidator may be silent on most minute bars).
+                if writers is not None:
+                    last_written_decision_ms = self._maybe_write_decision(
+                        writers, strategy, last_written_decision_ms
+                    )
+
                 submitted = await self._submit_pending_with_meta(portfolio)
                 submitted_order_ids.extend(ack.order_id for ack in submitted)
 
@@ -271,9 +320,16 @@ class LiveEngine:
                     portfolio.record_broker_fill(event)
                     order_events.append(event)
                     strategy.on_order_event(event)
+                    if writers is not None:
+                        self._write_execution(writers, event)
+                        last_written_trade_count = self._flush_new_trades(
+                            writers, strategy, last_written_trade_count
+                        )
         finally:
             if started_event_stream and isinstance(self._broker, IbkrEventAdapter):
                 await self._broker.stop_event_stream()
+            if writers is not None:
+                writers.close_all()
 
         strategy.on_end_of_algorithm()
         if previous_bar is not None:
@@ -299,6 +355,94 @@ class LiveEngine:
             open_positions=open_positions,
             pending_orders=len(portfolio.pending_orders),
         )
+
+    # ──────────────────── Artifact-writer helpers ────────────────────
+
+    @staticmethod
+    def _maybe_write_decision(
+        writers: LiveArtifactWriters,
+        strategy: Strategy,
+        last_written_ms: int | None,
+    ) -> int | None:
+        """Append ``strategy.last_decision_snapshot`` if it's new.
+
+        Returns the bar_close_ms now considered "written" (the input
+        ``last_written_ms`` if no new snapshot exists, or the snapshot's
+        ms if a new one was just appended). The dedupe is necessary
+        because the consolidator only fires on 15-min boundaries — most
+        minute bars leave ``last_decision_snapshot`` unchanged from the
+        prior iteration.
+        """
+        snap = strategy.last_decision_snapshot
+        if snap is None or snap.bar_close_ms == last_written_ms:
+            return last_written_ms
+        writers.decisions.append_row(
+            DecisionRow(
+                bar_close_ms=snap.bar_close_ms,
+                ema5=snap.ema5,
+                ema10=snap.ema10,
+                rsi=snap.rsi,
+                signal=snap.signal,
+                intended_price=snap.intended_price,
+            )
+        )
+        return snap.bar_close_ms
+
+    def _write_execution(self, writers: LiveArtifactWriters, event: OrderEvent) -> None:
+        """Append one execution row for an engine-converted broker fill.
+
+        Notes on the synthetic fields: ``exec_id`` and ``perm_id`` are
+        not on the engine ``OrderEvent`` shape (only on the wire
+        ``IbkrOrderEvent``). Until Phase C-2c surfaces those through a
+        dedicated execution channel, we synthesize stable identifiers
+        from the order_id + tag so the row is still well-formed and the
+        reconciler's hash sidecar covers a real file. § 7's intra-day
+        fatal halt that genuinely needs broker-primary-key indexing is
+        a separate code path on a separate writer — this PR only
+        produces the receipt artifact.
+        """
+        writers.executions.append_row(
+            ExecutionRow(
+                ts_ms=int(event.time.timestamp() * 1000),
+                exec_id=f"engine-{event.order_id}",
+                perm_id=int(event.order_id),
+                client_order_id=f"live-{event.order_id}",
+                account_id=self._account_id,
+                symbol=event.symbol,
+                fill_quantity=int(event.fill_quantity),
+                fill_price=float(event.fill_price),
+                fee=float(event.fee),
+            )
+        )
+
+    @staticmethod
+    def _flush_new_trades(
+        writers: LiveArtifactWriters,
+        strategy: Strategy,
+        last_written_count: int,
+    ) -> int:
+        """Append any trades the strategy added since the last call.
+
+        Strategies that don't carry a trade_log attribute (the base
+        Strategy class doesn't) skip this entirely. SpyEmaCrossover
+        appends to its trade_log on every closed round-trip in
+        on_order_event; we observe the delta here.
+        """
+        trade_log: list[LoggedTrade] | None = getattr(strategy, "trade_log", None)
+        if trade_log is None:
+            return last_written_count
+        new_trades = trade_log[last_written_count:]
+        for trade in new_trades:
+            writers.trades.append_row(
+                TradeRow(
+                    entry_time_ms=int(trade.entry_time.timestamp() * 1000),
+                    exit_time_ms=int(trade.exit_time.timestamp() * 1000),
+                    entry_price=float(trade.entry_price),
+                    exit_price=float(trade.exit_price),
+                    pnl_points=float(trade.pnl_pts),
+                )
+            )
+        return len(trade_log)
 
     async def _submit_pending_with_meta(self, portfolio: LivePortfolio):
         """Submit queued orders and remember their per-id metadata.
