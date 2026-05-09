@@ -1,0 +1,38 @@
+<div class="picker-v2 picker-v2--multi">
+  <div class="picker-v2__head">
+    <div class="picker-v2__title">
+      <i class="pi pi-th-large picker-v2__title-icon" aria-hidden="true"></i>
+      <span>{{ title() }}</span>
+    </div>
+    <div class="picker-v2__summary mono">
+      <span class="picker-v2__summary-symbol">{{ value().symbols.length }} tickers</span>
+      <span class="picker-v2__summary-sep">·</span>
+      <span>{{ value().from }} → {{ value().to }}</span>
+      <span class="picker-v2__summary-sep">·</span>
+      <span>{{ value().resolution }}</span>
+    </div>
+  </div>
+
+  <div class="picker-v2__groups"
+       [class.picker-v2__groups--no-sampling]="hideSampling()">
+    <app-multi-instrument-card
+      [(value)]="value"
+      [tickerPool]="tickerPool()"
+      [recent]="recent()" />
+
+    <app-time-window-card
+      [value]="singleProjection()"
+      (valueChange)="onSinglePatch($event)"
+      [legendTreatment]="legendTreatment()" />
+
+    @if (!hideSampling()) {
+      <app-sampling-card
+        [value]="singleProjection()"
+        (valueChange)="onSinglePatch($event)"
+        [availableResolutions]="availableResolutions()"
+        [availableMultipliers]="availableMultipliers()"
+        [sessionMode]="sessionMode()"
+        [showAutoFetch]="showAutoFetch()" />
+    }
+  </div>
+</div>
