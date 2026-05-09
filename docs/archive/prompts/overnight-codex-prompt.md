@@ -1,3 +1,8 @@
+> **Status:** Archived — operational prompt, not a design doc.
+> **Do not use as implementation authority.**
+> Current authority: `docs/ibkr-integration-authority.md`, `docs/ibkr-paper-deployment-plan.md`.
+> Archived because: verbatim unsupervised-execution brief for a single overnight Codex run; the plan it references is the live authority.
+
 # Overnight Execution Brief — IBKR Paper-Trading Live Runtime
 
 You are running unsupervised overnight. The user (Inkant) is asleep

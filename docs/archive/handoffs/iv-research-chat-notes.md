@@ -1,3 +1,8 @@
+> **Status:** Archived — verbatim chat-session notes, not a design record.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/iv-ownership-research.md` (full IV pipeline research authority).
+> Archived because: meta-description of a Cowork conversation; `iv-ownership-research.md` is the authoritative distillation.
+
 # IV Pipeline — Chat Notes (Cowork session, 2026-04-29)
 
 > Companion to `iv-ownership-research.md` and `iv-research-prompt.md`. Captures

@@ -1,3 +1,8 @@
+> **Status:** Archived — per-session UI/UX handoff, feature shipped.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/edge-feature-design.md` (engineering spec), `docs/architecture/edge-functionality-testing.md`.
+> Archived because: design handoff for the Edge feature delivered 2026-04-25; feature is live in the codebase.
+
 # Claude Design — Edge feature UI/UX handoff (2026-04-25)
 
 This prompt covers the **Edge** route (`/edge`) — three quantitative-research views (Realized vs IV, Cross-Asset Validation, Regime Clustering) bound by two cross-cutting capabilities (Trade Simulator, Edge Score). Read **"What's already done"** first — the functional shell, math engine, FastAPI endpoints, and route registration are all in place. The polish, charts, and interaction details below are what's left.

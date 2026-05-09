@@ -1,3 +1,8 @@
+> **Status:** Archived — overnight IBKR session progress log, ephemeral operational record.
+> **Do not use as implementation authority.**
+> Current authority: `docs/ibkr-integration-authority.md`, `docs/ibkr-paper-deployment-feedback.md`.
+> Archived because: per-run operational log; implementation outcomes are captured in the IBKR authority docs.
+
 # Overnight Progress
 
 [01:08] Baseline: `ruff check app/ tests/` passed and 100 pre-existing tests passed from `PythonDataService/`.

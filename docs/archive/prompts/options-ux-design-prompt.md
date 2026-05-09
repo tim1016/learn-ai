@@ -1,3 +1,8 @@
+> **Status:** Archived — UX-question accumulator prompt, not a design authority.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/options-math-authorities.md`, `docs/architecture/options-cleanup-2026-04-29.md`.
+> Archived because: accumulator for UX design questions during options-routes cleanup (Phase D11); cleanup shipped and questions resolved.
+
 # Options Feature — UX Design Prompt (accumulator)
 
 > **Purpose.** This file accumulates UX-design questions raised during the

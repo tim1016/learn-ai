@@ -1,3 +1,8 @@
+> **Status:** Archived — prompt snippet, not a design doc.
+> **Do not use as implementation authority.**
+> Current authority: `.claude/rules/angular.md` (Angular/UI conventions).
+> Archived because: verbatim LLM prompt for a one-off dark-theme design session; no ongoing decision authority.
+
 # Claude Design — Quant/Lab dark theme, follow-up pass
 
 This prompt picks up where a prior session left off. Read the **"What's already done"** section before proposing changes — it constrains the work and lists the tokens/components you should extend rather than re-invent.

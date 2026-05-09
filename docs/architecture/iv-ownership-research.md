@@ -1463,7 +1463,7 @@ current span via `aria-label`, `title`, and the `data-testid` hook.
 ### 8.5 External LLM review (2026-04-29)
 
 A second-pass external quant-LLM review (companion notes at
-[`docs/architecture/iv-research-chat-notes.md`](iv-research-chat-notes.md))
+[`docs/archive/handoffs/iv-research-chat-notes.md`](../archive/handoffs/iv-research-chat-notes.md)) (archived)
 re-examined the items the first review left open and flagged a few
 that the resolution had glossed over. Items below resolved or accepted;
 the re-examination of §8.2.1 (basis converter) and §8.2.2 (confidence

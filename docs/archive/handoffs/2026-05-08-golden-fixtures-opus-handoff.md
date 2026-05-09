@@ -1,3 +1,8 @@
+> **Status:** Archived — Opus overnight session handoff, ephemeral operational record.
+> **Do not use as implementation authority.**
+> Current authority: `docs/superpowers/specs/2026-05-08-golden-fixtures-design.md` (golden fixtures design spec).
+> Archived because: end-of-session context dump for the 2026-05-08 Opus overnight run; design spec is the authoritative reference.
+
 # Golden Fixtures System — Opus Session Handoff
 
 **Date:** 2026-05-08  

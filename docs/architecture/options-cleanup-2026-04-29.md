@@ -22,7 +22,7 @@
 
 - 11 decisions ratified (D1–D11) plus 2 sub-decisions (D9a, D10a).
   Full audit trail in [`options-routes-research.md` § 7](options-routes-research.md#7-decisions-log).
-- New artefact: [`options-ux-design-prompt.md`](options-ux-design-prompt.md)
+- New artefact: [`options-ux-design-prompt.md`](../archive/prompts/options-ux-design-prompt.md)
   — accumulator file for UX-design questions raised during execution
   (per D11). Seeded with UX-Q1 through UX-Q4 covering chain-table
   density, drill-down trigger ambiguity, past-chain inspector card

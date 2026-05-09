@@ -3,7 +3,7 @@
 **Audience:** an engineer with strong applied math but limited finance background. This guide translates the financial concepts to engineering analogues, then walks through testing each layer of the Edge feature concretely.
 
 **Date:** 2026-04-26
-**Related:** `docs/architecture/edge-feature-design.md` (engineering spec), `docs/architecture/design-handoff-edge-2026-04-25.md` (UI handoff)
+**Related:** `docs/architecture/edge-feature-design.md` (engineering spec), `docs/archive/handoffs/design-handoff-edge-2026-04-25.md` (UI handoff, archived)
 
 ---
 
