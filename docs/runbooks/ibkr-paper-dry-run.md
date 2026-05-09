@@ -67,8 +67,9 @@ is on the same network. That step uses paths under `/app/...` because
 those *are* visible to the container.
 
 ```bash
-# Activate the venv once per shell. All host commands below assume it's active.
-cd C:/Users/inkan/Documents/learn-ai/PythonDataService
+# Activate the venv once per shell. All host commands below assume it's
+# active and that the shell's working directory is the repo root.
+cd PythonDataService
 source .venv/Scripts/activate    # Git Bash on Windows
 # or:  .venv\Scripts\Activate.ps1 (PowerShell)
 # or:  source .venv/bin/activate  (Linux/macOS)
@@ -83,7 +84,7 @@ records the run identity (§10) — strategy spec hash, QC audit copy
 hash, account id, start-of-session UTC ms.
 
 ```bash
-python -m app.engine.live.run init-ledger \
+PYTHONPATH=PythonDataService python -m app.engine.live.run init-ledger \
   --repo-root . \
   --clean-tree-scope PythonDataService references/qc-shadow \
   --strategy-spec-path PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json \
@@ -95,9 +96,10 @@ python -m app.engine.live.run init-ledger \
   --run-root PythonDataService/artifacts/live_runs
 ```
 
-Run from the repo root. The `python` invocation needs `PythonDataService/`
-on `sys.path`; either run from that directory (and adjust paths) or
-prepend `PYTHONPATH=PythonDataService` to the command.
+Run from the repo root. `app` lives under `PythonDataService/app`, so the
+`PYTHONPATH=PythonDataService` prefix is what makes `python -m
+app.engine.live.run` resolvable from the repo root (same pattern as
+Steps 2 and 4 below).
 
 Expected outcome:
 - Exit 0
@@ -152,8 +154,10 @@ This command runs in the container (where the IBKR Gateway sidecar
 network is reachable). The artifact parquets it writes land at
 `/app/artifacts/live_runs/<run_id>/` inside the container, which is
 the same path as `PythonDataService/artifacts/live_runs/<run_id>/`
-on the host via the existing `./PythonDataService/app:/app/app`
-compose mount.
+on the host via the `./PythonDataService/artifacts:/app/artifacts:z`
+compose mount (added in Prerequisites). Note: the `app:/app/app` mount
+is a separate mount that exposes source code; it does not map
+`/app/artifacts`.
 
 ```bash
 podman exec polygon-data-service python -m app.engine.live.run start \
