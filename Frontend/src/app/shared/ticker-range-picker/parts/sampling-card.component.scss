@@ -1,0 +1,195 @@
+// Shared card frame.
+.group {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    font-weight: var(--fw-bold);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-subtle);
+  }
+
+  &__eyebrow-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+
+    &--accent { background: var(--accent); }
+    &--bull   { background: var(--bull); }
+    &--warn   { background: var(--warn); }
+  }
+
+  &__helper {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+}
+
+// ── Sampling-only ────────────────────────────────────────────────
+.res-group {
+  display: inline-flex;
+  height: 32px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+.res-btn {
+  padding: 0 14px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: var(--fw-semi);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+
+  &:last-child { border-right: none; }
+  &:hover { background: var(--bg-hover); color: var(--text-primary); }
+  &--active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+}
+
+// ── Multiplier dropdown (opt-in via availableMultipliers input) ──
+.multiplier {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+
+  &__label {
+    font-weight: var(--fw-bold);
+    flex-shrink: 0;
+  }
+
+  &__select {
+    height: 28px;
+    padding: 0 8px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    font-size: 11px;
+    cursor: pointer;
+    outline: none;
+
+    &:focus {
+      border-color: var(--accent);
+    }
+  }
+}
+
+.session {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  &__label {
+    font-weight: var(--fw-bold);
+  }
+
+  &__tag {
+    color: var(--warn);
+    font-weight: var(--fw-bold);
+    font-size: 9px;
+    padding: 1px 4px;
+    border: 1px solid rgba(255, 152, 0, 0.35);
+    border-radius: var(--radius-sm);
+    background: var(--warn-soft);
+    cursor: help;
+  }
+
+  &__group {
+    display: inline-flex;
+    height: 28px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    overflow: hidden;
+    align-self: flex-start;
+  }
+}
+
+.session-btn {
+  padding: 0 12px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: var(--fw-semi);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+
+  &:last-child { border-right: none; }
+  &:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  &--active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+.autofetch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+
+  &__label { flex: 1; }
+  &__icon  { color: var(--text-muted); font-size: 11px; }
+
+  input[type="checkbox"] {
+    accent-color: var(--accent);
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+  }
+}
