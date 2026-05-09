@@ -50,6 +50,8 @@ import {
   buildHolidayMap,
   getMinAllowedDate,
   validateDateRange,
+  parseYmd,
+  formatYmd,
 } from '../../utils/date-validation';
 
 /**
@@ -370,23 +372,10 @@ export class DataLabComponent {
     d.setDate(d.getDate() - 30);
     return d;
   }
-  private static formatDate(d: Date): string {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  }
-
-  private static parseDate(dateStr: string): Date {
-    const [y, m, d] = dateStr.split('-').map(Number);
-    const date = new Date(y, m - 1, d, 0, 0, 0, 0);
-    return date;
-  }
-
   fromDateValue = signal<Date>(DataLabComponent.get30DaysAgo());
   toDateValue = signal<Date>(DataLabComponent.getYesterday());
-  fromDate = computed(() => DataLabComponent.formatDate(this.fromDateValue()));
-  toDate = computed(() => DataLabComponent.formatDate(this.toDateValue()));
+  fromDate = computed(() => formatYmd(this.fromDateValue()));
+  toDate = computed(() => formatYmd(this.toDateValue()));
 
   // Calendar constraints
   holidays = signal<MarketHolidayEvent[]>([]);
@@ -448,8 +437,8 @@ export class DataLabComponent {
    *  component reads from. */
   readonly rangeState = signal<TickerRange>({
     symbol: 'SPY',
-    from: DataLabComponent.formatDate(DataLabComponent.get30DaysAgo()),
-    to: DataLabComponent.formatDate(DataLabComponent.getYesterday()),
+    from: formatYmd(DataLabComponent.get30DaysAgo()),
+    to: formatYmd(DataLabComponent.getYesterday()),
     resolution: 'minute',
     autoFetch: true,
   });
@@ -850,13 +839,15 @@ export class DataLabComponent {
         // multiplier back to 1, silently undoing the manual pick.
         untracked(() => {
           if (this.ticker() !== v.symbol) this.ticker.set(v.symbol);
-          const fromIso = DataLabComponent.formatDate(this.fromDateValue());
-          const toIso = DataLabComponent.formatDate(this.toDateValue());
+          const fromIso = formatYmd(this.fromDateValue());
+          const toIso = formatYmd(this.toDateValue());
           if (fromIso !== v.from) {
-            this.fromDateValue.set(DataLabComponent.parseDate(v.from));
+            const parsed = parseYmd(v.from);
+            if (parsed) this.fromDateValue.set(parsed);
           }
           if (toIso !== v.to) {
-            this.toDateValue.set(DataLabComponent.parseDate(v.to));
+            const parsed = parseYmd(v.to);
+            if (parsed) this.toDateValue.set(parsed);
           }
           const expected = DataLabComponent.timespanToResolution(this.timespan());
           if (v.resolution !== expected) {
@@ -1125,8 +1116,10 @@ export class DataLabComponent {
 
     // Restore configuration
     this.ticker.set(session.config.ticker);
-    this.fromDateValue.set(DataLabComponent.parseDate(session.config.fromDate));
-    this.toDateValue.set(DataLabComponent.parseDate(session.config.toDate));
+    const restoredFrom = parseYmd(session.config.fromDate);
+    if (restoredFrom) this.fromDateValue.set(restoredFrom);
+    const restoredTo = parseYmd(session.config.toDate);
+    if (restoredTo) this.toDateValue.set(restoredTo);
     this.session.set(session.config.session);
     this.forwardFill.set(session.config.forwardFill);
     this.adjustForSplits.set(session.config.adjusted ?? true);
