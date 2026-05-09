@@ -94,3 +94,35 @@ function formatDateStr(date: Date): string {
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
+
+// ---------------------------------------------------------------------------
+// YYYY-MM-DD <-> Date adapters (canonical conversion for UI <-> wire boundary)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a strict 'YYYY-MM-DD' string to a Date at local midnight.
+ * Returns null for empty input, non-matching format (including
+ * single-digit month/day like '2025-5-31'), or impossible calendar
+ * dates like '2025-02-30'.
+ */
+export function parseYmd(s: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const [y, m, d] = s.split('-').map(Number);
+  const date = new Date(y, m - 1, d, 0, 0, 0, 0);
+  if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) {
+    return null;
+  }
+  return date;
+}
+
+/**
+ * Format a Date as 'YYYY-MM-DD' in local time, zero-padded.
+ * Returns '' for null. Inverse of parseYmd.
+ */
+export function formatYmd(d: Date | null): string {
+  if (d === null) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}

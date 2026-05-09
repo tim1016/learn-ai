@@ -21,13 +21,14 @@
         class="w-full"
       />
     </div>
-    <div class="col-6 md:col-2">
-      <label class="block mb-1 font-semibold text-sm">From</label>
-      <input pInputText type="date" [(ngModel)]="fromDate" class="w-full" />
-    </div>
-    <div class="col-6 md:col-2">
-      <label class="block mb-1 font-semibold text-sm">To</label>
-      <input pInputText type="date" [(ngModel)]="toDate" class="w-full" />
+    <div class="col-12">
+      <app-polygon-date-range
+        [(fromDate)]="fromDate"
+        [(toDate)]="toDate"
+        fromLabel="From"
+        toLabel="To"
+        idPrefix="batch"
+      />
     </div>
   </div>
 

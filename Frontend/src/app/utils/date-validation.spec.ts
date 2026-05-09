@@ -8,6 +8,8 @@ import {
   isNonTradingDay,
   getDisabledHolidayDates,
   buildHolidayMap,
+  parseYmd,
+  formatYmd,
 } from './date-validation';
 import { MarketHolidayEvent } from '../models/market-monitor';
 
@@ -174,5 +176,55 @@ describe('buildHolidayMap', () => {
       { date: '', exchanges: ['NYSE'], name: 'Mystery', status: 'Closed', open: null, close: null },
     ];
     expect(buildHolidayMap(withMissing).size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseYmd
+// ---------------------------------------------------------------------------
+
+describe('parseYmd', () => {
+  it('parses YYYY-MM-DD to a local-midnight Date', () => {
+    const d = parseYmd('2025-05-31');
+    if (d === null) throw new Error('parseYmd returned null for a valid date');
+    expect(d.getFullYear()).toBe(2025);
+    expect(d.getMonth()).toBe(4); // May (0-indexed)
+    expect(d.getDate()).toBe(31);
+    expect(d.getHours()).toBe(0);
+    expect(d.getMinutes()).toBe(0);
+  });
+
+  it('returns null for empty string', () => {
+    expect(parseYmd('')).toBeNull();
+  });
+
+  it('returns null for malformed strings', () => {
+    expect(parseYmd('garbage')).toBeNull();
+    expect(parseYmd('2025-5-31')).toBeNull(); // single-digit month — the original bug
+    expect(parseYmd('2025/05/31')).toBeNull();
+    expect(parseYmd('2025-13-01')).toBeNull(); // invalid month
+    expect(parseYmd('2025-02-30')).toBeNull(); // Feb 30 doesn't exist
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatYmd
+// ---------------------------------------------------------------------------
+
+describe('formatYmd', () => {
+  it('formats a Date as zero-padded YYYY-MM-DD', () => {
+    expect(formatYmd(new Date(2025, 4, 31))).toBe('2025-05-31');
+    expect(formatYmd(new Date(2025, 0, 1))).toBe('2025-01-01');
+  });
+
+  it('returns empty string for null', () => {
+    expect(formatYmd(null)).toBe('');
+  });
+
+  it('round-trips with parseYmd', () => {
+    const original = '2024-02-29'; // leap day
+    const parsed = parseYmd(original);
+    if (parsed === null) throw new Error('parseYmd returned null for a valid leap day');
+    expect(formatYmd(parsed)).toBe(original);
   });
 });

@@ -1,0 +1,37 @@
+<div class="pdr">
+  <div class="pdr__row">
+    <div class="pdr__field">
+      <label [attr.for]="idPrefix() + '-from'" class="pdr__label">{{ fromLabel() }}</label>
+      <p-datepicker
+        [inputId]="idPrefix() + '-from'"
+        [ngModel]="fromDateValue()"
+        (ngModelChange)="onFromChange($event)"
+        dateFormat="yy-mm-dd"
+        [minDate]="minDate"
+        [maxDate]="maxDate"
+        [disabledDays]="disabledDays"
+        [disabledDates]="disabledDates()"
+        [showIcon]="true"
+        appendTo="body"
+      />
+    </div>
+    <div class="pdr__field">
+      <label [attr.for]="idPrefix() + '-to'" class="pdr__label">{{ toLabel() }}</label>
+      <p-datepicker
+        [inputId]="idPrefix() + '-to'"
+        [ngModel]="toDateValue()"
+        (ngModelChange)="onToChange($event)"
+        dateFormat="yy-mm-dd"
+        [minDate]="minDate"
+        [maxDate]="maxDate"
+        [disabledDays]="disabledDays"
+        [disabledDates]="disabledDates()"
+        [showIcon]="true"
+        appendTo="body"
+      />
+    </div>
+  </div>
+  @if (warning(); as msg) {
+    <p-message severity="warn" [text]="msg" class="pdr__warning" />
+  }
+</div>

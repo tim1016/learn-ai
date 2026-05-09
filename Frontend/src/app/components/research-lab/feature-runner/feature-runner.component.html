@@ -29,13 +29,14 @@
           <label class="field-label" for="ticker">Ticker</label>
           <input pInputText id="ticker" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="e.g. AAPL" />
         </div>
-        <div class="field">
-          <label class="field-label" for="fromDate">From Date</label>
-          <input pInputText id="fromDate" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" placeholder="YYYY-MM-DD" />
-        </div>
-        <div class="field">
-          <label class="field-label" for="toDate">To Date</label>
-          <input pInputText id="toDate" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" placeholder="YYYY-MM-DD" />
+        <div class="field field--date-range">
+          <app-polygon-date-range
+            [(fromDate)]="fromDate"
+            [(toDate)]="toDate"
+            fromLabel="From Date"
+            toLabel="To Date"
+            idPrefix="feat"
+          />
         </div>
         <div class="field">
           <label class="field-label" for="timespan">Timespan</label>

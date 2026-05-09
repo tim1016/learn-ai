@@ -50,6 +50,7 @@ import {
 import { findFeatureId } from '../../../shared/indicator-catalog/feature-mapping';
 import { ActiveIndicatorCardComponent } from '../../data-lab/active-indicator-card/active-indicator-card.component';
 import { IndicatorConfigModalComponent } from '../../data-lab/indicator-config-modal/indicator-config-modal.component';
+import { PolygonDateRangeComponent } from '../../../shared/polygon-date-range';
 
 interface FeatureOption {
   label: string;
@@ -118,6 +119,7 @@ interface FeatureResearchJobResultRaw {
     IndicatorCatalogComponent,
     ActiveIndicatorCardComponent,
     IndicatorConfigModalComponent,
+    PolygonDateRangeComponent,
   ],
   templateUrl: './feature-runner.component.html',
   styleUrls: ['./feature-runner.component.scss'],

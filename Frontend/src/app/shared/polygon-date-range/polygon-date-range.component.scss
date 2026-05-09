@@ -1,0 +1,27 @@
+.pdr {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pdr__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.pdr__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.pdr__label {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.pdr__warning {
+  display: block;
+}

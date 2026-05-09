@@ -360,14 +360,15 @@
     <div class="ssr-run-config">
       <h2 class="ssr-run-title"><i class="pi pi-play-circle" aria-hidden="true"></i> Backtest configuration</h2>
       <div class="ssr-run-row">
-        <label class="ssr-field">
-          <span class="ssr-field-label">Start date</span>
-          <input type="date" class="ssr-input" [ngModel]="startDate()" (ngModelChange)="startDate.set($event)" />
-        </label>
-        <label class="ssr-field">
-          <span class="ssr-field-label">End date</span>
-          <input type="date" class="ssr-input" [ngModel]="endDate()" (ngModelChange)="endDate.set($event)" />
-        </label>
+        <div class="ssr-field ssr-field--date-range">
+          <app-polygon-date-range
+            [(fromDate)]="fromDate"
+            [(toDate)]="toDate"
+            fromLabel="Start date"
+            toLabel="End date"
+            idPrefix="ssr"
+          />
+        </div>
         <label class="ssr-field">
           <span class="ssr-field-label">Initial cash</span>
           <input type="number" min="0" step="1000" class="ssr-input" [ngModel]="initialCash()" (ngModelChange)="initialCash.set(+$event)" />
@@ -440,8 +441,8 @@
       <div class="ssr-run-line">
         @if (errors().length === 0 && warnings().length === 0) {
           Ready to backtest <strong>{{ spec().name }}</strong> from
-          <span class="ssr-run-date">{{ startDate() }}</span> to
-          <span class="ssr-run-date">{{ endDate() }}</span>.
+          <span class="ssr-run-date">{{ fromDate() }}</span> to
+          <span class="ssr-run-date">{{ toDate() }}</span>.
         } @else if (errors().length > 0) {
           <span class="ssr-run-blocked">{{ errors().length }} error{{ errors().length > 1 ? 's' : '' }} must be fixed before running.</span>
         } @else {

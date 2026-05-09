@@ -67,27 +67,13 @@
         </div>
 
         <!-- Date Range -->
-        <div class="field">
-          <label for="fromDate" class="block text-sm font-medium mb-1">From Date</label>
-          <input
-            pInputText
-            id="fromDate"
-            type="date"
-            [ngModel]="fromDate()"
-            (ngModelChange)="fromDate.set($event)"
-            class="w-full"
-          />
-        </div>
-
-        <div class="field">
-          <label for="toDate" class="block text-sm font-medium mb-1">To Date</label>
-          <input
-            pInputText
-            id="toDate"
-            type="date"
-            [ngModel]="toDate()"
-            (ngModelChange)="toDate.set($event)"
-            class="w-full"
+        <div class="field field--date-range">
+          <app-polygon-date-range
+            [(fromDate)]="fromDate"
+            [(toDate)]="toDate"
+            fromLabel="From Date"
+            toLabel="To Date"
+            idPrefix="ireliab"
           />
         </div>
       </div>

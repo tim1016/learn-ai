@@ -30,13 +30,14 @@
             <label class="field-label" for="sig-ticker">Ticker</label>
             <input pInputText id="sig-ticker" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="e.g. AAPL" />
           </div>
-          <div class="field">
-            <label class="field-label" for="sig-from">From Date</label>
-            <input pInputText id="sig-from" [ngModel]="fromDate()" (ngModelChange)="fromDate.set($event)" placeholder="YYYY-MM-DD" />
-          </div>
-          <div class="field">
-            <label class="field-label" for="sig-to">To Date</label>
-            <input pInputText id="sig-to" [ngModel]="toDate()" (ngModelChange)="toDate.set($event)" placeholder="YYYY-MM-DD" />
+          <div class="field field--date-range">
+            <app-polygon-date-range
+              [(fromDate)]="fromDate"
+              [(toDate)]="toDate"
+              fromLabel="From Date"
+              toLabel="To Date"
+              idPrefix="sig"
+            />
           </div>
         </div>
       </div>
