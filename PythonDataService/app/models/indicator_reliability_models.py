@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.ticker_request import TickerRequest
+
 StrengthLabel = Literal["Noise", "Weak", "Moderate", "Strong"]
 StabilityLabel = Literal["Low", "Moderate", "High"]
 DirectionLabel = Literal["Mean-Reversion", "Momentum", "None"]
@@ -25,17 +27,24 @@ class VerdictModel(BaseModel):
     )
 
 
-class IndicatorReliabilityRequest(BaseModel):
-    """Request to analyze indicator reliability."""
+class IndicatorReliabilityRequest(TickerRequest):
+    """Request to analyze indicator reliability.
 
-    ticker: str = Field(..., description="Stock ticker symbol")
-    indicator_name: str = Field(..., description="pandas-ta indicator name (e.g., 'rsi', 'ema')")
+    Inherits ``symbol`` / ``from_date`` / ``to_date`` / ``timespan`` /
+    ``multiplier`` / ``session`` from the canonical ``TickerRequest``.
+    Pre-migration this model used ``ticker`` / ``start_date`` /
+    ``end_date`` — the base's ``AliasChoices`` accepts those names
+    transparently during PR (ii) → (iii); the canonical names are now
+    authoritative.
+    """
+
+    indicator_name: str = Field(
+        ..., description="pandas-ta indicator name (e.g., 'rsi', 'ema')"
+    )
     indicator_params: dict[str, int | float] = Field(
         default_factory=dict,
         description="Indicator parameters (e.g., {'length': 14})",
     )
-    start_date: str = Field(..., description="Start date (YYYY-MM-DD)")
-    end_date: str = Field(..., description="End date (YYYY-MM-DD)")
     horizons: list[int] = Field(
         default=[1, 5, 10, 15, 30],
         description="Forward horizons (in bars) to analyze",
@@ -44,8 +53,6 @@ class IndicatorReliabilityRequest(BaseModel):
         default=False,
         description="Also compute IC on indicator slope (1-bar change)",
     )
-    timespan: str = Field(default="minute", description="Bar timespan")
-    multiplier: int = Field(default=1, description="Bar multiplier")
 
 
 class HorizonICResult(BaseModel):
