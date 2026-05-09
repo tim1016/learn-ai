@@ -517,9 +517,9 @@ export class SignalRunnerComponent {
 
     const parameterStability: ParameterStability | null = ps
       ? {
-          sharpeValuesByThreshold: ((ps['sharpe_values_by_threshold'] as Record<string, unknown>[]) ?? []).map(
-            (e): ThresholdSharpeEntry => ({ threshold: e['threshold'] as number, sharpe: e['sharpe'] as number }),
-          ),
+          sharpeValuesByThreshold: Object.entries(
+            (ps['sharpe_values_by_threshold'] as Record<string, number>) ?? {},
+          ).map(([threshold, sharpe]): ThresholdSharpeEntry => ({ threshold: Number(threshold), sharpe })),
           stabilityScore: ps['stability_score'] as number,
           stabilityLabel: ps['stability_label'] as string,
         }
