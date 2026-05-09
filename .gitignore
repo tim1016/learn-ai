@@ -63,8 +63,8 @@ PythonDataService/artifacts/
 # Superpowers tooling session cache
 .superpowers/
 
-# Scratch / temp working files
-Temp*.json
+# Scratch / temp working files (recursive — also catches subdirs)
+**/Temp*.json
 
 # IBKR snapshot data (runtime-generated Arrow files)
 scripts/ibkr_snapshots/**/*.arrow
