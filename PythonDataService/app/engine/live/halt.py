@@ -38,6 +38,25 @@ from typing import Any
 POISONED_FLAG_FILENAME = "poisoned.flag"
 
 
+class FatalHaltError(RuntimeError):
+    """Raised when an intra-day fatal halt fires (§ 7).
+
+    Carries the ``PoisonedHaltReason`` so the top-level CLI handler
+    can surface the trigger and timestamp in its exit message. The
+    exception is the signal that the LiveEngine has already done its
+    fatal-halt cleanup (cancelled Python-owned orders, flushed
+    writers, written ``poisoned.flag``); the runner just needs to
+    propagate the failure with an appropriate exit code.
+    """
+
+    def __init__(self, reason: PoisonedHaltReason) -> None:
+        super().__init__(
+            f"FatalHaltError({reason.trigger.value} at {reason.halted_at_ms}ms UTC; "
+            f"details={reason.details})"
+        )
+        self.reason = reason
+
+
 class PoisonedHaltTrigger(enum.StrEnum):
     """The two intra-day fatal triggers from spec § 7.1.
 

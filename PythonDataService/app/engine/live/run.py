@@ -304,7 +304,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     """
     from importlib import import_module
 
-    from app.engine.live.halt import read_poisoned_flag
+    from app.engine.live.halt import FatalHaltError, read_poisoned_flag
     from app.engine.live.live_engine import (
         LiveEngine,
         MaxOrdersPerDayExceeded,
@@ -409,6 +409,20 @@ def cmd_start(args: argparse.Namespace) -> int:
     )
     try:
         asyncio.run(engine.run(strategy, bars=bars_iter))
+    except FatalHaltError as exc:
+        # § 7 fatal halt — broker-state divergence. The engine has
+        # already written poisoned.flag and flushed any partial
+        # writers. Surface the trigger + halted_at_ms so the operator
+        # knows what to investigate. Re-running on the same run_id
+        # will be refused at the cmd_start poisoned-flag check; a
+        # fresh run_id is required after manual reconciliation
+        # (§ 7.2 #5).
+        print(
+            f"[START] FATAL HALT — {exc.reason.trigger.value} at "
+            f"{exc.reason.halted_at_ms}ms UTC; details={exc.reason.details}",
+            file=sys.stderr,
+        )
+        return 1
     except MaxOrdersPerDayExceeded as exc:
         print(f"[START] HALT — max orders per day exceeded: {exc}", file=sys.stderr)
         return 1
