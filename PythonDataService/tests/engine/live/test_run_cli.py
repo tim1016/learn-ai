@@ -406,6 +406,57 @@ def test_start_returns_2_when_run_dir_missing_ledger(
     assert "missing run_ledger.json" in capsys.readouterr().err
 
 
+def test_live_config_from_ledger_applies_known_fields() -> None:
+    """CodeRabbit P2 fix: ledger.live_config must round-trip into LiveConfig."""
+    from datetime import time as time_cls
+
+    from app.engine.live.run import _live_config_from_ledger
+
+    cfg = _live_config_from_ledger(
+        {
+            "symbol": "QQQ",
+            "force_flat_at": "15:50",
+            "consolidator_period_min": 30,
+            "max_submit_latency_ms": 250,
+        }
+    )
+    assert cfg.symbol == "QQQ"
+    assert cfg.force_flat_at == time_cls(15, 50)
+    assert cfg.consolidator_period_min == 30
+    assert cfg.max_submit_latency_ms == 250
+
+
+def test_live_config_from_ledger_handles_null_force_flat() -> None:
+    from app.engine.live.run import _live_config_from_ledger
+
+    cfg = _live_config_from_ledger({"force_flat_at": None})
+    assert cfg.force_flat_at is None
+
+
+def test_live_config_from_ledger_returns_defaults_for_empty_payload() -> None:
+    from datetime import time as time_cls
+
+    from app.engine.live.run import _live_config_from_ledger
+
+    cfg = _live_config_from_ledger({})
+    # LiveConfig defaults — pinned here so a future change to the
+    # defaults can't silently change what an empty payload means.
+    assert cfg.symbol == "SPY"
+    assert cfg.force_flat_at == time_cls(15, 55)
+
+
+def test_live_config_from_ledger_rejects_unknown_keys() -> None:
+    """Unknown keys mean the ledger was written with a newer schema —
+    refuse rather than silently drop them, since the dropped values
+    were part of run_id."""
+    import pytest
+
+    from app.engine.live.run import _live_config_from_ledger
+
+    with pytest.raises(ValueError, match="unknown live_config keys"):
+        _live_config_from_ledger({"future_field": 1})
+
+
 def test_start_returns_2_when_strategy_module_unknown(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
