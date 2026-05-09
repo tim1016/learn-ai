@@ -63,6 +63,7 @@ import {
   updateSurvivalRuleAt,
 } from './spec-mutators';
 import { SpecStrategyStore } from './strategy-store.service';
+import { PolygonDateRangeComponent } from '../../shared/polygon-date-range';
 
 type LifecycleTab = 'entry' | 'manage' | 'exit';
 
@@ -102,7 +103,7 @@ interface QuickManageRule {
  */
 @Component({
   selector: 'app-spec-strategy-runner',
-  imports: [CommonModule, FormsModule, PageHeaderComponent],
+  imports: [CommonModule, FormsModule, PageHeaderComponent, PolygonDateRangeComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './spec-strategy-runner.component.html',
   styleUrl: './spec-strategy-runner.component.scss',
@@ -129,8 +130,8 @@ export class SpecStrategyRunnerComponent {
   readonly currentSavedId = signal<string | null>(null);
 
   // ---- Run controls (orthogonal to the spec) ----------------------------
-  readonly startDate = signal<string>('2024-03-28');
-  readonly endDate = signal<string>('2024-12-31');
+  readonly fromDate = signal<string>('2024-03-28');
+  readonly toDate = signal<string>('2024-12-31');
   readonly initialCash = signal<number>(100000);
   readonly fillMode = signal<'signal_bar_close' | 'next_bar_open'>('signal_bar_close');
 
@@ -179,8 +180,8 @@ export class SpecStrategyRunnerComponent {
   /** All validation issues for the current spec + run config. */
   readonly issues = computed<readonly ValidationIssue[]>(() =>
     validateStrategy(this.spec(), {
-      start: this.startDate(),
-      end: this.endDate(),
+      start: this.fromDate(),
+      end: this.toDate(),
       initialCash: this.initialCash(),
       fillMode: this.fillMode(),
       resolutionMinutes: this.spec().resolution.period_minutes,
@@ -642,8 +643,8 @@ export class SpecStrategyRunnerComponent {
     this.localError.set(null);
     try {
       await this.specService.runBacktest(this.spec(), {
-        startDate: this.startDate(),
-        endDate: this.endDate(),
+        startDate: this.fromDate(),
+        endDate: this.toDate(),
         initialCash: this.initialCash(),
         fillMode: this.fillMode(),
       });
