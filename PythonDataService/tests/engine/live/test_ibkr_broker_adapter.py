@@ -118,8 +118,19 @@ async def test_cancel_open_orders_empty_when_runner_owns_nothing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_event_stream_buffers_owned_fills_only() -> None:
-    """The streaming task drops events for non-owned order IDs."""
+async def test_event_stream_buffers_all_fills_including_foreign() -> None:
+    """The streaming task buffers ALL fills, including ones placed by
+    other clients on the same DU account.
+
+    Spec § 7 requires this: 'Persist all received executions to
+    executions.parquet whether or not Python originated them,
+    regardless of clientId'. The previous adapter-level filter
+    dropped foreigns entirely, defeating the outside-mutation halt
+    check that needs to see them. Downstream ownership filtering
+    for the engine's portfolio-update path lives in
+    LiveEngine._convert_ibkr_fill — see the comment in
+    IbkrBrokerAdapter._run_event_stream.
+    """
     client, _ = _client(owned_open_id=100)
     adapter = IbkrBrokerAdapter(client)
     await adapter.place_order(_spec())
@@ -146,6 +157,8 @@ async def test_event_stream_buffers_owned_fills_only() -> None:
             order_id=100,
             event_type="fill",
             status="Filled",
+            exec_id="exec-owned-1",
+            client_id=42,
             fill_quantity=10.0,
             avg_fill_price=500.0,
             last_fill_price=500.0,
@@ -155,9 +168,11 @@ async def test_event_stream_buffers_owned_fills_only() -> None:
         )
         foreign = IbkrOrderEvent(
             account_id="DU1234567",
-            order_id=999,
+            order_id=999,  # not in adapter.owned_order_ids
             event_type="fill",
             status="Filled",
+            exec_id="exec-foreign-1",
+            client_id=0,  # manual TWS click, different clientId
             fill_quantity=5.0,
             avg_fill_price=499.0,
             last_fill_price=499.0,
@@ -167,19 +182,22 @@ async def test_event_stream_buffers_owned_fills_only() -> None:
         )
         await queued.put(owned)
         await queued.put(foreign)
-        # Give the task a chance to drain both events.
-        for _ in range(50):
-            await asyncio.sleep(0)
-            if adapter.drain_broker_events.__self__ is adapter:
-                break
-        # Wait until the buffer reflects the owned event without polling forever.
-        for _ in range(100):
-            if adapter._event_buffer:
+
+        # Wait until both events have landed in the buffer.
+        for _ in range(200):
+            if len(adapter._event_buffer) >= 2:
                 break
             await asyncio.sleep(0.01)
 
         drained = adapter.drain_broker_events()
-        assert [e.order_id for e in drained] == [100]
+        # Both are kept now — § 7 requirement.
+        order_ids = [e.order_id for e in drained]
+        assert 100 in order_ids
+        assert 999 in order_ids
+        # exec_id and client_id round-trip through the new model fields.
+        foreign_drained = next(e for e in drained if e.order_id == 999)
+        assert foreign_drained.exec_id == "exec-foreign-1"
+        assert foreign_drained.client_id == 0
     finally:
         await adapter.stop_event_stream()
         live_portfolio_module.stream_order_events = original
