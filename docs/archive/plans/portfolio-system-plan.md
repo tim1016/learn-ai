@@ -1,3 +1,8 @@
+> **Status:** Archived — stale implementation plan, portfolio system shipped.
+> **Do not use as implementation authority.**
+> Current authority: `docs/portfolio-management.md` (comprehensive reference).
+> Archived because: portfolio system shipped; superseded by portfolio-management.md.
+
 # Portfolio System — Implementation Plan
 
 ## Architecture Flow

@@ -1,3 +1,8 @@
+> **Status:** Archived — stale plan, pipeline superseded.
+> **Do not use as implementation authority.**
+> Current authority: FastAPI service in `PythonDataService/` (Polygon.io-based pipeline).
+> Archived because: current data pipeline is Polygon-based; CSV pipeline plan superseded.
+
 # DIA Minute RTH Data Pipeline — Cleanup, Validation & Frontend Plan
 
 **Context:** Analysis of `DIA_minute_rth_2024-03-28_to_2026-03-28.csv` (195,390 rows, 501 trading days) revealed fabricated bars on half-days, fractional volumes in recent data, misleading cumulative VWAP, and opaque indicator warmup. This plan addresses all issues and adds a full-stack validation UI with before/after comparison and raw/clean data access.

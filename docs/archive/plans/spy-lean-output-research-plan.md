@@ -1,3 +1,8 @@
+> **Status:** Archived — stale research plan, work completed.
+> **Do not use as implementation authority.**
+> Current authority: `docs/spy-lean-output-report.md` (reconciliation report), `references/lean/` (vendored LEAN references).
+> Archived because: LEAN output research completed; findings documented in the report and references/.
+
 # Research Plan — LEAN SPY Study Output: What It Writes & How It's Calculated
 
 **Owner:** Inkant

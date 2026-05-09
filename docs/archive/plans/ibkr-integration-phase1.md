@@ -1,3 +1,8 @@
+> **Status:** Archived — frozen phase snapshot.
+> **Do not use as implementation authority.**
+> Current authority: `docs/ibkr-integration-authority.md` (comprehensive snapshot), `docs/architecture/ibkr-integration-tdd.md` (design rationale).
+> Archived because: `ibkr-integration-authority.md` explicitly calls phase docs "frozen snapshots of what each phase shipped." Preserved for provenance.
+
 # IBKR integration — Phase 1: read-only option chain
 
 **Status**: Phase 1 implemented, May 2026.

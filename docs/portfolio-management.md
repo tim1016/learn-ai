@@ -854,7 +854,7 @@ podman compose up -d --build
 
 ## 9. Related Documentation
 
-- [Portfolio System Plan](./portfolio-system-plan.md) — original 4-phase implementation plan
-- [Portfolio System (detailed)](./portfolio-system.md) — exhaustive entity/service reference
+- [Portfolio System Plan](./archive/plans/portfolio-system-plan.md) — original 4-phase implementation plan (archived)
+- [Portfolio System (detailed)](./archive/plans/portfolio-system.md) — exhaustive entity/service reference (archived duplicate — use this doc instead)
 - [Options Cross-Section Overview](./options-cross-section-overview.md) — IV pipeline and Greeks computation
-- [Black-Scholes Implementation](./black-scholes-implementation.md) — pricing formulas and Greeks derivations
+- [Black-Scholes Implementation](./archive/plans/black-scholes-implementation.md) — pricing formulas and Greeks derivations (archived — see `docs/architecture/options-math-authorities.md` for current authority)

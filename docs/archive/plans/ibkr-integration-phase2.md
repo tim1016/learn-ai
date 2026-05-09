@@ -1,3 +1,8 @@
+> **Status:** Archived — frozen phase snapshot.
+> **Do not use as implementation authority.**
+> Current authority: `docs/ibkr-integration-authority.md` (comprehensive snapshot), `docs/architecture/ibkr-integration-tdd.md` (design rationale).
+> Archived because: `ibkr-integration-authority.md` explicitly calls phase docs "frozen snapshots of what each phase shipped." Preserved for provenance.
+
 # IBKR integration — Phase 2: account, positions, P&L
 
 **Status**: Phase 2a in progress (account summary + positions, sync). Phase 2b (P&L SSE streams) and 2c (per-position P&L) not yet started.

@@ -3,7 +3,7 @@
 **Status**: Phase 1 + 2a + 2b + 2c + 3a + 3b shipped. Phase 4 (live) gated behind explicit operator approval.
 **Authors**: Inkant (driver), Claude (research + code), Codex (case-sensitive bug fix).
 **Date**: May 2026.
-**Scope**: Server-side IBKR integration in `PythonDataService/`. Frontend pointers in §10. Phase docs (§4) live alongside this file: [phase 1](./ibkr-integration-phase1.md), [phase 2](./ibkr-integration-phase2.md), [phase 3](./ibkr-integration-phase3.md).
+**Scope**: Server-side IBKR integration in `PythonDataService/`. Frontend pointers in §10. Phase docs (§4) are archived frozen snapshots: [phase 1](../archive/plans/ibkr-integration-phase1.md), [phase 2](../archive/plans/ibkr-integration-phase2.md), [phase 3](../archive/plans/ibkr-integration-phase3.md).
 
 ## 1. Motivation
 
@@ -124,7 +124,7 @@ Cancellation: every async iterator wraps the IBKR subscription in `try / finally
 
 ### 3.6 Container networking (Podman-on-Windows)
 
-Three lessons learned during bring-up, captured in [phase 1 doc § "Lessons learned"](./ibkr-integration-phase1.md#lessons-learned-debugging-notes-from-initial-bring-up):
+Three lessons learned during bring-up, captured in [phase 1 doc § "Lessons learned"](../archive/plans/ibkr-integration-phase1.md#lessons-learned-debugging-notes-from-initial-bring-up):
 
 - `pydantic-settings` `case_sensitive=True` silently dropped uppercase env vars. **Fixed** in `config.py`. Regression test `test_uppercase_ibkr_env_vars_are_honored`.
 - Gateway "Trusted IPs" filters by **source** IP (the WSL VM's peer), not the destination IP that lives in `IBKR_HOST`. Two different IPs, two different roles.
@@ -248,7 +248,7 @@ In rough priority order:
 4. **Phase 3.5: bracket / OCO orders** — extend `IbkrOrderSpec` with optional `take_profit` / `stop_loss` legs.
 5. **Phase 4: live trading** — `confirm_live=true`, risk pre-checks, mode flip.
 6. **Persistence schema decisions** — Phase 2c shipped writer stubs but the partition / retention / replay decision is deferred.
-7. **LEAN `InteractiveBrokersFeeModel` port** — tracked separately in `docs/lean-engine-phase2-plan.md` § 3.2; closes the commission-reconciliation gap.
+7. **LEAN `InteractiveBrokersFeeModel` port** — tracked separately in `docs/archive/plans/lean-engine-phase2-plan.md` § 3.2 (archived); closes the commission-reconciliation gap.
 
 ## 9. How we got here — engineering process retrospective
 

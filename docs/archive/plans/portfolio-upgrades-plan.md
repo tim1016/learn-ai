@@ -1,3 +1,8 @@
+> **Status:** Archived — stale upgrade plan, likely incorporated.
+> **Do not use as implementation authority.**
+> Current authority: `docs/portfolio-management.md`, `docs/audits/auto-research/`.
+> Archived because: portfolio upgrades shipped or folded into auto-research findings.
+
 # Portfolio System Upgrades — Implementation Plan
 
 ## Priority Matrix

@@ -1,7 +1,7 @@
 # LEAN Engine — Phase 1 Verification Report
 
 **Date:** 2026-04-09
-**Scope:** Verify the new in-process backtest engine at `PythonDataService/app/engine/` against the Phase 1 done-definition from `docs/lean-engine-implementation-plan.md`.
+**Scope:** Verify the new in-process backtest engine at `PythonDataService/app/engine/` against the Phase 1 done-definition from `docs/archive/plans/lean-engine-implementation-plan.md` (archived).
 **Result:** Phase 1 bit-exact parity is confirmed. Three gaps are flagged below before Phase 2 begins.
 
 ---

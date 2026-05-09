@@ -1,3 +1,8 @@
+> **Status:** Archived — CONFLICT with `docs/architecture/engine-authority-map.md`.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/engine-authority-map.md` (engine is canonical and shipped).
+> Archived because: this plan frames the engine as a future build goal; `engine-authority-map.md` (protected, reviewed 2026-05-04) documents the same engine as fully shipped and canonical.
+
 # LEAN-Compatible Backtest Engine — Implementation Plan
 
 ## Goal

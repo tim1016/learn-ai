@@ -6,7 +6,7 @@
 **Companion docs:**
 - [`options-math-authorities.md`](options-math-authorities.md) — single sources of truth (PR #25, merged)
 - [`edge-feature-design.md`](edge-feature-design.md) — Edge feature spec (PR #26, merged)
-- [`vol-surface-dashboard-plan.md`](vol-surface-dashboard-plan.md) — phased build plan (PR #27, in review)
+- [`vol-surface-dashboard-plan.md`](../archive/plans/vol-surface-dashboard-plan.md) — phased build plan (PR #27, in review)
 
 This TDD inventories what currently exists in the options + volatility stack
 across the three services (Python, .NET, Angular), then specifies the
@@ -952,7 +952,7 @@ and operate via shell loops + curl, even before steps 7-10 land.
 ## 10. Open questions (deferred to plan doc)
 
 The six open questions blocking the build live in
-[`vol-surface-dashboard-plan.md`](vol-surface-dashboard-plan.md) § 6:
+[`vol-surface-dashboard-plan.md`](../archive/plans/vol-surface-dashboard-plan.md) § 6:
 
 - Q1 — regime framing (clusters only vs labeler on top)
 - Q2 — .NET passthrough for new endpoint
@@ -977,7 +977,7 @@ decisions; they affect what gets built but not how the built parts work.
 - [`docs/architecture/edge-feature-design.md`](edge-feature-design.md) — Edge feature canonical spec (PR #26).
 - [`docs/architecture/edge-functionality-testing.md`](edge-functionality-testing.md) — Edge testing guide.
 - [`docs/archive/handoffs/design-handoff-edge-2026-04-25.md`](../archive/handoffs/design-handoff-edge-2026-04-25.md) — Edge design handoff (archived).
-- [`docs/architecture/vol-surface-dashboard-plan.md`](vol-surface-dashboard-plan.md) — phased build plan + open questions.
+- [`docs/architecture/vol-surface-dashboard-plan.md`](../archive/plans/vol-surface-dashboard-plan.md) — phased build plan + open questions.
 - [`PythonDataService/app/research/options/README.md`](../../PythonDataService/app/research/options/README.md) — IV pipeline data-fetching reference.
 
 ### 11.2 External

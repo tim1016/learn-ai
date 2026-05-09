@@ -1,3 +1,8 @@
+> **Status:** Archived — stale phase plan, work shipped.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/engine-authority-map.md`.
+> Archived because: Phase 2 shipped; engine authority map is the canonical reference.
+
 # LEAN Engine — Phase 2+ Implementation Plan
 
 **Date:** 2026-04-09

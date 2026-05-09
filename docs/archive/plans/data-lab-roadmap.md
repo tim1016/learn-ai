@@ -1,3 +1,8 @@
+> **Status:** Archived — stale roadmap, work materially completed.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/engine-authority-map.md`.
+> Archived because: Data Lab work completed; current state documented in engine-authority-map.md.
+
 # Data Lab — Roadmap & Future Improvements
 
 **Last updated:** 2026-03-29

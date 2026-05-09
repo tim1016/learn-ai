@@ -1,3 +1,8 @@
+> **Status:** Archived — CONFLICT with `docs/portfolio-management.md`.
+> **Do not use as implementation authority.**
+> Current authority: `docs/portfolio-management.md` (comprehensive reference with correct interface names).
+> Archived because: shorter duplicate of portfolio-management.md; uses concrete class names without `I` prefix, inconsistent with .NET conventions in `Backend/` and `.claude/rules/dotnet.md`.
+
 # Portfolio Management System
 
 ## 1. Overview

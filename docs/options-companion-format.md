@@ -236,7 +236,7 @@ These match the legacy `quantlib_pricer.price_option` output conventions (see `q
 **Validation status.** Per-bar Greek values are pending a formal parity pass against LEAN's analytic engine. Tracked in `docs/math-sources-of-truth.md`. Until that lands, treat Greeks as research-grade — directionally correct, signs and magnitudes consistent with closed-form (sample 0DTE put bar verified in §10), but not yet pinned to a golden fixture.
 
 **Cross-references:**
-- Frontend Black–Scholes (Abramowitz & Stegun normal CDF, used for the strategy lab's payoff curves only — NOT the companion CSVs): `docs/black-scholes-implementation.md`
+- Frontend Black–Scholes (Abramowitz & Stegun normal CDF, used for the strategy lab's payoff curves only — NOT the companion CSVs): `docs/archive/plans/black-scholes-implementation.md` (archived — current authority: `docs/architecture/options-math-authorities.md`)
 - `quantlib_pricer.PricingEngine` enum (binomial, finite-difference, Monte Carlo) is **not** used in the companion pipeline.
 
 ---

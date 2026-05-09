@@ -20,8 +20,8 @@
 
 **Companion documents:**
 - [`architecture/ibkr-integration-tdd.md`](architecture/ibkr-integration-tdd.md) — **read this first.** The broker boundary already exists; this plan layers on top.
-- [`architecture/ibkr-integration-phase3.md`](architecture/ibkr-integration-phase3.md) — order placement / cancel / event-stream details
-- [`engine-tv-alignment-roadmap.md`](engine-tv-alignment-roadmap.md) — RTH filter / warmup fixes that must be in place before paper
+- [`docs/archive/plans/ibkr-integration-phase3.md`](archive/plans/ibkr-integration-phase3.md) — order placement / cancel / event-stream details (archived phase snapshot)
+- [`docs/archive/plans/engine-tv-alignment-roadmap.md`](archive/plans/engine-tv-alignment-roadmap.md) — RTH filter / warmup fixes that must be in place before paper (archived)
 - [`audits/computational-fidelity-2026-04-22.md`](audits/computational-fidelity-2026-04-22.md) — timestamp / fill-model gotchas
 - [`math-sources-of-truth.md`](math-sources-of-truth.md) — registry to receive a `live-runtime` row
 - [`ibkr-paper-deployment-feedback.md`](ibkr-paper-deployment-feedback.md) — Codex's review of v1, used to produce this v2
@@ -109,7 +109,7 @@ Codex should verify these and stop with a flag if any is false:
 
 - [ ] `ruff check PythonDataService/app/ PythonDataService/tests/` is clean on `main`.
 - [ ] `dotnet format podman.sln --verify-no-changes` is clean on `main`.
-- [ ] The Tier-1 fixes in [`engine-tv-alignment-roadmap.md`](engine-tv-alignment-roadmap.md) §2-3 (RTH filter, warmup buffer) are merged. Without them, paper would diverge from the backtest because of known data-pipeline bugs, polluting the receipt.
+- [ ] The Tier-1 fixes in [`docs/archive/plans/engine-tv-alignment-roadmap.md`](archive/plans/engine-tv-alignment-roadmap.md) §2-3 (RTH filter, warmup buffer) are merged. Without them, paper would diverge from the backtest because of known data-pipeline bugs, polluting the receipt.
 - [ ] `test_spy_validation.py` and `test_spy_next_bar_open_validation.py` both pass.
 - [ ] All 86 broker tests under `tests/broker/ibkr/` pass.
 - [ ] `IBKR_MODE=paper`, `IBKR_PORT=4002` (or 7497), `IBKR_READONLY=false`, paper-account `DU…` ID present in `.env`.
