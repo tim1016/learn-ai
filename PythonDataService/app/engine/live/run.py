@@ -11,18 +11,24 @@ Subcommands:
   * ``start`` — connect to IBKR Gateway and run the live engine
     end-to-end against an existing ``run_dir`` (built by init-ledger).
     Supports ``--readonly`` (Phase D dry run) and
-    ``--max-orders-per-day`` (§ 9 cap).
+    ``--max-orders-per-day`` (§ 9 cap). Refuses if poisoned.flag
+    exists for the run_dir (§ 7.2 #4).
+  * ``emergency-flatten`` — manual operator path for the
+    contaminated-account case in § 7.2 #6. Requires ``--confirm`` +
+    ``--account``; logs every action to
+    ``<run_dir>/emergency_flatten.log``.
 
 Subcommands deferred to subsequent PRs:
   * ``reconcile`` — invoke ``app.engine.live.reconcile`` post-force-flat.
-  * ``emergency-flatten`` — manual operator path for the contaminated-account
-    case in § 7.2 #6.
 
 CLI exit codes:
   0  — success / pre-flight passed / start completed cleanly
-  1  — pre-flight failed (halt) / start halted by max-orders / similar
-  2  — operator error (bad args, missing files at init time)
-  3  — start failed due to a runtime error (broker, IO)
+  1  — pre-flight failed (halt) / start halted by max-orders or fatal
+       halt / poisoned.flag refusal / etc.
+  2  — operator error (bad args, missing files at init time, missing
+       --confirm on emergency-flatten, account mismatch)
+  3  — start or emergency-flatten failed due to a runtime error
+       (broker, IO)
 """
 
 from __future__ import annotations
@@ -304,7 +310,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     """
     from importlib import import_module
 
-    from app.engine.live.halt import read_poisoned_flag
+    from app.engine.live.halt import FatalHaltError, read_poisoned_flag
     from app.engine.live.live_engine import (
         LiveEngine,
         MaxOrdersPerDayExceeded,
@@ -409,6 +415,20 @@ def cmd_start(args: argparse.Namespace) -> int:
     )
     try:
         asyncio.run(engine.run(strategy, bars=bars_iter))
+    except FatalHaltError as exc:
+        # § 7 fatal halt — broker-state divergence. The engine has
+        # already written poisoned.flag and flushed any partial
+        # writers. Surface the trigger + halted_at_ms so the operator
+        # knows what to investigate. Re-running on the same run_id
+        # will be refused at the cmd_start poisoned-flag check; a
+        # fresh run_id is required after manual reconciliation
+        # (§ 7.2 #5).
+        print(
+            f"[START] FATAL HALT — {exc.reason.trigger.value} at "
+            f"{exc.reason.halted_at_ms}ms UTC; details={exc.reason.details}",
+            file=sys.stderr,
+        )
+        return 1
     except MaxOrdersPerDayExceeded as exc:
         print(f"[START] HALT — max orders per day exceeded: {exc}", file=sys.stderr)
         return 1
@@ -417,6 +437,107 @@ def cmd_start(args: argparse.Namespace) -> int:
         return 3
     print("[START] run completed cleanly")
     return 0
+
+
+# ──────────────────────────── emergency-flatten subcommand ───────────
+
+
+def cmd_emergency_flatten(args: argparse.Namespace) -> int:
+    """Manually liquidate every position on a contaminated account (§ 7.2 #6).
+
+    The ONLY allowed action on an account whose run is poisoned. Per
+    spec § 7.2 #6: "places only liquidating orders, logs each one,
+    and writes to a separate live_runs/<run_id>/emergency_flatten.log.
+    This path is OFF by default and never auto-triggered."
+
+    Defense-in-depth:
+      * ``--confirm`` is required (typo-proofing — the operator must
+        explicitly opt in).
+      * ``--account DU...`` must match the IBKR-connected account
+        (typo-proofing — the operator must name the account they
+        intend to flatten, and we refuse if it doesn't match).
+      * Refuses on a non-paper account by virtue of the IbkrClient
+        connect-time DU sentinel (§ 5).
+
+    The subcommand is independent of LiveEngine — it makes its own
+    broker calls so a poisoned LiveEngine state has no influence on
+    the flatten path. Unlike ``start``, it does NOT read the run
+    ledger; the operator names the account directly so a corrupted
+    ledger doesn't block the flatten.
+    """
+    import asyncio as _asyncio
+    from datetime import UTC
+    from datetime import datetime as _datetime
+
+    from app.broker.ibkr.models import IbkrOrderSpec
+
+    if not args.confirm:
+        print(
+            "[EMERGENCY-FLATTEN] refusing without --confirm. This subcommand places "
+            "broker orders against a real (paper) account; the operator must opt in.",
+            file=sys.stderr,
+        )
+        return 2
+
+    log_path = args.run_dir / "emergency_flatten.log"
+    args.run_dir.mkdir(parents=True, exist_ok=True)
+
+    def _log(message: str) -> None:
+        line = f"{_datetime.now(UTC).isoformat()} {message}"
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+        print(f"[EMERGENCY-FLATTEN] {message}")
+
+    _log(f"start: account={args.account} run_dir={args.run_dir}")
+
+    broker = getattr(args, "broker", None)
+    if broker is None:
+        from app.broker.ibkr.client import IbkrClient
+        from app.engine.live.live_portfolio import IbkrBrokerAdapter
+
+        client = IbkrClient()
+        broker = IbkrBrokerAdapter(client)
+
+    async def _flatten() -> int:
+        snapshot = await broker.fetch_positions()
+        if snapshot.account_id.upper() != args.account.upper():
+            _log(
+                f"REFUSED: connected account {snapshot.account_id} != --account {args.account}; "
+                "no orders placed."
+            )
+            return 2
+        liquidated = 0
+        for pos in snapshot.positions:
+            if pos.quantity == 0:
+                continue
+            qty_signed = int(pos.quantity)
+            action = "SELL" if qty_signed > 0 else "BUY"
+            spec = IbkrOrderSpec(
+                symbol=pos.symbol,
+                sec_type=pos.sec_type,
+                action=action,
+                quantity=abs(qty_signed),
+                order_type="MKT",
+                time_in_force="DAY",
+                confirm_paper=True,
+                client_order_id=f"emergency-flatten-{pos.symbol}-{int(_datetime.now(UTC).timestamp() * 1000)}",
+            )
+            ack = await broker.place_order(spec)
+            _log(
+                f"liquidated: symbol={pos.symbol} qty={qty_signed} action={action} "
+                f"order_id={ack.order_id}"
+            )
+            liquidated += 1
+        _log(f"complete: liquidated={liquidated}")
+        return 0
+
+    try:
+        rc = _asyncio.run(_flatten())
+    except Exception as exc:
+        _log(f"FAILURE: {type(exc).__name__}: {exc}")
+        print(f"[EMERGENCY-FLATTEN] runtime error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 3
+    return rc
 
 
 # ──────────────────────────── Argparse ───────────────────────────────
@@ -538,6 +659,32 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     start.set_defaults(func=cmd_start)
+
+    # emergency-flatten — § 7.2 #6 manual operator path.
+    flatten = sub.add_parser(
+        "emergency-flatten",
+        help=(
+            "Manually liquidate every position on a contaminated account. "
+            "Only allowed action on a poisoned run. Requires --confirm + --account."
+        ),
+    )
+    flatten.add_argument(
+        "--run-dir",
+        type=Path,
+        required=True,
+        help="live_runs/<run_id>/ directory; emergency_flatten.log lands under it.",
+    )
+    flatten.add_argument(
+        "--account",
+        required=True,
+        help="IBKR DU account id; refused if it doesn't match the connected account.",
+    )
+    flatten.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Required. Without this flag the subcommand refuses (typo-proofing).",
+    )
+    flatten.set_defaults(func=cmd_emergency_flatten)
 
     return parser
 

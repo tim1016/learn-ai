@@ -34,6 +34,13 @@ from app.engine.live.artifacts import (
 )
 from app.engine.live.bar_adapter import trade_bars_from_ibkr
 from app.engine.live.config import LiveConfig
+from app.engine.live.halt import (
+    FatalHaltError,
+    check_lost_fill,
+    check_outside_mutation,
+    now_ms_utc,
+    write_poisoned_flag,
+)
 from app.engine.live.live_context import LiveContext
 from app.engine.live.live_portfolio import (
     BrokerAdapter,
@@ -69,11 +76,16 @@ class _OrderMeta:
     tag. The engine stamps that context in when it submits, so a fill
     on ``order_id=42`` can be expanded back to a full
     ``OrderEvent(symbol=..., fill_quantity=signed, tag=...)``.
+
+    ``submitted_at_ms`` is the int64 ms UTC of order submission;
+    used by halt.check_lost_fill to decide when an unfilled order
+    has aged past its expected fill window (§ 7.1 trigger B).
     """
 
     symbol: str
     tag: str
     signed_qty: int
+    submitted_at_ms: int = 0
 
 
 @runtime_checkable
@@ -130,6 +142,7 @@ class LiveEngine:
         account_id: str = "",
         readonly: bool = False,
         max_orders_per_day: int | None = None,
+        fill_window_ms: int | None = None,
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -163,6 +176,19 @@ class LiveEngine:
         # of the most-recent bar; an attempt past the cap raises
         # MaxOrdersPerDayExceeded mid-run, surfacing as a halt.
         self._max_orders_per_day = max_orders_per_day
+        # ``fill_window_ms``: how long to wait before declaring a
+        # Python-owned order's fill lost (§ 7.1 trigger B). Default
+        # is one consolidator period + 60s slack. ``None`` disables
+        # both the lost-fill and outside-mutation halt detection
+        # (replay tests). When set, the engine writes poisoned.flag
+        # and raises FatalHaltError on either trigger.
+        if fill_window_ms is None:
+            self._fill_window_ms = (
+                self._config.consolidator_period_min * 60 * 1000 + 60_000
+            )
+        else:
+            self._fill_window_ms = fill_window_ms
+        self._halt_enabled = output_dir is not None  # need run_dir to write poisoned.flag
 
     def _validate_paper_client(self) -> None:
         if self._client is None:
@@ -227,6 +253,14 @@ class LiveEngine:
         orders_submitted_today: int = 0
         current_session_date: date | None = None
 
+        # § 7 fatal-halt state. ``seen_executions`` accumulates dict
+        # rows (one per broker fill event observed) so check_lost_fill
+        # can match owned orders against actual fills, and so
+        # check_outside_mutation runs against the cumulative set
+        # rather than just the per-bar drain. Both are no-ops when
+        # halt detection isn't enabled (replay tests).
+        seen_executions: list[dict] = []
+
         # Artifact-writer integration. Bundle is None when no
         # output_dir is configured — keeps replay tests (FakeBroker
         # paths) free of file IO. Per-bar dedupe state for the
@@ -261,12 +295,36 @@ class LiveEngine:
                         last_written_trade_count = self._flush_new_trades(
                             writers, strategy, last_written_trade_count
                         )
-                for event in self._drain_real_broker_order_events():
-                    portfolio.record_broker_fill(event)
-                    order_events.append(event)
-                    strategy.on_order_event(event)
+
+                # Drain real-broker events ONCE; halt-check the raw
+                # IbkrOrderEvent list (which may contain foreign fills
+                # — adapter no longer filters by ownership per § 7),
+                # then convert to engine OrderEvents for the existing
+                # portfolio + strategy + writer flow. Drain-once is
+                # important: drain_broker_events clears the buffer, so
+                # a second drain in _drain_real_broker_order_events
+                # would see nothing.
+                raw_real_events = self._drain_raw_real_broker_events()
+                if self._halt_enabled and raw_real_events:
+                    last_clean_ms = (
+                        int(previous_bar.end_time.timestamp() * 1000)
+                        if previous_bar is not None
+                        else int(minute_bar.time.timestamp() * 1000)
+                    )
+                    self._extend_seen_executions(seen_executions, raw_real_events)
+                    self._check_halt_outside_mutation(
+                        seen_executions, last_clean_bar_close_ms=last_clean_ms,
+                        portfolio=portfolio, writers=writers,
+                    )
+                for raw_event in raw_real_events:
+                    engine_event = self._convert_ibkr_fill(raw_event)
+                    if engine_event is None:
+                        continue
+                    portfolio.record_broker_fill(engine_event)
+                    order_events.append(engine_event)
+                    strategy.on_order_event(engine_event)
                     if writers is not None:
-                        self._write_execution(writers, event)
+                        self._write_execution(writers, engine_event)
                         last_written_trade_count = self._flush_new_trades(
                             writers, strategy, last_written_trade_count
                         )
@@ -342,6 +400,19 @@ class LiveEngine:
                         writers, strategy, last_written_decision_ms
                     )
 
+                # § 7.1 trigger B: any owned order that hasn't filled
+                # within its expected window halts the run. Run after
+                # the bar handler so any brand-new order this bar just
+                # submitted is considered (it'll be too young to halt
+                # this iteration, but we want the check to fire on
+                # subsequent iterations).
+                if self._halt_enabled:
+                    last_clean_ms = int(minute_bar.end_time.timestamp() * 1000)
+                    self._check_halt_lost_fill(
+                        seen_executions, last_clean_bar_close_ms=last_clean_ms,
+                        portfolio=portfolio, writers=writers,
+                    )
+
                 submitted = await self._submit_pending_with_meta(portfolio)
                 submitted_order_ids.extend(ack.order_id for ack in submitted)
                 orders_submitted_today += len(submitted)
@@ -377,12 +448,27 @@ class LiveEngine:
                 await self._broker.stop_event_stream()
                 started_event_stream = False
                 self._raise_if_event_stream_failed()
-                for event in self._drain_real_broker_order_events():
-                    portfolio.record_broker_fill(event)
-                    order_events.append(event)
-                    strategy.on_order_event(event)
+                final_raw_events = self._drain_raw_real_broker_events()
+                if self._halt_enabled and final_raw_events:
+                    last_clean_ms = (
+                        int(previous_bar.end_time.timestamp() * 1000)
+                        if previous_bar is not None
+                        else 0
+                    )
+                    self._extend_seen_executions(seen_executions, final_raw_events)
+                    self._check_halt_outside_mutation(
+                        seen_executions, last_clean_bar_close_ms=last_clean_ms,
+                        portfolio=portfolio, writers=writers,
+                    )
+                for raw_event in final_raw_events:
+                    engine_event = self._convert_ibkr_fill(raw_event)
+                    if engine_event is None:
+                        continue
+                    portfolio.record_broker_fill(engine_event)
+                    order_events.append(engine_event)
+                    strategy.on_order_event(engine_event)
                     if writers is not None:
-                        self._write_execution(writers, event)
+                        self._write_execution(writers, engine_event)
                         last_written_trade_count = self._flush_new_trades(
                             writers, strategy, last_written_trade_count
                         )
@@ -515,6 +601,11 @@ class LiveEngine:
         lets ``_drain_real_broker_order_events`` rebuild a full engine
         ``OrderEvent`` from a wire ``IbkrOrderEvent``.
 
+        ``submitted_at_ms`` (captured via ``now_ms_utc()`` after the
+        broker ack returns) feeds the § 7 lost-fill check in
+        halt.check_lost_fill — orders aged past the fill window
+        without a matching execution trip a fatal halt.
+
         Read-only mode: drain the strategy's pending orders so the
         portfolio doesn't keep them queued forever, but never call
         broker.place_order. Returns an empty ack list — no fills will
@@ -527,13 +618,139 @@ class LiveEngine:
             portfolio.pending_orders.clear()
             return []
         acks = await portfolio.submit_pending_orders()
+        submitted_at_ms = now_ms_utc()
         for order, ack in zip(pending_snapshot, acks, strict=True):
             self._order_meta[int(ack.order_id)] = _OrderMeta(
                 symbol=order.symbol,
                 tag=order.tag,
                 signed_qty=int(order.quantity),
+                submitted_at_ms=submitted_at_ms,
             )
         return acks
+
+    # ──────────────────── § 7 fatal-halt helpers ─────────────────────
+
+    def _drain_raw_real_broker_events(self) -> list[IbkrOrderEvent]:
+        """Drain the broker adapter's raw event buffer (unfiltered).
+
+        Caller is responsible for both halt-checking the result and
+        running it through ``_convert_ibkr_fill`` for the engine's
+        portfolio + strategy + writer flow. Drain-once: the adapter
+        clears its buffer on read, so callers must not invoke
+        ``self._broker.drain_broker_events`` again in the same loop
+        iteration.
+        """
+        if not isinstance(self._broker, IbkrEventAdapter):
+            return []
+        return self._broker.drain_broker_events()
+
+    def _extend_seen_executions(
+        self, seen_executions: list[dict], raw_events: list[IbkrOrderEvent]
+    ) -> None:
+        """Append fill events from a raw drain to the cumulative executions list.
+
+        Each entry is the dict shape ``halt.check_outside_mutation``
+        and ``halt.check_lost_fill`` consume. ``client_order_id`` is
+        derived from ``LivePortfolio``'s naming convention
+        (``f"live-{order_id}"``); foreign fills whose ``order_id`` is
+        not in ``self._order_meta`` get ``client_order_id=None`` and
+        are detected as foreign by the outside-mutation check.
+        """
+        for event in raw_events:
+            if event.event_type != "fill":
+                continue
+            owned = int(event.order_id) in self._order_meta
+            seen_executions.append(
+                {
+                    "client_order_id": f"live-{event.order_id}" if owned else None,
+                    "exec_id": event.exec_id,
+                    "perm_id": event.perm_id,
+                    "account_id": event.account_id,
+                    "client_id": event.client_id,
+                }
+            )
+
+    def _check_halt_outside_mutation(
+        self,
+        seen_executions: list[dict],
+        *,
+        last_clean_bar_close_ms: int,
+        portfolio: LivePortfolio,
+        writers: LiveArtifactWriters | None,
+    ) -> None:
+        """Run § 7.1 trigger A. On halt, perform fatal-halt cleanup and raise."""
+        owned_client_order_ids = {f"live-{oid}" for oid in self._order_meta}
+        reason = check_outside_mutation(
+            seen_executions,
+            owned_client_order_ids,
+            halted_at_ms=now_ms_utc(),
+            last_clean_bar_close_ms=last_clean_bar_close_ms,
+        )
+        if reason is None:
+            return
+        self._fatal_halt(reason, portfolio=portfolio, writers=writers)
+
+    def _check_halt_lost_fill(
+        self,
+        seen_executions: list[dict],
+        *,
+        last_clean_bar_close_ms: int,
+        portfolio: LivePortfolio,
+        writers: LiveArtifactWriters | None,
+    ) -> None:
+        """Run § 7.1 trigger B. On halt, perform fatal-halt cleanup and raise."""
+        owned_orders = [
+            {"client_order_id": f"live-{oid}", "submitted_at_ms": meta.submitted_at_ms}
+            for oid, meta in self._order_meta.items()
+        ]
+        reason = check_lost_fill(
+            owned_orders,
+            seen_executions,
+            fill_window_ms=self._fill_window_ms,
+            current_time_ms=now_ms_utc(),
+            last_clean_bar_close_ms=last_clean_bar_close_ms,
+        )
+        if reason is None:
+            return
+        self._fatal_halt(reason, portfolio=portfolio, writers=writers)
+
+    def _fatal_halt(
+        self,
+        reason,
+        *,
+        portfolio: LivePortfolio,
+        writers: LiveArtifactWriters | None,
+    ) -> None:
+        """Cleanup + write poisoned.flag + raise FatalHaltError.
+
+        Order matters: writers flush BEFORE the flag is written so the
+        partial parquets are on-disk by the time the operator inspects
+        the run dir. The flag write is best-effort — a pre-existing
+        flag (rare; e.g. a second halt firing on the same bar) is
+        silently kept since the first-halt-wins invariant is enforced
+        at the OS level by halt.write_poisoned_flag's ``open(..., 'x')``.
+        Cancellation of Python-owned orders is best-effort too — the
+        broker may not respond cleanly during a contaminated session,
+        and we'd rather raise than block on it.
+        """
+        # Clear the strategy's still-pending queue so a finally-block
+        # consumer doesn't try to submit them after the halt fires.
+        portfolio.pending_orders.clear()
+        if writers is not None:
+            try:
+                writers.flush_all()
+            except Exception:
+                logger.exception("writers.flush_all failed during fatal halt")
+        if self._output_dir is not None:
+            try:
+                write_poisoned_flag(self._output_dir, reason)
+            except FileExistsError:
+                # First halt already wrote it; preserve the original
+                # cause per spec § 7 first-halt-wins invariant.
+                logger.info("poisoned.flag already exists; preserving original halt cause")
+            except Exception:
+                logger.exception("write_poisoned_flag failed during fatal halt")
+        raise FatalHaltError(reason)
 
     def _raise_if_event_stream_failed(self) -> None:
         """Fail the run if the broker event-stream task died.
