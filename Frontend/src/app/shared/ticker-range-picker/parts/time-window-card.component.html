@@ -1,0 +1,97 @@
+<section class="group time-window"
+         [class.time-window--legend-tinted]="legendTreatment() === 'tinted-bold'"
+         [class.time-window--legend-solid]="legendTreatment() === 'solid-bold'"
+         [class.time-window--legend-icon]="legendTreatment() === 'icon-glyph'"
+         aria-label="Time window">
+  <header class="group__head">
+    <span class="group__eyebrow">
+      <span class="group__eyebrow-dot group__eyebrow-dot--bull"></span>
+      Time window
+    </span>
+    <span class="group__helper mono">{{ spanDays() }}d · {{ spanBusinessDays() }}bd</span>
+  </header>
+
+  <div class="range-row">
+    <input
+      type="date"
+      class="range-row__input mono"
+      [ngModel]="value().from"
+      (ngModelChange)="updateFrom($event)"
+      aria-label="Start date"
+    />
+    <i class="pi pi-arrow-right range-row__arrow" aria-hidden="true"></i>
+    <input
+      type="date"
+      class="range-row__input mono"
+      [ngModel]="value().to"
+      (ngModelChange)="updateTo($event)"
+      aria-label="End date"
+    />
+  </div>
+
+  <div class="presets" role="group" aria-label="Quick ranges">
+    @for (p of presets; track p.days) {
+      <button
+        type="button"
+        class="preset-btn"
+        [class.preset-btn--active]="activePreset() === p.days"
+        (click)="applyPreset(p.days)"
+      >
+        {{ p.label }}
+      </button>
+    }
+  </div>
+
+  @if (availability().length > 0) {
+    <div class="strip" [attr.aria-label]="'Per-day cache availability'">
+      @for (c of availability(); track trackByDay($index, c)) {
+        <div
+          class="strip__cell"
+          [class.strip__cell--complete]="c.status === 'complete'"
+          [class.strip__cell--partial]="c.status === 'partial'"
+          [class.strip__cell--missing]="c.status === 'missing'"
+          [class.strip__cell--hole]="c.status === 'hole'"
+          [class.strip__cell--weekend]="c.status === 'weekend'"
+          [attr.title]="c.date + ' · ' + c.status"
+        ></div>
+      }
+    </div>
+
+    <div class="legend">
+      <span class="legend-chip legend-chip--complete"
+            [class.legend-chip--dominant]="dominant() === 'complete'">
+        <i class="pi pi-check legend-chip__icon" aria-hidden="true"></i>
+        <span class="legend-chip__swatch"></span>
+        <span class="legend-chip__count mono">{{ summary().complete }}</span>
+        <span class="legend-chip__label">complete</span>
+      </span>
+      @if (summary().partial > 0) {
+        <span class="legend-chip legend-chip--partial"
+              [class.legend-chip--dominant]="dominant() === 'partial'">
+          <i class="pi pi-clock legend-chip__icon" aria-hidden="true"></i>
+          <span class="legend-chip__swatch"></span>
+          <span class="legend-chip__count mono">{{ summary().partial }}</span>
+          <span class="legend-chip__label">partial</span>
+        </span>
+      }
+      @if (summary().hole > 0) {
+        <span class="legend-chip legend-chip--hole"
+              [class.legend-chip--dominant]="dominant() === 'hole'">
+          <i class="pi pi-times legend-chip__icon" aria-hidden="true"></i>
+          <span class="legend-chip__swatch"></span>
+          <span class="legend-chip__count mono">{{ summary().hole }}</span>
+          <span class="legend-chip__label">{{ summary().hole === 1 ? 'hole' : 'holes' }}</span>
+        </span>
+      }
+      @if (summary().missing > 0) {
+        <span class="legend-chip legend-chip--missing"
+              [class.legend-chip--dominant]="dominant() === 'missing'">
+          <i class="pi pi-circle-off legend-chip__icon" aria-hidden="true"></i>
+          <span class="legend-chip__swatch"></span>
+          <span class="legend-chip__count mono">{{ summary().missing }}</span>
+          <span class="legend-chip__label">missing</span>
+        </span>
+      }
+    </div>
+  }
+</section>
