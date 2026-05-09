@@ -1,3 +1,8 @@
+> **Status:** Archived — stale test plan (2026-04-23), absorbed into auto-research.
+> **Do not use as implementation authority.**
+> Current authority: `docs/audits/auto-research/` (F-series findings and ongoing audit system).
+> Archived because: Python test improvement plan absorbed into auto-research findings and F-series.
+
 # Python Data Service — Test Coverage Research Plan (2026-04-23)
 
 **Branch:** `tests/python-data-service-coverage`

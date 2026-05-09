@@ -4,7 +4,7 @@
 **Branch:** `volatility`
 **Date:** 2026-04-25
 **Owner:** TBD
-**Related plans:** `data-lab-roadmap.md`, `engine-tv-alignment-roadmap.md`, `portfolio-system-plan.md`, `engine-phase-1-2-refined-plan.md`
+**Related plans:** `docs/archive/plans/data-lab-roadmap.md` (archived), `docs/archive/plans/engine-tv-alignment-roadmap.md` (archived), `docs/archive/plans/portfolio-system-plan.md` (archived), `docs/engine-phase-1-2-refined-plan.md`
 **Memory pointer:** `~/.claude/projects/.../memory/edge_feature_roadmap.md`
 
 This document describes a new parent route `/edge` that bundles three quantitative-research views — **Realized vs IV**, **Cross-Asset Validation**, **Regime Clustering** — plus two cross-cutting capabilities (**Trade Simulator**, **Edge Score**). The intent is to convert "interesting series" into ranked, decision-ready edges.

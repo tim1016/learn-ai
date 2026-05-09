@@ -1,3 +1,8 @@
+> **Status:** Archived — stale strategy plan, work completed or superseded.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/engine-authority-map.md` (strategy registry).
+> Archived because: ORB strategy work completed or superseded by current engine strategy registry.
+
 # SPY Opening Range Breakout (ORB) — Strategy & Validation Plan
 
 **Date:** April 16, 2026

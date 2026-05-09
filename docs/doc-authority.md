@@ -78,23 +78,17 @@
 
 ---
 
-## Disputed docs (deferred to PR2 — do not use as authority)
-
-These docs conflict with a protected canonical and must be resolved before they can be used as authority. See `docs/audits/auto-research/findings/2026-05-08-doc-cleanup-plan.md` §2 for the full conflict analysis.
-
-| Doc | Conflict | Resolution target |
-|---|---|---|
-| `docs/black-scholes-implementation.md` | Presents `black-scholes.ts` as math authority; `numerical-authority-migration-plan.md` marks it `[LEGACY-OK]` (Conflict A) | Archive with banner pointing to `options-math-authorities.md` |
-| `docs/lean-engine-implementation-plan.md` | Frames engine as future build; `engine-authority-map.md` shows it shipped (Conflict B) | Archive with banner pointing to `engine-authority-map.md` |
-| `docs/portfolio-system.md` | Shorter duplicate of `portfolio-management.md`; uses non-interface names inconsistent with .NET conventions (Conflict C) | Archive with banner pointing to `portfolio-management.md` |
-
----
-
 ## Archive (preserved for provenance — not implementation authority)
 
 All files under `docs/archive/` carry a status banner. See `docs/archive/README.md` for the convention.
 
 Key archive subdirectories:
+- `docs/archive/plans/` — stale plans, phase snapshots, and conflict docs (archived in PR1+PR2)
 - `docs/archive/prompts/` — verbatim LLM prompts stored as files
 - `docs/archive/handoffs/` — per-session context dumps and demo notes
 - `docs/archive/deleted-artifacts.md` — ledger of deleted raw outputs
+
+Previously disputed docs are now archived in `docs/archive/plans/` with banners naming their canonical replacement:
+- `docs/archive/plans/black-scholes-implementation.md` → authority: `docs/architecture/options-math-authorities.md`
+- `docs/archive/plans/lean-engine-implementation-plan.md` → authority: `docs/architecture/engine-authority-map.md`
+- `docs/archive/plans/portfolio-system.md` → authority: `docs/portfolio-management.md`

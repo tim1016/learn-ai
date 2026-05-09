@@ -1,3 +1,8 @@
+> **Status:** Archived — stale deep-dive, content folded into authority docs.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/options-math-authorities.md`, `docs/architecture/options-research.md`.
+> Archived because: Phase 1.2 design content folded into options-research.md per options-routes-research.md §7.
+
 # Phase 1 & 2 Deep Dive: Insights, Alpha Models, and How They Compare to the Research Lab
 
 **Date:** 2026-04-10

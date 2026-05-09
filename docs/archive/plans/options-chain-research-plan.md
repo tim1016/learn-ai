@@ -1,3 +1,8 @@
+> **Status:** Archived — stale plan, implemented.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/options-math-authorities.md`.
+> Archived because: TradingView-style options chain UI shipped; options authority docs cover current implementation.
+
 # Options Chain Page — TradingView-Style Implementation Plan
 
 > **STATUS: IMPLEMENTED** — All phases complete. See `Frontend/src/app/components/options-chain-v2/` for the live component at `/options-chain`.

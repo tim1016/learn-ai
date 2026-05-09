@@ -1,3 +1,8 @@
+> **Status:** Archived — stale plan, integration complete.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/engine-authority-map.md`, `references/lean/` (vendored).
+> Archived because: LEAN framework integration complete per current repo state.
+
 # LEAN Algorithm Framework Integration Plan
 
 **Date:** 2026-04-10  

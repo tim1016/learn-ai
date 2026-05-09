@@ -1,3 +1,8 @@
+> **Status:** Archived — stale plan, superseded.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/engine-authority-map.md` (engine ownership).
+> Archived because: root-level architecture refactor plan; superseded by shipped migrations documented in the engine authority map.
+
 # Python Service: Dependency Cleanup & Build Optimization Plan
 
 **Date:** 2026-03-29

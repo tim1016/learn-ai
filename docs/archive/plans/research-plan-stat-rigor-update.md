@@ -1,3 +1,8 @@
+> **Status:** Archived — stale stat-rigor update plan, incorporated elsewhere.
+> **Do not use as implementation authority.**
+> Current authority: `docs/audits/auto-research/baseline-math-rigor.md` and ongoing F-series findings.
+> Archived because: update plan incorporated into auto-research findings system.
+
 Production-Grade Fix (Recommended)
 
 Use walk-forward / expanding window scaling:

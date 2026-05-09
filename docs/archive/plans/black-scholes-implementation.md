@@ -1,3 +1,8 @@
+> **Status:** Archived — CONFLICT with `docs/architecture/numerical-authority-migration-plan.md`.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/options-math-authorities.md` (canonical options math), `bs_greeks.py` + `quantlib_pricer.py` (parity-pinned to atol=1e-10).
+> Archived because: this doc presents `Frontend/src/app/utils/black-scholes.ts` as the math reference; Phase 1.3 of the migration plan (shipped 2026-04-27) marks that file `[LEGACY-OK — RENDER-HELPER ONLY, NO NEW CALLERS]`. The canonical pricer authorities are Python-side.
+
 # Black-Scholes Implementation & Current P&L Curve
 
 Reference document for verifying the math in `Frontend/src/app/utils/black-scholes.ts` and the chart data pipeline in `options-strategy-lab.component.ts`.

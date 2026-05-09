@@ -1,3 +1,8 @@
+> **Status:** Archived — early research plan, superseded.
+> **Do not use as implementation authority.**
+> Current authority: `docs/audits/auto-research/` (auto-research state system).
+> Archived because: early research plan superseded by the auto-research state system.
+
 # LSTM Predictive Strategy — Research Plan
 
 ## Current State

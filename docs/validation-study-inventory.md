@@ -11,11 +11,11 @@ This report maps the repo's validation studies to the files they create/use, and
 - `PythonDataService/app/routers/validation_study.py`
   - Implements the Validation Study API.
   - Exposes `/run`, `/export-csv`, and `/report` endpoints.
-- `docs/data-lab-roadmap.md`
+- `docs/archive/plans/data-lab-roadmap.md` (archived)
   - Describes Data Lab goals, current state, and how the validation report should be rendered.
-- `docs/csv-data-pipeline-plan.md`
+- `docs/archive/plans/csv-data-pipeline-plan.md` (archived)
   - Defines the step-by-step data cleanup and validation plan for minute OHLCV data.
-- `validation_report_SPY_15m.pdf`
+- `docs/audits/validation_report_SPY_15m.pdf`
   - Example/derived report artifact used for SPY 15-minute validation.
 - `PythonDataService/study_report.txt`
   - Text report from a data or research validation study.
@@ -122,7 +122,7 @@ This report maps the repo's validation studies to the files they create/use, and
 ## 3. Files Produced by Each Validation Workflow
 
 ### Data Lab / CSV Validation
-- `validation_report_SPY_15m.pdf` — example formatted report artifact.
+- `docs/audits/validation_report_SPY_15m.pdf` — example formatted report artifact.
 - `PythonDataService/study_report.txt` — summary of study findings.
 - `PythonDataService/study_full_output.txt` — full logged output from a study run.
 - `PythonDataService/study_output.txt` — condensed summary output.
@@ -158,7 +158,7 @@ Use the following report structure in the UI/docs:
    - `study_report.txt`
    - `study_full_output.txt`
    - `study_output.txt`
-   - `validation_report_SPY_15m.pdf`
+   - `docs/audits/validation_report_SPY_15m.pdf`
 
 4. **Exact Processing Steps**
    - Fetch minute bars

@@ -1,3 +1,8 @@
+> **Status:** Archived — stale plan for deprecated feature.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/engine-authority-map.md` ("Deprecated engines" table).
+> Archived because: Strategy Lab is deprecated per engine-authority-map.md; improvement plans are moot.
+
 # Strategy Lab — UI/UX Improvement Plan
 
 **Component:** `Frontend/src/app/components/strategy-lab/`

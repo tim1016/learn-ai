@@ -1,3 +1,8 @@
+> **Status:** Archived — stale build plan, feature status unclear.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/options-vol-platform-tdd.md` (vol platform design).
+> Archived because: vol-surface dashboard feature status unclear; open questions and phased plan content absorbed into options-vol-platform-tdd.md.
+
 # Vol-Surface & Regime Dashboard — Build plan (regrounded after Edge ship)
 
 **Status:** Plan, awaiting user review. **Do not start without approval.**

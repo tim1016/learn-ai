@@ -1,3 +1,8 @@
+> **Status:** Archived — stale plan, work shipped.
+> **Do not use as implementation authority.**
+> Current authority: `docs/architecture/engine-authority-map.md`.
+> Archived because: Phase 2 work is reflected in engine-authority-map.md and the shipped codebase.
+
 # Level 2 — Feature Engineering: Detailed Implementation Plan
 
 ## Executive Summary

@@ -1,3 +1,8 @@
+> **Status:** Archived — stale architecture review (2026-04-23), superseded.
+> **Do not use as implementation authority.**
+> Current authority: `.claude/rules/angular.md` (Angular 21 conventions).
+> Archived because: Angular 21 conventions now captured in .claude/rules/angular.md, which supersedes ad-hoc review notes.
+
 # Frontend architecture review — 2026-04-23
 
 Scope: Apollo orchestration, signal-driven data fetching, leak-proof routing, zoneless migration. The original brief was written against a more Apollo-heavy assumption — see "What changed and why" for what was actually applicable.

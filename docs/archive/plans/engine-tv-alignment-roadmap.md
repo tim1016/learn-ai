@@ -1,3 +1,8 @@
+> **Status:** Archived — stale roadmap, alignment work completed.
+> **Do not use as implementation authority.**
+> Current authority: `docs/tv-polygon-validation-gotchas.md` (operational gotchas).
+> Archived because: TradingView/Polygon alignment work completed per current repo state.
+
 # learn-ai Engine — Roadmap to TradingView-Aligned Trades
 
 **Status:** Plan of record. Validated against the Day 4 trade-divergence run on SPY 15-min over Oct 9 2025 → Mar 27 2026 (3,010 RTH bars).

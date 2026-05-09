@@ -1,3 +1,8 @@
+> **Status:** Archived — dated code review (2026-03-31), concerns addressed.
+> **Do not use as implementation authority.**
+> Current authority: current codebase; `.claude/rules/` for stack conventions.
+> Archived because: concerns either addressed or superseded by newer architecture decisions.
+
 # MarketScope Code Review — Top 3 Improvement Requirements
 
 **Date:** 2026-03-31
