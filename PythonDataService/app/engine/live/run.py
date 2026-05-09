@@ -227,6 +227,65 @@ def cmd_pre_flight(args: argparse.Namespace) -> int:
 # ──────────────────────────── start subcommand ───────────────────────
 
 
+def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
+    """Build a LiveConfig from the ledger's serialized live_config dict.
+
+    The ledger's ``live_config`` is the JSON form of the same fields
+    LiveConfig carries; this round-trips them so the runtime sees the
+    same values that went into ``run_id``. Unknown keys are rejected
+    (they'd indicate the ledger was written with a newer schema than
+    this code understands — refuse rather than silently drop).
+
+    Empty payload ⇒ all-defaults LiveConfig (the canonical no-op case
+    where the operator didn't pass --live-config-json at init-ledger).
+    """
+    from datetime import time
+
+    from app.engine.live.config import LiveConfig
+
+    if not payload:
+        return LiveConfig()
+
+    known_fields = {
+        "symbol",
+        "force_flat_at",
+        "consolidator_period_min",
+        "run_dir",
+        "max_submit_latency_ms",
+    }
+    unknown = set(payload.keys()) - known_fields
+    if unknown:
+        raise ValueError(f"unknown live_config keys: {sorted(unknown)}")
+
+    kwargs: dict = {}
+    if "symbol" in payload:
+        kwargs["symbol"] = str(payload["symbol"])
+    if "force_flat_at" in payload:
+        raw = payload["force_flat_at"]
+        if raw is None:
+            kwargs["force_flat_at"] = None
+        elif isinstance(raw, str):
+            # Accept "HH:MM" or "HH:MM:SS" — the canonical format
+            # init-ledger writes via a JSON object.
+            parts = raw.split(":")
+            if len(parts) == 2:
+                kwargs["force_flat_at"] = time(int(parts[0]), int(parts[1]))
+            elif len(parts) == 3:
+                kwargs["force_flat_at"] = time(int(parts[0]), int(parts[1]), int(parts[2]))
+            else:
+                raise ValueError(f"force_flat_at format must be HH:MM or HH:MM:SS, got {raw!r}")
+        else:
+            raise TypeError(f"force_flat_at must be string or null, got {type(raw).__name__}")
+    if "consolidator_period_min" in payload:
+        kwargs["consolidator_period_min"] = int(payload["consolidator_period_min"])
+    if "run_dir" in payload:
+        kwargs["run_dir"] = Path(str(payload["run_dir"]))
+    if "max_submit_latency_ms" in payload:
+        kwargs["max_submit_latency_ms"] = int(payload["max_submit_latency_ms"])
+
+    return LiveConfig(**kwargs)
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Run the live engine end-to-end against an existing run directory.
 
@@ -278,6 +337,20 @@ def cmd_start(args: argparse.Namespace) -> int:
         return 2
     strategy = strategy_cls()
 
+    # Apply ledger.live_config so the runtime matches what was hashed
+    # into run_id. Without this, code_sha + spec_hash + qc_audit_hash
+    # would identify the run while the live config silently drifts to
+    # LiveConfig defaults — the §10 identity guarantee is then a lie.
+    # (CodeRabbit P2 from #186.)
+    try:
+        live_config = _live_config_from_ledger(ledger.live_config)
+    except (TypeError, ValueError) as exc:
+        print(
+            f"[START] could not apply ledger.live_config to LiveConfig: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+
     # Test injection point: ``args.broker`` (set programmatically) lets
     # tests pass a FakeBroker without an IBKR client. Operator runs
     # always go through the IBKR client path below.
@@ -285,6 +358,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     if broker is not None:
         engine = LiveEngine(
             None,
+            live_config,
             broker=broker,
             output_dir=args.run_dir,
             account_id=ledger.account_id,
@@ -297,6 +371,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         client = IbkrClient()
         engine = LiveEngine(
             client,
+            live_config,
             output_dir=args.run_dir,
             account_id=ledger.account_id,
             readonly=args.readonly,

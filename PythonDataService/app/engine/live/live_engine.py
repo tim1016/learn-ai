@@ -306,6 +306,22 @@ class LiveEngine:
                     if liquidations:
                         flat_acks = await self._submit_pending_with_meta(portfolio)
                         submitted_order_ids.extend(ack.order_id for ack in flat_acks)
+                        # Force-flat orders count toward the per-day cap
+                        # too — § 9 doesn't carve out an exemption.
+                        # Without this, a session with cap=4 + 3 normal
+                        # orders + a force-flat liquidation would silently
+                        # land at 4 actual broker orders without crossing
+                        # the counter check that protects against runaway
+                        # submissions. (CodeRabbit P1 from #186.)
+                        orders_submitted_today += len(flat_acks)
+                        if (
+                            self._max_orders_per_day is not None
+                            and orders_submitted_today > self._max_orders_per_day
+                        ):
+                            raise MaxOrdersPerDayExceeded(
+                                f"force-flat pushed total to {orders_submitted_today} on "
+                                f"{current_session_date} (cap={self._max_orders_per_day})"
+                            )
                         ctx.log(
                             f"[FORCE-FLAT] {minute_bar.time}: submitted "
                             f"{liquidations} liquidation order(s)"

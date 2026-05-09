@@ -199,6 +199,73 @@ async def test_max_orders_per_day_resets_on_new_session_date() -> None:
 
 
 @pytest.mark.asyncio
+async def test_max_orders_per_day_includes_force_flat_liquidations() -> None:
+    """Force-flat orders count toward the cap (CodeRabbit P1 fix from #186).
+
+    Setup: cap=1; broker pre-populated with a SPY position so
+    force-flat has something to liquidate; strategy submits exactly
+    one entry on the first consolidated bar (count=1). The force-flat
+    barrier then tries to submit a liquidation (count=2 > cap=1) — my
+    new in-force-flat check should raise with a "force-flat" message.
+
+    Before the fix, force-flat slipped past the counter and the run
+    silently submitted both orders.
+    """
+    from datetime import time as time_cls
+
+    from app.broker.ibkr.models import IbkrPosition, IbkrPositionsSnapshot
+
+    class _SubmitOnceStrategy(Strategy):
+        def __init__(self) -> None:
+            super().__init__()
+            self._submitted = False
+
+        def initialize(self) -> None:
+            assert self.ctx is not None
+            self.ctx.add_equity("SPY")
+            self.ctx.register_consolidator("SPY", timedelta(minutes=15), self.on_bar)
+
+        def on_bar(self, bar: TradeBar) -> None:
+            assert self.ctx is not None
+            if not self._submitted:
+                self.ctx.portfolio.submit_market_order(
+                    "SPY", 100, self.ctx.current_time, tag="entry"
+                )
+                self._submitted = True
+
+    broker = FakeBroker()
+    broker.position_snapshot = IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=[
+            IbkrPosition(
+                account_id="DU123",
+                con_id=42,
+                symbol="SPY",
+                sec_type="STK",
+                quantity=200.0,
+                avg_cost=500.0,
+                fetched_at_ms=1,
+            )
+        ],
+        fetched_at_ms=1,
+    )
+    # Consolidator fires on minute 45 (start of next window after bars
+    # 30..44 buffered). Force-flat at 14:48 lets the strategy's entry
+    # commit first (count=1), then trips the cap when the liquidation
+    # is sent.
+    engine = LiveEngine(
+        None,
+        LiveConfig(force_flat_at=time_cls(14, 48)),
+        broker=broker,
+        max_orders_per_day=1,
+    )
+    bars = [_bar(minute, "500") for minute in range(30, 80)]
+    with pytest.raises(MaxOrdersPerDayExceeded, match="force-flat"):
+        await engine.run(_SubmitOnceStrategy(), iter_bars(bars))
+
+
+@pytest.mark.asyncio
 async def test_max_orders_per_day_none_disables_cap() -> None:
     """``max_orders_per_day=None`` (default) means no cap — the engine
     should never raise MaxOrdersPerDayExceeded."""
