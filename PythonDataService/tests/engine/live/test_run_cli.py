@@ -406,6 +406,66 @@ def test_start_returns_2_when_run_dir_missing_ledger(
     assert "missing run_ledger.json" in capsys.readouterr().err
 
 
+def test_start_refuses_when_poisoned_flag_present(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """§ 7.2 #4: a poisoned run never resumes on its own run_id.
+
+    The cmd_start refusal exits 1 (halt) so an operator who runs
+    `start` against a previously-halted run dir gets the halt
+    trigger surfaced rather than silently re-entering the run.
+    """
+
+    from app.engine.live.halt import (
+        PoisonedHaltReason,
+        PoisonedHaltTrigger,
+        write_poisoned_flag,
+    )
+
+    # Even with a valid ledger, the poisoned.flag short-circuits
+    # before the ledger is even loaded.
+    write_poisoned_flag(
+        tmp_path,
+        PoisonedHaltReason(
+            trigger=PoisonedHaltTrigger.OUTSIDE_MUTATION,
+            halted_at_ms=1_700_000_000_500,
+            last_clean_bar_close_ms=1_700_000_000_000,
+            details={"exec_id": "foreign-1"},
+        ),
+    )
+    rc = main(
+        [
+            "start",
+            "--run-dir", str(tmp_path),
+            "--readonly",
+        ]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "poisoned" in err.lower()
+    assert "outside_mutation" in err
+
+
+def test_start_refuses_when_poisoned_flag_corrupted(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """A corrupted flag must NOT be silently ignored — that would let a
+    contaminated run resume. Refuse with exit 1, surface the parse error."""
+    from app.engine.live.halt import POISONED_FLAG_FILENAME
+
+    (tmp_path / POISONED_FLAG_FILENAME).write_text("not json", encoding="utf-8")
+    rc = main(
+        [
+            "start",
+            "--run-dir", str(tmp_path),
+            "--readonly",
+        ]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "corrupted" in err.lower() or "unreadable" in err.lower()
+
+
 def test_start_returns_2_when_strategy_module_unknown(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
