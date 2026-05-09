@@ -209,6 +209,63 @@ async def test_fatal_halt_on_foreign_execution(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_fatal_halt_writes_flag_even_when_cancel_hangs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hung broker.cancel_open_orders must NOT block poisoned.flag.
+
+    The whole point of fatal-halt is to land the flag on disk so the
+    operator knows the run is contaminated. Before the timeout fix,
+    a broker stuck in cancel would block the await indefinitely and
+    the flag would never get written. (CodeRabbit P1 from #194.)
+    """
+    import app.engine.live.live_engine as live_engine_module
+
+    # Tiny timeout so the test doesn't actually wait 5s; the real
+    # path uses FATAL_HALT_CANCEL_TIMEOUT_S.
+    monkeypatch.setattr(live_engine_module, "FATAL_HALT_CANCEL_TIMEOUT_S", 0.1)
+
+    class _HangingCancelBroker(_FakeIbkrEventBroker):
+        async def cancel_open_orders(self) -> list[int]:
+            # Simulate a broker that accepts the cancel call but
+            # never returns — typical of a contaminated session
+            # where the broker's TCP connection has wedged.
+            await asyncio.sleep(60)  # well beyond the 0.1s timeout
+            return []
+
+    broker = _HangingCancelBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(force_flat_at=None),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+    )
+    foreign_fill = IbkrOrderEvent(
+        account_id="DU123",
+        order_id=999_999,
+        event_type="fill",
+        status="Filled",
+        exec_id="exec-foreign-hanging",
+        client_id=0,
+        fill_quantity=10.0,
+        avg_fill_price=500.0,
+        last_fill_price=500.0,
+        cumulative_filled=10.0,
+        remaining=0.0,
+        ts_ms=1,
+    )
+    broker.inject_event(foreign_fill)
+
+    bars = [_bar(m) for m in range(30, 50)]
+    with pytest.raises(FatalHaltError):
+        await engine.run(_NoOpStrategy(), _iter_bars(bars))
+
+    # Flag landed despite the cancel hanging — the timeout did its job.
+    assert (tmp_path / POISONED_FLAG_FILENAME).exists()
+
+
+@pytest.mark.asyncio
 async def test_no_halt_when_disabled_via_no_output_dir(tmp_path: Path) -> None:
     """Without an output_dir, halt detection is off — replay tests
     don't need IBKR-state safety. Foreign fills flow through but no
