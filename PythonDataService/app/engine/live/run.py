@@ -304,10 +304,34 @@ def cmd_start(args: argparse.Namespace) -> int:
     """
     from importlib import import_module
 
+    from app.engine.live.halt import read_poisoned_flag
     from app.engine.live.live_engine import (
         LiveEngine,
         MaxOrdersPerDayExceeded,
     )
+
+    # § 7.2 #4 refusal: a poisoned run cannot resume on its own
+    # run_id. The flag is written intra-day by the LiveEngine when
+    # broker-state divergence is detected; it stays in place until the
+    # operator manually reconciles the account and starts a fresh
+    # run_id. Surface the trigger and timestamp in the exit message
+    # so the operator's next steps are obvious.
+    try:
+        poison = read_poisoned_flag(args.run_dir)
+    except ValueError as exc:
+        # Corrupted flag — treat as poisoned (refuse to start) rather
+        # than silently ignore. The spec invariant is that
+        # poisoned.flag is never the source of a clean restart.
+        print(f"[START] poisoned.flag at {args.run_dir} is corrupted: {exc}", file=sys.stderr)
+        return 1
+    if poison is not None:
+        print(
+            f"[START] HALT — run is poisoned ({poison.trigger.value} at "
+            f"{poison.halted_at_ms}ms UTC). § 7.2 #5: a fresh run_id is "
+            f"required after manual account reconciliation.",
+            file=sys.stderr,
+        )
+        return 1
 
     ledger_path = args.run_dir / "run_ledger.json"
     if not ledger_path.exists():

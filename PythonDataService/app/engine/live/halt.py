@@ -160,3 +160,117 @@ def is_run_poisoned(run_dir: Path) -> bool:
 def now_ms_utc() -> int:
     """Stable ``int64 ms UTC`` clock helper exposed for halt-callers and tests."""
     return int(time.time() * 1000)
+
+
+# ──────────────────────────── Detection functions ────────────────────
+
+
+def check_outside_mutation(
+    executions: list[dict],
+    owned_client_order_ids: set[str],
+    *,
+    halted_at_ms: int,
+    last_clean_bar_close_ms: int,
+) -> PoisonedHaltReason | None:
+    """Return a halt reason if any execution lacks a Python-owned ``client_order_id``.
+
+    Spec § 7.1 trigger A: any execution under the DU account whose
+    ``(execId, permId)`` is not linked to a Python-owned
+    ``client_order_id`` triggers the fatal halt — *regardless of
+    clientId*. A ``clientId == 42`` filter is insufficient because
+    TWS itself can place orders under ``clientId=0`` when a human
+    clicks a button, and those would slip past a same-client check.
+
+    Each ``execution`` row is the dict shape produced by the IBKR
+    adapter's execution-stream channel (Phase C-2c-b2): at minimum
+    ``client_order_id``, ``exec_id``, ``perm_id``, ``account_id``.
+    The function reads only ``client_order_id`` to decide ownership;
+    ``exec_id`` / ``perm_id`` are surfaced into the halt reason's
+    ``details`` for the post-mortem operator.
+
+    Returns ``None`` when every execution is Python-owned; otherwise
+    a ``PoisonedHaltReason`` describing the first offender (the
+    ``details`` dict carries the foreign exec_id / perm_id /
+    client_id / account_id so the operator can correlate against TWS
+    history).
+    """
+    for execution in executions:
+        client_order_id = execution.get("client_order_id")
+        if client_order_id in owned_client_order_ids:
+            continue
+        # Found a foreign execution — halt with the first offender's
+        # details. Subsequent foreigns aren't enumerated here; the
+        # halt is fatal regardless of count, and broker-side
+        # enumeration is the operator's manual reconciliation step.
+        return PoisonedHaltReason(
+            trigger=PoisonedHaltTrigger.OUTSIDE_MUTATION,
+            halted_at_ms=halted_at_ms,
+            last_clean_bar_close_ms=last_clean_bar_close_ms,
+            details={
+                "client_order_id": str(client_order_id) if client_order_id is not None else None,
+                "exec_id": execution.get("exec_id"),
+                "perm_id": execution.get("perm_id"),
+                "account_id": execution.get("account_id"),
+                "client_id": execution.get("client_id"),
+            },
+        )
+    return None
+
+
+def check_lost_fill(
+    orders: list[dict],
+    executions: list[dict],
+    *,
+    fill_window_ms: int,
+    current_time_ms: int,
+    last_clean_bar_close_ms: int,
+) -> PoisonedHaltReason | None:
+    """Return a halt reason if any Python order is past its fill window without an execution.
+
+    Spec § 7.1 trigger B: a Python order whose ``client_order_id``
+    has no matching execution within its expected fill window
+    (next-bar-open + slack), or remains unfilled at end-of-day.
+    Either case indicates broker-state divergence — we placed the
+    order, the broker doesn't show its lifecycle.
+
+    Each ``order`` row carries ``client_order_id`` and ``submitted_at_ms``;
+    each ``execution`` carries ``client_order_id`` (matching what the
+    LivePortfolio sets at place_order time). An order is "filled" if
+    ANY execution shares its ``client_order_id``.
+
+    ``fill_window_ms`` is how long we wait before declaring a fill
+    lost — typically the bar period + a few seconds of broker-clock
+    slack. ``current_time_ms`` is the wall-clock time of the check
+    (the LiveEngine passes the most-recent bar's end_time).
+
+    Returns ``None`` when every submitted order is either filled or
+    still within its window; otherwise a ``PoisonedHaltReason`` for
+    the first lost order (oldest by submission time).
+    """
+    filled_client_order_ids = {ex.get("client_order_id") for ex in executions}
+    overdue: list[dict] = []
+    for order in orders:
+        client_order_id = order.get("client_order_id")
+        if client_order_id is None:
+            continue
+        if client_order_id in filled_client_order_ids:
+            continue
+        submitted_at_ms = int(order.get("submitted_at_ms", 0))
+        if current_time_ms - submitted_at_ms > fill_window_ms:
+            overdue.append(order)
+    if not overdue:
+        return None
+    overdue.sort(key=lambda o: int(o.get("submitted_at_ms", 0)))
+    first = overdue[0]
+    return PoisonedHaltReason(
+        trigger=PoisonedHaltTrigger.LOST_FILL,
+        halted_at_ms=current_time_ms,
+        last_clean_bar_close_ms=last_clean_bar_close_ms,
+        details={
+            "client_order_id": str(first.get("client_order_id")),
+            "submitted_at_ms": int(first.get("submitted_at_ms", 0)),
+            "age_ms": current_time_ms - int(first.get("submitted_at_ms", 0)),
+            "fill_window_ms": fill_window_ms,
+            "overdue_count": len(overdue),
+        },
+    )
