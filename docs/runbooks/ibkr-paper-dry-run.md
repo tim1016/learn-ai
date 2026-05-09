@@ -36,13 +36,12 @@ Before kicking off the dry run, confirm:
 - [ ] NTP is reachable from the host (the pre-flight queries
       `pool.ntp.org` by default; offset must be < 1 s).
 - [ ] The polygon-data-service container is running (`podman ps`).
-- [ ] The compose file mounts `./PythonDataService/artifacts:/app/artifacts:z`
-      (the existing compose only mounts `./PythonDataService/app:/app/app`,
-      so the runner's parquets would otherwise vanish on container
-      restart and not be visible to the host-side reconcile in Step 4).
-      This mount is added by the Phase C-2b compose-config PR; for now,
-      add it manually to `compose.yaml` under the `python-service`
-      `volumes:` block before the dry run.
+- [ ] The compose file mounts `./PythonDataService/artifacts:/app/artifacts:z`.
+      Required so the container-side `start --readonly` parquets land
+      where the host-side reconcile in Step 4 can read them. Already
+      in `compose.yaml`; if you're on a long-lived branch that predates
+      it, run `git diff origin/master -- compose.yaml` to confirm
+      before kicking off Step 3.
 
 ## A note on where commands run
 

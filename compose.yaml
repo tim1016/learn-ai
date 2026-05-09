@@ -58,6 +58,15 @@ services:
       # Mounted so /research/data-divergence/* can serve host-built files and
       # rebuilds persist across container restarts.
       - ./PythonDataService/cache:/app/cache:z
+      # Live-runtime artifacts (Phase C IBKR paper-shadow output —
+      # decisions/executions/trades.parquet, run_ledger.json,
+      # halt.flag, poisoned.flag, reconcile/*). The container-side
+      # `start --readonly` writes here; the host-side `reconcile`
+      # reads from the same files. Without this mount the writers'
+      # parquets would vanish on container restart and not be
+      # visible to host-side commands. See
+      # docs/runbooks/ibkr-paper-dry-run.md prereqs.
+      - ./PythonDataService/artifacts:/app/artifacts:z
     environment:
       - POLYGON_API_KEY=${POLYGON_API_KEY}
       - POLYGON_RATE_LIMIT_PER_MIN=${POLYGON_RATE_LIMIT_PER_MIN:-0}
