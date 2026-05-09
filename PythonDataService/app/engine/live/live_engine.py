@@ -49,6 +49,17 @@ logger = logging.getLogger(__name__)
 _ENGINE_TZ = ZoneInfo("America/New_York")
 
 
+class MaxOrdersPerDayExceeded(RuntimeError):
+    """Raised when the per-day order cap (§ 9) is exceeded mid-session.
+
+    The cap exists so a buggy strategy or flapping connection can't
+    drain the account through repeated submissions in a single day.
+    Default cap for the SPY 15-min run is 4 (1 entry + 1 exit + 1
+    retry + 1 force-flat). Crossing the cap halts the run; resuming
+    requires investigation and a new ``run_id``.
+    """
+
+
 @dataclass(frozen=True)
 class _OrderMeta:
     """Per-order context the engine needs to convert IBKR fills.
@@ -117,6 +128,8 @@ class LiveEngine:
         broker: BrokerAdapter | None = None,
         output_dir: Path | None = None,
         account_id: str = "",
+        readonly: bool = False,
+        max_orders_per_day: int | None = None,
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -139,6 +152,17 @@ class LiveEngine:
         # exists (replay tests).
         self._output_dir = output_dir
         self._account_id = account_id
+        # ``readonly``: drain the strategy's pending orders without
+        # actually calling broker.place_order. The strategy still runs
+        # and publishes decision snapshots; the executions parquet
+        # stays empty (correct — no fills happened). This is what
+        # powers Phase D's dry-run mode.
+        self._readonly = readonly
+        # ``max_orders_per_day``: § 9 operational safety. None disables
+        # the cap (replay tests). Counter resets on the date boundary
+        # of the most-recent bar; an attempt past the cap raises
+        # MaxOrdersPerDayExceeded mid-run, surfacing as a halt.
+        self._max_orders_per_day = max_orders_per_day
 
     def _validate_paper_client(self) -> None:
         if self._client is None:
@@ -196,6 +220,13 @@ class LiveEngine:
         last_force_flat_date: date | None = None
         force_flat_at = self._config.force_flat_at
 
+        # § 9 max-orders-per-day enforcement. Counter resets on the
+        # date boundary of each new bar; crossing the cap raises
+        # MaxOrdersPerDayExceeded which surfaces as a halt to the
+        # caller (run.py turns this into an exit code).
+        orders_submitted_today: int = 0
+        current_session_date: date | None = None
+
         # Artifact-writer integration. Bundle is None when no
         # output_dir is configured — keeps replay tests (FakeBroker
         # paths) free of file IO. Per-bar dedupe state for the
@@ -215,6 +246,11 @@ class LiveEngine:
         try:
             async for minute_bar in source:
                 self._raise_if_event_stream_failed()
+                # Reset per-day order counter on session-date boundary.
+                bar_date = minute_bar.time.date()
+                if current_session_date is None or bar_date != current_session_date:
+                    orders_submitted_today = 0
+                    current_session_date = bar_date
                 await self._process_replay_broker_bar(minute_bar)
                 for event in self._drain_replay_order_events():
                     portfolio.record_broker_fill(event)
@@ -292,6 +328,15 @@ class LiveEngine:
 
                 submitted = await self._submit_pending_with_meta(portfolio)
                 submitted_order_ids.extend(ack.order_id for ack in submitted)
+                orders_submitted_today += len(submitted)
+                if (
+                    self._max_orders_per_day is not None
+                    and orders_submitted_today > self._max_orders_per_day
+                ):
+                    raise MaxOrdersPerDayExceeded(
+                        f"submitted {orders_submitted_today} orders on {current_session_date} "
+                        f"(cap={self._max_orders_per_day})"
+                    )
 
                 current_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
                 ctx.insight_manager.step(minute_bar.end_time, current_prices)
@@ -453,8 +498,18 @@ class LiveEngine:
         ``Order`` for ``_OrderMeta`` bookkeeping. That pairing is what
         lets ``_drain_real_broker_order_events`` rebuild a full engine
         ``OrderEvent`` from a wire ``IbkrOrderEvent``.
+
+        Read-only mode: drain the strategy's pending orders so the
+        portfolio doesn't keep them queued forever, but never call
+        broker.place_order. Returns an empty ack list — no fills will
+        come back, which is correct for the dry run (executions stay
+        empty; the strategy's own _in_position / trade_log evolves on
+        its internal countdown).
         """
         pending_snapshot = list(portfolio.pending_orders)
+        if self._readonly:
+            portfolio.pending_orders.clear()
+            return []
         acks = await portfolio.submit_pending_orders()
         for order, ack in zip(pending_snapshot, acks, strict=True):
             self._order_meta[int(ack.order_id)] = _OrderMeta(

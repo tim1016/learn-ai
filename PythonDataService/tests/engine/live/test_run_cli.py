@@ -369,3 +369,78 @@ def test_init_ledger_returns_2_when_live_config_json_is_not_an_object(
     )
     assert rc == 2
     assert "must be a JSON object" in capsys.readouterr().err
+
+
+# ──────────────────────────── start subcommand ───────────────────────
+
+
+def test_start_subcommand_args_parse() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "start",
+            "--run-dir", "/tmp/run",
+            "--readonly",
+            "--max-orders-per-day", "8",
+        ]
+    )
+    assert args.command == "start"
+    assert args.readonly is True
+    assert args.max_orders_per_day == 8
+    assert args.strategy == "spy_ema_crossover"  # default
+
+
+def test_start_returns_2_when_run_dir_missing_ledger(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Without a ledger, start can't recover identity — exit 2 is the
+    operator-error path documented in the module docstring."""
+    rc = main(
+        [
+            "start",
+            "--run-dir", str(tmp_path),
+            "--readonly",
+        ]
+    )
+    assert rc == 2
+    assert "missing run_ledger.json" in capsys.readouterr().err
+
+
+def test_start_returns_2_when_strategy_module_unknown(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Unknown strategy module surfaces as operator error (exit 2),
+    not a runtime crash."""
+    # Build a minimal valid ledger so we get past the ledger-load step.
+    import json as _json
+
+    (tmp_path / "run_ledger.json").write_text(
+        _json.dumps(
+            {
+                "schema_version": "1.0",
+                "run_id": "x",
+                "code_sha": "abc",
+                "strategy_spec_path": "/x",
+                "strategy_spec_sha256": "y",
+                "qc_audit_copy_path": "/x",
+                "qc_audit_copy_sha256": "z",
+                "qc_cloud_backtest_id": "bt",
+                "account_id": "DU111",
+                "start_date_ms": 1700000000000,
+                "live_config": {},
+                "created_at_ms": 1700000000000,
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc = main(
+        [
+            "start",
+            "--run-dir", str(tmp_path),
+            "--strategy", "nonexistent_module",
+            "--readonly",
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "could not import strategy" in err
