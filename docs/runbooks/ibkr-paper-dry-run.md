@@ -187,9 +187,8 @@ reconciliation. This compares the runner's decisions against a
 synthetic QC export (real QC paper runs only land in paper week proper)
 to verify the reconcile pipeline works end-to-end.
 
-For the dry run, build a tiny synthetic QC export that mirrors the
-runner's own decisions (so the comparison should classify everything as
-`none`):
+Build a tiny synthetic QC indicators export that mirrors the runner's
+own decisions (so the cross-engine class on every bar is `none`):
 
 ```bash
 mkdir -p PythonDataService/artifacts/qc-dry-run/2026-05-04
@@ -212,15 +211,37 @@ PYTHONPATH=PythonDataService python -m app.engine.live.reconcile \
   --day-date 2026-05-04
 ```
 
-Expected outcome:
+### Expected outcome
+
 - All four artifacts written (`day-0.parquet`, `day-0.json`,
   `day-0.hashes.json`, `day-0.md`).
-- Markdown shows `Halt triggered for next session: no` and zero
-  cross-engine `engine` divergences.
-- No `halt.flag` written.
+- Markdown shows zero cross-engine `engine` divergences.
+- The `Halt triggered for next session:` line will read `no` *only if*
+  the strategy didn't fire any ENTER/EXIT signals during the dry-run
+  window. **If the strategy did emit a signal, expect a `fill-class
+  breach count=N` halt** — Step 3 ran in `--readonly` mode so no broker
+  fills came back to match those intents. This is **expected behavior
+  in dry-run mode, not a bug**:
+  - the receipt and `halt.flag` are still well-formed and the dry run
+    is a pass on the pipeline-correctness criterion;
+  - delete the `halt.flag` before any subsequent `pre-flight` gate (or
+    the next morning would refuse to proceed because of it).
+
+If you want a clean `no halt` receipt as the dry-run output:
+1. Either run Step 3 over a too-short window for the strategy to
+   emit any signals (warmup-only); or
+2. Add synthetic `executions.parquet` rows that match each ENTER/EXIT
+   decision (one execution per signal, `fill_price` ≈ `intended_price`,
+   `client_order_id` of the form `live-N`).
 
 Inspect the Markdown by hand. The day-0 receipt is your dry-run
 deliverable; commit it to the docs tree as evidence the pipeline ran.
+
+A worked example committed to the repo lives at
+`docs/references/reconciliations/dry-run-2026-05-09/day-0.md` — that
+file shows the expected fill-class breach when a synthetic ENTER
+signal has no matching execution, and is what your output should
+roughly look like.
 
 ## Step 5 — Phases 1–7 regression check (host)
 
