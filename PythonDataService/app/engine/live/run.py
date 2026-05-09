@@ -2,28 +2,33 @@
 
 Implements the operator-facing CLI for the IBKR paper-shadow run.
 
-Subcommands implemented in this PR (Phase C-1):
+Subcommands:
   * ``init-ledger`` — build and write ``run_ledger.json`` for a new run.
     Refuses if the source tree is dirty (§ 9 dirty-tree halt) so the
     captured ``code_sha`` is meaningful.
   * ``pre-flight`` — run the morning-gate halt checks (§ 6.4 + § 9)
     against an existing run directory. Exits non-zero on halt.
+  * ``start`` — connect to IBKR Gateway and run the live engine
+    end-to-end against an existing ``run_dir`` (built by init-ledger).
+    Supports ``--readonly`` (Phase D dry run) and
+    ``--max-orders-per-day`` (§ 9 cap).
 
 Subcommands deferred to subsequent PRs:
-  * ``start`` — wire ``LiveEngine`` and the artifact writers (Phase C-2).
   * ``reconcile`` — invoke ``app.engine.live.reconcile`` post-force-flat.
   * ``emergency-flatten`` — manual operator path for the contaminated-account
     case in § 7.2 #6.
 
 CLI exit codes:
-  0  — success / pre-flight passed
-  1  — pre-flight failed (halt)
+  0  — success / pre-flight passed / start completed cleanly
+  1  — pre-flight failed (halt) / start halted by max-orders / similar
   2  — operator error (bad args, missing files at init time)
+  3  — start failed due to a runtime error (broker, IO)
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import subprocess
@@ -42,6 +47,7 @@ from app.engine.live.pre_flight import (
 )
 from app.engine.live.run_ledger import (
     build_ledger,
+    read_ledger,
     write_ledger,
 )
 
@@ -218,6 +224,102 @@ def cmd_pre_flight(args: argparse.Namespace) -> int:
     return 0
 
 
+# ──────────────────────────── start subcommand ───────────────────────
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    """Run the live engine end-to-end against an existing run directory.
+
+    Reads the run ledger to recover identity (account_id, etc.), opens
+    an IBKR connection (or accepts an injected broker for tests), and
+    drives ``LiveEngine.run`` with the artifact writer integration
+    pointed at ``--run-dir``. Honors ``--readonly`` (Phase D dry run —
+    no actual broker submissions) and ``--max-orders-per-day`` (§ 9
+    cap; default 4).
+
+    Strategy import is dynamic so the operator can swap algorithms
+    without editing this file: ``--strategy spy_ema_crossover`` resolves
+    to ``app.engine.strategy.algorithms.spy_ema_crossover.SpyEmaCrossoverAlgorithm``
+    by convention. Add new strategies by following the same naming
+    convention.
+    """
+    from importlib import import_module
+
+    from app.engine.live.live_engine import (
+        LiveEngine,
+        MaxOrdersPerDayExceeded,
+    )
+
+    ledger_path = args.run_dir / "run_ledger.json"
+    if not ledger_path.exists():
+        print(f"[START] missing run_ledger.json at {ledger_path}", file=sys.stderr)
+        return 2
+    try:
+        ledger = read_ledger(ledger_path)
+    except (OSError, ValueError) as exc:
+        print(f"[START] could not parse run_ledger.json: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        module = import_module(f"app.engine.strategy.algorithms.{args.strategy}")
+    except ImportError as exc:
+        print(f"[START] could not import strategy module {args.strategy!r}: {exc}", file=sys.stderr)
+        return 2
+    # Convention: snake_case module name → PascalCase class with
+    # "Algorithm" suffix. e.g. spy_ema_crossover → SpyEmaCrossoverAlgorithm.
+    class_name = "".join(part.capitalize() for part in args.strategy.split("_")) + "Algorithm"
+    strategy_cls = getattr(module, class_name, None)
+    if strategy_cls is None:
+        print(
+            f"[START] strategy module {args.strategy!r} has no class {class_name!r} "
+            f"(naming convention: snake_case module → PascalCase + 'Algorithm')",
+            file=sys.stderr,
+        )
+        return 2
+    strategy = strategy_cls()
+
+    # Test injection point: ``args.broker`` (set programmatically) lets
+    # tests pass a FakeBroker without an IBKR client. Operator runs
+    # always go through the IBKR client path below.
+    broker = getattr(args, "broker", None)
+    if broker is not None:
+        engine = LiveEngine(
+            None,
+            broker=broker,
+            output_dir=args.run_dir,
+            account_id=ledger.account_id,
+            readonly=args.readonly,
+            max_orders_per_day=args.max_orders_per_day,
+        )
+    else:
+        from app.broker.ibkr.client import IbkrClient
+
+        client = IbkrClient()
+        engine = LiveEngine(
+            client,
+            output_dir=args.run_dir,
+            account_id=ledger.account_id,
+            readonly=args.readonly,
+            max_orders_per_day=args.max_orders_per_day,
+        )
+
+    bars_iter = getattr(args, "bars", None)
+    print(
+        f"[START] run_id={ledger.run_id} account={ledger.account_id} "
+        f"readonly={args.readonly} max_orders_per_day={args.max_orders_per_day}"
+    )
+    try:
+        asyncio.run(engine.run(strategy, bars=bars_iter))
+    except MaxOrdersPerDayExceeded as exc:
+        print(f"[START] HALT — max orders per day exceeded: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"[START] runtime error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 3
+    print("[START] run completed cleanly")
+    return 0
+
+
 # ──────────────────────────── Argparse ───────────────────────────────
 
 
@@ -304,6 +406,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Symbol expected for the running strategy (long-only). Used by the position check.",
     )
     pre.set_defaults(func=cmd_pre_flight)
+
+    # start
+    start = sub.add_parser(
+        "start",
+        help="Run the live engine end-to-end against an existing run directory.",
+    )
+    start.add_argument("--run-dir", type=Path, required=True, help="live_runs/<run_id>/ directory built by init-ledger.")
+    start.add_argument(
+        "--strategy",
+        default="spy_ema_crossover",
+        help=(
+            "Strategy module under app.engine.strategy.algorithms (snake_case). "
+            "Class name is inferred (PascalCase + 'Algorithm')."
+        ),
+    )
+    start.add_argument(
+        "--readonly",
+        action="store_true",
+        help=(
+            "Phase D dry-run mode: drain pending orders without calling broker.place_order. "
+            "Decisions are still recorded; no fills come back; executions parquet stays empty."
+        ),
+    )
+    start.add_argument(
+        "--max-orders-per-day",
+        type=int,
+        default=4,
+        help=(
+            "§ 9 cap. Crossing this halts the run with exit 1. "
+            "Default 4 (≤ 1 entry + 1 exit + 1 retry + 1 force-flat)."
+        ),
+    )
+    start.set_defaults(func=cmd_start)
 
     return parser
 
