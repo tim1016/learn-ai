@@ -38,6 +38,7 @@ import {
   RunLogBuffer,
 } from '../../../utils/run-log-buffer';
 import { RunProgressPanelComponent } from '../shared/run-progress-panel/run-progress-panel.component';
+import { PolygonDateRangeComponent } from '../../../shared/polygon-date-range';
 
 const DEFAULT_TICKERS = ['SPY', 'QQQ', 'AAPL'];
 
@@ -151,6 +152,7 @@ interface CrossSectionalJobResultRaw {
     CheckboxModule,
     CardModule,
     RunProgressPanelComponent,
+    PolygonDateRangeComponent,
   ],
   templateUrl: './batch-runner.component.html',
   styleUrl: './batch-runner.component.scss',
