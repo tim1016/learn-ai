@@ -2,9 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Migrate eight research-lab/explorer consumers off `<app-polygon-date-range>` and onto the picker family (canonical, multi, or date sibling), lift `symbol` out of the strategy spec for `spec-strategy-runner`, remove the transitional .NET aliases shipped in PR (ii), and delete `<app-polygon-date-range>`. Land each consumer as its own commit (matching PR #198's cadence) so any single migration can be reverted without rewinding the others.
+**Goal (REVISED post-review):** Migrate **six** research-lab/explorer consumers off `<app-polygon-date-range>` and onto the picker family (canonical, multi, or date sibling); remove the Pydantic transitional aliases + the deprecated `hideResolution` input + the GraphQL `[GraphQLName]` schema aliases pinned in PR (ii); delete `<app-polygon-date-range>`. Land each consumer as its own commit (matching PR #198's cadence) so any single migration can be reverted without rewinding the others.
 
-**Architecture:** Each consumer's HTML drops the existing `<app-polygon-date-range>` + sibling inputs (ticker text input, multiplier int, timespan select, etc.) and replaces them with one of: `<app-ticker-range-picker>` (canonical), `<app-multi-ticker-range-picker>` (batch-runner), or `<app-ticker-date-picker>` (ticker-explorer). Consumer TS migrates from N separate signals (`ticker`, `fromDate`, `toDate`, `timespan`, `multiplier`) to a single `range = signal<TickerRange>(…)`. Service calls run through `tickerRangeToWire(range())` from PR (i)'s adapter. `indicator-report` adds a template-driven → signal refactor; if it bloats the PR, it splits to PR (iv) and the rest still ships.
+**Deferred from this PR:**
+- `spec-strategy-runner` — `StrategySpec.symbols: list[str]` is a plural domain shape, not a UI state. **Own design follow-up.**
+- `indicator-report` — never adopted `polygon-date-range`; needs a separate signals + OnPush refactor. **PR (iv) follow-up.**
+
+**Architecture:** Each consumer's HTML drops the existing `<app-polygon-date-range>` + sibling inputs (ticker text input, multiplier int, timespan select, etc.) and replaces them with one of: `<app-ticker-range-picker>` (canonical), `<app-multi-ticker-range-picker>` (batch-runner), or `<app-ticker-date-picker>` (ticker-explorer). Consumer TS migrates from N separate signals (`ticker`, `fromDate`, `toDate`, `timespan`, `multiplier`) to a single `range = signal<TickerRange>(…)`. **Each consumer's `range` signal is initialized with that consumer's pre-migration defaults** (e.g. `signal-runner` initializes `multiplier: 15` to match `SignalEngineJobRequest`'s default; `feature-runner` keeps `multiplier: 1`). Service calls run through `tickerRangeToWire(range())` from PR (i)'s adapter.
 
 **Tech Stack:** Angular 21 (standalone, OnPush, signals, `model()`, `@if`/`@for`), `tickerRangeToWire` adapter from PR (i), .NET DTOs from PR (ii), ESLint, Vitest, ruff (for the symbol-lift backend coordination), pytest, dotnet test/format.
 
@@ -18,7 +22,7 @@
 
 ## File structure
 
-**Modified (Frontend consumers — one commit each):**
+**Modified (Frontend consumers — one commit each, REVISED — six consumers):**
 ```
 Frontend/src/app/components/research-lab/indicator-reliability/indicator-reliability.component.{ts,html,spec.ts}
 Frontend/src/app/components/research-lab/strategy-preflight/strategy-preflight.component.{ts,html,spec.ts}
@@ -26,27 +30,29 @@ Frontend/src/app/components/research-lab/feature-runner/feature-runner.component
 Frontend/src/app/components/research-lab/signal-runner/signal-runner.component.{ts,html,spec.ts}
 Frontend/src/app/components/research-lab/batch-runner/batch-runner.component.{ts,html,spec.ts}
 Frontend/src/app/components/ticker-explorer/ticker-explorer.component.{ts,html,spec.ts}
-Frontend/src/app/components/spec-strategy-runner/spec-strategy-runner.component.{ts,html,spec.ts}
-Frontend/src/app/components/indicator-report/indicator-report.component.{ts,html,spec.ts}
 ```
 
-**Modified (Backend coordination for spec-strategy-runner symbol-lift):**
+**Excluded (deferred — see "Deferred" section above):**
 ```
-PythonDataService/app/routers/spec_strategy.py        (lift symbol to top level — required field now)
-Backend/Models/DTOs/SpecStrategyModels.cs              (DTO mirrors the lift)
-Backend/GraphQL/SpecStrategyMutation.cs                (resolver mirrors the lift)
+Frontend/src/app/components/spec-strategy-runner/    (own design follow-up)
+Frontend/src/app/components/indicator-report/        (PR iv follow-up)
 ```
 
 **Deleted (final commits of the PR):**
 ```
 Frontend/src/app/shared/polygon-date-range/           (entire directory)
+Frontend/src/app/shared/ticker-range-picker/ticker-range-picker.component.ts: hideResolution input (deprecated alias from PR i)
 ```
 
-**Final cleanup (last commit):**
+**Final cleanup commits:**
 ```
-PythonDataService/app/schemas/ticker_request.py        (remove AliasChoices for legacy names)
-Backend/Models/DTOs/*.cs                                (remove [JsonPropertyName] private setters for legacy names)
-PythonDataService/app/routers/spec_strategy.py         (remove the transitional optional symbol — now required from base)
+PythonDataService/app/schemas/ticker_request.py        (remove AliasChoices for legacy names — Pydantic-only transitional layer)
+Backend/GraphQL/*.cs                                   (remove [GraphQLName] schema aliases pinned in PR ii Task 12 step 5)
+```
+
+**Untouched (no .NET DTO setter cleanup — there are no transitional .NET setters to remove; PR (ii) used canonical-only renames):**
+```
+Backend/Models/DTOs/*.cs    (already canonical-only after PR ii)
 ```
 
 ---
@@ -309,15 +315,44 @@ git commit -m "refactor(feature-runner): adopt ticker-range-picker with availabl
 
 ---
 
-## Task 4: Migrate `signal-runner` — same pattern as feature-runner
+## Task 4: Migrate `signal-runner` — same pattern as feature-runner, **but `multiplier: 15` default**
 
 **Files:**
 - Modify: `Frontend/src/app/components/research-lab/signal-runner/signal-runner.component.{ts,html,spec.ts}`
 
-Pattern identical to Task 3.
+Pattern identical to Task 3 except for **default preservation**: `SignalEngineJobRequest`'s pre-migration default is `multiplier=15` (`jobs.py:162`). The frontend `range` signal must initialize with `multiplier: 15` to match — without this, signal-runner silently switches to 1-minute bars.
 
-- [ ] **Steps 1–4** identical, with `signal-runner` paths and the additional Options card retained verbatim (the picker only replaces the Signal card's ticker+date+timespan inputs, not the Flip Sign / Regime Gate / Force Re-run toggles).
+- [ ] **Steps 1–4** identical to Task 3, with `signal-runner` paths and the additional Options card retained verbatim (Flip Sign / Regime Gate / Force Re-run toggles stay).
+
+  **Critical TS difference:**
+  ```ts
+  range = signal<TickerRange>({
+    symbol: 'AAPL',
+    from: this.defaultFromDate(),
+    to: this.defaultToDate(),
+    resolution: 'minute',
+    multiplier: 15,    // PRESERVE pre-migration default — DO NOT default to 1
+  });
+  ```
+
+  **Add a default-preservation test** to `signal-runner.component.spec.ts`:
+  ```ts
+  it('initializes range.multiplier to 15 to preserve pre-migration behavior', async () => {
+    const { fixture } = await render(SignalRunnerComponent);
+    expect(fixture.componentInstance.range().multiplier).toBe(15);
+  });
+  ```
+
 - [ ] **Step 5: Commit** as `refactor(signal-runner): adopt ticker-range-picker with availableMultipliers`.
+
+  Commit message must explicitly note the multiplier-default preservation:
+  ```
+  Preserves SignalEngineJobRequest's pre-migration default of multiplier=15
+  by initializing the picker's range signal with that value. The base
+  TickerRequest defaults to multiplier=1, which would silently switch
+  signal-runner to 1-min bars; this PR's job-side override (PR ii) and
+  this PR's frontend-side initializer pin the default to 15 explicitly.
+  ```
 
 ---
 
@@ -457,7 +492,15 @@ git commit -m "refactor(ticker-explorer): adopt ticker-date-picker for snapshot 
 
 ---
 
-## Task 7: Migrate `spec-strategy-runner` (frontend) AND lift `symbol` out of spec (backend)
+## ~~Task 7: Migrate `spec-strategy-runner`~~ — REMOVED
+
+`StrategySpec.symbols: list[str]` (`engine/strategy/spec/schema.py:365`) is plural and load-bearing inside the domain spec object. The current Phase-1 evaluator picks `spec.symbols[0]` because it's single-symbol-only, but the type permits multi-symbol strategies. Lifting `symbols` (or `symbol`) to a top-level form field touches the strategy domain shape, not just UI. **Own design**, separate initiative — see spec §"Out of scope".
+
+**Skip to Task 8.**
+
+---
+
+## Task 7-original-removed: spec-strategy-runner content (kept for reference, NOT EXECUTED)
 
 **Files:**
 - Modify: `Frontend/src/app/components/spec-strategy-runner/spec-strategy-runner.component.{ts,html,spec.ts}`
@@ -587,7 +630,15 @@ Atomic — splitting risks runtime failures mid-deploy."
 
 ---
 
-## Task 8: Migrate `indicator-report` (template-driven → signal refactor + picker)
+## ~~Task 8: Migrate `indicator-report`~~ — REMOVED
+
+`indicator-report` was never a `polygon-date-range` consumer (template-driven `[(ngModel)]` against non-signal fields; was deferred from PR #198). Migrating it requires a `signals + OnPush` refactor independent of the picker work. **PR (iv) follow-up** — see spec §"Out of scope".
+
+**Skip to Task 9.**
+
+---
+
+## Task 8-original-removed: indicator-report content (kept for reference, NOT EXECUTED)
 
 **Files:**
 - Modify: `Frontend/src/app/components/indicator-report/indicator-report.component.{ts,html,spec.ts}`
@@ -663,46 +714,57 @@ in the app."
 
 ---
 
-## Task 9: Remove transitional .NET aliases
+## Task 9: Remove `[GraphQLName]` schema aliases pinned in PR (ii)
 
 **Files:**
-- Modify: `Backend/Models/DTOs/*.cs` (every DTO that has a `LegacyTicker` / `LegacyStartDate` / `LegacyEndDate` private setter from PR ii)
+- Modify: `Backend/GraphQL/*.cs` (resolvers that had `[GraphQLName("ticker")]` / `[GraphQLName("startDate")]` / `[GraphQLName("endDate")]` on arguments)
 
-- [ ] **Step 1: Find every transitional alias**
+PR (ii) Task 12 step 5 pinned legacy GraphQL schema field names so in-flight frontend GraphQL queries didn't break. With every consumer now migrated (Tasks 1-6), no query is sending the legacy names anymore — remove the aliases.
+
+**Note:** there are NO transitional `[JsonPropertyName]` setters to remove because PR (ii) used canonical-only DTO renames (no .NET-side compatibility layer). The .NET part of this cleanup is GraphQL-only.
+
+- [ ] **Step 1: Find every pinned schema alias**
 
 ```bash
-grep -rln "LegacyTicker\|LegacyStartDate\|LegacyEndDate\|JsonPropertyName(\"ticker\")\|JsonPropertyName(\"start_date\")\|JsonPropertyName(\"end_date\")" Backend/ --include="*.cs"
+grep -rnE 'GraphQLName\("(ticker|startDate|endDate)"\)' Backend/GraphQL/ --include="*.cs"
 ```
 
-Each file in the result list has alias plumbing that must be removed.
+- [ ] **Step 2: Update one resolver test to confirm legacy GraphQL names now error**
 
-- [ ] **Step 2: Update tests first**
-
-In `Backend.Tests/Models/TickerRequestSerializationTests.cs`, change the `LegacyFieldNamesDeserializeViaAlias` test to assert the **opposite** behaviour — legacy field names now produce a deserialization error or `null` value:
+`Backend.Tests/GraphQL/SchemaAliasRemovalTests.cs` (or analogous file):
 
 ```csharp
 [Fact]
-public void LegacyFieldNamesNoLongerAccepted()
+public async Task LegacyTickerArgumentNoLongerAcceptedAtSchema()
 {
-    var json = """{"ticker":"SPY","from_date":"2025-04-01","to_date":"2025-04-30"}""";
-    var opts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
-    var dto = JsonSerializer.Deserialize<FeatureResearchRequest>(json, opts);
-    // Legacy 'ticker' is ignored; Symbol is null/default → validation will reject upstream
-    Assert.Null(dto?.Symbol);
+    var query = "query { runResearch(ticker: \"SPY\", startDate: \"2025-01-01\", endDate: \"2025-01-31\") { ... } }";
+    var result = await ExecuteAsync(query);
+    Assert.NotNull(result.Errors);
+    Assert.Contains(result.Errors!, e => e.Message.Contains("ticker"));
 }
 ```
 
 - [ ] **Step 3: Verify failure.**
 
 ```bash
-cd Backend.Tests && dotnet test --filter "TickerRequestSerializationTests"
+cd Backend.Tests && dotnet test --filter "SchemaAliasRemovalTests"
 ```
+Expected: FAIL — the schema still exposes `ticker` / `startDate` / `endDate` argument names.
 
-Expected: FAIL on `LegacyFieldNamesNoLongerAccepted` because the alias still works.
+- [ ] **Step 4: Remove the `[GraphQLName]` overrides**
 
-- [ ] **Step 4: Delete the alias setters**
+For each resolver argument the grep found, remove the `[GraphQLName("...")]` attribute, leaving the canonical argument name as the schema field name:
 
-For each file from Step 1's grep, remove the private `LegacyTicker` / `LegacyStartDate` / `LegacyEndDate` setter blocks. The remaining `Symbol`, `FromDate`, `ToDate` properties are now the canonical-only path.
+```csharp
+// Before
+public Task<ResearchResult> RunResearch(
+    [GraphQLName("ticker")] string symbol,
+    [GraphQLName("startDate")] string fromDate,
+    [GraphQLName("endDate")] string toDate, ...);
+
+// After
+public Task<ResearchResult> RunResearch(string symbol, string fromDate, string toDate, ...);
+```
 
 - [ ] **Step 5: Run all .NET tests + format check.**
 
@@ -710,20 +772,21 @@ For each file from Step 1's grep, remove the private `LegacyTicker` / `LegacySta
 cd Backend.Tests && dotnet test
 dotnet format podman.sln --verify-no-changes
 ```
-
 Expected: ALL PASS, format clean.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add Backend/ Backend.Tests/
-git commit -m "refactor(backend): remove transitional Ticker/StartDate/EndDate aliases
+git commit -m "refactor(backend): remove transitional [GraphQLName] resolver aliases
 
-PR (iii)'s consumer migrations are complete — every Frontend payload
-sends the canonical (symbol, from_date, to_date) shape. Removing the
-[JsonPropertyName] aliases on private setters that accepted the legacy
-names. Any client still sending legacy names will now fail at
-deserialization."
+PR (iii)'s consumer migrations are complete — every Frontend GraphQL
+query sends the canonical argument names (symbol, fromDate, toDate).
+Removing the [GraphQLName] overrides pinned in PR (ii) Task 12 step 5;
+the canonical argument names are now authoritative on the schema.
+
+NOTE: No DTO setter cleanup needed — PR (ii) used canonical-only DTO
+renames (no transitional [JsonPropertyName] aliases to remove)."
 ```
 
 ---
@@ -803,6 +866,50 @@ Frontend + .NET have all migrated to the canonical (symbol, from_date,
 to_date, symbols) shape. AliasChoices for legacy names is removed;
 any client still sending 'ticker', 'tickers', 'start_date', or
 'end_date' will now fail Pydantic validation with a clear error."
+```
+
+---
+
+## Task 10b: Remove deprecated `hideResolution` input from canonical picker
+
+PR (i) kept `hideResolution` as a deprecated alias for one PR cycle. With every consumer migrated and none passing `hideResolution`, the alias comes off.
+
+**Files:**
+- Modify: `Frontend/src/app/shared/ticker-range-picker/ticker-range-picker.component.{ts,spec.ts}`
+
+- [ ] **Step 1: Confirm no consumer passes `hideResolution`.**
+
+```bash
+grep -rn "hideResolution" Frontend/src/ --include="*.ts" --include="*.html"
+```
+Expected: only the `ticker-range-picker.component.ts` declaration itself + its spec. If any consumer match: stop and migrate that consumer first.
+
+- [ ] **Step 2: Update spec to remove the deprecated-alias test**, keeping the canonical `hideSampling` test.
+
+- [ ] **Step 3: Remove the `hideResolution` input + the `samplingHidden` computed (revert it to plain `hideSampling()` reference).**
+
+```ts
+// Before (from PR i)
+readonly hideResolution = input(false);
+readonly hideSampling = input(false);
+protected readonly samplingHidden = computed(() => this.hideResolution() || this.hideSampling());
+
+// After
+readonly hideSampling = input(false);
+// (no computed; HTML uses hideSampling() directly)
+```
+
+Update the HTML to use `hideSampling()` directly instead of `samplingHidden()`.
+
+- [ ] **Step 4: Run + commit**
+
+```bash
+podman exec my-frontend npx ng test --watch=false --include='src/app/shared/ticker-range-picker/**'
+git add Frontend/src/app/shared/ticker-range-picker/ticker-range-picker.component.{ts,html,spec.ts}
+git commit -m "refactor(picker): remove deprecated hideResolution input
+
+One-PR-cycle deprecation expires here. hideSampling is the canonical
+name; no in-tree consumer passes hideResolution=true."
 ```
 
 ---

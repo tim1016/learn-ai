@@ -1,11 +1,30 @@
 # Adopt the rich `ticker-range-picker` UX everywhere + unify the ticker-data API — design
 
-**Status:** approved (brainstorm), pending implementation plan
+**Status:** approved (brainstorm); revised after technical review (2026-05-09 — see "Revisions" below); pending implementation plan
 **Date:** 2026-05-09
 **Author:** Claude (with Tim)
 **Predecessors:**
 - `docs/superpowers/specs/2026-05-09-ticker-range-picker-everywhere-handoff.md` (handoff that framed the seven design tensions)
 - `docs/superpowers/specs/2026-05-09-polygon-date-range-design.md` (PR #198, merged 2026-05-09 19:47 UTC) — partially superseded by this work
+
+## Revisions (2026-05-09 post-review)
+
+A technical review of the original spec turned up six concrete problems that revise the design before any code lands. Summary of what changed; full detail interleaved into the relevant sections:
+
+1. **Timestamp-policy framing was wrong.** Original text said "no numerical-rigor rules are triggered" — but `.claude/rules/numerical-rigor.md` § "Timestamp rigor" mandates `int64 ms UTC` at every wire boundary, and `from_date: "YYYY-MM-DD"` is a wire format. This is an **approved temporary deferral**, not a non-applicable rule. Reframed below in §"Authority hierarchy notes" and §"Out of scope".
+2. **Angular sub-component architecture clarified.** Original spec referred to "extracted partials" via `*ngTemplateOutlet`, which doesn't actually consume external HTML files. The implementation pattern is **child components** under `parts/`, which is what the plan already does — spec text now matches.
+3. **Pre-existing Angular legacy patterns disclosed.** The current `ticker-range-picker.component.ts` uses `@HostListener`, `FormsModule`, and `ngModel` — all flagged by `.claude/rules/angular.md`. PR (i) **explicitly does not modernize them** (would balloon scope); they're moved into the new sub-components as-is and tracked in §"Out of scope" as a follow-up.
+4. **.NET transitional aliases dropped.** `Backend/Jobs/JobsApi.cs` forwards JSON raw via `JsonNode.ParseAsync` for all five job types (cross-sectional, feature-research, signal-engine, backtest, engine-backtest), so .NET DTO aliases would be useless for those flows. Combined with the fact that `[JsonPropertyName]` is `AllowMultiple = false` (not repeatable), the original .NET alias plan was both incorrect and unnecessary. **Python `AliasChoices` is the only transitional layer**; .NET DTOs get canonical-only renames at the GraphQL-resolver paths that genuinely deserialize.
+5. **`TickerRequest` inheritor list shrunk.** Three routes don't fit the `(symbol, from_date, to_date, timespan, multiplier)` shape and are removed from the inheritor list:
+   - `chart.py` uses a single `timeframe: str` (`"1m"|"5m"|"15m"|...|"1D"`), not `timespan + multiplier`.
+   - `research_divergence.py` preflight uses `timeframe: Literal["5m","15m","1h"]`, not the picker's resolution+multiplier.
+   - `spec_strategy.py`'s spec carries `StrategySpec.symbols: list[str]` (plural — see `engine/strategy/spec/schema.py:365`), not a single symbol. The route picks `spec.symbols[0]` because Phase-1 is single-symbol. "Lifting symbol out" is a domain-shape change that needs its own design — not a cleanup step inside this initiative.
+6. **Per-route default preservation.** The original `_BarRange` defaults (`multiplier=1`, `timespan="minute"`, `session="rth"`) silently change behavior at endpoints with different existing defaults — `SignalEngineJobRequest` defaults to `multiplier=15` (`jobs.py:162`), for example. Inheriting routes **override the inherited defaults explicitly** to preserve current behavior; behavior changes are surfaced as deliberate.
+7. **Pydantic `extra="forbid"` + calendar/order validator.** Pydantic v2's default `extra="ignore"` made the original "PR (iii)'s alias removal causes 422 on legacy fields" claim wrong. The base now sets `extra="forbid"` and adds a `model_validator` checking calendar-date validity and `from_date <= to_date`.
+8. **PR scope adjustments.**
+   - `indicator-report` was never a `polygon-date-range` consumer (was deferred from PR #198 because it's template-driven). Including it in PR (iii) drags in a separate signal-refactor scope. **Deferred to its own follow-up PR.**
+   - `spec-strategy-runner` symbol-lift is a domain-shape change (see #5) — **deferred to its own design**.
+   - `ticker → symbol` rename **kept** (Tim's original goal of API consolidation), but only on routes that actually fit the unified shape.
 
 ## Goal
 
@@ -23,12 +42,12 @@ Distilled from a six-question brainstorm. Each decision is one of multiple optio
 | # | Question | Decision | Rationale |
 |---|---|---|---|
 | Q1 | Relationship between `ticker-range-picker` and `polygon-date-range` | **Deprecate `polygon-date-range`.** Rich picker rolls out everywhere; narrow callsites get config flags (`hideSampling`, opt-in `availableMultipliers`). | Tim's framing ("this UI/UX gets repeated everywhere") points at one canonical component. A `hide*` config is cheaper than living with two competing components forever. Partially backs out PR #198, but PR #198's value (Polygon-aware constraints, weekend/holiday disable) was already in the rich picker's date inputs — only the narrow wrapper goes. |
-| Q2 | Multi-ticker (`batch-runner`) | **Sibling component** `<app-multi-ticker-range-picker>`. Shares Time-window + Sampling sub-templates with the canonical picker via extracted partials. | Single-symbol Instrument card has UX (cache % hint, last-cached date, "snap to last 30 days of cache on pick") that doesn't generalize. A `multi: boolean` flag on the canonical picker would muddy the API and produce two different `value` shapes from one component. |
+| Q2 | Multi-ticker (`batch-runner`) | **Sibling component** `<app-multi-ticker-range-picker>`. Shares Time-window + Sampling **child components** with the canonical picker (under `shared/ticker-range-picker/parts/`). | Single-symbol Instrument card has UX (cache % hint, last-cached date, "snap to last 30 days of cache on pick") that doesn't generalize. A `multi: boolean` flag on the canonical picker would muddy the API and produce two different `value` shapes from one component. |
 | Q3 | Multiplier (5m / 15m / 1h bars) | **Additive on `TickerRange`.** New optional `multiplier?: number` (default 1, backward-compatible). New `availableMultipliers` opt-in input renders a multiplier dropdown next to the resolution toggle. | `resolution` ("minute / hour / daily") is the right user-facing concept (matches what people read on a chart); `multiplier` is additive. Default 1 keeps `data-lab` and `lean-engine` byte-identical. Strategy-preflight's `'5m'` cleanly maps to `{ resolution: 'minute', multiplier: 5 }` — one canonical shape, easy backward-compat helper. |
-| Q4a | `spec-strategy-runner` (symbol inside spec) | **Refactor — lift `symbol` out of the spec to a top-level form field.** Picker drives normally with no `hideTicker` flag. Backend `SpecBacktestRequest` schema also moves `symbol` to top level. | Cleaner long-term shape: every form has ticker as a top-level concept. Drops the need for a `hideTicker` config. Costs a coordinated frontend+backend change but the spec shape was the only consumer that needed `hideTicker`. |
+| Q4a | `spec-strategy-runner` (symbol inside spec) | **DEFERRED to its own design (post-review).** Originally planned as a "lift symbol out of spec" cleanup step inside PR (iii), but `StrategySpec.symbols: list[str]` (`engine/strategy/spec/schema.py:365`) is a **plural list inside the domain spec object**, not a stray UI field. The route's single-symbol behavior (`spec.symbols[0]`) is a Phase-1 evaluator boundary. Changing this is a domain-shape decision, not a UI consolidation. Tracked in §"Out of scope". | Originally I assumed `symbol: str` on the spec was a UI artefact. It's a list and it's load-bearing. Out of scope here. |
 | Q4b | `ticker-explorer` (single date) | **Sibling component** `<app-ticker-date-picker>`. Same Instrument card as canonical, single `<p-datepicker>`, no Sampling card. | Snapshot tools have a different mental model (one date, future-dated, no OHLCV range). Forcing the canonical picker would require multiple new flags for one consumer. A small sibling with a shared Instrument partial is YAGNI-clean. |
-| Q5 | Wire-format unification | **Schema unification only — `YYYY-MM-DD` strings stay on the wire.** Define a `TickerRequest` Pydantic base; rename fields in lockstep with .NET DTOs. | Q5's option B (`int64 ms` everywhere — what `numerical-rigor.md` actually mandates) is the right direction but a much larger blast radius (every consumer of every endpoint shifts). Conflating it with this initiative means neither lands cleanly. **Tracked as a separate follow-up cross-linked to F-0009 / F-0019 / F-0020 / F-0021** in §"Out of scope" below. |
-| Q6 | PR strategy | **Three coordinated PRs.** (i) picker enhancements + both new siblings + tests. (ii) Python `TickerRequest` base + endpoint signature migrations + .NET DTO renames. (iii) all eight consumer migrations + `spec-strategy-runner` symbol-lift + delete `polygon-date-range`. | Tim's choice. Bigger surface per PR than PR #198's pattern, but each PR is internally coherent and PR (ii) provides transitional aliases so PR (iii)'s merge order has tolerance. |
+| Q5 | Wire-format unification | **Schema unification only — `YYYY-MM-DD` strings stay on the wire.** Define a `TickerRequest` Pydantic base; **rename fields in Python only.** .NET DTOs at GraphQL-resolver paths get canonical-only renames; **no transitional aliases on .NET** because `[JsonPropertyName]` is not repeatable and `JobsApi.cs` forwards JSON raw for all five job-type flows anyway. Python `AliasChoices` is the sole transitional layer. | Q5's option B (`int64 ms` everywhere — what `numerical-rigor.md` actually mandates) is the right direction but a much larger blast radius. Conflating it with this initiative means neither lands cleanly. **Approved temporary deferral**, tracked in §"Out of scope" cross-linked to F-0009 / F-0019 / F-0020 / F-0021. |
+| Q6 | PR strategy | **Three coordinated PRs (revised post-review).** (i) picker enhancements + both new siblings + tests, **scope unchanged**. (ii) Python `TickerRequest` base + per-route default preservation + endpoint signature migrations on the **shrunk** inheritor list + .NET DTO canonical renames (no aliases). (iii) **six** consumer migrations (down from eight: `spec-strategy-runner` deferred to own design, `indicator-report` deferred to PR (iv)) + remove Pydantic `AliasChoices` + delete `polygon-date-range`. | Bigger surface per PR than PR #198's pattern, but each PR is internally coherent. PR (ii) provides transitional aliases (Python only) so PR (iii) has merge-order tolerance. |
 
 ## Architecture
 
@@ -115,10 +134,12 @@ export interface TickerRange {
 ```ts
 // ticker-range-picker.component.ts — additions
 readonly availableMultipliers = input<readonly number[]>([]);   // NEW
-readonly hideSampling         = input(false);                    // NEW (renames + widens hideResolution)
+readonly hideSampling         = input(false);                    // NEW (widens semantics)
+// Note: existing `hideResolution` input is KEPT for one PR cycle as a
+// deprecated alias — when set to `true`, behaves like `hideSampling=true`.
+// Removed in PR (iv) (or whenever a future PR confirms no consumer calls it).
 
-// existing hideResolution input is renamed to hideSampling. Currently no consumer
-// passes hideResolution=true, so this is a rename without behavioural risk.
+// `hideResolution` stays as a one-PR-cycle deprecation alias (see comment above).
 ```
 
 Behavior:
@@ -254,73 +275,157 @@ The whole `daily ↔ day` translation lives at one boundary. Both sides stay idi
 ```python
 # PythonDataService/app/schemas/ticker_request.py
 from __future__ import annotations
+from datetime import date as Date
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 Timespan = Literal["minute", "hour", "day"]
 Session = Literal["rth", "extended"]
 
 class _BarRange(BaseModel):
-    """Common shape for any request that pulls bars over a date range."""
-    from_date: str = Field(..., pattern=DATE_PATTERN)
-    to_date:   str = Field(..., pattern=DATE_PATTERN)
-    timespan:  Timespan = "minute"
-    multiplier: int    = Field(1, ge=1)
-    session:   Session = "rth"
+    """Common shape for any request that pulls bars over a date range.
+
+    `extra="forbid"` is required: Pydantic v2's default `extra="ignore"`
+    would silently drop unknown fields, hiding the rename bug instead of
+    surfacing it once PR (iii) removes the transitional aliases.
+    """
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    from_date: str = Field(
+        ..., pattern=DATE_PATTERN,
+        validation_alias=AliasChoices("from_date", "start_date"),
+    )
+    to_date: str = Field(
+        ..., pattern=DATE_PATTERN,
+        validation_alias=AliasChoices("to_date", "end_date"),
+    )
+    timespan:   Timespan = "minute"
+    multiplier: int      = Field(1, ge=1)
+    session:    Session  = "rth"
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> "_BarRange":
+        # The pattern only checks shape; "2025-13-99" passes the regex
+        # but isn't a real date. Parse + verify calendar validity, then
+        # confirm from_date <= to_date.
+        try:
+            f = Date.fromisoformat(self.from_date)
+            t = Date.fromisoformat(self.to_date)
+        except ValueError as e:
+            raise ValueError(f"invalid calendar date: {e}") from e
+        if t < f:
+            raise ValueError(
+                f"to_date ({self.to_date}) must be >= from_date ({self.from_date})"
+            )
+        return self
 
 class TickerRequest(_BarRange):
-    """Single-symbol bar request — used by every aggregates/indicator/research route."""
-    symbol: str = Field(..., min_length=1, max_length=20)
+    """Single-symbol bar request."""
+    symbol: str = Field(
+        ..., min_length=1, max_length=20,
+        validation_alias=AliasChoices("symbol", "ticker"),
+    )
 
 class MultiTickerRequest(_BarRange):
     """Universe-of-symbols bar request — used by cross-sectional research."""
-    symbols: list[str] = Field(..., min_length=1)
+    symbols: list[str] = Field(
+        ..., min_length=1,
+        validation_alias=AliasChoices("symbols", "tickers"),
+    )
 ```
 
-**Routes that inherit (PR ii):**
+**Per-route default preservation.** The base sets `multiplier=1`, `timespan="minute"`, `session="rth"`. Inheriting routes whose existing defaults differ **must override the inherited fields** to preserve current behavior. Example for `SignalEngineJobRequest` (current default `multiplier=15` per `jobs.py:162`):
 
-| Router | Current shape | After PR ii |
+```python
+class SignalEngineJobRequest(_CamelCaseTickerRequest):
+    multiplier: int = Field(15, ge=1)   # explicit — preserves pre-migration default
+    job_id: str = Field(..., min_length=1)
+    feature_name: str = Field(..., min_length=1)
+    flip_sign: bool = True
+    regime_gate_enabled: bool = True
+    force: bool = False
+```
+
+Per-route audit lives in **§"Contract matrix"** below; PR (ii)'s Task 0 confirms the `_confirm_` cells before any code change.
+
+**Routes that inherit (PR ii) — REVISED post-review:**
+
+| Router / model | Current shape | After PR ii |
 |---|---|---|
-| `aggregates` | `ticker`, `from_date`, `to_date`, `timespan`, `multiplier` | inherits `TickerRequest` (rename `ticker → symbol`) |
-| `chart` (`ChartDataRequest`, `AllowedTimeframesRequest`) | `ticker`, `from_date`, `to_date` | inherits `TickerRequest` |
-| `data_quality` (`DataQualityRequest`) | `ticker`, `from_date`, `to_date` | inherits `TickerRequest` |
-| `indicators` | `ticker`, `from_date`, `to_date`, `timespan`, `multiplier` | inherits `TickerRequest` |
-| `indicator_reliability` | similar | inherits `TickerRequest` |
-| `volatility` (`/series` endpoints) | `ticker`, dates | inherits `TickerRequest` |
-| `dataset` | `ticker` (Form), dates | inherits `TickerRequest` for JSON endpoints; `Form()` endpoints stay (multipart upload constraint) |
-| `jobs` (`backtest`, `feature-research`, `signal-engine`, `cross-sectional`) | varies | `RuleBasedBacktestJobRequest`, `FeatureResearchJobRequest`, `SignalEngineJobRequest` inherit `TickerRequest`; `CrossSectionalJobRequest` inherits `MultiTickerRequest` |
-| `engine` (`EngineBacktestRequest`) | `start_date`, `end_date` (strategy owns symbol) | rename `start_date/end_date → from_date/to_date`; symbol stays at top level when caller overrides; uses `_BarRange` partial inheritance (not full `TickerRequest` because symbol can be strategy-owned) |
-| `spec_strategy` (`SpecBacktestRequest`) | `symbol` inside spec | PR (iii) lifts `symbol` to top-level; PR (ii) prepares the alias |
+| `aggregates.AggregatesRequest` | `ticker`, `from_date`, `to_date`, `timespan`, `multiplier` | inherits `TickerRequest` |
+| `data_quality.DataQualityRequest` | `ticker`, `from_date`, `to_date` | inherits `TickerRequest` (no `multiplier`/`timespan` use; base defaults are harmless) |
+| `indicators.IndicatorsRequest` | `ticker`, `from_date`, `to_date`, `timespan`, `multiplier` | inherits `TickerRequest` |
+| `indicator_reliability.IndicatorReliabilityRequest` | `ticker`, dates | inherits `TickerRequest` |
+| `volatility` `/series` models | `ticker`, dates | inherits `TickerRequest` (per-model — only the ones matching the canonical shape) |
+| `dataset` JSON endpoints | varies | inherits `TickerRequest` for JSON endpoints; `Form()` endpoints stay |
+| `jobs.RuleBasedBacktestJobRequest` (jobs.py:79) | `ticker`, dates, **multiplier=15**, timespan="minute" | inherits `TickerRequest`; **overrides `multiplier=15`** to preserve default |
+| `jobs.FeatureResearchJobRequest` (jobs.py:136) | `ticker`, dates, multiplier=1, timespan="minute" | inherits `TickerRequest` (defaults match) |
+| `jobs.SignalEngineJobRequest` (jobs.py:154) | `ticker`, dates, **multiplier=15**, timespan="minute" | inherits `TickerRequest`; **overrides `multiplier=15`** |
+| `jobs.CrossSectionalJobRequest` (jobs.py:117) | `tickers: list[str]`, dates | inherits `MultiTickerRequest` |
+| `engine.EngineBacktestRequest` (engine.py:1165) | `start_date`/`end_date` (strategy-owned symbol) | inherits **`_BarRange` only** (NOT `TickerRequest`); rename dates; symbol stays strategy-owned |
 
-**Routes that explicitly do NOT inherit:**
+**Routes that explicitly do NOT inherit — REVISED:**
 
-| Router | Why |
+| Router / model | Why |
 |---|---|
-| `options`, `quantlib_options` | Options endpoints — strike/expiration shape, not bar-range |
+| `chart.ChartDataRequest` / `AllowedTimeframesRequest` (chart.py:33,53) | Uses single `timeframe: str` (`"1m"\|"5m"\|"15m"\|"30m"\|"1h"\|"4h"\|"1D"\|"1W"\|"1M"`), not `timespan + multiplier`. Different shape; would force a lossy conversion. Stays as-is; the picker emits a separate `timeframe` string for chart consumers via a `timeframeFromTickerRange()` helper added to `utils/ticker-wire.ts` |
+| `research_divergence._PreflightRequestBody` (research_divergence.py:113) | Uses `timeframe: Literal["5m","15m","1h"]` — distinct shape, doesn't fit |
+| `spec_strategy.SpecBacktestRequest` | `StrategySpec.symbols: list[str]` is a **plural list inside the domain spec object** (`engine/strategy/spec/schema.py:365`). Phase-1 picks `spec.symbols[0]` because evaluator boundary is single-symbol, but the type is plural and load-bearing. Lifting to top-level is a domain-shape change → **own design**, deferred |
+| `options`, `quantlib_options` | Options endpoints — strike/expiration shape |
 | `iv_recorder`, `iv30` | Recorder endpoints — different mental model |
-| `edge` | Case-by-case: most edge endpoints are not primary "bars over range" — `RealizedVsIvSeriesRequest` and similar are IV/RV-alignment endpoints with their own shape. Any edge endpoint that genuinely matches the `(symbol, from_date, to_date, timespan, multiplier)` pattern can opt-in via a follow-up PR; none migrate in PR (ii) |
+| `edge` | Case-by-case: IV/RV-alignment shapes; none migrate here |
 | `market_monitor`, `tickers`, `sanitize`, `snapshot`, `golden_fixtures`, `portfolio`, `broker` | Orthogonal concerns |
 
-The discrimination rule: **a route inherits `TickerRequest` iff its primary input is "bars for symbol X over date range [from, to]".** Anything else stays.
+The revised discrimination rule: **a route inherits `TickerRequest` iff (a) its primary input matches `(symbol, from_date, to_date, timespan, multiplier)` exactly, AND (b) its current behavior is preserved by either the base defaults or an explicit field override.** Anything else stays as-is.
 
-### .NET DTOs (PR ii)
+### Contract matrix (PR ii — Task 0, before any code)
 
-`Backend/Models/PolygonRequests.cs` (and any subordinate DTO files): `Ticker → Symbol`, `StartDate / EndDate → FromDate / ToDate` where applicable. `JsonNamingPolicy.SnakeCaseLower` already produces the snake_case wire shape.
+PR (ii)'s first task is to confirm this table by grep against the live tree. Each `_confirm_` cell is filled in by Task 0; the completed table is committed back into this spec and is the authoritative reference for the per-route migrations.
 
-Backend forwarders (`JobsApi`, etc.) get the rename **plus** transitional `[JsonPropertyName]` aliases on the renamed fields, so PR (iii)'s frontend changes don't have to land atomically with PR (ii):
+| Model (file) | Current symbol field | Current dates | Current `multiplier` | Current `timespan` | Current `session` | Transport | Compat strategy |
+|---|---|---|---|---|---|---|---|
+| `AggregatesRequest` | `ticker` | `from_date`/`to_date` | _confirm_ | _confirm_ | _confirm_ | direct REST | inherit; override defaults if differ |
+| `DataQualityRequest` | `ticker` | `from_date`/`to_date` | n/a | n/a | n/a | direct REST | inherit |
+| `IndicatorsRequest` | `ticker` | `from_date`/`to_date` | _confirm_ | _confirm_ | _confirm_ | direct REST | inherit |
+| `IndicatorReliabilityRequest` | `ticker` | `from_date`/`to_date` | _confirm_ | _confirm_ | _confirm_ | direct REST | inherit |
+| `VolatilitySeriesRequest`(s) | `ticker` | dates | _confirm_ | _confirm_ | _confirm_ | direct REST | inherit per-model |
+| `DatasetGenerationRequest` (JSON) | `ticker` | dates | _confirm_ | _confirm_ | _confirm_ | direct REST | inherit |
+| `RuleBasedBacktestJobRequest` | `ticker` | `from_date`/`to_date` | **15** | `"minute"` | n/a | jobs (raw forward) | inherit; **override `multiplier=15`** |
+| `FeatureResearchJobRequest` | `ticker` | `from_date`/`to_date` | 1 | `"minute"` | n/a | jobs | inherit (defaults match) |
+| `SignalEngineJobRequest` | `ticker` | `from_date`/`to_date` | **15** | `"minute"` | n/a | jobs | inherit; **override `multiplier=15`** |
+| `CrossSectionalJobRequest` | `tickers: list[str]` | `from_date`/`to_date` | n/a | n/a | n/a | jobs | inherit `MultiTickerRequest` |
+| `EngineBacktestRequest` | (strategy-owned, NOT in body) | `start_date`/`end_date` | n/a | n/a | n/a | direct REST | inherit `_BarRange` only |
+
+### .NET DTOs (PR ii) — REVISED post-review
+
+**`Backend/Jobs/JobsApi.cs:88-121` forwards JSON raw** for all five job-type flows (`backtest`, `cross_sectional`, `feature_research`, `signal_engine`, `engine_backtest`) — it parses to `JsonNode`, injects `job_id`, and `ToJsonString()` forwards verbatim. The .NET layer **never deserializes those payloads into typed DTOs**, so .NET DTO renames or aliases on those flows would be inert.
+
+The original spec proposed `[JsonPropertyName]` transitional aliases on .NET DTOs. That plan is dropped because:
+
+1. **`[JsonPropertyName]` is `AllowMultiple = false`** — the original example wouldn't compile.
+2. **Jobs flows forward JSON raw** — even a well-formed alias would not run.
+3. **Python `AliasChoices` already covers every consumer path** — direct REST, GraphQL resolver, jobs forwarder. One transitional layer is enough.
+
+**What .NET actually changes in PR (ii):**
+
+| File class | Action |
+|---|---|
+| `Backend/Models/DTOs/ResearchModels.cs` (and similar) | **Canonical-only renames**: `Ticker → Symbol`, `StartDate/EndDate → FromDate/ToDate` where the DTO actually deserializes a body. No transitional aliases. The compiler surfaces every consumer; each gets renamed in lockstep |
+| `Backend/GraphQL/*Mutation.cs` resolvers | If a resolver argument was named `ticker`, rename to `symbol` (with the `[GraphQLName("ticker")]` schema-side alias kept for one PR cycle so a stale frontend GraphQL query doesn't 400) |
+| `Backend/Jobs/JobsApi.cs` | Untouched. JSON is forwarded raw; no DTO involved |
+
+GraphQL-side compatibility is the only place a transitional alias is genuinely useful, and Hot Chocolate's `[GraphQLName]` does support coexisting field names by leaving the legacy name on a deprecated field marker:
 
 ```csharp
-public sealed class FeatureResearchJobRequest
-{
-    [JsonPropertyName("symbol")]
-    [JsonPropertyName("ticker")]   // transitional alias — removed in PR (iii)
-    public required string Symbol { get; init; }
-    // ... etc
-}
+// resolver argument rename in PR (ii):
+public Task<ResearchResult> RunResearch(string symbol, ...)   // canonical
+
+// PR (iii) removes any deprecated GraphQL aliases that PR (ii) left
+// behind for in-flight frontend queries.
 ```
 
-The aliases are removed in the final commit of PR (iii) (the `polygon-date-range`-deletion commit).
+The plan's Task 12 (PR ii) and Task 9 (PR iii) are revised accordingly: Task 12 does **canonical-only** DTO renames + GraphQL alias-pinning where applicable; Task 9 removes only those GraphQL aliases (no DTO setter cleanup, because there are no transitional setters to remove).
 
 ## Data flow
 
@@ -334,29 +439,39 @@ Per request:
 
 Type safety: `TickerRange` cannot be sent over the wire **except** through the adapter — the adapter is the only function with a return type matching the Python schema, and consumer code references payload types from the adapter module.
 
-## Migration order (inside PR iii)
+## Migration order (inside PR iii) — REVISED post-review
 
-Order chosen to land the lowest-friction consumers first so any picker-config bugs surface early on small surfaces:
+PR (iii) migrates **six** consumers (down from eight). `spec-strategy-runner` and `indicator-report` are removed — see "Deferred" below.
 
-1. **`indicator-reliability`** — cleanest fit (uses `hideSampling=true`, no multiplier, no symbol-lift). Smoke-tests the new `hideSampling` config.
-2. **`strategy-preflight`** — consumes multiplier (`'5m'` → `{ resolution: 'minute', multiplier: 5 }`). Smoke-tests `availableMultipliers`.
-3. **`feature-runner`** — full multiplier surface. Drops the standalone ticker input + timespan select + multiplier int.
-4. **`signal-runner`** — same shape as feature-runner.
-5. **`batch-runner`** — first consumer of `<app-multi-ticker-range-picker>`. Drops the chip grid (lines 36–53 of current HTML).
+Order chosen to land the lowest-friction consumers first so picker-config bugs surface early on small surfaces. **Each migration preserves the consumer's existing per-route default** (e.g. signal-runner's `multiplier: 15`) by initializing the picker's `range` signal with that value — no silent behavior change.
+
+1. **`indicator-reliability`** — cleanest fit (uses `hideSampling=true`, no multiplier, no symbol nesting). Smoke-tests the new `hideSampling` config.
+2. **`strategy-preflight`** — consumes multiplier (`'5m'` → `{ resolution: 'minute', multiplier: 5 }`). Smoke-tests `availableMultipliers`. Note: this consumer talks to `research_divergence.preflight`, which **does not inherit `TickerRequest`** (uses its own `timeframe` shape). The frontend picker payload is converted to the route's `timeframe` string at the consumer's wire-call site.
+3. **`feature-runner`** — full multiplier surface. Drops the standalone ticker input + timespan select + multiplier int. **Initializes `range.multiplier = 1`** to match existing default.
+4. **`signal-runner`** — same shape as feature-runner. **Initializes `range.multiplier = 15`** to match `SignalEngineJobRequest`'s pre-migration default.
+5. **`batch-runner`** — first consumer of `<app-multi-ticker-range-picker>`. Drops the chip grid (lines 36–53 of current HTML). Initializes with the existing default ticker universe.
 6. **`ticker-explorer`** — first consumer of `<app-ticker-date-picker>`. Drops the raw `<input type="date">` + raw text ticker.
-7. **`spec-strategy-runner`** — frontend lift of `symbol` from spec to top-level form field; backend `SpecBacktestRequest` schema lift in lockstep. Larger commit; documented in the PR description.
-8. **`indicator-report`** — template-driven `[(ngModel)]` → signal refactor + picker swap. **Split rule:** if the signal refactor touches more than the consumer's own files (e.g. modifies a service or a parent route component), or pushes the PR over ~25 changed files total, this consumer splits to PR (iv).
-9. **Delete** `Frontend/src/app/shared/polygon-date-range/` + remove from imports + remove transitional .NET aliases.
+7. **Remove Pydantic transitional aliases** (`AliasChoices` for `ticker`/`tickers`/`start_date`/`end_date` come off in `app/schemas/ticker_request.py`). With the six migrated consumers now sending canonical names, legacy names are no longer in flight.
+8. **Remove deprecated `hideResolution` input** from `ticker-range-picker.component.ts` (one-PR-cycle deprecation expires here).
+9. **Delete** `Frontend/src/app/shared/polygon-date-range/` + remove from imports.
+
+**Deferred from PR (iii) — moved to follow-ups:**
+
+- **`spec-strategy-runner`** — `StrategySpec.symbols: list[str]` is plural and load-bearing inside the domain spec object. Lifting it to a top-level form field is a domain-shape decision, not a UI consolidation. Tracked in §"Out of scope" as **own design**.
+- **`indicator-report`** — never adopted `polygon-date-range` (template-driven `[(ngModel)]` against non-signal fields). Migrating it requires a separate `signals + OnPush` refactor that has nothing to do with this initiative. Tracked in §"Out of scope" as **PR (iv)**.
 
 PR (iii) is structured as one logical commit per consumer (matching PR #198's cadence inside a single PR), so any consumer can be reverted on its own without rewinding the others.
 
 ## Error handling
 
-- **Pydantic validation** at the schema base level. `^\d{4}-\d{2}-\d{2}$` catches the original `2025-5-31` bug class at every inheriting route, not just the six PR #198 covered.
+- **Pydantic validation** at the schema base level catches three classes of bug at every inheriting route:
+  - **Shape**: `^\d{4}-\d{2}-\d{2}$` regex pattern on `from_date` and `to_date` (the original `2025-5-31` bug from PR #198's incident).
+  - **Calendar validity**: `model_validator(mode="after")` parses the string with `date.fromisoformat`; rejects `2025-13-99` etc. The pattern alone doesn't catch this.
+  - **Order**: same validator rejects `to_date < from_date`.
+- **`extra="forbid"`** on the base — Pydantic v2's default `extra="ignore"` would silently drop unknown fields, masking the rename bug instead of surfacing it. With `forbid`, any leftover legacy field name (after PR (iii) removes the `AliasChoices`) produces a clear `extra_forbidden` 422 with the offending key.
 - **FastAPI 422** with field path bubbles to the client. The original incident (`string_pattern_mismatch` on `to_date`) showed this works; we preserve the behavior.
 - **Frontend type safety** — `TickerRequestPayload` is the only acceptable wire shape; any service method whose body parameter is typed `TickerRequestPayload` cannot accept a malformed object. Consumer code references types from `utils/ticker-wire.ts`, not from picker types directly.
-- **.NET DTOs** — `JsonRequired` on the renamed fields; missing fields fail at deserialization time, not at the Python boundary.
-- **No silent field coercion.** If a route receives a `start_date` field after PR (iii)'s alias removal, it fails 422 with a clear "unknown field" message rather than silently mapping to `from_date`.
+- **.NET DTOs** — `required` keyword (C# 11+) on the renamed properties; missing fields fail at deserialization time, not at the Python boundary.
 
 ## Testing
 
@@ -385,10 +500,15 @@ PR (iii) is structured as one logical commit per consumer (matching PR #198's ca
 - `tests/schemas/test_ticker_request.py` — new shared parametric tests:
   - valid `TickerRequest` round-trip
   - rejects `from_date: "2025-5-31"` (regression for the original bug)
+  - rejects calendar-invalid date `"2025-13-99"` (validator catches what the regex misses)
+  - rejects `to_date < from_date`
   - rejects empty `symbol`, `multiplier=0`
   - `MultiTickerRequest` rejects empty `symbols` list
-- For each inheriting router, a smoke test that posts a minimal `TickerRequest` body and asserts 200 / structured 422 — most are existing tests that rerun under the new schema.
-- .NET `Backend.Tests` — DTO deserialization tests for the transitional alias (`ticker` and `symbol` both accepted) + the post-alias state (`ticker` rejected with 400).
+  - `extra="forbid"`: unknown fields produce `extra_forbidden` validation error
+  - transitional aliases accepted: `ticker`/`tickers`/`start_date`/`end_date` resolve to the canonical fields
+- For each inheriting router, a smoke test that posts both shapes (canonical + legacy alias) and asserts 200 — most are existing tests that rerun under the new schema.
+- Per-route default-preservation test: e.g. `SignalEngineJobRequest()` with no `multiplier` still defaults to `15` (not the base's `1`).
+- .NET `Backend.Tests` — DTO deserialization tests for the canonical-only field names (no transitional alias tests because there are no .NET aliases).
 
 ### PR (iii) — consumer migrations
 
@@ -412,67 +532,77 @@ Pre-existing failures (if any) baselined against `origin/master` before PR open;
 
 ## Out of scope (tracked follow-ups)
 
-- **`int64 ms UTC` wire-format migration.** `numerical-rigor.md` mandates `int64 ms` at every wire boundary; today's `from_date: "YYYY-MM-DD"` violates that policy. This work *would* be the right place to fix it, but the blast radius (every consumer of every endpoint) makes conflating it with the picker initiative unsafe — neither would land cleanly. Tracked separately, cross-linked to existing audit findings F-0009 (sanitizer ISO timestamp wire), F-0019 (trade-comparison naive strptime), F-0020 (timestamp ban-list rollup), F-0021 (.NET ingestion DateTime.Parse).
-- **Multi-ticker availability strip / advisories.** The `<app-multi-ticker-range-picker>` v1 omits per-ticker availability and smart advisories. Those are a separate UX problem.
-- **Single-date Polygon advisories.** `<app-ticker-date-picker>` v1 has no inline Polygon advisory (consumer provides min/max). If a future consumer wants the full Polygon-aware advisory, that ships as a follow-up.
-- **`indicator-report` migration**, if its template-driven → signal refactor blows up the PR (iii) scope. Splits to PR (iv).
+- **`int64 ms UTC` wire-format migration. APPROVED TEMPORARY DEFERRAL.** `.claude/rules/numerical-rigor.md` § "Timestamp rigor" mandates `int64 ms` at every wire boundary; `from_date: "YYYY-MM-DD"` is a wire format and is therefore a known violation of that rule. This initiative does not fix it because the blast radius (every consumer of every endpoint, plus the .NET-side `DateTime`/`DateTimeOffset` parse paths flagged in F-0021/F-0022, plus the Frontend `Date` parsing paths in F-0034) is much larger than the picker scope; conflating the two means neither lands cleanly. Tracked separately, cross-linked to existing audit findings F-0009 (sanitizer ISO timestamp wire), F-0019 (trade-comparison naive strptime), F-0020 (timestamp ban-list rollup), F-0021 (.NET ingestion `DateTime.Parse` AssumeUniversal), F-0022 (.NET query-parameter `DateTime.Parse`), F-0024 (additional ISO-Z emission), F-0033 (Python non-ingestion ban-list violations), F-0034 (frontend naive date parse rollup). Until that PR ships, this design's wire format is a documented exception to the rule.
+- **`spec-strategy-runner` symbol redesign.** `StrategySpec.symbols: list[str]` (`engine/strategy/spec/schema.py:365`) is plural and load-bearing inside the domain spec. The current Phase-1 evaluator boundary picks `spec.symbols[0]` because it's single-symbol-only, but the type permits multi-symbol strategies. Lifting `symbols` (or `symbol`) to a top-level form field touches the strategy domain shape, not just UI. **Own design**, separate initiative.
+- **`indicator-report` migration to signals + picker.** Was deferred from PR #198 because of template-driven `[(ngModel)]` against non-signal fields. The migration requires a `signals + OnPush` refactor independent of the picker work. **PR (iv)** when scheduled.
+- **Existing picker legacy patterns** — the canonical `ticker-range-picker.component.ts` uses `@HostListener` (line 308), `FormsModule` + `ngModel` (lines 17, 98). All three are flagged by `.claude/rules/angular.md`. PR (i) **explicitly does not modernize** them — moving them as-is into the new sub-components keeps the PR scoped. Tracked as a follow-up: replace `@HostListener` with the `host` object on `@Component`, replace `ngModel` with signal-based two-way binding, remove `FormsModule` from the imports list.
+- **`hideResolution` deprecated alias removal.** Kept for one PR cycle to avoid breakage if any out-of-tree consumer was passing it. Removed in PR (iii)'s commit 8 (or a later cleanup PR if scope tightens).
+- **Multi-ticker availability strip / advisories.** The `<app-multi-ticker-range-picker>` v1 omits per-ticker availability and smart advisories. Separate UX problem.
+- **Single-date Polygon advisories.** `<app-ticker-date-picker>` v1 has no inline Polygon advisory (consumer provides min/max). Future consumers can add it.
 - **Removing `polygon-date-range` from `docs/superpowers/specs/2026-05-09-polygon-date-range-design.md` history.** That doc stays as the record of what shipped in PR #198.
 
 ## Risks & open considerations
 
-- **PR (ii) merge-order tolerance.** The transitional `[JsonPropertyName]` aliases let PR (ii) merge before PR (iii)'s frontend changes are ready. But the aliases must come *off* in PR (iii) — risk: if a consumer is missed in the migration, it'll fail at runtime after alias removal. Mitigation: PR (iii)'s last commit is "remove transitional aliases" and runs the full project-scope test suite; any consumer still sending the old field name will fail there.
-- **`spec-strategy-runner` symbol-lift coordination.** The frontend form change and the backend `SpecBacktestRequest` schema change must land in the same PR. If split, runs fail mid-deploy. This is captured as a single commit in PR (iii)'s ordering.
+- **PR (ii) → (iii) merge-order tolerance.** Pydantic `AliasChoices` lets PR (ii) merge before PR (iii)'s frontend payload changes are ready. The aliases come off in PR (iii)'s commit 7 — risk: if a consumer is missed, it'll fail at runtime after alias removal. Mitigation: with `extra="forbid"` on the base, the failure surfaces as a clear `extra_forbidden` 422 with the offending field name (no silent acceptance). Project-scope test suite is run after the alias-removal commit and before the PR opens.
+- **Per-route default preservation is a manual audit.** The contract matrix is the load-bearing artefact — Task 0 of PR (ii) confirms each `_confirm_` cell against the live tree before any code change. Skipping or rushing Task 0 is the single biggest regression risk in this initiative.
 - **PrimeNG `dateFormat="yy-mm-dd"` quirk.** Already addressed in the existing canonical picker; new siblings inherit the same `<p-datepicker>` configuration.
-- **Multiplier defaults + GraphQL.** Some endpoints arrive via the .NET GraphQL API (Hot Chocolate v15 resolvers) rather than direct REST. Check `Backend/Services/*` and `Backend/GraphQL/*` for any hardcoded `multiplier: 15` or `timespan: "minute"` that conflicts with the new defaults; the implementation plan must enumerate the affected resolvers and migrate them in PR (ii) lockstep with the DTO renames.
+- **Multiplier defaults + GraphQL.** Some endpoints arrive via the .NET GraphQL API (Hot Chocolate v15 resolvers) rather than direct REST. Check `Backend/GraphQL/*` for any resolver argument literally named `ticker` that needs `[GraphQLName("ticker")]` pinning during the rename, and any hardcoded `multiplier: 15` / `timespan: "minute"` in `Backend/Services/*` that conflicts with new defaults. PR (ii)'s plan enumerates the affected resolvers as Task 12.
 - **Sampling card layout with multiplier dropdown.** Adding a multiplier `<p-select>` next to the existing minute/hour/daily toggle and session toggle pushes the Sampling card width. Verify (a) it stays under the existing card's wrap point at viewport breakpoints used by Engine Lab + Data Lab, and (b) AXE focus/contrast pass with the additional control. If layout fails, fall back to a small icon-button group rather than a `<p-select>`.
+- **`research_divergence.preflight` shape mismatch.** `strategy-preflight` uses the picker (with `availableMultipliers`) but the underlying route uses a single `timeframe` string. The wire-call site at the consumer converts picker `{ resolution, multiplier }` → preflight `'5m'|'15m'|'1h'` via a small adapter helper; if the picker emits a combination not in that list, the adapter throws and the run is blocked at the form level (no silent coercion).
+- **`chart` route shape mismatch.** Same shape mismatch as preflight — chart wants single `timeframe: str`. If a future consumer wants to use the picker against `/api/chart/data`, the same per-call adapter helper applies.
 
 ## Build sequence (for the implementation plan)
 
-PR (i) — picker enhancements + new siblings:
-1. Extract `_instrument.html`, `_time-window.html`, `_sampling.html` partials from `ticker-range-picker.component.html`.
-2. Add `multiplier?: number` to `TickerRange`, `availableMultipliers` + `hideSampling` inputs to canonical picker (rename + widen `hideResolution`).
+PR (i) — picker enhancements + new siblings (scope unchanged):
+1. Extract `parts/instrument-card.component`, `parts/time-window-card.component`, `parts/sampling-card.component` (real Angular child components, not HTML partials).
+2. Add `multiplier?: number` to `TickerRange`, `availableMultipliers` + `hideSampling` inputs to canonical picker (`hideResolution` kept as deprecated alias).
 3. Update `ticker-range-picker.component.spec.ts` with the new flag tests.
 4. Create `<app-multi-ticker-range-picker>` + types + spec.
 5. Create `<app-ticker-date-picker>` + types + spec.
 6. Create `Frontend/src/app/utils/ticker-wire.ts` + `ticker-wire.spec.ts`.
 7. Project-scope ESLint + Vitest pass; open PR (i).
 
-PR (ii) — Python `TickerRequest` base + .NET DTOs:
-1. Create `PythonDataService/app/schemas/ticker_request.py` + `tests/schemas/test_ticker_request.py`.
-2. Migrate each inheriting router one commit at a time (rename `ticker → symbol`, `start_date/end_date → from_date/to_date`); each commit re-runs the project-scope test.
-3. Update .NET DTOs with renames + transitional aliases.
-4. Project-scope ruff + dotnet format + dotnet test pass; open PR (ii).
+PR (ii) — Python `TickerRequest` base + canonical-only .NET DTO renames (REVISED):
+1. **Task 0 — Contract matrix confirmation**: grep against live tree to fill every `_confirm_` cell in §"Contract matrix"; commit the completed matrix back into this spec.
+2. Create `PythonDataService/app/schemas/ticker_request.py` (with `extra="forbid"`, `model_validator` for calendar/order, `AliasChoices` for legacy names) + `tests/schemas/test_ticker_request.py`.
+3. Migrate each inheriting router one commit at a time, **preserving each route's existing defaults via explicit field overrides**. Each commit re-runs the project-scope test.
+4. Canonical-only .NET DTO renames (`Ticker → Symbol`, `StartDate/EndDate → FromDate/ToDate`) + GraphQL `[GraphQLName]` schema-side aliases on resolver arguments where a stale frontend query might hit. **No `[JsonPropertyName]` transitional aliases** — Python is the only transitional layer.
+5. Project-scope ruff + dotnet format + dotnet test pass; open PR (ii).
 
-PR (iii) — consumer migrations + cleanup:
-1. One commit per consumer in the migration order above (eight commits).
-2. One commit for `spec-strategy-runner` backend symbol-lift.
-3. One commit removing transitional .NET aliases.
-4. One commit deleting `Frontend/src/app/shared/polygon-date-range/`.
-5. Project-scope test pass; open PR (iii). PR description lists the eight migrated consumers and the explicit "if `indicator-report` proves messy, split it" note.
+PR (iii) — consumer migrations + cleanup (REVISED — six consumers, not eight):
+1. One commit per consumer in the migration order above (six commits: indicator-reliability, strategy-preflight, feature-runner, signal-runner, batch-runner, ticker-explorer).
+2. One commit removing Pydantic `AliasChoices` from `ticker_request.py` (legacy field names now produce `extra_forbidden` 422).
+3. One commit removing the deprecated `hideResolution` input from canonical picker.
+4. One commit removing GraphQL `[GraphQLName]` schema aliases pinned in PR (ii) Task 4.
+5. One commit deleting `Frontend/src/app/shared/polygon-date-range/`.
+6. Project-scope test pass; open PR (iii). PR description lists the six migrated consumers and the two explicitly-deferred (spec-strategy-runner own-design, indicator-report PR (iv)).
 
 ## Files / folders this effort touches
 
 **Created:**
-- `Frontend/src/app/shared/multi-ticker-range-picker/` (5 files)
-- `Frontend/src/app/shared/ticker-date-picker/` (5 files)
-- `Frontend/src/app/shared/ticker-range-picker/_instrument.html`, `_time-window.html`, `_sampling.html` (3 partials)
+- `Frontend/src/app/shared/ticker-range-picker/parts/instrument-card.component.{ts,html,scss,spec.ts}`
+- `Frontend/src/app/shared/ticker-range-picker/parts/time-window-card.component.{ts,html,scss,spec.ts}`
+- `Frontend/src/app/shared/ticker-range-picker/parts/sampling-card.component.{ts,html,scss,spec.ts}`
+- `Frontend/src/app/shared/multi-ticker-range-picker/*` (component + multi-instrument-card sub-component + types + spec)
+- `Frontend/src/app/shared/ticker-date-picker/*` (component + types + spec)
 - `Frontend/src/app/utils/ticker-wire.ts` + `ticker-wire.spec.ts`
-- `PythonDataService/app/schemas/ticker_request.py`
-- `PythonDataService/tests/schemas/test_ticker_request.py`
+- `PythonDataService/app/schemas/ticker_request.py` + `tests/schemas/test_ticker_request.py`
 
 **Modified:**
-- `Frontend/src/app/shared/ticker-range-picker/*` (additive: `multiplier`, `availableMultipliers`, `hideSampling`)
-- All eight consumer components + their HTML
-- All inheriting Python routers (`aggregates`, `chart`, `data_quality`, `indicators`, `indicator_reliability`, `volatility`, `dataset`, `jobs`, `engine`, `spec_strategy`)
-- `PythonDataService/app/schemas/spec_strategy.py` (or wherever `SpecBacktestRequest` lives) — symbol-lift
-- `Backend/Models/PolygonRequests.cs` (or equivalent) — DTO renames + transitional aliases
-- `Backend/Services/*` — any hardcoded `Ticker` / `StartDate` references
-- `.NET` GraphQL resolvers that pass these payloads through
+- `Frontend/src/app/shared/ticker-range-picker/*` (additive: `multiplier`, `availableMultipliers`, `hideSampling`; `hideResolution` kept as deprecated alias for one PR cycle)
+- **Six** consumer components + their HTML (indicator-reliability, strategy-preflight, feature-runner, signal-runner, batch-runner, ticker-explorer)
+- Inheriting Python routers per the contract matrix (NOT chart, NOT spec_strategy, NOT research_divergence): `aggregates`, `data_quality`, `indicators`, `indicator_reliability`, `volatility` (per-model), `dataset` (JSON only), `jobs.py` (4 models), `engine.py` (`_BarRange` only)
+- `Backend/Models/DTOs/*.cs` — canonical-only renames (no transitional aliases)
+- `Backend/GraphQL/*Mutation.cs` — resolver argument renames + `[GraphQLName]` schema aliases pinned for one PR cycle
+- `Backend/Services/*` — any hardcoded `Ticker` / `StartDate` consumer references
 
 **Deleted:**
-- `Frontend/src/app/shared/polygon-date-range/` (final commit of PR iii)
+- `Frontend/src/app/shared/polygon-date-range/` (final commits of PR iii)
 
-**Untouched:**
+**Untouched (and explicitly deferred — see §"Out of scope"):**
+- `chart`, `research_divergence` (`preflight`), `spec_strategy` Python routers
+- `spec-strategy-runner`, `indicator-report` consumers
+- `Backend/Jobs/JobsApi.cs` (forwards JSON raw — no DTO involved)
 - Options/snapshot routes (`options`, `quantlib_options`, `iv_recorder`, `iv30`, `edge`)
 - `data-lab` (already adopted; defaults preserve byte-identical behavior)
 - `lean-engine` (already adopted; same)
@@ -482,8 +612,8 @@ PR (iii) — consumer migrations + cleanup:
 
 This work touches three stacks:
 
-- **Frontend** — `.claude/rules/angular.md`. Standalone, OnPush, signals + `model()`, modern control flow, no decorators, no `mutate()`. All applied.
-- **.NET** — `.claude/rules/dotnet.md`. PascalCase fields, `[JsonPropertyName]` for transitional aliases (only place in DTO that uses two), no silent catches, structured logging.
-- **Python** — `.claude/rules/python.md`. Pydantic v2 (`Field`, `Literal`), `from __future__ import annotations`, snake_case fields, project-scope ruff before push.
+- **Frontend** — `.claude/rules/angular.md`. **NEW code** (the three new sub-components, the two new sibling components, `tickerRangeToWire`) is fully compliant: standalone, OnPush, signals + `model()`, modern control flow, no decorators, no `mutate()`, no `ngClass`/`ngStyle`. **Pre-existing code** (the canonical picker's `@HostListener`, `FormsModule`, `ngModel`) is moved as-is into the new sub-components — it remains a known violation of the rules and is tracked in §"Out of scope" for separate cleanup. PR (i) does not modernize on touch (would balloon scope and is unrelated to this initiative's goal).
+- **.NET** — `.claude/rules/dotnet.md`. PascalCase fields, canonical-only renames (no transitional `[JsonPropertyName]` aliases — see §".NET DTOs" for why), `[GraphQLName]` for one-PR-cycle GraphQL schema aliases, no silent catches, structured logging.
+- **Python** — `.claude/rules/python.md`. Pydantic v2 (`Field`, `Literal`, `model_validator`, `AliasChoices`, `ConfigDict`), `from __future__ import annotations`, snake_case fields, project-scope ruff before push.
 
-No numerical-rigor rules are triggered (no math is being ported). Timestamp-rigor is touched at the perimeter — explicitly punted to the `int64 ms` follow-up tracked above.
+**Numerical-rigor:** `.claude/rules/numerical-rigor.md` § "Timestamp rigor" applies — `from_date: "YYYY-MM-DD"` is a wire-boundary timestamp and the rule mandates `int64 ms UTC`. This design ships an **approved temporary deferral**, not a non-applicable case. The deferral is tracked in §"Out of scope" with cross-links to the audit findings (F-0009, F-0019, F-0020, F-0021, F-0022, F-0024, F-0033, F-0034) that define the parallel `int64 ms` initiative. Math-porting rules are not triggered (no math is ported).

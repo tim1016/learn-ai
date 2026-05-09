@@ -2,9 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Create a single Pydantic `TickerRequest` (and `MultiTickerRequest`) base in PythonDataService; migrate every route whose primary input is "bars for symbol X over date range" to inherit it; coordinate .NET DTO renames with transitional `[JsonPropertyName]` aliases so PR (iii)'s frontend changes have a non-zero merge-order tolerance. **Backwards-compatible during PR (ii)** — every endpoint accepts both old (`ticker`, `start_date`, `end_date`) and new (`symbol`, `from_date`, `to_date`) field names. PR (iii)'s last commit removes the aliases.
+**Goal (REVISED post-review):** Create a single Pydantic `TickerRequest` (and `MultiTickerRequest`) base in PythonDataService with `extra="forbid"`, calendar/order validation, and per-route default-preservation overrides; migrate the routes whose primary input genuinely matches `(symbol, from_date, to_date, timespan, multiplier)` to inherit it; rename matching .NET DTOs to canonical-only names (no transitional aliases — `JobsApi.cs` forwards JSON raw and `[JsonPropertyName]` is `AllowMultiple = false`). **Python `AliasChoices` is the only transitional layer** — every endpoint accepts both old (`ticker`, `start_date`, `end_date`) and new (`symbol`, `from_date`, `to_date`) field names during PR (ii)→(iii). PR (iii) removes the Pydantic aliases.
 
-**Architecture:** New module `PythonDataService/app/schemas/ticker_request.py` exports `_BarRange`, `TickerRequest`, `MultiTickerRequest`. Each migrated router request model inherits the base via `class FooRequest(TickerRequest)` (or `MultiTickerRequest`) and uses Pydantic v2 `AliasChoices` to accept legacy field names during the transition. The .NET side renames matching DTO fields and adds dual `[JsonPropertyName]` aliases on serialization output and `[JsonInclude]`/manual deserialization to accept both.
+**Architecture:** New module `PythonDataService/app/schemas/ticker_request.py` exports `_BarRange`, `TickerRequest`, `MultiTickerRequest`. Base sets `model_config = ConfigDict(populate_by_name=True, extra="forbid")` and a `model_validator(mode="after")` that parses dates via `date.fromisoformat` (catching calendar-invalid strings like `"2025-13-99"` that the regex misses) and verifies `from_date <= to_date`. Each migrated request model inherits via `class FooRequest(TickerRequest)` AND **explicitly overrides any inherited field whose default differs from the route's pre-migration default** — e.g. `SignalEngineJobRequest` sets `multiplier: int = Field(15, ge=1)` to preserve its current 15-min default. .NET DTOs at GraphQL-resolver paths get canonical-only renames; `Backend/Jobs/JobsApi.cs` is untouched (it forwards JSON raw and never deserializes typed DTOs).
+
+**Routes that DO inherit (revised — see spec §"Contract matrix"):** `aggregates`, `data_quality`, `indicators`, `indicator_reliability`, `volatility` (per-model), `dataset` JSON endpoints, four `jobs.py` models, `engine.EngineBacktestRequest` (`_BarRange` only — symbol stays strategy-owned).
+
+**Routes that explicitly DO NOT inherit (revised):** `chart` (uses single `timeframe: str`, not `timespan + multiplier`), `research_divergence.preflight` (uses `timeframe: Literal["5m","15m","1h"]`), `spec_strategy` (uses `StrategySpec.symbols: list[str]` plural inside the domain spec — own design follow-up, see spec §"Out of scope"), plus all options/recorder/edge/orthogonal routes that never matched.
 
 **Tech Stack:** FastAPI, Pydantic v2, ruff, pytest + pytest-asyncio + httpx.AsyncClient, .NET 10, xUnit, NSubstitute, Hot Chocolate v15.
 
@@ -23,37 +27,42 @@ PythonDataService/tests/schemas/__init__.py
 PythonDataService/tests/schemas/test_ticker_request.py
 ```
 
-**Modified (Python routers — one commit per file):**
+**Modified (Python routers — one commit per file, REVISED — chart/spec_strategy removed):**
 
 ```
 PythonDataService/app/routers/aggregates.py
-PythonDataService/app/routers/chart.py
 PythonDataService/app/routers/data_quality.py
 PythonDataService/app/routers/indicators.py
 PythonDataService/app/routers/indicator_reliability.py
 PythonDataService/app/routers/volatility.py
 PythonDataService/app/routers/dataset.py            (JSON endpoints only; multipart Form() endpoints stay)
-PythonDataService/app/routers/jobs.py               (4 request models)
-PythonDataService/app/routers/engine.py             (start_date/end_date rename)
-PythonDataService/app/routers/spec_strategy.py      (alias prep — full symbol-lift in PR iii)
+PythonDataService/app/routers/jobs.py               (4 request models — RuleBasedBacktest + FeatureResearch + SignalEngine + CrossSectional)
+PythonDataService/app/routers/engine.py             (start_date/end_date rename only — _BarRange inheritance, NOT TickerRequest)
 ```
 
-**Modified (.NET DTOs — one commit total):**
+**Excluded** (do not migrate in this PR — see spec):
+- `chart.py` — uses single `timeframe: str`; would lose information forcing into `timespan + multiplier`
+- `research_divergence.py` — preflight uses `timeframe: Literal["5m","15m","1h"]`
+- `spec_strategy.py` — `StrategySpec.symbols` is plural and load-bearing; own-design follow-up
+
+**Modified (.NET DTOs — one commit total, REVISED — canonical-only renames, no transitional aliases):**
 
 ```
 Backend/Models/DTOs/ResearchModels.cs
 Backend/Models/DTOs/SignalModels.cs
 Backend/Models/DTOs/IndicatorModels.cs
 Backend/Models/DTOs/BatchResearchModels.cs
-Backend/Models/DTOs/SpecStrategyModels.cs
 Backend/Models/DTOs/GapDetectionModels.cs
-Backend/GraphQL/Mutation.cs                          (any resolver argument referencing renamed fields)
+Backend/GraphQL/Mutation.cs                          (resolver arguments + [GraphQLName] schema aliases)
 Backend/GraphQL/DataLabMutation.cs
-Backend/GraphQL/SpecStrategyMutation.cs
 Backend/GraphQL/Query.cs
 ```
 
 (Exact list confirmed in Task 12 by `grep -ln 'Ticker\|StartDate\|EndDate'` against `Backend/`.)
+
+**Untouched on the .NET side:**
+- `Backend/Jobs/JobsApi.cs` — forwards JSON raw via `JsonNode.ParseAsync` for all five job-type flows; never deserializes typed DTOs, so renames are invisible to it.
+- `Backend/Models/DTOs/SpecStrategyModels.cs` — spec-strategy is deferred to its own follow-up (see spec).
 
 **Untouched:**
 - `options`, `quantlib_options`, `iv_recorder`, `iv30`, `edge`, `market_monitor`, `tickers`, `sanitize`, `snapshot`, `golden_fixtures`, `portfolio`, `broker` — none of these have a primary `(symbol, from_date, to_date, timespan, multiplier)` shape.
@@ -77,6 +86,41 @@ Backend/GraphQL/Query.cs
   cd Backend.Tests && dotnet test
   dotnet format podman.sln --verify-no-changes
   ```
+
+---
+
+## Task 0: Confirm the contract matrix against the live tree
+
+Before any code change, confirm every `_confirm_` cell in the spec's §"Contract matrix". This is the load-bearing artefact for default preservation.
+
+- [ ] **Step 1: Run the audit greps** for each candidate inheritor:
+
+```bash
+cd PythonDataService/app/routers
+for f in aggregates.py data_quality.py indicators.py indicator_reliability.py volatility.py dataset.py jobs.py engine.py; do
+  echo "=== $f ==="
+  grep -nE "class.*Request|^\s+(ticker|symbol|from_date|to_date|start_date|end_date|timespan|multiplier|session)\s*[:=]" $f
+done
+```
+
+For each model, write down: current symbol field name (`ticker` or `symbol`), current dates (`from_date/to_date` or `start_date/end_date`), current `multiplier` default, current `timespan` default, current `session` default.
+
+- [ ] **Step 2: Update the spec's contract matrix in place** with the confirmed values, replacing every `_confirm_` cell.
+
+- [ ] **Step 3: Commit the matrix update**
+
+```bash
+git add docs/superpowers/specs/2026-05-09-ticker-range-picker-everywhere-design.md
+git commit -m "docs(spec): confirm contract matrix for PR (ii) ticker-request migration
+
+Audit completed against the live tree. Each inheriting router's
+current symbol field, dates, and per-route defaults are now
+recorded in the spec's contract matrix. Subsequent migration
+commits in this PR (Tasks 2-11) override inherited fields where
+the matrix shows a defaults mismatch."
+```
+
+This commit is the authoritative reference for every per-route migration that follows. **Skipping or rushing Task 0 is the single biggest regression risk in this PR.**
 
 ---
 
@@ -183,7 +227,33 @@ podman exec polygon-data-service python -m pytest tests/schemas/test_ticker_requ
 ```
 Expected: FAIL ("ModuleNotFoundError: No module named 'app.schemas.ticker_request'").
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Add `extra="forbid"` and date validator tests to the spec file**
+
+Append to `tests/schemas/test_ticker_request.py`:
+
+```python
+class TestExtraForbidAndValidation:
+    def test_rejects_unknown_field(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            TickerRequest.model_validate({
+                "symbol": "SPY", "from_date": "2025-01-01", "to_date": "2025-01-31",
+                "rogue_field": "value",
+            })
+        assert "rogue_field" in str(exc.value)
+        assert "extra" in str(exc.value).lower()
+
+    def test_rejects_calendar_invalid_date(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            TickerRequest(symbol="SPY", from_date="2025-13-99", to_date="2025-12-31")
+        assert "calendar" in str(exc.value).lower() or "month" in str(exc.value).lower()
+
+    def test_rejects_inverted_range(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            TickerRequest(symbol="SPY", from_date="2025-12-31", to_date="2025-01-01")
+        assert "to_date" in str(exc.value) and "from_date" in str(exc.value)
+```
+
+- [ ] **Step 4: Implement**
 
 ```python
 # PythonDataService/app/schemas/__init__.py
@@ -199,21 +269,28 @@ Every route whose primary input is "bars for symbol X over date range
 ``TickerRequest``. Routes for a *universe* of symbols inherit
 ``MultiTickerRequest``.
 
-Transitional aliases — to be REMOVED in PR (iii)'s final commit:
+`extra="forbid"` is required: Pydantic v2's default `extra="ignore"`
+silently drops unknown fields, which would hide the rename bug after
+PR (iii) removes the transitional aliases.
+
+Transitional aliases — to be REMOVED in PR (iii):
     ticker     → symbol
     tickers    → symbols
     start_date → from_date
     end_date   → to_date
 
 These aliases let PR (ii) ship before PR (iii)'s frontend payload
-renames, so the merge order has tolerance.
+renames, so the merge order has tolerance. Once PR (iii) lands and
+every consumer sends canonical names, the aliases are removed and
+legacy names produce a clear `extra_forbidden` 422.
 """
 
 from __future__ import annotations
 
+from datetime import date as Date
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
@@ -224,7 +301,7 @@ Session = Literal["rth", "extended"]
 class _BarRange(BaseModel):
     """Common shape for any request that pulls bars over a date range."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     from_date: str = Field(
         ...,
@@ -239,6 +316,22 @@ class _BarRange(BaseModel):
     timespan: Timespan = "minute"
     multiplier: int = Field(1, ge=1)
     session: Session = "rth"
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> "_BarRange":
+        # Pattern only checks shape; "2025-13-99" passes the regex.
+        # Parse with date.fromisoformat to verify calendar validity,
+        # then confirm from_date <= to_date.
+        try:
+            f = Date.fromisoformat(self.from_date)
+            t = Date.fromisoformat(self.to_date)
+        except ValueError as e:
+            raise ValueError(f"invalid calendar date: {e}") from e
+        if t < f:
+            raise ValueError(
+                f"to_date ({self.to_date}) must be >= from_date ({self.from_date})"
+            )
+        return self
 
 
 class TickerRequest(_BarRange):
@@ -402,46 +495,11 @@ transitional alias; removed in PR (iii)'s final commit."
 
 ---
 
-## Task 3: Migrate `chart.py` — `ChartDataRequest` and `AllowedTimeframesRequest`
+## Task 3: ~~Migrate chart.py~~ — REMOVED
 
-Both models in `chart.py` (lines 33 and 53 today) take `ticker`, `from_date`, `to_date`. Both inherit `TickerRequest`.
+`chart.py` uses a single `timeframe: str` (`"1m"|"5m"|...|"1D"`), not `timespan + multiplier`. Forcing it into `TickerRequest` would lose information. Stays on its current schema. See spec §"Routes that explicitly do NOT inherit".
 
-**Files:** `PythonDataService/app/routers/chart.py` + corresponding test file.
-
-Pattern: same as Task 2.
-
-- [ ] **Step 1: Add new-name and legacy-alias tests** for both `/api/chart/data` and `/api/chart/allowed-timeframes`. The diff is identical to Task 2 step 1 but with the chart endpoint paths.
-- [ ] **Step 2: Verify failure** on the new-name tests.
-- [ ] **Step 3: Replace base classes**
-
-```python
-# Before
-class ChartDataRequest(BaseModel):
-    ticker: str = Field(...)
-    from_date: str = Field(...)
-    to_date: str = Field(...)
-    # ...route-specific fields
-
-class AllowedTimeframesRequest(BaseModel):
-    ticker: str = Field(...)
-    from_date: str = Field(...)
-    to_date: str = Field(...)
-
-# After
-from app.schemas.ticker_request import TickerRequest
-
-class ChartDataRequest(TickerRequest):
-    # ...route-specific fields stay
-    ...
-
-class AllowedTimeframesRequest(TickerRequest):
-    pass
-```
-
-Update `request.ticker` → `request.symbol` everywhere in the route handlers.
-
-- [ ] **Step 4: Run + verify both tests pass.**
-- [ ] **Step 5: Commit** as `refactor(chart): inherit TickerRequest base in ChartDataRequest + AllowedTimeframesRequest`.
+**Skip to Task 4.**
 
 ---
 
@@ -537,8 +595,16 @@ class FeatureResearchJobRequest(_CamelCaseTickerRequest):
     job_id: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
     force: bool = False
+    # NOTE: pre-migration default for `multiplier` is 1, which matches the
+    # base. No override needed.
 
 class SignalEngineJobRequest(_CamelCaseTickerRequest):
+    # CRITICAL: SignalEngineJobRequest's pre-migration default is multiplier=15
+    # (jobs.py:162). The base inherits multiplier=1. Override to preserve the
+    # 15-minute bar default — without this override, signal-runner silently
+    # switches to 1-minute bars after migration.
+    multiplier: int = Field(15, ge=1)
+
     job_id: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
     flip_sign: bool = True
@@ -546,9 +612,37 @@ class SignalEngineJobRequest(_CamelCaseTickerRequest):
     force: bool = False
 ```
 
+Apply the same default-preservation pattern to `RuleBasedBacktestJobRequest` (pre-migration default `multiplier=15`):
+
+```python
+class RuleBasedBacktestJobRequest(_CamelCaseTickerRequest):
+    multiplier: int = Field(15, ge=1)   # preserve pre-migration default
+    job_id: str = Field(..., min_length=1)
+    parameters: dict = Field(default_factory=dict)
+```
+
 Add `_CamelCaseMultiTickerRequest` helper analogous to `_CamelCaseTickerRequest`.
 
 Update every `request.ticker` / `request.tickers` in the route handlers.
+
+**Add an explicit default-preservation test** to `tests/routers/test_jobs.py`:
+
+```python
+def test_signal_engine_job_request_defaults_to_multiplier_15() -> None:
+    """Regression test for the post-migration default — must stay 15."""
+    r = SignalEngineJobRequest(
+        job_id="test", ticker="SPY", feature_name="rsi",
+        from_date="2025-01-01", to_date="2025-01-31",
+    )
+    assert r.multiplier == 15  # NOT 1 (the base default)
+
+def test_rule_based_backtest_job_request_defaults_to_multiplier_15() -> None:
+    r = RuleBasedBacktestJobRequest(
+        job_id="test", ticker="SPY",
+        from_date="2025-01-01", to_date="2025-01-31",
+    )
+    assert r.multiplier == 15
+```
 
 - [ ] **Step 4: Run + verify all 8 tests (4 new + 4 legacy) pass.**
 - [ ] **Step 5: Commit** as `refactor(jobs): inherit TickerRequest / MultiTickerRequest in 4 job models`.
@@ -608,43 +702,11 @@ Update every `request.start_date` / `request.end_date` in the route handler to `
 
 ---
 
-## Task 11: Migrate `spec_strategy.py` — alias prep only
+## Task 11: ~~Migrate spec_strategy.py~~ — REMOVED
 
-`SpecBacktestRequest` (line 53 today) has `symbol` *inside* the spec body. PR (iii) lifts it to top level. **PR (ii) only adds the alias plumbing** so PR (iii)'s migration doesn't break in-flight requests.
+`SpecBacktestRequest` carries `StrategySpec.symbols: list[str]` (plural) inside the domain spec. Lifting `symbol` (singular) out is a domain-shape change, not a UI consolidation. Tracked in spec §"Out of scope" as own design.
 
-- [ ] **Step 1: Add a test** that posts a body with a top-level `symbol` field alongside the spec — expect the model to accept the new top-level field as a legacy-alias-shaped extra.
-
-```python
-@pytest.mark.asyncio
-async def test_spec_strategy_accepts_top_level_symbol(...):
-    # PR (iii) will lift the symbol out of the spec; this test pre-paves
-    # the alias so the field is recognized when PR (iii)'s frontend ships
-    # before this router knows symbol is top-level.
-    ...
-```
-
-- [ ] **Step 2: Verify failure.**
-- [ ] **Step 3: Add the alias to the request model**:
-
-```python
-# spec_strategy.py
-class SpecBacktestRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
-
-    spec: dict[str, Any] = Field(...)
-    # NEW — pre-pave the lift for PR (iii). Optional during PR (ii); becomes
-    # required + canonical in PR (iii).
-    symbol: str | None = Field(
-        None,
-        validation_alias=AliasChoices("symbol", "ticker"),
-    )
-    # ...other fields
-```
-
-The route handler reads `request.symbol or request.spec.get("symbol")` during the transition.
-
-- [ ] **Step 4: Run + verify the test passes.**
-- [ ] **Step 5: Commit** as `refactor(spec-strategy): add transitional top-level symbol alias for PR (iii) lift`.
+**Skip to Task 12.**
 
 ---
 
@@ -667,13 +729,21 @@ Backend/GraphQL/Query.cs
 Backend/Services/* (any forwarders constructing DTOs)
 ```
 
-- [ ] **Step 1: Confirm the file list and find every renaming target**
+**Approach (REVISED post-review):** Canonical-only renames. **No `[JsonPropertyName]` transitional aliases** because:
+
+1. `[JsonPropertyName]` is `AllowMultiple = false` — the original "two attributes on one property" example doesn't compile.
+2. `Backend/Jobs/JobsApi.cs:88-121` parses bodies as `JsonNode`/`JsonObject` and forwards raw via `bodyObj.ToJsonString()` — five job-type flows never deserialize typed DTOs, so DTO aliases on those paths would be inert.
+3. `Backend/Models/DTOs/SpecStrategyModels.cs` is **untouched** here (spec-strategy is deferred to its own design — see spec).
+
+For GraphQL resolvers, use Hot Chocolate's `[GraphQLName]` to keep a one-PR-cycle schema-side alias on resolver arguments where a stale frontend GraphQL query might otherwise 400.
+
+- [ ] **Step 1: Confirm the file list**
 
 ```bash
-grep -rln "Ticker\|StartDate\|EndDate" Backend/ --include="*.cs"
+grep -rln "Ticker\|StartDate\|EndDate" Backend/ --include="*.cs" | grep -v "/SpecStrategy"
 ```
 
-For each match, decide: is this field one of `Ticker`, `StartDate`, or `EndDate` on a DTO that crosses to/from the Python service? If yes, it renames. If it's a local/internal field, leave it.
+For each match, decide: is this field one of `Ticker`, `StartDate`, or `EndDate` on a DTO that genuinely deserializes a body OR a GraphQL resolver argument? If yes, it renames. If it's local/internal, leave it. **Skip `SpecStrategyModels.cs` and `SpecStrategyMutation.cs`** (deferred).
 
 - [ ] **Step 2: Write a focused .NET test**
 
@@ -698,14 +768,14 @@ public class TickerRequestSerializationTests
     }
 
     [Fact]
-    public void LegacyFieldNamesDeserializeViaAlias()
+    public void LegacyFieldNamesAreNotAcceptedAtDtoLayer()
     {
+        // Compatibility lives in Python (Pydantic AliasChoices). The .NET
+        // DTO does NOT accept legacy names — Symbol stays default/null.
         var json = """{"ticker":"SPY","start_date":"2025-04-01","end_date":"2025-04-30"}""";
         var opts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
         var dto = JsonSerializer.Deserialize<FeatureResearchRequest>(json, opts);
-        Assert.NotNull(dto);
-        Assert.Equal("SPY", dto!.Symbol);
-        Assert.Equal("2025-04-01", dto.FromDate);
+        Assert.True(string.IsNullOrEmpty(dto?.Symbol));
     }
 
     [Fact]
@@ -722,65 +792,82 @@ public class TickerRequestSerializationTests
 }
 ```
 
-(`FeatureResearchRequest` is illustrative — the actual DTO names live in `Backend/Models/DTOs/ResearchModels.cs`. Use the actual names.)
+(`FeatureResearchRequest` is illustrative — actual DTO names live in `Backend/Models/DTOs/ResearchModels.cs`. Use the actual names.)
 
-- [ ] **Step 3: Run + verify failure.**
+- [ ] **Step 3: Run + verify failure**
 
 ```bash
 cd Backend.Tests && dotnet test --filter "TickerRequestSerializationTests"
 ```
-Expected: FAIL on the new-name test (DTO still has `Ticker` property).
+Expected: FAIL on `NewFieldNamesDeserialize` (DTO still has `Ticker`).
 
-- [ ] **Step 4: Rename DTO properties + add transitional aliases**
+- [ ] **Step 4: Canonical-only DTO renames**
 
-For each DTO field renamed, the pattern is:
+For each DTO property:
 
 ```csharp
 // Before
 public required string Ticker { get; init; }
+public required string StartDate { get; init; }
+public required string EndDate { get; init; }
 
-// After — transitional dual-name acceptance via JsonInclude on a
-// secondary deserialization-only setter:
-[JsonPropertyName("symbol")]
+// After — canonical only, no aliases
 public required string Symbol { get; init; }
-
-// Transitional alias — accepts payloads still using "ticker".
-// Removed in PR (iii)'s final commit.
-[JsonInclude]
-[JsonPropertyName("ticker")]
-private string LegacyTicker { init { Symbol = value; } }
+public required string FromDate { get; init; }
+public required string ToDate { get; init; }
 ```
 
-Apply analogous treatment to `StartDate → FromDate` and `EndDate → ToDate`.
+For each consumer of the renamed property (search `\.Ticker\b`, `\.StartDate\b`, `\.EndDate\b` across `Backend/` excluding `SpecStrategy*`), update to the new name. The compiler is your friend — break it on rename, fix every callsite.
 
-For each consumer of the renamed property (search `\.Ticker\b`, `\.StartDate\b`, `\.EndDate\b` across `Backend/`), update to the new name. The compiler is your friend here — break it on rename, fix every callsite.
+- [ ] **Step 5: Add `[GraphQLName]` schema aliases for resolver arguments**
 
-- [ ] **Step 5: Run + verify all tests pass**
+For each Hot Chocolate resolver method whose argument was named `ticker`, `startDate`, or `endDate`, pin the legacy GraphQL field name:
+
+```csharp
+// Before
+public Task<ResearchResult> RunResearch(string ticker, string startDate, string endDate, ...);
+
+// After — argument renamed; legacy GraphQL schema field name pinned for one PR cycle
+public Task<ResearchResult> RunResearch(
+    [GraphQLName("ticker")] string symbol,
+    [GraphQLName("startDate")] string fromDate,
+    [GraphQLName("endDate")] string toDate,
+    ...);
+```
+
+This keeps in-flight frontend GraphQL queries from breaking during the PR (ii)→(iii) window. PR (iii)'s alias-cleanup commit removes the `[GraphQLName]` overrides so the canonical names become authoritative.
+
+- [ ] **Step 6: Run + verify all tests pass**
 
 ```bash
 cd Backend.Tests && dotnet test
 ```
-Expected: ALL PASS, including pre-existing tests (any `Ticker` / `StartDate` consumer must have been updated to compile).
+Expected: ALL PASS (any `Ticker` / `StartDate` consumer must have been updated to compile).
 
 ```bash
 dotnet format podman.sln --verify-no-changes
 ```
 Expected: clean.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add Backend/ Backend.Tests/
-git commit -m "refactor(backend): rename Ticker→Symbol, StartDate/EndDate→FromDate/ToDate
+git commit -m "refactor(backend): canonical-only Ticker→Symbol, StartDate/EndDate→FromDate/ToDate
 
-DTOs and resolvers across the .NET layer are renamed in lockstep with
-the Python TickerRequest schema base. Transitional [JsonPropertyName]
-aliases on private setters accept legacy field names ('ticker',
-'start_date', 'end_date') during the PR (ii)→(iii) merge window;
-those aliases are removed in PR (iii)'s final commit.
+.NET DTOs at the GraphQL-resolver paths get canonical-only renames in
+lockstep with the Python TickerRequest schema. NO transitional
+[JsonPropertyName] aliases — JsonPropertyName is AllowMultiple=false
+and JobsApi.cs forwards JSON raw for all five job flows without
+deserializing typed DTOs anyway.
 
-Compiler-driven update — every consumer of the renamed properties is
-fixed."
+Compatibility during the PR (ii)→(iii) window lives in Python
+(Pydantic AliasChoices). For GraphQL resolver arguments, [GraphQLName]
+pins the legacy schema field name for one PR cycle so in-flight
+queries don't break.
+
+SpecStrategyModels.cs is intentionally untouched (spec-strategy
+deferred to its own design)."
 ```
 
 ---

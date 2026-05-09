@@ -4,6 +4,8 @@
 
 **Goal:** Land additive changes on `<app-ticker-range-picker>` (multiplier, hideSampling, opt-in `availableMultipliers`), build two new sibling components (`<app-multi-ticker-range-picker>` and `<app-ticker-date-picker>`), and create the wire-format adapter (`utils/ticker-wire.ts`). No existing consumer changes — `data-lab` and `lean-engine` must remain byte-identical.
 
+**Scope guardrail (post-review):** PR (i) **does not modernize the existing picker's legacy patterns** (`@HostListener`, `FormsModule`, `ngModel` — currently at `ticker-range-picker.component.ts:8,17,98,308`). Those are moved as-is into the new sub-components; they remain a known violation of `.claude/rules/angular.md` tracked in the spec's §"Out of scope". Modernizing them is unrelated to this initiative's goal and would balloon scope. The `hideResolution` input is **kept as a deprecated alias** for one PR cycle (removed in PR (iii)).
+
 **Architecture:** Refactor the canonical picker's three semantic cards (Instrument / Time window / Sampling) into shared sub-components in `shared/ticker-range-picker/parts/`. The new sibling components reuse the appropriate sub-components. The wire adapter is a pure-function module that translates picker payloads to the snake_case JSON shape the Python service will expect (in PR ii).
 
 **Tech Stack:** Angular 21 (standalone components, OnPush, signals, `model()`), PrimeNG (`p-select`, `p-datepicker`, `p-button`), Vitest + Angular Testing Library, ESLint, TypeScript strict mode.
@@ -56,10 +58,11 @@ Frontend/src/app/shared/ticker-range-picker/ticker-range-picker.types.ts
   - add `multiplier?: number` to TickerRange
 
 Frontend/src/app/shared/ticker-range-picker/ticker-range-picker.component.ts
-  - rename `hideResolution` input → `hideSampling`
+  - ADD `hideSampling` input alongside the existing `hideResolution` (kept as deprecated alias)
   - add `availableMultipliers` input
-  - add `setMultiplier()` setter
   - reduce inline template logic by composing the three new parts/* sub-components
+  - DO NOT touch the existing @HostListener / FormsModule / ngModel — those move into
+    parts/instrument-card.component.ts as-is and remain known violations tracked in the spec
 
 Frontend/src/app/shared/ticker-range-picker/ticker-range-picker.component.html
   - replace inline Instrument / Time window / Sampling sections with
@@ -68,7 +71,7 @@ Frontend/src/app/shared/ticker-range-picker/ticker-range-picker.component.html
 Frontend/src/app/shared/ticker-range-picker/ticker-range-picker.component.spec.ts
   - add: availableMultipliers renders dropdown
   - add: hideSampling collapses Sampling card
-  - rename existing hideResolution tests to hideSampling
+  - add: hideResolution=true ALSO collapses Sampling card (deprecated-alias test)
 ```
 
 **Untouched:**
@@ -661,7 +664,9 @@ Expected: FAIL on the two new tests (input not declared). The renamed `hideSampl
 - [ ] **Step 3: Update component TS**
 
 In `ticker-range-picker.component.ts`:
-- Replace `readonly hideResolution = input(false);` with `readonly hideSampling = input(false);`
+- Keep `readonly hideResolution = input(false);` AS-IS (deprecated alias for one PR cycle).
+- Add `readonly hideSampling = input(false);`
+- Add a computed that ORs both: `protected readonly samplingHidden = computed(() => this.hideResolution() || this.hideSampling());`
 - Add `readonly availableMultipliers = input<readonly number[]>([]);`
 - Delete the moved-out state and methods: `open`, `query`, `selectedTicker`, `selectedTickerCachePct`, `selectedTickerLast`, `selectedExchange`, `selectedExchangeTooltip`, `filteredTickers`, `recentTickers`, `presets`, `effectiveSession`, all the `pickTicker`/`updateFrom`/`updateTo`/`setResolution`/`setSession`/`applyPreset`/`setAutoFetch` setters, the `EXCHANGE_NAMES` constant, the `searchInput`/`rootEl` viewChilds, and the dropdown `effect()`. Keep: `value` model, `tickerPool`/`recent`/`availability`/`availableResolutions`/`showAutoFetch`/`hideSampling`/`title`/`legendTreatment`/`sessionMode`/`availableMultipliers` inputs, `summary` / `dominant` / `advisories` / `spanDays` / `spanBusinessDays` computeds (those derive from inputs, not from ticker-box state), and `onAdvisoryAction` (the picker still owns advisory orchestration).
 - Remove `Tooltip`, `viewChild`, `ElementRef`, `HostListener`, `DestroyRef` from imports if no longer used.
@@ -693,7 +698,7 @@ Replace the three inline `<section>` blocks in `ticker-range-picker.component.ht
   </div>
 
   <div class="picker-v2__groups"
-       [class.picker-v2__groups--no-sampling]="hideSampling()">
+       [class.picker-v2__groups--no-sampling]="samplingHidden()">
 
     <app-instrument-card
       [(value)]="value"
@@ -704,7 +709,7 @@ Replace the three inline `<section>` blocks in `ticker-range-picker.component.ht
       [(value)]="value"
       [availability]="availability()" />
 
-    @if (!hideSampling()) {
+    @if (!samplingHidden()) {
       <app-sampling-card
         [(value)]="value"
         [availableResolutions]="availableResolutions()"
