@@ -116,18 +116,24 @@ def write_poisoned_flag(run_dir: Path, reason: PoisonedHaltReason) -> Path:
     Returns the path written. Refuses to overwrite an existing flag
     — a second halt on the same already-halted run shouldn't be able
     to silently rewrite the original cause; the first halt wins.
+
+    Uses ``open(..., 'x')`` for atomic exclusive create — the
+    earlier ``exists() + write_text()`` pattern was a TOCTOU race
+    where two near-simultaneous halt callers could both pass the
+    ``exists()`` check and the second's write would clobber the
+    first. (CodeRabbit P1 from #188.)
     """
+    run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / POISONED_FLAG_FILENAME
-    if path.exists():
+    payload = json.dumps(reason.to_json_dict(), indent=2, sort_keys=True)
+    try:
+        with path.open("x", encoding="utf-8") as fh:
+            fh.write(payload)
+    except FileExistsError as exc:
         raise FileExistsError(
             f"poisoned.flag already exists at {path}; refusing to overwrite "
             f"(the first halt's reason takes precedence)"
-        )
-    run_dir.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(reason.to_json_dict(), indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+        ) from exc
     return path
 
 
