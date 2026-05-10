@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from collections.abc import Callable, Iterable
 from datetime import date as Date
@@ -26,6 +27,7 @@ from app.research.ml.artifact import (
     compute_rows_hash,
     write_chunk_rows,
 )
+from app.research.ml.coverage import iter_consolidated_bars
 from app.research.ml.generators.deterministic_rule import (
     RULE_ID as RSI_RULE_ID,
 )
@@ -130,14 +132,41 @@ def generate_prediction_set(
 # ---------------------------------------------------------------------------
 
 
-def _default_lean_bars_provider(*, symbol: str, start: Date, end: Date, resolution_minutes: int) -> Iterable[tuple[float, int]]:
-    """Adapter from the LEAN minute reader's stream to (close, ts_ms) pairs.
+def _default_lean_bars_provider(
+    *, symbol: str, start: Date, end: Date, resolution_minutes: int
+) -> Iterable[tuple[float, int]]:
+    """Yield ``(close, timestamp_ms)`` for each bar the engine will see.
 
-    Wired in Task 17.
+    Constructs a ``LeanMinuteDataReader`` from ``LEAN_DATA_ROOT`` /
+    ``LEAN_DATA_CACHE`` (mirroring ``app/routers/spec_strategy.py``'s
+    default factory) and drives the same ``TradeBarConsolidator``
+    configuration the engine uses internally via
+    :func:`app.research.ml.coverage.iter_consolidated_bars`. This makes
+    the artifact's bar clock identical to the engine's at run time.
     """
-    raise NotImplementedError(
-        "default LEAN bars_provider is wired in Task 17; tests inject a synthetic provider"
-    )
+    # Imported lazily so the module stays importable without LEAN configured
+    # (tests inject a synthetic provider via ``bars_provider=...``).
+    from app.engine.data.lean_format import LeanMinuteDataReader
+
+    roots: list[Path] = []
+    for env_var in ("LEAN_DATA_ROOT", "LEAN_DATA_CACHE"):
+        val = os.environ.get(env_var)
+        if val:
+            roots.append(Path(val))
+    if not roots:
+        raise RuntimeError(
+            "No LEAN data roots configured (set LEAN_DATA_ROOT or LEAN_DATA_CACHE)"
+        )
+    reader = LeanMinuteDataReader(roots)
+
+    for bar in iter_consolidated_bars(
+        reader,
+        symbol=symbol,
+        start_date=start,
+        end_date=end,
+        resolution_minutes=resolution_minutes,
+    ):
+        yield float(bar.close), int(bar.end_time.timestamp() * 1000)
 
 
 def main(argv: list[str] | None = None) -> int:

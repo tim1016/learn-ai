@@ -10,6 +10,8 @@ import json
 from datetime import date as Date
 from pathlib import Path
 
+import pytest
+
 from app.research.ml.generators.deterministic_rule import compute_rsi_14_centered_predictions
 
 
@@ -132,3 +134,28 @@ def test_generate_is_byte_identical_on_repeat(tmp_path: Path) -> None:
     a_manifest = json.loads((out_a / set_id_a / "manifest.json").read_text())
     b_manifest = json.loads((out_b / set_id_b / "manifest.json").read_text())
     assert a_manifest["prediction_set_hash"] == b_manifest["prediction_set_hash"]
+
+
+# ----- LEAN-backed CLI smoke ----------------------------------------
+import os  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+
+
+@pytest.mark.slow
+def test_cli_generates_real_artifact_for_one_day(tmp_path: Path) -> None:
+    """Smoke test: run the CLI against the real LEAN reader for one trading day."""
+    cmd = [
+        sys.executable, "-m", "app.research.ml.generate_prediction_set",
+        "--rule", "rsi_14_centered",
+        "--symbol", "SPY",
+        "--start", "2024-05-01",
+        "--end", "2024-05-02",
+        "--resolution-minutes", "15",
+        "--artifacts-root", str(tmp_path),
+    ]
+    env = os.environ.copy()
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
+    assert result.returncode == 0, result.stderr
+    set_id = result.stdout.strip()
+    assert (tmp_path / set_id / "manifest.json").is_file()
