@@ -28,7 +28,7 @@ import httpx
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from app.engine.data.availability import (
     AvailabilityReport,
@@ -1163,6 +1163,27 @@ def _resolve_lean_data_roots() -> list[Path]:
 # Schemas
 # ---------------------------------------------------------------------------
 class EngineBacktestRequest(BaseModel):
+    """Backtest request for the in-process LEAN-compatible engine.
+
+    Does NOT inherit ``TickerRequest`` because:
+      - Dates are *optional* overrides (``None`` lets the strategy use
+        its own defaults), not required.
+      - The engine uses ``resolution: Literal["minute", "daily"]``
+        instead of the base's ``timespan: Literal["minute","hour","day"]``
+        (no "hour", and the field name differs).
+      - Symbol is strategy-owned (set by the strategy's Initialize-equivalent),
+        not a top-level form field.
+      - No ``multiplier`` / ``session`` concepts at this layer.
+
+    What does change in this PR: ``start_date`` / ``end_date`` are
+    renamed to ``from_date`` / ``to_date`` to align with the canonical
+    naming. The legacy names continue to be accepted via Pydantic
+    ``AliasChoices`` during the PR (ii) → (iii) transition window;
+    they're removed in PR (iii).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
     strategy_name: str = Field(..., description="Registered strategy identifier")
     fill_mode: str = Field(
         "signal_bar_close",
@@ -1210,8 +1231,16 @@ class EngineBacktestRequest(BaseModel):
     )
     # Optional overrides — when omitted, the strategy's own defaults (set in
     # its Initialize equivalent) are used.
-    start_date: str | None = Field(None, description="YYYY-MM-DD override")
-    end_date: str | None = Field(None, description="YYYY-MM-DD override")
+    from_date: str | None = Field(
+        None,
+        description="YYYY-MM-DD override (legacy: start_date)",
+        validation_alias=AliasChoices("from_date", "start_date"),
+    )
+    to_date: str | None = Field(
+        None,
+        description="YYYY-MM-DD override (legacy: end_date)",
+        validation_alias=AliasChoices("to_date", "end_date"),
+    )
     initial_cash: float | None = Field(None, ge=0)
     # Strategy-specific parameters — validated per-strategy against the
     # corresponding ``StrategyParamsBase`` subclass in the registry. Left
@@ -1332,11 +1361,11 @@ def _apply_overrides(strategy: Strategy, req: EngineBacktestRequest) -> None:
     The strategy's ``initialize`` has already run by the time this is
     called, so any override here replaces the value set by the algorithm.
     """
-    if req.start_date:
-        d = datetime.strptime(req.start_date, "%Y-%m-%d")
+    if req.from_date:
+        d = datetime.strptime(req.from_date, "%Y-%m-%d")
         strategy.set_start_date(d.year, d.month, d.day)
-    if req.end_date:
-        d = datetime.strptime(req.end_date, "%Y-%m-%d")
+    if req.to_date:
+        d = datetime.strptime(req.to_date, "%Y-%m-%d")
         strategy.set_end_date(d.year, d.month, d.day)
     if req.initial_cash is not None:
         strategy.set_cash(req.initial_cash)
@@ -1657,8 +1686,8 @@ def execute_engine_backtest(
 
     if request.auto_fetch:
         symbol = getattr(validated_params, "symbol", None)
-        start_override = request.start_date
-        end_override = request.end_date
+        start_override = request.from_date
+        end_override = request.to_date
         if symbol and start_override and end_override:
             on_phase("loading_bars")
             on_log(f"Ensuring {symbol} {request.resolution} bars {start_override} → {end_override}")
@@ -1902,8 +1931,8 @@ def execute_engine_backtest(
     response.study_id = _save_study_sync(
         response=response,
         symbol=strategy.ctx.symbols[0] if strategy.ctx.symbols else "SPY",
-        start_date=request.start_date or "",
-        end_date=request.end_date or "",
+        start_date=request.from_date or "",
+        end_date=request.to_date or "",
         resolution=request.resolution or "minute",
         params_json=json.dumps(request.params) if request.params else "{}",
         duration_ms=int((time.time() - _run_start) * 1000),
