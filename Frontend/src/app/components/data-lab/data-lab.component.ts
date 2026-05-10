@@ -1728,7 +1728,7 @@ export class DataLabComponent {
         this.http.post<QualityReportResponse>(
           `${environment.pythonServiceUrl}/api/data-quality/analyze`,
           {
-            ticker: this.ticker(),
+            symbol: this.ticker(),
             from_date: this.fromDate(),
             to_date: this.toDate(),
             volume_fix: 'round',

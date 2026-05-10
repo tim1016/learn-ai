@@ -141,7 +141,7 @@ export class BacktestJobPageComponent {
     this.result.set(null);
 
     const id = await this.jobs.startJob('backtest', {
-      ticker: this.ticker,
+      symbol: this.ticker,
       fromDate: this.fromDate,
       toDate: this.toDate,
       multiplier: Number(this.multiplier),
