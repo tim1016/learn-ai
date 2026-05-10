@@ -46,7 +46,6 @@ from app.research.ml.artifact import (
     write_chunk_rows,
 )
 
-
 _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _HHMM_RE = re.compile(r"^\d{2}:\d{2}$")
 

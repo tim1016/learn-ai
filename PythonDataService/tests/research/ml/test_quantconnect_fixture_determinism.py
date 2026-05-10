@@ -5,7 +5,6 @@ from pathlib import Path
 
 from app.research.ml.generators.quantconnect_fixture import import_qc_fixture
 
-
 _RECORDS = [
     {"date": "2024-01-02", "prediction_by_symbol": {"SPY": 0.0123, "QQQ": -0.011}},
     {"date": "2024-01-03", "prediction_by_symbol": {"SPY": -0.0045, "QQQ": 0.022}},

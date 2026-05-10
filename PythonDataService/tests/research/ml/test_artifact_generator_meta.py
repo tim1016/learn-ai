@@ -9,7 +9,6 @@ from app.research.ml.artifact import (
     QuantConnectPrecomputedFixtureGenerator,
 )
 
-
 # ----- regression: existing deterministic_rule manifests still load --
 
 
