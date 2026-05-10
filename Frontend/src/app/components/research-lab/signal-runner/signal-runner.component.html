@@ -95,7 +95,7 @@
       <span class="run-hint">
         Ready to run signal engine on
         <strong>{{ selectedFeatureLabel }}</strong> ·
-        <span class="mono">{{ ticker().toUpperCase() }}</span>
+        <span class="mono">{{ range().symbol.toUpperCase() }}</span>
       </span>
       <div class="run-bar-actions">
         <button class="btn-run" [disabled]="!canRun() || loading()" (click)="runSignalEngine()">

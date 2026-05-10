@@ -33,7 +33,7 @@ describe('TickerExplorerComponent', () => {
   });
 
   it('should have default ticker AAPL', () => {
-    expect(component.ticker()).toBe('AAPL');
+    expect(component.snapshot().symbol).toBe('AAPL');
   });
 
   it('should not be loading initially', () => {

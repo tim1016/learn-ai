@@ -77,7 +77,7 @@
     <div class="run-bar">
       <span class="run-hint">
         Ready to analyze <strong>{{ selectedFeatureLabel }}</strong> on
-        <span class="mono">{{ ticker().toUpperCase() }}</span>
+        <span class="mono">{{ range().symbol.toUpperCase() }}</span>
       </span>
       <div class="run-bar-actions">
         <button class="btn-run" [disabled]="!canRun() || loading()" (click)="runResearch()">

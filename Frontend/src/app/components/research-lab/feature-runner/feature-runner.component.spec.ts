@@ -74,7 +74,7 @@ describe('FeatureRunnerComponent', () => {
   });
 
   it('canRun is false when the ticker is empty', () => {
-    component.ticker.set('');
+    component.range.update((r) => ({ ...r, symbol: '' }));
     expect(component.canRun()).toBe(false);
   });
 
@@ -100,21 +100,27 @@ describe('FeatureRunnerComponent', () => {
   });
 
   it('runResearch dispatches the feature_research job via JobsService', async () => {
-    component.ticker.set('aapl'); // verify the upper-casing path
+    component.range.set({
+      symbol: 'aapl', // verify the upper-casing path
+      from: '2024-01-01',
+      to: '2024-03-31',
+      resolution: 'minute',
+      multiplier: 1,
+    });
     // The catalog drives feature selection — pick the indicator + params
     // that map to the legacy feature_name='momentum_5m' worker call.
     component.selectedIndicator.set('mom');
     component.selectedParams.set({ length: 5 });
-    component.fromDate.set('2024-01-01');
-    component.toDate.set('2024-03-31');
 
     await component.runResearch();
 
     expect(jobsServiceMock.startJob).toHaveBeenCalledOnce();
     const [type, payload] = jobsServiceMock.startJob.mock.calls[0];
     expect(type).toBe('feature_research');
+    // Payload uses canonical TickerRequest field names — the wire adapter
+    // emits symbol/from_date/to_date (not ticker/start_date/end_date).
     expect(payload).toMatchObject({
-      ticker: 'AAPL',
+      symbol: 'AAPL',
       feature_name: 'momentum_5m',
       from_date: '2024-01-01',
       to_date: '2024-03-31',
