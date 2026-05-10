@@ -81,7 +81,7 @@ def test_qc_fixture_parity_per_row_predictions_match(tmp_path: Path) -> None:
 
     import pandas as pd
 
-    matched = 0
+    seen_dates: set[str] = set()
     for row in rows:
         ts_ms = row["timestamp_ms"]
         # Reverse the importer's date conversion: ms UTC -> NY date.
@@ -93,17 +93,27 @@ def test_qc_fixture_parity_per_row_predictions_match(tmp_path: Path) -> None:
         assert ny_date in qc_values_by_date, (
             f"importer emitted ts={ts_ms} (NY date {ny_date}) which has no QC source row"
         )
+        # Reject duplicates explicitly: a count-only check would silently
+        # accept a duplicated NY date paired with a missing one.
+        assert ny_date not in seen_dates, (
+            f"importer emitted duplicate NY date {ny_date} (ts={ts_ms})"
+        )
+        seen_dates.add(ny_date)
+
         qc_value = qc_values_by_date[ny_date]
         imported_value = row["prediction"]
         assert math.isclose(imported_value, qc_value, abs_tol=1e-9, rel_tol=0), (
             f"prediction divergence on {ny_date}: imported={imported_value!r}, "
             f"qc={qc_value!r}, |diff|={abs(imported_value - qc_value)!r}"
         )
-        matched += 1
 
-    assert matched == len(qc_values_by_date), (
-        f"importer emitted {matched} rows but QC export has {len(qc_values_by_date)} "
-        f"for symbol {_SYMBOL!r}"
+    # Full-keyset equality: the importer's date set MUST equal QC's date
+    # set for the symbol. Rejects both missing-from-importer and
+    # extra-in-importer cases that count-only equality would mask.
+    assert seen_dates == set(qc_values_by_date), (
+        f"date-set mismatch for symbol {_SYMBOL!r}: "
+        f"missing-from-importer={sorted(set(qc_values_by_date) - seen_dates)[:5]}, "
+        f"extra-in-importer={sorted(seen_dates - set(qc_values_by_date))[:5]}"
     )
 
 

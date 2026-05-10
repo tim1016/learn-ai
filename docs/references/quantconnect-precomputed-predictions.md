@@ -129,7 +129,7 @@ Pull these files out of QC Cloud:
 
 Create the captured-fixture files under the existing fixture skeleton dir:
 
-```
+```text
 PythonDataService/tests/fixtures/golden/qc-precomputed-predictions/
 ├── qc_export.json               ← rename from research-to-backtest-factors.json
 ├── qc_price_history.csv         ← from Step 5
@@ -203,14 +203,14 @@ Create `PythonDataService/tests/research/ml/fixtures/qc_known_hashes.json`:
 }
 ```
 
-#### Step 10. Replace the four `pytest.fail(...)` bodies with real assertions
+#### Step 10. Parity tests — what they assert (already implemented)
 
-The placeholders at `PythonDataService/tests/research/ml/test_quantconnect_fixture_parity.py` and `_runtime.py` currently fail with TODO messages once the fixture exists. Replace each `pytest.fail(...)` with:
+Phase 1 §B + §C landed real assertions in both parity files; this step is a description of what they enforce, not pending work. If you re-capture the fixture in a future cycle, these tests guard the regression surface automatically.
 
-- `test_qc_fixture_parity_per_row_predictions_match` — load `qc_export.json` directly, run the importer, walk the importer's row index, and `assert math.isclose(imported_value, qc_published_value, abs_tol=1e-9, rel_tol=0)` for every row.
-- `test_qc_fixture_prediction_set_hash_pinned` — assert importer's output `prediction_set_hash` equals `qc_known_hashes.json["prediction_set_hash"]`.
-- `test_qc_fixture_strategy_spec_run_ledger_hash_pinned` — run the StrategySpec from Step 8, assert `RunLedger.prediction_set_hash` equals the pinned value.
-- `test_qc_fixture_strategy_spec_result_hash_pinned` — same, for `RunLedger.result_hash`.
+- `test_qc_fixture_parity_per_row_predictions_match` (parity file) — loads `qc_export.json` directly, runs the importer, walks the importer's row index, and asserts `math.isclose(imported_value, qc_published_value, abs_tol=1e-9, rel_tol=0)` for every row. Also asserts the importer's NY-date set equals the QC export's NY-date set (one-to-one coverage; rejects duplicates and missing rows).
+- `test_qc_fixture_prediction_set_hash_pinned` (parity file) — asserts importer's output `prediction_set_hash` equals `qc_known_hashes.json["prediction_set_hash"]`.
+- `test_qc_fixture_strategy_spec_run_ledger_hash_pinned` (runtime file) — runs the StrategySpec, asserts `RunLedger.prediction_set_hash` equals the pinned value.
+- `test_qc_fixture_strategy_spec_result_hash_pinned` (runtime file) — asserts `RunLedger.result_hash` equals the pinned value.
 
 Keep the per-row tolerance at `atol=1e-9, rtol=0` — do not loosen unless you're documenting an explicit reason in this doc (see spec D8).
 

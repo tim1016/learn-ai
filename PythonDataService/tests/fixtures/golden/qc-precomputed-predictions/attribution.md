@@ -1,7 +1,7 @@
 # QC precomputed-predictions fixture — attribution
 
 - **Tutorial URL**: https://www.quantconnect.com/docs/v2/writing-algorithms/importing-data/streaming-data/precomputed-ml-predictions
-- **Captured by**: Tim (QC Cloud account: `inkant awasthi`)
+- **Captured by**: Tim (QC Cloud account on file)
 - **Captured at (UTC ms)**: `1778443824165` (≈ 2026-05-10 17:30 UTC)
 - **Calendar window** (the `START` / `END` passed to `qb.history(...)` in the notebook):
   - Start: 2025-01-02 — 16:00 America/New_York → `1735851600000` ms UTC
