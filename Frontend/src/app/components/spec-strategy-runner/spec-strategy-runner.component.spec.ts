@@ -301,7 +301,7 @@ describe('SpecStrategyRunnerComponent', () => {
     it('sends the picker symbol via spec.symbols and dates from range', async () => {
       // Change symbol via the bridge.
       component.onRangeChange({
-        ...component.range(),
+        ...component.pickerValue(),
         symbol: 'TSLA',
         from: '2025-03-01',
         to: '2025-03-31',
@@ -352,9 +352,9 @@ describe('SpecStrategyRunnerComponent', () => {
       // Pick a date pair distinct from the constructor defaults so we
       // can prove the call site reads from range.
       component.range.set({
-        ...component.range(),
         from: '2025-06-01',
         to: '2025-06-30',
+        resolution: component.range().resolution,
       });
 
       // The component's `issues` computed re-runs on every signal read;
@@ -380,7 +380,8 @@ describe('SpecStrategyRunnerComponent', () => {
       };
       component.onRangeChange(next);
 
-      expect(component.range().symbol).toBe('AAPL');
+      // Picker view reflects the change (computed from spec).
+      expect(component.pickerValue().symbol).toBe('AAPL');
       expect(component.spec().symbols).toEqual(['AAPL']);
     });
 
@@ -388,7 +389,7 @@ describe('SpecStrategyRunnerComponent', () => {
       const symbolsRefBefore = component.spec().symbols;
 
       const next: TickerRange = {
-        ...component.range(),
+        ...component.pickerValue(),
         from: '2025-01-01',
         to: '2025-01-31',
       };
@@ -400,9 +401,35 @@ describe('SpecStrategyRunnerComponent', () => {
       expect(component.spec().symbols).toBe(symbolsRefBefore);
     });
 
-    it('range initializes from spec.symbols[0] on construction', () => {
+    it('pickerValue.symbol initially reflects spec.symbols[0]', () => {
       // Default fixture is spy_ema_crossover (symbols: ["SPY"]).
-      expect(component.range().symbol).toBe('SPY');
+      expect(component.pickerValue().symbol).toBe('SPY');
+    });
+
+    it('pickerValue re-syncs symbol when spec is replaced', () => {
+      // Regression test for the P1 caught on PR #206 review:
+      // initial range/picker showed SPY; spec is replaced with a
+      // different symbol (simulating selectFixture / loadSaved /
+      // applyAdvancedJson); the picker MUST reflect the new symbol
+      // so a subsequent date-only change can't clobber it.
+      expect(component.pickerValue().symbol).toBe('SPY');
+
+      component.spec.set({ ...component.spec(), symbols: ['AAPL'] });
+
+      // pickerValue is a computed signal — recomputes synchronously
+      // when its inputs change. The picker's bound value is now AAPL.
+      expect(component.pickerValue().symbol).toBe('AAPL');
+
+      // A subsequent date-only change must NOT revert spec.symbols to
+      // the previous value. The bridge guard compares incoming symbol
+      // against the live spec.symbols[0], not stale picker state.
+      component.onRangeChange({
+        ...component.pickerValue(),
+        from: '2025-04-01',
+        to: '2025-04-30',
+      });
+      expect(component.spec().symbols).toEqual(['AAPL']);
+      expect(component.pickerValue().symbol).toBe('AAPL');
     });
   });
 });

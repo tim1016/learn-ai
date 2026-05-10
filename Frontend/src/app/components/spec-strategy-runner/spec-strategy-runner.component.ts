@@ -64,7 +64,10 @@ import {
 } from './spec-mutators';
 import { SpecStrategyStore } from './strategy-store.service';
 import { TickerRangePickerComponent } from '../../shared/ticker-range-picker/ticker-range-picker.component';
-import type { TickerRange } from '../../shared/ticker-range-picker/ticker-range-picker.types';
+import type {
+  Resolution,
+  TickerRange,
+} from '../../shared/ticker-range-picker/ticker-range-picker.types';
 import { TICKER_POOL, RECENT_TICKERS } from '../../shared/ticker-catalog';
 
 type LifecycleTab = 'entry' | 'manage' | 'exit';
@@ -140,13 +143,14 @@ export class SpecStrategyRunnerComponent {
   readonly initialCash = signal<number>(100000);
   readonly fillMode = signal<'signal_bar_close' | 'next_bar_open'>('signal_bar_close');
 
-  /** Single source of truth for the picker UI. ``range.symbol`` is a
-   *  projection of ``spec().symbols[0]`` initialized at construction;
-   *  on user change ``onRangeChange`` propagates symbol updates back
-   *  into ``spec.symbols`` (preserving the domain rule that
-   *  ``StrategySpec`` owns its traded symbols). */
-  readonly range = signal<TickerRange>({
-    symbol: this.spec().symbols[0],
+  /** Form-owned picker state: dates + resolution only. Symbol is NOT
+   *  stored here — it's derived from ``spec.symbols[0]`` via the
+   *  ``pickerValue`` computed below. Storing symbol in ``range`` would
+   *  go stale when the spec is replaced (loadSaved / selectFixture /
+   *  applyAdvancedJson), and a subsequent date-only picker change
+   *  would silently clobber the loaded spec's symbol back to the
+   *  stale value. */
+  readonly range = signal<{ from: string; to: string; resolution: Resolution }>({
     from: '2024-03-28',
     to: '2024-12-31',
     resolution: 'minute', // ignored — Sampling card hidden on this consumer
@@ -154,12 +158,32 @@ export class SpecStrategyRunnerComponent {
   readonly tickerPool = TICKER_POOL;
   readonly recentTickers = RECENT_TICKERS;
 
-  /** Two-way bridge for the picker. Picker emits ``valueChange``;
-   *  this handler updates ``range`` (UI source of truth) and, when the
-   *  symbol changed, propagates the update back into ``spec.symbols``
-   *  so the strategy spec remains the canonical home of the symbol. */
+  /** Computed TickerRange the picker binds to. Symbol always reads
+   *  from ``spec.symbols[0]`` (the canonical home); dates and
+   *  resolution come from ``range``. Recomputes whenever the spec is
+   *  replaced, so the picker UI stays in sync with the loaded spec. */
+  readonly pickerValue = computed<TickerRange>(() => ({
+    symbol: this.spec().symbols[0],
+    from: this.range().from,
+    to: this.range().to,
+    resolution: this.range().resolution,
+  }));
+
+  /** Picker emits ``valueChange``; this handler:
+   *   1. Writes the date side back into ``range``.
+   *   2. If the symbol changed, mutates ``spec.symbols`` — preserving
+   *      the domain rule that ``StrategySpec`` owns its traded symbols.
+   *   3. Compares the incoming symbol against the **live** spec value,
+   *      not against any cached/stale picker state, so spec replacement
+   *      followed by a date-only change can't clobber the loaded
+   *      symbol.
+   */
   onRangeChange(next: TickerRange): void {
-    this.range.set(next);
+    this.range.set({
+      from: next.from,
+      to: next.to,
+      resolution: next.resolution,
+    });
     if (next.symbol !== this.spec().symbols[0]) {
       this.spec.update((s) => ({ ...s, symbols: [next.symbol] }));
     }

@@ -362,7 +362,7 @@
       <div class="ssr-run-row">
         <div class="ssr-field ssr-field--date-range">
           <app-ticker-range-picker
-            [value]="range()"
+            [value]="pickerValue()"
             (valueChange)="onRangeChange($event)"
             [tickerPool]="tickerPool"
             [recent]="recentTickers"
