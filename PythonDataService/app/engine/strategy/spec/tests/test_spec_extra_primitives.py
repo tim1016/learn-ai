@@ -306,5 +306,33 @@ def run_all() -> None:
         sys.exit(1)
 
 
+# ----- EvalContext.predictions -----------------------------------------------
+def test_eval_context_predictions_default_empty() -> None:
+    """Existing call sites that don't pass `predictions` keep working."""
+    from app.engine.strategy.spec.primitives import EvalContext
+
+    ctx = EvalContext(
+        indicators={},
+        current_bar_count=0,
+        bar_close_time=None,  # type: ignore[arg-type]
+        bar_close_price=Decimal("100"),
+    )
+    assert ctx.predictions == {}
+
+
+def test_eval_context_predictions_can_be_supplied() -> None:
+    """EvalContext accepts and stores predictions dict."""
+    from app.engine.strategy.spec.primitives import EvalContext
+
+    ctx = EvalContext(
+        indicators={},
+        current_bar_count=0,
+        bar_close_time=None,  # type: ignore[arg-type]
+        bar_close_price=Decimal("100"),
+        predictions={"my_pred": Decimal("0.5")},
+    )
+    assert ctx.predictions["my_pred"] == Decimal("0.5")
+
+
 if __name__ == "__main__":
     run_all()

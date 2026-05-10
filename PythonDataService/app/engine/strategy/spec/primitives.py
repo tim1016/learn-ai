@@ -30,7 +30,7 @@ on every eligible bar.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -64,6 +64,11 @@ class EvalContext:
     # Entry fill price for the currently-open trade (None until the entry
     # order has filled). Used by PnL primitives in survival rules.
     entry_price: Decimal | None = None
+
+    # Per-bar prediction values, keyed by spec PredictionRef.id.
+    # Populated by SpecAlgorithm before evaluate / observe_bar when the
+    # spec declares any predictions; empty for prediction-free specs.
+    predictions: dict[str, Decimal] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
