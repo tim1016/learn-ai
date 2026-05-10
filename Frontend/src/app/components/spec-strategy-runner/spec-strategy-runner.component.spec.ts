@@ -296,6 +296,56 @@ describe('SpecStrategyRunnerComponent', () => {
     ]);
   });
 
+  // ---- runBacktest payload reflects bridge ----------------------------
+  describe('runBacktest payload reflects symbol bridge', () => {
+    it('sends the picker symbol via spec.symbols and dates from range', async () => {
+      // Change symbol via the bridge.
+      component.onRangeChange({
+        ...component.range(),
+        symbol: 'TSLA',
+        from: '2025-03-01',
+        to: '2025-03-31',
+      });
+
+      // Fire the run; the service issues a single GraphQL mutation.
+      const promise = component.runBacktest();
+
+      const op = controller.expectOne(RUN_SPEC_STRATEGY_BACKTEST);
+      const vars = op.operation.variables;
+
+      // Dates flow from range.
+      expect(vars['startDate']).toBe('2025-03-01');
+      expect(vars['endDate']).toBe('2025-03-31');
+
+      // Symbol flows through spec.symbols (the bridge already updated it
+      // in onRangeChange, so the JSON-encoded specJson contains TSLA).
+      const spec = JSON.parse(vars['specJson'] as string);
+      expect(spec.symbols).toEqual(['TSLA']);
+
+      // Resolve the mutation so afterEach()'s controller.verify() passes.
+      op.flush({
+        data: {
+          runSpecStrategyBacktest: {
+            success: true,
+            strategyName: spec.name,
+            initialCash: 100000,
+            finalEquity: 100000,
+            netProfit: 0,
+            totalFees: 0,
+            totalTrades: 0,
+            winningTrades: 0,
+            losingTrades: 0,
+            winRate: 0,
+            trades: [],
+            logLines: [],
+            error: null,
+          },
+        },
+      });
+      await promise;
+    });
+  });
+
   // ---- Range dates flow into validation -------------------------------
   describe('range dates flow into validation', () => {
     it('validateStrategy receives range().from/to as start/end', () => {

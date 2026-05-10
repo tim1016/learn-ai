@@ -677,8 +677,8 @@ export class SpecStrategyRunnerComponent {
     this.localError.set(null);
     try {
       await this.specService.runBacktest(this.spec(), {
-        startDate: this.fromDate(),
-        endDate: this.toDate(),
+        startDate: this.range().from,
+        endDate: this.range().to,
         initialCash: this.initialCash(),
         fillMode: this.fillMode(),
       });
