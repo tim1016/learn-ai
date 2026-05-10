@@ -78,22 +78,11 @@ export class TickerRangePickerComponent {
    *  and only needs the picker for symbol/date/availability/advisories. */
   readonly hideSampling = input(false);
 
-  /** Deprecated alias for ``hideSampling``. Kept for one PR cycle so
-   *  any out-of-tree caller setting ``hideResolution=true`` keeps
-   *  working. Removed in PR (iii)'s Task 10b. */
-  readonly hideResolution = input(false);
-
   readonly title = input('Backtest data');
   readonly legendTreatment = input<LegendTreatment>('tinted-bold');
   readonly sessionMode = input<SessionMode>('preview');
 
   readonly advisoryAction = output<AdvisoryAction>();
-
-  /** Sampling card is hidden when EITHER input is true (deprecation
-   *  bridge — drops to plain ``hideSampling()`` in PR (iii)). */
-  protected readonly samplingHidden = computed(
-    () => this.hideSampling() || this.hideResolution(),
-  );
 
   // Advisories are computed at this layer — they read the union of
   // (range state, availability summary), neither of which is owned by
