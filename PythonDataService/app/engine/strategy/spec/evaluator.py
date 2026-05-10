@@ -57,6 +57,7 @@ from app.engine.strategy.spec.primitives import (
     EvalContext,
     Primitive,
 )
+from app.utils.timestamps import to_ms_utc
 
 
 @dataclass
@@ -259,7 +260,7 @@ class SpecAlgorithm(Strategy):
         # PredictionSet is wired (prediction-free specs).
         predictions: dict[str, Decimal] = {}
         if self._prediction_set is not None and self._spec.predictions:
-            ts_ms = int(bar.end_time.timestamp() * 1000)
+            ts_ms = to_ms_utc(bar.end_time)
             row = self._prediction_set.index[ts_ms]  # KeyError == coverage-check bug
             for ref in self._spec.predictions:
                 predictions[ref.id] = Decimal(str(row[ref.field]))

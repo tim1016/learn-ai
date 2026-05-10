@@ -37,6 +37,7 @@ from app.research.ml.generators.deterministic_rule import (
 from app.research.ml.generators.deterministic_rule import (
     compute_rsi_14_centered_predictions,
 )
+from app.utils.timestamps import to_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +167,7 @@ def _default_lean_bars_provider(
         end_date=end,
         resolution_minutes=resolution_minutes,
     ):
-        yield float(bar.close), int(bar.end_time.timestamp() * 1000)
+        yield float(bar.close), to_ms_utc(bar.end_time)
 
 
 def main(argv: list[str] | None = None) -> int:
