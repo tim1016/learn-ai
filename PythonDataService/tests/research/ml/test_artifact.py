@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -7,6 +9,8 @@ from app.research.ml.artifact import (
     ChunkRef,
     PredictionSetManifest,
     is_path_safe_id,
+    read_chunk_rows,
+    write_chunk_rows,
 )
 
 
@@ -148,3 +152,26 @@ def test_prediction_set_hash_changes_when_chunk_rows_hash_changes() -> None:
     base["chunks"][0]["rows_hash"] = "f" * 64
     h2 = compute_prediction_set_hash(base)
     assert h1 != h2
+
+
+# ----- parquet I/O ---------------------------------------------------
+
+
+def test_chunk_round_trip(tmp_path: Path) -> None:
+    rows = [_row(1, 0.1), _row(2, 0.2), _row(3, 0.3)]
+    path = tmp_path / "chunk.parquet"
+    write_chunk_rows(path, rows, field_names=["prediction"])
+    out = read_chunk_rows(path, field_names=["prediction"])
+    assert out == rows
+
+
+def test_chunk_rejects_unknown_field_in_rows(tmp_path: Path) -> None:
+    rows = [{"timestamp_ms": 1, "symbol": "SPY", "prediction": 0.1, "extra": 1.0}]
+    with pytest.raises(ValueError, match="extra column"):
+        write_chunk_rows(tmp_path / "x.parquet", rows, field_names=["prediction"])
+
+
+def test_chunk_rejects_missing_field_in_rows(tmp_path: Path) -> None:
+    rows = [{"timestamp_ms": 1, "symbol": "SPY"}]
+    with pytest.raises(ValueError, match="prediction"):
+        write_chunk_rows(tmp_path / "x.parquet", rows, field_names=["prediction"])

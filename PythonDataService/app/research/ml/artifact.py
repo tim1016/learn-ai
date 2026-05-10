@@ -11,8 +11,12 @@ Wire and storage timestamps are ``int64 ms UTC`` per
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
+from pathlib import Path
 from typing import Literal
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.research.runs.hashing import hash_payload
@@ -131,3 +135,68 @@ def compute_prediction_set_hash(manifest_dict: dict) -> str:
     """
     payload = {k: v for k, v in manifest_dict.items() if k != "prediction_set_hash"}
     return hash_payload(payload)
+
+
+# ---------------------------------------------------------------------
+# Parquet I/O for chunk files.
+# ---------------------------------------------------------------------
+
+
+def _build_schema(field_names: Sequence[str]) -> pa.Schema:
+    base_fields = [
+        pa.field("timestamp_ms", pa.int64(), nullable=False),
+        pa.field("symbol", pa.string(), nullable=False),
+    ]
+    value_fields = [pa.field(name, pa.float64(), nullable=False) for name in field_names]
+    return pa.schema(base_fields + value_fields)
+
+
+def write_chunk_rows(
+    path: Path,
+    rows: list[dict],
+    *,
+    field_names: Sequence[str],
+) -> None:
+    """Serialize chunk rows to parquet.
+
+    Schema is fixed: ``timestamp_ms: int64``, ``symbol: string``, and
+    one ``float64`` column per name in ``field_names``. Extra or missing
+    columns in ``rows`` raise ``ValueError`` — silent column drift would
+    invalidate the row-canonical hash.
+    """
+    expected = {"timestamp_ms", "symbol", *field_names}
+    for row in rows:
+        keys = set(row.keys())
+        extras = keys - expected
+        if extras:
+            raise ValueError(f"extra column(s) in row: {sorted(extras)}")
+        missing = expected - keys
+        if missing:
+            raise ValueError(f"missing column(s) in row: {sorted(missing)}")
+
+    columns: dict[str, list] = {name: [] for name in expected}
+    for row in rows:
+        for name in expected:
+            columns[name].append(row[name])
+
+    table = pa.Table.from_pydict(columns, schema=_build_schema(field_names))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, path)
+
+
+def read_chunk_rows(path: Path, *, field_names: Sequence[str]) -> list[dict]:
+    """Read a chunk parquet file back to a list of row dicts.
+
+    Asserts the schema matches the declared ``field_names`` — any drift
+    is treated as artifact corruption.
+    """
+    table = pq.read_table(path)
+    expected_cols = ["timestamp_ms", "symbol", *field_names]
+    actual_cols = list(table.column_names)
+    if actual_cols != expected_cols:
+        raise ValueError(
+            f"chunk parquet schema mismatch at {path}: "
+            f"expected {expected_cols}, got {actual_cols}"
+        )
+    pylist = table.to_pylist()
+    return pylist
