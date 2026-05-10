@@ -158,11 +158,15 @@ class RunLedger(BaseModel):
     Persisted as ``ledger.json`` in the run's artifact directory.
     Pydantic ``extra='forbid'`` makes schema drift loud rather than
     silent — adding a field is a deliberate ``schema_version`` bump.
+
+    Schema versions:
+      * v1.0: Initial schema.
+      * v1.1: Added optional ``prediction_set_hash`` field for ML prediction set tracking.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     run_id: str
 
     # Lineage — set on child runs (folds, MC simulations, sweep points).
@@ -194,6 +198,7 @@ class RunLedger(BaseModel):
     # Data identity.
     data_source: Literal["lean_minute_reader"] = "lean_minute_reader"
     data_snapshot_id: str
+    prediction_set_hash: str | None = None
 
     # Result identity (filled after the run completes).
     result_hash: str | None = None
