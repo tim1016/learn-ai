@@ -11,7 +11,7 @@
 - §A — schema extension + importer + synthetic-fixture tests: **landed** (PR #211).
 - §B — real QC fixture capture: **landed** (this PR).
 - §C — data parity (per-row tolerance + `prediction_set_hash` pin): **landed** (this PR).
-- §C runtime — `RunLedger.prediction_set_hash` + `result_hash` pin via a backtest run: **pending follow-up PR**.
+- §C runtime — `RunLedger.prediction_set_hash` + `result_hash` pinned via a backtest run on synthetic SPY daily bars: **landed** (this PR).
 
 ## Tolerances
 
@@ -52,8 +52,16 @@ The §A test fixtures use synthetic data crafted to match QC's documented shape.
 - **First emitted prediction**: 2025-01-13 (after 5-day lag warmup + 1 `pct_change` = 6 trading days from 2025-01-02)
 - **Last emitted prediction**: 2025-12-30 (243 rows total)
 - **Pinned `prediction_set_hash`**: `5807a23fe16ce790d807df3697fa9c161c1887fdb603a7b1b89593cfc93f0188` (in `tests/research/ml/fixtures/qc_known_hashes.json`)
-- **Pinned `RunLedger.prediction_set_hash`**: pending §C runtime PR
-- **Pinned `result_hash`**: pending §C runtime PR
+- **Pinned `RunLedger.prediction_set_hash`**: `5807a23fe16ce790d807df3697fa9c161c1887fdb603a7b1b89593cfc93f0188` — equals the manifest hash because the runner threads it through unchanged
+- **Pinned `result_hash`**: `0c92e9f58cf56658a43c53ac1a2ee936c97934e6f29e59f7a083e27a58792d8f` — covers the (artifact, spec, synthetic SPY daily bars, engine config) tuple end-to-end
+
+## §C runtime test setup
+
+Lives at `PythonDataService/tests/research/ml/test_quantconnect_fixture_runtime.py`.
+
+- **Spec**: minimal SPY-daily, no indicators, single `PredictionComparison(prediction="qc_pred", op=">", value=0.0)` entry, 1-bar `BarsSinceEntry` exit. Reduces inputs to `result_hash` to a deterministic function of (imported artifact, synthetic bars, engine defaults).
+- **Synthetic data**: one minute bar per QC prediction date with `time = 09:30 ET` and `end_time = 16:00 ET`, plus a sentinel bar 4 days after the last prediction to flush the last day's consolidated bar. Daily consolidation (`period_minutes = 1440`) emits one bar per prediction date with `end_time` matching QC's anchor convention exactly.
+- **Why synthetic, not real Polygon/LEAN bars**: the parity claim is about *prediction-pipeline determinism*, not about price-action realism. Decoupling from a live data source keeps the test reproducible offline and across CI re-pulls of master.
 
 ## Parity claim (current)
 
