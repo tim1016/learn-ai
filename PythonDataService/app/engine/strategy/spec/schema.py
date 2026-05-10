@@ -427,6 +427,39 @@ class StrategySpec(BaseModel):
             if ref not in declared:
                 raise ValueError(f"condition references undeclared indicator id: {ref!r} (declared: {sorted(declared)})")
 
+        # ---- prediction validators -------------------------------------
+        # Deferred import to avoid a circular import:
+        # schema -> artifact -> runs.hashing -> runs.__init__ -> runs.runner -> spec.__init__ -> schema
+        from app.research.ml.artifact import is_path_safe_id  # deferred: breaks circular import at module level
+
+        pred_ids = [p.id for p in self.predictions]
+        if len(pred_ids) != len(set(pred_ids)):
+            dup = [i for i in pred_ids if pred_ids.count(i) > 1]
+            raise ValueError(f"duplicate prediction ref ids: {sorted(set(dup))}")
+
+        for p in self.predictions:
+            if not is_path_safe_id(p.prediction_set_id):
+                raise ValueError(
+                    f"prediction_set_id {p.prediction_set_id!r} on ref {p.id!r} "
+                    f"must be path-safe (no slashes, no traversal)"
+                )
+
+        distinct_set_ids = {p.prediction_set_id for p in self.predictions}
+        if len(distinct_set_ids) > 1:
+            raise ValueError(
+                f"v0.5 admits at most one prediction_set_id per spec "
+                f"(got {sorted(distinct_set_ids)}). v1.2 lifts this with "
+                f"prediction_set_hashes: dict[str, str]."
+            )
+
+        declared_pred_ids = set(pred_ids)
+        for ref_id in self._iter_prediction_refs():
+            if ref_id not in declared_pred_ids:
+                raise ValueError(
+                    f"condition references undeclared prediction id: {ref_id!r} "
+                    f"(declared: {sorted(declared_pred_ids)})"
+                )
+
         return self
 
     # -- helpers -------------------------------------------------------------
@@ -469,6 +502,27 @@ class StrategySpec(BaseModel):
         for snap_id in self.diagnostics.snapshot_at_exit:
             refs.append(snap_id)
 
+        return refs
+
+    def _iter_prediction_refs(self) -> list[str]:
+        """Walk the logic tree and collect every PredictionComparison.prediction reference."""
+        refs: list[str] = []
+
+        def _walk(node: Condition | LogicNode) -> None:
+            if isinstance(node, LogicNode):
+                for child in node.conditions:
+                    _walk(child)
+                return
+            if isinstance(node, PredictionComparison):
+                refs.append(node.prediction)
+
+        for child in self.entry.conditions:
+            _walk(child)
+        for child in self.exit.conditions:
+            _walk(child)
+        for rule in self.survival:
+            for child in rule.when.conditions:
+                _walk(child)
         return refs
 
 

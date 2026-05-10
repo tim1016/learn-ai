@@ -78,3 +78,50 @@ def test_spec_with_no_predictions_still_loads() -> None:
     raw = _base_spec_dict()
     spec = StrategySpec.model_validate(raw)
     assert spec.predictions == []
+
+
+# ----- validators ----------------------------------------------------
+def test_spec_rejects_undeclared_prediction_id() -> None:
+    raw = _base_spec_dict(
+        predictions=[_pred_ref(id_="declared")],
+        entry_conditions=[_pred_cmp(prediction="undeclared")],
+    )
+    with pytest.raises(ValidationError, match="undeclared prediction id"):
+        StrategySpec.model_validate(raw)
+
+
+def test_spec_rejects_duplicate_prediction_ref_ids() -> None:
+    raw = _base_spec_dict(
+        predictions=[_pred_ref(id_="a"), _pred_ref(id_="a")],
+    )
+    with pytest.raises(ValidationError, match="duplicate prediction ref ids"):
+        StrategySpec.model_validate(raw)
+
+
+def test_spec_rejects_multiple_distinct_prediction_set_ids() -> None:
+    raw = _base_spec_dict(
+        predictions=[
+            _pred_ref(id_="a", set_id="pred_set_one"),
+            _pred_ref(id_="b", set_id="pred_set_two"),
+        ],
+    )
+    with pytest.raises(ValidationError, match="at most one prediction_set_id"):
+        StrategySpec.model_validate(raw)
+
+
+def test_spec_accepts_multiple_refs_to_same_set() -> None:
+    raw = _base_spec_dict(
+        predictions=[
+            {"id": "a", "prediction_set_id": "pred_set_one", "field": "prediction"},
+            {"id": "b", "prediction_set_id": "pred_set_one", "field": "prediction"},
+        ],
+    )
+    StrategySpec.model_validate(raw)
+
+
+def test_spec_rejects_path_unsafe_prediction_set_id() -> None:
+    raw = _base_spec_dict(
+        predictions=[_pred_ref(id_="a", set_id="../evil")],
+    )
+    with pytest.raises(ValidationError, match="path-safe"):
+        StrategySpec.model_validate(raw)
