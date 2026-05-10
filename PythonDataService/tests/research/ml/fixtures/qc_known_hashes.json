@@ -1,0 +1,6 @@
+{
+  "_comment": "Pinned hashes for the QC precomputed-predictions parity fixture. See docs/references/quantconnect-precomputed-predictions.md and tests/fixtures/golden/qc-precomputed-predictions/attribution.md for context. run_ledger_prediction_set_hash equals prediction_set_hash by design — the runner threads the manifest's top-level hash unchanged.",
+  "prediction_set_hash": "5807a23fe16ce790d807df3697fa9c161c1887fdb603a7b1b89593cfc93f0188",
+  "run_ledger_prediction_set_hash": "5807a23fe16ce790d807df3697fa9c161c1887fdb603a7b1b89593cfc93f0188",
+  "result_hash": "0c92e9f58cf56658a43c53ac1a2ee936c97934e6f29e59f7a083e27a58792d8f"
+}
