@@ -15,6 +15,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.research.runs.hashing import hash_payload
+
 # Path-safe pattern: alphanumerics, underscore, hyphen, dot.
 # Disallows leading dot (no hidden files), slashes, traversal.
 _PATH_SAFE = re.compile(r"^[A-Za-z0-9_\-][A-Za-z0-9_\-.]*$")
@@ -99,3 +101,33 @@ class PredictionSetManifest(BaseModel):
                 f"got {self.prediction_set_id!r}"
             )
         return self
+
+
+# ---------------------------------------------------------------------
+# Hash helpers
+# ---------------------------------------------------------------------
+
+
+def compute_rows_hash(rows: list[dict]) -> str:
+    """Return ``hash_payload(rows_sorted_by_timestamp_ms)`` as 64-char hex.
+
+    Each row dict must contain ``timestamp_ms``, ``symbol``, and one or
+    more float fields (e.g. ``prediction``). Floats are serialized via
+    Python's default JSON repr (shortest round-trippable for
+    ``float64``), so identical content produces identical hashes across
+    pyarrow / pandas versions.
+    """
+    sorted_rows = sorted(rows, key=lambda r: r["timestamp_ms"])
+    return hash_payload(sorted_rows)
+
+
+def compute_prediction_set_hash(manifest_dict: dict) -> str:
+    """Return ``hash_payload(manifest_without_prediction_set_hash_field)``.
+
+    The ``prediction_set_hash`` field is dropped from the dict before
+    hashing — it is the value being computed and including it would be a
+    chicken-and-egg loop. Operates on a shallow copy so the caller's dict
+    is unmodified.
+    """
+    payload = {k: v for k, v in manifest_dict.items() if k != "prediction_set_hash"}
+    return hash_payload(payload)

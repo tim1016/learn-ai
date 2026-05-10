@@ -92,3 +92,59 @@ def test_manifest_rejects_path_unsafe_id() -> None:
     bad = _manifest_dict() | {"prediction_set_id": "../evil"}
     with pytest.raises(ValidationError, match="path-safe"):
         PredictionSetManifest.model_validate(bad)
+
+
+# ----- hash helpers --------------------------------------------------
+from app.research.ml.artifact import (  # noqa: E402
+    compute_prediction_set_hash,
+    compute_rows_hash,
+)
+
+
+def _row(ts_ms: int, prediction: float) -> dict:
+    return {"timestamp_ms": ts_ms, "symbol": "SPY", "prediction": prediction}
+
+
+def test_rows_hash_deterministic_for_same_content() -> None:
+    rows_a = [_row(1, 0.1), _row(2, 0.2)]
+    rows_b = [_row(1, 0.1), _row(2, 0.2)]
+    assert compute_rows_hash(rows_a) == compute_rows_hash(rows_b)
+
+
+def test_rows_hash_changes_when_prediction_changes() -> None:
+    a = compute_rows_hash([_row(1, 0.1)])
+    b = compute_rows_hash([_row(1, 0.10000000001)])
+    assert a != b
+
+
+def test_rows_hash_sorts_by_timestamp() -> None:
+    """Order on input does not matter; canonical order does."""
+    sorted_input = [_row(1, 0.1), _row(2, 0.2)]
+    reverse_input = [_row(2, 0.2), _row(1, 0.1)]
+    assert compute_rows_hash(sorted_input) == compute_rows_hash(reverse_input)
+
+
+def test_rows_hash_is_64_char_hex() -> None:
+    h = compute_rows_hash([_row(1, 0.1)])
+    assert len(h) == 64
+    assert all(c in "0123456789abcdef" for c in h)
+
+
+def test_prediction_set_hash_excludes_self_field() -> None:
+    """Setting the prediction_set_hash field to anything must not affect the
+    computed hash — the field is removed from the dict before hashing.
+    """
+    base = _manifest_dict()
+    base["prediction_set_hash"] = "a" * 64
+    h_a = compute_prediction_set_hash(base)
+    base["prediction_set_hash"] = "b" * 64
+    h_b = compute_prediction_set_hash(base)
+    assert h_a == h_b
+
+
+def test_prediction_set_hash_changes_when_chunk_rows_hash_changes() -> None:
+    base = _manifest_dict()
+    h1 = compute_prediction_set_hash(base)
+    base["chunks"][0]["rows_hash"] = "f" * 64
+    h2 = compute_prediction_set_hash(base)
+    assert h1 != h2
