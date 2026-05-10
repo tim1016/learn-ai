@@ -1234,11 +1234,13 @@ class EngineBacktestRequest(BaseModel):
     from_date: str | None = Field(
         None,
         description="YYYY-MM-DD override (legacy: start_date)",
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
         validation_alias=AliasChoices("from_date", "start_date"),
     )
     to_date: str | None = Field(
         None,
         description="YYYY-MM-DD override (legacy: end_date)",
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
         validation_alias=AliasChoices("to_date", "end_date"),
     )
     initial_cash: float | None = Field(None, ge=0)

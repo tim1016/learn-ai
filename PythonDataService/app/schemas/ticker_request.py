@@ -31,15 +31,21 @@ behavior. See e.g. ``SignalEngineJobRequest`` (multiplier=15) or
 from __future__ import annotations
 
 from datetime import date as Date
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     model_validator,
 )
+
+# Per-symbol shape used by both ``TickerRequest.symbol`` and each element of
+# ``MultiTickerRequest.symbols`` so the cross-sectional batch path enforces
+# the same length bounds as the single-symbol path.
+_SymbolStr = Annotated[str, StringConstraints(min_length=1, max_length=20)]
 
 DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
@@ -86,18 +92,22 @@ class _BarRange(BaseModel):
 class TickerRequest(_BarRange):
     """Single-symbol bar request."""
 
-    symbol: str = Field(
+    symbol: _SymbolStr = Field(
         ...,
-        min_length=1,
-        max_length=20,
         validation_alias=AliasChoices("symbol", "ticker"),
     )
 
 
 class MultiTickerRequest(_BarRange):
-    """Universe-of-symbols bar request — used by cross-sectional research."""
+    """Universe-of-symbols bar request — used by cross-sectional research.
 
-    symbols: list[str] = Field(
+    Each element of ``symbols`` is constrained the same way as
+    ``TickerRequest.symbol`` (1-20 chars) so empty strings or oversized
+    tickers in the universe fail at validation rather than slipping
+    through to the runners.
+    """
+
+    symbols: list[_SymbolStr] = Field(
         ...,
         min_length=1,
         validation_alias=AliasChoices("symbols", "tickers"),

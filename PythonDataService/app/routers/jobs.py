@@ -260,7 +260,7 @@ async def start_rule_based_backtest_job(req: RuleBasedBacktestJobRequest) -> dic
     served by the .NET layer at ``/jobs/{id}/events``.
     """
     if not req.symbol.strip():
-        raise HTTPException(status_code=400, detail="ticker is required")
+        raise HTTPException(status_code=400, detail="symbol is required")
 
     def work(emit: ProgressEmitter, cancel) -> dict:
         # ----- Phase 1: load bars from Polygon -----
@@ -469,8 +469,10 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
     the response carries ``status=cached`` and the worker thread is
     skipped. Pass ``force=true`` in the body to bypass the cache.
     """
-    if not req.symbols:
-        raise HTTPException(status_code=400, detail="tickers list is required")
+    # Note: ``req.symbols`` is already validated by Pydantic (min_length=1
+    # on the list, plus per-element ``min_length=1, max_length=20`` from
+    # ``MultiTickerRequest``); an empty list or empty-string element fails
+    # at validation, never reaches here.
     if not req.feature_name.strip():
         raise HTTPException(status_code=400, detail="feature_name is required")
 
@@ -618,7 +620,7 @@ async def start_feature_research_job(req: FeatureResearchJobRequest) -> dict:
     bar resolution) is served from cache. Pass ``force=true`` to bypass.
     """
     if not req.symbol.strip():
-        raise HTTPException(status_code=400, detail="ticker is required")
+        raise HTTPException(status_code=400, detail="symbol is required")
     if not req.feature_name.strip():
         raise HTTPException(status_code=400, detail="feature_name is required")
 
@@ -727,7 +729,7 @@ async def start_signal_engine_job(req: SignalEngineJobRequest) -> dict:
     while the worker is mid-sweep.
     """
     if not req.symbol.strip():
-        raise HTTPException(status_code=400, detail="ticker is required")
+        raise HTTPException(status_code=400, detail="symbol is required")
     if not req.feature_name.strip():
         raise HTTPException(status_code=400, detail="feature_name is required")
 

@@ -178,6 +178,25 @@ class TestMultiTickerRequest:
                 "extra": True,
             })
 
+    def test_rejects_empty_string_symbol_in_list(self) -> None:
+        # Per-element min_length=1 must reject [""] — without the
+        # constraint the empty string would slip through to the runners.
+        with pytest.raises(ValidationError) as exc:
+            MultiTickerRequest(
+                symbols=["SPY", ""],
+                from_date="2025-01-01",
+                to_date="2025-01-31",
+            )
+        assert "symbols" in str(exc.value).lower()
+
+    def test_rejects_oversized_symbol_in_list(self) -> None:
+        with pytest.raises(ValidationError):
+            MultiTickerRequest(
+                symbols=["SPY", "X" * 21],
+                from_date="2025-01-01",
+                to_date="2025-01-31",
+            )
+
 
 class TestInheritance:
     """Smoke test — confirm subclasses can override defaults explicitly
