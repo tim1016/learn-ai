@@ -80,15 +80,14 @@ class _CamelCaseTickerRequest(TickerRequest):
 
     Pydantic quirk: a field-level ``validation_alias`` overrides the
     class's ``alias_generator``, so the base's ``from_date`` /
-    ``to_date`` / ``symbol`` fields (which carry explicit
-    ``AliasChoices`` for legacy snake_case names) won't pick up the
-    camelCase form automatically. We redeclare those three fields here
-    with ``AliasChoices`` that include both snake_case and camelCase
-    variants.
+    ``to_date`` / ``symbol`` fields (no longer aliased after PR (iii)
+    removed the legacy-name shims) won't pick up the camelCase form
+    automatically. We redeclare those three fields here with
+    ``AliasChoices`` covering both the snake_case canonical AND its
+    camelCase wire variant.
 
     ``extra="forbid"`` is preserved from the base — unknown fields
-    surface as ``extra_forbidden`` 422 once the transitional aliases
-    come off in PR (iii).
+    surface as ``extra_forbidden`` 422.
     """
 
     model_config = ConfigDict(
@@ -97,28 +96,24 @@ class _CamelCaseTickerRequest(TickerRequest):
         extra="forbid",
     )
 
-    # Re-declare with AliasChoices covering BOTH the canonical/legacy
-    # snake_case names AND their camelCase wire variants. Without this,
-    # the .NET-forwarded job bodies (camelCase) fail validation.
+    # Re-declare with AliasChoices covering snake_case canonical + the
+    # camelCase wire variant the .NET JobsApi sends. Legacy snake_case
+    # names (start_date / end_date / ticker) are no longer accepted
+    # post-PR (iii).
     from_date: str = Field(
         ...,
         pattern=r"^\d{4}-\d{2}-\d{2}$",
-        validation_alias=AliasChoices(
-            "from_date", "fromDate", "start_date", "startDate"
-        ),
+        validation_alias=AliasChoices("from_date", "fromDate"),
     )
     to_date: str = Field(
         ...,
         pattern=r"^\d{4}-\d{2}-\d{2}$",
-        validation_alias=AliasChoices(
-            "to_date", "toDate", "end_date", "endDate"
-        ),
+        validation_alias=AliasChoices("to_date", "toDate"),
     )
     symbol: str = Field(
         ...,
         min_length=1,
         max_length=20,
-        validation_alias=AliasChoices("symbol", "ticker"),
     )
 
 
@@ -134,21 +129,16 @@ class _CamelCaseMultiTickerRequest(MultiTickerRequest):
     from_date: str = Field(
         ...,
         pattern=r"^\d{4}-\d{2}-\d{2}$",
-        validation_alias=AliasChoices(
-            "from_date", "fromDate", "start_date", "startDate"
-        ),
+        validation_alias=AliasChoices("from_date", "fromDate"),
     )
     to_date: str = Field(
         ...,
         pattern=r"^\d{4}-\d{2}-\d{2}$",
-        validation_alias=AliasChoices(
-            "to_date", "toDate", "end_date", "endDate"
-        ),
+        validation_alias=AliasChoices("to_date", "toDate"),
     )
     symbols: list[str] = Field(
         ...,
         min_length=1,
-        validation_alias=AliasChoices("symbols", "tickers"),
     )
 
 

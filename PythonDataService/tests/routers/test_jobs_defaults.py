@@ -10,6 +10,8 @@ to the base or to the override surfaces explicitly.
 
 from __future__ import annotations
 
+import pytest
+
 from app.routers.jobs import (
     CrossSectionalJobRequest,
     FeatureResearchJobRequest,
@@ -92,11 +94,15 @@ class TestCamelCaseWire:
     camelCase field names on the wire (fromDate, toDate, jobId, etc.)
     in addition to canonical snake_case for in-process construction."""
 
-    def test_camel_case_fromDate_toDate_jobId(self) -> None:
+    def test_camel_case_canonical_names(self) -> None:
+        # Post-PR(iii) — Frontend sends canonical 'symbol' (not 'ticker')
+        # in camelCase wire format. Verifies the .NET-forwarded shape
+        # works after the AliasChoices for legacy snake_case names came
+        # off in PR (iii).
         r = RuleBasedBacktestJobRequest.model_validate(
             {
                 "jobId": "j1",
-                "ticker": "SPY",
+                "symbol": "SPY",
                 "fromDate": "2025-01-01",
                 "toDate": "2025-01-31",
             }
@@ -105,14 +111,45 @@ class TestCamelCaseWire:
         assert r.from_date == "2025-01-01"
         assert r.to_date == "2025-01-31"
 
-    def test_camel_case_tickers_for_multi(self) -> None:
+    def test_camel_case_legacy_ticker_no_longer_accepted(self) -> None:
+        # PR (iii) removed the legacy 'ticker' alias. With extra="forbid",
+        # the unknown field surfaces as a 422.
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc:
+            RuleBasedBacktestJobRequest.model_validate(
+                {
+                    "jobId": "j1",
+                    "ticker": "SPY",  # legacy — no longer accepted
+                    "fromDate": "2025-01-01",
+                    "toDate": "2025-01-31",
+                }
+            )
+        s = str(exc.value).lower()
+        assert "ticker" in s and ("extra" in s or "symbol" in s)
+
+    def test_camel_case_canonical_symbols_for_multi(self) -> None:
         c = CrossSectionalJobRequest.model_validate(
             {
                 "jobId": "j2",
                 "featureName": "rsi",
-                "tickers": ["SPY", "QQQ"],
+                "symbols": ["SPY", "QQQ"],
                 "fromDate": "2025-01-01",
                 "toDate": "2025-01-31",
             }
         )
         assert c.symbols == ["SPY", "QQQ"]
+
+    def test_camel_case_legacy_tickers_no_longer_accepted(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            CrossSectionalJobRequest.model_validate(
+                {
+                    "jobId": "j2",
+                    "featureName": "rsi",
+                    "tickers": ["SPY", "QQQ"],  # legacy — no longer accepted
+                    "fromDate": "2025-01-01",
+                    "toDate": "2025-01-31",
+                }
+            )

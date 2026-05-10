@@ -7,19 +7,15 @@ Every route whose primary input is "bars for symbol X over date range
 in ``_BarRange``, which both bases extend.
 
 `extra="forbid"` is required: Pydantic v2's default `extra="ignore"`
-silently drops unknown fields, which would hide the rename bug after
-PR (iii) removes the transitional aliases.
+silently drops unknown fields, which would hide rename bugs in
+consumers.
 
-Transitional aliases — to be REMOVED in PR (iii):
-    ticker     → symbol
-    tickers    → symbols
-    start_date → from_date
-    end_date   → to_date
-
-These aliases let PR (ii) ship before PR (iii)'s frontend payload
-renames, so the merge order has tolerance. Once PR (iii) lands and
-every consumer sends canonical names, the aliases are removed and
-legacy names produce a clear ``extra_forbidden`` 422.
+Wire format: snake_case field names, ``YYYY-MM-DD`` strings on dates.
+Legacy field names ``ticker`` / ``tickers`` / ``start_date`` /
+``end_date`` from the pre-PR-(ii) era are no longer accepted —
+PR (ii) provided ``AliasChoices`` for the transition window; PR (iii)
+removes them. Any caller still sending legacy names produces a clear
+``extra_forbidden`` 422.
 
 Per-route default preservation: routes whose pre-migration default for
 ``multiplier`` / ``timespan`` / ``session`` differs from this base
@@ -34,7 +30,6 @@ from datetime import date as Date
 from typing import Annotated, Literal
 
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -58,16 +53,8 @@ class _BarRange(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    from_date: str = Field(
-        ...,
-        pattern=DATE_PATTERN,
-        validation_alias=AliasChoices("from_date", "start_date"),
-    )
-    to_date: str = Field(
-        ...,
-        pattern=DATE_PATTERN,
-        validation_alias=AliasChoices("to_date", "end_date"),
-    )
+    from_date: str = Field(..., pattern=DATE_PATTERN)
+    to_date: str = Field(..., pattern=DATE_PATTERN)
     timespan: Timespan = "minute"
     multiplier: int = Field(1, ge=1)
     session: Session = "rth"
@@ -92,10 +79,7 @@ class _BarRange(BaseModel):
 class TickerRequest(_BarRange):
     """Single-symbol bar request."""
 
-    symbol: _SymbolStr = Field(
-        ...,
-        validation_alias=AliasChoices("symbol", "ticker"),
-    )
+    symbol: _SymbolStr = Field(...)
 
 
 class MultiTickerRequest(_BarRange):
@@ -107,8 +91,4 @@ class MultiTickerRequest(_BarRange):
     through to the runners.
     """
 
-    symbols: list[_SymbolStr] = Field(
-        ...,
-        min_length=1,
-        validation_alias=AliasChoices("symbols", "tickers"),
-    )
+    symbols: list[_SymbolStr] = Field(..., min_length=1)
