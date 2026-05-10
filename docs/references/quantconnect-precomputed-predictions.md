@@ -8,9 +8,10 @@
 
 ## Status
 
-- §A — schema extension + importer + synthetic-fixture tests: **landed** (this PR).
-- §B — real QC fixture capture: **pending Tim's QC Cloud run**.
-- §C — pinned hashes + parity tests: **gated on §B**.
+- §A — schema extension + importer + synthetic-fixture tests: **landed** (PR #211).
+- §B — real QC fixture capture: **landed** (this PR).
+- §C — data parity (per-row tolerance + `prediction_set_hash` pin): **landed** (this PR).
+- §C runtime — `RunLedger.prediction_set_hash` + `result_hash` pin via a backtest run: **pending follow-up PR**.
 
 ## Tolerances
 
@@ -37,17 +38,28 @@ The §A test fixtures use synthetic data crafted to match QC's documented shape.
 | 2 | Daily anchor `(tz, HH:MM)` for date-only → `int64 ms UTC` | `("America/New_York", "16:00")` (defaults; NYSE close) |
 | 3 | `qc_dataset_id` convention | Use QC's labeled string for the data source (e.g. `"QuantConnect/USEquity-Daily"`); record the verbatim label in `attribution.md`. |
 
-## Captured fixture provenance (filled in at §B)
+## Captured fixture provenance
 
-- QC tutorial commit / version: TBD at §B
-- QC dataset id: TBD (per pinned decision #3 above)
-- Calendar window: TBD (pinned start/end, no `datetime.now()`)
-- Symbol in export: SPY
-- QC sklearn / LEAN / numpy versions: TBD
-- Exported at (UTC): TBD
-- Pinned `prediction_set_hash`: TBD at §C
-- Pinned `RunLedger.prediction_set_hash`: TBD at §C
-- Pinned `result_hash`: TBD at §C
+(See `PythonDataService/tests/fixtures/golden/qc-precomputed-predictions/attribution.md` for the full record.)
+
+- **QC tutorial URL**: <https://www.quantconnect.com/docs/v2/writing-algorithms/importing-data/streaming-data/precomputed-ml-predictions>
+- **QC dataset id**: `QuantConnect/USEquity-Daily` (verbatim placeholder; QC Cloud doesn't expose a stable internal id at the notebook level)
+- **Calendar window**: `2025-01-02` → `2025-12-31` at NYSE close (`1735851600000` → `1767214800000` ms UTC)
+- **Symbol**: SPY (single-symbol notebook; **not** QC's published GBM + SP500-constituents-universe variant)
+- **Model**: `sklearn.linear_model.LinearRegression` on 5 lagged days of SPY's daily close `pct_change()` — closed-form, deterministic
+- **Versions**: sklearn 1.6.1, numpy 1.26.4, pandas 2.3.3 (lean: TBD next capture)
+- **Exported at (UTC ms)**: `1778443824165` (≈ 2026-05-10 17:30 UTC)
+- **First emitted prediction**: 2025-01-13 (after 5-day lag warmup + 1 `pct_change` = 6 trading days from 2025-01-02)
+- **Last emitted prediction**: 2025-12-30 (243 rows total)
+- **Pinned `prediction_set_hash`**: `5807a23fe16ce790d807df3697fa9c161c1887fdb603a7b1b89593cfc93f0188` (in `tests/research/ml/fixtures/qc_known_hashes.json`)
+- **Pinned `RunLedger.prediction_set_hash`**: pending §C runtime PR
+- **Pinned `result_hash`**: pending §C runtime PR
+
+## Parity claim (current)
+
+> Captured QC export `qc_export.json` → importer reproduces `prediction_set_hash = 5807a23f…f0188` deterministically across re-runs, and every per-row prediction value the importer emits equals the source JSON value within `atol=1e-9, rtol=0`.
+
+This is **not** "our predictions equal QC's published GBM tutorial values." This capture used a simplified single-symbol LinearRegression notebook to validate the importer pipeline; the export shape matches QC's documented contract but the model and universe differ. To extend the claim to literal-QC-published-prediction-values parity, swap the notebook's model cell for QC's published `GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)` against the SP500-constituents universe and re-capture; the importer code and the rest of the pipeline don't change.
 
 ---
 

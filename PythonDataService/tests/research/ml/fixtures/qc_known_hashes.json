@@ -1,0 +1,4 @@
+{
+  "_comment": "Pinned hashes for the QC precomputed-predictions parity fixture. See docs/references/quantconnect-precomputed-predictions.md and tests/fixtures/golden/qc-precomputed-predictions/attribution.md for context. Run-ledger and result hashes are added when §C runtime work lands.",
+  "prediction_set_hash": "5807a23fe16ce790d807df3697fa9c161c1887fdb603a7b1b89593cfc93f0188"
+}
