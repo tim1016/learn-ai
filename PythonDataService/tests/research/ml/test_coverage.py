@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.research.ml.artifact import ChunkRef, GeneratorMeta, PredictionSetManifest
+from app.research.ml.artifact import ChunkRef, DeterministicRuleGenerator, PredictionSetManifest
 from app.research.ml.coverage import assert_bar_clock_coverage
 from app.research.ml.loader import PredictionCoverageError, PredictionSet
 
@@ -34,7 +34,7 @@ def _pset(timestamps_ms: list[int]) -> PredictionSet:
         resolution_minutes=15,
         field_names=["prediction"],
         warmup_policy="neutral_zero_until_feature_ready",
-        generator=GeneratorMeta(kind="deterministic_rule", rule_id="x", rule_version="1.0"),
+        generator=DeterministicRuleGenerator(kind="deterministic_rule", rule_id="x", rule_version="1.0"),
         chunks=[ChunkRef(
             trained_through_ms=timestamps_ms[0] - 1 if timestamps_ms else 0,
             start_ms=timestamps_ms[0] if timestamps_ms else 0,

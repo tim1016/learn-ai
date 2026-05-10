@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -38,11 +38,38 @@ def is_path_safe_id(value: str) -> bool:
     return bool(_PATH_SAFE.fullmatch(value))
 
 
-class GeneratorMeta(BaseModel):
+class DeterministicRuleGenerator(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["deterministic_rule"]
     rule_id: str
     rule_version: str
+
+
+class QuantConnectPrecomputedFixtureGenerator(BaseModel):
+    """Provenance for a prediction-set artifact imported from a QuantConnect
+    precomputed-predictions tutorial export.
+
+    All fields are populated from the captured ``qc_export.json`` plus its
+    sibling ``attribution.md`` (pinned versions, dates, dataset id). Raw QC
+    date strings are NOT stored here — they live in the golden-fixture
+    directory only. Production rows are canonical ``int64 ms UTC``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["quantconnect_precomputed_fixture"]
+    qc_tutorial_url: str
+    qc_export_date: str
+    qc_calendar_window_start_ms: int
+    qc_calendar_window_end_ms: int
+    qc_symbol_filter: str
+    qc_dataset_id: str
+    qc_versions: dict[str, str]
+
+
+GeneratorMeta = Annotated[
+    DeterministicRuleGenerator | QuantConnectPrecomputedFixtureGenerator,
+    Field(discriminator="kind"),
+]
 
 
 class ChunkRef(BaseModel):
