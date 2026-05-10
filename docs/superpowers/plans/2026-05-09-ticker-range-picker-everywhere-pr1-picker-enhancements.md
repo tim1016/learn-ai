@@ -623,6 +623,25 @@ availableMultipliers input — existing data-lab and lean-engine
 consumers see no UI change."
 ```
 
+- [ ] **Step 6: Verify Sampling card layout at viewport breakpoints**
+
+The spec's §"Risks & open considerations" calls out: adding a multiplier `<p-select>` next to the existing minute/hour/daily toggle and session toggle pushes the Sampling card width. Verify:
+
+- (a) **Layout doesn't wrap or overflow** at viewport breakpoints used by Engine Lab + Data Lab. Resize the dev-server window through these widths (and any others your `:host` CSS / parent containers gate on):
+  - 1920 × 1080 (desktop wide)
+  - 1440 × 900 (desktop standard)
+  - 1280 × 720 (laptop)
+  - 1024 × 768 (small laptop / iPad landscape)
+  - 768 × 1024 (tablet portrait — optional, only if the lab pages target tablet)
+
+  The Sampling card must stay under its allocated grid column width without wrapping the resolution toggle, multiplier dropdown, or session toggle to a second row in a way that breaks alignment with the sibling cards. On the smallest viewport above (1024px), the three cards already collapse to a single column via `@media (max-width: 900px)`; verify that path still works.
+
+- (b) **AXE focus / contrast pass on the new `<select>`** — at minimum confirm the `<label class="multiplier-label">Multiplier</label>` has a `for` attribute (or wraps the select), the `<select>` has visible focus styling, and the option text contrast against `var(--bg-surface)` meets WCAG AA. Run AXE via the browser devtools panel on a Data Lab or Engine Lab page after picking `availableMultipliers`.
+
+If layout fails at any breakpoint, fall back to the icon-button group documented in spec §"Risks & open considerations" (small `<button>` per multiplier value, like the resolution toggle, instead of `<p-select>`). Document the regression in the commit message.
+
+This step is verification-only — no code change unless layout fails. If everything passes, no commit needed.
+
 ---
 
 ## Task 4: Refactor canonical picker to compose the three new sub-components
@@ -1525,6 +1544,15 @@ If anything fails on the consumer specs, do **not** patch the consumer to make i
 podman exec my-frontend npx tsc --noEmit
 ```
 Expected: clean.
+
+- [ ] **Step 3.5: Manual viewport / AXE smoke (if Task 3 Step 6 hasn't already covered every consumer page)**
+
+In the running dev server, visit Data Lab and Engine Lab and resize through the breakpoints listed in Task 3 Step 6 (1920, 1440, 1280, 1024, plus the `<= 900px` collapse path). Verify:
+
+- The canonical picker renders identically to before this PR (no `availableMultipliers` passed by either consumer).
+- AXE devtools shows zero new violations on those two pages.
+
+This is consumer-side verification — the Task 3 Step 6 check exercised the new multiplier UI in isolation; this step confirms the existing consumers are visually byte-identical at every breakpoint. If anything looks off, the canonical picker refactor (Task 4) introduced a regression — fix the picker, not the consumers.
 
 - [ ] **Step 4: Push and open PR**
 
