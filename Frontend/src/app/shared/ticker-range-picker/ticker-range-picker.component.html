@@ -21,7 +21,7 @@
 
   <!-- ── Three composed cards ──────────────────────────────────── -->
   <div class="picker-v2__groups"
-       [class.picker-v2__groups--no-sampling]="samplingHidden()">
+       [class.picker-v2__groups--no-sampling]="hideSampling()">
 
     <app-instrument-card
       [(value)]="value"
@@ -33,7 +33,7 @@
       [availability]="availability()"
       [legendTreatment]="legendTreatment()" />
 
-    @if (!samplingHidden()) {
+    @if (!hideSampling()) {
       <app-sampling-card
         [(value)]="value"
         [availableResolutions]="availableResolutions()"

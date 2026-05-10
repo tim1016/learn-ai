@@ -70,14 +70,20 @@ class TestBarRange:
         with pytest.raises(ValidationError):
             _BarRange(from_date="2025-01-01", to_date="2025-01-31", timespan=ts)  # type: ignore[arg-type]
 
-    def test_accepts_legacy_start_end_date_aliases(self) -> None:
-        # Transitional — to be removed in PR (iii)
-        r = _BarRange.model_validate({
-            "start_date": "2025-01-01",
-            "end_date": "2025-01-31",
-        })
-        assert r.from_date == "2025-01-01"
-        assert r.to_date == "2025-01-31"
+    def test_legacy_start_end_date_aliases_are_no_longer_accepted(self) -> None:
+        # PR (iii) removed the AliasChoices for legacy field names.
+        # Callers still sending start_date / end_date now produce a
+        # clear ``extra_forbidden`` 422 because ``extra="forbid"`` on
+        # the base catches the unknown fields AND from_date/to_date
+        # remain required (so the model fails validation on the
+        # missing required fields too).
+        with pytest.raises(ValidationError) as exc:
+            _BarRange.model_validate({
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+            })
+        s = str(exc.value).lower()
+        assert "start_date" in s and "extra" in s
 
     def test_extra_field_is_forbidden(self) -> None:
         with pytest.raises(ValidationError) as exc:
@@ -96,23 +102,25 @@ class TestTickerRequest:
         r = TickerRequest(symbol="SPY", from_date="2025-01-01", to_date="2025-01-31")
         assert r.symbol == "SPY"
 
-    def test_accepts_legacy_ticker_alias(self) -> None:
-        r = TickerRequest.model_validate({
-            "ticker": "SPY",
-            "from_date": "2025-01-01",
-            "to_date": "2025-01-31",
-        })
-        assert r.symbol == "SPY"
+    def test_legacy_ticker_alias_is_no_longer_accepted(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            TickerRequest.model_validate({
+                "ticker": "SPY",
+                "from_date": "2025-01-01",
+                "to_date": "2025-01-31",
+            })
+        s = str(exc.value).lower()
+        assert "ticker" in s and ("extra" in s or "symbol" in s)
 
-    def test_accepts_all_legacy_aliases_combined(self) -> None:
-        r = TickerRequest.model_validate({
-            "ticker": "SPY",
-            "start_date": "2025-01-01",
-            "end_date": "2025-01-31",
-        })
-        assert r.symbol == "SPY"
-        assert r.from_date == "2025-01-01"
-        assert r.to_date == "2025-01-31"
+    def test_all_legacy_aliases_combined_are_no_longer_accepted(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            TickerRequest.model_validate({
+                "ticker": "SPY",
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+            })
+        s = str(exc.value).lower()
+        assert "ticker" in s or "start_date" in s or "end_date" in s
 
     def test_rejects_empty_symbol(self) -> None:
         with pytest.raises(ValidationError):
@@ -153,13 +161,15 @@ class TestMultiTickerRequest:
         )
         assert r.symbols == ["SPY", "QQQ"]
 
-    def test_accepts_legacy_tickers_alias(self) -> None:
-        r = MultiTickerRequest.model_validate({
-            "tickers": ["SPY", "QQQ"],
-            "from_date": "2025-01-01",
-            "to_date": "2025-01-31",
-        })
-        assert r.symbols == ["SPY", "QQQ"]
+    def test_legacy_tickers_alias_is_no_longer_accepted(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            MultiTickerRequest.model_validate({
+                "tickers": ["SPY", "QQQ"],
+                "from_date": "2025-01-01",
+                "to_date": "2025-01-31",
+            })
+        s = str(exc.value).lower()
+        assert "tickers" in s or "symbols" in s
 
     def test_rejects_empty_symbols_list(self) -> None:
         with pytest.raises(ValidationError):

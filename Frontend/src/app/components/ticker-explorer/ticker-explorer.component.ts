@@ -4,13 +4,14 @@ import { FormsModule } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
 import { MarketDataService } from '../../services/market-data.service';
 import { SnapshotUnderlyingResult, SnapshotContractResult } from '../../graphql/types';
-import { getMinAllowedDate } from '../../utils/date-validation';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { TickerDatePickerComponent } from '../../shared/ticker-date-picker/ticker-date-picker.component';
+import type { TickerSnapshot } from '../../shared/ticker-date-picker/ticker-date-picker.types';
+import { TICKER_POOL, RECENT_TICKERS } from '../../shared/ticker-catalog';
 
 @Component({
   selector: 'app-ticker-explorer',
-  standalone: true,
-  imports: [CommonModule, FormsModule, PageHeaderComponent],
+  imports: [CommonModule, FormsModule, PageHeaderComponent, TickerDatePickerComponent],
   templateUrl: './ticker-explorer.component.html',
   styleUrls: ['./ticker-explorer.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -18,10 +19,23 @@ import { PageHeaderComponent } from '../../shared/page-header/page-header.compon
 export class TickerExplorerComponent {
   private marketDataService = inject(MarketDataService);
 
-  minDate = getMinAllowedDate();
+  // Single TickerSnapshot replaces the previous (ticker, expirationDate)
+  // signals — bound directly to <app-ticker-date-picker [(value)]="snapshot">.
+  // The default expiration is the next Friday; the component-supplied
+  // minDate restricts selection to today and forward (option expirations
+  // are always future-dated).
+  snapshot = signal<TickerSnapshot>({
+    symbol: 'AAPL',
+    date: TickerExplorerComponent.getNextFriday(),
+  });
+  readonly tickerPool = TICKER_POOL;
+  readonly recentTickers = RECENT_TICKERS;
+  protected readonly minDate = (() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  })();
 
-  ticker = signal('AAPL');
-  expirationDate = signal(TickerExplorerComponent.getNextFriday()); // default to next Friday expiration
   loading = signal(false);
   error = signal<string | null>(null);
 
@@ -99,7 +113,8 @@ export class TickerExplorerComponent {
   });
 
   async fetchSnapshot(): Promise<void> {
-    const t = this.ticker().trim().toUpperCase();
+    const snap = this.snapshot();
+    const t = snap.symbol.trim().toUpperCase();
     if (!t) return;
 
     this.loading.set(true);
@@ -109,7 +124,7 @@ export class TickerExplorerComponent {
     this.selectedExpiration.set('all');
 
     try {
-      const exp = this.expirationDate() || undefined;
+      const exp = snap.date || undefined;
       const result = await firstValueFrom(
         this.marketDataService.getOptionsChainSnapshot(t, exp)
       );

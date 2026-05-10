@@ -42,8 +42,6 @@ import {
 } from '../../../utils/run-log-buffer';
 import { SignalReportComponent } from '../signal-report/signal-report.component';
 import { RunProgressPanelComponent, PhaseRailStop } from '../shared/run-progress-panel/run-progress-panel.component';
-import { Select } from 'primeng/select';
-import { InputText } from 'primeng/inputtext';
 import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
 import { ToggleSwitch } from 'primeng/toggleswitch';
@@ -56,7 +54,13 @@ import {
 import { findFeatureId } from '../../../shared/indicator-catalog/feature-mapping';
 import { ActiveIndicatorCardComponent } from '../../data-lab/active-indicator-card/active-indicator-card.component';
 import { IndicatorConfigModalComponent } from '../../data-lab/indicator-config-modal/indicator-config-modal.component';
-import { PolygonDateRangeComponent } from '../../../shared/polygon-date-range';
+import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
+import type {
+  Resolution,
+  TickerRange,
+} from '../../../shared/ticker-range-picker/ticker-range-picker.types';
+import { TICKER_POOL, RECENT_TICKERS } from '../../../shared/ticker-catalog';
+import { tickerRangeToWire } from '../../../utils/ticker-wire';
 
 /** Snake-case shape returned by /api/jobs-internal/signal-engine worker. */
 interface SignalEngineJobResultRaw {
@@ -89,14 +93,11 @@ interface SignalEngineJobResultRaw {
 
 @Component({
   selector: 'app-signal-runner',
-  standalone: true,
   imports: [
     CommonModule,
     FormsModule,
     SignalReportComponent,
     RunProgressPanelComponent,
-    Select,
-    InputText,
     ButtonModule,
     MessageModule,
     ToggleSwitch,
@@ -104,7 +105,7 @@ interface SignalEngineJobResultRaw {
     IndicatorCatalogComponent,
     ActiveIndicatorCardComponent,
     IndicatorConfigModalComponent,
-    PolygonDateRangeComponent,
+    TickerRangePickerComponent,
   ],
   templateUrl: './signal-runner.component.html',
   styleUrls: ['./signal-runner.component.scss'],
@@ -123,14 +124,29 @@ export class SignalRunnerComponent {
   private catalog = inject(IndicatorCatalogService);
 
   // Form inputs
-  ticker = signal('AAPL');
+  // CRITICAL — ``range.multiplier`` initialized to 15 to preserve
+  // ``SignalEngineJobRequest``'s pre-migration default. Without this
+  // override, the inherited ``TickerRequest`` base default of 1 would
+  // silently switch every run from 15-minute to 1-minute bars. The
+  // backend also pins multiplier=15 explicitly on its side (PR ii); the
+  // frontend mirror keeps the UI consistent with that default.
+  range = signal<TickerRange>({
+    symbol: 'AAPL',
+    from: '2024-01-01',
+    to: '2024-06-30',
+    resolution: 'minute',
+    multiplier: 15,
+  });
+  readonly tickerPool = TICKER_POOL;
+  readonly recentTickers = RECENT_TICKERS;
+  readonly availableMultipliers: readonly number[] = [1, 5, 15, 60, 240];
+  readonly availableResolutions: readonly Resolution[] = ['minute', 'hour', 'daily'];
+
   /** Catalog-driven selection: indicator key + params (matches data-lab's
    *  ``IndicatorEntry`` shape). The ``feature_name`` sent to the backend is
    *  derived from this via ``findFeatureId``. */
   selectedIndicator = signal<string>('rsi');
   selectedParams = signal<Record<string, number>>({ length: 14 });
-  fromDate = signal('2024-01-01');
-  toDate = signal('2024-06-30');
   flipSign = signal(true);
   regimeGateEnabled = signal(true);
   forceRefresh = signal(false);
@@ -189,11 +205,12 @@ export class SignalRunnerComponent {
   readonly cached = computed<boolean>(() => this.job()?.cached === true);
 
   canRun = computed(() => {
+    const r = this.range();
     return (
-      this.ticker().trim().length > 0 &&
+      r.symbol.trim().length > 0 &&
       this.featureMapping() !== null &&
-      this.fromDate().trim().length > 0 &&
-      this.toDate().trim().length > 0 &&
+      r.from.trim().length > 0 &&
+      r.to.trim().length > 0 &&
       !this.loading()
     );
   });
@@ -203,7 +220,8 @@ export class SignalRunnerComponent {
   }
 
   get runSummary(): string {
-    return `${this.selectedFeatureLabel} on ${this.ticker().toUpperCase()} (${this.fromDate()} to ${this.toDate()})`;
+    const r = this.range();
+    return `${this.selectedFeatureLabel} on ${r.symbol.toUpperCase()} (${r.from} to ${r.to})`;
   }
 
   /** Catalog click in single-select mode → replace the active selection. */
@@ -284,11 +302,17 @@ export class SignalRunnerComponent {
         this.error.set(this.unsupportedReason() ?? 'No feature selected');
         return;
       }
+      // Wire the canonical TickerRange shape via the shared adapter.
+      // SignalEngineJobRequest preserves multiplier=15 default (PR ii);
+      // the picker is also initialized to multiplier=15 above so the UI
+      // and the wire agree.
+      const wire = tickerRangeToWire({
+        ...this.range(),
+        symbol: this.range().symbol.toUpperCase(),
+      });
       const id = await this.jobsService.startJob('signal_engine', {
-        ticker: this.ticker().toUpperCase(),
+        ...wire,
         feature_name: featureId,
-        from_date: this.fromDate(),
-        to_date: this.toDate(),
         flip_sign: this.flipSign(),
         regime_gate_enabled: this.regimeGateEnabled(),
         force: this.forceRefresh(),

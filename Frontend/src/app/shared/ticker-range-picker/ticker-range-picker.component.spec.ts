@@ -4,10 +4,10 @@
  * The pure-function tests cover ``summarizeAvailability`` /
  * ``computeAdvisories`` / ``dominantState`` / ``weekdaysBetween``.
  *
- * The component-level tests verify the new picker flags introduced in
- * PR (i): ``availableMultipliers`` (passes through to SamplingCard) and
- * ``hideSampling`` (collapses Sampling card; deprecated alias
- * ``hideResolution`` does the same).
+ * The component-level tests verify the picker flags from PR (i):
+ * ``availableMultipliers`` (passes through to SamplingCard) and
+ * ``hideSampling`` (collapses Sampling card). The deprecated
+ * ``hideResolution`` alias was removed in PR (iii).
  */
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -145,12 +145,6 @@ describe('TickerRangePickerComponent (flags)', () => {
 
   it('hideSampling=true collapses the Sampling card', () => {
     fixture.componentRef.setInput('hideSampling', true);
-    fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('app-sampling-card')).toBeNull();
-  });
-
-  it('deprecated hideResolution=true also collapses the Sampling card', () => {
-    fixture.componentRef.setInput('hideResolution', true);
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('app-sampling-card')).toBeNull();
   });

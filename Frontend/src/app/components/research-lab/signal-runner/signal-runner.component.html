@@ -17,30 +17,15 @@
 
   @if (!formCollapsed()) {
     <div class="runner-cards">
-      <!-- Signal card — ticker + dates only; feature picker moves to the workspace below. -->
-      <div class="runner-card">
-        <div class="card-head">
-          <span class="card-title">
-            <i class="pi pi-wave-pulse" aria-hidden="true"></i>
-            Signal
-          </span>
-        </div>
-        <div class="field-group field-group--2col">
-          <div class="field">
-            <label class="field-label" for="sig-ticker">Ticker</label>
-            <input pInputText id="sig-ticker" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="e.g. AAPL" />
-          </div>
-          <div class="field field--date-range">
-            <app-polygon-date-range
-              [(fromDate)]="fromDate"
-              [(toDate)]="toDate"
-              fromLabel="From Date"
-              toLabel="To Date"
-              idPrefix="sig"
-            />
-          </div>
-        </div>
-      </div>
+      <!-- Signal card — ticker + dates + sampling. The Options/toggles card stays below. -->
+      <app-ticker-range-picker
+        [(value)]="range"
+        [tickerPool]="tickerPool"
+        [recent]="recentTickers"
+        [availableResolutions]="availableResolutions"
+        [availableMultipliers]="availableMultipliers"
+        title="Signal data"
+      />
 
       <!-- Options card -->
       <div class="runner-card">
@@ -110,7 +95,7 @@
       <span class="run-hint">
         Ready to run signal engine on
         <strong>{{ selectedFeatureLabel }}</strong> ·
-        <span class="mono">{{ ticker().toUpperCase() }}</span>
+        <span class="mono">{{ range().symbol.toUpperCase() }}</span>
       </span>
       <div class="run-bar-actions">
         <button class="btn-run" [disabled]="!canRun() || loading()" (click)="runSignalEngine()">

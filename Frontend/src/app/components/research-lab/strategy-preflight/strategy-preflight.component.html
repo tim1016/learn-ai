@@ -16,28 +16,6 @@
              (ngModelChange)="strategyName.set($event)">
     </label>
     <label class="field">
-      <span>Symbol</span>
-      <input type="text" [ngModel]="symbol()"
-             (ngModelChange)="symbol.set($event)">
-    </label>
-    <label class="field">
-      <span>Timeframe</span>
-      <select [ngModel]="timeframe()" (ngModelChange)="timeframe.set($event)">
-        @for (tf of timeframes; track tf) {
-          <option [value]="tf">{{ tf }}</option>
-        }
-      </select>
-    </label>
-    <div class="field field--date-range">
-      <app-polygon-date-range
-        [(fromDate)]="fromDate"
-        [(toDate)]="toDate"
-        fromLabel="Trading start date"
-        toLabel="Trading end date"
-        idPrefix="preflight"
-      />
-    </div>
-    <label class="field">
       <span>Warmup buffer (calendar days before start)</span>
       <input type="number" min="0" step="1"
              [ngModel]="warmupDays()"
@@ -58,6 +36,22 @@
       <span>Prices will be dividend-adjusted (rare for backtests)</span>
     </label>
   </section>
+
+  <!--
+    Symbol + Trading window + Sampling are owned by the picker. The
+    Sampling card's resolution+multiplier maps to the preflight route's
+    timeframe vocabulary ('5m' / '15m' / '1h') via
+    rangeToPreflightTimeframe at request time. Combinations outside
+    that set throw a clear error and block the run.
+  -->
+  <app-ticker-range-picker
+    [(value)]="range"
+    [tickerPool]="tickerPool"
+    [recent]="recentTickers"
+    [availableResolutions]="availableResolutions"
+    [availableMultipliers]="availableMultipliers"
+    title="Pre-flight data"
+  />
 
   <section class="indicators">
     <h4>Indicators your strategy uses</h4>

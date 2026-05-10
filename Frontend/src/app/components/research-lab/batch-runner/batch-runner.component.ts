@@ -13,7 +13,6 @@ import { FormsModule } from '@angular/forms';
 import { ButtonModule } from 'primeng/button';
 import { CardModule } from 'primeng/card';
 import { CheckboxModule } from 'primeng/checkbox';
-import { InputTextModule } from 'primeng/inputtext';
 import { MessageModule } from 'primeng/message';
 import { ProgressBarModule } from 'primeng/progressbar';
 import { SelectModule } from 'primeng/select';
@@ -38,9 +37,20 @@ import {
   RunLogBuffer,
 } from '../../../utils/run-log-buffer';
 import { RunProgressPanelComponent } from '../shared/run-progress-panel/run-progress-panel.component';
-import { PolygonDateRangeComponent } from '../../../shared/polygon-date-range';
+import { MultiTickerRangePickerComponent } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.component';
+import type { MultiTickerRange } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.types';
+import type {
+  Resolution,
+  TickerOption,
+} from '../../../shared/ticker-range-picker/ticker-range-picker.types';
+import { multiTickerRangeToWire } from '../../../utils/ticker-wire';
 
 const DEFAULT_TICKERS = ['SPY', 'QQQ', 'AAPL'];
+
+const DEFAULT_TICKER_POOL: readonly TickerOption[] = DEFAULT_TICKERS.map((s) => ({
+  symbol: s,
+  name: s,
+}));
 
 const OPTIONS_FEATURES = [
   { label: 'IV 30-Day ATM', value: 'iv_30d' },
@@ -137,13 +147,11 @@ interface CrossSectionalJobResultRaw {
 
 @Component({
   selector: 'app-batch-runner',
-  standalone: true,
   imports: [
     CommonModule,
     FormsModule,
     ButtonModule,
     SelectModule,
-    InputTextModule,
     TableModule,
     TagModule,
     TooltipModule,
@@ -152,7 +160,7 @@ interface CrossSectionalJobResultRaw {
     CheckboxModule,
     CardModule,
     RunProgressPanelComponent,
-    PolygonDateRangeComponent,
+    MultiTickerRangePickerComponent,
   ],
   templateUrl: './batch-runner.component.html',
   styleUrl: './batch-runner.component.scss',
@@ -164,10 +172,24 @@ export class BatchRunnerComponent {
 
   // Form state
   featureName = signal('iv_rank_60');
-  fromDate = signal('2025-09-01');
-  toDate = signal('2025-12-01');
   targetType = signal('directional');
-  selectedTickers = signal<string[]>([...DEFAULT_TICKERS]);
+
+  // Single MultiTickerRange replaces (selectedTickers, fromDate, toDate).
+  // Cross-sectional research is daily-resolution by default; the picker
+  // exposes minute/hour/daily but the jobs route accepts MultiTickerRequest's
+  // base defaults (multiplier=1, timespan="minute") if the picker emits
+  // them. We initialize to daily / multiplier=1 to match the historical
+  // shape (cross-sectional studies don't typically use sub-daily bars).
+  range = signal<MultiTickerRange>({
+    symbols: [...DEFAULT_TICKERS],
+    from: '2025-09-01',
+    to: '2025-12-01',
+    resolution: 'daily',
+    multiplier: 1,
+  });
+  readonly tickerPool = DEFAULT_TICKER_POOL;
+  readonly availableMultipliers: readonly number[] = [1];
+  readonly availableResolutions: readonly Resolution[] = ['minute', 'hour', 'daily'];
 
   // Run state — survives tab switches because JobsService is providedIn:'root'.
   // We track the active job id locally; the JobsService holds the canonical
@@ -354,25 +376,14 @@ export class BatchRunnerComponent {
     return 'unknown';
   });
 
-  toggleTicker(ticker: string): void {
-    const current = this.selectedTickers();
-    if (current.includes(ticker)) {
-      this.selectedTickers.set(current.filter((t) => t !== ticker));
-    } else {
-      this.selectedTickers.set([...current, ticker]);
-    }
-  }
-
-  selectAll(): void {
-    this.selectedTickers.set([...DEFAULT_TICKERS]);
-  }
-
-  deselectAll(): void {
-    this.selectedTickers.set([]);
-  }
+  // Note: ticker selection (toggle / All / None) now lives inside
+  // <app-multi-ticker-range-picker>. The component refuses to leave the
+  // symbols array empty (keeps at least one selected); the explicit
+  // empty-list guard below catches any edge case where consumers reach
+  // runBatch with an empty universe.
 
   async runBatch(): Promise<void> {
-    if (this.selectedTickers().length === 0) {
+    if (this.range().symbols.length === 0) {
       this.error.set('Select at least one ticker');
       return;
     }
@@ -382,11 +393,17 @@ export class BatchRunnerComponent {
     this.logBuffer.clear();
 
     try {
+      // Wire the canonical MultiTickerRange shape via the shared adapter.
+      // CrossSectionalJobRequest inherits MultiTickerRequest in PR (ii);
+      // legacy 'tickers' alias still accepted until PR (iii)'s alias
+      // removal commit, but we send canonical 'symbols' now.
+      const wire = multiTickerRangeToWire({
+        ...this.range(),
+        symbols: this.range().symbols.map((s) => s.toUpperCase()),
+      });
       const id = await this.jobsService.startJob('cross_sectional', {
+        ...wire,
         feature_name: this.featureName(),
-        tickers: this.selectedTickers(),
-        from_date: this.fromDate(),
-        to_date: this.toDate(),
         target_type: this.targetType(),
       });
       this.jobId.set(id);

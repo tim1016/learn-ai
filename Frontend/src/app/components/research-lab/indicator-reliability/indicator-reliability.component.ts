@@ -16,7 +16,6 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, of, finalize } from 'rxjs';
 import { environment } from '../../../../environments/environment';
 import { Select } from 'primeng/select';
-import { InputText } from 'primeng/inputtext';
 import { InputNumber } from 'primeng/inputnumber';
 import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
@@ -34,7 +33,10 @@ import {
   type VerdictAnalysis,
   type VerdictCta,
 } from '../../../shared/indicator-verdict-hero';
-import { PolygonDateRangeComponent } from '../../../shared/polygon-date-range';
+import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
+import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
+import { TICKER_POOL, RECENT_TICKERS } from '../../../shared/ticker-catalog';
+import { tickerRangeToWire } from '../../../utils/ticker-wire';
 
 Chart.register(...registerables);
 
@@ -201,7 +203,6 @@ interface HorizonOption {
     CommonModule,
     FormsModule,
     Select,
-    InputText,
     InputNumber,
     ButtonModule,
     MessageModule,
@@ -213,7 +214,7 @@ interface HorizonOption {
     MultiSelect,
     InfoIconComponent,
     IndicatorVerdictHeroComponent,
-    PolygonDateRangeComponent,
+    TickerRangePickerComponent,
   ],
 })
 export class IndicatorReliabilityComponent {
@@ -236,10 +237,20 @@ export class IndicatorReliabilityComponent {
   private readonly ROLLING_IC_WINDOW = 20;
 
   // Form inputs
-  ticker = signal('AAPL');
+  // Single TickerRange replaces the previous (ticker, fromDate, toDate)
+  // signals — bound directly to <app-ticker-range-picker [(value)]="range">.
+  // ``hideSampling=true`` collapses the Sampling card because indicator
+  // reliability uses the indicator's own timeframe, not a per-form setting.
+  range = signal<TickerRange>({
+    symbol: 'AAPL',
+    from: '2024-01-01',
+    to: '2024-06-30',
+    resolution: 'minute',
+  });
+  readonly tickerPool = TICKER_POOL;
+  readonly recentTickers = RECENT_TICKERS;
+
   indicatorName = signal('rsi');
-  fromDate = signal('2024-01-01');
-  toDate = signal('2024-06-30');
   includeSlope = signal(false);
 
   // Dynamic params (populated when indicator is selected)
@@ -332,11 +343,12 @@ export class IndicatorReliabilityComponent {
   groupedIndicators = signal<Record<string, IndicatorOption[]>>({});
 
   canRun = computed(() => {
+    const r = this.range();
     return (
-      this.ticker().trim().length > 0 &&
+      r.symbol.trim().length > 0 &&
       this.indicatorName().trim().length > 0 &&
-      this.fromDate().trim().length > 0 &&
-      this.toDate().trim().length > 0 &&
+      r.from.trim().length > 0 &&
+      r.to.trim().length > 0 &&
       this.selectedHorizons().length > 0 &&
       !this.loading()
     );
@@ -455,16 +467,21 @@ export class IndicatorReliabilityComponent {
     this.error.set(null);
     this.result.set(null);
 
+    // Wire the canonical TickerRange shape into the request body via the
+    // shared adapter. Python's IndicatorReliabilityRequest now inherits
+    // TickerRequest (PR ii), so symbol/from_date/to_date are the canonical
+    // fields. The legacy aliases (ticker/start_date/end_date) still work
+    // until PR (iii)'s alias-removal commit, but we send canonical now.
+    const wire = tickerRangeToWire({
+      ...this.range(),
+      symbol: this.range().symbol.toUpperCase(),
+    });
     const payload = {
-      ticker: this.ticker().toUpperCase(),
+      ...wire,
       indicator_name: this.indicatorName(),
       indicator_params: this.paramValues(),
-      start_date: this.fromDate(),
-      end_date: this.toDate(),
       horizons: this.selectedHorizons(),
       include_slope: this.includeSlope(),
-      timespan: 'minute',
-      multiplier: 1,
     };
 
     this.http
@@ -841,12 +858,12 @@ export class IndicatorReliabilityComponent {
 
   /** Prompt + re-run with a new ticker (only wired CTA). */
   runOnAnotherTicker(): void {
-    const current = this.ticker();
+    const current = this.range().symbol;
     const next = window.prompt('Run on another ticker (e.g. MSFT, GOOGL, NVDA):', current);
     if (!next) return;
     const cleaned = next.trim().toUpperCase();
     if (!cleaned || cleaned === current) return;
-    this.ticker.set(cleaned);
+    this.range.set({ ...this.range(), symbol: cleaned });
     this.runAnalysis();
   }
 

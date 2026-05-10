@@ -44,18 +44,13 @@
 
   <!-- Search -->
   <div class="search-form">
-    <input
-      [ngModel]="ticker()"
-      (ngModelChange)="ticker.set($event)"
-      placeholder="Ticker (e.g., AAPL)"
-      (keyup.enter)="fetchSnapshot()"
-    />
-    <input
-      type="date"
-      [ngModel]="expirationDate()"
-      (ngModelChange)="expirationDate.set($event)"
-      [min]="minDate"
-      title="Expiration date (defaults to next Friday)"
+    <app-ticker-date-picker
+      [(value)]="snapshot"
+      [tickerPool]="tickerPool"
+      [recent]="recentTickers"
+      [minDate]="minDate"
+      title="Options snapshot"
+      dateLabel="Expiration date"
     />
     <button (click)="fetchSnapshot()" [disabled]="loading()">
       {{ loading() ? 'Loading...' : 'Fetch Chain' }}
@@ -67,7 +62,7 @@
   }
 
   @if (loading()) {
-    <div class="loading">Fetching options chain for {{ ticker() }}...</div>
+    <div class="loading">Fetching options chain for {{ snapshot().symbol }}...</div>
   }
 
   @if (underlying(); as u) {

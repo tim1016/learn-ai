@@ -27,21 +27,17 @@
   <!-- Controls Panel -->
   @if (!formCollapsed()) {
     <div class="controls-panel p-4 rounded-lg border mb-6">
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <!-- Ticker -->
-        <div class="field">
-          <label for="ticker" class="block text-sm font-medium mb-1">Ticker</label>
-          <input
-            pInputText
-            id="ticker"
-            [ngModel]="ticker()"
-            (ngModelChange)="ticker.set($event)"
-            placeholder="AAPL"
-            class="w-full"
-          />
-        </div>
+      <!-- Ticker + range picker (Sampling card hidden — indicator timeframe drives bar resolution). -->
+      <app-ticker-range-picker
+        [(value)]="range"
+        [tickerPool]="tickerPool"
+        [recent]="recentTickers"
+        [hideSampling]="true"
+        title="Reliability data"
+      />
 
-        <!-- Indicator -->
+      <!-- Indicator selector — separated from the picker since it's not a data field. -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
         <div class="field">
           <label for="indicator" class="block text-sm font-medium mb-1">Indicator</label>
           <p-select
@@ -64,17 +60,6 @@
               </div>
             </ng-template>
           </p-select>
-        </div>
-
-        <!-- Date Range -->
-        <div class="field field--date-range">
-          <app-polygon-date-range
-            [(fromDate)]="fromDate"
-            [(toDate)]="toDate"
-            fromLabel="From Date"
-            toLabel="To Date"
-            idPrefix="ireliab"
-          />
         </div>
       </div>
 

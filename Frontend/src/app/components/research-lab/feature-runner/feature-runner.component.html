@@ -24,28 +24,16 @@
           Execution
         </span>
       </div>
+      <app-ticker-range-picker
+        [(value)]="range"
+        [tickerPool]="tickerPool"
+        [recent]="recentTickers"
+        [availableResolutions]="availableResolutions"
+        [availableMultipliers]="availableMultipliers"
+        title="Feature research data"
+      />
+
       <div class="field-group">
-        <div class="field">
-          <label class="field-label" for="ticker">Ticker</label>
-          <input pInputText id="ticker" [ngModel]="ticker()" (ngModelChange)="ticker.set($event)" placeholder="e.g. AAPL" />
-        </div>
-        <div class="field field--date-range">
-          <app-polygon-date-range
-            [(fromDate)]="fromDate"
-            [(toDate)]="toDate"
-            fromLabel="From Date"
-            toLabel="To Date"
-            idPrefix="feat"
-          />
-        </div>
-        <div class="field">
-          <label class="field-label" for="timespan">Timespan</label>
-          <p-select id="timespan" [options]="timespanOptions" [ngModel]="timespan()" (ngModelChange)="timespan.set($event)" optionLabel="label" optionValue="value" />
-        </div>
-        <div class="field">
-          <label class="field-label" for="multiplier">Multiplier</label>
-          <input pInputText id="multiplier" type="number" [ngModel]="multiplier()" (ngModelChange)="multiplier.set($event)" />
-        </div>
         <div class="field field--toggle">
           <p-checkbox [binary]="true" [ngModel]="forceRun()" (ngModelChange)="forceRun.set($event)" inputId="force-run" />
           <label class="toggle-label" for="force-run">Force re-run (bypass cache)</label>
@@ -89,7 +77,7 @@
     <div class="run-bar">
       <span class="run-hint">
         Ready to analyze <strong>{{ selectedFeatureLabel }}</strong> on
-        <span class="mono">{{ ticker().toUpperCase() }}</span>
+        <span class="mono">{{ range().symbol.toUpperCase() }}</span>
       </span>
       <div class="run-bar-actions">
         <button class="btn-run" [disabled]="!canRun() || loading()" (click)="runResearch()">

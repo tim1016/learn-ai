@@ -21,36 +21,16 @@
         class="w-full"
       />
     </div>
-    <div class="col-12">
-      <app-polygon-date-range
-        [(fromDate)]="fromDate"
-        [(toDate)]="toDate"
-        fromLabel="From"
-        toLabel="To"
-        idPrefix="batch"
-      />
-    </div>
   </div>
 
-  <!-- Ticker Selection -->
-  <div class="mb-4">
-    <div class="flex align-items-center gap-2 mb-2">
-      <span class="font-semibold text-sm">Ticker Universe ({{ selectedTickers().length }}/{{ allTickers.length }})</span>
-      <p-button label="All" [text]="true" size="small" (onClick)="selectAll()" />
-      <p-button label="None" [text]="true" size="small" (onClick)="deselectAll()" />
-    </div>
-    <div class="flex flex-wrap gap-2">
-      @for (ticker of allTickers; track ticker) {
-        <p-button
-          [label]="ticker"
-          [severity]="selectedTickers().includes(ticker) ? 'primary' : 'secondary'"
-          [outlined]="!selectedTickers().includes(ticker)"
-          size="small"
-          (onClick)="toggleTicker(ticker)"
-        />
-      }
-    </div>
-  </div>
+  <!-- Ticker universe + dates + sampling — owned by the multi-ticker picker. -->
+  <app-multi-ticker-range-picker
+    [(value)]="range"
+    [tickerPool]="tickerPool"
+    [availableResolutions]="availableResolutions"
+    [availableMultipliers]="availableMultipliers"
+    title="Cross-sectional data"
+  />
 
   <!-- Run controls -->
   <div class="mb-4 flex gap-2 align-items-center">
@@ -58,7 +38,7 @@
       label="Run Cross-Sectional Study"
       icon="pi pi-play"
       [loading]="loading()"
-      [disabled]="loading() || selectedTickers().length === 0"
+      [disabled]="loading() || range().symbols.length === 0"
       (onClick)="runBatch()"
     />
     @if (loading()) {
