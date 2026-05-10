@@ -60,8 +60,8 @@ public class TechnicalAnalysisService : ITechnicalAnalysisService
         CancellationToken cancellationToken = default)
     {
         _logger.LogInformation(
-            "[TA-TABLE] Requesting indicator table for {Ticker}: {From} to {To}",
-            request.Ticker, request.FromDate, request.ToDate);
+            "[TA-TABLE] Requesting indicator table for {Symbol}: {From} to {To}",
+            request.Symbol, request.FromDate, request.ToDate);
 
         var response = await _httpClient.PostAsJsonAsync(
             "/api/indicators/generate-table", request, _jsonOptions, cancellationToken);
@@ -79,8 +79,8 @@ public class TechnicalAnalysisService : ITechnicalAnalysisService
         }
 
         _logger.LogInformation(
-            "[TA-TABLE] Received {Rows} rows with {Cols} columns for {Ticker}",
-            result.RowCount, result.Columns.Count, request.Ticker);
+            "[TA-TABLE] Received {Rows} rows with {Cols} columns for {Symbol}",
+            result.RowCount, result.Columns.Count, request.Symbol);
 
         return result;
     }

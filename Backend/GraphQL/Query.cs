@@ -317,7 +317,7 @@ public class Query
         try
         {
             var request = new IndicatorTableRequestDto(
-                Ticker: ticker.ToUpper(),
+                Symbol: ticker.ToUpper(),
                 FromDate: fromDate,
                 ToDate: toDate,
                 Multiplier: multiplier,

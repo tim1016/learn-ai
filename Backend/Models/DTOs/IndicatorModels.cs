@@ -47,7 +47,11 @@ public record CalculateIndicatorsResponseDto(
 // ------------------------------------------------------------------
 
 public record IndicatorTableRequestDto(
-    string Ticker,
+    // Renamed from Ticker → Symbol in PR (ii) to align with the Python
+    // TickerRequest schema base. Wire serialization uses snake_case
+    // (JsonNamingPolicy.SnakeCaseLower → "symbol"), which matches the
+    // canonical Python field name.
+    string Symbol,
     string FromDate,
     string ToDate,
     int Multiplier = 1,
