@@ -10,7 +10,11 @@ from __future__ import annotations
 import sys
 from decimal import Decimal
 
+import pytest
+
 from app.engine.strategy.spec import SpecAlgorithm, StrategySpec
+from app.engine.strategy.spec import schema as S
+from app.engine.strategy.spec.primitives import EvalContext, PredictionComparisonPrimitive
 from app.engine.strategy.spec.tests._parity_helpers import (
     SYMBOL,
     build_minute_bars,
@@ -306,5 +310,74 @@ def run_all() -> None:
         sys.exit(1)
 
 
+# ----- EvalContext.predictions -----------------------------------------------
+def test_eval_context_predictions_default_empty() -> None:
+    """Existing call sites that don't pass `predictions` keep working."""
+    from app.engine.strategy.spec.primitives import EvalContext
+
+    ctx = EvalContext(
+        indicators={},
+        current_bar_count=0,
+        bar_close_time=None,  # type: ignore[arg-type]
+        bar_close_price=Decimal("100"),
+    )
+    assert ctx.predictions == {}
+
+
+def test_eval_context_predictions_can_be_supplied() -> None:
+    """EvalContext accepts and stores predictions dict."""
+    from app.engine.strategy.spec.primitives import EvalContext
+
+    ctx = EvalContext(
+        indicators={},
+        current_bar_count=0,
+        bar_close_time=None,  # type: ignore[arg-type]
+        bar_close_price=Decimal("100"),
+        predictions={"my_pred": Decimal("0.5")},
+    )
+    assert ctx.predictions["my_pred"] == Decimal("0.5")
+
+
 if __name__ == "__main__":
     run_all()
+
+
+# ----- PredictionComparisonPrimitive --------------------------------
+def _ctx_with_predictions(preds: dict[str, Decimal]) -> EvalContext:
+    return EvalContext(
+        indicators={},
+        current_bar_count=1,
+        bar_close_time=None,  # type: ignore[arg-type]
+        bar_close_price=Decimal("100"),
+        predictions=preds,
+    )
+
+
+def test_prediction_comparison_fires_when_above_threshold() -> None:
+    node = S.PredictionComparison(kind="PredictionComparison", prediction="rsi_pred", op=">", value=0.1)
+    p = PredictionComparisonPrimitive(node)
+    assert p.evaluate(_ctx_with_predictions({"rsi_pred": Decimal("0.5")})) is True
+
+
+def test_prediction_comparison_does_not_fire_when_below_threshold() -> None:
+    node = S.PredictionComparison(kind="PredictionComparison", prediction="rsi_pred", op=">", value=0.1)
+    p = PredictionComparisonPrimitive(node)
+    assert p.evaluate(_ctx_with_predictions({"rsi_pred": Decimal("0.05")})) is False
+
+
+def test_prediction_comparison_keyerror_when_id_missing() -> None:
+    """Missing prediction id is a load-time bug (Stage 3 coverage check
+    should have caught it), not a runtime branch — surface loudly."""
+    node = S.PredictionComparison(kind="PredictionComparison", prediction="absent", op=">", value=0.0)
+    p = PredictionComparisonPrimitive(node)
+    with pytest.raises(KeyError):
+        p.evaluate(_ctx_with_predictions({"present": Decimal("0.5")}))
+
+
+def test_prediction_comparison_routed_by_build_leaf() -> None:
+    """_build_leaf must dispatch PredictionComparison to its primitive."""
+    from app.engine.strategy.spec.primitives import _build_leaf
+
+    node = S.PredictionComparison(kind="PredictionComparison", prediction="x", op=">", value=0.0)
+    primitive = _build_leaf(node)
+    assert isinstance(primitive, PredictionComparisonPrimitive)

@@ -12,12 +12,14 @@ hashes inputs and outputs into ledger identity columns.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date as Date
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -76,6 +78,24 @@ class RunRequest:
 # ---------------------------------------------------------------------------
 _VALID_FILL_MODES = {"signal_bar_close", "next_bar_open"}
 _NY = ZoneInfo("America/New_York")
+
+# Default artifact root: ``PythonDataService/artifacts/`` (sibling of ``app/``).
+# Resolved relative to this file so the path is stable regardless of the
+# process cwd. Override with ``LEARN_AI_PREDICTION_ARTIFACTS_ROOT`` for
+# tests or alternate deployments.
+_DEFAULT_ARTIFACTS_ROOT = Path(__file__).resolve().parents[3] / "artifacts"
+
+
+def _prediction_artifacts_root() -> Path:
+    """Return the root directory for prediction-set artifacts.
+
+    Override via ``LEARN_AI_PREDICTION_ARTIFACTS_ROOT`` env var (used by tests).
+    Default: ``PythonDataService/artifacts/predictions/``.
+    """
+    override = os.environ.get("LEARN_AI_PREDICTION_ARTIFACTS_ROOT")
+    if override:
+        return Path(override)
+    return _DEFAULT_ARTIFACTS_ROOT / "predictions"
 
 
 def _normalize_fill_mode(s: str) -> str:
@@ -340,11 +360,60 @@ def run_strategy_spec(
         logger.exception("[RUNS] data source unavailable for %s", symbol)
         return _failed(ledger, f"data source unavailable: {exc}")
 
+    # ML predictions-as-data (v0.5): if the spec references a prediction
+    # set, load + validate it before constructing the strategy so the
+    # runner can fail-fast with a ``failed`` ledger rather than letting
+    # the SpecAlgorithm constructor raise. Coverage is checked here too:
+    # the loader knows nothing about which bars the engine will see; the
+    # runner does (data source + resolution).
+    prediction_set = None
+    prediction_set_hash: str | None = None
+    if spec.predictions:
+        from app.research.ml.coverage import (
+            assert_bar_clock_coverage,
+            iter_consolidated_bars,
+        )
+        from app.research.ml.loader import PredictionSet
+
+        # v0.5 admits at most one prediction_set_id per spec (validated by
+        # ``StrategySpec._check_phase1_boundaries``); take the first.
+        set_id = spec.predictions[0].prediction_set_id
+        artifact_dir = _prediction_artifacts_root() / set_id
+        try:
+            prediction_set = PredictionSet.load(artifact_dir)
+        except Exception as exc:
+            logger.exception("[RUNS] prediction set load failed: %s", set_id)
+            return _failed(ledger, f"prediction set {set_id!r} failed to load: {exc}")
+        try:
+            prediction_set.assert_pairs_with(spec)
+        except Exception as exc:
+            return _failed(
+                ledger,
+                f"prediction set {set_id!r} does not pair with spec: {exc}",
+            )
+        try:
+            bar_stream = iter_consolidated_bars(
+                data_source,
+                symbol=symbol,
+                start_date=request.start_date,
+                end_date=request.end_date,
+                resolution_minutes=resolution,
+            )
+            assert_bar_clock_coverage(prediction_set, bar_stream)
+        except Exception as exc:
+            return _failed(
+                ledger,
+                f"prediction set {set_id!r}: bar-clock coverage failed: {exc}",
+            )
+
+        prediction_set_hash = prediction_set.manifest.prediction_set_hash
+        ledger = ledger.model_copy(update={"prediction_set_hash": prediction_set_hash})
+
     # Construct the spec algorithm; the constructor raises NotImplementedError
     # for forward-compat spec features (FixedContracts, OPTION_TEMPLATE,
     # non-CLOSE_ALL survival actions, pyramiding != 1) and that propagates.
     try:
-        strategy = SpecAlgorithm(spec)
+        strategy = SpecAlgorithm(spec, prediction_set=prediction_set)
     except NotImplementedError as exc:
         return _failed(ledger, f"spec uses unsupported feature: {exc}")
 
