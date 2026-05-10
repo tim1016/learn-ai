@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RUN_SPEC_STRATEGY_BACKTEST } from '../../services/spec-strategy.service';
 import { SpecStrategyRunnerComponent } from './spec-strategy-runner.component';
 import { CANONICAL_FIXTURES } from './canonical-fixtures';
+import type { TickerRange } from '../../shared/ticker-range-picker/ticker-range-picker.types';
 
 /**
  * Tests for the form-driven runner component.
@@ -293,5 +294,45 @@ describe('SpecStrategyRunnerComponent', () => {
       'sma_crossover',
       'rsi_mean_reversion',
     ]);
+  });
+
+  // ---- Symbol bridge ---------------------------------------------------
+  describe('symbol bridge to spec.symbols', () => {
+    it('onRangeChange propagates next.symbol into spec.symbols', () => {
+      const before = component.spec().symbols[0];
+      expect(before).toBe('SPY');
+
+      const next: TickerRange = {
+        symbol: 'AAPL',
+        from: component.range().from,
+        to: component.range().to,
+        resolution: 'minute',
+      };
+      component.onRangeChange(next);
+
+      expect(component.range().symbol).toBe('AAPL');
+      expect(component.spec().symbols).toEqual(['AAPL']);
+    });
+
+    it('onRangeChange skips spec.update when only dates change', () => {
+      const symbolsRefBefore = component.spec().symbols;
+
+      const next: TickerRange = {
+        ...component.range(),
+        from: '2025-01-01',
+        to: '2025-01-31',
+      };
+      component.onRangeChange(next);
+
+      expect(component.range().from).toBe('2025-01-01');
+      expect(component.range().to).toBe('2025-01-31');
+      // Same array reference — no spec.update was called.
+      expect(component.spec().symbols).toBe(symbolsRefBefore);
+    });
+
+    it('range initializes from spec.symbols[0] on construction', () => {
+      // Default fixture is spy_ema_crossover (symbols: ["SPY"]).
+      expect(component.range().symbol).toBe('SPY');
+    });
   });
 });

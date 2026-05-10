@@ -64,6 +64,9 @@ import {
 } from './spec-mutators';
 import { SpecStrategyStore } from './strategy-store.service';
 import { PolygonDateRangeComponent } from '../../shared/polygon-date-range';
+import { TickerRangePickerComponent } from '../../shared/ticker-range-picker/ticker-range-picker.component';
+import type { TickerRange } from '../../shared/ticker-range-picker/ticker-range-picker.types';
+import { TICKER_POOL, RECENT_TICKERS } from '../../shared/ticker-catalog';
 
 type LifecycleTab = 'entry' | 'manage' | 'exit';
 
@@ -103,7 +106,13 @@ interface QuickManageRule {
  */
 @Component({
   selector: 'app-spec-strategy-runner',
-  imports: [CommonModule, FormsModule, PageHeaderComponent, PolygonDateRangeComponent],
+  imports: [
+    CommonModule,
+    FormsModule,
+    PageHeaderComponent,
+    PolygonDateRangeComponent,
+    TickerRangePickerComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './spec-strategy-runner.component.html',
   styleUrl: './spec-strategy-runner.component.scss',
@@ -134,6 +143,31 @@ export class SpecStrategyRunnerComponent {
   readonly toDate = signal<string>('2024-12-31');
   readonly initialCash = signal<number>(100000);
   readonly fillMode = signal<'signal_bar_close' | 'next_bar_open'>('signal_bar_close');
+
+  /** Single source of truth for the picker UI. ``range.symbol`` is a
+   *  projection of ``spec().symbols[0]`` initialized at construction;
+   *  on user change ``onRangeChange`` propagates symbol updates back
+   *  into ``spec.symbols`` (preserving the domain rule that
+   *  ``StrategySpec`` owns its traded symbols). */
+  readonly range = signal<TickerRange>({
+    symbol: this.spec().symbols[0],
+    from: '2024-03-28',
+    to: '2024-12-31',
+    resolution: 'minute', // ignored — Sampling card hidden on this consumer
+  });
+  readonly tickerPool = TICKER_POOL;
+  readonly recentTickers = RECENT_TICKERS;
+
+  /** Two-way bridge for the picker. Picker emits ``valueChange``;
+   *  this handler updates ``range`` (UI source of truth) and, when the
+   *  symbol changed, propagates the update back into ``spec.symbols``
+   *  so the strategy spec remains the canonical home of the symbol. */
+  onRangeChange(next: TickerRange): void {
+    this.range.set(next);
+    if (next.symbol !== this.spec().symbols[0]) {
+      this.spec.update((s) => ({ ...s, symbols: [next.symbol] }));
+    }
+  }
 
   // ---- Status / errors --------------------------------------------------
   readonly result = this.specService.result;
