@@ -63,7 +63,12 @@ import {
   updateSurvivalRuleAt,
 } from './spec-mutators';
 import { SpecStrategyStore } from './strategy-store.service';
-import { PolygonDateRangeComponent } from '../../shared/polygon-date-range';
+import { TickerRangePickerComponent } from '../../shared/ticker-range-picker/ticker-range-picker.component';
+import type {
+  Resolution,
+  TickerRange,
+} from '../../shared/ticker-range-picker/ticker-range-picker.types';
+import { TICKER_POOL, RECENT_TICKERS } from '../../shared/ticker-catalog';
 
 type LifecycleTab = 'entry' | 'manage' | 'exit';
 
@@ -103,7 +108,12 @@ interface QuickManageRule {
  */
 @Component({
   selector: 'app-spec-strategy-runner',
-  imports: [CommonModule, FormsModule, PageHeaderComponent, PolygonDateRangeComponent],
+  imports: [
+    CommonModule,
+    FormsModule,
+    PageHeaderComponent,
+    TickerRangePickerComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './spec-strategy-runner.component.html',
   styleUrl: './spec-strategy-runner.component.scss',
@@ -130,10 +140,54 @@ export class SpecStrategyRunnerComponent {
   readonly currentSavedId = signal<string | null>(null);
 
   // ---- Run controls (orthogonal to the spec) ----------------------------
-  readonly fromDate = signal<string>('2024-03-28');
-  readonly toDate = signal<string>('2024-12-31');
   readonly initialCash = signal<number>(100000);
   readonly fillMode = signal<'signal_bar_close' | 'next_bar_open'>('signal_bar_close');
+
+  /** Form-owned picker state: dates + resolution only. Symbol is NOT
+   *  stored here — it's derived from ``spec.symbols[0]`` via the
+   *  ``pickerValue`` computed below. Storing symbol in ``range`` would
+   *  go stale when the spec is replaced (loadSaved / selectFixture /
+   *  applyAdvancedJson), and a subsequent date-only picker change
+   *  would silently clobber the loaded spec's symbol back to the
+   *  stale value. */
+  readonly range = signal<{ from: string; to: string; resolution: Resolution }>({
+    from: '2024-03-28',
+    to: '2024-12-31',
+    resolution: 'minute', // ignored — Sampling card hidden on this consumer
+  });
+  readonly tickerPool = TICKER_POOL;
+  readonly recentTickers = RECENT_TICKERS;
+
+  /** Computed TickerRange the picker binds to. Symbol always reads
+   *  from ``spec.symbols[0]`` (the canonical home); dates and
+   *  resolution come from ``range``. Recomputes whenever the spec is
+   *  replaced, so the picker UI stays in sync with the loaded spec. */
+  readonly pickerValue = computed<TickerRange>(() => ({
+    symbol: this.spec().symbols[0],
+    from: this.range().from,
+    to: this.range().to,
+    resolution: this.range().resolution,
+  }));
+
+  /** Picker emits ``valueChange``; this handler:
+   *   1. Writes the date side back into ``range``.
+   *   2. If the symbol changed, mutates ``spec.symbols`` — preserving
+   *      the domain rule that ``StrategySpec`` owns its traded symbols.
+   *   3. Compares the incoming symbol against the **live** spec value,
+   *      not against any cached/stale picker state, so spec replacement
+   *      followed by a date-only change can't clobber the loaded
+   *      symbol.
+   */
+  onRangeChange(next: TickerRange): void {
+    this.range.set({
+      from: next.from,
+      to: next.to,
+      resolution: next.resolution,
+    });
+    if (next.symbol !== this.spec().symbols[0]) {
+      this.spec.update((s) => ({ ...s, symbols: [next.symbol] }));
+    }
+  }
 
   // ---- Status / errors --------------------------------------------------
   readonly result = this.specService.result;
@@ -180,8 +234,8 @@ export class SpecStrategyRunnerComponent {
   /** All validation issues for the current spec + run config. */
   readonly issues = computed<readonly ValidationIssue[]>(() =>
     validateStrategy(this.spec(), {
-      start: this.fromDate(),
-      end: this.toDate(),
+      start: this.range().from,
+      end: this.range().to,
       initialCash: this.initialCash(),
       fillMode: this.fillMode(),
       resolutionMinutes: this.spec().resolution.period_minutes,
@@ -643,8 +697,8 @@ export class SpecStrategyRunnerComponent {
     this.localError.set(null);
     try {
       await this.specService.runBacktest(this.spec(), {
-        startDate: this.fromDate(),
-        endDate: this.toDate(),
+        startDate: this.range().from,
+        endDate: this.range().to,
         initialCash: this.initialCash(),
         fillMode: this.fillMode(),
       });
