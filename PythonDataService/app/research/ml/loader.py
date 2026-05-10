@@ -95,3 +95,24 @@ class PredictionSet:
                 index[ts] = {name: row[name] for name in manifest.field_names}
 
         return cls(manifest=manifest, index=index)
+
+    def assert_pairs_with(self, spec) -> None:
+        """Validate that this prediction set is consumable by ``spec``.
+
+        ``spec`` is typed loosely (``StrategySpec``) to avoid a circular
+        import; the runtime check uses duck typing on ``.symbols`` and
+        ``.resolution.period_minutes``.
+        """
+        if not spec.symbols:
+            raise ValueError("StrategySpec.symbols is empty")
+        spec_symbol = spec.symbols[0]
+        if self.manifest.symbol != spec_symbol:
+            raise ValueError(
+                f"symbol mismatch: prediction set has {self.manifest.symbol!r}, "
+                f"spec has {spec_symbol!r}"
+            )
+        if self.manifest.resolution_minutes != spec.resolution.period_minutes:
+            raise ValueError(
+                f"resolution mismatch: prediction set has {self.manifest.resolution_minutes} min, "
+                f"spec has {spec.resolution.period_minutes} min"
+            )

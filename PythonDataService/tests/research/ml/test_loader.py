@@ -5,6 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.strategy.spec.schema import (
+    EntryBlock,
+    EquityLongPosition,
+    ExitBlock,
+    Resolution,
+    SetHoldings,
+    StrategySpec,
+)
 from app.research.ml.artifact import (
     PredictionSetManifest,
     compute_prediction_set_hash,
@@ -157,3 +165,36 @@ def test_load_fails_on_duplicate_timestamp_across_chunks(tmp_path: Path) -> None
     set_dir = _write_artifact(tmp_path, chunks=chunks)
     with pytest.raises(ValueError, match="duplicate timestamp"):
         PredictionSet.load(set_dir)
+
+
+# ----- spec-pairing --------------------------------------------------
+def _spec_for(symbol: str, period_minutes: int) -> StrategySpec:
+    return StrategySpec(
+        schema_version="1.0",
+        name="t",
+        symbols=[symbol],
+        resolution=Resolution(period_minutes=period_minutes),
+        entry=EntryBlock(logic="AND", conditions=[], size=SetHoldings(kind="SetHoldings", fraction=1.0)),
+        exit=ExitBlock(logic="AND", conditions=[]),
+        position=EquityLongPosition(kind="EQUITY_LONG"),
+    )
+
+
+def test_assert_pairs_with_spec_succeeds_on_match(tmp_path: Path) -> None:
+    set_dir = _write_artifact(tmp_path)
+    pset = PredictionSet.load(set_dir)
+    pset.assert_pairs_with(_spec_for("SPY", 1))
+
+
+def test_assert_pairs_with_spec_fails_on_symbol_mismatch(tmp_path: Path) -> None:
+    set_dir = _write_artifact(tmp_path)
+    pset = PredictionSet.load(set_dir)
+    with pytest.raises(ValueError, match="symbol mismatch"):
+        pset.assert_pairs_with(_spec_for("QQQ", 1))
+
+
+def test_assert_pairs_with_spec_fails_on_resolution_mismatch(tmp_path: Path) -> None:
+    set_dir = _write_artifact(tmp_path)
+    pset = PredictionSet.load(set_dir)
+    with pytest.raises(ValueError, match="resolution mismatch"):
+        pset.assert_pairs_with(_spec_for("SPY", 5))
