@@ -217,6 +217,31 @@ class BarProperty(_ConditionBase):
     value: float
 
 
+class PredictionRef(BaseModel):
+    """Spec-local handle bound to one column of a prediction set artifact.
+
+    ``id`` is referenced by ``PredictionComparison.prediction``. ``field``
+    is the column name in the artifact rows (default ``"prediction"`` for
+    the v0.5 single-scalar contract; reserved for future multi-column
+    artifacts).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    prediction_set_id: str
+    field: str = "prediction"
+
+
+class PredictionComparison(_ConditionBase):
+    """Compare a per-bar prediction value against a constant threshold."""
+
+    kind: Literal["PredictionComparison"]
+    prediction: str  # PredictionRef.id
+    op: ComparisonOp
+    value: float
+
+
 Condition = Annotated[
     IndicatorComparison
     | IndicatorBetween
@@ -226,7 +251,8 @@ Condition = Annotated[
     | PnLPercent
     | PnLPoints
     | DrawdownFromPeak
-    | BarProperty,
+    | BarProperty
+    | PredictionComparison,
     Field(discriminator="kind"),
 ]
 
@@ -365,6 +391,7 @@ class StrategySpec(BaseModel):
     symbols: list[str]
     resolution: Resolution
     indicators: list[IndicatorBlock] = Field(default_factory=list)
+    predictions: list[PredictionRef] = Field(default_factory=list)
     entry: EntryBlock
     position: PositionSpec = Field(default_factory=lambda: EquityLongPosition(kind="EQUITY_LONG"))
     survival: list[SurvivalRule] = Field(default_factory=list)
