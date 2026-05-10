@@ -214,8 +214,8 @@ export class SpecStrategyRunnerComponent {
   /** All validation issues for the current spec + run config. */
   readonly issues = computed<readonly ValidationIssue[]>(() =>
     validateStrategy(this.spec(), {
-      start: this.fromDate(),
-      end: this.toDate(),
+      start: this.range().from,
+      end: this.range().to,
       initialCash: this.initialCash(),
       fillMode: this.fillMode(),
       resolutionMinutes: this.spec().resolution.period_minutes,
