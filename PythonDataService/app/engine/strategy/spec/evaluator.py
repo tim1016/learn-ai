@@ -41,6 +41,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.research.ml.loader import PredictionSet
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
@@ -97,9 +101,26 @@ class SpecAlgorithm(Strategy):
     resolution.
     """
 
-    def __init__(self, spec: S.StrategySpec) -> None:
+    def __init__(
+        self,
+        spec: S.StrategySpec,
+        *,
+        prediction_set: PredictionSet | None = None,
+    ) -> None:
         super().__init__()
         self._spec = spec
+        self._prediction_set = prediction_set
+
+        # Predictions sanity: a spec that declares predictions must be
+        # paired with a loaded PredictionSet at construction time.
+        if spec.predictions and prediction_set is None:
+            raise ValueError(
+                f"spec {spec.name!r} declares predictions "
+                f"({[p.id for p in spec.predictions]}) but no prediction_set "
+                f"was provided to SpecAlgorithm"
+            )
+        if prediction_set is not None and spec.predictions:
+            prediction_set.assert_pairs_with(spec)
 
         # Runtime guards for forward-compatible spec features that the
         # current evaluator does not yet support. These run at construction
@@ -233,6 +254,16 @@ class SpecAlgorithm(Strategy):
         # happened yet) and on every bar while flat; PnL primitives
         # gate on this.
         entry_price = self._open_trade.entry_price if self._open_trade is not None else None
+
+        # Build the predictions snapshot for this bar. Empty when no
+        # PredictionSet is wired (prediction-free specs).
+        predictions: dict[str, Decimal] = {}
+        if self._prediction_set is not None and self._spec.predictions:
+            ts_ms = int(bar.end_time.timestamp() * 1000)
+            row = self._prediction_set.index[ts_ms]  # KeyError == coverage-check bug
+            for ref in self._spec.predictions:
+                predictions[ref.id] = Decimal(str(row[ref.field]))
+
         ctx = EvalContext(
             indicators=self._indicators,
             current_bar_count=self._bar_count,
@@ -242,6 +273,7 @@ class SpecAlgorithm(Strategy):
             in_position=self._in_position,
             entry_bar_count=self._entry_bar_count,
             entry_price=entry_price,
+            predictions=predictions,
         )
 
         # 4. Choose the lifecycle block based on position state at the
