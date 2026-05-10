@@ -264,6 +264,24 @@ class DrawdownFromPeakPrimitive(Primitive):
             self._peak = ctx.bar_close_price
 
 
+class PredictionComparisonPrimitive(Primitive):
+    """Compare a per-bar prediction against a constant threshold.
+
+    Reads ``ctx.predictions[node.prediction]`` (a ``Decimal``). A
+    ``KeyError`` on lookup means the bar-clock coverage check should
+    have caught this — surface loudly rather than swallowing.
+    """
+
+    def __init__(self, node: S.PredictionComparison) -> None:
+        self._prediction = node.prediction
+        self._op = node.op
+        self._threshold = Decimal(str(node.value))
+
+    def evaluate(self, ctx: EvalContext) -> bool:
+        value = ctx.predictions[self._prediction]  # KeyError surfaces deliberately
+        return _compare(self._op, value, self._threshold)
+
+
 class BarPropertyPrimitive(Primitive):
     """Compares a bar-derived property (range, body, %-of-close) to a threshold.
 
@@ -417,6 +435,8 @@ def _build_leaf(node) -> Primitive:
         return DrawdownFromPeakPrimitive(node)
     if isinstance(node, S.BarProperty):
         return BarPropertyPrimitive(node)
+    if isinstance(node, S.PredictionComparison):
+        return PredictionComparisonPrimitive(node)
     raise NotImplementedError(f"primitive kind {type(node).__name__} not supported")
 
 
