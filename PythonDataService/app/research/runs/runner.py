@@ -43,6 +43,7 @@ from app.research.runs.result import (
     RunMetrics,
     RunTrade,
 )
+from app.utils.timestamps import to_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -118,17 +119,6 @@ def _parse_fill_mode(s: str) -> FillMode:
     raise ValueError(f"unknown fill_mode {s!r} — expected one of {sorted(_VALID_FILL_MODES)}")
 
 
-def _to_ms_utc(dt: datetime) -> int:
-    """Convert a tz-aware datetime to ``int64 ms`` since Unix epoch UTC.
-
-    Engine timestamps (``TradeBar.end_time``, ``LoggedTrade.entry_time``,
-    ``EquitySnapshot.timestamp``) are tz-aware America/New_York. POSIX
-    seconds are zone-independent, so multiplying by 1000 yields the
-    canonical wire format.
-    """
-    return int(dt.timestamp() * 1000)
-
-
 def _date_to_ny_midnight_ms(d: Date) -> int:
     """Convert a calendar date to ``int64 ms`` UTC for ``America/New_York``
     midnight on that date.
@@ -178,16 +168,16 @@ def _build_drawdown_curve(equity_curve: list[EquitySnapshot]) -> list[DrawdownPo
             dd = 0.0
         else:
             dd = float((peak - eq) / peak)
-        out.append(DrawdownPoint(timestamp_ms=_to_ms_utc(snap.timestamp), drawdown_pct=dd))
+        out.append(DrawdownPoint(timestamp_ms=to_ms_utc(snap.timestamp), drawdown_pct=dd))
     return out
 
 
 def _trade_to_run_trade(i: int, t: LoggedTrade, resolution_minutes: int) -> RunTrade:
     return RunTrade(
         trade_number=i + 1,
-        entry_time_ms=_to_ms_utc(t.entry_time),
+        entry_time_ms=to_ms_utc(t.entry_time),
         entry_price=float(t.entry_price),
-        exit_time_ms=_to_ms_utc(t.exit_time),
+        exit_time_ms=to_ms_utc(t.exit_time),
         exit_price=float(t.exit_price),
         indicators_at_entry={k: float(v) for k, v in t.indicators.items()},
         pnl_pts=float(t.pnl_pts),
@@ -470,7 +460,7 @@ def run_strategy_spec(
         initial_cash=float(engine_result.initial_cash),
         final_equity=float(engine_result.final_equity),
         equity_curve=[
-            EquityCurvePoint(timestamp_ms=_to_ms_utc(s.timestamp), equity=float(s.equity))
+            EquityCurvePoint(timestamp_ms=to_ms_utc(s.timestamp), equity=float(s.equity))
             for s in engine_result.equity_curve
         ],
         drawdown_curve=_build_drawdown_curve(engine_result.equity_curve),

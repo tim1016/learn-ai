@@ -22,6 +22,7 @@ from typing import Protocol
 from app.engine.consolidators.trade_bar_consolidator import TradeBarConsolidator
 from app.engine.data.trade_bar import TradeBar
 from app.research.ml.loader import PredictionCoverageError, PredictionSet
+from app.utils.timestamps import to_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ def assert_bar_clock_coverage(
     same ``TradeBarConsolidator`` configuration the engine will use.
     Iterating consumes the stream once.
     """
-    expected_ms: set[int] = {int(bar.end_time.timestamp() * 1000) for bar in bar_stream}
+    expected_ms: set[int] = {to_ms_utc(bar.end_time) for bar in bar_stream}
     have_ms: set[int] = set(prediction_set.index.keys())
 
     missing = expected_ms - have_ms
@@ -92,6 +93,16 @@ def iter_consolidated_bars(
     by default (see its ``scan`` docstring). The engine matches that
     convention, so we don't call ``scan`` here either — the prediction
     set must cover the same set the engine will actually evaluate.
+
+    Contract on ``data_source``:
+        ``data_source.iter_bars(symbol, start_date, end_date)`` MUST return
+        a fresh iterator on every call. The bar-clock coverage check
+        consumes the stream once here; the runner / engine then iterates it
+        again for the actual backtest. If a data source caches a single
+        iterator and reuses it, the second iteration sees an exhausted
+        stream and the engine silently produces no bars. Every concrete
+        reader in the repo (``LeanMinuteDataReader``, the fake test reader)
+        is a generator-returning method and satisfies this contract.
     """
     consolidator = TradeBarConsolidator(timedelta(minutes=resolution_minutes))
     fired: list[TradeBar] = []
