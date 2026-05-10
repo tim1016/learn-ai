@@ -1,6 +1,6 @@
 # QuantConnect precomputed-predictions parity (Phase 1)
 
-**Reference source:** QuantConnect "Precomputed ML Predictions" tutorial — `https://www.quantconnect.com/docs/v2/writing-algorithms/machine-learning/precomputed-ml-predictions` (URL pinned in the captured fixture's `attribution.md`).
+**Reference source:** QuantConnect "Precomputed ML Predictions" tutorial — `https://www.quantconnect.com/docs/v2/writing-algorithms/importing-data/streaming-data/precomputed-ml-predictions` (URL pinned in the captured fixture's `attribution.md`).
 
 **Spec:** `docs/superpowers/specs/2026-05-10-quantconnect-precomputed-predictions-parity.md`
 
@@ -23,10 +23,11 @@
 ## What §A established
 
 - `GeneratorMeta` is a discriminated union (`deterministic_rule | quantconnect_precomputed_fixture`); manifest schema stays at `1.0`.
-- `app/research/ml/generators/quantconnect_fixture.py` reads a closed `qc_export.json`, filters to one symbol, converts tz-aware ISO 8601 dates to `int64 ms UTC` at the ingestion boundary, and emits a v0.5-compliant `manifest.json` plus a single chunk parquet.
+- `app/research/ml/generators/quantconnect_fixture.py` reads QC's documented bare-list export shape `[{date: "YYYY-MM-DD", prediction_by_symbol: {symbol: float}}, ...]`, picks the requested symbol from each daily record's map, converts each date-only string + a caller-supplied `(daily_anchor_tz, daily_anchor_hhmm)` to `int64 ms UTC` at the ingestion boundary, and emits a v0.5-compliant `manifest.json` plus a single chunk parquet.
+- Provenance (tutorial URL, dataset id, exported_at_ms, calendar window, sklearn/LEAN versions) is **not** in QC's emitted file — captured separately in `attribution.md` at fixture-capture time and passed to the importer as explicit kwargs.
 - Determinism is enforced by a re-run test: same input must produce byte-identical manifest and identical `prediction_set_hash`.
 
-The synthetic `qc_export.json` shape used by §A tests is a **strawman** for the real QC export schema. §B will either confirm the strawman or force adjustments to the closed Pydantic model in `quantconnect_fixture.py`.
+The §A test fixtures use synthetic data crafted to match QC's documented shape. §B captures real values; if QC has versioned the tutorial since this writing, the §B step diffs the captured shape against the documented one and surfaces any drift before unskipping the parity tests.
 
 ## Captured fixture provenance (filled in at §B)
 

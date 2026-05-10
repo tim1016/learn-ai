@@ -102,13 +102,15 @@ class DeterministicRuleGenerator(BaseModel):
 class QuantConnectPrecomputedFixtureGenerator(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["quantconnect_precomputed_fixture"]
-    qc_tutorial_url: str                     # e.g. https://www.quantconnect.com/docs/v2/.../precomputed-ml-predictions
-    qc_export_date: str                      # ISO date the fixture was exported from QC Cloud
+    qc_tutorial_url: str                     # e.g. https://www.quantconnect.com/docs/v2/writing-algorithms/importing-data/streaming-data/precomputed-ml-predictions
+    qc_exported_at_ms: int                   # int64 ms UTC — when the QC notebook ran (converted at fixture-capture time)
     qc_calendar_window_start_ms: int         # the pinned [start, end) window QC ran on
     qc_calendar_window_end_ms: int
     qc_symbol_filter: str                    # which symbol from the QC export was selected (e.g. "SPY")
     qc_dataset_id: str                       # QC dataset identifier the export is anchored to
     qc_versions: dict[str, str]              # {"sklearn": "1.5.0", "lean": "...", "numpy": "..."} — verbatim from QC env
+    qc_daily_anchor_tz: str                  # IANA tz used to convert QC's date-only strings (typically "America/New_York")
+    qc_daily_anchor_hhmm: str                # "HH:MM" wall-clock anchor for date-only -> int64 ms UTC (typically "16:00" market close)
 
 
 GeneratorMeta = Annotated[
@@ -123,24 +125,43 @@ class PredictionSetManifest(BaseModel):
 
 Existing `deterministic_rule` manifests on disk continue to load. New QC manifests round-trip through the same code path. `extra='forbid'` still applies per variant.
 
+### QC's documented export shape
+
+The QuantConnect tutorial saves predictions as a **bare JSON list** (no envelope) of daily records:
+
+```json
+[
+  {"date": "YYYY-MM-DD", "prediction_by_symbol": {"SPY": 0.0123, "QQQ": -0.011}},
+  {"date": "YYYY-MM-DD", "prediction_by_symbol": {"SPY": -0.0045, "QQQ":  0.022}},
+  ...
+]
+```
+
+Per QC's tutorial code: `predictions_json = [{'date': date, 'prediction_by_symbol': group.set_index('symbol')['prediction'].to_dict()} for date, group in df.groupby('time')]` with `df['time'] = df['time'].dt.strftime('%Y-%m-%d')`. The file is saved as `'research-to-backtest-factors.json'` in QC's ObjectStore.
+
+**Date is date-only** (`'%Y-%m-%d'`), not tz-aware. The importer pairs each date with a caller-supplied `qc_daily_anchor_tz` + `qc_daily_anchor_hhmm` (typically `("America/New_York", "16:00")` to anchor at NYSE close) and converts to `int64 ms UTC` at the ingestion boundary — a permitted conversion per `numerical-rigor.md` § Timestamp rigor.
+
+**No provenance in QC's emitted file.** Tutorial URL, dataset id, sklearn/LEAN versions, calendar window, and exported-at timestamp must be captured separately at fixture-capture time (in `attribution.md`) and passed to the importer as explicit arguments.
+
 ### Importer behavior (`quantconnect_fixture.py`)
 
 Inputs:
 
-- `qc_export_path: Path` — pointer to `qc_export.json` (the committed fixture).
-- `prediction_set_id: str` — what to name the artifact directory; validated path-safe.
+- `qc_export_path: Path` — pointer to `qc_export.json` (QC's bare list).
+- `prediction_set_id: str` — artifact directory name; validated path-safe.
 - `output_root: Path` — target artifact root (default `PythonDataService/artifacts/predictions/`).
-- `symbol: str` — which symbol to keep (the only legal value in Phase 1 is whichever single symbol QC's tutorial publishes; if QC publishes multi-symbol, this picks one).
+- `symbol: str` — which symbol to extract from each daily record's `prediction_by_symbol` map.
+- Provenance kwargs: `qc_tutorial_url`, `qc_exported_at_ms`, `qc_calendar_window_start_ms`, `qc_calendar_window_end_ms`, `qc_dataset_id`, `qc_versions`, `qc_daily_anchor_tz` (default `"America/New_York"`), `qc_daily_anchor_hhmm` (default `"16:00"`).
 
 Steps (every step has a test in the plan):
 
-1. Parse `qc_export.json` against a closed Pydantic model. `extra='forbid'` rejects shape drift.
-2. Extract per-bar prediction rows for the requested `symbol`. Reject duplicate dates within the symbol's series; reject the import if the symbol is absent from the export.
-3. Convert each QC date to `int64 ms UTC`. Reject naive strings — QC dates must carry an explicit tz (or QC's documented session tz, which is recorded in the fixture's `attribution.md`).
-4. Validate timestamps strictly increasing.
+1. Parse `qc_export.json` as a closed Pydantic `RootModel[list[QcPredictionRecord]]`. Each record is `extra='forbid'` with a non-empty `prediction_by_symbol` map.
+2. For each daily record, look up `symbol` in `prediction_by_symbol`. **Days where the symbol is absent are silently skipped** — QC's universe filter may legitimately exclude a symbol on some days. The import only fails if the symbol is absent from **every** record.
+3. Convert each record's `"YYYY-MM-DD"` date + `qc_daily_anchor_tz` + `qc_daily_anchor_hhmm` to `int64 ms UTC`. Reject any date string that doesn't strictly match `^\d{4}-\d{2}-\d{2}$` — a tz-aware ISO 8601 string would be ambiguous (which tz applies, the embedded one or the anchor?) and the caller must rewrite it before reaching the importer.
+4. Validate strictly-increasing timestamps after sort. Duplicate dates fail.
 5. Build the row list `[{"timestamp_ms": int, "symbol": str, "prediction": float}, ...]` and compute `rows_hash` via the existing `compute_rows_hash` helper.
-6. Build the manifest dict with `generator.kind == "quantconnect_precomputed_fixture"` and the QC-provenance fields populated, run `compute_prediction_set_hash`, write `manifest.json` and `chunks/<trained_through_ms>.parquet`.
-7. Set `trained_through_ms = qc_calendar_window_start_ms - 1` — same convention as the deterministic-rule generator, since QC's "training cutoff" is implied by the calendar window the tutorial ran on. Documented inline.
+6. Build the manifest dict with `generator.kind == "quantconnect_precomputed_fixture"` and the provenance fields populated, run `compute_prediction_set_hash`, write `manifest.json` and `chunks/<trained_through_ms>.parquet`.
+7. Set `trained_through_ms = start_ms - 1` — same convention as the deterministic-rule generator. Documented inline.
 
 ### Validation workflow
 
@@ -214,7 +235,7 @@ The skip-until-captured pattern lets §A land independently of QC Cloud access w
 
 ## Risks and open questions
 
-- **R1 — QC's published JSON shape.** The `qc_export.json` schema isn't documented as a stable contract; QC tutorials show output snippets, not a formal schema. The importer's `extra='forbid'` model will be inferred from the actual export Tim captures. Until §B runs, the synthetic fixture in §A is our best guess at the shape and may need adjusting once we see the real export.
+- **R1 — QC's published JSON shape.** Confirmed via QC's documented tutorial code (see "QC's documented export shape" above): bare list of `{date: "YYYY-MM-DD", prediction_by_symbol: {symbol: float}}`. The importer's `RootModel[list[QcPredictionRecord]]` matches this shape exactly with `extra='forbid'`. Risk remaining: QC may version the tutorial and change the shape without notice — §B should diff the captured `qc_export.json` against this spec's documented shape and surface any drift before unskipping the parity tests.
 - **R2 — QC tz semantics.** QC documents `algorithm.Time` as exchange-aware. Whether the predictions JSON serializes timestamps as UTC, local-with-offset, or naive-with-implied-NY is a property of QC's exporter and must be confirmed from the captured fixture before the importer's tz handling is finalized. Documented in the importer module docstring after §B.
 - **R3 — QC dataset-id stability.** If QC silently re-versions the dataset (e.g., dividend adjustment policy change), our pinned hash would still pass for the captured `qc_export.json` but the underlying QC reality would have drifted. Mitigation: `attribution.md` records the QC dataset id and run timestamp; periodic re-export and diff is a follow-up, not Phase 1 scope.
 - **R4 — Symbol the QC tutorial actually uses.** The original handoff assumed SPY based on the Keras tutorial; the precomputed-predictions tutorial may publish a different symbol or a multi-symbol export. **D4** + the importer's `symbol` parameter handle either case, but Tim should confirm before §B so the fixture and the spec match.

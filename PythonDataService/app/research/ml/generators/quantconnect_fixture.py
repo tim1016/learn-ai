@@ -1,27 +1,40 @@
 """Import a QuantConnect precomputed-predictions tutorial export into the
 v0.5 prediction-set artifact format.
 
-Phase 1 §A scope: schema validation, symbol filter, timestamp conversion,
+The QC tutorial documented at
+https://www.quantconnect.com/docs/v2/writing-algorithms/importing-data/streaming-data/precomputed-ml-predictions
+emits a JSON file containing a bare list of daily prediction records:
+
+    [
+      {"date": "YYYY-MM-DD", "prediction_by_symbol": {"SPY": 0.1, "QQQ": -0.05}},
+      {"date": "YYYY-MM-DD", "prediction_by_symbol": {"SPY": ..., "QQQ": ...}},
+      ...
+    ]
+
+QC's saved file does not include any provenance (tutorial URL, dataset id,
+versions, calendar window). Provenance is captured separately in the
+fixture's ``attribution.md`` (or sidecar JSON) and passed to the importer
+as explicit arguments.
+
+Phase 1 §A scope: schema validation, symbol filter, date conversion,
 manifest + chunk write. Real-fixture parity tests are gated on §B (QC
 Cloud capture) — see
 ``docs/superpowers/specs/2026-05-10-quantconnect-precomputed-predictions-parity.md``.
 
-Wire and storage format for timestamps is ``int64 ms UTC``. The QC export's
-raw date strings cross the ingestion boundary in this module and are
-converted on the spot; no string timestamps escape downstream.
-
-The ``QcExport`` shape used here is a strawman for the QC export's actual
-schema (spec R1). Once §B captures a real export, this model is verified
-or adjusted.
+Wire and storage format for timestamps is ``int64 ms UTC``. QC's date-only
+strings are paired with the caller-supplied ``daily_anchor_tz`` +
+``daily_anchor_hhmm`` and converted to ``int64 ms UTC`` at this ingestion
+boundary; no string timestamps escape downstream.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from app.research.ml.artifact import (
     ChunkRef,
@@ -34,59 +47,44 @@ from app.research.ml.artifact import (
 )
 
 
-class QcCalendarWindow(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    start: str
-    end: str
-    tz: str
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_HHMM_RE = re.compile(r"^\d{2}:\d{2}$")
 
 
-class QcPredictionRow(BaseModel):
+class QcPredictionRecord(BaseModel):
+    """One day's predictions, as QC's precomputed-ml-predictions tutorial emits."""
+
     model_config = ConfigDict(extra="forbid")
-    symbol: str
     date: str
-    prediction: float
+    prediction_by_symbol: dict[str, float] = Field(min_length=1)
 
 
-class QcExport(BaseModel):
-    """Closed model of the captured ``qc_export.json``.
+class QcExport(RootModel[list[QcPredictionRecord]]):
+    """Closed model of QC's emitted JSON file.
 
-    Strawman shape; §B fixture capture confirms the real schema.
+    The file is a bare list — no envelope, no provenance metadata. Validated
+    via Pydantic v2 ``RootModel``; ``extra='forbid'`` on each record rejects
+    unknown fields.
     """
 
-    model_config = ConfigDict(extra="forbid")
-    tutorial_id: str
-    tutorial_url: str
-    exported_at: str
-    dataset_id: str
-    calendar_window: QcCalendarWindow
-    versions: dict[str, str]
-    predictions: list[QcPredictionRow] = Field(min_length=1)
 
+def _date_only_to_ms_utc(date_str: str, anchor_hhmm: str, anchor_tz: str) -> int:
+    """Combine a ``"YYYY-MM-DD"`` date, a ``"HH:MM"`` anchor, and an IANA tz
+    into ``int64 ms UTC``.
 
-def _to_ms_utc(date_str: str) -> int:
-    """Convert a tz-aware ISO 8601 date string to int64 ms UTC.
-
-    Naive strings (no tz designator, no offset) are rejected per
-    .claude/rules/numerical-rigor.md -> "Timestamp rigor -> Ban list".
+    Rejects any input that does not look like a strict date-only string;
+    a tz-aware ISO 8601 string would be ambiguous (which tz applies?) and
+    must be rewritten by the caller before reaching this helper.
     """
-    ts = pd.Timestamp(date_str)
-    if ts.tz is None:
+    if not _DATE_ONLY_RE.match(date_str):
         raise ValueError(
-            f"naive timestamp {date_str!r} is disallowed at the QC ingestion "
-            "boundary; QC date strings must carry an explicit tz designator"
+            f"expected date-only 'YYYY-MM-DD' string, got {date_str!r}; "
+            "tz-aware or other formats must be rewritten by the caller"
         )
+    if not _HHMM_RE.match(anchor_hhmm):
+        raise ValueError(f"expected anchor 'HH:MM' string, got {anchor_hhmm!r}")
+    ts = pd.Timestamp(f"{date_str} {anchor_hhmm}", tz=anchor_tz)
     return int(ts.tz_convert("UTC").value // 1_000_000)
-
-
-def _window_to_ms_utc(date_str: str, tz: str) -> int:
-    """Convert a calendar-window boundary date + tz to int64 ms UTC.
-
-    Unlike per-row prediction dates, calendar-window dates from QC are
-    typically date-only (e.g. ``"2024-01-02"``) and require the export's
-    declared tz to localize. Always succeeds for a valid (date, tz) pair.
-    """
-    return int(pd.Timestamp(date_str, tz=tz).tz_convert("UTC").value // 1_000_000)
 
 
 def import_qc_fixture(
@@ -95,13 +93,29 @@ def import_qc_fixture(
     prediction_set_id: str,
     output_root: Path,
     symbol: str,
+    qc_tutorial_url: str,
+    qc_exported_at_ms: int,
+    qc_calendar_window_start_ms: int,
+    qc_calendar_window_end_ms: int,
+    qc_dataset_id: str,
+    qc_versions: dict[str, str],
+    qc_daily_anchor_tz: str = "America/New_York",
+    qc_daily_anchor_hhmm: str = "16:00",
 ) -> PredictionSetManifest:
     """Import a QC precomputed-predictions export into the v0.5 artifact format.
 
-    Filters to the requested ``symbol``, converts QC date strings to
-    ``int64 ms UTC``, computes canonical hashes, writes ``manifest.json``
-    plus a single chunk parquet under ``output_root/<prediction_set_id>/``.
-    Returns the parsed manifest.
+    ``qc_export_path`` points at the bare-list JSON file QC's tutorial saves
+    to ObjectStore. Provenance fields (``qc_tutorial_url``, dataset id,
+    versions, calendar window, exported_at_ms, daily anchor) are not in
+    QC's emitted file; the caller supplies them from ``attribution.md`` or a
+    sidecar.
+
+    For each daily record, picks the requested ``symbol`` from the
+    ``prediction_by_symbol`` map, converts the date-only string +
+    daily-anchor convention to ``int64 ms UTC``, and emits one row per day.
+    Days where the symbol is absent from ``prediction_by_symbol`` are
+    silently skipped (QC's tutorial may exclude a symbol on days the
+    universe filter excludes it). Days with a duplicate date raise.
     """
     if not is_path_safe_id(prediction_set_id):
         raise ValueError(
@@ -111,25 +125,29 @@ def import_qc_fixture(
 
     raw = json.loads(Path(qc_export_path).read_text(encoding="utf-8"))
     export = QcExport.model_validate(raw)
-
-    matching = [r for r in export.predictions if r.symbol == symbol]
-    if not matching:
-        present = sorted({r.symbol for r in export.predictions})
-        raise ValueError(
-            f"symbol {symbol!r} absent from QC export (symbols present: {present})"
-        )
+    records = export.root
 
     row_dicts: list[dict] = []
     seen_ts: set[int] = set()
-    for r in matching:
-        ts_ms = _to_ms_utc(r.date)
+    for record in records:
+        if symbol not in record.prediction_by_symbol:
+            continue
+        ts_ms = _date_only_to_ms_utc(record.date, qc_daily_anchor_hhmm, qc_daily_anchor_tz)
         if ts_ms in seen_ts:
             raise ValueError(
-                f"duplicate timestamp {ts_ms} for symbol {symbol!r} in QC export"
+                f"duplicate timestamp {ts_ms} for symbol {symbol!r} (date {record.date!r}) in QC export"
             )
         seen_ts.add(ts_ms)
+        prediction = float(record.prediction_by_symbol[symbol])
         row_dicts.append(
-            {"timestamp_ms": ts_ms, "symbol": symbol, "prediction": float(r.prediction)}
+            {"timestamp_ms": ts_ms, "symbol": symbol, "prediction": prediction}
+        )
+
+    if not row_dicts:
+        present = sorted({s for r in records for s in r.prediction_by_symbol})
+        raise ValueError(
+            f"symbol {symbol!r} absent from QC export "
+            f"(symbols present in at least one record: {present})"
         )
 
     row_dicts.sort(key=lambda d: d["timestamp_ms"])
@@ -141,22 +159,17 @@ def import_qc_fixture(
 
     rows_hash = compute_rows_hash(row_dicts)
 
-    qc_window_start_ms = _window_to_ms_utc(
-        export.calendar_window.start, export.calendar_window.tz
-    )
-    qc_window_end_ms = _window_to_ms_utc(
-        export.calendar_window.end, export.calendar_window.tz
-    )
-
     generator = QuantConnectPrecomputedFixtureGenerator(
         kind="quantconnect_precomputed_fixture",
-        qc_tutorial_url=export.tutorial_url,
-        qc_export_date=export.exported_at,
-        qc_calendar_window_start_ms=qc_window_start_ms,
-        qc_calendar_window_end_ms=qc_window_end_ms,
+        qc_tutorial_url=qc_tutorial_url,
+        qc_exported_at_ms=qc_exported_at_ms,
+        qc_calendar_window_start_ms=qc_calendar_window_start_ms,
+        qc_calendar_window_end_ms=qc_calendar_window_end_ms,
         qc_symbol_filter=symbol,
-        qc_dataset_id=export.dataset_id,
-        qc_versions=dict(export.versions),
+        qc_dataset_id=qc_dataset_id,
+        qc_versions=dict(qc_versions),
+        qc_daily_anchor_tz=qc_daily_anchor_tz,
+        qc_daily_anchor_hhmm=qc_daily_anchor_hhmm,
     )
 
     chunk = ChunkRef(

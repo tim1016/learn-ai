@@ -2,13 +2,10 @@
 
 When the captured fixture lands at
 ``PythonDataService/tests/fixtures/golden/qc-precomputed-predictions/qc_export.json``,
-the module-level skip lifts and the inner ``pytest.skip`` calls below are
-replaced with real assertions that:
-
-- the importer's output ``prediction_set_hash`` equals the value pinned in
-  ``tests/research/ml/fixtures/qc_known_hashes.json`` (§C);
-- every per-row prediction value equals QC's published value within
-  ``atol=1e-9, rtol=0`` (spec D8).
+the module-level ``skipif`` no longer fires. At that point each test body
+below FAILS with a TODO message — that's intentional. A skipped test
+silently approves missing work; a failing test forces the §C assertions
+(per-row tolerance check, pinned ``prediction_set_hash``) to be written.
 """
 
 from __future__ import annotations
@@ -30,8 +27,15 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_qc_fixture_parity_per_row_predictions_match() -> None:
-    pytest.skip("§C parity test — implement when fixture lands")
+    pytest.fail(
+        "§C TODO: assert every imported prediction equals QC's published value "
+        "within atol=1e-9, rtol=0 (spec D8). Implement now that the fixture exists."
+    )
 
 
 def test_qc_fixture_prediction_set_hash_pinned() -> None:
-    pytest.skip("§C parity test — implement when fixture lands")
+    pytest.fail(
+        "§C TODO: assert importer's prediction_set_hash equals the value "
+        "pinned in tests/research/ml/fixtures/qc_known_hashes.json. "
+        "Implement now that the fixture exists."
+    )

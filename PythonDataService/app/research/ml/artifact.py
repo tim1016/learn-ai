@@ -49,21 +49,27 @@ class QuantConnectPrecomputedFixtureGenerator(BaseModel):
     """Provenance for a prediction-set artifact imported from a QuantConnect
     precomputed-predictions tutorial export.
 
-    All fields are populated from the captured ``qc_export.json`` plus its
-    sibling ``attribution.md`` (pinned versions, dates, dataset id). Raw QC
-    date strings are NOT stored here — they live in the golden-fixture
-    directory only. Production rows are canonical ``int64 ms UTC``.
+    Provenance fields are sourced from the captured ``attribution.md`` (or
+    a sidecar JSON) and passed by the caller; QC's emitted file itself
+    contains only the per-date prediction list, no provenance metadata.
+
+    All timestamps are ``int64 ms UTC`` per ``.claude/rules/numerical-rigor.md``
+    -> "Timestamp rigor". Raw QC date strings (the per-row ``"YYYY-MM-DD"``
+    values from the export) are converted to ``int64 ms UTC`` at the
+    importer boundary using ``qc_daily_anchor_tz`` + ``qc_daily_anchor_hhmm``.
     """
 
     model_config = ConfigDict(extra="forbid")
     kind: Literal["quantconnect_precomputed_fixture"]
     qc_tutorial_url: str
-    qc_export_date: str
+    qc_exported_at_ms: int
     qc_calendar_window_start_ms: int
     qc_calendar_window_end_ms: int
     qc_symbol_filter: str
     qc_dataset_id: str
     qc_versions: dict[str, str]
+    qc_daily_anchor_tz: str
+    qc_daily_anchor_hhmm: str = Field(pattern=r"^\d{2}:\d{2}$")
 
 
 GeneratorMeta = Annotated[
