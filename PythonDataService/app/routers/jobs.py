@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -44,7 +44,6 @@ from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
 from app.schemas.ticker_request import (
-    DATE_PATTERN,
     MultiTickerRequest,
     TickerRequest,
 )

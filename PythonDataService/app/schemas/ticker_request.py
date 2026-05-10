@@ -67,7 +67,7 @@ class _BarRange(BaseModel):
     session: Session = "rth"
 
     @model_validator(mode="after")
-    def _validate_dates(self) -> "_BarRange":
+    def _validate_dates(self) -> _BarRange:
         # The pattern above only checks shape — "2025-13-99" passes the
         # regex but isn't a real date. Parse with date.fromisoformat to
         # verify calendar validity, then confirm from_date <= to_date.
