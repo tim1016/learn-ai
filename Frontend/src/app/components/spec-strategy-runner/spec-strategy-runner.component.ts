@@ -63,7 +63,6 @@ import {
   updateSurvivalRuleAt,
 } from './spec-mutators';
 import { SpecStrategyStore } from './strategy-store.service';
-import { PolygonDateRangeComponent } from '../../shared/polygon-date-range';
 import { TickerRangePickerComponent } from '../../shared/ticker-range-picker/ticker-range-picker.component';
 import type { TickerRange } from '../../shared/ticker-range-picker/ticker-range-picker.types';
 import { TICKER_POOL, RECENT_TICKERS } from '../../shared/ticker-catalog';
@@ -110,7 +109,6 @@ interface QuickManageRule {
     CommonModule,
     FormsModule,
     PageHeaderComponent,
-    PolygonDateRangeComponent,
     TickerRangePickerComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -139,8 +137,6 @@ export class SpecStrategyRunnerComponent {
   readonly currentSavedId = signal<string | null>(null);
 
   // ---- Run controls (orthogonal to the spec) ----------------------------
-  readonly fromDate = signal<string>('2024-03-28');
-  readonly toDate = signal<string>('2024-12-31');
   readonly initialCash = signal<number>(100000);
   readonly fillMode = signal<'signal_bar_close' | 'next_bar_open'>('signal_bar_close');
 
