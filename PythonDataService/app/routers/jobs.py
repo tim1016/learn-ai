@@ -23,10 +23,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from app.jobs import cache as result_cache
@@ -43,18 +43,16 @@ from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
 from app.routers.engine import EngineBacktestRequest, execute_engine_backtest
+from app.schemas.ticker_request import (
+    MultiTickerRequest,
+    TickerRequest,
+)
 from app.services.dataset_service import RunCancelledError
 from app.services.polygon_client import PolygonClientService
 from app.services.rule_based_backtest import (
     RuleBasedBacktestResult,
     run_rule_based_backtest,
 )
-
-# Polygon-supported aggregate granularities; the runners only exercise
-# minute/hour/day/week today, but the broader set is allowed because the
-# rule-based backtest path accepts whatever the engine accepts.
-Timespan = Literal["minute", "hour", "day", "week", "month", "quarter", "year"]
-DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -76,15 +74,98 @@ class _CamelCaseModel(BaseModel):
     )
 
 
-class RuleBasedBacktestJobRequest(_CamelCaseModel):
-    """Body of POST /api/jobs-internal/backtest."""
+class _CamelCaseTickerRequest(TickerRequest):
+    """Composes ``TickerRequest`` with the camelCase wire convention
+    used by .NET-forwarded job bodies.
+
+    Pydantic quirk: a field-level ``validation_alias`` overrides the
+    class's ``alias_generator``, so the base's ``from_date`` /
+    ``to_date`` / ``symbol`` fields (which carry explicit
+    ``AliasChoices`` for legacy snake_case names) won't pick up the
+    camelCase form automatically. We redeclare those three fields here
+    with ``AliasChoices`` that include both snake_case and camelCase
+    variants.
+
+    ``extra="forbid"`` is preserved from the base — unknown fields
+    surface as ``extra_forbidden`` 422 once the transitional aliases
+    come off in PR (iii).
+    """
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+    # Re-declare with AliasChoices covering BOTH the canonical/legacy
+    # snake_case names AND their camelCase wire variants. Without this,
+    # the .NET-forwarded job bodies (camelCase) fail validation.
+    from_date: str = Field(
+        ...,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        validation_alias=AliasChoices(
+            "from_date", "fromDate", "start_date", "startDate"
+        ),
+    )
+    to_date: str = Field(
+        ...,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        validation_alias=AliasChoices(
+            "to_date", "toDate", "end_date", "endDate"
+        ),
+    )
+    symbol: str = Field(
+        ...,
+        min_length=1,
+        max_length=20,
+        validation_alias=AliasChoices("symbol", "ticker"),
+    )
+
+
+class _CamelCaseMultiTickerRequest(MultiTickerRequest):
+    """Multi-symbol equivalent of ``_CamelCaseTickerRequest``."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+    from_date: str = Field(
+        ...,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        validation_alias=AliasChoices(
+            "from_date", "fromDate", "start_date", "startDate"
+        ),
+    )
+    to_date: str = Field(
+        ...,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        validation_alias=AliasChoices(
+            "to_date", "toDate", "end_date", "endDate"
+        ),
+    )
+    symbols: list[str] = Field(
+        ...,
+        min_length=1,
+        validation_alias=AliasChoices("symbols", "tickers"),
+    )
+
+
+class RuleBasedBacktestJobRequest(_CamelCaseTickerRequest):
+    """Body of POST /api/jobs-internal/backtest.
+
+    **Default override**: ``multiplier=15`` to preserve the
+    pre-migration default (the rule-based backtest path defaulted to
+    15-minute bars before this PR). Without the override, the inherited
+    base default of 1 would silently switch every caller to 1-minute
+    bars.
+    """
+
+    # Override base default — preserves pre-migration multiplier=15.
+    multiplier: int = Field(15, ge=1)
 
     job_id: str = Field(..., min_length=1)
-    ticker: str
-    from_date: str  # YYYY-MM-DD
-    to_date: str
-    multiplier: int = 15
-    timespan: str = "minute"
     parameters: dict = Field(default_factory=dict)
 
 
@@ -114,7 +195,7 @@ class EngineBacktestJobRequest(_CamelCaseModel):
     backtest: dict[str, Any] = Field(default_factory=dict)
 
 
-class CrossSectionalJobRequest(_CamelCaseModel):
+class CrossSectionalJobRequest(_CamelCaseMultiTickerRequest):
     """Body of POST /api/jobs-internal/cross-sectional.
 
     The Frontend posts the same shape it currently sends to the GraphQL
@@ -124,43 +205,43 @@ class CrossSectionalJobRequest(_CamelCaseModel):
 
     job_id: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
-    tickers: list[str] = Field(..., min_length=1)
-    from_date: str
-    to_date: str
     target_type: str = "directional"
     force: bool = False
     """Skip the result cache and always re-run. Default: serve from
     cache if a prior run with identical params is still warm."""
 
 
-class FeatureResearchJobRequest(_CamelCaseModel):
+class FeatureResearchJobRequest(_CamelCaseTickerRequest):
     """Body of POST /api/jobs-internal/feature-research.
 
     The runner fetches bars from Polygon itself — the Frontend sends only
     the symbol + date range + feature, no payload of OHLCV. This keeps
     the .NET round-trip small and matches the cross-sectional pattern.
+
+    Inherits all defaults from the base (``multiplier=1``,
+    ``timespan="minute"``, ``session="rth"``) — those match the
+    pre-migration shape exactly.
     """
 
     job_id: str = Field(..., min_length=1)
-    ticker: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
-    from_date: str = Field(..., pattern=DATE_PATTERN)
-    to_date: str = Field(..., pattern=DATE_PATTERN)
-    multiplier: int = Field(1, ge=1)
-    timespan: Timespan = "minute"
     force: bool = False
 
 
-class SignalEngineJobRequest(_CamelCaseModel):
-    """Body of POST /api/jobs-internal/signal-engine."""
+class SignalEngineJobRequest(_CamelCaseTickerRequest):
+    """Body of POST /api/jobs-internal/signal-engine.
+
+    **Default override**: ``multiplier=15`` to preserve the
+    pre-migration default. Signal-engine processing operates on
+    15-minute bars by default; the inherited base default of 1 would
+    silently switch every caller to 1-minute bars.
+    """
+
+    # Override base default — preserves pre-migration multiplier=15.
+    multiplier: int = Field(15, ge=1)
 
     job_id: str = Field(..., min_length=1)
-    ticker: str = Field(..., min_length=1)
     feature_name: str = Field(..., min_length=1)
-    from_date: str = Field(..., pattern=DATE_PATTERN)
-    to_date: str = Field(..., pattern=DATE_PATTERN)
-    multiplier: int = Field(15, ge=1)
-    timespan: Timespan = "minute"
     flip_sign: bool = True
     regime_gate_enabled: bool = True
     force: bool = False
@@ -178,24 +259,24 @@ async def start_rule_based_backtest_job(req: RuleBasedBacktestJobRequest) -> dic
     The actual progress is observed by subscribing to the SSE stream
     served by the .NET layer at ``/jobs/{id}/events``.
     """
-    if not req.ticker.strip():
-        raise HTTPException(status_code=400, detail="ticker is required")
+    if not req.symbol.strip():
+        raise HTTPException(status_code=400, detail="symbol is required")
 
     def work(emit: ProgressEmitter, cancel) -> dict:
         # ----- Phase 1: load bars from Polygon -----
         emit.phase("loading_bars")
-        emit.log(f"Fetching {req.ticker} {req.multiplier}{req.timespan} bars from {req.from_date} to {req.to_date}")
+        emit.log(f"Fetching {req.symbol} {req.multiplier}{req.timespan} bars from {req.from_date} to {req.to_date}")
         cancel.raise_if_cancelled()
 
         bars = polygon_client.fetch_aggregates(
-            ticker=req.ticker.upper(),
+            ticker=req.symbol.upper(),
             multiplier=req.multiplier,
             timespan=req.timespan,
             from_date=req.from_date,
             to_date=req.to_date,
         )
         if not bars:
-            raise ValueError(f"No bars returned for {req.ticker} in date range")
+            raise ValueError(f"No bars returned for {req.symbol} in date range")
 
         emit.log(f"Fetched {len(bars)} bars")
         emit.progress(current=len(bars), total=len(bars), unit="bars", message="bars loaded")
@@ -207,7 +288,7 @@ async def start_rule_based_backtest_job(req: RuleBasedBacktestJobRequest) -> dic
         # iterates the dataframe internally. Coarse progress only:
         # phase boundaries are the meaningful signal here.
         result: RuleBasedBacktestResult = run_rule_based_backtest(
-            ticker=req.ticker.upper(),
+            ticker=req.symbol.upper(),
             bars=bars,
             params=req.parameters,
         )
@@ -388,14 +469,16 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
     the response carries ``status=cached`` and the worker thread is
     skipped. Pass ``force=true`` in the body to bypass the cache.
     """
-    if not req.tickers:
-        raise HTTPException(status_code=400, detail="tickers list is required")
+    # Note: ``req.symbols`` is already validated by Pydantic (min_length=1
+    # on the list, plus per-element ``min_length=1, max_length=20`` from
+    # ``MultiTickerRequest``); an empty list or empty-string element fails
+    # at validation, never reaches here.
     if not req.feature_name.strip():
         raise HTTPException(status_code=400, detail="feature_name is required")
 
     cache_params = {
         "feature_name": req.feature_name,
-        "tickers": req.tickers,
+        "tickers": req.symbols,
         "from_date": req.from_date,
         "to_date": req.to_date,
         "target_type": req.target_type,
@@ -411,10 +494,10 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
         cancel.raise_if_cancelled()
         emit.phase("starting")
         emit.log(
-            f"Starting cross-sectional study on {len(req.tickers)} ticker"
-            f"{'' if len(req.tickers) == 1 else 's'} "
-            f"({', '.join(t.upper() for t in req.tickers[:5])}"
-            f"{'…' if len(req.tickers) > 5 else ''}) "
+            f"Starting cross-sectional study on {len(req.symbols)} ticker"
+            f"{'' if len(req.symbols) == 1 else 's'} "
+            f"({', '.join(t.upper() for t in req.symbols[:5])}"
+            f"{'…' if len(req.symbols) > 5 else ''}) "
             f"for feature '{req.feature_name}'"
         )
 
@@ -441,7 +524,7 @@ async def start_cross_sectional_job(req: CrossSectionalJobRequest) -> dict:
 
         report: CrossSectionalReport = run_cross_sectional_study(
             feature_name=req.feature_name,
-            tickers=[t.upper() for t in req.tickers],
+            tickers=[t.upper() for t in req.symbols],
             start_date=req.from_date,
             end_date=req.to_date,
             polygon_client=polygon_client,
@@ -536,13 +619,13 @@ async def start_feature_research_job(req: FeatureResearchJobRequest) -> dict:
     A successful prior run with identical (ticker, feature, range,
     bar resolution) is served from cache. Pass ``force=true`` to bypass.
     """
-    if not req.ticker.strip():
-        raise HTTPException(status_code=400, detail="ticker is required")
+    if not req.symbol.strip():
+        raise HTTPException(status_code=400, detail="symbol is required")
     if not req.feature_name.strip():
         raise HTTPException(status_code=400, detail="feature_name is required")
 
     cache_params = {
-        "ticker": req.ticker.upper(),
+        "ticker": req.symbol.upper(),
         "feature_name": req.feature_name,
         "from_date": req.from_date,
         "to_date": req.to_date,
@@ -557,7 +640,7 @@ async def start_feature_research_job(req: FeatureResearchJobRequest) -> dict:
             return {"job_id": req.job_id, "status": "cached"}
 
     def work(emit: ProgressEmitter, cancel) -> dict:
-        ticker = req.ticker.upper()
+        ticker = req.symbol.upper()
 
         # ── Phase: load bars ─────────────────────────────────────────
         _emit_friendly_phase(
@@ -645,13 +728,13 @@ async def start_signal_engine_job(req: SignalEngineJobRequest) -> dict:
     walk-forward) emit fine-grained ``on_progress`` so the bar moves
     while the worker is mid-sweep.
     """
-    if not req.ticker.strip():
-        raise HTTPException(status_code=400, detail="ticker is required")
+    if not req.symbol.strip():
+        raise HTTPException(status_code=400, detail="symbol is required")
     if not req.feature_name.strip():
         raise HTTPException(status_code=400, detail="feature_name is required")
 
     cache_params = {
-        "ticker": req.ticker.upper(),
+        "ticker": req.symbol.upper(),
         "feature_name": req.feature_name,
         "from_date": req.from_date,
         "to_date": req.to_date,
@@ -668,7 +751,7 @@ async def start_signal_engine_job(req: SignalEngineJobRequest) -> dict:
             return {"job_id": req.job_id, "status": "cached"}
 
     def work(emit: ProgressEmitter, cancel) -> dict:
-        ticker = req.ticker.upper()
+        ticker = req.symbol.upper()
 
         _emit_friendly_phase(
             emit,

@@ -12,8 +12,9 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import Field
 
+from app.schemas.ticker_request import TickerRequest
 from app.services.data_quality_service import analyze, get_pipeline_docs
 from app.services.polygon_client import PolygonClientService
 
@@ -22,17 +23,30 @@ logger = logging.getLogger(__name__)
 polygon_client = PolygonClientService()
 
 
-class DataQualityRequest(BaseModel):
-    """Request schema for data quality analysis"""
+class DataQualityRequest(TickerRequest):
+    """Request schema for data quality analysis.
 
-    ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")
-    from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
-    to_date: str = Field(..., description="End date (YYYY-MM-DD)")
-    volume_fix: str = Field("round", description="How to fix fractional volume: 'round', 'drop', or 'nullify'")
-    recompute_indicators: bool = Field(True, description="Whether to recompute indicators from scratch")
+    Inherits ``symbol`` / ``from_date`` / ``to_date`` (with transitional
+    aliases for ``ticker`` / ``start_date`` / ``end_date``) plus
+    ``timespan`` / ``multiplier`` / ``session`` from the canonical base.
+    DQ analysis only consumes symbol + dates; the inherited sampling
+    fields are accepted but unused by ``analyze()`` — base defaults
+    (``timespan="minute"``, ``multiplier=1``, ``session="rth"``) are
+    harmless.
+    """
+
+    volume_fix: str = Field(
+        "round",
+        description="How to fix fractional volume: 'round', 'drop', or 'nullify'",
+    )
+    recompute_indicators: bool = Field(
+        True, description="Whether to recompute indicators from scratch"
+    )
     indicator_entries: list[dict[str, Any]] = Field(
         default=[],
-        description="List of indicator entries, each with 'name' and optional 'params' dict",
+        description=(
+            "List of indicator entries, each with 'name' and optional 'params' dict"
+        ),
     )
 
 
@@ -46,7 +60,7 @@ async def analyze_data_quality(request: DataQualityRequest):
     """
     try:
         logger.info(
-            f"[DQ] Analyze request: {request.ticker} {request.from_date} to {request.to_date}, "
+            f"[DQ] Analyze request: {request.symbol} {request.from_date} to {request.to_date}, "
             f"volume_fix={request.volume_fix}, recompute={request.recompute_indicators}"
         )
 
@@ -58,7 +72,7 @@ async def analyze_data_quality(request: DataQualityRequest):
 
         result = analyze(
             polygon=polygon_client,
-            ticker=request.ticker,
+            ticker=request.symbol,
             from_date=request.from_date,
             to_date=request.to_date,
             volume_fix=request.volume_fix,

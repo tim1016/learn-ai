@@ -171,11 +171,11 @@ async def calculate_indicator_reliability(
     try:
         logger.info(
             "[Reliability] Request: %s %s(%s) [%s -> %s] horizons=%s",
-            request.ticker,
+            request.symbol,
             request.indicator_name,
             request.indicator_params,
-            request.start_date,
-            request.end_date,
+            request.from_date,
+            request.to_date,
             request.horizons,
         )
 
@@ -191,7 +191,7 @@ async def calculate_indicator_reliability(
         # Compute warmup period
         max_lookback = _estimate_max_lookback(request.indicator_params)
         warmup_start = compute_warmup_start_date(
-            request.start_date,
+            request.from_date,
             max_lookback,
             request.timespan,
             request.multiplier,
@@ -200,9 +200,9 @@ async def calculate_indicator_reliability(
         # Fetch bars (including warmup)
         bars = fetch_bars_chunked(
             _polygon_client,
-            ticker=request.ticker,
+            ticker=request.symbol,
             from_date=warmup_start,
-            to_date=request.end_date,
+            to_date=request.to_date,
             timespan=request.timespan,
             multiplier=request.multiplier,
             adjusted=True,
@@ -240,7 +240,7 @@ async def calculate_indicator_reliability(
         logger.info("[Reliability] Indicator column: %s", indicator_column)
 
         # Trim warmup period
-        from_ts = int(pd.Timestamp(request.start_date).timestamp() * 1000)
+        from_ts = int(pd.Timestamp(request.from_date).timestamp() * 1000)
         df = df[df["timestamp"] >= from_ts].reset_index(drop=True)
 
         if len(df) < 100:
@@ -383,7 +383,7 @@ async def calculate_indicator_reliability(
 
         return IndicatorReliabilityResponse(
             success=True,
-            ticker=request.ticker,
+            ticker=request.symbol,
             indicator_name=request.indicator_name,
             indicator_params=request.indicator_params,
             display_name=format_indicator_display_name(
@@ -391,8 +391,8 @@ async def calculate_indicator_reliability(
                 request.indicator_params,
             ),
             category=get_indicator_category(request.indicator_name),
-            start_date=request.start_date,
-            end_date=request.end_date,
+            start_date=request.from_date,
+            end_date=request.to_date,
             bar_count=len(df),
             train_start=metadata.get("train_start"),
             train_end=metadata.get("train_end"),
