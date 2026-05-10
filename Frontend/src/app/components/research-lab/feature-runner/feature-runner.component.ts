@@ -36,8 +36,6 @@ import {
 } from '../../../utils/run-log-buffer';
 import { FeatureReportComponent } from '../feature-report/feature-report.component';
 import { RunProgressPanelComponent } from '../shared/run-progress-panel/run-progress-panel.component';
-import { Select } from 'primeng/select';
-import { InputText } from 'primeng/inputtext';
 import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
 import { CheckboxModule } from 'primeng/checkbox';
@@ -50,12 +48,13 @@ import {
 import { findFeatureId } from '../../../shared/indicator-catalog/feature-mapping';
 import { ActiveIndicatorCardComponent } from '../../data-lab/active-indicator-card/active-indicator-card.component';
 import { IndicatorConfigModalComponent } from '../../data-lab/indicator-config-modal/indicator-config-modal.component';
-import { PolygonDateRangeComponent } from '../../../shared/polygon-date-range';
-
-interface FeatureOption {
-  label: string;
-  value: string;
-}
+import { TickerRangePickerComponent } from '../../../shared/ticker-range-picker/ticker-range-picker.component';
+import type {
+  Resolution,
+  TickerRange,
+} from '../../../shared/ticker-range-picker/ticker-range-picker.types';
+import { TICKER_POOL, RECENT_TICKERS } from '../../../shared/ticker-catalog';
+import { tickerRangeToWire } from '../../../utils/ticker-wire';
 
 /** Shape of the ``target`` payload emitted by ``_serialize_target`` in
  *  ``PythonDataService/app/routers/jobs.py``. Mirrors the GraphQL
@@ -104,14 +103,11 @@ interface FeatureResearchJobResultRaw {
 
 @Component({
   selector: 'app-feature-runner',
-  standalone: true,
   imports: [
     CommonModule,
     FormsModule,
     FeatureReportComponent,
     RunProgressPanelComponent,
-    Select,
-    InputText,
     ButtonModule,
     MessageModule,
     CheckboxModule,
@@ -119,7 +115,7 @@ interface FeatureResearchJobResultRaw {
     IndicatorCatalogComponent,
     ActiveIndicatorCardComponent,
     IndicatorConfigModalComponent,
-    PolygonDateRangeComponent,
+    TickerRangePickerComponent,
   ],
   templateUrl: './feature-runner.component.html',
   styleUrls: ['./feature-runner.component.scss'],
@@ -131,17 +127,28 @@ export class FeatureRunnerComponent {
   private catalog = inject(IndicatorCatalogService);
 
   // Form inputs
-  ticker = signal('AAPL');
+  // Single TickerRange replaces (ticker, fromDate, toDate, timespan,
+  // multiplier). multiplier=1 matches FeatureResearchJobRequest's
+  // pre-migration default; the base TickerRequest also defaults to 1
+  // so no behavior change.
+  range = signal<TickerRange>({
+    symbol: 'AAPL',
+    from: '2024-01-01',
+    to: '2024-03-31',
+    resolution: 'minute',
+    multiplier: 1,
+  });
+  readonly tickerPool = TICKER_POOL;
+  readonly recentTickers = RECENT_TICKERS;
+  readonly availableMultipliers: readonly number[] = [1, 5, 15, 60, 240];
+  readonly availableResolutions: readonly Resolution[] = ['minute', 'hour', 'daily'];
+
   /** Catalog-driven selection: indicator key + params (matches data-lab's
    *  ``IndicatorEntry`` shape). The ``featureName`` sent to the backend is
    *  derived from this via ``findFeatureId`` so the IC test still routes
    *  through the existing fixed-ID feature_research worker. */
   selectedIndicator = signal<string>('rsi');
   selectedParams = signal<Record<string, number>>({ length: 14 });
-  fromDate = signal('2024-01-01');
-  toDate = signal('2024-03-31');
-  timespan = signal('minute');
-  multiplier = signal(1);
   forceRun = signal(false);
 
   /** Selected-name set fed to the catalog (single element, single-select). */
@@ -197,29 +204,24 @@ export class FeatureRunnerComponent {
 
   readonly cached = computed<boolean>(() => this.job()?.cached === true);
 
-  timespanOptions: FeatureOption[] = [
-    { label: 'Minute', value: 'minute' },
-    { label: 'Hour', value: 'hour' },
-    { label: 'Day', value: 'day' },
-  ];
-
   // ── Range guard ─────────────────────────────────────
   // Minute-resolution research at 2 years exceeds ~200k bars, which overruns
   // the backend→python keep-alive window. Cap minute studies to 180 calendar
   // days; hour at 3 years; day unrestricted.
-  private readonly MAX_DAYS_BY_TIMESPAN: Readonly<Record<string, number>> = {
+  private readonly MAX_DAYS_BY_RESOLUTION: Readonly<Record<Resolution, number>> = {
     minute: 180,
     hour: 1095,
-    day: Number.POSITIVE_INFINITY,
+    daily: Number.POSITIVE_INFINITY,
   };
 
-  readonly maxRangeDays = computed<number>(() =>
-    this.MAX_DAYS_BY_TIMESPAN[this.timespan()] ?? 180,
+  readonly maxRangeDays = computed<number>(
+    () => this.MAX_DAYS_BY_RESOLUTION[this.range().resolution] ?? 180,
   );
 
   readonly rangeDays = computed<number | null>(() => {
-    const from = Date.parse(this.fromDate());
-    const to = Date.parse(this.toDate());
+    const r = this.range();
+    const from = Date.parse(r.from);
+    const to = Date.parse(r.to);
     if (Number.isNaN(from) || Number.isNaN(to) || to < from) return null;
     return Math.round((to - from) / 86_400_000);
   });
@@ -230,15 +232,16 @@ export class FeatureRunnerComponent {
     const cap = this.maxRangeDays();
     if (days <= cap) return null;
     const capLabel = Number.isFinite(cap) ? `${cap} days` : 'no cap';
-    return `${this.timespan()}-resolution research is capped at ${capLabel} (you selected ${days} days). Long minute-bar requests don't survive the backend→python connection window. Shorten the range, or switch to an hourly/daily timespan.`;
+    return `${this.range().resolution}-resolution research is capped at ${capLabel} (you selected ${days} days). Long minute-bar requests don't survive the backend→python connection window. Shorten the range, or switch to an hourly/daily resolution.`;
   });
 
   canRun = computed(() => {
+    const r = this.range();
     return (
-      this.ticker().trim().length > 0 &&
+      r.symbol.trim().length > 0 &&
       this.featureMapping() !== null &&
-      this.fromDate().trim().length > 0 &&
-      this.toDate().trim().length > 0 &&
+      r.from.trim().length > 0 &&
+      r.to.trim().length > 0 &&
       this.rangeWarning() === null &&
       !this.loading()
     );
@@ -257,7 +260,8 @@ export class FeatureRunnerComponent {
   }
 
   get runSummary(): string {
-    return `${this.selectedFeatureLabel} on ${this.ticker().toUpperCase()} (${this.fromDate()} to ${this.toDate()})`;
+    const r = this.range();
+    return `${this.selectedFeatureLabel} on ${r.symbol.toUpperCase()} (${r.from} to ${r.to})`;
   }
 
   /** Catalog click in single-select mode → replace the active selection. */
@@ -344,13 +348,17 @@ export class FeatureRunnerComponent {
         this.error.set(this.unsupportedReason() ?? 'No feature selected');
         return;
       }
+      // Wire the canonical TickerRange shape via the shared adapter.
+      // Python's FeatureResearchJobRequest inherits TickerRequest in PR
+      // (ii); legacy aliases are still accepted until PR (iii)'s
+      // alias-removal commit.
+      const wire = tickerRangeToWire({
+        ...this.range(),
+        symbol: this.range().symbol.toUpperCase(),
+      });
       const id = await this.jobsService.startJob('feature_research', {
-        ticker: this.ticker().toUpperCase(),
+        ...wire,
         feature_name: featureId,
-        from_date: this.fromDate(),
-        to_date: this.toDate(),
-        timespan: this.timespan(),
-        multiplier: this.multiplier(),
         force: this.forceRun(),
       });
       this.jobId.set(id);
