@@ -22,6 +22,30 @@ def test_first_thirteen_bars_emit_zero() -> None:
     assert all(r["prediction"] == 0.0 for r in rows[:13])
 
 
+def test_rsi_warmup_zero_count_is_pinned() -> None:
+    """Pin the exact number of bars that emit prediction=0.0 due to RSI warmup.
+
+    Observed: pandas_ta RSI-14 NaN only at index 0 (not indices 0-13).
+    The ``idx < 13`` gate is an explicit design choice that pins 13 warmup
+    zeros (indices 0-12); index 13 is the first non-zero output.
+
+    Drift in this count signals either a pandas_ta behaviour change or an
+    intentional threshold change. Either way, the E2E hash fixture in
+    ``tests/research/ml/fixtures/e2e_known_hashes.json`` must also be
+    regenerated with a provenance note.
+    """
+    closes = [100.0 + i * 0.1 for i in range(50)]
+    timestamps_ms = [1000 * i for i in range(50)]
+    rows = compute_rsi_14_centered_predictions(closes, timestamps_ms)
+    zero_count = sum(1 for r in rows if r["prediction"] == 0.0)
+    assert zero_count == 13, (
+        f"RSI warmup zero-count drifted to {zero_count}; "
+        "if intentional (e.g. pandas_ta upgrade or threshold change), update this assertion "
+        "and the docstring on compute_rsi_14_centered_predictions, "
+        "and regenerate tests/research/ml/fixtures/e2e_known_hashes.json with a provenance note"
+    )
+
+
 def test_warmed_bars_have_nonzero_prediction() -> None:
     closes = [100.0 + i * 0.1 for i in range(20)]
     timestamps_ms = [1000 * i for i in range(20)]

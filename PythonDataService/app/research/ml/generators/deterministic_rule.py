@@ -29,10 +29,32 @@ def compute_rsi_14_centered_predictions(
 ) -> list[dict]:
     """Return one row per (close, timestamp) pair.
 
-    Predictions for bars where RSI has not yet warmed (first 13 bars
-    out of any non-empty input) are emitted as ``0.0``. From bar 14
-    onwards, ``prediction = (RSI14 - 50) / 100``, equivalent to
-    ``RSI14/100 - 0.5``.
+    Warmup policy — ``neutral_zero_until_feature_ready``:
+        Indices 0–12 (13 bars) are emitted as ``prediction = 0.0``.
+        From index 13 onward, ``prediction = (RSI14 - 50) / 100``,
+        equivalent to ``RSI14/100 - 0.5``.
+
+    Observed pandas_ta NaN range (verified empirically 2026-05-10,
+    pandas_ta 0.3.14b, monotonically-increasing series of length 20):
+
+        ta.rsi(series, length=14) → nan ONLY at index 0; indices 1–19
+        all return a numeric value (100.0 for a monotone up-series
+        because all gains, zero losses → RS=∞ → RSI→100).
+
+    So pandas_ta's own NaN guard covers only index 0. The ``idx < 13``
+    gate is an explicit DESIGN CHOICE to emit 13 warmup zeros rather
+    than the 1 that pandas_ta's NaN range would require. Rationale:
+    Wilder's smoothing needs at least 14 bars to produce a reliable
+    estimate; the first-bar RSI of 100.0 for an up-series is
+    technically "valid" but economically noisy. Emitting zeros for the
+    full first 14 bars (indices 0–13) would match LEAN's convention;
+    the current gate of ``idx < 13`` emits zeros for 13 bars, meaning
+    index 13 is the first non-zero output.
+
+    This is pinned by ``test_rsi_warmup_zero_count_is_pinned`` in
+    ``tests/research/ml/test_generator.py``. Any change here (e.g. to
+    align with LEAN's 14-bar convention) MUST update that test and the
+    E2E hash fixture in ``tests/research/ml/fixtures/e2e_known_hashes.json``.
     """
     if len(closes) != len(timestamps_ms):
         raise ValueError(
@@ -50,8 +72,10 @@ def compute_rsi_14_centered_predictions(
 
     rows: list[dict] = []
     for idx, (ts, rsi_val) in enumerate(zip(timestamps_ms, rsi_list, strict=True)):
-        # Apply neutral_zero_until_feature_ready warmup policy: RSI-14 requires
-        # 14 bars (indices 0-13) before it is meaningful; emit 0.0 for bars 0-12.
+        # Apply neutral_zero_until_feature_ready warmup policy. Gate at idx < 13:
+        # emits zeros for indices 0–12 (13 bars). Index 13 is the first bar
+        # eligible for a non-zero prediction. See docstring for the rationale
+        # vs. pandas_ta's own NaN range (only index 0 is NaN in practice).
         if idx < 13 or rsi_val is None or (isinstance(rsi_val, float) and pd.isna(rsi_val)):
             prediction = 0.0
         else:
