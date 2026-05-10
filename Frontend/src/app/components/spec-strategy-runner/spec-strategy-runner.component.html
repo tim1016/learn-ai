@@ -361,12 +361,13 @@
       <h2 class="ssr-run-title"><i class="pi pi-play-circle" aria-hidden="true"></i> Backtest configuration</h2>
       <div class="ssr-run-row">
         <div class="ssr-field ssr-field--date-range">
-          <app-polygon-date-range
-            [(fromDate)]="fromDate"
-            [(toDate)]="toDate"
-            fromLabel="Start date"
-            toLabel="End date"
-            idPrefix="ssr"
+          <app-ticker-range-picker
+            [value]="range()"
+            (valueChange)="onRangeChange($event)"
+            [tickerPool]="tickerPool"
+            [recent]="recentTickers"
+            [hideSampling]="true"
+            title="Backtest data"
           />
         </div>
         <label class="ssr-field">
@@ -441,8 +442,8 @@
       <div class="ssr-run-line">
         @if (errors().length === 0 && warnings().length === 0) {
           Ready to backtest <strong>{{ spec().name }}</strong> from
-          <span class="ssr-run-date">{{ fromDate() }}</span> to
-          <span class="ssr-run-date">{{ toDate() }}</span>.
+          <span class="ssr-run-date">{{ range().from }}</span> to
+          <span class="ssr-run-date">{{ range().to }}</span>.
         } @else if (errors().length > 0) {
           <span class="ssr-run-blocked">{{ errors().length }} error{{ errors().length > 1 ? 's' : '' }} must be fixed before running.</span>
         } @else {
