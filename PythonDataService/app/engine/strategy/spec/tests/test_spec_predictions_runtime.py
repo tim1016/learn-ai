@@ -7,7 +7,7 @@ import pytest
 
 from app.engine.strategy.spec import SpecAlgorithm
 from app.engine.strategy.spec import schema as S
-from app.research.ml.artifact import ChunkRef, GeneratorMeta, PredictionSetManifest
+from app.research.ml.artifact import ChunkRef, DeterministicRuleGenerator, PredictionSetManifest
 from app.research.ml.loader import PredictionSet
 
 
@@ -20,7 +20,7 @@ def _make_pset(timestamps_ms: list[int], values: list[float]) -> PredictionSet:
         resolution_minutes=15,
         field_names=["prediction"],
         warmup_policy="neutral_zero_until_feature_ready",
-        generator=GeneratorMeta(kind="deterministic_rule", rule_id="x", rule_version="1.0"),
+        generator=DeterministicRuleGenerator(kind="deterministic_rule", rule_id="x", rule_version="1.0"),
         chunks=[ChunkRef(
             trained_through_ms=timestamps_ms[0] - 1,
             start_ms=timestamps_ms[0],

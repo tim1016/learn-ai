@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -38,11 +38,44 @@ def is_path_safe_id(value: str) -> bool:
     return bool(_PATH_SAFE.fullmatch(value))
 
 
-class GeneratorMeta(BaseModel):
+class DeterministicRuleGenerator(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["deterministic_rule"]
     rule_id: str
     rule_version: str
+
+
+class QuantConnectPrecomputedFixtureGenerator(BaseModel):
+    """Provenance for a prediction-set artifact imported from a QuantConnect
+    precomputed-predictions tutorial export.
+
+    Provenance fields are sourced from the captured ``attribution.md`` (or
+    a sidecar JSON) and passed by the caller; QC's emitted file itself
+    contains only the per-date prediction list, no provenance metadata.
+
+    All timestamps are ``int64 ms UTC`` per ``.claude/rules/numerical-rigor.md``
+    -> "Timestamp rigor". Raw QC date strings (the per-row ``"YYYY-MM-DD"``
+    values from the export) are converted to ``int64 ms UTC`` at the
+    importer boundary using ``qc_daily_anchor_tz`` + ``qc_daily_anchor_hhmm``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["quantconnect_precomputed_fixture"]
+    qc_tutorial_url: str
+    qc_exported_at_ms: int
+    qc_calendar_window_start_ms: int
+    qc_calendar_window_end_ms: int
+    qc_symbol_filter: str
+    qc_dataset_id: str
+    qc_versions: dict[str, str]
+    qc_daily_anchor_tz: str
+    qc_daily_anchor_hhmm: str = Field(pattern=r"^\d{2}:\d{2}$")
+
+
+GeneratorMeta = Annotated[
+    DeterministicRuleGenerator | QuantConnectPrecomputedFixtureGenerator,
+    Field(discriminator="kind"),
+]
 
 
 class ChunkRef(BaseModel):

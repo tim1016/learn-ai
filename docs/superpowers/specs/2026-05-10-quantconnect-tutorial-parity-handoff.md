@@ -1,6 +1,8 @@
 # QuantConnect ML-tutorial parity study — session handoff
 
-**Status:** brainstorm pending, fresh session to start
+> **Status (2026-05-10): superseded for Phase 1.** The Phase 1 parity target is QuantConnect's *precomputed-predictions* tutorial, not the Keras "ML key concepts" tutorial framed in this doc. See `docs/superpowers/specs/2026-05-10-quantconnect-precomputed-predictions-parity.md` for the Phase 1 spec and the Phase 1 / Phase 2 / Phase 3 split. This doc is kept on disk because its **Hard problems / risks** (lines 79–92) and **Open questions** (lines 113–123) sections still inform Phase 2 (Keras tutorial parity). When Phase 2 starts, revisit this doc.
+
+**Status:** superseded — see banner above
 **Date:** 2026-05-10
 **Author:** Claude (with Tim) — handoff written at the end of the v0.5 plumbing session
 **Predecessors:**
