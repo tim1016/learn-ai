@@ -1,17 +1,18 @@
 /**
- * TickerRangePicker — pure-function tests.
+ * TickerRangePicker — pure-function tests + component-level flag tests.
  *
- * Covers the two pieces of logic that drive the component's behavior:
- * ``summarizeAvailability`` (counts cells by status, ignores weekends)
- * and ``computeAdvisories`` (smart-combination hints — resolution
- * downgrade, missing-data auto-fetch, wide-range warnings).
+ * The pure-function tests cover ``summarizeAvailability`` /
+ * ``computeAdvisories`` / ``dominantState`` / ``weekdaysBetween``.
  *
- * Rendering is intentionally not tested here: the project does not
- * ship ``@testing-library/angular``, and the component's visual output
- * is 1:1 with its inputs via signals + `@for` — no branching worth
- * asserting on at the markup level.
+ * The component-level tests verify the new picker flags introduced in
+ * PR (i): ``availableMultipliers`` (passes through to SamplingCard) and
+ * ``hideSampling`` (collapses Sampling card; deprecated alias
+ * ``hideResolution`` does the same).
  */
-import { computeAdvisories, dominantState, summarizeAvailability, weekdaysBetween } from './ticker-range-picker.types';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { TickerRangePickerComponent } from './ticker-range-picker.component';
+import { computeAdvisories, dominantState, summarizeAvailability, weekdaysBetween, type TickerRange } from './ticker-range-picker.types';
 
 describe('weekdaysBetween', () => {
   it('counts Mon–Fri inclusive of both endpoints', () => {
@@ -114,6 +115,61 @@ describe('computeAdvisories', () => {
       { complete: 17, partial: 0, hole: 0, missing: 0, weekdays: 17 },
     );
     expect(advisories).toEqual([]);
+  });
+});
+
+describe('TickerRangePickerComponent (flags)', () => {
+  const baseValue: TickerRange = {
+    symbol: 'SPY',
+    from: '2025-04-01',
+    to: '2025-04-30',
+    resolution: 'minute',
+  };
+
+  let fixture: ComponentFixture<TickerRangePickerComponent>;
+
+  beforeEach(async () => {
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [TickerRangePickerComponent],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(TickerRangePickerComponent);
+    fixture.componentRef.setInput('value', baseValue);
+  });
+
+  it('renders the Sampling card by default', () => {
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('app-sampling-card')).not.toBeNull();
+  });
+
+  it('hideSampling=true collapses the Sampling card', () => {
+    fixture.componentRef.setInput('hideSampling', true);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('app-sampling-card')).toBeNull();
+  });
+
+  it('deprecated hideResolution=true also collapses the Sampling card', () => {
+    fixture.componentRef.setInput('hideResolution', true);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('app-sampling-card')).toBeNull();
+  });
+
+  it('passes availableMultipliers through to the Sampling card', () => {
+    fixture.componentRef.setInput('availableMultipliers', [1, 5, 15]);
+    fixture.detectChanges();
+    const select: HTMLSelectElement | null = fixture.nativeElement.querySelector(
+      '.multiplier__select',
+    );
+    expect(select).not.toBeNull();
+    if (select) {
+      expect(select.querySelectorAll('option').length).toBe(3);
+    }
+  });
+
+  it('does not render multiplier dropdown by default', () => {
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.multiplier__select')).toBeNull();
   });
 });
 

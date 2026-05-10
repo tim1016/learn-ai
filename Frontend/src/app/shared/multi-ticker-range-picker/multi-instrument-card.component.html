@@ -1,0 +1,56 @@
+<section class="group" aria-label="Instrument universe">
+  <header class="group__head">
+    <span class="group__eyebrow">
+      <span class="group__eyebrow-dot group__eyebrow-dot--accent"></span>
+      Instrument
+      <span class="group__count mono">({{ value().symbols.length }}/{{ tickerPool().length }})</span>
+    </span>
+    <span class="group__actions">
+      <button type="button" class="link-btn" (click)="selectAll()">All</button>
+      <button type="button" class="link-btn" (click)="selectNone()">None</button>
+    </span>
+  </header>
+
+  <div class="chips-row">
+    @for (s of value().symbols; track s) {
+      <button
+        type="button"
+        class="chip"
+        (click)="remove(s)"
+        [attr.aria-label]="s + ' (remove)'"
+      >
+        <span class="chip__symbol mono">{{ s }}</span>
+        <span class="chip__remove" aria-hidden="true">×</span>
+      </button>
+    }
+  </div>
+
+  <div class="add-row">
+    <input
+      type="text"
+      class="add-input mono"
+      placeholder="Add ticker…"
+      [ngModel]="query()"
+      (ngModelChange)="query.set($event)"
+      aria-label="Search to add a ticker"
+    />
+    @if (query() && addable().length > 0) {
+      <ul class="add-suggestions" role="listbox">
+        @for (t of addable(); track t.symbol) {
+          <li>
+            <button
+              type="button"
+              class="suggestion"
+              role="option"
+              [attr.aria-selected]="false"
+              (click)="add(t.symbol)"
+            >
+              <span class="suggestion__symbol mono">{{ t.symbol }}</span>
+              <span class="suggestion__name">{{ t.name }}</span>
+            </button>
+          </li>
+        }
+      </ul>
+    }
+  </div>
+</section>

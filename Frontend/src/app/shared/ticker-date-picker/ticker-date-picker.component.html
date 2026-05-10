@@ -1,0 +1,43 @@
+<div class="picker-v2 picker-v2--date">
+  <div class="picker-v2__head">
+    <div class="picker-v2__title">
+      <i class="pi pi-calendar picker-v2__title-icon" aria-hidden="true"></i>
+      <span>{{ title() }}</span>
+    </div>
+    <div class="picker-v2__summary mono">
+      <span class="picker-v2__summary-symbol">{{ value().symbol }}</span>
+      <span class="picker-v2__summary-sep">·</span>
+      <span>{{ value().date }}</span>
+    </div>
+  </div>
+
+  <div class="picker-v2__groups picker-v2__groups--two">
+    <app-instrument-card
+      [value]="rangeProjection()"
+      (valueChange)="onInstrumentPatch($event)"
+      [tickerPool]="tickerPool()"
+      [recent]="recent()" />
+
+    <section class="group" aria-label="Date">
+      <header class="group__head">
+        <span class="group__eyebrow">
+          <span class="group__eyebrow-dot group__eyebrow-dot--bull"></span>
+          {{ dateLabel() }}
+        </span>
+      </header>
+      <div class="date-row">
+        <label [for]="idPrefix() + '-date'" class="visually-hidden">{{ dateLabel() }}</label>
+        <p-datepicker
+          [inputId]="idPrefix() + '-date'"
+          [ngModel]="dateValue"
+          (ngModelChange)="onDateChange($event)"
+          dateFormat="yy-mm-dd"
+          [minDate]="minDate()"
+          [maxDate]="maxDate()"
+          [showIcon]="true"
+          appendTo="body"
+        />
+      </div>
+    </section>
+  </div>
+</div>

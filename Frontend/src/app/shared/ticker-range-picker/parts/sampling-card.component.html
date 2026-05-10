@@ -1,0 +1,89 @@
+<section class="group" aria-label="Sampling">
+  <header class="group__head">
+    <span class="group__eyebrow">
+      <span class="group__eyebrow-dot group__eyebrow-dot--warn"></span>
+      Sampling
+    </span>
+    <span class="group__helper mono">
+      @if (effectiveMultiplier() === 1) {
+        {{ value().resolution }}
+      } @else {
+        {{ effectiveMultiplier() }}× {{ value().resolution }}
+      }
+    </span>
+  </header>
+
+  <div class="res-group" role="group" aria-label="Resolution">
+    @for (r of availableResolutions(); track r) {
+      <button
+        type="button"
+        class="res-btn mono"
+        [class.res-btn--active]="value().resolution === r"
+        (click)="setResolution(r)"
+        [attr.aria-pressed]="value().resolution === r"
+      >
+        {{ r === "minute" ? "1m" : r === "hour" ? "1h" : "1d" }}
+      </button>
+    }
+  </div>
+
+  @if (availableMultipliers().length > 0) {
+    <label class="multiplier">
+      <span class="multiplier__label">Multiplier</span>
+      <select
+        class="multiplier__select mono"
+        [ngModel]="effectiveMultiplier()"
+        (ngModelChange)="setMultiplier(+$event)"
+        aria-label="Bar multiplier"
+      >
+        @for (m of availableMultipliers(); track m) {
+          <option [value]="m">{{ m }}×</option>
+        }
+      </select>
+    </label>
+  }
+
+  @if (sessionMode() !== 'hidden') {
+    <div class="session" role="group" aria-label="Session">
+      <div class="session__head">
+        <span class="session__label">Session</span>
+        @if (sessionMode() === 'preview') {
+          <span class="session__tag mono"
+                pTooltip="UI preview — Python engine still hardcodes RTH. Extended hours coming soon."
+                tooltipPosition="top">preview</span>
+        }
+      </div>
+      <div class="session__group">
+        <button
+          type="button"
+          class="session-btn"
+          [class.session-btn--active]="effectiveSession() === 'rth'"
+          (click)="setSession('rth')"
+          [attr.aria-pressed]="effectiveSession() === 'rth'"
+        >RTH</button>
+        <button
+          type="button"
+          class="session-btn"
+          [class.session-btn--active]="effectiveSession() === 'extended'"
+          [disabled]="sessionMode() === 'disabled'"
+          [pTooltip]="sessionMode() === 'disabled' ? 'Extended hours coming soon' : ''"
+          tooltipPosition="top"
+          (click)="setSession('extended')"
+          [attr.aria-pressed]="effectiveSession() === 'extended'"
+        >Ext</button>
+      </div>
+    </div>
+  }
+
+  @if (showAutoFetch()) {
+    <label class="autofetch">
+      <input
+        type="checkbox"
+        [ngModel]="value().autoFetch ?? false"
+        (ngModelChange)="setAutoFetch($event)"
+      />
+      <span class="autofetch__label">Auto-fetch missing</span>
+      <i class="pi pi-cloud-download autofetch__icon" aria-hidden="true"></i>
+    </label>
+  }
+</section>

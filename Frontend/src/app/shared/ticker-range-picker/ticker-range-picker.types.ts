@@ -22,6 +22,12 @@ export interface TickerRange {
   /** YYYY-MM-DD */
   to: string;
   resolution: Resolution;
+  /** Bar multiplier (e.g. 5 for 5-minute bars). Defaults to 1.
+   *  The Sampling card only renders a multiplier picker when the host
+   *  passes a non-empty ``availableMultipliers`` input. Existing
+   *  consumers (data-lab, lean-engine) leave this undefined; the wire
+   *  adapter normalizes ``undefined`` to ``1`` at the seam. */
+  multiplier?: number;
   /** Defaults to ``rth`` when absent. */
   session?: Session;
   autoFetch?: boolean;

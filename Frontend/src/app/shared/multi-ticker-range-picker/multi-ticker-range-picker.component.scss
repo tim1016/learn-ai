@@ -1,0 +1,76 @@
+@use "../../styles/tokens" as *;
+
+:host {
+  display: block;
+  position: relative;
+  z-index: 1;
+}
+
+// Same outer-shell rules as the canonical picker — duplicated under
+// view encapsulation. Keeping shape compatibility so the two siblings
+// look identical when placed next to each other on a page.
+.picker-v2 {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  &__title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: var(--fw-semi);
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+  }
+
+  &__title-icon {
+    font-size: 12px;
+    color: var(--accent);
+  }
+
+  &__summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-subtle);
+  }
+
+  &__summary-symbol {
+    color: var(--text-primary);
+    font-weight: var(--fw-semi);
+  }
+
+  &__summary-sep {
+    color: var(--text-muted);
+  }
+
+  &__groups {
+    display: grid;
+    grid-template-columns: 1.1fr 1.4fr 1fr;
+    gap: 10px;
+
+    &--no-sampling {
+      grid-template-columns: 1.1fr 1.6fr;
+    }
+  }
+}
+
+@media (max-width: 900px) {
+  .picker-v2__groups,
+  .picker-v2__groups--no-sampling {
+    grid-template-columns: 1fr;
+  }
+}
