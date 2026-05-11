@@ -142,6 +142,11 @@
     </div>
   }
 
+  <!-- IDE shell: left rail = inputs, main = workspace, right rail = picker + output -->
+  <div class="ide-grid">
+
+  <div class="ide-rail-left">
+
   <!-- Card 1 — Instrument & Range -->
   <div class="dl-section-card">
     <h2 class="dl-card-head" data-card="01">Instrument &amp; Range</h2>
@@ -817,6 +822,10 @@
 
   </div><!-- end Card 4 -->
 
+  </div><!-- end ide-rail-left -->
+
+  <div class="ide-main">
+
   @if (error()) {
     <div class="error-msg">{{ error() }}</div>
   }
@@ -882,20 +891,153 @@
     </div>
   }
 
-  <!-- Indicator configuration modal (shared instance) -->
-  <app-indicator-config-modal
-    [visible]="modalVisible()"
-    (visibleChange)="onModalVisibleChange($event)"
-    [mode]="modalMode()"
-    [entry]="modalEntry()"
-    [paramConfigs]="modalParamConfigs()"
-    [activeIndicatorKeys]="activeIndicatorKeys()"
-    (paramChange)="onModalParamChange($event)"
-    (resetDefaults)="onModalReset()"
-    (resetParam)="onModalResetParam($event)"
-    (addRelated)="addInstanceByName($event)"
-    (removeRelated)="removeLastEntryByName($event)"
-    (addPreview)="onAddPreview($event)" />
+  <!-- Active indicators (moved into main from the old .indicator-workspace) -->
+  <div class="indicator-active-col">
+    @if (entries().length) {
+      <div class="entries-section">
+        <div class="entries-toolbar">
+          <span class="entries-toolbar-eyebrow">
+            Active · <span class="entries-toolbar-count">{{ entries().length }}</span>
+          </span>
+          <div class="entries-toolbar-actions">
+            <label class="entries-sort">
+              Sort
+              <select [ngModel]="entriesSortMode()" (ngModelChange)="entriesSortMode.set($event)">
+                @for (mode of entriesSortModes; track mode.value) {
+                  <option [value]="mode.value">{{ mode.label }}</option>
+                }
+              </select>
+            </label>
+            <button class="entries-add" type="button"
+                    (click)="focusCatalogSearch()"
+                    aria-label="Add an indicator — focus catalog search">
+              <i class="pi pi-plus" aria-hidden="true"></i>
+              Add indicator
+            </button>
+          </div>
+        </div>
+        <div class="entries-grid">
+          @for (block of groupedEntriesView(); track $index) {
+            @switch (block.kind) {
+              @case ('single') {
+                <app-active-indicator-card
+                  [entry]="block.item.entry"
+                  [paramConfigs]="getConfigParams(block.item.entry.name)"
+                  [timeframeWarning]="timeframeWarnings()[block.item.originalIndex]"
+                  (configure)="openConfigure(block.item.originalIndex)"
+                  (resetDefaults)="resetEntryToDefaults(block.item.originalIndex)"
+                  (remove)="removeEntry(block.item.originalIndex)" />
+              }
+              @case ('group') {
+                <app-active-indicator-group
+                  [name]="block.name"
+                  [items]="block.items"
+                  [paramConfigs]="getConfigParams(block.name)"
+                  (configurePill)="openConfigure($event)"
+                  (removePill)="removeEntry($event)"
+                  (addAnother)="addInstanceByName(block.name)"
+                  (resetGroup)="resetGroupToDefaults(block.name)"
+                  (removeGroup)="removeGroupByName(block.name)" />
+              }
+            }
+          }
+        </div>
+      </div>
+    } @else {
+      <div class="active-empty">
+        <i class="pi pi-sliders-h" aria-hidden="true"></i>
+        <p class="active-empty-primary">OHLCV only — the simple path.</p>
+        <p class="active-empty-hint">Click an indicator in the catalog to add it to your export.</p>
+      </div>
+    }
+  </div>
+
+  </div><!-- end ide-main -->
+
+  <div class="ide-rail-right">
+
+  <!-- Indicator catalog (moved up into the right rail) -->
+  <div class="indicator-catalog-col" id="data-lab-indicator-catalog">
+    <div class="catalog-col-header">
+      <span class="catalog-col-eyebrow">Indicator Catalog</span>
+      <span class="catalog-col-hint">All calculations use <code>pandas-ta</code></span>
+    </div>
+
+    <div class="catalog-search" role="search">
+      <i class="pi pi-search catalog-search-icon" aria-hidden="true"></i>
+      <input
+        #catalogSearchInput
+        type="search"
+        class="catalog-search-input"
+        placeholder="Search (rsi, bollinger, volume…)"
+        [ngModel]="catalogQuery()"
+        (ngModelChange)="catalogQuery.set($event)"
+        aria-label="Search indicator catalog"
+      />
+    </div>
+
+    @if (loadingIndicators()) {
+      <div class="loading-msg">Loading available indicators...</div>
+    }
+
+    <div class="categories">
+      @for (cat of filteredCategories(); track cat.name) {
+        @let count = categorySelectedCount(cat.name);
+        <div class="category-card">
+          <div class="category-header" (click)="toggleCategory(cat.name)">
+            <div class="category-title">
+              <i class="pi" [class.pi-chevron-right]="!isCategoryExpanded(cat.name)"
+                 [class.pi-chevron-down]="isCategoryExpanded(cat.name)"></i>
+              <span class="cat-name">{{ cat.name }}</span>
+              <span class="cat-count">{{ cat.indicators.length }}</span>
+              @if (count > 0) {
+                <span class="cat-selected">{{ count }} selected</span>
+              }
+            </div>
+          </div>
+
+          @if (isCategoryExpanded(cat.name)) {
+            <div class="indicator-grid">
+              @for (ind of cat.indicators; track ind.name) {
+                <div class="indicator-item" [class.selected]="isSelected(ind.name)">
+                  <label>
+                    <input
+                      type="checkbox"
+                      [checked]="isSelected(ind.name)"
+                      (change)="toggleIndicator(ind)" />
+                    <app-indicator-tooltip [indicatorKey]="ind.name"
+                                           [paramConfigs]="ind.configurable_params"
+                                           [fallbackDescription]="ind.description">
+                      <div class="indicator-info">
+                        <span class="ind-name">{{ ind.name }}</span>
+                        <span class="ind-desc">{{ ind.description }}</span>
+                      </div>
+                    </app-indicator-tooltip>
+                  </label>
+                  <button class="btn-preview" type="button"
+                          (click)="openPreview(ind.name)"
+                          pTooltip="Preview before adding" tooltipPosition="top"
+                          [attr.aria-label]="'Preview ' + ind.name">
+                    <i class="pi pi-info-circle"></i>
+                  </button>
+                  @if (ind.configurable_params.length) {
+                    <button class="btn-add" title="Add another instance with different params" (click)="addInstance(ind)">
+                      <i class="pi pi-plus"></i>
+                    </button>
+                  }
+                </div>
+              }
+            </div>
+          }
+        </div>
+      }
+      @if (filteredCategories().length === 0 && !loadingIndicators()) {
+        <div class="catalog-no-results">
+          No indicators match "{{ catalogQuery() }}".
+        </div>
+      }
+    </div>
+  </div>
 
   <!-- CSV Column Preview -->
   <div class="columns-section">
@@ -987,154 +1129,23 @@
     }
   </div>
 
-  <!-- Indicator workspace — 2-column: catalog left, active instances right -->
-  <div class="indicator-workspace">
+  </div><!-- end ide-rail-right -->
+  </div><!-- end ide-grid -->
 
-    <!-- Left: searchable catalog -->
-    <div class="indicator-catalog-col" id="data-lab-indicator-catalog">
-      <div class="catalog-col-header">
-        <span class="catalog-col-eyebrow">Indicator Catalog</span>
-        <span class="catalog-col-hint">All calculations use <code>pandas-ta</code></span>
-      </div>
-
-      <div class="catalog-search" role="search">
-        <i class="pi pi-search catalog-search-icon" aria-hidden="true"></i>
-        <input
-          #catalogSearchInput
-          type="search"
-          class="catalog-search-input"
-          placeholder="Search (rsi, bollinger, volume…)"
-          [ngModel]="catalogQuery()"
-          (ngModelChange)="catalogQuery.set($event)"
-          aria-label="Search indicator catalog"
-        />
-      </div>
-
-      @if (loadingIndicators()) {
-        <div class="loading-msg">Loading available indicators...</div>
-      }
-
-      <div class="categories">
-        @for (cat of filteredCategories(); track cat.name) {
-          @let count = categorySelectedCount(cat.name);
-          <div class="category-card">
-            <div class="category-header" (click)="toggleCategory(cat.name)">
-              <div class="category-title">
-                <i class="pi" [class.pi-chevron-right]="!isCategoryExpanded(cat.name)"
-                   [class.pi-chevron-down]="isCategoryExpanded(cat.name)"></i>
-                <span class="cat-name">{{ cat.name }}</span>
-                <span class="cat-count">{{ cat.indicators.length }}</span>
-                @if (count > 0) {
-                  <span class="cat-selected">{{ count }} selected</span>
-                }
-              </div>
-            </div>
-
-            @if (isCategoryExpanded(cat.name)) {
-              <div class="indicator-grid">
-                @for (ind of cat.indicators; track ind.name) {
-                  <div class="indicator-item" [class.selected]="isSelected(ind.name)">
-                    <label>
-                      <input
-                        type="checkbox"
-                        [checked]="isSelected(ind.name)"
-                        (change)="toggleIndicator(ind)" />
-                      <app-indicator-tooltip [indicatorKey]="ind.name"
-                                             [paramConfigs]="ind.configurable_params"
-                                             [fallbackDescription]="ind.description">
-                        <div class="indicator-info">
-                          <span class="ind-name">{{ ind.name }}</span>
-                          <span class="ind-desc">{{ ind.description }}</span>
-                        </div>
-                      </app-indicator-tooltip>
-                    </label>
-                    <button class="btn-preview" type="button"
-                            (click)="openPreview(ind.name)"
-                            pTooltip="Preview before adding" tooltipPosition="top"
-                            [attr.aria-label]="'Preview ' + ind.name">
-                      <i class="pi pi-info-circle"></i>
-                    </button>
-                    @if (ind.configurable_params.length) {
-                      <button class="btn-add" title="Add another instance with different params" (click)="addInstance(ind)">
-                        <i class="pi pi-plus"></i>
-                      </button>
-                    }
-                  </div>
-                }
-              </div>
-            }
-          </div>
-        }
-        @if (filteredCategories().length === 0 && !loadingIndicators()) {
-          <div class="catalog-no-results">
-            No indicators match "{{ catalogQuery() }}".
-          </div>
-        }
-      </div>
-    </div>
-
-    <!-- Right: active instances -->
-    <div class="indicator-active-col">
-      @if (entries().length) {
-        <div class="entries-section">
-          <div class="entries-toolbar">
-            <span class="entries-toolbar-eyebrow">
-              Active · <span class="entries-toolbar-count">{{ entries().length }}</span>
-            </span>
-            <div class="entries-toolbar-actions">
-              <label class="entries-sort">
-                Sort
-                <select [ngModel]="entriesSortMode()" (ngModelChange)="entriesSortMode.set($event)">
-                  @for (mode of entriesSortModes; track mode.value) {
-                    <option [value]="mode.value">{{ mode.label }}</option>
-                  }
-                </select>
-              </label>
-              <button class="entries-add" type="button"
-                      (click)="focusCatalogSearch()"
-                      aria-label="Add an indicator — focus catalog search">
-                <i class="pi pi-plus" aria-hidden="true"></i>
-                Add indicator
-              </button>
-            </div>
-          </div>
-          <div class="entries-grid">
-            @for (block of groupedEntriesView(); track $index) {
-              @switch (block.kind) {
-                @case ('single') {
-                  <app-active-indicator-card
-                    [entry]="block.item.entry"
-                    [paramConfigs]="getConfigParams(block.item.entry.name)"
-                    [timeframeWarning]="timeframeWarnings()[block.item.originalIndex]"
-                    (configure)="openConfigure(block.item.originalIndex)"
-                    (resetDefaults)="resetEntryToDefaults(block.item.originalIndex)"
-                    (remove)="removeEntry(block.item.originalIndex)" />
-                }
-                @case ('group') {
-                  <app-active-indicator-group
-                    [name]="block.name"
-                    [items]="block.items"
-                    [paramConfigs]="getConfigParams(block.name)"
-                    (configurePill)="openConfigure($event)"
-                    (removePill)="removeEntry($event)"
-                    (addAnother)="addInstanceByName(block.name)"
-                    (resetGroup)="resetGroupToDefaults(block.name)"
-                    (removeGroup)="removeGroupByName(block.name)" />
-                }
-              }
-            }
-          </div>
-        </div>
-      } @else {
-        <div class="active-empty">
-          <i class="pi pi-sliders-h" aria-hidden="true"></i>
-          <p class="active-empty-primary">OHLCV only — the simple path.</p>
-          <p class="active-empty-hint">Click an indicator in the catalog to add it to your export.</p>
-        </div>
-      }
-    </div>
-
-  </div>
+  <!-- Indicator configuration modal (overlay, outside the grid so it spans the page) -->
+  <app-indicator-config-modal
+    [visible]="modalVisible()"
+    (visibleChange)="onModalVisibleChange($event)"
+    [mode]="modalMode()"
+    [entry]="modalEntry()"
+    [paramConfigs]="modalParamConfigs()"
+    [activeIndicatorKeys]="activeIndicatorKeys()"
+    (paramChange)="onModalParamChange($event)"
+    (resetDefaults)="onModalReset()"
+    (resetParam)="onModalResetParam($event)"
+    (addRelated)="addInstanceByName($event)"
+    (removeRelated)="removeLastEntryByName($event)"
+    (addPreview)="onAddPreview($event)" />
 </div>
 
 <!-- Bottom-docked run UI: replaces the previous in-flow progress card.
