@@ -23,6 +23,9 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 14px;
+  // Drive the inner grid off the picker's own width, not the viewport — so
+  // it stacks correctly when mounted in a narrow rail (~320px).
+  container: picker / inline-size;
 
   &__head {
     display: flex;
@@ -68,12 +71,19 @@
 
   &__groups {
     display: grid;
-    grid-template-columns: 1.1fr 1.4fr 1fr;
+    // Stack single-column by default — the side-by-side layout only kicks
+    // in when the picker has room for both cards (see @container below).
+    grid-template-columns: 1fr;
     gap: 10px;
+  }
+}
 
-    &--no-sampling {
-      grid-template-columns: 1.1fr 1.6fr;
-    }
+@container picker (min-width: 560px) {
+  .picker-v2__groups {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr) minmax(0, 1fr);
+  }
+  .picker-v2__groups--no-sampling {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.6fr);
   }
 }
 
@@ -139,10 +149,5 @@
   }
 }
 
-// ── Mobile collapse ────────────────────────────────────────────────
-@media (max-width: 900px) {
-  .picker-v2__groups,
-  .picker-v2__groups--no-sampling {
-    grid-template-columns: 1fr;
-  }
-}
+// (Mobile collapse handled by the @container query above — single-column
+// is the default; the multi-column variants kick in only at ≥560px.)
