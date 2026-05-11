@@ -9,45 +9,9 @@
   padding: 0;
 }
 
-// ── Pinned/inspector mode ───────────────────────────────────
-// Right-anchored, full-height, no overlay, no drop shadow on the page.
-::ng-deep .icm-dialog-pinned.p-dialog {
-  position: fixed !important;
-  top: 0 !important;
-  right: 0 !important;
-  left: auto !important;
-  bottom: 0 !important;
-  margin: 0 !important;
-  height: 100vh !important;
-  max-height: 100vh !important;
-  border-radius: 0 !important;
-  border-left: 1px solid var(--border) !important;
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4) !important;
-}
-
-::ng-deep .icm-dialog-pinned .p-dialog-content {
-  max-height: calc(100vh - 80px);
-  height: calc(100vh - 80px);
-  overflow-y: auto;
-}
-
-.icm-pin-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-subtle);
-  cursor: pointer;
-  padding: 0.35rem 0.45rem;
-  border-radius: var(--radius);
-  font-size: 0.85rem;
-  align-self: flex-start;
-  margin-left: auto;
-  transition: background var(--t-ui) ease, color var(--t-ui) ease;
-
-  &:hover {
-    color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.06);
-  }
-}
+// Pinned-inspector mode retired in Phase 5 of the IDE-layout rollout —
+// the Data Lab IDE shell now owns the right rail natively, so the dialog
+// only renders as a centered modal.
 
 .icm-header {
   display: flex;
