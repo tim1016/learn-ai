@@ -1,6 +1,6 @@
 {
-  "_comment": "Pinned hashes for the QC precomputed-predictions parity fixture. See docs/references/quantconnect-precomputed-predictions.md and tests/fixtures/golden/qc-precomputed-predictions/attribution.md for context. run_ledger_prediction_set_hash equals prediction_set_hash by design — the runner threads the manifest's top-level hash unchanged.",
-  "prediction_set_hash": "5807a23fe16ce790d807df3697fa9c161c1887fdb603a7b1b89593cfc93f0188",
-  "run_ledger_prediction_set_hash": "5807a23fe16ce790d807df3697fa9c161c1887fdb603a7b1b89593cfc93f0188",
-  "result_hash": "0c92e9f58cf56658a43c53ac1a2ee936c97934e6f29e59f7a083e27a58792d8f"
+  "_comment": "Pinned hashes for the QC precomputed-predictions parity fixture (GBM + SP500-universe, AAPL anchor). See docs/references/quantconnect-precomputed-predictions.md and tests/fixtures/golden/qc-precomputed-predictions/attribution.md for context. run_ledger_prediction_set_hash equals prediction_set_hash by design — the runner threads the manifest's top-level hash unchanged.",
+  "prediction_set_hash": "b8252cfa9a749f5bf592602f3aebc2b3a4ccc6bb0cd41da48a6db7a581342e0e",
+  "run_ledger_prediction_set_hash": "b8252cfa9a749f5bf592602f3aebc2b3a4ccc6bb0cd41da48a6db7a581342e0e",
+  "result_hash": "2585aadb0e9a22e0b7da4b0b62d4b027acdbaf97695bdff452cc7aa1b23f8446"
 }

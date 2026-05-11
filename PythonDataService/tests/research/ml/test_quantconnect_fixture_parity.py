@@ -22,21 +22,16 @@ import pytest
 
 from app.research.ml.generators.quantconnect_fixture import import_qc_fixture
 
-_FIXTURE_DIR = (
-    Path(__file__).resolve().parents[2]
-    / "fixtures" / "golden" / "qc-precomputed-predictions"
-)
+_FIXTURE_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "golden" / "qc-precomputed-predictions"
 _QC_EXPORT = _FIXTURE_DIR / "qc_export.json"
-_KNOWN_HASHES = (
-    Path(__file__).resolve().parent / "fixtures" / "qc_known_hashes.json"
-)
-_SYMBOL = "SPY"
+_KNOWN_HASHES = Path(__file__).resolve().parent / "fixtures" / "qc_known_hashes.json"
+_SYMBOL = "AAPL"
 
 _PROVENANCE = {
     "qc_tutorial_url": "https://www.quantconnect.com/docs/v2/writing-algorithms/importing-data/streaming-data/precomputed-ml-predictions",
-    "qc_exported_at_ms": 1778443824165,
-    "qc_calendar_window_start_ms": 1735851600000,  # 2025-01-02 16:00 ET
-    "qc_calendar_window_end_ms":   1767214800000,  # 2025-12-31 16:00 ET
+    "qc_exported_at_ms": 1778469503771,
+    "qc_calendar_window_start_ms": 1770757200000,  # 2026-02-10 16:00 ET
+    "qc_calendar_window_end_ms": 1773345600000,  # 2026-03-12 16:00 ET
     "qc_dataset_id": "QuantConnect/USEquity-Daily",
     "qc_versions": {"sklearn": "1.6.1", "numpy": "1.26.4", "pandas": "2.3.3"},
 }
@@ -50,7 +45,7 @@ pytestmark = pytest.mark.skipif(
 def _import(tmp_path: Path):
     return import_qc_fixture(
         qc_export_path=_QC_EXPORT,
-        prediction_set_id="qc_spy_precomputed_v001",
+        prediction_set_id="qc_aapl_gbm_v001",
         output_root=tmp_path / "artifacts" / "predictions",
         symbol=_SYMBOL,
         **_PROVENANCE,
@@ -69,9 +64,7 @@ def test_qc_fixture_parity_per_row_predictions_match(tmp_path: Path) -> None:
     }
 
     manifest = _import(tmp_path)
-    artifact_dir = (
-        tmp_path / "artifacts" / "predictions" / manifest.prediction_set_id
-    )
+    artifact_dir = tmp_path / "artifacts" / "predictions" / manifest.prediction_set_id
 
     # Re-read the chunk parquet via the existing helper to round-trip.
     from app.research.ml.artifact import read_chunk_rows
@@ -85,19 +78,13 @@ def test_qc_fixture_parity_per_row_predictions_match(tmp_path: Path) -> None:
     for row in rows:
         ts_ms = row["timestamp_ms"]
         # Reverse the importer's date conversion: ms UTC -> NY date.
-        ny_date = (
-            pd.Timestamp(ts_ms, unit="ms", tz="UTC")
-            .tz_convert("America/New_York")
-            .strftime("%Y-%m-%d")
-        )
+        ny_date = pd.Timestamp(ts_ms, unit="ms", tz="UTC").tz_convert("America/New_York").strftime("%Y-%m-%d")
         assert ny_date in qc_values_by_date, (
             f"importer emitted ts={ts_ms} (NY date {ny_date}) which has no QC source row"
         )
         # Reject duplicates explicitly: a count-only check would silently
         # accept a duplicated NY date paired with a missing one.
-        assert ny_date not in seen_dates, (
-            f"importer emitted duplicate NY date {ny_date} (ts={ts_ms})"
-        )
+        assert ny_date not in seen_dates, f"importer emitted duplicate NY date {ny_date} (ts={ts_ms})"
         seen_dates.add(ny_date)
 
         qc_value = qc_values_by_date[ny_date]
