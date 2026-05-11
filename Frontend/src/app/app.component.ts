@@ -28,12 +28,17 @@ import { BrokerHealthService } from './services/broker-health.service';
       color: var(--text-primary);
     }
 
+    /* Named container "ide" drives the .ide-grid breakpoints declared in
+       styles.scss. Lives here (outside any per-page component) so
+       container-query measurement is unaffected by tab switches, modal
+       mounts, or page-level transforms. */
     .main {
       flex: 1;
       min-width: 0;
       display: flex;
       flex-direction: column;
       overflow-x: auto;
+      container: ide / inline-size;
     }
 
     .main-content {

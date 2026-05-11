@@ -231,3 +231,77 @@ code {
   color: var(--text-primary);
   margin: 10px 0 4px;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   IDE layout primitives
+
+   Sticky-main + two-rail layout, driven by container queries
+   against the named container declared on <main> (see
+   app.component.ts). Three modes:
+
+     <1100px content : everything stacks vertically.
+     ≥1100 <1500    : 320px left rail + main with right rail
+                       reflowed below it (still column 2).
+     ≥1500          : 320px left rail + sticky main + 360px
+                       right rail (all three sticky and
+                       independently scrollable).
+
+   DOM order is always: top-strip → left → main → right.
+   That reading order works for all three modes; grid
+   placement handles the spatial layout.
+
+   The named container lives on <main> (outside any per-page
+   component), so container-query measurement is unaffected by
+   tab switches, modal mounts, or page-level transforms.
+   ═══════════════════════════════════════════════════════════ */
+
+.ide-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+}
+
+.ide-rail-left,
+.ide-rail-right,
+.ide-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+@container ide (min-width: 1100px) {
+  .ide-grid {
+    grid-template-columns: 320px minmax(0, 1fr);
+  }
+
+  /* Right rail content reflows under main in column 2. */
+  .ide-rail-right {
+    grid-column: 2;
+  }
+
+  .ide-rail-left,
+  .ide-main {
+    position: sticky;
+    top: var(--subnav-h, 0px);
+    align-self: start;
+    max-height: calc(100vh - var(--subnav-h, 0px) - var(--run-dock-height, 36px) - 1rem);
+    overflow-y: auto;
+  }
+}
+
+@container ide (min-width: 1500px) {
+  .ide-grid {
+    grid-template-columns: 320px minmax(0, 1fr) 360px;
+  }
+
+  .ide-rail-right {
+    grid-column: 3;
+    grid-row: 1;
+    position: sticky;
+    top: var(--subnav-h, 0px);
+    align-self: start;
+    max-height: calc(100vh - var(--subnav-h, 0px) - var(--run-dock-height, 36px) - 1rem);
+    overflow-y: auto;
+  }
+}
