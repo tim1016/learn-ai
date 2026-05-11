@@ -46,23 +46,18 @@ from app.engine.strategy.spec.tests._parity_helpers import FakeDataReader
 from app.research.ml.generators.quantconnect_fixture import import_qc_fixture
 from app.research.runs.runner import RunRequest, run_strategy_spec
 
-_FIXTURE_DIR = (
-    Path(__file__).resolve().parents[2]
-    / "fixtures" / "golden" / "qc-precomputed-predictions"
-)
+_FIXTURE_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "golden" / "qc-precomputed-predictions"
 _QC_EXPORT = _FIXTURE_DIR / "qc_export.json"
-_KNOWN_HASHES_PATH = (
-    Path(__file__).resolve().parent / "fixtures" / "qc_known_hashes.json"
-)
-_SYMBOL = "SPY"
-_PREDICTION_SET_ID = "qc_spy_precomputed_v001"
+_KNOWN_HASHES_PATH = Path(__file__).resolve().parent / "fixtures" / "qc_known_hashes.json"
+_SYMBOL = "AAPL"
+_PREDICTION_SET_ID = "qc_aapl_gbm_v001"
 _NY = ZoneInfo("America/New_York")
 
 _PROVENANCE = {
     "qc_tutorial_url": "https://www.quantconnect.com/docs/v2/writing-algorithms/importing-data/streaming-data/precomputed-ml-predictions",
-    "qc_exported_at_ms": 1778443824165,
-    "qc_calendar_window_start_ms": 1735851600000,
-    "qc_calendar_window_end_ms": 1767214800000,
+    "qc_exported_at_ms": 1778469503771,
+    "qc_calendar_window_start_ms": 1770757200000,
+    "qc_calendar_window_end_ms": 1773345600000,
     "qc_dataset_id": "QuantConnect/USEquity-Daily",
     "qc_versions": {"sklearn": "1.6.1", "numpy": "1.26.4", "pandas": "2.3.3"},
 }
@@ -72,10 +67,7 @@ def _runtime_hashes_pinned() -> bool:
     if not _QC_EXPORT.is_file() or not _KNOWN_HASHES_PATH.is_file():
         return False
     data = json.loads(_KNOWN_HASHES_PATH.read_text(encoding="utf-8"))
-    return (
-        "run_ledger_prediction_set_hash" in data
-        and "result_hash" in data
-    )
+    return "run_ledger_prediction_set_hash" in data and "result_hash" in data
 
 
 pytestmark = pytest.mark.skipif(
@@ -118,9 +110,7 @@ def _build_spy_daily_bars() -> list[TradeBar]:
         )
 
     sentinel_date = dates[-1] + timedelta(days=4)
-    sentinel_start = datetime(
-        sentinel_date.year, sentinel_date.month, sentinel_date.day, 9, 30, tzinfo=_NY
-    )
+    sentinel_start = datetime(sentinel_date.year, sentinel_date.month, sentinel_date.day, 9, 30, tzinfo=_NY)
     bars.append(
         TradeBar(
             symbol=_SYMBOL,
@@ -210,14 +200,10 @@ def _run() -> tuple[str | None, str]:
     in test_qc_fixture_strategy_spec_run_ledger_hash_pinned can reuse it
     without forcing both runtime tests to share a single execution.
     """
-    raise NotImplementedError(
-        "tests build the run inline — see the test bodies below"
-    )
+    raise NotImplementedError("tests build the run inline — see the test bodies below")
 
 
-def test_qc_fixture_strategy_spec_run_ledger_hash_pinned(
-    qc_spy_data_factory, qc_artifacts_root: Path
-) -> None:
+def test_qc_fixture_strategy_spec_run_ledger_hash_pinned(qc_spy_data_factory, qc_artifacts_root: Path) -> None:
     """RunLedger.prediction_set_hash threads through unchanged from the
     artifact's manifest; if the importer or artifact format ever drifts,
     this fails before result_hash even matters."""
@@ -228,8 +214,8 @@ def test_qc_fixture_strategy_spec_run_ledger_hash_pinned(
     ledger, _ = run_strategy_spec(
         RunRequest(
             spec=spec,
-            start_date=Date(2025, 1, 13),
-            end_date=Date(2025, 12, 30),
+            start_date=Date(2026, 2, 10),
+            end_date=Date(2026, 3, 12),
         ),
         data_source_factory=qc_spy_data_factory,
         data_root_revision="qc-parity-fixture-v1",
@@ -237,14 +223,11 @@ def test_qc_fixture_strategy_spec_run_ledger_hash_pinned(
 
     assert ledger.status == "completed", ledger.failure_reason
     assert ledger.prediction_set_hash == expected_pred_hash, (
-        f"RunLedger.prediction_set_hash drift: pinned={expected_pred_hash}, "
-        f"got={ledger.prediction_set_hash}"
+        f"RunLedger.prediction_set_hash drift: pinned={expected_pred_hash}, got={ledger.prediction_set_hash}"
     )
 
 
-def test_qc_fixture_strategy_spec_result_hash_pinned(
-    qc_spy_data_factory, qc_artifacts_root: Path
-) -> None:
+def test_qc_fixture_strategy_spec_result_hash_pinned(qc_spy_data_factory, qc_artifacts_root: Path) -> None:
     """result_hash is the SHA256 of the BacktestRunResult payload — pins
     the (artifact, spec, bars, engine config) tuple end-to-end. Drift here
     means *something* in the run pipeline changed semantics; investigate
@@ -256,8 +239,8 @@ def test_qc_fixture_strategy_spec_result_hash_pinned(
     ledger, _ = run_strategy_spec(
         RunRequest(
             spec=spec,
-            start_date=Date(2025, 1, 13),
-            end_date=Date(2025, 12, 30),
+            start_date=Date(2026, 2, 10),
+            end_date=Date(2026, 3, 12),
         ),
         data_source_factory=qc_spy_data_factory,
         data_root_revision="qc-parity-fixture-v1",
@@ -265,6 +248,5 @@ def test_qc_fixture_strategy_spec_result_hash_pinned(
 
     assert ledger.status == "completed", ledger.failure_reason
     assert ledger.result_hash == expected_result_hash, (
-        f"RunLedger.result_hash drift: pinned={expected_result_hash}, "
-        f"got={ledger.result_hash}"
+        f"RunLedger.result_hash drift: pinned={expected_result_hash}, got={ledger.result_hash}"
     )

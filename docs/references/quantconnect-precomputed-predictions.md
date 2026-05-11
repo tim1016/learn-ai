@@ -30,13 +30,14 @@
 
 The §A test fixtures use synthetic data crafted to match QC's documented shape. §B captures real values; if QC has versioned the tutorial since this writing, the §B step diffs the captured shape against the documented one and surfaces any drift before unskipping the parity tests.
 
-## Pinned decisions for §B / §C
+## Pinned decisions
 
-| # | Decision | Value |
-|---|---|---|
-| 1 | Symbol to anchor parity on | **SPY** |
-| 2 | Daily anchor `(tz, HH:MM)` for date-only → `int64 ms UTC` | `("America/New_York", "16:00")` (defaults; NYSE close) |
-| 3 | `qc_dataset_id` convention | Use QC's labeled string for the data source (e.g. `"QuantConnect/USEquity-Daily"`); record the verbatim label in `attribution.md`. |
+| # | Decision | Value | Notes |
+|---|---|---|---|
+| 1 | Symbol to anchor parity on | **AAPL** | Long-tenured S&P 500 constituent; present in `qb.universe.etf(spy)` continuously across any reasonable validation window. Changed from SPY because SPY itself is **not** a constituent of its own ETF universe — QC's published tutorial uses `qb.universe.etf(spy)` which returns SP500 stocks, so SPY is absent from the export. |
+| 2 | Daily anchor `(tz, HH:MM)` for date-only → `int64 ms UTC` | `("America/New_York", "16:00")` (defaults; NYSE close) | |
+| 3 | `qc_dataset_id` convention | Use QC's labeled string for the data source (e.g. `"QuantConnect/USEquity-Daily"`); record the verbatim label in `attribution.md`. | |
+| 4 | QC `Symbol` key normalization | Strip the security-id suffix at fixture-capture time via `str(s).split(' ', 1)[0]` so saved JSON has bare ticker keys (e.g. `"AAPL"`, not `"AAPL R735QTJ8XC9X"`). | QC stringifies `Symbol` objects with security identifiers. The importer reads bare tickers; the normalization happens in the notebook before save. |
 
 ## Captured fixture provenance
 
@@ -44,30 +45,32 @@ The §A test fixtures use synthetic data crafted to match QC's documented shape.
 
 - **QC tutorial URL**: <https://www.quantconnect.com/docs/v2/writing-algorithms/importing-data/streaming-data/precomputed-ml-predictions>
 - **QC dataset id**: `QuantConnect/USEquity-Daily` (verbatim placeholder; QC Cloud doesn't expose a stable internal id at the notebook level)
-- **Calendar window**: `2025-01-02` → `2025-12-31` at NYSE close (`1735851600000` → `1767214800000` ms UTC)
-- **Symbol**: SPY (single-symbol notebook; **not** QC's published GBM + SP500-constituents-universe variant)
-- **Model**: `sklearn.linear_model.LinearRegression` on 5 lagged days of SPY's daily close `pct_change()` — closed-form, deterministic
-- **Versions**: sklearn 1.6.1, numpy 1.26.4, pandas 2.3.3 (lean: TBD next capture)
-- **Exported at (UTC ms)**: `1778443824165` (≈ 2026-05-10 17:30 UTC)
-- **First emitted prediction**: 2025-01-13 (after 5-day lag warmup + 1 `pct_change` = 6 trading days from 2025-01-02)
-- **Last emitted prediction**: 2025-12-30 (243 rows total)
-- **Pinned `prediction_set_hash`**: `5807a23fe16ce790d807df3697fa9c161c1887fdb603a7b1b89593cfc93f0188` (in `tests/research/ml/fixtures/qc_known_hashes.json`)
-- **Pinned `RunLedger.prediction_set_hash`**: `5807a23fe16ce790d807df3697fa9c161c1887fdb603a7b1b89593cfc93f0188` — equals the manifest hash because the runner threads it through unchanged
-- **Pinned `result_hash`**: `0c92e9f58cf56658a43c53ac1a2ee936c97934e6f29e59f7a083e27a58792d8f` — covers the (artifact, spec, synthetic SPY daily bars, engine config) tuple end-to-end
+- **Validation window**: `2026-02-10` → `2026-03-12` at NYSE close (`1770757200000` → `1773345600000` ms UTC) — the `[validation_start, validation_end]` QC's tutorial predicts on
+- **Train window**: 90 trading days preceding `validation_start` (QC tutorial default)
+- **Symbol** (parity anchor): AAPL — extracted from a full `qb.universe.etf(spy)` SP500-constituents export (~500 symbols per record)
+- **Model**: `sklearn.ensemble.GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)` — QC's published precomputed-ML-predictions tutorial code, verbatim. Features: 10-day momentum, 20-day daily-return volatility, relative volume. Label: open-to-open return from `T+1` to `T+2`.
+- **Versions**: sklearn 1.6.1, numpy 1.26.4, pandas 2.3.3 (lean: record from QC Cloud "About" footer next time)
+- **Exported at (UTC ms)**: `1778469503771` (≈ 2026-05-10)
+- **Row count**: 22 daily AAPL predictions (one per trading day in the validation window)
+- **Pinned `prediction_set_hash`**: `b8252cfa9a749f5bf592602f3aebc2b3a4ccc6bb0cd41da48a6db7a581342e0e` (in `tests/research/ml/fixtures/qc_known_hashes.json`)
+- **Pinned `RunLedger.prediction_set_hash`**: `b8252cfa9a749f5bf592602f3aebc2b3a4ccc6bb0cd41da48a6db7a581342e0e` — equals the manifest hash because the runner threads it through unchanged
+- **Pinned `result_hash`**: `2585aadb0e9a22e0b7da4b0b62d4b027acdbaf97695bdff452cc7aa1b23f8446` — covers the (artifact, spec, synthetic AAPL daily bars, engine config) tuple end-to-end
 
 ## §C runtime test setup
 
 Lives at `PythonDataService/tests/research/ml/test_quantconnect_fixture_runtime.py`.
 
-- **Spec**: minimal SPY-daily, no indicators, single `PredictionComparison(prediction="qc_pred", op=">", value=0.0)` entry, 1-bar `BarsSinceEntry` exit. Reduces inputs to `result_hash` to a deterministic function of (imported artifact, synthetic bars, engine defaults).
+- **Spec**: minimal AAPL-daily, no indicators, single `PredictionComparison(prediction="qc_pred", op=">", value=0.0)` entry, 1-bar `BarsSinceEntry` exit. Reduces inputs to `result_hash` to a deterministic function of (imported artifact, synthetic bars, engine defaults).
 - **Synthetic data**: one minute bar per QC prediction date with `time = 09:30 ET` and `end_time = 16:00 ET`, plus a sentinel bar 4 days after the last prediction to flush the last day's consolidated bar. Daily consolidation (`period_minutes = 1440`) emits one bar per prediction date with `end_time` matching QC's anchor convention exactly.
 - **Why synthetic, not real Polygon/LEAN bars**: the parity claim is about *prediction-pipeline determinism*, not about price-action realism. Decoupling from a live data source keeps the test reproducible offline and across CI re-pulls of master.
 
 ## Parity claim (current)
 
-> Captured QC export `qc_export.json` → importer reproduces `prediction_set_hash = 5807a23f…f0188` deterministically across re-runs, and every per-row prediction value the importer emits equals the source JSON value within `atol=1e-9, rtol=0`.
+> Captured QC export `qc_export.json` — QC's published `GradientBoostingRegressor(random_state=42)` tutorial run against the SP500-constituents universe, AAPL anchor — feeds into our importer, which reproduces `prediction_set_hash = b8252cfa…342e0e` deterministically across re-runs, and every per-row AAPL prediction value the importer emits equals the source JSON value within `atol=1e-9, rtol=0`. The runtime backtest produces a stable `result_hash = 2585aadb…f8446`.
 
-This is **not** "our predictions equal QC's published GBM tutorial values." This capture used a simplified single-symbol LinearRegression notebook to validate the importer pipeline; the export shape matches QC's documented contract but the model and universe differ. To extend the claim to literal-QC-published-prediction-values parity, swap the notebook's model cell for QC's published `GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)` against the SP500-constituents universe and re-capture; the importer code and the rest of the pipeline don't change.
+This **is** literal-QC-published-value parity at the plumbing level: the captured JSON contains QC's actual GBM tutorial output for SP500 constituents over the pinned validation window, and our importer + runner reproduce hashes deterministically against that JSON. The runtime test uses synthetic flat AAPL daily bars (open=high=low=close), not real market data — `result_hash` validates pipeline determinism, not P&L realism (Phase 3 work).
+
+**Superseded fixture**: A prior `prediction_set_hash = 5807a23f…f0188` (LinearRegression on SPY, 2025-01-13 → 2025-12-30) is preserved in git history at PR #213. That fixture validated the importer plumbing with a deterministic-but-non-QC-published model; this fixture replaces it with QC's actual tutorial output.
 
 ---
 
