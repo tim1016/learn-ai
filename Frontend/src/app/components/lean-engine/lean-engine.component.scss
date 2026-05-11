@@ -142,16 +142,9 @@
   }
 }
 
-// ─── Configure tab — strategy/execution two-column grid ──────────
-.config-two-col {
-  display: grid;
-  grid-template-columns: 1.6fr 1fr;
-  gap: 1rem;
-
-  @media (max-width: 900px) {
-    grid-template-columns: 1fr;
-  }
-}
+// The old .config-two-col strategy/execution grid is gone; the IDE shell
+// (.ide-grid in styles.scss) now lays the Configure tab out into three
+// rails. Strategy + Execution cards stack vertically in .ide-rail-left.
 
 // Strategy metadata block — description + badges
 .strategy-meta {
