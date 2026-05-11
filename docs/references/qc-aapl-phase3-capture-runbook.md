@@ -62,13 +62,52 @@ class PrecomputedMlPredictionsAapl(QCAlgorithm):
 
 Click **Build → Backtest**. Wait for it to complete. Record the backtest id from the URL (used in step 2).
 
-## Step 2 — pull qc_orders.json
+## Step 2 — pull qc_orders.json (canonical schema required)
+
+### Canonical fixture schema
+
+The reconciler's parser is strict on purpose — it enforces a single canonical
+schema and fails fast on any deviation. QC's raw API response carries
+information (nested `Symbol` objects, `orderEvents` camelCase, numeric times in
+seconds) that the runbook must normalize to the canonical shape **before** the
+file is committed:
+
+```json
+{
+  "orders": [
+    {
+      "id": 1,
+      "symbol": "AAPL",
+      "type": 0,
+      "events": [
+        {
+          "time": "2026-02-11T13:30:00Z",
+          "fillQuantity": 526,
+          "fillPrice": 190.00,
+          "direction": 0,
+          "orderFeeAmount": 2.63
+        }
+      ]
+    }
+  ]
+}
+```
+
+Schema rules (any violation makes `_parse_qc_orders` raise `FixtureSchemaError`):
+
+1. Top-level object **must** have an `"orders"` key whose value is a JSON array.
+2. Each order's `"symbol"` is a plain **string** (bare ticker or QC `"AAPL R735QTJ8XC9X"` with security-id suffix — the parser strips it). Nested `{"value": "AAPL"}` is rejected.
+3. Each order's event list **must** be named `"events"` (not `"orderEvents"`).
+4. Each event's `"time"` is either an ISO-8601 string with a `Z` or offset, **or** a numeric `int64` ms since epoch (`> 10**12`). Numeric seconds (`< 10**11`) are auto-promoted. Anything in between is rejected as ambiguous.
+5. Each event has integer `"fillQuantity"`, numeric `"fillPrice"`, optional numeric/null `"orderFeeAmount"`.
+
+### QC capture + normalization snippet
 
 In a new QC Research notebook **bound to the same project as the algorithm**:
 
 ```python
 from QuantConnect.Api import Api
-import json, os
+import json
 
 # Replace these — project id is in the project URL; backtest id is in the
 # completed-backtest URL.
@@ -78,18 +117,66 @@ BACKTEST_ID = "abcdef1234567890"
 api = Api()
 api.initialize(self.config.UserId, self.config.UserToken)
 
-orders = api.read_backtest_orders(PROJECT_ID, BACKTEST_ID).orders
-qc_orders_json = json.dumps(
-    {"orders": [o.__dict__ for o in orders]},
-    default=str,
-    indent=2,
-)
-with open("qc_orders.json", "w") as f:
-    f.write(qc_orders_json)
-print(f"wrote {len(orders)} orders")
-```
+# Try the Python wrapper first; fall back to the HTTP endpoint if the
+# wrapper isn't available on your QC client version.
+try:
+    raw_orders = api.read_backtest_orders(PROJECT_ID, BACKTEST_ID).orders
+    raw_dicts = [o.__dict__ for o in raw_orders]
+except Exception:
+    # HTTP fallback — /backtests/orders/read is paginated; loop until done.
+    # See https://www.quantconnect.com/docs/v2/cloud-platform/api-reference
+    import requests
+    raw_dicts = []
+    start = 0
+    while True:
+        resp = requests.post(
+            "https://www.quantconnect.com/api/v2/backtests/orders/read",
+            auth=(api.UserId, api.UserToken),
+            json={"projectId": PROJECT_ID, "backtestId": BACKTEST_ID, "start": start, "end": start + 100},
+        ).json()
+        page = resp.get("orders", [])
+        if not page:
+            break
+        raw_dicts.extend(page)
+        start += len(page)
 
-> If ``api.read_backtest_orders`` doesn't exist on your QC client version, use the equivalent ``/backtests/orders/read`` HTTP endpoint via ``requests.post(...)``.
+# ── Normalization to canonical schema ─────────────────────────────────
+def _flatten_symbol(s):
+    if isinstance(s, str):
+        return s
+    # QC sometimes returns nested Symbol objects in the wrapper path.
+    for attr in ("Value", "value", "ID", "id"):
+        v = getattr(s, attr, None) if not isinstance(s, dict) else s.get(attr)
+        if isinstance(v, str):
+            return v
+    raise ValueError(f"cannot flatten symbol: {s!r}")
+
+def _normalize_event_keys(ev):
+    # Accept camelCase or PascalCase; emit canonical camelCase.
+    keymap = {
+        "Time": "time", "time": "time",
+        "FillQuantity": "fillQuantity", "fillQuantity": "fillQuantity", "fill_quantity": "fillQuantity",
+        "FillPrice": "fillPrice", "fillPrice": "fillPrice", "fill_price": "fillPrice",
+        "Direction": "direction", "direction": "direction",
+        "OrderFeeAmount": "orderFeeAmount", "orderFeeAmount": "orderFeeAmount", "order_fee_amount": "orderFeeAmount",
+    }
+    return {keymap[k]: v for k, v in ev.items() if k in keymap}
+
+normalized = []
+for o in raw_dicts:
+    # Event list lives under either "Events", "events", or "orderEvents".
+    raw_events = o.get("Events") or o.get("events") or o.get("orderEvents") or []
+    normalized.append({
+        "id": int(o.get("Id") or o.get("id")),
+        "symbol": _flatten_symbol(o.get("Symbol") or o.get("symbol")),
+        "type": int(o.get("Type") or o.get("type") or 0),
+        "events": [_normalize_event_keys(e) for e in raw_events],
+    })
+
+with open("qc_orders.json", "w") as f:
+    json.dump({"orders": normalized}, f, indent=2, default=str)
+print(f"wrote {len(normalized)} orders in canonical schema")
+```
 
 ## Step 3 — pull qc_price_history.csv
 
