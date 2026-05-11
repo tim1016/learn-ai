@@ -228,5 +228,12 @@ export const routes: Routes = [
         "./components/golden-fixtures/golden-fixtures-catalog.component"
       ).then((m) => m.GoldenFixturesCatalogComponent),
   },
+  {
+    path: "_ide-sandbox",
+    loadComponent: () =>
+      import(
+        "./components/_ide-sandbox/ide-sandbox.component"
+      ).then((m) => m.IdeSandboxComponent),
+  },
   { path: "**", redirectTo: "/data-lab" },
 ];

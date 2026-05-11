@@ -13,15 +13,11 @@
 .data-lab {
   max-width: none;
   padding: 1.5rem 1rem 3rem;
-  // Reserve gutter when the indicator-config inspector is pinned. Set by
-  // <app-indicator-config-modal> via document.documentElement style.
-  padding-right: calc(1rem + var(--inspector-w, 0px));
-  // Reserve bottom space for the fixed <app-run-dock>. The dock writes
-  // --run-dock-height onto :root when expanded (320 px) / collapsed
-  // (36 px) so the page can scroll past everything without the last
-  // controls being hidden under the dock.
-  padding-bottom: calc(3rem + var(--run-dock-height, 36px));
-  transition: padding-right var(--t-ui) ease, padding-bottom var(--t-ui) ease;
+  // The IDE shell rails now own their own max-height + overflow, so they
+  // scroll independently and the run-dock floats over their tail. No
+  // page-level padding-bottom is needed for the dock anymore. The old
+  // --inspector-w gutter for the pinned config inspector is also gone --
+  // the right rail occupies that gutter natively.
 }
 
 // ─── Page Header ────────────────────────────────────────
@@ -1363,18 +1359,9 @@
 }
 
 // ─── Indicator Catalog ──────────────────────────────────
-// ─── Indicator 2-col Workspace ────────────────────────────
-.indicator-workspace {
-  display: grid;
-  grid-template-columns: 340px 1fr;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
-  align-items: start;
-
-  @media (max-width: 900px) {
-    grid-template-columns: 1fr;
-  }
-}
+// The old .indicator-workspace 2-col grid has been replaced by the page-level
+// IDE shell (.ide-grid). The catalog now lives in .ide-rail-right and the
+// active-instances list in .ide-main; both inherit width from their rail.
 
 .indicator-catalog-col {
   min-width: 0;

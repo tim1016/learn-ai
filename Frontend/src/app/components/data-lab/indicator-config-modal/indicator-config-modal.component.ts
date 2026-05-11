@@ -54,15 +54,16 @@ export class IndicatorConfigModalComponent implements OnDestroy {
   constructor() {
     effect(() => {
       const p = this.pinned();
-      const v = this.visible();
       try {
         localStorage.setItem(IndicatorConfigModalComponent.PIN_STORAGE_KEY, p ? 'pinned' : 'modal');
       } catch {
         // localStorage may be unavailable (private mode, SSR) — silently skip persist.
       }
-      // Drive a page-level CSS var so the host page can reserve gutter space
-      // while the inspector is pinned.
-      document.documentElement.style.setProperty('--inspector-w', p && v ? '360px' : '0px');
+      // The Data Lab IDE shell now owns the right rail natively, so the
+      // --inspector-w gutter that pinned mode used to write is no longer
+      // read by anything. Pinned-mode rendering will be retired in Phase 5
+      // once the rail-native inspector lands; for now it falls back to the
+      // centered/overlay mode.
     });
 
     // Seed preview-mode params from INDICATOR_CONFIGS defaults whenever
