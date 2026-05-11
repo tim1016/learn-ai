@@ -1,12 +1,12 @@
 <p-dialog
   [(visible)]="visible"
-  [modal]="!pinned()"
+  [modal]="true"
   [closable]="true"
-  [dismissableMask]="!pinned()"
+  [dismissableMask]="true"
   [draggable]="false"
   [resizable]="false"
-  [style]="pinned() ? { width: '360px', maxWidth: '95vw' } : { width: '640px', maxWidth: '95vw' }"
-  [styleClass]="pinned() ? 'icm-dialog icm-dialog-pinned' : 'icm-dialog'"
+  [style]="{ width: '640px', maxWidth: '95vw' }"
+  styleClass="icm-dialog"
   (onHide)="close()">
 
   <ng-template pTemplate="header">
@@ -28,13 +28,6 @@
             <span class="icm-chip icm-chip-muted">{{ r.recommendedTimeframes }}</span>
           </div>
         </div>
-        <button type="button" class="icm-pin-btn"
-                (click)="togglePin()"
-                [attr.aria-label]="pinned() ? 'Unpin inspector' : 'Pin to side as inspector'"
-                [pTooltip]="pinned() ? 'Unpin (return to modal)' : 'Pin to side'"
-                tooltipPosition="left">
-          <i class="pi" [class.pi-thumbtack]="!pinned()" [class.pi-arrow-right]="pinned()"></i>
-        </button>
       </div>
     } @else if (entry(); as e) {
       <h3 class="icm-title">{{ e.name.toUpperCase() }}</h3>

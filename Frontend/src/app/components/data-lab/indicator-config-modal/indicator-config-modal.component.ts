@@ -44,28 +44,7 @@ export class IndicatorConfigModalComponent implements OnDestroy {
   /** Preview mode: user clicked "Add to active" with the current param set. */
   addPreview = output<{ key: string; params: Record<string, number> }>();
 
-  // ── Pin/inspector mode ──────────────────────────────────────
-  /** When true, the dialog renders as a right-anchored 360px inspector
-   *  instead of a centered modal. Persisted across sessions. */
-  protected pinned = signal<boolean>(this.readPinnedFromStorage());
-
-  private static readonly PIN_STORAGE_KEY = 'data-lab.indicator-config.mode';
-
   constructor() {
-    effect(() => {
-      const p = this.pinned();
-      try {
-        localStorage.setItem(IndicatorConfigModalComponent.PIN_STORAGE_KEY, p ? 'pinned' : 'modal');
-      } catch {
-        // localStorage may be unavailable (private mode, SSR) — silently skip persist.
-      }
-      // The Data Lab IDE shell now owns the right rail natively, so the
-      // --inspector-w gutter that pinned mode used to write is no longer
-      // read by anything. Pinned-mode rendering will be retired in Phase 5
-      // once the rail-native inspector lands; for now it falls back to the
-      // centered/overlay mode.
-    });
-
     // Seed preview-mode params from INDICATOR_CONFIGS defaults whenever
     // the modal opens with a new entry in preview mode.
     effect(() => {
@@ -74,18 +53,6 @@ export class IndicatorConfigModalComponent implements OnDestroy {
       if (!e || !this.visible()) return;
       this.previewParams.set(this.defaultParamMap());
     });
-  }
-
-  protected togglePin(): void {
-    this.pinned.update((p) => !p);
-  }
-
-  private readPinnedFromStorage(): boolean {
-    try {
-      return localStorage.getItem(IndicatorConfigModalComponent.PIN_STORAGE_KEY) === 'pinned';
-    } catch {
-      return false;
-    }
   }
 
   // ── Preview-mode local param state ─────────────────────────

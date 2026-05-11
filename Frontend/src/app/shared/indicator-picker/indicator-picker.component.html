@@ -1,0 +1,161 @@
+<div class="ip-header">
+  <span class="ip-eyebrow">Indicators</span>
+  <span class="ip-count">
+    <strong>{{ totalVisible() }}</strong> of {{ totalCatalog() }}
+    @if (totalStaged() > 0) {
+      &nbsp;·&nbsp;<strong>{{ totalStaged() }}</strong> staged
+    }
+  </span>
+</div>
+
+@if (loading()) {
+  <div class="ip-empty"><strong>Loading indicators…</strong></div>
+} @else {
+  <!-- Presets -->
+  @if (presets().length) {
+    <div class="ip-presets" role="list" aria-label="Indicator presets">
+      @for (p of presets(); track p.name) {
+        <button class="ip-preset" type="button"
+                [title]="p.name + ' — ' + p.subtitle"
+                (click)="onPreset(p)">
+          <span class="stack" [class]="'s-' + p.stack">{{ p.count }}</span>
+          <span>{{ p.name }}</span>
+        </button>
+      }
+    </div>
+  }
+
+  <!-- Facets -->
+  <div class="ip-facets">
+    <div class="ip-facet-label">Pane</div>
+    <div class="ip-chips">
+      <button class="ip-chip" type="button"
+              data-pane="overlay"
+              [attr.aria-pressed]="paneFilter().has('overlay')"
+              (click)="togglePane('overlay')">
+        <span class="ip-chip-icon">▤</span>Overlay
+      </button>
+      <button class="ip-chip" type="button"
+              data-pane="sub"
+              [attr.aria-pressed]="paneFilter().has('sub')"
+              (click)="togglePane('sub')">
+        <span class="ip-chip-icon">▥</span>Sub-panel
+      </button>
+    </div>
+
+    <div class="ip-facet-label">Category</div>
+    <div class="ip-chips">
+      @for (cat of categories(); track cat.name) {
+        <button class="ip-chip" type="button"
+                [attr.data-cat]="cat.name"
+                [attr.aria-pressed]="catFilter().has(cat.name)"
+                (click)="toggleCat(cat.name)">
+          <span class="dot"></span>{{ cat.name }}
+        </button>
+      }
+      @if (hasFilter()) {
+        <button class="ip-chip-clear" type="button" (click)="clearFilters()">
+          Clear filters
+        </button>
+      }
+    </div>
+  </div>
+
+  <!-- Categories / rows -->
+  <div class="ip-cats">
+    @if (totalVisible() === 0) {
+      <div class="ip-empty">
+        <strong>No indicators match these filters</strong>
+        Try removing a pane or category constraint.
+        @if (hasFilter()) {
+          <br/>
+          <button class="ip-link" type="button" (click)="clearFilters()">
+            Clear all filters
+          </button>
+        }
+      </div>
+    } @else {
+      @for (group of groupedView(); track group.name) {
+        @let open = isCatOpen(group.name);
+        @let staged = stagedInCat(group.name);
+        <div class="ip-cat"
+             [attr.data-cat]="group.name"
+             [attr.data-open]="open">
+          <button class="ip-cat-head" type="button"
+                  [attr.aria-expanded]="open"
+                  (click)="toggleCatOpen(group.name)">
+            <svg class="chev" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+              <path d="M3 1.5l3.5 3.5L3 8.5"
+                    stroke="currentColor" stroke-width="1.4"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span class="ip-cat-swatch"></span>
+            <span class="ip-cat-name">{{ group.name }}</span>
+            @if (staged > 0) {
+              <span class="ip-cat-active">{{ staged }} staged</span>
+            }
+            <span class="ip-cat-count">{{ group.indicators.length }}</span>
+          </button>
+
+          @if (open) {
+            <div class="ip-cat-list">
+              @for (ind of group.indicators; track ind.name) {
+                @let active = activeCountFor(ind.name);
+                @let isHovered = hoveredName() === ind.name;
+                <div class="ip-row"
+                     [attr.data-name]="ind.name"
+                     [attr.data-active]="active > 0"
+                     (mouseenter)="onRowEnter(ind)"
+                     (mouseleave)="onRowLeave(ind)">
+                  <span class="ip-pane-marker"
+                        [attr.data-pane]="ind.pane"
+                        [title]="ind.pane === 'overlay' ? 'Overlay on price chart' : 'Sub-panel'">
+                    {{ paneIcon(ind.pane) }}
+                  </span>
+                  <div class="ip-row-main">
+                    <div class="ip-row-top">
+                      <span class="ip-name">{{ ind.name }}</span>
+                      @if (active > 0) {
+                        <span class="ip-instances">+{{ active }}</span>
+                      }
+                    </div>
+                    <span class="ip-desc">{{ ind.description }}</span>
+                  </div>
+                  <div class="ip-row-actions">
+                    @if (ind.configurable_params.length) {
+                      <button class="ip-btn iconic" type="button"
+                              title="Add another instance with different params"
+                              (click)="onAddInstance(ind)">
+                        <span class="plus">+</span>
+                      </button>
+                    }
+                    <button class="ip-btn" type="button"
+                            (click)="onAdd(ind)">
+                      Add
+                    </button>
+                  </div>
+
+                  @if (isHovered) {
+                    <div class="ip-preview" role="tooltip">
+                      <div class="ip-preview-head">
+                        <span class="ip-preview-name">{{ ind.name }}{{ paramSignature(ind) }}</span>
+                        <span class="ip-preview-tag">
+                          {{ ind.pane === 'overlay' ? 'overlay' : 'sub-panel' }} · {{ ind.category }}
+                        </span>
+                      </div>
+                      <canvas #previewCanvas
+                              class="ip-preview-canvas"
+                              [attr.data-kind]="previewKind(ind)">
+                      </canvas>
+                      <div class="ip-preview-desc">{{ ind.description }}</div>
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+          }
+        </div>
+      }
+    }
+  </div>
+}

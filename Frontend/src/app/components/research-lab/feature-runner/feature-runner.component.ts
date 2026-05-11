@@ -40,10 +40,12 @@ import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
 import { CheckboxModule } from 'primeng/checkbox';
 import { TagModule } from 'primeng/tag';
-import { IndicatorCatalogComponent } from '../../../shared/indicator-catalog/indicator-catalog.component';
+import {
+  IndicatorPickerAdd,
+  IndicatorPickerComponent,
+} from '../../../shared/indicator-picker/indicator-picker.component';
 import {
   IndicatorCatalogService,
-  IndicatorInfo,
 } from '../../../shared/indicator-catalog/indicator-catalog.service';
 import { findFeatureId } from '../../../shared/indicator-catalog/feature-mapping';
 import { ActiveIndicatorCardComponent } from '../../data-lab/active-indicator-card/active-indicator-card.component';
@@ -112,7 +114,7 @@ interface FeatureResearchJobResultRaw {
     MessageModule,
     CheckboxModule,
     TagModule,
-    IndicatorCatalogComponent,
+    IndicatorPickerComponent,
     ActiveIndicatorCardComponent,
     IndicatorConfigModalComponent,
     TickerRangePickerComponent,
@@ -125,6 +127,11 @@ export class FeatureRunnerComponent {
   private jobsService = inject(JobsService);
   private destroyRef = inject(DestroyRef);
   private catalog = inject(IndicatorCatalogService);
+
+  /** Catalog passed to the picker. Exposed as a getter so the template can
+   *  read the service signal directly without leaking the service. */
+  readonly catalogCategories = this.catalog.categories;
+  readonly catalogLoading = this.catalog.loading;
 
   // Form inputs
   // Single TickerRange replaces (ticker, fromDate, toDate, timespan,
@@ -151,9 +158,10 @@ export class FeatureRunnerComponent {
   selectedParams = signal<Record<string, number>>({ length: 14 });
   forceRun = signal(false);
 
-  /** Selected-name set fed to the catalog (single element, single-select). */
-  readonly selectedNames = computed<ReadonlySet<string>>(
-    () => new Set([this.selectedIndicator()]),
+  /** Single-element activeKeys array fed to the picker so the chosen row
+   *  shows the active rail + +1 badge. */
+  readonly pickerActiveKeys = computed<readonly string[]>(
+    () => [this.selectedIndicator()],
   );
 
   /** Synthetic active-indicator entry rendered on the right of the workspace. */
@@ -264,10 +272,14 @@ export class FeatureRunnerComponent {
     return `${this.selectedFeatureLabel} on ${r.symbol.toUpperCase()} (${r.from} to ${r.to})`;
   }
 
-  /** Catalog click in single-select mode → replace the active selection. */
-  onCatalogSelect(ind: IndicatorInfo): void {
-    this.selectedIndicator.set(ind.name);
-    this.selectedParams.set(this.catalog.defaultParams(ind.name));
+  /** Picker (add) in this host = single-select replace. The picker fires
+   *  (add) on every row click; we treat each fire as "set this as the
+   *  active feature" rather than accumulating. */
+  onPickerSelect(event: IndicatorPickerAdd): void {
+    this.selectedIndicator.set(event.name);
+    // The picker passes catalog-default params already; mirror to local
+    // state so the active-card and config-modal see them.
+    this.selectedParams.set({ ...event.params });
   }
 
   openConfigure(): void {
@@ -303,6 +315,10 @@ export class FeatureRunnerComponent {
   private resultSettledFor: string | null = null;
 
   constructor() {
+    // The picker is purely a renderer — it doesn't fetch the catalog itself.
+    // The old IndicatorCatalogComponent triggered this implicitly.
+    void this.catalog.load();
+
     let lastLogSeq = -1;
 
     effect(() => {
