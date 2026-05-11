@@ -23,6 +23,10 @@ import { PastChainInspectorComponent } from './past-chain-inspector/past-chain-i
 import { IndicatorConfigModalComponent } from './indicator-config-modal/indicator-config-modal.component';
 import { RunDockComponent } from './run-dock/run-dock.component';
 import { INDICATOR_REFERENCE } from '../../shared/indicators/indicator-reference';
+import {
+  IndicatorPickerAdd,
+  IndicatorPickerComponent,
+} from '../../shared/indicator-picker/indicator-picker.component';
 
 type EntriesSortMode = 'insertion' | 'category' | 'name';
 
@@ -322,7 +326,7 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
     DataLabChartComponent, SharedModule, Tooltip,
     IndicatorTooltipComponent, PageHeaderComponent, TickerRangePickerComponent,
     ActiveIndicatorCardComponent, ActiveIndicatorGroupComponent, IndicatorConfigModalComponent,
-    PastChainInspectorComponent, RunDockComponent,
+    PastChainInspectorComponent, RunDockComponent, IndicatorPickerComponent,
   ],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
@@ -1282,7 +1286,13 @@ export class DataLabComponent {
   }
 
   focusCatalogSearch(): void {
-    this.catalogSearchInput()?.nativeElement.focus();
+    // Old inline catalog had a search input; the new picker doesn't.
+    // Scroll the picker into view as the closest replacement so users who
+    // click "Add indicator" from the active list still get nudged to it.
+    document.getElementById('data-lab-indicator-catalog')?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
   }
 
   toggleCategory(catName: string): void {
@@ -1430,6 +1440,38 @@ export class DataLabComponent {
     const info = this.indicatorMap()[name];
     if (!info) return;
     this.addInstance(info);
+  }
+
+  // ── New indicator-picker bridge ───────────────────────────────
+  /** Names of indicators with at least one active instance — drives the
+   *  picker's per-row +N badge. Repeats reflect instance count. The other
+   *  `activeIndicatorKeys` computed (deduped) further down feeds the modal,
+   *  which has different semantics. */
+  pickerActiveKeys = computed<readonly string[]>(() =>
+    this.entries().map(e => e.name),
+  );
+
+  /** Handler for the picker's (add) + (addInstance) outputs. Both events
+   *  append a new entry; "add" semantically means first-time, "addInstance"
+   *  means another instance of an already-staged indicator — but downstream
+   *  the storage shape is identical (an IndicatorEntry per instance). */
+  onPickerAdd(event: IndicatorPickerAdd): void {
+    const info = this.indicatorMap()[event.name];
+    const params: Record<string, number> = info
+      ? this.fillMissingParamDefaults(event.params, info)
+      : { ...event.params };
+    this.entries.update(list => [...list, { name: event.name, params }]);
+  }
+
+  private fillMissingParamDefaults(
+    given: Record<string, number>,
+    info: IndicatorInfo,
+  ): Record<string, number> {
+    const out: Record<string, number> = { ...given };
+    for (const p of info.configurable_params) {
+      if (!(p.name in out)) out[p.name] = p.default;
+    }
+    return out;
   }
 
   // ── Preview-mode state (catalog → modal) ──────────────────

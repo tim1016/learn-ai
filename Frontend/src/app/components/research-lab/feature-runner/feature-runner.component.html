@@ -41,14 +41,17 @@
       </div>
     </div>
 
-    <!-- Feature workspace — same 2-column treatment as data-lab. -->
+    <!-- Feature workspace — design-ported picker on the left, active
+         indicator card on the right. The picker is multi-select natively;
+         this host treats each (add) as a single-select replace via
+         onPickerSelect. -->
     <div class="indicator-workspace">
-      <app-indicator-catalog
-        selectionMode="single"
-        [selectedNames]="selectedNames()"
-        eyebrow="Feature Catalog"
-        hint="Pick the indicator to IC-test"
-        (indicatorSelected)="onCatalogSelect($event)" />
+      <app-indicator-picker
+        [categories]="catalogCategories()"
+        [activeKeys]="pickerActiveKeys()"
+        [loading]="catalogLoading()"
+        (add)="onPickerSelect($event)"
+        (addInstance)="onPickerSelect($event)" />
 
       <div class="indicator-active-col">
         @if (activeParamConfigs().length > 0) {

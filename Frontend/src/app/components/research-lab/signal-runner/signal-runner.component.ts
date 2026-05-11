@@ -46,10 +46,12 @@ import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
 import { ToggleSwitch } from 'primeng/toggleswitch';
 import { TagModule } from 'primeng/tag';
-import { IndicatorCatalogComponent } from '../../../shared/indicator-catalog/indicator-catalog.component';
+import {
+  IndicatorPickerAdd,
+  IndicatorPickerComponent,
+} from '../../../shared/indicator-picker/indicator-picker.component';
 import {
   IndicatorCatalogService,
-  IndicatorInfo,
 } from '../../../shared/indicator-catalog/indicator-catalog.service';
 import { findFeatureId } from '../../../shared/indicator-catalog/feature-mapping';
 import { ActiveIndicatorCardComponent } from '../../data-lab/active-indicator-card/active-indicator-card.component';
@@ -102,7 +104,7 @@ interface SignalEngineJobResultRaw {
     MessageModule,
     ToggleSwitch,
     TagModule,
-    IndicatorCatalogComponent,
+    IndicatorPickerComponent,
     ActiveIndicatorCardComponent,
     IndicatorConfigModalComponent,
     TickerRangePickerComponent,
@@ -122,6 +124,10 @@ export class SignalRunnerComponent {
   private jobsService = inject(JobsService);
   private destroyRef = inject(DestroyRef);
   private catalog = inject(IndicatorCatalogService);
+
+  /** Catalog passed to the picker. */
+  readonly catalogCategories = this.catalog.categories;
+  readonly catalogLoading = this.catalog.loading;
 
   // Form inputs
   // CRITICAL — ``range.multiplier`` initialized to 15 to preserve
@@ -151,9 +157,10 @@ export class SignalRunnerComponent {
   regimeGateEnabled = signal(true);
   forceRefresh = signal(false);
 
-  /** Selected-name set fed to the catalog (single element, single-select). */
-  readonly selectedNames = computed<ReadonlySet<string>>(
-    () => new Set([this.selectedIndicator()]),
+  /** Single-element activeKeys array fed to the picker so the chosen row
+   *  shows the active rail + +1 badge. */
+  readonly pickerActiveKeys = computed<readonly string[]>(
+    () => [this.selectedIndicator()],
   );
 
   readonly activeEntry = computed(() => ({
@@ -224,10 +231,10 @@ export class SignalRunnerComponent {
     return `${this.selectedFeatureLabel} on ${r.symbol.toUpperCase()} (${r.from} to ${r.to})`;
   }
 
-  /** Catalog click in single-select mode → replace the active selection. */
-  onCatalogSelect(ind: IndicatorInfo): void {
-    this.selectedIndicator.set(ind.name);
-    this.selectedParams.set(this.catalog.defaultParams(ind.name));
+  /** Picker (add) in this host = single-select replace. */
+  onPickerSelect(event: IndicatorPickerAdd): void {
+    this.selectedIndicator.set(event.name);
+    this.selectedParams.set({ ...event.params });
   }
 
   openConfigure(): void {
@@ -256,6 +263,9 @@ export class SignalRunnerComponent {
   }
 
   constructor() {
+    // The picker is a renderer; the host owns the catalog fetch.
+    void this.catalog.load();
+
     let lastLogSeq = -1;
     let resultFetchedFor: string | null = null;
 

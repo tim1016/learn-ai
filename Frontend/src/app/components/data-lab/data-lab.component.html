@@ -956,88 +956,16 @@
 
   <div class="ide-rail-right">
 
-  <!-- Indicator catalog (moved up into the right rail) -->
-  <div class="indicator-catalog-col" id="data-lab-indicator-catalog">
-    <div class="catalog-col-header">
-      <span class="catalog-col-eyebrow">Indicator Catalog</span>
-      <span class="catalog-col-hint">All calculations use <code>pandas-ta</code></span>
-    </div>
-
-    <div class="catalog-search" role="search">
-      <i class="pi pi-search catalog-search-icon" aria-hidden="true"></i>
-      <input
-        #catalogSearchInput
-        type="search"
-        class="catalog-search-input"
-        placeholder="Search (rsi, bollinger, volume…)"
-        [ngModel]="catalogQuery()"
-        (ngModelChange)="catalogQuery.set($event)"
-        aria-label="Search indicator catalog"
-      />
-    </div>
-
-    @if (loadingIndicators()) {
-      <div class="loading-msg">Loading available indicators...</div>
-    }
-
-    <div class="categories">
-      @for (cat of filteredCategories(); track cat.name) {
-        @let count = categorySelectedCount(cat.name);
-        <div class="category-card">
-          <div class="category-header" (click)="toggleCategory(cat.name)">
-            <div class="category-title">
-              <i class="pi" [class.pi-chevron-right]="!isCategoryExpanded(cat.name)"
-                 [class.pi-chevron-down]="isCategoryExpanded(cat.name)"></i>
-              <span class="cat-name">{{ cat.name }}</span>
-              <span class="cat-count">{{ cat.indicators.length }}</span>
-              @if (count > 0) {
-                <span class="cat-selected">{{ count }} selected</span>
-              }
-            </div>
-          </div>
-
-          @if (isCategoryExpanded(cat.name)) {
-            <div class="indicator-grid">
-              @for (ind of cat.indicators; track ind.name) {
-                <div class="indicator-item" [class.selected]="isSelected(ind.name)">
-                  <label>
-                    <input
-                      type="checkbox"
-                      [checked]="isSelected(ind.name)"
-                      (change)="toggleIndicator(ind)" />
-                    <app-indicator-tooltip [indicatorKey]="ind.name"
-                                           [paramConfigs]="ind.configurable_params"
-                                           [fallbackDescription]="ind.description">
-                      <div class="indicator-info">
-                        <span class="ind-name">{{ ind.name }}</span>
-                        <span class="ind-desc">{{ ind.description }}</span>
-                      </div>
-                    </app-indicator-tooltip>
-                  </label>
-                  <button class="btn-preview" type="button"
-                          (click)="openPreview(ind.name)"
-                          pTooltip="Preview before adding" tooltipPosition="top"
-                          [attr.aria-label]="'Preview ' + ind.name">
-                    <i class="pi pi-info-circle"></i>
-                  </button>
-                  @if (ind.configurable_params.length) {
-                    <button class="btn-add" title="Add another instance with different params" (click)="addInstance(ind)">
-                      <i class="pi pi-plus"></i>
-                    </button>
-                  }
-                </div>
-              }
-            </div>
-          }
-        </div>
-      }
-      @if (filteredCategories().length === 0 && !loadingIndicators()) {
-        <div class="catalog-no-results">
-          No indicators match "{{ catalogQuery() }}".
-        </div>
-      }
-    </div>
-  </div>
+  <!-- Indicator picker — design-ported component with overlay/sub-panel
+       facet, hover-preview, and presets. Backed by the same
+       IndicatorCatalogService as before. -->
+  <app-indicator-picker
+    id="data-lab-indicator-catalog"
+    [categories]="categories()"
+    [activeKeys]="pickerActiveKeys()"
+    [loading]="loadingIndicators()"
+    (add)="onPickerAdd($event)"
+    (addInstance)="onPickerAdd($event)" />
 
   <!-- CSV Column Preview -->
   <div class="columns-section">
