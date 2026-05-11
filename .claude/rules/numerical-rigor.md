@@ -131,6 +131,42 @@ Every reconciled port produces a report in `docs/references/reconciliations/<n>.
 - Any accepted divergences with cumulative-impact justification
 - Link to the test(s) that encode the reconciliation
 
+## Trade-level reconciliation taxonomy
+
+When reconciling our backtest engine against a reference execution
+(LEAN, a vendor backtester, QC Cloud), every disagreement between our
+trade log and the reference trade log gets classified into exactly one
+of eight categories. The taxonomy is encoded as the
+``DivergenceCategory`` ``StrEnum`` in
+``PythonDataService/app/research/parity/qc_reconciler.py`` — keep these
+two in lockstep.
+
+| Category | Meaning | Routes to |
+|---|---|---|
+| ``FIXTURE_INSUFFICIENT`` | The captured price-history fixture cannot explain a reference fill price within tolerance — i.e., the input data is the gap, not our engine. | Phase 3.5: re-capture the fixture (minute bars, alternate price-adjustment mode, or extended hours). Halts reconciliation; downstream classes are not evaluated until the fixture is repaired. |
+| ``DECISION_MISMATCH`` | One side has a fill on a given ``(trading_date, side)``; the other doesn't. | Phase 3 engine / spec bug. Most common causes: signal-condition mis-port, indicator warmup mismatch, prediction-set coverage gap. |
+| ``DIRECTION_MISMATCH`` | Same ``(trading_date)`` and quantity, opposite signs. | Phase 3 engine bug (rare; usually indicates a side-flipping bug in order construction). |
+| ``QUANTITY_MISMATCH`` | Same ``(trading_date, side)``, different fill quantities. | Phase 3: examine ``SetHoldings`` rounding / cash-buffer logic. Reference's position-sizing primitive may compute target shares differently. |
+| ``FILL_PRICE_DRIFT`` | Fill prices differ by more than ``fill_price_atol`` (default $0.01). | Phase 3.5 if clustered (suggests partial-fill / VWAP / auction-print differences requiring a LEAN-style ``EquityFillModel`` port). One-off occurrences: examine whether the bar's ``open`` truly explains the fill. |
+| ``COMMISSION_DRIFT`` | Reference's recorded fee differs from the IBKR-tier fee computed by ``IbkrEquityCommissionModel`` by more than ``commission_atol``. **Gating only when ``assert_fees=True``** (Branch A — fee data is recorded). | Phase 3.5: re-derive the IBKR tier or wire the model into the engine if Phase 3 requires byte-exact fee parity. |
+| ``PNL_DRIFT`` | Per-trade P&L differs by more than the propagated tolerance ``Σ |fill_qty_i| × $0.01 + Σ fee_atol_i``. | Almost always a downstream consequence of one of the above; root-cause the upstream divergence first. Don't widen this tolerance to silence cascaded effects. |
+| ``ORDER_TYPE_MISMATCH`` | Reference's order type isn't ``MARKET`` (QC enum code 0). | Re-examine whether the reference algorithm uses limit / stop orders that our spec's ``SetHoldings`` primitive can't express. Phase 3 only supports market orders. |
+
+**Acceptance gate.** A reconciliation report is ``passed`` iff zero
+divergences fall in the **gating set**:
+``{FIXTURE_INSUFFICIENT, DECISION_MISMATCH, DIRECTION_MISMATCH,
+QUANTITY_MISMATCH, FILL_PRICE_DRIFT, ORDER_TYPE_MISMATCH, PNL_DRIFT}``,
+plus ``COMMISSION_DRIFT`` only on Branch-A fixtures. Non-gating
+divergences (``COMMISSION_DRIFT`` on Branch-B fixtures) are reported as
+diagnostics, not failures.
+
+**Loosening rule.** A tolerance may be loosened past its default only
+when the relevant category has been ruled out as a root cause. The
+specific rule from the Tolerances section above applies here unchanged:
+if a category-classified divergence's magnitude is small relative to
+the meaningful range, document the accepted tolerance and the reasoning
+in the reconciliation report at ``docs/references/reconciliations/<n>.md``.
+
 ## Sovereignty
 
 "Sovereign over the math" means:
