@@ -6,6 +6,26 @@ this package are bare 64-char hex, matching ``strategy_spec_hash`` and
 
 Wire and storage timestamps are ``int64 ms UTC`` per
 ``.claude/rules/numerical-rigor.md`` -> "Timestamp rigor".
+
+Formulas:
+    rows_hash = hash_payload(rows_sorted_by_timestamp_ms)
+    prediction_set_hash = hash_payload(manifest_dict_without_prediction_set_hash)
+    (the self-field is dropped before hashing to avoid the chicken-and-egg
+    loop of hashing a dict that contains the hash being computed)
+
+Reference: SHA-256 (FIPS 180-4) via ``app.research.runs.hashing.hash_payload``
+    (canonical-JSON SHA-256 with relaxed RFC 8785 contract — key-order
+    independence, non-ASCII stability, no whitespace); v0.5 design at
+    ``docs/superpowers/specs/2026-05-09-ml-prediction-as-data-v05-design.md``;
+    authority at ``docs/ml-predictions-authority.md``.
+
+Canonical implementation: this file (manifest schema + hash math + parquet I/O).
+Validated against:
+    ``tests/research/ml/test_artifact.py`` (manifest round-trip, hash
+    determinism, chunk-rows hash sorting, prediction_set_hash self-field
+    exclusion, path-safe-id enforcement),
+    ``test_quantconnect_fixture_determinism.py`` (re-import produces
+    identical hash pinned at ``b8252cfa9a749f5bf592602f3aebc2b3a4ccc6bb0cd41da48a6db7a581342e0e``).
 """
 
 from __future__ import annotations
@@ -104,9 +124,7 @@ class ChunkRef(BaseModel):
                 f"(got start_ms={self.start_ms}, trained_through_ms={self.trained_through_ms})"
             )
         if self.end_ms < self.start_ms:
-            raise ValueError(
-                f"end_ms must be >= start_ms (got start_ms={self.start_ms}, end_ms={self.end_ms})"
-            )
+            raise ValueError(f"end_ms must be >= start_ms (got start_ms={self.start_ms}, end_ms={self.end_ms})")
         return self
 
 
@@ -227,9 +245,6 @@ def read_chunk_rows(path: Path, *, field_names: Sequence[str]) -> list[dict]:
     expected_cols = ["timestamp_ms", "symbol", *field_names]
     actual_cols = list(table.column_names)
     if actual_cols != expected_cols:
-        raise ValueError(
-            f"chunk parquet schema mismatch at {path}: "
-            f"expected {expected_cols}, got {actual_cols}"
-        )
+        raise ValueError(f"chunk parquet schema mismatch at {path}: expected {expected_cols}, got {actual_cols}")
     pylist = table.to_pylist()
     return pylist

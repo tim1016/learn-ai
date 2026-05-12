@@ -10,8 +10,30 @@ split into private functions so each stage is unit-testable:
    ``(trading_date, side)``.
 4. :func:`_classify_divergences` — walk the tolerance table per pair.
 
-See ``docs/superpowers/specs/2026-05-11-phase3-pnl-parity-design.md``
-for the design rationale, divergence taxonomy, and acceptance gates.
+Formulas:
+    Round-trip realized P&L (long-only single-position):
+        realized_pnl = (exit_price - entry_price) * shares - entry_fee - exit_fee
+    Propagated atol (algebraic triangle inequality over per-fill atols):
+        propagated_atol =
+            (|entry_qty| + |exit_qty|) * per_share_pnl_atol
+            + 2 * commission_atol
+    Per-fill parity therefore *implies* P&L parity; ``PNL_DRIFT`` is emitted
+    as an explicit gate rather than relying on implicit propagation.
+
+Reference: Internal design — divergence taxonomy is the 8-category
+    ``DivergenceCategory`` `StrEnum` documented in
+    ``.claude/rules/numerical-rigor.md`` → "Trade-level reconciliation
+    taxonomy"; design rationale, acceptance gates, and tolerance defaults
+    in ``docs/superpowers/specs/2026-05-11-phase3-pnl-parity-design.md``;
+    Phase 3.0 / 3.5 Path A reconciliation summary at
+    ``docs/references/reconciliations/qc-aapl-phase3.md``.
+
+Canonical implementation: this file.
+Validated against:
+    ``tests/research/parity/test_qc_reconciler.py`` (schema, fixture audit,
+    alignment, classification across all 8 categories, round-trip P&L drift),
+    ``test_qc_aapl_phase3_trade_parity.py`` (Phase 3.5 acceptance gate),
+    ``test_qc_fixture_smoke.py`` (Branch-A/B fee-presence gate).
 """
 
 from __future__ import annotations
