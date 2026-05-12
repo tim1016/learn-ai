@@ -1,0 +1,18 @@
+{
+  "orders": [
+    {
+      "id": 1,
+      "symbol": "AAPL",
+      "type": 0,
+      "events": [
+        {
+          "time": "2026-02-10T14:31:00Z",
+          "fillQuantity": 365,
+          "fillPrice": 273.238170408,
+          "direction": 0,
+          "orderFeeAmount": 1.83
+        }
+      ]
+    }
+  ]
+}
