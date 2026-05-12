@@ -176,15 +176,21 @@ def _build_our_fills(tmp_path: Path) -> list[OurFill]:
 
     commission = IbkrEquityCommissionModel()
     fills: list[OurFill] = []
-    for trade in result.trades:
+    # Canonical SetHoldings(1.0) sizes from *current portfolio equity* at the
+    # time of the trade, not initial_cash. Walk trades chronologically and
+    # track running equity so trade N's qty reflects the P&L of trades 1..N-1.
+    # QC may apply a small cash-buffer factor that diverges by 1-2 shares;
+    # that surfaces as QUANTITY_MISMATCH, not a silent discrepancy.
+    running_equity = _INITIAL_CASH
+    for trade in sorted(result.trades, key=lambda t: t.entry_time_ms):
         entry_price = Decimal(str(trade.entry_price))
         exit_price = Decimal(str(trade.exit_price))
-        # Canonical SetHoldings(1.0) sizing: integer shares such that
-        # qty × entry_price ≤ initial_cash. Matches the simplest engine
-        # path; QC may apply a small cash-buffer factor that diverges by
-        # 1-2 shares — that surfaces as QUANTITY_MISMATCH, not a silent
-        # discrepancy.
-        qty = int(_INITIAL_CASH / entry_price)
+        qty = int(running_equity / entry_price)
+        entry_fee = commission.fee(quantity=qty, fill_price=entry_price)
+        exit_fee = commission.fee(quantity=qty, fill_price=exit_price)
+        # Realized P&L for this round-trip, applied to running equity so the
+        # next trade sizes off the updated portfolio value.
+        running_equity += (exit_price - entry_price) * Decimal(qty) - entry_fee - exit_fee
         fills.append(
             OurFill(
                 symbol="AAPL",
@@ -192,7 +198,7 @@ def _build_our_fills(tmp_path: Path) -> list[OurFill]:
                 fill_qty=qty,
                 fill_price=entry_price,
                 fill_time_ms=trade.entry_time_ms,
-                fee=commission.fee(quantity=qty, fill_price=entry_price),
+                fee=entry_fee,
             )
         )
         fills.append(
@@ -202,7 +208,7 @@ def _build_our_fills(tmp_path: Path) -> list[OurFill]:
                 fill_qty=-qty,
                 fill_price=exit_price,
                 fill_time_ms=trade.exit_time_ms,
-                fee=commission.fee(quantity=qty, fill_price=exit_price),
+                fee=exit_fee,
             )
         )
     return fills
