@@ -84,3 +84,10 @@ def test_order_event_fields():
     assert event.order_id == 7
     assert event.fee == Decimal("1.00")
     assert event.tag == "entry"
+
+
+def test_next_session_open_is_a_known_fill_mode() -> None:
+    """NEXT_SESSION_OPEN exists and has the canonical string value the runner
+    will normalize to. The string value is what RunRequest.fill_mode carries
+    and what ledger persistence stores; renaming it breaks every prior run."""
+    assert FillMode.NEXT_SESSION_OPEN.value == "next_session_open"
