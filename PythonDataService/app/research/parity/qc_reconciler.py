@@ -347,42 +347,81 @@ def _audit_fixture(
     reader: FixtureDataReader,
     tolerances: Tolerances,
 ) -> list[FixtureAudit]:
-    """Check that each QC fill is explained by the same trading-date's bar open.
+    """Check that each QC fill is explained by the captured bars.
+
+    Resolution-aware:
+
+    - **Daily fixture**: fill price must match the trading-date bar's
+      ``open`` within ``fill_price_atol`` (canonical ``NEXT_BAR_OPEN``
+      semantics — fill at next session's open).
+    - **Minute fixture**: fill price must fall within ``[low, high]`` of
+      the minute bar containing the fill's timestamp (QC's market-order
+      fill happens at some price within that minute bar's range).
 
     Returns one ``FixtureAudit`` per unexplained fill (empty when the
-    fixture is internally consistent). Mismatches mean the captured price
-    history is missing the resolution required to reproduce QC's fill —
-    Phase 3.5 escalation rather than a Phase 3 engine bug.
+    fixture is internally consistent). Audit failures route to
+    ``FIXTURE_INSUFFICIENT`` and halt downstream classification.
     """
     if not qc_fills:
         return []
     symbol = qc_fills[0].symbol
-    opens = reader.bar_open_by_date(symbol)
     audits: list[FixtureAudit] = []
-    for qc in qc_fills:
-        bar_open = opens.get(qc.trading_date)
-        if bar_open is None:
-            audits.append(
-                FixtureAudit(
-                    qc_fill=qc,
-                    reason=f"no bar in fixture for trading date {qc.trading_date}",
-                    expected_open=None,
-                    actual_fill_price=qc.fill_price,
+    if reader.is_minute_resolution:
+        for qc in qc_fills:
+            bar = reader.find_bar_containing(symbol, qc.fill_time_ms)
+            if bar is None:
+                audits.append(
+                    FixtureAudit(
+                        qc_fill=qc,
+                        reason=(
+                            f"no minute bar in fixture containing fill time "
+                            f"{qc.fill_time_ms} ms (date {qc.trading_date})"
+                        ),
+                        expected_open=None,
+                        actual_fill_price=qc.fill_price,
+                    )
                 )
-            )
-            continue
-        if abs(bar_open - qc.fill_price) > tolerances.fill_price_atol:
-            audits.append(
-                FixtureAudit(
-                    qc_fill=qc,
-                    reason=(
-                        f"fill {qc.fill_price} not explained by bar open {bar_open} "
-                        f"(tolerance {tolerances.fill_price_atol})"
-                    ),
-                    expected_open=bar_open,
-                    actual_fill_price=qc.fill_price,
+                continue
+            atol = tolerances.fill_price_atol
+            if not (bar.low - atol <= qc.fill_price <= bar.high + atol):
+                audits.append(
+                    FixtureAudit(
+                        qc_fill=qc,
+                        reason=(
+                            f"fill {qc.fill_price} outside minute-bar range "
+                            f"[{bar.low}, {bar.high}] at {bar.time.isoformat()} "
+                            f"(tolerance {atol})"
+                        ),
+                        expected_open=bar.open,
+                        actual_fill_price=qc.fill_price,
+                    )
                 )
-            )
+    else:
+        opens = reader.bar_open_by_date(symbol)
+        for qc in qc_fills:
+            bar_open = opens.get(qc.trading_date)
+            if bar_open is None:
+                audits.append(
+                    FixtureAudit(
+                        qc_fill=qc,
+                        reason=f"no bar in fixture for trading date {qc.trading_date}",
+                        expected_open=None,
+                        actual_fill_price=qc.fill_price,
+                    )
+                )
+                continue
+            if abs(bar_open - qc.fill_price) > tolerances.fill_price_atol:
+                audits.append(
+                    FixtureAudit(
+                        qc_fill=qc,
+                        reason=(
+                            f"fill {qc.fill_price} not explained by bar open {bar_open} "
+                            f"(tolerance {tolerances.fill_price_atol})"
+                        ),
+                        expected_open=bar_open,
+                        actual_fill_price=qc.fill_price,
+                    )
+                )
     return audits
 
 
