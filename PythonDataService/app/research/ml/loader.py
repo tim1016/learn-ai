@@ -16,7 +16,8 @@ A third stage — bar-clock coverage — runs at the run-pipeline boundary
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from bisect import bisect_right
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.research.ml.artifact import (
@@ -31,12 +32,45 @@ class PredictionCoverageError(ValueError):
     """Raised when a loaded prediction set does not cover an emitted bar."""
 
 
+class PredictionLookupError(ValueError):
+    """Raised when a strategy's per-bar prediction lookup violates contract.
+
+    Indicates one of: missing 'next' row for a next_after_bar_close ref,
+    a missing exact-match row, or a row missing the declared field.
+    Coverage check (app.research.ml.coverage.assert_bar_clock_coverage)
+    is the intended first-line guard; this is the runtime backstop so a
+    coverage bug or fixture truncation can never silently suppress trades.
+    """
+
+
 @dataclass
 class PredictionSet:
     """Loaded + validated prediction-set artifact."""
 
     manifest: PredictionSetManifest
     index: dict[int, dict[str, float]]
+    _sorted_ts: list[int] = field(default_factory=list, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        # Sorted-key cache for O(log n) next_after lookups. Built once at
+        # load; the index is treated as immutable post-construction (the
+        # public API exposes no mutation, and PredictionSet.load builds a
+        # fresh instance).
+        self._sorted_ts = sorted(self.index.keys())
+
+    def next_after(self, ts_ms: int) -> dict[str, float] | None:
+        """Smallest-key row whose timestamp is strictly greater than ``ts_ms``.
+
+        Returns ``None`` when no such row exists. Callers needing
+        non-None guarantees (the SpecAlgorithm evaluator for refs with
+        ``lookup="next_after_bar_close"``) raise ``PredictionLookupError``
+        on None; the coverage check is the intended first-line guard so
+        runtime should never see None in correct configurations.
+        """
+        i = bisect_right(self._sorted_ts, ts_ms)
+        if i == len(self._sorted_ts):
+            return None
+        return self.index[self._sorted_ts[i]]
 
     @classmethod
     def load(cls, root: Path) -> PredictionSet:
@@ -107,10 +141,7 @@ class PredictionSet:
             raise ValueError("StrategySpec.symbols is empty")
         spec_symbol = spec.symbols[0]
         if self.manifest.symbol != spec_symbol:
-            raise ValueError(
-                f"symbol mismatch: prediction set has {self.manifest.symbol!r}, "
-                f"spec has {spec_symbol!r}"
-            )
+            raise ValueError(f"symbol mismatch: prediction set has {self.manifest.symbol!r}, spec has {spec_symbol!r}")
         if self.manifest.resolution_minutes != spec.resolution.period_minutes:
             raise ValueError(
                 f"resolution mismatch: prediction set has {self.manifest.resolution_minutes} min, "
