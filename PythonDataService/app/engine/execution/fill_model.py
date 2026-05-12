@@ -1,6 +1,6 @@
 """Fill models for market orders.
 
-Two modes are supported:
+Three modes are supported:
 
 * ``SIGNAL_BAR_CLOSE`` — the order fills at ``bar.close`` of the consolidated
   bar that triggered it. This reproduces the bookkeeping inside LEAN's
@@ -13,6 +13,13 @@ Two modes are supported:
   behavior for backtests without tick data, where
   ``GetBestEffortTradeBar`` returns the next available bar whose ``EndTime``
   is strictly after the order time.
+
+* ``NEXT_SESSION_OPEN`` — the QC precomputed-predictions parity case: signal
+  at end of day T-1 (daily-consolidated bar's close), fill at the first
+  minute bar of day T. The fill is deferred (returns None) for any candidate
+  bar whose NY-local trading date is not strictly after the signal bar's
+  trading date. The first eligible candidate bar's ``open`` is used as the
+  fill price.
 """
 
 from __future__ import annotations
@@ -28,6 +35,13 @@ from app.engine.execution.order import (
     OrderEvent,
     OrderType,
 )
+
+# Set of FillModes whose fill_market_order may return None waiting for a
+# subsequent candidate bar. The engine's main loop uses this set to gate
+# both the pending-fills retry loop (Step 3) and the order-drain branch
+# (Step 5). Single source of truth — keep in lockstep with the FillMode
+# enum (see test_deferred_fill_modes_membership_invariant).
+DEFERRED_FILL_MODES: frozenset[FillMode] = frozenset({FillMode.NEXT_BAR_OPEN, FillMode.NEXT_SESSION_OPEN})
 
 
 @dataclass
@@ -76,6 +90,21 @@ class FillModel:
             fill_time = signal_bar.end_time
         elif self.mode == FillMode.NEXT_BAR_OPEN:
             if next_bar is None:
+                return None
+            fill_price = next_bar.open
+            fill_time = next_bar.time
+        elif self.mode == FillMode.NEXT_SESSION_OPEN:
+            if next_bar is None:
+                return None
+            # Eligibility: candidate bar must belong to a trading date STRICTLY
+            # AFTER the signal bar's trading date (NY-local). Minimal
+            # implementation for regular-hours-only fixtures. A future
+            # EligibilityPolicy would replace this date comparison without
+            # changing the contract: "first eligible minute bar after the
+            # signal bar's trading date." Both .end_time and .time are
+            # tz-aware (set by FixtureDataReader and LeanMinuteDataReader);
+            # .date() returns the NY-local calendar date.
+            if next_bar.time.date() <= signal_bar.end_time.date():
                 return None
             fill_price = next_bar.open
             fill_time = next_bar.time
