@@ -329,22 +329,15 @@ class BacktestEngine:
                             strategy.on_order_event(event)
                             _register_bracket_if_needed(order, event)
                         elif self.fill_model.mode == FillMode.NEXT_SESSION_OPEN:
-                            # Attempt immediate fill against the current minute_bar.
-                            # In the daily-consolidator-over-minute-stream pattern
-                            # (Phase 3.5 Path A), this iteration's minute_bar IS
-                            # already the first minute of the next session, so the
-                            # order should fill now — not wait for the next bar.
-                            # See tests/engine/test_engine_fill_modes.py
-                            # ::test_next_session_open_fills_at_first_eligible_minute_open
-                            # for the pinned invariant.
-                            event = self.fill_model.fill_market_order(order, signal_bar, next_bar=minute_bar)
-                            if event is None:
-                                pending_fills.append((order, signal_bar))
-                            else:
-                                portfolio.apply_fill(event)
-                                order_events.append(event)
-                                strategy.on_order_event(event)
-                                _register_bracket_if_needed(order, event)
+                            # Defer until a subsequent minute bar whose trading date is
+                            # strictly after signal_bar.end_time.date() (NY-local). The
+                            # fill_model's eligibility check in fill_market_order enforces
+                            # the date condition when pending_fills loop re-tries.
+                            # See test_engine_fill_modes.py for the pinned fill-timing
+                            # invariant. This semantic mirrors QC's MarketOrder flow:
+                            # algorithm fires at END of first session minute, fill lands
+                            # at NEXT (second) minute's open.
+                            pending_fills.append((order, signal_bar))
                         elif self.fill_model.mode == FillMode.NEXT_BAR_OPEN:
                             # Defer until the next minute bar — protects
                             # single-stream cases where signal_bar IS the current

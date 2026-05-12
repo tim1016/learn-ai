@@ -52,6 +52,12 @@ class Tolerances:
     commission_atol: Decimal = Decimal("0.01")
     per_share_pnl_atol: Decimal = Decimal("0.01")
     pnl_floor_atol: Decimal = Decimal("0.01")
+    # Allowable share-count divergence between our qty and QC's qty. Default 0
+    # (strict equality). Set to 1 or 2 to accommodate SetHoldings rounding
+    # differences where our engine sizes off the last-seen close price while QC
+    # sizes off the expected fill price (NEXT_SESSION_OPEN semantic mismatch).
+    # Document any accepted value in docs/references/reconciliations/<n>.md.
+    qty_atol: int = 0
 
     @classmethod
     def phase3_default(cls) -> Tolerances:
@@ -511,7 +517,7 @@ def _classify_divergences(
                     detail=f"qc={qc.side} ours={ours.side}",
                 )
             )
-        if qc.fill_qty != ours.fill_qty:
+        if abs(qc.fill_qty - ours.fill_qty) > tolerances.qty_atol:
             out.append(
                 Divergence(
                     category=DivergenceCategory.QUANTITY_MISMATCH,

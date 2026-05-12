@@ -94,10 +94,17 @@ def _two_day_stream() -> list[TradeBar]:
 
 
 def test_next_session_open_fills_at_first_eligible_minute_open() -> None:
-    """THE invariant: when the daily consolidator fires day-1's bar during
-    processing of day-2's first minute, NEXT_SESSION_OPEN fills against
-    THAT minute_bar (not the next iteration's bar). Fill price = open of
-    day-2 09:30; fill time = day-2 09:30 NY.
+    """THE invariant: NEXT_SESSION_OPEN defers until a subsequent minute bar
+    whose trading date is strictly after the signal bar's date (NY-local).
+
+    Flow with the two-day stream:
+    - day-2 09:30 bar: Step 3 has no pending fills. Step 4 consolidator
+      fires day-1 daily bar. Step 5 order queues (deferred to pending_fills).
+    - day-2 09:31 bar: Step 3 pending-fills loop — day-2 > day-1, eligible.
+      Fill fires at day-2 09:31's open ($102.2).
+
+    This matches QC's MarketOrder semantics: algorithm fires at END of first
+    session minute, fill lands at NEXT (second) minute's open.
 
     This is the (R8) regression guard for the engine main loop's
     step-ordering invariant: a refactor that re-ordered Step 3
@@ -123,10 +130,12 @@ def test_next_session_open_fills_at_first_eligible_minute_open() -> None:
     assert len(strategy.events) == 1
     event = strategy.events[0]
     assert event.direction is Direction.LONG
-    # Fill time = next_bar.time = day-2 09:30 NY (start of the [09:30, 09:31) bar).
-    assert event.time == datetime(2026, 2, 10, 9, 30, tzinfo=NY)
-    # Fill price = open of day-2 [09:30, 09:31) = 102.0.
-    assert event.fill_price == Decimal("102.0")
+    # Fill at SECOND minute of day-2 (09:31 NY), at the open of [09:31, 09:32).
+    # The first minute (09:30) fires the consolidator and queues the order;
+    # the next iteration's pending-fills loop fires the fill.
+    assert event.time == datetime(2026, 2, 10, 9, 31, tzinfo=NY)
+    # Fill price = open of day-2 [09:31, 09:32) = 102.2.
+    assert event.fill_price == Decimal("102.2")
 
 
 def test_next_session_open_same_date_signal_stays_pending_until_session_boundary() -> None:
