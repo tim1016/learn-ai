@@ -18,7 +18,7 @@ from decimal import Decimal
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.execution_config import ExecutionConfig
-from app.engine.execution.fill_model import FillModel
+from app.engine.execution.fill_model import DEFERRED_FILL_MODES, FillModel
 from app.engine.execution.intrabar_resolver import (
     IntrabarOutcome,
     resolve_bracket_pessimistic,
@@ -253,8 +253,10 @@ class BacktestEngine:
                 strategy.on_force_flat()
                 last_force_flat_date = minute_bar.time.date()
 
-            # ----- Fill any deferred NEXT_BAR_OPEN orders with this bar as next_bar
-            if pending_fills and self.fill_model.mode == FillMode.NEXT_BAR_OPEN:
+            # ----- Fill any deferred orders (NEXT_BAR_OPEN / NEXT_SESSION_OPEN)
+            # with this bar as next_bar. DEFERRED_FILL_MODES is the single
+            # source of truth shared with Step 5 below.
+            if pending_fills and self.fill_model.mode in DEFERRED_FILL_MODES:
                 still_pending: list[tuple[object, TradeBar]] = []
                 for order, signal_bar in pending_fills:
                     event = self.fill_model.fill_market_order(order, signal_bar, next_bar=minute_bar)
@@ -305,9 +307,7 @@ class BacktestEngine:
                 market_orders = [o for o in drained if o.order_type == OrderType.MARKET]
                 other_orders = [o for o in drained if o.order_type not in (OrderType.LIMIT, OrderType.MARKET)]
                 if other_orders:
-                    raise NotImplementedError(
-                        f"order types not yet supported: {[o.order_type for o in other_orders]}"
-                    )
+                    raise NotImplementedError(f"order types not yet supported: {[o.order_type for o in other_orders]}")
                 for order in limit_orders:
                     assert order.limit_price is not None, "LIMIT order requires limit_price"
                     resting_limit_orders.append(order)
@@ -328,9 +328,31 @@ class BacktestEngine:
                             order_events.append(event)
                             strategy.on_order_event(event)
                             _register_bracket_if_needed(order, event)
-                        else:
-                            # Defer until the next minute bar.
+                        elif self.fill_model.mode == FillMode.NEXT_SESSION_OPEN:
+                            # Attempt immediate fill against the current minute_bar.
+                            # In the daily-consolidator-over-minute-stream pattern
+                            # (Phase 3.5 Path A), this iteration's minute_bar IS
+                            # already the first minute of the next session, so the
+                            # order should fill now — not wait for the next bar.
+                            # See tests/engine/test_engine_fill_modes.py
+                            # ::test_next_session_open_fills_at_first_eligible_minute_open
+                            # for the pinned invariant.
+                            event = self.fill_model.fill_market_order(order, signal_bar, next_bar=minute_bar)
+                            if event is None:
+                                pending_fills.append((order, signal_bar))
+                            else:
+                                portfolio.apply_fill(event)
+                                order_events.append(event)
+                                strategy.on_order_event(event)
+                                _register_bracket_if_needed(order, event)
+                        elif self.fill_model.mode == FillMode.NEXT_BAR_OPEN:
+                            # Defer until the next minute bar — protects
+                            # single-stream cases where signal_bar IS the current
+                            # minute_bar, so filling against it would defeat the
+                            # "next bar open" semantic.
                             pending_fills.append((order, signal_bar))
+                        else:
+                            raise ValueError(f"unknown fill mode: {self.fill_model.mode}")
 
             # ----- Evaluate resting limit orders against this minute's
             #       [low, high] range. The penetration requirement is
