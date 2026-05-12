@@ -20,7 +20,7 @@
 > rule: if you touch those files, update the matching section here and
 > bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-05-12 (post PR #220 — Phase 3.0 acceptance shipped as `xfail`; Phase 3.5 pending).
+> **Last reviewed:** 2026-05-12 (post Phase 3.5 Path A merge — single-fill acceptance gate passed; Phase 3.5+ multi-day round-trip P&L deferred pending QC OOS rollover).
 
 ---
 
@@ -120,9 +120,9 @@ recorded in the `RunLedger` — uses the canonical artifact form.
 
 | File | Responsibility |
 |---|---|
-| `loader.py` (`class PredictionSet`) | Load artifact, validate manifest, expose lookups, run `assert_pairs_with(spec)` |
+| `loader.py` (`class PredictionSet`) | Load artifact, validate manifest, expose lookups (`next_after()`, `PredictionLookupError`), run `assert_pairs_with(spec)` |
 | `artifact.py` | Manifest schema, chunk write/read helpers, hash computation |
-| `coverage.py` | `assert_bar_clock_coverage(prediction_set, bar_stream)` — fail-fast on missing or extra bars |
+| `coverage.py` | `assert_bar_clock_coverage(prediction_set, bar_stream, refs=...)` — fail-fast on missing or extra bars; lookup-aware when `refs` provided |
 | `generators/quantconnect_fixture.py` | `import_qc_fixture(...)` — QC `qc_export.json` → canonical artifact, deterministic hash |
 | `generators/deterministic_rule.py` | Synthetic prediction generator (testing only — no QC dependency) |
 | `generate_prediction_set.py` | CLI entry point for ingestion (used by validation scripts) |
@@ -131,15 +131,16 @@ recorded in the `RunLedger` — uses the canonical artifact form.
 
 | File | Responsibility |
 |---|---|
-| `schema.py` | `StrategySpec.predictions` list, `PredictionRef`, `PredictionComparison` Pydantic schema |
-| `primitives.py` | `PredictionComparison` evaluator — `op` ∈ `{<, <=, >, >=, ==, !=}` against the latest prediction value at the current bar's timestamp |
+| `schema.py` | `StrategySpec.predictions` list, `PredictionRef` (incl. new `lookup` field), `PredictionComparison` Pydantic schema |
+| `primitives.py` | `PredictionComparison` evaluator — per-ref lookup dispatch using `PredictionRef.lookup`; `op` ∈ `{<, <=, >, >=, ==, !=}` |
+| `engine.py` | `FillMode.NEXT_SESSION_OPEN` — defer-only with NY-trading-date eligibility; fills at first minute-bar open of the next trading session |
 | `__init__.py` (`SpecAlgorithm.__init__`) | Takes `prediction_set: PredictionSet \| None` injected from the runner; raises if spec references a set but none is provided |
 
 ### Runner integration (`PythonDataService/app/research/runs/`)
 
 | File | Responsibility |
 |---|---|
-| `runner.py` (`run_strategy_spec`) | Orchestrates prediction-set load + coverage check + engine run; records `prediction_set_hash` on the `RunLedger` |
+| `runner.py` (`run_strategy_spec`) | Orchestrates prediction-set load + coverage check + engine run; records `prediction_set_hash` on the `RunLedger`; accepts `"next_session_open"` fill_mode string |
 | `runner.py` (`_prediction_artifacts_root`) | Artifacts dir resolution — defaults to `PythonDataService/artifacts/predictions/`, overridable via `LEARN_AI_PREDICTION_ARTIFACTS_ROOT` (used by parity tests) |
 | `ledger.py` (`RunLedger.prediction_set_hash`) | Pinned hash field — links the run to the exact prediction-set content |
 
@@ -288,16 +289,21 @@ same-side fills raise `RoundTripPairingError`.
 | **v0.5 plumbing** (PR #207–#210) | ✅ shipped | `PredictionSet` artifact format, manifest-hash determinism, `assert_pairs_with`, `assert_bar_clock_coverage`, runner integration, `RunLedger.prediction_set_hash` | — |
 | **QC tutorial parity Phase 1** (PR #211–#215) | ✅ shipped | Captured GBM prediction-set fixture from QC's "Precomputed ML Predictions" tutorial (AAPL anchor, 22-day window); reimport hash pinned at `b8252cfa9a749f5bf592602f3aebc2b3a4ccc6bb0cd41da48a6db7a581342e0e` | — |
 | **Phase 3.0 — trade-level parity scaffolding** (PR #218–#220) | ✅ shipped (xfail) | `FixtureDataReader` (daily+minute), `IbkrEquityCommissionModel`, `QcReconciler` (8-category taxonomy), round-trip P&L emission, `_build_our_fills` engine replay; 1-day QC fixture committed | Phase 3.0 acceptance test marked `xfail(strict=True)` — 1-day fixture exposes intrinsic QC-intraday-vs-our-NEXT_BAR_OPEN timing mismatch (documented in [reconciliation summary](references/reconciliations/qc-aapl-phase3.md)) |
-| **Phase 3.5 — full trade-level parity** | ⏳ pending | Multi-day fixture (2026-02-10 → 2026-03-12) + one of: (a) intraday-trigger fill mode in our engine, or (b) accepted timing-offset reconciliation | Engine work; fixture re-capture |
+| **Phase 3.5 Path A — intraday-trigger fill mode** | ✅ shipped (single-fill scope) | `FillMode.NEXT_SESSION_OPEN` (defer-only with NY-trading-date eligibility), `PredictionRef.lookup="next_after_bar_close"` for data-timing, `PredictionSet.next_after`, lookup-aware bar-clock coverage. Acceptance test passes with 1 pinned aligned fill (2026-02-10 buy, $273.18 vs QC's $273.24 within bid-ask tolerance). | — |
+| **Phase 3.5+ — multi-day round-trip P&L** | ⏳ deferred | Gated on QC OOS rollover (~2 months at free tier) or paid-tier upgrade. Requires the full 2026-02-10 → 2026-03-12 fixture window so an exit signal can fire and a closed `LoggedTrade` round-trip emits. | QC account tier OR wait for OOS rollover |
 | **Phase 4 — multi-symbol top-N ranking** | ⏳ pending (independent of 3.5) | Currently `SpecAlgorithm` restricts to single symbol; `PortfolioConstruction` extension needed | `StrategySpec` schema change |
 
-### What "xfail Phase 3.0" actually means
+### Historical note — Phase 3.0 xfail closed by Phase 3.5 Path A
 
-`tests/research/parity/test_qc_aapl_phase3_trade_parity.py::test_qc_aapl_phase3_trade_level_parity`
-is marked `xfail(strict=True)`. CI passes because xfailed counts as success,
-but a future change that makes it produce `status="passed"` will surface
-as `XPASS` — which is a CI failure — forcing the engineer to remove the
-xfail mark. That's the trip-wire that confirms Phase 3.5 has closed parity.
+Phase 3.0 shipped the reconciler infrastructure against a 1-day fixture
+with an intentional `xfail(strict=True)`: our engine's `NEXT_BAR_OPEN`
+filled one trading day after QC's intraday `set_holdings`, producing a
+`DECISION_MISMATCH`. Phase 3.5 closes this via `FillMode.NEXT_SESSION_OPEN`
+(defer-only with NY-trading-date eligibility) + `PredictionRef.lookup=
+"next_after_bar_close"`. The acceptance test now asserts `status="passed"`
+under widened (but justified) tolerances; see the
+[reconciliation report](references/reconciliations/qc-aapl-phase3.md)
+for the divergence breakdown.
 
 ---
 
@@ -360,24 +366,12 @@ prediction-set browsing and top-N configuration; out of scope here.
 
 ## 10. Open issues and next phases
 
-### Phase 3.5 — close the trade-level parity gate
+### Phase 3.5 — closed via Path A
 
-The 1-day Phase 3.0 fixture demonstrates the reconciler pipeline runs
-end-to-end, but the `xfail` is held open by a structural timing mismatch.
-Two paths to closure (pick one or both):
-
-- **Path A — Intraday-trigger fill mode.** Add an engine `FillMode` that
-  signals on daily-close prediction and fills at the same trading day's
-  first minute-bar open. Matches QC's `set_holdings @ 09:31 ET` semantics
-  exactly. Requires `BacktestEngine` work + minute-resolution data
-  subscription support.
-- **Path B — Accepted timing offset.** Reconcile P&L against `(QC day-T fill,
-  our day-(T+1) fill)` with an explicit timing-offset tolerance documented
-  in the reconciler. Cheaper; less satisfying.
-
-Either path needs a multi-day fixture (2026-02-10 → 2026-03-12 matching
-PR #215's prediction-set window) so round-trips exist and `PNL_DRIFT`
-can fire as a real assertion.
+`FillMode.NEXT_SESSION_OPEN` (defer-only) + `PredictionRef.lookup=
+"next_after_bar_close"` shipped 2026-05-12. Single-fill acceptance
+gate passed; multi-day round-trip P&L deferred pending QC OOS rollover.
+See [reconciliation](references/reconciliations/qc-aapl-phase3.md).
 
 ### Phase 4 — multi-symbol ranking
 
