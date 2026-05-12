@@ -387,7 +387,7 @@ def run_strategy_spec(
                 end_date=request.end_date,
                 resolution_minutes=resolution,
             )
-            assert_bar_clock_coverage(prediction_set, bar_stream)
+            assert_bar_clock_coverage(prediction_set, bar_stream, refs=spec.predictions)
         except Exception as exc:
             return _failed(
                 ledger,

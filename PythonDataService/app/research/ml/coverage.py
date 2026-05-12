@@ -14,15 +14,19 @@ market-hours stream) are allowed — they're a superset, not a mismatch.
 from __future__ import annotations
 
 import logging
+from bisect import bisect_right
 from collections.abc import Iterable, Iterator
 from datetime import date as Date
 from datetime import timedelta
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.engine.consolidators.trade_bar_consolidator import TradeBarConsolidator
 from app.engine.data.trade_bar import TradeBar
 from app.research.ml.loader import PredictionCoverageError, PredictionSet
 from app.utils.timestamps import to_ms_utc
+
+if TYPE_CHECKING:
+    from app.engine.strategy.spec.schema import PredictionRef
 
 logger = logging.getLogger(__name__)
 
@@ -37,20 +41,45 @@ class _BarLike(Protocol):
 def assert_bar_clock_coverage(
     prediction_set: PredictionSet,
     bar_stream: Iterable[_BarLike],
+    *,
+    refs: Iterable[PredictionRef],
 ) -> None:
-    """Raise ``PredictionCoverageError`` if any emitted bar lacks a prediction.
+    """Raise ``PredictionCoverageError`` if any fired bar lacks a matching
+    prediction under any declared ``PredictionRef``'s ``lookup`` mode.
+
+    For each ``ref`` and each fired bar's ``end_time_ms``:
+
+    - ``ref.lookup == "exact_bar_close"``: ``prediction_set.index`` must
+      contain the bar's ``end_time_ms``, AND that row must contain
+      ``ref.field``.
+    - ``ref.lookup == "next_after_bar_close"``: there must be a row whose
+      timestamp is strictly greater than the bar's ``end_time_ms``, AND
+      that row must contain ``ref.field``.
+
+    Raises on the first violation. The error message names ``ref.id``,
+    ``ref.lookup``, the fired ``ts_ms``, and ``ref.field``; for the
+    next_after-row-missing-field case, also names the matched next-row's
+    ``ts_ms`` so the offending prediction row can be located in the
+    artifact.
 
     ``bar_stream`` must be the bars the run will actually evaluate —
-    typically obtained by running the run's data source through the
-    same ``TradeBarConsolidator`` configuration the engine will use.
+    typically obtained by running the data source through the same
+    ``TradeBarConsolidator`` configuration the engine will use.
     Iterating consumes the stream once.
+
+    ``refs`` is the spec's ``predictions`` list. A spec may mix lookup
+    modes across refs; each ref is validated independently.
     """
-    expected_ms: set[int] = {to_ms_utc(bar.end_time) for bar in bar_stream}
+    bars: list[_BarLike] = list(bar_stream)
+    fired_ms: list[int] = [to_ms_utc(bar.end_time) for bar in bars]
     have_ms: set[int] = set(prediction_set.index.keys())
+    sorted_have: list[int] = prediction_set._sorted_ts
 
-    missing = expected_ms - have_ms
-    extra = have_ms - expected_ms
+    refs_list = list(refs)
+    if not refs_list:
+        return
 
+    extra = have_ms - set(fired_ms)
     if extra:
         logger.info(
             "[ML] prediction_set %s has %d predictions for bars the engine will not evaluate; "
@@ -59,12 +88,43 @@ def assert_bar_clock_coverage(
             len(extra),
         )
 
-    if missing:
-        sample = sorted(missing)[:5]
-        raise PredictionCoverageError(
-            f"prediction_set {prediction_set.manifest.prediction_set_id!r} missing predictions "
-            f"for {len(missing)} emitted bars; first {len(sample)}: {sample}"
-        )
+    for ref in refs_list:
+        if ref.lookup == "exact_bar_close":
+            for fired in fired_ms:
+                if fired not in have_ms:
+                    raise PredictionCoverageError(
+                        f"ref {ref.id!r} (exact_bar_close): no prediction row "
+                        f"at fired bar ts_ms={fired}; field={ref.field!r}"
+                    )
+                row = prediction_set.index[fired]
+                if ref.field not in row:
+                    raise PredictionCoverageError(
+                        f"ref {ref.id!r} (exact_bar_close): row at fired bar "
+                        f"ts_ms={fired} is missing field {ref.field!r} "
+                        f"(available: {sorted(row)})"
+                    )
+        elif ref.lookup == "next_after_bar_close":
+            for fired in fired_ms:
+                i = bisect_right(sorted_have, fired)
+                if i == len(sorted_have):
+                    raise PredictionCoverageError(
+                        f"ref {ref.id!r} (next_after_bar_close): fired bar "
+                        f"ts_ms={fired} has no prediction row strictly after; "
+                        f"field={ref.field!r}"
+                    )
+                matched_ts = sorted_have[i]
+                row = prediction_set.index[matched_ts]
+                if ref.field not in row:
+                    raise PredictionCoverageError(
+                        f"ref {ref.id!r} (next_after_bar_close): fired bar "
+                        f"ts_ms={fired} matched next row at ts_ms={matched_ts} "
+                        f"but it is missing field {ref.field!r} "
+                        f"(available: {sorted(row)})"
+                    )
+        else:
+            raise PredictionCoverageError(
+                f"ref {ref.id!r}: unknown lookup mode {ref.lookup!r}; coverage.py needs an updated branch"
+            )
 
 
 def iter_consolidated_bars(
