@@ -129,8 +129,7 @@ class SpecAlgorithm(Strategy):
         # later-phase spec and get silently-wrong results.
         if not isinstance(spec.position, S.EquityLongPosition):
             raise NotImplementedError(
-                f"evaluator supports EQUITY_LONG positions only "
-                f"(spec uses {type(spec.position).__name__})"
+                f"evaluator supports EQUITY_LONG positions only (spec uses {type(spec.position).__name__})"
             )
         # Survival rule actions: Phase 2.1 ships CLOSE_ALL only.
         for rule in spec.survival:
@@ -140,9 +139,7 @@ class SpecAlgorithm(Strategy):
                     f"not supported in Phase 2.1 (only CLOSE_ALL)"
                 )
         if spec.entry.pyramiding != 1:
-            raise NotImplementedError(
-                f"evaluator supports pyramiding=1 only (spec uses {spec.entry.pyramiding})"
-            )
+            raise NotImplementedError(f"evaluator supports pyramiding=1 only (spec uses {spec.entry.pyramiding})")
 
         self._symbol_name = spec.symbols[0].upper()
         self._symbol: str = ""
@@ -197,17 +194,11 @@ class SpecAlgorithm(Strategy):
         # primitive. observe_bar is called on every primitive every bar
         # regardless of which block evaluated.
         self._all_primitives = []
-        self._entry_block = CompiledBlock(
-            self._spec.entry.logic, self._spec.entry.conditions, self._all_primitives
-        )
-        self._exit_block = CompiledBlock(
-            self._spec.exit.logic, self._spec.exit.conditions, self._all_primitives
-        )
+        self._entry_block = CompiledBlock(self._spec.entry.logic, self._spec.entry.conditions, self._all_primitives)
+        self._exit_block = CompiledBlock(self._spec.exit.logic, self._spec.exit.conditions, self._all_primitives)
         self._survival_rules = []
         for rule in self._spec.survival:
-            compiled_when = CompiledBlock(
-                rule.when.logic, rule.when.conditions, self._all_primitives
-            )
+            compiled_when = CompiledBlock(rule.when.logic, rule.when.conditions, self._all_primitives)
             self._survival_rules.append((rule.name, compiled_when, rule.action))
 
         # Reset lifecycle state (in case initialize is called more than once
@@ -257,12 +248,45 @@ class SpecAlgorithm(Strategy):
         entry_price = self._open_trade.entry_price if self._open_trade is not None else None
 
         # Build the predictions snapshot for this bar. Empty when no
-        # PredictionSet is wired (prediction-free specs).
+        # PredictionSet is wired (prediction-free specs). Each ref's
+        # `lookup` field controls which prediction-set row is consumed:
+        # - exact_bar_close: row keyed at bar.end_time_ms
+        # - next_after_bar_close: smallest-key row with ts > bar.end_time_ms
+        # Coverage check is the intended first-line guard; the
+        # PredictionLookupError raises are runtime backstops so a coverage
+        # bypass / fixture truncation can never silently produce False.
         predictions: dict[str, Decimal] = {}
         if self._prediction_set is not None and self._spec.predictions:
             ts_ms = to_ms_utc(bar.end_time)
-            row = self._prediction_set.index[ts_ms]  # KeyError == coverage-check bug
             for ref in self._spec.predictions:
+                if ref.lookup == "exact_bar_close":
+                    row = self._prediction_set.index.get(ts_ms)
+                    if row is None:
+                        from app.research.ml.loader import PredictionLookupError  # lazy — avoids circular import
+
+                        raise PredictionLookupError(
+                            f"prediction ref {ref.id!r} (lookup=exact_bar_close): "
+                            f"no row at ts_ms={ts_ms} ({bar.end_time}); "
+                            f"coverage check should have caught this"
+                        )
+                else:  # "next_after_bar_close"
+                    row = self._prediction_set.next_after(ts_ms)
+                    if row is None:
+                        from app.research.ml.loader import PredictionLookupError  # lazy — avoids circular import
+
+                        raise PredictionLookupError(
+                            f"prediction ref {ref.id!r} (lookup=next_after_bar_close): "
+                            f"no row strictly after ts_ms={ts_ms} ({bar.end_time}); "
+                            f"coverage check should have caught this"
+                        )
+                if ref.field not in row:
+                    from app.research.ml.loader import PredictionLookupError  # lazy — avoids circular import
+
+                    raise PredictionLookupError(
+                        f"prediction ref {ref.id!r}: row at lookup-resolved timestamp "
+                        f"is missing declared field {ref.field!r} "
+                        f"(available: {sorted(row)})"
+                    )
                 predictions[ref.id] = Decimal(str(row[ref.field]))
 
         ctx = EvalContext(
@@ -291,10 +315,7 @@ class SpecAlgorithm(Strategy):
                     break
             if not survival_fired and self._exit_block.evaluate(ctx):
                 self.ctx.liquidate(self._symbol)
-                self.ctx.log(
-                    f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
-                    f"Close={bar.close:.2f}"
-                )
+                self.ctx.log(f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
                 self._in_position = False
                 self._entry_bar_count = None
         else:
@@ -343,9 +364,7 @@ class SpecAlgorithm(Strategy):
     def _format_snapshot(snapshot: dict[str, Decimal]) -> str:
         return " ".join(f"{k}={v}" for k, v in snapshot.items())
 
-    def _apply_survival_action(
-        self, rule_name: str, action: S.SurvivalAction, bar: TradeBar
-    ) -> None:
+    def _apply_survival_action(self, rule_name: str, action: S.SurvivalAction, bar: TradeBar) -> None:
         """Execute a survival rule's action.
 
         Phase 2.1 supports CLOSE_ALL only — liquidate the entire position.
@@ -377,8 +396,7 @@ class SpecAlgorithm(Strategy):
             # Phase 1 is equity-only; FixedContracts is reserved for Phase 2
             # options sizing.
             raise NotImplementedError(
-                "FixedContracts sizing is reserved for Phase 2 (options) — "
-                "Phase 1 equity specs use SetHoldings"
+                "FixedContracts sizing is reserved for Phase 2 (options) — Phase 1 equity specs use SetHoldings"
             )
         raise TypeError(f"unknown size rule type: {type(size).__name__}")
 
