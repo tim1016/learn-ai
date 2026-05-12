@@ -2,7 +2,7 @@
 
 - **Tutorial**: https://www.quantconnect.com/docs/v2/writing-algorithms/importing-data/streaming-data/precomputed-ml-predictions
 - **Captured by**: Tim
-- **Captured at (UTC ms)**: 1778544000000  *(2026-05-11 23:37 — taken from QC `state.StartTime` of the backtest blob; replace with actual capture timestamp if more precision needed)*
+- **Captured at (UTC ms)**: 1778544000000  *(2026-05-12 00:00:00 UTC — taken from QC `state.StartTime` of the backtest blob; replace with actual capture timestamp if more precision needed)*
 - **QC project id**: 31452310
 - **QC backtest name**: "Hipster Yellow Bat"
 - **QC algorithm id**: `748c9f9f400b777443a57289ba4468b7`
