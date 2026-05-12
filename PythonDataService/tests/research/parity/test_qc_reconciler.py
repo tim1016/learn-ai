@@ -237,6 +237,77 @@ def test_audit_fixture_flags_missing_bar(reader: FixtureDataReader) -> None:
     assert "no bar in fixture" in audits[0].reason
 
 
+# ---------- _audit_fixture (minute resolution) ---------------------------
+
+
+_CSV_MINUTE_AAPL = (
+    "time,open,high,low,close,volume\n"
+    "2026-02-10 09:30:00,274.0,274.8,273.5,274.5,500000\n"
+    "2026-02-10 09:31:00,274.74678,275.106448512,273.04834536,273.228179616,743349\n"
+    "2026-02-10 09:32:00,273.178225656,274.317175944,273.04834536,274.117360104,206471\n"
+)
+
+
+@pytest.fixture
+def minute_csv_path(tmp_path: Path) -> Path:
+    p = tmp_path / "qc_price_history_minute.csv"
+    p.write_text(_CSV_MINUTE_AAPL)
+    return p
+
+
+@pytest.fixture
+def minute_reader(minute_csv_path: Path) -> FixtureDataReader:
+    return FixtureDataReader(minute_csv_path)
+
+
+def _qc_fill_at(side: str, qty: int, price: str, iso: str, *, order_id: int = 1, fee: str = "1.83") -> QcFill:
+    dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return QcFill(
+        order_id=order_id,
+        symbol="AAPL",
+        side=side,  # type: ignore[arg-type]
+        fill_qty=qty,
+        fill_price=Decimal(price),
+        fill_time_ms=int(dt.timestamp() * 1000),
+        fee=Decimal(fee),
+        order_type_code=0,
+    )
+
+
+def test_minute_audit_passes_when_fill_within_bar_range(
+    minute_reader: FixtureDataReader,
+) -> None:
+    # Fill at 2026-02-10 14:31:00Z (= 9:31 ET) at $273.238 — within
+    # 9:31 bar's [273.048, 275.106] range.
+    qc = [_qc_fill_at("buy", 365, "273.238170408", "2026-02-10T14:31:00Z")]
+    audits = _audit_fixture(qc, minute_reader, Tolerances.phase3_default())
+    assert audits == []
+
+
+def test_minute_audit_flags_fill_outside_bar_range(
+    minute_reader: FixtureDataReader,
+) -> None:
+    # Fill at $300 on the 9:31 bar — well outside [273.048, 275.106].
+    qc = [_qc_fill_at("buy", 100, "300.00", "2026-02-10T14:31:00Z")]
+    audits = _audit_fixture(qc, minute_reader, Tolerances.phase3_default())
+    assert len(audits) == 1
+    assert "outside minute-bar range" in audits[0].reason
+
+
+def test_minute_audit_flags_no_minute_bar_for_time(
+    minute_reader: FixtureDataReader,
+) -> None:
+    # Fill at 9:45 ET — no bar in the fixture for that minute.
+    qc = [_qc_fill_at("buy", 100, "274.00", "2026-02-10T14:45:00Z")]
+    audits = _audit_fixture(qc, minute_reader, Tolerances.phase3_default())
+    assert len(audits) == 1
+    assert "no minute bar" in audits[0].reason
+
+
+def test_minute_reader_detects_resolution(minute_reader: FixtureDataReader) -> None:
+    assert minute_reader.is_minute_resolution is True
+
+
 # ---------- _align_fills ---------------------------------------------------
 
 
