@@ -18,17 +18,20 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from datetime import date as Date
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from app.research.parity.fixture_data_reader import FixtureDataReader
 from app.research.parity.ibkr_commission import IbkrEquityCommissionModel
 
 Side = Literal["buy", "sell"]
+
+_NY = ZoneInfo("America/New_York")
 
 
 class DivergenceCategory(StrEnum):
@@ -79,7 +82,10 @@ class QcFill:
 
     @property
     def trading_date(self) -> Date:
-        return datetime.fromtimestamp(self.fill_time_ms / 1000, tz=UTC).date()
+        # NY-local date — extended/overnight fills can have a UTC date one
+        # day ahead of their NY trading date. Reconciler aligns on NY
+        # trading date, so the conversion must happen here.
+        return datetime.fromtimestamp(self.fill_time_ms / 1000, tz=_NY).date()
 
 
 @dataclass(frozen=True)
@@ -95,7 +101,10 @@ class OurFill:
 
     @property
     def trading_date(self) -> Date:
-        return datetime.fromtimestamp(self.fill_time_ms / 1000, tz=UTC).date()
+        # NY-local date — extended/overnight fills can have a UTC date one
+        # day ahead of their NY trading date. Reconciler aligns on NY
+        # trading date, so the conversion must happen here.
+        return datetime.fromtimestamp(self.fill_time_ms / 1000, tz=_NY).date()
 
 
 @dataclass(frozen=True)

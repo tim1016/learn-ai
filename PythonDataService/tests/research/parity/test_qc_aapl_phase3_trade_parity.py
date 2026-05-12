@@ -21,6 +21,7 @@ See ``docs/ml-predictions-authority.md`` §3 and
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -208,6 +209,22 @@ def test_qc_aapl_phase3_trade_level_parity(tmp_path: Path) -> None:
     PredictionRef.lookup="next_after_bar_close" produces the same fill
     as QC at the same minute (within bid-ask spread imprecision).
     """
+    # Branch A guard: assert_fees=True is only valid when the fixture has
+    # non-zero orderFeeAmount events. Catches a silent failure mode where a
+    # future Branch B re-capture would change the meaning of this test
+    # without surfacing the change.
+    payload = json.loads(_ORDERS.read_text())
+    has_nonzero_fee = any(
+        event.get("orderFeeAmount") is not None and float(event["orderFeeAmount"]) != 0.0
+        for order in payload["orders"]
+        for event in order.get("events", [])
+    )
+    assert has_nonzero_fee, (
+        f"Fixture at {_ORDERS} is Branch B (no non-zero fees); "
+        f"assert_fees=True is invalid. Re-capture in Branch A mode "
+        f"or set assert_fees=False explicitly."
+    )
+
     our_fills = _build_our_fills(tmp_path)
     # Widened fill_price_atol = $0.10 to cover bid-ask spread imprecision:
     # QC fills at ASK; our engine fills at bar.open (last-trade approximation).

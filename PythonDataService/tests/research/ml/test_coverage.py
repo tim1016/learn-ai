@@ -180,6 +180,29 @@ def test_coverage_mixed_lookup_modes_validates_both() -> None:
         assert_bar_clock_coverage(pset, bars, refs=refs)
 
 
+def test_coverage_next_after_matched_row_missing_field_raises_with_both_timestamps() -> None:
+    """For next_after_bar_close, when the matched successor row exists but
+    lacks the declared field, the error must name BOTH the fired ts AND the
+    matched next-row's ts (so the user can locate the corrupt row in the
+    prediction set). Closes a test gap in the coverage layer — the evaluator
+    has a corresponding backstop test but coverage itself lacked one."""
+    bars = _bars(1)
+    fired_ts = _to_ms(bars[0].end_time)
+    matched_ts = fired_ts + 1
+    # Row exists at matched_ts but lacks 'prediction':
+    rows = [
+        (fired_ts, {"prediction": 0.0, "confidence": 0.5}),
+        (matched_ts, {"confidence": 0.6}),  # missing 'prediction'
+    ]
+    pset = _pset_with_fields(rows)
+    refs = [_ref(lookup="next_after_bar_close", field="prediction")]
+    with pytest.raises(
+        PredictionCoverageError,
+        match=rf"matched next row at ts_ms={matched_ts}.*missing field 'prediction'",
+    ):
+        assert_bar_clock_coverage(pset, bars, refs=refs)
+
+
 def test_coverage_passes_under_next_after_when_set_extends_one_row_past_bars() -> None:
     bars = _bars(3)
     timestamps = [_to_ms(b.end_time) for b in bars]
