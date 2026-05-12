@@ -30,6 +30,7 @@
 | `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |
 | `docs/ibkr-integration-authority.md` | IBKR integration snapshot | `docs/architecture/ibkr-integration-phase1/2/3.md` (archived) | 2026-05-04 |
 | `docs/indicator-reliability-authority.md` | Indicator reliability methodology | — | — |
+| `docs/ml-predictions-authority.md` | ML predictions (prediction-set artifact, StrategySpec wiring, QC parity infra) | — | 2026-05-12 |
 | `docs/portfolio-management.md` | Portfolio management system | `docs/portfolio-system.md` (duplicate, disputed — PR2) | — |
 | `docs/signal-engine-authority.md` | Signal engine | — | — |
 
