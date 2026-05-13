@@ -70,9 +70,7 @@ def _git_head_sha(repo_root: Path) -> str:
         check=False,
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"git rev-parse HEAD failed in {repo_root}: rc={proc.returncode} stderr={proc.stderr!r}"
-        )
+        raise RuntimeError(f"git rev-parse HEAD failed in {repo_root}: rc={proc.returncode} stderr={proc.stderr!r}")
     sha = proc.stdout.strip()
     if not sha:
         raise RuntimeError(f"git rev-parse HEAD returned empty in {repo_root}")
@@ -315,6 +313,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         LiveEngine,
         MaxOrdersPerDayExceeded,
     )
+    from app.engine.live.run_logging import configure_run_logging
 
     # § 7.2 #4 refusal: a poisoned run cannot resume on its own
     # run_id. The flag is written intra-day by the LiveEngine when
@@ -348,6 +347,16 @@ def cmd_start(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         print(f"[START] could not parse run_ledger.json: {exc}", file=sys.stderr)
         return 2
+
+    # Attach file + console logging keyed off the run-dir. Done after
+    # the poisoned-flag refusal and ledger read so a misconfigured run
+    # never creates a fresh live.log under a poisoned run_dir.
+    log_path = configure_run_logging(args.run_dir)
+    logger.info(
+        "Run logging attached: %s (rotating, 10MB x 5 backups)",
+        log_path,
+        extra={"step": "0"},
+    )
 
     try:
         module = import_module(f"app.engine.strategy.algorithms.{args.strategy}")
@@ -501,10 +510,7 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
     async def _flatten() -> int:
         snapshot = await broker.fetch_positions()
         if snapshot.account_id.upper() != args.account.upper():
-            _log(
-                f"REFUSED: connected account {snapshot.account_id} != --account {args.account}; "
-                "no orders placed."
-            )
+            _log(f"REFUSED: connected account {snapshot.account_id} != --account {args.account}; no orders placed.")
             return 2
         liquidated = 0
         for pos in snapshot.positions:
@@ -529,10 +535,7 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                 client_order_id=f"emergency-flatten-{pos.symbol}-{int(_datetime.now(UTC).timestamp() * 1000)}",
             )
             ack = await broker.place_order(spec)
-            _log(
-                f"liquidated: symbol={pos.symbol} qty={qty_signed} action={action} "
-                f"order_id={ack.order_id}"
-            )
+            _log(f"liquidated: symbol={pos.symbol} qty={qty_signed} action={action} order_id={ack.order_id}")
             liquidated += 1
         _log(f"complete: liquidated={liquidated}")
         return 0
@@ -638,7 +641,9 @@ def build_parser() -> argparse.ArgumentParser:
         "start",
         help="Run the live engine end-to-end against an existing run directory.",
     )
-    start.add_argument("--run-dir", type=Path, required=True, help="live_runs/<run_id>/ directory built by init-ledger.")
+    start.add_argument(
+        "--run-dir", type=Path, required=True, help="live_runs/<run_id>/ directory built by init-ledger."
+    )
     start.add_argument(
         "--strategy",
         default="spy_ema_crossover",
@@ -660,8 +665,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=4,
         help=(
-            "§ 9 cap. Crossing this halts the run with exit 1. "
-            "Default 4 (≤ 1 entry + 1 exit + 1 retry + 1 force-flat)."
+            "§ 9 cap. Crossing this halts the run with exit 1. Default 4 (≤ 1 entry + 1 exit + 1 retry + 1 force-flat)."
         ),
     )
     start.set_defaults(func=cmd_start)
