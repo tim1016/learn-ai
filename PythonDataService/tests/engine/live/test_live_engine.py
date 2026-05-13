@@ -298,3 +298,66 @@ async def test_live_engine_emits_per_bar_heartbeat_log(caplog) -> None:
         msg = record.getMessage()
         assert "consolidator_emitted=" in msg, msg
         assert "snapshot=" in msg, msg
+
+
+class _WedgedBarSource:
+    """Async iterator that never yields — models a stalled stream_minute_bars.
+
+    Real-world scenarios this represents: the IBKR error-420
+    (RT-bars same-IP-binding) silent rejection, an IB Gateway daily
+    restart that drops the bar stream, a market-halt period that
+    pauses 5-second bars indefinitely. In every case ``__anext__``
+    awaits forever and the engine is wedged inside ``async for``.
+    """
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await asyncio.Event().wait()  # never set — blocks forever
+        raise StopAsyncIteration  # unreachable
+
+
+@pytest.mark.asyncio
+async def test_live_engine_shutdown_event_unwedges_loop_when_bar_source_is_silent() -> None:
+    """SIGINT must unwedge the engine even when the bar source never yields.
+
+    Today (pre-fix), ``LiveEngine.run`` checks ``shutdown_event.is_set()``
+    INSIDE the ``async for minute_bar in source:`` loop. When ``source``
+    is wedged on its own ``__anext__`` (no bars arriving), the loop
+    body never runs and the shutdown check is never reached, so the
+    engine cannot be SIGINT'd cleanly — only SIGKILL works.
+
+    The container run with IBKR error 420 on 2026-05-13 hit exactly
+    this state: connect succeeded, ``stream_minute_bars`` polled an
+    empty ``BarDataList`` for 30 min, SIGINT was sent at 30 min, the
+    Phase 8 signal handler set ``shutdown_event``, but the engine
+    never noticed because the bar loop was wedged. SIGKILL fired
+    after the 30 s grace and the run exited with code 137.
+
+    Fix shape: race ``source.__anext__()`` against
+    ``shutdown_event.wait()`` so shutdown wins within bounded time
+    even when no bar arrives. After the fix, this test returns in
+    ~0.1 s; the 5 s ``wait_for`` cap is just so a regression hangs
+    the test rather than the test runner.
+    """
+    broker = FakeBroker()
+    engine = LiveEngine(None, LiveConfig(), broker=broker)
+    shutdown_event = asyncio.Event()
+
+    async def trigger_shutdown() -> None:
+        # Give engine.run a chance to enter its bar-loop wait first.
+        await asyncio.sleep(0.1)
+        shutdown_event.set()
+
+    # Hold a reference so the task isn't GC'd before it fires.
+    trigger_task = asyncio.create_task(trigger_shutdown())
+
+    result = await asyncio.wait_for(
+        engine.run(IdleStrategy(), bars=_WedgedBarSource(), shutdown_event=shutdown_event),
+        timeout=5.0,
+    )
+    await trigger_task  # surface any exception in the trigger
+
+    # No bars were ever yielded, so no order events.
+    assert result.order_events == []
