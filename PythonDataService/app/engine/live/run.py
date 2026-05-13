@@ -263,6 +263,100 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop, shutdown_event: as
             )
 
 
+def _resolve_recovery_broker(broker_arg, client_arg):
+    """Return a broker adapter for cmd_start's recovery flatten, or None.
+
+    Test path: ``broker_arg`` is the FakeBroker injected via
+    ``args.broker`` — pass it through unchanged.
+
+    Production path: wrap the IBKR client in ``IbkrBrokerAdapter`` if
+    the client is still connected. The client is disconnected in
+    ``_drive_engine``'s finally block, but the recovery flatten runs
+    before that finally fires (inside the same try's except handler),
+    so the client is still live here.
+
+    Returns ``None`` if neither broker shape is viable — the operator
+    is told to run ``emergency-flatten --confirm`` manually.
+    """
+    if broker_arg is not None:
+        return broker_arg
+    if client_arg is not None and client_arg.is_connected():
+        from app.engine.live.live_portfolio import IbkrBrokerAdapter
+
+        return IbkrBrokerAdapter(client_arg)
+    return None
+
+
+async def _recovery_flatten(broker) -> int:
+    """Best-effort cancel + flatten for the cmd_start unhandled-exception path.
+
+    Different from ``cmd_emergency_flatten``: no ``--confirm`` gate,
+    no account-id match check (we trust the broker we're already
+    connected to). Different from ``LiveEngine._shutdown_flatten``:
+    that runs inside ``engine.run`` with the engine's portfolio in
+    scope; this runs in cmd_start's exception path where the engine's
+    portfolio is no longer reachable, so we re-fetch positions from
+    the broker.
+
+    Returns the number of liquidation orders submitted. Per-position
+    place_order failures are logged but don't abort the loop — every
+    remaining position still gets an attempt.
+    """
+    from datetime import UTC, datetime
+
+    from app.broker.ibkr.models import IbkrOrderSpec
+
+    snapshot = await broker.fetch_positions()
+    try:
+        cancelled = await broker.cancel_open_orders()
+    except Exception:
+        logger.exception(
+            "cancel_open_orders failed during recovery flatten",
+            extra={"step": "8"},
+        )
+        cancelled = []
+    if cancelled:
+        logger.info(
+            "Recovery flatten cancelled %d open order(s)",
+            len(cancelled),
+            extra={"step": "8"},
+        )
+
+    liquidated = 0
+    for pos in snapshot.positions:
+        qty_signed = float(pos.quantity)
+        if qty_signed == 0:
+            continue
+        action = "SELL" if qty_signed > 0 else "BUY"
+        spec = IbkrOrderSpec(
+            symbol=pos.symbol,
+            sec_type=pos.sec_type,
+            action=action,
+            quantity=abs(qty_signed),
+            order_type="MKT",
+            time_in_force="DAY",
+            confirm_paper=True,
+            client_order_id=f"recovery-flatten-{pos.symbol}-{int(datetime.now(UTC).timestamp() * 1000)}",
+        )
+        try:
+            ack = await broker.place_order(spec)
+            logger.info(
+                "Recovery flatten liquidated %s qty=%s order_id=%s",
+                pos.symbol,
+                qty_signed,
+                ack.order_id,
+                extra={"step": "8"},
+            )
+            liquidated += 1
+        except Exception:
+            logger.exception(
+                "Recovery flatten place_order failed for %s",
+                pos.symbol,
+                extra={"step": "8"},
+            )
+    return liquidated
+
+
 def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     """Build a LiveConfig from the ledger's serialized live_config dict.
 
@@ -426,6 +520,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     # tests pass a FakeBroker without an IBKR client. Operator runs
     # always go through the IBKR client path below.
     broker = getattr(args, "broker", None)
+    client = None
     if broker is not None:
         engine = LiveEngine(
             None,
@@ -455,36 +550,75 @@ def cmd_start(args: argparse.Namespace) -> int:
         f"readonly={args.readonly} max_orders_per_day={args.max_orders_per_day}"
     )
 
-    async def _drive_engine() -> None:
+    async def _drive_engine() -> int:
         loop = asyncio.get_running_loop()
         shutdown_event = asyncio.Event()
         _install_signal_handlers(loop, shutdown_event)
-        await engine.run(strategy, bars=bars_iter, shutdown_event=shutdown_event)
 
-    try:
-        asyncio.run(_drive_engine())
-    except FatalHaltError as exc:
-        # § 7 fatal halt — broker-state divergence. The engine has
-        # already written poisoned.flag and flushed any partial
-        # writers. Surface the trigger + halted_at_ms so the operator
-        # knows what to investigate. Re-running on the same run_id
-        # will be refused at the cmd_start poisoned-flag check; a
-        # fresh run_id is required after manual reconciliation
-        # (§ 7.2 #5).
-        print(
-            f"[START] FATAL HALT — {exc.reason.trigger.value} at "
-            f"{exc.reason.halted_at_ms}ms UTC; details={exc.reason.details}",
-            file=sys.stderr,
-        )
-        return 1
-    except MaxOrdersPerDayExceeded as exc:
-        print(f"[START] HALT — max orders per day exceeded: {exc}", file=sys.stderr)
-        return 1
-    except Exception as exc:
-        print(f"[START] runtime error: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 3
-    print("[START] run completed cleanly")
-    return 0
+        # Production path: connect the IBKR client before validating
+        # the paper sentinel inside engine.run. Until this commit the
+        # CLI created IbkrClient() but never called connect(), so the
+        # engine's _validate_paper_client would raise "requires a DU
+        # paper account, got None". The injected-broker test path
+        # skips this — FakeBroker is always "connected."
+        if client is not None:
+            await client.connect()
+
+        try:
+            await engine.run(strategy, bars=bars_iter, shutdown_event=shutdown_event)
+            return 0
+        except FatalHaltError as exc:
+            print(
+                f"[START] FATAL HALT — {exc.reason.trigger.value} at "
+                f"{exc.reason.halted_at_ms}ms UTC; details={exc.reason.details}",
+                file=sys.stderr,
+            )
+            return 1
+        except MaxOrdersPerDayExceeded as exc:
+            print(f"[START] HALT — max orders per day exceeded: {exc}", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            logger.exception(
+                "Unhandled exception in engine.run — attempting recovery flatten",
+                extra={"step": "8"},
+            )
+            print(f"[START] runtime error: {type(exc).__name__}: {exc}", file=sys.stderr)
+            broker_for_flatten = _resolve_recovery_broker(broker, client)
+            if broker_for_flatten is not None:
+                try:
+                    liquidated = await _recovery_flatten(broker_for_flatten)
+                    print(
+                        f"[START] recovery flatten submitted {liquidated} order(s); "
+                        f"verify with /api/broker/positions and /api/broker/orders/open",
+                        file=sys.stderr,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Recovery flatten itself failed",
+                        extra={"step": "8"},
+                    )
+                    print(
+                        "[START] recovery flatten failed — manual cleanup via 'emergency-flatten --confirm' required",
+                        file=sys.stderr,
+                    )
+            else:
+                print(
+                    "[START] no live broker for recovery flatten — operator should run "
+                    "'emergency-flatten --confirm' to verify and clean up positions",
+                    file=sys.stderr,
+                )
+            return 3
+        finally:
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    logger.exception("client.disconnect() failed", extra={"step": "8"})
+
+    rc = asyncio.run(_drive_engine())
+    if rc == 0:
+        print("[START] run completed cleanly")
+    return rc
 
 
 # ──────────────────────────── emergency-flatten subcommand ───────────
