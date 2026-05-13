@@ -114,6 +114,15 @@ async def _next_bar_or_shutdown(
                 with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
                     await task
 
+    # Surface a real source exception even if shutdown also fired —
+    # operators want to see broker stream errors, not have them masked
+    # by the graceful-exit path. (Reviewer feedback on PR #231:
+    # silent exception swallow when shutdown is concurrent.)
+    if next_task.done() and not next_task.cancelled():
+        exc = next_task.exception()
+        if exc is not None and not isinstance(exc, StopAsyncIteration):
+            raise exc
+
     if shutdown_event.is_set():
         return (None, True)
     if next_task.done() and not next_task.cancelled():

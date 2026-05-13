@@ -361,3 +361,50 @@ async def test_live_engine_shutdown_event_unwedges_loop_when_bar_source_is_silen
 
     # No bars were ever yielded, so no order events.
     assert result.order_events == []
+
+
+class _FailingBarSource:
+    """Async iterator whose ``__anext__`` raises a non-cancellation
+    exception synchronously (no ``await``), so the wrapping task
+    completes with that exception on its first event-loop tick."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise self._exc
+
+
+@pytest.mark.asyncio
+async def test_live_engine_propagates_source_exception_when_shutdown_is_concurrent() -> None:
+    """A real source error must propagate through ``engine.run`` even when
+    ``shutdown_event`` is set around the same time.
+
+    Reviewer feedback on PR #231 (Codex P2 + CodeRabbit Major): the
+    helper used to return ``(None, True)`` whenever shutdown was set,
+    which would silently drop a concurrent source-side exception
+    (broker stream failure, IBKR connection drop, malformed bar). The
+    graceful-exit path then made the run look clean despite the
+    underlying error. This test pre-sets ``shutdown_event`` AND uses a
+    source that raises ``RuntimeError`` immediately — the helper must
+    surface the exception, not swallow it.
+    """
+    broker = FakeBroker()
+    engine = LiveEngine(None, LiveConfig(), broker=broker)
+    shutdown_event = asyncio.Event()
+    shutdown_event.set()  # already set when engine.run starts
+
+    source_error = RuntimeError("simulated IBKR stream error")
+
+    with pytest.raises(RuntimeError, match="simulated IBKR stream error"):
+        await asyncio.wait_for(
+            engine.run(
+                IdleStrategy(),
+                bars=_FailingBarSource(source_error),
+                shutdown_event=shutdown_event,
+            ),
+            timeout=5.0,
+        )
