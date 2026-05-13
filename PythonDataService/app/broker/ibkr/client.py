@@ -182,14 +182,13 @@ class IbkrClient:
                 await asyncio.sleep(min(2.0 * attempt, 5.0))
         else:
             raise BrokerError(
-                f"IBKR connect failed after {s.connect_attempts} attempts; "
-                f"last error: {last_error!r}"
+                f"IBKR connect failed after {s.connect_attempts} attempts; last error: {last_error!r}"
             ) from last_error
 
         # ── sentinel check ──────────────────────────────────────────────
         accounts = list(self._ib.managedAccounts())
         if not accounts:
-            await self._ib.disconnectAsync()
+            self._ib.disconnect()
             raise BrokerError("Connected to IBKR but managedAccounts() returned empty.")
 
         # Single-account assumption holds for individual paper/live setups.
@@ -199,7 +198,7 @@ class IbkrClient:
         # while orders could still route to a sibling account that
         # disagrees with ``IBKR_MODE``.
         if len(accounts) > 1:
-            await self._ib.disconnectAsync()
+            self._ib.disconnect()
             raise BrokerError(
                 f"IBKR returned {len(accounts)} managed accounts ({accounts!r}). "
                 "Multi-account selection is not yet implemented. Refusing to "
@@ -210,13 +209,13 @@ class IbkrClient:
         is_paper = _is_paper_account(account_id)
 
         if s.mode == "paper" and not is_paper:
-            await self._ib.disconnectAsync()
+            self._ib.disconnect()
             raise ConnectionRefusedDueToSentinelError(
                 f"IBKR_MODE=paper but connected account {account_id!r} is NOT a paper "
                 f"account (paper IDs begin with 'DU'). Disconnected. Refusing to proceed."
             )
         if s.mode == "live" and is_paper:
-            await self._ib.disconnectAsync()
+            self._ib.disconnect()
             raise ConnectionRefusedDueToSentinelError(
                 f"IBKR_MODE=live but connected account {account_id!r} IS a paper "
                 f"account. Disconnected. Refusing to proceed."
@@ -234,7 +233,10 @@ class IbkrClient:
     async def disconnect(self) -> None:
         """Idempotent disconnect."""
         if self._ib.isConnected():
-            await self._ib.disconnectAsync()
+            # ib_async.IB only exposes a synchronous disconnect(); there is
+            # no disconnectAsync. The smoke run on 2026-05-13 surfaced this
+            # the first time cmd_start ever called us in production.
+            self._ib.disconnect()
         self._connected_account = None
 
     # ── accessors ───────────────────────────────────────────────────────
@@ -278,11 +280,7 @@ class IbkrClient:
             client_id=self._settings.client_id,
             connected=connected,
             account_id=self._connected_account,
-            is_paper=(
-                _is_paper_account(self._connected_account)
-                if self._connected_account
-                else None
-            ),
+            is_paper=(_is_paper_account(self._connected_account) if self._connected_account else None),
             server_version=sv,
             fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
         )
@@ -298,8 +296,7 @@ _client: IbkrClient | None = None
 def get_client() -> IbkrClient:
     if _client is None:
         raise NotConnectedError(
-            "IbkrClient is not initialised. The FastAPI lifespan event "
-            "should construct one at startup."
+            "IbkrClient is not initialised. The FastAPI lifespan event should construct one at startup."
         )
     return _client
 
