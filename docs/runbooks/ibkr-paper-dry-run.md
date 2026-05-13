@@ -35,22 +35,31 @@ Before kicking off the dry run, confirm:
       empty. (Phase C-1's `init-ledger` will refuse otherwise.)
 - [ ] NTP is reachable from the host (the pre-flight queries
       `pool.ntp.org` by default; offset must be < 1 s).
-- [ ] The polygon-data-service container is running (`podman ps`).
-- [ ] The compose file mounts `./PythonDataService/artifacts:/app/artifacts:z`.
-      Required so the container-side `start --readonly` parquets land
-      where the host-side reconcile in Step 4 can read them. Already
-      in `compose.yaml`; if you're on a long-lived branch that predates
-      it, run `git diff origin/master -- compose.yaml` to confirm
-      before kicking off Step 3.
+- [ ] The polygon-data-service container is running (`podman ps`) **if**
+      you want to verify Gateway connectivity through `/api/broker/health`
+      and `/api/broker/diagnose` before Step 3. Step 3 itself runs
+      host-side and does not require the container, but the diagnose
+      endpoints are a convenient pre-flight sanity check.
 
 ## A note on where commands run
 
-This runbook is a mix of **host-side** commands (most of it) and one
-**container-side** command (Step 3 only). The reasons are:
+**Every step runs on the host** (host venv). Earlier revisions of this
+runbook directed Step 3 to the `polygon-data-service` container; that
+no longer works. IBKR Gateway enforces same-IP binding on real-time
+bar subscriptions: the API client's source IP must match the Gateway's
+login session IP, or the `reqRealTimeBars` call returns error 420
+("Invalid Real-time Query: Trading TWS session is connected from a
+different IP address"). The container connects from the WSL bridge
+subnet (`10.89.0.x`) which differs from the Gateway's login IP, so RT
+bars are silently rejected even though the API connection succeeds.
+Running on the host means the API client and the Gateway share an IP,
+and the binding check passes.
 
-- `init-ledger`, `pre-flight`, and `reconcile` need git access (clean-tree
-  refusal, code_sha capture) and visibility into the full repo
-  (`references/qc-shadow/`, `docs/references/reconciliations/`,
+Other reasons every other step is host-side:
+
+- `init-ledger`, `pre-flight`, and `reconcile` need git access
+  (clean-tree refusal, code_sha capture) and visibility into the full
+  repo (`references/qc-shadow/`, `docs/references/reconciliations/`,
   `PythonDataService/artifacts/`). Only the host satisfies all of those.
 - The `polygon-data-service` container compose-mounts only
   `./PythonDataService/app:/app/app:z` — `tests/`, `references/`, and
@@ -59,11 +68,6 @@ This runbook is a mix of **host-side** commands (most of it) and one
 - The host has its own Python venv at `PythonDataService/.venv/` with
   the same dependencies as the container; activate it before each
   command.
-
-Step 3 (`start --readonly`, the long-running broker connection) is the
-exception — it runs in the container because the IBKR Gateway sidecar
-is on the same network. That step uses paths under `/app/...` because
-those *are* visible to the container.
 
 ```bash
 # Activate the venv once per shell. All host commands below assume it's
@@ -91,7 +95,7 @@ PYTHONPATH=PythonDataService python -m app.engine.live.run init-ledger \
   --qc-cloud-backtest-id <PASTE FROM QC CLOUD UI> \
   --account-id DU<your-paper-account> \
   --start-date-ms $(date -u -d "today 09:30 EDT" +%s000) \
-  --live-config-json '{"symbol":"SPY","force_flat_at":"15:55","client_id":42}' \
+  --live-config-json '{"symbol":"SPY","force_flat_at":"15:55"}' \
   --run-root PythonDataService/artifacts/live_runs
 ```
 
@@ -99,6 +103,16 @@ Run from the repo root. `app` lives under `PythonDataService/app`, so the
 `PYTHONPATH=PythonDataService` prefix is what makes `python -m
 app.engine.live.run` resolvable from the repo root (same pattern as
 Steps 2 and 4 below).
+
+**Note on `--live-config-json`:** the JSON object must contain only
+`LiveConfig` fields (`symbol`, `force_flat_at`, `consolidator_period_min`,
+`run_dir`, `max_submit_latency_ms`). Do **not** include broker fields
+like `client_id`, `host`, `port`, `mode` — those belong to `IbkrSettings`
+and come from `.env` / env vars. The `start` subcommand (Step 3) reads
+the ledger and calls `_live_config_from_ledger`, which strict-rejects
+unknown keys with **exit 2** ("could not apply ledger.live_config to
+LiveConfig: unknown live_config keys: ['client_id']"). The example
+above is the minimum the operator should pass.
 
 Expected outcome:
 - Exit 0
@@ -140,7 +154,7 @@ Failure modes to expect:
 
 If any check fails, **stop the dry run**. The morning gate must be green before placing any orders, even fake ones.
 
-## Step 3 — Read-only run (container)
+## Step 3 — Read-only run (host)
 
 Start the runner with `--readonly` (Phase C-2 flag). The runner connects
 to IB Gateway, subscribes to the SPY 5-second bar stream (aggregated to
@@ -149,24 +163,45 @@ but never submits an order. Decisions, indicators, and bars all land in
 the artifact parquets exactly as they would in a live run; the
 difference is that `--readonly` short-circuits `place_order`.
 
-This command runs in the container (where the IBKR Gateway sidecar
-network is reachable). The artifact parquets it writes land at
-`/app/artifacts/live_runs/<run_id>/` inside the container, which is
-the same path as `PythonDataService/artifacts/live_runs/<run_id>/`
-on the host via the `./PythonDataService/artifacts:/app/artifacts:z`
-compose mount (added in Prerequisites). Note: the `app:/app/app` mount
-is a separate mount that exposes source code; it does not map
-`/app/artifacts`.
+This command runs on the host (host venv). See "A note on where
+commands run" above for why container-side `start` does not work
+(IBKR error 420 — same-IP binding on RT bars).
+
+Two env-var overrides are required at the command line:
+
+- **`IBKR_HOST=127.0.0.1`** — the `.env` default of `172.23.176.1` is
+  the *container's* view of the Windows host bridge; from the host
+  itself, Gateway listens on loopback. Pydantic-settings prioritizes
+  process env vars over the `.env` file, so the inline override wins.
+- **`IBKR_CLIENT_ID=43`** (or any small integer ≠ the FastAPI app's
+  lifespan id) — the `.env` default `42` is owned by the running
+  `polygon-data-service` container's `IbkrClient`. Reusing it from a
+  second client triggers IBKR error 326 ("client id is already in
+  use"). Pick any unused id; the engine retries connect 3× with
+  `BrokerError` on persistent failure, but it's better not to collide.
 
 ```bash
-podman exec polygon-data-service python -m app.engine.live.run start \
-  --run-dir /app/artifacts/live_runs/<run_id> \
+IBKR_HOST=127.0.0.1 IBKR_CLIENT_ID=43 \
+  PYTHONPATH=PythonDataService python -m app.engine.live.run start \
+  --run-dir PythonDataService/artifacts/live_runs/<run_id> \
   --readonly
 ```
 
 Run this from market open (09:30 ET) through close (16:00 ET), or for at
 least one full session if doing the dry run on a non-trading day with
 historical replay.
+
+**Windows note** — Phase 8's SIGINT/SIGTERM signal handlers use
+`loop.add_signal_handler`, which is unsupported by Windows's asyncio
+event loop. The runner emits two warnings at startup
+(`Signal handler for SIGINT not supported on this event loop (Windows
+host?); graceful shutdown via this signal disabled.`) and falls back
+to `KeyboardInterrupt`. Operators stop the run with **Ctrl+C** in the
+terminal; `asyncio.run` translates it to `CancelledError`, which
+propagates through `engine.run`'s `finally` block — writers flush and
+the IbkrClient disconnects cleanly. (On Linux / container hosts where
+this Windows constraint doesn't apply, SIGINT/SIGTERM trigger the
+graceful `shutdown_event` path instead.)
 
 Expected runtime behavior:
 - IB Gateway shows one connected client (id=42).
