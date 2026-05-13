@@ -170,11 +170,35 @@ historical replay.
 
 Expected runtime behavior:
 - IB Gateway shows one connected client (id=42).
-- `decisions.parquet` grows by one row every 15 minutes (consolidated
-  bar close).
+- `live.log` grows by one `[BAR]` heartbeat line every minute, of the
+  form `[BAR] <iso-time> consolidator_emitted=<int> snapshot=<set|None>`.
+  This is the operator's primary signal that the engine is alive — tail
+  it (`tail -f live.log | grep '\[BAR\]'`) to confirm bars are flowing.
+- `decisions.parquet` **stays empty during indicator warmup** and only
+  starts growing once every indicator the strategy uses is `is_ready`.
+  For `SpyEmaCrossoverAlgorithm` this requires
+  ``max(EMA5=5, EMA10=10, RSI14=14) = 14`` consolidated 15-min bars —
+  so the first row appears ≈ 3.5 hours after a fresh-state run starts.
+  Until then, `[BAR] ... snapshot=None` is normal and expected. After
+  warmup, `decisions.parquet` grows by one row every 15 minutes
+  (consolidated bar close).
 - `executions.parquet` stays empty (read-only mode).
 - The strategy logs at least one ENTER and one EXIT signal during the
-  session if the EMA crossover triggers.
+  session if the EMA crossover triggers (only possible after warmup).
+
+How to distinguish "engine alive, strategy in warmup" from "engine hung":
+the `[BAR]` heartbeat above. If `live.log` shows new `[BAR]` lines every
+minute, the engine is fine — `decisions.parquet` being empty just means
+the strategy is still warming up. If `[BAR]` lines stop arriving, *that*
+is a hang and the operator should investigate (issue #227 was a
+misdiagnosis caused by the absence of this heartbeat — see issue #228).
+
+For a meaningful single-day dry run that produces decision rows in
+`decisions.parquet`, either (a) start by 06:00 ET so warmup completes
+before RTH open at 09:30 ET, (b) accept that day 1 produces no decisions
+and rely on the `[BAR]` heartbeat for end-to-end pipeline verification,
+or (c) wait for indicator-state-persistence-across-restarts to ship
+(tracked separately) so day 2+ skips warmup.
 
 If a halt rule trips intra-day (rare in dry-run mode), the runner stops
 and writes `halt.json` under the run directory. Inspect, fix, restart.

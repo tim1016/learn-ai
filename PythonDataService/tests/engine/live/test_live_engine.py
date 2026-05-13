@@ -266,3 +266,35 @@ async def test_live_engine_shutdown_event_unset_runs_normally() -> None:
     assert result.submitted_order_ids == [1]
     assert len(result.order_events) == 1
     assert result.open_positions == {"SPY": 200}
+
+
+@pytest.mark.asyncio
+async def test_live_engine_emits_per_bar_heartbeat_log(caplog) -> None:
+    """Engine emits a `[BAR]` heartbeat log per minute_bar received.
+
+    Operability requirement (issue #228): operators tail live.log to
+    distinguish "engine running, strategy in warmup" from "engine hung."
+    Without a per-bar log line the warmup window is silent and looks
+    indistinguishable from a hang — issue #227 was that exact
+    misdiagnosis. The heartbeat must include the bar time, the count
+    of consolidator emissions on this bar, and whether the strategy
+    published a new decision snapshot.
+    """
+    caplog.set_level("INFO", logger="app.engine.live.live_engine")
+
+    broker = FakeBroker()
+    engine = LiveEngine(None, LiveConfig(), broker=broker)
+    bars = [_bar(minute, "500", "500") for minute in range(30, 33)]
+
+    await engine.run(HoldsExistingStrategy(), iter_bars(bars))
+
+    bar_logs = [r for r in caplog.records if r.getMessage().startswith("[BAR]")]
+    assert len(bar_logs) == 3, (
+        f"expected 3 [BAR] heartbeats (one per minute_bar), got {len(bar_logs)}: {[r.getMessage() for r in bar_logs]}"
+    )
+    # Each heartbeat must surface the structural diagnostic fields the
+    # operator needs to read state at a glance.
+    for record in bar_logs:
+        msg = record.getMessage()
+        assert "consolidator_emitted=" in msg, msg
+        assert "snapshot=" in msg, msg
