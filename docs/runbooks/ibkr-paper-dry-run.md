@@ -167,21 +167,35 @@ This command runs on the host (host venv). See "A note on where
 commands run" above for why container-side `start` does not work
 (IBKR error 420 — same-IP binding on RT bars).
 
-Two env-var overrides are required at the command line:
+**Before launching, stop the `polygon-data-service` container** so
+its lifespan `IbkrClient` releases `client_id=42`:
+
+```bash
+podman compose stop python-service
+```
+
+The dry-run validates the spec § 5 single-client operating mode (one
+API client owning `client_id=42`). If you leave the container up, its
+lifespan client also holds an IBKR connection — operator-facing
+diagnostics work, but the run no longer certifies single-client mode
+and the dry-run client either collides on `client_id=42` (IBKR error
+326) or is forced onto a different id, breaking the invariant
+Prerequisites declared. Stop the container; restart it with
+`podman compose start python-service` after Step 4 if you want the
+broker REST endpoints back for post-mortem inspection.
+
+One env-var override is required at the command line:
 
 - **`IBKR_HOST=127.0.0.1`** — the `.env` default of `172.23.176.1` is
   the *container's* view of the Windows host bridge; from the host
   itself, Gateway listens on loopback. Pydantic-settings prioritizes
   process env vars over the `.env` file, so the inline override wins.
-- **`IBKR_CLIENT_ID=43`** (or any small integer ≠ the FastAPI app's
-  lifespan id) — the `.env` default `42` is owned by the running
-  `polygon-data-service` container's `IbkrClient`. Reusing it from a
-  second client triggers IBKR error 326 ("client id is already in
-  use"). Pick any unused id; the engine retries connect 3× with
-  `BrokerError` on persistent failure, but it's better not to collide.
+  `IBKR_CLIENT_ID` does **not** need an override: the `.env` default
+  `42` is exactly what the run is supposed to use, and with the
+  container stopped the id is free.
 
 ```bash
-IBKR_HOST=127.0.0.1 IBKR_CLIENT_ID=43 \
+IBKR_HOST=127.0.0.1 \
   PYTHONPATH=PythonDataService python -m app.engine.live.run start \
   --run-dir PythonDataService/artifacts/live_runs/<run_id> \
   --readonly
