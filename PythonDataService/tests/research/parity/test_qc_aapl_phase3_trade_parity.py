@@ -4,10 +4,11 @@ Skipped on master until ``tests/fixtures/golden/qc-aapl-phase3/`` is
 committed. The fixture-landing PR (#219) supplies the QC artifacts; this
 test activates automatically once they're present.
 
-Scope: 2-day OOS window (2026-02-09 → 2026-02-11). QC's free-tier
-reservation truncated the achievable backtest to this window; 1 entry fill
-fires on 2026-02-10, no exit (positive prediction every day). Full
-round-trip P&L coverage is deferred until QC OOS rolls forward.
+Scope: 2-day window (2026-02-09 → 2026-02-11). QC free tier's minute-data
+trailing window (~90 days, per https://www.quantconnect.com/forum/discussion/19781/getting-data-with-free-plan/)
+truncated the achievable backtest to this window; 1 entry fill fires on
+2026-02-10, no exit (positive prediction every day). Full round-trip P&L
+coverage is not pursued (decision 2026-05-12 — see authority doc § 10).
 
 ``_build_our_fills`` imports the prediction set, runs ``BacktestEngine``
 directly (bypassing ``run_strategy_spec``) so it captures order_events
@@ -116,7 +117,7 @@ def _build_our_fills(tmp_path: Path) -> list[OurFill]:
 
     Phase 3.5 scope: single entry fill on 2026-02-10 morning. No exit
     fires (position stays open at backtest end with all-positive predictions
-    in the 2-day OOS-truncated window). We can't use strategy.trade_log
+    in the 2-day trailing-window-truncated window). We can't use strategy.trade_log
     because that only captures closed round-trips; we need every fill
     including the open-position entry. Bypassing run_strategy_spec is the
     cleanest path — runner integration is covered by
@@ -199,11 +200,13 @@ def _build_our_fills(tmp_path: Path) -> list[OurFill]:
 def test_qc_aapl_phase3_trade_level_parity(tmp_path: Path) -> None:
     """Phase 3.5 acceptance gate.
 
-    Single-fill scope: QC's free-tier OOS reservation truncates the achievable
-    backtest to the 2-day window 2026-02-09 → 2026-02-11. Result: 1 entry
-    fill on 2026-02-10 morning, no exit (positive prediction every day in
-    the window). Round-trip P&L coverage deferred to Phase 3.5+ (gated on
-    QC OOS rollover or paid-tier upgrade — see reconciliation report).
+    Single-fill scope: QC free tier's minute-data trailing window (~90 days,
+    per https://www.quantconnect.com/forum/discussion/19781/getting-data-with-free-plan/)
+    truncates the achievable backtest to the 2-day window 2026-02-09 → 2026-02-11.
+    Result: 1 entry fill on 2026-02-10 morning, no exit (positive prediction
+    every day in the window). Round-trip P&L coverage is not pursued
+    (decision 2026-05-12 — see authority doc § 10 and the reconciliation
+    report for the full rationale).
 
     The (R8) invariant validates that our engine's NEXT_SESSION_OPEN +
     PredictionRef.lookup="next_after_bar_close" produces the same fill

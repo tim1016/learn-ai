@@ -20,7 +20,7 @@
 > rule: if you touch those files, update the matching section here and
 > bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-05-12 (post Phase 3.5 Path A merge — single-fill acceptance gate passed; Phase 3.5+ multi-day round-trip P&L deferred pending QC OOS rollover).
+> **Last reviewed:** 2026-05-12 (post Phase 3.5 Path A merge — **single-fill** acceptance gate passed; multi-trade engine validation **does not exist** end-to-end against real QC output; decision not to pursue paid-tier QC, minute-data trailing-window workarounds, or shifted-window re-capture).
 
 ---
 
@@ -290,7 +290,7 @@ same-side fills raise `RoundTripPairingError`.
 | **QC tutorial parity Phase 1** (PR #211–#215) | ✅ shipped | Captured GBM prediction-set fixture from QC's "Precomputed ML Predictions" tutorial (AAPL anchor, 22-day window); reimport hash pinned at `b8252cfa9a749f5bf592602f3aebc2b3a4ccc6bb0cd41da48a6db7a581342e0e` | — |
 | **Phase 3.0 — trade-level parity scaffolding** (PR #218–#220) | ✅ shipped (xfail) | `FixtureDataReader` (daily+minute), `IbkrEquityCommissionModel`, `QcReconciler` (8-category taxonomy), round-trip P&L emission, `_build_our_fills` engine replay; 1-day QC fixture committed | Phase 3.0 acceptance test marked `xfail(strict=True)` — 1-day fixture exposes intrinsic QC-intraday-vs-our-NEXT_BAR_OPEN timing mismatch (documented in [reconciliation summary](references/reconciliations/qc-aapl-phase3.md)) |
 | **Phase 3.5 Path A — intraday-trigger fill mode** | ✅ shipped (single-fill scope) | `FillMode.NEXT_SESSION_OPEN` (defer-only with NY-trading-date eligibility), `PredictionRef.lookup="next_after_bar_close"` for data-timing, `PredictionSet.next_after`, lookup-aware bar-clock coverage. Acceptance test passes with 1 pinned aligned fill (2026-02-10 buy, $273.18 vs QC's $273.24 within bid-ask tolerance). | — |
-| **Phase 3.5+ — multi-day round-trip P&L** | ⏳ deferred | Gated on QC OOS rollover (~2 months at free tier) or paid-tier upgrade. Requires the full 2026-02-10 → 2026-03-12 fixture window so an exit signal can fire and a closed `LoggedTrade` round-trip emits. | QC account tier OR wait for OOS rollover |
+| **Phase 3.5+ — multi-day round-trip P&L** | 🛑 not pursued (accepted limitation, **no empirical multi-trade engine validation**) | The QC tutorial algorithm uses `Resolution.MINUTE`, and QC free tier provides only a short trailing window of minute-resolution data ([QC forum](https://www.quantconnect.com/forum/discussion/19781/getting-data-with-free-plan/): "Hourly and Daily history is available broadly"; minute/second/tick have "shorter trailing windows"). Empirically that minute-data trailing window is ~90 calendar days, which truncated the captured backtest to the entry day only — no exit was simulated by QC. End-to-end validation is **single-fill only**; reconciler's multi-fill / round-trip logic is unit-tested with synthetic fixtures, **not** against real QC output. We have no empirical evidence the engine handles multi-trade sequences correctly under a real truth set. Decision 2026-05-12: not buying the Researcher Seat (~$10/mo); not re-capturing at daily resolution (would validate a different engine fill-mode code path, `NEXT_BAR_OPEN`, instead of the `NEXT_SESSION_OPEN` path Phase 3.5 Path A actually validates). | Cheapest unblock at full fidelity: paid-tier QC for longer minute-data history. Cheaper but lower fidelity: re-capture at daily resolution, accept that it validates a different engine code path. Or use a different reference backtester. |
 | **Phase 4 — multi-symbol top-N ranking** | ⏳ pending (independent of 3.5) | Currently `SpecAlgorithm` restricts to single symbol; `PortfolioConstruction` extension needed | `StrategySpec` schema change |
 
 ### Historical note — Phase 3.0 xfail closed by Phase 3.5 Path A
@@ -369,9 +369,39 @@ prediction-set browsing and top-N configuration; out of scope here.
 ### Phase 3.5 — closed via Path A
 
 `FillMode.NEXT_SESSION_OPEN` (defer-only) + `PredictionRef.lookup=
-"next_after_bar_close"` shipped 2026-05-12. Single-fill acceptance
-gate passed; multi-day round-trip P&L deferred pending QC OOS rollover.
-See [reconciliation](references/reconciliations/qc-aapl-phase3.md).
+"next_after_bar_close"` shipped 2026-05-12. **Single-fill acceptance
+gate passed** — exactly one aligned entry fill on 2026-02-10 vs QC's
+recorded fill on the same date, within the documented tolerances.
+
+**Multi-day round-trip P&L parity is not being pursued** (decision
+2026-05-12). The QC tutorial algorithm uses `Resolution.MINUTE`, and
+QC free tier provides only a short trailing window of minute-resolution
+data — [QC forum](https://www.quantconnect.com/forum/discussion/19781/getting-data-with-free-plan/):
+"Hourly and Daily history is available broadly"; minute/second/tick
+have "shorter trailing windows." Empirically that minute-data trailing
+window is ~90 calendar days, which truncated the captured backtest to
+the entry day only. QC never simulated the exit (2026-02-20) or
+re-entry (2026-02-21), so no closed round-trip exists on their side to
+reconcile against. We have explicitly declined to purchase the QC
+Researcher Seat (~$10/month) and to re-run QC's tutorial algorithm at
+daily resolution on a shifted earlier window (which would validate a
+different engine code path — `FillMode.NEXT_BAR_OPEN` against QC's
+daily-bar fill semantics — rather than the `NEXT_SESSION_OPEN`
+minute-bar alignment that Phase 3.5 Path A actually validates).
+
+**What this means for engine confidence.** End-to-end engine
+validation against real QC output is **single-fill only**. The
+reconciler's multi-fill / round-trip / `PNL_DRIFT` machinery is
+exercised by unit tests in `test_qc_reconciler.py` against hand-built
+synthetic fixtures — **not** against any real QC backtest. We
+therefore have **no empirical evidence** that our engine produces
+correct exit signals, correct round-trip P&L, or correct multi-fill
+sequencing under a real multi-trade truth set. "Phase 3.5 Path A
+acceptance gate passed" means "one entry fill aligns with QC's one
+entry fill"; it does not mean "the engine has been validated for
+closed round-trip P&L parity." See
+[reconciliation](references/reconciliations/qc-aapl-phase3.md) for
+the full divergence breakdown and the unblocking options.
 
 ### Phase 4 — multi-symbol ranking
 

@@ -176,7 +176,7 @@ The `assert_bar_clock_coverage` function (`coverage.py:41`) validates two lookup
 
 4. **ML-V-004** — one-line inline justification comment at `fixture_data_reader.py:95` to suppress future ban-list grep hits. Low priority.
 
-5. **Capture-runbook posterity** — the QC capture runbook (`docs/references/qc-aapl-phase3-capture-runbook.md`) is currently a manual workflow because free-tier QC has no API token (authority doc § 10). When the Phase 3.5+ multi-day fixture lands (QC OOS rollover in ~2 months OR paid tier), the runbook should be updated in the same PR.
+5. **Capture-runbook posterity** — the QC capture runbook (`docs/references/qc-aapl-phase3-capture-runbook.md`) is currently a manual workflow because free-tier QC has no API token (authority doc § 10). Phase 3.5+ multi-day fixture is not being pursued (decision 2026-05-12; QC free tier's minute-data trailing window plus the cost/scope tradeoffs make this not worth the effort — see authority doc § 10 and the qc-aapl-phase3 reconciliation doc for the full rationale). If that decision is ever reversed, update the runbook in the same PR.
 
 6. **Not a deficiency, but worth noting** — the `_pair_round_trips` Phase 3 invariant ("single-position-at-a-time long-only — consecutive same-side fills raise `RoundTripPairingError`") is exactly the right scope for v0.5. When Phase 4 multi-symbol ships, this invariant becomes the design decision to revisit, not a bug to fix.
 
@@ -184,7 +184,7 @@ The `assert_bar_clock_coverage` function (`coverage.py:41`) validates two lookup
 
 ## 7. Open Risks / Things Not Validated
 
-- **Phase 3.5+ multi-day round-trip P&L** is deferred pending QC OOS rollover; the acceptance test asserts a single pinned fill ($273.18 vs $273.24). The full round-trip P&L assertion gate hasn't fired against real multi-day data. This is acknowledged in the authority doc § 7 — not a finding, just a coverage limit.
+- **Phase 3.5+ multi-day round-trip P&L** is **not being pursued** (decision 2026-05-12); the acceptance test asserts a single pinned fill ($273.18 vs $273.24). The full round-trip P&L assertion gate has never fired against real multi-day QC data. Cause: QC free tier's minute-data trailing window (~90 days, per [QC forum](https://www.quantconnect.com/forum/discussion/19781/getting-data-with-free-plan/)) truncated the captured backtest to a single trading day, so QC never simulated an exit. Acknowledged in the authority doc § 7 and § 10 with full rationale — not a finding, a coverage limit by choice.
 - **Live retraining hook** — not implemented; v0.5 is offline-only by design. No risk in v0.5; would need a new authority section if it ever lands.
 - **Multi-prediction-set composition in one spec** — `StrategySpec._check_phase1_boundaries` enforces singleton. Not a gap.
 - **Playwright UI inspection** — skipped because there's no ML-specific UI surface in v0.5. Build Alpha UI was validated 2026-05-07; nothing has changed in the user-facing strategy-runs flow that would warrant re-screenshotting.
