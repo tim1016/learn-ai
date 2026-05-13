@@ -158,3 +158,75 @@ def test_cmd_start_shutdown_event_path_flattens_and_returns_zero(tmp_path: Path)
 )
 def test_cmd_start_real_sigint_end_to_end_documented_skip(tmp_path: Path) -> None:
     """Documented skip placeholder for the real-SIGINT integration scenario."""
+
+
+def test_cmd_start_refuses_with_unexpected_position_on_broker(tmp_path: Path) -> None:
+    """cmd_start must refuse to launch when the broker holds anything
+    beyond a long position in the strategy's expected symbol.
+
+    Reviewer feedback (P1.3): the pre-flight subcommand prints "the
+    live runner enforces this when connected to IB" when no
+    ``--positions-json`` is supplied, but the prior implementation
+    had no such enforcement in cmd_start or LiveEngine. A paper run
+    could start with foreign symbols or short SPY in the account.
+    Fix: cmd_start fetches positions after connect (or, in the test
+    path, from the injected broker directly) and refuses to start if
+    ``check_unexpected_position`` flags any.
+    """
+    run_dir = _build_run_dir(tmp_path)
+
+    # Pre-seed the broker with a non-strategy symbol — the gate must fire.
+    broker = FakeBroker()
+    broker.position_snapshot = IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=[
+            IbkrPosition(
+                account_id="DU123",
+                con_id=42,
+                symbol="QQQ",  # not SPY → unexpected
+                sec_type="STK",
+                quantity=10.0,
+                avg_cost=400.0,
+                fetched_at_ms=1,
+            ),
+        ],
+        fetched_at_ms=1,
+    )
+
+    args = _make_args(run_dir=run_dir, broker=broker, bars=[])
+    rc = cmd_start(args)
+
+    # Halt exit code (per cmd_start's other halt paths) and the gate did
+    # NOT call engine.run — broker.advance_bar / place_order untouched.
+    assert rc == 1
+    assert broker.orders == [], "must refuse before any order placement"
+
+
+def test_cmd_start_refuses_with_short_position_in_expected_symbol(tmp_path: Path) -> None:
+    """A short position in the expected symbol is also unexpected for the
+    long-only SPY EMA strategy. Same P1.3 gate, different bad shape."""
+    run_dir = _build_run_dir(tmp_path)
+
+    broker = FakeBroker()
+    broker.position_snapshot = IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=[
+            IbkrPosition(
+                account_id="DU123",
+                con_id=756733,
+                symbol="SPY",
+                sec_type="STK",
+                quantity=-50.0,  # short
+                avg_cost=500.0,
+                fetched_at_ms=1,
+            ),
+        ],
+        fetched_at_ms=1,
+    )
+
+    args = _make_args(run_dir=run_dir, broker=broker, bars=[])
+    rc = cmd_start(args)
+    assert rc == 1
+    assert broker.orders == []

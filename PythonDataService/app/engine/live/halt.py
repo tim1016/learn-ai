@@ -51,8 +51,7 @@ class FatalHaltError(RuntimeError):
 
     def __init__(self, reason: PoisonedHaltReason) -> None:
         super().__init__(
-            f"FatalHaltError({reason.trigger.value} at {reason.halted_at_ms}ms UTC; "
-            f"details={reason.details})"
+            f"FatalHaltError({reason.trigger.value} at {reason.halted_at_ms}ms UTC; details={reason.details})"
         )
         self.reason = reason
 
@@ -106,21 +105,15 @@ class PoisonedHaltReason:
         try:
             trigger = PoisonedHaltTrigger(payload["trigger"])
         except (KeyError, ValueError) as exc:
-            raise ValueError(
-                f"poisoned.flag payload missing or invalid 'trigger': {payload!r}"
-            ) from exc
+            raise ValueError(f"poisoned.flag payload missing or invalid 'trigger': {payload!r}") from exc
         try:
             halted_at_ms = int(payload["halted_at_ms"])
             last_clean_bar_close_ms = int(payload["last_clean_bar_close_ms"])
         except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(
-                f"poisoned.flag payload missing or invalid timestamp fields: {payload!r}"
-            ) from exc
+            raise ValueError(f"poisoned.flag payload missing or invalid timestamp fields: {payload!r}") from exc
         details = payload.get("details", {})
         if not isinstance(details, dict):
-            raise ValueError(
-                f"poisoned.flag 'details' must be a dict, got {type(details).__name__}"
-            )
+            raise ValueError(f"poisoned.flag 'details' must be a dict, got {type(details).__name__}")
         return cls(
             trigger=trigger,
             halted_at_ms=halted_at_ms,
@@ -150,8 +143,7 @@ def write_poisoned_flag(run_dir: Path, reason: PoisonedHaltReason) -> Path:
             fh.write(payload)
     except FileExistsError as exc:
         raise FileExistsError(
-            f"poisoned.flag already exists at {path}; refusing to overwrite "
-            f"(the first halt's reason takes precedence)"
+            f"poisoned.flag already exists at {path}; refusing to overwrite (the first halt's reason takes precedence)"
         ) from exc
     return path
 
@@ -171,9 +163,7 @@ def read_poisoned_flag(run_dir: Path) -> PoisonedHaltReason | None:
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"poisoned.flag at {path} is unreadable: {exc}") from exc
     if not isinstance(payload, dict):
-        raise ValueError(
-            f"poisoned.flag at {path} must contain a JSON object, got {type(payload).__name__}"
-        )
+        raise ValueError(f"poisoned.flag at {path} must contain a JSON object, got {type(payload).__name__}")
     return PoisonedHaltReason.from_json_dict(payload)
 
 
@@ -260,25 +250,34 @@ def check_lost_fill(
 
     Each ``order`` row carries ``client_order_id`` and ``submitted_at_ms``;
     each ``execution`` carries ``client_order_id`` (matching what the
-    LivePortfolio sets at place_order time). An order is "filled" if
-    ANY execution shares its ``client_order_id``.
+    LivePortfolio sets at place_order time) PLUS ``remaining`` — the
+    order's leftover quantity after this execution. An order is
+    "complete" iff some execution sharing its ``client_order_id`` has
+    ``remaining == 0``. A partial fill (``remaining > 0``) does NOT
+    mark the order complete: a 1-share execution on a 200-share order
+    leaves 199 unfilled, and the lost-fill halt must still fire when
+    the order ages past its window.
 
     ``fill_window_ms`` is how long we wait before declaring a fill
     lost — typically the bar period + a few seconds of broker-clock
     slack. ``current_time_ms`` is the wall-clock time of the check
     (the LiveEngine passes the most-recent bar's end_time).
 
-    Returns ``None`` when every submitted order is either filled or
+    Returns ``None`` when every submitted order is either complete or
     still within its window; otherwise a ``PoisonedHaltReason`` for
     the first lost order (oldest by submission time).
     """
-    filled_client_order_ids = {ex.get("client_order_id") for ex in executions}
+    complete_client_order_ids: set = {
+        ex.get("client_order_id")
+        for ex in executions
+        if ex.get("remaining") is not None and float(ex.get("remaining")) == 0.0
+    }
     overdue: list[dict] = []
     for order in orders:
         client_order_id = order.get("client_order_id")
         if client_order_id is None:
             continue
-        if client_order_id in filled_client_order_ids:
+        if client_order_id in complete_client_order_ids:
             continue
         submitted_at_ms = int(order.get("submitted_at_ms", 0))
         if current_time_ms - submitted_at_ms > fill_window_ms:

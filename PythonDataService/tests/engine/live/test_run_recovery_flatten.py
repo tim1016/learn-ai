@@ -158,4 +158,33 @@ def test_resolve_recovery_broker_returns_none_when_client_disconnected() -> None
         def is_connected(self) -> bool:
             return False
 
+    # A disconnected client should yield None regardless of broker presence
+    # — recovery_flatten can't operate without a live broker session.
     assert _resolve_recovery_broker(None, _DisconnectedClient()) is None
+    assert _resolve_recovery_broker(FakeBroker(), _DisconnectedClient()) is None
+
+
+def test_resolve_recovery_broker_returns_engine_broker_to_preserve_owned_order_ids() -> None:
+    """Recovery flatten must use the SAME broker instance the engine ran with.
+
+    Reviewer feedback (P1.2): the prior implementation, when no test
+    ``broker_arg`` was supplied, wrapped the client in a FRESH
+    ``IbkrBrokerAdapter`` whose ``_owned_order_ids`` was empty. Calling
+    ``cancel_open_orders`` on that fresh adapter is a no-op against
+    the runner's actual in-flight orders, so recovery would submit
+    liquidations while the original orders kept working — double-state
+    on the account.
+
+    The fix: cmd_start now constructs the broker explicitly and passes
+    the same instance to both ``LiveEngine(broker=...)`` and the
+    recovery flatten via ``_resolve_recovery_broker(broker, client)``.
+    This test pins the helper's identity contract.
+    """
+
+    class _ConnectedClient:
+        def is_connected(self) -> bool:
+            return True
+
+    engine_broker = FakeBroker()
+    resolved = _resolve_recovery_broker(engine_broker, _ConnectedClient())
+    assert resolved is engine_broker  # SAME instance, not a fresh adapter
