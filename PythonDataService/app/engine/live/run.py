@@ -521,9 +521,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         return 2
 
-    # Test injection point: ``args.broker`` (set programmatically) lets
-    # tests pass a FakeBroker without an IBKR client. Operator runs
-    # always go through the IBKR client path below.
+    # Test injection points: ``args.broker`` (set programmatically) lets
+    # tests pass a FakeBroker without an IBKR client; ``args.client``
+    # lets tests pass a stub client that records connect/disconnect
+    # calls so assertions about lifecycle paths (disconnect-on-position-
+    # check-failure, etc.) are testable. Operator runs supply neither.
     #
     # Both paths construct the broker explicitly so cmd_start holds the
     # same instance the engine will use. The recovery-flatten path
@@ -531,12 +533,14 @@ def cmd_start(args: argparse.Namespace) -> int:
     # adapter construction would orphan ``_owned_order_ids`` and skip
     # cancelling the runner's actual in-flight orders.
     broker = getattr(args, "broker", None)
-    client = None
+    client = getattr(args, "client", None)
     if broker is None:
-        from app.broker.ibkr.client import IbkrClient
+        if client is None:
+            from app.broker.ibkr.client import IbkrClient
+
+            client = IbkrClient()
         from app.engine.live.live_portfolio import IbkrBrokerAdapter
 
-        client = IbkrClient()
         broker = IbkrBrokerAdapter(client)
     engine = LiveEngine(
         client,
@@ -567,79 +571,87 @@ def cmd_start(args: argparse.Namespace) -> int:
         # skips this — FakeBroker is always "connected."
         if client is not None:
             await client.connect()
-        # Unexpected-position gate (spec § 5 single-client invariant +
-        # § 7 broker-state-divergence). The pre-flight subcommand also
-        # provides this check, but only when the operator passes
-        # ``--positions-json``; the "live runner enforces this when
-        # connected to IB" message that pre-flight prints in the
-        # no-flag path was previously vacuous because no such enforcement
-        # existed. Now it does: cmd_start fetches broker positions
-        # after connect and refuses to start if the account holds
-        # anything beyond a long position in the strategy's expected
-        # symbol. Runs against any broker (production IbkrBrokerAdapter
-        # or test FakeBroker) since both expose ``fetch_positions``.
+        # Outer try/finally guarantees ``client.disconnect()`` runs on
+        # EVERY post-connect exit path — including the early returns
+        # from the unexpected-position gate (return 2 on fetch failure,
+        # return 1 on bad position). Without it, a position-gate halt
+        # would leak the IBKR session and interfere with the next
+        # operator run. (Reviewer feedback on PR #233.)
         try:
-            positions = await broker.fetch_positions()
-        except Exception as exc:
-            print(
-                f"[START] could not fetch positions for unexpected-position check: {exc}",
-                file=sys.stderr,
-            )
-            return 2
-        position_check = check_unexpected_position(positions, expected_symbol=live_config.symbol)
-        if not position_check.passed:
-            print(
-                f"[START] HALT unexpected_position: {position_check.detail} "
-                f"(expected long-only {live_config.symbol}; operator must "
-                f"reconcile the account before starting)",
-                file=sys.stderr,
-            )
-            return 1
-
-        try:
-            await engine.run(strategy, bars=bars_iter, shutdown_event=shutdown_event)
-            return 0
-        except FatalHaltError as exc:
-            print(
-                f"[START] FATAL HALT — {exc.reason.trigger.value} at "
-                f"{exc.reason.halted_at_ms}ms UTC; details={exc.reason.details}",
-                file=sys.stderr,
-            )
-            return 1
-        except MaxOrdersPerDayExceeded as exc:
-            print(f"[START] HALT — max orders per day exceeded: {exc}", file=sys.stderr)
-            return 1
-        except Exception as exc:
-            logger.exception(
-                "Unhandled exception in engine.run — attempting recovery flatten",
-                extra={"step": "8"},
-            )
-            print(f"[START] runtime error: {type(exc).__name__}: {exc}", file=sys.stderr)
-            broker_for_flatten = _resolve_recovery_broker(broker, client)
-            if broker_for_flatten is not None:
-                try:
-                    liquidated = await _recovery_flatten(broker_for_flatten)
-                    print(
-                        f"[START] recovery flatten submitted {liquidated} order(s); "
-                        f"verify with /api/broker/positions and /api/broker/orders/open",
-                        file=sys.stderr,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Recovery flatten itself failed",
-                        extra={"step": "8"},
-                    )
-                    print(
-                        "[START] recovery flatten failed — manual cleanup via 'emergency-flatten --confirm' required",
-                        file=sys.stderr,
-                    )
-            else:
+            # Unexpected-position gate (spec § 5 single-client invariant
+            # + § 7 broker-state-divergence). The pre-flight subcommand
+            # also provides this check, but only when the operator
+            # passes ``--positions-json``; the "live runner enforces
+            # this when connected to IB" message that pre-flight prints
+            # in the no-flag path was previously vacuous because no
+            # such enforcement existed. Now it does: cmd_start fetches
+            # broker positions after connect and refuses to start if
+            # the account holds anything beyond a long position in the
+            # strategy's expected symbol. Runs against any broker
+            # (production IbkrBrokerAdapter or test FakeBroker) since
+            # both expose ``fetch_positions``.
+            try:
+                positions = await broker.fetch_positions()
+            except Exception as exc:
                 print(
-                    "[START] no live broker for recovery flatten — operator should run "
-                    "'emergency-flatten --confirm' to verify and clean up positions",
+                    f"[START] could not fetch positions for unexpected-position check: {exc}",
                     file=sys.stderr,
                 )
-            return 3
+                return 2
+            position_check = check_unexpected_position(positions, expected_symbol=live_config.symbol)
+            if not position_check.passed:
+                print(
+                    f"[START] HALT unexpected_position: {position_check.detail} "
+                    f"(expected long-only {live_config.symbol}; operator must "
+                    f"reconcile the account before starting)",
+                    file=sys.stderr,
+                )
+                return 1
+
+            try:
+                await engine.run(strategy, bars=bars_iter, shutdown_event=shutdown_event)
+                return 0
+            except FatalHaltError as exc:
+                print(
+                    f"[START] FATAL HALT — {exc.reason.trigger.value} at "
+                    f"{exc.reason.halted_at_ms}ms UTC; details={exc.reason.details}",
+                    file=sys.stderr,
+                )
+                return 1
+            except MaxOrdersPerDayExceeded as exc:
+                print(f"[START] HALT — max orders per day exceeded: {exc}", file=sys.stderr)
+                return 1
+            except Exception as exc:
+                logger.exception(
+                    "Unhandled exception in engine.run — attempting recovery flatten",
+                    extra={"step": "8"},
+                )
+                print(f"[START] runtime error: {type(exc).__name__}: {exc}", file=sys.stderr)
+                broker_for_flatten = _resolve_recovery_broker(broker, client)
+                if broker_for_flatten is not None:
+                    try:
+                        liquidated = await _recovery_flatten(broker_for_flatten)
+                        print(
+                            f"[START] recovery flatten submitted {liquidated} order(s); "
+                            f"verify with /api/broker/positions and /api/broker/orders/open",
+                            file=sys.stderr,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Recovery flatten itself failed",
+                            extra={"step": "8"},
+                        )
+                        print(
+                            "[START] recovery flatten failed — manual cleanup via 'emergency-flatten --confirm' required",
+                            file=sys.stderr,
+                        )
+                else:
+                    print(
+                        "[START] no live broker for recovery flatten — operator should run "
+                        "'emergency-flatten --confirm' to verify and clean up positions",
+                        file=sys.stderr,
+                    )
+                return 3
         finally:
             if client is not None:
                 try:

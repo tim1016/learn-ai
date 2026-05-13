@@ -83,7 +83,13 @@ def _build_run_dir(tmp_path: Path) -> Path:
     return run_dir
 
 
-def _make_args(run_dir: Path, broker: FakeBroker, bars: list[TradeBar]) -> argparse.Namespace:
+def _make_args(
+    run_dir: Path,
+    broker: FakeBroker,
+    bars: list[TradeBar],
+    *,
+    client=None,
+) -> argparse.Namespace:
     return argparse.Namespace(
         command="start",
         run_dir=run_dir,
@@ -92,7 +98,35 @@ def _make_args(run_dir: Path, broker: FakeBroker, bars: list[TradeBar]) -> argpa
         max_orders_per_day=4,
         broker=broker,
         bars=_iter_bars(bars),
+        client=client,
     )
+
+
+class _LifecycleClient:
+    """Stub IbkrClient that records connect/disconnect calls so tests can
+    pin lifecycle invariants without spinning up a real broker session.
+
+    Only the methods cmd_start actually calls — connect, disconnect,
+    is_connected — are implemented. ``LiveEngine._validate_paper_client``
+    accesses other attributes (settings, connected_account) but only
+    inside ``engine.run``; tests using this stub must exit cmd_start
+    before reaching that path (e.g., via the position-gate refusal)."""
+
+    def __init__(self) -> None:
+        self.connect_calls = 0
+        self.disconnect_calls = 0
+        self._connected = False
+
+    async def connect(self) -> None:
+        self.connect_calls += 1
+        self._connected = True
+
+    async def disconnect(self) -> None:
+        self.disconnect_calls += 1
+        self._connected = False
+
+    def is_connected(self) -> bool:
+        return self._connected
 
 
 def test_cmd_start_shutdown_event_path_flattens_and_returns_zero(tmp_path: Path) -> None:
@@ -230,3 +264,71 @@ def test_cmd_start_refuses_with_short_position_in_expected_symbol(tmp_path: Path
     rc = cmd_start(args)
     assert rc == 1
     assert broker.orders == []
+
+
+def test_cmd_start_disconnects_client_when_position_check_fails(tmp_path: Path) -> None:
+    """The unexpected-position halt path must still disconnect the client.
+
+    Reviewer feedback on PR #233 (Codex P1): cmd_start's new
+    unexpected-position gate (P1.3) had two early-return paths
+    (return 2 on fetch_positions failure, return 1 on bad position)
+    that exited BEFORE the try/finally that called
+    ``client.disconnect()``. So a position-gate halt would leave the
+    IBKR session connected, leaking until process exit and potentially
+    interfering with the next operator run. Fix: outer try/finally
+    around the entire post-connect body so every exit path disconnects.
+    """
+    run_dir = _build_run_dir(tmp_path)
+
+    # Bad-position broker — gate must refuse with exit 1.
+    broker = FakeBroker()
+    broker.position_snapshot = IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=[
+            IbkrPosition(
+                account_id="DU123",
+                con_id=42,
+                symbol="QQQ",  # not SPY
+                sec_type="STK",
+                quantity=10.0,
+                avg_cost=400.0,
+                fetched_at_ms=1,
+            ),
+        ],
+        fetched_at_ms=1,
+    )
+    client = _LifecycleClient()
+
+    args = _make_args(run_dir=run_dir, broker=broker, bars=[], client=client)
+    rc = cmd_start(args)
+
+    # Halt return code (matches the existing P1.3 tests).
+    assert rc == 1
+    # The critical assertion: connect AND disconnect both fired, even
+    # though we exited via the position-gate refusal — not via
+    # engine.run's finally.
+    assert client.connect_calls == 1
+    assert client.disconnect_calls == 1
+    # Sanity: no orders placed (gate refused before engine.run).
+    assert broker.orders == []
+
+
+def test_cmd_start_disconnects_client_when_fetch_positions_raises(tmp_path: Path) -> None:
+    """Same as above but for the OTHER early-return path: a broker error
+    on ``fetch_positions`` returns 2 — must still disconnect."""
+    run_dir = _build_run_dir(tmp_path)
+
+    class _RaisingBroker(FakeBroker):
+        async def fetch_positions(self):  # type: ignore[override]
+            raise ConnectionError("simulated broker outage during position fetch")
+
+    broker = _RaisingBroker()
+    client = _LifecycleClient()
+
+    args = _make_args(run_dir=run_dir, broker=broker, bars=[], client=client)
+    rc = cmd_start(args)
+
+    assert rc == 2
+    assert client.connect_calls == 1
+    assert client.disconnect_calls == 1, "must disconnect even when fetch_positions raises"
