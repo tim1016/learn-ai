@@ -96,7 +96,9 @@ def test_fixture_first_and_last_minute_timestamps_match_window() -> None:
     pinning here catches a fixture recapture that shifts by one day.
 
     Phase 3.5 scope is the 2-day window 2026-02-09 09:31 -> 2026-02-11 16:00 NY
-    (QC free-tier OOS truncation; see reconciliation report for context).
+    (truncated by QC free tier's minute-data trailing window — only the most
+    recent ~90 calendar days of minute bars are accessible on free tier; see
+    reconciliation report for full context).
     """
     from datetime import datetime
     from zoneinfo import ZoneInfo

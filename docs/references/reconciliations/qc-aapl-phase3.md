@@ -4,7 +4,7 @@
 **Date:** 2026-05-12
 **Reference:** [Phase 3 design](../../superpowers/specs/2026-05-11-phase3-pnl-parity-design.md), [Phase 3.5 design](../../superpowers/specs/2026-05-11-phase35-path-a-intraday-fill-mode-design.md), [capture runbook](../qc-aapl-phase3-capture-runbook.md)
 **Fixture:** `PythonDataService/tests/fixtures/golden/qc-aapl-phase3/` (minute resolution, 2026-02-09 09:31 → 2026-02-11 16:00 NY, 1170 minute bars)
-**Captured QC backtest:** "Formal Black Rabbit" (free-tier OOS-truncated; algorithm code at `qc_algorithm_screenshot.png`)
+**Captured QC backtest:** "Formal Black Rabbit" (truncated by QC free tier's minute-data trailing window — see "Why only one fill" below; algorithm code at `qc_algorithm_screenshot.png`)
 
 ## What was reconciled
 
@@ -14,7 +14,7 @@ Our engine running the AAPL single-symbol `StrategySpec` with:
 - `SetHoldings(1.0)` sizing
 - `commission_per_order=0` (fees computed reconciler-side via `IbkrEquityCommissionModel`)
 
-Run window: 2026-02-09 → 2026-02-12 (engine start_date / end_date). QC's backtest window (truncated by free-tier OOS): 2026-02-10 → 2026-02-11.
+Run window: 2026-02-09 → 2026-02-12 (engine start_date / end_date). QC's backtest window (truncated by minute-data trailing-window cap — see "Why only one fill" below): 2026-02-10 → 2026-02-11.
 
 ## Outcome
 
@@ -61,10 +61,17 @@ The reconciler aligns these by `(trading_date, side)` → 1 pair, 0 divergences 
 
 ## Open follow-ups
 
-1. **Phase 3.5+ multi-day round-trip P&L** (deferred). Gated on:
-   - QC OOS rollover: with free-tier 3-month reserve, the OOS boundary advances daily. The 2026-02-10 → 2026-03-12 window becomes fully available ~2026-08-12.
-   - OR paid-tier upgrade ($10/month for Researcher Seat) that allows backtesting into the reserved OOS window.
-   When available, the existing acceptance test infrastructure should re-pin 3 aligned-fill rows (entry 02-10, exit 02-20 — the only negative prediction — and re-entry 02-21) and exercise `PNL_DRIFT` on the closed round-trip.
+1. **Phase 3.5+ multi-day round-trip P&L** — **accepted limitation, not pursued.**
+
+   **Why only one fill.** The QC tutorial algorithm uses `Resolution.MINUTE` for AAPL data. Per the [QC forum on free-plan data access](https://www.quantconnect.com/forum/discussion/19781/getting-data-with-free-plan/), free tier provides hour/daily data broadly but minute/second/tick data only on a "shorter trailing window." Empirically that trailing window is approximately 90 calendar days, advancing forward as time passes. The captured backtest ran with `set_start_date(2026, 2, 10)` / `set_end_date(2026, 2, 11)` because dates earlier than that had no minute-bar data available; QC simulated just those two trading days and produced a single entry fill. The exit signal (2026-02-20, first negative prediction in the prediction-set artifact) and re-entry (2026-02-21) fell outside that two-day window and were never simulated, so no round-trip P&L is available to reconcile against.
+
+   (Historical note: earlier drafts of this section described the truncation as a "free-tier OOS reserve." That framing wasn't from QC's documentation — it was project-internal terminology that inverted cause and effect. The truer description is the minute-data trailing-window cap above, sourced from the QC forum.)
+
+   **Decision recorded 2026-05-12.** We are not pursuing this work. Specifically: not purchasing the QC Researcher Seat (~$10/month) to unlock a longer minute-data trailing window, and not re-capturing at daily resolution on a shifted earlier window (which would validate a different engine code path — `FillMode.NEXT_BAR_OPEN` against QC's daily-bar fill semantics — instead of the `NEXT_SESSION_OPEN` minute-bar alignment that Phase 3.5 Path A actually validates; a different validation property, not a smaller one).
+
+   **What this means for engine confidence — read carefully.** End-to-end engine validation against real QC output is **single-fill only**. The reconciler's multi-fill machinery (`_pair_round_trips`, `_classify_pnl_drift`, seq-aware alignment, 8-category taxonomy) is exercised by unit tests in `test_qc_reconciler.py` against hand-built synthetic fixtures — **not** against any real QC backtest. We therefore have **no empirical evidence** that our engine produces correct exit signals, correct round-trip P&L, or correct multi-fill sequencing under a real multi-trade truth set. What we have is: (a) one pinned aligned entry fill vs QC at minute resolution, and (b) unit-test-level confidence in the reconciler's classification logic. These are different claims and should not be conflated.
+
+   **If multi-trade validation is ever needed**, the unblocking options are: (i) **paid-tier QC subscription** to unlock a longer minute-data trailing window, preserving the Phase 3.5 Path A validation property at full fidelity; (ii) **re-capture at daily resolution** on a shifted window — cheaper, but it validates a different fill-mode code path (`NEXT_BAR_OPEN` against daily bars) rather than the minute-bar `NEXT_SESSION_OPEN` path that's the centerpiece of Phase 3.5 Path A; (iii) **a different reference backtester** (e.g., a local LEAN run) that doesn't have free-tier data limits. None of these are scheduled.
 
 2. **SetHoldings sizing alignment with QC** (1-share `qty_atol=2` accepted). The 1-share offset is bounded but documented; reducing `qty_atol` to 1 (still tolerant of 1-share rounding) is cosmetic. Eliminating it entirely requires our engine to use the expected fill price for sizing, which conflicts with the consolidator-fire-on-rollover flow (fill price isn't known until the next iteration). Worth revisiting if Phase 4 multi-symbol top-N ranking surfaces a similar issue.
 

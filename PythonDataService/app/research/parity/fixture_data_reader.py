@@ -92,6 +92,11 @@ class FixtureDataReader:
         )
         # Preserve the full datetime when present; pandas naively parses
         # "YYYY-MM-DD HH:MM:SS" as a Timestamp at that wall-clock.
+        # Justified ban-list exception: QC's qb.history CSV exports time
+        # as NY-local wall-clock without a tz designator. We parse naively
+        # here and attach ``tzinfo=_NY`` in ``_to_trade_bars`` (line ~116).
+        # The naive Timestamps never cross a wire or storage boundary —
+        # they only exist between this line and the TradeBar construction.
         frame["time_dt"] = pd.to_datetime(frame["time"], utc=False, errors="raise")
         frame["date"] = frame["time_dt"].dt.date
         return frame.sort_values("time_dt").reset_index(drop=True)
