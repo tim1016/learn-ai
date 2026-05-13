@@ -45,11 +45,16 @@ def test_configure_run_logging_creates_log_file(tmp_path: Path) -> None:
 
 
 def test_configure_run_logging_rotation_caps_match_plan_spec(tmp_path: Path) -> None:
-    configure_run_logging(tmp_path / "run-002")
+    log_path = configure_run_logging(tmp_path / "run-002")
     root = logging.getLogger()
-    file_handlers = [h for h in root.handlers if isinstance(h, RotatingFileHandler)]
-    assert len(file_handlers) == 1
-    handler = file_handlers[0]
+    # Filter to *this* test's log path — earlier suite tests
+    # (e.g. test_run_cli_shutdown) may have left their own
+    # RotatingFileHandlers attached to the root logger. Asserting on
+    # a global count was order-dependent; asserting on the handler we
+    # just installed is what the test means.
+    matching = [h for h in root.handlers if isinstance(h, RotatingFileHandler) and Path(h.baseFilename) == log_path]
+    assert len(matching) == 1
+    handler = matching[0]
     assert handler.maxBytes == DEFAULT_LOG_MAX_BYTES == 10 * 1024 * 1024
     assert handler.backupCount == DEFAULT_LOG_BACKUP_COUNT == 5
 
