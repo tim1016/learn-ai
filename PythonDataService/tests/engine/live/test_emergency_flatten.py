@@ -93,21 +93,45 @@ def _args(
     account: str = "DU123",
     confirm: bool = True,
     broker=None,
+    client=None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         run_dir=run_dir,
         account=account,
         confirm=confirm,
         broker=broker,
+        client=client,
     )
+
+
+class _LifecycleTrackingClient:
+    """Records ``connect()`` / ``disconnect()`` invocations so tests can
+    assert the emergency-flatten path manages the IBKR client lifecycle.
+
+    Lightweight stand-in for ``IbkrClient`` — provides only what
+    ``cmd_emergency_flatten`` actually calls."""
+
+    def __init__(self) -> None:
+        self.connect_calls = 0
+        self.disconnect_calls = 0
+        self._connected = False
+
+    async def connect(self) -> None:
+        self.connect_calls += 1
+        self._connected = True
+
+    async def disconnect(self) -> None:
+        self.disconnect_calls += 1
+        self._connected = False
+
+    def is_connected(self) -> bool:
+        return self._connected
 
 
 # ──────────────────────────── Refusals ───────────────────────────────
 
 
-def test_emergency_flatten_refuses_without_confirm(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
+def test_emergency_flatten_refuses_without_confirm(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     broker = _FakeFlattenBroker(positions=[_pos("SPY", 200)])
     rc = cmd_emergency_flatten(_args(run_dir=tmp_path, confirm=False, broker=broker))
     assert rc == 2
@@ -138,7 +162,7 @@ def test_emergency_flatten_liquidates_each_nonzero_position(tmp_path: Path) -> N
         positions=[
             _pos("SPY", 200),
             _pos("QQQ", -50),  # short — flatten via BUY
-            _pos("IWM", 0),    # zero — should NOT generate an order
+            _pos("IWM", 0),  # zero — should NOT generate an order
         ]
     )
     rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker))
@@ -237,3 +261,49 @@ def test_emergency_flatten_returns_3_and_logs_on_broker_exception(
     assert "simulated broker outage" in log
 
 
+# ──────────────────────────── Client lifecycle ───────────────────────
+
+
+def test_emergency_flatten_connects_and_disconnects_client(tmp_path: Path) -> None:
+    """The IBKR client must be connected before any broker call and
+    disconnected on exit.
+
+    Reviewer feedback (P1.1): the prior implementation constructed
+    ``IbkrClient()`` + ``IbkrBrokerAdapter(client)`` then called
+    ``broker.fetch_positions()`` directly. ``fetch_positions`` →
+    ``account.fetch_account_summary`` invokes ``client.require_connected()``
+    which raises if the client never connected, so
+    ``emergency-flatten --confirm`` would fail at the very first broker
+    call in production (no orders placed). Fix: wrap the body in
+    ``await client.connect() ... try: ... finally: await client.disconnect()``.
+    """
+    broker = _FakeFlattenBroker(positions=[_pos("SPY", 100)])
+    client = _LifecycleTrackingClient()
+
+    rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker, client=client))
+
+    assert rc == 0
+    assert client.connect_calls == 1, "must connect before fetch_positions"
+    assert client.disconnect_calls == 1, "must disconnect in finally"
+    # And the SPY position was actually liquidated — i.e. the lifecycle
+    # didn't block the actual work.
+    assert len(broker.placed) == 1
+    assert broker.placed[0].action == "SELL"
+
+
+def test_emergency_flatten_disconnects_client_even_when_broker_raises(tmp_path: Path) -> None:
+    """The disconnect must run in ``finally`` so a broker error doesn't
+    leak a connected client. Pairs with the P1.1 fix."""
+
+    class _ExplodingBroker(_FakeFlattenBroker):
+        async def fetch_positions(self) -> IbkrPositionsSnapshot:
+            raise ConnectionError("simulated broker outage")
+
+    broker = _ExplodingBroker()
+    client = _LifecycleTrackingClient()
+
+    rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker, client=client))
+
+    assert rc == 3  # error path
+    assert client.connect_calls == 1
+    assert client.disconnect_calls == 1, "must disconnect even when broker raises"

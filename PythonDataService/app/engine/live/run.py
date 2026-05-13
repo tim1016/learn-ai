@@ -263,28 +263,33 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop, shutdown_event: as
             )
 
 
-def _resolve_recovery_broker(broker_arg, client_arg):
-    """Return a broker adapter for cmd_start's recovery flatten, or None.
+def _resolve_recovery_broker(broker, client):
+    """Return the broker to use for cmd_start's recovery flatten.
 
-    Test path: ``broker_arg`` is the FakeBroker injected via
-    ``args.broker`` — pass it through unchanged.
+    The returned broker is the same instance the engine ran with — both
+    the test path (FakeBroker injected via ``args.broker``) and the
+    production path (``IbkrBrokerAdapter`` constructed in ``cmd_start``
+    and passed to ``LiveEngine(broker=...)``) preserve
+    ``IbkrBrokerAdapter._owned_order_ids``. Cancelling on a fresh
+    adapter (the prior behavior) would skip the runner's in-flight
+    orders entirely and leave them working while liquidations also fly,
+    yielding double-state on the account.
 
-    Production path: wrap the IBKR client in ``IbkrBrokerAdapter`` if
-    the client is still connected. The client is disconnected in
-    ``_drive_engine``'s finally block, but the recovery flatten runs
-    before that finally fires (inside the same try's except handler),
-    so the client is still live here.
+    Returns ``None`` when:
+      * no broker is in scope (shouldn't happen with the post-refactor
+        ``cmd_start``, but defensive); or
+      * the client has disconnected — recovery flatten requires a live
+        broker session, and a stale client makes ``fetch_positions`` /
+        ``cancel_open_orders`` calls non-deliverable.
 
-    Returns ``None`` if neither broker shape is viable — the operator
-    is told to run ``emergency-flatten --confirm`` manually.
+    When ``None`` is returned the operator is told to run
+    ``emergency-flatten --confirm`` manually.
     """
-    if broker_arg is not None:
-        return broker_arg
-    if client_arg is not None and client_arg.is_connected():
-        from app.engine.live.live_portfolio import IbkrBrokerAdapter
-
-        return IbkrBrokerAdapter(client_arg)
-    return None
+    if broker is None:
+        return None
+    if client is not None and not client.is_connected():
+        return None
+    return broker
 
 
 async def _recovery_flatten(broker) -> int:
@@ -516,33 +521,36 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         return 2
 
-    # Test injection point: ``args.broker`` (set programmatically) lets
-    # tests pass a FakeBroker without an IBKR client. Operator runs
-    # always go through the IBKR client path below.
+    # Test injection points: ``args.broker`` (set programmatically) lets
+    # tests pass a FakeBroker without an IBKR client; ``args.client``
+    # lets tests pass a stub client that records connect/disconnect
+    # calls so assertions about lifecycle paths (disconnect-on-position-
+    # check-failure, etc.) are testable. Operator runs supply neither.
+    #
+    # Both paths construct the broker explicitly so cmd_start holds the
+    # same instance the engine will use. The recovery-flatten path
+    # (``_resolve_recovery_broker``) reads ``broker`` directly — fresh
+    # adapter construction would orphan ``_owned_order_ids`` and skip
+    # cancelling the runner's actual in-flight orders.
     broker = getattr(args, "broker", None)
-    client = None
-    if broker is not None:
-        engine = LiveEngine(
-            None,
-            live_config,
-            broker=broker,
-            output_dir=args.run_dir,
-            account_id=ledger.account_id,
-            readonly=args.readonly,
-            max_orders_per_day=args.max_orders_per_day,
-        )
-    else:
-        from app.broker.ibkr.client import IbkrClient
+    client = getattr(args, "client", None)
+    if broker is None:
+        if client is None:
+            from app.broker.ibkr.client import IbkrClient
 
-        client = IbkrClient()
-        engine = LiveEngine(
-            client,
-            live_config,
-            output_dir=args.run_dir,
-            account_id=ledger.account_id,
-            readonly=args.readonly,
-            max_orders_per_day=args.max_orders_per_day,
-        )
+            client = IbkrClient()
+        from app.engine.live.live_portfolio import IbkrBrokerAdapter
+
+        broker = IbkrBrokerAdapter(client)
+    engine = LiveEngine(
+        client,
+        live_config,
+        broker=broker,
+        output_dir=args.run_dir,
+        account_id=ledger.account_id,
+        readonly=args.readonly,
+        max_orders_per_day=args.max_orders_per_day,
+    )
 
     bars_iter = getattr(args, "bars", None)
     print(
@@ -563,51 +571,91 @@ def cmd_start(args: argparse.Namespace) -> int:
         # skips this — FakeBroker is always "connected."
         if client is not None:
             await client.connect()
-
+        # Outer try/finally guarantees ``client.disconnect()`` runs on
+        # EVERY post-connect exit path — including the early returns
+        # from the unexpected-position gate (return 2 on fetch failure,
+        # return 1 on bad position). Without it, a position-gate halt
+        # would leak the IBKR session and interfere with the next
+        # operator run. (Reviewer feedback on PR #233.)
         try:
-            await engine.run(strategy, bars=bars_iter, shutdown_event=shutdown_event)
-            return 0
-        except FatalHaltError as exc:
-            print(
-                f"[START] FATAL HALT — {exc.reason.trigger.value} at "
-                f"{exc.reason.halted_at_ms}ms UTC; details={exc.reason.details}",
-                file=sys.stderr,
-            )
-            return 1
-        except MaxOrdersPerDayExceeded as exc:
-            print(f"[START] HALT — max orders per day exceeded: {exc}", file=sys.stderr)
-            return 1
-        except Exception as exc:
-            logger.exception(
-                "Unhandled exception in engine.run — attempting recovery flatten",
-                extra={"step": "8"},
-            )
-            print(f"[START] runtime error: {type(exc).__name__}: {exc}", file=sys.stderr)
-            broker_for_flatten = _resolve_recovery_broker(broker, client)
-            if broker_for_flatten is not None:
-                try:
-                    liquidated = await _recovery_flatten(broker_for_flatten)
-                    print(
-                        f"[START] recovery flatten submitted {liquidated} order(s); "
-                        f"verify with /api/broker/positions and /api/broker/orders/open",
-                        file=sys.stderr,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Recovery flatten itself failed",
-                        extra={"step": "8"},
-                    )
-                    print(
-                        "[START] recovery flatten failed — manual cleanup via 'emergency-flatten --confirm' required",
-                        file=sys.stderr,
-                    )
-            else:
+            # Unexpected-position gate (spec § 5 single-client invariant
+            # + § 7 broker-state-divergence). The pre-flight subcommand
+            # also provides this check, but only when the operator
+            # passes ``--positions-json``; the "live runner enforces
+            # this when connected to IB" message that pre-flight prints
+            # in the no-flag path was previously vacuous because no
+            # such enforcement existed. Now it does: cmd_start fetches
+            # broker positions after connect and refuses to start if
+            # the account holds anything beyond a long position in the
+            # strategy's expected symbol. Runs against any broker
+            # (production IbkrBrokerAdapter or test FakeBroker) since
+            # both expose ``fetch_positions``.
+            try:
+                positions = await broker.fetch_positions()
+            except Exception as exc:
                 print(
-                    "[START] no live broker for recovery flatten — operator should run "
-                    "'emergency-flatten --confirm' to verify and clean up positions",
+                    f"[START] could not fetch positions for unexpected-position check: {exc}",
                     file=sys.stderr,
                 )
-            return 3
+                # Exit 3 per the module docstring exit-code table — a
+                # broker fetch failure is a runtime error (broker / IO),
+                # not an operator-error condition. Exit 2 would imply
+                # bad args or missing files.
+                return 3
+            position_check = check_unexpected_position(positions, expected_symbol=live_config.symbol)
+            if not position_check.passed:
+                print(
+                    f"[START] HALT unexpected_position: {position_check.detail} "
+                    f"(expected long-only {live_config.symbol}; operator must "
+                    f"reconcile the account before starting)",
+                    file=sys.stderr,
+                )
+                return 1
+
+            try:
+                await engine.run(strategy, bars=bars_iter, shutdown_event=shutdown_event)
+                return 0
+            except FatalHaltError as exc:
+                print(
+                    f"[START] FATAL HALT — {exc.reason.trigger.value} at "
+                    f"{exc.reason.halted_at_ms}ms UTC; details={exc.reason.details}",
+                    file=sys.stderr,
+                )
+                return 1
+            except MaxOrdersPerDayExceeded as exc:
+                print(f"[START] HALT — max orders per day exceeded: {exc}", file=sys.stderr)
+                return 1
+            except Exception as exc:
+                logger.exception(
+                    "Unhandled exception in engine.run — attempting recovery flatten",
+                    extra={"step": "8"},
+                )
+                print(f"[START] runtime error: {type(exc).__name__}: {exc}", file=sys.stderr)
+                broker_for_flatten = _resolve_recovery_broker(broker, client)
+                if broker_for_flatten is not None:
+                    try:
+                        liquidated = await _recovery_flatten(broker_for_flatten)
+                        print(
+                            f"[START] recovery flatten submitted {liquidated} order(s); "
+                            f"verify with /api/broker/positions and /api/broker/orders/open",
+                            file=sys.stderr,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Recovery flatten itself failed",
+                            extra={"step": "8"},
+                        )
+                        print(
+                            "[START] recovery flatten failed — manual cleanup via 'emergency-flatten --confirm' required",
+                            file=sys.stderr,
+                        )
+                else:
+                    print(
+                        "[START] no live broker for recovery flatten — operator should run "
+                        "'emergency-flatten --confirm' to verify and clean up positions",
+                        file=sys.stderr,
+                    )
+                return 3
         finally:
             if client is not None:
                 try:
@@ -672,46 +720,67 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
 
     _log(f"start: account={args.account} run_dir={args.run_dir}")
 
+    # Test injection points: ``args.broker`` and ``args.client``. When
+    # the broker is supplied, no client is needed (FakeBroker is always
+    # "connected"). The production path constructs both so the IBKR
+    # connection lifecycle is owned end-to-end.
     broker = getattr(args, "broker", None)
+    client = getattr(args, "client", None)
     if broker is None:
         from app.broker.ibkr.client import IbkrClient
         from app.engine.live.live_portfolio import IbkrBrokerAdapter
 
-        client = IbkrClient()
+        if client is None:
+            client = IbkrClient()
         broker = IbkrBrokerAdapter(client)
 
     async def _flatten() -> int:
-        snapshot = await broker.fetch_positions()
-        if snapshot.account_id.upper() != args.account.upper():
-            _log(f"REFUSED: connected account {snapshot.account_id} != --account {args.account}; no orders placed.")
-            return 2
-        liquidated = 0
-        for pos in snapshot.positions:
-            qty_signed = float(pos.quantity)
-            if qty_signed == 0:
-                continue
-            # Preserve fractional quantities — IbkrOrderSpec.quantity
-            # is float and IBKR supports fractional shares for many
-            # equities. Casting to int here would truncate (e.g.
-            # 0.5 → 0) and submit a zero-sized order that IBKR
-            # rejects, leaving the fractional position un-flattened.
-            # (CodeRabbit P2 from #193.)
-            action = "SELL" if qty_signed > 0 else "BUY"
-            spec = IbkrOrderSpec(
-                symbol=pos.symbol,
-                sec_type=pos.sec_type,
-                action=action,
-                quantity=abs(qty_signed),
-                order_type="MKT",
-                time_in_force="DAY",
-                confirm_paper=True,
-                client_order_id=f"emergency-flatten-{pos.symbol}-{int(_datetime.now(UTC).timestamp() * 1000)}",
-            )
-            ack = await broker.place_order(spec)
-            _log(f"liquidated: symbol={pos.symbol} qty={qty_signed} action={action} order_id={ack.order_id}")
-            liquidated += 1
-        _log(f"complete: liquidated={liquidated}")
-        return 0
+        # Connect the IBKR client before any broker call. ``fetch_positions``
+        # → ``account.fetch_account_summary`` calls ``client.require_connected()``
+        # which raises if the client never connected, so without this
+        # ``emergency-flatten --confirm`` would fail at the very first
+        # broker call in production. Disconnect runs in ``finally`` to
+        # match cmd_start's lifecycle.
+        if client is not None:
+            await client.connect()
+        try:
+            snapshot = await broker.fetch_positions()
+            if snapshot.account_id.upper() != args.account.upper():
+                _log(f"REFUSED: connected account {snapshot.account_id} != --account {args.account}; no orders placed.")
+                return 2
+            liquidated = 0
+            for pos in snapshot.positions:
+                qty_signed = float(pos.quantity)
+                if qty_signed == 0:
+                    continue
+                # Preserve fractional quantities — IbkrOrderSpec.quantity
+                # is float and IBKR supports fractional shares for many
+                # equities. Casting to int here would truncate (e.g.
+                # 0.5 → 0) and submit a zero-sized order that IBKR
+                # rejects, leaving the fractional position un-flattened.
+                # (CodeRabbit P2 from #193.)
+                action = "SELL" if qty_signed > 0 else "BUY"
+                spec = IbkrOrderSpec(
+                    symbol=pos.symbol,
+                    sec_type=pos.sec_type,
+                    action=action,
+                    quantity=abs(qty_signed),
+                    order_type="MKT",
+                    time_in_force="DAY",
+                    confirm_paper=True,
+                    client_order_id=f"emergency-flatten-{pos.symbol}-{int(_datetime.now(UTC).timestamp() * 1000)}",
+                )
+                ack = await broker.place_order(spec)
+                _log(f"liquidated: symbol={pos.symbol} qty={qty_signed} action={action} order_id={ack.order_id}")
+                liquidated += 1
+            _log(f"complete: liquidated={liquidated}")
+            return 0
+        finally:
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    logger.exception("client.disconnect() failed during emergency-flatten")
 
     try:
         rc = _asyncio.run(_flatten())

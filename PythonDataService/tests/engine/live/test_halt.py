@@ -51,9 +51,7 @@ def test_poisoned_halt_reason_rejects_invalid_trigger() -> None:
 
 def test_poisoned_halt_reason_rejects_missing_timestamps() -> None:
     with pytest.raises(ValueError, match="timestamp"):
-        PoisonedHaltReason.from_json_dict(
-            {"trigger": PoisonedHaltTrigger.LOST_FILL.value, "details": {}}
-        )
+        PoisonedHaltReason.from_json_dict({"trigger": PoisonedHaltTrigger.LOST_FILL.value, "details": {}})
 
 
 def test_poisoned_halt_reason_rejects_non_dict_details() -> None:
@@ -171,9 +169,7 @@ def test_outside_mutation_returns_none_when_all_executions_owned() -> None:
         {"client_order_id": "live-2", "exec_id": "e2", "perm_id": 9002, "account_id": "DU123"},
     ]
     owned = {"live-1", "live-2"}
-    assert check_outside_mutation(
-        executions, owned, halted_at_ms=1_000, last_clean_bar_close_ms=900
-    ) is None
+    assert check_outside_mutation(executions, owned, halted_at_ms=1_000, last_clean_bar_close_ms=900) is None
 
 
 def test_outside_mutation_flags_first_foreign_execution() -> None:
@@ -196,8 +192,10 @@ def test_outside_mutation_flags_first_foreign_execution() -> None:
         },
     ]
     reason = check_outside_mutation(
-        executions, owned_client_order_ids={"live-1"},
-        halted_at_ms=1_000, last_clean_bar_close_ms=900,
+        executions,
+        owned_client_order_ids={"live-1"},
+        halted_at_ms=1_000,
+        last_clean_bar_close_ms=900,
     )
     assert reason is not None
     assert reason.trigger == PoisonedHaltTrigger.OUTSIDE_MUTATION
@@ -215,8 +213,10 @@ def test_outside_mutation_flags_execution_with_no_client_order_id() -> None:
         {"client_order_id": None, "exec_id": "e-foreign", "perm_id": 1, "account_id": "DU123"},
     ]
     reason = check_outside_mutation(
-        executions, owned_client_order_ids={"live-1"},
-        halted_at_ms=1_000, last_clean_bar_close_ms=900,
+        executions,
+        owned_client_order_ids={"live-1"},
+        halted_at_ms=1_000,
+        last_clean_bar_close_ms=900,
     )
     assert reason is not None
     assert reason.details["client_order_id"] is None
@@ -229,11 +229,48 @@ def test_lost_fill_returns_none_when_all_orders_filled() -> None:
     from app.engine.live.halt import check_lost_fill
 
     orders = [{"client_order_id": "live-1", "submitted_at_ms": 100}]
-    executions = [{"client_order_id": "live-1", "exec_id": "e1"}]
-    assert check_lost_fill(
-        orders, executions,
-        fill_window_ms=60_000, current_time_ms=200, last_clean_bar_close_ms=0,
-    ) is None
+    # remaining=0 marks the order complete. Any other value (or missing key)
+    # leaves the order considered unfilled — see the partial-fill regression
+    # test below.
+    executions = [{"client_order_id": "live-1", "exec_id": "e1", "remaining": 0}]
+    assert (
+        check_lost_fill(
+            orders,
+            executions,
+            fill_window_ms=60_000,
+            current_time_ms=200,
+            last_clean_bar_close_ms=0,
+        )
+        is None
+    )
+
+
+def test_lost_fill_flags_order_with_only_partial_execution_past_window() -> None:
+    """A partial fill (remaining > 0) must NOT mark the order complete.
+
+    Reviewer feedback (P2.1): the prior implementation considered an
+    order filled iff ANY execution shared its client_order_id, so a
+    1-share execution on a 200-share order would suppress the
+    lost-fill halt indefinitely. After the fix, only executions with
+    ``remaining == 0`` mark an order complete; everything else leaves
+    the order eligible for the lost-fill halt when its window expires.
+    """
+    from app.engine.live.halt import PoisonedHaltTrigger, check_lost_fill
+
+    orders = [{"client_order_id": "live-1", "submitted_at_ms": 100_000}]
+    # A 1-share execution on a 200-share order: remaining=199. Order is
+    # NOT complete. After fill_window_ms elapses, lost-fill must fire.
+    executions = [{"client_order_id": "live-1", "exec_id": "e1", "remaining": 199}]
+    reason = check_lost_fill(
+        orders,
+        executions,
+        fill_window_ms=60_000,
+        current_time_ms=200_000,
+        last_clean_bar_close_ms=180_000,
+    )
+    assert reason is not None
+    assert reason.trigger == PoisonedHaltTrigger.LOST_FILL
+    assert reason.details["client_order_id"] == "live-1"
 
 
 def test_lost_fill_returns_none_when_unfilled_order_still_within_window() -> None:
@@ -241,10 +278,16 @@ def test_lost_fill_returns_none_when_unfilled_order_still_within_window() -> Non
     from app.engine.live.halt import check_lost_fill
 
     orders = [{"client_order_id": "live-1", "submitted_at_ms": 100_000}]
-    assert check_lost_fill(
-        orders, executions=[],
-        fill_window_ms=60_000, current_time_ms=130_000, last_clean_bar_close_ms=100_000,
-    ) is None
+    assert (
+        check_lost_fill(
+            orders,
+            executions=[],
+            fill_window_ms=60_000,
+            current_time_ms=130_000,
+            last_clean_bar_close_ms=100_000,
+        )
+        is None
+    )
 
 
 def test_lost_fill_flags_order_past_its_window() -> None:
@@ -255,8 +298,11 @@ def test_lost_fill_flags_order_past_its_window() -> None:
 
     orders = [{"client_order_id": "live-1", "submitted_at_ms": 100_000}]
     reason = check_lost_fill(
-        orders, executions=[],
-        fill_window_ms=60_000, current_time_ms=200_000, last_clean_bar_close_ms=180_000,
+        orders,
+        executions=[],
+        fill_window_ms=60_000,
+        current_time_ms=200_000,
+        last_clean_bar_close_ms=180_000,
     )
     assert reason is not None
     assert reason.trigger == PoisonedHaltTrigger.LOST_FILL
@@ -277,8 +323,11 @@ def test_lost_fill_reports_oldest_overdue_when_multiple() -> None:
         {"client_order_id": "live-1", "submitted_at_ms": 100_000},  # older
     ]
     reason = check_lost_fill(
-        orders, executions=[],
-        fill_window_ms=60_000, current_time_ms=200_000, last_clean_bar_close_ms=180_000,
+        orders,
+        executions=[],
+        fill_window_ms=60_000,
+        current_time_ms=200_000,
+        last_clean_bar_close_ms=180_000,
     )
     assert reason is not None
     assert reason.details["client_order_id"] == "live-1"
@@ -293,7 +342,13 @@ def test_lost_fill_skips_orders_with_no_client_order_id() -> None:
     orders = [
         {"client_order_id": None, "submitted_at_ms": 100_000},
     ]
-    assert check_lost_fill(
-        orders, executions=[],
-        fill_window_ms=60_000, current_time_ms=200_000, last_clean_bar_close_ms=180_000,
-    ) is None
+    assert (
+        check_lost_fill(
+            orders,
+            executions=[],
+            fill_window_ms=60_000,
+            current_time_ms=200_000,
+            last_clean_bar_close_ms=180_000,
+        )
+        is None
+    )

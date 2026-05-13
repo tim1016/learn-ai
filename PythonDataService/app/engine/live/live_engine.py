@@ -836,6 +836,12 @@ class LiveEngine:
                     "perm_id": event.perm_id,
                     "account_id": event.account_id,
                     "client_id": event.client_id,
+                    # ``remaining`` is the order's leftover quantity AFTER
+                    # this execution. ``check_lost_fill`` treats an order
+                    # as complete iff ``remaining == 0`` for some
+                    # execution — without this, a 1-share partial on a
+                    # 200-share order would suppress the lost-fill halt.
+                    "remaining": event.remaining,
                 }
             )
 
