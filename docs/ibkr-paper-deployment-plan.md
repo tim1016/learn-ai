@@ -352,7 +352,14 @@ class LiveEngine:
 
 ## 10. Phase 8 — Paper config, CLI, hygiene
 
-**Goal:** A `python -m app.engine.live.run` command that paper-trades SPY end-to-end with sane defaults. Most safety is delegated to existing `IbkrSettings` (`app/broker/ibkr/config.py`).
+**Status (2026-05-12): SHIPPED on `feat/ibkr-paper-runner-hardening`.** The CLI grew richer than originally spec'd — four subcommands (`init-ledger`, `pre-flight`, `start`, `emergency-flatten`) with run-ledger identity, halt/poisoned-flag refusal, max-orders-per-day cap, and dirty-tree refusal. The hardening commit added on top: `LiveEngine.shutdown_event` for graceful SIGINT/SIGTERM exit, `run_logging.configure_run_logging` (10MB × 5 backups), unhandled-exception recovery flatten via `_recovery_flatten`, and `IbkrClient.connect()/disconnect()` wiring (the latter closed a latent bug — the prior CLI never connected the client). See the IBKR integration authority doc § 6 for the runtime semantics and § 11 for the test inventory.
+
+**Deferred to follow-ups (intentional scope choices, not blockers):**
+- Equity-curve parquet writer — `equity_curve` lives in `LiveRunResult` in memory; `artifacts.py` has writers for decisions/executions/trades but no `EquityWriter`. Standalone follow-up.
+- YAML config input to `init-ledger` — `--live-config-json` already round-trips through the ledger; YAML is a sugar layer.
+- `LiveConfig` → `BaseSettings` conversion — current `dataclass(frozen=True)` works fine for the ledger-mediated flow; env-var loading at init-ledger would require this conversion.
+
+**Goal (original):** A `python -m app.engine.live.run` command that paper-trades SPY end-to-end with sane defaults. Most safety is delegated to existing `IbkrSettings` (`app/broker/ibkr/config.py`).
 
 **Files:**
 
