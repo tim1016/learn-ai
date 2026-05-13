@@ -597,7 +597,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                     f"[START] could not fetch positions for unexpected-position check: {exc}",
                     file=sys.stderr,
                 )
-                return 2
+                # Exit 3 per the module docstring exit-code table — a
+                # broker fetch failure is a runtime error (broker / IO),
+                # not an operator-error condition. Exit 2 would imply
+                # bad args or missing files.
+                return 3
             position_check = check_unexpected_position(positions, expected_symbol=live_config.symbol)
             if not position_check.passed:
                 print(

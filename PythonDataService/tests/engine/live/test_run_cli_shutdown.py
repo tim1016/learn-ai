@@ -316,7 +316,9 @@ def test_cmd_start_disconnects_client_when_position_check_fails(tmp_path: Path) 
 
 def test_cmd_start_disconnects_client_when_fetch_positions_raises(tmp_path: Path) -> None:
     """Same as above but for the OTHER early-return path: a broker error
-    on ``fetch_positions`` returns 2 — must still disconnect."""
+    on ``fetch_positions`` returns 3 (runtime error per the module
+    docstring's exit-code table — broker / IO failures aren't operator
+    errors). Must still disconnect."""
     run_dir = _build_run_dir(tmp_path)
 
     class _RaisingBroker(FakeBroker):
@@ -329,6 +331,8 @@ def test_cmd_start_disconnects_client_when_fetch_positions_raises(tmp_path: Path
     args = _make_args(run_dir=run_dir, broker=broker, bars=[], client=client)
     rc = cmd_start(args)
 
-    assert rc == 2
+    # Runtime error (broker / IO) → exit 3 per the module docstring
+    # (CodeRabbit Major review on PR #233 — original code returned 2).
+    assert rc == 3
     assert client.connect_calls == 1
     assert client.disconnect_calls == 1, "must disconnect even when fetch_positions raises"
