@@ -411,8 +411,25 @@ class LiveEngine:
                     last_force_flat_date = minute_bar.time.date()
 
                 portfolio.update_reference_price(symbol, minute_bar.close)
+                consolidated_count_before = len(ctx.consolidated_bars)
                 for consolidator in ctx.get_consolidators(symbol):
                     consolidator.update(minute_bar)
+                consolidated_emitted = len(ctx.consolidated_bars) - consolidated_count_before
+
+                # Operator-facing heartbeat — operators tail live.log to
+                # confirm bars are flowing during the strategy's indicator
+                # warmup window (≥3 h 45 m for SpyEmaCrossoverAlgorithm —
+                # RSI(14) is_ready at samples >= period + 1, so 15 × 15-min
+                # bars). Without this, warmup is silent and an "engine
+                # running, strategy in warmup" run is indistinguishable
+                # from "engine hung." See issue #228 (and the #227
+                # misdiagnosis it prevents recurring).
+                logger.info(
+                    "[BAR] %s consolidator_emitted=%d snapshot=%s",
+                    minute_bar.time.isoformat(),
+                    consolidated_emitted,
+                    "set" if strategy.last_decision_snapshot is not None else "None",
+                )
 
                 # Snapshot publication runs inside the strategy bar
                 # handler; capture it here, deduped by bar_close_ms so
