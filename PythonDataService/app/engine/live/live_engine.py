@@ -418,11 +418,12 @@ class LiveEngine:
 
                 # Operator-facing heartbeat — operators tail live.log to
                 # confirm bars are flowing during the strategy's indicator
-                # warmup window (≥3.5 hours for SpyEmaCrossoverAlgorithm).
-                # Without this, warmup is silent and an "engine running,
-                # strategy in warmup" run is indistinguishable from "engine
-                # hung." See issue #228 (and the #227 misdiagnosis it
-                # prevents recurring).
+                # warmup window (≥3 h 45 m for SpyEmaCrossoverAlgorithm —
+                # RSI(14) is_ready at samples >= period + 1, so 15 × 15-min
+                # bars). Without this, warmup is silent and an "engine
+                # running, strategy in warmup" run is indistinguishable
+                # from "engine hung." See issue #228 (and the #227
+                # misdiagnosis it prevents recurring).
                 logger.info(
                     "[BAR] %s consolidator_emitted=%d snapshot=%s",
                     minute_bar.time.isoformat(),

@@ -177,8 +177,10 @@ Expected runtime behavior:
 - `decisions.parquet` **stays empty during indicator warmup** and only
   starts growing once every indicator the strategy uses is `is_ready`.
   For `SpyEmaCrossoverAlgorithm` this requires
-  ``max(EMA5=5, EMA10=10, RSI14=14) = 14`` consolidated 15-min bars —
-  so the first row appears ≈ 3.5 hours after a fresh-state run starts.
+  ``max(EMA5=5, EMA10=10, RSI14=15) = 15`` consolidated 15-min bars —
+  RSI's `is_ready` predicate requires `samples >= period + 1` (one
+  extra sample for the first delta; see `app/engine/indicators/rsi.py`).
+  The first row appears ≈ 3 h 45 m after a fresh-state run starts.
   Until then, `[BAR] ... snapshot=None` is normal and expected. After
   warmup, `decisions.parquet` grows by one row every 15 minutes
   (consolidated bar close).
@@ -194,7 +196,7 @@ is a hang and the operator should investigate (issue #227 was a
 misdiagnosis caused by the absence of this heartbeat — see issue #228).
 
 For a meaningful single-day dry run that produces decision rows in
-`decisions.parquet`, either (a) start by 06:00 ET so warmup completes
+`decisions.parquet`, either (a) start by 05:45 ET so warmup completes
 before RTH open at 09:30 ET, (b) accept that day 1 produces no decisions
 and rely on the `[BAR]` heartbeat for end-to-end pipeline verification,
 or (c) wait for indicator-state-persistence-across-restarts to ship
