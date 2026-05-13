@@ -370,7 +370,11 @@ Run these in order before turning the runner loose:
 
 1. **`.env`** has `IBKR_MODE=paper`, `IBKR_PORT=4002` (or `7497` for TWS), `IBKR_READONLY=false`, paper account `DU…` ID. Anything else and the four layers will refuse.
 2. **NYSE/ARCA real-time market-data subscription** active on the linked live account. Paper inherits — see TDD §2.4.
-3. **IB Gateway** running, logged into the paper account, API tab has the container IP under "Trusted IPs," and "Read-Only API" is OFF.
+3. **IB Gateway** running, logged into the paper account, "Read-Only API" is OFF, and the API tab's "Trusted IPs" includes:
+   - **`127.0.0.1`** (host loopback) — required by the host-venv `cmd_start` (Step 7); without this, the dry-run client cannot connect.
+   - **The `polygon-data-service` container's WSL bridge IP** (e.g. `10.89.0.x`) — required only when the operator keeps the container running for the `/api/broker/health` and `/api/broker/diagnose` REST endpoints (used in Steps 4–5 of this checklist). Optional if those steps are skipped or run from the host venv directly.
+
+   The Step 7 invocation runs from the host, so `127.0.0.1` is the load-bearing entry; the container IP is for the optional pre-flight diagnose path. (Earlier revisions instructed only the container IP, which contradicted Step 7's host-venv path — corrected post PR #232 review.)
 4. **`GET /api/broker/health`** returns `connected: true, is_paper: true` and the account ID begins with `DU`.
 5. **`GET /api/broker/diagnose`** returns `overall_status: pass` (or click the **Diagnose** button on `/broker`).
 6. **Project-scope tests** green: `pytest PythonDataService/tests/ -k "not slow"`. 1797+ pass; the replay parity test must skip with the `lean-cache` message on a clean CI runner or pass locally where the cache is materialized.
