@@ -13,7 +13,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/broker/ibkr/*` or `PythonDataService/app/engine/live/*`. Same-PR rule: if you touch those files, update the matching section here and bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-05-12 (post PR #76 — Phase 1-7 live runtime; PR #77 — Diagnose button; PR #78 — Phase 10 prereqs; `feat/ibkr-paper-runner-hardening` — Phase 8 hardening: `shutdown_event` graceful exit on SIGINT/SIGTERM, rotating file logger, unhandled-exception recovery flatten, `IbkrClient.connect()` wired in `cmd_start`).
+> **Last reviewed:** 2026-05-13 (doc-rot refresh: Phase 9 three-way reconciliation pipeline was shipped per the shadow-deployment spec — this page incorrectly still listed `reconcile.py` as a stub. PR #225 — Phase 8 hardening — also merged 2026-05-13).
 
 ---
 
@@ -170,7 +170,7 @@ All routes live in `app/routers/broker.py`, prefix `/api/broker`, tag `broker`.
 
 ## 6. Live runtime (`app/engine/live/`)
 
-The runtime that turns a `Strategy` into paper orders against IBKR. Nine files (one stub each for Phase 8 CLI and Phase 9 reconciliation).
+The runtime that turns a `Strategy` into paper orders against IBKR.
 
 ### Surface
 
@@ -180,8 +180,11 @@ The runtime that turns a `Strategy` into paper orders against IBKR. Nine files (
 | `live_portfolio.py` | `LivePortfolio` — Portfolio-shaped surface with broker-backed account snapshots; `set_holdings`, `liquidate`, `submit_pending_orders`, `record_broker_fill`, `cancel_open_orders`. `BrokerAdapter` Protocol + `IbkrBrokerAdapter` (production) implementation. |
 | `live_context.py` | `LiveContext` — drop-in for `StrategyContext`. Reuses `TradeBarConsolidator` verbatim. Plumbs consolidated-bar close through to `LivePortfolio` reference price. |
 | `live_engine.py` | `LiveEngine`, `LiveRunResult`, `ReplayBrokerAdapter` Protocol. Single-task `async for` loop. Eager four-layer paper-safety validation when an `IbkrClient` is supplied. |
-| `run.py` | **Stub.** CLI entrypoint with `argparse --help`. Phase 8 will wire signal handling, log rotation, run-dir management. |
-| `reconcile.py` | **Stub.** Phase 9 will diff a paper run vs same-window backtest. |
+| `run.py` | Operator CLI. Four subcommands: `init-ledger` (writes the run identity at `artifacts/live_runs/<run_id>/run_ledger.json`), `pre-flight` (runs the 7 morning halt checks in `pre_flight.py`), `start` (wires `shutdown_event` + SIGINT/SIGTERM handlers + rotating file logger + unhandled-exception recovery flatten + `IbkrClient.connect()/disconnect()`), `emergency-flatten`. |
+| `reconcile.py` | Three-way daily reconciler — Python live ↔ QC Cloud ↔ IBKR fills. Per-bar `CrossEngineClass` (none/data/engine) and `FillClass` (none/within_tol/breach) classifications; writes `day-N.{md,json,parquet,hashes.json}`; emits `halt.flag` consumed by next morning's `check_no_halt_flag` pre-flight; SHA-256 manifest in the committed Markdown receipt. Implemented per `docs/superpowers/specs/2026-05-08-ibkr-paper-shadow-deployment-design.md` § 6. |
+| `run_logging.py` | Rotating file logger (`<run-dir>/live.log`, 10MB × 5 backups) plus console handler with `[STEP X]` formatting when callers pass `extra={"step": ...}`. Idempotent for repeat init on the same run-dir. |
+| `pre_flight.py` | Seven morning halt checks: `clean_tree`, `run_state_intact`, `no_halt_flag` (reads `halt.flag` written by `reconcile.write_day_report`), `ntp_offset`, `no_unexpected_position`, `yesterday_artifacts_intact` (walks the SHA-256 sidecar), plus skip-gates. |
+| `run_ledger.py` | Run-identity ledger: strategy spec hash, QC audit copy hash, account_id, start-of-session ms, live-config JSON. Written by `cmd_init_ledger`. |
 | `README.md` | Operator runbook. |
 
 ### What `LiveEngine.run()` does, in order, per minute bar
@@ -220,7 +223,7 @@ The gate skips on CI when `lean-cache/` is absent (gitignored runtime data — p
 
 ### Known parity-non-equivalent behavior
 
-`LiveEngine` force-flat submits a market liquidation that fills on the next print after submission (under `FakeBroker` that's the next bar's open). `BacktestEngine` synthesizes a fill at the current bar's close, bypassing the fill model. The price residual is what the Phase 9 reconciliation tooling (when shipped) will measure and classify. Documented in `LiveEngine.run` docstring.
+`LiveEngine` force-flat submits a market liquidation that fills on the next print after submission (under `FakeBroker` that's the next bar's open). `BacktestEngine` synthesizes a fill at the current bar's close, bypassing the fill model. The price residual is what `reconcile.py`'s `classify_fill` measures and classifies (`FillClass.within_tol` vs `breach` against `FillTolerances.price_atol=0.05`). Documented in `LiveEngine.run` docstring.
 
 ### Graceful shutdown (SIGINT/SIGTERM, 2026-05-12)
 
@@ -334,7 +337,7 @@ Tracked deliberately. None of these are accidental gaps; each is documented and 
 | Multi-symbol live | NOT SUPPORTED | `LiveEngine` raises `NotImplementedError` on `len(ctx.symbols) != 1`. Mirrors `BacktestEngine` v1 scope. |
 | Options paper trading via `LiveEngine` | NOT SUPPORTED | `LiveEngine` is equity-only in v1. Options option-chain *streaming* is supported; placing options orders via the runtime is not. |
 | Phase 8 — paper config + CLI + signal handling + log rotation | **SHIPPED** (2026-05-12) | `run.py` has four subcommands (`init-ledger`, `pre-flight`, `start`, `emergency-flatten`); `start` wires `shutdown_event`, signal handlers, rotating file logger, unhandled-exception recovery flatten, and `IbkrClient.connect()/disconnect()`. Deferred to follow-ups: equity-curve parquet writer, YAML config input, `LiveConfig` → `BaseSettings` conversion. |
-| Phase 9 — paper-vs-backtest reconciliation tooling | STUB | `app/engine/live/reconcile.py` is empty; will diff a paper run vs a same-window backtest into `docs/references/reconciliations/`. |
+| Phase 9 — daily reconciliation tooling | **SHIPPED** (2026-05-08, registered 2026-05-13) | `app/engine/live/reconcile.py` implements the three-way design from the shadow-deployment spec — Python live ↔ QC Cloud ↔ IBKR fills. Per-bar `CrossEngineClass`/`FillClass` classification, `day-N.{md,json,parquet,hashes.json}` artifacts, halt.flag wired into pre-flight, week rollup. 25 unit tests in `tests/engine/live/test_reconcile.py`. Note: the deployment plan § 11 described an older paper-vs-backtest framing; the three-way design supersedes it. Deferred: IBKR `commissionReport` callback (real fills carry `fee=0` today), so commission-class reconciliation is misleadingly clean. |
 | Phase 10 — actual paper week + reconciliation report | NOT STARTED | Operational; gated on the items below. |
 | `IbkrMinuteBar` → `TradeBar` conversion in `stream_minute_bars` consumer | TRACKED | Real-IBKR path in `LiveEngine.run()` calls `stream_minute_bars` which yields `IbkrMinuteBar`, not `TradeBar`. The replay path supplies `TradeBar` directly so this is unexercised today. PR #76 review C1 — Phase 10 prereq. |
 | `client_order_id` per-session uniqueness | TRACKED | Counter resets per `LivePortfolio`; `place_paper_order` idempotency cache is process-scoped. PR #76 review C2 — Phase 10 prereq. |
@@ -357,7 +360,7 @@ Run these in order before turning the runner loose:
 4. **`GET /api/broker/health`** returns `connected: true, is_paper: true` and the account ID begins with `DU`.
 5. **`GET /api/broker/diagnose`** returns `overall_status: pass` (or click the **Diagnose** button on `/broker`).
 6. **Project-scope tests** green: `pytest PythonDataService/tests/ -k "not slow"`. 1797+ pass; the replay parity test must skip with the `lean-cache` message on a clean CI runner or pass locally where the cache is materialized.
-7. **Phase 8 CLI** is shipped — operator path is `python -m app.engine.live.run init-ledger ...` then `python -m app.engine.live.run start --run-dir <dir>`. SIGINT/SIGTERM trigger a graceful cancel + flatten + disconnect via the engine's `shutdown_event`. **Phase 9 reconciliation** is still a stub — paper-vs-backtest comparison is manual until `app/engine/live/reconcile.py` is implemented.
+7. **Phase 8 CLI** is shipped — operator path is `python -m app.engine.live.run init-ledger ...` then `python -m app.engine.live.run start --run-dir <dir>`. SIGINT/SIGTERM trigger a graceful cancel + flatten + disconnect via the engine's `shutdown_event`. **Phase 9 reconciliation** is shipped (`python -m app.engine.live.reconcile --run-dir <dir> --qc-dir <dir> --docs-dir <dir> --run-label <label> --day-n N --day-date YYYY-MM-DD`). End-to-end operator steps are in `docs/runbooks/ibkr-paper-dry-run.md`.
 
 If any of these fails, fix it before running. The diagnostic endpoint will tell you which layer is the blocker.
 
@@ -383,3 +386,4 @@ If any of these fails, fix it before running. The diagnostic endpoint will tell 
 |---|---|---|
 | 2026-05-04 | Claude Opus 4.7 | Initial authority doc post PR #76, #77, #78. Captures Phase 1-7 live runtime, Diagnose endpoint + button, Phase 10 prereqs (`open_` fallback, force-flat, exit-side collapse). |
 | 2026-05-12 | Claude Opus 4.7 | Phase 8 hardening landed on `feat/ibkr-paper-runner-hardening`: `LiveEngine.shutdown_event` graceful exit, SIGINT/SIGTERM handlers in `cmd_start`, rotating file logger (`run_logging.py`, 10MB × 5 backups), unhandled-exception recovery flatten, `IbkrClient.connect()/disconnect()` wired. Phase 8 row in § 11 flipped from STUB → SHIPPED. Latent CLI bug (CLI never connected the client) fixed in the same commit. Deferred to follow-ups: equity-curve parquet writer, YAML config input, `LiveConfig` → `BaseSettings`. |
+| 2026-05-13 | Claude Opus 4.7 | Doc-rot refresh — three-way Phase 9 reconciliation pipeline (`reconcile.py`, per the 2026-05-08 shadow-deployment spec § 6) had shipped but this page still listed it as a stub. Updated § 6 surface table (`run.py`/`reconcile.py`/`run_logging.py`/`pre_flight.py`/`run_ledger.py` rows), § 6 force-flat residual paragraph (replaced "(when shipped)" with the actual classifier), § 11 status row (STUB → SHIPPED with note on deployment-plan's older paper-vs-backtest framing being superseded), and § 12 operational checklist item 7 (reconcile CLI command). Also surfaced the smoke-discovered `IbkrClient.disconnect()` latent bug (`ib_async.IB.disconnect` is synchronous; the code awaited a non-existent `disconnectAsync`) — fix landed in PR #225 commit `34ea0a1` and is regression-tested. |

@@ -409,6 +409,8 @@ The four-layer paper safety is **not** duplicated here. Codex feedback §5: don'
 
 ## 11. Phase 9 — Reconciliation tooling
 
+**Status (2026-05-13):** SHIPPED, but **the implemented design is three-way** (Python live ↔ QC Cloud ↔ IBKR fills), not the paper-vs-backtest design originally outlined in this section. The three-way design is specified in [`docs/superpowers/specs/2026-05-08-ibkr-paper-shadow-deployment-design.md`](superpowers/specs/2026-05-08-ibkr-paper-shadow-deployment-design.md) § 6 and supersedes what follows here. Per-bar classifications use `CrossEngineClass` (`none`/`data`/`engine`) and `FillClass` (`none`/`within_tol`/`breach`); the divergence taxonomy below is preserved as historical framing. End-to-end operator steps live in [`docs/runbooks/ibkr-paper-dry-run.md`](runbooks/ibkr-paper-dry-run.md). Deferred: IBKR `commissionReport` callback (real fills carry `fee=0` today; reconciliation receipts will look misleadingly clean on commissions until this lands).
+
 **Goal:** Diff a paper run against a same-window backtest run and emit a reconciliation report.
 
 **File:** `app/engine/live/reconcile.py`
