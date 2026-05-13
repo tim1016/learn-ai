@@ -10,6 +10,7 @@ IBKR.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
@@ -55,6 +56,84 @@ logger = logging.getLogger(__name__)
 
 
 _ENGINE_TZ = ZoneInfo("America/New_York")
+
+
+async def _next_bar_or_shutdown(
+    source_iter,
+    shutdown_event: asyncio.Event | None,
+) -> tuple[TradeBar | None, bool]:
+    """Race the next bar from ``source_iter`` against ``shutdown_event``.
+
+    Returns ``(bar, shutdown_won)``:
+      * ``(TradeBar, False)`` — a bar arrived before shutdown
+      * ``(None, True)`` — shutdown fired first (or was already set)
+      * ``(None, False)`` — source exhausted (``StopAsyncIteration``)
+
+    When ``shutdown_event`` is ``None``, behaves like a normal
+    ``__anext__`` and returns ``(bar, False)`` or ``(None, False)``
+    on exhaustion.
+
+    Why this exists: the Phase 8 graceful-shutdown check used to live
+    inside ``async for minute_bar in source:``. When ``source`` is
+    wedged on its own ``__anext__`` (no bars arriving — IBKR error
+    420 from a same-IP-binding rejection, a Gateway daily restart,
+    a market-halt period), the loop body never runs and the
+    shutdown check is never reached. SIGINT can't unwedge the
+    engine, so SIGKILL is required after the timeout grace
+    (observed 2026-05-13 container run, exit 137 after 30 s).
+    Racing ``source.__anext__()`` against ``shutdown_event.wait()``
+    means shutdown fires within bounded time even when no bar
+    arrives.
+
+    When shutdown wins, the in-flight ``source_iter.__anext__()`` is
+    cancelled. Async-generator-style sources (``stream_minute_bars``)
+    treat ``CancelledError`` as a normal exit through their
+    ``finally`` block, which cancels the IBKR real-time bar
+    subscription cleanly.
+    """
+    if shutdown_event is None:
+        try:
+            return (await source_iter.__anext__(), False)
+        except StopAsyncIteration:
+            return (None, False)
+
+    next_task = asyncio.ensure_future(source_iter.__anext__())
+    shutdown_task = asyncio.ensure_future(shutdown_event.wait())
+    try:
+        await asyncio.wait(
+            {next_task, shutdown_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
+        # Cancel and silently drain whichever task lost the race.
+        # CancelledError from cancellation is expected; StopAsyncIteration
+        # may surface if the source was on its very last item.
+        for task in (next_task, shutdown_task):
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+                    await task
+
+    # Surface a real source exception even if shutdown also fired —
+    # operators want to see broker stream errors, not have them masked
+    # by the graceful-exit path. (Reviewer feedback on PR #231:
+    # silent exception swallow when shutdown is concurrent.)
+    if next_task.done() and not next_task.cancelled():
+        exc = next_task.exception()
+        if exc is not None and not isinstance(exc, StopAsyncIteration):
+            raise exc
+
+    if shutdown_event.is_set():
+        return (None, True)
+    if next_task.done() and not next_task.cancelled():
+        try:
+            return (next_task.result(), False)
+        except StopAsyncIteration:
+            return (None, False)
+    # Defensive: shutdown not set, next_task wasn't completable. Treat
+    # as exhaustion to break the caller's loop rather than spinning.
+    return (None, False)
+
 
 # How long to wait for broker.cancel_open_orders during a fatal halt
 # before giving up. The whole point of _fatal_halt is to land
@@ -297,19 +376,29 @@ class LiveEngine:
             await self._broker.start_event_stream()
             started_event_stream = True
 
+        source_iter = source.__aiter__()
+        last_bar: TradeBar | None = None
         try:
-            async for minute_bar in source:
-                if shutdown_event is not None and shutdown_event.is_set():
-                    # Graceful shutdown via SIGINT/SIGTERM. The current
-                    # bar is sacrificed — we don't run the strategy
-                    # handler on it. cancel_open_orders + liquidate +
-                    # submit happen via _shutdown_flatten; the existing
-                    # finally block (post-break) flushes writers and
-                    # stops the broker event stream.
-                    ctx.log(f"[SHUTDOWN] {minute_bar.time}: shutdown_event set; flattening and exiting")
-                    flat_acks = await self._shutdown_flatten(portfolio, ctx, bar_time=minute_bar.end_time)
-                    submitted_order_ids.extend(ack.order_id for ack in flat_acks)
+            while True:
+                minute_bar, shutdown_won = await _next_bar_or_shutdown(source_iter, shutdown_event)
+                if minute_bar is None:
+                    if shutdown_won:
+                        # Graceful shutdown via SIGINT/SIGTERM. cancel_open_orders +
+                        # liquidate + submit happen via _shutdown_flatten; the
+                        # existing finally block (post-break) flushes writers and
+                        # stops the broker event stream. ``last_bar.end_time``
+                        # gives the historical "use the last bar's time" behavior
+                        # when bars were flowing; the wall-clock fallback covers
+                        # the wedged-source case (issue surfaced 2026-05-13)
+                        # where no bar ever arrived.
+                        fallback_time = last_bar.end_time if last_bar is not None else datetime.now(_ENGINE_TZ)
+                        ctx.log(f"[SHUTDOWN] {fallback_time}: shutdown_event set; flattening and exiting")
+                        flat_acks = await self._shutdown_flatten(portfolio, ctx, bar_time=fallback_time)
+                        submitted_order_ids.extend(ack.order_id for ack in flat_acks)
+                    # source exhausted (shutdown_won=False) OR shutdown finished —
+                    # either way the bar loop is done.
                     break
+                last_bar = minute_bar
                 self._raise_if_event_stream_failed()
                 # Reset per-day order counter on session-date boundary.
                 bar_date = minute_bar.time.date()
