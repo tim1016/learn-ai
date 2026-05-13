@@ -37,6 +37,7 @@ import argparse
 import asyncio
 import json
 import logging
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -231,6 +232,37 @@ def cmd_pre_flight(args: argparse.Namespace) -> int:
 # ──────────────────────────── start subcommand ───────────────────────
 
 
+def _install_signal_handlers(loop: asyncio.AbstractEventLoop, shutdown_event: asyncio.Event) -> None:
+    """Wire SIGINT and SIGTERM to set ``shutdown_event``.
+
+    Linux/container only — ``loop.add_signal_handler`` is not
+    implemented on Windows's default event loop. The intended
+    execution host is the polygon-data-service container (Linux), so
+    on Windows we log a warning and fall through; the operator's
+    Ctrl-C will surface as a ``KeyboardInterrupt`` which ``cmd_start``
+    catches via its generic exception path (still recorded, just not
+    a graceful flatten).
+    """
+
+    def _handle(sig_value: int) -> None:
+        logger.info(
+            "Received signal %d; setting shutdown_event for graceful exit",
+            sig_value,
+            extra={"step": "9"},
+        )
+        shutdown_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _handle, sig)
+        except NotImplementedError:
+            logger.warning(
+                "Signal handler for %s not supported on this event loop "
+                "(Windows host?); graceful shutdown via this signal disabled.",
+                sig.name,
+            )
+
+
 def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     """Build a LiveConfig from the ledger's serialized live_config dict.
 
@@ -422,8 +454,15 @@ def cmd_start(args: argparse.Namespace) -> int:
         f"[START] run_id={ledger.run_id} account={ledger.account_id} "
         f"readonly={args.readonly} max_orders_per_day={args.max_orders_per_day}"
     )
+
+    async def _drive_engine() -> None:
+        loop = asyncio.get_running_loop()
+        shutdown_event = asyncio.Event()
+        _install_signal_handlers(loop, shutdown_event)
+        await engine.run(strategy, bars=bars_iter, shutdown_event=shutdown_event)
+
     try:
-        asyncio.run(engine.run(strategy, bars=bars_iter))
+        asyncio.run(_drive_engine())
     except FatalHaltError as exc:
         # § 7 fatal halt — broker-state divergence. The engine has
         # already written poisoned.flag and flushed any partial
