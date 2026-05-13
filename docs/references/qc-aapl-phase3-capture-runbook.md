@@ -1,12 +1,21 @@
 # QC AAPL Phase 3 fixture-capture runbook
 
-Hand-run in QC Cloud to produce ``tests/fixtures/golden/qc-aapl-phase3/``. After capture, drop the three files into that directory and the two fixture-gated tests activate automatically.
+Hand-run in QC Cloud to produce ``tests/fixtures/golden/qc-aapl-phase3/``. After capture, drop the files into that directory and the two fixture-gated tests activate automatically.
+
+> **Phase 3.5 update (2026-05-11):** the price-history pull is now
+> ``Resolution.MINUTE`` (was ``Resolution.DAILY``) to support
+> ``FillMode.NEXT_SESSION_OPEN`` parity. The QC algorithm itself stays
+> on daily-bar universe + minute-equity (QC's brokerage simulates fills
+> at minute granularity regardless). Multi-day fill count expected: 3
+> on the 2026-02-10 → 2026-03-12 window (entry 02-10, exit 02-20, re-entry
+> 02-21 — the only negative prediction in the set).
 
 ## Inputs you need before opening QC
 
 - Validation window: **2026-02-10 → 2026-03-12** (must match PR #215's prediction-set window)
 - Backtest cash: **$100,000**
 - Symbol: **AAPL** (single-symbol degenerate of QC's full SP500 universe)
+- Resolution: **MINUTE** for price-history pull (algorithm itself can keep DAILY for universe selection)
 
 ## QC algorithm code
 
@@ -23,8 +32,12 @@ class PrecomputedMlPredictionsAapl(QCAlgorithm):
         self.set_cash(100_000)
         self.universe_settings.resolution = Resolution.DAILY
 
-        # Phase 3 modification: AAPL-only universe.
-        self.symbol_aapl = self.add_equity("AAPL", Resolution.DAILY).symbol
+        # Phase 3 modification: AAPL-only universe. AAPL itself is added at
+        # MINUTE resolution so QC's brokerage simulates fills at the 09:31
+        # ET minute-bar boundary (matches Phase 3.5 NEXT_SESSION_OPEN
+        # parity); universe selection stays daily (cheaper than
+        # MINUTE-frequency universe re-selection).
+        self.symbol_aapl = self.add_equity("AAPL", Resolution.MINUTE).symbol
         self.add_universe(self._select_assets)
 
         self.schedule.on(
@@ -178,7 +191,7 @@ with open("qc_orders.json", "w") as f:
 print(f"wrote {len(normalized)} orders in canonical schema")
 ```
 
-## Step 3 — pull qc_price_history.csv
+## Step 3 — pull qc_price_history.csv (MINUTE)
 
 Same notebook:
 
@@ -186,23 +199,32 @@ Same notebook:
 import pandas as pd
 
 qb = QuantBook()
-aapl = qb.add_equity("AAPL", Resolution.DAILY).symbol
+aapl = qb.add_equity("AAPL", Resolution.MINUTE).symbol
 
 history = qb.history(
     aapl,
     start=pd.Timestamp("2026-02-10"),
     end=pd.Timestamp("2026-03-12") + pd.Timedelta(days=1),
-    resolution=Resolution.DAILY,
+    resolution=Resolution.MINUTE,
 )
 # history is a multi-index frame; flatten to the schema the fixture reader expects.
 flat = history.reset_index()
 flat = flat[["time", "open", "high", "low", "close", "volume"]]
-flat["time"] = flat["time"].dt.strftime("%Y-%m-%d")
+# Minute-resolution timestamps include HH:MM:SS (NY-local wall-clock per QC's
+# qb.history convention for US equities). The fixture reader auto-detects
+# minute vs daily resolution from the time column's time-of-day component.
+flat["time"] = flat["time"].dt.strftime("%Y-%m-%d %H:%M:%S")
 flat.to_csv("qc_price_history.csv", index=False)
-print(f"wrote {len(flat)} daily bars")
+print(f"wrote {len(flat)} minute bars")
+
+# Sanity-check the boundaries — must match what the Phase 3.5 smoke test asserts.
+assert flat["time"].iloc[0] == "2026-02-10 09:30:00", flat["time"].iloc[0]
+assert flat["time"].iloc[-1].startswith("2026-03-12 15:5"), flat["time"].iloc[-1]
 ```
 
 Column ordering matters — must be exactly ``time,open,high,low,close,volume`` because ``FixtureDataReader`` reads by column name and the smoke test asserts the header.
+
+Expected row count: ~8,000 (≈22 trading days × 390 minutes/session). Significantly larger than the prior daily fixture's 22 rows — the smoke test pins the first and last timestamps explicitly.
 
 ## Step 4 — pull qc_equity.json (diagnostic)
 
@@ -229,9 +251,10 @@ Equity curve isn't asserted in Phase 3 — captured for diagnostic comparison on
 - Universe: AAPL (single-symbol)
 - Brokerage model: <default — record from "Backtest Statistics" page>
 - Commission model: <record exactly as shown in QC backtest report>
-- Resolution: Daily
+- Resolution: Minute (price history) / Daily (universe selection)
 - Initial cash: $100,000
-- Schedule: set_holdings @ 08:00 ET → fills at next session open (NEXT_BAR_OPEN equivalent)
+- Schedule: set_holdings @ 08:00 ET → fills at next minute open (09:31 ET first-minute bar; matches Phase 3.5 NEXT_SESSION_OPEN parity)
+- Expected fills (Phase 3.5 multi-day window): 3 — entry 02-10, exit 02-20, re-entry 02-21 (only negative prediction in the set is 2026-02-20)
 ```
 
 ## Step 6 — drop into repo

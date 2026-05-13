@@ -108,6 +108,7 @@ class IndicatorBlock(BaseModel):
 # Condition primitives. Each "kind" is a discriminator value for the union.
 # ---------------------------------------------------------------------------
 ComparisonOp = Literal["<", "<=", "==", ">=", ">", "!="]
+PredictionLookup = Literal["exact_bar_close", "next_after_bar_close"]
 
 
 class _ConditionBase(BaseModel):
@@ -224,6 +225,16 @@ class PredictionRef(BaseModel):
     is the column name in the artifact rows (default ``"prediction"`` for
     the v0.5 single-scalar contract; reserved for future multi-column
     artifacts).
+
+    ``lookup`` selects the evaluator's row-selection policy at decision
+    time. ``"exact_bar_close"`` (default) reads the row keyed at the
+    consolidated bar's ``end_time_ms``. ``"next_after_bar_close"`` reads
+    the row with the smallest timestamp strictly greater than the bar's
+    ``end_time_ms`` — used for "consume tomorrow's prediction at today's
+    close" strategies like QC's precomputed-predictions tutorial.
+    Coverage validation (``app.research.ml.coverage``) is lookup-aware
+    and fails at run-pipeline boundary if any fired bar lacks the
+    required successor row.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -231,6 +242,7 @@ class PredictionRef(BaseModel):
     id: str
     prediction_set_id: str
     field: str = "prediction"
+    lookup: PredictionLookup = "exact_bar_close"
 
 
 class PredictionComparison(_ConditionBase):
@@ -425,7 +437,9 @@ class StrategySpec(BaseModel):
         declared = set(ids)
         for ref in self._iter_indicator_refs():
             if ref not in declared:
-                raise ValueError(f"condition references undeclared indicator id: {ref!r} (declared: {sorted(declared)})")
+                raise ValueError(
+                    f"condition references undeclared indicator id: {ref!r} (declared: {sorted(declared)})"
+                )
 
         # ---- prediction validators -------------------------------------
         # Deferred import to avoid a circular import:
@@ -456,8 +470,7 @@ class StrategySpec(BaseModel):
         for ref_id in self._iter_prediction_refs():
             if ref_id not in declared_pred_ids:
                 raise ValueError(
-                    f"condition references undeclared prediction id: {ref_id!r} "
-                    f"(declared: {sorted(declared_pred_ids)})"
+                    f"condition references undeclared prediction id: {ref_id!r} (declared: {sorted(declared_pred_ids)})"
                 )
 
         return self

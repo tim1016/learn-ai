@@ -18,17 +18,20 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from datetime import date as Date
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from app.research.parity.fixture_data_reader import FixtureDataReader
 from app.research.parity.ibkr_commission import IbkrEquityCommissionModel
 
 Side = Literal["buy", "sell"]
+
+_NY = ZoneInfo("America/New_York")
 
 
 class DivergenceCategory(StrEnum):
@@ -52,6 +55,12 @@ class Tolerances:
     commission_atol: Decimal = Decimal("0.01")
     per_share_pnl_atol: Decimal = Decimal("0.01")
     pnl_floor_atol: Decimal = Decimal("0.01")
+    # Allowable share-count divergence between our qty and QC's qty. Default 0
+    # (strict equality). Set to 1 or 2 to accommodate SetHoldings rounding
+    # differences where our engine sizes off the last-seen close price while QC
+    # sizes off the expected fill price (NEXT_SESSION_OPEN semantic mismatch).
+    # Document any accepted value in docs/references/reconciliations/<n>.md.
+    qty_atol: int = 0
 
     @classmethod
     def phase3_default(cls) -> Tolerances:
@@ -73,7 +82,10 @@ class QcFill:
 
     @property
     def trading_date(self) -> Date:
-        return datetime.fromtimestamp(self.fill_time_ms / 1000, tz=UTC).date()
+        # NY-local date — extended/overnight fills can have a UTC date one
+        # day ahead of their NY trading date. Reconciler aligns on NY
+        # trading date, so the conversion must happen here.
+        return datetime.fromtimestamp(self.fill_time_ms / 1000, tz=_NY).date()
 
 
 @dataclass(frozen=True)
@@ -89,7 +101,10 @@ class OurFill:
 
     @property
     def trading_date(self) -> Date:
-        return datetime.fromtimestamp(self.fill_time_ms / 1000, tz=UTC).date()
+        # NY-local date — extended/overnight fills can have a UTC date one
+        # day ahead of their NY trading date. Reconciler aligns on NY
+        # trading date, so the conversion must happen here.
+        return datetime.fromtimestamp(self.fill_time_ms / 1000, tz=_NY).date()
 
 
 @dataclass(frozen=True)
@@ -511,7 +526,7 @@ def _classify_divergences(
                     detail=f"qc={qc.side} ours={ours.side}",
                 )
             )
-        if qc.fill_qty != ours.fill_qty:
+        if abs(qc.fill_qty - ours.fill_qty) > tolerances.qty_atol:
             out.append(
                 Divergence(
                     category=DivergenceCategory.QUANTITY_MISMATCH,

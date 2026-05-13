@@ -77,7 +77,7 @@ class RunRequest:
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
-_VALID_FILL_MODES = {"signal_bar_close", "next_bar_open"}
+_VALID_FILL_MODES = {"signal_bar_close", "next_bar_open", "next_session_open"}
 _NY = ZoneInfo("America/New_York")
 
 # Default artifact root: ``PythonDataService/artifacts/`` (sibling of ``app/``).
@@ -116,6 +116,8 @@ def _parse_fill_mode(s: str) -> FillMode:
         return FillMode.SIGNAL_BAR_CLOSE
     if norm == "next_bar_open":
         return FillMode.NEXT_BAR_OPEN
+    if norm == "next_session_open":
+        return FillMode.NEXT_SESSION_OPEN
     raise ValueError(f"unknown fill_mode {s!r} — expected one of {sorted(_VALID_FILL_MODES)}")
 
 
@@ -281,14 +283,10 @@ def run_strategy_spec(
     # HTTP layer accepts.
     fill_mode_norm = _normalize_fill_mode(request.fill_mode)
     if fill_mode_norm not in _VALID_FILL_MODES:
-        raise ValueError(
-            f"unknown fill_mode {request.fill_mode!r} — "
-            f"expected one of {sorted(_VALID_FILL_MODES)}"
-        )
+        raise ValueError(f"unknown fill_mode {request.fill_mode!r} — expected one of {sorted(_VALID_FILL_MODES)}")
     if request.start_date >= request.end_date:
         raise ValueError(
-            f"start_date must be strictly before end_date "
-            f"(got start={request.start_date}, end={request.end_date})"
+            f"start_date must be strictly before end_date (got start={request.start_date}, end={request.end_date})"
         )
     # ``StrategySpec`` validates ``len(symbols) == 1`` at construction (Phase 1
     # boundary), so multi-symbol specs can't reach here. Still guard against
@@ -389,7 +387,7 @@ def run_strategy_spec(
                 end_date=request.end_date,
                 resolution_minutes=resolution,
             )
-            assert_bar_clock_coverage(prediction_set, bar_stream)
+            assert_bar_clock_coverage(prediction_set, bar_stream, refs=spec.predictions)
         except Exception as exc:
             return _failed(
                 ledger,
@@ -413,12 +411,8 @@ def run_strategy_spec(
 
     def _patched_init() -> None:
         orig_init()
-        strategy.set_start_date(
-            request.start_date.year, request.start_date.month, request.start_date.day
-        )
-        strategy.set_end_date(
-            request.end_date.year, request.end_date.month, request.end_date.day
-        )
+        strategy.set_start_date(request.start_date.year, request.start_date.month, request.start_date.day)
+        strategy.set_end_date(request.end_date.year, request.end_date.month, request.end_date.day)
         strategy.set_cash(request.initial_cash)
 
     strategy.initialize = _patched_init  # type: ignore[assignment]

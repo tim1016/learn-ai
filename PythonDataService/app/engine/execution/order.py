@@ -30,10 +30,19 @@ class FillMode(Enum):
     NEXT_BAR_OPEN: Fill at the open of the bar *after* the signal bar.
         Closer to LEAN's actual fill model for equity market orders when no
         tick data is available. Used for realistic backtesting.
+
+    NEXT_SESSION_OPEN: Fill at the open of the first eligible minute bar
+        whose trading date is strictly after the signal bar's trading date
+        (NY-local). Designed for the daily-consolidator-over-minute-stream
+        pattern (e.g. QC precomputed-predictions parity): the strategy
+        triggers at end of day T-1's consolidated bar; the order fills at
+        the first minute of day T. "Eligible" today means any regular-hours
+        bar; a future EligibilityPolicy may add pre/post-market handling.
     """
 
     SIGNAL_BAR_CLOSE = "signal_bar_close"
     NEXT_BAR_OPEN = "next_bar_open"
+    NEXT_SESSION_OPEN = "next_session_open"
 
 
 @dataclass

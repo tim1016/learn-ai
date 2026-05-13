@@ -14,12 +14,14 @@ from app.engine.strategy.spec.schema import (
     StrategySpec,
 )
 from app.research.ml.artifact import (
+    ChunkRef,
+    DeterministicRuleGenerator,
     PredictionSetManifest,
     compute_prediction_set_hash,
     compute_rows_hash,
     write_chunk_rows,
 )
-from app.research.ml.loader import PredictionSet
+from app.research.ml.loader import PredictionLookupError, PredictionSet
 
 
 def _row(ts: int, p: float) -> dict:
@@ -44,13 +46,15 @@ def _write_artifact(
     for trained_through_ms, rows in chunks:
         path = chunk_dir / f"{trained_through_ms}.parquet"
         write_chunk_rows(path, rows, field_names=["prediction"])
-        manifest_chunks.append({
-            "trained_through_ms": trained_through_ms,
-            "start_ms": rows[0]["timestamp_ms"],
-            "end_ms": rows[-1]["timestamp_ms"],
-            "row_count": len(rows),
-            "rows_hash": compute_rows_hash(rows),
-        })
+        manifest_chunks.append(
+            {
+                "trained_through_ms": trained_through_ms,
+                "start_ms": rows[0]["timestamp_ms"],
+                "end_ms": rows[-1]["timestamp_ms"],
+                "row_count": len(rows),
+                "rows_hash": compute_rows_hash(rows),
+            }
+        )
 
     manifest_dict = {
         "schema_version": "1.0",
@@ -123,13 +127,15 @@ def test_load_fails_on_leakage_chunk_start_at_or_before_trained_through(tmp_path
         "field_names": ["prediction"],
         "warmup_policy": "neutral_zero_until_feature_ready",
         "generator": {"kind": "deterministic_rule", "rule_id": "x", "rule_version": "1.0"},
-        "chunks": [{
-            "trained_through_ms": 100,
-            "start_ms": 100,
-            "end_ms": 200,
-            "row_count": 2,
-            "rows_hash": compute_rows_hash(rows),
-        }],
+        "chunks": [
+            {
+                "trained_through_ms": 100,
+                "start_ms": 100,
+                "end_ms": 200,
+                "row_count": 2,
+                "rows_hash": compute_rows_hash(rows),
+            }
+        ],
         "prediction_set_hash": "0" * 64,
     }
     raw["prediction_set_hash"] = compute_prediction_set_hash(raw)
@@ -198,3 +204,61 @@ def test_assert_pairs_with_spec_fails_on_resolution_mismatch(tmp_path: Path) -> 
     pset = PredictionSet.load(set_dir)
     with pytest.raises(ValueError, match="resolution mismatch"):
         pset.assert_pairs_with(_spec_for("SPY", 5))
+
+
+# ----- next_after + PredictionLookupError ----------------------------
+def _pset_with_keys(keys_ms: list[int]) -> PredictionSet:
+    manifest = PredictionSetManifest(
+        schema_version="1.0",
+        prediction_set_id="t",
+        symbol="AAPL",
+        resolution_minutes=1440,
+        field_names=["prediction"],
+        warmup_policy="neutral_zero_until_feature_ready",
+        generator=DeterministicRuleGenerator(kind="deterministic_rule", rule_id="x", rule_version="1.0"),
+        chunks=[
+            ChunkRef(
+                trained_through_ms=min(keys_ms) - 1 if keys_ms else 0,
+                start_ms=min(keys_ms) if keys_ms else 0,
+                end_ms=max(keys_ms) if keys_ms else 0,
+                row_count=len(keys_ms),
+                rows_hash="0" * 64,
+            )
+        ],
+        prediction_set_hash="0" * 64,
+    )
+    index = {ts: {"prediction": float(ts)} for ts in keys_ms}
+    return PredictionSet(manifest=manifest, index=index)
+
+
+def test_next_after_returns_smallest_strictly_greater_key() -> None:
+    """The defining invariant: strict `>`, not `>=`. A query at a key that
+    exists returns the NEXT row, not the queried one."""
+    pset = _pset_with_keys([100, 200, 300, 400])
+    assert pset.next_after(100) == {"prediction": 200.0}
+    assert pset.next_after(150) == {"prediction": 200.0}
+    assert pset.next_after(199) == {"prediction": 200.0}
+    assert pset.next_after(200) == {"prediction": 300.0}  # strict — skips 200 itself
+
+
+def test_next_after_returns_none_when_no_later_key_exists() -> None:
+    pset = _pset_with_keys([100, 200, 300])
+    assert pset.next_after(300) is None
+    assert pset.next_after(999) is None
+
+
+def test_next_after_handles_unsorted_input_keys() -> None:
+    """Index dict insertion order may be unsorted; the sorted-key cache
+    must produce correct ordering regardless of dict iteration order."""
+    pset = _pset_with_keys([300, 100, 400, 200])
+    # Same expectations as the sorted-input case.
+    assert pset.next_after(100) == {"prediction": 200.0}
+    assert pset.next_after(250) == {"prediction": 300.0}
+    assert pset.next_after(400) is None
+
+
+def test_prediction_lookup_error_subclasses_value_error() -> None:
+    """PredictionLookupError must be catchable as ValueError so existing
+    runner exception handling (which catches Exception for failed-status
+    ledger persistence) continues to work without an explicit add."""
+    assert issubclass(PredictionLookupError, ValueError)

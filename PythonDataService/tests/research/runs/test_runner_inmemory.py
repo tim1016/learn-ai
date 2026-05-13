@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.engine.engine import EquitySnapshot
+from app.engine.execution.order import FillMode
 from app.engine.strategy.spec import StrategySpec
 from app.engine.strategy.spec.tests._parity_helpers import (
     FakeDataReader,
@@ -30,7 +31,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
 from app.research.runs import RunRequest, run_strategy_spec
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
-from app.research.runs.runner import _summarize_metrics
+from app.research.runs.runner import _VALID_FILL_MODES, _normalize_fill_mode, _parse_fill_mode, _summarize_metrics
 
 
 def _build_test_spec(
@@ -95,9 +96,7 @@ def _build_test_spec(
             "survival": [],
             "exit": {
                 "logic": "OR",
-                "conditions": [
-                    {"kind": "BarsSinceEntry", "op": ">=", "value": bars_to_hold}
-                ],
+                "conditions": [{"kind": "BarsSinceEntry", "op": ">=", "value": bars_to_hold}],
             },
             "diagnostics": {"snapshot_at_entry": ["fast", "slow", "rsi"]},
         }
@@ -421,3 +420,23 @@ def test_parent_run_id_round_trips(fake_data_factory):
     )
     assert ledger.parent_run_id == "parent-abc"
     assert ledger.parent_spec_hash == "spec-hash-xyz"
+
+
+# ---------------------------------------------------------------------------
+# next_session_open fill mode.
+# ---------------------------------------------------------------------------
+def test_next_session_open_is_a_valid_fill_mode() -> None:
+    assert "next_session_open" in _VALID_FILL_MODES
+
+
+def test_parse_fill_mode_returns_next_session_open_enum_value() -> None:
+    assert _parse_fill_mode("next_session_open") is FillMode.NEXT_SESSION_OPEN
+
+
+def test_normalize_fill_mode_handles_dash_and_case_variants_for_next_session_open() -> None:
+    # All three of these must produce the same canonical form so they
+    # ledger-identify identically (R5 hash-identity invariant).
+    assert _normalize_fill_mode("NEXT-SESSION-OPEN") == "next_session_open"
+    assert _normalize_fill_mode("Next-Session-Open") == "next_session_open"
+    assert _normalize_fill_mode("next_session_open") == "next_session_open"
+    assert _parse_fill_mode("NEXT-SESSION-OPEN") is FillMode.NEXT_SESSION_OPEN
