@@ -193,9 +193,7 @@ class LiveEngine:
         # (replay tests). When set, the engine writes poisoned.flag
         # and raises FatalHaltError on either trigger.
         if fill_window_ms is None:
-            self._fill_window_ms = (
-                self._config.consolidator_period_min * 60 * 1000 + 60_000
-            )
+            self._fill_window_ms = self._config.consolidator_period_min * 60 * 1000 + 60_000
         else:
             self._fill_window_ms = fill_window_ms
         self._halt_enabled = output_dir is not None  # need run_dir to write poisoned.flag
@@ -218,6 +216,7 @@ class LiveEngine:
         bars: AsyncIterable[TradeBar] | None = None,
         *,
         ibkr_bars: AsyncIterable[IbkrMinuteBar] | None = None,
+        shutdown_event: asyncio.Event | None = None,
     ) -> LiveRunResult:
         """Run a strategy against supplied bars or the real IBKR bar stream.
 
@@ -226,6 +225,17 @@ class LiveEngine:
         instances and is wrapped through the bar adapter — this is the
         production path's shape, exposed for tests that drive the
         engine without a live IBKR connection.
+
+        ``shutdown_event`` is the graceful-shutdown hook for SIGINT /
+        SIGTERM (wired in ``run.py`` cmd_start). When set, the bar
+        loop runs ``_shutdown_flatten`` (cancel open broker orders +
+        liquidate positions + submit the liquidations) and exits
+        cleanly through the existing finally block (artifact writers
+        close, event stream stops). Responsiveness: the event is
+        checked once per minute-bar tick, so SIGINT honors at most one
+        minute late under real IBKR. Set to ``None`` (default) to
+        disable — replay and FakeBroker tests that don't need
+        graceful-shutdown semantics keep the prior behavior.
         """
         if bars is not None and ibkr_bars is not None:
             raise ValueError("supply at most one of bars or ibkr_bars")
@@ -289,6 +299,17 @@ class LiveEngine:
 
         try:
             async for minute_bar in source:
+                if shutdown_event is not None and shutdown_event.is_set():
+                    # Graceful shutdown via SIGINT/SIGTERM. The current
+                    # bar is sacrificed — we don't run the strategy
+                    # handler on it. cancel_open_orders + liquidate +
+                    # submit happen via _shutdown_flatten; the existing
+                    # finally block (post-break) flushes writers and
+                    # stops the broker event stream.
+                    ctx.log(f"[SHUTDOWN] {minute_bar.time}: shutdown_event set; flattening and exiting")
+                    flat_acks = await self._shutdown_flatten(portfolio, ctx, bar_time=minute_bar.end_time)
+                    submitted_order_ids.extend(ack.order_id for ack in flat_acks)
+                    break
                 self._raise_if_event_stream_failed()
                 # Reset per-day order counter on session-date boundary.
                 bar_date = minute_bar.time.date()
@@ -302,9 +323,7 @@ class LiveEngine:
                     strategy.on_order_event(event)
                     if writers is not None:
                         self._write_execution(writers, event)
-                        last_written_trade_count = self._flush_new_trades(
-                            writers, strategy, last_written_trade_count
-                        )
+                        last_written_trade_count = self._flush_new_trades(writers, strategy, last_written_trade_count)
 
                 # Drain real-broker events ONCE; halt-check the raw
                 # IbkrOrderEvent list (which may contain foreign fills
@@ -323,8 +342,10 @@ class LiveEngine:
                     )
                     self._extend_seen_executions(seen_executions, raw_real_events)
                     await self._check_halt_outside_mutation(
-                        seen_executions, last_clean_bar_close_ms=last_clean_ms,
-                        portfolio=portfolio, writers=writers,
+                        seen_executions,
+                        last_clean_bar_close_ms=last_clean_ms,
+                        portfolio=portfolio,
+                        writers=writers,
                     )
                 for raw_event in raw_real_events:
                     engine_event = self._convert_ibkr_fill(raw_event)
@@ -335,9 +356,7 @@ class LiveEngine:
                     strategy.on_order_event(engine_event)
                     if writers is not None:
                         self._write_execution(writers, engine_event)
-                        last_written_trade_count = self._flush_new_trades(
-                            writers, strategy, last_written_trade_count
-                        )
+                        last_written_trade_count = self._flush_new_trades(writers, strategy, last_written_trade_count)
 
                 # Force-flat barrier: at most once per session date, when the
                 # bar's wall-clock time crosses ``force_flat_at``, cancel the
@@ -382,18 +401,12 @@ class LiveEngine:
                         # the counter check that protects against runaway
                         # submissions. (CodeRabbit P1 from #186.)
                         orders_submitted_today += len(flat_acks)
-                        if (
-                            self._max_orders_per_day is not None
-                            and orders_submitted_today > self._max_orders_per_day
-                        ):
+                        if self._max_orders_per_day is not None and orders_submitted_today > self._max_orders_per_day:
                             raise MaxOrdersPerDayExceeded(
                                 f"force-flat pushed total to {orders_submitted_today} on "
                                 f"{current_session_date} (cap={self._max_orders_per_day})"
                             )
-                        ctx.log(
-                            f"[FORCE-FLAT] {minute_bar.time}: submitted "
-                            f"{liquidations} liquidation order(s)"
-                        )
+                        ctx.log(f"[FORCE-FLAT] {minute_bar.time}: submitted {liquidations} liquidation order(s)")
                     strategy.on_force_flat()
                     last_force_flat_date = minute_bar.time.date()
 
@@ -406,9 +419,7 @@ class LiveEngine:
                 # we never write the same consolidated bar twice (a
                 # consolidator may be silent on most minute bars).
                 if writers is not None:
-                    last_written_decision_ms = self._maybe_write_decision(
-                        writers, strategy, last_written_decision_ms
-                    )
+                    last_written_decision_ms = self._maybe_write_decision(writers, strategy, last_written_decision_ms)
 
                 # § 7.1 trigger B runs BEFORE _submit_pending_with_meta
                 # so any order overdue from a prior bar gates new
@@ -424,17 +435,16 @@ class LiveEngine:
                 if self._halt_enabled:
                     last_clean_ms = int(minute_bar.end_time.timestamp() * 1000)
                     await self._check_halt_lost_fill(
-                        seen_executions, last_clean_bar_close_ms=last_clean_ms,
-                        portfolio=portfolio, writers=writers,
+                        seen_executions,
+                        last_clean_bar_close_ms=last_clean_ms,
+                        portfolio=portfolio,
+                        writers=writers,
                     )
 
                 submitted = await self._submit_pending_with_meta(portfolio)
                 submitted_order_ids.extend(ack.order_id for ack in submitted)
                 orders_submitted_today += len(submitted)
-                if (
-                    self._max_orders_per_day is not None
-                    and orders_submitted_today > self._max_orders_per_day
-                ):
+                if self._max_orders_per_day is not None and orders_submitted_today > self._max_orders_per_day:
                     raise MaxOrdersPerDayExceeded(
                         f"submitted {orders_submitted_today} orders on {current_session_date} "
                         f"(cap={self._max_orders_per_day})"
@@ -465,15 +475,13 @@ class LiveEngine:
                 self._raise_if_event_stream_failed()
                 final_raw_events = self._drain_raw_real_broker_events()
                 if self._halt_enabled and final_raw_events:
-                    last_clean_ms = (
-                        int(previous_bar.end_time.timestamp() * 1000)
-                        if previous_bar is not None
-                        else 0
-                    )
+                    last_clean_ms = int(previous_bar.end_time.timestamp() * 1000) if previous_bar is not None else 0
                     self._extend_seen_executions(seen_executions, final_raw_events)
                     await self._check_halt_outside_mutation(
-                        seen_executions, last_clean_bar_close_ms=last_clean_ms,
-                        portfolio=portfolio, writers=writers,
+                        seen_executions,
+                        last_clean_bar_close_ms=last_clean_ms,
+                        portfolio=portfolio,
+                        writers=writers,
                     )
                 for raw_event in final_raw_events:
                     engine_event = self._convert_ibkr_fill(raw_event)
@@ -484,9 +492,7 @@ class LiveEngine:
                     strategy.on_order_event(engine_event)
                     if writers is not None:
                         self._write_execution(writers, engine_event)
-                        last_written_trade_count = self._flush_new_trades(
-                            writers, strategy, last_written_trade_count
-                        )
+                        last_written_trade_count = self._flush_new_trades(writers, strategy, last_written_trade_count)
         finally:
             if started_event_stream and isinstance(self._broker, IbkrEventAdapter):
                 await self._broker.stop_event_stream()
@@ -643,6 +649,50 @@ class LiveEngine:
             )
         return acks
 
+    # ──────────────────── Graceful shutdown helper ───────────────────
+
+    async def _shutdown_flatten(
+        self,
+        portfolio: LivePortfolio,
+        ctx: LiveContext,
+        *,
+        bar_time,
+    ) -> list:
+        """Cancel + flatten + submit liquidations for a graceful shutdown.
+
+        Same broker effects as the force-flat barrier (cancel open
+        orders, liquidate every open position, submit) minus the
+        ``strategy.on_force_flat()`` callback — which is specifically
+        for session-close, not external SIGINT. Also unlike the
+        barrier, this does **not** raise ``MaxOrdersPerDayExceeded``
+        on cap overage: the operator chose to exit, and leaving a
+        position open to honor the cap defeats the point.
+
+        Returns the list of submitted order acks so the caller can
+        record their IDs in ``submitted_order_ids``.
+        """
+        portfolio.pending_orders.clear()
+        try:
+            cancelled = await self._broker.cancel_open_orders()
+        except Exception:
+            # Mirror _fatal_halt's tolerance: best-effort cancel, log
+            # and continue so the flatten still runs.
+            logger.exception("broker.cancel_open_orders failed during shutdown_flatten")
+            cancelled = []
+        if cancelled:
+            ctx.log(f"[SHUTDOWN] {bar_time}: cancelled {len(cancelled)} open broker order(s) {cancelled!r}")
+        liquidations = 0
+        for sym, pos in list(portfolio.positions.items()):
+            if pos.quantity == 0:
+                continue
+            portfolio.liquidate(sym, bar_time)
+            liquidations += 1
+        if liquidations == 0:
+            return []
+        flat_acks = await self._submit_pending_with_meta(portfolio)
+        ctx.log(f"[SHUTDOWN] {bar_time}: submitted {liquidations} liquidation order(s)")
+        return flat_acks
+
     # ──────────────────── § 7 fatal-halt helpers ─────────────────────
 
     def _drain_raw_real_broker_events(self) -> list[IbkrOrderEvent]:
@@ -659,9 +709,7 @@ class LiveEngine:
             return []
         return self._broker.drain_broker_events()
 
-    def _extend_seen_executions(
-        self, seen_executions: list[dict], raw_events: list[IbkrOrderEvent]
-    ) -> None:
+    def _extend_seen_executions(self, seen_executions: list[dict], raw_events: list[IbkrOrderEvent]) -> None:
         """Append fill events from a raw drain to the cumulative executions list.
 
         Each entry is the dict shape ``halt.check_outside_mutation``
@@ -765,7 +813,8 @@ class LiveEngine:
             if cancelled:
                 logger.info(
                     "fatal halt cancelled %d Python-owned broker order(s): %r",
-                    len(cancelled), cancelled,
+                    len(cancelled),
+                    cancelled,
                 )
         except TimeoutError:
             # CodeRabbit P1 from #194: an unresponsive broker
@@ -812,9 +861,7 @@ class LiveEngine:
         failure = self._broker.stream_failure
         if failure is None:
             return
-        raise LiveBrokerEventStreamError(
-            "IBKR order-event stream terminated unexpectedly; aborting run"
-        ) from failure
+        raise LiveBrokerEventStreamError("IBKR order-event stream terminated unexpectedly; aborting run") from failure
 
     async def _process_replay_broker_bar(self, bar: TradeBar) -> None:
         if isinstance(self._broker, ReplayBrokerAdapter):

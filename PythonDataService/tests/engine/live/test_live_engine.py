@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -149,7 +150,9 @@ class IdleStrategy(Strategy):
         self.set_cash(Decimal("100000"))
         self.ctx.add_equity("SPY")
         self.ctx.register_consolidator(
-            "SPY", timedelta(minutes=15), lambda _bar: None,
+            "SPY",
+            timedelta(minutes=15),
+            lambda _bar: None,
         )
 
 
@@ -183,3 +186,83 @@ async def test_live_engine_force_flat_does_not_fire_before_threshold() -> None:
     assert broker.orders == []
     assert result.order_events == []
     assert result.open_positions == {"SPY": 50}
+
+
+@pytest.mark.asyncio
+async def test_live_engine_shutdown_event_breaks_loop_and_flattens_open_position() -> None:
+    """SIGINT/SIGTERM graceful shutdown: cancel + flatten + submit, then exit clean.
+
+    Pre-seeds an open SPY position via the broker snapshot, sets
+    shutdown_event before run() starts, and asserts the engine
+    flattens the position on the first bar's top-of-iteration check.
+    The liquidation order is submitted to the broker; the actual fill
+    happens broker-side after run() returns (FakeBroker.advance_bar
+    is not reached because we break before processing the bar), which
+    mirrors real IBKR: the operator's goal is broker-side flat, not
+    portfolio-cache flat.
+    """
+    broker = FakeBroker()
+    broker.position_snapshot = IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=[
+            IbkrPosition(
+                account_id="DU123",
+                con_id=756733,
+                symbol="SPY",
+                sec_type="STK",
+                quantity=100.0,
+                avg_cost=500.0,
+                fetched_at_ms=1,
+            ),
+        ],
+        fetched_at_ms=1,
+    )
+
+    engine = LiveEngine(None, LiveConfig(), broker=broker)
+    strategy = IdleStrategy()
+    bars = [_bar(m, "500", "500") for m in range(30, 35)]
+
+    shutdown_event = asyncio.Event()
+    shutdown_event.set()  # Pre-set: first iteration's check trips immediately.
+
+    result = await engine.run(strategy, iter_bars(bars), shutdown_event=shutdown_event)
+
+    sell_orders = [o for o in broker.orders if o.action == "SELL"]
+    assert len(sell_orders) == 1
+    assert sell_orders[0].symbol == "SPY"
+    assert sell_orders[0].quantity == 100
+    assert len(result.submitted_order_ids) == 1
+
+
+@pytest.mark.asyncio
+async def test_live_engine_shutdown_event_with_no_positions_exits_clean() -> None:
+    """Shutdown with empty portfolio: no flatten orders, engine returns clean."""
+    broker = FakeBroker()  # No position snapshot — portfolio loads empty.
+    engine = LiveEngine(None, LiveConfig(), broker=broker)
+    strategy = IdleStrategy()
+    bars = [_bar(m, "500", "500") for m in range(30, 35)]
+
+    shutdown_event = asyncio.Event()
+    shutdown_event.set()
+
+    result = await engine.run(strategy, iter_bars(bars), shutdown_event=shutdown_event)
+
+    # No positions → nothing to liquidate, no orders submitted.
+    assert broker.orders == []
+    assert result.submitted_order_ids == []
+    assert result.open_positions == {}
+
+
+@pytest.mark.asyncio
+async def test_live_engine_shutdown_event_unset_runs_normally() -> None:
+    """Default shutdown_event=None preserves the prior loop behavior exactly."""
+    broker = FakeBroker()
+    engine = LiveEngine(None, LiveConfig(), broker=broker)
+    bars = [_bar(minute, "500", "500") for minute in range(30, 47)]
+
+    result = await engine.run(OneEntryStrategy(), iter_bars(bars))
+
+    assert result.submitted_order_ids == [1]
+    assert len(result.order_events) == 1
+    assert result.open_positions == {"SPY": 200}

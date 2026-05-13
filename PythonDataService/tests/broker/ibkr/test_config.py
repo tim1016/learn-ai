@@ -3,13 +3,24 @@ port-vs-mode safety layer."""
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from pydantic import ValidationError
 
 from app.broker.ibkr.config import IbkrSettings
 
 
-def test_defaults_are_paper_on_paper_port() -> None:
+def test_defaults_are_paper_on_paper_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Strip every IBKR_-prefixed env var first — pydantic-settings reads
+    # os.environ even when _env_file=None, and the polygon-data-service
+    # container's process env carries values from the repo-root .env
+    # (e.g., IBKR_CLIENT_ID=42). Without this scrub, an operator-set
+    # client_id silently invalidates the "default is 1" assertion.
+    for key in list(os.environ):
+        if key.startswith("IBKR_"):
+            monkeypatch.delenv(key, raising=False)
+
     s = IbkrSettings(_env_file=None)
     assert s.mode == "paper"
     assert s.port == 4002

@@ -34,10 +34,17 @@ def settings_live() -> IbkrSettings:
 
 def _patched_ib_class() -> tuple:
     """Patch ``ib_async.IB`` with a MagicMock that returns a fresh
-    AsyncMock-backed ``IB()`` per call."""
+    AsyncMock-backed ``IB()`` per call.
+
+    NOTE: ``IB.disconnect`` is synchronous in ib_async — pre-mock it as a
+    plain ``MagicMock`` (not ``AsyncMock``) so this fixture matches the
+    real API. A previous version pre-mocked ``disconnectAsync`` as
+    ``AsyncMock``, which silently auto-created the wrong attribute and
+    masked the 2026-05-13 disconnect bug.
+    """
     fake_ib = MagicMock()
     fake_ib.connectAsync = AsyncMock(return_value=None)
-    fake_ib.disconnectAsync = AsyncMock(return_value=None)
+    fake_ib.disconnect = MagicMock(return_value=None)
     fake_ib.isConnected = MagicMock(return_value=True)
     fake_ib.client = MagicMock()
     fake_ib.client.serverVersion = MagicMock(return_value=178)
@@ -158,7 +165,7 @@ async def test_connect_aborts_when_paper_mode_gets_live_account(
         with pytest.raises(ConnectionRefusedDueToSentinelError):
             await client.connect()
 
-    fake_ib.disconnectAsync.assert_awaited()
+    fake_ib.disconnect.assert_called()
     assert client.connected_account is None
 
 
@@ -193,9 +200,7 @@ async def test_connect_retries_then_fails(settings_paper: IbkrSettings) -> None:
     fake_ib, fake_class = _patched_ib_class()
     fake_ib.connectAsync.side_effect = OSError("Gateway unreachable")
 
-    settings_three = IbkrSettings(
-        mode="paper", port=4002, connect_attempts=3, _env_file=None
-    )
+    settings_three = IbkrSettings(mode="paper", port=4002, connect_attempts=3, _env_file=None)
 
     with patch("ib_async.IB", fake_class):
         client = IbkrClient(settings_three)
@@ -215,4 +220,29 @@ async def test_disconnect_is_idempotent(settings_paper: IbkrSettings) -> None:
         await client.disconnect()
         await client.disconnect()
 
-    fake_ib.disconnectAsync.assert_not_awaited()
+    fake_ib.disconnect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_calls_sync_ib_disconnect_when_connected(
+    settings_paper: IbkrSettings,
+) -> None:
+    # Surfaced 2026-05-13 by the paper-Gateway smoke run: ib_async.IB
+    # exposes a synchronous .disconnect(), not .disconnectAsync(). The
+    # other tests in this file use an unspec'd MagicMock that silently
+    # auto-creates .disconnectAsync, hiding the mismatch. spec=IB
+    # restricts attribute access to real IB methods.
+    import ib_async
+
+    fake_ib = MagicMock(spec=ib_async.IB)
+    fake_ib.isConnected.return_value = True
+    fake_ib.disconnect.return_value = "Disconnected"
+    fake_class = MagicMock(return_value=fake_ib)
+
+    with patch("ib_async.IB", fake_class):
+        client = IbkrClient(settings_paper)
+        client._connected_account = "DU1234567"
+        await client.disconnect()
+
+    fake_ib.disconnect.assert_called_once()
+    assert client.connected_account is None

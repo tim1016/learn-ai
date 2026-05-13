@@ -13,7 +13,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/broker/ibkr/*` or `PythonDataService/app/engine/live/*`. Same-PR rule: if you touch those files, update the matching section here and bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-05-04 (post PR #76 — Phase 1-7 live runtime; PR #77 — Diagnose button; PR #78 in flight — Phase 10 prereqs: `open_` fallback, force-flat barrier, exit-side collapse test).
+> **Last reviewed:** 2026-05-12 (post PR #76 — Phase 1-7 live runtime; PR #77 — Diagnose button; PR #78 — Phase 10 prereqs; `feat/ibkr-paper-runner-hardening` — Phase 8 hardening: `shutdown_event` graceful exit on SIGINT/SIGTERM, rotating file logger, unhandled-exception recovery flatten, `IbkrClient.connect()` wired in `cmd_start`).
 
 ---
 
@@ -222,6 +222,22 @@ The gate skips on CI when `lean-cache/` is absent (gitignored runtime data — p
 
 `LiveEngine` force-flat submits a market liquidation that fills on the next print after submission (under `FakeBroker` that's the next bar's open). `BacktestEngine` synthesizes a fill at the current bar's close, bypassing the fill model. The price residual is what the Phase 9 reconciliation tooling (when shipped) will measure and classify. Documented in `LiveEngine.run` docstring.
 
+### Graceful shutdown (SIGINT/SIGTERM, 2026-05-12)
+
+`LiveEngine.run()` accepts an optional `shutdown_event: asyncio.Event`. `run.py`'s `cmd_start` creates the event, registers SIGINT and SIGTERM handlers on the asyncio loop via `loop.add_signal_handler` that set it, and passes it through to `engine.run`. When the event fires, the bar loop's top-of-iteration check breaks; `_shutdown_flatten` cancels open broker orders, liquidates open positions, submits the liquidations, and the existing `finally` block flushes artifact writers + stops the broker event stream. Responsiveness: SIGINT honors at most one minute late under real IBKR (the event is checked once per minute-bar tick). Linux/container only — `add_signal_handler` raises `NotImplementedError` on Windows's default event loop and the helper falls through with a warning; Windows operators get the un-graceful `KeyboardInterrupt` path.
+
+### Unhandled-exception recovery (2026-05-12)
+
+`cmd_start` wraps `engine.run` in an exception handler that, on an unhandled `Exception`, attempts a best-effort flatten via `_recovery_flatten`: re-fetches positions from the broker, cancels open orders (failures logged, not blocking), and submits a market liquidation per open position. Failure to recover-flatten logs the cause and tells the operator to run `emergency-flatten --confirm` manually. Exit code 3 either way.
+
+### `IbkrClient` lifecycle in `cmd_start`
+
+`cmd_start` now calls `await client.connect()` before driving the engine and `await client.disconnect()` in the surrounding `finally`. This closes a latent bug — the prior CLI created an `IbkrClient` but never connected it, so `_validate_paper_client` would raise "requires a DU paper account, got None" on the first run against a real Gateway. The injected-broker test path (`args.broker` set by tests) bypasses this — `FakeBroker` is always "connected."
+
+### File logging with rotation
+
+`app/engine/live/run_logging.py:configure_run_logging` attaches a `RotatingFileHandler` at `<run-dir>/live.log` (10 MB × 5 backups) plus a console handler to the root logger. Format inlines a `[STEP X]` prefix when callers pass `extra={"step": "N"}`; absent step attributes are defaulted by a custom filter so existing log calls don't break. Invoked in `cmd_start` after the ledger loads.
+
 ---
 
 ## 7. Frontend pages (`/broker/*`)
@@ -317,14 +333,14 @@ Tracked deliberately. None of these are accidental gaps; each is documented and 
 | Live (real-money) trading | NOT SUPPORTED | Phase 4 in `architecture/ibkr-integration-tdd.md` §7. Will require a separate `run_live.py` runner with its own config profile, not a flag on the paper runner. |
 | Multi-symbol live | NOT SUPPORTED | `LiveEngine` raises `NotImplementedError` on `len(ctx.symbols) != 1`. Mirrors `BacktestEngine` v1 scope. |
 | Options paper trading via `LiveEngine` | NOT SUPPORTED | `LiveEngine` is equity-only in v1. Options option-chain *streaming* is supported; placing options orders via the runtime is not. |
-| Phase 8 — paper config + CLI + signal handling + log rotation | STUB | `app/engine/live/run.py` parses `--help` only. |
+| Phase 8 — paper config + CLI + signal handling + log rotation | **SHIPPED** (2026-05-12) | `run.py` has four subcommands (`init-ledger`, `pre-flight`, `start`, `emergency-flatten`); `start` wires `shutdown_event`, signal handlers, rotating file logger, unhandled-exception recovery flatten, and `IbkrClient.connect()/disconnect()`. Deferred to follow-ups: equity-curve parquet writer, YAML config input, `LiveConfig` → `BaseSettings` conversion. |
 | Phase 9 — paper-vs-backtest reconciliation tooling | STUB | `app/engine/live/reconcile.py` is empty; will diff a paper run vs a same-window backtest into `docs/references/reconciliations/`. |
 | Phase 10 — actual paper week + reconciliation report | NOT STARTED | Operational; gated on the items below. |
 | `IbkrMinuteBar` → `TradeBar` conversion in `stream_minute_bars` consumer | TRACKED | Real-IBKR path in `LiveEngine.run()` calls `stream_minute_bars` which yields `IbkrMinuteBar`, not `TradeBar`. The replay path supplies `TradeBar` directly so this is unexercised today. PR #76 review C1 — Phase 10 prereq. |
 | `client_order_id` per-session uniqueness | TRACKED | Counter resets per `LivePortfolio`; `place_paper_order` idempotency cache is process-scoped. PR #76 review C2 — Phase 10 prereq. |
 | `IbkrMinuteBar` `model_validator` for `end_ms == start_ms + 60_000` and `volume >= 0` | TRACKED | Defensive; unenforced today. PR #76 review R5. |
 | `LiveEngine.run()` guard for `bars=None` and `client=None` | TRACKED | Currently passes `None` to `stream_minute_bars` if both are absent; should fail fast. PR #76 review R7. |
-| `[STEP X]` structured logging in `LiveEngine` | TRACKED | Logger calls exist; lack the prefixes that make traces scannable. Plan §7 critical item #7. |
+| `[STEP X]` structured logging in `LiveEngine` | PARTIAL | `run_logging.configure_run_logging` supports `[STEP X]` via `extra={"step": ...}`; `cmd_start` and the new shutdown/recovery paths use it. Pre-existing log calls inside `LiveEngine.run` still need migration; tracked as a sweep. |
 | Single-account FA support | NOT SUPPORTED | `client.py:201-208` refuses to connect on >1 managed account. |
 | 2FA mid-session | OUT OF SCOPE | TDD §6 risk register. Operator handles via Gateway settings. |
 | Order ID persistence across restarts | NOT SHIPPED | `.live_state.json` is in the plan §10 hygiene tasks but unimplemented. Postgres-based persistence is a separate ticket because there is no migrations workflow yet. |
@@ -341,7 +357,7 @@ Run these in order before turning the runner loose:
 4. **`GET /api/broker/health`** returns `connected: true, is_paper: true` and the account ID begins with `DU`.
 5. **`GET /api/broker/diagnose`** returns `overall_status: pass` (or click the **Diagnose** button on `/broker`).
 6. **Project-scope tests** green: `pytest PythonDataService/tests/ -k "not slow"`. 1797+ pass; the replay parity test must skip with the `lean-cache` message on a clean CI runner or pass locally where the cache is materialized.
-7. **Phase 8 / Phase 9 prereqs** addressed (currently stubs). Until then, paper runs are manual — no CLI runner, no automated reconciliation.
+7. **Phase 8 CLI** is shipped — operator path is `python -m app.engine.live.run init-ledger ...` then `python -m app.engine.live.run start --run-dir <dir>`. SIGINT/SIGTERM trigger a graceful cancel + flatten + disconnect via the engine's `shutdown_event`. **Phase 9 reconciliation** is still a stub — paper-vs-backtest comparison is manual until `app/engine/live/reconcile.py` is implemented.
 
 If any of these fails, fix it before running. The diagnostic endpoint will tell you which layer is the blocker.
 
@@ -366,3 +382,4 @@ If any of these fails, fix it before running. The diagnostic endpoint will tell 
 | Date | Reviewer | Notes |
 |---|---|---|
 | 2026-05-04 | Claude Opus 4.7 | Initial authority doc post PR #76, #77, #78. Captures Phase 1-7 live runtime, Diagnose endpoint + button, Phase 10 prereqs (`open_` fallback, force-flat, exit-side collapse). |
+| 2026-05-12 | Claude Opus 4.7 | Phase 8 hardening landed on `feat/ibkr-paper-runner-hardening`: `LiveEngine.shutdown_event` graceful exit, SIGINT/SIGTERM handlers in `cmd_start`, rotating file logger (`run_logging.py`, 10MB × 5 backups), unhandled-exception recovery flatten, `IbkrClient.connect()/disconnect()` wired. Phase 8 row in § 11 flipped from STUB → SHIPPED. Latent CLI bug (CLI never connected the client) fixed in the same commit. Deferred to follow-ups: equity-curve parquet writer, YAML config input, `LiveConfig` → `BaseSettings`. |
