@@ -73,6 +73,40 @@ async def test_recovery_flatten_no_positions_returns_zero() -> None:
 
 
 @pytest.mark.asyncio
+async def test_recovery_flatten_readonly_does_not_place_or_cancel_orders() -> None:
+    """In readonly mode the recovery path must NOT touch the broker.
+
+    Regression: a paper-week dry-run with ``--readonly`` crashed
+    mid-session (duplicate IBKR 5-second bar timestamp) and
+    ``_recovery_flatten`` placed a real SELL MKT against the paper
+    account, breaking the documented ``IBKR_READONLY=true`` contract
+    on ``IbkrSettings.readonly`` ("every call to place_paper_order
+    raises OrderRefusedError before any contract is built"). On a
+    flag-flip to live this would have closed a real position on an
+    arbitrary engine crash.
+
+    Readonly must enumerate positions for the operator log and return
+    the detected count, but must not call ``place_order`` or
+    ``cancel_open_orders``.
+    """
+
+    class RaisingCancelAndPlaceBroker(FakeBroker):
+        async def cancel_open_orders(self) -> list[int]:
+            raise AssertionError("cancel_open_orders must not be called in readonly mode")
+
+        async def place_order(self, spec):
+            raise AssertionError("place_order must not be called in readonly mode")
+
+    broker = RaisingCancelAndPlaceBroker()
+    _seed_position(broker, "SPY", 100.0)
+
+    detected = await _recovery_flatten(broker, readonly=True)
+
+    assert detected == 1
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
 async def test_recovery_flatten_cancel_failure_does_not_block_flatten() -> None:
     """A broker failure on cancel_open_orders must not skip the flatten path.
 

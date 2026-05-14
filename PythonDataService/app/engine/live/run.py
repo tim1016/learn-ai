@@ -292,7 +292,7 @@ def _resolve_recovery_broker(broker, client):
     return broker
 
 
-async def _recovery_flatten(broker) -> int:
+async def _recovery_flatten(broker, *, readonly: bool = False) -> int:
     """Best-effort cancel + flatten for the cmd_start unhandled-exception path.
 
     Different from ``cmd_emergency_flatten``: no ``--confirm`` gate,
@@ -303,15 +303,44 @@ async def _recovery_flatten(broker) -> int:
     portfolio is no longer reachable, so we re-fetch positions from
     the broker.
 
-    Returns the number of liquidation orders submitted. Per-position
-    place_order failures are logged but don't abort the loop — every
-    remaining position still gets an attempt.
+    When ``readonly`` is True, the function enumerates positions and
+    logs what *would* have been liquidated but does NOT call
+    ``cancel_open_orders`` and does NOT call ``place_order``. This
+    preserves the ``IBKR_READONLY=true`` contract documented on
+    ``IbkrSettings.readonly`` (``config.py``: "when True, every call
+    to ``place_paper_order`` raises ``OrderRefusedError`` before any
+    contract is built") on the unhandled-exception path. Operators
+    can still run ``emergency-flatten --confirm`` afterwards if the
+    detected positions need cleanup.
+
+    Returns the number of liquidation orders submitted, or — in
+    readonly mode — the number of non-zero positions detected.
+    Per-position place_order failures are logged but don't abort the
+    loop — every remaining position still gets an attempt.
     """
     from datetime import UTC, datetime
 
     from app.broker.ibkr.models import IbkrOrderSpec
 
     snapshot = await broker.fetch_positions()
+
+    if readonly:
+        detected = 0
+        for pos in snapshot.positions:
+            qty_signed = float(pos.quantity)
+            if qty_signed == 0:
+                continue
+            action = "SELL" if qty_signed > 0 else "BUY"
+            logger.info(
+                "Recovery flatten (readonly): would have submitted %s %s qty=%s",
+                action,
+                pos.symbol,
+                abs(qty_signed),
+                extra={"step": "8"},
+            )
+            detected += 1
+        return detected
+
     try:
         cancelled = await broker.cancel_open_orders()
     except Exception:
@@ -701,13 +730,22 @@ def cmd_start(args: argparse.Namespace) -> int:
                 )
                 broker_for_flatten = _resolve_recovery_broker(broker, client)
                 if broker_for_flatten is not None:
+                    is_readonly = bool(client is not None and getattr(client.settings, "readonly", False))
                     try:
-                        liquidated = await _recovery_flatten(broker_for_flatten)
-                        print(
-                            f"[START] recovery flatten submitted {liquidated} order(s); "
-                            f"verify with /api/broker/positions and /api/broker/orders/open",
-                            file=sys.stderr,
-                        )
+                        n = await _recovery_flatten(broker_for_flatten, readonly=is_readonly)
+                        if is_readonly:
+                            print(
+                                f"[START] readonly: recovery flatten skipped — "
+                                f"{n} position(s) detected; run "
+                                f"'emergency-flatten --confirm' if cleanup needed",
+                                file=sys.stderr,
+                            )
+                        else:
+                            print(
+                                f"[START] recovery flatten submitted {n} order(s); "
+                                f"verify with /api/broker/positions and /api/broker/orders/open",
+                                file=sys.stderr,
+                            )
                     except Exception:
                         logger.exception(
                             "Recovery flatten itself failed",
