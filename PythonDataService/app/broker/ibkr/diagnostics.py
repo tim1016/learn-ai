@@ -30,7 +30,7 @@ from app.broker.ibkr.client import (
     get_client,
 )
 from app.broker.ibkr.config import LIVE_PORTS, PAPER_PORTS, get_settings
-from app.broker.ibkr.models import DiagnosticCheck, DiagnosticReport
+from app.broker.ibkr.models import DiagnosticCheck, DiagnosticReportActive
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +81,7 @@ def _check_settings_port() -> DiagnosticCheck:
         label="IBKR_PORT",
         status="fail",
         detail=f"port {s.port} disagrees with mode={s.mode!r}",
-        fix=(
-            "Set IBKR_PORT=4002 for paper Gateway / 7497 for paper TWS, "
-            "or IBKR_PORT=4001 / 7496 for live."
-        ),
+        fix=("Set IBKR_PORT=4002 for paper Gateway / 7497 for paper TWS, or IBKR_PORT=4001 / 7496 for live."),
     )
 
 
@@ -363,7 +360,7 @@ def _aggregate_status(checks: list[DiagnosticCheck]) -> str:
     return "pass"
 
 
-async def run_diagnostics() -> DiagnosticReport:
+async def run_diagnostics() -> DiagnosticReportActive:
     """Run every check and return a :class:`DiagnosticReport`.
 
     Each check captures its own exception so the report always renders;
@@ -385,7 +382,7 @@ async def run_diagnostics() -> DiagnosticReport:
     checks.append(_check_account_sentinel())
     checks.append(await _check_account_fetch())
 
-    return DiagnosticReport(
+    return DiagnosticReportActive(
         overall_status=_aggregate_status(checks),  # type: ignore[arg-type]
         checks=checks,
         fetched_at_ms=_now_ms(),

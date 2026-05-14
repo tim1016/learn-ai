@@ -60,32 +60,47 @@ async def lifespan(app: FastAPI):
     service still boots. The ONLY failure that aborts startup is the
     paper-vs-live sentinel mismatch — that's a safety violation and
     must not be silently absorbed.
+
+    When ``IBKR_BROKER_ENABLED=false`` the client is never constructed;
+    the service boots without any IBKR connection and broker endpoints
+    return 503 (or a disabled-sentinel response for /health and /diagnose).
     """
     logger.info(f"Starting Polygon Data Service on {settings.HOST}:{settings.PORT}")
     logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
 
-    ibkr_client = IbkrClient()
-    try:
-        await ibkr_client.connect()
-        set_client(ibkr_client)
-        logger.info("IBKR client connected; broker endpoints available.")
-    except ConnectionRefusedDueToSentinelError:
-        # Hard fail — never proceed past a paper/live mismatch.
-        logger.exception("IBKR sentinel mismatch — aborting startup.")
-        raise
-    except (BrokerError, OSError) as exc:
-        # Soft fail — Gateway is probably not running locally. Broker
-        # endpoints will return 503 until a future reconnect.
-        logger.warning(
-            "IBKR client could not connect (%s). Broker endpoints will return 503.",
-            exc,
-        )
+    from app.broker.ibkr.config import get_settings as get_ibkr_settings
+
+    ibkr_settings = get_ibkr_settings()
+    ibkr_client: IbkrClient | None = None
+
+    if ibkr_settings.broker_enabled:
+        ibkr_client = IbkrClient()
+        try:
+            await ibkr_client.connect()
+            set_client(ibkr_client)
+            logger.info("IBKR client connected; broker endpoints available.")
+        except ConnectionRefusedDueToSentinelError:
+            # Hard fail — never proceed past a paper/live mismatch.
+            logger.exception("IBKR sentinel mismatch — aborting startup.")
+            raise
+        except (BrokerError, OSError) as exc:
+            # Soft fail — Gateway is probably not running locally. Broker
+            # endpoints will return 503 until a future reconnect.
+            logger.warning(
+                "IBKR client could not connect (%s). Broker endpoints will return 503.",
+                exc,
+            )
+            set_client(None)
+    else:
         set_client(None)
+        logger.info(
+            "IBKR broker disabled (IBKR_BROKER_ENABLED=false). Broker endpoints disabled. Live-runs router available."
+        )
 
     try:
         yield
     finally:
-        if ibkr_client.is_connected():
+        if ibkr_client is not None and ibkr_client.is_connected():
             await ibkr_client.disconnect()
         set_client(None)
         logger.info("Shutting down Polygon Data Service")

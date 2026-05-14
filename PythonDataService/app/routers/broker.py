@@ -40,6 +40,7 @@ from app.broker.ibkr.diagnostics import run_diagnostics
 from app.broker.ibkr.market_data import stream_option_chain
 from app.broker.ibkr.models import (
     DiagnosticReport,
+    DiagnosticReportDisabled,
     IbkrAccountSummary,
     IbkrChainSnapshot,
     IbkrConnectionHealth,
@@ -80,6 +81,25 @@ logger = logging.getLogger(__name__)
 @router.get("/health", response_model=IbkrConnectionHealth)
 async def broker_health() -> IbkrConnectionHealth:
     """Connection diagnostic. Never raises on disconnect."""
+    if _is_broker_disabled():
+        from datetime import UTC, datetime
+
+        from app.broker.ibkr.config import get_settings
+
+        s = get_settings()
+        return IbkrConnectionHealth(
+            mode=s.mode,
+            host=s.host,
+            port=s.port,
+            client_id=s.client_id,
+            connected=False,
+            disabled=True,
+            reason="IBKR_BROKER_ENABLED=false — host-venv runner owns the IBKR session",
+            account_id=None,
+            is_paper=None,
+            server_version=None,
+            fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+        )
     try:
         client = get_client()
     except NotConnectedError:
@@ -114,7 +134,18 @@ async def broker_diagnose() -> DiagnosticReport:
     the account sentinel; returns one row per check with a remediation
     hint when something is not passing. Read-only — does not call
     ``connect()`` and does not place orders.
+
+    When the broker is disabled (``IBKR_BROKER_ENABLED=false``) returns a
+    :class:`DiagnosticReportDisabled` sentinel immediately without probing.
     """
+    if _is_broker_disabled():
+        from datetime import UTC, datetime
+
+        return DiagnosticReportDisabled(
+            disabled=True,
+            reason="IBKR_BROKER_ENABLED=false — host-venv runner owns the IBKR session",
+            since_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+        )
     return await run_diagnostics()
 
 
@@ -250,9 +281,7 @@ async def option_chain_stream(
 
     async def event_source():
         try:
-            async for snapshot in stream_option_chain(
-                client, sym, expiry_ms, band, debounce_seconds=debounce_seconds
-            ):
+            async for snapshot in stream_option_chain(client, sym, expiry_ms, band, debounce_seconds=debounce_seconds):
                 await writer.write(snapshot)
                 payload = _snapshot_to_json(snapshot)
                 yield f"event: chain\ndata: {payload}\n\n"
@@ -294,9 +323,7 @@ async def pnl_account_stream(
     """Account-level P&L SSE stream."""
     client = _require_connected_or_503()
     debounce_seconds = debounce_ms / 1000.0
-    pnl_writer = make_pnl_writer(
-        persist=client.settings.persist_pnl, persist_dir=client.settings.persist_dir
-    )
+    pnl_writer = make_pnl_writer(persist=client.settings.persist_pnl, persist_dir=client.settings.persist_dir)
 
     async def event_source():
         try:
@@ -334,21 +361,15 @@ async def pnl_positions_stream(
     500 instead of the documented 422.
     """
     if not con_ids:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "con_ids must be non-empty."
-        )
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "con_ids must be non-empty.")
 
     client = _require_connected_or_503()
     debounce_seconds = debounce_ms / 1000.0
-    pnl_writer = make_pnl_writer(
-        persist=client.settings.persist_pnl, persist_dir=client.settings.persist_dir
-    )
+    pnl_writer = make_pnl_writer(persist=client.settings.persist_pnl, persist_dir=client.settings.persist_dir)
 
     async def event_source():
         try:
-            async for tick in stream_position_pnl(
-                client, con_ids, debounce_seconds=debounce_seconds
-            ):
+            async for tick in stream_position_pnl(client, con_ids, debounce_seconds=debounce_seconds):
                 await pnl_writer.write(tick)
                 yield _pnl_tick_to_sse(tick)
         except asyncio.CancelledError:
@@ -446,7 +467,18 @@ async def order_events_stream_endpoint(
 # ── helpers ────────────────────────────────────────────────────────────
 
 
+def _is_broker_disabled() -> bool:
+    from app.broker.ibkr.config import get_settings
+
+    return not get_settings().broker_enabled
+
+
 def _require_connected_or_503():
+    if _is_broker_disabled():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "IBKR broker is disabled (IBKR_BROKER_ENABLED=false). Use /api/live-runs for paper-run status.",
+        )
     try:
         client = get_client()
     except NotConnectedError as exc:

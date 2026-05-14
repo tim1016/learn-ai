@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import math
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -327,10 +327,7 @@ class IbkrOrderSpec(BaseModel):
 
     confirm_paper: bool = Field(
         ...,
-        description=(
-            "Required True. Defense-in-depth on top of IBKR_MODE and the "
-            "DU account-id sentinel."
-        ),
+        description=("Required True. Defense-in-depth on top of IBKR_MODE and the DU account-id sentinel."),
     )
 
     client_order_id: str | None = Field(
@@ -490,20 +487,31 @@ class DiagnosticCheck(BaseModel):
     fix: str | None = None
 
 
-class DiagnosticReport(BaseModel):
-    """Aggregate broker self-test report served by ``GET /api/broker/diagnose``.
-
-    ``overall_status`` is the worst severity across ``checks`` (``fail`` >
-    ``warn`` > ``pass``; ``skip`` does not affect aggregate). The page
-    surface that renders this report should use ``overall_status`` to
-    pick a banner colour and ``checks`` to render the per-step list.
-    """
+class DiagnosticReportActive(BaseModel):
+    """Active broker diagnostic report (broker connection is enabled)."""
 
     model_config = ConfigDict(frozen=True)
 
+    disabled: Literal[False] = False
     overall_status: Literal["pass", "warn", "fail"]
     checks: list[DiagnosticCheck]
     fetched_at_ms: int
+
+
+class DiagnosticReportDisabled(BaseModel):
+    """Broker disabled diagnostic report (IBKR_BROKER_ENABLED=false)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    disabled: Literal[True]
+    reason: str
+    since_ms: int
+
+
+DiagnosticReport = Annotated[
+    DiagnosticReportActive | DiagnosticReportDisabled,
+    Field(discriminator="disabled"),
+]
 
 
 class IbkrConnectionHealth(BaseModel):
@@ -521,6 +529,8 @@ class IbkrConnectionHealth(BaseModel):
     port: int
     client_id: int
     connected: bool
+    disabled: bool = False
+    reason: str | None = None
     account_id: str | None = None
     is_paper: bool | None = None
     server_version: int | None = None
@@ -530,6 +540,8 @@ class IbkrConnectionHealth(BaseModel):
 __all__ = [
     "DiagnosticCheck",
     "DiagnosticReport",
+    "DiagnosticReportActive",
+    "DiagnosticReportDisabled",
     "DiagnosticStatus",
     "IbkrAccountSummary",
     "IbkrChainSnapshot",
