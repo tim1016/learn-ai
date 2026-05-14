@@ -183,7 +183,7 @@ def _parquet_row_count(path: Path) -> int:
     """O(1) row count from Parquet footer metadata."""
     try:
         return pq.ParquetFile(path).metadata.num_rows
-    except Exception:
+    except (FileNotFoundError, OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid):
         return 0
 
 
@@ -236,7 +236,7 @@ def _read_parquet_tail(path: Path, n: int) -> list[dict]:
             return []
         table = pq.read_table(path).slice(max(0, nrows - n), n)
         return table.to_pylist()
-    except Exception:
+    except (FileNotFoundError, OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid):
         return []
 
 
