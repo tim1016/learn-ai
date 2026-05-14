@@ -1,0 +1,223 @@
+<app-page-header
+  title="Paper Run Observer"
+  subtitle="Read-only console for the host-venv paper-trading session. Polls /api/live-runs every 5 seconds."
+>
+  <button slot="actions" type="button" class="refresh-btn" (click)="reloadRunList()" aria-label="Refresh run list">
+    <i class="pi pi-refresh" aria-hidden="true"></i>
+    <span>Refresh</span>
+  </button>
+</app-page-header>
+
+<!-- ── Run picker ── -->
+<section class="run-picker">
+  <div class="filter-chips" role="group" aria-label="Filter runs">
+    @for (chip of filterChips; track chip.key) {
+      <button
+        type="button"
+        class="chip"
+        [class.active]="activeFilter() === chip.key"
+        (click)="setFilter(chip.key)"
+        [attr.aria-pressed]="activeFilter() === chip.key"
+      >{{ chip.label }}</button>
+    }
+  </div>
+  @let runs = filteredRuns();
+  @if (runList.isLoading()) {
+    <p class="muted">Loading runs…</p>
+  } @else if (runList.error()) {
+    <app-section-error [error]="runList.error()" contextWhat="Could not load run list." (retry)="reloadRunList()" />
+  } @else if (runs.length === 0) {
+    <p class="muted">No runs match this filter.</p>
+  } @else {
+    <select class="run-select" [value]="selectedRunId()" (change)="selectRun(getSelectValue($event))" aria-label="Select run">
+      @for (r of runs; track r.run_id) {
+        <option [value]="r.run_id">
+          {{ r.run_id.slice(0, 8) }} — {{ r.state }} — {{ fmtTimestampNy(r.created_at_ms) }}
+        </option>
+      }
+    </select>
+  }
+</section>
+
+@let s = status.value();
+@let st = s?.state ?? null;
+
+<!-- ── Top strip (sticky) ── -->
+<div class="top-strip" [class]="topStripDynamicClasses()">
+  @if (s === null && status.isLoading()) {
+    <span class="muted">Loading…</span>
+  } @else if (s === null) {
+    <span class="muted">Select a run above.</span>
+  } @else {
+    <span class="mode-pill">PAPER</span>
+    <span class="account mono">{{ s.account_id }}</span>
+    <span class="state-badge" [class]="'badge-' + st">{{ st }}</span>
+    <span class="last-bar" [class.stale]="lastBarAgeStale()">
+      Last &#91;BAR&#93;: {{ lastBarAgeLabel() }}
+    </span>
+    <span class="decisions">Decisions: {{ fmtInteger(s.decisions.row_count) }}</span>
+    @if (actionRequired()) {
+      <span class="action-dot" aria-label="Operator action required" title="Operator action required">●</span>
+    }
+    <button type="button" class="run-id-btn mono" (click)="copyRunId()" [title]="'Copy run ID: ' + (selectedRunId() ?? '')">
+      {{ runIdShort() }} <i class="pi pi-copy" aria-hidden="true"></i>
+    </button>
+  }
+</div>
+
+@if (status.error()) {
+  <app-section-error [error]="status.error()" contextWhat="Could not load run status." (retry)="status.reload()" />
+}
+
+<!-- ── Panels (only shown when a run is selected and loaded) ── -->
+@if (s !== null) {
+  <div class="panels">
+
+    <!-- 1. Heartbeat panel -->
+    <section class="card" aria-labelledby="heartbeat-heading">
+      <header class="card-header">
+        <h2 id="heartbeat-heading">Heartbeat</h2>
+        @if (s.heartbeat_parse_status === 'degraded') {
+          <span class="status-pill warn">DEGRADED</span>
+        }
+      </header>
+      @let tail = logTail.value();
+      @if (logTail.isLoading() && !tail) {
+        <p class="muted">Loading log tail…</p>
+      } @else if (tail && tail.length > 0) {
+        <ul class="log-lines" aria-label="Recent log lines">
+          @for (line of tail.slice(-10); track line.raw_text) {
+            <li class="log-line" [class.bar-event]="line.event_type === 'bar'">
+              <span class="log-ts mono">{{ line.ts_ms !== null ? fmtTimestampNy(line.ts_ms) : '—' }}</span>
+              <span class="log-text mono">{{ line.raw_text }}</span>
+            </li>
+          }
+        </ul>
+      } @else {
+        <p class="muted">No log lines yet.</p>
+      }
+    </section>
+
+    <!-- 2. Strategy state panel -->
+    <section class="card" aria-labelledby="strategy-heading">
+      <header class="card-header">
+        <h2 id="strategy-heading">Strategy State</h2>
+      </header>
+      @if (s.state === 'warming_up' || (s.state !== 'idle' && s.decisions.row_count === 0)) {
+        <p class="muted warmup-msg">Strategy in warmup; no decisions yet.</p>
+        <p class="warmup-progress">Warmup: {{ warmupProgress() }} consolidated bars</p>
+      } @else if (s.decisions.latest_decision; as d) {
+        <dl class="kv-grid">
+          <dt>Signal</dt>
+          <dd class="mono">{{ formatField(d, 'signal') }}</dd>
+          <dt>EMA5</dt>
+          <dd class="mono">{{ formatField(d, 'ema5') }}</dd>
+          <dt>EMA10</dt>
+          <dd class="mono">{{ formatField(d, 'ema10') }}</dd>
+          <dt>RSI14</dt>
+          <dd class="mono">{{ formatField(d, 'rsi14') }}</dd>
+          <dt>Decisions</dt>
+          <dd class="mono">{{ fmtInteger(s.decisions.row_count) }}</dd>
+        </dl>
+      } @else {
+        <p class="muted">No decisions recorded yet.</p>
+      }
+    </section>
+
+    <!-- 3. Position & exposure panel -->
+    <section class="card" aria-labelledby="position-heading">
+      <header class="card-header">
+        <h2 id="position-heading">Position &amp; Exposure</h2>
+      </header>
+      <p class="muted readonly-note">Intended/simulated exposure — derived from executions.parquet (readonly run; no broker fills reflected here).</p>
+      @if (s.executions.last_fills.length > 0) {
+        <h3 class="subsection-heading">Recent fills (last {{ s.executions.last_fills.length }})</h3>
+        <ul class="fills-list">
+          @for (fill of s.executions.last_fills; track $index) {
+            <li class="fill-row mono">
+              {{ formatField(fill, 'fill_quantity') }} @ {{ formatField(fill, 'fill_price') }}
+              <span class="muted">{{ fmtTimestampNy(getFillTs(fill)) }}</span>
+            </li>
+          }
+        </ul>
+      } @else {
+        <p class="muted">No executions yet.</p>
+      }
+      @if (s.trades.open_position; as pos) {
+        <h3 class="subsection-heading">Open position</h3>
+        <dl class="kv-grid">
+          <dt>Symbol</dt>
+          <dd class="mono">{{ formatField(pos, 'symbol') }}</dd>
+          <dt>Qty</dt>
+          <dd class="mono">{{ formatField(pos, 'quantity') }}</dd>
+        </dl>
+      }
+    </section>
+
+    <!-- 4. Safety flags panel -->
+    <section class="card" [class.flags-alert]="s.flags.halt_flag !== null || s.flags.poisoned_flag !== null" aria-labelledby="flags-heading">
+      <header class="card-header">
+        <h2 id="flags-heading">Safety Flags</h2>
+        @if (s.flags.halt_flag) {
+          <span class="status-pill bad">HALT</span>
+        }
+        @if (s.flags.poisoned_flag) {
+          <span class="status-pill bad">POISONED</span>
+        }
+      </header>
+      @if (s.flags.halt_flag === null && s.flags.poisoned_flag === null) {
+        <p class="muted">No flags set — all clear.</p>
+      }
+      @if (s.flags.halt_flag; as hf) {
+        <details class="flag-details">
+          <summary>halt.flag payload</summary>
+          <pre class="flag-json mono">{{ hf | json }}</pre>
+        </details>
+      }
+      @if (s.flags.poisoned_flag; as pf) {
+        <details class="flag-details">
+          <summary>poisoned.flag payload</summary>
+          <pre class="flag-json mono">{{ pf | json }}</pre>
+        </details>
+      }
+      @if (s.reconcile.latest_receipt_name) {
+        <p class="reconcile-link">
+          Reconcile receipt:
+          <a [href]="s.reconcile.latest_receipt_url" target="_blank" rel="noopener noreferrer">{{ s.reconcile.latest_receipt_name }}</a>
+        </p>
+      }
+    </section>
+
+    <!-- 5. Artifacts panel -->
+    <section class="card" aria-labelledby="artifacts-heading">
+      <header class="card-header">
+        <h2 id="artifacts-heading">Artifacts</h2>
+      </header>
+      @if (s.artifacts.files.length === 0) {
+        <p class="muted">No artifact files found.</p>
+      } @else {
+        <table class="artifacts-table">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th class="num">Rows</th>
+              <th class="num">Size</th>
+              <th>Modified</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (f of s.artifacts.files; track f.name) {
+              <tr>
+                <td class="mono">{{ f.name }}</td>
+                <td class="mono num">{{ f.row_count !== null ? fmtInteger(f.row_count) : '—' }}</td>
+                <td class="mono num">{{ f.size_bytes !== null ? fmtBytes(f.size_bytes) : '—' }}</td>
+                <td class="mono">{{ fmtTimestampNy(f.mtime_ms) }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </section>
+
+  </div>
+}
