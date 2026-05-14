@@ -213,18 +213,19 @@
   }
 
   @let diag = diagnostics();
+  @let active = activeDiagReport();
   @if (diag.loading || diag.data || diag.error) {
     <article
       class="card diagnostics-card"
-      [class.is-pass]="diag.data?.overall_status === 'pass'"
-      [class.is-warn]="diag.data?.overall_status === 'warn'"
-      [class.is-fail]="diag.data?.overall_status === 'fail'"
+      [class.is-pass]="active?.overall_status === 'pass'"
+      [class.is-warn]="active?.overall_status === 'warn'"
+      [class.is-fail]="active?.overall_status === 'fail'"
     >
       <header class="card-header">
         Diagnostics
-        @if (diag.data) {
-          <span class="status-pill" [class]="'status-' + diag.data.overall_status">
-            {{ diag.data.overall_status | uppercase }}
+        @if (active) {
+          <span class="status-pill" [class]="'status-' + active.overall_status">
+            {{ active.overall_status | uppercase }}
           </span>
         }
       </header>
@@ -237,24 +238,28 @@
           (retry)="runDiagnostics()"
         />
       } @else if (diag.data; as report) {
-        <ul class="diagnostics-list">
-          @for (check of report.checks; track trackCheck($index, check)) {
-            <li class="diagnostic-row" [class]="'row-' + check.status">
-              <div class="diagnostic-head">
-                <span class="status-pill" [class]="'status-' + check.status">
-                  {{ check.status | uppercase }}
-                </span>
-                <span class="diagnostic-label">{{ check.label }}</span>
-              </div>
-              <p class="diagnostic-detail mono">{{ check.detail }}</p>
-              @if (check.fix) {
-                <p class="diagnostic-fix">
-                  <strong>Fix:</strong> {{ check.fix }}
-                </p>
-              }
-            </li>
-          }
-        </ul>
+        @if (report.disabled) {
+          <p class="muted">IBKR diagnostics are disabled — the host-venv runner owns this session.</p>
+        } @else if (active) {
+          <ul class="diagnostics-list">
+            @for (check of active.checks; track trackCheck($index, check)) {
+              <li class="diagnostic-row" [class]="'row-' + check.status">
+                <div class="diagnostic-head">
+                  <span class="status-pill" [class]="'status-' + check.status">
+                    {{ check.status | uppercase }}
+                  </span>
+                  <span class="diagnostic-label">{{ check.label }}</span>
+                </div>
+                <p class="diagnostic-detail mono">{{ check.detail }}</p>
+                @if (check.fix) {
+                  <p class="diagnostic-fix">
+                    <strong>Fix:</strong> {{ check.fix }}
+                  </p>
+                }
+              </li>
+            }
+          </ul>
+        }
       }
     </article>
   }
