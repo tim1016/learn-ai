@@ -45,11 +45,11 @@ from app.services.live_run_state import infer_state
 router = APIRouter(tags=["live-runs"])
 logger = logging.getLogger(__name__)
 
-_RUN_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+_RUN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,127}$")
 
 
 def _validate_run_id(run_id: str, root: Path) -> Path:
-    """Validate run_id is a UUID and the resolved path stays within root."""
+    """Validate run_id is safe and the resolved path stays within root."""
     if not _RUN_ID_RE.match(run_id):
         raise ValueError(f"Invalid run_id format: {run_id!r}")
     run_dir = (root / run_id).resolve()
