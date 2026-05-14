@@ -51,7 +51,7 @@ def _parquet_row_count(path: Path) -> int:
     """Return row count from Parquet footer metadata. O(1) — no data read."""
     try:
         return pq.ParquetFile(path).metadata.num_rows
-    except Exception:
+    except (FileNotFoundError, OSError, pq.lib.ArrowIOError, pq.lib.ArrowInvalid):
         return 0
 
 
@@ -63,7 +63,7 @@ def _read_sidecar(run_dir: Path) -> RunStatusSidecar | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return RunStatusSidecar.model_validate(data)
-    except Exception:
+    except (OSError, json.JSONDecodeError, ValueError):
         return None
 
 
