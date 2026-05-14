@@ -15,7 +15,7 @@ export class LiveRunsService {
     to_ms?: number;
   }): Promise<LiveRunSummary[]> {
     return firstValueFrom(
-      this.http.get<LiveRunSummary[]>(this.base, { params: params as Record<string, unknown> ?? {} }),
+      this.http.get<LiveRunSummary[]>(this.base, { params: params as Record<string, string | number | boolean> ?? {} }),
     );
   }
 

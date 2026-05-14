@@ -13,7 +13,7 @@ import { from, of, switchMap, timer } from 'rxjs';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { LiveRunsService } from '../../../services/live-runs.service';
-import type { LiveRunSummary, LogLine, RunState } from '../../../api/live-runs.types';
+import type { LiveRunStatus, LiveRunSummary, LogLine, RunState } from '../../../api/live-runs.types';
 import { fmtTimestampNy, fmtInteger } from '../format';
 
 type FilterChip = 'today' | 'last14' | 'halted' | 'complete' | 'all';
@@ -88,11 +88,12 @@ export class BrokerPaperRunComponent {
 
   // ── Status polling ────────────────────────────────────────────────────
   readonly status = resource({
-    request: () => this.selectedRunId(),
-    loader: ({ request: runId }) => {
+    params: () => this.selectedRunId(),
+    loader: ({ params: runId }): Promise<LiveRunStatus | null> => {
       if (!runId) return Promise.resolve(null);
       return this.svc.getStatus(runId);
     },
+    defaultValue: null as LiveRunStatus | null,
   });
 
   private readonly pollIntervalMs = computed<number>(() => {
@@ -102,8 +103,8 @@ export class BrokerPaperRunComponent {
 
   // ── Log-tail polling ──────────────────────────────────────────────────
   readonly logTail = rxResource({
-    request: () => this.selectedRunId(),
-    loader: ({ request: runId }) => {
+    params: () => this.selectedRunId(),
+    stream: ({ params: runId }) => {
       if (!runId) return of<LogLine[]>([]);
       return timer(0, 10_000).pipe(
         switchMap(() => from(this.svc.getLogTail(runId, 200))),
