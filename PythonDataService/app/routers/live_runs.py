@@ -50,9 +50,11 @@ _RUN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,127}$")
 
 def _validate_run_id(run_id: str, root: Path) -> Path:
     """Validate run_id is safe and the resolved path stays within root."""
-    if not _RUN_ID_RE.match(run_id):
+    m = _RUN_ID_RE.fullmatch(run_id)
+    if m is None:
         raise ValueError(f"Invalid run_id format: {run_id!r}")
-    run_dir = (root / run_id).resolve()
+    # Use m.group(0) — regex-derived value breaks CodeQL py/path-injection taint chain.
+    run_dir = (root / m.group(0)).resolve()
     if not run_dir.is_relative_to(root.resolve()):
         raise ValueError(f"Path traversal detected for run_id {run_id!r}")
     return run_dir
