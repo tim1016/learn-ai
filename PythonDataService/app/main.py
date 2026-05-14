@@ -46,6 +46,9 @@ from app.routers import (
     volatility,
     walk_forward,
 )
+from app.routers import (
+    live_runs as live_runs_router,
+)
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -192,6 +195,10 @@ app.include_router(broker.router)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])
+# Live paper-trading run observer (read-only). Three-layer caching:
+# Layer 1: 15 s TTL on dir listing; Layer 2: mtime-signature LRU on status;
+# Layer 3: inode-tracked incremental deque on log tail.
+app.include_router(live_runs_router.router, prefix="/api/live-runs", tags=["live-runs"])
 
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)
