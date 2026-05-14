@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 _BAR_PATTERN = re.compile(
     r"\[BAR\]\s+"
-    r"(\d{4}-\d{2}-\d{2}T[\d:.]+)"  # ISO datetime
+    r"(\d{4}-\d{2}-\d{2}T[\d:.]+(?:[+-]\d{2}:\d{2}|Z)?)"  # ISO datetime with optional tz
     r"\s+consolidator_emitted=(\d+)"
     r"\s+snapshot=(set|None)"
 )
