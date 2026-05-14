@@ -1220,6 +1220,48 @@
       "status": "active"
     },
     {
+      "id": "BFL-2008-MICRO-001",
+      "name": "Bouchaud-Farmer-Lillo 2008 Paper-Reported Microstructure Benchmarks",
+      "category": "microstructure",
+      "canonical_module": "PythonDataService/app/research/microstructure/benchmarks.py",
+      "canonical_callable": "load_bfl_2008_paper_benchmarks",
+      "reference": {
+        "kind": "literature_formula",
+        "oracle": "Paper-reported empirical benchmark values extracted from the vendored arXiv TeX source",
+        "citation": "Bouchaud, Farmer, Lillo (2008), How markets slowly digest changes in supply and demand, arXiv:0809.0822v1"
+      },
+      "market_input": {
+        "source": "vendored",
+        "vendor": "arXiv",
+        "generated_by": "manual extraction from references/arxiv-0809.0822v1/source/arXiv-0809.0822v1.tar.gz"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Exact JSON benchmark inventory. This is not a raw-market-data equivalence fixture; future formula implementations must add separate synthetic or hand-computed fixtures."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "generated": "2026-05-14",
+          "justification": "Initial design fixture for BFL 2008 microstructure implementation plan",
+          "content_sha256": {
+            "input.json": "9c6093262ba82c1769eb3286558c43f37f55166b1ec2ed7414f42d76a025e598",
+            "output.json": "d5d4130d50af2425b9dd7fbdc39d44c20ce16b56b6a59cf27c55705cedfc8f18"
+          },
+          "file_sha256": {
+            "input.json": "9c6093262ba82c1769eb3286558c43f37f55166b1ec2ed7414f42d76a025e598",
+            "output.json": "d5d4130d50af2425b9dd7fbdc39d44c20ce16b56b6a59cf27c55705cedfc8f18"
+          }
+        }
+      },
+      "status": "planned"
+    },
+    {
       "id": "OPT-IB-002",
       "name": "IBKR Reported IV vs NR/Brent BSM Solver",
       "category": "options-pricing",
