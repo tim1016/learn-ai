@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
+import { RouterLink } from '@angular/router';
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
@@ -49,7 +50,7 @@ interface PositionRow {
 @Component({
   selector: 'app-broker-account-monitor',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent, PageGuideComponent, DataSourceComponent, SectionErrorComponent],
+  imports: [PageHeaderComponent, PageGuideComponent, DataSourceComponent, SectionErrorComponent, RouterLink],
   styleUrl: './broker-account-monitor.component.scss',
   templateUrl: './broker-account-monitor.component.html',
 })

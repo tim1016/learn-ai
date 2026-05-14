@@ -73,7 +73,11 @@ def _log_has_bar(run_dir: Path) -> bool:
     if not log_path.exists():
         return False
     try:
-        return "[BAR]" in log_path.read_text(encoding="utf-8", errors="replace")
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if "[BAR]" in line:
+                    return True
+        return False
     except OSError:
         return False
 
@@ -84,7 +88,11 @@ def _log_contains(run_dir: Path, needle: str) -> bool:
     if not log_path.exists():
         return False
     try:
-        return needle in log_path.read_text(encoding="utf-8", errors="replace")
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if needle in line:
+                    return True
+        return False
     except OSError:
         return False
 

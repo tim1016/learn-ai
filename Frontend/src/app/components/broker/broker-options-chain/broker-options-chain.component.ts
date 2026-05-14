@@ -12,6 +12,7 @@ import { FormsModule } from '@angular/forms';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
+import { RouterLink } from '@angular/router';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerHealthService } from '../../../services/broker-health.service';
@@ -83,6 +84,7 @@ interface ExpirationOption {
     PageGuideComponent,
     DataSourceComponent,
     SectionErrorComponent,
+    RouterLink,
   ],
   styleUrl: './broker-options-chain.component.scss',
   templateUrl: './broker-options-chain.component.html',

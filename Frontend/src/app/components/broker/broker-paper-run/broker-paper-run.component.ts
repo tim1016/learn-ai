@@ -44,7 +44,9 @@ function startOfTodayNyMs(): number {
     hour12: false,
   }).format(new Date(roughUtc));
   const [hh, mm] = checkStr.split(':').map(Number);
-  return roughUtc - hh * 3_600_000 - mm * 60_000;
+  // roughUtc is midnight UTC on the NY calendar date.
+  // At that instant, NY shows HH:MM — so NY midnight is (24-HH) hours later.
+  return roughUtc + (24 - hh) * 3_600_000 - mm * 60_000;
 }
 
 const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;

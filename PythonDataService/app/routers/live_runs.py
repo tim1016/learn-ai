@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
@@ -43,6 +44,19 @@ from app.services.live_run_state import infer_state
 
 router = APIRouter(tags=["live-runs"])
 logger = logging.getLogger(__name__)
+
+_RUN_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def _validate_run_id(run_id: str, root: Path) -> Path:
+    """Validate run_id is a UUID and the resolved path stays within root."""
+    if not _RUN_ID_RE.match(run_id):
+        raise ValueError(f"Invalid run_id format: {run_id!r}")
+    run_dir = (root / run_id).resolve()
+    if not run_dir.is_relative_to(root.resolve()):
+        raise ValueError(f"Path traversal detected for run_id {run_id!r}")
+    return run_dir
+
 
 # ── Layer 1: directory listing cache (15 s TTL) ────────────────────────────
 
@@ -141,6 +155,11 @@ def _update_log_tail(run_id: str, log_path: Path) -> _LogTailState:
         state = _LogTailState(inode=cur_inode, last_offset=0)
         _log_tail_states[run_id] = state
 
+    if cur_size < state.last_offset:
+        # Log was truncated (copy-truncate rotation) — re-read from start
+        state.last_offset = 0
+        state.lines.clear()
+
     if cur_size > state.last_offset:
         with open(log_path, encoding="utf-8", errors="replace") as fh:
             fh.seek(state.last_offset)
@@ -196,10 +215,10 @@ def _last_activity_ms(run_dir: Path) -> int:
                 mtime = p.stat().st_mtime
                 if mtime > best:
                     best = mtime
-            except OSError:
-                pass
-    except OSError:
-        pass
+            except OSError as exc:
+                logger.warning("Could not stat %s while scanning run_dir: %s", p, exc)
+    except OSError as exc:
+        logger.warning("Could not iterate run_dir %s: %s", run_dir, exc)
     return int(best * 1000)
 
 
@@ -452,7 +471,10 @@ async def get_run_status(run_id: str) -> LiveRunStatus:
         reconcile summary, and last-bar timing.
     """
     root = Path(get_settings().live_runs_root)
-    run_dir = root / run_id
+    try:
+        run_dir = _validate_run_id(run_id, root)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
     if not run_dir.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
@@ -488,7 +510,10 @@ async def get_log_tail(
         consolidator/snapshot metadata; other lines have ``event_type="raw"``.
     """
     root = Path(get_settings().live_runs_root)
-    run_dir = root / run_id
+    try:
+        run_dir = _validate_run_id(run_id, root)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
     if not run_dir.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 

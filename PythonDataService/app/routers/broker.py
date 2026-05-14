@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -73,6 +74,11 @@ from app.broker.ibkr.pnl import (
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)
+
+# Computed once at module import — stable for the lifetime of the process.
+# Used by DiagnosticReportDisabled.since_ms so each request doesn't generate
+# a fresh timestamp that shifts on every poll.
+_BROKER_DISABLED_SINCE_MS: int = int(time.time() * 1000)
 
 
 # ── /health ────────────────────────────────────────────────────────────
@@ -139,12 +145,10 @@ async def broker_diagnose() -> DiagnosticReport:
     :class:`DiagnosticReportDisabled` sentinel immediately without probing.
     """
     if _is_broker_disabled():
-        from datetime import UTC, datetime
-
         return DiagnosticReportDisabled(
             disabled=True,
             reason="IBKR_BROKER_ENABLED=false — host-venv runner owns the IBKR session",
-            since_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+            since_ms=_BROKER_DISABLED_SINCE_MS,
         )
     return await run_diagnostics()
 

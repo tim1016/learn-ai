@@ -6,6 +6,7 @@ import {
   signal,
 } from '@angular/core';
 import { UpperCasePipe } from '@angular/common';
+import { RouterLink } from '@angular/router';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
@@ -44,7 +45,7 @@ const EMPTY_CARD: AsyncCard<never> = { data: null, loading: false, error: null }
 @Component({
   selector: 'app-broker-status',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent, PageGuideComponent, SectionErrorComponent, UpperCasePipe],
+  imports: [PageHeaderComponent, PageGuideComponent, SectionErrorComponent, UpperCasePipe, RouterLink],
   styleUrl: './broker-status.component.scss',
   templateUrl: './broker-status.component.html',
 })

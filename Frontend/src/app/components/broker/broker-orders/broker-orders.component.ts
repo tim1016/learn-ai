@@ -14,6 +14,7 @@ import {
 import { FormsModule } from '@angular/forms';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
+import { RouterLink } from '@angular/router';
 import { PaperOnlyDirective } from '../../../shared/directives/paper-only.directive';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
@@ -56,7 +57,7 @@ interface OrderEventLine extends IbkrOrderEvent {
 @Component({
   selector: 'app-broker-orders',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, PageHeaderComponent, SectionErrorComponent, PaperOnlyDirective],
+  imports: [FormsModule, PageHeaderComponent, SectionErrorComponent, PaperOnlyDirective, RouterLink],
   styleUrl: './broker-orders.component.scss',
   templateUrl: './broker-orders.component.html',
 })

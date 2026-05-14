@@ -561,7 +561,15 @@ def cmd_start(args: argparse.Namespace) -> int:
         last_update_ms=now_ms(),
         host_pid=_os.getpid(),
     )
-    write_run_status(args.run_dir, _entry_sidecar)
+    try:
+        write_run_status(args.run_dir, _entry_sidecar)
+    except OSError as exc:
+        logger.warning(
+            "Could not write entry sidecar for run %s in %s: %s",
+            ledger.run_id,
+            args.run_dir,
+            exc,
+        )
 
     bars_iter = getattr(args, "bars", None)
     print(

@@ -9,6 +9,7 @@ import {
   runInInjectionContext,
   signal,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
@@ -70,7 +71,7 @@ interface AccountReconcileRow {
 @Component({
   selector: 'app-broker-reconciliation',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent],
+  imports: [PageHeaderComponent, RouterLink],
   styleUrl: './broker-reconciliation.component.scss',
   templateUrl: './broker-reconciliation.component.html',
 })
