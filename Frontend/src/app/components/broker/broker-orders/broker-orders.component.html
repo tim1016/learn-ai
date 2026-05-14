@@ -4,6 +4,14 @@
   subtitle="Place market or limit paper orders against your DU account. Brackets, OCO, and bracket-children are deferred to a later phase."
 />
 
+@if (bannerState() === 'disabled-host-runner-active') {
+  <div class="disabled-banner" role="status">
+    <i class="pi pi-info-circle" aria-hidden="true"></i>
+    The host runner owns IBKR for this paper window. IBKR broker features are disabled.
+    <a href="/broker/paper-run">View the Paper Run Observer</a> to monitor the active session.
+  </div>
+}
+
 @if (liveModeLocked()) {
   <div class="live-locked" role="alert">
     <strong>Live trading not enabled.</strong>

@@ -77,6 +77,7 @@ interface AccountReconcileRow {
 export class BrokerReconciliationComponent implements OnDestroy {
   private readonly broker = inject(BrokerService);
   private readonly health = inject(BrokerHealthService);
+  readonly bannerState = this.health.bannerState;
   private readonly injector = inject(Injector);
 
   readonly positionsSnapshot = signal<IbkrPositionsSnapshot | null>(null);

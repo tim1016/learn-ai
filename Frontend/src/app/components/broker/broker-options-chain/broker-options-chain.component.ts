@@ -90,6 +90,7 @@ interface ExpirationOption {
 export class BrokerOptionsChainComponent {
   private readonly broker = inject(BrokerService);
   private readonly health = inject(BrokerHealthService);
+  readonly bannerState = this.health.bannerState;
   private readonly quantlib = inject(QuantLibService);
   private readonly injector = inject(Injector);
 

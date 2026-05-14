@@ -56,6 +56,7 @@ interface PositionRow {
 export class BrokerAccountMonitorComponent {
   private readonly broker = inject(BrokerService);
   private readonly health = inject(BrokerHealthService);
+  readonly bannerState = this.health.bannerState;
   private readonly injector = inject(Injector);
 
   readonly positionsLoading = signal(false);
