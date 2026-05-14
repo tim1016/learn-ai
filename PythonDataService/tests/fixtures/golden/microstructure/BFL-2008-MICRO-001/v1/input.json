@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "fixture_id": "BFL-2008-MICRO-001",
+  "fixture_name": "Bouchaud-Farmer-Lillo 2008 paper-reported microstructure validation benchmarks",
+  "reference_source": {
+    "kind": "vendored_arxiv_source",
+    "arxiv_id": "0809.0822v1",
+    "archive_path": "references/arxiv-0809.0822v1/source/arXiv-0809.0822v1.tar.gz",
+    "tex_entrypoint": "handbook20.tex",
+    "archive_sha256": "457f383f7267b64690bc0970f31d0955de4273e9fb9e77f436fd1324fcff21db"
+  },
+  "extraction_scope": {
+    "type": "paper_reported_benchmarks",
+    "raw_market_data_included": false,
+    "strict_empirical_equivalence_claimed": false,
+    "purpose": "Preserve the authors' reported validation targets for future microstructure implementations."
+  },
+  "implementation_target": {
+    "planned_modules": [
+      "PythonDataService/app/engine/execution/optimal_schedule.py",
+      "PythonDataService/app/engine/execution/execution_cost.py",
+      "PythonDataService/app/research/microstructure/order_flow.py",
+      "PythonDataService/app/research/microstructure/impact.py",
+      "PythonDataService/app/research/microstructure/liquidity.py",
+      "PythonDataService/app/research/microstructure/spread_impact.py",
+      "PythonDataService/app/research/microstructure/order_book.py"
+    ]
+  }
+}

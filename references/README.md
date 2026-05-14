@@ -24,6 +24,7 @@ references/
 | Project | Commit | Vendored on | License | Path |
 |---|---|---|---|---|
 | QuantConnect/Lean | `7986ed0aade3ae5de06121682409f05984e32ff7` | 2026-04-26 | Apache-2.0 | `lean/7986ed0aade3ae5de06121682409f05984e32ff7/` |
+| Bouchaud/Farmer/Lillo arXiv source | `0809.0822v1` | 2026-05-14 | NOASSERTION | `arxiv-0809.0822v1/` |
 
 ## Adding a new vendored reference
 

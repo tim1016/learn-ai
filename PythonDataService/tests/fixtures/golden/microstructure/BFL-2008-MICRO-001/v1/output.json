@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "fixture_id": "BFL-2008-MICRO-001",
+  "benchmark_type": "paper_reported_literature_benchmarks",
+  "reference": {
+    "citation": "Bouchaud, Farmer, Lillo (2008), How markets slowly digest changes in supply and demand, arXiv:0809.0822v1",
+    "vendored_archive": "references/arxiv-0809.0822v1/source/arXiv-0809.0822v1.tar.gz"
+  },
+  "benchmarks": [
+    {
+      "id": "order_flow_long_memory_lse_hurst",
+      "paper_section": "4.1",
+      "context": "Lillo and Farmer panel of 20 highly capitalized London Stock Exchange stocks",
+      "metric": "Hurst exponent and corresponding autocorrelation decay exponent",
+      "reported_values": {
+        "H_approx": 0.7,
+        "gamma_approx": 0.6
+      },
+      "validation_role": "literature sanity benchmark; requires trade-sign data for empirical reproduction"
+    },
+    {
+      "id": "order_flow_gamma_alpha_link",
+      "paper_section": "4.3",
+      "context": "Strategic order-splitting model compared with LSE stock averages",
+      "metric": "Relation alpha = gamma + 1",
+      "reported_values": {
+        "average_measured_gamma": 0.57,
+        "predicted_gamma_from_alpha_minus_one": 0.59,
+        "implied_alpha_from_measured_gamma": 1.57
+      },
+      "validation_role": "formula and literature benchmark"
+    },
+    {
+      "id": "block_trade_half_cubic_tail",
+      "paper_section": "4.5",
+      "context": "LSE off-book/block trade cumulative volume distribution",
+      "metric": "Cumulative tail exponent in P(V > x) ~ x^(-alpha)",
+      "reported_values": {
+        "alpha_approx": 1.5
+      },
+      "validation_role": "tail-fit target if block trade data is acquired"
+    },
+    {
+      "id": "individual_trade_impact_lse",
+      "paper_section": "5.1",
+      "context": "Individual transaction impact for liquid LSE stocks including AZN, DGE, LLOY, SHEL, VOD",
+      "metric": "Concave impact exponent psi in E[r | v] proportional to v^psi",
+      "reported_values": {
+        "psi_lse_fit_approx": 0.3,
+        "psi_small_volume_approx": 0.5,
+        "psi_large_volume_approx": 0.2,
+        "vod_fit_psi": 0.3
+      },
+      "validation_role": "impact model default/range benchmark"
+    },
+    {
+      "id": "selective_liquidity_taking_lse",
+      "paper_section": "6.1 and 8.1",
+      "context": "Selective liquidity taking and gap-driven individual price moves in LSE studies",
+      "metric": "Opposite-best and first-gap attribution percentages reported in paper prose",
+      "reported_values": {
+        "azn_market_orders_nonzero_move_equal_opposite_best_pct": 87.0,
+        "azn_market_orders_nonzero_move_opposite_best_or_second_level_pct": 97.0,
+        "lse_trades_nonzero_impact_volume_equal_best_pct": 85.0,
+        "lse_trades_nonzero_impact_price_change_equal_first_gap_pct": 97.0
+      },
+      "validation_role": "requires level-2 order book data; not reproducible from bars"
+    },
+    {
+      "id": "response_amplification_france_telecom",
+      "paper_section": "6.6",
+      "context": "France Telecom 2002 lagged response function",
+      "metric": "R_lag amplification from lag 1 to lag 1000",
+      "reported_values": {
+        "observed_amplification_approx": 2.0,
+        "mrr_expected_amplification_min": 1.2,
+        "mrr_expected_amplification_max": 1.4
+      },
+      "validation_role": "propagator/response sanity benchmark"
+    },
+    {
+      "id": "spread_impact_pse",
+      "paper_section": "7.3.3",
+      "context": "68 Paris Stock Exchange stocks in 2002",
+      "metric": "Cross-sectional relation y = slope * x, y=E[vS]/E[v], x=E[vR1(v)]/E[v]",
+      "reported_values": {
+        "fitted_slope": 2.86,
+        "average_theoretical_slope_2_over_1_minus_C1": 2.64,
+        "r_squared": 0.90
+      },
+      "validation_role": "spread-impact phase diagram benchmark"
+    },
+    {
+      "id": "spread_impact_nyse",
+      "paper_section": "7.3.3",
+      "context": "155 most actively traded NYSE stocks in 2005",
+      "metric": "Specialist-market spread-impact relation",
+      "reported_values": {
+        "fitted_slope": 3.3,
+        "average_theoretical_slope_2_over_1_minus_C1": 2.78,
+        "positive_intercept_bp": 1.3,
+        "r_squared": 0.87
+      },
+      "validation_role": "spread-impact phase diagram benchmark for market with specialists"
+    },
+    {
+      "id": "spread_recovery_azn",
+      "paper_section": "7.4",
+      "context": "AZN traded on LSE; conditional spread decay after spread openings",
+      "metric": "Power-law decay exponent for G(tau | Delta)",
+      "reported_values": {
+        "decay_exponent_min": 0.4,
+        "decay_exponent_max": 0.5
+      },
+      "validation_role": "spread-shock recovery target if quote data is acquired"
+    },
+    {
+      "id": "impact_volatility_pse",
+      "paper_section": "8.3",
+      "context": "68 Paris Stock Exchange stocks in 2002",
+      "metric": "sigma_1^2 = A * R_1^2 + Sigma^2",
+      "reported_values": {
+        "A_approx": 10.9,
+        "Sigma_squared_intercept": 0.0,
+        "r_squared": 0.96
+      },
+      "validation_role": "liquidity-volatility benchmark"
+    },
+    {
+      "id": "spread_volatility_pse",
+      "paper_section": "8.3",
+      "context": "68 Paris Stock Exchange stocks in 2002",
+      "metric": "E[S] = C * sigma_1",
+      "reported_values": {
+        "fitted_slope_C": 1.58,
+        "r_squared": 0.96
+      },
+      "validation_role": "spread-volatility benchmark"
+    },
+    {
+      "id": "limit_order_placement_tails",
+      "paper_section": "9.1",
+      "context": "Limit order placement distance Delta in LSE/PSE studies",
+      "metric": "rho(Delta) ~ 1 / Delta^(1 + mu)",
+      "reported_values": {
+        "zovko_lse_mu": 1.5,
+        "bouchaud_pse_mu": 0.6,
+        "mike_farmer_lse_student_degrees": 1.3,
+        "mike_farmer_lse_mu_equivalent": 1.3
+      },
+      "validation_role": "order-book placement tail benchmark"
+    },
+    {
+      "id": "hidden_order_vaglica",
+      "paper_section": "11.1",
+      "context": "Spanish Stock Exchange brokerage data hidden-order inference",
+      "metric": "Hidden-order tail and scaling exponents",
+      "reported_values": {
+        "tail_P_V_greater_x_exponent": 2.0,
+        "tail_P_N_greater_x_exponent": 1.8,
+        "tail_P_T_greater_x_exponent": 1.3,
+        "scaling_N_vs_V_exponent": 1.1,
+        "scaling_T_vs_V_exponent": 1.9,
+        "scaling_N_vs_T_exponent": 0.66,
+        "first_principal_component_variance_pct": 88.0
+      },
+      "validation_role": "future hidden-order detection benchmark; requires broker/member identifiers"
+    }
+  ],
+  "limitations": [
+    "The arXiv source does not include the authors' raw LSE, PSE, NYSE, or Spanish Stock Exchange datasets.",
+    "These values are paper-reported benchmarks and should not be treated as regenerated reference outputs.",
+    "OHLCV bars are insufficient for most listed studies; trade, quote, order-book, and broker/member data are required depending on benchmark."
+  ]
+}
