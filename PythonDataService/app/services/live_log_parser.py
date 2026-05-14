@@ -9,7 +9,7 @@ Validated against: PythonDataService/tests/test_live_log_parser.py
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -39,22 +39,26 @@ class RawLine(BaseModel):
 
 
 def _iso_to_ms(iso: str) -> int:
-    """Parse ISO datetime string to int64 ms UTC. Assumes UTC if no tz."""
+    """Parse ISO datetime string to int64 ms UTC. Raises on naive (tz-less) input."""
     dt = datetime.fromisoformat(iso)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
+        raise ValueError(f"Naive ISO datetime in log line; expected UTC-explicit string: {iso!r}")
     return int(dt.timestamp() * 1000)
 
 
 def parse_bar_line(line: str) -> BarEvent | RawLine:
-    """Parse one log line. Returns BarEvent if it contains a [BAR] entry, RawLine otherwise."""
+    """Parse one log line. Returns BarEvent if [BAR] found and parseable, RawLine otherwise."""
     m = _BAR_PATTERN.search(line)
     if m is None:
         return RawLine(ts_ms=None, raw_text=line.rstrip())
 
     iso_str, emitted_str, snapshot_str = m.group(1), m.group(2), m.group(3)
+    try:
+        ts = _iso_to_ms(iso_str)
+    except ValueError:
+        return RawLine(ts_ms=None, raw_text=line.rstrip())
     return BarEvent(
-        ts_ms=_iso_to_ms(iso_str),
+        ts_ms=ts,
         consolidator_emitted=int(emitted_str),
         snapshot_set=(snapshot_str == "set"),
         raw_text=line.rstrip(),
