@@ -35,7 +35,7 @@ _MALFORMED_BAR_LINE = "[BAR] NOT-A-DATE consolidator_emitted=1 snapshot=set"
         (
             _BAR_LINE_WITH_TS,
             BarEvent,
-            1735720500000,  # 2026-01-01T09:35:00+00:00
+            1767260100000,  # 2026-01-01T09:35:00+00:00
             1,
             True,
         ),
@@ -43,7 +43,7 @@ _MALFORMED_BAR_LINE = "[BAR] NOT-A-DATE consolidator_emitted=1 snapshot=set"
         (
             _BAR_LINE_SNAPSHOT_NONE,
             BarEvent,
-            1735720500000,
+            1767260100000,
             3,
             False,
         ),
