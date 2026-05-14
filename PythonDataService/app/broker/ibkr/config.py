@@ -104,6 +104,16 @@ class IbkrSettings(BaseSettings):
     # Created lazily under ``{persist_dir}/{date}/{topic}.parquet``.
     persist_dir: str = "/data/ibkr-ticks"
 
+    # Enable/disable the IBKR client entirely. Set False when a host-venv
+    # cmd_start process owns the IBKR session (client_id=42); the container
+    # stays up to serve the live-runs artifact router but does not connect.
+    broker_enabled: bool = True
+
+    # Artifact root for live-run directories. Host path differs from container
+    # path due to the compose volume mount; surfaced as config so tests can
+    # parameterise it. Container default: /app/artifacts/live_runs.
+    live_runs_root: str = "/app/artifacts/live_runs"
+
     @model_validator(mode="after")
     def _enforce_port_mode_consistency(self) -> IbkrSettings:
         """Refuse to run with a port that disagrees with ``mode``.
