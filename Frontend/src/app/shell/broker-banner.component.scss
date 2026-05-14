@@ -26,6 +26,11 @@
     background: var(--disc-banner-bg, #f3f4f6);
     color: var(--disc-banner-fg, #4b5563);
   }
+
+  &.is-disabled {
+    background: var(--info-banner-bg, #dbeafe);
+    color: var(--info-banner-fg, #1e40af);
+  }
 }
 
 .broker-banner-icon {
