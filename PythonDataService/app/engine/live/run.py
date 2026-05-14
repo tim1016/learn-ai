@@ -292,6 +292,26 @@ def _resolve_recovery_broker(broker, client):
     return broker
 
 
+def _is_recovery_readonly(args, client) -> bool:
+    """True if the recovery-flatten path should run in readonly mode.
+
+    The CLI ``--readonly`` flag (``args.readonly``) and the
+    ``IBKR_READONLY`` env var (which surfaces as
+    ``client.settings.readonly``) can diverge: ``IbkrClient()`` reads
+    settings from env only, so a CLI ``--readonly`` does NOT
+    propagate to ``client.settings``. The recovery path must respect
+    either signal — operator intent on the command line, or the
+    deployment-wide default. Safer-of-the-two on each path.
+    """
+    args_readonly = bool(getattr(args, "readonly", False))
+    if args_readonly:
+        return True
+    if client is None:
+        return False
+    settings = getattr(client, "settings", None)
+    return bool(getattr(settings, "readonly", False))
+
+
 async def _recovery_flatten(broker, *, readonly: bool = False) -> int:
     """Best-effort cancel + flatten for the cmd_start unhandled-exception path.
 
@@ -730,7 +750,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                 )
                 broker_for_flatten = _resolve_recovery_broker(broker, client)
                 if broker_for_flatten is not None:
-                    is_readonly = bool(client is not None and getattr(client.settings, "readonly", False))
+                    is_readonly = _is_recovery_readonly(args, client)
                     try:
                         n = await _recovery_flatten(broker_for_flatten, readonly=is_readonly)
                         if is_readonly:
