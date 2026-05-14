@@ -23,11 +23,13 @@ In-scope:
 
 * New FastAPI router `app/routers/live_runs.py` exposing read-only endpoints over `PythonDataService/artifacts/live_runs/`.
 * New Angular page (`/broker/paper-run`) — operator console with five panels.
-* Server-side run-state inference (`idle | warming_up | running | stale | halted | poisoned | complete`).
+* **`run_status.json` sidecar** written by `cmd_start` on transition (start, exit). Provides authoritative `started_at_ms`, `ended_at_ms`, `exit_code`, `exit_reason` so the router doesn't have to grep `live.log` for the clean-shutdown signal. (Reviewer Must-Fix #1.)
+* Server-side run-state inference (`idle | waiting_for_bars | warming_up | running | stale | halted | poisoned | complete | stopped | unknown`) — sidecar-primary, file-mtime fallback for legacy runs without it.
 * Server-side `[BAR]` heartbeat parser with graceful degradation.
-* In-process LRU caching keyed on file mtimes.
+* In-process LRU caching keyed on file mtimes; Parquet row counts via PyArrow file metadata (no full DataFrame read).
 * New env var to disable the python-service container's IBKR connection while a host-venv runner owns the IBKR session (preserves spec § 5 single-client invariant).
-* Banner on the existing `/broker/*` pages indicating broker connection is intentionally disabled when the host runner is active.
+* `LIVE_RUNS_ROOT` env var for the artifact root path (host vs container differ); plumbed through `IbkrSettings` and `compose.yaml`.
+* Info-level banner (not warning/error — broker disabled is intentional state) on the existing `/broker/*` pages indicating the host runner owns IBKR.
 
 Out-of-scope (this spec):
 
@@ -48,20 +50,27 @@ Out-of-scope (this spec):
 
 ## 4. Backend changes
 
-### 4.1 `IBKR_BROKER_ENABLED` env var
+### 4.1 New env vars
 
-New `IbkrSettings` field, default `True`. When set to `False`:
+Two new env vars in this spec, both wired through `IbkrSettings` AND added to `compose.yaml` (Reviewer Should-Adjust — without explicit compose entries, flipping `.env` may not propagate to the container):
+
+* **`IBKR_BROKER_ENABLED`** (bool, default `True`) — see below for behavior when `False`.
+* **`LIVE_RUNS_ROOT`** (path, default `PythonDataService/artifacts/live_runs` host-side / `/app/artifacts/live_runs` container-side) — the artifact root the live-runs router walks. Host vs container paths differ because of the compose mount; surfacing as a config knob avoids hard-coding either side. Tests parameterize this for fixture isolation.
+
+`compose.yaml` adds:
+```yaml
+- IBKR_BROKER_ENABLED=${IBKR_BROKER_ENABLED:-true}
+- LIVE_RUNS_ROOT=/app/artifacts/live_runs
+```
+
+#### `IBKR_BROKER_ENABLED=False` behavior
+
+When `IBKR_BROKER_ENABLED=False`:
 
 * The FastAPI lifespan **does not** instantiate or connect the process-wide `IbkrClient`.
-* All existing `/api/broker/*` endpoints that depend on the live client (`/health`, `/diagnose`, `/account`, `/positions`, `/orders/*`, `/pnl/*`, `/expirations/*`, `/strikes/*`, `/option-chain/*`) return HTTP 503 with a structured body:
-  ```json
-  {
-    "disabled": true,
-    "reason": "IBKR_BROKER_ENABLED=false; the host runner owns IBKR for this paper window",
-    "since_ms": 1778670000000
-  }
-  ```
-* `/api/broker/diagnose` returns its existing `DiagnosticReport` shape with every check `status=skip` and a top-level `overall_status=disabled`. (UI gates on this rather than HTTP 503 for the diagnose page specifically, so the existing component degrades cleanly.)
+* `/api/broker/health` returns **HTTP 200** with `connected=false, disabled=true, reason, since_ms` (Reviewer Must-Fix #4 — Angular `HttpClient` routes 503 to the error path; 200 keeps the existing `BrokerHealthService.bannerState` codepath intact). The current response model gains two optional fields (`disabled: bool = False`, `reason: str | None = None`); existing callers ignore them by default.
+* `/api/broker/diagnose` returns a **discriminated union** — either the existing `DiagnosticReportActive` (renamed; `disabled: Literal[False] = False`) or a new `DiagnosticReportDisabled(disabled: Literal[True], reason: str, since_ms: int)`. UI checks `report.disabled` first; the existing `pass | warn | fail` literal stays untouched on the active branch (Reviewer Must-Fix #3 — extending the literal would cascade through the generated TypeScript and frontend type guards).
+* The other broker endpoints (`/account`, `/positions`, `/orders/*`, `/pnl/*`, `/expirations/*`, `/strikes/*`, `/option-chain/*`) return **HTTP 503** with the disabled body. These are not in the routine UI poll path; the 503 is correct semantically (resource unavailable) and the UI's existing error handlers degrade gracefully.
 
 The new `/api/live-runs/*` router is **unaffected** — it never touches the `IbkrClient`.
 
@@ -85,14 +94,19 @@ Pydantic v2 response models live in `app/schemas/live_runs.py` (new file). Snake
 class LiveRunSummary(BaseModel):
     run_id: str
     account_id: str
-    started_ms: int          # int64 ms UTC
-    last_activity_ms: int    # max(mtime) across run-dir files
-    state: RunState           # see § 4.4
+    session_start_ms: int          # ledger.start_date_ms (the trading session's 09:30 ET in ms)
+    created_at_ms: int             # ledger.created_at_ms (when init-ledger ran)
+    run_started_at_ms: int | None  # sidecar.started_at_ms (when cmd_start fired)
+    ended_at_ms: int | None        # sidecar.ended_at_ms (when cmd_start exited)
+    last_activity_ms: int          # max(mtime) across run-dir files
+    state: RunState                # see § 4.4
     decision_count: int
     execution_count: int
     halt_flag_set: bool
     poisoned_flag_set: bool
 ```
+
+(Reviewer Should-Adjust: `started_ms` was ambiguous between session-start and process-start. Three distinct fields now; UI picks the one its panel needs.)
 
 `LiveRunStatus` (the load-bearing one):
 ```python
@@ -114,9 +128,44 @@ class LiveRunStatus(BaseModel):
 
 Each sub-model is small (4–8 fields) and pinned in the schemas file.
 
-### 4.3 Caching
+### 4.3 `run_status.json` sidecar (Reviewer Must-Fix #1)
 
-Per Tim's Q3 call. Two-layer LRU.
+**The load-bearing structural addition over the original spec.** Without this, the only way to detect "clean shutdown" is to grep `live.log` for `[START] run completed cleanly`, which `cmd_start` emits via `print()` not `logger.info()` so it never lands in `live.log` at all (Reviewer caught the bug).
+
+`cmd_start` writes (and atomically updates via tempfile + rename) `<run_dir>/run_status.json`:
+
+```python
+class RunStatusSidecar(BaseModel):
+    schema_version: int = 1
+    run_id: str
+    started_at_ms: int                 # set on cmd_start entry
+    last_update_ms: int                # bumped on each transition or per N seconds
+    ended_at_ms: int | None = None     # set on exit (any path)
+    exit_code: int | None = None       # set on exit
+    exit_reason: ExitReason | None = None  # see literal below
+    host_pid: int                      # for "stopped" detection if process is gone but no exit recorded
+```
+
+`ExitReason` literal:
+```
+"normal" | "force_flat_complete" | "keyboard_interrupt" | "signal" |
+"max_orders_exceeded" | "fatal_halt" | "recovery_flatten" | "exception"
+```
+
+Write points (4 total, all in `cmd_start` / `_drive_engine`):
+
+1. **Entry** — after ledger load + before `_drive_engine` runs. Writes `{started_at_ms: now, last_update_ms: now, host_pid: os.getpid(), ended_at_ms: null}`. `state` is inferred by the router from this absent-`ended_at_ms` + sidecar age, plus file mtimes.
+2. **On engine.run normal completion** — `{ended_at_ms: now, exit_code: 0, exit_reason: "normal" or "force_flat_complete"}`.
+3. **On graceful shutdown / KeyboardInterrupt** — `{ended_at_ms: now, exit_code: 0, exit_reason: "keyboard_interrupt" or "signal"}`.
+4. **On halt / exception path** — `{ended_at_ms: now, exit_code: 1 or 3, exit_reason: "max_orders_exceeded" / "fatal_halt" / "exception"}`.
+
+Atomic write: `_atomic_write_json(path, payload)` writes to `path.tmp`, fsyncs, renames to `path`. Avoids the router seeing a half-written file mid-update.
+
+Forward-compat: `schema_version: 1` so a future schema change (e.g., adding `decision_count_at_exit`) is detectable without breaking the router.
+
+### 4.4 Caching
+
+Per Tim's Q3 call + Should-Adjust. Three-layer LRU.
 
 **Layer 1: directory listing** for `/api/live-runs`.
 * Key: `run_root_path`
@@ -124,35 +173,44 @@ Per Tim's Q3 call. Two-layer LRU.
 * Invalidation: TTL-only (no inotify; we accept up to 15 s lag for new runs to appear in the picker)
 
 **Layer 2: per-run status** for `/api/live-runs/{run_id}/status`.
-* Key: `(run_id, mtime_signature)` where `mtime_signature` is a tuple of mtimes for `(run_ledger.json, live.log, halt.flag, poisoned.flag, decisions.parquet, executions.parquet, trades.parquet, reconcile_dir)`
-* Stat the seven files first (cheap), build the signature, look up in cache, return cached body if hit. Cache misses do the full read.
+* Key: `(run_id, mtime_signature)` where `mtime_signature` is a tuple of mtimes for `(run_ledger.json, run_status.json, live.log, halt.flag, poisoned.flag, decisions.parquet, executions.parquet, trades.parquet, reconcile_dir)`
+* Stat the eight files first (cheap), build the signature, look up in cache, return cached body if hit. Cache misses do the full read.
 * Eviction: bounded LRU at 256 entries (covers ~36 days of runs)
+* **Row counts via Parquet metadata only** (Reviewer Caching note): `pyarrow.parquet.ParquetFile(path).metadata.num_rows` reads the footer, not the data — O(1) per file. Latest-N rows for the panels (e.g., last 5 fills) need a real read; cache those separately keyed on `(path, mtime, n)`.
 
 **Layer 3: log tail** for `/api/live-runs/{run_id}/log-tail`.
 * Per-process state: `{path: (inode, last_size, last_offset)}`
 * On request: if size grew, seek to `last_offset`, read tail, parse new lines, append to in-memory deque (capped at 1000 lines per run); update `last_size`. If file was rotated (inode changed), re-open from start.
 * Cache the **parsed** lines so repeated tail requests for the same N are served from RAM.
 
-This bounds the request cost to ~7 `os.stat` calls + 1 small file read per `/status` call, regardless of run-dir age.
+This bounds the request cost to ~8 `os.stat` calls + Parquet-footer reads + 1 small log-file read per `/status` call, regardless of run-dir age or parquet size.
 
-### 4.4 Run-state inference
+### 4.5 Run-state inference
 
-Server-side function `infer_state(run_dir: Path, now_ms: int) -> RunState`. Pure function over file metadata; no IBKR calls. Tested with a fixture-tree per state.
+Server-side function `infer_state(run_dir: Path, now_ms: int) -> RunState`. Pure function over file metadata + sidecar; no IBKR calls. Tested with a fixture-tree per state.
 
-| State | Rule (first match wins, top to bottom) |
+**Inference is sidecar-primary.** The router reads `run_status.json` first (when present) for the authoritative `started_at_ms` / `ended_at_ms` / `exit_reason`. File-mtime inference is the **fallback** for legacy runs (pre-sidecar) or when the sidecar is missing/corrupted.
+
+States and rules (first match wins, top to bottom):
+
+| State | Rule |
 |---|---|
 | `poisoned` | `poisoned.flag` exists |
 | `halted` | `halt.flag` exists |
-| `complete` | `live.log` contains `[START] run completed cleanly` (grep last 50 lines) |
-| `idle` | `live.log` doesn't exist OR last `[BAR]` mtime > 24 h ago |
-| `stale` | last `[BAR]` mtime > 90 s but ≤ 5 min |
-| `warming_up` | last `[BAR]` mtime ≤ 90 s AND `decisions.parquet` doesn't exist or has 0 rows |
-| `running` | last `[BAR]` mtime ≤ 90 s AND `decisions.parquet` has ≥ 1 row |
+| `complete` | sidecar exists AND `ended_at_ms` set AND `exit_reason in {"normal", "force_flat_complete"}` |
+| `stopped` | sidecar exists AND `ended_at_ms` set AND `exit_reason in {"keyboard_interrupt", "signal"}` (Reviewer state-set: distinguishes operator-interrupted from clean force-flat) |
+| `waiting_for_bars` | sidecar exists AND `ended_at_ms` is null AND no `[BAR]` line yet AND `started_at_ms` within last 60 s (Reviewer state-set: distinguishes "started, no bars yet" from `idle`/`stale`) |
+| `warming_up` | sidecar exists AND `ended_at_ms` is null AND last `[BAR]` mtime ≤ 90 s AND `decisions.parquet` doesn't exist or has 0 rows |
+| `running` | sidecar exists AND `ended_at_ms` is null AND last `[BAR]` mtime ≤ 90 s AND `decisions.parquet` has ≥ 1 row |
+| `stale` | sidecar exists AND `ended_at_ms` is null AND last `[BAR]` mtime > 90 s but ≤ 5 min |
+| `idle` | No `run_status.json` for any run within the last 24 h, OR all recent runs have `ended_at_ms` set |
 | `unknown` | None of the above (defensive — UI shows it as a fallback badge) |
 
-Thresholds (`90`, `300`, `86_400`) live in module constants, tunable for tests.
+When `run_status.json` is missing (legacy run from before this spec lands), fallback rules apply: `complete` becomes "live.log contains `[START] run completed cleanly` substring" (will not match for runs that were interrupted), and `stopped` is unreachable (legacy can't distinguish). Operators see legacy runs correctly even though new runs are sidecar-driven.
 
-### 4.5 `[BAR]` heartbeat parser
+Thresholds (`60` for `waiting_for_bars` window, `90` for stale, `300` for stale-max, `86_400` for idle) live in module constants, tunable for tests.
+
+### 4.6 `[BAR]` heartbeat parser
 
 `app/services/live_log_parser.py` (new). One regex per known event type:
 
@@ -178,11 +236,22 @@ Standalone component, OnPush, signal-driven. Uses `resource()` for the polled st
 
 Single page, no sub-routes in Phase 1. Layout (top to bottom):
 
+**Top-strip design principle** (Reviewer UX-nit): four questions answered at a glance, in this order:
+
+1. *Is the runner alive?* → state badge color + last-`[BAR]` age
+2. *Is it safe?* → halt/poisoned flag indicators (red dot if either present)
+3. *Has the strategy emitted decisions yet?* → decision count + warmup progress
+4. *Did anything require operator action?* → halt flag, exit_reason on `stopped`/`halted`/`poisoned`
+
+Layout (top to bottom):
+
 1. **Top strip** (sticky)
    * Mode pill: `PAPER` / `READONLY` / `LIVE-LOCKED`
    * Connected account: `DUM284968`
-   * Run state badge: color-coded per state
+   * Run state badge: color-coded per state — green = `running`, blue = `warming_up`/`waiting_for_bars`, yellow = `stale`, red = `halted`/`poisoned`, grey = `idle`/`complete`/`stopped`
    * Last `[BAR]` age: `42 s ago` (red if > 90 s)
+   * Decisions emitted: `4 / N` (warmup progress when N < 15)
+   * Action-required indicator: red dot when `halted` / `poisoned` / `stopped` with non-`keyboard_interrupt` reason
    * Run ID: truncated 8-char prefix, click-to-copy
    * Run picker: dropdown of recent runs (filter chips below: Today / Last 14 days / Halted / Completed / All)
 
@@ -196,10 +265,11 @@ Single page, no sub-routes in Phase 1. Layout (top to bottom):
    * Warmup progress: `N / 15 consolidated bars` (uses RSI(14)'s `samples >= period + 1` rule per the corrected runbook)
    * Empty state: "Strategy in warmup; no decisions yet."
 
-4. **Position & orders panel**
-   * Current position from latest `decisions.parquet` row's reference price (not from `/api/broker/positions`, which is disabled)
+4. **Position & exposure panel** (Reviewer Must-Fix #5 — corrected from the original "decisions.parquet reference price" approach)
+   * Current exposure derived from `executions.parquet` net signed `fill_quantity` per symbol PLUS open trades from `trades.parquet`. `decisions.parquet` does NOT carry quantity — it has signal/indicators/intended_price only — so it's not a position source.
    * Recent fills from `executions.parquet` (last 5)
    * Trade log from `trades.parquet` (last 5)
+   * **`--readonly` runs label this explicitly: "Intended/simulated exposure (readonly run — no broker fills)."** Only the IBKR side has truth in non-readonly runs; this panel reflects what the engine THINKS it holds based on its own writers (`/api/broker/positions` is disabled while the host runner owns IBKR).
 
 5. **Safety flags panel**
    * `halt.flag` payload if present (collapsible JSON)
@@ -207,19 +277,17 @@ Single page, no sub-routes in Phase 1. Layout (top to bottom):
    * Reconcile receipt link to most recent `day-N.md`
 
 6. **Artifacts panel**
-   * File list with row counts + mtimes for the four parquets, the two flag files, the reconcile dir
-   * Download links for `live.log`, `host_run.log`
+   * File list with row counts (Parquet footer metadata, no full read) + mtimes for the four parquets, the two flag files, the reconcile dir, the `run_status.json` sidecar
+   * Download links for `live.log` and (if present) `host_run.log` — the latter is operator-shell convention and only exists when the launcher script tee's stdout (Reviewer Should-Adjust)
 
-### 5.3 Existing `/broker/*` pages — degraded-mode banner
+### 5.3 Existing `/broker/*` pages — disabled-mode banner
 
 When `IBKR_BROKER_ENABLED=false`:
 
 * `BrokerHealthService.bannerState` adds a new value `disabled-host-runner-active`
-* `app-shell` banner shows: "Broker connection disabled — paper-run is active. Visit `/broker/paper-run` for live status."
-* Each existing `/broker/*` page (`/broker`, `/broker/options-chain`, `/broker/account-monitor`, `/broker/orders`, `/broker/reconciliation`) shows a top-of-page warning explaining why the broker data is stale (the last-known timestamp is shown).
-* No data is fabricated; pages render empty states gracefully when the underlying endpoint returns 503.
-
-The disabled state is intentional, not an error. The banner reads as informational, not alarming.
+* `app-shell` banner shows: "Broker connection disabled — paper-run is active. Visit `/broker/paper-run` for live status." **Info-level styling (blue/info), not warning/error** (Reviewer UX-nit — disabled is intentional state, not a failure).
+* Each existing `/broker/*` page (`/broker`, `/broker/options-chain`, `/broker/account-monitor`, `/broker/orders`, `/broker/reconciliation`) shows a top-of-page info banner explaining the host runner owns IBKR for this paper window.
+* No data is fabricated; pages render empty states gracefully when the underlying endpoint returns 503 (or when `/health` returns 200 with `disabled=true`).
 
 ### 5.4 Run picker
 
@@ -232,16 +300,21 @@ Filter chips: `Today · Last 14 days · Halted · Completed · All`. Selecting a
 Frontend state lives in a `signal<RunState>` driven entirely by polled status. No client-side inference — the Angular component trusts the server. Transitions trigger Phase-2 notifications later; in Phase 1 the badge color and panel content update is the only visual response.
 
 ```
-idle ──► warming_up ──► running ──► complete
-              │            │
-              ▼            ▼
-            stale       halted ──► (manual reconcile, then idle)
-                          │
-                          ▼
-                       poisoned ──► (manual reset, then idle)
+idle ──► waiting_for_bars ──► warming_up ──► running ──► complete
+                  │                  │            │
+                  ▼                  ▼            ▼
+                stale              stale       stopped (Ctrl+C / SIGINT)
+                  │                  │            │
+                  ▼                  ▼            ▼
+                halted ──► (manual reconcile, then idle)
+                  │
+                  ▼
+              poisoned ──► (manual reset, then idle)
 ```
 
-`unknown` is a fallback; in normal operation we never reach it.
+* `waiting_for_bars` is reached immediately after `cmd_start` writes the sidecar but before the first `[BAR]` line lands. It distinguishes "runner started, waiting for first 5-second bar" from `idle` (no run started) and from `stale` (run started, then bar source went silent for > 90 s).
+* `stopped` is the operator-interrupted exit path (Ctrl+C / SIGINT) — distinct from `complete` which is the clean force-flat / end-of-bars exit. Phase-2 notifications can route differently for each (a `stopped` run after EMA crossover has fired is more interesting than a `stopped` warmup run).
+* `unknown` is a fallback; in normal operation we never reach it.
 
 ## 7. Tests
 
@@ -250,15 +323,19 @@ Per `.claude/rules/numerical-rigor.md` and `testing.md`:
 ### Backend (pytest)
 
 * `app/services/live_log_parser.py` — table-driven test cases for happy `[BAR]` lines, malformed lines, mid-line truncation. Asserts shape and `degraded` flag behavior.
-* `app/routers/live_runs.py` — 7 integration tests using a fixture run-dir per state (`idle`, `warming_up`, `running`, `stale`, `halted`, `poisoned`, `complete`). Use `httpx.AsyncClient` with `ASGITransport` per repo testing rules.
-* Cache layers — separate unit tests with monkeypatched `os.stat` returning controlled mtimes. Verify cache hit/miss behavior, eviction, and tail-state across rotation.
-* `IBKR_BROKER_ENABLED=false` lifespan path — verify `IbkrClient` is NOT instantiated; verify `/api/broker/health` returns the `disabled` 503 body.
+* `app/engine/live/run_status.py` (new sidecar writer) — atomic-write tests, schema-version round-trip, every `ExitReason` literal exercised.
+* `cmd_start` / `cmd_emergency_flatten` integration — verify sidecar is written on entry AND on each exit path (clean, KeyboardInterrupt, FatalHaltError, MaxOrdersPerDayExceeded, generic Exception). Reuse the existing `_LifecycleClient` pattern from PR #233's tests.
+* `app/routers/live_runs.py` — 9 integration tests using a fixture run-dir per state (`idle`, `waiting_for_bars`, `warming_up`, `running`, `stale`, `halted`, `poisoned`, `complete`, `stopped`). Use `httpx.AsyncClient` with `ASGITransport` per repo testing rules. Plus a 10th legacy-fallback test (run-dir without `run_status.json`).
+* Cache layers — separate unit tests with monkeypatched `os.stat` returning controlled mtimes. Verify cache hit/miss behavior, eviction, tail-state across rotation, Parquet `num_rows` from footer (no full read).
+* `IBKR_BROKER_ENABLED=false` lifespan path — verify `IbkrClient` is NOT instantiated; verify `/api/broker/health` returns HTTP 200 with the `disabled` body; verify `/api/broker/diagnose` returns the `DiagnosticReportDisabled` discriminated-union variant; verify the other broker endpoints return HTTP 503.
 
 ### Frontend (Vitest + Angular Testing Library)
 
-* `broker-paper-run.component.spec.ts` — render with each state's mock status, assert badge color + panel content + empty states.
+* `broker-paper-run.component.spec.ts` — render with each state's mock status (all 9), assert badge color + panel content + empty states + the four-questions top-strip layout.
 * `broker-paper-run.component.spec.ts` — run picker filter chips work; selecting a chip filters the list correctly.
-* `broker-health.service.spec.ts` — `bannerState` returns `disabled-host-runner-active` when health endpoint returns the disabled-503 body.
+* `broker-paper-run.component.spec.ts` — position/exposure panel correctly derives net signed quantity from a multi-fill `executions.parquet` mock; in `--readonly` mode shows the "intended/simulated" label.
+* `broker-health.service.spec.ts` — `bannerState` returns `disabled-host-runner-active` when `/health` returns the 200 + `disabled=true` body.
+* TypeScript discriminated-union test for `DiagnosticReport` — `report.disabled === true` narrows to `DiagnosticReportDisabled`; `report.disabled === false` narrows to `DiagnosticReportActive` with the `pass | warn | fail` literal preserved.
 
 ## 8. Open issues / forward-compat hooks
 
@@ -274,12 +351,13 @@ Not blockers for Phase 1; documented so Phase 2/3 don't surprise:
 
 A reviewer can validate Phase 1 is complete when:
 
-1. With the python-service container UP and a host-venv `cmd_start` running, `/api/live-runs/{run_id}/status` returns the correct `RunState` for each of the seven states (validated against fixture run-dirs).
-2. Setting `IBKR_BROKER_ENABLED=false` in `.env` and restarting the container: the existing `/broker` page shows the disabled banner; the new `/broker/paper-run` page works normally.
-3. A 90-second host-venv `start --readonly` (after-hours, no bars) drives the UI through `idle → warming_up` → (KeyboardInterrupt → `complete` once `[START] run completed cleanly` is logged). The page shows a populated heartbeat panel, even though no decisions are written.
-4. A real RTH session (separately) drives the UI through `warming_up → running` once the first decision row lands at ~3h45m. The position panel reflects the `decisions.parquet` reference price.
+1. With the python-service container UP and a host-venv `cmd_start` running, `/api/live-runs/{run_id}/status` returns the correct `RunState` for each of the **nine** states (validated against fixture run-dirs that include `run_status.json` sidecar variants).
+2. Setting `IBKR_BROKER_ENABLED=false` in `.env` and restarting the container: the existing `/broker` page shows the info-level disabled banner; the new `/broker/paper-run` page works normally; `/api/broker/health` returns 200 with `disabled=true`.
+3. **After-hours fixture-run validation** (Reviewer Must-Fix #2 — was originally written as a real after-hours run, which is impossible since no bars = no `[BAR]` = can't reach `warming_up`): a fixture-tree with a synthetic sidecar (`started_at_ms = now`, `ended_at_ms = null`, no `[BAR]` lines yet) drives the UI through `idle → waiting_for_bars`. After 60 s without `[BAR]`, the inferred state advances to `stale` (consistent with the threshold). After a synthetic `[BAR]` line is appended, state advances to `warming_up`. Real after-hours `start --readonly` runs only validate `idle → waiting_for_bars → stopped` (the `[BAR]` path requires a market-hours bar source).
+4. A real RTH session (separately) drives the UI through `warming_up → running` once the first decision row lands at ~3h45m. The position panel correctly derives net signed quantity from `executions.parquet` (NOT from `decisions.parquet` which doesn't carry quantity).
 5. A `halt.flag` written by `reconcile.write_day_report` flips the badge to `halted` within one polling interval (≤ 5 s).
-6. Project-scope `pytest tests/` and `npx ng test --watch=false` both pass; `ruff check`, `dotnet format --verify-no-changes`, and Angular lint all clean.
+6. Ctrl+C during an active run: `cmd_start` writes the sidecar with `exit_reason="keyboard_interrupt"`; UI flips to `stopped` (not `complete`) within one polling interval.
+7. Project-scope `pytest tests/` and `npx ng test --watch=false` both pass; `ruff check`, `dotnet format --verify-no-changes`, and Angular lint all clean.
 
 ## 10. References
 
