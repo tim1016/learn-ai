@@ -126,11 +126,20 @@ export interface DiagnosticCheck {
   fix: string | null;
 }
 
-export interface DiagnosticReport {
+export interface DiagnosticReportActive {
+  disabled: false;
   overall_status: 'pass' | 'warn' | 'fail';
   checks: DiagnosticCheck[];
   fetched_at_ms: number;
 }
+
+export interface DiagnosticReportDisabled {
+  disabled: true;
+  reason: string;
+  since_ms: number;
+}
+
+export type DiagnosticReport = DiagnosticReportActive | DiagnosticReportDisabled;
 
 // ── REST shape: /api/broker/expirations/{symbol} ─────────────────────
 

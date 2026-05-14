@@ -437,6 +437,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     by convention. Add new strategies by following the same naming
     convention.
     """
+    import os as _os
     from importlib import import_module
 
     from app.engine.live.halt import FatalHaltError, read_poisoned_flag
@@ -445,6 +446,8 @@ def cmd_start(args: argparse.Namespace) -> int:
         MaxOrdersPerDayExceeded,
     )
     from app.engine.live.run_logging import configure_run_logging
+    from app.engine.live.run_status import now_ms, write_run_status
+    from app.schemas.live_runs import ExitReason, RunStatusSidecar
 
     # § 7.2 #4 refusal: a poisoned run cannot resume on its own
     # run_id. The flag is written intra-day by the LiveEngine when
@@ -552,6 +555,22 @@ def cmd_start(args: argparse.Namespace) -> int:
         max_orders_per_day=args.max_orders_per_day,
     )
 
+    _entry_sidecar = RunStatusSidecar(
+        run_id=ledger.run_id,
+        started_at_ms=now_ms(),
+        last_update_ms=now_ms(),
+        host_pid=_os.getpid(),
+    )
+    try:
+        write_run_status(args.run_dir, _entry_sidecar)
+    except OSError as exc:
+        logger.warning(
+            "Could not write entry sidecar for run %s in %s: %s",
+            ledger.run_id,
+            args.run_dir,
+            exc,
+        )
+
     bars_iter = getattr(args, "bars", None)
     print(
         f"[START] run_id={ledger.run_id} account={ledger.account_id} "
@@ -614,6 +633,22 @@ def cmd_start(args: argparse.Namespace) -> int:
 
             try:
                 await engine.run(strategy, bars=bars_iter, shutdown_event=shutdown_event)
+                # Write exit sidecar — use keyboard_interrupt if signal was received
+                if shutdown_event.is_set():
+                    _exit_reason = ExitReason.keyboard_interrupt
+                else:
+                    _exit_reason = ExitReason.normal
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 0,
+                            "exit_reason": _exit_reason,
+                        }
+                    ),
+                )
                 return 0
             except FatalHaltError as exc:
                 print(
@@ -621,9 +656,31 @@ def cmd_start(args: argparse.Namespace) -> int:
                     f"{exc.reason.halted_at_ms}ms UTC; details={exc.reason.details}",
                     file=sys.stderr,
                 )
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 1,
+                            "exit_reason": ExitReason.fatal_halt,
+                        }
+                    ),
+                )
                 return 1
             except MaxOrdersPerDayExceeded as exc:
                 print(f"[START] HALT — max orders per day exceeded: {exc}", file=sys.stderr)
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 1,
+                            "exit_reason": ExitReason.max_orders_exceeded,
+                        }
+                    ),
+                )
                 return 1
             except Exception as exc:
                 logger.exception(
@@ -631,6 +688,17 @@ def cmd_start(args: argparse.Namespace) -> int:
                     extra={"step": "8"},
                 )
                 print(f"[START] runtime error: {type(exc).__name__}: {exc}", file=sys.stderr)
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 3,
+                            "exit_reason": ExitReason.exception,
+                        }
+                    ),
+                )
                 broker_for_flatten = _resolve_recovery_broker(broker, client)
                 if broker_for_flatten is not None:
                     try:

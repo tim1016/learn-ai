@@ -37,6 +37,7 @@ beforeAll(() => {
 
 class FakeBrokerHealthService {
   readonly isPaperConnected = signal(true);
+  readonly bannerState = signal<string | null>(null);
   readonly health = signal({
     connected: true,
     is_paper: true,

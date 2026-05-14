@@ -100,6 +100,12 @@ services:
       # line, flipping IBKR_READONLY=false in .env has no effect and the
       # error message in orders.py is misleading.
       - IBKR_READONLY=${IBKR_READONLY:-true}
+      # Broker enable/disable switch. Set false when host-venv cmd_start owns
+      # the IBKR session. The container stays up for the live-runs router.
+      - IBKR_BROKER_ENABLED=${IBKR_BROKER_ENABLED:-true}
+      # Live-run artifact root. Container path is fixed by the volume mount
+      # (./PythonDataService/artifacts:/app/artifacts).
+      - IBKR_LIVE_RUNS_ROOT=/app/artifacts/live_runs
     # Make host.docker.internal resolve to the Windows host's bridge IP.
     # Docker Desktop adds this automatically; Podman does NOT — without
     # this entry, the name resolves to a sentinel that doesn't reach

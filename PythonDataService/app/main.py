@@ -1,5 +1,7 @@
 """FastAPI application entry point"""
 
+from __future__ import annotations
+
 import logging
 from contextlib import asynccontextmanager
 
@@ -44,6 +46,9 @@ from app.routers import (
     volatility,
     walk_forward,
 )
+from app.routers import (
+    live_runs as live_runs_router,
+)
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -60,32 +65,47 @@ async def lifespan(app: FastAPI):
     service still boots. The ONLY failure that aborts startup is the
     paper-vs-live sentinel mismatch — that's a safety violation and
     must not be silently absorbed.
+
+    When broker is disabled: /health returns HTTP 200 with disabled=True
+    (not 503 — Angular HttpClient routes 503 to error path); /diagnose
+    returns DiagnosticReportDisabled; all other broker endpoints return 503.
     """
     logger.info(f"Starting Polygon Data Service on {settings.HOST}:{settings.PORT}")
     logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
 
-    ibkr_client = IbkrClient()
-    try:
-        await ibkr_client.connect()
-        set_client(ibkr_client)
-        logger.info("IBKR client connected; broker endpoints available.")
-    except ConnectionRefusedDueToSentinelError:
-        # Hard fail — never proceed past a paper/live mismatch.
-        logger.exception("IBKR sentinel mismatch — aborting startup.")
-        raise
-    except (BrokerError, OSError) as exc:
-        # Soft fail — Gateway is probably not running locally. Broker
-        # endpoints will return 503 until a future reconnect.
-        logger.warning(
-            "IBKR client could not connect (%s). Broker endpoints will return 503.",
-            exc,
-        )
+    from app.broker.ibkr.config import get_settings as get_ibkr_settings
+
+    ibkr_settings = get_ibkr_settings()
+    ibkr_client: IbkrClient | None = None
+
+    if ibkr_settings.broker_enabled:
+        ibkr_client = IbkrClient()
+        try:
+            await ibkr_client.connect()
+            set_client(ibkr_client)
+            logger.info("IBKR client connected; broker endpoints available.")
+        except ConnectionRefusedDueToSentinelError:
+            # Hard fail — never proceed past a paper/live mismatch.
+            logger.exception("IBKR sentinel mismatch — aborting startup.")
+            raise
+        except (BrokerError, OSError) as exc:
+            # Soft fail — Gateway is probably not running locally. Broker
+            # endpoints will return 503 until a future reconnect.
+            logger.warning(
+                "IBKR client could not connect (%s). Broker endpoints will return 503.",
+                exc,
+            )
+            set_client(None)
+    else:
         set_client(None)
+        logger.info(
+            "IBKR broker disabled (IBKR_BROKER_ENABLED=false). Broker endpoints disabled. Live-runs router available."
+        )
 
     try:
         yield
     finally:
-        if ibkr_client.is_connected():
+        if ibkr_client is not None and ibkr_client.is_connected():
             await ibkr_client.disconnect()
         set_client(None)
         logger.info("Shutting down Polygon Data Service")
@@ -175,6 +195,10 @@ app.include_router(broker.router)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])
+# Live paper-trading run observer (read-only). Three-layer caching:
+# Layer 1: 15 s TTL on dir listing; Layer 2: mtime-signature LRU on status;
+# Layer 3: inode-tracked incremental deque on log tail.
+app.include_router(live_runs_router.router, prefix="/api/live-runs", tags=["live-runs"])
 
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)

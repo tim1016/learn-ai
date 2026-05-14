@@ -4169,6 +4169,10 @@ export interface components {
             is_paper?: boolean | null;
             /** Server Version */
             server_version?: number | null;
+            /** Disabled */
+            disabled?: boolean;
+            /** Reason */
+            reason?: string | null;
             /** Fetched At Ms */
             fetched_at_ms: number;
         };

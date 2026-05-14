@@ -22,6 +22,7 @@ import { BrokerHealthService } from '../services/broker-health.service';
         [class.is-paper]="state.kind === 'paper'"
         [class.is-live]="state.kind === 'live'"
         [class.is-disconnected]="state.kind === 'disconnected'"
+        [class.is-disabled]="state.kind === 'disabled'"
         role="status"
         [attr.aria-label]="state.aria"
       >
@@ -37,6 +38,14 @@ export class BrokerBannerComponent {
   readonly banner = computed(() => {
     const state = this.healthService.bannerState();
     if (state === null) return null;
+    if (state === 'disabled-host-runner-active') {
+      return {
+        kind: 'disabled' as const,
+        icon: 'ℹ',
+        text: 'Broker connection disabled — paper-run is active. Visit /broker/paper-run for live status.',
+        aria: 'IBKR broker connection disabled — host-venv runner owns IBKR for paper-run',
+      };
+    }
     const h = this.healthService.health();
     if (state === 'paper') {
       return {

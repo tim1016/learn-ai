@@ -6,6 +6,7 @@ import {
   signal,
 } from '@angular/core';
 import { UpperCasePipe } from '@angular/common';
+import { RouterLink } from '@angular/router';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
@@ -13,6 +14,7 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import type {
   DiagnosticReport,
+  DiagnosticReportActive,
   IbkrAccountSummary,
   IbkrPosition,
   IbkrPositionsSnapshot,
@@ -44,7 +46,7 @@ const EMPTY_CARD: AsyncCard<never> = { data: null, loading: false, error: null }
 @Component({
   selector: 'app-broker-status',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent, PageGuideComponent, SectionErrorComponent, UpperCasePipe],
+  imports: [PageHeaderComponent, PageGuideComponent, SectionErrorComponent, UpperCasePipe, RouterLink],
   styleUrl: './broker-status.component.scss',
   templateUrl: './broker-status.component.html',
 })
@@ -58,6 +60,11 @@ export class BrokerStatusComponent {
   readonly account = signal<AsyncCard<IbkrAccountSummary>>({ ...EMPTY_CARD });
   readonly positions = signal<AsyncCard<IbkrPositionsSnapshot>>({ ...EMPTY_CARD });
   readonly diagnostics = signal<AsyncCard<DiagnosticReport>>({ ...EMPTY_CARD });
+
+  readonly activeDiagReport = computed<DiagnosticReportActive | null>(() => {
+    const d = this.diagnostics().data;
+    return d != null && d.disabled === false ? d : null;
+  });
 
   /**
    * Visible only when we know the broker is connected. The auth banner

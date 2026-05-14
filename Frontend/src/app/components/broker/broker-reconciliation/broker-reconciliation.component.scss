@@ -139,3 +139,21 @@
     color: #991b1b;
   }
 }
+
+.disabled-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--info-banner-bg, #dbeafe);
+  color: var(--info-banner-fg, #1e40af);
+  border-radius: 6px;
+  font-size: 0.9rem;
+
+  a {
+    color: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+  }
+}

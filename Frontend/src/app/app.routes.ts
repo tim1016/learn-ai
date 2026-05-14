@@ -194,6 +194,13 @@ export const routes: Routes = [
       ).then((m) => m.BrokerReconciliationComponent),
   },
   {
+    path: "broker/paper-run",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-paper-run/broker-paper-run.component"
+      ).then((m) => m.BrokerPaperRunComponent),
+  },
+  {
     path: "edge",
     loadComponent: () =>
       import("./components/edge/edge.component").then((m) => m.EdgeComponent),
