@@ -52,6 +52,8 @@ The first production-quality implementation should be broker-agnostic. It should
 
 ## Data Reality Check
 
+Important current constraint: learn-ai does not have tick-level trade, quote, or order-book data today. Therefore the initial implementation must be a bar-compatible execution planner and simulator. It may use modeled spread/impact assumptions and optional user-supplied bid/ask snapshots, but it must not claim empirical validation of the paper's market microstructure studies.
+
 The paper is primarily about trade-by-trade and quote/order-book microstructure. Our repo currently has strong bar-based research infrastructure and some broker/order abstractions, but most paper studies require data richer than OHLCV bars.
 
 ### Data Classes
@@ -75,6 +77,21 @@ Class C: level-2/order-book event stream.
 - Can support: virtual impact, gap distribution, order-placement distance distribution, cancellation model, zero/low-intelligence order-book simulator calibration.
 
 Implementation must require the correct data class at the API/schema boundary. Do not silently degrade a Class C study to Class A data.
+
+### Immediate Bar-Only Track
+
+Until tick/quote/order-book data exists, Opus should implement only the track below:
+
+```text
+Bar data + configured/modelled liquidity assumptions
+  -> static optimal execution schedule
+  -> integer child-order allocation
+  -> adaptive urgency policy using elapsed time, fills, bar volume, modeled spread, and modeled volatility
+  -> expected cost attribution with model_status="modeled" or "unavailable"
+  -> comparison against TWAP/VWAP-like baselines on bar data
+```
+
+Do not implement empirical order-flow memory, individual trade impact curves, spread-impact phase diagrams, spread shock recovery, virtual impact, or order-book shape as production features until a Class B or Class C dataset is present. Synthetic tests for formulas are allowed, but they are formula tests only.
 
 ## Implementation Map
 
@@ -705,6 +722,19 @@ def plan_adaptive_child_order(
     ...
 ```
 
+Bar-only version for the current repo:
+
+```python
+def plan_adaptive_child_order_from_bars(
+    *,
+    parent: ParentOrderState,
+    latest_bar: BarExecutionMarketState,
+    schedule_state: ScheduleState,
+    config: AdaptiveExecutionConfig,
+) -> ChildOrderInstruction:
+    ...
+```
+
 Suggested dataclasses:
 
 ```python
@@ -729,6 +759,18 @@ class ExecutionMarketState:
     spread: Decimal | None
     recent_volume: int | None
     realized_volatility: float | None
+    tick_size: Decimal
+
+@dataclass(frozen=True)
+class BarExecutionMarketState:
+    ts_ms: int
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+    modeled_spread: Decimal | None
+    modeled_realized_volatility: float | None
     tick_size: Decimal
 
 @dataclass(frozen=True)
@@ -761,12 +803,13 @@ Recommended Phase 1 behavior:
 - Start from static U-shaped target cumulative schedule.
 - At each decision time, compute target filled quantity by now.
 - Compute schedule error: `target_filled - actual_filled`.
-- If ahead and spread is wide, rest passively.
-- If behind and spread is normal/tight, use marketable limit.
-- If deadline is close, raise urgency and allow crossing.
+- In the current bar-only repo, use `modeled_spread` and `modeled_realized_volatility`; set all quote-derived fields to `model_status="modeled"` or `model_status="unavailable"`.
+- If ahead and modeled spread is wide, rest passively or skip the slice.
+- If behind and modeled spread is normal/tight, use a marketable-limit-style simulated child instruction.
+- If deadline is close, raise urgency and allow crossing in the simulator.
 - For small liquid orders such as 100 SPY shares over two hours, expect most cost savings to come from spread avoidance, not market impact reduction.
-- Always cap child size by max participation if recent volume exists.
-- If no bid/ask exists, produce a plan but mark `liquidity_state="unknown"` and avoid claiming minimized cost.
+- Always cap child size by max participation if bar volume exists.
+- If no modeled spread exists, produce a plan but mark `liquidity_state="unknown"` and avoid claiming minimized cost.
 
 Validation:
 
@@ -778,10 +821,10 @@ Validation:
   - `total_quantity=100`, `n_slices=12`, `lot_size=1` produces 100 total shares.
 - Adaptive planner:
   - behind schedule increases urgency.
-  - wide spread lowers aggression when not close to deadline.
+  - wide modeled spread lowers aggression when not close to deadline.
   - near deadline chooses marketable limit or market depending config.
   - `max_participation_rate` caps quantity.
-  - no quote data returns conservative instruction with reason code.
+  - no quote data is expected in the first implementation; no modeled spread returns conservative instruction with reason code.
 
 Do not implement live brokerage routing in this PR family. Emit instructions only.
 
@@ -894,7 +937,8 @@ Files:
 Required behavior:
 
 - Static schedule as target.
-- Quote/spread-aware aggression.
+- Bar-volume-aware aggression.
+- Modeled-spread-aware aggression when no bid/ask exists.
 - Deadline pressure.
 - Fill-rate feedback.
 - Max participation cap.
@@ -903,7 +947,7 @@ Required behavior:
 Acceptance:
 
 - Deterministic tests for small `total_quantity=100`.
-- Edge cases: no quote, one slice, quantity less than slices, odd lot, wide spread, near deadline.
+- Edge cases: no modeled spread, one slice, quantity less than slices, odd lot, wide modeled spread, near deadline.
 - No live brokerage side effects.
 
 ### Phase 3: Spread And Impact Cost Model
@@ -939,7 +983,7 @@ Migration warning:
 
 Goal:
 
-- Implement order-flow memory, impact curves, phase diagram, and spread recovery diagnostics for tick/quote datasets.
+- Deferred until Class B tick/quote data exists. Implement only formula-level helpers and synthetic tests if needed before then.
 
 Files:
 
@@ -983,9 +1027,9 @@ Potential endpoints:
 ```text
 POST /api/execution/optimal-schedule
 POST /api/execution/adaptive-order/next-child
-POST /api/research/microstructure/order-flow-memory
-POST /api/research/microstructure/impact-curve
-POST /api/research/microstructure/spread-recovery
+POST /api/research/microstructure/order-flow-memory       # future: requires tick/trade signs
+POST /api/research/microstructure/impact-curve            # future: requires trades + quotes
+POST /api/research/microstructure/spread-recovery         # future: requires quote series
 ```
 
 Rules:
@@ -1016,13 +1060,17 @@ With no new external data:
 
 - Static optimal execution schedule.
 - Integer child-order allocation.
-- Broker-agnostic adaptive order decision logic using supplied quote state.
-- Execution cost model formulas.
+- Broker-agnostic adaptive order decision logic using bars, observed fills, modeled spread, modeled volatility, and bar volume.
+- Execution cost model formulas with all market-microstructure components marked `model_status="modeled"` or `model_status="unavailable"`.
+- Baseline comparison against TWAP/VWAP-style bar schedules.
+- Paper-reported benchmark fixture parser/test.
+
+With synthetic-only data, for formula development but not empirical claims:
+
 - Synthetic long-memory order-flow simulator.
 - Synthetic impact/propagator tests.
 - Spread/impact formula helpers.
 - Zero-intelligence spread equation.
-- Paper-reported benchmark fixture parser/test.
 
 With top-of-book quotes and trades:
 
@@ -1049,6 +1097,7 @@ With broker/member identity data:
 
 ## What We Cannot Honestly Implement Or Validate Yet
 
+- We do not have tick-level trade, quote, or order-book data today; all microstructure empirical studies are future/data-gated.
 - We cannot reproduce the authors' LSE/PSE/NYSE figures from the arXiv source alone. The raw data is not included.
 - We cannot infer true market order signs from OHLCV bars.
 - We cannot measure bid-ask spread from bars unless bid/ask data is supplied or a model is assumed.

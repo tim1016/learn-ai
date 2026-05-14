@@ -22,7 +22,7 @@ This paper is a review and synthesis of market microstructure studies. It contai
 - Limit-order placement and order-book shape.
 - Optimal execution profiles.
 
-The first repo implementation should prioritize optimal execution and transaction-cost modeling. Those are useful with existing learn-ai infrastructure and can be tested with deterministic synthetic fixtures. Full empirical replication of the paper's LSE/PSE/NYSE studies requires tick, quote, order-book, and sometimes broker/member-code data that is not included in the arXiv source.
+The first repo implementation should prioritize optimal execution and transaction-cost modeling. Because learn-ai does not currently have tick-level trade, quote, or order-book data, the first implementation must be bar-compatible: static optimal schedules, integer child-order allocation, modeled spread/impact assumptions, and comparison against TWAP/VWAP-style bar baselines. Full empirical replication of the paper's LSE/PSE/NYSE studies requires tick, quote, order-book, and sometimes broker/member-code data that is not included in the arXiv source.
 
 ## Paper-Reported Benchmark Fixture
 
@@ -63,6 +63,7 @@ When implementing any formula from this paper:
 
 ## Known Limitations
 
+- learn-ai does not currently have tick-level trade, quote, or order-book data.
 - OHLCV bars cannot validate order-flow memory, trade impact, spread dynamics, or order-book gaps.
 - The source archive does not include the original LSE/PSE/NYSE/Spanish datasets.
 - The empirical values extracted into `BFL-2008-MICRO-001` are reported benchmark values, not regenerated outputs.
