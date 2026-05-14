@@ -1,5 +1,7 @@
 """FastAPI application entry point"""
 
+from __future__ import annotations
+
 import logging
 from contextlib import asynccontextmanager
 
@@ -61,9 +63,9 @@ async def lifespan(app: FastAPI):
     paper-vs-live sentinel mismatch — that's a safety violation and
     must not be silently absorbed.
 
-    When ``IBKR_BROKER_ENABLED=false`` the client is never constructed;
-    the service boots without any IBKR connection and broker endpoints
-    return 503 (or a disabled-sentinel response for /health and /diagnose).
+    When broker is disabled: /health returns HTTP 200 with disabled=True
+    (not 503 — Angular HttpClient routes 503 to error path); /diagnose
+    returns DiagnosticReportDisabled; all other broker endpoints return 503.
     """
     logger.info(f"Starting Polygon Data Service on {settings.HOST}:{settings.PORT}")
     logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
