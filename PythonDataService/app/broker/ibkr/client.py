@@ -115,6 +115,24 @@ class NotConnectedError(BrokerError):
     while the client is disconnected."""
 
 
+class IbkrClientIdInUseError(BrokerError):
+    """Raised when IB Gateway / TWS rejects the connect with error 326.
+
+    TWS error 326 ("Unable to connect as the client id is already in use")
+    means the requested ``clientId`` is held by another open API session
+    on the same Gateway — or, more commonly, by a stale half-open
+    connection from a prior crashed session that hasn't timed out yet.
+
+    Retrying the same ``clientId`` does NOT resolve this: the slot stays
+    reserved until either the zombie socket times out (which can take
+    minutes) or IB Gateway is restarted. So this error is raised
+    immediately on the first attempt rather than being absorbed into a
+    generic ``BrokerError`` after the full retry budget expires —
+    surfacing the actual remediation (restart Gateway or bump
+    ``IBKR_CLIENT_ID``) instead of hiding it under ``TimeoutError``.
+    """
+
+
 def _is_paper_account(account_id: str) -> bool:
     """Paper accounts at IBKR begin with ``DU``."""
     return account_id.upper().startswith("DU")
@@ -138,6 +156,18 @@ class IbkrClient:
         self._settings = settings or get_settings()
         self._ib: IB = IB()
         self._connected_account: str | None = None
+        # Tracks whether TWS error 326 ("client id already in use") has
+        # surfaced during the current connect attempt. ib_async logs this
+        # via the wrapper but raises only TimeoutError from connectAsync,
+        # hiding the actionable cause. Hook errorEvent so connect() can
+        # fast-fail with the real remediation message.
+        self._client_id_in_use_seen: bool = False
+        self._ib.errorEvent += self._on_ib_error
+
+    def _on_ib_error(self, reqId: int, errorCode: int, errorString: str, contract) -> None:
+        """ib_async errorEvent handler — captures TWS error 326."""
+        if errorCode == 326:
+            self._client_id_in_use_seen = True
 
     # ── lifecycle ───────────────────────────────────────────────────────
 
@@ -155,6 +185,7 @@ class IbkrClient:
         last_error: Exception | None = None
 
         for attempt in range(1, s.connect_attempts + 1):
+            self._client_id_in_use_seen = False
             try:
                 logger.info(
                     "[STEP 1/3] IBKR connect attempt %d/%d → %s:%d (mode=%s, clientId=%d)",
@@ -174,6 +205,14 @@ class IbkrClient:
                 break
             except Exception as exc:
                 last_error = exc
+                if self._client_id_in_use_seen:
+                    raise IbkrClientIdInUseError(
+                        f"IBKR clientId {s.client_id} is already in use on "
+                        f"Gateway at {resolved_host}:{s.port}. The slot will "
+                        f"not free up on retry — remediation: restart IB "
+                        f"Gateway to clear the zombie session, or set a "
+                        f"different IBKR_CLIENT_ID in .env."
+                    ) from exc
                 logger.warning(
                     "IBKR connect attempt %d failed: %s",
                     attempt,

@@ -15,6 +15,7 @@ from app.broker.ibkr.client import (
     BrokerError,
     ConnectionRefusedDueToSentinelError,
     IbkrClient,
+    IbkrClientIdInUseError,
     _detect_host_gateway,
     _is_paper_account,
     _resolve_host,
@@ -211,6 +212,74 @@ async def test_connect_retries_then_fails(settings_paper: IbkrSettings) -> None:
 
 
 @pytest.mark.asyncio
+async def test_connect_fast_fails_on_client_id_in_use_no_retries() -> None:
+    """TWS error 326 must short-circuit the retry loop with a typed error.
+
+    Regression: 2026-05-14 paper dry-run hit a zombie clientId=42 after
+    a prior failed run. ib_async raises only TimeoutError from
+    connectAsync (the underlying error 326 is logged to the wrapper),
+    so the runner burned its full 3-attempt budget — taking ~18 seconds
+    — then surfaced "BrokerError: ... last error: TimeoutError()",
+    which hid the actionable cause from the operator.
+
+    Error 326 cannot be resolved by retry — the slot stays reserved
+    until the zombie socket times out (minutes) or Gateway is
+    restarted. So: fail on attempt 1 with IbkrClientIdInUseError,
+    name the remediation in the message, and don't burn more time.
+    """
+    fake_ib, fake_class = _patched_ib_class()
+
+    settings_three = IbkrSettings(mode="paper", port=4002, connect_attempts=3, _env_file=None)
+
+    async def _connect_simulating_326(**kwargs):
+        # The real ib_async fires errorEvent with code 326 from the
+        # wrapper before connectAsync times out. Reproduce that
+        # ordering by calling the registered handler first.
+        client_under_test._on_ib_error(-1, 326, "Unable to connect as the client id is already in use.", None)
+        raise TimeoutError()
+
+    fake_ib.connectAsync.side_effect = _connect_simulating_326
+
+    with patch("ib_async.IB", fake_class):
+        client_under_test = IbkrClient(settings_three)
+        with pytest.raises(IbkrClientIdInUseError) as excinfo:
+            await client_under_test.connect()
+
+    # Fast-fail: exactly ONE connect attempt, no retries.
+    assert fake_ib.connectAsync.await_count == 1
+    # The remediation must be in the message — that's the whole point.
+    msg = str(excinfo.value)
+    assert "already in use" in msg
+    assert "restart IB Gateway" in msg or "IBKR_CLIENT_ID" in msg
+
+
+@pytest.mark.asyncio
+async def test_connect_does_not_misclassify_non_326_errors_as_client_id_in_use() -> None:
+    """A non-326 errorEvent firing during a connect failure must NOT
+    cause IbkrClientIdInUseError. Only code 326 triggers the fast-fail.
+    """
+    fake_ib, fake_class = _patched_ib_class()
+
+    settings_one = IbkrSettings(mode="paper", port=4002, connect_attempts=1, _env_file=None)
+
+    async def _connect_with_unrelated_error(**kwargs):
+        # Simulate ib_async firing a DIFFERENT error code (e.g. 502
+        # "Couldn't connect to TWS") before the timeout.
+        client_under_test._on_ib_error(-1, 502, "Couldn't connect to TWS.", None)
+        raise OSError("Gateway unreachable")
+
+    fake_ib.connectAsync.side_effect = _connect_with_unrelated_error
+
+    with patch("ib_async.IB", fake_class):
+        client_under_test = IbkrClient(settings_one)
+        # Should raise BrokerError (the generic case), NOT IbkrClientIdInUseError.
+        with pytest.raises(BrokerError) as excinfo:
+            await client_under_test.connect()
+
+    assert not isinstance(excinfo.value, IbkrClientIdInUseError)
+
+
+@pytest.mark.asyncio
 async def test_disconnect_is_idempotent(settings_paper: IbkrSettings) -> None:
     fake_ib, fake_class = _patched_ib_class()
     fake_ib.isConnected.return_value = False  # already disconnected
@@ -235,6 +304,11 @@ async def test_disconnect_calls_sync_ib_disconnect_when_connected(
     import ib_async
 
     fake_ib = MagicMock(spec=ib_async.IB)
+    # errorEvent is set in IB.__init__() as an Event instance, not an
+    # attribute declared at class level — spec=IB doesn't pick it up.
+    # IbkrClient.__init__ subscribes a handler via "errorEvent +=
+    # handler" so the attribute must exist on the spec'd mock.
+    fake_ib.errorEvent = MagicMock()
     fake_ib.isConnected.return_value = True
     fake_ib.disconnect.return_value = "Disconnected"
     fake_class = MagicMock(return_value=fake_ib)
