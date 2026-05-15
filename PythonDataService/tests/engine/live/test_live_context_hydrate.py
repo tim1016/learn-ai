@@ -265,7 +265,7 @@ def test_disabled_writes_receipt_without_reading_sidecar(tmp_path: Path) -> None
     assert receipt.validation.failure_reason == "disabled_by_operator"
 
 
-# ---- maybe_write ----
+# ---- REQUIRE policy (extra ladder cases) ----
 
 
 def test_require_restore_failure_treated_as_schema_mismatch(tmp_path: Path) -> None:
@@ -307,6 +307,9 @@ def test_require_corrupted_samples_treated_as_indicators_unready(tmp_path: Path)
         ctx.hydrate_indicator_state(strat)
     receipt = HydrationReceipt.model_validate_json((ctx.run_dir / "indicator_state_hydration.json").read_text())
     assert receipt.validation.failure_reason == "indicators_unready"
+
+
+# ---- maybe_write ----
 
 
 def test_maybe_write_skips_when_strategy_reports_none(tmp_path: Path) -> None:
