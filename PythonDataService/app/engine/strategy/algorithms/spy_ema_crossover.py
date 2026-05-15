@@ -39,6 +39,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.engine.live.indicator_state import ValidationResult
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
@@ -73,6 +77,9 @@ class _OpenTrade:
 
 
 class SpyEmaCrossoverAlgorithm(Strategy):
+    STRATEGY_KEY = "spy_ema_crossover"
+    CONSOLIDATOR_PERIOD_MIN = 15
+
     def __init__(self, symbol: str = "SPY") -> None:
         super().__init__()
         # The symbol is parameterized (default SPY) so the exact same
@@ -321,3 +328,74 @@ class SpyEmaCrossoverAlgorithm(Strategy):
             assert self.ctx is not None
             self.ctx.liquidate(self._symbol)
             self._in_position = False
+
+    # ---- Indicator-state persistence hooks (PR1) ----
+
+    def report_state_for_persistence(self) -> dict | None:
+        """Return the strategy's persistable state, or None if not restorable.
+
+        Returns None when any of:
+          * indicators not all is_ready (the restored state would be
+            sub-warmup and the validation ladder would reject it)
+          * position not flat (we'd be hydrating into an open trade
+            tomorrow with no way to reconcile entry context)
+          * pending entry / open trade bookkeeping is mid-flight
+
+        On the happy path returns a dict with ema5/ema10/rsi14 indicator
+        states (via to_state_dict), the prev-cross flag, and a lifecycle
+        block proving the strategy is flat.
+        """
+        if self._ema5 is None or self._ema10 is None or self._rsi14 is None:
+            return None
+        if not (self._ema5.is_ready and self._ema10.is_ready and self._rsi14.is_ready):
+            return None
+        if self._in_position:
+            return None
+        if self._pending_entry is not None or self._open_trade is not None:
+            return None
+        return {
+            "ema5": self._ema5.to_state_dict(),
+            "ema10": self._ema10.to_state_dict(),
+            "rsi14": self._rsi14.to_state_dict(),
+            "_prev_ema5_above_ema10": self._prev_ema5_above_ema10,
+            "lifecycle": {
+                "position_qty": 0,
+                "pending_orders_count": 0,
+                "open_insights": 0,
+                "last_signal_kind": None,
+                "last_signal_bar_end_ms": None,
+            },
+        }
+
+    def restore_state_from_persistence(self, payload: dict) -> None:
+        """Rehydrate indicator internals + _prev_ema5_above_ema10 from payload.
+
+        Caller (LiveContext.hydrate_indicator_state) guarantees that
+        ``validate_state_payload(payload)`` has already passed, and
+        that this is called immediately after ``initialize()`` while
+        indicators are fresh-constructed and unfed.
+        """
+        assert self._ema5 is not None and self._ema10 is not None and self._rsi14 is not None
+        self._ema5.restore_state(payload["ema5"])
+        self._ema10.restore_state(payload["ema10"])
+        self._rsi14.restore_state(payload["rsi14"])
+        self._prev_ema5_above_ema10 = bool(payload["_prev_ema5_above_ema10"])
+
+    def validate_state_payload(self, payload: dict) -> ValidationResult:
+        """Shape-check the payload for this strategy. Returns a ValidationResult.
+
+        Imports ValidationResult locally to avoid a module-level
+        cycle (indicator_state -> strategy is not desirable; this
+        method is rarely called in hot paths).
+        """
+        from app.engine.live.indicator_state import ValidationResult
+
+        required_top = {"ema5", "ema10", "rsi14", "_prev_ema5_above_ema10", "lifecycle"}
+        if not isinstance(payload, dict) or not required_top.issubset(payload.keys()):
+            return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
+        if not isinstance(payload["lifecycle"], dict):
+            return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
+        required_lifecycle = {"position_qty", "pending_orders_count", "open_insights"}
+        if not required_lifecycle.issubset(payload["lifecycle"].keys()):
+            return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
+        return ValidationResult.all_passed()
