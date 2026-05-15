@@ -44,7 +44,7 @@ def test_previous_completed_session_close(case: str, session_start_ms: int, expe
     assert actual == expected_prev_close_ms, f"{case}: expected {expected_prev_close_ms}, got {actual}"
 
 
-def test_weekend_session_start_raises_no_session_error() -> None:
+def test_weekend_session_start_returns_previous_friday_close() -> None:
     sat = _ms(2026, 5, 16, 9, 30)
     # The function asks for the previous SESSION close. A start_ms on
     # a non-session day is pathological but the function is still

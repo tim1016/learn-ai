@@ -23,6 +23,7 @@ class NoSessionError(LookupError):
 
 _LOOKBACK_DAYS = 14
 _CALENDAR_NAME = "NYSE"
+_CALENDAR = mcal.get_calendar(_CALENDAR_NAME)
 
 
 def previous_completed_nyse_session_close_ms(session_start_ms: int) -> int:
@@ -43,14 +44,13 @@ def previous_completed_nyse_session_close_ms(session_start_ms: int) -> int:
     # session_start_ms of 0 is pathological and callers must not pass it.
     if session_start_ms <= 0:
         raise NoSessionError(f"session_start_ms={session_start_ms} is not a valid trading timestamp")
-    cal = mcal.get_calendar(_CALENDAR_NAME)
     session_start_ts = pd.Timestamp(session_start_ms, unit="ms", tz="UTC")
     start = (session_start_ts - pd.Timedelta(days=_LOOKBACK_DAYS)).normalize()
     end = session_start_ts.normalize()
-    schedule = cal.schedule(start_date=start, end_date=end)
+    schedule = _CALENDAR.schedule(start_date=start, end_date=end)
     if schedule.empty:
         raise NoSessionError(f"no NYSE sessions in {_LOOKBACK_DAYS}-day lookback ending at {session_start_ts}")
-    # schedule['market_close'] is tz-aware UTC; filter strictly < start.
+    # schedule['market_close'] is tz-aware UTC; keep only rows strictly before session_start_ts.
     earlier = schedule[schedule["market_close"] < session_start_ts]
     if earlier.empty:
         raise NoSessionError(f"no completed NYSE session strictly before {session_start_ts}")
