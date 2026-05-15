@@ -254,6 +254,44 @@ or (c) wait for indicator-state-persistence-across-restarts to ship
 If a halt rule trips intra-day (rare in dry-run mode), the runner stops
 and writes `halt.json` under the run directory. Inspect, fix, restart.
 
+### Hydrate policy
+
+The `start` subcommand reads / validates the prior session's indicator
+state sidecar before consuming any bars. Three modes:
+
+| Flag                      | Behavior                                                       | When to use |
+|---|---|---|
+| `--hydrate-policy require` (default) | Validate sidecar; exit 4 on missing/stale/mismatched/unready/non-flat | B2 dry-run gate and paper week (the default — no flag needed) |
+| `--hydrate-policy optional` | Cold-start when sidecar missing/invalid; write at end-of-session | Seed day (Monday of paper week, or first ever run) |
+| `--hydrate-policy disabled` (alias: `--allow-cold-start`) | Never read sidecar; still write at end-of-session | Operator escape hatch ("I know yesterday's state is bad, warmup from scratch today") |
+
+On exit 4 under require, inspect `<run_dir>/indicator_state_hydration.json`
+for the failure reason (one of: `disabled_by_operator`, `missing`,
+`schema_mismatch`, `identity_mismatch`, `calendar_stale`,
+`payload_mismatch`, `indicators_unready`, `lifecycle_not_flat`).
+
+State lives at `PythonDataService/artifacts/live_state/<strategy_key>/<symbol>_<period>m.json`
+(e.g., `PythonDataService/artifacts/live_state/spy_ema_crossover/SPY_15m.json`)
+and is keyed by identity-tuple — every `run_id` reads / writes the same
+file, so day-over-day continuity is automatic.
+
+## Step 3a — Seed day (first ever run)
+
+The very first paper-week run (or the first dry-run attempt ever) has no prior sidecar. Use the `optional` policy so the runner cold-starts instead of exiting 4:
+
+```bash
+IBKR_HOST=127.0.0.1 \
+  PYTHONPATH=PythonDataService python -m app.engine.live.run start \
+  --run-dir PythonDataService/artifacts/live_runs/<run_id> \
+  --readonly \
+  --hydrate-policy optional
+```
+
+The runner cold-starts (warmup takes ~3 h 45 m for `SpyEmaCrossoverAlgorithm`),
+writes its first sidecar at 15:55 ET force-flat completion. From day 2 onward,
+`--hydrate-policy require` (the default; no flag needed) accepts that sidecar
+and skips warmup.
+
 ## Step 4 — End-of-session reconciliation (host)
 
 After force-flat (or end of session in dry-run mode), invoke the daily
