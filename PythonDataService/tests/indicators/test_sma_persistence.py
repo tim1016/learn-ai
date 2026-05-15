@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from app.engine.indicators.sma import SimpleMovingAverage
 
 
@@ -49,3 +51,16 @@ def test_bit_identical_outputs_after_restore() -> None:
     actual = dst.current_value
 
     assert actual == expected  # Decimal equality — atol=0
+
+
+def test_restore_state_rejects_oversized_window() -> None:
+    """A corrupt state with window > period must fail-fast, not silently truncate."""
+    src = SimpleMovingAverage("S", 3)
+    src.update(datetime(2026, 5, 18, 14, 0, tzinfo=UTC), Decimal("100"))
+    state = src.to_state_dict()
+    state["window"] = [str(Decimal(i)) for i in range(5)]  # 5 > period=3
+    state["sum"] = str(sum(Decimal(i) for i in range(5)))
+
+    dst = SimpleMovingAverage("S", 3)
+    with pytest.raises(ValueError, match="window length"):
+        dst.restore_state(state)

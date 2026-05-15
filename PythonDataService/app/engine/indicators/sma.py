@@ -48,8 +48,11 @@ class SimpleMovingAverage(Indicator):
         }
 
     def _restore_state_extra(self, state: dict) -> None:
+        raw = state["window"]
+        if len(raw) > self.period:
+            raise ValueError(f"restore_state: window length {len(raw)} exceeds period {self.period}")
         self._window = deque(
-            (Decimal(v) for v in state["window"]),
+            (Decimal(v) for v in raw),
             maxlen=self.period,
         )
         self._sum = Decimal(state["sum"])

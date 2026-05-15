@@ -28,7 +28,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from app.engine.indicators.base import Indicator
+from app.engine.indicators.base import Indicator, _decimal_to_str, _str_to_decimal
 
 
 class RelativeStrengthIndex(Indicator):
@@ -102,18 +102,18 @@ class RelativeStrengthIndex(Indicator):
 
     def _to_state_extra(self) -> dict:
         return {
-            "prev_input": None if self._prev_input is None else str(self._prev_input),
-            "avg_gain": None if self._avg_gain is None else str(self._avg_gain),
-            "avg_loss": None if self._avg_loss is None else str(self._avg_loss),
+            "prev_input": _decimal_to_str(self._prev_input),
+            "avg_gain": _decimal_to_str(self._avg_gain),
+            "avg_loss": _decimal_to_str(self._avg_loss),
             "gain_sum": str(self._gain_sum),
             "loss_sum": str(self._loss_sum),
             "delta_samples": self._delta_samples,
         }
 
     def _restore_state_extra(self, state: dict) -> None:
-        self._prev_input = None if state["prev_input"] is None else Decimal(state["prev_input"])
-        self._avg_gain = None if state["avg_gain"] is None else Decimal(state["avg_gain"])
-        self._avg_loss = None if state["avg_loss"] is None else Decimal(state["avg_loss"])
+        self._prev_input = _str_to_decimal(state["prev_input"])
+        self._avg_gain = _str_to_decimal(state["avg_gain"])
+        self._avg_loss = _str_to_decimal(state["avg_loss"])
         self._gain_sum = Decimal(state["gain_sum"])
         self._loss_sum = Decimal(state["loss_sum"])
         self._delta_samples = int(state["delta_samples"])
