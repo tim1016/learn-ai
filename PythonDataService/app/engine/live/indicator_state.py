@@ -22,6 +22,7 @@ import contextlib
 import hashlib
 import os
 import sys
+import time as _time
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
@@ -264,3 +265,269 @@ def _file_lock(target_path: Path):  # type: ignore[return]
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
     finally:
         fh.close()
+
+
+def hydrate(
+    *,
+    strategy: Any,
+    policy: HydratePolicy,
+    artifacts_root: Path,
+    run_dir: Path,
+    session_start_ms: int,
+) -> None:
+    """Run the six-row validation ladder + write the hydration receipt.
+
+    Side effects:
+      * Writes <run_dir>/indicator_state_hydration.json (always).
+      * Calls strategy.restore_state_from_persistence(payload) on success.
+      * Raises IndicatorStateHydrationError if policy=REQUIRE and the
+        ladder rejects (after writing the receipt).
+    """
+    # Local import to keep module-load surface minimal.
+    from app.engine.live.nyse_calendar import NoSessionError, previous_completed_nyse_session_close_ms
+
+    strategy_key: str = strategy.STRATEGY_KEY
+    symbol: str = (
+        strategy.ctx.symbols[0]
+        if strategy.ctx is not None and strategy.ctx.symbols
+        else getattr(strategy, "_symbol_name", "")
+    )
+    period: int = strategy.CONSOLIDATOR_PERIOD_MIN
+    receipt_path = run_dir / "indicator_state_hydration.json"
+    global_path = stable_global_path(artifacts_root, strategy_key, symbol, period)
+    repo = IndicatorStateRepo(global_path)
+
+    def _write_receipt(receipt: HydrationReceipt) -> None:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text(receipt.model_dump_json(indent=2))
+
+    def _base_receipt(
+        accepted: bool,
+        validation: ValidationResult,
+        sidecar_last_bar_ms: int | None = None,
+        expected_prev_close_ms: int | None = None,
+        global_sha: str | None = None,
+    ) -> HydrationReceipt:
+        return HydrationReceipt(
+            schema_version=1,
+            hydrated_at_ms=int(_time.time() * 1000),
+            policy=policy,
+            global_path=str(global_path),
+            global_sha256=global_sha,
+            accepted=accepted,
+            strategy_key=strategy_key,
+            symbol=symbol,
+            consolidator_period_min=period,
+            sidecar_last_consolidated_bar_end_ms=sidecar_last_bar_ms,
+            expected_prev_session_close_ms=expected_prev_close_ms,
+            calendar="NYSE",
+            validation=validation,
+        )
+
+    # Policy: DISABLED — skip read, write disabled receipt, return.
+    if policy is HydratePolicy.DISABLED:
+        _write_receipt(
+            _base_receipt(
+                accepted=False,
+                validation=ValidationResult.failed("disabled_by_operator"),
+            )
+        )
+        return
+
+    # Check #1: schema parse + existence.
+    try:
+        envelope = repo.read()
+    except Exception:
+        receipt = _base_receipt(
+            accepted=False,
+            validation=ValidationResult.failed("schema_mismatch", schema_version_ok=False),
+            global_sha=repo.sha256_of_on_disk(),
+        )
+        _write_receipt(receipt)
+        if policy is HydratePolicy.REQUIRE:
+            raise IndicatorStateHydrationError(receipt)
+        return
+
+    if envelope is None:
+        receipt = _base_receipt(accepted=False, validation=ValidationResult.failed("missing"))
+        _write_receipt(receipt)
+        if policy is HydratePolicy.REQUIRE:
+            raise IndicatorStateHydrationError(receipt)
+        return
+
+    global_sha = repo.sha256_of_on_disk()
+
+    # Check #2: identity.
+    if (
+        envelope.strategy_key != strategy_key
+        or envelope.symbol.upper() != symbol.upper()
+        or envelope.consolidator_period_min != period
+    ):
+        receipt = _base_receipt(
+            accepted=False,
+            validation=ValidationResult.failed("identity_mismatch", identity_ok=False),
+            sidecar_last_bar_ms=envelope.last_consolidated_bar_end_ms,
+            global_sha=global_sha,
+        )
+        _write_receipt(receipt)
+        if policy is HydratePolicy.REQUIRE:
+            raise IndicatorStateHydrationError(receipt)
+        return
+
+    # Check #3: calendar — previous completed NYSE session.
+    try:
+        expected_prev_close_ms = previous_completed_nyse_session_close_ms(session_start_ms)
+    except NoSessionError:
+        receipt = _base_receipt(
+            accepted=False,
+            validation=ValidationResult.failed("calendar_stale", calendar_ok=False),
+            sidecar_last_bar_ms=envelope.last_consolidated_bar_end_ms,
+            global_sha=global_sha,
+        )
+        _write_receipt(receipt)
+        if policy is HydratePolicy.REQUIRE:
+            raise IndicatorStateHydrationError(receipt)
+        return
+
+    if envelope.last_consolidated_bar_end_ms != expected_prev_close_ms:
+        receipt = _base_receipt(
+            accepted=False,
+            validation=ValidationResult.failed("calendar_stale", calendar_ok=False),
+            sidecar_last_bar_ms=envelope.last_consolidated_bar_end_ms,
+            expected_prev_close_ms=expected_prev_close_ms,
+            global_sha=global_sha,
+        )
+        _write_receipt(receipt)
+        if policy is HydratePolicy.REQUIRE:
+            raise IndicatorStateHydrationError(receipt)
+        return
+
+    # Check #4: payload shape — strategy's own validator.
+    shape_result: ValidationResult = strategy.validate_state_payload(envelope.payload)
+    if shape_result.failure_reason is not None:
+        receipt = _base_receipt(
+            accepted=False,
+            validation=shape_result,
+            sidecar_last_bar_ms=envelope.last_consolidated_bar_end_ms,
+            expected_prev_close_ms=expected_prev_close_ms,
+            global_sha=global_sha,
+        )
+        _write_receipt(receipt)
+        if policy is HydratePolicy.REQUIRE:
+            raise IndicatorStateHydrationError(receipt)
+        return
+
+    # Check #5: indicators ready — samples >= period (RSI: period+1).
+    if not _indicators_ready(envelope.payload):
+        receipt = _base_receipt(
+            accepted=False,
+            validation=ValidationResult.failed("indicators_unready", indicators_ready_ok=False),
+            sidecar_last_bar_ms=envelope.last_consolidated_bar_end_ms,
+            expected_prev_close_ms=expected_prev_close_ms,
+            global_sha=global_sha,
+        )
+        _write_receipt(receipt)
+        if policy is HydratePolicy.REQUIRE:
+            raise IndicatorStateHydrationError(receipt)
+        return
+
+    # Check #6: lifecycle flat.
+    lifecycle = envelope.payload["lifecycle"]
+    if (
+        lifecycle.get("position_qty", 0) != 0
+        or lifecycle.get("pending_orders_count", 0) != 0
+        or lifecycle.get("open_insights", 0) != 0
+    ):
+        receipt = _base_receipt(
+            accepted=False,
+            validation=ValidationResult.failed("lifecycle_not_flat", lifecycle_flat_ok=False),
+            sidecar_last_bar_ms=envelope.last_consolidated_bar_end_ms,
+            expected_prev_close_ms=expected_prev_close_ms,
+            global_sha=global_sha,
+        )
+        _write_receipt(receipt)
+        if policy is HydratePolicy.REQUIRE:
+            raise IndicatorStateHydrationError(receipt)
+        return
+
+    # All checks passed — restore and write accepted receipt.
+    strategy.restore_state_from_persistence(envelope.payload)
+    _write_receipt(
+        _base_receipt(
+            accepted=True,
+            validation=ValidationResult.all_passed(),
+            sidecar_last_bar_ms=envelope.last_consolidated_bar_end_ms,
+            expected_prev_close_ms=expected_prev_close_ms,
+            global_sha=global_sha,
+        )
+    )
+
+
+def _indicators_ready(payload: dict[str, Any]) -> bool:
+    """Check each indicator block has samples >= period (RSI needs period+1).
+
+    Per-strategy if-name-is-RSI behavior is intentional for PR1 — the
+    SpyEma strategy is the only consumer, and RSI's is_ready predicate
+    is genuinely different from SMA/EMA's. A generic refactor lives in
+    a future base-class promotion.
+    """
+    for key in ("ema5", "ema10", "rsi14"):
+        block = payload.get(key)
+        if not isinstance(block, dict):
+            return False
+        samples = int(block.get("samples", 0))
+        period = int(block.get("period", 0))
+        threshold = period + 1 if key.startswith("rsi") else period
+        if samples < threshold:
+            return False
+    return True
+
+
+def maybe_write(
+    *,
+    strategy: Any,
+    artifacts_root: Path,
+    reason: str,
+    code_sha: str,
+    strategy_spec_sha: str,
+    last_consolidated_bar_end_ms: int,
+) -> None:
+    """Force-flat or graceful-shutdown checkpoint write.
+
+    Skip without write if:
+      * strategy.report_state_for_persistence returns None
+      * reason == 'shutdown' and an on-disk envelope already has
+        an equal-or-newer last_consolidated_bar_end_ms (the
+        "newer check" — protects force-flat's canonical write).
+    """
+    payload = strategy.report_state_for_persistence()
+    if payload is None:
+        return
+
+    if reason not in ("force_flat", "shutdown"):
+        raise ValueError(f"unknown reason: {reason!r}")
+
+    strategy_key: str = strategy.STRATEGY_KEY
+    symbol: str = (
+        strategy.ctx.symbols[0]
+        if strategy.ctx is not None and strategy.ctx.symbols
+        else getattr(strategy, "_symbol_name", "")
+    )
+    period: int = strategy.CONSOLIDATOR_PERIOD_MIN
+
+    envelope = IndicatorStateEnvelope(
+        schema_version=1,
+        strategy_key=strategy_key,
+        symbol=symbol,
+        consolidator_period_min=period,
+        last_consolidated_bar_end_ms=last_consolidated_bar_end_ms,
+        captured_at_ms=int(_time.time() * 1000),
+        captured_reason=reason,
+        code_sha=code_sha,
+        strategy_spec_sha=strategy_spec_sha,
+        payload=payload,
+    )
+    repo = IndicatorStateRepo(stable_global_path(artifacts_root, strategy_key, symbol, period))
+    if reason == "shutdown" and not repo.is_strictly_newer_than_on_disk(envelope):
+        return
+    repo.write(envelope)
