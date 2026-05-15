@@ -73,6 +73,70 @@
 @if (s !== null) {
   <div class="panels">
 
+    <!-- 0. Host runner daemon -->
+    <section class="card runner-card" aria-labelledby="runner-heading">
+      <header class="card-header">
+        <h2 id="runner-heading">Host Runner</h2>
+        @if (daemonUnavailable()) {
+          <span class="status-pill bad">OFFLINE</span>
+        } @else {
+          <span class="status-pill ok">{{ hostProcessLabel() }}</span>
+        }
+      </header>
+      @if (daemonUnavailable()) {
+        <p class="muted">Host daemon unavailable.</p>
+        <div class="command-row">
+          <code class="mono">{{ daemonLaunchCommand }}</code>
+          <button type="button" class="icon-btn" (click)="copyDaemonCommand()" aria-label="Copy host daemon launch command" title="Copy launch command">
+            <i class="pi pi-copy" aria-hidden="true"></i>
+          </button>
+        </div>
+      } @else if (daemonHealth.value(); as daemon) {
+        <dl class="kv-grid">
+          <dt>PID</dt>
+          <dd class="mono">{{ daemon.process.pid ?? '—' }}</dd>
+          <dt>Started</dt>
+          <dd class="mono">{{ fmtTimestampNy(daemon.process.started_at_ms) }}</dd>
+          <dt>Exit</dt>
+          <dd class="mono">{{ daemon.process.exit_code ?? '—' }}</dd>
+        </dl>
+        @if (daemon.process.log_path) {
+          <p class="muted mono">{{ daemon.process.log_path }}</p>
+        }
+      } @else {
+        <p class="muted">Checking daemon…</p>
+      }
+
+      <div class="runner-controls">
+        <label class="check-control">
+          <input type="checkbox" [checked]="runnerReadonly()" (change)="setRunnerReadonly($event)" />
+          <span>Readonly</span>
+        </label>
+        <label class="select-control">
+          <span>Hydrate</span>
+          <select [value]="runnerHydratePolicy()" (change)="setRunnerHydratePolicy(getSelectValue($event))">
+            <option value="require">require</option>
+            <option value="optional">optional</option>
+            <option value="disabled">disabled</option>
+          </select>
+        </label>
+        <button type="button" class="primary-action" (click)="startHostRunner()" [disabled]="!hostRunnerCanStart()">
+          <i class="pi pi-play" aria-hidden="true"></i>
+          <span>Start</span>
+        </button>
+        <button type="button" class="danger-action" (click)="stopHostRunner(false)" [disabled]="!hostRunnerCanStop()">
+          <i class="pi pi-stop" aria-hidden="true"></i>
+          <span>Stop</span>
+        </button>
+      </div>
+      @if (runnerMessage()) {
+        <p class="runner-message ok">{{ runnerMessage() }}</p>
+      }
+      @if (runnerError()) {
+        <p class="runner-message bad">{{ runnerError() }}</p>
+      }
+    </section>
+
     <!-- 1. Heartbeat panel -->
     <section class="card" aria-labelledby="heartbeat-heading">
       <header class="card-header">

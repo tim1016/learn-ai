@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RunState(StrEnum):
@@ -162,3 +162,67 @@ class LogLine(BaseModel):
     # populated for bar events
     consolidator_emitted: int | None = None
     snapshot_set: str | None = None
+
+
+HydratePolicy = Literal["require", "optional", "disabled"]
+
+
+class HostRunnerProcessState(StrEnum):
+    """Lifecycle state of the host-side runner subprocess."""
+
+    idle = "idle"
+    running = "running"
+    exited = "exited"
+    stopping = "stopping"
+
+
+class HostRunnerProcessStatus(BaseModel):
+    """Current host-daemon process status.
+
+    This is intentionally process-level, not trading-state-level. Trading
+    state remains authoritative in :class:`LiveRunStatus`, derived from the
+    run directory artifacts.
+    """
+
+    state: HostRunnerProcessState
+    run_id: str | None = None
+    pid: int | None = None
+    started_at_ms: int | None = None
+    ended_at_ms: int | None = None
+    exit_code: int | None = None
+    command: list[str] = Field(default_factory=list)
+    log_path: str | None = None
+    message: str | None = None
+
+
+class HostRunnerHealth(BaseModel):
+    """Health envelope returned by the host-side runner daemon."""
+
+    ok: bool
+    repo_root: str
+    live_runs_root: str
+    fetched_at_ms: int
+    process: HostRunnerProcessStatus
+
+
+class HostRunnerStartRequest(BaseModel):
+    """Request body for starting one existing run from the host daemon."""
+
+    readonly: bool = True
+    hydrate_policy: HydratePolicy = "require"
+    strategy: str = Field(default="spy_ema_crossover", pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    max_orders_per_day: int = Field(default=4, ge=0, le=100)
+    ibkr_host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
+
+
+class HostRunnerStopRequest(BaseModel):
+    """Request body for stopping the active host runner subprocess."""
+
+    force: bool = False
+
+
+class HostRunnerActionResponse(BaseModel):
+    """Response for daemon start/stop actions."""
+
+    accepted: bool
+    process: HostRunnerProcessStatus

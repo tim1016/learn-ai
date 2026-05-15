@@ -317,6 +317,113 @@
   }
 }
 
+// ── Host runner controls ──────────────────────────────────────────────
+
+.runner-card {
+  .kv-grid dd {
+    text-align: left;
+  }
+}
+
+.command-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2rem;
+  gap: 0.5rem;
+  align-items: center;
+
+  code {
+    min-width: 0;
+    overflow-x: auto;
+    white-space: nowrap;
+    padding: 0.4rem 0.5rem;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle, #e5e7eb);
+    background: var(--bg-canvas-alt, #f9fafb);
+    font-size: 0.78rem;
+  }
+}
+
+.runner-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.check-control,
+.select-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary, #4b5563);
+  font-size: 0.85rem;
+}
+
+.select-control select {
+  height: 2rem;
+  border: 1px solid var(--border-subtle, #d1d5db);
+  border-radius: 6px;
+  background: var(--bg-elevated, #ffffff);
+  color: var(--text-primary);
+}
+
+.primary-action,
+.danger-action,
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  height: 2rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+  cursor: pointer;
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent, #2563eb);
+    outline-offset: 2px;
+  }
+}
+
+.primary-action {
+  padding: 0 0.8rem;
+  background: var(--accent, #2563eb);
+  color: #ffffff;
+}
+
+.danger-action {
+  padding: 0 0.8rem;
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #991b1b;
+}
+
+.icon-btn {
+  width: 2rem;
+  background: var(--bg-elevated, #ffffff);
+  border-color: var(--border-subtle, #d1d5db);
+  color: var(--text-secondary, #4b5563);
+}
+
+.runner-message {
+  margin: 0;
+  font-size: 0.85rem;
+
+  &.ok {
+    color: #166534;
+  }
+
+  &.bad {
+    color: #991b1b;
+  }
+}
+
 // ── Log lines ──────────────────────────────────────────────────────────
 
 .log-lines {

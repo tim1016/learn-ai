@@ -167,8 +167,32 @@ This command runs on the host (host venv). See "A note on where
 commands run" above for why container-side `start` does not work
 (IBKR error 420 — same-IP binding on RT bars).
 
-**Before launching, stop the `polygon-data-service` container** so
-its lifespan `IbkrClient` releases `client_id=42`:
+### Optional UI start via host daemon
+
+Instead of paste-running the `start` command by hand, launch the host
+daemon once from the repo root:
+
+```powershell
+$env:PYTHONPATH='PythonDataService'; python -m app.engine.live.host_daemon --repo-root .
+```
+
+Leave the daemon bound to its default `127.0.0.1:8765`; it has no remote
+auth layer because it is intended to be a local operator bridge only.
+
+Then open `/broker/paper-run`. The **Host Runner** panel calls the
+daemon at `http://127.0.0.1:8765` and starts/stops the same
+`app.engine.live.run start` subprocess from the host. The run artifacts
+still land under `PythonDataService/artifacts/live_runs/<run_id>/`, so
+the existing observer panels remain the diagnostic source of truth.
+
+If you want the observer UI available while the host runner owns IBKR,
+keep `python-service` up with `IBKR_BROKER_ENABLED=false`; that prevents
+the container lifespan client from taking an IBKR client id while still
+serving `/api/live-runs`.
+
+**Before launching through the manual CLI path, stop the
+`polygon-data-service` container** so its lifespan `IbkrClient` releases
+`client_id=42`:
 
 ```bash
 podman compose stop python-service
