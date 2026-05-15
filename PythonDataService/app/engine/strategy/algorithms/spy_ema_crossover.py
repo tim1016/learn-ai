@@ -381,7 +381,10 @@ class SpyEmaCrossoverAlgorithm(Strategy):
         self._ema5.restore_state(payload["ema5"])
         self._ema10.restore_state(payload["ema10"])
         self._rsi14.restore_state(payload["rsi14"])
-        self._prev_ema5_above_ema10 = bool(payload["_prev_ema5_above_ema10"])
+        prev_above = payload["_prev_ema5_above_ema10"]
+        if not isinstance(prev_above, bool):
+            raise ValueError("payload_mismatch: _prev_ema5_above_ema10 must be bool")
+        self._prev_ema5_above_ema10 = prev_above
 
     def validate_state_payload(self, payload: dict) -> ValidationResult:
         """Shape-check the payload for this strategy. Returns a ValidationResult.
@@ -395,9 +398,18 @@ class SpyEmaCrossoverAlgorithm(Strategy):
         required_top = {"ema5", "ema10", "rsi14", "_prev_ema5_above_ema10", "lifecycle"}
         if not isinstance(payload, dict) or not required_top.issubset(payload.keys()):
             return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
+        if not isinstance(payload["_prev_ema5_above_ema10"], bool):
+            return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
         if not isinstance(payload["lifecycle"], dict):
             return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
         required_lifecycle = {"position_qty", "pending_orders_count", "open_insights"}
         if not required_lifecycle.issubset(payload["lifecycle"].keys()):
+            return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
+        # Lifecycle counters must be strict ints (bool is a subclass of int in Python;
+        # exclude it to prevent True/False sneaking in where 0/1 is expected).
+        if any(
+            not isinstance(payload["lifecycle"][k], int) or isinstance(payload["lifecycle"][k], bool)
+            for k in required_lifecycle
+        ):
             return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
         return ValidationResult.all_passed()

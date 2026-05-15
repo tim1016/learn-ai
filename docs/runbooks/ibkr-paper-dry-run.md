@@ -262,7 +262,7 @@ state sidecar before consuming any bars. Three modes:
 | Flag                      | Behavior                                                       | When to use |
 |---|---|---|
 | `--hydrate-policy require` (default) | Validate sidecar; exit 4 on missing/stale/mismatched/unready/non-flat | B2 dry-run gate and paper week (the default — no flag needed) |
-| `--hydrate-policy optional` | Cold-start when sidecar missing/invalid; write at end-of-session | Seed day (Monday of paper week, or first ever run) |
+| `--hydrate-policy optional` | Cold-start when sidecar missing/invalid; write at end-of-session | Seed day (Monday of paper week, or first-ever run) |
 | `--hydrate-policy disabled` (alias: `--allow-cold-start`) | Never read sidecar; still write at end-of-session | Operator escape hatch ("I know yesterday's state is bad, warmup from scratch today") |
 
 On exit 4 under require, inspect `<run_dir>/indicator_state_hydration.json`
@@ -275,9 +275,9 @@ State lives at `PythonDataService/artifacts/live_state/<strategy_key>/<symbol>_<
 and is keyed by identity-tuple — every `run_id` reads / writes the same
 file, so day-over-day continuity is automatic.
 
-## Step 3a — Seed day (first ever run)
+## Step 3a — Seed day (first-ever run)
 
-The very first paper-week run (or the first dry-run attempt ever) has no prior sidecar. Use the `optional` policy so the runner cold-starts instead of exiting 4:
+The very first paper-week run (or the first-ever dry-run attempt) has no prior sidecar. Use the `optional` policy so the runner cold-starts instead of exiting 4:
 
 ```bash
 IBKR_HOST=127.0.0.1 \

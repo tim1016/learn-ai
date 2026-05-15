@@ -378,7 +378,7 @@ Run these in order before turning the runner loose:
 
    The Step 7 invocation runs from the host, so `127.0.0.1` is the load-bearing entry; the container IP is for the optional pre-flight diagnose path. (Earlier revisions instructed only the container IP, which contradicted Step 7's host-venv path — corrected post PR #232 review.)
 
-   On day 1 of paper week (or the first ever dry-run), pass `--hydrate-policy optional`
+   On day 1 of paper week (or the first-ever dry-run), pass `--hydrate-policy optional`
    to seed the sidecar; on day 2+ omit the flag (default `require`). See the runbook
    Step 3 "Hydrate policy" subsection.
 4. **`GET /api/broker/health`** returns `connected: true, is_paper: true` and the account ID begins with `DU`.

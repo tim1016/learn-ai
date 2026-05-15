@@ -138,3 +138,32 @@ def test_validate_state_payload_rejects_missing_keys() -> None:
 def test_strategy_key_and_period_constants() -> None:
     assert SpyEmaCrossoverAlgorithm.STRATEGY_KEY == "spy_ema_crossover"
     assert SpyEmaCrossoverAlgorithm.CONSOLIDATOR_PERIOD_MIN == 15
+
+
+def test_validate_state_payload_rejects_string_for_prev_above() -> None:
+    """A persisted 'false' string for _prev_ema5_above_ema10 must fail validation,
+    not silently coerce to bool('false')==True."""
+    strat = SpyEmaCrossoverAlgorithm()
+    bad = {
+        "ema5": {},
+        "ema10": {},
+        "rsi14": {},
+        "_prev_ema5_above_ema10": "false",  # string, not bool
+        "lifecycle": {"position_qty": 0, "pending_orders_count": 0, "open_insights": 0},
+    }
+    result = strat.validate_state_payload(bad)
+    assert result.failure_reason == "payload_mismatch"
+
+
+def test_validate_state_payload_rejects_non_int_lifecycle() -> None:
+    """Lifecycle counters must be ints — non-int values fail validation."""
+    strat = SpyEmaCrossoverAlgorithm()
+    bad = {
+        "ema5": {},
+        "ema10": {},
+        "rsi14": {},
+        "_prev_ema5_above_ema10": True,
+        "lifecycle": {"position_qty": "0", "pending_orders_count": 0, "open_insights": 0},
+    }
+    result = strat.validate_state_payload(bad)
+    assert result.failure_reason == "payload_mismatch"

@@ -221,6 +221,36 @@ class IndicatorStateRepo:
             return True
         return candidate.last_consolidated_bar_end_ms > existing.last_consolidated_bar_end_ms
 
+    def write_if_strictly_newer(self, candidate: IndicatorStateEnvelope) -> bool:
+        """Atomic compare-and-write: write only if candidate is strictly newer than on-disk.
+
+        Returns True if the write happened, False if it was skipped because
+        on-disk envelope is equal or newer. The compare and write are under
+        the same advisory lock — no race window between the check and the
+        replace.
+        """
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
+        payload_json = candidate.model_dump_json(indent=2).encode("utf-8")
+
+        with _file_lock(self._path):
+            if self._path.exists():
+                with self._path.open("r", encoding="utf-8") as fh:
+                    existing = IndicatorStateEnvelope.model_validate_json(fh.read())
+                if candidate.last_consolidated_bar_end_ms <= existing.last_consolidated_bar_end_ms:
+                    return False
+            with open(tmp_path, "wb") as fh:
+                fh.write(payload_json)
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                os.replace(tmp_path, self._path)
+            except Exception:
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink()
+                raise
+            return True
+
     def sha256_of_on_disk(self) -> str | None:
         """Return SHA-256 hex of the on-disk bytes, or None if absent."""
         if not self._path.exists():
@@ -463,7 +493,25 @@ def hydrate(
         return
 
     # All checks passed — restore and write accepted receipt.
-    strategy.restore_state_from_persistence(envelope.payload)
+    try:
+        strategy.restore_state_from_persistence(envelope.payload)
+    except Exception as exc:
+        # Nested-field validation failures inside restore_state escape
+        # the per-strategy validate_state_payload shape check. Treat
+        # any restore-time exception as a schema_mismatch so the
+        # receipt is still written and the policy raise/return path is
+        # honored (optional → cold-start, require → exit 4).
+        receipt = _base_receipt(
+            accepted=False,
+            validation=ValidationResult.failed("schema_mismatch", schema_version_ok=False),
+            sidecar_last_bar_ms=envelope.last_consolidated_bar_end_ms,
+            expected_prev_close_ms=expected_prev_close_ms,
+            global_sha=global_sha,
+        )
+        _write_receipt(receipt)
+        if policy is HydratePolicy.REQUIRE:
+            raise IndicatorStateHydrationError(receipt) from exc
+        return
     _write_receipt(
         _base_receipt(
             accepted=True,
@@ -482,13 +530,21 @@ def _indicators_ready(payload: dict[str, Any]) -> bool:
     SpyEma strategy is the only consumer, and RSI's is_ready predicate
     is genuinely different from SMA/EMA's. A generic refactor lives in
     a future base-class promotion.
+
+    Defensive: a corrupted counter (e.g., samples="NaN") is treated as
+    not-ready rather than crashing the ladder — this lets the policy
+    (REQUIRE → exit 4, OPTIONAL → cold-start) handle the failure
+    deterministically via the indicators_unready receipt path.
     """
     for key in ("ema5", "ema10", "rsi14"):
         block = payload.get(key)
         if not isinstance(block, dict):
             return False
-        samples = int(block.get("samples", 0))
-        period = int(block.get("period", 0))
+        try:
+            samples = int(block.get("samples", 0))
+            period = int(block.get("period", 0))
+        except (TypeError, ValueError):
+            return False
         threshold = period + 1 if key.startswith("rsi") else period
         if samples < threshold:
             return False
@@ -540,6 +596,7 @@ def maybe_write(
         payload=payload,
     )
     repo = IndicatorStateRepo(stable_global_path(artifacts_root, strategy_key, symbol, period))
-    if reason == "shutdown" and not repo.is_strictly_newer_than_on_disk(envelope):
-        return
-    repo.write(envelope)
+    if reason == "shutdown":
+        repo.write_if_strictly_newer(envelope)
+    else:
+        repo.write(envelope)

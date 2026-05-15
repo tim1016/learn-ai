@@ -112,3 +112,31 @@ def test_lock_file_created_on_write(tmp_path: Path) -> None:
     repo = IndicatorStateRepo(tmp_path / "state.json")
     repo.write(_make_envelope(last_bar_ms=1_700_000_000_000))
     assert (tmp_path / "state.json.lock").exists()
+
+
+def test_write_if_strictly_newer_writes_when_newer(tmp_path: Path) -> None:
+    repo = IndicatorStateRepo(tmp_path / "state.json")
+    repo.write(_make_envelope(last_bar_ms=1_700_000_000_000))
+    newer = _make_envelope(last_bar_ms=1_800_000_000_000)
+    assert repo.write_if_strictly_newer(newer) is True
+    on_disk = repo.read()
+    assert on_disk is not None
+    assert on_disk.last_consolidated_bar_end_ms == 1_800_000_000_000
+
+
+def test_write_if_strictly_newer_skips_when_equal(tmp_path: Path) -> None:
+    repo = IndicatorStateRepo(tmp_path / "state.json")
+    repo.write(_make_envelope(last_bar_ms=1_700_000_000_000))
+    same = _make_envelope(last_bar_ms=1_700_000_000_000)
+    assert repo.write_if_strictly_newer(same) is False
+    on_disk = repo.read()
+    assert on_disk is not None
+    assert on_disk.last_consolidated_bar_end_ms == 1_700_000_000_000
+
+
+def test_write_if_strictly_newer_writes_when_no_existing(tmp_path: Path) -> None:
+    repo = IndicatorStateRepo(tmp_path / "state.json")
+    new = _make_envelope(last_bar_ms=1_700_000_000_000)
+    assert repo.write_if_strictly_newer(new) is True
+    on_disk = repo.read()
+    assert on_disk is not None

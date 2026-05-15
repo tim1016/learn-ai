@@ -268,6 +268,47 @@ def test_disabled_writes_receipt_without_reading_sidecar(tmp_path: Path) -> None
 # ---- maybe_write ----
 
 
+def test_require_restore_failure_treated_as_schema_mismatch(tmp_path: Path) -> None:
+    """If validate_state_payload passes but restore_state_from_persistence raises
+    a nested-field KeyError, the ladder converts it to a schema_mismatch receipt."""
+    ctx = _make_ctx(tmp_path, HydratePolicy.REQUIRE)
+    from app.engine.live.indicator_state import IndicatorStateRepo, stable_global_path
+
+    expected_prev_close_ms = 1779134400000  # Mon 2026-05-18 16:00 ET
+    env_dict = _valid_envelope_dict(last_bar_ms=expected_prev_close_ms)
+    repo = IndicatorStateRepo(stable_global_path(ctx.artifacts_root, "spy_ema_crossover", "SPY", 15))
+    repo.write(IndicatorStateEnvelope.model_validate(env_dict))
+
+    strat = _fake_strategy_with_payload(payload=env_dict["payload"], validate_ok=True)
+    # Make the fake strategy raise during restore (simulating a missing nested field).
+    strat.restore_state_from_persistence.side_effect = KeyError("current_time_ms")
+
+    with pytest.raises(IndicatorStateHydrationError):
+        ctx.hydrate_indicator_state(strat)
+    receipt = HydrationReceipt.model_validate_json((ctx.run_dir / "indicator_state_hydration.json").read_text())
+    assert receipt.accepted is False
+    assert receipt.validation.failure_reason == "schema_mismatch"
+
+
+def test_require_corrupted_samples_treated_as_indicators_unready(tmp_path: Path) -> None:
+    """Malformed counters (samples='NaN') do not crash _indicators_ready;
+    they surface as indicators_unready."""
+    ctx = _make_ctx(tmp_path, HydratePolicy.REQUIRE)
+    from app.engine.live.indicator_state import IndicatorStateRepo, stable_global_path
+
+    expected_prev_close_ms = 1779134400000
+    env_dict = _valid_envelope_dict(last_bar_ms=expected_prev_close_ms)
+    env_dict["payload"]["ema5"]["samples"] = "NaN"  # corrupted counter
+    repo = IndicatorStateRepo(stable_global_path(ctx.artifacts_root, "spy_ema_crossover", "SPY", 15))
+    repo.write(IndicatorStateEnvelope.model_validate(env_dict))
+
+    strat = _fake_strategy_with_payload(payload=env_dict["payload"])
+    with pytest.raises(IndicatorStateHydrationError):
+        ctx.hydrate_indicator_state(strat)
+    receipt = HydrationReceipt.model_validate_json((ctx.run_dir / "indicator_state_hydration.json").read_text())
+    assert receipt.validation.failure_reason == "indicators_unready"
+
+
 def test_maybe_write_skips_when_strategy_reports_none(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
     strat = _fake_strategy_with_payload(payload=None)
