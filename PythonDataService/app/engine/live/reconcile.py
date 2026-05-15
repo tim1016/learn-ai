@@ -306,9 +306,7 @@ def _attach_fills(decisions: pd.DataFrame, executions: pd.DataFrame) -> pd.DataF
         if row["signal"] not in {"ENTER", "EXIT"}:
             continue
         bar_close_ms = int(row["bar_close_ms"])
-        candidates = executions[
-            (executions["ts_ms"] >= bar_close_ms) & (~executions.index.isin(used_indices))
-        ]
+        candidates = executions[(executions["ts_ms"] >= bar_close_ms) & (~executions.index.isin(used_indices))]
         if candidates.empty:
             continue
         match_idx = int(candidates.index[0])
@@ -370,24 +368,16 @@ def build_reconciliation_table(
             intended_price = None
             intended_time_ms = None
         else:
-            intended_price = (
-                float(row["intended_price"]) if pd.notna(row["intended_price"]) else None
-            )
+            intended_price = float(row["intended_price"]) if pd.notna(row["intended_price"]) else None
             intended_time_ms = int(row["bar_close_ms"])
 
         fill = classify_fill(
             intended_price=intended_price,
-            fill_price=(
-                float(row["python_fill_price"]) if pd.notna(row["python_fill_price"]) else None
-            ),
+            fill_price=(float(row["python_fill_price"]) if pd.notna(row["python_fill_price"]) else None),
             intended_time_ms=intended_time_ms,
-            fill_time_ms=(
-                int(row["python_fill_time_ms"]) if pd.notna(row["python_fill_time_ms"]) else None
-            ),
+            fill_time_ms=(int(row["python_fill_time_ms"]) if pd.notna(row["python_fill_time_ms"]) else None),
             intended_quantity=None,
-            fill_quantity=(
-                int(row["python_fill_quantity"]) if pd.notna(row["python_fill_quantity"]) else None
-            ),
+            fill_quantity=(int(row["python_fill_quantity"]) if pd.notna(row["python_fill_quantity"]) else None),
             tols=fill_tols,
         )
         fill_classes.append(fill.value)
@@ -514,8 +504,9 @@ def build_hash_manifest(
     qc_trades_path: Path,
     qc_indicators_path: Path,
     run_ledger_path: Path,
+    hydration_receipt_path: Path | None = None,
 ) -> dict[str, str | None]:
-    return {
+    manifest: dict[str, str | None] = {
         "reconcile_json": _maybe_sha256(json_path),
         "reconcile_parquet": _maybe_sha256(parquet_path),
         "python_executions_parquet": _maybe_sha256(py_executions_path),
@@ -524,6 +515,9 @@ def build_hash_manifest(
         "qc_export_indicators": _maybe_sha256(qc_indicators_path),
         "run_ledger": _maybe_sha256(run_ledger_path),
     }
+    if hydration_receipt_path is not None and hydration_receipt_path.exists():
+        manifest["indicator_state_hydration.json"] = file_sha256(hydration_receipt_path)
+    return manifest
 
 
 # ──────────────────────────── Markdown rendering ─────────────────────
@@ -545,8 +539,7 @@ def render_day_md(
     Markdown receipt summarizes (§ 6.5).
     """
     halt_block = (
-        "**Halt triggered for next session:** "
-        + ", ".join(summary.halt_reasons)
+        "**Halt triggered for next session:** " + ", ".join(summary.halt_reasons)
         if summary.halt_triggered
         else "**Halt triggered for next session:** no"
     )
@@ -719,6 +712,7 @@ def write_day_report(
         qc_trades_path=qc_dir / "trades.csv",
         qc_indicators_path=qc_dir / "indicators.csv",
         run_ledger_path=run_dir / "run_ledger.json",
+        hydration_receipt_path=run_dir / "indicator_state_hydration.json",
     )
     hashes_path.write_text(json.dumps(hash_manifest, indent=2, sort_keys=True), encoding="utf-8")
 

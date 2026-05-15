@@ -99,8 +99,14 @@ def _write_run_inputs(
 
 def test_classify_cross_engine_none_when_indicators_and_signals_agree() -> None:
     cls = classify_cross_engine(
-        py_ema5=500.0, py_ema10=500.0, py_rsi=60.0, py_signal="HOLD",
-        qc_ema5=500.05, qc_ema10=500.02, qc_rsi=60.5, qc_signal="HOLD",
+        py_ema5=500.0,
+        py_ema10=500.0,
+        py_rsi=60.0,
+        py_signal="HOLD",
+        qc_ema5=500.05,
+        qc_ema10=500.02,
+        qc_rsi=60.5,
+        qc_signal="HOLD",
         tols=CrossEngineTolerances(),
     )
     assert cls == CrossEngineClass.NONE
@@ -108,8 +114,14 @@ def test_classify_cross_engine_none_when_indicators_and_signals_agree() -> None:
 
 def test_classify_cross_engine_data_when_ema_outside_tolerance() -> None:
     cls = classify_cross_engine(
-        py_ema5=500.0, py_ema10=500.0, py_rsi=60.0, py_signal="HOLD",
-        qc_ema5=500.5, qc_ema10=500.0, qc_rsi=60.0, qc_signal="HOLD",  # ema5 delta = 0.5 > 0.10
+        py_ema5=500.0,
+        py_ema10=500.0,
+        py_rsi=60.0,
+        py_signal="HOLD",
+        qc_ema5=500.5,
+        qc_ema10=500.0,
+        qc_rsi=60.0,
+        qc_signal="HOLD",  # ema5 delta = 0.5 > 0.10
         tols=CrossEngineTolerances(),
     )
     assert cls == CrossEngineClass.DATA
@@ -117,8 +129,14 @@ def test_classify_cross_engine_data_when_ema_outside_tolerance() -> None:
 
 def test_classify_cross_engine_data_when_rsi_outside_tolerance() -> None:
     cls = classify_cross_engine(
-        py_ema5=500.0, py_ema10=500.0, py_rsi=60.0, py_signal="ENTER",
-        qc_ema5=500.0, qc_ema10=500.0, qc_rsi=63.0, qc_signal="ENTER",  # rsi delta = 3 > 2
+        py_ema5=500.0,
+        py_ema10=500.0,
+        py_rsi=60.0,
+        py_signal="ENTER",
+        qc_ema5=500.0,
+        qc_ema10=500.0,
+        qc_rsi=63.0,
+        qc_signal="ENTER",  # rsi delta = 3 > 2
         tols=CrossEngineTolerances(),
     )
     # Data class wins even though signals match — § 6.2: indicators outside tol → data
@@ -127,8 +145,14 @@ def test_classify_cross_engine_data_when_rsi_outside_tolerance() -> None:
 
 def test_classify_cross_engine_engine_when_indicators_agree_but_signals_differ() -> None:
     cls = classify_cross_engine(
-        py_ema5=500.0, py_ema10=500.0, py_rsi=60.0, py_signal="ENTER",
-        qc_ema5=500.05, qc_ema10=500.02, qc_rsi=60.5, qc_signal="HOLD",
+        py_ema5=500.0,
+        py_ema10=500.0,
+        py_rsi=60.0,
+        py_signal="ENTER",
+        qc_ema5=500.05,
+        qc_ema10=500.02,
+        qc_rsi=60.5,
+        qc_signal="HOLD",
         tols=CrossEngineTolerances(),
     )
     assert cls == CrossEngineClass.ENGINE
@@ -142,8 +166,14 @@ def test_classify_cross_engine_data_class_takes_precedence_over_signal_mismatch(
     we cannot make that claim.
     """
     cls = classify_cross_engine(
-        py_ema5=500.0, py_ema10=500.0, py_rsi=60.0, py_signal="ENTER",
-        qc_ema5=502.0, qc_ema10=502.0, qc_rsi=70.0, qc_signal="HOLD",
+        py_ema5=500.0,
+        py_ema10=500.0,
+        py_rsi=60.0,
+        py_signal="ENTER",
+        qc_ema5=502.0,
+        qc_ema10=502.0,
+        qc_rsi=70.0,
+        qc_signal="HOLD",
         tols=CrossEngineTolerances(),
     )
     assert cls == CrossEngineClass.DATA
@@ -153,21 +183,12 @@ def test_classify_cross_engine_data_class_takes_precedence_over_signal_mismatch(
 
 
 def test_classify_fill_none_when_both_sides_missing() -> None:
-    assert (
-        classify_fill(None, None, None, None, None, None, FillTolerances())
-        == FillClass.NONE
-    )
+    assert classify_fill(None, None, None, None, None, None, FillTolerances()) == FillClass.NONE
 
 
 def test_classify_fill_breach_when_only_one_side_has_fill() -> None:
-    assert (
-        classify_fill(500.0, None, _ms(2026, 5, 4, 14, 45), None, 200, None, FillTolerances())
-        == FillClass.BREACH
-    )
-    assert (
-        classify_fill(None, 500.0, None, _ms(2026, 5, 4, 14, 45), None, 200, FillTolerances())
-        == FillClass.BREACH
-    )
+    assert classify_fill(500.0, None, _ms(2026, 5, 4, 14, 45), None, 200, None, FillTolerances()) == FillClass.BREACH
+    assert classify_fill(None, 500.0, None, _ms(2026, 5, 4, 14, 45), None, 200, FillTolerances()) == FillClass.BREACH
 
 
 def test_classify_fill_within_tolerance_for_small_price_delta() -> None:
@@ -222,29 +243,56 @@ def test_classify_fill_breach_when_time_delta_exceeds_seconds_tolerance() -> Non
 
 
 def test_build_reconciliation_table_inner_joins_on_bar_close_ms() -> None:
-    py = _make_decisions([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 30), "ema5": 500.0, "ema10": 499.5, "rsi": 60.0, "signal": "HOLD", "intended_price": 500.0},
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "ENTER", "intended_price": 501.0},
-        {"bar_close_ms": _ms(2026, 5, 4, 15, 0), "ema5": 502.0, "ema10": 501.0, "rsi": 63.0, "signal": "HOLD", "intended_price": 502.0},
-    ])
-    qc = _make_qc([
-        # 14:30 missing on QC side → excluded from join
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.05, "ema10": 500.02, "rsi": 62.5, "signal": "ENTER"},
-        {"bar_close_ms": _ms(2026, 5, 4, 15, 0), "ema5": 502.05, "ema10": 501.02, "rsi": 63.5, "signal": "HOLD"},
-    ])
-    execs = _make_executions([
-        {
-            "ts_ms": _ms(2026, 5, 4, 14, 45) + 2_000,
-            "exec_id": "exec-1",
-            "perm_id": 9001,
-            "client_order_id": "live-1",
-            "account_id": "DU1234",
-            "symbol": "SPY",
-            "fill_quantity": 200,
-            "fill_price": 501.02,
-            "fee": 1.0,
-        },
-    ])
+    py = _make_decisions(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 30),
+                "ema5": 500.0,
+                "ema10": 499.5,
+                "rsi": 60.0,
+                "signal": "HOLD",
+                "intended_price": 500.0,
+            },
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "ENTER",
+                "intended_price": 501.0,
+            },
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 15, 0),
+                "ema5": 502.0,
+                "ema10": 501.0,
+                "rsi": 63.0,
+                "signal": "HOLD",
+                "intended_price": 502.0,
+            },
+        ]
+    )
+    qc = _make_qc(
+        [
+            # 14:30 missing on QC side → excluded from join
+            {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.05, "ema10": 500.02, "rsi": 62.5, "signal": "ENTER"},
+            {"bar_close_ms": _ms(2026, 5, 4, 15, 0), "ema5": 502.05, "ema10": 501.02, "rsi": 63.5, "signal": "HOLD"},
+        ]
+    )
+    execs = _make_executions(
+        [
+            {
+                "ts_ms": _ms(2026, 5, 4, 14, 45) + 2_000,
+                "exec_id": "exec-1",
+                "perm_id": 9001,
+                "client_order_id": "live-1",
+                "account_id": "DU1234",
+                "symbol": "SPY",
+                "fill_quantity": 200,
+                "fill_price": 501.02,
+                "fee": 1.0,
+            },
+        ]
+    )
 
     table = build_reconciliation_table(py, qc, execs, CrossEngineTolerances(), FillTolerances())
 
@@ -267,12 +315,23 @@ def test_build_reconciliation_table_inner_joins_on_bar_close_ms() -> None:
 
 
 def test_build_reconciliation_table_engine_class_with_clean_indicators() -> None:
-    py = _make_decisions([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "ENTER", "intended_price": 501.0},
-    ])
-    qc = _make_qc([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "HOLD"},
-    ])
+    py = _make_decisions(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "ENTER",
+                "intended_price": 501.0,
+            },
+        ]
+    )
+    qc = _make_qc(
+        [
+            {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "HOLD"},
+        ]
+    )
     table = build_reconciliation_table(py, qc, _make_executions([]), CrossEngineTolerances(), FillTolerances())
     assert table.iloc[0]["cross_engine_class"] == CrossEngineClass.ENGINE.value
 
@@ -281,12 +340,23 @@ def test_build_reconciliation_table_engine_class_with_clean_indicators() -> None
 
 
 def test_summarize_day_triggers_halt_on_engine_class() -> None:
-    py = _make_decisions([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "ENTER", "intended_price": 501.0},
-    ])
-    qc = _make_qc([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "HOLD"},
-    ])
+    py = _make_decisions(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "ENTER",
+                "intended_price": 501.0,
+            },
+        ]
+    )
+    qc = _make_qc(
+        [
+            {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "HOLD"},
+        ]
+    )
     table = build_reconciliation_table(py, qc, _make_executions([]), CrossEngineTolerances(), FillTolerances())
     summary = summarize_day(table, py, qc, day_n=1, day_date=date(2026, 5, 4))
 
@@ -296,25 +366,38 @@ def test_summarize_day_triggers_halt_on_engine_class() -> None:
 
 
 def test_summarize_day_triggers_halt_on_fill_breach() -> None:
-    py = _make_decisions([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "ENTER", "intended_price": 501.0},
-    ])
-    qc = _make_qc([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.05, "ema10": 500.02, "rsi": 62.5, "signal": "ENTER"},
-    ])
-    execs = _make_executions([
-        {
-            "ts_ms": _ms(2026, 5, 4, 14, 45) + 2_000,
-            "exec_id": "exec-1",
-            "perm_id": 9001,
-            "client_order_id": "live-1",
-            "account_id": "DU1234",
-            "symbol": "SPY",
-            "fill_quantity": 200,
-            "fill_price": 501.20,  # 0.20 > 0.05 atol
-            "fee": 1.0,
-        },
-    ])
+    py = _make_decisions(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "ENTER",
+                "intended_price": 501.0,
+            },
+        ]
+    )
+    qc = _make_qc(
+        [
+            {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.05, "ema10": 500.02, "rsi": 62.5, "signal": "ENTER"},
+        ]
+    )
+    execs = _make_executions(
+        [
+            {
+                "ts_ms": _ms(2026, 5, 4, 14, 45) + 2_000,
+                "exec_id": "exec-1",
+                "perm_id": 9001,
+                "client_order_id": "live-1",
+                "account_id": "DU1234",
+                "symbol": "SPY",
+                "fill_quantity": 200,
+                "fill_price": 501.20,  # 0.20 > 0.05 atol
+                "fee": 1.0,
+            },
+        ]
+    )
     table = build_reconciliation_table(py, qc, execs, CrossEngineTolerances(), FillTolerances())
     summary = summarize_day(table, py, qc, day_n=1, day_date=date(2026, 5, 4))
 
@@ -323,12 +406,29 @@ def test_summarize_day_triggers_halt_on_fill_breach() -> None:
 
 
 def test_summarize_day_no_halt_when_only_data_class_present() -> None:
-    py = _make_decisions([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "HOLD", "intended_price": 501.0},
-    ])
-    qc = _make_qc([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 502.0, "ema10": 501.0, "rsi": 65.0, "signal": "HOLD"},  # outside tol
-    ])
+    py = _make_decisions(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "HOLD",
+                "intended_price": 501.0,
+            },
+        ]
+    )
+    qc = _make_qc(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 502.0,
+                "ema10": 501.0,
+                "rsi": 65.0,
+                "signal": "HOLD",
+            },  # outside tol
+        ]
+    )
     table = build_reconciliation_table(py, qc, _make_executions([]), CrossEngineTolerances(), FillTolerances())
     summary = summarize_day(table, py, qc, day_n=1, day_date=date(2026, 5, 4))
 
@@ -345,10 +445,7 @@ def test_file_sha256_is_deterministic_for_same_bytes(tmp_path: Path) -> None:
     p1.write_bytes(b"hello world")
     p2.write_bytes(b"hello world")
     assert file_sha256(p1) == file_sha256(p2)
-    assert (
-        file_sha256(p1)
-        == "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-    )
+    assert file_sha256(p1) == "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
 
 
 def test_build_hash_manifest_returns_none_for_missing_files(tmp_path: Path) -> None:
@@ -368,31 +465,151 @@ def test_build_hash_manifest_returns_none_for_missing_files(tmp_path: Path) -> N
     assert manifest["python_executions_parquet"] is None
 
 
+def test_day_hashes_manifest_includes_hydration_receipt_if_present(tmp_path: Path) -> None:
+    """When <run_dir>/indicator_state_hydration.json exists its SHA-256 appears in day-N.hashes.json."""
+    import hashlib
+
+    run_dir = tmp_path / "live_runs" / "abcdef"
+    qc_dir = tmp_path / "qc" / "2026-05-04"
+    docs_dir = tmp_path / "docs" / "spy-ema-crossover-paper-2026-05"
+
+    py = _make_decisions(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "HOLD",
+                "intended_price": 501.0,
+            },
+        ]
+    )
+    qc = _make_qc(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.05,
+                "ema10": 500.02,
+                "rsi": 62.5,
+                "signal": "HOLD",
+            },
+        ]
+    )
+    _write_run_inputs(run_dir, qc_dir, decisions=py, executions=_make_executions([]), qc_indicators=qc)
+
+    # Write the hydration receipt that Task 7 produces.
+    hydration_content = json.dumps({"hydrated_from": "previous_state", "bars_loaded": 20})
+    hydration_path = run_dir / "indicator_state_hydration.json"
+    hydration_path.write_text(hydration_content, encoding="utf-8")
+
+    expected_sha = hashlib.sha256(hydration_content.encode()).hexdigest()
+
+    paths = write_day_report(
+        run_dir=run_dir,
+        qc_dir=qc_dir,
+        docs_dir=docs_dir,
+        run_label="spy-ema-crossover-paper-2026-05",
+        day_n=1,
+        day_date=date(2026, 5, 4),
+    )
+
+    # 1. hashes.json must contain the key and the correct SHA-256.
+    hashes = json.loads(paths.hashes.read_text(encoding="utf-8"))
+    assert "indicator_state_hydration.json" in hashes, (
+        "day-N.hashes.json must include 'indicator_state_hydration.json' when the file exists"
+    )
+    assert hashes["indicator_state_hydration.json"] == expected_sha
+
+    # 2. The committed Markdown receipt must also mention the SHA.
+    md_text = paths.md.read_text(encoding="utf-8")
+    assert expected_sha in md_text, "day-N.md artifact_hashes block must embed the hydration receipt SHA-256"
+
+
+def test_day_hashes_manifest_omits_hydration_receipt_when_absent(tmp_path: Path) -> None:
+    """When indicator_state_hydration.json does not exist the key is absent from day-N.hashes.json."""
+    run_dir = tmp_path / "live_runs" / "nohyd"
+    qc_dir = tmp_path / "qc" / "2026-05-04"
+    docs_dir = tmp_path / "docs" / "spy-ema-crossover-paper-2026-05"
+
+    py = _make_decisions(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "HOLD",
+                "intended_price": 501.0,
+            },
+        ]
+    )
+    qc = _make_qc(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.05,
+                "ema10": 500.02,
+                "rsi": 62.5,
+                "signal": "HOLD",
+            },
+        ]
+    )
+    _write_run_inputs(run_dir, qc_dir, decisions=py, executions=_make_executions([]), qc_indicators=qc)
+
+    # Deliberately do NOT write indicator_state_hydration.json.
+
+    paths = write_day_report(
+        run_dir=run_dir,
+        qc_dir=qc_dir,
+        docs_dir=docs_dir,
+        run_label="spy-ema-crossover-paper-2026-05",
+        day_n=1,
+        day_date=date(2026, 5, 4),
+    )
+
+    hashes = json.loads(paths.hashes.read_text(encoding="utf-8"))
+    assert "indicator_state_hydration.json" not in hashes
+
+
 # ──────────────────────────── Markdown rendering ─────────────────────
 
 
 def test_render_day_md_includes_required_sections(tmp_path: Path) -> None:
-    py = _make_decisions([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "ENTER", "intended_price": 501.0},
-    ])
-    qc = _make_qc([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.05, "ema10": 500.02, "rsi": 62.5, "signal": "ENTER"},
-    ])
+    py = _make_decisions(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "ENTER",
+                "intended_price": 501.0,
+            },
+        ]
+    )
+    qc = _make_qc(
+        [
+            {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.05, "ema10": 500.02, "rsi": 62.5, "signal": "ENTER"},
+        ]
+    )
     # Provide an in-tolerance fill so the day classifies clean (focus
     # of this test is Markdown structure, not halt logic).
-    execs = _make_executions([
-        {
-            "ts_ms": _ms(2026, 5, 4, 14, 45) + 2_000,
-            "exec_id": "exec-1",
-            "perm_id": 9001,
-            "client_order_id": "live-1",
-            "account_id": "DU1234",
-            "symbol": "SPY",
-            "fill_quantity": 200,
-            "fill_price": 501.02,
-            "fee": 1.0,
-        },
-    ])
+    execs = _make_executions(
+        [
+            {
+                "ts_ms": _ms(2026, 5, 4, 14, 45) + 2_000,
+                "exec_id": "exec-1",
+                "perm_id": 9001,
+                "client_order_id": "live-1",
+                "account_id": "DU1234",
+                "symbol": "SPY",
+                "fill_quantity": 200,
+                "fill_price": 501.02,
+                "fee": 1.0,
+            },
+        ]
+    )
     table = build_reconciliation_table(py, qc, execs, CrossEngineTolerances(), FillTolerances())
     summary = summarize_day(table, py, qc, day_n=1, day_date=date(2026, 5, 4))
     manifest = {"reconcile_json": "abc123", "reconcile_parquet": None}
@@ -418,12 +635,23 @@ def test_render_day_md_includes_required_sections(tmp_path: Path) -> None:
 
 
 def test_render_day_md_marks_halt_when_engine_class_present() -> None:
-    py = _make_decisions([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "ENTER", "intended_price": 501.0},
-    ])
-    qc = _make_qc([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "HOLD"},
-    ])
+    py = _make_decisions(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "ENTER",
+                "intended_price": 501.0,
+            },
+        ]
+    )
+    qc = _make_qc(
+        [
+            {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "HOLD"},
+        ]
+    )
     table = build_reconciliation_table(py, qc, _make_executions([]), CrossEngineTolerances(), FillTolerances())
     summary = summarize_day(table, py, qc, day_n=1, day_date=date(2026, 5, 4))
     md = render_day_md(
@@ -445,27 +673,47 @@ def test_write_day_report_writes_all_four_artifacts(tmp_path: Path) -> None:
     qc_dir = tmp_path / "qc" / "2026-05-04"
     docs_dir = tmp_path / "docs" / "spy-ema-crossover-paper-2026-05"
 
-    py = _make_decisions([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "ENTER", "intended_price": 501.0},
-        {"bar_close_ms": _ms(2026, 5, 4, 15, 0), "ema5": 502.0, "ema10": 501.0, "rsi": 63.0, "signal": "HOLD", "intended_price": 502.0},
-    ])
-    qc = _make_qc([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.05, "ema10": 500.02, "rsi": 62.5, "signal": "ENTER"},
-        {"bar_close_ms": _ms(2026, 5, 4, 15, 0), "ema5": 502.05, "ema10": 501.02, "rsi": 63.5, "signal": "HOLD"},
-    ])
-    execs = _make_executions([
-        {
-            "ts_ms": _ms(2026, 5, 4, 14, 45) + 2_000,
-            "exec_id": "exec-1",
-            "perm_id": 9001,
-            "client_order_id": "live-1",
-            "account_id": "DU1234",
-            "symbol": "SPY",
-            "fill_quantity": 200,
-            "fill_price": 501.02,
-            "fee": 1.0,
-        },
-    ])
+    py = _make_decisions(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "ENTER",
+                "intended_price": 501.0,
+            },
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 15, 0),
+                "ema5": 502.0,
+                "ema10": 501.0,
+                "rsi": 63.0,
+                "signal": "HOLD",
+                "intended_price": 502.0,
+            },
+        ]
+    )
+    qc = _make_qc(
+        [
+            {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.05, "ema10": 500.02, "rsi": 62.5, "signal": "ENTER"},
+            {"bar_close_ms": _ms(2026, 5, 4, 15, 0), "ema5": 502.05, "ema10": 501.02, "rsi": 63.5, "signal": "HOLD"},
+        ]
+    )
+    execs = _make_executions(
+        [
+            {
+                "ts_ms": _ms(2026, 5, 4, 14, 45) + 2_000,
+                "exec_id": "exec-1",
+                "perm_id": 9001,
+                "client_order_id": "live-1",
+                "account_id": "DU1234",
+                "symbol": "SPY",
+                "fill_quantity": 200,
+                "fill_price": 501.02,
+                "fee": 1.0,
+            },
+        ]
+    )
     _write_run_inputs(
         run_dir,
         qc_dir,
@@ -524,13 +772,24 @@ def test_write_day_report_writes_halt_flag_on_engine_divergence(tmp_path: Path) 
     qc_dir = tmp_path / "qc" / "2026-05-04"
     docs_dir = tmp_path / "docs"
 
-    py = _make_decisions([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "ENTER", "intended_price": 501.0},
-    ])
-    qc = _make_qc([
-        # indicators agree, signals don't → engine class
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "HOLD"},
-    ])
+    py = _make_decisions(
+        [
+            {
+                "bar_close_ms": _ms(2026, 5, 4, 14, 45),
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "ENTER",
+                "intended_price": 501.0,
+            },
+        ]
+    )
+    qc = _make_qc(
+        [
+            # indicators agree, signals don't → engine class
+            {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "HOLD"},
+        ]
+    )
     _write_run_inputs(run_dir, qc_dir, decisions=py, executions=_make_executions([]), qc_indicators=qc)
 
     write_day_report(
@@ -562,9 +821,11 @@ def test_load_python_decisions_rejects_missing_columns(tmp_path: Path) -> None:
 
 
 def test_load_qc_indicators_rejects_unknown_signal_value(tmp_path: Path) -> None:
-    bad = _make_qc([
-        {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "MAYBE"},
-    ])
+    bad = _make_qc(
+        [
+            {"bar_close_ms": _ms(2026, 5, 4, 14, 45), "ema5": 501.0, "ema10": 500.0, "rsi": 62.0, "signal": "MAYBE"},
+        ]
+    )
     path = tmp_path / "indicators.csv"
     bad.to_csv(path, index=False)
     with pytest.raises(ReconcileSchemaError) as exc:
@@ -573,19 +834,21 @@ def test_load_qc_indicators_rejects_unknown_signal_value(tmp_path: Path) -> None
 
 
 def test_load_python_executions_passes_for_well_formed_input(tmp_path: Path) -> None:
-    df = _make_executions([
-        {
-            "ts_ms": _ms(2026, 5, 4, 14, 45) + 2_000,
-            "exec_id": "exec-1",
-            "perm_id": 9001,
-            "client_order_id": "live-1",
-            "account_id": "DU1234",
-            "symbol": "SPY",
-            "fill_quantity": 200,
-            "fill_price": 501.02,
-            "fee": 1.0,
-        },
-    ])
+    df = _make_executions(
+        [
+            {
+                "ts_ms": _ms(2026, 5, 4, 14, 45) + 2_000,
+                "exec_id": "exec-1",
+                "perm_id": 9001,
+                "client_order_id": "live-1",
+                "account_id": "DU1234",
+                "symbol": "SPY",
+                "fill_quantity": 200,
+                "fill_price": 501.02,
+                "fee": 1.0,
+            },
+        ]
+    )
     path = tmp_path / "executions.parquet"
     df.to_parquet(path, index=False)
     out = load_python_executions(path)
@@ -609,23 +872,37 @@ def test_write_week_rollup_aggregates_days(tmp_path: Path) -> None:
 
     days = [
         DaySummary(
-            day_n=1, day_date="2026-05-04",
-            bars_total=26, bars_python_only=0, bars_qc_only=0,
-            cross_none=26, cross_data=0, cross_engine=0,
-            fill_none=24, fill_within_tol=2, fill_breach=0,
-            halt_triggered=False, halt_reasons=(),
+            day_n=1,
+            day_date="2026-05-04",
+            bars_total=26,
+            bars_python_only=0,
+            bars_qc_only=0,
+            cross_none=26,
+            cross_data=0,
+            cross_engine=0,
+            fill_none=24,
+            fill_within_tol=2,
+            fill_breach=0,
+            halt_triggered=False,
+            halt_reasons=(),
         ),
         DaySummary(
-            day_n=2, day_date="2026-05-05",
-            bars_total=26, bars_python_only=0, bars_qc_only=0,
-            cross_none=25, cross_data=1, cross_engine=0,
-            fill_none=26, fill_within_tol=0, fill_breach=0,
-            halt_triggered=False, halt_reasons=(),
+            day_n=2,
+            day_date="2026-05-05",
+            bars_total=26,
+            bars_python_only=0,
+            bars_qc_only=0,
+            cross_none=25,
+            cross_data=1,
+            cross_engine=0,
+            fill_none=26,
+            fill_within_tol=0,
+            fill_breach=0,
+            halt_triggered=False,
+            halt_reasons=(),
         ),
     ]
-    week_path = write_week_rollup(
-        run_dir=run_dir, docs_dir=docs_dir, run_label="x", days=days
-    )
+    week_path = write_week_rollup(run_dir=run_dir, docs_dir=docs_dir, run_label="x", days=days)
 
     md = week_path.read_text(encoding="utf-8")
     assert "# Week rollup — x" in md
