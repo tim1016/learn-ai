@@ -7,6 +7,7 @@ from datetime import time as dtime
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -16,6 +17,8 @@ from app.engine.live.indicator_state import HydratePolicy
 from app.engine.live.live_engine import LiveEngine
 from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
 from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+_ET = ZoneInfo("America/New_York")
 
 
 async def _empty_bar_source():
@@ -57,7 +60,7 @@ async def test_force_flat_invokes_maybe_write_with_reason_force_flat(tmp_path: P
     )
 
     # Drive a single bar at 15:55 ET (just past the barrier).
-    t = datetime(2026, 5, 18, 15, 55, 0, tzinfo=UTC)
+    t = datetime(2026, 5, 18, 15, 55, 0, tzinfo=_ET)
 
     with patch("app.engine.live.live_context.LiveContext.maybe_write_indicator_state") as spy:
         await engine.run(strat, bars=_one_bar_source(t))
@@ -89,7 +92,7 @@ async def test_finally_block_invokes_maybe_write_with_reason_shutdown(tmp_path: 
     )
 
     # Drive one bar so last_bar is not None when finally runs.
-    t = datetime(2026, 5, 18, 14, 0, 0, tzinfo=UTC)
+    t = datetime(2026, 5, 18, 14, 0, 0, tzinfo=_ET)
 
     with patch("app.engine.live.live_context.LiveContext.maybe_write_indicator_state") as spy:
         await engine.run(strat, bars=_one_bar_source(t))
@@ -161,15 +164,16 @@ async def test_no_artifacts_root_keeps_replay_behavior_unchanged(tmp_path: Path)
         config=LiveConfig(symbol="SPY", force_flat_at=None),
     )
 
-    # Drive one bar; assert no persistence-related call is made.
-    t = datetime(2026, 5, 18, 14, 0, 0, tzinfo=UTC)
+    # Drive one bar; assert no persistence-related hydration call is made.
+    t = datetime(2026, 5, 18, 14, 0, 0, tzinfo=_ET)
     with (
-        patch("app.engine.live.live_context.LiveContext.maybe_write_indicator_state"),
-        patch("app.engine.live.live_context.LiveContext.hydrate_indicator_state"),
+        patch("app.engine.live.live_context.LiveContext.maybe_write_indicator_state") as write_spy,
+        patch("app.engine.live.live_context.LiveContext.hydrate_indicator_state") as hydrate_spy,
     ):
         await engine.run(strat, bars=_one_bar_source(t))
-        # When hydrate_policy is None and artifacts_root is None, the methods are still callable
-        # but they should be no-ops. Calls may happen but both should exit early without IO.
-        # The stricter assertion is that no receipt is written to disk.
-    # No receipt path was specified (no run_dir wired without artifacts_root) — and FakeBroker
-    # runs cleanly without it.
+
+    # The outer guard in LiveEngine prevents hydrate when hydrate_policy is None.
+    hydrate_spy.assert_not_called()
+    # maybe_write_indicator_state is called by the finally block (last_bar is set),
+    # but LiveContext.maybe_write_indicator_state no-ops internally when artifacts_root is None.
+    write_spy.assert_called()
