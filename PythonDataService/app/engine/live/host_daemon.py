@@ -13,6 +13,7 @@ owns subprocess lifecycle.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import logging
 import os
 import re
@@ -25,6 +26,7 @@ from pathlib import Path
 from typing import TextIO
 
 from fastapi import FastAPI, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.schemas.live_runs import (
@@ -184,12 +186,25 @@ class RunnerProcessManager:
             return HostRunnerActionResponse(accepted=False, process=self.process_status(run_id))
 
         current.stopping = True
-        _send_graceful_stop(current.process)
+        if current.process.poll() is None:
+            try:
+                _send_graceful_stop(current.process)
+            except OSError:
+                self._refresh_current()
+                if current.process.poll() is not None:
+                    return HostRunnerActionResponse(accepted=False, process=self.process_status(run_id))
+                raise
         try:
             current.process.wait(timeout=_STOP_WAIT_SECONDS)
         except subprocess.TimeoutExpired:
             if request.force:
-                current.process.kill()
+                if current.process.poll() is None:
+                    try:
+                        current.process.kill()
+                    except OSError:
+                        self._refresh_current()
+                        if current.process.poll() is None:
+                            raise
                 current.process.wait(timeout=_STOP_WAIT_SECONDS)
 
         self._refresh_current()
@@ -276,14 +291,14 @@ def create_app(manager: RunnerProcessManager | None = None, *, allowed_origins: 
     @app.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
     async def start_run(run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:
         try:
-            return process_manager.start(run_id, request)
+            return await run_in_threadpool(process_manager.start, run_id, request)
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
     @app.post("/runs/{run_id}/stop", response_model=HostRunnerActionResponse)
     async def stop_run(run_id: str, request: HostRunnerStopRequest) -> HostRunnerActionResponse:
         try:
-            return process_manager.stop(run_id, request)
+            return await run_in_threadpool(process_manager.stop, run_id, request)
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
@@ -320,7 +335,7 @@ def _now_ms() -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the learn-ai host live-run daemon.")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="127.0.0.1", type=_loopback_host)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument(
@@ -335,6 +350,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated browser origins allowed to call this daemon.",
     )
     return parser
+
+
+def _loopback_host(host: str) -> str:
+    """Validate that the unauthenticated daemon binds only to loopback."""
+    if host == "localhost":
+        return host
+    try:
+        parsed = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--host must be loopback (127.0.0.1 / ::1 / localhost), got {host!r}."
+        ) from exc
+    if not parsed.is_loopback:
+        raise argparse.ArgumentTypeError(f"--host must be loopback (127.0.0.1 / ::1 / localhost), got {host!r}.")
+    return host
 
 
 def main(argv: list[str] | None = None) -> int:
