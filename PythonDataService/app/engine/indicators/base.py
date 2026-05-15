@@ -117,18 +117,21 @@ class Indicator(ABC):
         """Restore from a dict produced by ``to_state_dict``.
 
         Raises ``ValueError`` on identity mismatch (different name or
-        period). Subclasses override ``_restore_state_extra`` to
-        consume their own keys.
+        period) OR on a missing required key. Subclasses override
+        ``_restore_state_extra`` to consume their own keys.
         """
-        if state["name"] != self.name:
-            raise ValueError(f"name mismatch: state={state['name']!r} self={self.name!r}")
-        if state["period"] != self.period:
-            raise ValueError(f"period mismatch: state={state['period']} self={self.period}")
-        self.samples = int(state["samples"])
-        self._current_value = _str_to_decimal(state["current_value"])
-        self._current_time = _ms_to_datetime(state["current_time_ms"])
-        self._previous_value = _str_to_decimal(state["previous_value"])
-        self._previous_time = _ms_to_datetime(state["previous_time_ms"])
+        try:
+            if state["name"] != self.name:
+                raise ValueError(f"name mismatch: state={state['name']!r} self={self.name!r}")
+            if state["period"] != self.period:
+                raise ValueError(f"period mismatch: state={state['period']} self={self.period}")
+            self.samples = int(state["samples"])
+            self._current_value = _str_to_decimal(state["current_value"])
+            self._current_time = _ms_to_datetime(state["current_time_ms"])
+            self._previous_value = _str_to_decimal(state["previous_value"])
+            self._previous_time = _ms_to_datetime(state["previous_time_ms"])
+        except KeyError as exc:
+            raise ValueError(f"restore_state: missing required key {exc} in state dict") from exc
         self._restore_state_extra(state)
 
     def _to_state_extra(self) -> dict:
@@ -235,18 +238,21 @@ class BarIndicator(ABC):
         """Restore from a dict produced by ``to_state_dict``.
 
         Raises ``ValueError`` on identity mismatch (different name or
-        period). Subclasses override ``_restore_state_extra`` to
-        consume their own keys.
+        period) OR on a missing required key. Subclasses override
+        ``_restore_state_extra`` to consume their own keys.
         """
-        if state["name"] != self.name:
-            raise ValueError(f"name mismatch: state={state['name']!r} self={self.name!r}")
-        if state["period"] != self.period:
-            raise ValueError(f"period mismatch: state={state['period']} self={self.period}")
-        self.samples = int(state["samples"])
-        self._current_value = _str_to_decimal(state["current_value"])
-        self._current_time = _ms_to_datetime(state["current_time_ms"])
-        self._previous_value = _str_to_decimal(state["previous_value"])
-        self._previous_time = _ms_to_datetime(state["previous_time_ms"])
+        try:
+            if state["name"] != self.name:
+                raise ValueError(f"name mismatch: state={state['name']!r} self={self.name!r}")
+            if state["period"] != self.period:
+                raise ValueError(f"period mismatch: state={state['period']} self={self.period}")
+            self.samples = int(state["samples"])
+            self._current_value = _str_to_decimal(state["current_value"])
+            self._current_time = _ms_to_datetime(state["current_time_ms"])
+            self._previous_value = _str_to_decimal(state["previous_value"])
+            self._previous_time = _ms_to_datetime(state["previous_time_ms"])
+        except KeyError as exc:
+            raise ValueError(f"restore_state: missing required key {exc} in state dict") from exc
         self._restore_state_extra(state)
 
     def _to_state_extra(self) -> dict:
@@ -266,7 +272,13 @@ def _str_to_decimal(value: str | None) -> Decimal | None:
 
 
 def _datetime_to_ms(value: datetime | None) -> int | None:
-    return None if value is None else int(value.timestamp() * 1000)
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(
+            f"_datetime_to_ms received a tz-naive datetime: {value!r}. All indicator timestamps must be tz-aware UTC."
+        )
+    return int(value.timestamp() * 1000)
 
 
 def _ms_to_datetime(value: int | None) -> datetime | None:

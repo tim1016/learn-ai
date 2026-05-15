@@ -78,3 +78,24 @@ def test_to_state_dict_decimals_are_strings() -> None:
     # Quoted-string preserves Decimal precision exactly.
     assert isinstance(state["current_value"], str)
     assert Decimal(state["current_value"]) == Decimal("100.123456789012345")
+
+
+def test_to_state_dict_rejects_tz_naive_current_time() -> None:
+    """tz-naive timestamps must not flow through serialization — int64 ms UTC contract."""
+    from app.engine.indicators.base import _datetime_to_ms
+
+    naive = datetime(2026, 5, 18, 14, 0)  # no tzinfo
+    with pytest.raises(ValueError, match="tz-naive"):
+        _datetime_to_ms(naive)
+
+
+def test_restore_state_missing_key_raises_value_error() -> None:
+    """A truncated state dict raises ValueError per the docstring, not raw KeyError."""
+    src = _CountingIndicator("X", 3)
+    src.update(datetime(2026, 5, 18, 14, 0, tzinfo=UTC), Decimal("100"))
+    state = src.to_state_dict()
+    del state["samples"]
+
+    dst = _CountingIndicator("X", 3)
+    with pytest.raises(ValueError, match="missing required key"):
+        dst.restore_state(state)
