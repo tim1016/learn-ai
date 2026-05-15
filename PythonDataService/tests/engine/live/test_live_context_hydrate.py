@@ -194,6 +194,22 @@ def test_require_lifecycle_not_flat_raises(tmp_path: Path) -> None:
     assert receipt.validation.failure_reason == "lifecycle_not_flat"
 
 
+def test_require_schema_mismatch_raises_on_corrupt_json(tmp_path: Path) -> None:
+    """Malformed JSON on disk produces a schema_mismatch failure under REQUIRE."""
+    ctx = _make_ctx(tmp_path, HydratePolicy.REQUIRE)
+    from app.engine.live.indicator_state import stable_global_path
+
+    path = stable_global_path(ctx.artifacts_root, "spy_ema_crossover", "SPY", 15)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not valid json")
+    strat = _fake_strategy_with_payload(payload=None)
+    with pytest.raises(IndicatorStateHydrationError):
+        ctx.hydrate_indicator_state(strat)
+    receipt = HydrationReceipt.model_validate_json((ctx.run_dir / "indicator_state_hydration.json").read_text())
+    assert receipt.accepted is False
+    assert receipt.validation.failure_reason == "schema_mismatch"
+
+
 def test_require_indicators_unready_raises(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path, HydratePolicy.REQUIRE)
     from app.engine.live.indicator_state import IndicatorStateRepo, stable_global_path

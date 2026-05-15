@@ -432,7 +432,19 @@ def hydrate(
         return
 
     # Check #6: lifecycle flat.
-    lifecycle = envelope.payload["lifecycle"]
+    lifecycle = envelope.payload.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        receipt = _base_receipt(
+            accepted=False,
+            validation=ValidationResult.failed("lifecycle_not_flat", lifecycle_flat_ok=False),
+            sidecar_last_bar_ms=envelope.last_consolidated_bar_end_ms,
+            expected_prev_close_ms=expected_prev_close_ms,
+            global_sha=global_sha,
+        )
+        _write_receipt(receipt)
+        if policy is HydratePolicy.REQUIRE:
+            raise IndicatorStateHydrationError(receipt)
+        return
     if (
         lifecycle.get("position_qty", 0) != 0
         or lifecycle.get("pending_orders_count", 0) != 0
