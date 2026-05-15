@@ -204,7 +204,12 @@ class IndicatorStateRepo:
                 fh.write(payload_json)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(tmp_path, self._path)
+            try:
+                os.replace(tmp_path, self._path)
+            except Exception:
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink()
+                raise
 
     def is_strictly_newer_than_on_disk(self, candidate: IndicatorStateEnvelope) -> bool:
         """Return True iff there is no existing sidecar or candidate's bar is strictly newer."""
@@ -238,6 +243,7 @@ def _file_lock(target_path: Path):  # type: ignore[return]
     lock_path = target_path.with_suffix(target_path.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fh = open(lock_path, "a+b")  # noqa: SIM115
+    fh.seek(0)  # msvcrt.locking is byte-range; ensure lock and unlock target offset 0
     try:
         if sys.platform == "win32":
             import msvcrt

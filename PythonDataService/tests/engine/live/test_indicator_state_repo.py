@@ -105,3 +105,10 @@ def test_atomic_write_does_not_leak_tmp_on_success(tmp_path: Path) -> None:
     # The .tmp file should not survive a successful write.
     tmp_siblings = list(tmp_path.glob("*.tmp*"))
     assert tmp_siblings == []
+
+
+def test_lock_file_created_on_write(tmp_path: Path) -> None:
+    """Confirms the locking path runs — the .lock file is present after a write."""
+    repo = IndicatorStateRepo(tmp_path / "state.json")
+    repo.write(_make_envelope(last_bar_ms=1_700_000_000_000))
+    assert (tmp_path / "state.json.lock").exists()
