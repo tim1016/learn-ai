@@ -17,8 +17,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from app.engine.live.indicator_state import HydratePolicy
 
 from app.broker.ibkr.bars import stream_minute_bars
 from app.broker.ibkr.client import IbkrClient
@@ -232,6 +235,12 @@ class LiveEngine:
         readonly: bool = False,
         max_orders_per_day: int | None = None,
         fill_window_ms: int | None = None,
+        # NEW: indicator-state persistence.
+        artifacts_root: Path | None = None,
+        hydrate_policy: HydratePolicy | None = None,
+        session_start_ms: int | None = None,
+        code_sha: str = "",
+        strategy_spec_sha: str = "",
     ) -> None:
         self._client = client
         self._config = config or LiveConfig()
@@ -276,6 +285,11 @@ class LiveEngine:
         else:
             self._fill_window_ms = fill_window_ms
         self._halt_enabled = output_dir is not None  # need run_dir to write poisoned.flag
+        self._artifacts_root = artifacts_root
+        self._hydrate_policy = hydrate_policy
+        self._session_start_ms = session_start_ms
+        self._code_sha = code_sha
+        self._strategy_spec_sha = strategy_spec_sha
 
     def _validate_paper_client(self) -> None:
         if self._client is None:
@@ -323,9 +337,19 @@ class LiveEngine:
         portfolio = LivePortfolio(self._broker)
         await portfolio.refresh_from_broker()
         initial_cash = portfolio.cash
-        ctx = LiveContext(portfolio=portfolio)
+        ctx = LiveContext(
+            portfolio=portfolio,
+            hydrate_policy=self._hydrate_policy,
+            run_dir=self._output_dir,
+            artifacts_root=self._artifacts_root,
+            session_start_ms=self._session_start_ms,
+        )
         strategy.ctx = ctx
         strategy.initialize()
+
+        # NEW: hydrate call site (after initialize, before bar loop).
+        if self._hydrate_policy is not None:
+            ctx.hydrate_indicator_state(strategy)
 
         if len(ctx.symbols) != 1:
             raise NotImplementedError("LiveEngine v1 supports a single symbol only")
@@ -498,6 +522,14 @@ class LiveEngine:
                         ctx.log(f"[FORCE-FLAT] {minute_bar.time}: submitted {liquidations} liquidation order(s)")
                     strategy.on_force_flat()
                     last_force_flat_date = minute_bar.time.date()
+                    # NEW: indicator-state checkpoint at force-flat.
+                    ctx.maybe_write_indicator_state(
+                        strategy,
+                        reason="force_flat",
+                        code_sha=self._code_sha,
+                        strategy_spec_sha=self._strategy_spec_sha,
+                        last_consolidated_bar_end_ms=int(minute_bar.end_time.timestamp() * 1000),
+                    )
 
                 portfolio.update_reference_price(symbol, minute_bar.close)
                 consolidated_count_before = len(ctx.consolidated_bars)
@@ -600,6 +632,18 @@ class LiveEngine:
                         self._write_execution(writers, engine_event)
                         last_written_trade_count = self._flush_new_trades(writers, strategy, last_written_trade_count)
         finally:
+            # NEW: indicator-state checkpoint at graceful shutdown.
+            if last_bar is not None:
+                try:
+                    ctx.maybe_write_indicator_state(
+                        strategy,
+                        reason="shutdown",
+                        code_sha=self._code_sha,
+                        strategy_spec_sha=self._strategy_spec_sha,
+                        last_consolidated_bar_end_ms=int(last_bar.end_time.timestamp() * 1000),
+                    )
+                except Exception:
+                    logger.exception("indicator-state shutdown checkpoint failed; continuing finally cleanup")
             if started_event_stream and isinstance(self._broker, IbkrEventAdapter):
                 await self._broker.stop_event_stream()
             if writers is not None:
