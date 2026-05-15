@@ -72,12 +72,18 @@ def test_parser_supports_init_ledger_and_pre_flight() -> None:
     init_args = parser.parse_args(
         [
             "init-ledger",
-            "--repo-root", "/tmp/x",
-            "--strategy-spec-path", "/tmp/spec.json",
-            "--qc-audit-copy-path", "/tmp/qc.py",
-            "--qc-cloud-backtest-id", "bt-1",
-            "--account-id", "DU111",
-            "--start-date-ms", "1700000000000",
+            "--repo-root",
+            "/tmp/x",
+            "--strategy-spec-path",
+            "/tmp/spec.json",
+            "--qc-audit-copy-path",
+            "/tmp/qc.py",
+            "--qc-cloud-backtest-id",
+            "bt-1",
+            "--account-id",
+            "DU111",
+            "--start-date-ms",
+            "1700000000000",
         ]
     )
     assert init_args.command == "init-ledger"
@@ -86,8 +92,10 @@ def test_parser_supports_init_ledger_and_pre_flight() -> None:
     pre_args = parser.parse_args(
         [
             "pre-flight",
-            "--repo-root", "/tmp/x",
-            "--run-dir", "/tmp/run",
+            "--repo-root",
+            "/tmp/x",
+            "--run-dir",
+            "/tmp/run",
             "--skip-ntp",
         ]
     )
@@ -96,22 +104,30 @@ def test_parser_supports_init_ledger_and_pre_flight() -> None:
 
 
 @requires_git
-def test_init_ledger_succeeds_in_clean_tree(
-    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
-) -> None:
+def test_init_ledger_succeeds_in_clean_tree(repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path) -> None:
     repo, spec, qc = repo_with_inputs
     rc = main(
         [
             "init-ledger",
-            "--repo-root", str(repo),
-            "--clean-tree-scope", "PythonDataService", "references/qc-shadow",
-            "--strategy-spec-path", str(spec),
-            "--qc-audit-copy-path", str(qc),
-            "--qc-cloud-backtest-id", "bt-1",
-            "--account-id", "DU111",
-            "--start-date-ms", "1700000000000",
-            "--live-config-json", '{"symbol": "SPY"}',
-            "--run-root", str(tmp_path / "live_runs"),
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "references/qc-shadow",
+            "--strategy-spec-path",
+            str(spec),
+            "--qc-audit-copy-path",
+            str(qc),
+            "--qc-cloud-backtest-id",
+            "bt-1",
+            "--account-id",
+            "DU111",
+            "--start-date-ms",
+            "1700000000000",
+            "--live-config-json",
+            '{"symbol": "SPY"}',
+            "--run-root",
+            str(tmp_path / "live_runs"),
         ]
     )
     assert rc == 0
@@ -136,14 +152,22 @@ def test_init_ledger_refuses_dirty_tree(
     rc = main(
         [
             "init-ledger",
-            "--repo-root", str(repo),
-            "--clean-tree-scope", "PythonDataService",
-            "--strategy-spec-path", str(spec),
-            "--qc-audit-copy-path", str(qc),
-            "--qc-cloud-backtest-id", "bt-1",
-            "--account-id", "DU111",
-            "--start-date-ms", "1700000000000",
-            "--run-root", str(tmp_path / "live_runs"),
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "--strategy-spec-path",
+            str(spec),
+            "--qc-audit-copy-path",
+            str(qc),
+            "--qc-cloud-backtest-id",
+            "bt-1",
+            "--account-id",
+            "DU111",
+            "--start-date-ms",
+            "1700000000000",
+            "--run-root",
+            str(tmp_path / "live_runs"),
         ]
     )
     assert rc == 1
@@ -161,23 +185,30 @@ def test_init_ledger_refuses_existing_run_dir_without_force(
     repo, spec, qc = repo_with_inputs
     args = [
         "init-ledger",
-        "--repo-root", str(repo),
-        "--clean-tree-scope", "PythonDataService", "references/qc-shadow",
-        "--strategy-spec-path", str(spec),
-        "--qc-audit-copy-path", str(qc),
-        "--qc-cloud-backtest-id", "bt-1",
-        "--account-id", "DU111",
-        "--start-date-ms", "1700000000000",
-        "--run-root", str(tmp_path / "live_runs"),
+        "--repo-root",
+        str(repo),
+        "--clean-tree-scope",
+        "PythonDataService",
+        "references/qc-shadow",
+        "--strategy-spec-path",
+        str(spec),
+        "--qc-audit-copy-path",
+        str(qc),
+        "--qc-cloud-backtest-id",
+        "bt-1",
+        "--account-id",
+        "DU111",
+        "--start-date-ms",
+        "1700000000000",
+        "--run-root",
+        str(tmp_path / "live_runs"),
     ]
     assert main(args) == 0
     assert main(args) == 2
 
 
 @requires_git
-def test_pre_flight_passes_when_no_flags_set(
-    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
-) -> None:
+def test_pre_flight_passes_when_no_flags_set(repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path) -> None:
     repo, _, _ = repo_with_inputs
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -186,9 +217,12 @@ def test_pre_flight_passes_when_no_flags_set(
     rc = main(
         [
             "pre-flight",
-            "--repo-root", str(repo),
-            "--clean-tree-scope", "PythonDataService",
-            "--run-dir", str(run_dir),
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "--run-dir",
+            str(run_dir),
             "--skip-ntp",
         ]
     )
@@ -209,9 +243,12 @@ def test_pre_flight_halts_when_dirty_tree(
     rc = main(
         [
             "pre-flight",
-            "--repo-root", str(repo),
-            "--clean-tree-scope", "PythonDataService",
-            "--run-dir", str(run_dir),
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "--run-dir",
+            str(run_dir),
             "--skip-ntp",
         ]
     )
@@ -222,9 +259,7 @@ def test_pre_flight_halts_when_dirty_tree(
 
 
 @requires_git
-def test_pre_flight_halts_when_halt_flag_present(
-    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
-) -> None:
+def test_pre_flight_halts_when_halt_flag_present(repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path) -> None:
     repo, _, _ = repo_with_inputs
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -234,9 +269,12 @@ def test_pre_flight_halts_when_halt_flag_present(
     rc = main(
         [
             "pre-flight",
-            "--repo-root", str(repo),
-            "--clean-tree-scope", "PythonDataService",
-            "--run-dir", str(run_dir),
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "--run-dir",
+            str(run_dir),
             "--skip-ntp",
         ]
     )
@@ -254,18 +292,20 @@ def test_pre_flight_halts_when_positions_json_has_foreign_symbol(
     (run_dir / "run_ledger.json").write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
 
     positions_json = tmp_path / "positions.json"
-    positions_json.write_text(
-        json.dumps({"positions": [{"symbol": "QQQ", "quantity": 100}]}), encoding="utf-8"
-    )
+    positions_json.write_text(json.dumps({"positions": [{"symbol": "QQQ", "quantity": 100}]}), encoding="utf-8")
 
     rc = main(
         [
             "pre-flight",
-            "--repo-root", str(repo),
-            "--clean-tree-scope", "PythonDataService",
-            "--run-dir", str(run_dir),
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "--run-dir",
+            str(run_dir),
             "--skip-ntp",
-            "--positions-json", str(positions_json),
+            "--positions-json",
+            str(positions_json),
         ]
     )
     assert rc == 1
@@ -283,18 +323,20 @@ def test_pre_flight_passes_when_positions_json_matches_expected(
     (run_dir / "run_ledger.json").write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
 
     positions_json = tmp_path / "positions.json"
-    positions_json.write_text(
-        json.dumps({"positions": [{"symbol": "SPY", "quantity": 200}]}), encoding="utf-8"
-    )
+    positions_json.write_text(json.dumps({"positions": [{"symbol": "SPY", "quantity": 200}]}), encoding="utf-8")
 
     rc = main(
         [
             "pre-flight",
-            "--repo-root", str(repo),
-            "--clean-tree-scope", "PythonDataService",
-            "--run-dir", str(run_dir),
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "--run-dir",
+            str(run_dir),
             "--skip-ntp",
-            "--positions-json", str(positions_json),
+            "--positions-json",
+            str(positions_json),
         ]
     )
     assert rc == 0
@@ -313,9 +355,12 @@ def test_pre_flight_skips_position_check_when_no_positions_json(
     rc = main(
         [
             "pre-flight",
-            "--repo-root", str(repo),
-            "--clean-tree-scope", "PythonDataService",
-            "--run-dir", str(run_dir),
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "--run-dir",
+            str(run_dir),
             "--skip-ntp",
         ]
     )
@@ -332,15 +377,25 @@ def test_init_ledger_returns_2_on_malformed_live_config_json(
     rc = main(
         [
             "init-ledger",
-            "--repo-root", str(repo),
-            "--clean-tree-scope", "PythonDataService", "references/qc-shadow",
-            "--strategy-spec-path", str(spec),
-            "--qc-audit-copy-path", str(qc),
-            "--qc-cloud-backtest-id", "bt-1",
-            "--account-id", "DU111",
-            "--start-date-ms", "1700000000000",
-            "--live-config-json", "not-valid-json{{{",
-            "--run-root", str(tmp_path / "live_runs"),
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "references/qc-shadow",
+            "--strategy-spec-path",
+            str(spec),
+            "--qc-audit-copy-path",
+            str(qc),
+            "--qc-cloud-backtest-id",
+            "bt-1",
+            "--account-id",
+            "DU111",
+            "--start-date-ms",
+            "1700000000000",
+            "--live-config-json",
+            "not-valid-json{{{",
+            "--run-root",
+            str(tmp_path / "live_runs"),
         ]
     )
     assert rc == 2
@@ -356,15 +411,25 @@ def test_init_ledger_returns_2_when_live_config_json_is_not_an_object(
     rc = main(
         [
             "init-ledger",
-            "--repo-root", str(repo),
-            "--clean-tree-scope", "PythonDataService", "references/qc-shadow",
-            "--strategy-spec-path", str(spec),
-            "--qc-audit-copy-path", str(qc),
-            "--qc-cloud-backtest-id", "bt-1",
-            "--account-id", "DU111",
-            "--start-date-ms", "1700000000000",
-            "--live-config-json", '"a-string-not-an-object"',
-            "--run-root", str(tmp_path / "live_runs"),
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "references/qc-shadow",
+            "--strategy-spec-path",
+            str(spec),
+            "--qc-audit-copy-path",
+            str(qc),
+            "--qc-cloud-backtest-id",
+            "bt-1",
+            "--account-id",
+            "DU111",
+            "--start-date-ms",
+            "1700000000000",
+            "--live-config-json",
+            '"a-string-not-an-object"',
+            "--run-root",
+            str(tmp_path / "live_runs"),
         ]
     )
     assert rc == 2
@@ -379,9 +444,11 @@ def test_start_subcommand_args_parse() -> None:
     args = parser.parse_args(
         [
             "start",
-            "--run-dir", "/tmp/run",
+            "--run-dir",
+            "/tmp/run",
             "--readonly",
-            "--max-orders-per-day", "8",
+            "--max-orders-per-day",
+            "8",
         ]
     )
     assert args.command == "start"
@@ -390,15 +457,14 @@ def test_start_subcommand_args_parse() -> None:
     assert args.strategy == "spy_ema_crossover"  # default
 
 
-def test_start_returns_2_when_run_dir_missing_ledger(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
+def test_start_returns_2_when_run_dir_missing_ledger(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     """Without a ledger, start can't recover identity — exit 2 is the
     operator-error path documented in the module docstring."""
     rc = main(
         [
             "start",
-            "--run-dir", str(tmp_path),
+            "--run-dir",
+            str(tmp_path),
             "--readonly",
         ]
     )
@@ -457,9 +523,7 @@ def test_live_config_from_ledger_rejects_unknown_keys() -> None:
         _live_config_from_ledger({"future_field": 1})
 
 
-def test_start_refuses_when_poisoned_flag_present(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
+def test_start_refuses_when_poisoned_flag_present(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     """§ 7.2 #4: a poisoned run never resumes on its own run_id.
 
     The cmd_start refusal exits 1 (halt) so an operator who runs
@@ -487,7 +551,8 @@ def test_start_refuses_when_poisoned_flag_present(
     rc = main(
         [
             "start",
-            "--run-dir", str(tmp_path),
+            "--run-dir",
+            str(tmp_path),
             "--readonly",
         ]
     )
@@ -497,9 +562,7 @@ def test_start_refuses_when_poisoned_flag_present(
     assert "outside_mutation" in err
 
 
-def test_start_refuses_when_poisoned_flag_corrupted(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
+def test_start_refuses_when_poisoned_flag_corrupted(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     """A corrupted flag must NOT be silently ignored — that would let a
     contaminated run resume. Refuse with exit 1, surface the parse error."""
     from app.engine.live.halt import POISONED_FLAG_FILENAME
@@ -508,7 +571,8 @@ def test_start_refuses_when_poisoned_flag_corrupted(
     rc = main(
         [
             "start",
-            "--run-dir", str(tmp_path),
+            "--run-dir",
+            str(tmp_path),
             "--readonly",
         ]
     )
@@ -517,9 +581,89 @@ def test_start_refuses_when_poisoned_flag_corrupted(
     assert "corrupted" in err.lower() or "unreadable" in err.lower()
 
 
-def test_start_returns_2_when_strategy_module_unknown(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
+def test_start_accepts_hydrate_policy_require() -> None:
+    """--hydrate-policy require parses to 'require'; default also 'require'."""
+    parser = build_parser()
+
+    args_explicit = parser.parse_args(["start", "--run-dir", "/tmp/run", "--hydrate-policy", "require"])
+    assert args_explicit.hydrate_policy == "require"
+
+    args_default = parser.parse_args(["start", "--run-dir", "/tmp/run"])
+    assert args_default.hydrate_policy == "require"
+
+
+def test_start_accepts_allow_cold_start_alias() -> None:
+    """--allow-cold-start is an alias for --hydrate-policy disabled."""
+    parser = build_parser()
+    args = parser.parse_args(["start", "--run-dir", "/tmp/run", "--allow-cold-start"])
+    assert args.hydrate_policy == "disabled"
+
+
+def test_start_default_hydrate_policy_is_require() -> None:
+    """No --hydrate-policy flag => default is 'require'."""
+    parser = build_parser()
+    args = parser.parse_args(["start", "--run-dir", "/tmp/run"])
+    assert args.hydrate_policy == "require"
+
+
+def test_hydration_failure_exits_code_4(tmp_path: Path) -> None:
+    """REQUIRE policy with no sidecar on disk exits 4 (distinct from 1/2/3).
+
+    The hydrate() call inside engine.run raises IndicatorStateHydrationError
+    when policy=REQUIRE and the sidecar is missing. cmd_start must catch
+    it BEFORE the generic Exception handler (which returns 3) and return 4.
+    """
+    import argparse as _argparse
+    from collections.abc import AsyncIterator
+
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    strategy_spec = tmp_path / "spec.json"
+    strategy_spec.write_text('{"strategy": "spy_ema_crossover"}', encoding="utf-8")
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-test-1",
+        account_id="DU123",
+        # A past date so NYSE calendar can find a prior session.
+        start_date_ms=1714838400000,
+        live_config={},
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+
+    # Artifacts root that exists but has no sidecar inside it.
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+
+    async def _empty_bars() -> AsyncIterator:  # type: ignore[override]
+        return
+        yield  # make it an async generator
+
+    broker = FakeBroker()
+    args = _argparse.Namespace(
+        command="start",
+        run_dir=run_dir,
+        strategy="spy_ema_crossover",
+        readonly=False,
+        max_orders_per_day=4,
+        hydrate_policy="require",
+        artifacts_root=artifacts_root,
+        broker=broker,
+        bars=_empty_bars(),
+        client=None,
+    )
+    rc = cmd_start(args)
+    assert rc == 4, f"expected exit 4 (hydration failure), got {rc}"
+
+
+def test_start_returns_2_when_strategy_module_unknown(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     """Unknown strategy module surfaces as operator error (exit 2),
     not a runtime crash."""
     # Build a minimal valid ledger so we get past the ledger-load step.
@@ -547,8 +691,10 @@ def test_start_returns_2_when_strategy_module_unknown(
     rc = main(
         [
             "start",
-            "--run-dir", str(tmp_path),
-            "--strategy", "nonexistent_module",
+            "--run-dir",
+            str(tmp_path),
+            "--strategy",
+            "nonexistent_module",
             "--readonly",
         ]
     )
