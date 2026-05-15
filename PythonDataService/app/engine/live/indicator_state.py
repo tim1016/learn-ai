@@ -114,7 +114,7 @@ class HydrationReceipt(BaseModel):
     hydrated_at_ms: int
     policy: HydratePolicy
     global_path: str
-    global_sha256: str | None
+    global_sha256: str | None = None
     accepted: bool
     strategy_key: str
     symbol: str
