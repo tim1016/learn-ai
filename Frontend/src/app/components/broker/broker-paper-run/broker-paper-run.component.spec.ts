@@ -7,6 +7,7 @@ import type {
   DecisionsSummary,
   ExecutionsSummary,
   FlagsSummary,
+  HostRunnerHealth,
   LiveRunStatus,
   LiveRunSummary,
   ReconcileSummary,
@@ -18,6 +19,15 @@ class FakeLiveRunsService {
   listRuns = vi.fn().mockResolvedValue([]);
   getStatus = vi.fn().mockResolvedValue(null);
   getLogTail = vi.fn().mockResolvedValue([]);
+  getHostRunnerHealth = vi.fn().mockResolvedValue(makeHostRunnerHealth());
+  startHostRunner = vi.fn().mockResolvedValue({
+    accepted: true,
+    process: makeHostRunnerHealth({ state: 'running', run_id: RUN_ID }).process,
+  });
+  stopHostRunner = vi.fn().mockResolvedValue({
+    accepted: true,
+    process: makeHostRunnerHealth({ state: 'exited', run_id: RUN_ID, exit_code: 0 }).process,
+  });
 }
 
 const RUN_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
@@ -63,6 +73,29 @@ function makeStatus(state: RunState, overrides: Partial<LiveRunStatus> = {}): Li
     reconcile: EMPTY_RECONCILE,
     fetched_at_ms: 1_700_000_000_000,
     ...overrides,
+  };
+}
+
+function makeHostRunnerHealth(
+  processOverrides: Partial<HostRunnerHealth['process']> = {},
+): HostRunnerHealth {
+  return {
+    ok: true,
+    repo_root: 'C:/repo',
+    live_runs_root: 'C:/repo/PythonDataService/artifacts/live_runs',
+    fetched_at_ms: 1_700_000_000_000,
+    process: {
+      state: 'idle',
+      run_id: null,
+      pid: null,
+      started_at_ms: null,
+      ended_at_ms: null,
+      exit_code: null,
+      command: [],
+      log_path: null,
+      message: 'No host runner process.',
+      ...processOverrides,
+    },
   };
 }
 
@@ -339,5 +372,40 @@ describe('BrokerPaperRunComponent — runIdShort', () => {
     const { component } = setup();
     component.selectRun('abcdef12-1234-0000-0000-000000000000');
     expect(component.runIdShort()).toBe('abcdef12');
+  });
+});
+
+// ── host runner controls ──────────────────────────────────────────────
+
+describe('BrokerPaperRunComponent — host runner controls', () => {
+  it('starts the selected run through the host daemon with hydrate policy', async () => {
+    const runs = [makeRun({ run_id: RUN_ID, state: 'idle' })];
+    const { component, svc } = setup(runs, makeStatus('idle'));
+    await flush();
+    await flush();
+
+    component.setRunnerHydratePolicy('optional');
+    await component.startHostRunner();
+
+    expect(svc.startHostRunner).toHaveBeenCalledWith(RUN_ID, {
+      readonly: true,
+      hydrate_policy: 'optional',
+      strategy: 'spy_ema_crossover',
+      max_orders_per_day: 4,
+      ibkr_host: '127.0.0.1',
+    });
+    expect(component.runnerError()).toBeNull();
+  });
+
+  it('stops the selected run through the host daemon', async () => {
+    const runs = [makeRun({ run_id: RUN_ID, state: 'running' })];
+    const { component, svc } = setup(runs, makeStatus('running'));
+    await flush();
+    await flush();
+
+    await component.stopHostRunner();
+
+    expect(svc.stopHostRunner).toHaveBeenCalledWith(RUN_ID, { force: false });
+    expect(component.runnerError()).toBeNull();
   });
 });

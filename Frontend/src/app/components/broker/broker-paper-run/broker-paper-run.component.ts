@@ -13,7 +13,14 @@ import { from, of, switchMap, timer } from 'rxjs';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { LiveRunsService } from '../../../services/live-runs.service';
-import type { LiveRunStatus, LiveRunSummary, LogLine, RunState } from '../../../api/live-runs.types';
+import type {
+  HostRunnerHealth,
+  HydratePolicy,
+  LiveRunStatus,
+  LiveRunSummary,
+  LogLine,
+  RunState,
+} from '../../../api/live-runs.types';
 import { fmtTimestampNy, fmtInteger } from '../format';
 
 type FilterChip = 'today' | 'last14' | 'halted' | 'complete' | 'all';
@@ -51,6 +58,15 @@ function startOfTodayNyMs(): number {
 
 const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
 const WARMUP_BARS_REQUIRED = 15;
+const DAEMON_LAUNCH_COMMAND = "$env:PYTHONPATH='PythonDataService'; python -m app.engine.live.host_daemon --repo-root .";
+
+function isHydratePolicy(value: string): value is HydratePolicy {
+  return value === 'require' || value === 'optional' || value === 'disabled';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
+}
 
 @Component({
   selector: 'app-broker-paper-run',
@@ -112,6 +128,52 @@ export class BrokerPaperRunComponent {
         switchMap(() => from(this.svc.getLogTail(runId, 200))),
       );
     },
+  });
+
+  // ── Host runner daemon ───────────────────────────────────────────────
+  readonly runnerReadonly = signal<boolean>(true);
+  readonly runnerHydratePolicy = signal<HydratePolicy>('require');
+  readonly runnerBusy = signal<boolean>(false);
+  readonly runnerMessage = signal<string | null>(null);
+  readonly runnerError = signal<string | null>(null);
+  readonly daemonLaunchCommand = DAEMON_LAUNCH_COMMAND;
+
+  readonly daemonHealth = resource({
+    loader: (): Promise<HostRunnerHealth> => this.svc.getHostRunnerHealth(),
+  });
+
+  readonly daemonUnavailable = computed<boolean>(() => this.daemonHealth.error() != null);
+
+  readonly hostProcessLabel = computed<string>(() => {
+    const health = this.daemonHealth.value();
+    if (!health) return 'unknown';
+    const process = health.process;
+    if (process.run_id && process.run_id !== this.selectedRunId()) {
+      return `${process.state} (${process.run_id.slice(0, 8)})`;
+    }
+    return process.state;
+  });
+
+  readonly hostProcessActiveForSelectedRun = computed<boolean>(() => {
+    const process = this.daemonHealth.value()?.process;
+    return process?.state === 'running' && process.run_id === this.selectedRunId();
+  });
+
+  readonly hostRunnerCanStart = computed<boolean>(() => {
+    const health = this.daemonHealth.value();
+    if (!health) return false;
+    const state = health.process.state;
+    return (
+      !this.runnerBusy()
+      && !this.daemonUnavailable()
+      && this.selectedRunId() != null
+      && state !== 'running'
+      && state !== 'stopping'
+    );
+  });
+
+  readonly hostRunnerCanStop = computed<boolean>(() => {
+    return !this.runnerBusy() && this.hostProcessActiveForSelectedRun();
   });
 
   // ── Computed display helpers ──────────────────────────────────────────
@@ -182,6 +244,11 @@ export class BrokerPaperRunComponent {
       const id = setInterval(() => this.status.reload(), interval);
       onCleanup(() => clearInterval(id));
     });
+
+    effect((onCleanup) => {
+      const id = setInterval(() => this.daemonHealth.reload(), 5_000);
+      onCleanup(() => clearInterval(id));
+    });
   }
 
   selectRun(runId: string): void {
@@ -197,8 +264,62 @@ export class BrokerPaperRunComponent {
     if (id) void navigator.clipboard.writeText(id);
   }
 
+  copyDaemonCommand(): void {
+    void navigator.clipboard.writeText(this.daemonLaunchCommand);
+  }
+
   reloadRunList(): void {
     this.runList.reload();
+  }
+
+  setRunnerReadonly(event: Event): void {
+    this.runnerReadonly.set((event.target as HTMLInputElement).checked);
+  }
+
+  setRunnerHydratePolicy(value: string): void {
+    if (isHydratePolicy(value)) this.runnerHydratePolicy.set(value);
+  }
+
+  async startHostRunner(): Promise<void> {
+    const runId = this.selectedRunId();
+    if (!runId) return;
+    this.runnerBusy.set(true);
+    this.runnerError.set(null);
+    this.runnerMessage.set(null);
+    try {
+      const response = await this.svc.startHostRunner(runId, {
+        readonly: this.runnerReadonly(),
+        hydrate_policy: this.runnerHydratePolicy(),
+        strategy: 'spy_ema_crossover',
+        max_orders_per_day: 4,
+        ibkr_host: '127.0.0.1',
+      });
+      this.runnerMessage.set(response.process.message ?? 'Host runner start accepted.');
+      this.daemonHealth.reload();
+      this.status.reload();
+    } catch (err) {
+      this.runnerError.set(this.formatError(err));
+    } finally {
+      this.runnerBusy.set(false);
+    }
+  }
+
+  async stopHostRunner(force = false): Promise<void> {
+    const runId = this.selectedRunId();
+    if (!runId) return;
+    this.runnerBusy.set(true);
+    this.runnerError.set(null);
+    this.runnerMessage.set(null);
+    try {
+      const response = await this.svc.stopHostRunner(runId, { force });
+      this.runnerMessage.set(response.process.message ?? 'Host runner stop requested.');
+      this.daemonHealth.reload();
+      this.status.reload();
+    } catch (err) {
+      this.runnerError.set(this.formatError(err));
+    } finally {
+      this.runnerBusy.set(false);
+    }
   }
 
   fmtBytes(bytes: number): string {
@@ -224,5 +345,15 @@ export class BrokerPaperRunComponent {
 
   getSelectValue(event: Event): string {
     return (event.target as HTMLSelectElement).value;
+  }
+
+  private formatError(err: unknown): string {
+    const record = asRecord(err);
+    const errorPayload = asRecord(record?.['error']);
+    const detail = errorPayload?.['detail'];
+    if (typeof detail === 'string') return detail;
+    const message = record?.['message'];
+    if (typeof message === 'string') return message;
+    return 'Host runner action failed.';
   }
 }

@@ -94,3 +94,44 @@ export interface LogLine {
   consolidator_emitted: number | null;
   snapshot_set: string | null;
 }
+
+export type HydratePolicy = 'require' | 'optional' | 'disabled';
+
+export type HostRunnerProcessState = 'idle' | 'running' | 'exited' | 'stopping';
+
+export interface HostRunnerProcessStatus {
+  state: HostRunnerProcessState;
+  run_id: string | null;
+  pid: number | null;
+  started_at_ms: number | null;
+  ended_at_ms: number | null;
+  exit_code: number | null;
+  command: string[];
+  log_path: string | null;
+  message: string | null;
+}
+
+export interface HostRunnerHealth {
+  ok: boolean;
+  repo_root: string;
+  live_runs_root: string;
+  fetched_at_ms: number;
+  process: HostRunnerProcessStatus;
+}
+
+export interface HostRunnerStartRequest {
+  readonly: boolean;
+  hydrate_policy: HydratePolicy;
+  strategy: string;
+  max_orders_per_day: number;
+  ibkr_host: string;
+}
+
+export interface HostRunnerStopRequest {
+  force: boolean;
+}
+
+export interface HostRunnerActionResponse {
+  accepted: boolean;
+  process: HostRunnerProcessStatus;
+}

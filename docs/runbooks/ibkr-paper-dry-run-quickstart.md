@@ -97,19 +97,27 @@ for the dry run only (NOT for paper week — fix the firewall first).
 
 ---
 
-## Step 3 — Read-only run (CONTAINER)
+## Step 3 — Read-only run (HOST)
 
 **What:** connects to IB Gateway, subscribes to SPY 5-second TRADES bars,
 consolidates to 15-min, runs the strategy. `--readonly` short-circuits
 `place_order` so no broker orders go out.
 
-**Why:** this is the only step that needs the container — the IBKR Gateway
-sidecar network lives there. Run it through a full session (or a synthetic
-replay window) to prove the bar stream, consolidator, decision logger, and
-writer pipeline all work end-to-end.
+**Why:** the runner must originate from the host that is logged into IB
+Gateway. Container-side `start` hits IBKR error 420 because the real-time bar
+client source IP differs from the Gateway login IP. Run it through a full
+session (or a synthetic replay window) to prove the bar stream,
+consolidator, decision logger, and writer pipeline all work end-to-end.
 
 ```bash
-podman exec polygon-data-service python -m app.engine.live.run start --run-dir /app/artifacts/live_runs/$RUN_ID --readonly
+IBKR_HOST=127.0.0.1 PYTHONPATH=PythonDataService python -m app.engine.live.run start --run-dir PythonDataService/artifacts/live_runs/$RUN_ID --readonly
+```
+
+Or launch the local UI daemon once and use `/broker/paper-run` → **Host
+Runner**:
+
+```powershell
+$env:PYTHONPATH='PythonDataService'; python -m app.engine.live.host_daemon --repo-root .
 ```
 
 **Expect during the run:**
@@ -123,10 +131,9 @@ podman exec polygon-data-service python -m app.engine.live.run start --run-dir /
 > `poisoned.flag`, and exits non-zero. Inspect, decide if it's expected, then
 > proceed.
 
-> **Note on `$RUN_ID` inside the container:** `podman exec` passes through
-> environment variables from the calling shell, so the host-side `$RUN_ID`
-> resolves correctly. If your shell doesn't propagate it, swap to
-> `--run-dir /app/artifacts/live_runs/THE_LITERAL_HEX` instead.
+> **Observer UI note:** keep `python-service` up with
+> `IBKR_BROKER_ENABLED=false` if you want `/broker/paper-run` available while
+> the host runner owns the IBKR session.
 
 ---
 
