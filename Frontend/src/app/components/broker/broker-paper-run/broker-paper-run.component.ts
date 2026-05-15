@@ -246,6 +246,7 @@ export class BrokerPaperRunComponent {
     });
 
     effect((onCleanup) => {
+      if (!this.selectedRunId()) return;
       const id = setInterval(() => this.daemonHealth.reload(), 5_000);
       onCleanup(() => clearInterval(id));
     });

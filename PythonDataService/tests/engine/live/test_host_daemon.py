@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.engine.live.host_daemon import RunnerProcessManager, create_app
+from app.engine.live.host_daemon import RunnerProcessManager, build_parser, create_app
 
 RUN_ID = "run-daemon-" + "a" * 53
 
@@ -146,3 +147,48 @@ async def test_stop_force_kills_when_graceful_signal_does_not_exit(
     assert fake_process.killed is True
     assert stop.json()["process"]["state"] == "exited"
     assert stop.json()["process"]["exit_code"] == -9
+
+
+async def test_stop_handles_process_exiting_between_poll_and_signal(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Process exits in the TOCTOU window between poll() and send_signal()."""
+    manager, _ = daemon_context
+
+    class RacingProcess(FakeProcess):
+        def send_signal(self, sig: int) -> None:
+            self.returncode = 0
+            raise OSError("process already exited")
+
+    fake_process = RacingProcess()
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: fake_process)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        start = await client.post(f"/runs/{RUN_ID}/start", json={})
+        stop = await client.post(f"/runs/{RUN_ID}/stop", json={"force": False})
+
+    assert start.status_code == 200
+    assert stop.status_code == 200
+    assert stop.json()["accepted"] is False
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "8.8.8.8"])
+def test_build_parser_rejects_non_loopback_host(host: str) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--host", host])
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost"])
+def test_build_parser_accepts_loopback_host(host: str) -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--host", host])
+    assert args.host == host
+
+
+def test_build_parser_rejects_garbage_host() -> None:
+    parser = build_parser()
+    with pytest.raises((SystemExit, argparse.ArgumentTypeError)):
+        parser.parse_args(["--host", "not-a-host"])
