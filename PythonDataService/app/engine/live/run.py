@@ -29,6 +29,8 @@ CLI exit codes:
        --confirm on emergency-flatten, account mismatch)
   3  — start or emergency-flatten failed due to a runtime error
        (broker, IO)
+  4  — indicator-state hydration failed under REQUIRE policy (B2
+       dry-run gate); see indicator_state_hydration.json in run_dir
 """
 
 from __future__ import annotations
@@ -584,6 +586,21 @@ def cmd_start(args: argparse.Namespace) -> int:
     # (``_resolve_recovery_broker``) reads ``broker`` directly — fresh
     # adapter construction would orphan ``_owned_order_ids`` and skip
     # cancelling the runner's actual in-flight orders.
+
+    # Indicator-state persistence policy. ``getattr`` default of None
+    # means "no hydration" for test Namespace objects that don't set
+    # this attribute (e.g. shutdown-path tests that build argparse.Namespace
+    # directly). CLI-constructed args always have the parser default ("require").
+    _raw_policy = getattr(args, "hydrate_policy", None)
+    from app.engine.live.indicator_state import HydratePolicy, IndicatorStateHydrationError
+
+    if _raw_policy is not None:
+        hydrate_policy = HydratePolicy(_raw_policy)
+    else:
+        hydrate_policy = None
+
+    _artifacts_root = getattr(args, "artifacts_root", Path("PythonDataService/artifacts"))
+
     broker = getattr(args, "broker", None)
     client = getattr(args, "client", None)
     if broker is None:
@@ -602,6 +619,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         account_id=ledger.account_id,
         readonly=args.readonly,
         max_orders_per_day=args.max_orders_per_day,
+        artifacts_root=_artifacts_root,
+        hydrate_policy=hydrate_policy,
+        session_start_ms=ledger.start_date_ms,
+        code_sha=ledger.code_sha,
+        strategy_spec_sha=ledger.strategy_spec_sha256,
     )
 
     _entry_sidecar = RunStatusSidecar(
@@ -699,6 +721,28 @@ def cmd_start(args: argparse.Namespace) -> int:
                     ),
                 )
                 return 0
+            except IndicatorStateHydrationError as exc:
+                # Exit 4: REQUIRE policy, sidecar absent or invalid. Distinct
+                # from 1 (halt) / 2 (operator error) / 3 (runtime IO error).
+                # Must be caught before the generic Exception handler below
+                # so 3-from-unhandled doesn't preempt the more specific code.
+                logger.error(
+                    "indicator-state hydrate failed (%s); see %s",
+                    exc.receipt.validation.failure_reason,
+                    args.run_dir / "indicator_state_hydration.json",
+                )
+                write_run_status(
+                    args.run_dir,
+                    _entry_sidecar.model_copy(
+                        update={
+                            "ended_at_ms": now_ms(),
+                            "last_update_ms": now_ms(),
+                            "exit_code": 4,
+                            "exit_reason": ExitReason.exception,
+                        }
+                    ),
+                )
+                return 4
             except FatalHaltError as exc:
                 print(
                     f"[START] FATAL HALT — {exc.reason.trigger.value} at "
@@ -1034,6 +1078,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=4,
         help=(
             "§ 9 cap. Crossing this halts the run with exit 1. Default 4 (≤ 1 entry + 1 exit + 1 retry + 1 force-flat)."
+        ),
+    )
+    start.add_argument(
+        "--hydrate-policy",
+        choices=["require", "optional", "disabled"],
+        default="require",
+        help=(
+            "Indicator-state hydrate policy. 'require' is the default for the B2 dry-run gate "
+            "and paper-week operation; failure to validate the prior session's sidecar exits 4 "
+            "before any bar runs. 'optional' is the seed-day mode that cold-starts when no "
+            "sidecar exists. 'disabled' skips the read entirely (still writes at end-of-session)."
+        ),
+    )
+    start.add_argument(
+        "--allow-cold-start",
+        action="store_const",
+        const="disabled",
+        dest="hydrate_policy",
+        help="Alias for --hydrate-policy disabled. The operator escape hatch.",
+    )
+    start.add_argument(
+        "--artifacts-root",
+        type=Path,
+        default=Path("PythonDataService/artifacts"),
+        help=(
+            "Root directory for cross-session artifacts (indicator state sidecars). "
+            "Default: PythonDataService/artifacts (relative to repo root)."
         ),
     )
     start.set_defaults(func=cmd_start)

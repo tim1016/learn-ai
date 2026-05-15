@@ -6,12 +6,17 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.engine.consolidators.trade_bar_consolidator import TradeBarConsolidator
 from app.engine.data.trade_bar import TradeBar
 from app.engine.framework.insight import Insight
 from app.engine.framework.insight_manager import InsightManager
 from app.engine.live.live_portfolio import LivePortfolio
+
+if TYPE_CHECKING:
+    from app.engine.live.indicator_state import HydratePolicy
 
 
 @dataclass
@@ -28,6 +33,12 @@ class LiveContext:
     consolidated_bars: list[TradeBar] = field(default_factory=list)
     insight_manager: InsightManager = field(default_factory=InsightManager)
     _pre_handler_hook: Callable[[TradeBar], None] | None = None
+
+    # ---- Indicator-state persistence ----
+    hydrate_policy: HydratePolicy | None = None
+    run_dir: Path | None = None
+    artifacts_root: Path | None = None
+    session_start_ms: int | None = None
 
     def add_equity(self, symbol: str) -> str:
         symbol = symbol.upper()
@@ -79,3 +90,57 @@ class LiveContext:
             insight.close_time = self.current_time + insight.period
         price = self.portfolio.reference_price.get(insight.symbol, Decimal(0))
         self.insight_manager.add(insight, price)
+
+    def hydrate_indicator_state(self, strategy: object) -> None:
+        """Implement the §4.1 validation ladder + receipt-write contract.
+
+        Caller (LiveEngine.run) invokes immediately after strategy.initialize().
+        Behavior depends on self.hydrate_policy:
+          REQUIRE  — failure -> write receipt + raise IndicatorStateHydrationError
+          OPTIONAL — failure -> write receipt + return (cold-start)
+          DISABLED — never reads sidecar; writes a 'disabled_by_operator' receipt and returns
+          None     — persistence disabled at the engine level (replay tests); return
+        """
+        from app.engine.live.indicator_state import hydrate
+
+        if self.hydrate_policy is None:
+            return
+        if self.run_dir is None or self.artifacts_root is None or self.session_start_ms is None:
+            raise RuntimeError(
+                "hydrate_indicator_state requires run_dir, artifacts_root, session_start_ms on LiveContext"
+            )
+        hydrate(
+            strategy=strategy,
+            policy=self.hydrate_policy,
+            artifacts_root=self.artifacts_root,
+            run_dir=self.run_dir,
+            session_start_ms=self.session_start_ms,
+        )
+
+    def maybe_write_indicator_state(
+        self,
+        strategy: object,
+        reason: str,
+        *,
+        code_sha: str,
+        strategy_spec_sha: str,
+        last_consolidated_bar_end_ms: int,
+    ) -> None:
+        """Force-flat or graceful-shutdown checkpoint write.
+
+        No-op when persistence is disabled (artifacts_root is None).
+        On force_flat: write if strategy reports a non-None payload.
+        On shutdown:   write only if strictly newer than on-disk.
+        """
+        from app.engine.live.indicator_state import maybe_write
+
+        if self.artifacts_root is None:
+            return
+        maybe_write(
+            strategy=strategy,
+            artifacts_root=self.artifacts_root,
+            reason=reason,
+            code_sha=code_sha,
+            strategy_spec_sha=strategy_spec_sha,
+            last_consolidated_bar_end_ms=last_consolidated_bar_end_ms,
+        )
