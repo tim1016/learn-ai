@@ -48,3 +48,13 @@ class ExponentialMovingAverage(Indicator):
 
     def _reset_state(self) -> None:
         self._sma.reset()
+
+    def _to_state_extra(self) -> dict:
+        # k and one_minus_k are derived from period in __init__;
+        # no need to persist them.
+        return {
+            "sma_state": self._sma.to_state_dict(),
+        }
+
+    def _restore_state_extra(self, state: dict) -> None:
+        self._sma.restore_state(state["sma_state"])

@@ -40,3 +40,16 @@ class SimpleMovingAverage(Indicator):
     def _reset_state(self) -> None:
         self._window.clear()
         self._sum = Decimal(0)
+
+    def _to_state_extra(self) -> dict:
+        return {
+            "window": [str(v) for v in self._window],
+            "sum": str(self._sum),
+        }
+
+    def _restore_state_extra(self, state: dict) -> None:
+        self._window = deque(
+            (Decimal(v) for v in state["window"]),
+            maxlen=self.period,
+        )
+        self._sum = Decimal(state["sum"])
