@@ -375,7 +375,9 @@ class SpyEmaCrossoverAlgorithm(Strategy):
         that this is called immediately after ``initialize()`` while
         indicators are fresh-constructed and unfed.
         """
-        assert self._ema5 is not None and self._ema10 is not None and self._rsi14 is not None
+        assert self._ema5 is not None
+        assert self._ema10 is not None
+        assert self._rsi14 is not None
         self._ema5.restore_state(payload["ema5"])
         self._ema10.restore_state(payload["ema10"])
         self._rsi14.restore_state(payload["rsi14"])

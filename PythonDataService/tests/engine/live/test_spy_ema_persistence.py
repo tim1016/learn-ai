@@ -61,6 +61,21 @@ def test_report_state_returns_none_when_pending_entry() -> None:
     assert strat.report_state_for_persistence() is None
 
 
+def test_report_state_returns_none_when_open_trade() -> None:
+    """The state between entry fill and exit fill — _open_trade is set."""
+    from app.engine.strategy.algorithms.spy_ema_crossover import _OpenTrade
+
+    strat = _build_warmed_strategy()
+    strat._open_trade = _OpenTrade(
+        entry_time=datetime(2026, 5, 18, 14, 0, tzinfo=UTC),
+        entry_price=Decimal("410"),
+        ema5=Decimal("410"),
+        ema10=Decimal("409"),
+        rsi=Decimal("62"),
+    )
+    assert strat.report_state_for_persistence() is None
+
+
 def test_report_state_returns_payload_when_flat_and_ready() -> None:
     strat = _build_warmed_strategy()
     payload = strat.report_state_for_persistence()
