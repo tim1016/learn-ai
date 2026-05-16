@@ -183,7 +183,7 @@ Create `.claude/skills/auto-readme-tick/SKILL.md` with this content:
 ````markdown
 ---
 name: auto-readme-tick
-description: Sync the Features section of README.md with code. Reads feat(...) commits since last sync, reads the touched source files, regenerates the fenced ## Features section, and opens a PR. Use when invoked manually as `/auto-readme-tick`, when fired by the weekly cron, or when the user explicitly says "run the readme tick" or "update the readme". Add `dry-run` to skip the PR and write a proposed diff to docs/audits/auto-readme/dry-runs/ instead.
+description: Sync the Features section of README.md with code. Reads feat(...) commits since the last sync, reads the touched source files, regenerates the fenced ## Features section, and opens a PR. Use when invoked manually as `/auto-readme-tick`, when fired by the weekly cron, or when the user explicitly says "run the readme tick" or "update the readme". Add `dry-run` to skip the PR and write a proposed diff to docs/audits/auto-readme/dry-runs/ instead.
 ---
 
 # Auto-readme tick

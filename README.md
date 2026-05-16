@@ -43,7 +43,7 @@ End-to-end IBKR paper-trading runtime with safety-first design. Three coordinate
 - **Orders** (`/broker/orders`) — Order ledger with status, fills, and exchange round-trip detail
 - **Reconciliation** (`/broker/reconciliation`) — Daily three-way reconcile (decisions ⨯ fills ⨯ broker state) with category breakdown
 - **Options Chain** (`/broker/options-chain`) — Live IBKR options chain for trade entry
-- **Status** (`/broker/status`) — Top-strip session health, IBKR connectivity, and run summary
+- **Broker landing** (`/broker`) — Top-strip session health, IBKR connectivity, and run summary
 
 **Live engine** (`PythonDataService/app/engine/live/`) — Paper-trading runtime ported from LEAN:
 
@@ -112,8 +112,6 @@ End-to-end IBKR paper-trading runtime with safety-first design. Three coordinate
 - **Strategy Builder** (`/options-lab/strategy-builder`) — Multi-leg payoff curves (expiration intrinsic + current-time Black-Scholes), Greek curves on a secondary Y-axis, Probability of Profit via lognormal terminal CDF, what-if scenarios (T+N days, ±IV)
 - **Strategy Finder** (`/options-lab/strategy-finder`) — Pre-built templates (bull call spread, bear put spread, long straddle, iron condor, iron butterfly, covered call, protective put) with scenario-aware ranking
 - **Volatility** (`/options-lab/volatility`) — IV surface analysis, ATM IV30 recorder, IV-skew metrics
-
-**Options Chain v2** (`/options-chain`) — Standalone options chain viewer with contract detail drawer (full Greeks, IV, OI, candlestick history, break-even price, smart price resolution: day close → last trade → quote midpoint → bid/ask midpoint)
 
 **Pricing Lab** (`/pricing-lab`) — Black-Scholes pricing calculator and educational reference; configurable risk-free rate (default 4.3%); QuantLib-backed pricing comparison
 
@@ -246,10 +244,6 @@ A multi-tab experimental platform (`/research-lab`) for systematic alpha researc
 ### Tracked Instruments & Reference Data
 
 **Tracked Instruments** (`/tracked-instruments`) — Curated watchlist with expandable detail panels showing company info, related tickers, and inline data sanitization summaries
-
-**Ticker Explorer** (`/ticker-explorer`) — Search and explore the ticker universe with TradingView mini-chart widgets, aggregate counts, and date ranges
-
-**Market Calendar** (`/market-calendar`) — NYSE trading-day calendar with holidays, early-close days, and session-filter readiness
 
 **Golden Fixtures** (`/golden-fixtures`) — Browse the canonical reference fixtures used for numerical parity tests (see `PythonDataService/tests/fixtures/golden/`); attribution and regeneration commands per fixture
 

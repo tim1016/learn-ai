@@ -8,9 +8,9 @@
     {
       "date": "2026-05-15",
       "sha_range": "8c368ef7..3a1bb963",
-      "feat_commits": "many (bootstrap, processed manually as part of PR-A)",
+      "feat_commits": 0,
       "status": "pr-opened",
-      "notes": "Initial bootstrap. README's last-touched SHA (8c368ef7) was deeply stale. Modernization performed manually as part of the skill-introduction PR rather than via a separate auto-generated PR. last_pr_url will be filled by the next live tick."
+      "notes": "Initial bootstrap. README's last-touched SHA (8c368ef7) was deeply stale. Many feat commits processed manually as part of PR-A (skill-introduction PR) rather than via a separate auto-generated PR; feat_commits set to 0 because no commits were processed by the skill itself. last_pr_url will be filled by the next live tick."
     }
   ]
 }
