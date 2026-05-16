@@ -28,6 +28,8 @@ A full-stack quantitative trading research platform for US equity and options ma
 
 ---
 
+<!-- AUTO-UPDATED:FEATURES — managed by .claude/skills/auto-readme-tick. Edits between the fences will be overwritten. -->
+
 ## Features
 
 ### Market Data & Visualization
@@ -267,6 +269,8 @@ Deep learning pipeline for price forecasting under `/lstm/*`:
 **Tracked Instruments** (`/tracked-instruments`) — Curated watchlist of 50 major US stocks (NVDA, TSLA, AAPL, AMZN, MSFT, GOOGL, META, AMD, etc.) with expandable detail panels showing company info (description, IPO date, SIC code, address) and related tickers.
 
 **Tickers** (`/tickers`) — Auto-populated inventory of all tracked symbols with TradingView mini-chart widgets, aggregate counts, date ranges, and data sanitization summaries.
+
+<!-- /AUTO-UPDATED:FEATURES -->
 
 ---
 
