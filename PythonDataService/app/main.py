@@ -80,22 +80,32 @@ async def lifespan(app: FastAPI):
 
     if ibkr_settings.broker_enabled:
         ibkr_client = IbkrClient()
-        try:
-            await ibkr_client.connect()
-            set_client(ibkr_client)
-            logger.info("IBKR client connected; broker endpoints available.")
-        except ConnectionRefusedDueToSentinelError:
-            # Hard fail — never proceed past a paper/live mismatch.
-            logger.exception("IBKR sentinel mismatch — aborting startup.")
-            raise
-        except (BrokerError, OSError) as exc:
-            # Soft fail — Gateway is probably not running locally. Broker
-            # endpoints will return 503 until a future reconnect.
-            logger.warning(
-                "IBKR client could not connect (%s). Broker endpoints will return 503.",
-                exc,
+        # Install the client immediately so /health reports the
+        # disconnected-but-available state and POST /api/broker/connect can
+        # drive the lifecycle from the Status page. Without this, a soft-fail
+        # auto-connect leaves _client=None and the only fix is restarting
+        # the container.
+        set_client(ibkr_client)
+        if ibkr_settings.connect_on_startup:
+            try:
+                await ibkr_client.connect()
+                logger.info("IBKR client connected; broker endpoints available.")
+            except ConnectionRefusedDueToSentinelError:
+                # Hard fail — never proceed past a paper/live mismatch.
+                logger.exception("IBKR sentinel mismatch — aborting startup.")
+                raise
+            except (BrokerError, OSError) as exc:
+                # Soft fail — Gateway is probably not running locally. Broker
+                # endpoints will return 503 until POST /api/broker/connect.
+                logger.warning(
+                    "IBKR client could not connect (%s). Use POST /api/broker/connect or the Status page to retry.",
+                    exc,
+                )
+        else:
+            logger.info(
+                "IBKR auto-connect disabled (IBKR_CONNECT_ON_STARTUP=false). "
+                "Use POST /api/broker/connect or the Status page to establish the connection."
             )
-            set_client(None)
     else:
         set_client(None)
         logger.info(
