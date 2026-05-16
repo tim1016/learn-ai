@@ -61,6 +61,20 @@ export class BrokerStatusComponent {
   readonly positions = signal<AsyncCard<IbkrPositionsSnapshot>>({ ...EMPTY_CARD });
   readonly diagnostics = signal<AsyncCard<DiagnosticReport>>({ ...EMPTY_CARD });
 
+  /**
+   * Which lifecycle action (connect/disconnect/reconnect) is in flight.
+   * Disables all three buttons simultaneously so a frustrated operator
+   * cannot stack actions on top of an outstanding connect.
+   */
+  readonly lifecycleAction = signal<'connect' | 'disconnect' | 'reconnect' | null>(null);
+  readonly lifecycleError = signal<unknown | null>(null);
+
+  /** Hide lifecycle controls when the broker subsystem is disabled. */
+  readonly lifecycleControlsVisible = computed(() => {
+    const h = this.health();
+    return h !== null && h.disabled !== true;
+  });
+
   readonly activeDiagReport = computed<DiagnosticReportActive | null>(() => {
     const d = this.diagnostics().data;
     return d != null && d.disabled === false ? d : null;
@@ -129,6 +143,37 @@ export class BrokerStatusComponent {
       this.diagnostics.set({ data, loading: false, error: null });
     } catch (err) {
       this.diagnostics.set({ data: null, loading: false, error: err });
+    }
+  }
+
+  connect(): Promise<void> {
+    return this.runLifecycleAction('connect', () => this.broker.connect());
+  }
+
+  disconnect(): Promise<void> {
+    return this.runLifecycleAction('disconnect', () => this.broker.disconnect());
+  }
+
+  reconnect(): Promise<void> {
+    return this.runLifecycleAction('reconnect', () => this.broker.reconnect());
+  }
+
+  private async runLifecycleAction(
+    action: 'connect' | 'disconnect' | 'reconnect',
+    call: () => Promise<unknown>,
+  ): Promise<void> {
+    if (this.lifecycleAction() !== null) return;
+    this.lifecycleAction.set(action);
+    this.lifecycleError.set(null);
+    try {
+      await call();
+    } catch (err) {
+      this.lifecycleError.set(err);
+    } finally {
+      this.lifecycleAction.set(null);
+      // Refresh health + dependent cards so the banner and Status page
+      // reflect the post-action state immediately, not five seconds later.
+      await this.refresh();
     }
   }
 
