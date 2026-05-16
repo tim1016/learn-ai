@@ -28,70 +28,92 @@ A full-stack quantitative trading research platform for US equity and options ma
 
 ---
 
+<!-- AUTO-UPDATED:FEATURES — managed by .claude/skills/auto-readme-tick. Edits between the fences will be overwritten. -->
+
 ## Features
 
-### Market Data & Visualization
+### Live Paper Trading (IBKR)
 
-**Aggregate Fetcher** (`/market-data`) — Fetch and cache OHLCV bars for any US ticker across multiple timeframes (minute, hour, day, week, month). The system checks PostgreSQL first and only calls Polygon.io on cache miss. Features include:
+End-to-end IBKR paper-trading runtime with safety-first design. Three coordinated surfaces (operator UI, live engine, reconciliation) make a single paper run reproducible, observable, and reversible.
 
-- Candlestick, volume, and closing price line charts (TradingView lightweight-charts v5)
-- Sortable, paginated data table with VWAP calculations
-- Gap detection — analyzes data coverage against the market calendar, flags missing dates and partial trading days
-- Live market calendar with trading holidays
-- Real-time fetch progress polling during large requests
+**Broker surface** (`/broker/*`) — Operator UIs for live runs:
 
-**Stock Analysis** (`/stock-analysis`) — Bulk-fetch months of minute-level data using a monthly chunking algorithm:
+- **Paper Run** (`/broker/paper-run`) — Observer dashboard with run state, last-bar age, decision/execution counts, halt/poison flags, host runner controls (start/stop with hydrate policy), and reconciliation receipt links
+- **Account Monitor** (`/broker/account-monitor`) — Live account balances and active positions
+- **Orders** (`/broker/orders`) — Order ledger with status, fills, and exchange round-trip detail
+- **Reconciliation** (`/broker/reconciliation`) — Daily three-way reconcile (decisions ⨯ fills ⨯ broker state) with category breakdown
+- **Options Chain** (`/broker/options-chain`) — Live IBKR options chain for trade entry
+- **Broker landing** (`/broker`) — Top-strip session health, IBKR connectivity, and run summary
 
-- Cache-aware execution — pre-checks which months already have data
-- Configurable inter-chunk delays (default 12s) to stay within API rate limits
-- 0DTE options integration — detects trading days, calculates ATM strikes, fetches minute data for ATM +/- 2 ITM/OTM contracts
-- Per-chunk progress tracking with abort capability
-- Drill-down into chunk-level and day-level detail pages
+**Live engine** (`PythonDataService/app/engine/live/`) — Paper-trading runtime ported from LEAN:
 
-### Technical Analysis
+- **Halt detection** — `poisoned.flag` protocol, fatal-halt end-to-end pipeline, atomic flag I/O, and `cmd_start` refusal when flags are set
+- **Emergency flatten** — force-flat on halt with --readonly safety gates (both CLI and env-driven signals must agree)
+- **Indicator-state persistence** — EMA/RSI hydrate across runs (skip the ~3 h 45 m warmup) with policy tri-state (`require` / `optional` / `disabled`); per-run hydration receipt
+- **Recovery flatten** — force-flat at 15:55 ET; canonical first-checkpoint write; graceful-shutdown finally with a "newer state wins" check
+- **Run ledger** with pre-flight halt rules; artifact writers pinned to reconcile schemas; per-bar DecisionSnapshot publishing
+- **Host runner daemon** (`host_daemon.py`) — local FastAPI control plane for start/stop of paper runs from the operator UI. Loopback-only bind, no auth (intentional design — local operator bridge, not a remotely exposed service)
 
-Calculate and overlay indicators (`/technical-analysis`) on cached price data, computed server-side via pandas-ta:
+**Parity reconciliation** (`PythonDataService/app/research/parity/`) — QC trade-level parity:
 
-- **SMA** (Simple Moving Average) — configurable window (default 20)
-- **EMA** (Exponential Moving Average) — configurable window (default 50)
-- **RSI** (Relative Strength Index) — configurable period (default 14)
-- **MACD** — with signal line and histogram
-- **Bollinger Bands** — with upper/lower bands
+- Eight-category divergence taxonomy: `FIXTURE_INSUFFICIENT`, `DECISION_MISMATCH`, `DIRECTION_MISMATCH`, `QUANTITY_MISMATCH`, `FILL_PRICE_DRIFT`, `COMMISSION_DRIFT`, `PNL_DRIFT`, `ORDER_TYPE_MISMATCH`
+- IBKR commission model port (`ibkr_commission.py`) with tier-aware fee computation
+- Intraday-trigger fill mode for sub-bar fills (Phase 3.5 Path A)
+- Fixture data reader with explicit captures for parity-pinned runs
 
-Results are cached to prevent redundant calculations.
+### Spec Strategy Runner
+
+**Spec Strategy** (`/spec-strategy`) — Plain-English strategy specification with deterministic execution:
+
+- Compose trading conditions in plain English (e.g., "EMA(5) crosses above EMA(10) and RSI(14) < 70")
+- Condition catalog with validated mutators — every spec is round-trip-stable through the canonical form
+- Strategy store (versioned saved specs) with author attribution
+- Canonical fixtures for parity-pinned reference runs
+- Inline validation of operator-input specs before execution
+
+### Data Lab
+
+**Data Lab** (`/data-lab`, default landing route) — IDE-style data exploration workstation:
+
+- **Active indicators panel** with per-indicator config modal (parameter grid, validation, preview)
+- **Run dock** with bar-timeframe awareness and chunk-readout (knows when historical data fetch will run vs. complete instantly)
+- **Quality modal** — inspect data quality (gaps, flat bars, OHLC integrity) before strategy use
+- **Interactive chart** with TradingView lightweight-charts v5 (candles, overlays, marker tracks)
+- **Past chain inspector** — historical options chain at a chosen date
+- **Auto bar-timeframe** and chart-timeframe parsing — type "15m" / "1h" / "1d", the workstation reconfigures
+- Built-in documentation pane (`/data-lab-docs`)
+
+### Engine Lab
+
+**Engine Lab** (`/engine`) — Backtesting engine with a Configure surface:
+
+- Strategy execution against historical data with per-bar event replay
+- Trade log with entry/exit timestamps, prices, per-trade and cumulative PnL
+- Equity curve and drawdown rendering
+- Built-in engine docs (`/engine/docs`)
+
+**Lean Engine** (`/lean-engine`) — LEAN backtester integration surface for cross-validating ported strategies against the original framework
+
+**Strategy Builder** (`/strategy-builder`) — Visual strategy construction with drag-to-build interface and instant payoff updates
+
+### Technical Analysis & Indicator Reliability
+
+**Indicator Report** (`/indicator-report`) — Drill-down indicator analysis:
+
+- Compute SMA, EMA, RSI, MACD, Bollinger Bands server-side via pandas-ta with explicit warmup tracking
+- **Indicator reliability scoring** (`app/research/indicator_reliability.py`) — stability scoring across volatility and trend regimes, documented in `/docs/indicator-reliability-methodology`
+- Per-indicator parity tests against reference implementations (LEAN / TradingView CSV anchors)
 
 ### Options Analytics
 
-**Options Chain** (`/options-chain`) — Professional dark-themed options chain viewer:
+**Options Lab** (`/options-lab/*`) — Multi-tab options workstation:
 
-- Expiration ribbon with horizontal scrolling grouped by month
-- Symmetrical chain table: Calls (vega, theta, gamma, delta, price, OI, volume) | Strike + IV% | Puts (mirrored)
-- ATM strike auto-detection with amber highlighting and auto-scroll
-- ITM/OTM zone coloring (emerald for ITM calls, red for ITM puts, dimmed OTM)
-- Volume bars with proportional colored fills
-- Configurable strike range (5-50 strikes around ATM) with "Show All" toggle
-- Contract detail drawer — click any cell to view candlestick charts, all Greeks, IV, OI, bid/ask, break-even price, and historical summary stats
-- Smart price resolution: day close -> last trade -> quote midpoint -> bid/ask midpoint
-- Stock snapshot header with real-time price and daily change
+- **Chain** (`/options-lab/chain`) — Symmetric calls/puts grid with ATM auto-detection, ITM/OTM coloring, IV/Greeks per leg, expiration ribbon grouped by month
+- **Strategy Builder** (`/options-lab/strategy-builder`) — Multi-leg payoff curves (expiration intrinsic + current-time Black-Scholes), Greek curves on a secondary Y-axis, Probability of Profit via lognormal terminal CDF, what-if scenarios (T+N days, ±IV)
+- **Strategy Finder** (`/options-lab/strategy-finder`) — Pre-built templates (bull call spread, bear put spread, long straddle, iron condor, iron butterfly, covered call, protective put) with scenario-aware ranking
+- **Volatility** (`/options-lab/volatility`) — IV surface analysis, ATM IV30 recorder, IV-skew metrics
 
-**Options Strategy Lab** (`/options-strategy-lab`) — Build and analyze multi-leg options strategies:
-
-- **Pre-built templates**: Bull call spread, bear put spread, long straddle, iron condor, iron butterfly, covered call, protective put
-- **Manual leg builder**: Up to 8 legs with per-leg controls (strike, type, position, premium, IV, quantity)
-- **Live payoff curve**: Instantly updates as legs change
-  - Expiration payoff (intrinsic value)
-  - Current-time P&L (Black-Scholes priced, dashed blue line)
-  - What-if scenarios: T+5d, IV +/- 10%, custom overlays
-- **Greek curves**: Delta, gamma, theta, vega, rho plotted on secondary Y-axis
-- **Probability of Profit (PoP)**: Lognormal terminal distribution with CDF
-- **Break-even detection**: Linear interpolation across the payoff curve
-- **Diagnostic table**: Full Black-Scholes breakdown (d1, d2, N(d1), price, delta, intrinsic, P&L) at sample prices
-- Max profit / max loss / breakeven prices / aggregate Greeks / strategy cost (debit/credit)
-- Configurable risk-free rate (default 4.3%) and price range (+/- 5% to +/- 50%)
-
-**Strategy Builder** (`/strategy-builder`) — Quick options chain viewing with drag-to-build strategy construction and instant payoff updates.
-
-**Options History** (`/options-history`) — Historical 0DTE options contract lookup for a specific date. Scans ATM +/- N strikes with per-contract daily bar data and relative strike positioning.
+**Pricing Lab** (`/pricing-lab`) — Black-Scholes pricing calculator and educational reference; configurable risk-free rate (default 4.3%); QuantLib-backed pricing comparison
 
 ### Portfolio Management
 
@@ -135,11 +157,10 @@ Results are cached to prevent redundant calculations.
 - Per-strategy PnL breakdown with win rate and trade count
 - Alpha contribution bar chart — see which strategies drive returns
 - Contribution percentages showing each strategy's share of total PnL
-- Links to the existing backtest system (`/strategy-lab`)
 
 **Validation** — Frontend-piloted system validation suite that verifies the entire portfolio engine:
 
-- One-click execution of 10 automated tests against a temporary test account
+- One-click execution of automated tests against a temporary test account
 - **FIFO Accounting** — lot closures, realized PnL, remaining quantities, average cost basis
 - **Rebuild Determinism** — event sourcing guarantee: positions rebuild identically from trade log
 - **Cash Accounting** — cash balance correctness after buys/sells including fees
@@ -162,28 +183,10 @@ Results are cached to prevent redundant calculations.
 - **Position lifecycle**: Open → Closed (with ClosedAt timestamp when all lots are consumed)
 - **Metrics**: Sharpe (√252 annualized, sample stddev), Sortino (downside deviation only), Calmar (return / max drawdown)
 - **Self-validating**: Built-in validation suite tests all subsystems (accounting, valuation, risk, scenarios, rebuild) from the UI
-- **Full documentation**: See `docs/portfolio-management.md` for entity schemas, service APIs, GraphQL operations, and formulas. See `docs/portfolio-validation-plan.md` for the validation plan with test specifications
 
-### Strategy Backtesting
+### Research Lab (Alpha Validation)
 
-**Backtest Engine** (`/strategy-lab`) — Execute trading strategies against historical data:
-
-- **SMA Crossover**: Configurable short/long windows (default 10/30)
-- **RSI Mean Reversion**: Configurable window (14), oversold (30), overbought (70) thresholds
-- **Results**: Win/loss count, total PnL, max drawdown, Sharpe ratio
-- **Equity curve**: Multiple chart type options (Lightweight Charts, SVG, PrimeNG/Chart.js)
-- **Full trade log**: Entry/exit timestamps, prices, per-trade and cumulative PnL
-
-**Replay Mode** — Step through historical price action bar-by-bar:
-
-- Indicator overlays (SMA, EMA, RSI) rendered in real-time
-- Trade entry/exit markers from backtests overlaid on chart
-- Play, pause, step, and speed controls
-- Live P&L tracking as trades execute
-
-### Research Lab
-
-A multi-tab experimental platform (`/research-lab`) for systematic alpha research:
+A multi-tab experimental platform (`/research-lab`) for systematic alpha research, with Build Alpha-style functionality validation built in.
 
 **Feature Runner** — Validate alpha features (momentum, RSI, VWAP deviation, etc.) using Information Coefficient (IC) analysis:
 
@@ -210,31 +213,39 @@ A multi-tab experimental platform (`/research-lab`) for systematic alpha researc
 - Structural break detection (significant IC changes over time)
 - Rolling t-statistic smoothing for stability assessment
 
-**Batch Runner** — Run signals across multiple tickers in parallel for cross-sectional consistency testing.
+**Walk-forward validation** — OOS validation with rolling train/test windows (`/research-lab` + `app/routers/walk_forward.py`)
 
-**Options Feature Research** — Options-specific alpha validation targeting directional or IV-based return forecasts.
+**Monte Carlo** — Simulation-based confidence-interval lab (`app/research/monte_carlo/` + `app/routers/monte_carlo.py`) — perturbation under noise, shifted-data, slippage, and cost grids
 
-**Signal Report** (`/research-lab/signal-report/:id`) — Detailed experiment report with walk-forward equity curves, graduation scorecard, backtesting grid, and alpha decay metrics.
+**Null baselines** — Random/shuffled/permuted reference distributions for overfitting detection (`app/research/baselines/` + `app/routers/baselines.py`)
 
-**Options Math Docs** — Educational reference for Black-Scholes pricing, Greeks definitions, and interactive examples.
+**Parameter sensitivity** — Sensitivity grids with parsimony scoring across strategy hyperparameters
 
-### LSTM Predictions
+**ML predictions parity** — QuantConnect precomputed-predictions parity; predictions-as-data plumbing for LEAN compatibility (`app/research/ml/`)
 
-Deep learning pipeline for price forecasting under `/lstm/*`:
+**Batch Runner** — Run signals across multiple tickers in parallel for cross-sectional consistency testing
 
-**Training** (`/lstm/train`) — Submit background LSTM training jobs with configurable:
+**Options Feature Research** — Options-specific alpha validation targeting directional or IV-based return forecasts (`app/research/options_runner.py`)
 
-- Epochs (default 50), sequence length (default 60), feature selection (close, OHLC)
-- Scaler type: standard, minmax, robust
-- Preprocessing: log returns toggle, winsorization toggle
-- Mock mode for quick testing
-- Results: RMSE, MAE, improvement vs. naive baseline, loss curves, residual analysis, stationarity tests (ADF/KPSS)
+**Research Divergence** — Compare two research runs and classify the divergence (`app/research/divergence/`)
 
-**Validation** (`/lstm/validate`) — K-fold cross-validation with per-fold metrics: RMSE, MAE, R-squared, directional accuracy, Sharpe ratio.
+**Signal Report** (`/research-lab/signal-report/:id`) — Detailed experiment report with walk-forward equity curves, graduation scorecard, backtesting grid, and alpha decay metrics
 
-**Predictions** (`/lstm/predictions`) — Generate forward forecasts from trained models with confidence intervals.
+**Methodology docs** — `/docs/signal-engine-methodology` and `/docs/indicator-reliability-methodology`
 
-**Model History** (`/lstm/models`) — Browse, compare, and manage all trained model artifacts with hyperparameters and training performance.
+### Volatility & Edge Research
+
+**Edge Lab** (`/edge/*`) — Volatility-anchored research surface:
+
+- **Realized vs IV** (`/edge/realized-vs-iv`) — Realized vol vs implied vol divergence and term-structure analysis
+- **Cross-Asset** (`/edge/cross-asset`) — Cross-asset implications, correlations, and lead-lag relationships
+- **Regimes** (`/edge/regimes`) — Volatility regime detection and persistence
+
+### Tracked Instruments & Reference Data
+
+**Tracked Instruments** (`/tracked-instruments`) — Curated watchlist with expandable detail panels showing company info, related tickers, and inline data sanitization summaries
+
+**Golden Fixtures** (`/golden-fixtures`) — Browse the canonical reference fixtures used for numerical parity tests (see `PythonDataService/tests/fixtures/golden/`); attribution and regeneration commands per fixture
 
 ### Data Quality & Validation
 
@@ -251,22 +262,9 @@ Deep learning pipeline for price forecasting under `/lstm/*`:
 - CSV download of cleaned data for offline analysis
 - Built-in pipeline documentation page (`/data-quality-docs`)
 
-**Data Lab** (`/data-lab`) — Validation report for comparing pandas-ta computed indicators against TradingView CSV exports. Upload a TradingView export and compare indicator values side-by-side to verify calculation accuracy.
+**Validation Study** (`app/routers/validation_study.py`) — Methodology validation across multiple external sources, with documented references
 
-**Indicator Validation** (`/indicator-validation`) — Cross-reference computed technical indicators against external sources.
-
-### Snapshots & Market Data
-
-**Snapshots** (`/snapshots`) — Four snapshot modes in a single tabbed view:
-
-- **Single Ticker** — Detailed real-time snapshot (price, change, bid/ask, volume, VWAP)
-- **Market Movers** — Top gainers/losers ranked by percentage change
-- **Multi-Ticker** — Side-by-side comparison of multiple tickers
-- **Unified** — Advanced query with configurable limits and structured output
-
-**Tracked Instruments** (`/tracked-instruments`) — Curated watchlist of 50 major US stocks (NVDA, TSLA, AAPL, AMZN, MSFT, GOOGL, META, AMD, etc.) with expandable detail panels showing company info (description, IPO date, SIC code, address) and related tickers.
-
-**Tickers** (`/tickers`) — Auto-populated inventory of all tracked symbols with TradingView mini-chart widgets, aggregate counts, date ranges, and data sanitization summaries.
+<!-- /AUTO-UPDATED:FEATURES -->
 
 ---
 
