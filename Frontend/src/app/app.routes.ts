@@ -3,6 +3,13 @@ import { Routes } from "@angular/router";
 export const routes: Routes = [
   { path: "", redirectTo: "/data-lab", pathMatch: "full" },
   {
+    path: "lean-lab",
+    loadComponent: () =>
+      import("./components/lean-lab/lean-lab.component").then(
+        (m) => m.LeanLabComponent
+      ),
+  },
+  {
     path: "jobs-demo",
     loadComponent: () =>
       import("./components/jobs/backtest-job-page.component").then(

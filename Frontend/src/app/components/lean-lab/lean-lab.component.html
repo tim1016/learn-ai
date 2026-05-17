@@ -1,0 +1,141 @@
+<div class="lean-lab">
+  <header class="lean-lab__header">
+    <h1>LEAN Sidecar Lab</h1>
+    <p class="lean-lab__lead">
+      Run the trusted buy-and-hold sample through an isolated LEAN container and inspect the
+      classified result. Phase&nbsp;4a — trusted sample only; arbitrary
+      <code>QCAlgorithm</code> source lands when the Phase&nbsp;3 boundary gate clears.
+    </p>
+  </header>
+
+  <form class="lean-lab__form" [formGroup]="form" (ngSubmit)="submit()">
+    <label class="lean-lab__field">
+      <span>Run ID</span>
+      <input type="text" formControlName="runId" aria-describedby="runIdHint" />
+      <small id="runIdHint">Strict slug — regenerates after each submit.</small>
+    </label>
+
+    <label class="lean-lab__field">
+      <span>Symbol</span>
+      <input type="text" formControlName="symbol" />
+    </label>
+
+    <label class="lean-lab__field">
+      <span>Start date (UTC)</span>
+      <input type="date" formControlName="startDate" />
+    </label>
+
+    <label class="lean-lab__field">
+      <span>End date (UTC)</span>
+      <input type="date" formControlName="endDate" />
+    </label>
+
+    <label class="lean-lab__field">
+      <span>Starting cash (USD)</span>
+      <input type="number" formControlName="startingCash" min="1000" max="10000000" step="1000" />
+    </label>
+
+    <button
+      class="lean-lab__submit"
+      type="submit"
+      [disabled]="submitting() || form.invalid"
+      aria-label="Run the trusted-sample backtest through the LEAN sidecar"
+    >
+      {{ submitting() ? "Running…" : "Run trusted sample" }}
+    </button>
+  </form>
+
+  @if (error(); as err) {
+    <section class="lean-lab__error" role="alert" aria-live="assertive">
+      <h2>Run failed</h2>
+      <dl>
+        <dt>HTTP status</dt>
+        <dd>{{ err.status || "—" }}</dd>
+        <dt>Reason</dt>
+        <dd>{{ err.reason }}</dd>
+        <dt>Message</dt>
+        <dd>{{ err.message }}</dd>
+      </dl>
+    </section>
+  }
+
+  @if (response(); as resp) {
+    <section class="lean-lab__result" aria-live="polite">
+      <header class="lean-lab__result-header">
+        <h2>Run {{ resp.run_id }}</h2>
+        @if (statusBadge(); as badge) {
+          <span class="lean-lab__badge" [class]="'lean-lab__badge--' + badge.tone">
+            {{ badge.label }}
+          </span>
+        }
+      </header>
+
+      <dl class="lean-lab__summary">
+        <dt>Exit code</dt>
+        <dd>{{ resp.exit_code }}</dd>
+        <dt>Duration</dt>
+        <dd>{{ resp.duration_ms }} ms</dd>
+        <dt>Timed out</dt>
+        <dd>{{ resp.timed_out ? "yes" : "no" }}</dd>
+        <dt>Parser version</dt>
+        <dd>{{ resp.normalized_parser_version ?? "—" }}</dd>
+        <dt>Equity points</dt>
+        <dd>{{ resp.total_equity_points ?? 0 }}</dd>
+        <dt>Order events</dt>
+        <dd>{{ resp.total_order_events ?? 0 }}</dd>
+      </dl>
+
+      @if (equityHighlights(); as eh) {
+        <section class="lean-lab__equity">
+          <h3>Equity snapshot</h3>
+          <p>
+            <strong>{{ eh.points }} samples</strong> · {{ eh.orders }} order events ·
+            start ${{ eh.start | number: "1.2-2" }} → end
+            ${{ eh.end | number: "1.2-2" }}
+            (<span
+              [class.lean-lab__pnl-up]="eh.pnlPct >= 0"
+              [class.lean-lab__pnl-down]="eh.pnlPct < 0"
+            >{{ eh.pnlPct | number: "1.2-2" }}%</span>)
+          </p>
+        </section>
+      }
+
+      @if (errorRows().length > 0) {
+        <section class="lean-lab__errors">
+          <h3>LEAN log errors ({{ errorRows().length }})</h3>
+          <table>
+            <thead>
+              <tr><th>Category</th><th>Line</th></tr>
+            </thead>
+            <tbody>
+              @for (row of errorRows(); track row.category + row.line) {
+                <tr>
+                  <td>{{ row.category }}</td>
+                  <td><code>{{ row.line }}</code></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </section>
+      }
+
+      <details class="lean-lab__paths">
+        <summary>Server paths</summary>
+        <dl>
+          <dt>Workspace</dt><dd><code>{{ resp.workspace_root }}</code></dd>
+          <dt>Manifest</dt><dd><code>{{ resp.manifest_path }}</code></dd>
+          <dt>Observations</dt><dd><code>{{ resp.observations_path }}</code></dd>
+          <dt>LEAN log</dt><dd><code>{{ resp.lean_log_path }}</code></dd>
+          @if (resp.normalized_path) {
+            <dt>Normalized</dt><dd><code>{{ resp.normalized_path }}</code></dd>
+          }
+        </dl>
+      </details>
+
+      <details class="lean-lab__log">
+        <summary>Log tail ({{ resp.log_tail.length }} chars)</summary>
+        <pre>{{ resp.log_tail }}</pre>
+      </details>
+    </section>
+  }
+</div>
