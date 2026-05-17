@@ -47,6 +47,13 @@ from app.lean_sidecar.manifest import (
     sha256_text,
     write_manifest,
 )
+from app.lean_sidecar.normalized_parser import (
+    NORMALIZED_PARSER_VERSION,
+    NormalizedParserError,
+    NormalizedResult,
+    parse_workspace,
+    write_normalized_result,
+)
 from app.lean_sidecar.staging import (
     stage_algorithm_source,
     stage_daily_bars,
@@ -64,7 +71,6 @@ logger = logging.getLogger(__name__)
 # When the launcher gains its own deployable image this becomes its
 # image digest.
 LAUNCHER_VERSION_HASH = sha256_text("phase-1-spike-0")
-NORMALIZED_PARSER_VERSION = "phase-2a-no-parser-yet"
 
 
 class LeanSidecarServiceError(RuntimeError):
@@ -119,6 +125,12 @@ class TrustedRunResult:
     workspace_root: Path
     observations_path: Path
     lean_log_path: Path
+    # Phase 3a — the normalized LEAN result (Pydantic-typed). ``None``
+    # when the run never produced output (launcher rejected, container
+    # died before write); the router surfaces that to the caller so
+    # the inspection endpoint can 404 deterministically.
+    normalized_path: Path | None
+    normalized: NormalizedResult | None
 
 
 _ET = ZoneInfo("America/New_York")
@@ -288,6 +300,25 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     response: LaunchResponse = await post_launch(launch_request)
     finished_ms = now_ms_utc()
 
+    # Phase 3a: parse LEAN's output into typed DTOs and persist
+    # them. Only attempt parsing when the container actually produced
+    # output (exit_code 0); a crashed run leaves nothing useful to
+    # parse and the inspection endpoint already 404s on absence.
+    # NormalizedParserError is surfaced as a service-level error so
+    # the operator sees "parser disagrees with LEAN schema" rather
+    # than a silent missing-result.
+    normalized: NormalizedResult | None = None
+    normalized_path: Path | None = None
+    if response.exit_code == 0:
+        try:
+            normalized = parse_workspace(workspace)
+            normalized_path = write_normalized_result(workspace, normalized)
+        except NormalizedParserError as e:
+            logger.warning("normalized parser failed for %s: %s", request.run_id, e)
+            # Don't fail the whole run — the raw LEAN artifacts are still
+            # available via /runs/{id}/log. Phase 4 UI can fall back to
+            # the unparsed artifacts when normalized is None.
+
     manifest = _build_manifest(
         request=request,
         workspace=workspace,
@@ -298,6 +329,7 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         response=response,
         started_ms=started_ms,
         finished_ms=finished_ms,
+        normalized=normalized,
     )
     write_manifest(manifest, workspace.manifest_path)
 
@@ -313,6 +345,8 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         workspace_root=workspace.root,
         observations_path=workspace.object_store_dir / "observations.csv",
         lean_log_path=workspace.lean_log_path,
+        normalized_path=normalized_path,
+        normalized=normalized,
     )
 
 
@@ -327,6 +361,7 @@ def _build_manifest(
     response: LaunchResponse,
     started_ms: int,
     finished_ms: int,
+    normalized: NormalizedResult | None,
 ) -> RunManifest:
     """Construct the full reproducibility manifest from the run.
 
@@ -383,21 +418,45 @@ def _build_manifest(
             start_ms=request.start_ms_utc,
             end_ms=request.end_ms_utc,
         ),
-        # ``staged_data_window_ms`` and ``effective_algorithm_window_ms``
-        # require the Phase 2 normalized parser (deferred to a fast-
-        # follow); for Phase 2a they stay None and the manifest's
-        # ``notes`` records that.
+        # ``effective_algorithm_window_ms`` derived from the parsed
+        # equity curve when available; ``bars_consumed_by_symbol``
+        # is still empty until Phase 3b adds per-symbol bar counts
+        # from the observations.csv audit file.
+        effective_algorithm_window_ms=_effective_window_from_normalized(normalized),
         bars_consumed_by_symbol={},
         started_at_ms=started_ms,
         finished_at_ms=finished_ms,
         exit_code=response.exit_code,
         notes=(
-            "Phase 2a manifest — staged_data_window_ms, "
-            "effective_algorithm_window_ms, and bars_consumed_by_symbol "
-            "stay empty until the normalized LEAN parser ships.",
+            "Phase 3a — normalized parser populates effective_algorithm_window_ms; "
+            "staged_data_window_ms and bars_consumed_by_symbol still pending Phase 3b.",
             f"is_clean={response.is_clean}",
             f"lean_error_categories={sorted(response.lean_errors.keys())}",
+            f"normalized_parser={'present' if normalized else 'absent'}",
         ),
+    )
+
+
+def _effective_window_from_normalized(normalized: NormalizedResult | None) -> WindowMs | None:
+    """Derive the effective-algorithm window from the parsed equity curve.
+
+    LEAN samples equity at bar boundaries; the first and last points
+    are the algorithm's actual run window after any internal date
+    clipping. Returning ``None`` when the curve is empty or the
+    parser didn't run keeps the manifest faithful — a missing window
+    is not the same as a window of length zero.
+    """
+    if normalized is None or normalized.first_equity_ms_utc is None:
+        return None
+    if normalized.last_equity_ms_utc is None:
+        return None
+    # WindowMs requires start < end; if LEAN somehow emitted a
+    # single-point curve, return None rather than fabricate a window.
+    if normalized.first_equity_ms_utc >= normalized.last_equity_ms_utc:
+        return None
+    return WindowMs(
+        start_ms=normalized.first_equity_ms_utc,
+        end_ms=normalized.last_equity_ms_utc,
     )
 
 

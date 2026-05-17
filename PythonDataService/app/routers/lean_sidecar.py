@@ -186,6 +186,13 @@ class TrustedRunResponseModel(BaseModel):
     workspace_root: str
     observations_path: str
     lean_log_path: str
+    # Phase 3a: present when LEAN produced parseable output. ``None``
+    # when the run crashed before producing artifacts (the operator
+    # then falls back to /runs/{id}/log for diagnosis).
+    normalized_path: str | None = None
+    normalized_parser_version: str | None = None
+    total_order_events: int | None = None
+    total_equity_points: int | None = None
 
 
 @router.post(
@@ -251,6 +258,10 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         workspace_root=str(result.workspace_root),
         observations_path=str(result.observations_path),
         lean_log_path=str(result.lean_log_path),
+        normalized_path=str(result.normalized_path) if result.normalized_path else None,
+        normalized_parser_version=(result.normalized.parser_version if result.normalized else None),
+        total_order_events=(result.normalized.total_order_events if result.normalized else None),
+        total_equity_points=(result.normalized.total_equity_points if result.normalized else None),
     )
 
 
@@ -324,6 +335,35 @@ async def get_observations(run_id: str) -> PlainTextResponse:
 
 
 _LEAN_LOG_TAIL_MAX_BYTES = 1 << 20  # 1 MiB
+
+
+@router.get(
+    "/runs/{run_id}/normalized",
+    summary="Return the normalized LEAN result (parsed equity curve + orders + stats).",
+)
+async def get_normalized(run_id: str) -> dict:
+    """Serve the parsed result.json written by the orchestrator.
+
+    404 when the file is absent: either the run hasn't completed, or
+    LEAN died before producing the artifacts the parser reads. The
+    operator can `GET /runs/{id}/log` to diagnose.
+    """
+    workspace = _resolved_workspace_or_404(run_id)
+    result_path = workspace.normalized_dir / "result.json"
+    if not result_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason": "normalized_missing",
+                "message": (
+                    f"normalized result.json not present for {run_id}; "
+                    "LEAN may have failed before producing parseable output"
+                ),
+            },
+        )
+    import json
+
+    return json.loads(result_path.read_text(encoding="utf-8"))
 
 
 @router.get(
