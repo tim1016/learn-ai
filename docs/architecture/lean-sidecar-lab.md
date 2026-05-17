@@ -1,19 +1,23 @@
 # LEAN Sidecar Lab
 
-**Status:** Phase 1 — runner spike in progress (Phase 1a partially shipped)
+**Status:** Phase 1 — runner spike shipped (Phase 1a + 1b)
 **Last reviewed:** 2026-05-17
 **Pairs with:** `docs/architecture/engine-authority-map.md`, `docs/references/lean-engine.md`, `.claude/rules/numerical-rigor.md`
 
 This document is the authority for the **LEAN Lab** feature — a UI surface in learn-ai where the user pastes or edits a real `QCAlgorithm` and runs it through an isolated official LEAN runner sidecar. It exists because the alternative ("just shell out to LEAN from FastAPI") quietly violates several invariants this repo depends on.
 
 Phase 0 landed this decision record plus the matching row in
-`docs/architecture/engine-authority-map.md`. Phase 1a (this PR) lands
-the runnable surface: launcher service, podman-shape runner, manifest
-writer, workspace contract, LEAN data-folder staging, trusted
-`MyAlgorithm` Python sample, and the round-trip fidelity fixture for
-the LEAN data-folder contract. Image digest pin and the security-flag
-matrix outcome land in Phase 1b once the `podman pull` finishes
-locally — both are tracked in `247-Critical-feedback.md`.
+`docs/architecture/engine-authority-map.md`. Phase 1 (this PR) lands
+the runnable surface: launcher service, podman-shape runner with the
+proven hardening flags, manifest writer, workspace contract, LEAN
+data-folder staging, image-bundled metadata extraction, trusted
+`MyAlgorithm` Python sample, the data-folder round-trip fidelity
+fixture, the security-flag viability matrix, and three end-to-end
+sidecar runs (baseline, with `--cap-drop=ALL`, and the xfailed
+`--read-only` documented in the security section).
+
+**Pinned LEAN image digest (Phase 1b):**
+`sha256:97884667be20077925996ac22b5e3e16e3a47e7363e01795151459d16786247c`
 
 ---
 
@@ -438,15 +442,43 @@ Shipped in PR following Phase 0:
 - **`config.json` authoring** — `app/lean_sidecar/lean_config.py`. Container-side paths hard-coded against the `/lean-run` mount; sorted-pretty JSON for stable hashing. Phase 1 confirms the exact key names against the pinned image (see Open Questions §5).
 - **Test surface** — 59 unit tests passing; security-flag matrix + E2E sidecar test gated on the locally-pulled LEAN image (skip-with-clear-reason on hosts that have not pulled it).
 
-Open from this PR, queued for Phase 1b:
+### Phase 1b progress (2026-05-17, same PR)
 
-- (b) **Image digest pin** — `podman pull quantconnect/lean` did not finish in the Phase 1a session. Pin script ships at `PythonDataService/scripts/lean_sidecar_pin_image.py`; once the pull lands, run it to rewrite `app/lean_sidecar/config.py`'s `PINNED_LEAN_IMAGE_DIGEST` and update the digest row in this doc in the same commit.
-- (c) **Windows topology proof** — provisional: launcher runs as a host Python process invoking `podman` over the WSL2/podman-machine VM; data plane reaches it on localhost. UID/GID for the mounted workspace, exact CRLF behavior on the source file, and whether to wrap the launcher in its own container with only the Podman socket mounted are deferred to Phase 1b.
-- (d) **Security-flag matrix** — `test_security_flags.py` is written and runs as soon as the image lands; results land in this section in the same commit that pins the digest.
-- (f) **Factor/map/metadata staging for the trusted sample** — Phase 1a stages only the bar zips, since the trusted-sample window has no corporate actions and runs against image-baked metadata defaults. Phase 1b stages and hashes the metadata databases plus factor/map files for the trusted sample window so reconciliation-grade fixtures are reproducible without image defaults.
-- (g) **End-to-end trusted-sample run** — test exists, skip-gated on image. Runs in Phase 1b on the first run after the digest pin.
-- (h) **Determinism gate** — once the E2E run produces artifacts, the determinism re-run + normalized-artifact comparison lands in Phase 1b.
-- (i) **Date-window / consumption gate** — the trusted sample writes observed `(ms_utc, close)` pairs into `ObjectStore`; the parser landing in Phase 2 reads them and asserts `bars_consumed_by_symbol[SPY] > 0` plus the three-window alignment from §"Date-window and bar-consumption policy".
+After Phase 1a landed, the LEAN image pull completed; Phase 1b added:
+
+- (b) **Image digest pinned.** `sha256:97884667be20077925996ac22b5e3e16e3a47e7363e01795151459d16786247c` (see top of doc). `PINNED_LEAN_IMAGE_DIGEST` in `app/lean_sidecar/config.py` is the source of truth; `scripts/lean_sidecar_pin_image.py` writes it from `podman image inspect`.
+- (c) **Windows topology — provisional.** Launcher is a host Python process invoking podman over the WSL2/podman-machine VM. Workspace bind-mounted via the standard WSL2 path translation. UID/GID matching for `--user` is a Phase 1c fast-follow (see security matrix below). The "launcher in its own container with only the Podman socket mounted" hardening pass remains deferred.
+- (d) **Security-flag viability matrix (Phase 1b run on the pinned digest):**
+
+  | Flag                                       | Podman-startup | LEAN-runtime  | Status                          |
+  |--------------------------------------------|----------------|---------------|---------------------------------|
+  | `--cap-drop=ALL`                           | ✅ accepted    | ✅ ran clean  | **Mandatory** in `runner.py`    |
+  | `--pids-limit=512`                         | ✅ accepted    | ✅ ran clean  | **Mandatory** in `runner.py`    |
+  | `--tmpfs /tmp:rw,noexec,nosuid,size=256m`  | ✅ accepted    | ➖ untested   | Opt-in (caller passes flag)     |
+  | `--read-only`                              | ✅ accepted    | ❌ breaks     | **Deferred** — see note below   |
+  | `--user 10001:10001`                       | ✅ accepted    | ➖ untested   | **Deferred** — see note below   |
+
+  `--read-only` deferred because LEAN's `ObjectStore` defaults to `/Lean/Launcher/bin/Debug/storage` which sits on the image's read-only overlay; the trusted sample's audit-file write fails in `Algorithm.Initialize()`. Two fast-follow paths: add `--tmpfs /Lean/Launcher/bin/Debug/storage:rw,...`, or override `object-store-root` in `config.json` to a workspace-writable path. `--user` deferred until the launcher pins the UID/GID that owns the bind-mounted workspace on Windows + WSL2 — without that pin, the LEAN container can't write to `/lean-run/output`. Both are tracked as Phase 1c work.
+
+- (f) **Metadata staging from image.** Added `stage_lean_metadata_from_image(workspace, image_digest)` in `app/lean_sidecar/staging.py`. Uses `podman create` + `podman cp` (no run, no network) to extract `/Lean/Data/market-hours/market-hours-database.json` and `/Lean/Data/symbol-properties/symbol-properties-database.csv` into the workspace's `data/` subtree. The launcher then mounts only the workspace; LEAN reads the metadata from a hashable path under the audit boundary instead of from the image-baked defaults.
+- (g) **End-to-end trusted-sample run.** Three tests in `tests/lean_sidecar/test_runner_e2e.py`:
+  - `test_buy_and_hold_runs_clean` — baseline shape, **passes**.
+  - `test_buy_and_hold_runs_with_cap_drop_all` — adds `--cap-drop=ALL`, **passes** at full LEAN runtime.
+  - `test_buy_and_hold_runs_with_read_only_root` — adds `--read-only + tmpfs /tmp`, **xfails** with the ObjectStore message captured in the test docstring.
+- (i, partial) **Bar-consumption audit file.** The trusted sample writes `observations.csv` to LEAN's `ObjectStore` recording `(ms_utc, close)` for every received bar; the Phase 2 parser will read this and assert non-zero consumption + the three-window alignment.
+
+Two trusted-sample fixes also landed in Phase 1b:
+
+- LEAN's launcher reads `config.json` from its working directory by default (which is the image-baked default config pointing at `BasicTemplateFrameworkAlgorithm`). The runner now always appends `--config /lean-run/project/config.json` as the launcher arg so the workspace config wins; this is the safety floor noted in `runner.py:CONTAINER_LEAN_CONFIG_PATH`.
+- `bar.EndTime` arrives as a naive Python `datetime` in algorithm timezone (ET), not a wrapped .NET `DateTime`; the sample now attaches ET via `zoneinfo` before converting to int64 ms UTC.
+- `SetBenchmark(lambda dt: 100)` pins a constant benchmark so LEAN's post-run `ResultsAnalyzer` does not try to read SPY daily data that the trusted-sample-window does not stage.
+
+Open from this PR, queued for Phase 1c:
+
+- (c) `--user <uid>` requires workspace UID/GID matching on Windows + WSL2 — currently launcher does not pin a UID.
+- (d) `--read-only` requires either an `ObjectStore` tmpfs or a config-side `object-store-root` redirect.
+- (h) **Determinism gate** — re-run + byte-identical normalized-artifact comparison. Trivial to add now that one clean E2E run produces artifacts; deferred so this PR does not grow further.
+- Factor/map files for the trusted-sample window — not required because the window has no corporate actions, but reconciliation-grade fixtures will need them in Phase 5.
 
 ---
 

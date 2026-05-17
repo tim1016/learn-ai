@@ -42,7 +42,26 @@ The class name MUST be ``MyAlgorithm`` — Phase 1 launches use it as the
 default ``algorithm_type_name``.
 """
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from AlgorithmImports import *
+
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _to_ms_utc(dt):
+    """Normalize a QC-supplied Python datetime to int64 ms UTC.
+
+    QC's Python bridge passes ``bar.EndTime`` as a naive
+    ``datetime.datetime`` in the algorithm timezone (ET for US
+    equities). Attaching the ET zone before ``.timestamp()`` is the
+    only safe way to convert to a UTC epoch.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_ET)
+    return int(dt.timestamp() * 1000)
 
 
 class MyAlgorithm(QCAlgorithm):
@@ -69,6 +88,13 @@ class MyAlgorithm(QCAlgorithm):
         self.symbol = equity.Symbol
         self._invested = False
 
+        # LEAN's default benchmark is SPY daily, which would require
+        # staging daily bars in addition to minute. The trusted-sample
+        # is reconciliation-eligible without a benchmark; pin it to a
+        # constant so the post-run ResultsAnalyzer does not fail
+        # looking for unstaged daily data.
+        self.SetBenchmark(lambda dt: 100)
+
         # Pre-create the observations file so the test can detect
         # zero-bars-consumed without ambiguity.
         path = self.ObjectStore.GetFilePath("observations.csv")
@@ -80,11 +106,8 @@ class MyAlgorithm(QCAlgorithm):
         bar = slice.Bars.get(self.symbol)
         if bar is None:
             return
-        # bar.EndTime is the bar close in algorithm timezone (ET);
-        # convert to int64 ms UTC for the manifest boundary.
-        end_utc_ms = int(bar.EndTime.ToUniversalTime().timestamp() * 1000)
         with open(self._obs_path, "a") as f:
-            f.write(f"{end_utc_ms},{bar.Close}\\n")
+            f.write(f"{_to_ms_utc(bar.EndTime)},{bar.Close}\\n")
         if not self._invested:
             self.SetHoldings(self.symbol, 1.0)
             self._invested = True

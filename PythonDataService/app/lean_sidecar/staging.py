@@ -12,6 +12,9 @@ contract" and §"LEAN data-folder fidelity".
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
@@ -19,8 +22,22 @@ from pathlib import Path
 
 from app.engine.data.lean_format import write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
+from app.lean_sidecar.config import LEAN_IMAGE_REPO
 from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.workspace import Workspace
+
+# Paths inside the LEAN image where the bundled metadata databases live.
+# These are part of the image's release artifact, not something the
+# operator stages from Polygon — extracting them per-run keeps the
+# manifest hashing surface uniform (every file LEAN reads lives under
+# the workspace and is hashed).
+IMAGE_LEAN_DATA_ROOT = "/Lean/Data"
+IMAGE_MARKET_HOURS = f"{IMAGE_LEAN_DATA_ROOT}/market-hours"
+IMAGE_SYMBOL_PROPERTIES = f"{IMAGE_LEAN_DATA_ROOT}/symbol-properties"
+
+
+class MetadataStagingError(RuntimeError):
+    """The image-bundled metadata could not be extracted."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,3 +135,91 @@ def list_metadata_databases(
     mh = workspace.data_dir / "market-hours" / "market-hours-database.json"
     sp = workspace.data_dir / "symbol-properties" / "symbol-properties-database.csv"
     return (mh if mh.exists() else None, sp if sp.exists() else None)
+
+
+def stage_lean_metadata_from_image(
+    workspace: Workspace,
+    image_digest: str,
+) -> tuple[Path, Path]:
+    """Extract the image's bundled metadata databases into the workspace.
+
+    LEAN refuses to initialize when the symbol-properties or market-hours
+    database is missing from the configured ``data-folder``. Those files
+    ship inside the image at ``/Lean/Data/{market-hours,symbol-properties}/``;
+    this helper copies them into the workspace's ``data/`` subtree so
+    they sit under the single mount LEAN sees and so the manifest can
+    hash exactly what LEAN read.
+
+    Uses ``podman cp`` against a freshly-created (but not started)
+    container, then removes the container — no LEAN process runs and no
+    network is required.
+
+    Args:
+        workspace: Resolved workspace; ``data_dir`` is created if missing.
+        image_digest: ``sha256:...`` (or full ``repo@sha256:...``) to extract
+            from. Must already be pulled locally; this helper does not pull.
+
+    Returns:
+        Tuple of (market_hours_db_path, symbol_properties_db_path) under
+        the workspace.
+    """
+    bare = image_digest.split("@", 1)[-1]
+    if not bare.startswith("sha256:"):
+        raise MetadataStagingError(f"image_digest must be pinned, got {image_digest!r}")
+    image_ref = f"{LEAN_IMAGE_REPO}@{bare}"
+
+    podman = shutil.which("podman")
+    if not podman:
+        raise MetadataStagingError("podman is required but was not found on PATH")
+
+    workspace.ensure_layout()
+    workspace.data_dir.mkdir(parents=True, exist_ok=True)
+
+    # ``podman create`` returns a container id we then ``cp`` out of.
+    # We do not ``run`` it; nothing inside the image executes here.
+    create = subprocess.run(
+        [podman, "create", "--network=none", image_ref],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if create.returncode != 0:
+        raise MetadataStagingError(f"podman create failed: {create.stderr.strip()}")
+    container_id = create.stdout.strip()
+
+    # MSYS_NO_PATHCONV prevents Git Bash on Windows from rewriting the
+    # ``/Lean/Data/...`` container path into a host-side ``C:/...`` path
+    # before podman ever sees it. The HOME / USERPROFILE env podman
+    # needs to find its config still has to be present, so we copy the
+    # whole environment and only add the path-mangling toggle.
+    env = {**os.environ, "MSYS_NO_PATHCONV": "1"}
+    try:
+        for src in (IMAGE_MARKET_HOURS, IMAGE_SYMBOL_PROPERTIES):
+            cp = subprocess.run(
+                [
+                    podman,
+                    "cp",
+                    f"{container_id}:{src}",
+                    str(workspace.data_dir),
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            if cp.returncode != 0:
+                raise MetadataStagingError(f"podman cp {src} failed: {cp.stderr.strip()}")
+    finally:
+        subprocess.run(
+            [podman, "rm", container_id],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    mh, sp = list_metadata_databases(workspace)
+    if mh is None or sp is None:
+        raise MetadataStagingError(
+            f"metadata databases not present in workspace after extract; market-hours={mh!r}, symbol-properties={sp!r}"
+        )
+    return mh, sp

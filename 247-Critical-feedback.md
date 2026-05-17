@@ -1,13 +1,15 @@
-# 247-Critical-Feedback — Phase 1a runner spike
+# 247-Critical-Feedback — Phase 1 runner spike (1a + 1b)
 
 **Branch:** `lean-sidecar/phase-1-runner-spike`
 **Authored:** 2026-05-17 by Claude (Opus 4.7), autonomously while operator was away.
 **Authority for the work:** `docs/architecture/lean-sidecar-lab.md` (PR #247).
 
+**Phase 1b update (after image pulled):** Image digest pinned, security-flag matrix run, three end-to-end LEAN sidecar runs landed, `--cap-drop=ALL` promoted to mandatory in the runner. See "Phase 1b actual outcome" near the bottom of this doc. The original Phase 1a content below is preserved for the record of what I shipped before the image landed.
+
 This document is for **your review when you return**. It lists every
 non-trivial autonomous decision I made, the gaps that remain in
 Phase 1, and the items where I'd specifically like your judgement
-before Phase 1b lands.
+before Phase 1c lands.
 
 ## Where things stand
 
@@ -102,10 +104,59 @@ Two minor things I noticed reading the doc carefully while writing the code, tha
 
 ## What I'd ask for explicitly when you're back
 
-1. **Approve or amend the Phase 1a scope split** so I know whether Phase 1b is "everything else" or a curated subset.
-2. **Decide whether the launcher gets its own container in Phase 1b** or stays as a host process for now.
+1. **Approve or amend the Phase 1a/1b/1c scope split** so I know whether Phase 1c is "everything else" or a curated subset.
+2. **Decide whether the launcher gets its own container in Phase 1c** or stays as a host process for now.
 3. **Tell me whether to baseline the 2 pre-existing test failures** as a separate cleanup ticket, or whether you already track them somewhere.
 
 Everything else I'm happy to keep deciding as I go — flag the ones you want bubbled up to you.
 
 — Claude
+
+---
+
+## Phase 1b actual outcome (after the image landed)
+
+When the pull completed, I ran the full Phase 1b plan from this doc. Everything below was decided autonomously; flag anything you'd reverse.
+
+### Image pinned
+
+`sha256:97884667be20077925996ac22b5e3e16e3a47e7363e01795151459d16786247c` — written into `PythonDataService/app/lean_sidecar/config.py` by `scripts/lean_sidecar_pin_image.py` and echoed into the ADR top + §"Phase 1b progress".
+
+### Security-flag matrix outcome
+
+Tested at two levels: podman-startup (the `test_security_flags.py` `echo` smoke) and LEAN-runtime (E2E variants in `test_runner_e2e.py`). Outcome table:
+
+| Flag | Podman | LEAN runtime | Status |
+|---|---|---|---|
+| `--cap-drop=ALL` | accepted | clean | **Promoted to mandatory** in `runner.py` |
+| `--pids-limit=512` | accepted | clean | Already mandatory |
+| `--tmpfs /tmp:rw,noexec,nosuid,size=256m` | accepted | not yet tested in a full E2E | Caller opt-in |
+| `--read-only` | accepted | breaks Algorithm.Initialize | **Deferred to Phase 1c** (LEAN's ObjectStore defaults to `/Lean/Launcher/bin/Debug/storage`, on the read-only overlay) |
+| `--user 10001:10001` | accepted | not yet tested in a full E2E | **Deferred to Phase 1c** (workspace UID/GID on Windows + WSL2 not pinned) |
+
+The "podman accepts but LEAN runtime breaks" finding for `--read-only` is captured as an `xfail` in `test_buy_and_hold_runs_with_read_only_root` with the diagnostic in the test docstring, so the next person who tries to promote `--read-only` will see exactly what to fix.
+
+### Three bugs found and fixed during Phase 1b
+
+1. **LEAN ran the wrong algorithm.** First clean E2E run completed with exit-code 0 but produced no output. The launcher's `podman run quantconnect/lean` used the image-baked `config.json` (which selects `BasicTemplateFrameworkAlgorithm`) instead of mine. Fix: `runner.py` now always appends `--config /lean-run/project/config.json` to the LEAN launcher args. Without this, every "successful" run silently executes the wrong code.
+2. **`bar.EndTime.ToUniversalTime()` is .NET, not Python.** QC's Python bridge passes a naive `datetime.datetime` in algorithm timezone. Fix: trusted sample now imports `zoneinfo`, attaches ET, and converts via `.timestamp()`.
+3. **LEAN's post-run ResultsAnalyzer needs benchmark data.** Default benchmark is SPY daily; my trusted sample only stages SPY minute. LEAN crashed in `ResultsAnalyzer.ReadEquityCurve`. Fix: `MyAlgorithm` now pins `SetBenchmark(lambda dt: 100)` to a constant.
+
+### New helper: extract metadata from the LEAN image
+
+LEAN refuses to initialize without `symbol-properties-database.csv` and `market-hours-database.json`. These ship inside the image at `/Lean/Data/`. Added `stage_lean_metadata_from_image(workspace, image_digest)` that uses `podman create + podman cp + podman rm` (no `run`, no network) to extract them into the workspace before launch. Manifest hashing then covers exactly the bytes LEAN reads.
+
+### Test posture after Phase 1b
+
+- **lean_sidecar package** — 67 tests passing, 1 xfail (the documented `--read-only` regression). 0 skipped — every test that gated on `requires_lean_image` now runs.
+- **Full project test suite** — not re-run after Phase 1b changes; the only file outside `lean_sidecar/` I touched in Phase 1b is the ADR. Will run before mark-ready-for-review.
+- **Project-scope lint** — clean.
+
+### Phase 1c queue (smaller than the original Phase 1b queue)
+
+1. Pin a non-root UID/GID for the workspace, then enable `--user <uid>` mandatory.
+2. Either add an `ObjectStore` tmpfs or override `object-store-root` in `config.json`, then enable `--read-only` mandatory.
+3. Add the determinism re-run check (trivial now that one clean E2E run exists — same `run_id` with same inputs should produce byte-identical artifacts modulo timestamps).
+4. Test `--tmpfs /tmp:rw,...` at full LEAN runtime; promote to mandatory if clean.
+5. Wire the unix-domain-socket transport in the launcher (currently only localhost + optional token).
+

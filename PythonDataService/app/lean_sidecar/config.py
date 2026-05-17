@@ -30,7 +30,7 @@ LEAN_IMAGE_REPO = "quantconnect/lean"
 
 # Resolved by Phase 1 spike on first successful pull. See
 # docs/architecture/lean-sidecar-lab.md §"Runner choice" for the policy.
-PINNED_LEAN_IMAGE_DIGEST: str | None = None
+PINNED_LEAN_IMAGE_DIGEST: str | None = "sha256:97884667be20077925996ac22b5e3e16e3a47e7363e01795151459d16786247c"
 
 ALLOWED_IMAGE_DIGESTS: frozenset[str] = frozenset(d for d in (PINNED_LEAN_IMAGE_DIGEST,) if d is not None)
 

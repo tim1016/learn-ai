@@ -41,6 +41,14 @@ class RunnerConfigurationError(RuntimeError):
 # visible to the LEAN container.
 CONTAINER_WORKSPACE_MOUNT = "/lean-run"
 
+# LEAN's launcher reads ``config.json`` from its working directory by
+# default. The image's working dir is ``/Lean/Launcher/bin/Debug`` and
+# the image ships a default ``config.json`` there pointing at the
+# `BasicTemplateFrameworkAlgorithm`. We always pass ``--config`` to
+# point LEAN at the config the data plane wrote into the workspace,
+# otherwise the run silently executes the default template.
+CONTAINER_LEAN_CONFIG_PATH = f"{CONTAINER_WORKSPACE_MOUNT}/project/config.json"
+
 
 @dataclass(frozen=True, slots=True)
 class RunnerPlan:
@@ -128,12 +136,20 @@ def build_command(
 
     # Mandatory non-conditional flags. Any change here is a sandbox
     # change and must update the ADR in the same PR.
+    #
+    # ``--cap-drop=ALL`` is mandatory as of Phase 1b — proven safe at
+    # both the podman-startup level (security-flag matrix) and the
+    # LEAN-runtime level (E2E ``test_buy_and_hold_runs_with_cap_drop_all``).
+    # ``--read-only`` and ``--user`` remain caller-opt-in until LEAN's
+    # ObjectStore and workspace UID/GID assumptions are pinned in a
+    # fast-follow PR.
     argv: list[str] = [
         podman,
         "run",
         "--rm",
         "--network=none",
         "--security-opt=no-new-privileges",
+        "--cap-drop=ALL",
         f"--cpus={limits.cpus}",
         f"--memory={limits.memory_mb}m",
         f"--pids-limit={limits.pids_limit}",
@@ -144,6 +160,11 @@ def build_command(
     # proved the pinned image tolerates them.
     argv.extend(hardening_flags)
     argv.append(image_reference)
+    # The LEAN launcher's first arg is always ``--config <path>`` so it
+    # reads the workspace config, not the image-baked default. This is a
+    # safety floor: forgetting it silently runs the default template
+    # algorithm and the run looks "successful" with empty output.
+    argv.extend(["--config", CONTAINER_LEAN_CONFIG_PATH])
     argv.extend(extra_image_args)
     return RunnerPlan(image_reference=image_reference, argv=tuple(argv))
 

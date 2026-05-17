@@ -61,6 +61,7 @@ class TestBuildCommand:
         assert "--rm" in argv
         assert "--network=none" in argv
         assert "--security-opt=no-new-privileges" in argv
+        assert "--cap-drop=ALL" in argv
         assert any(a.startswith("--cpus=") for a in argv)
         assert any(a.startswith("--memory=") for a in argv)
         assert any(a.startswith("--pids-limit=") for a in argv)
