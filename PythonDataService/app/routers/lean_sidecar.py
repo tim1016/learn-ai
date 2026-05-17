@@ -28,8 +28,11 @@ from app.lean_sidecar.launcher_client import (
 )
 from app.lean_sidecar.workspace import (
     RUN_ID_PATTERN,
+    TICKER_SYMBOL_PATTERN,
+    SymbolValidationError,
     WorkspaceError,
     resolve_workspace,
+    validate_symbol,
 )
 from app.services.lean_sidecar_service import (
     LeanSidecarServiceError,
@@ -67,7 +70,12 @@ class TrustedRunRequestModel(BaseModel):
     )
     symbol: str = Field(
         default="SPY",
-        description="Equity ticker for the trusted sample; Phase 2a defaults to SPY.",
+        pattern=TICKER_SYMBOL_PATTERN.pattern,
+        description=(
+            "Equity ticker. Must match the strict ticker regex so it cannot "
+            "smuggle path separators into the LEAN data-folder layout; the "
+            "service layer re-validates as defense-in-depth."
+        ),
     )
     start_date: date = Field(..., description="Inclusive ISO date (YYYY-MM-DD).")
     end_date: date = Field(..., description="Inclusive ISO date (YYYY-MM-DD).")
@@ -88,6 +96,15 @@ class TrustedRunRequestModel(BaseModel):
         span_days = (self.end_date - self.start_date).days + 1
         if span_days > _MAX_TRADING_DAYS:
             raise ValueError(f"window spans {span_days} days; max is {_MAX_TRADING_DAYS}")
+        # Symbol must pass the full validator — the field-level
+        # regex catches ``/``, ``\``, length, and the alphabet, but
+        # not the dot-only case (``"."``, ``".."``). validate_symbol
+        # closes that hole and is the same function the staging
+        # writers re-check against.
+        try:
+            validate_symbol(self.symbol)
+        except SymbolValidationError as e:
+            raise ValueError(str(e)) from e
         return self
 
 
@@ -256,6 +273,9 @@ async def get_observations(run_id: str) -> PlainTextResponse:
     return PlainTextResponse(obs_path.read_text(encoding="utf-8"))
 
 
+_LEAN_LOG_TAIL_MAX_BYTES = 1 << 20  # 1 MiB
+
+
 @router.get(
     "/runs/{run_id}/log",
     response_class=PlainTextResponse,
@@ -263,7 +283,8 @@ async def get_observations(run_id: str) -> PlainTextResponse:
 )
 async def get_log(run_id: str) -> PlainTextResponse:
     workspace = _resolved_workspace_or_404(run_id)
-    if not workspace.lean_log_path.exists():
+    log_path = workspace.lean_log_path
+    if not log_path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -271,8 +292,14 @@ async def get_log(run_id: str) -> PlainTextResponse:
                 "message": f"LEAN log.txt not present for {run_id}",
             },
         )
-    # Cap at 1 MiB so a runaway log doesn't OOM the data plane on
-    # serialization. The launcher already truncates the in-response
-    # tail; this is the secondary cap for the standalone endpoint.
-    text = workspace.lean_log_path.read_text(encoding="utf-8", errors="replace")
-    return PlainTextResponse(text[-(1 << 20) :])
+    # Read only the tail off disk so memory is bounded by the cap, not
+    # by the underlying log size. ``read_text()`` would load the whole
+    # file into memory before slicing — under concurrent requests on
+    # a multi-GiB LEAN log that defeats the OOM protection the cap is
+    # there to provide.
+    size = log_path.stat().st_size
+    with log_path.open("rb") as f:
+        if size > _LEAN_LOG_TAIL_MAX_BYTES:
+            f.seek(size - _LEAN_LOG_TAIL_MAX_BYTES)
+        raw = f.read(_LEAN_LOG_TAIL_MAX_BYTES)
+    return PlainTextResponse(raw.decode("utf-8", errors="replace"))

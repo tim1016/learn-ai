@@ -166,6 +166,26 @@ class TestPostTrustedRunValidation:
         r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
         assert r.status_code == 422
 
+    @pytest.mark.parametrize(
+        "bad_symbol",
+        [
+            "../../etc/passwd",
+            "SPY/extra",
+            "SPY\\windows",
+            "..",
+            "",
+            "TOO_LONG_TICKER_OVER_LIMIT_X",
+        ],
+    )
+    async def test_pydantic_rejects_path_traversal_symbols(self, client: AsyncClient, bad_symbol: str) -> None:
+        """Path-traversal characters in ``symbol`` must be rejected at
+        the API boundary — before they reach the staging writers that
+        join the symbol into a filesystem path."""
+        payload = _good_payload()
+        payload["symbol"] = bad_symbol
+        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
+        assert r.status_code == 422, f"symbol {bad_symbol!r} should have been rejected at the boundary"
+
 
 class TestPostTrustedRunHappyPath:
     async def test_launcher_clean_response_passes_through(

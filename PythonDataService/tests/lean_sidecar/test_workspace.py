@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 
 from app.lean_sidecar.workspace import (
+    SymbolValidationError,
     WorkspaceError,
     resolve_workspace,
     validate_run_id,
+    validate_symbol,
 )
 
 
@@ -77,3 +79,44 @@ class TestResolveWorkspace:
     def test_rejects_bad_run_id(self, tmp_artifacts_root: Path) -> None:
         with pytest.raises(WorkspaceError):
             resolve_workspace("../escape", tmp_artifacts_root)
+
+
+class TestValidateSymbol:
+    @pytest.mark.parametrize(
+        "good",
+        [
+            "SPY",
+            "QQQ",
+            "BRK.B",
+            "AAPL",
+            "ES",
+            "A",
+            "abc",  # lowercased input is normalized to upper
+        ],
+    )
+    def test_accepts_real_tickers(self, good: str) -> None:
+        assert validate_symbol(good) == good.upper()
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "",
+            "../etc/passwd",
+            "SPY/extra",
+            "SPY\\windows",
+            "SPY ",
+            "..",
+            ".",
+            "a" * 17,  # over 16 chars
+            "SPY\x00null",
+            "SPY;rm -rf",
+            "SPY$(whoami)",
+        ],
+    )
+    def test_rejects_path_traversal_and_injection(self, bad: str) -> None:
+        with pytest.raises(SymbolValidationError):
+            validate_symbol(bad)
+
+    def test_rejects_non_string(self) -> None:
+        with pytest.raises(SymbolValidationError):
+            validate_symbol(123)  # type: ignore[arg-type]

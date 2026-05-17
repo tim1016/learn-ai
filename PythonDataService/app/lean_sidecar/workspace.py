@@ -18,6 +18,39 @@ from pathlib import Path
 # components would defeat the path-under-root check.
 RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{2,63}$")
 
+# Equity ticker symbols flow into LEAN data-folder paths
+# (``equity/usa/minute/<symbol>/...``). Without a strict regex, a
+# request with ``symbol="../../etc/passwd"`` would traverse outside
+# the workspace via the staging writers. Permit upper/lower alpha,
+# digits, dot for share-class tickers (``BRK.B``), and dash; reject
+# everything else. ``^[A-Z0-9.-]{1,16}$`` is comfortably above any
+# real US equity symbol but rejects path traversal characters
+# (``/``, ``\``, ``..``-only strings, whitespace, NULs).
+TICKER_SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9.\-]{1,16}$")
+
+
+class SymbolValidationError(ValueError):
+    """Raised when a caller-supplied symbol is not a valid ticker."""
+
+
+def validate_symbol(symbol: str) -> str:
+    """Return the upper-cased symbol or raise on path-unsafe input.
+
+    Validates *before* any join with a filesystem path. The pattern
+    rejects ``..``-only strings (which would pass through ``.lower()``
+    intact), path separators, and any character that is not in the
+    permitted ticker alphabet.
+    """
+    if not isinstance(symbol, str):
+        raise SymbolValidationError(f"symbol must be str, got {type(symbol).__name__}")
+    if not TICKER_SYMBOL_PATTERN.fullmatch(symbol):
+        raise SymbolValidationError(f"symbol must match {TICKER_SYMBOL_PATTERN.pattern} (got {symbol!r})")
+    # A dot-only string would pass the regex but resolve to ``.`` /
+    # ``..`` in path joins. Reject up-front.
+    if set(symbol) <= {"."}:
+        raise SymbolValidationError(f"symbol cannot be only dots (got {symbol!r})")
+    return symbol.upper()
+
 
 class WorkspaceError(ValueError):
     """Raised when a workspace request violates the layout contract."""
@@ -123,21 +156,32 @@ def validate_run_id(run_id: str) -> None:
 def resolve_workspace(run_id: str, artifacts_root: Path) -> Workspace:
     """Resolve ``run_id`` to a workspace strictly under ``artifacts_root``.
 
-    Path-under-root is enforced after symlink resolution: the resolved
-    workspace root must equal ``artifacts_root.resolve() / run_id``.
+    Two-stage defense against path traversal:
+
+    1. :func:`validate_run_id` rejects any slug that contains a path
+       separator, ``.`` component, or whitespace — i.e. anything that
+       could change the meaning of the join below.
+    2. After the join, the candidate is resolved and re-checked against
+       ``artifacts_root.resolve()`` with :meth:`pathlib.Path.is_relative_to`.
+       This catches symlink escapes the validator cannot see (a symlink
+       under ``artifacts_root`` pointing outside it).
+
+    The two checks together close the path-traversal class even though
+    each alone would be insufficient: the regex blocks textual escapes,
+    the resolve+is_relative_to blocks filesystem-level escapes.
     """
     validate_run_id(run_id)
     root_resolved = artifacts_root.resolve()
-    workspace_root = root_resolved / run_id
-    # Re-resolve the candidate; if it resolves outside root (symlink
-    # escape attempts, etc.) refuse.
-    resolved = workspace_root.resolve() if workspace_root.exists() else workspace_root
-    try:
-        resolved.relative_to(root_resolved)
-    except ValueError as e:
-        raise WorkspaceError(f"workspace path {resolved} escapes artifacts root {root_resolved}") from e
+    # ``resolve(strict=False)`` returns the canonical path even when
+    # the target does not yet exist — that's the Phase 1 case where
+    # the workspace dir is materialized after this call. A
+    # single-expression path build + check (no branch) is what
+    # CodeQL's path-traversal heuristic looks for.
+    candidate = (root_resolved / run_id).resolve(strict=False)
+    if not candidate.is_relative_to(root_resolved):
+        raise WorkspaceError(f"workspace path {candidate} escapes artifacts root {root_resolved}")
     return Workspace(
         run_id=run_id,
         artifacts_root=root_resolved,
-        root=workspace_root,
+        root=candidate,
     )
