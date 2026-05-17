@@ -44,6 +44,14 @@ COPY ./app ./app
 # test errors out at collection.
 COPY ./pytest.ini ./pytest.ini
 
+# Golden-fixture manifest — read at runtime by ``GET /api/golden-fixtures``
+# (see app/routers/golden_fixtures.py). Lives under tests/ for historical
+# reasons (the fixtures themselves are test inputs) but the catalog endpoint
+# is a production read path, so the file must be in the runtime image. The
+# rest of tests/ is intentionally excluded — test data is large and not
+# needed at runtime.
+COPY ./tests/fixtures/golden/manifest.json ./tests/fixtures/golden/manifest.json
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
