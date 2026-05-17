@@ -1,0 +1,201 @@
+"""Podman invocation core for the LEAN sidecar.
+
+This module owns the `podman run` command construction and execution. It
+is the only place in the codebase that may spawn a container that
+executes user-supplied source. Every flag in the constructed command
+maps back to a row in ``docs/architecture/lean-sidecar-lab.md``
+§"Container execution boundary".
+
+The runner is intentionally a thin, testable function on top of
+``subprocess``: the launcher service wraps it with request validation,
+workspace-size monitoring, and timeout enforcement. Keeping podman-shell
+construction here, separate from launcher policy, lets the integration
+tests assert the constructed argv without spawning a real container.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+from dataclasses import dataclass
+
+from app.lean_sidecar.config import (
+    ALLOWED_IMAGE_DIGESTS,
+    DEFAULT_RUN_LIMITS,
+    LEAN_IMAGE_REPO,
+    RunLimits,
+)
+from app.lean_sidecar.workspace import Workspace
+
+
+class RunnerConfigurationError(RuntimeError):
+    """Raised when the runner cannot or must not launch.
+
+    Examples: requested image is not in the digest allow-list; podman is
+    not installed; workspace directory missing on disk.
+    """
+
+
+# Container-side mount point for the workspace. The launcher mounts only
+# this single directory; nothing else under the artifacts root is
+# visible to the LEAN container.
+CONTAINER_WORKSPACE_MOUNT = "/lean-run"
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerPlan:
+    """The fully constructed `podman run` argv plus the resolved digest.
+
+    Returned by :func:`build_command` so tests can assert on the exact
+    invocation without spawning a container, and the launcher can log
+    the planned command to ``launcher.log`` before execution.
+    """
+
+    image_reference: str
+    argv: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RunResult:
+    """Outcome of a real container invocation."""
+
+    exit_code: int
+    duration_ms: int
+    timed_out: bool
+    log_tail: str
+
+
+def _require_podman() -> str:
+    """Return the absolute path to podman, or raise.
+
+    The launcher refuses to run if podman is not on PATH; the error
+    message names what is missing so the operator does not get a generic
+    FileNotFoundError. We do not silently fall back to docker — docker
+    has different default flag semantics that could weaken the
+    sandbox.
+    """
+    podman = shutil.which("podman")
+    if not podman:
+        raise RunnerConfigurationError("podman is required but was not found on PATH")
+    return podman
+
+
+def _require_image_in_allowlist(image_digest: str) -> str:
+    """Verify ``image_digest`` is in the static allow-list.
+
+    Accepts either a bare ``sha256:...`` digest or
+    ``quantconnect/lean@sha256:...``. The launcher never resolves tags
+    like ``:latest`` — only pinned digests pass.
+    """
+    bare = image_digest.split("@", 1)[-1]
+    if not bare.startswith("sha256:"):
+        raise RunnerConfigurationError(f"image must be pinned by sha256 digest, got {image_digest!r}")
+    if not ALLOWED_IMAGE_DIGESTS:
+        raise RunnerConfigurationError(
+            "no LEAN image digests pinned yet — pin one in config.py before invoking the runner"
+        )
+    if bare not in ALLOWED_IMAGE_DIGESTS:
+        raise RunnerConfigurationError(f"image digest {bare} is not in ALLOWED_IMAGE_DIGESTS")
+    return f"{LEAN_IMAGE_REPO}@{bare}"
+
+
+def build_command(
+    workspace: Workspace,
+    image_digest: str,
+    *,
+    limits: RunLimits = DEFAULT_RUN_LIMITS,
+    extra_image_args: tuple[str, ...] = (),
+    hardening_flags: tuple[str, ...] = (),
+) -> RunnerPlan:
+    """Construct the `podman run` argv for this workspace + image.
+
+    The returned argv is the *exact* command the runner will execute.
+    Tests assert on it so a future refactor cannot silently widen the
+    sandbox.
+
+    ``hardening_flags`` are the optional flags from the ADR's "if
+    compatible" set (``--cap-drop=ALL``, ``--read-only``, etc.) whose
+    viability was proven by the security-flag matrix test. Callers pass
+    in whichever survive on the pinned image; an empty tuple is the
+    safe default for Phase 1 spike runs against an unproven image.
+    """
+    limits.validate()
+    if not workspace.workspace_dir.exists():
+        raise RunnerConfigurationError(f"workspace directory does not exist: {workspace.workspace_dir}")
+
+    image_reference = _require_image_in_allowlist(image_digest)
+    podman = _require_podman()
+
+    # Mandatory non-conditional flags. Any change here is a sandbox
+    # change and must update the ADR in the same PR.
+    argv: list[str] = [
+        podman,
+        "run",
+        "--rm",
+        "--network=none",
+        "--security-opt=no-new-privileges",
+        f"--cpus={limits.cpus}",
+        f"--memory={limits.memory_mb}m",
+        f"--pids-limit={limits.pids_limit}",
+        "-v",
+        f"{workspace.workspace_dir}:{CONTAINER_WORKSPACE_MOUNT}:rw",
+    ]
+    # Optional hardening flags survive only if the security-flag matrix
+    # proved the pinned image tolerates them.
+    argv.extend(hardening_flags)
+    argv.append(image_reference)
+    argv.extend(extra_image_args)
+    return RunnerPlan(image_reference=image_reference, argv=tuple(argv))
+
+
+def _tail_text(buf: bytes, max_bytes: int) -> str:
+    """Return the last ``max_bytes`` of a buffer decoded as best-effort
+    UTF-8.
+
+    LEAN can emit non-UTF-8 bytes in rare cases (binary tracebacks from
+    a crashing native dep). ``errors="replace"`` keeps the launcher's
+    own log readable rather than failing on decode.
+    """
+    tail = buf[-max_bytes:] if len(buf) > max_bytes else buf
+    return tail.decode("utf-8", errors="replace")
+
+
+def execute(plan: RunnerPlan, *, limits: RunLimits = DEFAULT_RUN_LIMITS) -> RunResult:
+    """Spawn the container and return a structured result.
+
+    The wall-clock timeout from ``limits`` is enforced here as the outer
+    kill switch; LEAN-internal timeouts are independent and may fire
+    earlier. ``log_tail`` is truncated to ``limits.log_tail_bytes`` so
+    the launcher can persist + return logs without unbounded growth.
+    """
+    limits.validate()
+
+    import time
+
+    started = time.monotonic()
+    timed_out = False
+    try:
+        completed = subprocess.run(
+            plan.argv,
+            capture_output=True,
+            timeout=limits.wall_clock_timeout_s,
+            check=False,
+        )
+        stdout, stderr = completed.stdout, completed.stderr
+        exit_code = completed.returncode
+    except subprocess.TimeoutExpired as e:
+        timed_out = True
+        stdout = e.stdout or b""
+        stderr = e.stderr or b""
+        exit_code = -1
+    duration_ms = int((time.monotonic() - started) * 1000)
+
+    # Merge for the tail; keep stderr last so the failure message is the
+    # most likely thing the operator sees.
+    combined = stdout + b"\n" + stderr if stderr else stdout
+    return RunResult(
+        exit_code=exit_code,
+        duration_ms=duration_ms,
+        timed_out=timed_out,
+        log_tail=_tail_text(combined, limits.log_tail_bytes),
+    )
