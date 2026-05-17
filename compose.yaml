@@ -52,6 +52,10 @@ services:
       # picks up `asyncio_mode = auto` without rebuilding the image after
       # local config tweaks. Baked into the image too — see Dockerfile.
       - ./PythonDataService/pytest.ini:/app/pytest.ini:ro,z
+      # Golden-fixture manifest — read at runtime by GET /api/golden-fixtures.
+      # Mounted so manifest edits are visible without rebuild; baked into the
+      # image too (see Dockerfile) so prod images don't depend on the mount.
+      - ./PythonDataService/tests/fixtures/golden/manifest.json:/app/tests/fixtures/golden/manifest.json:ro,z
       - ../Lean/Data:/lean-data:ro,z
       - ./PythonDataService/lean-cache:/lean-cache:z
       # Divergence study artifacts (dashboard HTML + matrix CSV) live here.
