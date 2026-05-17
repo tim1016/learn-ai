@@ -429,3 +429,157 @@ class TestInspectionEndpoints:
     async def test_invalid_run_id_rejected_at_inspect(self, client: AsyncClient) -> None:
         r = await client.get("/api/lean-sidecar/runs/..escape/manifest")
         assert r.status_code == 400
+
+
+def _write_manifest(
+    artifacts_root: Path,
+    run_id: str,
+    *,
+    symbol: str = "SPY",
+    started_at_ms: int | None = 1_736_121_600_000,
+    finished_at_ms: int | None = 1_736_121_605_000,
+    exit_code: int | None = 0,
+    algorithm_source_kind: str | None = "trusted_sample",
+) -> None:
+    """Write a minimal manifest.json into a run's workspace dir.
+
+    Just enough fields for the index endpoint's summary extractor; not
+    a full manifest. Real manifests come from ``write_manifest`` in
+    other tests."""
+    run_dir = artifacts_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    notes = []
+    if algorithm_source_kind is not None:
+        notes.append(f"algorithm_source_kind={algorithm_source_kind}")
+    body = {
+        "run_id": run_id,
+        "parameters": {"symbol": symbol, "starting_cash": "100000.0"},
+        "requested_window_ms": {"start_ms": 1_736_121_600_000, "end_ms": 1_736_467_200_000},
+        "started_at_ms": started_at_ms,
+        "finished_at_ms": finished_at_ms,
+        "exit_code": exit_code,
+        "notes": notes,
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(body), encoding="utf-8")
+
+
+class TestRunsIndex:
+    async def test_empty_artifacts_root_returns_empty_list(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        r = await client.get("/api/lean-sidecar/runs")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["runs"] == []
+        assert body["truncated"] is False
+        assert body["cap"] >= 1
+
+    async def test_lists_runs_in_started_at_desc(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        _write_manifest(patched_artifacts_root, "ui_run_001", started_at_ms=1000)
+        _write_manifest(patched_artifacts_root, "ui_run_002", started_at_ms=3000)
+        _write_manifest(patched_artifacts_root, "ui_run_003", started_at_ms=2000)
+        r = await client.get("/api/lean-sidecar/runs")
+        assert r.status_code == 200
+        ids = [row["run_id"] for row in r.json()["runs"]]
+        assert ids == ["ui_run_002", "ui_run_003", "ui_run_001"]
+
+    async def test_skips_directories_without_manifest(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        # An in-progress workspace exists but has no manifest yet — it
+        # must not appear in the index (otherwise we'd render a "run"
+        # with no symbol/window/exit data).
+        (patched_artifacts_root / "ui_run_pending").mkdir()
+        _write_manifest(patched_artifacts_root, "ui_run_finished", started_at_ms=1000)
+        r = await client.get("/api/lean-sidecar/runs")
+        ids = [row["run_id"] for row in r.json()["runs"]]
+        assert ids == ["ui_run_finished"]
+
+    async def test_skips_unparseable_manifest(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        # A half-written manifest from a launcher crash mid-write must
+        # not 500 the whole index — silently skip the bad row.
+        bad_dir = patched_artifacts_root / "ui_run_corrupt"
+        bad_dir.mkdir()
+        (bad_dir / "manifest.json").write_text("{not valid json", encoding="utf-8")
+        _write_manifest(patched_artifacts_root, "ui_run_ok", started_at_ms=1000)
+        r = await client.get("/api/lean-sidecar/runs")
+        assert r.status_code == 200
+        ids = [row["run_id"] for row in r.json()["runs"]]
+        assert ids == ["ui_run_ok"]
+
+    async def test_skips_non_slug_directory_names(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        # A stray dir from an out-of-band tool — e.g., a tar extract —
+        # whose name fails the slug regex must not be enumerated. We
+        # don't want to render arbitrary host paths in the sidebar.
+        stray = patched_artifacts_root / "Not A Slug!"
+        stray.mkdir()
+        (stray / "manifest.json").write_text("{}", encoding="utf-8")
+        _write_manifest(patched_artifacts_root, "ui_run_valid", started_at_ms=1000)
+        r = await client.get("/api/lean-sidecar/runs")
+        ids = [row["run_id"] for row in r.json()["runs"]]
+        assert ids == ["ui_run_valid"]
+
+    async def test_summary_fields_extracted_from_manifest(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        _write_manifest(
+            patched_artifacts_root,
+            "ui_run_full",
+            symbol="AAPL",
+            started_at_ms=1_700_000_000_000,
+            finished_at_ms=1_700_000_001_000,
+            exit_code=0,
+            algorithm_source_kind="user_provided",
+        )
+        r = await client.get("/api/lean-sidecar/runs")
+        row = r.json()["runs"][0]
+        assert row["run_id"] == "ui_run_full"
+        assert row["symbol"] == "AAPL"
+        assert row["started_at_ms"] == 1_700_000_000_000
+        assert row["finished_at_ms"] == 1_700_000_001_000
+        assert row["exit_code"] == 0
+        assert row["exit_clean"] is True
+        assert row["algorithm_source_kind"] == "user_provided"
+        assert row["requested_start_ms_utc"] == 1_736_121_600_000
+        assert row["requested_end_ms_utc"] == 1_736_467_200_000
+
+    async def test_exit_clean_false_when_exit_code_nonzero(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        _write_manifest(patched_artifacts_root, "ui_run_failed", exit_code=137)
+        row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
+        assert row["exit_code"] == 137
+        assert row["exit_clean"] is False
+
+    async def test_legacy_manifest_without_source_kind_is_unknown(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        # Pre-Phase-4c manifests don't have the source-kind note. The
+        # index must not misclassify those as 'trusted_sample' (which
+        # would lie about a possibly-user-source run); 'unknown' is
+        # the honest answer.
+        _write_manifest(patched_artifacts_root, "ui_run_legacy", algorithm_source_kind=None)
+        row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
+        assert row["algorithm_source_kind"] == "unknown"

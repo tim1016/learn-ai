@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import PlainTextResponse
@@ -32,6 +33,7 @@ from app.lean_sidecar.workspace import (
     SymbolValidationError,
     WorkspaceError,
     resolve_workspace,
+    validate_run_id,
     validate_symbol,
 )
 from app.services.lean_sidecar_service import (
@@ -196,6 +198,47 @@ class TrustedRunRequestModel(BaseModel):
         return self
 
 
+class RunSummaryModel(BaseModel):
+    """One row in the run-history index.
+
+    Built from each run's ``manifest.json``. Index reads do not touch
+    the launcher and do not require LEAN to be running — they're a
+    pure read over the artifacts root. Fields are the minimum needed
+    to render a sidebar row + offer a "click to re-open" action;
+    detail views still go through the existing per-run endpoints
+    (``/runs/{id}/manifest``, ``/runs/{id}/normalized``, etc.).
+    """
+
+    run_id: str
+    symbol: str | None
+    requested_start_ms_utc: int | None
+    requested_end_ms_utc: int | None
+    started_at_ms: int | None
+    finished_at_ms: int | None
+    exit_code: int | None
+    algorithm_source_kind: Literal["trusted_sample", "user_provided", "unknown"]
+    # Compact derived flag the UI can branch on without re-fetching the
+    # normalized result. ``True`` when ``exit_code == 0``; ``None`` when
+    # the run never wrote a finished_at_ms (likely still running or
+    # crashed mid-launch). Not a substitute for ``is_clean`` — LEAN can
+    # exit 0 with classified errors — but a fast at-a-glance signal.
+    exit_clean: bool | None
+
+
+class RunIndexResponseModel(BaseModel):
+    """Paged-ish response for the run-history index.
+
+    ``cap`` is the configured per-request cap; ``truncated`` is True if
+    the artifacts root holds more runs than were returned. The frontend
+    surfaces both so the operator knows the list is not necessarily
+    exhaustive.
+    """
+
+    runs: list[RunSummaryModel]
+    cap: int
+    truncated: bool
+
+
 class LeanErrorsResponseModel(BaseModel):
     """Mirror of LaunchResponse.lean_errors with the launcher's stable
     category keys. Exposed as a separate model so OpenAPI documents it."""
@@ -302,6 +345,118 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         total_order_events=(result.normalized.total_order_events if result.normalized else None),
         total_equity_points=(result.normalized.total_equity_points if result.normalized else None),
     )
+
+
+# ---------------------------------------------------------------------------
+# Run-history index
+# ---------------------------------------------------------------------------
+
+# Cap on rows returned by GET /runs. Single host with a single operator
+# rarely accumulates more than a few hundred runs, but the cap stops a
+# pathological artifacts root from ballooning the response. The frontend
+# sees ``truncated=True`` and can offer a "show older" follow-up later.
+_RUN_INDEX_CAP = 200
+
+
+def _safe_load_manifest_summary(manifest_path) -> dict | None:
+    """Read one manifest.json and return a flat dict for the index row.
+
+    Returns ``None`` if the file does not exist, is not valid JSON, or
+    is missing fields required to build a row. The index endpoint
+    treats unreadable manifests as "skip silently" — a half-written
+    manifest from a crash mid-run should not break the listing.
+    """
+    import json
+
+    try:
+        raw = manifest_path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    requested = data.get("requested_window_ms") or {}
+    params = data.get("parameters") or {}
+    notes = data.get("notes") or []
+    # ``algorithm_source_kind`` was added to manifest.notes in Phase 4c.
+    # Older manifests don't have it; treat them as "unknown" rather
+    # than guessing — guessing creates misleading sidebar copy.
+    kind = "unknown"
+    for note in notes:
+        if isinstance(note, str) and note.startswith("algorithm_source_kind="):
+            value = note.split("=", 1)[1]
+            if value in ("trusted_sample", "user_provided"):
+                kind = value
+            break
+    exit_code = data.get("exit_code")
+    return {
+        "symbol": params.get("symbol") if isinstance(params, dict) else None,
+        "requested_start_ms_utc": requested.get("start_ms") if isinstance(requested, dict) else None,
+        "requested_end_ms_utc": requested.get("end_ms") if isinstance(requested, dict) else None,
+        "started_at_ms": data.get("started_at_ms"),
+        "finished_at_ms": data.get("finished_at_ms"),
+        "exit_code": exit_code,
+        "algorithm_source_kind": kind,
+        "exit_clean": (exit_code == 0) if exit_code is not None else None,
+    }
+
+
+@router.get(
+    "/runs",
+    response_model=RunIndexResponseModel,
+    summary="List past runs from the artifacts root (newest first).",
+)
+async def get_runs_index() -> RunIndexResponseModel:
+    """Return the run-history index for the LEAN Lab sidebar.
+
+    Scans direct child directories of ``DEFAULT_ARTIFACTS_ROOT``, keeps
+    those whose names match ``RUN_ID_PATTERN`` (so stray dirs created
+    out-of-band are ignored), reads each ``manifest.json``, and sorts
+    by ``started_at_ms`` desc (run_id desc as a stable tiebreaker for
+    pre-Phase-4d manifests without that field).
+
+    Pure read — does not touch the launcher, does not require LEAN to
+    be running. Manifests that fail to parse are silently skipped (a
+    half-written file from a crash mid-write shouldn't break the
+    listing for the rest).
+    """
+    rows: list[RunSummaryModel] = []
+    if not DEFAULT_ARTIFACTS_ROOT.exists():
+        return RunIndexResponseModel(runs=[], cap=_RUN_INDEX_CAP, truncated=False)
+    # Sort by name desc as the initial enumeration order — run_ids are
+    # timestamp-prefixed by the frontend, so this approximates newest-
+    # first even before we read manifests. We re-sort after loading.
+    candidate_dirs = []
+    for entry in DEFAULT_ARTIFACTS_ROOT.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            validate_run_id(entry.name)
+        except WorkspaceError:
+            continue
+        candidate_dirs.append(entry)
+    candidate_dirs.sort(key=lambda p: p.name, reverse=True)
+    truncated = False
+    for idx, entry in enumerate(candidate_dirs):
+        manifest_path = entry / "manifest.json"
+        if not manifest_path.exists():
+            continue
+        summary = _safe_load_manifest_summary(manifest_path)
+        if summary is None:
+            continue
+        rows.append(RunSummaryModel(run_id=entry.name, **summary))
+        if len(rows) >= _RUN_INDEX_CAP:
+            # Cap hit. If any remaining candidate has a manifest, the
+            # response omits it — flag the response so the UI can say so.
+            truncated = any((c / "manifest.json").exists() for c in candidate_dirs[idx + 1 :])
+            break
+    # Final sort by started_at_ms desc; runs without that field fall
+    # back to run_id desc (already the initial enumeration order).
+    rows.sort(
+        key=lambda r: (r.started_at_ms if r.started_at_ms is not None else -1, r.run_id),
+        reverse=True,
+    )
+    return RunIndexResponseModel(runs=rows, cap=_RUN_INDEX_CAP, truncated=truncated)
 
 
 # ---------------------------------------------------------------------------

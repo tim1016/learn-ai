@@ -2,7 +2,12 @@ import { provideZonelessChangeDetection } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { describe, expect, it, vi } from "vitest";
 import { LeanSidecarApiError, LeanSidecarService } from "../../services/lean-sidecar.service";
-import type { NormalizedResult, TrustedRunResponse } from "../../services/lean-sidecar.types";
+import type {
+  NormalizedResult,
+  RunIndexResponse,
+  RunSummary,
+  TrustedRunResponse,
+} from "../../services/lean-sidecar.types";
 import { LeanLabComponent } from "./lean-lab.component";
 
 /**
@@ -17,6 +22,26 @@ interface FakeLeanSidecarService {
   getNormalized: ReturnType<typeof vi.fn>;
   getLogTail: ReturnType<typeof vi.fn>;
   getObservationsCsv: ReturnType<typeof vi.fn>;
+  listRuns: ReturnType<typeof vi.fn>;
+}
+
+function makeRunSummary(overrides: Partial<RunSummary> = {}): RunSummary {
+  return {
+    run_id: "ui_run_history_1",
+    symbol: "SPY",
+    requested_start_ms_utc: 1_736_121_600_000,
+    requested_end_ms_utc: 1_736_467_200_000,
+    started_at_ms: 1_736_121_650_000,
+    finished_at_ms: 1_736_121_700_000,
+    exit_code: 0,
+    algorithm_source_kind: "trusted_sample",
+    exit_clean: true,
+    ...overrides,
+  };
+}
+
+function makeRunIndex(overrides: Partial<RunIndexResponse> = {}): RunIndexResponse {
+  return { runs: [], cap: 200, truncated: false, ...overrides };
 }
 
 function makeResponse(overrides: Partial<TrustedRunResponse> = {}): TrustedRunResponse {
@@ -75,6 +100,10 @@ describe("LeanLabComponent", () => {
       getNormalized: vi.fn(),
       getLogTail: vi.fn(),
       getObservationsCsv: vi.fn(),
+      // Default listRuns to an empty index so the constructor's
+      // refreshRuns() call doesn't throw in tests that don't set
+      // it explicitly.
+      listRuns: vi.fn().mockResolvedValue(makeRunIndex()),
     };
     await TestBed.configureTestingModule({
       imports: [LeanLabComponent],
@@ -185,6 +214,108 @@ describe("LeanLabComponent", () => {
     expect(after2).not.toBe(after1);
     // And the random suffix should match the slug constraint.
     expect(after2).toMatch(/^ui_run_\d{17}_[a-z0-9]{5}$/);
+  });
+
+  it("loads the run history on init and renders rows", async () => {
+    // The constructor calls refreshRuns(), but our beforeEach() already
+    // ran that with an empty index. Rebuild with a populated index.
+    TestBed.resetTestingModule();
+    serviceMock = {
+      startTrustedRun: vi.fn(),
+      getNormalized: vi.fn(),
+      getLogTail: vi.fn(),
+      getObservationsCsv: vi.fn(),
+      listRuns: vi.fn().mockResolvedValue(
+        makeRunIndex({
+          runs: [
+            makeRunSummary({ run_id: "ui_run_a", symbol: "AAPL" }),
+            makeRunSummary({ run_id: "ui_run_b", exit_clean: false, exit_code: 137 }),
+          ],
+        }),
+      ),
+    };
+    await TestBed.configureTestingModule({
+      imports: [LeanLabComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: LeanSidecarService, useValue: serviceMock },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LeanLabComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    // Let the init-time listRuns promise settle.
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("ui_run_a");
+    expect(text).toContain("ui_run_b");
+    expect(text).toContain("AAPL");
+  });
+
+  it("re-fetches the run history after a successful submit", async () => {
+    serviceMock.startTrustedRun.mockResolvedValue(makeResponse({ run_id: "ui_run_new" }));
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+
+    await component.submit();
+    await fixture.whenStable();
+
+    // 1 on init + 1 after the submit's finally block.
+    expect(serviceMock.listRuns).toHaveBeenCalledTimes(2);
+  });
+
+  it("loadRun fetches the normalized result and renders the equity snapshot", async () => {
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    await component.loadRun("ui_run_history_42");
+    fixture.detectChanges();
+
+    expect(serviceMock.getNormalized).toHaveBeenCalledWith("ui_run_history_42");
+    expect(component.response()?.run_id).toBe("ui_run_history_42");
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("Equity snapshot");
+  });
+
+  it("loadRun surfaces a 404 via the typed error envelope", async () => {
+    serviceMock.getNormalized.mockRejectedValue(
+      new LeanSidecarApiError(404, "normalized_missing", "not present"),
+    );
+
+    await component.loadRun("ui_run_missing");
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("Run failed");
+    expect(text).toContain("normalized_missing");
+  });
+
+  it("does not crash when listRuns rejects on init", async () => {
+    TestBed.resetTestingModule();
+    serviceMock = {
+      startTrustedRun: vi.fn(),
+      getNormalized: vi.fn(),
+      getLogTail: vi.fn(),
+      getObservationsCsv: vi.fn(),
+      listRuns: vi.fn().mockRejectedValue(new Error("network down")),
+    };
+    await TestBed.configureTestingModule({
+      imports: [LeanLabComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: LeanSidecarService, useValue: serviceMock },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LeanLabComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    // Sidebar shows the empty state, page itself rendered fine.
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("LEAN Sidecar Lab");
+    expect(text).toContain("No runs yet");
+    expect(component.runs()).toEqual([]);
   });
 
   it("renders the launcher's typed rejection envelope on a 400", async () => {

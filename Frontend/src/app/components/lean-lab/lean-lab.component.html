@@ -9,6 +9,15 @@
     </p>
   </header>
 
+  <div class="lean-lab__layout">
+    <app-lean-lab-run-history
+      [runs]="runs()"
+      [selectedRunId]="selectedRunId()"
+      [loading]="loadingRun() || submitting()"
+      [truncated]="runsTruncated()"
+      (runSelected)="loadRun($event)"
+    />
+    <div class="lean-lab__main">
   <form class="lean-lab__form" [formGroup]="form" (ngSubmit)="submit()">
     <label class="lean-lab__field">
       <span>Run ID</span>
@@ -167,4 +176,6 @@
       </details>
     </section>
   }
+    </div>
+  </div>
 </div>
