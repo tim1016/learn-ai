@@ -86,11 +86,19 @@ class LeanSidecarServiceError(RuntimeError):
 class TrustedRunRequest:
     """Phase 2a input — bounded set of caller-tunable knobs.
 
+    Phase 4c added the optional ``algorithm_source`` field. When
+    provided, the orchestrator stages it as ``workspace/project/main.py``
+    instead of the bundled trusted sample; when ``None`` (default),
+    the trusted ``buy_and_hold`` sample is used. The class name is
+    still kept as ``TrustedRunRequest`` because the request goes
+    through the same launcher path under the same sandbox shape — the
+    Phase 1c hardening is what makes accepting arbitrary source safe.
+
     ``start_ms_utc`` and ``end_ms_utc`` are int64 ms UTC per the repo's
     timestamp rigor rule. They are converted to ``date`` *inside this
     module* (under the boundary) so the LEAN config's ISO-string
-    parameter values stay consistent with what the trusted-sample
-    algorithm reads via ``GetParameter``.
+    parameter values stay consistent with what the algorithm reads
+    via ``GetParameter``.
     """
 
     run_id: str
@@ -98,6 +106,10 @@ class TrustedRunRequest:
     start_ms_utc: int
     end_ms_utc: int
     starting_cash: float
+    # Phase 4c — None means "use the trusted buy_and_hold sample".
+    # When provided, must be valid Python source defining a
+    # ``MyAlgorithm`` class (LeanConfig.algorithm_type_name's default).
+    algorithm_source: str | None = None
 
     @property
     def start_date(self) -> date:
@@ -276,7 +288,12 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     daily_path = stage_daily_bars(workspace, symbol=request.symbol, bars=daily_bars)
     stage_lean_metadata_from_image(workspace, PINNED_LEAN_IMAGE_DIGEST)
     stage_empty_corporate_action_dirs(workspace)
-    source_path = stage_algorithm_source(workspace, BUY_AND_HOLD_SOURCE)
+    # Phase 4c: ``algorithm_source`` overrides the bundled trusted
+    # sample when present. The Phase 1c sandbox shape (--read-only,
+    # --user=<non-root>, --cap-drop=ALL, --network=none, workspace-
+    # only mount) is what makes accepting arbitrary source safe.
+    source_to_stage = request.algorithm_source if request.algorithm_source else BUY_AND_HOLD_SOURCE
+    source_path = stage_algorithm_source(workspace, source_to_stage)
     config = LeanConfig(
         parameters={
             "start_date": request.start_date.isoformat(),
@@ -433,6 +450,11 @@ def _build_manifest(
             f"is_clean={response.is_clean}",
             f"lean_error_categories={sorted(response.lean_errors.keys())}",
             f"normalized_parser={'present' if normalized else 'absent'}",
+            # Phase 4c audit: distinguishes user-provided source from
+            # the trusted sample. The source hash above
+            # (algorithm_source_sha256) already records the *content*,
+            # but this note makes the intent explicit for audit.
+            f"algorithm_source_kind={'user_provided' if request.algorithm_source else 'trusted_sample'}",
         ),
     )
 

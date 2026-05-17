@@ -132,6 +132,40 @@ describe("LeanLabComponent", () => {
     expect(text).toContain("quote.zip");
   });
 
+  it("toggle hidden by default → request omits algorithm_source", async () => {
+    serviceMock.startTrustedRun.mockResolvedValue(makeResponse());
+    await component.submit();
+    const req = serviceMock.startTrustedRun.mock.calls[0][0];
+    expect(req.algorithm_source).toBeUndefined();
+  });
+
+  it("toggle on + custom source → request carries algorithm_source", async () => {
+    serviceMock.startTrustedRun.mockResolvedValue(makeResponse());
+    component.form.patchValue({
+      useCustomAlgorithm: true,
+      algorithmSource: "class MyAlgorithm: pass",
+    });
+    fixture.detectChanges();
+    await component.submit();
+    const req = serviceMock.startTrustedRun.mock.calls[0][0];
+    expect(req.algorithm_source).toBe("class MyAlgorithm: pass");
+  });
+
+  it("toggle on + whitespace-only source → algorithm_source omitted (server fallback)", async () => {
+    // The server 422s on whitespace-only algorithm_source. Better to
+    // omit the field client-side and let the server quietly fall
+    // back to the trusted sample.
+    serviceMock.startTrustedRun.mockResolvedValue(makeResponse());
+    component.form.patchValue({
+      useCustomAlgorithm: true,
+      algorithmSource: "   \n\t  ",
+    });
+    fixture.detectChanges();
+    await component.submit();
+    const req = serviceMock.startTrustedRun.mock.calls[0][0];
+    expect(req.algorithm_source).toBeUndefined();
+  });
+
   it("regenerates a unique runId on every successful submit", async () => {
     // Reviewer P1: two fast successful submits must not produce the
     // same runId (same-second collision would mix server-side

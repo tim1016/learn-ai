@@ -13,7 +13,7 @@
  * about 30,000 years away from precision loss).
  */
 
-/** Caller-supplied trusted-run request. No algorithm_source — Phase 3+ gate. */
+/** Caller-supplied run request. Optional ``algorithm_source`` since Phase 4c. */
 export interface TrustedRunRequest {
   /** Strict slug `^[a-z0-9][a-z0-9_-]{2,63}$`. */
   run_id: string;
@@ -25,6 +25,14 @@ export interface TrustedRunRequest {
   end_ms_utc: number;
   /** Starting capital in USD; server cap is $1,000..$10,000,000. */
   starting_cash?: number;
+  /**
+   * Optional QCAlgorithm Python source. When omitted, the bundled
+   * trusted buy_and_hold sample runs on the server. Must define a
+   * class named ``MyAlgorithm`` and stay under the server's 256 KiB
+   * cap. Runs inside the Phase 1c hardened sandbox (read-only root,
+   * non-root user, no caps, no network, workspace-only mount).
+   */
+  algorithm_source?: string | null;
 }
 
 /**

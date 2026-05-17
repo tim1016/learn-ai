@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT
+from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT, MAX_ALGORITHM_SOURCE_BYTES
 from app.lean_sidecar.launcher_client import (
     LauncherClientError,
     LauncherRejected,
@@ -85,10 +85,15 @@ def _count_weekdays_between(start_ms: int, end_ms: int) -> int:
 class TrustedRunRequestModel(BaseModel):
     """Pydantic shape for POST /api/lean-sidecar/trusted-runs.
 
-    There is intentionally **no** ``algorithm_source`` field — Phase 3
-    is the gating phase before any user-authored source crosses the
-    launcher boundary. Reviewers / fuzzers adding such a field here
-    must update the ADR row in the same PR.
+    Phase 4c added the optional ``algorithm_source`` field — Phase 1c's
+    mandatory sandbox shape (``--read-only``, ``--user=<non-root>``,
+    ``--cap-drop=ALL``, ``--network=none``, workspace-only mount)
+    closes the threat model that previously gated arbitrary user
+    source. When omitted, the trusted ``buy_and_hold`` sample runs.
+
+    The endpoint name (``/trusted-runs``) is retained for backwards
+    compatibility with the Phase 2a frontend; the URL no longer
+    implies "trusted sample only" semantically.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -131,6 +136,19 @@ class TrustedRunRequestModel(BaseModel):
         ge=_MIN_STARTING_CASH,
         le=_MAX_STARTING_CASH,
     )
+    algorithm_source: str | None = Field(
+        default=None,
+        description=(
+            "Optional QCAlgorithm Python source. When omitted, the "
+            "bundled trusted buy_and_hold sample runs. Must define a "
+            "class named MyAlgorithm (LeanConfig's default "
+            "algorithm-type-name). Capped at "
+            f"{MAX_ALGORITHM_SOURCE_BYTES // 1024} KiB. Runs inside "
+            "the Phase 1c sandbox shape (read-only root, non-root "
+            "user, no caps, no network, workspace-only mount) — that "
+            "shape is what makes accepting arbitrary source safe."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_window(self) -> TrustedRunRequestModel:
@@ -155,6 +173,26 @@ class TrustedRunRequestModel(BaseModel):
             validate_symbol(self.symbol)
         except SymbolValidationError as e:
             raise ValueError(str(e)) from e
+        # Phase 4c: algorithm_source validation. Size cap is the
+        # ADR's per-request hard limit; UTF-8-ness is checked
+        # implicitly by Pydantic accepting str. The MyAlgorithm
+        # class-name requirement is documented but not regex-
+        # enforced here — LEAN's launcher fails fast on a missing
+        # class with a clear "algorithm-type-name not found" error,
+        # which the result_classifier picks up as `runtime_error`.
+        # Text-level "no `import os`" filtering would be security
+        # theater: the Phase 1c sandbox is the boundary, not the
+        # source-text contents.
+        if self.algorithm_source is not None:
+            if not self.algorithm_source.strip():
+                raise ValueError("algorithm_source, if provided, must not be empty/whitespace")
+            source_bytes = len(self.algorithm_source.encode("utf-8"))
+            if source_bytes > MAX_ALGORITHM_SOURCE_BYTES:
+                raise ValueError(
+                    f"algorithm_source is {source_bytes} bytes; "
+                    f"max is {MAX_ALGORITHM_SOURCE_BYTES} bytes "
+                    f"({MAX_ALGORITHM_SOURCE_BYTES // 1024} KiB)"
+                )
         return self
 
 
@@ -214,6 +252,7 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         start_ms_utc=payload.start_ms_utc,
         end_ms_utc=payload.end_ms_utc,
         starting_cash=payload.starting_cash,
+        algorithm_source=payload.algorithm_source,
     )
     try:
         result = await run_trusted_sample(request)
