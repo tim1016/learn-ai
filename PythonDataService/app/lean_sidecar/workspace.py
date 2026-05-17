@@ -164,25 +164,42 @@ def validate_run_id(run_id: str) -> str:
 def resolve_workspace(run_id: str, artifacts_root: Path) -> Workspace:
     """Resolve ``run_id`` to a workspace strictly under ``artifacts_root``.
 
-    Two-stage defense against path traversal:
+    Three-stage defense against path traversal:
 
     1. :func:`validate_run_id` rejects any slug that contains a path
-       separator, ``.`` component, or whitespace — i.e. anything that
-       could change the meaning of the join below. The validated value
-       is bound to a fresh local (``safe_run_id``) so static-analysis
-       dataflow can see the sanitizer.
-    2. After the join, the candidate is resolved and verified to live
+       separator, ``.`` component, or whitespace — the boundary check
+       the router/launcher use directly.
+    2. **Reconstruct from the regex match group** so the value flowing
+       into the path operation is provably derived from the regex
+       capture rather than from the raw user input. CodeQL's
+       path-injection rule recognises ``re.Match.group()`` output as
+       sanitized; the cross-function ``validate_run_id`` return value
+       it does not follow.
+    3. After the join, the candidate is resolved and verified to live
        under ``artifacts_root.resolve()`` via :func:`os.path.commonpath`.
        This catches symlink escapes the regex cannot see (a symlink
        under ``artifacts_root`` pointing outside it).
 
-    The two checks together close the path-traversal class even though
-    each alone would be insufficient: the regex blocks textual escapes,
-    the commonpath check blocks filesystem-level escapes.
+    Three together close the path-traversal class even though each
+    alone would be insufficient: the regex blocks textual escapes,
+    the match-group reconstruction makes the sanitizer visible to
+    dataflow analysis, and the commonpath check blocks filesystem-
+    level escapes.
     """
     import os
 
-    safe_run_id = validate_run_id(run_id)
+    # Boundary check (raises on bad input).
+    validate_run_id(run_id)
+    # Reconstruct from the regex match group so the value used below
+    # is provably from the regex capture, not the raw user input.
+    # CodeQL's path-injection rule treats ``re.Match.group(0)`` as
+    # sanitized; an indirect-via-helper-function value, it does not.
+    match = RUN_ID_PATTERN.fullmatch(run_id)
+    if match is None:
+        # Defensive: validate_run_id already raised on this case.
+        raise WorkspaceError(f"run_id rejected on second check: {run_id!r}")
+    safe_run_id = match.group(0)
+
     root_resolved = artifacts_root.resolve()
     # ``resolve(strict=False)`` returns the canonical path even when
     # the target does not yet exist — that's the Phase 1 case where
