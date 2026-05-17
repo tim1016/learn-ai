@@ -94,7 +94,7 @@
   <app-section-error
     [error]="lifecycleErr"
     contextWhat="The most recent connect / disconnect / reconnect request failed."
-    (retry)="reconnect()"
+    (retry)="retryLastAction()"
   />
 }
 

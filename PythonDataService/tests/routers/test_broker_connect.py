@@ -225,13 +225,13 @@ async def test_connect_sentinel_mismatch_returns_502(monkeypatch, reset_settings
     fake = FakeClient(connect_raises=ConnectionRefusedDueToSentinelError("paper/live mismatch"))
     ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
     monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/broker/connect")
-
-    assert response.status_code == 502
-    assert "mismatch" in response.json()["detail"]
-    ibkr_client_module.set_client(None)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/broker/connect")
+        assert response.status_code == 502
+        assert "mismatch" in response.json()["detail"]
+    finally:
+        ibkr_client_module.set_client(None)
 
 
 async def test_connect_client_id_in_use_returns_409(monkeypatch, reset_settings):
@@ -242,13 +242,13 @@ async def test_connect_client_id_in_use_returns_409(monkeypatch, reset_settings)
     fake = FakeClient(connect_raises=IbkrClientIdInUseError("clientId 1 already in use"))
     ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
     monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/broker/connect")
-
-    assert response.status_code == 409
-    assert "in use" in response.json()["detail"]
-    ibkr_client_module.set_client(None)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/broker/connect")
+        assert response.status_code == 409
+        assert "in use" in response.json()["detail"]
+    finally:
+        ibkr_client_module.set_client(None)
 
 
 async def test_connect_generic_broker_error_returns_502(monkeypatch, reset_settings):
@@ -259,10 +259,49 @@ async def test_connect_generic_broker_error_returns_502(monkeypatch, reset_setti
     fake = FakeClient(connect_raises=BrokerError("Gateway unreachable"))
     ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
     monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/broker/connect")
+        assert response.status_code == 502
+        assert "Gateway unreachable" in response.json()["detail"]
+    finally:
+        ibkr_client_module.set_client(None)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/broker/connect")
 
-    assert response.status_code == 502
-    assert "Gateway unreachable" in response.json()["detail"]
-    ibkr_client_module.set_client(None)
+async def test_connect_os_error_returns_502(monkeypatch, reset_settings):
+    """OSError from connectAsync (socket-level failure) must map to 502."""
+    monkeypatch.setenv("IBKR_BROKER_ENABLED", "true")
+    from app.broker.ibkr import client as ibkr_client_module
+    from app.routers import broker as broker_router
+
+    fake = FakeClient(connect_raises=OSError("socket closed"))
+    ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
+    monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/broker/connect")
+        assert response.status_code == 502
+        assert "socket closed" in response.json()["detail"]
+    finally:
+        ibkr_client_module.set_client(None)
+
+
+async def test_disconnect_os_error_returns_502(monkeypatch, reset_settings):
+    """OSError from client.disconnect() must map to 502 (Major fix from PR #244 review)."""
+    monkeypatch.setenv("IBKR_BROKER_ENABLED", "true")
+    from app.broker.ibkr import client as ibkr_client_module
+
+    fake = FakeClient(starts_connected=True)
+
+    async def raising_disconnect() -> None:
+        raise OSError("socket teardown raced pending write")
+
+    fake.disconnect = raising_disconnect  # type: ignore[assignment]
+    ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/broker/disconnect")
+        assert response.status_code == 502
+        assert "socket teardown" in response.json()["detail"]
+    finally:
+        ibkr_client_module.set_client(None)

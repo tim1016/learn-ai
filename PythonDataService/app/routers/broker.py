@@ -202,7 +202,7 @@ async def disconnect_endpoint() -> IbkrConnectionHealth:
             client = get_client()
         except NotConnectedError:
             return _synthesize_disconnected_health()
-        await client.disconnect()
+        await _disconnect_with_error_mapping(client)
         return client.health()
 
 
@@ -217,7 +217,7 @@ async def reconnect_endpoint() -> IbkrConnectionHealth:
     async with _lifecycle_lock:
         client = _get_or_create_client()
         if client.is_connected():
-            await client.disconnect()
+            await _disconnect_with_error_mapping(client)
         return await _connect_and_install(client)
 
 
@@ -253,6 +253,24 @@ async def _connect_and_install(client: IbkrClient) -> IbkrConnectionHealth:
         ) from exc
     set_client(client)
     return health
+
+
+async def _disconnect_with_error_mapping(client: IbkrClient) -> None:
+    """Call ``client.disconnect()``, translating socket / broker errors to 502.
+
+    ``IbkrClient.disconnect()`` wraps a sync ``self._ib.disconnect()`` which
+    can surface ``OSError`` when the socket teardown races a still-pending
+    write. Without this wrapper that bubbles as 500 instead of the
+    broker-facing 502 used by every other lifecycle path. ``NotConnectedError``
+    is also caught defensively so callers can treat disconnect as idempotent
+    even if a future refactor adds a require-connected guard.
+    """
+    try:
+        await client.disconnect()
+    except NotConnectedError:
+        return
+    except (BrokerError, OSError) as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
 
 def _synthesize_disconnected_health() -> IbkrConnectionHealth:

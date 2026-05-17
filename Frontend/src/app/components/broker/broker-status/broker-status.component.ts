@@ -68,6 +68,13 @@ export class BrokerStatusComponent {
    */
   readonly lifecycleAction = signal<'connect' | 'disconnect' | 'reconnect' | null>(null);
   readonly lifecycleError = signal<unknown | null>(null);
+  /**
+   * The most recent lifecycle attempt. ``retryLastAction()`` replays
+   * exactly this — retrying a failed Disconnect with Reconnect (the
+   * naive bind) would flip the session state instead of finishing the
+   * disconnect.
+   */
+  private readonly lastLifecycleAction = signal<'connect' | 'disconnect' | 'reconnect' | null>(null);
 
   /** Hide lifecycle controls when the broker subsystem is disabled. */
   readonly lifecycleControlsVisible = computed(() => {
@@ -164,6 +171,7 @@ export class BrokerStatusComponent {
   ): Promise<void> {
     if (this.lifecycleAction() !== null) return;
     this.lifecycleAction.set(action);
+    this.lastLifecycleAction.set(action);
     this.lifecycleError.set(null);
     try {
       await call();
@@ -174,6 +182,22 @@ export class BrokerStatusComponent {
       // Refresh health + dependent cards so the banner and Status page
       // reflect the post-action state immediately, not five seconds later.
       await this.refresh();
+    }
+  }
+
+  /**
+   * Replay the most recent lifecycle attempt — wired to the inline
+   * error component's retry button. Defaults to reconnect when no
+   * attempt is on record (e.g. cold load with no failures).
+   */
+  retryLastAction(): Promise<void> {
+    switch (this.lastLifecycleAction()) {
+      case 'connect':
+        return this.connect();
+      case 'disconnect':
+        return this.disconnect();
+      default:
+        return this.reconnect();
     }
   }
 
