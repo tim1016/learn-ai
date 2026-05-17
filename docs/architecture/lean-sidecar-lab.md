@@ -427,7 +427,7 @@ The original plan's six phases are retained, with these adjustments encoded by P
 - **Phase 1 (Runner spike)** — now includes (a) authoring the launcher service, (b) resolving the image digest, (c) proving the Windows/Podman topology and workspace path mapping, (d) confirming which of `--cap-drop=ALL` / `--read-only` / `--tmpfs` / non-root user / disk quota the LEAN image tolerates, (e) proving the LEAN data-folder contract with a price/timestamp round-trip fixture, (f) staging and hashing metadata databases, factor files, and map files for the trusted sample, (g) producing one end-to-end run on a hard-coded trusted Python algorithm (no user input yet), (h) re-running the same sample with the same inputs and asserting deterministic artifacts or documented equivalence within the quantization floor, (i) proving requested/staged/effective date-window alignment and non-empty bar consumption.
 - **Phase 2 (Python API)** — unchanged in shape; the runner.py invocations go through the launcher socket/HTTP rather than spawning podman as a child process of the data-plane container.
 - **Phase 3 — renamed *Container Execution Boundary + Fidelity Boundary*** — is the gating phase before any UI takes arbitrary user input. The UI from Phase 4 may exist earlier only with a hardcoded trusted sample algorithm (no `algorithm_source` field, no textarea). This phase also lands the normalized parser tests, manifest hashing, disk-cap enforcement, and explicit compatibility-vs-reconciliation run classification.
-- **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. From this phase onward, a successful run must be possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
+- **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. Phase 4a shipped the trusted-sample form, 4b the equity chart, and **4c the custom-algorithm textarea** (server-side accept of `algorithm_source` on `POST /lean/runs/start`). From 4c onward, a successful run is possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. The acceptance is unconditional on the API and gated by a UI toggle (defaults off → trusted sample). Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
 - **Phases 5-6** - unchanged in scope.
 
 ### Phase 1a progress (2026-05-17)
@@ -532,6 +532,40 @@ Open from this PR, queued for Phase 1d / Phase 5:
 - Quote-bar staging — eliminates the last known-noise category in the trusted-sample log.
 - Real factor/map files for the reconciliation-grade Phase 5 fixtures (not for the spike).
 - Hardening-profile enum to replace caller-supplied `hardening_flags` argv tokens — reviewer-suggested longer-term direction.
+
+### Phase 4c progress (2026-05-17, follow-up PR — accept arbitrary algorithm source)
+
+After Phase 1c promoted `--read-only` and `--user=<non-root>` to mandatory sandbox flags, the
+`POST /lean/runs/start` API and the LEAN Lab UI both accept arbitrary `QCAlgorithm` source from
+the operator. Phase 1c's hardening is the precondition that makes accepting arbitrary source
+acceptable.
+
+- **API** — `TrustedRunRequestModel.algorithm_source: str | None`. Empty/whitespace is rejected
+  with HTTP 422 (better signal than a silent fallback). UTF-8 size validated against
+  `MAX_ALGORITHM_SOURCE_BYTES = 256 KiB`. Omitting the field falls back to the bundled trusted
+  `buy_and_hold.py`. `extra="forbid"` still rejects unknown fields.
+- **Service** — `TrustedRunRequest.algorithm_source` flows through to `stage_algorithm_source(...)`;
+  the manifest gains `algorithm_source_kind={user_provided|trusted_sample}` so the audit trail
+  records intent. Class name MUST be `MyAlgorithm` (matches `algorithm-type-name` in
+  `LeanConfig`) — a mismatch causes LEAN to run its image-baked default and the run looks
+  "successful" with empty output.
+- **UI** — `lean-lab.component`: new Reactive Forms controls `useCustomAlgorithm: boolean` +
+  `algorithmSource: string`. The toggle defaults off (operator still gets a one-click trusted
+  run); turning it on reveals a monospace textarea pre-populated with a minimal `MyAlgorithm`
+  template that runs against the sample data window. Whitespace-only source is silently omitted
+  client-side rather than sent for a server 422.
+- **Sandbox guarantee surfaced in UI copy** — header explicitly names the Phase 1c shape
+  (read-only root, non-root user, no caps, no network, workspace-only mount) so the operator
+  knows what protects the host when they paste arbitrary code.
+- **Test surface** — 4 new router tests (`test_algorithm_source_optional`,
+  `..._empty_string_rejected`, `..._oversize_rejected`, `..._within_cap_accepted`); 1 new
+  field-rejection test renamed from the stale Phase 2a `test_forbids_algorithm_source_field`.
+  3 new component specs cover (a) toggle-off omits the field, (b) toggle-on with source sends
+  it, (c) toggle-on with whitespace-only omits it.
+- **What Phase 4c does NOT do** — does not run arbitrary algorithms through the
+  reconciliation-grade path; does not stage additional brokerage / fill model variants
+  (still LEAN defaults); does not relax the trusted-sample data window or stage real factor
+  / map files. Those remain Phase 5+.
 
 ---
 

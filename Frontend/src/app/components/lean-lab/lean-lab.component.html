@@ -2,9 +2,10 @@
   <header class="lean-lab__header">
     <h1>LEAN Sidecar Lab</h1>
     <p class="lean-lab__lead">
-      Run the trusted buy-and-hold sample through an isolated LEAN container and inspect the
-      classified result. Phase&nbsp;4a — trusted sample only; arbitrary
-      <code>QCAlgorithm</code> source lands when the Phase&nbsp;3 boundary gate clears.
+      Run a <code>QCAlgorithm</code> through an isolated LEAN container and inspect the classified
+      result. The bundled trusted sample runs by default; toggle <em>Custom algorithm</em> to paste
+      your own. Phase&nbsp;1c hardening (read-only root, non-root user, no caps, no network,
+      workspace-only mount) keeps arbitrary source contained.
     </p>
   </header>
 
@@ -35,13 +36,36 @@
       <input type="number" formControlName="startingCash" min="1000" max="10000000" step="1000" />
     </label>
 
+    <label class="lean-lab__field lean-lab__field--toggle">
+      <input type="checkbox" formControlName="useCustomAlgorithm" />
+      <span>Custom algorithm</span>
+      <small>Off: run the bundled trusted sample. On: paste your own <code>MyAlgorithm</code> below.</small>
+    </label>
+
+    @if (form.controls.useCustomAlgorithm.value) {
+      <label class="lean-lab__field lean-lab__field--source">
+        <span>Algorithm source (Python)</span>
+        <textarea
+          formControlName="algorithmSource"
+          rows="18"
+          spellcheck="false"
+          aria-describedby="sourceHint"
+        ></textarea>
+        <small id="sourceHint">
+          Class name must be <code>MyAlgorithm</code>. Max 256&nbsp;KiB. Runs under the Phase&nbsp;1c
+          sandbox shape.
+        </small>
+      </label>
+    }
+
     <button
       class="lean-lab__submit"
       type="submit"
       [disabled]="submitting() || form.invalid"
-      aria-label="Run the trusted-sample backtest through the LEAN sidecar"
+      aria-label="Run the LEAN sidecar backtest with the configured form"
     >
-      {{ submitting() ? "Running…" : "Run trusted sample" }}
+      @let isCustom = form.controls.useCustomAlgorithm.value;
+      {{ submitting() ? "Running…" : (isCustom ? "Run custom algorithm" : "Run trusted sample") }}
     </button>
   </form>
 

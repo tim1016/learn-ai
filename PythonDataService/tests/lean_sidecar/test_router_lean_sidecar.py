@@ -200,13 +200,60 @@ class TestPostTrustedRunValidation:
         assert r.status_code == 422
         assert "weekday" in r.text.lower() or "trading day" in r.text.lower()
 
-    async def test_forbids_algorithm_source_field(self, client: AsyncClient) -> None:
-        """Phase 2a refuses any algorithm_source field; that gate
-        opens in Phase 3 per ADR §"Phase sequencing"."""
+    async def test_forbids_unknown_extra_fields(self, client: AsyncClient) -> None:
+        """``extra="forbid"`` still rejects keys the schema doesn't
+        know about. ``algorithm_source`` IS in the schema as of
+        Phase 4c (see separate tests), so this test uses a different
+        bogus field that proves the forbid-unknown contract still
+        holds — important because a future field could be smuggled
+        if forbid silently became allow."""
         payload = _good_payload()
-        payload["algorithm_source"] = "class Evil(QCAlgorithm): pass"
+        payload["unknown_field"] = "anything"
         r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
         assert r.status_code == 422
+
+    async def test_algorithm_source_optional(self) -> None:
+        """Phase 4c: omitting ``algorithm_source`` is valid — the
+        server falls back to the trusted sample. This is a schema-only
+        test (no HTTP round-trip) so it does not depend on the host
+        having podman or the LEAN image — Phase 1c sandbox wiring is
+        tested separately in ``test_router_lean_sidecar_e2e.py``."""
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        assert "algorithm_source" not in payload
+        model = TrustedRunRequestModel.model_validate(payload)
+        assert model.algorithm_source is None
+
+    async def test_algorithm_source_empty_string_rejected(self, client: AsyncClient) -> None:
+        payload = _good_payload()
+        payload["algorithm_source"] = "   \n\t  "
+        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
+        assert r.status_code == 422
+        assert "empty" in r.text.lower() or "whitespace" in r.text.lower()
+
+    async def test_algorithm_source_oversize_rejected(self, client: AsyncClient) -> None:
+        """Phase 4c: ADR-mandated 256 KiB cap on user source. Exceeding
+        must 422 before the launcher round-trip."""
+        payload = _good_payload()
+        # 300 KiB of ASCII — over the 256 KiB cap.
+        payload["algorithm_source"] = "x" * (300 * 1024)
+        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
+        assert r.status_code == 422
+        assert "bytes" in r.text.lower() or "max" in r.text.lower()
+
+    async def test_algorithm_source_within_cap_accepted(self) -> None:
+        """Right at the boundary — a 200 KiB source must pass schema.
+        Schema-only assertion: a real HTTP round-trip on CI would need
+        podman + the LEAN image, which are Phase 1c E2E concerns and
+        live in ``test_router_lean_sidecar_e2e.py``."""
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["algorithm_source"] = "# " + "x" * (200 * 1024)
+        model = TrustedRunRequestModel.model_validate(payload)
+        assert model.algorithm_source is not None
+        assert len(model.algorithm_source.encode("utf-8")) == 200 * 1024 + 2
 
     @pytest.mark.parametrize(
         "bad_symbol",

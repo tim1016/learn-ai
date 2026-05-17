@@ -17,13 +17,57 @@ import type {
 } from "../../services/lean-sidecar.types";
 import { LeanLabEquityChartComponent } from "./lean-lab-equity-chart/lean-lab-equity-chart.component";
 
+/** Mirror the server's ``MAX_ALGORITHM_SOURCE_BYTES``. */
+const MAX_ALGORITHM_SOURCE_BYTES = 256 * 1024;
+
 /**
- * Phase 4a — minimal LEAN Lab UI.
+ * Default placeholder shown in the "Custom algorithm" textarea so
+ * the operator sees a minimal QCAlgorithm shape they can edit
+ * rather than a blank box. The class name MUST be ``MyAlgorithm``
+ * (LeanConfig's default ``algorithm-type-name``); a mismatch makes
+ * LEAN run its image-baked default and the run looks "successful"
+ * with empty output.
+ */
+const DEFAULT_CUSTOM_TEMPLATE = `"""Custom algorithm — Phase 4c.
+
+Runs inside the Phase 1c hardened sandbox: read-only root, non-root
+user (UID 10001 on Windows / host UID on Linux), all caps dropped,
+no network, workspace-only bind mount. Algorithm output lands under
+workspace/output/ and observations.csv under workspace/output/storage/.
+"""
+
+from AlgorithmImports import *
+
+
+class MyAlgorithm(QCAlgorithm):
+    def Initialize(self):
+        start = self.GetParameter("start_date") or "2025-01-06"
+        end = self.GetParameter("end_date") or "2025-01-10"
+        cash = float(self.GetParameter("starting_cash") or "100000")
+        sy, sm, sd = (int(x) for x in start.split("-"))
+        ey, em, ed = (int(x) for x in end.split("-"))
+        self.SetStartDate(sy, sm, sd)
+        self.SetEndDate(ey, em, ed)
+        self.SetCash(cash)
+        equity = self.AddEquity("SPY", Resolution.Minute, fillForward=False)
+        equity.SetDataNormalizationMode(DataNormalizationMode.Raw)
+        self.SetBenchmark(lambda dt: 100)
+        self.symbol = equity.Symbol
+
+    def OnData(self, slice):
+        if not self.Portfolio.Invested:
+            self.SetHoldings(self.symbol, 1.0)
+`;
+
+/**
+ * LEAN Lab UI — Phase 4a (form), 4b (equity chart), 4c (custom source).
  *
- * Trusted-sample only: the form has no algorithm-source field per the
- * ADR's Phase 3 gating rule. The page lets an operator submit a
- * trusted run, watch its `is_clean` outcome, and inspect the
- * classified LEAN errors + normalized result without leaving the UI.
+ * Lets an operator submit a run, watch its ``is_clean`` outcome, and
+ * inspect the classified LEAN errors + normalized result without
+ * leaving the UI. The "Custom algorithm" toggle (Phase 4c) sends an
+ * operator-pasted QCAlgorithm to the server which executes it under
+ * the Phase 1c sandbox shape (read-only root, non-root user, no caps,
+ * no network, workspace-only bind mount).
  *
  * Reactive Forms (FormGroup) is the project convention; Template-
  * driven forms (ngModel) are forbidden per .claude/rules/angular.md.
@@ -72,6 +116,15 @@ export class LeanLabComponent {
     startingCash: new FormControl(100_000, {
       nonNullable: true,
       validators: [Validators.required, Validators.min(1_000), Validators.max(10_000_000)],
+    }),
+    // Phase 4c — when ``useCustomAlgorithm`` is true, ``algorithmSource``
+    // is sent on the request; otherwise the server runs the bundled
+    // trusted sample. The textarea has a soft 256 KiB cap matching
+    // the server's ``MAX_ALGORITHM_SOURCE_BYTES``.
+    useCustomAlgorithm: new FormControl(false, { nonNullable: true }),
+    algorithmSource: new FormControl(DEFAULT_CUSTOM_TEMPLATE, {
+      nonNullable: true,
+      validators: [Validators.maxLength(MAX_ALGORITHM_SOURCE_BYTES)],
     }),
   });
 
@@ -188,6 +241,13 @@ export class LeanLabComponent {
       end_ms_utc,
       starting_cash: value.startingCash,
     };
+    // Phase 4c — only include the algorithm_source when the toggle
+    // is on AND the textarea has non-whitespace content. Sending an
+    // empty string would 422 on the server's empty-check rather
+    // than silently falling back to the trusted sample.
+    if (value.useCustomAlgorithm && value.algorithmSource.trim()) {
+      req.algorithm_source = value.algorithmSource;
+    }
 
     try {
       const resp = await this.service.startTrustedRun(req);
