@@ -171,6 +171,36 @@ class TestBuildCommand:
         assert "--tmpfs" in argv
         assert "/tmp:rw,noexec,nosuid,size=256m" in argv
 
+    def test_rejects_tmpfs_without_spec(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+    ) -> None:
+        """``--tmpfs`` on its own must fail before podman sees it.
+
+        Without this check the next token would be the image
+        reference, which podman would treat as the tmpfs spec — a
+        confusing failure that's hard to diagnose from outside.
+        """
+        ws = resolve_workspace("run_x8", tmp_artifacts_root)
+        ws.ensure_layout()
+        with pytest.raises(RunnerConfigurationError, match="requires a value"):
+            build_command(ws, DUMMY_DIGEST, hardening_flags=("--tmpfs",))
+
+    def test_rejects_tmpfs_followed_by_another_flag(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+    ) -> None:
+        ws = resolve_workspace("run_x9", tmp_artifacts_root)
+        ws.ensure_layout()
+        with pytest.raises(RunnerConfigurationError, match="expects a value"):
+            build_command(
+                ws,
+                DUMMY_DIGEST,
+                hardening_flags=("--tmpfs", "--read-only"),
+            )
+
 
 class TestRunLimits:
     @pytest.mark.parametrize(

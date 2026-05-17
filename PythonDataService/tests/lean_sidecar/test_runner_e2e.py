@@ -31,6 +31,8 @@ from app.lean_sidecar.launcher.service import launch
 from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.staging import (
     stage_algorithm_source,
+    stage_daily_bars,
+    stage_empty_corporate_action_dirs,
     stage_lean_config,
     stage_lean_metadata_from_image,
     stage_minute_bars,
@@ -85,7 +87,19 @@ def _stage_trusted_sample(
     dates = [date(2025, 1, d) for d in (6, 7, 8, 9, 10)]
     bars_by_date = [(d, _make_minute_bars(symbol, d, count=30)) for d in dates]
     stage_minute_bars(ws, symbol=symbol, bars_by_date=bars_by_date)
+    # LEAN's default benchmark + post-run equity-curve analysis need
+    # daily bars for the same symbol; without them the run logs
+    # ``failed_data_requests`` + ``analysis_failed`` even on a
+    # successful backtest. Take the closing minute of each trading
+    # day as a synthetic daily bar so the analyzer has something to
+    # build the equity curve from.
+    daily_bars = [day[-1] for (_, day) in bars_by_date]
+    stage_daily_bars(ws, symbol=symbol, bars=daily_bars)
     stage_lean_metadata_from_image(ws, digest)
+    # No corporate actions in window, but LEAN still warns when the
+    # map_files directory is missing. Empty dirs silence the warning
+    # without claiming reconciliation-grade fixtures.
+    stage_empty_corporate_action_dirs(ws)
     stage_algorithm_source(ws, BUY_AND_HOLD_SOURCE)
     stage_lean_config(
         ws,
@@ -114,15 +128,68 @@ def _base_request(run_id: str, digest: str, **overrides: object) -> LaunchReques
     return LaunchRequest(**kwargs)
 
 
-def _assert_clean_run(ws: Workspace, response: LaunchResponse) -> None:
+# Known-noise LEAN errors the *trusted sample* tolerates: the sample is
+# explicitly non-reconciliation-grade (see buy_and_hold.py docstring).
+# These specific patterns come from LEAN's default minute subscription
+# also requesting quote bars, which the sample does not stage; they are
+# inert for the backtest math and tracked in the ADR as Phase 1c work
+# (real reconciliation needs the full subscription set staged).
+# Any error NOT matching these patterns is a regression and fails the
+# assertion below.
+_TRUSTED_SAMPLE_KNOWN_NOISE = ("_quote.zip",)
+
+
+def _assert_trusted_sample_run(ws: Workspace, response: LaunchResponse) -> None:
+    """Assert the launcher + LEAN contract for the trusted (non-recon) sample.
+
+    Requires:
+      * launcher.log written with the planned podman argv (shell-quoted
+        single-line form + argv-per-line form)
+      * exit_code == 0, not timed out
+      * the observations.csv audit file lands under
+        workspace/output/storage/ — proving ObjectStore is wired
+        through to the workspace and the bar-consumption gate is
+        actually inspectable
+      * LEAN's classified errors only contain known-noise patterns
+        (no unexpected analysis failures or runtime errors)
+      * the workspace has at least one LEAN output artifact
+
+    A separate reconciliation-grade test (Phase 5) will use a strict
+    ``response.is_clean is True`` instead of this filtered check.
+    """
     assert ws.launcher_log_path.exists()
     log_text = ws.launcher_log_path.read_text(encoding="utf-8")
     assert "podman" in log_text.lower()
     assert "--network=none" in log_text
+    # Launcher.log includes the shell-quoted single-line form so
+    # operators can reproduce the invocation manually.
+    assert "# shell:" in log_text
     assert response.exit_code == 0, (
         f"LEAN exited non-zero ({response.exit_code}); log tail:\n{response.log_tail[-3000:]}"
     )
     assert not response.timed_out
+
+    # Phase 1 non-negotiable #9 + Phase 1c blocker: observations.csv
+    # MUST land inside the workspace (object-store-root wired through).
+    obs = ws.object_store_dir / "observations.csv"
+    assert obs.exists(), f"observations.csv missing at {obs}; ObjectStore is not landing inside the workspace"
+    body = obs.read_text(encoding="utf-8").splitlines()
+    assert len(body) >= 2, f"observations.csv too small: {body!r}"
+    assert body[0] == "ms_utc,close"
+    # Bar-consumption gate (i): the algorithm received and recorded
+    # bars from the staged minute series.
+    assert len(body) - 1 > 0, "no bars consumed by the trusted sample"
+
+    # Any LEAN error category beyond known-noise is a regression. The
+    # trusted sample is allowed to log the documented quote-file
+    # warnings; an analysis_failed or runtime_error is never OK.
+    surprising: dict[str, list[str]] = {}
+    for cat, lines in response.lean_errors.items():
+        unexpected = [line for line in lines if not any(noise in line for noise in _TRUSTED_SAMPLE_KNOWN_NOISE)]
+        if unexpected:
+            surprising[cat] = unexpected
+    assert not surprising, f"LEAN logged unexpected errors beyond known trusted-sample noise: {surprising}"
+
     outputs = list(ws.output_dir.glob("*"))
     assert outputs, f"LEAN produced no output artifacts; log tail:\n{response.log_tail[-2000:]}"
 
@@ -149,7 +216,7 @@ class TestEndToEndTrustedSample:
             _base_request(run_id, digest),
             artifacts_root=tmp_artifacts_root,
         )
-        _assert_clean_run(ws, response)
+        _assert_trusted_sample_run(ws, response)
         # Cap-drop is part of the mandatory argv; the launcher.log
         # writes the plan before execution, so we can assert from the
         # log instead of stubbing the runner.
@@ -199,4 +266,4 @@ class TestEndToEndTrustedSample:
                 "overlay; needs an extra tmpfs or object-store-root override. "
                 "Tracked in ADR §'Container execution boundary' Phase 1b note."
             )
-        _assert_clean_run(ws, response)
+        _assert_trusted_sample_run(ws, response)

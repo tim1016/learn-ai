@@ -1,5 +1,21 @@
 """Trusted Phase 1 sample: buy-and-hold SPY for the trusted-sample window.
 
+**Not reconciliation-grade.** This sample exists to exercise the
+sidecar plumbing (runner, manifest, workspace contract, LEAN data-folder
+fidelity, ObjectStore visibility), not to produce numbers that can be
+compared to Engine Lab. Specifically:
+
+* ``SetBenchmark(lambda dt: 100)`` pins the benchmark to a constant so
+  the post-run ResultsAnalyzer does not try to read SPY daily data the
+  trusted-sample window does not stage. A reconciliation-grade run
+  must stage real daily benchmark bars.
+* Brokerage / fill / commission models are LEAN defaults. A
+  reconciliation-grade run must pin Interactive Brokers semantics per
+  ADR §"Brokerage, fill, and fee policy".
+* The fixture only stages five trading days of synthetic minute bars;
+  no factor or map files. Any algorithm that touches corporate-action
+  windows is out of scope.
+
 This is the *source* the sidecar copies into ``workspace/project/main.py``
 before launching LEAN. It is intentionally trivial so the Phase 1 spike
 is testing the runner and the data-folder contract, not strategy logic.

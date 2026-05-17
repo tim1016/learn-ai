@@ -53,6 +53,24 @@ class Workspace:
         return self.workspace_dir / "output"
 
     @property
+    def object_store_dir(self) -> Path:
+        """LEAN ObjectStore root inside the workspace.
+
+        LEAN's default ObjectStore is rooted at
+        ``/Lean/Launcher/bin/Debug/storage`` (image overlay) which is
+        invisible to the manifest and unwritable under ``--read-only``.
+        Pointing ``object-store-root`` here keeps everything LEAN
+        writes inside the workspace where the manifest can hash it and
+        the operator can inspect it.
+        """
+        return self.output_dir / "storage"
+
+    @property
+    def lean_log_path(self) -> Path:
+        """LEAN's own runtime log; the launcher reads it to classify errors."""
+        return self.output_dir / "log.txt"
+
+    @property
     def launcher_dir(self) -> Path:
         return self.workspace_dir / "launcher"
 
@@ -73,12 +91,16 @@ class Workspace:
 
         Idempotent so callers can pre-create the workspace and stage data
         before the launcher request; the launcher re-asserts existence.
+        ``object_store_dir`` is created up-front so LEAN — even when
+        launched with ``--read-only`` once the Phase 1c relaxation
+        lands — does not need to ``mkdir`` it itself.
         """
         for d in (
             self.workspace_dir,
             self.project_dir,
             self.data_dir,
             self.output_dir,
+            self.object_store_dir,
             self.launcher_dir,
             self.normalized_dir,
         ):

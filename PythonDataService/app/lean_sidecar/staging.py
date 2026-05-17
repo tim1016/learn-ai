@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from app.engine.data.lean_format import write_lean_day_zip
+from app.engine.data.lean_format import write_lean_daily_zip, write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import LEAN_IMAGE_REPO
 from app.lean_sidecar.lean_config import LeanConfig
@@ -29,14 +29,14 @@ from app.lean_sidecar.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
-# Paths inside the LEAN image where the bundled metadata databases live.
-# These are part of the image's release artifact, not something the
-# operator stages from Polygon — extracting them per-run keeps the
-# manifest hashing surface uniform (every file LEAN reads lives under
-# the workspace and is hashed).
+# Paths inside the LEAN image where the bundled metadata + alternative
+# databases live. These ship with the image; extracting them per-run
+# keeps the manifest hashing surface uniform (every file LEAN reads
+# lives under the workspace and is hashed).
 IMAGE_LEAN_DATA_ROOT = "/Lean/Data"
 IMAGE_MARKET_HOURS = f"{IMAGE_LEAN_DATA_ROOT}/market-hours"
 IMAGE_SYMBOL_PROPERTIES = f"{IMAGE_LEAN_DATA_ROOT}/symbol-properties"
+IMAGE_INTEREST_RATE = f"{IMAGE_LEAN_DATA_ROOT}/alternative/interest-rate"
 
 
 class MetadataStagingError(RuntimeError):
@@ -107,6 +107,38 @@ def stage_minute_bars(
         )
         written.append(path)
     return tuple(written)
+
+
+def stage_daily_bars(
+    workspace: Workspace,
+    *,
+    symbol: str,
+    bars: list[TradeBar],
+) -> Path:
+    """Stage a LEAN daily zip under ``workspace/data/equity/usa/daily/``.
+
+    Phase 1 trusted-sample wiring needs at least one daily bar zip so
+    LEAN's default benchmark resolution and the post-run
+    ResultsAnalyzer's equity-curve construction do not fail. The shape
+    matches :func:`app.engine.data.lean_format.write_lean_daily_zip`.
+    """
+    workspace.ensure_layout()
+    return write_lean_daily_zip(workspace.data_dir, symbol, bars)
+
+
+def stage_empty_corporate_action_dirs(workspace: Workspace) -> None:
+    """Create empty ``factor_files`` / ``map_files`` subdirectories.
+
+    A reconciliation-grade run requires real factor and map files (see
+    ADR §"Corporate actions and metadata policy"). For the
+    non-reconciliation trusted sample the windows have no corporate
+    actions, so an empty directory is enough to silence LEAN's
+    ``LocalDiskMapFileProvider`` warning and keep the run output
+    classified as clean.
+    """
+    workspace.ensure_layout()
+    for sub in ("factor_files", "map_files"):
+        (workspace.data_dir / "equity" / "usa" / sub).mkdir(parents=True, exist_ok=True)
 
 
 def list_factor_map_files(workspace: Workspace) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
@@ -207,15 +239,22 @@ def stage_lean_metadata_from_image(
     # needs to find its config still has to be present, so we copy the
     # whole environment and only add the path-mangling toggle.
     env = {**os.environ, "MSYS_NO_PATHCONV": "1"}
+    # Pre-create the alternative dir so podman cp lands the
+    # interest-rate subtree alongside the equity-only databases.
+    (workspace.data_dir / "alternative").mkdir(parents=True, exist_ok=True)
     try:
-        for src in (IMAGE_MARKET_HOURS, IMAGE_SYMBOL_PROPERTIES):
+        for src in (IMAGE_MARKET_HOURS, IMAGE_SYMBOL_PROPERTIES, IMAGE_INTEREST_RATE):
+            # Interest rate lives under data/alternative/, the others
+            # under data/. Pick the destination accordingly so the
+            # extracted tree mirrors the image layout LEAN expects.
+            dest = workspace.data_dir / "alternative" if src == IMAGE_INTEREST_RATE else workspace.data_dir
             try:
                 cp = subprocess.run(
                     [
                         podman,
                         "cp",
                         f"{container_id}:{src}",
-                        str(workspace.data_dir),
+                        str(dest),
                     ],
                     capture_output=True,
                     text=True,

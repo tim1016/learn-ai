@@ -160,3 +160,48 @@ LEAN refuses to initialize without `symbol-properties-database.csv` and `market-
 4. Test `--tmpfs /tmp:rw,...` at full LEAN runtime; promote to mandatory if clean.
 5. Wire the unix-domain-socket transport in the launcher (currently only localhost + optional token).
 
+---
+
+## Phase 1c actual outcome (review-driven, same PR)
+
+Three reviewer-flagged blockers landed before merge — none was caught by the prior unit suite or by my own real-HTTP test, all three matter for "Phase 1 actually delivers what it claims":
+
+### Clean-run classification beyond exit code
+
+Real bug: a launch that crashed `ResultsAnalyzer`, failed several `SubscriptionDataSource` reads, *and* hit a missing-symbol-properties error STILL returned exit_code 0. The Phase 1b assertion `assert response.exit_code == 0` was a lying success signal.
+
+Fix: new `app/lean_sidecar/result_classifier.py` parses LEAN's `output/log.txt` after every run and buckets `ERROR::` lines into four stable categories — `analysis_failed`, `failed_data_requests`, `runtime_error`, `other`. `LaunchResponse` now exposes `lean_errors: dict[str, list[str]]` and a top-level `is_clean: bool`. `is_clean` is True iff exit code is 0, the run did not time out, AND the classified-error dict is empty. The trusted-sample E2E test asserts no error category appears beyond an explicit `_TRUSTED_SAMPLE_KNOWN_NOISE` allow-list (currently just `_quote.zip` — see "trusted sample is not reconciliation-grade" below).
+
+New tests: `tests/lean_sidecar/test_result_classifier.py` (9 cases). Representative log shapes harvested from real Phase 1b LEAN runs so the classifier is exercised against shapes I've actually seen, not synthetic ones.
+
+### `observations.csv` visibility — bar-consumption gate (i)
+
+Real bug: LEAN's `ObjectStore` defaults to `/Lean/Launcher/bin/Debug/storage` which is on the image's overlay. The trusted sample's `observations.csv` was being written but to a path I'd never see — meaning the ADR's bar-consumption gate was technically un-satisfied even though I claimed otherwise.
+
+Fix: `LeanConfig` now sets `object-store-root` to `/lean-run/output/storage` (a workspace path). `Workspace.object_store_dir` exposes it. The E2E test asserts the file exists with a non-trivial body (`ms_utc,close` header + at least one bar row).
+
+### Explicit handling of failed data requests
+
+Real bug: LEAN's default minute subscription requests Trade *and* Quote bars; the post-run analyzer needs SPY daily for the equity curve; `InterestRateProvider` needs `data/alternative/interest-rate/usa/interest-rate.csv`; `LocalDiskMapFileProvider` warns when `map_files/` is missing. The trusted sample triggered all of them, and Phase 1b logged them as a generic "log_tail" string without classification.
+
+Fix: stage what we can, document the rest as known noise:
+
+- `stage_daily_bars()` — writes one synthetic daily bar per trading day from the last minute close, eliminating both the `daily/spy.zip` not-found and the `ResultsAnalyzer` equity-curve crash.
+- `stage_lean_metadata_from_image()` extended to also extract `/Lean/Data/alternative/interest-rate/` into `workspace/data/alternative/interest-rate/`.
+- `stage_empty_corporate_action_dirs()` — empty `factor_files/` + `map_files/`; the trusted-sample window has no corporate actions so empty is the right semantic.
+- Quote-bar staging is Phase 5+ work. Until then the test allows ONE documented noise pattern (`_quote.zip` not-found) and treats any other unexpected error as a regression.
+
+### Smaller improvements that came with the same review
+
+- **Hardening flags structural validation.** `--tmpfs` without a following spec is rejected before podman sees it. New tests cover the bad-pair shapes.
+- **`launcher.log` shell-quoted single-line form.** Added `# shell: podman run --rm …` to the plan header so an operator can copy/paste to reproduce manually. The argv-per-line audit form stays for grep-ability.
+- **Trusted sample explicitly non-reconciliation-grade.** Docstring now leads with the boundary; the test helper is named `_assert_trusted_sample_run`, not `_assert_clean_run`, so the distinction is visible at every call site.
+
+### Tests after Phase 1c
+
+90 passed, 1 skipped (Windows symlink). No xfail (the Phase 1b `--read-only` xfail was kept but the trusted-sample test now uses `_assert_trusted_sample_run`, which the read-only test also calls — so the xfail still gates on the same `Read-only file system` substring in the log tail).
+
+### What this changes for Phase 2+
+
+Phase 2's parser can now read `lean_errors` from the response and `observations.csv` from the workspace without any further wiring; the contract surface is stable. The Phase 5 reconciliation work will replace `_assert_trusted_sample_run` with a strict `_assert_reconciliation_grade_run` that requires `response.is_clean is True` AND `lean_errors == {}` AND a proper benchmark + brokerage pin in the algorithm. Those two helpers will sit side by side in the test module so the contrast between compatibility-grade and reconciliation-grade is one short read.
+

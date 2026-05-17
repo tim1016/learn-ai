@@ -134,12 +134,19 @@ def _require_image_in_allowlist(image_digest: str) -> str:
 
 
 def _validate_hardening_flags(hardening_flags: tuple[str, ...]) -> None:
-    """Reject hardening tokens not on the allow-list.
+    """Reject hardening tokens not on the allow-list and malformed pairs.
 
-    Every individual argv token must be in ``ALLOWED_HARDENING_TOKENS``.
-    Any unknown token (``--privileged``, ``--cap-add=...``,
-    ``--security-opt=...``, etc.) aborts the run; callers cannot widen
-    the sandbox through the launcher API.
+    Two checks:
+
+    1. **Token membership.** Every argv token must be in
+       :data:`ALLOWED_HARDENING_TOKENS`. Unknown tokens
+       (``--privileged``, ``--cap-add=...``, ``--security-opt=...``,
+       etc.) abort the run; callers cannot widen the sandbox.
+    2. **Pair structure.** Two-token flags must be followed by their
+       value token. ``["--tmpfs"]`` on its own would silently pass
+       token-membership but then podman would consume the image
+       reference as the tmpfs spec, breaking the launch in a confusing
+       way. We reject those before the argv reaches podman.
     """
     unknown = [t for t in hardening_flags if t not in ALLOWED_HARDENING_TOKENS]
     if unknown:
@@ -147,6 +154,22 @@ def _validate_hardening_flags(hardening_flags: tuple[str, ...]) -> None:
             f"hardening_flags rejected — tokens not on the allow-list: {unknown}. "
             f"Allowed tokens: {sorted(ALLOWED_HARDENING_TOKENS)}"
         )
+    # Pair-structure check: each flag-name token (those starting with
+    # ``--`` and not self-contained like ``--read-only``) must be
+    # followed by a value token.
+    i = 0
+    while i < len(hardening_flags):
+        token = hardening_flags[i]
+        needs_value = token in {"--tmpfs"}
+        if needs_value:
+            if i + 1 >= len(hardening_flags):
+                raise RunnerConfigurationError(f"hardening flag {token!r} requires a value token after it; got nothing")
+            value = hardening_flags[i + 1]
+            if value.startswith("--"):
+                raise RunnerConfigurationError(f"hardening flag {token!r} expects a value, got another flag {value!r}")
+            i += 2
+        else:
+            i += 1
 
 
 def build_command(

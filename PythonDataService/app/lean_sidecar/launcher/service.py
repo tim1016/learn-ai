@@ -8,10 +8,12 @@ binding a TCP port.
 from __future__ import annotations
 
 import logging
+import shlex
 from pathlib import Path
 
 from app.lean_sidecar.config import RunLimits
 from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
+from app.lean_sidecar.result_classifier import classify_workspace
 from app.lean_sidecar.runner import (
     RunnerConfigurationError,
     RunResult,
@@ -93,11 +95,21 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as f:
         f.write("# launcher plan\n")
+        # Shell-quoted single-line form first so an operator can
+        # copy/paste it into a terminal to reproduce manually. The
+        # argv-per-line form below stays for audit grep-ability.
+        f.write(f"# shell: {shlex.join(plan.argv)}\n")
         for arg in plan.argv:
             f.write(f"{arg}\n")
         f.write("# end launcher plan\n")
 
     result: RunResult = execute(plan, limits=limits)
+
+    # Classify LEAN's own log.txt — exit_code 0 alone lies (LEAN can
+    # crash ResultsAnalyzer, fail data requests, or raise in
+    # Initialize while still exiting 0). The classifier categorizes
+    # any ERROR:: lines so callers can branch on actual cleanliness.
+    classified = classify_workspace(workspace.lean_log_path)
 
     # Post-run workspace size enforcement. The launcher does not stream
     # mid-run size — wall-clock timeout already caps how much the
@@ -108,12 +120,18 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
     # Phase 1c+ once a separate monitor process exists.
     overran = _workspace_size_bytes(workspace.workspace_dir) > limits.workspace_max_mb * (1 << 20)
 
+    is_clean = result.exit_code == 0 and not result.timed_out and classified.is_clean
+
     with log_path.open("a", encoding="utf-8") as f:
         f.write("\n# launcher result\n")
         f.write(f"exit_code: {result.exit_code}\n")
         f.write(f"duration_ms: {result.duration_ms}\n")
         f.write(f"timed_out: {result.timed_out}\n")
         f.write(f"workspace_overran_cap: {overran}\n")
+        f.write(f"is_clean: {is_clean}\n")
+        f.write(f"lean_error_total: {classified.total}\n")
+        for cat in classified.categories:
+            f.write(f"  lean_errors[{cat}]: {len(classified.by_category[cat])}\n")
         f.write("# container log tail (truncated):\n")
         f.write(result.log_tail)
         if not result.log_tail.endswith("\n"):
@@ -134,6 +152,8 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
         duration_ms=result.duration_ms,
         timed_out=result.timed_out,
         log_tail=result.log_tail,
+        lean_errors=dict(classified.by_category),
+        is_clean=is_clean,
     )
 
 

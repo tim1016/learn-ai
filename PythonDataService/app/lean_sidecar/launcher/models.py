@@ -58,10 +58,34 @@ class LaunchRequest(BaseModel):
 
 
 class LaunchResponse(BaseModel):
-    """Result returned to the data plane after the container exits."""
+    """Result returned to the data plane after the container exits.
+
+    ``exit_code == 0`` alone is not a "clean" signal — LEAN can crash
+    its ResultsAnalyzer, fail data requests, or raise in
+    Algorithm.Initialize while still exiting 0. ``lean_errors``
+    summarizes any ``ERROR::`` lines in ``output/log.txt``, bucketed by
+    category, so callers can decide whether the run is acceptable for
+    compatibility (warnings allowed) or reconciliation-grade (no
+    analysis failures, no failed data requests).
+    """
 
     run_id: str
     exit_code: int
     duration_ms: int
     timed_out: bool
     log_tail: str
+    lean_errors: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Categorized LEAN ERROR:: lines, keyed by category "
+            "(analysis_failed | failed_data_requests | runtime_error | other). "
+            "Empty dict means LEAN's log.txt had no errors."
+        ),
+    )
+    is_clean: bool = Field(
+        ...,
+        description=(
+            "True iff exit_code == 0 AND lean_errors is empty AND not "
+            "timed_out. The single boolean callers should branch on."
+        ),
+    )

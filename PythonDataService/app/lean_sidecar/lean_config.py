@@ -25,6 +25,7 @@ from app.lean_sidecar.runner import CONTAINER_WORKSPACE_MOUNT
 # module and ``runner.py`` move together.
 CONTAINER_DATA_FOLDER = f"{CONTAINER_WORKSPACE_MOUNT}/data"
 CONTAINER_RESULTS_FOLDER = f"{CONTAINER_WORKSPACE_MOUNT}/output"
+CONTAINER_OBJECT_STORE_ROOT = f"{CONTAINER_WORKSPACE_MOUNT}/output/storage"
 CONTAINER_PYTHON_ALGORITHM = f"{CONTAINER_WORKSPACE_MOUNT}/project/main.py"
 CONTAINER_CSHARP_ASSEMBLY = f"{CONTAINER_WORKSPACE_MOUNT}/project/QuantConnect.Algorithm.CSharp.dll"
 
@@ -63,6 +64,12 @@ class LeanConfig:
             "algorithm-location": algorithm_location,
             "data-folder": CONTAINER_DATA_FOLDER,
             "results-destination-folder": CONTAINER_RESULTS_FOLDER,
+            # Override LEAN's default ObjectStore root (image overlay at
+            # /Lean/Launcher/bin/Debug/storage) so per-run audit files
+            # like the trusted sample's observations.csv land in the
+            # workspace where the manifest can hash them and the
+            # operator can inspect them.
+            "object-store-root": CONTAINER_OBJECT_STORE_ROOT,
             "parameters": dict(self.parameters),
             # The defaults below match the pinned LEAN image's documented
             # local-backtest config. Phase 1 spike re-asserts they are
