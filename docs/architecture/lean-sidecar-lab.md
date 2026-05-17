@@ -51,6 +51,9 @@ These are the invariants. Every Phase 1–6 PR re-asserts them in its descriptio
 | 10 | Corporate-action mode is explicit | Runs declare `data_adjustment_policy` in the manifest. Reconciliation-grade runs use raw bars plus LEAN factor/map files; adjusted bars without a matching policy are rejected for reconciliation. |
 | 11 | Reconciliation-grade runs pin brokerage/fill/fee semantics | General LEAN Lab runs may execute the user's algorithm as written. Any run compared against Engine Lab must pin brokerage and fill assumptions in the algorithm/template and manifest. |
 | 12 | LEAN output parsing is a timestamp ingestion boundary | LEAN's naive result timestamps are parsed as exchange-local timestamps with explicit formats, then converted to `int64 ms UTC` before API response or persistence. |
+| 13 | Reconciliation-grade subscriptions disable fill-forward | LEAN's default minute subscription can synthesize forward-filled bars. Engine Lab's rigor rules forbid forward-fill alignment, so reconciled algorithms/templates must request `fillForward=false` and the manifest records it. |
+| 14 | Reconciliation-grade subscriptions pin normalization mode | LEAN's staged data policy and runtime `DataNormalizationMode` are independent. Reconciled algorithms/templates must set the normalization mode to match Engine Lab and the manifest records it. |
+| 15 | Reconciliation fixtures require determinism proof | Phase 1 runs the trusted sample twice with the same image/data/config and asserts equivalent artifacts before any golden fixture or reconciliation claim is accepted. |
 
 ---
 
@@ -77,7 +80,7 @@ Additional flags applied **if compatible** with the chosen LEAN image (validated
 - `--read-only` — root filesystem read-only
 - `--tmpfs /tmp:rw,noexec,nosuid,size=256m`
 - `--user <non-root-uid>` — drop root inside the container
-- `--storage-opt size=<cap>` or an equivalent workspace-size monitor/kill path — disk growth cap
+- `--storage-opt size=<cap>` — defense-in-depth for writes to the container overlay, when supported
 
 Phase 1's runner spike must record which of these flags the LEAN image actually tolerates. If `--read-only`, `--cap-drop=ALL`, or non-root breaks LEAN, the doc gets updated with the smallest accepted relaxation. The workspace-only mount, no-network rule, no-secrets rule, and hard CPU/memory/time/disk ceilings remain mandatory.
 
@@ -88,7 +91,7 @@ The launcher enforces an outer timeout (kill the container) **in addition to** a
 - Per-run timeout: **120s** (configurable in the request, capped at a server-side max).
 - Log capture cap: **8 MB** truncated tail returned in the API; persisted logs count against the per-run disk cap.
 - Per-run source-size cap: **256 KB** for `algorithm_source` (rejects oversized payloads at request validation).
-- Per-run workspace-size cap: Phase 1 chooses the implementation (`podman --storage-opt` when available, otherwise a launcher-side directory monitor that kills the run and marks it `failed_disk_cap`). The cap is recorded in `manifest.json`.
+- Per-run workspace-size cap: enforced by the launcher by monitoring the bind-mounted workspace directory and killing the container when the cap is exceeded. `podman --storage-opt size=...` does **not** cap bind-mounted output and is only defense-in-depth for non-mounted writes. The cap is recorded in `manifest.json`.
 
 ---
 
@@ -108,10 +111,12 @@ PythonDataService/artifacts/lean-sidecar/<run_id>/
       equity/usa/map_files/        # required for reconciliation-grade mapped symbols
       market-hours/market-hours-database.json
       symbol-properties/symbol-properties-database.csv
-    output/                        # LEAN writes here
+    output/                        # LEAN writes here; launcher never overwrites these files
       logs.txt
       <statistics>.json
       <orders>.json
+    launcher/
+      launcher.log                 # container stdout/stderr + launcher diagnostics
   normalized/                      # learn-ai DTOs parsed from output/
     result.json
   manifest.json                    # run_id, image digest, input hashes, limits, timestamps (int64 ms UTC)
@@ -131,9 +136,10 @@ For US equity minute data, the writer must match `PythonDataService/app/engine/d
 - Prices are integer deci-cents: `price * 10000`. Raw dollar prices are forbidden because LEAN will divide them by 10000 and still complete the run with garbage prices.
 - Phase 1 adds a round-trip fixture that writes a tiny deterministic price series, runs a QCAlgorithm that records the prices it receives, and asserts the observed values match the intended dollar prices with the LEAN quantization floor below.
 
-Daily and option/future data layouts are out of scope until a Phase 1+ PR pins
-their exact LEAN layout with the same kind of fixture. A UI request for an
-unsupported resolution/security type must fail fast, not silently stage a
+Daily, quote, option, future, and extended-hours data layouts are out of scope
+until a Phase 1+ PR pins their exact LEAN layout with the same kind of fixture.
+A UI request for an unsupported resolution/security type, quote-dependent
+algorithm, or extended-hours run must fail fast, not silently stage a
 best-effort folder.
 
 ### Corporate actions and metadata policy
@@ -177,7 +183,7 @@ The data-plane container `polygon-data-service` runs inside podman (see `compose
 - Request payload is minimal — `{ run_id, image, limits }`. The launcher resolves `run_id` to a host-absolute workspace path itself using its configured artifacts root; the data plane never sends paths.
 - Validates the resolved path is under the configured root, the workspace directory exists, and the requested image matches an allow-list of pinned digests.
 - Invokes `podman run` with the flags in *Container execution boundary* above.
-- Returns `{ exit_code, duration_ms, log_tail }` and persists full logs to `workspace/output/logs.txt`.
+- Returns `{ exit_code, duration_ms, log_tail }` and persists container stdout/stderr plus launcher diagnostics to `workspace/launcher/launcher.log`. LEAN owns `workspace/output/logs.txt`; the launcher must never overwrite LEAN artifacts.
 
 Phase 1 starts with the simplest launcher placement that can actually invoke Podman in the current dev environment. A future hardening pass can move it into its own minimal container with **only** the Podman socket/API endpoint and the artifacts root mounted.
 
@@ -232,6 +238,9 @@ Python algorithms are the Phase 1 target. C# algorithms remain planned but
 gated: Phase 1 must prove `Main.cs` compilation works under `--network=none`
 without NuGet restore, or the UI keeps C# disabled with a documented reason.
 
+All bundled trusted samples and templates use the `MyAlgorithm` entry class
+until the UI supports an explicit `algorithm_type_name` field.
+
 ### Config the launcher writes
 
 The LEAN runner is driven by a `config.json` the data-plane authors and writes into `workspace/project/config.json`. The minimum fields LEAN needs to backtest from local data:
@@ -269,6 +278,40 @@ There are two run classes:
 No run may be labeled "exact" against Engine Lab unless the brokerage/fill/fee
 policy is explicit.
 
+Reconciliation-grade runs also pin starting capital and account currency. The
+trusted sample template must call `SetCash(<amount>)` (and any required account
+currency setting supported by the pinned LEAN version) to match the Engine Lab
+request. Otherwise `SetHoldings(...)` target sizing can diverge even when the
+signals and fill prices match.
+
+### Fill-forward policy
+
+LEAN subscriptions can forward-fill missing minute bars by default. Engine Lab's
+numerical-rigor rule forbids forward-fill/interpolation alignment, so
+reconciliation-grade algorithms/templates must subscribe with `fillForward=false`
+and the manifest records `fill_forward=false`.
+
+Compatibility runs may use the user's requested/default fill-forward behavior,
+but those outputs are not eligible for exact Engine Lab reconciliation unless
+Engine Lab is explicitly configured to observe the same synthetic bars and the
+exception is documented in the reconciliation report.
+
+### Data normalization mode policy
+
+The bar staging policy and LEAN's runtime normalization mode are separate
+controls. Reconciliation-grade equity algorithms/templates must set
+`DataNormalizationMode.Raw` unless the Engine Lab run being compared explicitly
+uses adjusted prices. The manifest records both:
+
+- `data_adjustment_policy` — how files were staged (`raw_with_factor_map_files`,
+  `pre_adjusted_non_reconciliation`, etc.)
+- `data_normalization_mode` — how LEAN presented prices to the algorithm
+  (`Raw`, `Adjusted`, etc.)
+
+This prevents the silent divergence where raw bars and factor/map files are
+staged correctly, but `AddEquity(...)` defaults to adjusted runtime prices and
+the algorithm sees a different price series than Engine Lab.
+
 ### LEAN quantization floor
 
 LEAN equity data on disk stores prices at 1/10000 dollar precision. That is a
@@ -276,6 +319,16 @@ hard floor on price parity even when every other assumption matches. Phase 5
 must not assert `atol=1e-9` on LEAN-ingested prices or fill prices. The minimum
 documented floor for US equity bar/fill price comparison is `atol=0.0001,
 rtol=0`, with any larger tolerance justified in the reconciliation report.
+
+### Statistics parity scope
+
+Reconciliation-grade Phase 5 targets orders, fills, positions, trade PnL, and
+equity curve first. LEAN's aggregate statistics are version- and definition-
+sensitive (annualization constant, sample vs population standard deviation,
+benchmark selection, risk-free source, and drawdown convention). They are
+reported as LEAN-native diagnostics until a separate statistics-parity fixture
+pins each formula. Do not treat Sharpe/drawdown/beta deltas as engine bugs
+without a statistic-level reference note.
 
 ### Normalized output parser
 
@@ -310,14 +363,19 @@ can affect output:
   hash, market-hours database hash, and symbol-properties database hash
 - request parameters and limits
 - data adjustment policy
+- data normalization mode
 - brokerage/fill/fee policy
+- starting capital and account currency
+- subscription fill-forward policy
 - normalized parser version/hash
 - start/end timestamps as `int64 ms UTC`
 
 Changing the pinned LEAN image digest, staged metadata databases, data
-adjustment policy, or parser version invalidates existing LEAN-vs-Engine
+adjustment policy, data normalization mode, or parser version invalidates existing LEAN-vs-Engine
 reconciliation fixtures. Regeneration follows the golden-fixture lifecycle in
 `.claude/rules/numerical-rigor.md`: deliberate, documented, and never silent.
+The determinism equivalence must hold on the fixture-generating host and in CI
+before a fixture is promoted to a regression gate.
 
 ---
 
@@ -325,7 +383,7 @@ reconciliation fixtures. Regeneration follows the golden-fixture lifecycle in
 
 The original plan's six phases are retained, with these adjustments encoded by Phase 0:
 
-- **Phase 1 (Runner spike)** — now includes (a) authoring the launcher service, (b) resolving the image digest, (c) proving the Windows/Podman topology and workspace path mapping, (d) confirming which of `--cap-drop=ALL` / `--read-only` / `--tmpfs` / non-root user / disk quota the LEAN image tolerates, (e) proving the LEAN data-folder contract with a price/timestamp round-trip fixture, (f) staging and hashing metadata databases, factor files, and map files for the trusted sample, (g) producing one end-to-end run on a hard-coded trusted Python algorithm (no user input yet).
+- **Phase 1 (Runner spike)** — now includes (a) authoring the launcher service, (b) resolving the image digest, (c) proving the Windows/Podman topology and workspace path mapping, (d) confirming which of `--cap-drop=ALL` / `--read-only` / `--tmpfs` / non-root user / disk quota the LEAN image tolerates, (e) proving the LEAN data-folder contract with a price/timestamp round-trip fixture, (f) staging and hashing metadata databases, factor files, and map files for the trusted sample, (g) producing one end-to-end run on a hard-coded trusted Python algorithm (no user input yet), (h) re-running the same sample with the same inputs and asserting deterministic artifacts or documented equivalence within the quantization floor.
 - **Phase 2 (Python API)** — unchanged in shape; the runner.py invocations go through the launcher socket/HTTP rather than spawning podman as a child process of the data-plane container.
 - **Phase 3 — renamed *Container Execution Boundary + Fidelity Boundary*** — is the gating phase before any UI takes arbitrary user input. The UI from Phase 4 may exist earlier only with a hardcoded trusted sample algorithm (no `algorithm_source` field, no textarea). This phase also lands the normalized parser tests, manifest hashing, disk-cap enforcement, and explicit compatibility-vs-reconciliation run classification.
 - **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. From this phase onward, a successful run must be possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
@@ -338,11 +396,12 @@ The original plan's six phases are retained, with these adjustments encoded by P
 1. **Image digest** — pin `quantconnect/lean` to a `sha256:...` and record it here.
 2. **Windows launcher topology** — native Windows, WSL2/podman-machine, or launcher container. Record path mapping, socket access, and UID/GID behavior.
 3. **Security flags viability** — does the LEAN image tolerate `--cap-drop=ALL`, `--read-only`, `--tmpfs`, and `--user <uid>`? If no, document the minimal accepted relaxation.
-4. **Disk cap implementation** — `--storage-opt` vs launcher-side workspace-size monitor/kill path.
+4. **Disk cap implementation** — launcher-side workspace-size monitor/kill path for the bind mount, with optional `--storage-opt` only as overlay defense-in-depth.
 5. **`config.json` template** — capture the exact, working LEAN config keys against the pinned image.
 6. **Data-folder fixture** — pin the exact minute zip/entry format, metadata database paths, factor/map file policy, and quantization tolerance in tests.
 7. **C# viability** — prove `Main.cs` compiles under `--network=none`, or keep C# disabled in the UI.
-8. **Per-run cost** — measure cold-start vs warm-start and decide whether to keep an idle warm runner pool in Phase 2+.
+8. **Determinism gate** — run the trusted sample twice with the same manifest inputs and assert byte-identical normalized output, or document the minimal accepted equivalence class before any fixture is trusted.
+9. **Per-run cost** — measure cold-start vs warm-start and decide whether to keep an idle warm runner pool in Phase 2+.
 
 ---
 
