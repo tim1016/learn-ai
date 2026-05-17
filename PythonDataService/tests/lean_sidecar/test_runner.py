@@ -62,6 +62,9 @@ class TestBuildCommand:
         assert "--network=none" in argv
         assert "--security-opt=no-new-privileges" in argv
         assert "--cap-drop=ALL" in argv
+        # Phase 1c — promoted to mandatory after E2E proved viable.
+        assert "--read-only" in argv
+        assert "--user=10001:10001" in argv
         assert any(a.startswith("--cpus=") for a in argv)
         assert any(a.startswith("--memory=") for a in argv)
         assert any(a.startswith("--pids-limit=") for a in argv)
@@ -156,17 +159,21 @@ class TestBuildCommand:
     ) -> None:
         ws = resolve_workspace("run_x7", tmp_artifacts_root)
         ws.ensure_layout()
-        # All tokens here must be in ALLOWED_HARDENING_TOKENS.
+        # All tokens here must be in ALLOWED_HARDENING_TOKENS. Phase
+        # 1c moved --read-only and --user out of the allow-list and
+        # into the mandatory shape, so the only opt-in surface left
+        # is --tmpfs + spec.
         plan = build_command(
             ws,
             DUMMY_DIGEST,
             hardening_flags=(
-                "--read-only",
                 "--tmpfs",
                 "/tmp:rw,noexec,nosuid,size=256m",
             ),
         )
         argv = plan.argv
+        # --read-only is in the mandatory shape, not the allow-list;
+        # still expect it in the constructed argv.
         assert "--read-only" in argv
         assert "--tmpfs" in argv
         assert "/tmp:rw,noexec,nosuid,size=256m" in argv
@@ -192,13 +199,18 @@ class TestBuildCommand:
         tmp_artifacts_root: Path,
         _allow_dummy_digest: None,
     ) -> None:
+        """``--tmpfs`` must be followed by a value token, not another
+        flag. The other-flag check has to fire AFTER allow-list
+        membership; using a token CodeQL-allow-listed but flag-shaped
+        (``--tmpfs --tmpfs``) exercises the structural validator
+        rather than the allow-list."""
         ws = resolve_workspace("run_x9", tmp_artifacts_root)
         ws.ensure_layout()
         with pytest.raises(RunnerConfigurationError, match="expects a value"):
             build_command(
                 ws,
                 DUMMY_DIGEST,
-                hardening_flags=("--tmpfs", "--read-only"),
+                hardening_flags=("--tmpfs", "--tmpfs"),
             )
 
 

@@ -43,27 +43,24 @@ CONTAINER_WORKSPACE_MOUNT = "/lean-run"
 
 # Token-level allow-list for caller-supplied hardening flags.
 #
-# The launcher boundary forwards a caller's ``hardening_flags`` to
-# ``podman run`` between the mandatory flags and the image reference,
-# so a permissive forward (``--privileged``, ``--cap-add=SYS_ADMIN``,
-# ``--security-opt=seccomp=unconfined``, etc.) would silently widen the
-# sandbox. Every token a caller passes must appear in this set; an
-# unrecognized token aborts the run with ``RunnerConfigurationError``.
+# Phase 1c promoted ``--read-only`` and ``--user=10001:10001`` into the
+# mandatory shape, so the only callers-supply hardening surface left
+# is ``--tmpfs <spec>``. Keeping the allow-list (rather than removing
+# it) means a caller passing ``--privileged``,
+# ``--security-opt=seccomp=unconfined``, etc. still aborts the run
+# with ``RunnerConfigurationError`` rather than silently widening the
+# sandbox.
 #
 # The set lists individual argv tokens, not full flag strings, because
-# multi-token flags (``--tmpfs <spec>``, ``--user <uid:gid>``) split
-# across two argv entries. Adding a new flag is a deliberate change
-# this set documents.
+# ``--tmpfs <spec>`` splits across two argv entries. Adding a new flag
+# is a deliberate change this set documents.
 ALLOWED_HARDENING_TOKENS: frozenset[str] = frozenset(
     {
-        # --read-only is a single token.
-        "--read-only",
-        # --tmpfs takes a second token; allow both the flag and the
+        # --tmpfs takes a second token; allow the flag plus the
         # specific tmpfs specs we've validated.
         "--tmpfs",
         "/tmp:rw,noexec,nosuid,size=256m",
         "/tmp:rw,noexec,nosuid,size=64m",
-        "/Lean/Launcher/bin/Debug/storage:rw,noexec,nosuid,size=256m",
     }
 )
 
@@ -209,12 +206,20 @@ def build_command(
     # Mandatory non-conditional flags. Any change here is a sandbox
     # change and must update the ADR in the same PR.
     #
-    # ``--cap-drop=ALL`` is mandatory as of Phase 1b — proven safe at
-    # both the podman-startup level (security-flag matrix) and the
-    # LEAN-runtime level (E2E ``test_buy_and_hold_runs_with_cap_drop_all``).
-    # ``--read-only`` and ``--user`` remain caller-opt-in until LEAN's
-    # ObjectStore and workspace UID/GID assumptions are pinned in a
-    # fast-follow PR.
+    # ``--cap-drop=ALL`` (Phase 1b), ``--read-only`` (Phase 1c), and
+    # ``--user=10001:10001`` (Phase 1c) are all proven safe at both
+    # the podman-startup level (security-flag matrix) and the LEAN-
+    # runtime level (E2E ``test_buy_and_hold_runs_with_*``). They
+    # gate the Phase 4c arbitrary-user-source unlock — without them
+    # the sandbox is weaker than the ADR's non-negotiables require.
+    #
+    # ``--read-only`` is viable because Phase 1c moved LEAN's
+    # ObjectStore root from the image overlay
+    # (``/Lean/Launcher/bin/Debug/storage``) to the workspace via
+    # the ``object-store-root`` config key (see lean_config.py).
+    # ``--user`` works on Windows + WSL2 podman because the WSL2
+    # mount layer doesn't enforce host-side UID ownership inside
+    # the container.
     argv: list[str] = [
         podman,
         "run",
@@ -222,6 +227,8 @@ def build_command(
         "--network=none",
         "--security-opt=no-new-privileges",
         "--cap-drop=ALL",
+        "--read-only",
+        "--user=10001:10001",
         f"--cpus={limits.cpus}",
         f"--memory={limits.memory_mb}m",
         f"--pids-limit={limits.pids_limit}",
