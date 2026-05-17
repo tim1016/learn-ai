@@ -98,12 +98,19 @@ async def client() -> AsyncClient:
         yield c
 
 
+# 2025-01-06 00:00 UTC = 1_736_121_600_000 ms; 2025-01-10 00:00 UTC =
+# 1_736_467_200_000 ms. The trusted-sample window is [Mon, Fri] = 5
+# trading days; under the 30-day cap.
+_GOOD_START_MS = 1_736_121_600_000
+_GOOD_END_MS = 1_736_467_200_000
+
+
 def _good_payload(run_id: str = "router_unit") -> dict:
     return {
         "run_id": run_id,
         "symbol": "SPY",
-        "start_date": "2025-01-06",
-        "end_date": "2025-01-10",
+        "start_ms_utc": _GOOD_START_MS,
+        "end_ms_utc": _GOOD_END_MS,
         "starting_cash": 100000.0,
     }
 
@@ -138,25 +145,41 @@ class TestPostTrustedRunValidation:
         payload = _good_payload()
         payload[bad_field] = bad_value
         r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        # Either 422 (Pydantic) or 400 (model_validator after) is OK;
-        # both signal "request did not validate" before any container
-        # work happens.
-        assert r.status_code in (400, 422)
+        # 422 specifically: every rejection in this parametrize is a
+        # Pydantic field/model_validator violation, not a downstream
+        # service error. Locking to 422 catches regressions where a
+        # request-shape error accidentally becomes a 400.
+        assert r.status_code == 422
 
     async def test_reversed_window_rejected(self, client: AsyncClient) -> None:
         payload = _good_payload()
-        payload["end_date"] = "2024-12-30"
+        payload["end_ms_utc"] = _GOOD_START_MS - 86_400_000  # 1 day before start
         r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
         assert r.status_code == 422
-        assert "end_date" in r.text
+        assert "end_ms_utc" in r.text or "strictly greater" in r.text
 
     async def test_oversized_window_rejected(self, client: AsyncClient) -> None:
         payload = _good_payload()
-        payload["start_date"] = "2025-01-01"
-        payload["end_date"] = "2025-03-01"
+        # 60 calendar days = ~42 weekdays, over the 30-trading-day cap.
+        payload["start_ms_utc"] = _GOOD_START_MS
+        payload["end_ms_utc"] = _GOOD_START_MS + 60 * 86_400_000
         r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
         assert r.status_code == 422
-        assert "max" in r.text.lower() or "30" in r.text
+        assert "trading days" in r.text or "30" in r.text
+
+    async def test_weekends_only_window_rejected(self, client: AsyncClient) -> None:
+        """A window covering only weekends must be rejected — zero
+        weekdays means staging would produce zero bars, which is the
+        kind of silent-empty failure the router has to catch up
+        front."""
+        # 2025-01-04 (Sat) 00:00 UTC = 1_735_948_800_000
+        # 2025-01-05 (Sun) 23:59 UTC = 1_736_121_540_000
+        payload = _good_payload()
+        payload["start_ms_utc"] = 1_735_948_800_000
+        payload["end_ms_utc"] = 1_736_121_540_000
+        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
+        assert r.status_code == 422
+        assert "weekday" in r.text.lower() or "trading day" in r.text.lower()
 
     async def test_forbids_algorithm_source_field(self, client: AsyncClient) -> None:
         """Phase 2a refuses any algorithm_source field; that gate

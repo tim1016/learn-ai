@@ -140,8 +140,15 @@ class Workspace:
             d.mkdir(parents=True, exist_ok=True)
 
 
-def validate_run_id(run_id: str) -> None:
-    """Reject any run_id that is not a strict slug.
+def validate_run_id(run_id: str) -> str:
+    """Return the validated slug or raise.
+
+    Returns the validated string (not ``None``) so callers can bind
+    ``safe_run_id = validate_run_id(user_input)`` and have CodeQL's
+    taint analysis see the regex as the sanitizer between user input
+    and any path operation. The previous signature returned ``None``
+    and relied on the side-effect of raising, which is correct at
+    runtime but invisible to dataflow analysis.
 
     Path separators, "." components, leading hyphens, uppercase, or
     runs over 64 chars are all rejected — anything that could be used
@@ -151,6 +158,7 @@ def validate_run_id(run_id: str) -> None:
         raise WorkspaceError(f"run_id must be str, got {type(run_id).__name__}")
     if not RUN_ID_PATTERN.fullmatch(run_id):
         raise WorkspaceError(f"run_id must match ^[a-z0-9][a-z0-9_-]{{2,63}}$ (got {run_id!r})")
+    return run_id
 
 
 def resolve_workspace(run_id: str, artifacts_root: Path) -> Workspace:
@@ -160,28 +168,38 @@ def resolve_workspace(run_id: str, artifacts_root: Path) -> Workspace:
 
     1. :func:`validate_run_id` rejects any slug that contains a path
        separator, ``.`` component, or whitespace — i.e. anything that
-       could change the meaning of the join below.
-    2. After the join, the candidate is resolved and re-checked against
-       ``artifacts_root.resolve()`` with :meth:`pathlib.Path.is_relative_to`.
-       This catches symlink escapes the validator cannot see (a symlink
+       could change the meaning of the join below. The validated value
+       is bound to a fresh local (``safe_run_id``) so static-analysis
+       dataflow can see the sanitizer.
+    2. After the join, the candidate is resolved and verified to live
+       under ``artifacts_root.resolve()`` via :func:`os.path.commonpath`.
+       This catches symlink escapes the regex cannot see (a symlink
        under ``artifacts_root`` pointing outside it).
 
     The two checks together close the path-traversal class even though
     each alone would be insufficient: the regex blocks textual escapes,
-    the resolve+is_relative_to blocks filesystem-level escapes.
+    the commonpath check blocks filesystem-level escapes.
     """
-    validate_run_id(run_id)
+    import os
+
+    safe_run_id = validate_run_id(run_id)
     root_resolved = artifacts_root.resolve()
     # ``resolve(strict=False)`` returns the canonical path even when
     # the target does not yet exist — that's the Phase 1 case where
-    # the workspace dir is materialized after this call. A
-    # single-expression path build + check (no branch) is what
-    # CodeQL's path-traversal heuristic looks for.
-    candidate = (root_resolved / run_id).resolve(strict=False)
-    if not candidate.is_relative_to(root_resolved):
+    # the workspace dir is materialized after this call.
+    candidate = (root_resolved / safe_run_id).resolve(strict=False)
+    # ``commonpath`` is the documented CodeQL sanitizer for path
+    # traversal: if the common prefix is not the root, the candidate
+    # escapes via symlinks or normalization.
+    try:
+        common = os.path.commonpath([str(candidate), str(root_resolved)])
+    except ValueError as e:
+        # commonpath raises on drive-letter mismatches on Windows.
+        raise WorkspaceError(f"workspace path {candidate} cannot share a root with {root_resolved}") from e
+    if common != str(root_resolved):
         raise WorkspaceError(f"workspace path {candidate} escapes artifacts root {root_resolved}")
     return Workspace(
-        run_id=run_id,
+        run_id=safe_run_id,
         artifacts_root=root_resolved,
         root=candidate,
     )

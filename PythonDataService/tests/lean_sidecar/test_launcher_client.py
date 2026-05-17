@@ -95,13 +95,15 @@ class TestPostLaunch:
     async def test_bad_envelope_falls_back_to_unknown(self) -> None:
         """A misbehaving launcher returning a non-{reason,message} 400
         body must still surface as LauncherRejected — not a crash —
-        with ``reason="unknown"`` so the operator sees the literal body.
+        with ``reason="unknown"`` AND the raw body in ``message`` so
+        the operator sees the literal text in their logs.
         """
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
             mock.post("/launch").mock(return_value=httpx.Response(400, text="raw error"))
             with pytest.raises(LauncherRejected) as ei:
                 await post_launch(_request())
         assert ei.value.reason == "unknown"
+        assert "raw error" in ei.value.message
 
     async def test_token_attached_when_env_var_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LEAN_LAUNCHER_TOKEN", "shared-secret-abc")

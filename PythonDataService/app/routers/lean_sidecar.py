@@ -14,7 +14,7 @@ and refused here with a clear note in the OpenAPI schema.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import PlainTextResponse
@@ -51,6 +51,36 @@ _MAX_TRADING_DAYS = 30
 _MAX_STARTING_CASH = 10_000_000.0
 _MIN_STARTING_CASH = 1_000.0
 
+# Window inputs are int64 ms UTC per ``.claude/rules/numerical-rigor.md``
+# §"Timestamp rigor". Trading-day semantics live below this boundary
+# (the orchestrator resolves the ms range into trading dates after
+# converting to ET).
+_MIN_EPOCH_MS = 1_000_000_000_000  # 2001-09-09 — well before any LEAN data we'd run
+_MAX_EPOCH_MS = 4_102_444_800_000  # 2100-01-01 — far future sanity bound
+
+
+def _count_weekdays_between(start_ms: int, end_ms: int) -> int:
+    """Return the number of Mon-Fri days in [start_ms, end_ms].
+
+    Trading-day approximation. The orchestrator uses the same
+    weekday-only iteration when staging data, so the count agreed at
+    the API boundary matches the work the staging step does.
+    Holidays still count as "trading days" here — LEAN simply emits
+    no bars for them, which the response surfaces via
+    ``bars_consumed_by_symbol``.
+    """
+    if end_ms < start_ms:
+        return 0
+    start = datetime.fromtimestamp(start_ms / 1000, tz=UTC).date()
+    end = datetime.fromtimestamp(end_ms / 1000, tz=UTC).date()
+    days = (end - start).days + 1
+    count = 0
+    for i in range(days):
+        d = start + timedelta(days=i)
+        if d.weekday() < 5:
+            count += 1
+    return count
+
 
 class TrustedRunRequestModel(BaseModel):
     """Pydantic shape for POST /api/lean-sidecar/trusted-runs.
@@ -77,8 +107,25 @@ class TrustedRunRequestModel(BaseModel):
             "service layer re-validates as defense-in-depth."
         ),
     )
-    start_date: date = Field(..., description="Inclusive ISO date (YYYY-MM-DD).")
-    end_date: date = Field(..., description="Inclusive ISO date (YYYY-MM-DD).")
+    start_ms_utc: int = Field(
+        ...,
+        ge=_MIN_EPOCH_MS,
+        le=_MAX_EPOCH_MS,
+        description=(
+            "Inclusive window start as int64 ms since Unix epoch UTC. "
+            "Per .claude/rules/numerical-rigor.md, every wire timestamp "
+            "is int64 ms UTC; ISO strings are not accepted."
+        ),
+    )
+    end_ms_utc: int = Field(
+        ...,
+        ge=_MIN_EPOCH_MS,
+        le=_MAX_EPOCH_MS,
+        description=(
+            "Inclusive window end as int64 ms since Unix epoch UTC. "
+            "The orchestrator picks weekdays in [start, end] when staging."
+        ),
+    )
     starting_cash: float = Field(
         default=100_000.0,
         ge=_MIN_STARTING_CASH,
@@ -87,15 +134,18 @@ class TrustedRunRequestModel(BaseModel):
 
     @model_validator(mode="after")
     def _validate_window(self) -> TrustedRunRequestModel:
-        if self.end_date < self.start_date:
-            raise ValueError("end_date must be on or after start_date")
+        if self.end_ms_utc <= self.start_ms_utc:
+            raise ValueError("end_ms_utc must be strictly greater than start_ms_utc")
         # Pre-launcher cap on date range — the Phase 2a synthetic-bar
         # generator and the launcher's wall-clock timeout both scale
-        # with the window; refusing oversized windows here keeps the
-        # 422 message specific.
-        span_days = (self.end_date - self.start_date).days + 1
-        if span_days > _MAX_TRADING_DAYS:
-            raise ValueError(f"window spans {span_days} days; max is {_MAX_TRADING_DAYS}")
+        # with the window. Count *trading days* (weekdays), not
+        # calendar days: a window with 30 weekdays plus surrounding
+        # weekends should pass even if it's 40 calendar days wide.
+        trading_days = _count_weekdays_between(self.start_ms_utc, self.end_ms_utc)
+        if trading_days > _MAX_TRADING_DAYS:
+            raise ValueError(f"window spans {trading_days} trading days; max is {_MAX_TRADING_DAYS}")
+        if trading_days == 0:
+            raise ValueError("window contains no weekdays — staging would produce zero bars")
         # Symbol must pass the full validator — the field-level
         # regex catches ``/``, ``\``, length, and the alphabet, but
         # not the dot-only case (``"."``, ``".."``). validate_symbol
@@ -154,8 +204,8 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
     request = TrustedRunRequest(
         run_id=payload.run_id,
         symbol=payload.symbol.upper(),
-        start_date=payload.start_date,
-        end_date=payload.end_date,
+        start_ms_utc=payload.start_ms_utc,
+        end_ms_utc=payload.end_ms_utc,
         starting_cash=payload.starting_cash,
     )
     try:

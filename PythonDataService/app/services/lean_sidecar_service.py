@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import (
@@ -78,18 +80,28 @@ class LeanSidecarServiceError(RuntimeError):
 class TrustedRunRequest:
     """Phase 2a input — bounded set of caller-tunable knobs.
 
-    ``start_date`` / ``end_date`` are ISO ``YYYY-MM-DD`` strings; they
-    are converted to ``date`` here and re-serialized into the LEAN
-    config's parameters dict, so the algorithm reads them via
-    ``GetParameter`` (the same path the algorithm would for any
-    future user-tuned run).
+    ``start_ms_utc`` and ``end_ms_utc`` are int64 ms UTC per the repo's
+    timestamp rigor rule. They are converted to ``date`` *inside this
+    module* (under the boundary) so the LEAN config's ISO-string
+    parameter values stay consistent with what the trusted-sample
+    algorithm reads via ``GetParameter``.
     """
 
     run_id: str
     symbol: str
-    start_date: date
-    end_date: date
+    start_ms_utc: int
+    end_ms_utc: int
     starting_cash: float
+
+    @property
+    def start_date(self) -> date:
+        """Trading date corresponding to ``start_ms_utc`` (UTC calendar day)."""
+        return datetime.fromtimestamp(self.start_ms_utc / 1000, tz=UTC).date()
+
+    @property
+    def end_date(self) -> date:
+        """Trading date corresponding to ``end_ms_utc`` (UTC calendar day)."""
+        return datetime.fromtimestamp(self.end_ms_utc / 1000, tz=UTC).date()
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +121,9 @@ class TrustedRunResult:
     lean_log_path: Path
 
 
+_ET = ZoneInfo("America/New_York")
+
+
 def _date_to_ms_utc(d: date) -> int:
     """Convert an ET-resolved trading date's midnight UTC to int64 ms.
 
@@ -118,7 +133,7 @@ def _date_to_ms_utc(d: date) -> int:
     exchange-aligned millisecond boundaries from the LEAN result
     artifacts (Phase 5 work).
     """
-    return int(datetime(d.year, d.month, d.day, tzinfo=__import__("datetime").timezone.utc).timestamp() * 1000)
+    return int(datetime(d.year, d.month, d.day, tzinfo=UTC).timestamp() * 1000)
 
 
 def _generate_synthetic_bars(
@@ -136,14 +151,7 @@ def _generate_synthetic_bars(
     so the data-folder fidelity claim is intentional, not coincidental.
     Phase 5 reconciliation will swap this for Polygon-sourced bars.
     """
-    # Local import to keep top-of-file imports lean; this helper is
-    # the only place the time-zone gymnastics happen.
-    from datetime import timedelta
-    from decimal import Decimal
-    from zoneinfo import ZoneInfo
-
-    et = ZoneInfo("America/New_York")
-    market_open = datetime(trading_date.year, trading_date.month, trading_date.day, 9, 30, tzinfo=et)
+    market_open = datetime(trading_date.year, trading_date.month, trading_date.day, 9, 30, tzinfo=_ET)
     bars: list[TradeBar] = []
     for i in range(count):
         start = market_open + timedelta(minutes=i)
@@ -163,6 +171,38 @@ def _generate_synthetic_bars(
     return bars
 
 
+def _aggregate_daily_bar(symbol: str, minute_bars: list[TradeBar]) -> TradeBar:
+    """Collapse a day's minute bars into a single OHLCV daily bar.
+
+    Real LEAN-format daily bars are open-of-first / high-max /
+    low-min / close-of-last / sum-of-volume across the trading day —
+    not "the last minute's OHLCV". A copied minute bar would mislead
+    LEAN's daily-resolution paths (warmup, benchmark) into seeing a
+    1-minute price range as the day's high/low. The benchmark equity
+    curve is what consumes this in Phase 2a; reconciliation-grade
+    runs in Phase 5 stage real daily data and skip this aggregator.
+    """
+    if not minute_bars:
+        raise LeanSidecarServiceError(f"no minute bars to aggregate for {symbol}")
+    first = minute_bars[0]
+    last = minute_bars[-1]
+    # ``time`` for the daily bar is session midnight in ET so the
+    # writer (lean_format.write_lean_daily_zip) stamps the right
+    # ``YYYYMMDD 00:00`` timestamp.
+    session_date = first.time.astimezone(_ET).date()
+    session_midnight = datetime(session_date.year, session_date.month, session_date.day, tzinfo=_ET)
+    return TradeBar(
+        symbol=symbol,
+        time=session_midnight,
+        end_time=session_midnight + timedelta(days=1),
+        open=first.open,
+        high=max(b.high for b in minute_bars),
+        low=min(b.low for b in minute_bars),
+        close=last.close,
+        volume=sum(b.volume for b in minute_bars),
+    )
+
+
 def _iter_trading_dates(start: date, end: date) -> list[date]:
     """Inclusive trading-date sequence, weekends-only filtered.
 
@@ -172,8 +212,6 @@ def _iter_trading_dates(start: date, end: date) -> list[date]:
     completes (LEAN ignores days without staged data) but the
     bar-consumption count drops, which the response surfaces.
     """
-    from datetime import timedelta
-
     out: list[date] = []
     current = start
     one = timedelta(days=1)
@@ -220,7 +258,9 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     trading_dates = _iter_trading_dates(request.start_date, request.end_date)
     bars_by_date = [(d, _generate_synthetic_bars(request.symbol, d)) for d in trading_dates]
     bar_zip_paths = list(stage_minute_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
-    daily_bars = [day[-1] for (_, day) in bars_by_date]
+    # Real OHLCV daily bars (open-of-first, high-max, low-min,
+    # close-of-last, sum-of-volume), not the last minute bar copied.
+    daily_bars = [_aggregate_daily_bar(request.symbol, day) for (_, day) in bars_by_date]
     daily_path = stage_daily_bars(workspace, symbol=request.symbol, bars=daily_bars)
     stage_lean_metadata_from_image(workspace, PINNED_LEAN_IMAGE_DIGEST)
     stage_empty_corporate_action_dirs(workspace)
@@ -335,9 +375,13 @@ def _build_manifest(
             "starting_cash": request.starting_cash,
             "symbol": request.symbol,
         },
+        # API boundary timestamps are already int64 ms UTC; pass them
+        # through unchanged so the manifest's recorded window matches
+        # the request exactly. The router enforces start < end strictly,
+        # so WindowMs's invariant always holds.
         requested_window_ms=WindowMs(
-            start_ms=_date_to_ms_utc(request.start_date),
-            end_ms=_date_to_ms_utc(request.end_date) + 86_400_000,
+            start_ms=request.start_ms_utc,
+            end_ms=request.end_ms_utc,
         ),
         # ``staged_data_window_ms`` and ``effective_algorithm_window_ms``
         # require the Phase 2 normalized parser (deferred to a fast-

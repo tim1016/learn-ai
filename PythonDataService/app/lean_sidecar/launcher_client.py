@@ -99,7 +99,11 @@ async def post_launch(request: LaunchRequest) -> LaunchResponse:
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, json=payload, headers=_auth_headers())
-    except (httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout, httpx.NetworkError) as e:
+    # ``httpx.TimeoutException`` covers Connect/Read/Write/Pool timeouts;
+    # ``httpx.NetworkError`` covers ConnectError + general transport errors.
+    # Listing only the leaves (ConnectError, ReadTimeout, ...) misses
+    # WriteTimeout and ConnectTimeout — bubble those as unreachable too.
+    except (httpx.TimeoutException, httpx.NetworkError) as e:
         raise LauncherUnreachable(f"launcher at {url} unreachable: {e}") from e
 
     if response.status_code == 400:
@@ -109,7 +113,11 @@ async def post_launch(request: LaunchRequest) -> LaunchResponse:
         raise LauncherProtocolError(f"launcher returned HTTP {response.status_code}: {response.text[:500]}")
     try:
         return LaunchResponse.model_validate(response.json())
-    except Exception as e:
+    except (ValueError, TypeError) as e:
+        # ValueError covers json-decode + Pydantic validation; TypeError
+        # covers ``Response.model_validate`` receiving a non-mapping.
+        # Anything else (httpx internals, MemoryError, etc.) is a real
+        # bug and should propagate.
         raise LauncherProtocolError(f"launcher body did not parse as LaunchResponse: {e}") from e
 
 
@@ -128,8 +136,12 @@ def _parse_error_envelope(response: httpx.Response) -> dict[str, str]:
                 "reason": detail.get("reason", "unknown"),
                 "message": detail.get("message", str(detail)),
             }
-    except Exception:
-        pass
+    except (ValueError, TypeError, AttributeError) as e:
+        # JSON decode errors / non-dict bodies / .get on a non-mapping
+        # are all expected misbehaviour. Log instead of silently
+        # swallowing per the repo's "no silent exception handlers"
+        # rule.
+        logger.warning("launcher returned malformed 400 envelope: %s", e)
     return {"reason": "unknown", "message": response.text[:500]}
 
 
@@ -141,8 +153,11 @@ async def get_healthz() -> dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(url, headers=_auth_headers())
-    except (httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout, httpx.NetworkError) as e:
+    except (httpx.TimeoutException, httpx.NetworkError) as e:
         raise LauncherUnreachable(f"launcher at {url} unreachable: {e}") from e
     if response.status_code != 200:
         raise LauncherProtocolError(f"launcher /healthz returned HTTP {response.status_code}")
-    return response.json()
+    try:
+        return response.json()
+    except ValueError as e:
+        raise LauncherProtocolError("launcher /healthz returned a non-JSON body") from e

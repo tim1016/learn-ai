@@ -122,8 +122,9 @@ class TestRouterToLauncherToLeanEndToEnd:
                     json={
                         "run_id": "e2e_router_real",
                         "symbol": "SPY",
-                        "start_date": "2025-01-06",
-                        "end_date": "2025-01-10",
+                        # 2025-01-06 00:00 UTC .. 2025-01-10 00:00 UTC
+                        "start_ms_utc": 1_736_121_600_000,
+                        "end_ms_utc": 1_736_467_200_000,
                         "starting_cash": 100000.0,
                     },
                     timeout=httpx.Timeout(300.0),
@@ -138,7 +139,10 @@ class TestRouterToLauncherToLeanEndToEnd:
         # known-noise (quote.zip) — see the lean_sidecar test module.
         # What MUST hold is that the only error category is
         # ``failed_data_requests`` and every entry is a quote.zip line.
-        for cat, lines in body["lean_errors"].items():
+        # A genuinely clean run omits ``lean_errors`` or returns {};
+        # ``.get`` handles either shape so this assertion can't false-
+        # fail when ``is_clean is True``.
+        for cat, lines in body.get("lean_errors", {}).items():
             for line in lines:
                 if cat == "failed_data_requests" and "_quote.zip" in line:
                     continue
