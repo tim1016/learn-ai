@@ -49,7 +49,7 @@
   font-size: 0.8rem;
   font-weight: 600;
   border-radius: 4px;
-  border: 1px solid currentColor;
+  border: 1px solid currentcolor;
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -59,7 +59,7 @@
   }
 
   &:focus-visible {
-    outline: 2px solid currentColor;
+    outline: 2px solid currentcolor;
     outline-offset: 2px;
   }
 

@@ -16,6 +16,7 @@ import { BrokerHealthService } from '../services/broker-health.service';
   styleUrl: './broker-banner.component.scss',
   template: `
     @let state = banner();
+    @let action = lifecycleAction();
     @if (state) {
       <div
         class="broker-banner"
@@ -33,10 +34,21 @@ import { BrokerHealthService } from '../services/broker-health.service';
             type="button"
             class="broker-banner-cta"
             (click)="connect()"
-            [disabled]="connecting()"
+            [disabled]="action !== null"
             aria-label="Connect to IB Gateway"
           >
-            {{ connecting() ? 'Connecting…' : 'Connect' }}
+            {{ action === 'connect' ? 'Connecting…' : 'Connect' }}
+          </button>
+        }
+        @if (state.kind === 'paper' || state.kind === 'live') {
+          <button
+            type="button"
+            class="broker-banner-cta"
+            (click)="disconnect()"
+            [disabled]="action !== null"
+            aria-label="Disconnect from IB Gateway"
+          >
+            {{ action === 'disconnect' ? 'Disconnecting…' : 'Disconnect' }}
           </button>
         }
       </div>
@@ -45,10 +57,14 @@ import { BrokerHealthService } from '../services/broker-health.service';
 })
 export class BrokerBannerComponent {
   private readonly healthService = inject(BrokerHealthService);
-  readonly connecting = this.healthService.connecting;
+  readonly lifecycleAction = this.healthService.lifecycleAction;
 
   connect(): Promise<void> {
     return this.healthService.connect();
+  }
+
+  disconnect(): Promise<void> {
+    return this.healthService.disconnect();
   }
 
   readonly banner = computed(() => {

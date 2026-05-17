@@ -62,17 +62,19 @@ export class BrokerStatusComponent {
   readonly diagnostics = signal<AsyncCard<DiagnosticReport>>({ ...EMPTY_CARD });
 
   /**
-   * Which lifecycle action (connect/disconnect/reconnect) is in flight.
-   * Disables all three buttons simultaneously so a frustrated operator
-   * cannot stack actions on top of an outstanding connect.
+   * The lifecycle action signals live on ``BrokerHealthService`` so the
+   * global banner and this page share one in-flight lock — clicking
+   * Connect in the banner disables Connect here too, matching the
+   * server-side asyncio lock on /api/broker/{connect,disconnect,reconnect}.
    */
-  readonly lifecycleAction = signal<'connect' | 'disconnect' | 'reconnect' | null>(null);
-  readonly lifecycleError = signal<unknown | null>(null);
+  readonly lifecycleAction = this.healthService.lifecycleAction;
+  readonly lifecycleError = this.healthService.lifecycleError;
   /**
    * The most recent lifecycle attempt. ``retryLastAction()`` replays
    * exactly this — retrying a failed Disconnect with Reconnect (the
    * naive bind) would flip the session state instead of finishing the
-   * disconnect.
+   * disconnect. Page-local because retry intent doesn't belong in the
+   * shared service.
    */
   private readonly lastLifecycleAction = signal<'connect' | 'disconnect' | 'reconnect' | null>(null);
 
@@ -153,36 +155,22 @@ export class BrokerStatusComponent {
     }
   }
 
-  connect(): Promise<void> {
-    return this.runLifecycleAction('connect', () => this.broker.connect());
+  async connect(): Promise<void> {
+    this.lastLifecycleAction.set('connect');
+    await this.healthService.connect();
+    await this.refreshDependentCards();
   }
 
-  disconnect(): Promise<void> {
-    return this.runLifecycleAction('disconnect', () => this.broker.disconnect());
+  async disconnect(): Promise<void> {
+    this.lastLifecycleAction.set('disconnect');
+    await this.healthService.disconnect();
+    await this.refreshDependentCards();
   }
 
-  reconnect(): Promise<void> {
-    return this.runLifecycleAction('reconnect', () => this.broker.reconnect());
-  }
-
-  private async runLifecycleAction(
-    action: 'connect' | 'disconnect' | 'reconnect',
-    call: () => Promise<unknown>,
-  ): Promise<void> {
-    if (this.lifecycleAction() !== null) return;
-    this.lifecycleAction.set(action);
-    this.lastLifecycleAction.set(action);
-    this.lifecycleError.set(null);
-    try {
-      await call();
-    } catch (err) {
-      this.lifecycleError.set(err);
-    } finally {
-      this.lifecycleAction.set(null);
-      // Refresh health + dependent cards so the banner and Status page
-      // reflect the post-action state immediately, not five seconds later.
-      await this.refresh();
-    }
+  async reconnect(): Promise<void> {
+    this.lastLifecycleAction.set('reconnect');
+    await this.healthService.reconnect();
+    await this.refreshDependentCards();
   }
 
   /**
@@ -199,6 +187,20 @@ export class BrokerStatusComponent {
       default:
         return this.reconnect();
     }
+  }
+
+  /**
+   * Refresh the account + positions cards after a lifecycle action.
+   * Health itself is refreshed inside ``BrokerHealthService.runLifecycleAction``;
+   * here we only need the cards that depend on the post-action state.
+   */
+  private async refreshDependentCards(): Promise<void> {
+    if (!this.showAccountAndPositions()) {
+      this.account.set({ ...EMPTY_CARD });
+      this.positions.set({ ...EMPTY_CARD });
+      return;
+    }
+    await Promise.all([this.loadAccount(), this.loadPositions()]);
   }
 
   trackPosition = (_: number, p: IbkrPosition): string =>
