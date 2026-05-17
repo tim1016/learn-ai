@@ -1,13 +1,23 @@
 # LEAN Sidecar Lab
 
-**Status:** Phase 0 — architecture decision record
+**Status:** Phase 1 — runner spike shipped (Phase 1a + 1b)
 **Last reviewed:** 2026-05-17
 **Pairs with:** `docs/architecture/engine-authority-map.md`, `docs/references/lean-engine.md`, `.claude/rules/numerical-rigor.md`
 
 This document is the authority for the **LEAN Lab** feature — a UI surface in learn-ai where the user pastes or edits a real `QCAlgorithm` and runs it through an isolated official LEAN runner sidecar. It exists because the alternative ("just shell out to LEAN from FastAPI") quietly violates several invariants this repo depends on.
 
-Phase 0 lands this decision record plus the matching row in
-`docs/architecture/engine-authority-map.md`. Code starts in Phase 1.
+Phase 0 landed this decision record plus the matching row in
+`docs/architecture/engine-authority-map.md`. Phase 1 (this PR) lands
+the runnable surface: launcher service, podman-shape runner with the
+proven hardening flags, manifest writer, workspace contract, LEAN
+data-folder staging, image-bundled metadata extraction, trusted
+`MyAlgorithm` Python sample, the data-folder round-trip fidelity
+fixture, the security-flag viability matrix, and three end-to-end
+sidecar runs (baseline, with `--cap-drop=ALL`, and the xfailed
+`--read-only` documented in the security section).
+
+**Pinned LEAN image digest (Phase 1b):**
+`sha256:97884667be20077925996ac22b5e3e16e3a47e7363e01795151459d16786247c`
 
 ---
 
@@ -419,6 +429,95 @@ The original plan's six phases are retained, with these adjustments encoded by P
 - **Phase 3 — renamed *Container Execution Boundary + Fidelity Boundary*** — is the gating phase before any UI takes arbitrary user input. The UI from Phase 4 may exist earlier only with a hardcoded trusted sample algorithm (no `algorithm_source` field, no textarea). This phase also lands the normalized parser tests, manifest hashing, disk-cap enforcement, and explicit compatibility-vs-reconciliation run classification.
 - **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. From this phase onward, a successful run must be possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
 - **Phases 5-6** - unchanged in scope.
+
+### Phase 1a progress (2026-05-17)
+
+Shipped in PR following Phase 0:
+
+- (a) **Launcher service authored** — `PythonDataService/app/lean_sidecar/launcher/`. Pydantic request model enforces digest pin + run-id slug + limit positivity. The service writes the planned `podman run` argv to `workspace/launcher/launcher.log` *before* spawning so an audit trail survives a launcher crash. `LaunchRejectedError.reason` is a stable label (`"workspace_not_staged"`, `"runner_configuration_error"`, `"invalid_run_id_or_path"`) for caller-side routing without parsing free text.
+- (a, cont.) **Workspace path-under-root contract** — `app/lean_sidecar/workspace.py`. `run_id` is a strict slug (`^[a-z0-9][a-z0-9_-]{2,63}$`); resolution rejects symlink escapes; layout creation is idempotent.
+- (e) **LEAN data-folder fidelity proof** — `tests/lean_sidecar/test_data_folder_fidelity.py` (7 cases). Asserts deci-cent round-trip (the integer disk encoding is exactly `price * 10000`), ET timestamp normalization (UTC inputs serialize to the equivalent ET ms-since-midnight), canonical zip layout (`equity/usa/minute/<sym>/<YYYYMMDD>_trade.zip`), and the LEAN quantization floor at `0.0001` for the smallest representable price.
+- **Manifest contract** — `app/lean_sidecar/manifest.py`. All `int64 ms UTC`; the serializer refuses `datetime` objects at the boundary; atomic temp+rename write; sorted-pretty JSON so the file hash is stable across Python dict-iteration changes.
+- **Trusted Python sample** — `app/lean_sidecar/trusted_samples/buy_and_hold.py`. Class is `MyAlgorithm` (matches the ADR's documented default). `SetCash` is explicit, `fillForward=False`, `DataNormalizationMode.Raw` — the reconciliation-grade defaults from §"Fill-forward policy" and §"Data normalization mode policy" are wired in from the start so the sample is reconciliation-eligible without a future rewrite.
+- **`config.json` authoring** — `app/lean_sidecar/lean_config.py`. Container-side paths hard-coded against the `/lean-run` mount; sorted-pretty JSON for stable hashing. Phase 1 confirms the exact key names against the pinned image (see Open Questions §5).
+- **Test surface** — 59 unit tests passing; security-flag matrix + E2E sidecar test gated on the locally-pulled LEAN image (skip-with-clear-reason on hosts that have not pulled it).
+
+### Phase 1b progress (2026-05-17, same PR)
+
+After Phase 1a landed, the LEAN image pull completed; Phase 1b added:
+
+- (b) **Image digest pinned.** `sha256:97884667be20077925996ac22b5e3e16e3a47e7363e01795151459d16786247c` (see top of doc). `PINNED_LEAN_IMAGE_DIGEST` in `app/lean_sidecar/config.py` is the source of truth; `scripts/lean_sidecar_pin_image.py` writes it from `podman image inspect`.
+- (c) **Windows topology — provisional.** Launcher is a host Python process invoking podman over the WSL2/podman-machine VM. Workspace bind-mounted via the standard WSL2 path translation. UID/GID matching for `--user` is a Phase 1c fast-follow (see security matrix below). The "launcher in its own container with only the Podman socket mounted" hardening pass remains deferred.
+- (d) **Security-flag viability matrix (Phase 1b run on the pinned digest):**
+
+  | Flag                                       | Podman-startup | LEAN-runtime  | Status                          |
+  |--------------------------------------------|----------------|---------------|---------------------------------|
+  | `--cap-drop=ALL`                           | ✅ accepted    | ✅ ran clean  | **Mandatory** in `runner.py`    |
+  | `--pids-limit=512`                         | ✅ accepted    | ✅ ran clean  | **Mandatory** in `runner.py`    |
+  | `--tmpfs /tmp:rw,noexec,nosuid,size=256m`  | ✅ accepted    | ➖ untested   | Opt-in (caller passes flag)     |
+  | `--read-only`                              | ✅ accepted    | ❌ breaks     | **Deferred** — see note below   |
+  | `--user 10001:10001`                       | ✅ accepted    | ➖ untested   | **Deferred** — see note below   |
+
+  `--read-only` deferred because LEAN's `ObjectStore` defaults to `/Lean/Launcher/bin/Debug/storage` which sits on the image's read-only overlay; the trusted sample's audit-file write fails in `Algorithm.Initialize()`. Two fast-follow paths: add `--tmpfs /Lean/Launcher/bin/Debug/storage:rw,...`, or override `object-store-root` in `config.json` to a workspace-writable path. `--user` deferred until the launcher pins the UID/GID that owns the bind-mounted workspace on Windows + WSL2 — without that pin, the LEAN container can't write to `/lean-run/output`. Both are tracked as Phase 1c work.
+
+- (f) **Metadata staging from image.** Added `stage_lean_metadata_from_image(workspace, image_digest)` in `app/lean_sidecar/staging.py`. Uses `podman create` + `podman cp` (no run, no network) to extract `/Lean/Data/market-hours/market-hours-database.json` and `/Lean/Data/symbol-properties/symbol-properties-database.csv` into the workspace's `data/` subtree. The launcher then mounts only the workspace; LEAN reads the metadata from a hashable path under the audit boundary instead of from the image-baked defaults.
+- (g) **End-to-end trusted-sample run.** Three tests in `tests/lean_sidecar/test_runner_e2e.py`:
+  - `test_buy_and_hold_runs_clean` — baseline shape, **passes**.
+  - `test_buy_and_hold_runs_with_cap_drop_all` — adds `--cap-drop=ALL`, **passes** at full LEAN runtime.
+  - `test_buy_and_hold_runs_with_read_only_root` — adds `--read-only + tmpfs /tmp`, **xfails** with the ObjectStore message captured in the test docstring.
+- (i, partial) **Bar-consumption audit file.** The trusted sample writes `observations.csv` to LEAN's `ObjectStore` recording `(ms_utc, close)` for every received bar; the Phase 2 parser will read this and assert non-zero consumption + the three-window alignment.
+
+Two trusted-sample fixes also landed in Phase 1b:
+
+- LEAN's launcher reads `config.json` from its working directory by default (which is the image-baked default config pointing at `BasicTemplateFrameworkAlgorithm`). The runner now always appends `--config /lean-run/project/config.json` as the launcher arg so the workspace config wins; this is the safety floor noted in `runner.py:CONTAINER_LEAN_CONFIG_PATH`.
+- `bar.EndTime` arrives as a naive Python `datetime` in algorithm timezone (ET), not a wrapped .NET `DateTime`; the sample now attaches ET via `zoneinfo` before converting to int64 ms UTC.
+- `SetBenchmark(lambda dt: 100)` pins a constant benchmark so LEAN's post-run `ResultsAnalyzer` does not try to read SPY daily data that the trusted-sample-window does not stage.
+
+### Phase 1c progress (2026-05-17, same PR — review-driven hardening)
+
+After Phase 1b, reviewer feedback flagged three blockers for *claiming*
+fidelity / reconciliation-readiness even from the spike. They land in
+this same PR before merge:
+
+- **Clean-run classification beyond exit code.** Exit-code 0 was lying — LEAN can crash `ResultsAnalyzer`, fail `SubscriptionDataSource` reads, or raise in `Algorithm.Initialize` while still exiting 0 (Phase 1b shipped that bug; Phase 1c catches it). New `app/lean_sidecar/result_classifier.py` parses `output/log.txt` after every run and buckets `ERROR::` lines into four stable categories: `analysis_failed`, `failed_data_requests`, `runtime_error`, `other`. `LaunchResponse` now carries `lean_errors: dict[category, list[str]]` and a top-level `is_clean: bool` that is True only when exit code is 0, the run did not time out, AND the classified-error dict is empty. Test surface: `tests/lean_sidecar/test_result_classifier.py` (9 cases including representative log shapes harvested from real Phase 1b runs).
+- **`observations.csv` visibility (bar-consumption gate (i)).** The trusted sample writes through LEAN's `ObjectStore`, which previously rooted at `/Lean/Launcher/bin/Debug/storage` (image overlay) — invisible to the manifest and unwritable under `--read-only`. `LeanConfig` now sets `object-store-root` to `/lean-run/output/storage` (a workspace path), `Workspace.object_store_dir` exposes it, and the E2E test asserts the audit file lands there with a non-trivial body. Until this PR, "bar-consumption inspectable" was a Phase 1 claim the code did not actually deliver.
+- **Explicit handling of failed data requests.** LEAN's default minute subscription also requests quote bars; the post-run `ResultsAnalyzer` needs SPY daily for benchmark equity-curve; `InterestRateProvider` needs `data/alternative/interest-rate/usa/interest-rate.csv`; `LocalDiskMapFileProvider` warns when `map_files/` is missing. Phase 1c addresses them by:
+  * staging a synthetic daily SPY bar per trading day (`stage_daily_bars`),
+  * extending `stage_lean_metadata_from_image` to extract the bundled `/Lean/Data/alternative/interest-rate/` subtree alongside `market-hours` + `symbol-properties`,
+  * creating empty `factor_files/` + `map_files/` directories (`stage_empty_corporate_action_dirs`) — the trusted-sample window has no corporate actions so empty is the right semantic.
+  After Phase 1c, the only LEAN log noise the trusted sample emits is `_quote.zip` not found (LEAN's minute subscription requests Trade *and* Quote bars; staging quotes is Phase 5+ work). The E2E test asserts that *no* category other than this documented known-noise pattern appears.
+
+Three smaller hardening items also landed:
+
+- **Hardening flags allow-list with structural validation.** The `runner.ALLOWED_HARDENING_TOKENS` allow-list now rejects unknown tokens AND verifies that paired flags (e.g., `--tmpfs <spec>`) have a value token after the flag name. `extra_image_args` is removed from `LaunchRequest` entirely; callers cannot tack on post-image flags.
+- **Post-run `workspace_max_mb` enforcement.** The launcher walks the workspace after `execute()` and raises `LaunchRejectedError("workspace_max_mb_exceeded", …)` if the cap was overrun. Symlinks are not followed. Live mid-run monitoring is the Phase 1c+ ADR item.
+- **`launcher.log` operator-friendly form.** The plan header now writes a shell-quoted single-line form (`# shell: podman run --rm …`) in addition to the argv-per-line audit form.
+
+### Trusted-sample reconciliation status
+
+The trusted sample is **not reconciliation-grade**, by construction:
+
+- `SetBenchmark(lambda dt: 100)` pins a constant benchmark so the post-run `ResultsAnalyzer` does not need market-cap benchmark data the sample does not stage.
+- Brokerage / fill / commission models are LEAN defaults.
+- Only five trading days of synthetic minute bars; no factor or map files; no quote bars.
+
+Reconciliation-grade samples (Phase 5) will:
+
+- Stage real benchmark daily data and remove the `SetBenchmark` hack.
+- Pin Interactive Brokers brokerage and the documented fill / fee models per ADR §"Brokerage, fill, and fee policy".
+- Stage factor / map files for any window that touches a corporate action.
+- Stage quote bars for any algorithm that consumes quotes.
+
+This boundary is captured in `buy_and_hold.py`'s docstring; the E2E test calls `_assert_trusted_sample_run` not `_assert_reconciliation_grade_run` (the latter is a Phase 5 fixture).
+
+Open from this PR, queued for Phase 1d / Phase 5:
+
+- `--user <uid>` requires workspace UID/GID matching on Windows + WSL2 — launcher does not pin a UID yet.
+- `--read-only` is now safe-er with ObjectStore inside the workspace, but `/Lean/Launcher/bin/Debug/` paths LEAN still touches for storage need a tmpfs; not promoted to mandatory.
+- **Determinism gate** — re-run + byte-identical normalized-artifact comparison. Trivial to add now that the clean-run contract is enforced; deferred so this PR does not grow further.
+- Quote-bar staging — eliminates the last known-noise category in the trusted-sample log.
+- Real factor/map files for the reconciliation-grade Phase 5 fixtures (not for the spike).
+- Hardening-profile enum to replace caller-supplied `hardening_flags` argv tokens — reviewer-suggested longer-term direction.
 
 ---
 
