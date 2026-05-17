@@ -4,6 +4,8 @@ import { BrokerService } from './broker.service';
 
 const POLL_INTERVAL_MS = 5000;
 
+export type LifecycleAction = 'connect' | 'disconnect' | 'reconnect';
+
 /**
  * Singleton owner of the connection-health signal.
  *
@@ -25,6 +27,14 @@ export class BrokerHealthService {
 
   readonly health = signal<IbkrConnectionHealth | null>(null);
   readonly lastError = signal<unknown | null>(null);
+  /**
+   * Which lifecycle action (connect / disconnect / reconnect) is in
+   * flight. Both the global banner and the Broker Status page read this
+   * — clicking either control disables both, so two concurrent
+   * connectAsyncs can't race past the server-side asyncio lock.
+   */
+  readonly lifecycleAction = signal<LifecycleAction | null>(null);
+  readonly lifecycleError = signal<unknown | null>(null);
 
   /**
    * The banner state derived from the latest health snapshot. ``null``
@@ -82,6 +92,43 @@ export class BrokerHealthService {
       // crashing the poll.
       this.lastError.set(err);
       this.health.set(null);
+    }
+  }
+
+  /**
+   * Drive ``POST /api/broker/connect`` and refresh health on completion.
+   * Shared by the global banner and the Broker Status page so a click
+   * in either place is the same lifecycle action — and the
+   * ``lifecycleAction`` signal locks both controls together.
+   */
+  connect(): Promise<void> {
+    return this.runLifecycleAction('connect', () => this.broker.connect());
+  }
+
+  /** Drive ``POST /api/broker/disconnect`` and refresh health. */
+  disconnect(): Promise<void> {
+    return this.runLifecycleAction('disconnect', () => this.broker.disconnect());
+  }
+
+  /** Drive ``POST /api/broker/reconnect`` and refresh health. */
+  reconnect(): Promise<void> {
+    return this.runLifecycleAction('reconnect', () => this.broker.reconnect());
+  }
+
+  private async runLifecycleAction(
+    action: LifecycleAction,
+    call: () => Promise<unknown>,
+  ): Promise<void> {
+    if (this.lifecycleAction() !== null) return;
+    this.lifecycleAction.set(action);
+    this.lifecycleError.set(null);
+    try {
+      await call();
+    } catch (err) {
+      this.lifecycleError.set(err);
+    } finally {
+      this.lifecycleAction.set(null);
+      await this.refresh();
     }
   }
 
