@@ -15,6 +15,32 @@
 
 Python service has **no dependencies** — runs standalone.
 
+## LEAN Sidecar launcher (Phase 2a)
+
+`/api/lean-sidecar/*` endpoints in the data plane forward to a
+**separate** launcher service that owns Podman API access. The
+launcher is NOT inside the `polygon-data-service` container (see
+`docs/architecture/lean-sidecar-lab.md` §"Launcher topology" for why).
+
+Run it as a host process alongside `podman compose up`:
+
+```bash
+podman pull docker.io/quantconnect/lean:latest
+python PythonDataService/scripts/lean_sidecar_pin_image.py
+cd PythonDataService
+.venv/Scripts/python.exe -m uvicorn app.lean_sidecar.launcher.app:app \
+    --host 127.0.0.1 --port 8090
+```
+
+The data plane reads `LEAN_LAUNCHER_URL` (default `http://127.0.0.1:8090`)
+and the optional `LEAN_LAUNCHER_TOKEN` env var. On Windows + WSL2 the
+`polygon-data-service` container reaches the host launcher via
+`host.containers.internal`; set
+`LEAN_LAUNCHER_URL=http://host.containers.internal:8090` in
+`compose.yaml`'s `python-service.environment` block when running
+sidecar runs end-to-end. Containerizing the launcher itself is the
+Phase 2b/Phase 1c hardening pass.
+
 ## File Structure
 
 ```
