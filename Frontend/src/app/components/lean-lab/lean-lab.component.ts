@@ -15,6 +15,7 @@ import type {
   TrustedRunRequest,
   TrustedRunResponse,
 } from "../../services/lean-sidecar.types";
+import { LeanLabEquityChartComponent } from "./lean-lab-equity-chart/lean-lab-equity-chart.component";
 
 /**
  * Phase 4a — minimal LEAN Lab UI.
@@ -31,7 +32,7 @@ import type {
 @Component({
   selector: "app-lean-lab",
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule],
+  imports: [CommonModule, ReactiveFormsModule, LeanLabEquityChartComponent],
   templateUrl: "./lean-lab.component.html",
   styleUrl: "./lean-lab.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,

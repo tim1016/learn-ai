@@ -97,6 +97,11 @@
               [class.lean-lab__pnl-down]="eh.pnlPct < 0"
             >{{ eh.pnlPct | number: "1.2-2" }}%</span>)
           </p>
+          @if (normalized(); as nr) {
+            @if (nr.equity_curve.length > 0) {
+              <app-lean-lab-equity-chart [equityPoints]="nr.equity_curve" />
+            }
+          }
         </section>
       }
 
