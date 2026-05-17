@@ -25,7 +25,7 @@ from app.engine.data.lean_format import write_lean_daily_zip, write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import LEAN_IMAGE_REPO
 from app.lean_sidecar.lean_config import LeanConfig
-from app.lean_sidecar.workspace import Workspace
+from app.lean_sidecar.workspace import Workspace, validate_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -95,13 +95,19 @@ def stage_minute_bars(
     so the same writer that backs Engine Lab's local cache is the one
     writing LEAN's sidecar data folder. There is exactly one writer for
     the deci-cent / ms-since-midnight contract.
+
+    ``symbol`` is re-validated via :func:`validate_symbol` even when
+    the caller already validated upstream — staging is the place
+    where the symbol first flows into a filesystem path, so the
+    defense-in-depth check belongs here.
     """
+    safe_symbol = validate_symbol(symbol)
     workspace.ensure_layout()
     written: list[Path] = []
     for trading_date, bars in bars_by_date:
         path = write_lean_day_zip(
             workspace.data_dir,
-            symbol,
+            safe_symbol,
             trading_date,
             bars,
         )
@@ -121,9 +127,13 @@ def stage_daily_bars(
     LEAN's default benchmark resolution and the post-run
     ResultsAnalyzer's equity-curve construction do not fail. The shape
     matches :func:`app.engine.data.lean_format.write_lean_daily_zip`.
+
+    Re-validates ``symbol`` for the same defense-in-depth reason as
+    :func:`stage_minute_bars`.
     """
+    safe_symbol = validate_symbol(symbol)
     workspace.ensure_layout()
-    return write_lean_daily_zip(workspace.data_dir, symbol, bars)
+    return write_lean_daily_zip(workspace.data_dir, safe_symbol, bars)
 
 
 def stage_empty_corporate_action_dirs(workspace: Workspace) -> None:

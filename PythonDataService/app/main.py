@@ -30,6 +30,7 @@ from app.routers import (
     iv30,
     iv_recorder,
     jobs,
+    lean_sidecar,
     market_monitor,
     monte_carlo,
     options,
@@ -177,6 +178,10 @@ app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
 app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
 app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
+# LEAN Sidecar Lab — data-plane API in front of the launcher service.
+# Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
+# algorithm source. See docs/architecture/lean-sidecar-lab.md.
+app.include_router(lean_sidecar.router, prefix="/api/lean-sidecar", tags=["lean-sidecar"])
 app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
 # Portfolio scenario / live-Greeks. Phase 2 of numerical-authority migration:
 # Python becomes canonical for portfolio Greeks; .NET becomes a passthrough.

@@ -15,6 +15,38 @@
 
 Python service has **no dependencies** — runs standalone.
 
+## LEAN Sidecar launcher (Phase 2a)
+
+`/api/lean-sidecar/*` endpoints in the data plane forward to a
+**separate** launcher service that owns Podman API access. The
+launcher is NOT inside the `polygon-data-service` container (see
+`docs/architecture/lean-sidecar-lab.md` §"Launcher topology" for why).
+
+Run it as a host process alongside `podman compose up`:
+
+```bash
+podman pull docker.io/quantconnect/lean:latest
+python PythonDataService/scripts/lean_sidecar_pin_image.py
+cd PythonDataService
+# Bind to 0.0.0.0 so the polygon-data-service container can reach
+# the launcher over host.containers.internal. Loopback-only would
+# refuse connections from the container's network namespace.
+.venv/Scripts/python.exe -m uvicorn app.lean_sidecar.launcher.app:app \
+    --host 0.0.0.0 --port 8090
+```
+
+The data plane reads `LEAN_LAUNCHER_URL` (default `http://127.0.0.1:8090`
+when both processes share localhost) and the optional `LEAN_LAUNCHER_TOKEN`
+env var. **When running the data plane inside compose** on Windows + WSL2,
+set `LEAN_LAUNCHER_URL=http://host.containers.internal:8090` in
+`compose.yaml`'s `python-service.environment` block — the loopback-only
+launcher binding above will refuse connections from the container's
+network namespace, so the 0.0.0.0 binding above is required for that
+path. Always set `LEAN_LAUNCHER_TOKEN` to a random secret in that
+configuration so the wider-bound port still requires authentication.
+Containerizing the launcher itself is the Phase 2b / Phase 1c
+hardening pass.
+
 ## File Structure
 
 ```

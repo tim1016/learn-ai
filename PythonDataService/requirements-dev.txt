@@ -10,6 +10,7 @@ pytest
 pytest-asyncio
 pytest-cov
 jsonschema>=4.0  # manifest.json schema validation in test_golden_manifest.py
+respx>=0.21      # HTTP mocking for lean_sidecar launcher_client + router tests
 # (pyarrow lives in requirements-heavy.txt now — used at runtime by the
 # vol-surface cache, not just by tests.)
 
