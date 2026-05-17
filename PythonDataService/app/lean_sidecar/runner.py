@@ -15,6 +15,7 @@ tests assert the constructed argv without spawning a real container.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -43,27 +44,24 @@ CONTAINER_WORKSPACE_MOUNT = "/lean-run"
 
 # Token-level allow-list for caller-supplied hardening flags.
 #
-# The launcher boundary forwards a caller's ``hardening_flags`` to
-# ``podman run`` between the mandatory flags and the image reference,
-# so a permissive forward (``--privileged``, ``--cap-add=SYS_ADMIN``,
-# ``--security-opt=seccomp=unconfined``, etc.) would silently widen the
-# sandbox. Every token a caller passes must appear in this set; an
-# unrecognized token aborts the run with ``RunnerConfigurationError``.
+# Phase 1c promoted ``--read-only`` and ``--user=10001:10001`` into the
+# mandatory shape, so the only callers-supply hardening surface left
+# is ``--tmpfs <spec>``. Keeping the allow-list (rather than removing
+# it) means a caller passing ``--privileged``,
+# ``--security-opt=seccomp=unconfined``, etc. still aborts the run
+# with ``RunnerConfigurationError`` rather than silently widening the
+# sandbox.
 #
 # The set lists individual argv tokens, not full flag strings, because
-# multi-token flags (``--tmpfs <spec>``, ``--user <uid:gid>``) split
-# across two argv entries. Adding a new flag is a deliberate change
-# this set documents.
+# ``--tmpfs <spec>`` splits across two argv entries. Adding a new flag
+# is a deliberate change this set documents.
 ALLOWED_HARDENING_TOKENS: frozenset[str] = frozenset(
     {
-        # --read-only is a single token.
-        "--read-only",
-        # --tmpfs takes a second token; allow both the flag and the
+        # --tmpfs takes a second token; allow the flag plus the
         # specific tmpfs specs we've validated.
         "--tmpfs",
         "/tmp:rw,noexec,nosuid,size=256m",
         "/tmp:rw,noexec,nosuid,size=64m",
-        "/Lean/Launcher/bin/Debug/storage:rw,noexec,nosuid,size=256m",
     }
 )
 
@@ -74,6 +72,36 @@ ALLOWED_HARDENING_TOKENS: frozenset[str] = frozenset(
 # point LEAN at the config the data plane wrote into the workspace,
 # otherwise the run silently executes the default template.
 CONTAINER_LEAN_CONFIG_PATH = f"{CONTAINER_WORKSPACE_MOUNT}/project/config.json"
+
+# Fallback UID/GID for hosts where ``os.getuid()`` is unavailable
+# (Windows native Python). On Windows + WSL2 podman the WSL2 mount
+# layer does not enforce host POSIX ownership inside the container,
+# so any non-root UID works.
+_FALLBACK_CONTAINER_UID = 10001
+_FALLBACK_CONTAINER_GID = 10001
+
+
+def _container_user_spec() -> str:
+    """Return the ``--user <uid>:<gid>`` spec for the LEAN container.
+
+    On Linux the spec is the launcher process's own UID/GID so the
+    container's effective user matches the owner of the workspace
+    files the launcher just created. Without that alignment, the
+    container (running as a fixed 10001:10001) cannot write to
+    ``workspace/output``/ObjectStore because POSIX permissions
+    reject the cross-UID write — reviewer-flagged regression on
+    native Linux hosts that the launcher does not chown around.
+
+    On Windows the launcher runs as a native Windows process where
+    ``os.getuid()`` does not exist; the bind mount goes through the
+    WSL2 layer which does not enforce host UID, so the
+    ``10001:10001`` fallback works. The fixed UID is non-root
+    (covers the "don't run as container root" requirement) and is
+    explicit in the launcher.log for audit.
+    """
+    if hasattr(os, "getuid") and hasattr(os, "getgid"):
+        return f"{os.getuid()}:{os.getgid()}"
+    return f"{_FALLBACK_CONTAINER_UID}:{_FALLBACK_CONTAINER_GID}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,12 +237,21 @@ def build_command(
     # Mandatory non-conditional flags. Any change here is a sandbox
     # change and must update the ADR in the same PR.
     #
-    # ``--cap-drop=ALL`` is mandatory as of Phase 1b — proven safe at
-    # both the podman-startup level (security-flag matrix) and the
-    # LEAN-runtime level (E2E ``test_buy_and_hold_runs_with_cap_drop_all``).
-    # ``--read-only`` and ``--user`` remain caller-opt-in until LEAN's
-    # ObjectStore and workspace UID/GID assumptions are pinned in a
-    # fast-follow PR.
+    # ``--cap-drop=ALL`` (Phase 1b), ``--read-only`` (Phase 1c), and
+    # ``--user`` (Phase 1c) are all proven safe at both the
+    # podman-startup level (security-flag matrix) and the LEAN-
+    # runtime level (E2E ``test_buy_and_hold_runs_with_*``). They
+    # gate the Phase 4c arbitrary-user-source unlock — without them
+    # the sandbox is weaker than the ADR's non-negotiables require.
+    #
+    # ``--read-only`` is viable because Phase 1c moved LEAN's
+    # ObjectStore root from the image overlay
+    # (``/Lean/Launcher/bin/Debug/storage``) to the workspace via
+    # the ``object-store-root`` config key (see lean_config.py).
+    # ``--user`` resolves dynamically via ``_container_user_spec``
+    # so the container user matches the launcher's host UID on
+    # Linux (otherwise POSIX permissions reject writes the
+    # container makes to launcher-created workspace files).
     argv: list[str] = [
         podman,
         "run",
@@ -222,6 +259,8 @@ def build_command(
         "--network=none",
         "--security-opt=no-new-privileges",
         "--cap-drop=ALL",
+        "--read-only",
+        f"--user={_container_user_spec()}",
         f"--cpus={limits.cpus}",
         f"--memory={limits.memory_mb}m",
         f"--pids-limit={limits.pids_limit}",

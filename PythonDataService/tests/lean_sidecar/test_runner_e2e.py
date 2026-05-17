@@ -222,48 +222,46 @@ class TestEndToEndTrustedSample:
         # log instead of stubbing the runner.
         assert "--cap-drop=ALL" in ws.launcher_log_path.read_text(encoding="utf-8")
 
-    def test_buy_and_hold_runs_with_read_only_root(
+    def test_baseline_includes_read_only_and_user_in_argv(
         self,
         tmp_artifacts_root: Path,
         _allow_pinned_digest_or_skip: str,
     ) -> None:
-        """LEAN's full backtest path with a read-only root + tmpfs /tmp.
+        """Phase 1c — ``--read-only`` and ``--user`` are now mandatory.
 
-        Empirically (Phase 1b run on this digest): LEAN's ObjectStore
-        defaults to ``/Lean/Launcher/bin/Debug/storage`` which sits on
-        the image's read-only overlay. A bare ``--read-only`` therefore
-        breaks ``Algorithm.Initialize()`` whenever the algorithm touches
-        ObjectStore (the trusted sample does, by design — it writes the
-        observations audit file).
+        The baseline ``test_buy_and_hold_runs_clean`` above already
+        exercises a full LEAN run under both flags (they're in the
+        baseline shape now); this test pins the launcher.log assertion
+        so a future runner refactor that silently drops either flag
+        gets caught at the test level, not in a security review months
+        later.
 
-        Two ways to make this pass land in a fast-follow:
-          * Add ``--tmpfs /Lean/Launcher/bin/Debug/storage:rw,...`` so
-            ObjectStore has somewhere to write.
-          * Override ``object-store-root`` in ``config.json`` to point
-            at ``/lean-run/output/storage`` (writable workspace mount).
-        Until one ships, this test is xfailed so the read-only flag is
-        not silently promoted to mandatory in ``runner.py``.
+        The prior xfail (``test_buy_and_hold_runs_with_read_only_root``)
+        was retired because ``--read-only`` is no longer opt-in. LEAN's
+        ObjectStore default path (image overlay) was the blocker;
+        Phase 1c's ``object-store-root`` config override moved it into
+        the writable workspace, making the read-only root viable.
+        ``--user=10001:10001`` works on Windows + WSL2 podman because
+        the WSL2 mount layer doesn't enforce host UID ownership inside
+        the container.
         """
-        run_id = "e2e_readonly"
+        run_id = "e2e_hardened_baseline"
         ws = resolve_workspace(run_id, tmp_artifacts_root)
         digest = _allow_pinned_digest_or_skip
         _stage_trusted_sample(ws, digest)
         response = launch(
-            _base_request(
-                run_id,
-                digest,
-                hardening_flags=[
-                    "--read-only",
-                    "--tmpfs",
-                    "/tmp:rw,noexec,nosuid,size=256m",
-                ],
-            ),
+            _base_request(run_id, digest),
             artifacts_root=tmp_artifacts_root,
         )
-        if response.exit_code != 0 and "Read-only file system" in response.log_tail:
-            pytest.xfail(
-                "LEAN ObjectStore default path is on the image's read-only "
-                "overlay; needs an extra tmpfs or object-store-root override. "
-                "Tracked in ADR §'Container execution boundary' Phase 1b note."
-            )
         _assert_trusted_sample_run(ws, response)
+        log_text = ws.launcher_log_path.read_text(encoding="utf-8")
+        assert "--read-only" in log_text
+        # ``--user`` is dynamic per host — host UID on Linux,
+        # 10001:10001 fallback on Windows. Pattern-match so the
+        # assertion works across both hosts and rejects --user=0:0
+        # (root) specifically.
+        user_lines = [line for line in log_text.splitlines() if line.startswith("--user=") and ":" in line]
+        assert user_lines, f"no --user=<uid>:<gid> in launcher.log:\n{log_text[-2000:]}"
+        for line in user_lines:
+            uid_str = line.removeprefix("--user=").split(":", 1)[0]
+            assert int(uid_str) > 0, f"container must not run as root, got {line!r}"

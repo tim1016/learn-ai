@@ -454,11 +454,25 @@ After Phase 1a landed, the LEAN image pull completed; Phase 1b added:
   |--------------------------------------------|----------------|---------------|---------------------------------|
   | `--cap-drop=ALL`                           | ✅ accepted    | ✅ ran clean  | **Mandatory** in `runner.py`    |
   | `--pids-limit=512`                         | ✅ accepted    | ✅ ran clean  | **Mandatory** in `runner.py`    |
+  | `--read-only`                              | ✅ accepted    | ✅ ran clean  | **Mandatory** (Phase 1c — see note below) |
+  | `--user=<dynamic>`                         | ✅ accepted    | ✅ ran clean  | **Mandatory** (Phase 1c — dynamic UID, see note below) |
   | `--tmpfs /tmp:rw,noexec,nosuid,size=256m`  | ✅ accepted    | ➖ untested   | Opt-in (caller passes flag)     |
-  | `--read-only`                              | ✅ accepted    | ❌ breaks     | **Deferred** — see note below   |
-  | `--user 10001:10001`                       | ✅ accepted    | ➖ untested   | **Deferred** — see note below   |
 
-  `--read-only` deferred because LEAN's `ObjectStore` defaults to `/Lean/Launcher/bin/Debug/storage` which sits on the image's read-only overlay; the trusted sample's audit-file write fails in `Algorithm.Initialize()`. Two fast-follow paths: add `--tmpfs /Lean/Launcher/bin/Debug/storage:rw,...`, or override `object-store-root` in `config.json` to a workspace-writable path. `--user` deferred until the launcher pins the UID/GID that owns the bind-mounted workspace on Windows + WSL2 — without that pin, the LEAN container can't write to `/lean-run/output`. Both are tracked as Phase 1c work.
+  Phase 1b initially deferred `--read-only` and `--user`; Phase 1c
+  promoted both to mandatory after the trusted-sample E2E proved them
+  viable at full LEAN runtime. `--read-only` works because Phase 1c's
+  `object-store-root` config override moved LEAN's ObjectStore out of
+  the image overlay (`/Lean/Launcher/bin/Debug/storage`) into
+  `/lean-run/output/storage` — a workspace-writable path under the
+  single bind mount. `--user` resolves dynamically via
+  `runner._container_user_spec()`: on Linux the container's UID/GID
+  matches the launcher's `os.getuid()`/`os.getgid()` so the container
+  can write to launcher-created workspace files (without the dynamic
+  match, native Linux hosts hit POSIX permission errors on
+  `workspace/output` writes); on Windows + WSL2 where `os.getuid`
+  doesn't exist the helper returns `10001:10001` as a non-root
+  fallback that works because the WSL2 mount layer doesn't enforce
+  host POSIX ownership inside the container.
 
 - (f) **Metadata staging from image.** Added `stage_lean_metadata_from_image(workspace, image_digest)` in `app/lean_sidecar/staging.py`. Uses `podman create` + `podman cp` (no run, no network) to extract `/Lean/Data/market-hours/market-hours-database.json` and `/Lean/Data/symbol-properties/symbol-properties-database.csv` into the workspace's `data/` subtree. The launcher then mounts only the workspace; LEAN reads the metadata from a hashable path under the audit boundary instead of from the image-baked defaults.
 - (g) **End-to-end trusted-sample run.** Three tests in `tests/lean_sidecar/test_runner_e2e.py`:
