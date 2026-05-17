@@ -208,13 +208,19 @@ def write_manifest(manifest: RunManifest, dest: Path) -> Path:
 
 
 def hash_staged_files(root: Path, paths: Iterable[Path]) -> tuple[StagedDataFile, ...]:
-    """Hash a collection of files relative to ``root``.
+    """Hash a collection of files relative to ``root``, in sorted order.
 
     ``path_in_workspace`` is normalized to forward slashes so the
     manifest is portable across Windows and Linux launcher hosts.
+
+    Sorting by posix-relative path makes the returned tuple deterministic
+    regardless of caller iteration order (filesystem ``rglob``, set
+    iteration, etc.). Without this, identical staged inputs could produce
+    different manifests and break the reproducibility contract.
     """
+    ordered = sorted(paths, key=lambda p: p.relative_to(root).as_posix())
     out: list[StagedDataFile] = []
-    for p in paths:
+    for p in ordered:
         rel = p.relative_to(root).as_posix()
         out.append(
             StagedDataFile(

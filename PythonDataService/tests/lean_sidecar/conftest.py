@@ -49,7 +49,11 @@ def _lean_image_available() -> bool:
             capture_output=True,
             timeout=10,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
+        # Only swallow the specific failure modes that genuinely mean
+        # "image-availability check could not run": podman not on PATH,
+        # subprocess timeout, etc. Any other exception propagates so a
+        # real bug in the conftest is not silently turned into a skip.
         return False
     return result.returncode == 0
 

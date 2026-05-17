@@ -16,10 +16,14 @@ between deployments. After running this you should:
 
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "app" / "lean_sidecar" / "config.py"
 IMAGE_REF = "quantconnect/lean:latest"
@@ -64,8 +68,8 @@ def rewrite_pinned_digest(new_digest: str) -> None:
 def main() -> int:
     digest = resolve_digest()
     rewrite_pinned_digest(digest)
-    print(digest)
-    print(f"updated {CONFIG_PATH.relative_to(Path.cwd())}")
+    logger.info(digest)
+    logger.info("updated %s", CONFIG_PATH.relative_to(Path.cwd()))
     return 0
 
 

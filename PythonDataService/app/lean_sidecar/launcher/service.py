@@ -80,13 +80,13 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
             workspace,
             request.image_digest,
             limits=limits,
-            extra_image_args=tuple(request.extra_image_args),
             hardening_flags=tuple(request.hardening_flags),
         )
     except RunnerConfigurationError as e:
         # The runner itself decides which configuration is acceptable
-        # (image-allow-list, podman-on-path). Propagate the message as
-        # a rejection so the API contract is consistent.
+        # (image-allow-list, podman-on-path, hardening allow-list).
+        # Propagate the message as a rejection so the API contract is
+        # consistent.
         raise LaunchRejectedError("runner_configuration_error", str(e)) from e
 
     log_path = workspace.launcher_log_path
@@ -99,16 +99,34 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
 
     result: RunResult = execute(plan, limits=limits)
 
+    # Post-run workspace size enforcement. The launcher does not stream
+    # mid-run size — wall-clock timeout already caps how much the
+    # container can write — but after the container exits we walk the
+    # workspace and surface a hard error if it overran the cap so the
+    # operator sees the violation rather than a silently-stale workspace.
+    # The ADR's longer-term "kill on overrun during run" is queued for
+    # Phase 1c+ once a separate monitor process exists.
+    overran = _workspace_size_bytes(workspace.workspace_dir) > limits.workspace_max_mb * (1 << 20)
+
     with log_path.open("a", encoding="utf-8") as f:
         f.write("\n# launcher result\n")
         f.write(f"exit_code: {result.exit_code}\n")
         f.write(f"duration_ms: {result.duration_ms}\n")
         f.write(f"timed_out: {result.timed_out}\n")
+        f.write(f"workspace_overran_cap: {overran}\n")
         f.write("# container log tail (truncated):\n")
         f.write(result.log_tail)
         if not result.log_tail.endswith("\n"):
             f.write("\n")
         f.write("# end launcher result\n")
+
+    if overran:
+        raise LaunchRejectedError(
+            "workspace_max_mb_exceeded",
+            f"workspace exceeded {limits.workspace_max_mb} MiB cap after "
+            f"container exit (exit_code={result.exit_code}); "
+            "see launcher.log for the run trace",
+        )
 
     return LaunchResponse(
         run_id=request.run_id,
@@ -117,3 +135,28 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
         timed_out=result.timed_out,
         log_tail=result.log_tail,
     )
+
+
+def _workspace_size_bytes(root: Path) -> int:
+    """Sum on-disk file sizes under ``root``. Symlinks are not followed.
+
+    Used by ``launch()`` to enforce ``workspace_max_mb`` after the
+    container exits. Walking after-the-fact is acceptable for Phase 1
+    because ``wall_clock_timeout_s`` already caps how much the
+    container could write in one run; live monitoring is a Phase 1c+
+    item per the ADR.
+    """
+    total = 0
+    for path in root.rglob("*"):
+        # ``is_file()`` follows symlinks; we want disk usage, not link
+        # target sizes that may live outside the workspace.
+        if path.is_file() and not path.is_symlink():
+            try:
+                total += path.stat().st_size
+            except OSError:
+                # A file disappearing mid-walk is rare but possible if
+                # the launcher is racing a still-shutting-down LEAN
+                # process. Treat as zero — the next walk picks it up
+                # or proves the file is truly gone.
+                continue
+    return total

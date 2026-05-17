@@ -30,14 +30,19 @@ LAUNCHER_VERSION = "phase-1-spike-0"
 def _artifacts_root() -> Path:
     """Resolve the host-side artifacts root from env or default.
 
-    The launcher refuses to start if the configured root does not exist;
-    silently creating it could mask a misconfigured deployment that puts
-    the root somewhere unintended.
+    The launcher creates the root if missing (deploys often start with
+    an empty volume). It rejects a configured path that already exists
+    as a non-directory — a regular file at that path would silently
+    cause every later mount + manifest write to fail with confusing
+    errors; failing fast here is the boundary check that "validate
+    inputs at system boundaries" calls for.
     """
     raw = os.environ.get("LEAN_LAUNCHER_ARTIFACTS_ROOT")
     root = Path(raw).resolve() if raw else DEFAULT_ARTIFACTS_ROOT.resolve()
     if not root.exists():
         root.mkdir(parents=True, exist_ok=True)
+    if not root.is_dir():
+        raise RuntimeError(f"LEAN_LAUNCHER_ARTIFACTS_ROOT must be a directory; got {root}")
     return root
 
 
@@ -58,12 +63,12 @@ app = FastAPI(
 
 
 @app.get("/healthz")
-def healthz() -> dict[str, str]:
+async def healthz() -> dict[str, str]:
     return {"status": "ok", "version": LAUNCHER_VERSION}
 
 
 @app.post("/launch", response_model=LaunchResponse)
-def post_launch(
+async def post_launch(
     request: LaunchRequest,
     x_launcher_token: str | None = Header(default=None, alias="X-Launcher-Token"),
 ) -> LaunchResponse:

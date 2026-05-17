@@ -110,27 +110,8 @@ MAX_ALGORITHM_SOURCE_BYTES = 256 * 1024
 DEFAULT_ARTIFACTS_ROOT = Path(__file__).resolve().parents[2] / "artifacts" / "lean-sidecar"
 
 
-# ---------------------------------------------------------------------------
-# Container security flags
-# ---------------------------------------------------------------------------
-#
-# The mandatory non-conditional shape. Optional flags whose viability the
-# Phase 1 spike must verify are recorded under
-# ``CANDIDATE_HARDENING_FLAGS``; the spike updates the ADR with which
-# survive into production use.
-
-MANDATORY_PODMAN_FLAGS: tuple[str, ...] = (
-    "--rm",
-    "--network=none",
-    "--security-opt=no-new-privileges",
-)
-
-CANDIDATE_HARDENING_FLAGS: tuple[str, ...] = (
-    "--cap-drop=ALL",
-    "--read-only",
-    "--tmpfs",
-    "/tmp:rw,noexec,nosuid,size=256m",
-    "--user",
-    # Probed flags live in test_security_flags.py; results land back in the
-    # ADR and (where they survive) in ``runner.py`` as fixed flags.
-)
+# The mandatory and allow-listed-optional podman flags now live in
+# ``app.lean_sidecar.runner`` alongside the argv-construction code that
+# uses them. Keeping the lists next to the code that enforces them
+# prevents the documentation-vs-behavior drift we had during Phase 1a
+# when the constants were here but unused.

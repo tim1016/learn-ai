@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.launcher.models import LaunchRequest
@@ -34,15 +35,15 @@ def _make_request(run_id: str, digest: str = DUMMY_DIGEST) -> LaunchRequest:
 
 class TestLaunchValidation:
     def test_pydantic_rejects_bad_run_id(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             _make_request("../escape")
 
     def test_pydantic_rejects_unpinned_image(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             _make_request("run_a", digest="quantconnect/lean:latest")
 
     def test_pydantic_rejects_nonpositive_limit(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             LaunchRequest(
                 run_id="run_a",
                 image_digest=DUMMY_DIGEST,
@@ -90,3 +91,39 @@ class TestLaunchValidation:
         with pytest.raises(LaunchRejectedError) as ei:
             launch(req, artifacts_root=tmp_artifacts_root)
         assert ei.value.reason == "runner_configuration_error"
+
+
+class TestWorkspaceSizeEnforcement:
+    """Post-run ``workspace_max_mb`` enforcement.
+
+    Tests against the helper, not a real ``execute()`` — exercising the
+    enforcement contract without spawning a container. The integration
+    of helper + enforcement is covered by the E2E tests where the LEAN
+    container actually writes output.
+    """
+
+    def test_under_cap_passes(self, tmp_path: Path) -> None:
+        from app.lean_sidecar.launcher.service import _workspace_size_bytes
+
+        (tmp_path / "small.bin").write_bytes(b"x" * 1024)
+        assert _workspace_size_bytes(tmp_path) == 1024
+
+    def test_over_cap_detectable(self, tmp_path: Path) -> None:
+        from app.lean_sidecar.launcher.service import _workspace_size_bytes
+
+        # Write 3 MiB; cap test in launch() then catches > 2 * (1 << 20).
+        (tmp_path / "big.bin").write_bytes(b"y" * (3 * (1 << 20)))
+        assert _workspace_size_bytes(tmp_path) > 2 * (1 << 20)
+
+    def test_ignores_symlinks(self, tmp_path: Path) -> None:
+        from app.lean_sidecar.launcher.service import _workspace_size_bytes
+
+        target = tmp_path / "real.bin"
+        target.write_bytes(b"z" * 100)
+        link = tmp_path / "link.bin"
+        try:
+            link.symlink_to(target)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this host (Windows w/o priv)")
+        # The link is skipped; only the real file is counted.
+        assert _workspace_size_bytes(tmp_path) == 100

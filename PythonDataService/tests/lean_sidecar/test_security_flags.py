@@ -97,7 +97,13 @@ class TestHardeningFlagMatrix:
             pytest.xfail(f"LEAN image does not run as non-root by default; stderr=\n{result.stderr}")
 
     def test_combined_required_shape(self) -> None:
-        """All survivors together. The ADR records this exact set."""
+        """All survivors together. The ADR records this exact set.
+
+        Hard-asserts rather than xfails: if the combined shape ever
+        regresses, the launcher's mandatory flag set is no longer
+        viable on the pinned image and that is a gating PR-blocker,
+        not a flaky-test note.
+        """
         result = _run_smoke(
             iter(
                 [
@@ -109,8 +115,4 @@ class TestHardeningFlagMatrix:
                 ]
             )
         )
-        if result.returncode != 0:
-            pytest.xfail(
-                "Combined hardening shape rejected; "
-                f"individual flags may pass while combined fails. stderr=\n{result.stderr}"
-            )
+        assert result.returncode == 0, f"combined hardening shape rejected by image; stderr=\n{result.stderr}"

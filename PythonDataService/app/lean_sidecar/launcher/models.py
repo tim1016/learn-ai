@@ -32,8 +32,14 @@ class LaunchRequest(BaseModel):
     wall_clock_timeout_s: int = Field(..., gt=0)
     workspace_max_mb: int = Field(..., gt=0)
     log_tail_bytes: int = Field(..., gt=0)
-    hardening_flags: list[str] = Field(default_factory=list)
-    extra_image_args: list[str] = Field(default_factory=list)
+    hardening_flags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional --read-only / --tmpfs tokens. Every token must be in "
+            "ALLOWED_HARDENING_TOKENS; the launcher refuses unknown tokens "
+            "to prevent sandbox-widening flags like --privileged."
+        ),
+    )
 
     @field_validator("run_id")
     @classmethod

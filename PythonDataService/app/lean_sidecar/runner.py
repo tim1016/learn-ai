@@ -41,6 +41,32 @@ class RunnerConfigurationError(RuntimeError):
 # visible to the LEAN container.
 CONTAINER_WORKSPACE_MOUNT = "/lean-run"
 
+# Token-level allow-list for caller-supplied hardening flags.
+#
+# The launcher boundary forwards a caller's ``hardening_flags`` to
+# ``podman run`` between the mandatory flags and the image reference,
+# so a permissive forward (``--privileged``, ``--cap-add=SYS_ADMIN``,
+# ``--security-opt=seccomp=unconfined``, etc.) would silently widen the
+# sandbox. Every token a caller passes must appear in this set; an
+# unrecognized token aborts the run with ``RunnerConfigurationError``.
+#
+# The set lists individual argv tokens, not full flag strings, because
+# multi-token flags (``--tmpfs <spec>``, ``--user <uid:gid>``) split
+# across two argv entries. Adding a new flag is a deliberate change
+# this set documents.
+ALLOWED_HARDENING_TOKENS: frozenset[str] = frozenset(
+    {
+        # --read-only is a single token.
+        "--read-only",
+        # --tmpfs takes a second token; allow both the flag and the
+        # specific tmpfs specs we've validated.
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=256m",
+        "/tmp:rw,noexec,nosuid,size=64m",
+        "/Lean/Launcher/bin/Debug/storage:rw,noexec,nosuid,size=256m",
+    }
+)
+
 # LEAN's launcher reads ``config.json`` from its working directory by
 # default. The image's working dir is ``/Lean/Launcher/bin/Debug`` and
 # the image ships a default ``config.json`` there pointing at the
@@ -107,12 +133,27 @@ def _require_image_in_allowlist(image_digest: str) -> str:
     return f"{LEAN_IMAGE_REPO}@{bare}"
 
 
+def _validate_hardening_flags(hardening_flags: tuple[str, ...]) -> None:
+    """Reject hardening tokens not on the allow-list.
+
+    Every individual argv token must be in ``ALLOWED_HARDENING_TOKENS``.
+    Any unknown token (``--privileged``, ``--cap-add=...``,
+    ``--security-opt=...``, etc.) aborts the run; callers cannot widen
+    the sandbox through the launcher API.
+    """
+    unknown = [t for t in hardening_flags if t not in ALLOWED_HARDENING_TOKENS]
+    if unknown:
+        raise RunnerConfigurationError(
+            f"hardening_flags rejected — tokens not on the allow-list: {unknown}. "
+            f"Allowed tokens: {sorted(ALLOWED_HARDENING_TOKENS)}"
+        )
+
+
 def build_command(
     workspace: Workspace,
     image_digest: str,
     *,
     limits: RunLimits = DEFAULT_RUN_LIMITS,
-    extra_image_args: tuple[str, ...] = (),
     hardening_flags: tuple[str, ...] = (),
 ) -> RunnerPlan:
     """Construct the `podman run` argv for this workspace + image.
@@ -122,14 +163,22 @@ def build_command(
     sandbox.
 
     ``hardening_flags`` are the optional flags from the ADR's "if
-    compatible" set (``--cap-drop=ALL``, ``--read-only``, etc.) whose
-    viability was proven by the security-flag matrix test. Callers pass
-    in whichever survive on the pinned image; an empty tuple is the
-    safe default for Phase 1 spike runs against an unproven image.
+    compatible" set (``--read-only``, ``--tmpfs ...``) whose viability
+    was proven by the security-flag matrix test. Every token must be in
+    :data:`ALLOWED_HARDENING_TOKENS`; an empty tuple is the safe
+    default. ``--cap-drop=ALL`` and ``--pids-limit`` are mandatory and
+    never come from the caller.
+
+    There is intentionally **no** ``extra_image_args`` parameter: the
+    LEAN launcher arg list is determined entirely by ``build_command``
+    so a caller cannot tack on flags after the image reference.
     """
     limits.validate()
+    _validate_hardening_flags(hardening_flags)
     if not workspace.workspace_dir.exists():
         raise RunnerConfigurationError(f"workspace directory does not exist: {workspace.workspace_dir}")
+    if not workspace.workspace_dir.is_dir():
+        raise RunnerConfigurationError(f"workspace path is not a directory: {workspace.workspace_dir}")
 
     image_reference = _require_image_in_allowlist(image_digest)
     podman = _require_podman()
@@ -157,7 +206,8 @@ def build_command(
         f"{workspace.workspace_dir}:{CONTAINER_WORKSPACE_MOUNT}:rw",
     ]
     # Optional hardening flags survive only if the security-flag matrix
-    # proved the pinned image tolerates them.
+    # proved the pinned image tolerates them. Already validated against
+    # ALLOWED_HARDENING_TOKENS above.
     argv.extend(hardening_flags)
     argv.append(image_reference)
     # The LEAN launcher's first arg is always ``--config <path>`` so it
@@ -165,7 +215,6 @@ def build_command(
     # safety floor: forgetting it silently runs the default template
     # algorithm and the run looks "successful" with empty output.
     argv.extend(["--config", CONTAINER_LEAN_CONFIG_PATH])
-    argv.extend(extra_image_args)
     return RunnerPlan(image_reference=image_reference, argv=tuple(argv))
 
 

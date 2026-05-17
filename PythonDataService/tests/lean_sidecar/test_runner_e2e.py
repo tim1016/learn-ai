@@ -26,7 +26,7 @@ import pytest
 
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
-from app.lean_sidecar.launcher.models import LaunchRequest
+from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
 from app.lean_sidecar.launcher.service import launch
 from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.staging import (
@@ -36,7 +36,7 @@ from app.lean_sidecar.staging import (
     stage_minute_bars,
 )
 from app.lean_sidecar.trusted_samples.buy_and_hold import BUY_AND_HOLD_SOURCE
-from app.lean_sidecar.workspace import resolve_workspace
+from app.lean_sidecar.workspace import Workspace, resolve_workspace
 from tests.lean_sidecar.test_data_folder_fidelity import _make_minute_bars
 
 pytestmark = [
@@ -71,7 +71,7 @@ def _allow_pinned_digest_or_skip(monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 def _stage_trusted_sample(
-    ws,
+    ws: Workspace,
     digest: str,
 ) -> None:
     """Stage 5 days of deterministic SPY minute bars + metadata +
@@ -99,7 +99,7 @@ def _stage_trusted_sample(
     )
 
 
-def _base_request(run_id: str, digest: str, **overrides) -> LaunchRequest:
+def _base_request(run_id: str, digest: str, **overrides: object) -> LaunchRequest:
     kwargs = dict(
         run_id=run_id,
         image_digest=digest,
@@ -114,7 +114,7 @@ def _base_request(run_id: str, digest: str, **overrides) -> LaunchRequest:
     return LaunchRequest(**kwargs)
 
 
-def _assert_clean_run(ws, response) -> None:
+def _assert_clean_run(ws: Workspace, response: LaunchResponse) -> None:
     assert ws.launcher_log_path.exists()
     log_text = ws.launcher_log_path.read_text(encoding="utf-8")
     assert "podman" in log_text.lower()
@@ -133,7 +133,14 @@ class TestEndToEndTrustedSample:
         tmp_artifacts_root: Path,
         _allow_pinned_digest_or_skip: str,
     ) -> None:
-        """Baseline E2E: launch with only the mandatory security shape."""
+        """Baseline E2E: launch with only the mandatory security shape.
+
+        The mandatory shape already includes ``--cap-drop=ALL`` (promoted
+        to mandatory in Phase 1b after the security-flag matrix proved
+        the LEAN runtime tolerates it). So this single passing test
+        also covers "LEAN runs with --cap-drop=ALL"; no separate variant
+        is needed.
+        """
         run_id = "e2e_buy_and_hold"
         ws = resolve_workspace(run_id, tmp_artifacts_root)
         digest = _allow_pinned_digest_or_skip
@@ -143,28 +150,10 @@ class TestEndToEndTrustedSample:
             artifacts_root=tmp_artifacts_root,
         )
         _assert_clean_run(ws, response)
-
-    def test_buy_and_hold_runs_with_cap_drop_all(
-        self,
-        tmp_artifacts_root: Path,
-        _allow_pinned_digest_or_skip: str,
-    ) -> None:
-        """LEAN's full backtest path tolerates ``--cap-drop=ALL``.
-
-        The security-flag matrix only proves podman accepts the flag at
-        container creation; this proves LEAN's actual runtime (JIT,
-        Python.NET bridge, file I/O) does not need any of the dropped
-        capabilities.
-        """
-        run_id = "e2e_capdrop"
-        ws = resolve_workspace(run_id, tmp_artifacts_root)
-        digest = _allow_pinned_digest_or_skip
-        _stage_trusted_sample(ws, digest)
-        response = launch(
-            _base_request(run_id, digest, hardening_flags=["--cap-drop=ALL"]),
-            artifacts_root=tmp_artifacts_root,
-        )
-        _assert_clean_run(ws, response)
+        # Cap-drop is part of the mandatory argv; the launcher.log
+        # writes the plan before execution, so we can assert from the
+        # log instead of stubbing the runner.
+        assert "--cap-drop=ALL" in ws.launcher_log_path.read_text(encoding="utf-8")
 
     def test_buy_and_hold_runs_with_read_only_root(
         self,
@@ -197,7 +186,6 @@ class TestEndToEndTrustedSample:
                 run_id,
                 digest,
                 hardening_flags=[
-                    "--cap-drop=ALL",
                     "--read-only",
                     "--tmpfs",
                     "/tmp:rw,noexec,nosuid,size=256m",

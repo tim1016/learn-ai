@@ -1,4 +1,4 @@
-"""Trusted Phase 1 sample: buy-and-hold SPY for one day.
+"""Trusted Phase 1 sample: buy-and-hold SPY for the trusted-sample window.
 
 This is the *source* the sidecar copies into ``workspace/project/main.py``
 before launching LEAN. It is intentionally trivial so the Phase 1 spike

@@ -12,6 +12,7 @@ contract" and §"LEAN data-folder fidelity".
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -25,6 +26,8 @@ from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import LEAN_IMAGE_REPO
 from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.workspace import Workspace
+
+logger = logging.getLogger(__name__)
 
 # Paths inside the LEAN image where the bundled metadata databases live.
 # These are part of the image's release artifact, not something the
@@ -175,14 +178,25 @@ def stage_lean_metadata_from_image(
     workspace.ensure_layout()
     workspace.data_dir.mkdir(parents=True, exist_ok=True)
 
+    # Bounded podman subprocess timeouts: a hung podman would otherwise
+    # stall the launch critical path indefinitely. 30s for create+cp
+    # (a hot pull is sub-second; 30s is generous), 15s for rm.
+    _CREATE_TIMEOUT_S = 30
+    _CP_TIMEOUT_S = 30
+    _RM_TIMEOUT_S = 15
+
     # ``podman create`` returns a container id we then ``cp`` out of.
     # We do not ``run`` it; nothing inside the image executes here.
-    create = subprocess.run(
-        [podman, "create", "--network=none", image_ref],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        create = subprocess.run(
+            [podman, "create", "--network=none", image_ref],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_CREATE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise MetadataStagingError(f"podman create timed out after {_CREATE_TIMEOUT_S}s") from e
     if create.returncode != 0:
         raise MetadataStagingError(f"podman create failed: {create.stderr.strip()}")
     container_id = create.stdout.strip()
@@ -195,27 +209,43 @@ def stage_lean_metadata_from_image(
     env = {**os.environ, "MSYS_NO_PATHCONV": "1"}
     try:
         for src in (IMAGE_MARKET_HOURS, IMAGE_SYMBOL_PROPERTIES):
-            cp = subprocess.run(
-                [
-                    podman,
-                    "cp",
-                    f"{container_id}:{src}",
-                    str(workspace.data_dir),
-                ],
-                capture_output=True,
-                text=True,
-                env=env,
-                check=False,
-            )
+            try:
+                cp = subprocess.run(
+                    [
+                        podman,
+                        "cp",
+                        f"{container_id}:{src}",
+                        str(workspace.data_dir),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    check=False,
+                    timeout=_CP_TIMEOUT_S,
+                )
+            except subprocess.TimeoutExpired as e:
+                raise MetadataStagingError(f"podman cp {src} timed out after {_CP_TIMEOUT_S}s") from e
             if cp.returncode != 0:
                 raise MetadataStagingError(f"podman cp {src} failed: {cp.stderr.strip()}")
     finally:
-        subprocess.run(
-            [podman, "rm", container_id],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        # ``rm`` is best-effort cleanup; a timeout here leaves a
+        # stopped container behind which an operator can garbage-
+        # collect, so we do not raise.
+        try:
+            subprocess.run(
+                [podman, "rm", container_id],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_RM_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            # Best-effort: a stopped container is recoverable manually.
+            logger.warning(
+                "podman rm %s timed out after %ss; container left behind",
+                container_id,
+                _RM_TIMEOUT_S,
+            )
 
     mh, sp = list_metadata_databases(workspace)
     if mh is None or sp is None:

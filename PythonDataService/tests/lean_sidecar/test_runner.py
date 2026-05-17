@@ -65,6 +65,11 @@ class TestBuildCommand:
         assert any(a.startswith("--cpus=") for a in argv)
         assert any(a.startswith("--memory=") for a in argv)
         assert any(a.startswith("--pids-limit=") for a in argv)
+        # The LEAN launcher arg ``--config <workspace-path>`` is always
+        # appended after the image; without it LEAN runs the image-baked
+        # default config silently.
+        assert "--config" in argv
+        assert "/lean-run/project/config.json" in argv
         # Workspace mount is exactly the workspace directory.
         mount_arg_idx = argv.index("-v")
         mount_spec = argv[mount_arg_idx + 1]
@@ -101,6 +106,70 @@ class TestBuildCommand:
         # Note: ensure_layout NOT called.
         with pytest.raises(RunnerConfigurationError):
             build_command(ws, DUMMY_DIGEST)
+
+    def test_refuses_workspace_that_is_a_file(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+    ) -> None:
+        ws = resolve_workspace("run_x5", tmp_artifacts_root)
+        # Place a regular file where the workspace directory should be.
+        # This is a misconfiguration we want to fail fast on.
+        ws.root.mkdir(parents=True, exist_ok=True)
+        ws.workspace_dir.write_text("not a directory", encoding="utf-8")
+        with pytest.raises(RunnerConfigurationError, match="not a directory"):
+            build_command(ws, DUMMY_DIGEST)
+
+    @pytest.mark.parametrize(
+        "bad_token",
+        [
+            "--privileged",
+            "--cap-add=SYS_ADMIN",
+            "--security-opt=seccomp=unconfined",
+            "--network=host",
+            "--user=0:0",
+            "--volume=/etc:/host-etc",
+        ],
+    )
+    def test_refuses_sandbox_widening_hardening_flag(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+        bad_token: str,
+    ) -> None:
+        """Hardening flags from a caller can never widen the sandbox.
+
+        The launcher boundary forwards ``hardening_flags`` straight into
+        the ``podman run`` argv; a caller passing ``--privileged`` or
+        anything similarly permissive must be rejected with a clear
+        error before any container is spawned.
+        """
+        ws = resolve_workspace("run_x6", tmp_artifacts_root)
+        ws.ensure_layout()
+        with pytest.raises(RunnerConfigurationError, match="not on the allow-list"):
+            build_command(ws, DUMMY_DIGEST, hardening_flags=(bad_token,))
+
+    def test_accepts_allow_listed_hardening_tokens(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+    ) -> None:
+        ws = resolve_workspace("run_x7", tmp_artifacts_root)
+        ws.ensure_layout()
+        # All tokens here must be in ALLOWED_HARDENING_TOKENS.
+        plan = build_command(
+            ws,
+            DUMMY_DIGEST,
+            hardening_flags=(
+                "--read-only",
+                "--tmpfs",
+                "/tmp:rw,noexec,nosuid,size=256m",
+            ),
+        )
+        argv = plan.argv
+        assert "--read-only" in argv
+        assert "--tmpfs" in argv
+        assert "/tmp:rw,noexec,nosuid,size=256m" in argv
 
 
 class TestRunLimits:
