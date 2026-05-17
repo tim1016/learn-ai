@@ -212,19 +212,18 @@ class TestPostTrustedRunValidation:
         r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
         assert r.status_code == 422
 
-    async def test_algorithm_source_optional(self, client: AsyncClient) -> None:
-        """Phase 4c: omitting algorithm_source falls back to the
-        trusted sample. This is the Phase 4a default behavior — the
-        new field is additive."""
+    async def test_algorithm_source_optional(self) -> None:
+        """Phase 4c: omitting ``algorithm_source`` is valid — the
+        server falls back to the trusted sample. This is a schema-only
+        test (no HTTP round-trip) so it does not depend on the host
+        having podman or the LEAN image — Phase 1c sandbox wiring is
+        tested separately in ``test_router_lean_sidecar_e2e.py``."""
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
         payload = _good_payload()
         assert "algorithm_source" not in payload
-        # Validates locally (422 not expected since required validation
-        # happens upstream of launcher; we just check the schema
-        # accepts the payload).
-        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        # Either 200 (if launcher reachable) or 503 (launcher absent).
-        # NOT 422 — the payload shape is valid.
-        assert r.status_code != 422, r.text
+        model = TrustedRunRequestModel.model_validate(payload)
+        assert model.algorithm_source is None
 
     async def test_algorithm_source_empty_string_rejected(self, client: AsyncClient) -> None:
         payload = _good_payload()
@@ -243,13 +242,18 @@ class TestPostTrustedRunValidation:
         assert r.status_code == 422
         assert "bytes" in r.text.lower() or "max" in r.text.lower()
 
-    async def test_algorithm_source_within_cap_accepted(self, client: AsyncClient) -> None:
-        """Right at the boundary — a 200 KiB source must pass schema."""
+    async def test_algorithm_source_within_cap_accepted(self) -> None:
+        """Right at the boundary — a 200 KiB source must pass schema.
+        Schema-only assertion: a real HTTP round-trip on CI would need
+        podman + the LEAN image, which are Phase 1c E2E concerns and
+        live in ``test_router_lean_sidecar_e2e.py``."""
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
         payload = _good_payload()
         payload["algorithm_source"] = "# " + "x" * (200 * 1024)
-        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        # Either 200/503 — NOT 422.
-        assert r.status_code != 422
+        model = TrustedRunRequestModel.model_validate(payload)
+        assert model.algorithm_source is not None
+        assert len(model.algorithm_source.encode("utf-8")) == 200 * 1024 + 2
 
     @pytest.mark.parametrize(
         "bad_symbol",
