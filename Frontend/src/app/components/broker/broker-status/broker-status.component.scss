@@ -193,6 +193,31 @@
     outline: 2px solid var(--accent, #2563eb);
     outline-offset: 2px;
   }
+
+  // Connect when disconnected is the operator's primary intent — promote it
+  // visually so it stands out from the muted Refresh / Diagnose / Reconnect
+  // siblings. Same height/padding so the row stays balanced.
+  &.primary-cta {
+    background: var(--accent, #2563eb);
+    border-color: var(--accent, #2563eb);
+    color: #ffffff;
+    font-weight: 600;
+
+    &:hover:not(:disabled) {
+      background: var(--accent-hover, #1d4ed8);
+      border-color: var(--accent-hover, #1d4ed8);
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+  }
+}
+
+.lifecycle-actions {
+  display: inline-flex;
+  gap: 0.5rem;
 }
 
 .positions-table {

@@ -28,12 +28,28 @@ import { BrokerHealthService } from '../services/broker-health.service';
       >
         <span class="broker-banner-icon" aria-hidden="true">{{ state.icon }}</span>
         <span class="broker-banner-text">{{ state.text }}</span>
+        @if (state.kind === 'disconnected') {
+          <button
+            type="button"
+            class="broker-banner-cta"
+            (click)="connect()"
+            [disabled]="connecting()"
+            aria-label="Connect to IB Gateway"
+          >
+            {{ connecting() ? 'Connecting…' : 'Connect' }}
+          </button>
+        }
       </div>
     }
   `,
 })
 export class BrokerBannerComponent {
   private readonly healthService = inject(BrokerHealthService);
+  readonly connecting = this.healthService.connecting;
+
+  connect(): Promise<void> {
+    return this.healthService.connect();
+  }
 
   readonly banner = computed(() => {
     const state = this.healthService.bannerState();

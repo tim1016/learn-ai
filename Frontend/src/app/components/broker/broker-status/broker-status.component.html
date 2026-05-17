@@ -23,47 +23,53 @@
     <i class="pi pi-exclamation-circle" aria-hidden="true"></i>
     <span>{{ diagnostics().loading ? 'Diagnosing…' : 'Diagnose' }}</span>
   </button>
-  @if (lifecycleControlsVisible()) {
-    @let action = lifecycleAction();
-    @let connected = health()?.connected === true;
-    @if (!connected) {
+  <!--
+    All lifecycle buttons live inside a single permanent <span slot="actions">.
+    Angular's content-projection selectors only see top-level children of the
+    host — wrapping projected elements in an @if block hides them from
+    <ng-content select="[slot=actions]">. The span gets projected; the @if
+    blocks inside it render normally.
+  -->
+  <span slot="actions" class="lifecycle-actions">
+    @if (lifecycleControlsVisible()) {
+      @let action = lifecycleAction();
+      @let connected = health()?.connected === true;
+      @if (!connected) {
+        <button
+          type="button"
+          class="refresh-btn connect-btn primary-cta"
+          (click)="connect()"
+          [disabled]="action !== null"
+          aria-label="Connect to IB Gateway"
+        >
+          <i class="pi pi-link" aria-hidden="true"></i>
+          <span>{{ action === 'connect' ? 'Connecting…' : 'Connect' }}</span>
+        </button>
+      }
+      @if (connected) {
+        <button
+          type="button"
+          class="refresh-btn disconnect-btn"
+          (click)="disconnect()"
+          [disabled]="action !== null"
+          aria-label="Disconnect from IB Gateway"
+        >
+          <i class="pi pi-power-off" aria-hidden="true"></i>
+          <span>{{ action === 'disconnect' ? 'Disconnecting…' : 'Disconnect' }}</span>
+        </button>
+      }
       <button
-        slot="actions"
         type="button"
-        class="refresh-btn connect-btn"
-        (click)="connect()"
+        class="refresh-btn reconnect-btn"
+        (click)="reconnect()"
         [disabled]="action !== null"
-        aria-label="Connect to IB Gateway"
+        aria-label="Reconnect to IB Gateway"
       >
-        <i class="pi pi-link" aria-hidden="true"></i>
-        <span>{{ action === 'connect' ? 'Connecting…' : 'Connect' }}</span>
+        <i class="pi pi-replay" aria-hidden="true"></i>
+        <span>{{ action === 'reconnect' ? 'Reconnecting…' : 'Reconnect' }}</span>
       </button>
     }
-    @if (connected) {
-      <button
-        slot="actions"
-        type="button"
-        class="refresh-btn disconnect-btn"
-        (click)="disconnect()"
-        [disabled]="action !== null"
-        aria-label="Disconnect from IB Gateway"
-      >
-        <i class="pi pi-power-off" aria-hidden="true"></i>
-        <span>{{ action === 'disconnect' ? 'Disconnecting…' : 'Disconnect' }}</span>
-      </button>
-    }
-    <button
-      slot="actions"
-      type="button"
-      class="refresh-btn reconnect-btn"
-      (click)="reconnect()"
-      [disabled]="action !== null"
-      aria-label="Reconnect to IB Gateway"
-    >
-      <i class="pi pi-replay" aria-hidden="true"></i>
-      <span>{{ action === 'reconnect' ? 'Reconnecting…' : 'Reconnect' }}</span>
-    </button>
-  }
+  </span>
   <app-page-guide
     slot="guide"
     pulls="GET /api/broker/health (5 s poll), /account (snapshot), and /positions (snapshot)."

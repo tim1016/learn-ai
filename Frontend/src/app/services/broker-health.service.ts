@@ -25,6 +25,14 @@ export class BrokerHealthService {
 
   readonly health = signal<IbkrConnectionHealth | null>(null);
   readonly lastError = signal<unknown | null>(null);
+  /**
+   * True while a connect call initiated from the global banner is in
+   * flight — banners and per-page controls should disable their Connect
+   * buttons together to keep the asyncio lock on the server from
+   * surfacing as a confusing race.
+   */
+  readonly connecting = signal<boolean>(false);
+  readonly connectError = signal<unknown | null>(null);
 
   /**
    * The banner state derived from the latest health snapshot. ``null``
@@ -82,6 +90,26 @@ export class BrokerHealthService {
       // crashing the poll.
       this.lastError.set(err);
       this.health.set(null);
+    }
+  }
+
+  /**
+   * Drive ``POST /api/broker/connect`` and refresh health on completion.
+   * Shared by the global disconnected banner and the Broker Status page
+   * so a click in either place is the same lifecycle action — and the
+   * ``connecting`` signal locks both controls together.
+   */
+  async connect(): Promise<void> {
+    if (this.connecting()) return;
+    this.connecting.set(true);
+    this.connectError.set(null);
+    try {
+      await this.broker.connect();
+    } catch (err) {
+      this.connectError.set(err);
+    } finally {
+      this.connecting.set(false);
+      await this.refresh();
     }
   }
 
