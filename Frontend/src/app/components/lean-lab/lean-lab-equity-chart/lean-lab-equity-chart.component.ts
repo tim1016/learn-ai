@@ -91,8 +91,12 @@ export class LeanLabEquityChartComponent implements AfterViewInit, OnDestroy {
   ngAfterViewInit(): void {
     const el = this.container().nativeElement;
     this.chart = createChart(el, {
-      width: el.clientWidth,
-      height: el.clientHeight,
+      // ``autoSize: true`` makes lightweight-charts attach its own
+      // ResizeObserver to the container so the canvas tracks layout
+      // changes (window resize, responsive breakpoint, parent
+      // collapse/expand). Without it, the one-time width/height pin
+      // at mount silently goes stale and the chart renders clipped.
+      autoSize: true,
       layout: {
         background: { color: DARK.bg },
         textColor: DARK.text,
