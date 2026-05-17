@@ -1,13 +1,19 @@
 # LEAN Sidecar Lab
 
-**Status:** Phase 0 — architecture decision record
+**Status:** Phase 1 — runner spike in progress (Phase 1a partially shipped)
 **Last reviewed:** 2026-05-17
 **Pairs with:** `docs/architecture/engine-authority-map.md`, `docs/references/lean-engine.md`, `.claude/rules/numerical-rigor.md`
 
 This document is the authority for the **LEAN Lab** feature — a UI surface in learn-ai where the user pastes or edits a real `QCAlgorithm` and runs it through an isolated official LEAN runner sidecar. It exists because the alternative ("just shell out to LEAN from FastAPI") quietly violates several invariants this repo depends on.
 
-Phase 0 lands this decision record plus the matching row in
-`docs/architecture/engine-authority-map.md`. Code starts in Phase 1.
+Phase 0 landed this decision record plus the matching row in
+`docs/architecture/engine-authority-map.md`. Phase 1a (this PR) lands
+the runnable surface: launcher service, podman-shape runner, manifest
+writer, workspace contract, LEAN data-folder staging, trusted
+`MyAlgorithm` Python sample, and the round-trip fidelity fixture for
+the LEAN data-folder contract. Image digest pin and the security-flag
+matrix outcome land in Phase 1b once the `podman pull` finishes
+locally — both are tracked in `247-Critical-feedback.md`.
 
 ---
 
@@ -419,6 +425,28 @@ The original plan's six phases are retained, with these adjustments encoded by P
 - **Phase 3 — renamed *Container Execution Boundary + Fidelity Boundary*** — is the gating phase before any UI takes arbitrary user input. The UI from Phase 4 may exist earlier only with a hardcoded trusted sample algorithm (no `algorithm_source` field, no textarea). This phase also lands the normalized parser tests, manifest hashing, disk-cap enforcement, and explicit compatibility-vs-reconciliation run classification.
 - **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. From this phase onward, a successful run must be possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
 - **Phases 5-6** - unchanged in scope.
+
+### Phase 1a progress (2026-05-17)
+
+Shipped in PR following Phase 0:
+
+- (a) **Launcher service authored** — `PythonDataService/app/lean_sidecar/launcher/`. Pydantic request model enforces digest pin + run-id slug + limit positivity. The service writes the planned `podman run` argv to `workspace/launcher/launcher.log` *before* spawning so an audit trail survives a launcher crash. `LaunchRejectedError.reason` is a stable label (`"workspace_not_staged"`, `"runner_configuration_error"`, `"invalid_run_id_or_path"`) for caller-side routing without parsing free text.
+- (a, cont.) **Workspace path-under-root contract** — `app/lean_sidecar/workspace.py`. `run_id` is a strict slug (`^[a-z0-9][a-z0-9_-]{2,63}$`); resolution rejects symlink escapes; layout creation is idempotent.
+- (e) **LEAN data-folder fidelity proof** — `tests/lean_sidecar/test_data_folder_fidelity.py` (7 cases). Asserts deci-cent round-trip (the integer disk encoding is exactly `price * 10000`), ET timestamp normalization (UTC inputs serialize to the equivalent ET ms-since-midnight), canonical zip layout (`equity/usa/minute/<sym>/<YYYYMMDD>_trade.zip`), and the LEAN quantization floor at `0.0001` for the smallest representable price.
+- **Manifest contract** — `app/lean_sidecar/manifest.py`. All `int64 ms UTC`; the serializer refuses `datetime` objects at the boundary; atomic temp+rename write; sorted-pretty JSON so the file hash is stable across Python dict-iteration changes.
+- **Trusted Python sample** — `app/lean_sidecar/trusted_samples/buy_and_hold.py`. Class is `MyAlgorithm` (matches the ADR's documented default). `SetCash` is explicit, `fillForward=False`, `DataNormalizationMode.Raw` — the reconciliation-grade defaults from §"Fill-forward policy" and §"Data normalization mode policy" are wired in from the start so the sample is reconciliation-eligible without a future rewrite.
+- **`config.json` authoring** — `app/lean_sidecar/lean_config.py`. Container-side paths hard-coded against the `/lean-run` mount; sorted-pretty JSON for stable hashing. Phase 1 confirms the exact key names against the pinned image (see Open Questions §5).
+- **Test surface** — 59 unit tests passing; security-flag matrix + E2E sidecar test gated on the locally-pulled LEAN image (skip-with-clear-reason on hosts that have not pulled it).
+
+Open from this PR, queued for Phase 1b:
+
+- (b) **Image digest pin** — `podman pull quantconnect/lean` did not finish in the Phase 1a session. Pin script ships at `PythonDataService/scripts/lean_sidecar_pin_image.py`; once the pull lands, run it to rewrite `app/lean_sidecar/config.py`'s `PINNED_LEAN_IMAGE_DIGEST` and update the digest row in this doc in the same commit.
+- (c) **Windows topology proof** — provisional: launcher runs as a host Python process invoking `podman` over the WSL2/podman-machine VM; data plane reaches it on localhost. UID/GID for the mounted workspace, exact CRLF behavior on the source file, and whether to wrap the launcher in its own container with only the Podman socket mounted are deferred to Phase 1b.
+- (d) **Security-flag matrix** — `test_security_flags.py` is written and runs as soon as the image lands; results land in this section in the same commit that pins the digest.
+- (f) **Factor/map/metadata staging for the trusted sample** — Phase 1a stages only the bar zips, since the trusted-sample window has no corporate actions and runs against image-baked metadata defaults. Phase 1b stages and hashes the metadata databases plus factor/map files for the trusted sample window so reconciliation-grade fixtures are reproducible without image defaults.
+- (g) **End-to-end trusted-sample run** — test exists, skip-gated on image. Runs in Phase 1b on the first run after the digest pin.
+- (h) **Determinism gate** — once the E2E run produces artifacts, the determinism re-run + normalized-artifact comparison lands in Phase 1b.
+- (i) **Date-window / consumption gate** — the trusted sample writes observed `(ms_utc, close)` pairs into `ObjectStore`; the parser landing in Phase 2 reads them and asserts `bars_consumed_by_symbol[SPY] > 0` plus the three-window alignment from §"Date-window and bar-consumption policy".
 
 ---
 
