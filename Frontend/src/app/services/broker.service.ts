@@ -34,6 +34,24 @@ export class BrokerService {
     return firstValueFrom(this.http.get<DiagnosticReport>(`${this.base}/diagnose`));
   }
 
+  connect(): Promise<IbkrConnectionHealth> {
+    return firstValueFrom(
+      this.http.post<IbkrConnectionHealth>(`${this.base}/connect`, {}),
+    );
+  }
+
+  disconnect(): Promise<IbkrConnectionHealth> {
+    return firstValueFrom(
+      this.http.post<IbkrConnectionHealth>(`${this.base}/disconnect`, {}),
+    );
+  }
+
+  reconnect(): Promise<IbkrConnectionHealth> {
+    return firstValueFrom(
+      this.http.post<IbkrConnectionHealth>(`${this.base}/reconnect`, {}),
+    );
+  }
+
   account(): Promise<IbkrAccountSummary> {
     return firstValueFrom(this.http.get<IbkrAccountSummary>(`${this.base}/account`));
   }

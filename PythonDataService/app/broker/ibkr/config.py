@@ -109,6 +109,13 @@ class IbkrSettings(BaseSettings):
     # stays up to serve the live-runs artifact router but does not connect.
     broker_enabled: bool = True
 
+    # Auto-connect during FastAPI startup. When False, the lifespan
+    # instantiates the IbkrClient but does NOT call connect(); the operator
+    # is expected to drive the lifecycle from the Status page via
+    # ``POST /api/broker/connect``. ``broker_enabled=false`` takes precedence —
+    # this flag has no effect when the broker subsystem is disabled.
+    connect_on_startup: bool = True
+
     # Artifact root for live-run directories. Host path differs from container
     # path due to the compose volume mount; surfaced as config so tests can
     # parameterise it. Container default: /app/artifacts/live_runs.

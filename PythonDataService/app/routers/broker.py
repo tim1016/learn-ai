@@ -7,6 +7,10 @@ no tight coupling to ``ib_async`` types crosses this boundary.
 Endpoints (Phase 1 + Phase 2 + Phase 3):
 
 * ``GET /api/broker/health`` — connection + sentinel.
+* ``GET /api/broker/diagnose`` — layered self-test (read-only).
+* ``POST /api/broker/connect`` — establish IBKR connection (idempotent).
+* ``POST /api/broker/disconnect`` — drop the session (idempotent).
+* ``POST /api/broker/reconnect`` — disconnect-then-connect.
 * ``GET /api/broker/expirations/{symbol}`` — list expiries.
 * ``GET /api/broker/option-chain/{symbol}`` — SSE chain stream.
 * ``GET /api/broker/account`` — one-shot account summary (Phase 2a).
@@ -34,8 +38,12 @@ from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr import contracts as ibkr_contracts
 from app.broker.ibkr.client import (
     BrokerError,
+    ConnectionRefusedDueToSentinelError,
+    IbkrClient,
+    IbkrClientIdInUseError,
     NotConnectedError,
     get_client,
+    set_client,
 )
 from app.broker.ibkr.diagnostics import run_diagnostics
 from app.broker.ibkr.market_data import stream_option_chain
@@ -79,6 +87,15 @@ logger = logging.getLogger(__name__)
 # Used by DiagnosticReportDisabled.since_ms so each request doesn't generate
 # a fresh timestamp that shifts on every poll.
 _BROKER_DISABLED_SINCE_MS: int = int(time.time() * 1000)
+
+# Serialises POST /connect | /disconnect | /reconnect so two concurrent
+# operator clicks do not race ``IbkrClient.connect`` against itself.
+_lifecycle_lock = asyncio.Lock()
+
+# Factory indirection so tests can monkeypatch the client constructor
+# without having ``ib_async`` installed. Production callers see the real
+# class; tests substitute a fake.
+_ibkr_client_factory: type[IbkrClient] = IbkrClient
 
 
 # ── /health ────────────────────────────────────────────────────────────
@@ -151,6 +168,129 @@ async def broker_diagnose() -> DiagnosticReport:
             since_ms=_BROKER_DISABLED_SINCE_MS,
         )
     return await run_diagnostics()
+
+
+# ── /connect | /disconnect | /reconnect ────────────────────────────────
+
+
+@router.post("/connect", response_model=IbkrConnectionHealth)
+async def connect_endpoint() -> IbkrConnectionHealth:
+    """Establish (or confirm) the IBKR connection. Idempotent.
+
+    Returns the current health if already connected — no second
+    ``connectAsync`` is issued. Serialised against /disconnect and
+    /reconnect via a process-wide asyncio lock.
+    """
+    _raise_if_disabled()
+    async with _lifecycle_lock:
+        client = _get_or_create_client()
+        if client.is_connected():
+            return client.health()
+        return await _connect_and_install(client)
+
+
+@router.post("/disconnect", response_model=IbkrConnectionHealth)
+async def disconnect_endpoint() -> IbkrConnectionHealth:
+    """Disconnect from IB Gateway / TWS. Idempotent.
+
+    Returns a disconnected health snapshot if there is no client to
+    disconnect; otherwise returns the post-disconnect health.
+    """
+    _raise_if_disabled()
+    async with _lifecycle_lock:
+        try:
+            client = get_client()
+        except NotConnectedError:
+            return _synthesize_disconnected_health()
+        await _disconnect_with_error_mapping(client)
+        return client.health()
+
+
+@router.post("/reconnect", response_model=IbkrConnectionHealth)
+async def reconnect_endpoint() -> IbkrConnectionHealth:
+    """Disconnect (if connected) then connect.
+
+    Useful after a Gateway hiccup or after bumping ``IBKR_CLIENT_ID``
+    to clear a stale session.
+    """
+    _raise_if_disabled()
+    async with _lifecycle_lock:
+        client = _get_or_create_client()
+        if client.is_connected():
+            await _disconnect_with_error_mapping(client)
+        return await _connect_and_install(client)
+
+
+def _raise_if_disabled() -> None:
+    if _is_broker_disabled():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "IBKR broker is disabled (IBKR_BROKER_ENABLED=false). Cannot drive connection lifecycle.",
+        )
+
+
+def _get_or_create_client() -> IbkrClient:
+    try:
+        return get_client()
+    except NotConnectedError:
+        return _ibkr_client_factory()
+
+
+async def _connect_and_install(client: IbkrClient) -> IbkrConnectionHealth:
+    """Call ``client.connect()``, translate errors to HTTPException, install on success."""
+    try:
+        health = await client.connect()
+    except ConnectionRefusedDueToSentinelError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    except IbkrClientIdInUseError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Could not reach IB Gateway: {exc}",
+        ) from exc
+    set_client(client)
+    return health
+
+
+async def _disconnect_with_error_mapping(client: IbkrClient) -> None:
+    """Call ``client.disconnect()``, translating socket / broker errors to 502.
+
+    ``IbkrClient.disconnect()`` wraps a sync ``self._ib.disconnect()`` which
+    can surface ``OSError`` when the socket teardown races a still-pending
+    write. Without this wrapper that bubbles as 500 instead of the
+    broker-facing 502 used by every other lifecycle path. ``NotConnectedError``
+    is also caught defensively so callers can treat disconnect as idempotent
+    even if a future refactor adds a require-connected guard.
+    """
+    try:
+        await client.disconnect()
+    except NotConnectedError:
+        return
+    except (BrokerError, OSError) as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+
+def _synthesize_disconnected_health() -> IbkrConnectionHealth:
+    """Build a disconnected health snapshot when no client exists."""
+    from datetime import UTC, datetime
+
+    from app.broker.ibkr.config import get_settings
+
+    s = get_settings()
+    return IbkrConnectionHealth(
+        mode=s.mode,
+        host=s.host,
+        port=s.port,
+        client_id=s.client_id,
+        connected=False,
+        account_id=None,
+        is_paper=None,
+        server_version=None,
+        fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+    )
 
 
 # ── /account (Phase 2a) ────────────────────────────────────────────────
