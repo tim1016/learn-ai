@@ -256,4 +256,12 @@ class TestEndToEndTrustedSample:
         _assert_trusted_sample_run(ws, response)
         log_text = ws.launcher_log_path.read_text(encoding="utf-8")
         assert "--read-only" in log_text
-        assert "--user=10001:10001" in log_text
+        # ``--user`` is dynamic per host — host UID on Linux,
+        # 10001:10001 fallback on Windows. Pattern-match so the
+        # assertion works across both hosts and rejects --user=0:0
+        # (root) specifically.
+        user_lines = [line for line in log_text.splitlines() if line.startswith("--user=") and ":" in line]
+        assert user_lines, f"no --user=<uid>:<gid> in launcher.log:\n{log_text[-2000:]}"
+        for line in user_lines:
+            uid_str = line.removeprefix("--user=").split(":", 1)[0]
+            assert int(uid_str) > 0, f"container must not run as root, got {line!r}"

@@ -64,7 +64,14 @@ class TestBuildCommand:
         assert "--cap-drop=ALL" in argv
         # Phase 1c — promoted to mandatory after E2E proved viable.
         assert "--read-only" in argv
-        assert "--user=10001:10001" in argv
+        # ``--user`` is dynamic per host (matches host UID on Linux,
+        # falls back to ``10001:10001`` on Windows where ``os.getuid``
+        # is unavailable). Pattern-match rather than literal-match.
+        user_args = [a for a in argv if a.startswith("--user=")]
+        assert len(user_args) == 1, f"expected exactly one --user= flag, got {user_args}"
+        uid_str, gid_str = user_args[0].removeprefix("--user=").split(":", 1)
+        assert int(uid_str) > 0, f"container UID must not be root, got {uid_str}"
+        assert int(gid_str) > 0, f"container GID must not be root, got {gid_str}"
         assert any(a.startswith("--cpus=") for a in argv)
         assert any(a.startswith("--memory=") for a in argv)
         assert any(a.startswith("--pids-limit=") for a in argv)
@@ -193,6 +200,29 @@ class TestBuildCommand:
         ws.ensure_layout()
         with pytest.raises(RunnerConfigurationError, match="requires a value"):
             build_command(ws, DUMMY_DIGEST, hardening_flags=("--tmpfs",))
+
+    def test_container_user_spec_matches_host_uid_on_posix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reviewer P1: on Linux, the container UID must match the
+        launcher's host UID so the container can write to workspace
+        files the launcher just created. Otherwise POSIX permissions
+        reject the cross-UID write and backtests fail."""
+        from app.lean_sidecar import runner
+
+        monkeypatch.setattr(runner.os, "getuid", lambda: 1000, raising=False)
+        monkeypatch.setattr(runner.os, "getgid", lambda: 1000, raising=False)
+        assert runner._container_user_spec() == "1000:1000"
+
+    def test_container_user_spec_falls_back_when_getuid_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """On Windows where ``os.getuid`` does not exist, the helper
+        returns ``10001:10001`` — non-root, fixed, audit-explicit. The
+        WSL2 mount layer doesn't enforce host UID so this just works."""
+        from app.lean_sidecar import runner
+
+        # Simulate Windows native Python by removing getuid/getgid.
+        monkeypatch.delattr(runner.os, "getuid", raising=False)
+        monkeypatch.delattr(runner.os, "getgid", raising=False)
+        spec = runner._container_user_spec()
+        assert spec == "10001:10001"
 
     def test_rejects_tmpfs_followed_by_another_flag(
         self,

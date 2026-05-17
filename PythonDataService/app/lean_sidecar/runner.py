@@ -15,6 +15,7 @@ tests assert the constructed argv without spawning a real container.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -71,6 +72,36 @@ ALLOWED_HARDENING_TOKENS: frozenset[str] = frozenset(
 # point LEAN at the config the data plane wrote into the workspace,
 # otherwise the run silently executes the default template.
 CONTAINER_LEAN_CONFIG_PATH = f"{CONTAINER_WORKSPACE_MOUNT}/project/config.json"
+
+# Fallback UID/GID for hosts where ``os.getuid()`` is unavailable
+# (Windows native Python). On Windows + WSL2 podman the WSL2 mount
+# layer does not enforce host POSIX ownership inside the container,
+# so any non-root UID works.
+_FALLBACK_CONTAINER_UID = 10001
+_FALLBACK_CONTAINER_GID = 10001
+
+
+def _container_user_spec() -> str:
+    """Return the ``--user <uid>:<gid>`` spec for the LEAN container.
+
+    On Linux the spec is the launcher process's own UID/GID so the
+    container's effective user matches the owner of the workspace
+    files the launcher just created. Without that alignment, the
+    container (running as a fixed 10001:10001) cannot write to
+    ``workspace/output``/ObjectStore because POSIX permissions
+    reject the cross-UID write — reviewer-flagged regression on
+    native Linux hosts that the launcher does not chown around.
+
+    On Windows the launcher runs as a native Windows process where
+    ``os.getuid()`` does not exist; the bind mount goes through the
+    WSL2 layer which does not enforce host UID, so the
+    ``10001:10001`` fallback works. The fixed UID is non-root
+    (covers the "don't run as container root" requirement) and is
+    explicit in the launcher.log for audit.
+    """
+    if hasattr(os, "getuid") and hasattr(os, "getgid"):
+        return f"{os.getuid()}:{os.getgid()}"
+    return f"{_FALLBACK_CONTAINER_UID}:{_FALLBACK_CONTAINER_GID}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,8 +238,8 @@ def build_command(
     # change and must update the ADR in the same PR.
     #
     # ``--cap-drop=ALL`` (Phase 1b), ``--read-only`` (Phase 1c), and
-    # ``--user=10001:10001`` (Phase 1c) are all proven safe at both
-    # the podman-startup level (security-flag matrix) and the LEAN-
+    # ``--user`` (Phase 1c) are all proven safe at both the
+    # podman-startup level (security-flag matrix) and the LEAN-
     # runtime level (E2E ``test_buy_and_hold_runs_with_*``). They
     # gate the Phase 4c arbitrary-user-source unlock — without them
     # the sandbox is weaker than the ADR's non-negotiables require.
@@ -217,9 +248,10 @@ def build_command(
     # ObjectStore root from the image overlay
     # (``/Lean/Launcher/bin/Debug/storage``) to the workspace via
     # the ``object-store-root`` config key (see lean_config.py).
-    # ``--user`` works on Windows + WSL2 podman because the WSL2
-    # mount layer doesn't enforce host-side UID ownership inside
-    # the container.
+    # ``--user`` resolves dynamically via ``_container_user_spec``
+    # so the container user matches the launcher's host UID on
+    # Linux (otherwise POSIX permissions reject writes the
+    # container makes to launcher-created workspace files).
     argv: list[str] = [
         podman,
         "run",
@@ -228,7 +260,7 @@ def build_command(
         "--security-opt=no-new-privileges",
         "--cap-drop=ALL",
         "--read-only",
-        "--user=10001:10001",
+        f"--user={_container_user_spec()}",
         f"--cpus={limits.cpus}",
         f"--memory={limits.memory_mb}m",
         f"--pids-limit={limits.pids_limit}",
