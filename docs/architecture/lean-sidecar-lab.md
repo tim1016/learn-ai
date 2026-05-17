@@ -54,6 +54,7 @@ These are the invariants. Every Phase 1–6 PR re-asserts them in its descriptio
 | 13 | Reconciliation-grade subscriptions disable fill-forward | LEAN's default minute subscription can synthesize forward-filled bars. Engine Lab's rigor rules forbid forward-fill alignment, so reconciled algorithms/templates must request `fillForward=false` and the manifest records it. |
 | 14 | Reconciliation-grade subscriptions pin normalization mode | LEAN's staged data policy and runtime `DataNormalizationMode` are independent. Reconciled algorithms/templates must set the normalization mode to match Engine Lab and the manifest records it. |
 | 15 | Reconciliation fixtures require determinism proof | Phase 1 runs the trusted sample twice with the same image/data/config and asserts equivalent artifacts before any golden fixture or reconciliation claim is accepted. |
+| 16 | Algorithm date range must overlap staged data and consume bars | The request range, LEAN effective algorithm range, and staged data window are recorded separately. Runs that consume zero bars for a requested subscription fail fast; reconciliation-grade runs require exact window alignment. |
 
 ---
 
@@ -312,6 +313,34 @@ This prevents the silent divergence where raw bars and factor/map files are
 staged correctly, but `AddEquity(...)` defaults to adjusted runtime prices and
 the algorithm sees a different price series than Engine Lab.
 
+### Date-window and bar-consumption policy
+
+LEAN can complete a backtest even when the algorithm's effective
+`SetStartDate`/`SetEndDate` range does not overlap the staged data files. That
+is a silent-green failure, not a valid backtest.
+
+The sidecar records three windows independently:
+
+- `requested_window_ms` — what the UI/API asked to run.
+- `staged_data_window_ms` — min/max timestamps actually staged per symbol and
+  resolution, after timezone conversion and file writing.
+- `effective_algorithm_window_ms` — what LEAN actually ran after applying the
+  algorithm's `SetStartDate`/`SetEndDate` calls and config defaults.
+
+For reconciliation-grade runs, those windows must align exactly, except for an
+explicitly declared warmup/staging extension that is excluded from the
+comparison window. Compatibility runs may allow a user-authored algorithm to
+choose a narrower effective window, but the response must show the three windows
+and warn when they differ.
+
+Every run must also prove non-empty data consumption for each requested
+subscription: `bars_consumed_by_symbol[symbol] > 0`. The Phase 1 trusted sample
+does this with explicit algorithm instrumentation. Before Phase 4 exposes
+arbitrary user source, Phase 3 must either identify a reliable LEAN artifact for
+bar consumption or inject a sidecar-owned audit hook that cannot alter strategy
+logic. If consumption cannot be proven, the run is not eligible for
+reconciliation and the UI must not label it successful without a warning.
+
 ### LEAN quantization floor
 
 LEAN equity data on disk stores prices at 1/10000 dollar precision. That is a
@@ -367,6 +396,8 @@ can affect output:
 - brokerage/fill/fee policy
 - starting capital and account currency
 - subscription fill-forward policy
+- requested, staged-data, and effective algorithm windows
+- bars consumed per requested subscription
 - normalized parser version/hash
 - start/end timestamps as `int64 ms UTC`
 
@@ -383,7 +414,7 @@ before a fixture is promoted to a regression gate.
 
 The original plan's six phases are retained, with these adjustments encoded by Phase 0:
 
-- **Phase 1 (Runner spike)** — now includes (a) authoring the launcher service, (b) resolving the image digest, (c) proving the Windows/Podman topology and workspace path mapping, (d) confirming which of `--cap-drop=ALL` / `--read-only` / `--tmpfs` / non-root user / disk quota the LEAN image tolerates, (e) proving the LEAN data-folder contract with a price/timestamp round-trip fixture, (f) staging and hashing metadata databases, factor files, and map files for the trusted sample, (g) producing one end-to-end run on a hard-coded trusted Python algorithm (no user input yet), (h) re-running the same sample with the same inputs and asserting deterministic artifacts or documented equivalence within the quantization floor.
+- **Phase 1 (Runner spike)** — now includes (a) authoring the launcher service, (b) resolving the image digest, (c) proving the Windows/Podman topology and workspace path mapping, (d) confirming which of `--cap-drop=ALL` / `--read-only` / `--tmpfs` / non-root user / disk quota the LEAN image tolerates, (e) proving the LEAN data-folder contract with a price/timestamp round-trip fixture, (f) staging and hashing metadata databases, factor files, and map files for the trusted sample, (g) producing one end-to-end run on a hard-coded trusted Python algorithm (no user input yet), (h) re-running the same sample with the same inputs and asserting deterministic artifacts or documented equivalence within the quantization floor, (i) proving requested/staged/effective date-window alignment and non-empty bar consumption.
 - **Phase 2 (Python API)** — unchanged in shape; the runner.py invocations go through the launcher socket/HTTP rather than spawning podman as a child process of the data-plane container.
 - **Phase 3 — renamed *Container Execution Boundary + Fidelity Boundary*** — is the gating phase before any UI takes arbitrary user input. The UI from Phase 4 may exist earlier only with a hardcoded trusted sample algorithm (no `algorithm_source` field, no textarea). This phase also lands the normalized parser tests, manifest hashing, disk-cap enforcement, and explicit compatibility-vs-reconciliation run classification.
 - **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. From this phase onward, a successful run must be possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
@@ -401,7 +432,8 @@ The original plan's six phases are retained, with these adjustments encoded by P
 6. **Data-folder fixture** — pin the exact minute zip/entry format, metadata database paths, factor/map file policy, and quantization tolerance in tests.
 7. **C# viability** — prove `Main.cs` compiles under `--network=none`, or keep C# disabled in the UI.
 8. **Determinism gate** — run the trusted sample twice with the same manifest inputs and assert byte-identical normalized output, or document the minimal accepted equivalence class before any fixture is trusted.
-9. **Per-run cost** — measure cold-start vs warm-start and decide whether to keep an idle warm runner pool in Phase 2+.
+9. **Date-window / consumption gate** — prove the trusted sample's requested window, staged data window, and effective LEAN algorithm window align, and prove `bars_consumed_by_symbol` is non-zero. Decide the Phase 3 mechanism for arbitrary user algorithms.
+10. **Per-run cost** — measure cold-start vs warm-start and decide whether to keep an idle warm runner pool in Phase 2+.
 
 ---
 
