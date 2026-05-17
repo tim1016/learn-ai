@@ -9,7 +9,15 @@ __pycache__
 *.md
 notebooks/
 trained_models/
-tests/
+# Exclude test data from the build context (it's large and not needed
+# at runtime) but keep the golden-fixture manifest — it's read at runtime
+# by GET /api/golden-fixtures (see app/routers/golden_fixtures.py).
+# Use tests/** + path-walk exceptions because Docker doesn't honour
+# !tests/fixtures/... when the parent directory itself is excluded.
+tests/**
+!tests/fixtures
+!tests/fixtures/golden
+!tests/fixtures/golden/manifest.json
 requirements-dev.txt
 requirements-lock.txt
 .venv
