@@ -133,11 +133,22 @@ export class LeanLabComponent {
    * Regenerates on submit so the operator never accidentally
    * re-submits with the same id (which would land in the same
    * workspace dir on the server). Slug pattern matches the server's
-   * RUN_ID_PATTERN.
+   * RUN_ID_PATTERN: `^[a-z0-9][a-z0-9_-]{2,63}$`.
+   *
+   * Seconds precision alone wasn't enough — two fast clicks within
+   * the same second produced identical IDs, reusing the workspace
+   * and mixing artifacts. Adding milliseconds + a short random
+   * suffix removes the collision class entirely (worst case: two
+   * clicks in the same millisecond with the same 5-char base-36
+   * random — ~1 in 60M).
    */
   private defaultRunId(): string {
-    const ts = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
-    return `ui_run_${ts}`;
+    const now = new Date();
+    const ts = now.toISOString().replace(/[^0-9]/g, "").slice(0, 17); // YYYYMMDDhhmmssSSS
+    const random = Math.floor(Math.random() * 36 ** 5)
+      .toString(36)
+      .padStart(5, "0");
+    return `ui_run_${ts}_${random}`;
   }
 
   /**

@@ -132,6 +132,27 @@ describe("LeanLabComponent", () => {
     expect(text).toContain("quote.zip");
   });
 
+  it("regenerates a unique runId on every successful submit", async () => {
+    // Reviewer P1: two fast successful submits must not produce the
+    // same runId (same-second collision would mix server-side
+    // workspace artifacts). Seconds + milliseconds + 5-char random
+    // suffix removes the collision class entirely.
+    serviceMock.startTrustedRun.mockResolvedValue(makeResponse());
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+
+    const initial = component.form.controls.runId.value;
+    await component.submit();
+    const after1 = component.form.controls.runId.value;
+    await component.submit();
+    const after2 = component.form.controls.runId.value;
+
+    // Each submit must have regenerated the id.
+    expect(after1).not.toBe(initial);
+    expect(after2).not.toBe(after1);
+    // And the random suffix should match the slug constraint.
+    expect(after2).toMatch(/^ui_run_\d{17}_[a-z0-9]{5}$/);
+  });
+
   it("renders the launcher's typed rejection envelope on a 400", async () => {
     serviceMock.startTrustedRun.mockRejectedValue(
       new LeanSidecarApiError(400, "workspace_not_staged", "stage first"),
