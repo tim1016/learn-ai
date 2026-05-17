@@ -92,6 +92,25 @@ def stub_image_extract(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
+def stub_normalized_parser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No-op the normalized parser for mocked launcher tests.
+
+    The mocked launcher never produces real LEAN output, so calling
+    the real parser would always raise ``NormalizedParserError``. The
+    service handles that gracefully (the run still completes with
+    ``normalized=None``); this fixture makes the failure deterministic
+    instead of relying on incidental ENOENT.
+    """
+    from app.lean_sidecar.normalized_parser import NormalizedParserError
+    from app.services import lean_sidecar_service
+
+    def _stub(workspace):
+        raise NormalizedParserError("stubbed in mocked-launcher tests")
+
+    monkeypatch.setattr(lean_sidecar_service, "parse_workspace", _stub)
+
+
+@pytest.fixture
 async def client() -> AsyncClient:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
@@ -217,6 +236,7 @@ class TestPostTrustedRunHappyPath:
         patched_pin: str,
         patched_artifacts_root: Path,
         stub_image_extract: None,
+        stub_normalized_parser: None,
     ) -> None:
         payload = _good_payload("router_happy")
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
@@ -242,6 +262,7 @@ class TestPostTrustedRunHappyPath:
         patched_pin: str,
         patched_artifacts_root: Path,
         stub_image_extract: None,
+        stub_normalized_parser: None,
     ) -> None:
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
             mock.post("/launch").mock(
@@ -268,6 +289,7 @@ class TestPostTrustedRunHappyPath:
         patched_pin: str,
         patched_artifacts_root: Path,
         stub_image_extract: None,
+        stub_normalized_parser: None,
     ) -> None:
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
             mock.post("/launch").mock(side_effect=httpx.ConnectError("refused"))
@@ -286,6 +308,7 @@ class TestInspectionEndpoints:
         patched_pin: str,
         patched_artifacts_root: Path,
         stub_image_extract: None,
+        stub_normalized_parser: None,
     ) -> None:
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
             mock.post("/launch").mock(return_value=httpx.Response(200, json=_launcher_success_body("router_inspect")))
@@ -328,6 +351,33 @@ class TestInspectionEndpoints:
         r = await client.get("/api/lean-sidecar/runs/ws_log/log")
         assert r.status_code == 200
         assert "hello lean" in r.text
+
+    async def test_normalized_endpoint_returns_written_result(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """Phase 3a: /normalized serves the parsed result.json
+        written by the orchestrator."""
+        ws = resolve_workspace("ws_normalized", patched_artifacts_root)
+        ws.ensure_layout()
+        ws.normalized_dir.mkdir(parents=True, exist_ok=True)
+        payload = {"parser_version": "phase-3a-r1", "algorithm_id": "MyAlgorithm"}
+        (ws.normalized_dir / "result.json").write_text(json.dumps(payload), encoding="utf-8")
+        r = await client.get("/api/lean-sidecar/runs/ws_normalized/normalized")
+        assert r.status_code == 200
+        assert r.json()["parser_version"] == "phase-3a-r1"
+
+    async def test_normalized_endpoint_404_when_missing(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        ws = resolve_workspace("ws_no_normalized", patched_artifacts_root)
+        ws.ensure_layout()
+        r = await client.get("/api/lean-sidecar/runs/ws_no_normalized/normalized")
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "normalized_missing"
 
     async def test_invalid_run_id_rejected_at_inspect(self, client: AsyncClient) -> None:
         r = await client.get("/api/lean-sidecar/runs/..escape/manifest")
