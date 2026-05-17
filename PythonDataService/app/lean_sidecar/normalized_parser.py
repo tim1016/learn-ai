@@ -178,15 +178,17 @@ def _locate_lean_artifacts(output_dir: Path) -> _LeanArtifactPaths:
     """Find LEAN's summary + order-events files in ``output_dir``.
 
     The two filenames look like ``<algo>-summary.json`` and
-    ``<algo>-order-events.json``. We pick the first match for each
-    suffix — Phase 3a assumes a single algorithm per run (which is
-    LEAN's default; multi-algo lab runs are out of scope).
+    ``<algo>-order-events.json``. The summary is the source of truth
+    for the algorithm-id; the order-events file MUST match that same
+    prefix exactly. Without the explicit binding, a workspace that
+    contains stale events from a previous run (different algorithm-id
+    that happens to sort first) would corrupt the parsed events count
+    and any downstream reconciliation built on it.
     """
     if not output_dir.is_dir():
         raise NormalizedParserError(f"output directory missing: {output_dir}")
 
     summary_candidates = sorted(output_dir.glob("*-summary.json"))
-    order_candidates = sorted(output_dir.glob("*-order-events.json"))
     if not summary_candidates:
         raise NormalizedParserError(f"no *-summary.json under {output_dir}; LEAN did not write a backtest summary")
     summary = summary_candidates[0]
@@ -194,11 +196,17 @@ def _locate_lean_artifacts(output_dir: Path) -> _LeanArtifactPaths:
     # Derive algorithm-id from the summary filename (the part before
     # ``-summary.json``).
     algorithm_id = summary.name[: -len("-summary.json")]
+
+    # Bind the order-events file to the same algorithm-id. A
+    # ``<other-algo>-order-events.json`` left over from a prior run
+    # in the same workspace must NOT be picked up — it would
+    # masquerade as the current run's order stream.
+    expected_events = output_dir / f"{algorithm_id}-order-events.json"
+    order_events = expected_events if expected_events.exists() else None
+
     return _LeanArtifactPaths(
         summary=summary,
-        # Zero-order runs don't write the events file; that's a valid
-        # zero-events outcome, not an error.
-        order_events=order_candidates[0] if order_candidates else None,
+        order_events=order_events,
         algorithm_id=algorithm_id,
     )
 
@@ -277,8 +285,24 @@ def parse_workspace(workspace: Workspace) -> NormalizedResult:
     if not isinstance(summary_raw, dict):
         raise NormalizedParserError(f"summary file {paths.summary} is not a JSON object")
 
-    statistics = {k: str(v) for k, v in summary_raw.get("statistics", {}).items()}
-    runtime_statistics = {k: str(v) for k, v in summary_raw.get("runtimeStatistics", {}).items()}
+    # Defensive: LEAN's schema may emit ``null`` or a non-object for
+    # these fields under partial-failure conditions. A bare ``.items()``
+    # on ``None`` raises ``AttributeError``, which the orchestrator's
+    # ``except NormalizedParserError`` would NOT catch — failing the
+    # whole trusted-run request instead of returning normalized=None
+    # as the run-completion contract promises.
+    raw_stats = summary_raw.get("statistics")
+    raw_runtime = summary_raw.get("runtimeStatistics")
+    if raw_stats is not None and not isinstance(raw_stats, dict):
+        raise NormalizedParserError(
+            f"summary 'statistics' must be a JSON object or null, got {type(raw_stats).__name__}"
+        )
+    if raw_runtime is not None and not isinstance(raw_runtime, dict):
+        raise NormalizedParserError(
+            f"summary 'runtimeStatistics' must be a JSON object or null, got {type(raw_runtime).__name__}"
+        )
+    statistics = {k: str(v) for k, v in (raw_stats or {}).items()}
+    runtime_statistics = {k: str(v) for k, v in (raw_runtime or {}).items()}
     equity_curve = _parse_equity_curve(summary_raw)
 
     order_events: list[NormalizedOrderEvent] = []

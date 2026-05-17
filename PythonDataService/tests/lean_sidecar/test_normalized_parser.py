@@ -143,6 +143,76 @@ class TestParseWorkspace:
         with pytest.raises(NormalizedParserError, match="not a JSON object"):
             parse_workspace(ws)
 
+    def test_order_events_bound_to_summary_algo_id(self, tmp_path: Path) -> None:
+        """Reviewer P1: with a stale order-events file from a previous
+        run in the same workspace (different algo id that happens to
+        sort first), the parser must NOT pick up the stale events.
+        """
+        ws = resolve_workspace("parser_unit_stalemix", tmp_path)
+        ws.ensure_layout()
+        # The current run's summary names algo "MyAlgorithm".
+        shutil.copy(SAMPLE_SUMMARY, ws.output_dir / "MyAlgorithm-summary.json")
+        # The current run produced no order-events file (zero orders).
+        # But a previous run that used a different algo ("AAlgo")
+        # left an events file behind in the same workspace.
+        (ws.output_dir / "AAlgo-order-events.json").write_text(
+            '[{"orderEventId":99,"orderId":99,"algorithmId":"AAlgo","symbol":"X 2T",'
+            '"symbolValue":"X","symbolPermtick":"X","time":1736173860.0,"status":"filled",'
+            '"fillPrice":1.0,"fillPriceCurrency":"USD","fillQuantity":1.0,"direction":"buy",'
+            '"isAssignment":false,"quantity":1.0}]',
+            encoding="utf-8",
+        )
+        result = parse_workspace(ws)
+        # Must report zero events for the current run, not the stale 1.
+        assert result.total_order_events == 0
+        assert result.order_events == []
+        assert result.algorithm_id == "MyAlgorithm"
+
+    def test_null_statistics_treated_as_empty(self, tmp_path: Path) -> None:
+        """Reviewer P2: ``statistics: null`` must not raise AttributeError.
+
+        The orchestrator only catches NormalizedParserError; a bare
+        AttributeError from a downstream .items() would fail the whole
+        trusted-run request instead of returning normalized=None as
+        the contract promises.
+        """
+        ws = resolve_workspace("parser_unit_nullstats", tmp_path)
+        ws.ensure_layout()
+        (ws.output_dir / "MyAlgorithm-summary.json").write_text(
+            '{"statistics": null, "runtimeStatistics": null, "charts": {}}',
+            encoding="utf-8",
+        )
+        result = parse_workspace(ws)
+        assert result.statistics == {}
+        assert result.runtime_statistics == {}
+
+    @pytest.mark.parametrize(
+        "field,bad_value",
+        [
+            ("statistics", "not a dict"),
+            ("statistics", [1, 2, 3]),
+            ("runtimeStatistics", 42),
+            ("runtimeStatistics", "string instead of dict"),
+        ],
+    )
+    def test_non_object_statistics_raises_parser_error(self, tmp_path: Path, field: str, bad_value: object) -> None:
+        """A non-null non-object value for statistics/runtimeStatistics
+        is a schema violation worth surfacing as NormalizedParserError
+        — not a silent ``AttributeError`` from a downstream ``.items()``.
+        """
+        ws = resolve_workspace(
+            f"parser_unit_badstats_{abs(hash(field + str(bad_value))) % 10000:04d}",
+            tmp_path,
+        )
+        ws.ensure_layout()
+        import json as _json
+
+        body = {"statistics": {}, "runtimeStatistics": {}, "charts": {}}
+        body[field] = bad_value  # type: ignore[assignment]
+        (ws.output_dir / "MyAlgorithm-summary.json").write_text(_json.dumps(body), encoding="utf-8")
+        with pytest.raises(NormalizedParserError, match="must be a JSON object"):
+            parse_workspace(ws)
+
 
 class TestWriteNormalizedResult:
     def test_writes_pretty_sorted_json(self, tmp_path: Path) -> None:
