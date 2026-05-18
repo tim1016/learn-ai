@@ -145,6 +145,49 @@ def _parse_error_envelope(response: httpx.Response) -> dict[str, str]:
     return {"reason": "unknown", "message": response.text[:500]}
 
 
+def post_extract_metadata_sync(run_id: str, image_digest: str) -> dict[str, str]:
+    """Sync HTTP call to the launcher's ``/extract-metadata`` endpoint.
+
+    Sync rather than async because the only caller
+    (:func:`app.lean_sidecar.staging.stage_lean_metadata_from_image`) is
+    itself sync, invoked from the data plane's pre-launch staging path.
+    Using ``httpx.Client`` instead of ``AsyncClient`` keeps the call
+    sites unchanged; the brief event-loop block during the metadata
+    pull is acceptable because launch itself blocks the event loop for
+    much longer than this.
+
+    Raises the same ``LauncherRejected`` / ``LauncherUnreachable`` /
+    ``LauncherProtocolError`` exceptions as ``post_launch`` so the
+    error contract is consistent across endpoints.
+    """
+    url = f"{_launcher_url()}/extract-metadata"
+    payload = {"run_id": run_id, "image_digest": image_digest}
+    # The podman ``create + cp + rm`` round-trip is typically <5s on a
+    # hot pull; allow 90s as a generous outer bound matching the worst-
+    # case subprocess timeouts inside ``stage_lean_metadata_from_image``
+    # (30s create + 30s cp + 15s rm worst case, plus margin).
+    timeout = httpx.Timeout(90.0)
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(url, json=payload, headers=_auth_headers())
+    except (httpx.TimeoutException, httpx.NetworkError) as e:
+        raise LauncherUnreachable(f"launcher at {url} unreachable: {e}") from e
+
+    if response.status_code == 400:
+        body = _parse_error_envelope(response)
+        raise LauncherRejected(body["reason"], body["message"])
+    if response.status_code != 200:
+        raise LauncherProtocolError(
+            f"launcher /extract-metadata returned HTTP {response.status_code}: {response.text[:500]}"
+        )
+    try:
+        return response.json()
+    except ValueError as e:
+        raise LauncherProtocolError(
+            f"launcher /extract-metadata returned a non-JSON body: {e}"
+        ) from e
+
+
 async def get_healthz() -> dict[str, Any]:
     """Read the launcher's ``/healthz``. Used by the data plane's
     own ``/healthz`` to surface launcher reachability."""

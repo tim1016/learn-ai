@@ -130,3 +130,62 @@ class LaunchResponse(BaseModel):
             "timed_out. The single boolean callers should branch on."
         ),
     )
+
+
+class ExtractMetadataRequest(BaseModel):
+    """Request to extract LEAN's bundled metadata into a workspace.
+
+    Hardening-fix for the launcher topology: the data-plane container
+    does not have ``podman`` on PATH, so it cannot subprocess-spawn
+    ``podman cp`` to pull ``market-hours-database.json``,
+    ``symbol-properties-database.csv``, and the ``interest-rate``
+    subtree out of the LEAN image. The launcher (a host process with
+    podman) owns this work and exposes it via
+    ``POST /extract-metadata``; the data plane calls it when its own
+    ``shutil.which('podman')`` returns None.
+    """
+
+    run_id: str = Field(
+        ...,
+        description=(
+            "Strict slug; resolved to a workspace path under the "
+            "launcher's configured artifacts root. The same value the "
+            "data plane uses for the matching ``/launch`` request."
+        ),
+    )
+    image_digest: str = Field(
+        ...,
+        description=(
+            "Pinned image digest (``sha256:...``). Must be in the "
+            "launcher's allow-list, same as for ``/launch``."
+        ),
+    )
+
+    @field_validator("run_id")
+    @classmethod
+    def _validate_run_id(cls, v: str) -> str:
+        if not RUN_ID_PATTERN.fullmatch(v):
+            raise ValueError("run_id must match ^[a-z0-9][a-z0-9_-]{2,63}$")
+        return v
+
+    @field_validator("image_digest")
+    @classmethod
+    def _validate_image_digest(cls, v: str) -> str:
+        bare = v.split("@", 1)[-1]
+        if not bare.startswith("sha256:"):
+            raise ValueError("image_digest must be pinned (start with sha256:)")
+        return v
+
+
+class ExtractMetadataResponse(BaseModel):
+    """Paths the launcher just wrote, as the launcher sees them.
+
+    The data plane sees the same files under its own view of the
+    bind-mounted artifacts root, so it does not need these paths to do
+    its own manifest hashing — the data plane re-resolves the workspace
+    against its in-container ``DEFAULT_ARTIFACTS_ROOT``. The paths are
+    returned anyway for log auditability + a launcher-side sanity check.
+    """
+
+    market_hours_db_path: str
+    symbol_properties_db_path: str

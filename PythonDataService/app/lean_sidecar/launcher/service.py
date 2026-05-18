@@ -12,14 +12,24 @@ import shlex
 from pathlib import Path
 
 from app.lean_sidecar.config import RunLimits
-from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
+from app.lean_sidecar.launcher.models import (
+    ExtractMetadataRequest,
+    ExtractMetadataResponse,
+    LaunchRequest,
+    LaunchResponse,
+)
 from app.lean_sidecar.result_classifier import classify_workspace
 from app.lean_sidecar.runner import (
     HardeningProfile,
     RunnerConfigurationError,
     RunResult,
+    _require_image_in_allowlist,
     build_command,
     execute,
+)
+from app.lean_sidecar.staging import (
+    MetadataStagingError,
+    stage_lean_metadata_from_image,
 )
 from app.lean_sidecar.workspace import (
     WorkspaceError,
@@ -167,6 +177,61 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
         log_tail=result.log_tail,
         lean_errors=dict(classified.by_category),
         is_clean=is_clean,
+    )
+
+
+def extract_metadata(
+    request: ExtractMetadataRequest,
+    *,
+    artifacts_root: Path,
+) -> ExtractMetadataResponse:
+    """Extract LEAN image metadata into the named workspace.
+
+    Launcher-side counterpart to the data plane's
+    ``stage_lean_metadata_from_image`` call. Exists so the
+    polygon-data-service container does not need ``podman`` on PATH;
+    instead it POSTs ``{run_id, image_digest}`` to the launcher and the
+    launcher (a host process) does the subprocess work.
+
+    The workspace path resolution matches ``launch()`` exactly so the
+    same ``run_id`` reaches the same workspace from either entry
+    point. The launcher writes files; the data plane reads them through
+    its in-container view of the same bind mount.
+
+    Enforces the same image allow-list ``/launch`` does — Codex-P1 /
+    CodeRabbit-Major review-fix. Otherwise any caller that can reach
+    the launcher could trigger ``podman create`` + ``podman cp``
+    against an arbitrary pinned digest, weakening the hardening
+    boundary the launcher is supposed to enforce.
+    """
+    try:
+        workspace = resolve_workspace(request.run_id, artifacts_root)
+    except WorkspaceError as e:
+        raise LaunchRejectedError("invalid_run_id_or_path", str(e)) from e
+    try:
+        _require_image_in_allowlist(request.image_digest)
+    except RunnerConfigurationError as e:
+        raise LaunchRejectedError("image_not_allowlisted", str(e)) from e
+    workspace.ensure_layout()
+    try:
+        # ``allow_launcher_fallback=False`` shuts off the data-plane's
+        # ``no podman → call launcher`` path inside this launcher-side
+        # call — otherwise a launcher host without podman would
+        # recursively HTTP-POST itself via /extract-metadata, blocking
+        # the request loop until httpx times out (Codex-P2 /
+        # CodeRabbit-Major review-fix).
+        mh, sp = stage_lean_metadata_from_image(
+            workspace,
+            request.image_digest,
+            allow_launcher_fallback=False,
+        )
+    except MetadataStagingError as e:
+        # The staging error already carries a meaningful detail. Map to
+        # a stable launcher reason so the data plane can branch.
+        raise LaunchRejectedError("metadata_staging_failed", str(e)) from e
+    return ExtractMetadataResponse(
+        market_hours_db_path=str(mh),
+        symbol_properties_db_path=str(sp),
     )
 
 

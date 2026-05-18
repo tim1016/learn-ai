@@ -118,30 +118,42 @@ class CrossReconciliationOutput:
     divergences: list[CrossDivergence] = field(default_factory=list)
 
 
-# Filled status string the Phase 3a parser emits. Other statuses
-# (Submitted, Canceled, Invalid, PartiallyFilled) are not "fills" for
-# reconciliation purposes — they're submission/lifecycle events.
-_LEAN_FILLED_STATUS = "Filled"
+# LEAN emits ``status`` + ``direction`` in lowercase on the wire
+# (``"filled"`` / ``"buy"`` / ``"sell"``); the Phase 3a parser passes
+# them through unchanged. Comparisons use ``.casefold()`` (matching the
+# existing pattern in :mod:`app.lean_sidecar.reconciler`) so case
+# variants — including Unicode — fold to the canonical form. Side is
+# normalized to the capitalized wire form (``"Buy"`` / ``"Sell"``) the
+# cross-reconciler's response model and the paired qc_reconciler
+# taxonomy both use.
 
 
 def _adapt_lean_event(event: NormalizedOrderEvent) -> _InternalFill | None:
     """Adapt a LEAN ``NormalizedOrderEvent`` to the internal shape.
 
-    Returns ``None`` if the event is not a fill (e.g., ``Submitted``)
-    or has zero fill_quantity. Fee may be absent (``None``) when the
-    LEAN run did not record ``orderFeeAmount`` on the event.
+    Returns ``None`` if the event is not a fill (a ``submitted``
+    lifecycle event) or has zero fill_quantity. Fee may be absent
+    (``None``) when the LEAN run did not record ``orderFeeAmount``.
+
+    Case-folds ``status`` and ``direction`` before comparison so the
+    adapter is robust to LEAN presentation changes — same pattern as
+    :mod:`app.lean_sidecar.reconciler`.
     """
-    if event.status != _LEAN_FILLED_STATUS:
+    if event.status.casefold() != "filled":
         return None
     qty = int(event.fill_quantity)
     if qty == 0:
         return None
-    # LEAN's NormalizedOrderEvent.direction is the wire string "Buy" or
-    # "Sell" already (per Phase 3a parser). Defensive cast to Literal
-    # via runtime check — anything outside Buy/Sell is a parser bug.
-    if event.direction not in ("Buy", "Sell"):
+    direction_cf = event.direction.casefold()
+    if direction_cf == "buy":
+        side: Side = "Buy"
+    elif direction_cf == "sell":
+        side = "Sell"
+    else:
+        # Unknown direction — parser-version-skew or LEAN-behavior-
+        # change signal. Surface as a dropped fill rather than silently
+        # coercing.
         return None
-    side: Side = event.direction  # type: ignore[assignment]
     fee = (
         Decimal(str(event.order_fee_amount))
         if event.order_fee_amount is not None
