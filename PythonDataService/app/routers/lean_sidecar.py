@@ -62,6 +62,7 @@ from app.lean_sidecar.workspace import (
 )
 from app.services.lean_sidecar_service import (
     LeanSidecarServiceError,
+    RunIdAlreadyUsedError,
     TrustedRunRequest,
     run_trusted_sample,
 )
@@ -375,6 +376,17 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={"reason": "launcher_protocol_error", "message": str(e)},
+        ) from e
+    except RunIdAlreadyUsedError as e:
+        # 409 Conflict: a run with this run_id already exists on disk.
+        # The caller MUST pick a fresh slug — the existing run's
+        # artifacts must not be silently overwritten because the
+        # parser then reads stale ``*-summary.json`` content under a
+        # freshly-written manifest. Subclass of LeanSidecarServiceError
+        # so this except must come BEFORE the generic catch below.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"reason": "run_id_already_used", "message": str(e)},
         ) from e
     except LeanSidecarServiceError as e:
         raise HTTPException(
