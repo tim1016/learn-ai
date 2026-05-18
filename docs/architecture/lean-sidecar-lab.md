@@ -428,7 +428,8 @@ The original plan's six phases are retained, with these adjustments encoded by P
 - **Phase 2 (Python API)** — unchanged in shape; the runner.py invocations go through the launcher socket/HTTP rather than spawning podman as a child process of the data-plane container.
 - **Phase 3 — renamed *Container Execution Boundary + Fidelity Boundary*** — is the gating phase before any UI takes arbitrary user input. The UI from Phase 4 may exist earlier only with a hardcoded trusted sample algorithm (no `algorithm_source` field, no textarea). This phase also lands the normalized parser tests, manifest hashing, disk-cap enforcement, and explicit compatibility-vs-reconciliation run classification.
 - **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. Phase 4a shipped the trusted-sample form, 4b the equity chart, **4c the custom-algorithm textarea** (server-side accept of `algorithm_source` on `POST /lean/runs/start`), **4d the run-history sidebar** (`GET /api/lean-sidecar/runs` + sidebar component), and **4e form rehydration on sidebar click** (`getManifest` repopulates symbol/window/cash so re-running a past run is a one-click → tweak → submit loop). From 4c onward, a successful run is possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. The acceptance is unconditional on the API and gated by a UI toggle (defaults off → trusted sample). Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
-- **Phases 5-6** - unchanged in scope.
+- **Phase 5 (Reconciliation-grade samples)** is multi-PR. **5a** ships the self-reconciler (`POST /runs/{id}/reconcile` compares any past run's recorded fees against `IbkrEquityCommissionModel`). **5b** adds the reconciliation-grade trusted-sample template with explicit IBKR brokerage pinning. **5c** wires the reconciler results into the frontend and adds the LEAN-Lab-vs-Engine-Lab trade reconciler. The reconciler is decoupled from template choice — a default-brokerage run produces a "many drift" report that's informative (it shows brokerage choice matters), not a bug.
+- **Phase 6** - unchanged in scope.
 
 ### Phase 1a progress (2026-05-17)
 
@@ -532,6 +533,52 @@ Open from this PR, queued for Phase 1d / Phase 5:
 - Quote-bar staging — eliminates the last known-noise category in the trusted-sample log.
 - Real factor/map files for the reconciliation-grade Phase 5 fixtures (not for the spike).
 - Hardening-profile enum to replace caller-supplied `hardening_flags` argv tokens — reviewer-suggested longer-term direction.
+
+### Phase 5a progress (2026-05-17, follow-up PR — self-reconciler against IBKR commission model)
+
+First slice of the reconciliation-grade work. Ships the primitive that
+every other Phase 5 deliverable depends on: a categorized comparison
+of recorded fees against the canonical `IbkrEquityCommissionModel`
+(which has lived in `app/research/parity/ibkr_commission.py` since
+Engine Lab's QC reconciler work — Phase 5a consumes it without
+duplicating the formula).
+
+- **API** — `POST /api/lean-sidecar/runs/{id}/reconcile` returns
+  `RunReconciliationReportModel { run_id, algorithm_id,
+  total_fill_events, matched_count, divergent_count, commission_atol,
+  total_recorded_fees, total_expected_ibkr_fees, divergences[] }`.
+  Reads the normalized result.json for the run, walks filled events,
+  computes the expected IBKR fee per event, classifies each as clean
+  / `commission_drift` / `no_recorded_fee`. Tolerance is the
+  numerical-rigor.md default ($0.01).
+- **Reconciler module** — `app/lean_sidecar/reconciler.py` is pure
+  functions over `NormalizedOrderEvent` iterables. Three exports:
+  `FeeDivergenceCategory`, `FeeReconciliationReport`,
+  `reconcile_against_ibkr`. The categories are a strict subset of the
+  project-wide `DivergenceCategory` so consumers can lift them into
+  the broader taxonomy without translation.
+- **Decoupled from template choice.** A trusted-sample run that used
+  LEAN's default brokerage will produce a report full of
+  `commission_drift` rows — that's *expected* and informative (it
+  shows the brokerage choice matters). The clean-vs-drift signal only
+  becomes interpretable as "Engine-Lab-comparable" once the Phase 5b
+  reconciliation-grade template pins IBKR brokerage explicitly.
+- **Decimal hygiene on the wire.** All money values cross the API as
+  strings (not floats) so JSON serialization is exact. The reconciler
+  quantizes both recorded and expected fees to cents internally so the
+  $0.01 tolerance is meaningful at the cent boundary.
+- **What 5a does NOT do** — does not modify any run, does not include
+  the reconciliation-grade template (Phase 5b), does not surface the
+  report in the UI (Phase 5c), does not handle quote bars / factor
+  files / benchmark staging (separate Phase 5b+ work items).
+- **Test surface** — 19 unit tests on the pure reconciler (empty list,
+  non-filled events excluded, status case insensitivity, clean run,
+  drift detection, no-recorded-fee categorization, tolerance boundary,
+  aggregate totals, negative quantity, custom atol, custom model, edge
+  cases: zero qty, percentage cap, parametrized boundary classification);
+  5 endpoint integration tests (clean run, drift surface, 404 on missing
+  workspace, 404 on missing normalized, invalid run_id rejection).
+  199 lean_sidecar tests pass + 1 skip.
 
 ### Phase 4e progress (2026-05-17, follow-up PR — form rehydration from manifest)
 

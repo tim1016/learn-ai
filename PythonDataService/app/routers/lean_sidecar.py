@@ -27,6 +27,15 @@ from app.lean_sidecar.launcher_client import (
     LauncherRejected,
     LauncherUnreachable,
 )
+from app.lean_sidecar.normalized_parser import (
+    NormalizedParserError,
+    parse_workspace,
+)
+from app.lean_sidecar.reconciler import (
+    DEFAULT_COMMISSION_ATOL,
+    FeeReconciliationReport,
+    reconcile_normalized_result,
+)
 from app.lean_sidecar.workspace import (
     RUN_ID_PATTERN,
     TICKER_SYMBOL_PATTERN,
@@ -587,6 +596,110 @@ async def get_normalized(run_id: str) -> dict:
     import json
 
     return json.loads(result_path.read_text(encoding="utf-8"))
+
+
+class FeeDivergenceModel(BaseModel):
+    """One row in the fee reconciliation report. Decimals serialized as
+    strings so the wire is exact (avoids float-binary error in JSON)."""
+
+    order_event_id: int
+    order_id: int
+    symbol: str
+    ms_utc: int
+    fill_quantity: int
+    fill_price: str
+    recorded_fee: str | None
+    expected_ibkr_fee: str
+    # ``None`` when ``category == "no_recorded_fee"`` — there's nothing
+    # to subtract from. Non-null for every ``commission_drift`` row.
+    delta: str | None
+    category: Literal["commission_drift", "no_recorded_fee"]
+
+
+class RunReconciliationReportModel(BaseModel):
+    """Phase 5a — categorized fee-divergence report for one LEAN Lab run.
+
+    The report is decoupled from whether the run was reconciliation-grade.
+    A default-brokerage trusted-sample run will naturally surface many
+    ``commission_drift`` rows because LEAN's default commission differs
+    from IBKR's tier — that signal is informative, not a bug.
+    """
+
+    run_id: str
+    algorithm_id: str
+    total_fill_events: int
+    matched_count: int
+    divergent_count: int
+    # All Decimals on the wire are strings — preserves exact cents and
+    # documents the tolerance regime in numerical-rigor.md.
+    commission_atol: str
+    total_recorded_fees: str
+    total_expected_ibkr_fees: str
+    divergences: list[FeeDivergenceModel]
+
+
+def _report_to_model(report: FeeReconciliationReport, algorithm_id: str) -> RunReconciliationReportModel:
+    return RunReconciliationReportModel(
+        run_id=report.run_id,
+        algorithm_id=algorithm_id,
+        total_fill_events=report.total_fill_events,
+        matched_count=report.matched_count,
+        divergent_count=report.divergent_count,
+        commission_atol=str(report.commission_atol),
+        total_recorded_fees=str(report.total_recorded_fees),
+        total_expected_ibkr_fees=str(report.total_expected_ibkr_fees),
+        divergences=[
+            FeeDivergenceModel(
+                order_event_id=d.order_event_id,
+                order_id=d.order_id,
+                symbol=d.symbol,
+                ms_utc=d.ms_utc,
+                fill_quantity=d.fill_quantity,
+                fill_price=str(d.fill_price),
+                recorded_fee=None if d.recorded_fee is None else str(d.recorded_fee),
+                expected_ibkr_fee=str(d.expected_ibkr_fee),
+                delta=None if d.delta is None else str(d.delta),
+                category=d.category.value,
+            )
+            for d in report.divergences
+        ],
+    )
+
+
+@router.post(
+    "/runs/{run_id}/reconcile",
+    response_model=RunReconciliationReportModel,
+    summary="Reconcile a past run's recorded fees against the canonical IBKR commission model (Phase 5a).",
+)
+async def post_reconcile(run_id: str) -> RunReconciliationReportModel:
+    """Phase 5a — self-reconciliation: compares each filled order
+    event's recorded ``orderFeeAmount`` against the IBKR equity-tier
+    fee. Returns the categorized divergence report; tolerance is the
+    project default ($0.01) from ``.claude/rules/numerical-rigor.md``.
+
+    Accepts only ``run_id``. The reconciler is decoupled from whether
+    the run was reconciliation-grade — a default-brokerage run will
+    have many ``commission_drift`` rows by construction (LEAN's
+    default commission ≠ IBKR's tier). Phase 5b will add the
+    reconciliation-grade template that makes this report come back
+    clean for properly-pinned runs.
+    """
+    workspace = _resolved_workspace_or_404(run_id)
+    try:
+        result = parse_workspace(workspace)
+    except NormalizedParserError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason": "normalized_missing",
+                "message": (
+                    f"cannot reconcile {run_id}: normalized result not present "
+                    f"({e}). The run may have crashed before producing parseable output."
+                ),
+            },
+        ) from e
+    report = reconcile_normalized_result(result, commission_atol=DEFAULT_COMMISSION_ATOL)
+    return _report_to_model(report, algorithm_id=result.algorithm_id)
 
 
 @router.get(
