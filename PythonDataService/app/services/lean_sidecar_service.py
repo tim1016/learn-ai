@@ -448,7 +448,31 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         workspace_max_mb=DEFAULT_RUN_LIMITS.workspace_max_mb,
         log_tail_bytes=DEFAULT_RUN_LIMITS.log_tail_bytes,
     )
-    response: LaunchResponse = await post_launch(launch_request)
+    # Reviewer P1.3: write a manifest on EVERY exit path — success,
+    # launcher-rejected, launcher-unreachable, even unexpected errors
+    # below the launcher_client. Without this guard, a launcher that
+    # rejected post-execute (e.g., workspace_max_mb_exceeded — the
+    # container actually ran) leaves a fully-staged workspace on disk
+    # with no manifest, no entry in the run-history sidebar, and no
+    # rejection_reason audit. The failure manifest carries every
+    # staged hash + a ``failure_reason`` note so the run remains
+    # auditable and the operator can decide whether to retry, prune,
+    # or escalate.
+    from app.lean_sidecar.launcher_client import LauncherClientError
+
+    response: LaunchResponse | None = None
+    failure_reason: str | None = None
+    launcher_exc: LauncherClientError | None = None
+    try:
+        response = await post_launch(launch_request)
+    except LauncherClientError as e:
+        launcher_exc = e
+        failure_reason = f"{type(e).__name__}: {e}"
+        logger.warning(
+            "launcher call failed for %s: %s",
+            request.run_id,
+            failure_reason,
+        )
     finished_ms = now_ms_utc()
 
     # Phase 3a: parse LEAN's output into typed DTOs and persist
@@ -460,7 +484,7 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     # than a silent missing-result.
     normalized: NormalizedResult | None = None
     normalized_path: Path | None = None
-    if response.exit_code == 0:
+    if response is not None and response.exit_code == 0:
         try:
             normalized = parse_workspace(workspace)
             normalized_path = write_normalized_result(workspace, normalized)
@@ -487,9 +511,19 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         # manifest can now show that the requested window vs the
         # staged window match (or surface that they don't).
         staged_trading_dates=trading_dates,
+        failure_reason=failure_reason,
     )
     write_manifest(manifest, workspace.manifest_path)
 
+    if launcher_exc is not None:
+        # The failure manifest is on disk; surface the original
+        # exception to the router so the HTTP layer maps to the right
+        # status code (400 / 502 / 503) per the existing contract.
+        raise launcher_exc
+
+    # ``response`` is guaranteed non-None here because the only way to
+    # leave it None is via ``launcher_exc``, which we re-raised above.
+    assert response is not None
     return TrustedRunResult(
         run_id=request.run_id,
         is_clean=response.is_clean,
@@ -516,18 +550,39 @@ def _build_manifest(
     daily_path: Path,
     source_path: Path,
     config_path: Path,
-    response: LaunchResponse,
+    response: LaunchResponse | None,
     started_ms: int,
     finished_ms: int,
     normalized: NormalizedResult | None,
     staged_trading_dates: list[date],
+    failure_reason: str | None = None,
 ) -> RunManifest:
     """Construct the full reproducibility manifest from the run.
 
     Field-order mirrors the ADR §"Reproducibility manifest" bullet
     list so a reviewer can grep against the authority doc.
+
+    Reviewer P1.3: ``response`` is optional. When the launcher
+    rejects or is unreachable before producing a ``LaunchResponse``,
+    the orchestrator still calls this builder so a *failure manifest*
+    lands on disk. The failure manifest records every byte that was
+    actually staged + a ``failure_reason`` note so the run remains
+    auditable and shows up in the sidebar instead of vanishing.
     """
     market_hours, symbol_properties = _list_metadata(workspace)
+    if response is not None:
+        exit_code = response.exit_code
+        is_clean_note = f"is_clean={response.is_clean}"
+        error_cats_note = (
+            f"lean_error_categories={sorted(response.lean_errors.keys())}"
+        )
+    else:
+        exit_code = None
+        is_clean_note = "is_clean=False"
+        error_cats_note = "lean_error_categories=[]"
+    failure_note = (
+        (f"failure_reason={failure_reason}",) if failure_reason else ()
+    )
     return RunManifest(
         schema_version=MANIFEST_SCHEMA_VERSION,
         run_id=request.run_id,
@@ -602,12 +657,12 @@ def _build_manifest(
         bars_consumed_by_symbol=_count_bars_consumed(workspace, request.symbol),
         started_at_ms=started_ms,
         finished_at_ms=finished_ms,
-        exit_code=response.exit_code,
+        exit_code=exit_code,
         notes=(
             "Phase 3a — normalized parser populates effective_algorithm_window_ms; "
             "staged_data_window_ms and bars_consumed_by_symbol still pending Phase 3b.",
-            f"is_clean={response.is_clean}",
-            f"lean_error_categories={sorted(response.lean_errors.keys())}",
+            is_clean_note,
+            error_cats_note,
             f"normalized_parser={'present' if normalized else 'absent'}",
             # Phase 4c audit: distinguishes user-provided source from
             # the trusted sample. The source hash above
@@ -617,6 +672,7 @@ def _build_manifest(
             # Phase 5b: which bundled template (if any) was staged.
             # ``user_provided_no_template`` when caller pasted source.
             f"trusted_template={'user_provided_no_template' if request.algorithm_source else request.template}",
+            *failure_note,
         ),
     )
 
