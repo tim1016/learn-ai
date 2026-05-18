@@ -262,6 +262,38 @@ def _aggregate_daily_bar(symbol: str, minute_bars: list[TradeBar]) -> TradeBar:
     )
 
 
+def _count_bars_consumed(workspace: Workspace, symbol: str) -> dict[str, int]:
+    """Phase 5e: per-symbol bar count parsed from observations.csv.
+
+    The trusted sample (and any user algorithm following its
+    convention) appends one row per received bar to
+    ``<workspace>/output/storage/observations.csv`` with a leading
+    ``ms_utc,close`` header. The count is (line count - 1) — the
+    minus-one is for the header. Empty / missing / unreadable files
+    return ``{}`` rather than raising: a user algorithm that doesn't
+    write observations.csv still gets a successful run, the manifest
+    just records "no bar-consumption evidence" honestly.
+
+    Multi-symbol algorithms are out of scope here — the trusted
+    sample is single-symbol and per-symbol tagging would need a
+    schema change to observations.csv (Phase 5f+ if it lands).
+    """
+    obs_path = workspace.object_store_dir / "observations.csv"
+    if not obs_path.exists():
+        return {}
+    try:
+        text = obs_path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("could not read observations.csv at %s: %s", obs_path, e)
+        return {}
+    # Count non-empty data rows (skip header + any trailing blank).
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) <= 1:
+        # Header only (or fully empty) — no bars consumed.
+        return {}
+    return {symbol.upper(): len(lines) - 1}
+
+
 def _iter_trading_dates(start: date, end: date) -> list[date]:
     """Inclusive trading-date sequence, weekends-only filtered.
 
@@ -494,11 +526,12 @@ def _build_manifest(
             end_ms=request.end_ms_utc,
         ),
         # ``effective_algorithm_window_ms`` derived from the parsed
-        # equity curve when available; ``bars_consumed_by_symbol``
-        # is still empty until Phase 3b adds per-symbol bar counts
-        # from the observations.csv audit file.
+        # equity curve when available. Phase 5e populates
+        # ``bars_consumed_by_symbol`` from observations.csv (written
+        # by the trusted sample) — closes the other half of
+        # invariant #16.
         effective_algorithm_window_ms=_effective_window_from_normalized(normalized),
-        bars_consumed_by_symbol={},
+        bars_consumed_by_symbol=_count_bars_consumed(workspace, request.symbol),
         started_at_ms=started_ms,
         finished_at_ms=finished_ms,
         exit_code=response.exit_code,

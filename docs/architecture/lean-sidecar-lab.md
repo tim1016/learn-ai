@@ -531,9 +531,39 @@ Open from this PR, queued for Phase 1d / Phase 5:
 - **Determinism gate** — re-run + byte-identical normalized-artifact comparison. Trivial to add now that the clean-run contract is enforced; deferred so this PR does not grow further.
 - ~~Quote-bar staging~~ — landed in Phase 5c (synthetic zero-spread minute quotes alongside trade zips; eliminates the ``Cannot find file: ...quote.zip`` known-noise category).
 - Real factor/map files for the reconciliation-grade Phase 5 fixtures (not for the spike).
-- Populate `bars_consumed_by_symbol` in the manifest writer (currently `{}` in `lean_sidecar_service._build_manifest`). Closes half of the staged-window/bar-consumption invariant (#16) that's still pending.
+- ~~Populate `bars_consumed_by_symbol` in the manifest writer~~ — landed in Phase 5e (per-symbol count from observations.csv line count, gracefully empty on missing/legacy files).
 - Populate `staged_data_window_ms` in the manifest writer (currently `None`). Closes the other half of invariant #16 — without it a reconciliation reader can't tell whether the algorithm's effective window matched the staged data window.
 - Hardening-profile enum to replace caller-supplied `hardening_flags` argv tokens — reviewer-suggested longer-term direction.
+
+### Phase 5e progress (2026-05-17, follow-up PR — bars_consumed_by_symbol in manifest)
+
+Closes the other half of invariant #16. ``bars_consumed_by_symbol``
+was ``{}`` in every manifest since Phase 1a, so an auditor couldn't
+tell whether the algorithm actually consumed bars — just that the
+exit code was 0. Phase 5e populates it from the trusted sample's
+already-written ``observations.csv`` audit file.
+
+- **New helper** — ``_count_bars_consumed(workspace, symbol)``. Reads
+  ``<workspace>/output/storage/observations.csv``, returns
+  ``{<symbol.upper()>: <data_row_count>}`` or ``{}`` when the file
+  is missing / empty / header-only / unreadable. The empty-dict
+  branch handles every "no evidence" case identically so downstream
+  consumers don't need to distinguish.
+- **No silent excepts.** ``OSError`` on read logs a WARNING with
+  the workspace path before returning ``{}``, per
+  ``.claude/rules/numerical-rigor.md`` — never swallow an exception
+  without context.
+- **Symbol uppercased** to match the rest of the staging layer's
+  canonical convention. A ``symbol="spy"`` request still keys
+  bars under ``"SPY"``, no duplicate entries.
+- **What this does NOT do.** Doesn't extract per-symbol counts for
+  multi-symbol algorithms — observations.csv is single-symbol by
+  trusted-sample convention. A schema change to observations.csv
+  is a Phase 5f+ candidate. Doesn't reconcile observed-vs-staged
+  counts; that's a Phase 5g comparator's job.
+- **Test surface** — 9 unit tests (missing/empty/header-only/single
+  bar/multi-bar/trailing-blanks/uppercased-symbol/OSError-logs-warning/
+  pure-read-no-create). 250 lean_sidecar tests pass (was 247).
 
 ### Phase 5c progress (2026-05-17, follow-up PR — synthetic minute-quote staging)
 
