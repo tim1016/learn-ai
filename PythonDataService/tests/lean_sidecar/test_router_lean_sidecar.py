@@ -767,7 +767,7 @@ class TestPostReconcileEndpoint:
 
         return _make_factory
 
-    def _filled_event(self, **overrides) -> dict:
+    def _filled_event(self, **overrides: object) -> dict:
         base = {
             "order_event_id": 1,
             "order_id": 100,
