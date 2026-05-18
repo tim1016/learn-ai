@@ -15,6 +15,7 @@ from app.lean_sidecar.config import RunLimits
 from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
 from app.lean_sidecar.result_classifier import classify_workspace
 from app.lean_sidecar.runner import (
+    HardeningProfile,
     RunnerConfigurationError,
     RunResult,
     build_command,
@@ -78,12 +79,24 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
     )
 
     try:
-        plan = build_command(
-            workspace,
-            request.image_digest,
-            limits=limits,
-            hardening_flags=tuple(request.hardening_flags),
-        )
+        # Pass exactly one of profile-or-flags to build_command. The
+        # model validator already rejects both-set; this rejects neither-
+        # set being ambiguous: when profile is None, fall through to the
+        # raw flags (defaults to empty tuple, the Phase 1 safe shape).
+        if request.hardening_profile is not None:
+            plan = build_command(
+                workspace,
+                request.image_digest,
+                limits=limits,
+                hardening_profile=HardeningProfile(request.hardening_profile),
+            )
+        else:
+            plan = build_command(
+                workspace,
+                request.image_digest,
+                limits=limits,
+                hardening_flags=tuple(request.hardening_flags),
+            )
     except RunnerConfigurationError as e:
         # The runner itself decides which configuration is acceptable
         # (image-allow-list, podman-on-path, hardening allow-list).
