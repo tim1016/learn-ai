@@ -42,6 +42,6 @@ Open from this PR, queued for Phase 1d / Phase 5:
 - **Determinism gate** — re-run + byte-identical normalized-artifact comparison. Trivial to add now that the clean-run contract is enforced; deferred so this PR does not grow further.
 - ~~Quote-bar staging~~ — landed in Phase 5c (synthetic zero-spread minute quotes alongside trade zips; eliminates the ``Cannot find file: ...quote.zip`` known-noise category).
 - Real factor/map files for the reconciliation-grade Phase 5 fixtures (not for the spike).
-- Populate `bars_consumed_by_symbol` in the manifest writer (currently `{}` in `lean_sidecar_service._build_manifest`). Closes half of the staged-window/bar-consumption invariant (#16) that's still pending.
+- ~~Populate `bars_consumed_by_symbol` in the manifest writer~~ — landed in Phase 5e (per-symbol count from `observations.csv` line count; closes the bar-consumption half of invariant #16).
 - ~~Populate `staged_data_window_ms` in the manifest writer~~ — landed in Phase 5d (envelope = first staged ET-midnight → last staged ET-midnight + 1 day, expressed as int64 ms UTC; DST-stable).
-- Hardening-profile enum to replace caller-supplied `hardening_flags` argv tokens — reviewer-suggested longer-term direction.
+- ~~Hardening-profile enum to replace caller-supplied `hardening_flags` argv tokens~~ — landed in PR #261 (`HardeningProfile.MINIMAL` / `WITH_TMPFS_256M` / `WITH_TMPFS_64M`; back-compat — raw tokens still accepted).
