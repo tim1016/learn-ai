@@ -188,6 +188,42 @@ class TestReconcileAgainstIbkr:
         assert Decimal("0.01") == DEFAULT_COMMISSION_ATOL
 
 
+class TestFractionalQuantity:
+    """Phase 5a, reviewer P2 — fractional-share fills must not silently
+    round into the integer-shares IBKR model. ``round(100.5) == 100`` in
+    Python 3 (banker's), so a fractional fill could erroneously
+    reconcile clean. Surface them as their own category instead."""
+
+    def test_fractional_quantity_surfaces_as_dedicated_category(self) -> None:
+        """A 100.5-share fill must NOT round to 100 + reconcile; it must
+        emerge as ``FRACTIONAL_QUANTITY`` so the operator decides what
+        to do (filter upstream or wait for the fractional-share model)."""
+        events = [_filled_event(fill_quantity=100.5, fill_price=580.50, fee=1.00)]
+        report = reconcile_against_ibkr("run_x", events)
+        assert report.divergent_count == 1
+        d = report.divergences[0]
+        assert d.category == FeeDivergenceCategory.FRACTIONAL_QUANTITY
+        assert d.fill_quantity_raw == 100.5
+        # Recorded fee preserved for operator inspection.
+        assert d.recorded_fee == Decimal("1.00")
+        # Expected fee is a placeholder ($0.00) — the IBKR model has no
+        # answer for fractional shares; delta is undefined.
+        assert d.expected_ibkr_fee == Decimal("0.00")
+        assert d.delta is None
+        # Placeholder must not pollute the aggregate.
+        assert report.total_expected_ibkr_fees == Decimal("0.00")
+
+    def test_exactly_integral_float_quantity_reconciles_normally(self) -> None:
+        """100.0 is integer-valued even though Python types it as float;
+        it must NOT trip FRACTIONAL_QUANTITY (only a true fractional
+        part — e.g., 100.5 — does)."""
+        events = [_filled_event(fill_quantity=100.0, fill_price=580.50, fee=1.00)]
+        report = reconcile_against_ibkr("run_x", events)
+        assert report.matched_count == 1
+        assert report.divergent_count == 0
+        assert report.total_expected_ibkr_fees == Decimal("1.00")
+
+
 class TestReconcilerEdgeCases:
     def test_zero_quantity_fill_produces_zero_expected_fee(self) -> None:
         """An IBKR fill with zero shares is a no-op — fee should be $0.00,
