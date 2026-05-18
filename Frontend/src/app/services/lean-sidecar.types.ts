@@ -135,6 +135,30 @@ export interface LeanSidecarErrorEnvelope {
   message: string;
 }
 
+/**
+ * Phase 4e — the minimal slice of the manifest the UI uses to
+ * rehydrate the form on sidebar click. The full server-side manifest
+ * has many more fields (see RunManifest in
+ * PythonDataService/app/lean_sidecar/manifest.py); the UI only needs
+ * the inputs that were on the form when this run was submitted, so
+ * the rest is intentionally not typed here. Read with optional
+ * fallbacks — older manifests may not have every nested field.
+ */
+export interface RunManifest {
+  run_id?: string;
+  parameters?: {
+    symbol?: string;
+    starting_cash?: string | number;
+    [k: string]: unknown;
+  };
+  requested_window_ms?: {
+    start_ms: number;
+    end_ms: number;
+  };
+  algorithm_source_sha256?: string;
+  [k: string]: unknown;
+}
+
 /** One row from GET /api/lean-sidecar/runs — Phase 4d index. */
 export interface RunSummary {
   run_id: string;

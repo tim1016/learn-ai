@@ -1,6 +1,27 @@
 import { provideZonelessChangeDetection } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { describe, expect, it, vi } from "vitest";
+
+// lightweight-charts pulled in transitively via LeanLabEquityChartComponent.
+// We don't render the chart in these integration tests, but the import
+// still resolves through the worker's module cache — and if the
+// equity-chart spec runs in the same worker AFTER this one, its own
+// vi.mock arrives too late and its 5 tests cascade-fail with "vi.fn()
+// called 0 times" because the real lightweight-charts has been cached.
+// Mocking here (identical stub shape to the chart spec) keeps the worker's
+// cache mock-flavored regardless of test-file ordering.
+vi.mock("lightweight-charts", () => {
+  const series = { setData: vi.fn(), applyOptions: vi.fn() };
+  const chart = {
+    addSeries: vi.fn().mockReturnValue(series),
+    removeSeries: vi.fn(),
+    timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+  };
+  return { createChart: vi.fn().mockReturnValue(chart), CandlestickSeries: "CandlestickSeries" };
+});
+
 import { LeanSidecarApiError, LeanSidecarService } from "../../services/lean-sidecar.service";
 import type {
   NormalizedResult,
@@ -20,6 +41,7 @@ import { LeanLabComponent } from "./lean-lab.component";
 interface FakeLeanSidecarService {
   startTrustedRun: ReturnType<typeof vi.fn>;
   getNormalized: ReturnType<typeof vi.fn>;
+  getManifest: ReturnType<typeof vi.fn>;
   getLogTail: ReturnType<typeof vi.fn>;
   getObservationsCsv: ReturnType<typeof vi.fn>;
   listRuns: ReturnType<typeof vi.fn>;
@@ -98,6 +120,10 @@ describe("LeanLabComponent", () => {
     serviceMock = {
       startTrustedRun: vi.fn(),
       getNormalized: vi.fn(),
+      // Phase 4e: default getManifest to reject with a 404 so tests
+      // that don't care about rehydration don't accidentally exercise
+      // it. loadRun swallows 404s as expected (legacy run case).
+      getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
       getLogTail: vi.fn(),
       getObservationsCsv: vi.fn(),
       // Default listRuns to an empty index so the constructor's
@@ -223,6 +249,7 @@ describe("LeanLabComponent", () => {
     serviceMock = {
       startTrustedRun: vi.fn(),
       getNormalized: vi.fn(),
+      getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
       getLogTail: vi.fn(),
       getObservationsCsv: vi.fn(),
       listRuns: vi.fn().mockResolvedValue(
@@ -285,6 +312,7 @@ describe("LeanLabComponent", () => {
     serviceMock = {
       startTrustedRun: vi.fn(),
       getNormalized: vi.fn().mockResolvedValue(makeNormalized()),
+      getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
       getLogTail: vi.fn(),
       getObservationsCsv: vi.fn(),
       listRuns: vi.fn().mockResolvedValue(
@@ -326,6 +354,7 @@ describe("LeanLabComponent", () => {
     serviceMock = {
       startTrustedRun: vi.fn(),
       getNormalized: vi.fn(),
+      getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
       getLogTail: vi.fn(),
       getObservationsCsv: vi.fn(),
       listRuns: vi
@@ -368,6 +397,7 @@ describe("LeanLabComponent", () => {
     serviceMock = {
       startTrustedRun: vi.fn(),
       getNormalized: vi.fn(),
+      getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
       getLogTail: vi.fn(),
       getObservationsCsv: vi.fn(),
       listRuns: vi.fn().mockRejectedValue(new Error("network down")),
@@ -390,6 +420,83 @@ describe("LeanLabComponent", () => {
     expect(text).toContain("LEAN Sidecar Lab");
     expect(text).toContain("No runs yet");
     expect(component.runs()).toEqual([]);
+  });
+
+  it("Phase 4e: loadRun rehydrates symbol + window + cash from the manifest", async () => {
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    serviceMock.getManifest.mockResolvedValue({
+      run_id: "ui_run_rehydrate",
+      parameters: { symbol: "MSFT", starting_cash: "250000" },
+      requested_window_ms: { start_ms: 1_736_121_600_000, end_ms: 1_736_467_200_000 },
+    });
+
+    const initialRunId = component.form.controls.runId.value;
+    await component.loadRun("ui_run_rehydrate");
+    fixture.detectChanges();
+
+    expect(component.form.controls.symbol.value).toBe("MSFT");
+    expect(component.form.controls.startingCash.value).toBe(250000);
+    expect(component.form.controls.startDate.value).toBe("2025-01-06");
+    expect(component.form.controls.endDate.value).toBe("2025-01-10");
+    // Toggle resets to off (manifest doesn't store the source itself).
+    expect(component.form.controls.useCustomAlgorithm.value).toBe(false);
+    // Fresh runId so re-running the form lands in a new workspace.
+    expect(component.form.controls.runId.value).not.toBe(initialRunId);
+    expect(component.form.controls.runId.value).not.toBe("ui_run_rehydrate");
+  });
+
+  it("Phase 4e: starting_cash as number (not string) also rehydrates", async () => {
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    serviceMock.getManifest.mockResolvedValue({
+      parameters: { symbol: "SPY", starting_cash: 500000 },
+      requested_window_ms: { start_ms: 1_736_121_600_000, end_ms: 1_736_467_200_000 },
+    });
+
+    await component.loadRun("ui_run_numeric_cash");
+
+    expect(component.form.controls.startingCash.value).toBe(500000);
+  });
+
+  it("Phase 4e: manifest 404 leaves form at its current values (result panel still renders)", async () => {
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    serviceMock.getManifest.mockRejectedValue(
+      new LeanSidecarApiError(404, "manifest_missing", "legacy run"),
+    );
+    component.form.patchValue({
+      symbol: "AAPL",
+      startingCash: 99_000,
+      startDate: "2026-01-01",
+      endDate: "2026-01-05",
+    });
+
+    await component.loadRun("ui_run_legacy");
+    fixture.detectChanges();
+
+    // Form unchanged — manifest fetch failure must not clobber it.
+    expect(component.form.controls.symbol.value).toBe("AAPL");
+    expect(component.form.controls.startingCash.value).toBe(99_000);
+    expect(component.form.controls.startDate.value).toBe("2026-01-01");
+    expect(component.form.controls.endDate.value).toBe("2026-01-05");
+    // Result panel still rendered.
+    expect(component.response()?.run_id).toBe("ui_run_legacy");
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("Equity snapshot");
+  });
+
+  it("Phase 4e: rejects nonsensical starting_cash (under min) instead of patching it", async () => {
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    serviceMock.getManifest.mockResolvedValue({
+      parameters: { symbol: "SPY", starting_cash: "5" },
+      requested_window_ms: { start_ms: 1_736_121_600_000, end_ms: 1_736_467_200_000 },
+    });
+    const initialCash = component.form.controls.startingCash.value;
+
+    await component.loadRun("ui_run_tiny_cash");
+
+    // Below-min cash from manifest must not be patched in — would
+    // immediately invalidate the form. Symbol + dates still rehydrate.
+    expect(component.form.controls.startingCash.value).toBe(initialCash);
+    expect(component.form.controls.symbol.value).toBe("SPY");
   });
 
   it("renders the launcher's typed rejection envelope on a 400", async () => {

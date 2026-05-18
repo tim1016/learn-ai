@@ -6,6 +6,7 @@ import type {
   LeanSidecarErrorEnvelope,
   NormalizedResult,
   RunIndexResponse,
+  RunManifest,
   TrustedRunRequest,
   TrustedRunResponse,
 } from "./lean-sidecar.types";
@@ -66,6 +67,16 @@ export class LeanSidecarService {
         this.http.get(`${this.base}/runs/${encodeURIComponent(runId)}/log`, {
           responseType: "text",
         }),
+      );
+    } catch (err) {
+      throw this.translate(err);
+    }
+  }
+
+  async getManifest(runId: string): Promise<RunManifest> {
+    try {
+      return await firstValueFrom(
+        this.http.get<RunManifest>(`${this.base}/runs/${encodeURIComponent(runId)}/manifest`),
       );
     } catch (err) {
       throw this.translate(err);
