@@ -427,7 +427,7 @@ The original plan's six phases are retained, with these adjustments encoded by P
 - **Phase 1 (Runner spike)** — now includes (a) authoring the launcher service, (b) resolving the image digest, (c) proving the Windows/Podman topology and workspace path mapping, (d) confirming which of `--cap-drop=ALL` / `--read-only` / `--tmpfs` / non-root user / disk quota the LEAN image tolerates, (e) proving the LEAN data-folder contract with a price/timestamp round-trip fixture, (f) staging and hashing metadata databases, factor files, and map files for the trusted sample, (g) producing one end-to-end run on a hard-coded trusted Python algorithm (no user input yet), (h) re-running the same sample with the same inputs and asserting deterministic artifacts or documented equivalence within the quantization floor, (i) proving requested/staged/effective date-window alignment and non-empty bar consumption.
 - **Phase 2 (Python API)** — unchanged in shape; the runner.py invocations go through the launcher socket/HTTP rather than spawning podman as a child process of the data-plane container.
 - **Phase 3 — renamed *Container Execution Boundary + Fidelity Boundary*** — is the gating phase before any UI takes arbitrary user input. The UI from Phase 4 may exist earlier only with a hardcoded trusted sample algorithm (no `algorithm_source` field, no textarea). This phase also lands the normalized parser tests, manifest hashing, disk-cap enforcement, and explicit compatibility-vs-reconciliation run classification.
-- **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. Phase 4a shipped the trusted-sample form, 4b the equity chart, and **4c the custom-algorithm textarea** (server-side accept of `algorithm_source` on `POST /lean/runs/start`). From 4c onward, a successful run is possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. The acceptance is unconditional on the API and gated by a UI toggle (defaults off → trusted sample). Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
+- **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. Phase 4a shipped the trusted-sample form, 4b the equity chart, **4c the custom-algorithm textarea** (server-side accept of `algorithm_source` on `POST /lean/runs/start`), and **4d the run-history sidebar** (`GET /api/lean-sidecar/runs` + sidebar component, click-to-rehydrate). From 4c onward, a successful run is possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. The acceptance is unconditional on the API and gated by a UI toggle (defaults off → trusted sample). Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
 - **Phases 5-6** - unchanged in scope.
 
 ### Phase 1a progress (2026-05-17)
@@ -532,6 +532,61 @@ Open from this PR, queued for Phase 1d / Phase 5:
 - Quote-bar staging — eliminates the last known-noise category in the trusted-sample log.
 - Real factor/map files for the reconciliation-grade Phase 5 fixtures (not for the spike).
 - Hardening-profile enum to replace caller-supplied `hardening_flags` argv tokens — reviewer-suggested longer-term direction.
+
+### Phase 4d progress (2026-05-17, follow-up PR — run-history sidebar)
+
+After Phase 4c made arbitrary user source first-class, the page still
+forgot every run the moment the operator submitted the next one or
+refreshed the browser. Phase 4d adds the missing read-side affordance:
+a sidebar that lists past runs and lets the operator click one to
+rehydrate it in the main panel. No persistence change: the index is
+built by scanning the artifacts root on demand.
+
+- **API** — `GET /api/lean-sidecar/runs` returns `RunIndexResponse {
+  runs, cap, truncated }`. The scan reads each `<artifacts_root>/<run_id>/manifest.json`,
+  extracts a compact `RunSummaryModel` (run_id, symbol, requested
+  window, started/finished ms, exit_code, `algorithm_source_kind`,
+  `exit_clean`), and sorts by `started_at_ms` desc. Capped at 200
+  rows so a pathological artifacts root cannot balloon the response.
+  Pure read — does not touch the launcher, does not require LEAN to
+  be running. Half-written or non-JSON manifests are silently skipped
+  so a crash mid-write does not break the listing.
+- **Slug-pattern filter at the directory boundary.** The scan only
+  enumerates directories whose names pass `RUN_ID_PATTERN`, so a
+  stray out-of-band tar extract (`/artifacts/Not a Slug!/manifest.json`)
+  never reaches the response — the sidebar is not a free file-browser.
+- **UI** — new `LeanLabRunHistoryComponent` (presentational): takes
+  `runs`, `selectedRunId`, `loading`, `truncated` as inputs and emits
+  `runSelected: string`. Renders a colored status dot per row (green
+  for `exit_clean=true`, red for `false`, grey for null/no manifest)
+  plus a "custom" tag when `algorithm_source_kind="user_provided"`.
+  Parent `LeanLabComponent` owns the run-list signal, refreshes it on
+  init + after every successful submit, and handles click by calling
+  `getNormalized()` and rehydrating the main panel. The form fields
+  are intentionally NOT repopulated on click — keeping the form
+  primed for the next submit is the lower-surprise behavior. Form
+  rehydration from manifest is a Phase 4e candidate.
+- **`exit_clean` is intentionally weaker than `is_clean`.** The
+  manifest doesn't store `lean_errors` so the index can't reconstruct
+  the full clean signal (exit==0 AND no LEAN errors AND not timed
+  out). The sidebar uses `exit_clean` only for at-a-glance row color;
+  clicking a row still rehydrates the normalized result, which is
+  where the operator gets the real picture.
+- **Test surface** — 8 new router tests (sort order, manifest-missing
+  skip, corrupt-manifest skip, non-slug skip, summary-field
+  extraction, exit-clean false branch, legacy-manifest unknown-kind,
+  empty root). 7 new component specs for the standalone sidebar
+  (empty state, row render, truncated banner, custom-tag rendering,
+  click emits, click disabled while loading, aria-current on
+  selected). 5 new specs on the parent component for the integration
+  (init load, submit re-refresh, loadRun rehydration, loadRun 404
+  surfaces error envelope, listRuns rejection survives gracefully).
+- **What Phase 4d does NOT do** — does not introduce a database; the
+  scan-on-demand approach is fine at 200 rows but will need an index
+  cache + a real persistence layer for the Phase 6 multi-thousand-run
+  case. Does not stream live progress for in-flight runs (the index
+  only shows manifest-written runs, so an in-progress run appears at
+  the top only after completion).
 
 ### Phase 4c progress (2026-05-17, follow-up PR — accept arbitrary algorithm source)
 

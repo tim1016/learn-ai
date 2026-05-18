@@ -1,0 +1,49 @@
+<aside class="lean-lab-run-history" aria-label="Run history">
+  <header class="lean-lab-run-history__header">
+    <h2>Past runs</h2>
+    @if (truncated()) {
+      <small class="lean-lab-run-history__truncated">List capped — older runs omitted.</small>
+    }
+  </header>
+
+  @if (loadError(); as err) {
+    <p class="lean-lab-run-history__error" role="alert">Couldn't load runs: {{ err }}</p>
+  }
+  @if (!hasRuns()) {
+    <p class="lean-lab-run-history__empty">No runs yet. Submit one to start the history.</p>
+  } @else {
+    <ul class="lean-lab-run-history__list">
+      @for (run of runs(); track run.run_id) {
+        @let status = statusFor(run);
+        <li
+          class="lean-lab-run-history__row"
+          [class.lean-lab-run-history__row--selected]="run.run_id === selectedRunId()"
+        >
+          <button
+            type="button"
+            class="lean-lab-run-history__button"
+            [disabled]="loading()"
+            (click)="onClick(run.run_id)"
+            [attr.aria-current]="run.run_id === selectedRunId() ? 'true' : null"
+          >
+            <span
+              class="lean-lab-run-history__status"
+              [class]="'lean-lab-run-history__status--' + status.tone"
+              [attr.aria-label]="status.label"
+              [title]="status.label"
+            ></span>
+            <span class="lean-lab-run-history__meta">
+              <span class="lean-lab-run-history__id">{{ run.run_id }}</span>
+              <span class="lean-lab-run-history__sub">
+                {{ run.symbol ?? "—" }} · {{ formatStartedAt(run.started_at_ms) }}
+              </span>
+              @if (run.algorithm_source_kind === "user_provided") {
+                <span class="lean-lab-run-history__tag">custom</span>
+              }
+            </span>
+          </button>
+        </li>
+      }
+    </ul>
+  }
+</aside>

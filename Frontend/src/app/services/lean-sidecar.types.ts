@@ -134,3 +134,27 @@ export interface LeanSidecarErrorEnvelope {
   reason: string;
   message: string;
 }
+
+/** One row from GET /api/lean-sidecar/runs — Phase 4d index. */
+export interface RunSummary {
+  run_id: string;
+  symbol: string | null;
+  requested_start_ms_utc: number | null;
+  requested_end_ms_utc: number | null;
+  started_at_ms: number | null;
+  finished_at_ms: number | null;
+  exit_code: number | null;
+  algorithm_source_kind: "trusted_sample" | "user_provided" | "unknown";
+  /**
+   * ``exit_code == 0`` — a fast at-a-glance status. NOT a substitute
+   * for ``TrustedRunResponse.is_clean`` (which also requires zero
+   * classified LEAN errors); the sidebar uses this only to color rows.
+   */
+  exit_clean: boolean | null;
+}
+
+export interface RunIndexResponse {
+  runs: RunSummary[];
+  cap: number;
+  truncated: boolean;
+}

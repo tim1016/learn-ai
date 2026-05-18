@@ -12,10 +12,12 @@ import {
 } from "../../services/lean-sidecar.service";
 import type {
   NormalizedResult,
+  RunSummary,
   TrustedRunRequest,
   TrustedRunResponse,
 } from "../../services/lean-sidecar.types";
 import { LeanLabEquityChartComponent } from "./lean-lab-equity-chart/lean-lab-equity-chart.component";
+import { LeanLabRunHistoryComponent } from "./lean-lab-run-history/lean-lab-run-history.component";
 
 /** Mirror the server's ``MAX_ALGORITHM_SOURCE_BYTES``. */
 const MAX_ALGORITHM_SOURCE_BYTES = 256 * 1024;
@@ -76,7 +78,12 @@ class MyAlgorithm(QCAlgorithm):
 @Component({
   selector: "app-lean-lab",
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule, LeanLabEquityChartComponent],
+  imports: [
+    CommonModule,
+    ReactiveFormsModule,
+    LeanLabEquityChartComponent,
+    LeanLabRunHistoryComponent,
+  ],
   templateUrl: "./lean-lab.component.html",
   styleUrl: "./lean-lab.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -132,6 +139,18 @@ export class LeanLabComponent {
   readonly response = signal<TrustedRunResponse | null>(null);
   readonly normalized = signal<NormalizedResult | null>(null);
   readonly error = signal<{ reason: string; message: string; status: number } | null>(null);
+
+  /** Phase 4d sidebar state — populated by ``refreshRuns()``. */
+  readonly runs = signal<RunSummary[]>([]);
+  readonly runsTruncated = signal(false);
+  readonly loadingRun = signal(false);
+  /**
+   * Reviewer P2 (silent catch fix): surface the index-fetch failure
+   * reason in the UI so an empty sidebar isn't ambiguous (network
+   * down vs. genuinely no runs). Reset on each successful refresh.
+   */
+  readonly runsLoadError = signal<string | null>(null);
+  readonly selectedRunId = computed(() => this.response()?.run_id ?? null);
 
   /**
    * `is_clean` is the single boolean callers should branch on; the
@@ -220,6 +239,105 @@ export class LeanLabComponent {
     return Date.UTC(y, (m ?? 1) - 1, d ?? 1);
   }
 
+  /**
+   * Phase 4d — load past runs into the sidebar. Called on init (via
+   * the constructor below) and again after every successful submit so
+   * the new run shows up without a page refresh.
+   *
+   * Failures reset the sidebar to an empty list (an empty sidebar is
+   * better than the whole page erroring because the index endpoint was
+   * unreachable) and are surfaced via ``runsLoadError`` so the
+   * operator can see WHY the sidebar is empty. Logging to console
+   * would violate the "no console.log in committed code" hard rule
+   * and there's no project-wide frontend logger yet — surfacing the
+   * error in the UI is the working alternative.
+   */
+  async refreshRuns(): Promise<void> {
+    try {
+      const idx = await this.service.listRuns();
+      this.runs.set(idx.runs);
+      this.runsTruncated.set(idx.truncated);
+      this.runsLoadError.set(null);
+    } catch (err) {
+      this.runs.set([]);
+      this.runsTruncated.set(false);
+      this.runsLoadError.set(
+        err instanceof LeanSidecarApiError
+          ? `${err.reason}: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err),
+      );
+    }
+  }
+
+  /**
+   * Sidebar click handler. Loads the normalized result for an
+   * existing run and renders it in the main panel. Does not
+   * repopulate form fields — the form remains primed for the next
+   * submit. Phase 4e candidate: rehydrate form from manifest too.
+   *
+   * Reviewer P1: the synthesized ``TrustedRunResponse`` MUST carry
+   * the actual ``exit_code`` / ``exit_clean`` from the row in
+   * ``runs()`` — synthesizing ``is_clean: true`` for every historical
+   * row would paint failed runs as clean once rehydrated. We don't
+   * have ``lean_errors`` from the manifest (the index intentionally
+   * omits them), so the statusBadge still shows "Clean run" only when
+   * the exit was actually 0; non-zero exits get the red ``Exit N``
+   * pill and the operator clicks through to the LEAN log endpoint
+   * for the detailed errors.
+   */
+  async loadRun(runId: string): Promise<void> {
+    this.loadingRun.set(true);
+    this.error.set(null);
+    this.response.set(null);
+    this.normalized.set(null);
+    const summary = this.runs().find((r) => r.run_id === runId);
+    try {
+      const parsed = await this.service.getNormalized(runId);
+      this.normalized.set(parsed);
+      // Use the actual exit_code/exit_clean from the summary row.
+      // Default to a "not clean, exit unknown" shape when the summary
+      // isn't in the cache (e.g., the sidebar refresh raced with the
+      // click) — better to under-claim than over-claim cleanliness.
+      const exit_code = summary?.exit_code ?? -1;
+      const is_clean = summary?.exit_clean === true;
+      this.response.set({
+        run_id: runId,
+        is_clean,
+        exit_code,
+        duration_ms: 0,
+        timed_out: false,
+        lean_errors: { analysis_failed: [], failed_data_requests: [], runtime_error: [], other: [] },
+        log_tail: "",
+        manifest_path: "",
+        workspace_root: "",
+        observations_path: "",
+        lean_log_path: "",
+        normalized_path: "",
+        normalized_parser_version: parsed.parser_version,
+        total_order_events: parsed.total_order_events,
+        total_equity_points: parsed.total_equity_points,
+      });
+    } catch (err) {
+      if (err instanceof LeanSidecarApiError) {
+        this.error.set({ reason: err.reason, message: err.message, status: err.status });
+      } else {
+        this.error.set({
+          reason: "client_error",
+          message: err instanceof Error ? err.message : String(err),
+          status: 0,
+        });
+      }
+    } finally {
+      this.loadingRun.set(false);
+    }
+  }
+
+  constructor() {
+    void this.refreshRuns();
+  }
+
   async submit(): Promise<void> {
     if (this.form.invalid) {
       this.form.markAllAsTouched();
@@ -286,6 +404,9 @@ export class LeanLabComponent {
       }
     } finally {
       this.submitting.set(false);
+      // Refresh the sidebar so the just-submitted run appears at the
+      // top, even if its normalized result fetch failed.
+      void this.refreshRuns();
     }
   }
 }
