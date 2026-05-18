@@ -58,6 +58,7 @@ function makeRunSummary(overrides: Partial<RunSummary> = {}): RunSummary {
     exit_code: 0,
     algorithm_source_kind: "trusted_sample",
     exit_clean: true,
+    is_clean: true,
     ...overrides,
   };
 }
@@ -322,6 +323,7 @@ describe("LeanLabComponent", () => {
               run_id: "ui_run_oom",
               exit_code: 137,
               exit_clean: false,
+              is_clean: false,
             }),
           ],
         }),
@@ -347,6 +349,102 @@ describe("LeanLabComponent", () => {
     const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
     expect(text).not.toContain("Clean run");
     expect(text).toContain("Exit 137");
+  });
+
+  it("loadRun does not paint a 'Clean run' badge when manifest is_clean=false despite exit_code=0", async () => {
+    // Reviewer P1: a run that exited 0 but had classified LEAN errors
+    // (failed_data_requests, runtime_error, etc.) has ``is_clean=false``
+    // on the launcher response and in the manifest's ``is_clean=False``
+    // note. The sidebar rehydration must branch on the manifest's
+    // ``is_clean`` field — not on ``exit_clean`` (which is just
+    // ``exit_code == 0`` and would paint this dirty run as green).
+    TestBed.resetTestingModule();
+    serviceMock = {
+      startTrustedRun: vi.fn(),
+      getNormalized: vi.fn().mockResolvedValue(makeNormalized()),
+      getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
+      getLogTail: vi.fn(),
+      getObservationsCsv: vi.fn(),
+      listRuns: vi.fn().mockResolvedValue(
+        makeRunIndex({
+          runs: [
+            makeRunSummary({
+              run_id: "ui_run_dirty_zero_exit",
+              exit_code: 0,
+              exit_clean: true,
+              is_clean: false,
+            }),
+          ],
+        }),
+      ),
+    };
+    await TestBed.configureTestingModule({
+      imports: [LeanLabComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: LeanSidecarService, useValue: serviceMock },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LeanLabComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    await component.loadRun("ui_run_dirty_zero_exit");
+    fixture.detectChanges();
+
+    // Synthesized response carries is_clean=false from the manifest.
+    expect(component.response()?.is_clean).toBe(false);
+    expect(component.response()?.exit_code).toBe(0);
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    // Badge must NOT say "Clean run" — exit==0 alone doesn't qualify.
+    // The component shows "LEAN errors logged" for exit==0 + not clean.
+    expect(text).not.toContain("Clean run");
+    expect(text).toContain("LEAN errors logged");
+  });
+
+  it("loadRun falls back to is_clean=false when manifest note is null (legacy run)", async () => {
+    // Pre-Phase-2a manifests don't carry the ``is_clean`` note —
+    // ``summary.is_clean`` arrives as null. Per the reviewer's
+    // direction: fall back to false, never silently paint green.
+    TestBed.resetTestingModule();
+    serviceMock = {
+      startTrustedRun: vi.fn(),
+      getNormalized: vi.fn().mockResolvedValue(makeNormalized()),
+      getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
+      getLogTail: vi.fn(),
+      getObservationsCsv: vi.fn(),
+      listRuns: vi.fn().mockResolvedValue(
+        makeRunIndex({
+          runs: [
+            makeRunSummary({
+              run_id: "ui_run_legacy_no_note",
+              exit_code: 0,
+              exit_clean: true,
+              is_clean: null,
+            }),
+          ],
+        }),
+      ),
+    };
+    await TestBed.configureTestingModule({
+      imports: [LeanLabComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: LeanSidecarService, useValue: serviceMock },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LeanLabComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    await component.loadRun("ui_run_legacy_no_note");
+    fixture.detectChanges();
+
+    expect(component.response()?.is_clean).toBe(false);
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).not.toContain("Clean run");
   });
 
   it("surfaces the listRuns failure reason in the sidebar (reviewer: no silent catch)", async () => {
