@@ -1,10 +1,27 @@
 """Application configuration loaded from environment variables"""
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables"""
+    """Application settings loaded from environment variables.
+
+    Pydantic-v2 settings: ``extra="ignore"`` so a local ``.env`` with
+    project-specific extras (test fixtures, optional vendor tokens,
+    one-off experiments) does not break ``Settings()`` construction.
+    The class-based ``Config`` previously rejected unknown keys with a
+    ``ValidationError`` at module import; that broke ``pytest``
+    collection any time a developer dropped an experimental key into
+    ``.env``. ``extra="ignore"`` is the standard Pydantic-settings
+    convention for application config models where the env file is
+    operator-edited.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
     # Polygon API
     POLYGON_API_KEY: str
@@ -38,10 +55,5 @@ class Settings(BaseSettings):
 
     # Rate limiting (optional)
     MAX_REQUESTS_PER_MINUTE: int = 100
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-
 
 settings = Settings()

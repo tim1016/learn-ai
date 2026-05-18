@@ -140,10 +140,23 @@ def classify_lean_log(log_text: str) -> ClassifiedErrors:
 def classify_workspace(log_path: Path) -> ClassifiedErrors:
     """Convenience wrapper: classify the LEAN log on disk.
 
-    Returns an empty result (not an error) if the log is missing; the
-    launcher distinguishes "no log" from "no errors" by checking the
-    log path's existence itself.
+    Treats a missing log as a non-clean diagnostic — surfaces it in the
+    ``other`` bucket with a stable label so ``is_clean`` flips to False
+    instead of silently returning success on a run that crashed before
+    flushing any output. Previously an absent log produced an empty
+    ``ClassifiedErrors`` (the launcher then computed ``is_clean=True``
+    when exit_code was also 0); a runaway algorithm that exited 0 but
+    wrote nothing would have passed for a clean run.
     """
     if not log_path.exists():
-        return ClassifiedErrors()
+        return ClassifiedErrors(
+            by_category={
+                "other": [
+                    f"LEAN log.txt not present at {log_path}; "
+                    "the run did not produce a log file. Treat as "
+                    "non-clean — LEAN crashed before flushing or the "
+                    "output directory was misconfigured."
+                ],
+            }
+        )
     return classify_lean_log(log_path.read_text(encoding="utf-8", errors="replace"))

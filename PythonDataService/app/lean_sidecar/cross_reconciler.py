@@ -59,7 +59,11 @@ class CrossReconciliationTolerances:
 
     fill_price_atol: Decimal = Decimal("0.01")
     commission_atol: Decimal = Decimal("0.01")
-    qty_atol: int = 0
+    # ``Decimal`` (not ``int``) so the comparator's
+    # ``abs(lean - engine) > qty_atol`` works on Decimal-typed sides
+    # produced by the adapters. Default 0 — strict equality — so any
+    # fractional drift surfaces unless the caller explicitly widens.
+    qty_atol: Decimal = Decimal(0)
 
     @classmethod
     def default(cls) -> CrossReconciliationTolerances:
@@ -74,17 +78,20 @@ class _InternalFill:
     LEAN/Engine direction string already — no Buy/Sell→side
     translation happens later, so the comparator works on
     wire-identical strings.
+
+    ``fill_quantity`` is ``Decimal`` (not ``int``) because LEAN can
+    emit fractional-share fills (e.g., ``100.5``). Engines that disagree
+    only on the fractional part previously compared equal because the
+    adapter ``int``-truncated both sides before comparison; using
+    Decimal throughout preserves the divergence.
     """
 
     side: Side
-    fill_quantity: int  # unsigned magnitude; sign lives in ``side``
+    fill_quantity: Decimal  # unsigned magnitude; sign lives in ``side``
     fill_price: Decimal
     fill_time_ms_utc: int
     fee: Decimal | None
     symbol: str
-    # For cross-side report rendering: which fill on the source side
-    # this internal record came from. Carries enough fields to fill
-    # ``CrossEngineFillSnapshotModel`` without re-reading the source.
 
     @property
     def trading_date(self) -> date:
@@ -135,14 +142,17 @@ def _adapt_lean_event(event: NormalizedOrderEvent) -> _InternalFill | None:
     lifecycle event) or has zero fill_quantity. Fee may be absent
     (``None``) when the LEAN run did not record ``orderFeeAmount``.
 
-    Case-folds ``status`` and ``direction`` before comparison so the
-    adapter is robust to LEAN presentation changes — same pattern as
-    :mod:`app.lean_sidecar.reconciler`.
+    Case-folds ``status`` and ``direction`` so the adapter is robust to
+    LEAN presentation changes — same pattern as
+    :mod:`app.lean_sidecar.reconciler`. Quantity is preserved as
+    ``Decimal`` (review-fix): truncating LEAN's float quantity to int
+    hides fractional-share fills, and two engines that disagreed only
+    on the fractional part would have compared equal.
     """
     if event.status.casefold() != "filled":
         return None
-    qty = int(event.fill_quantity)
-    if qty == 0:
+    qty_decimal = Decimal(str(event.fill_quantity))
+    if qty_decimal == 0:
         return None
     direction_cf = event.direction.casefold()
     if direction_cf == "buy":
@@ -161,7 +171,7 @@ def _adapt_lean_event(event: NormalizedOrderEvent) -> _InternalFill | None:
     )
     return _InternalFill(
         side=side,
-        fill_quantity=abs(qty),
+        fill_quantity=abs(qty_decimal),
         fill_price=Decimal(str(event.fill_price)),
         fill_time_ms_utc=int(event.ms_utc),
         fee=fee,
@@ -170,10 +180,17 @@ def _adapt_lean_event(event: NormalizedOrderEvent) -> _InternalFill | None:
 
 
 def _adapt_engine_event(event: CrossRunOrderEvent) -> _InternalFill:
-    """Adapt an Engine-Lab ``CrossRunOrderEvent`` to the internal shape."""
+    """Adapt an Engine-Lab ``CrossRunOrderEvent`` to the internal shape.
+
+    The engine's ``CrossRunOrderEvent.fill_quantity`` is already an
+    unsigned ``int`` — Engine Lab's ``OrderEvent`` cannot represent
+    fractional shares — but the internal shape uses ``Decimal`` so the
+    comparator's subtraction stays in one type domain and surfaces any
+    LEAN-side fractional drift cleanly.
+    """
     return _InternalFill(
         side=event.direction,
-        fill_quantity=event.fill_quantity,
+        fill_quantity=Decimal(event.fill_quantity),
         fill_price=event.fill_price,
         fill_time_ms_utc=event.ms_utc,
         fee=event.fee,
@@ -351,13 +368,32 @@ def compare_cross_engine(
 
 def internal_fill_to_dict(fill: _InternalFill, *, ms_to_utc: bool = True) -> dict:
     """Render an internal fill to a dict the router can spread into
-    ``CrossEngineFillSnapshotModel``. ``fill_price`` and ``fee`` come
-    out as strings — cent-exact wire matching the rest of the
-    lean_sidecar surface."""
+    ``CrossEngineFillSnapshotModel``.
+
+    ``fill_price`` and ``fee`` come out as strings — cent-exact wire
+    matching the rest of the lean_sidecar surface.
+
+    ``fill_quantity`` is rendered as ``int`` (truncated) so the existing
+    UI keeps rendering whole-share counts unchanged. When the internal
+    Decimal quantity is fractional (LEAN can emit ``100.5``-style
+    fills), the full precision goes into ``fill_quantity_raw`` as a
+    string — mirroring the Phase 5a fee reconciler's
+    ``fill_quantity_raw`` convention. Consumers ignoring the new field
+    keep the old int-only behavior; consumers that care see the exact
+    value.
+    """
+    qty_decimal = fill.fill_quantity
+    qty_int = int(qty_decimal)
+    raw = (
+        str(qty_decimal)
+        if Decimal(qty_int) != qty_decimal
+        else None
+    )
     return {
         "symbol": fill.symbol,
         "side": fill.side,
-        "fill_quantity": fill.fill_quantity,
+        "fill_quantity": qty_int,
+        "fill_quantity_raw": raw,
         "fill_price": str(fill.fill_price),
         "fill_time_ms_utc": int(fill.fill_time_ms_utc),
         "fee": None if fill.fee is None else str(fill.fee),
