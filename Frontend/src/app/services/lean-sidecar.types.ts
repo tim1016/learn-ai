@@ -191,3 +191,43 @@ export interface RunIndexResponse {
   cap: number;
   truncated: boolean;
 }
+
+/**
+ * Phase 5a — one row in the fee-reconciliation report. Money values
+ * arrive as strings (preserves exact cents through JSON serialization;
+ * matches the Decimal hygiene called out in the ADR's Phase 5a
+ * section). Categories mirror ``FeeDivergenceCategory`` in
+ * ``PythonDataService/app/lean_sidecar/reconciler.py``.
+ */
+export interface FeeDivergence {
+  order_event_id: number;
+  order_id: number;
+  symbol: string;
+  ms_utc: number;
+  fill_quantity: number;
+  fill_price: string;
+  recorded_fee: string | null;
+  expected_ibkr_fee: string;
+  delta: string | null;
+  category: "commission_drift" | "no_recorded_fee";
+}
+
+/**
+ * Phase 5a — full report returned by
+ * ``POST /api/lean-sidecar/runs/{id}/reconcile``.
+ *
+ * ``run_id`` is the workspace slug (path parameter), ``algorithm_id`` is
+ * LEAN's algorithm-type-name — they are distinct because the slug is
+ * UI-generated while the algorithm-id defaults to ``MyAlgorithm``.
+ */
+export interface RunReconciliationReport {
+  run_id: string;
+  algorithm_id: string;
+  total_fill_events: number;
+  matched_count: number;
+  divergent_count: number;
+  commission_atol: string;
+  total_recorded_fees: string;
+  total_expected_ibkr_fees: string;
+  divergences: FeeDivergence[];
+}
