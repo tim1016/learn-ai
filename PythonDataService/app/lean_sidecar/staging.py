@@ -251,7 +251,12 @@ def stage_lean_metadata_from_image(
 
     podman = shutil.which("podman")
     if not podman:
-        raise MetadataStagingError("podman is required but was not found on PATH")
+        # Data-plane container has no podman on PATH — by design, per
+        # the launcher topology in lean-sidecar-lab.md §"Launcher
+        # topology". Delegate to the host-side launcher via HTTP, then
+        # verify the files landed in the workspace through our view of
+        # the shared bind mount.
+        return _stage_lean_metadata_via_launcher(workspace, image_digest)
 
     workspace.ensure_layout()
     workspace.data_dir.mkdir(parents=True, exist_ok=True)
@@ -336,5 +341,53 @@ def stage_lean_metadata_from_image(
     if mh is None or sp is None:
         raise MetadataStagingError(
             f"metadata databases not present in workspace after extract; market-hours={mh!r}, symbol-properties={sp!r}"
+        )
+    return mh, sp
+
+
+def _stage_lean_metadata_via_launcher(
+    workspace: Workspace,
+    image_digest: str,
+) -> tuple[Path, Path]:
+    """Delegate metadata extraction to the launcher service.
+
+    Used when the local environment has no ``podman`` on PATH — the
+    production topology for the data-plane container. The launcher
+    (a host process with podman) does the subprocess work and writes
+    files to the workspace; we then re-read them through our view of
+    the shared bind mount.
+
+    The workspace's ``run_id`` is read from the dataclass field
+    (``Workspace.run_id``) — the same value the data plane sent on the
+    matching ``/launch`` request. Both endpoints address the same
+    workspace by the same key without the data plane threading a
+    separate id.
+    """
+    # Lazy import to keep the staging module importable in environments
+    # where httpx is not installed (e.g., a minimal test fixture).
+    from app.lean_sidecar.launcher_client import (
+        LauncherClientError,
+        post_extract_metadata_sync,
+    )
+
+    workspace.ensure_layout()
+    workspace.data_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        post_extract_metadata_sync(workspace.run_id, image_digest)
+    except LauncherClientError as e:
+        # Surface the launcher's failure as a MetadataStagingError so
+        # callers handle this delegation path the same way they handle
+        # the local-podman path. The message preserves the launcher's
+        # reason label so an operator can distinguish in logs.
+        raise MetadataStagingError(
+            f"metadata extraction via launcher failed: {e}"
+        ) from e
+
+    mh, sp = list_metadata_databases(workspace)
+    if mh is None or sp is None:
+        raise MetadataStagingError(
+            f"metadata databases not present in workspace after launcher "
+            f"extract; market-hours={mh!r}, symbol-properties={sp!r}"
         )
     return mh, sp

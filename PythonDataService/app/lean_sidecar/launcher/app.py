@@ -19,8 +19,17 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, status
 
 from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT
-from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
-from app.lean_sidecar.launcher.service import LaunchRejectedError, launch
+from app.lean_sidecar.launcher.models import (
+    ExtractMetadataRequest,
+    ExtractMetadataResponse,
+    LaunchRequest,
+    LaunchResponse,
+)
+from app.lean_sidecar.launcher.service import (
+    LaunchRejectedError,
+    extract_metadata,
+    launch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +93,33 @@ async def post_launch(
         # 4xx covers all "this request is malformed in a way the
         # launcher refuses to act on". The body carries a stable
         # ``reason`` label so the caller can branch without parsing.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"reason": e.reason, "message": e.detail},
+        ) from e
+
+
+@app.post("/extract-metadata", response_model=ExtractMetadataResponse)
+async def post_extract_metadata(
+    request: ExtractMetadataRequest,
+    x_launcher_token: str | None = Header(default=None, alias="X-Launcher-Token"),
+) -> ExtractMetadataResponse:
+    """Extract LEAN's image-bundled metadata into the named workspace.
+
+    Same auth + error-envelope shape as ``/launch``. Lets the data plane
+    delegate ``podman cp`` work to the launcher when its own container
+    has no podman on PATH (the production topology — the data plane is
+    not supposed to need podman directly).
+    """
+    expected = _expected_token()
+    if expected is not None and x_launcher_token != expected:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing or wrong X-Launcher-Token",
+        )
+    try:
+        return extract_metadata(request, artifacts_root=_artifacts_root())
+    except LaunchRejectedError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"reason": e.reason, "message": e.detail},

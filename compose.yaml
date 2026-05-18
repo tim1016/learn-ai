@@ -77,6 +77,14 @@ services:
       - FRED_API_KEY=${FRED_API_KEY}
       - LEAN_DATA_ROOT=/lean-data
       - LEAN_DATA_CACHE=/lean-cache
+      # Phase 1c topology — the launcher is a HOST process (it owns
+      # podman access), not a compose container. The data-plane
+      # reaches it via the WSL2 adapter IP because
+      # ``host.containers.internal`` resolves to a broken link-local
+      # on this host (169.254.x). Override LEAN_LAUNCHER_URL in your
+      # local .env (or shell) when this default doesn't match your
+      # adapter — ``ipconfig | findstr WSL`` to discover yours.
+      - LEAN_LAUNCHER_URL=${LEAN_LAUNCHER_URL:-http://172.23.176.1:8090}
       - HOST=0.0.0.0
       - PORT=8000
       - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200
