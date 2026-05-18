@@ -440,6 +440,7 @@ def _write_manifest(
     finished_at_ms: int | None = 1_736_121_605_000,
     exit_code: int | None = 0,
     algorithm_source_kind: str | None = "trusted_sample",
+    is_clean: bool | None = None,
 ) -> None:
     """Write a minimal manifest.json into a run's workspace dir.
 
@@ -451,6 +452,8 @@ def _write_manifest(
     notes = []
     if algorithm_source_kind is not None:
         notes.append(f"algorithm_source_kind={algorithm_source_kind}")
+    if is_clean is not None:
+        notes.append(f"is_clean={is_clean}")
     body = {
         "run_id": run_id,
         "parameters": {"symbol": symbol, "starting_cash": "100000.0"},
@@ -548,6 +551,7 @@ class TestRunsIndex:
             finished_at_ms=1_700_000_001_000,
             exit_code=0,
             algorithm_source_kind="user_provided",
+            is_clean=True,
         )
         r = await client.get("/api/lean-sidecar/runs")
         row = r.json()["runs"][0]
@@ -557,6 +561,7 @@ class TestRunsIndex:
         assert row["finished_at_ms"] == 1_700_000_001_000
         assert row["exit_code"] == 0
         assert row["exit_clean"] is True
+        assert row["is_clean"] is True
         assert row["algorithm_source_kind"] == "user_provided"
         assert row["requested_start_ms_utc"] == 1_736_121_600_000
         assert row["requested_end_ms_utc"] == 1_736_467_200_000
@@ -583,6 +588,49 @@ class TestRunsIndex:
         _write_manifest(patched_artifacts_root, "ui_run_legacy", algorithm_source_kind=None)
         row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
         assert row["algorithm_source_kind"] == "unknown"
+
+    async def test_is_clean_parsed_from_manifest_note_false(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """Reviewer P1: a manifest noting ``is_clean=False`` (e.g., LEAN
+        exited 0 but logged data/analysis errors) must surface as
+        ``is_clean: false`` in the row so the sidebar click does not
+        synthesize a green "Clean run" badge."""
+        _write_manifest(
+            patched_artifacts_root,
+            "ui_run_dirty_zero_exit",
+            exit_code=0,
+            is_clean=False,
+        )
+        row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
+        # exit_code is 0 → exit_clean is True (just a status code check),
+        # but the manifest's is_clean note is False because LEAN logged
+        # errors. The UI must branch on the latter.
+        assert row["exit_code"] == 0
+        assert row["exit_clean"] is True
+        assert row["is_clean"] is False
+
+    async def test_is_clean_parsed_from_manifest_note_true(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        _write_manifest(patched_artifacts_root, "ui_run_truly_clean", is_clean=True)
+        row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
+        assert row["is_clean"] is True
+
+    async def test_is_clean_null_for_legacy_manifest_without_note(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        # Pre-Phase-2a manifests don't carry the is_clean note. ``None``
+        # is the honest answer — under-claim, never guess.
+        _write_manifest(patched_artifacts_root, "ui_run_legacy_no_clean_note", is_clean=None)
+        row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
+        assert row["is_clean"] is None
 
     async def test_cap_applied_after_global_sort(
         self,

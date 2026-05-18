@@ -15,6 +15,7 @@ function makeRun(overrides: Partial<RunSummary> = {}): RunSummary {
     exit_code: 0,
     algorithm_source_kind: "trusted_sample",
     exit_clean: true,
+    is_clean: true,
     ...overrides,
   };
 }
