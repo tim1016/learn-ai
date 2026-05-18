@@ -251,6 +251,16 @@ class RunSummaryModel(BaseModel):
     # so a run that exited 0 with classified LEAN errors does not paint
     # as a green "Clean run."
     is_clean: bool | None
+    # Phase 4f: which LEAN error categories appeared in the run's
+    # log.txt, parsed from the manifest's
+    # ``lean_error_categories=[...]`` note. Empty list means the run
+    # had no categorized LEAN errors. The Phase 4d/4e sidebar uses
+    # this to populate the rehydrated TrustedRunResponse with
+    # bucket-name placeholders (the manifest doesn't store individual
+    # lines, only the bucket names), so a rehydrated run with
+    # `is_clean=false` shows WHICH category was hit instead of an
+    # uninformative "errors logged" badge with empty buckets.
+    lean_error_categories: list[str]
 
 
 class RunIndexResponseModel(BaseModel):
@@ -420,6 +430,7 @@ def _safe_load_manifest_summary(manifest_path) -> dict | None:
     # writer); ``None`` for pre-Phase-2a manifests.
     kind = "unknown"
     is_clean: bool | None = None
+    lean_error_categories: list[str] = []
     for note in notes:
         if not isinstance(note, str):
             continue
@@ -435,6 +446,8 @@ def _safe_load_manifest_summary(manifest_path) -> dict | None:
                 is_clean = False
             # Anything else stays None — never silently coerce a
             # malformed note into a truthy/falsy value.
+        elif note.startswith("lean_error_categories="):
+            lean_error_categories = _parse_categories_note(note.split("=", 1)[1])
     exit_code = data.get("exit_code")
     return {
         "symbol": params.get("symbol") if isinstance(params, dict) else None,
@@ -446,7 +459,39 @@ def _safe_load_manifest_summary(manifest_path) -> dict | None:
         "algorithm_source_kind": kind,
         "exit_clean": (exit_code == 0) if exit_code is not None else None,
         "is_clean": is_clean,
+        "lean_error_categories": lean_error_categories,
     }
+
+
+# Known LEAN error bucket keys per the launcher's classifier. The note
+# is whitelisted against this set so a malformed note ("=junk") can't
+# inject arbitrary strings into the sidebar.
+_VALID_LEAN_ERROR_CATEGORIES = frozenset(
+    {"analysis_failed", "failed_data_requests", "runtime_error", "other"}
+)
+
+
+def _parse_categories_note(raw: str) -> list[str]:
+    """Parse the ``lean_error_categories=['x', 'y']`` value into a list.
+
+    The service writes ``f"lean_error_categories={sorted(response.lean_errors.keys())}"``
+    which python's str() on a list produces (single-quoted entries).
+    Parsing safely: strip brackets, split on commas, strip quotes +
+    whitespace, keep only known categories. Returns an empty list when
+    the format is unrecognized — a malformed note must not crash the
+    index endpoint.
+    """
+    if not raw.startswith("[") or not raw.endswith("]"):
+        return []
+    inner = raw[1:-1].strip()
+    if not inner:
+        return []
+    out: list[str] = []
+    for piece in inner.split(","):
+        cleaned = piece.strip().strip("'").strip('"').strip()
+        if cleaned in _VALID_LEAN_ERROR_CATEGORIES:
+            out.append(cleaned)
+    return out
 
 
 @router.get(

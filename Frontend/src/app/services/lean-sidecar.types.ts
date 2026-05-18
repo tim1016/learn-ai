@@ -194,6 +194,18 @@ export interface RunSummary {
    * paint as a green "Clean run" badge.
    */
   is_clean: boolean | null;
+  /**
+   * Phase 4f — which LEAN error categories appeared in the run's
+   * log.txt, parsed from the manifest's ``lean_error_categories=[...]``
+   * note. Empty array means a clean run. ``loadRun`` uses this to
+   * populate the rehydrated TrustedRunResponse with bucket-name
+   * placeholders.
+   *
+   * Optional because legacy manifests (pre-Phase-1a's note) lack the
+   * categories note entirely — the parser then omits the field. The
+   * frontend treats `undefined` and `[]` identically (no categories).
+   */
+  lean_error_categories?: string[];
 }
 
 export interface RunIndexResponse {

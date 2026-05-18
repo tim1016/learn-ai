@@ -61,6 +61,7 @@ function makeRunSummary(overrides: Partial<RunSummary> = {}): RunSummary {
     algorithm_source_kind: "trusted_sample",
     exit_clean: true,
     is_clean: true,
+    lean_error_categories: [],
     ...overrides,
   };
 }
@@ -778,5 +779,71 @@ describe("LeanLabComponent", () => {
     expect(text).toContain("Run failed");
     expect(text).toContain("workspace_not_staged");
     expect(text).toContain("stage first");
+  });
+
+  it("Phase 4f: loadRun populates lean_errors buckets from manifest categories", async () => {
+    // A run that exited 0 with failed_data_requests is is_clean=false
+    // in the index. loadRun must populate the synthesized response's
+    // lean_errors bucket so the existing badge logic shows WHICH
+    // category was hit, not an uninformative empty-buckets state.
+    TestBed.resetTestingModule();
+    serviceMock = {
+      startTrustedRun: vi.fn(),
+      getNormalized: vi.fn().mockResolvedValue(makeNormalized()),
+      getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
+      getLogTail: vi.fn(),
+      getObservationsCsv: vi.fn(),
+      listRuns: vi.fn().mockResolvedValue(
+        makeRunIndex({
+          runs: [
+            makeRunSummary({
+              run_id: "ui_run_with_data_errors",
+              exit_code: 0,
+              exit_clean: true,
+              is_clean: false,
+              lean_error_categories: ["failed_data_requests"],
+            }),
+          ],
+        }),
+      ),
+      reconcileRun: vi
+        .fn()
+        .mockRejectedValue(new LeanSidecarApiError(404, "normalized_missing", "n/a")),
+    };
+    await TestBed.configureTestingModule({
+      imports: [LeanLabComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: LeanSidecarService, useValue: serviceMock },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LeanLabComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    await component.loadRun("ui_run_with_data_errors");
+    fixture.detectChanges();
+
+    const resp = component.response();
+    expect(resp).not.toBeNull();
+    expect(resp!.is_clean).toBe(false);
+    expect(resp!.lean_errors.failed_data_requests).toHaveLength(1);
+    expect(resp!.lean_errors.failed_data_requests[0]).toContain("line content not in manifest");
+    expect(resp!.lean_errors.runtime_error).toEqual([]);
+    // Visible to the operator via the existing errorRows() template.
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("LEAN errors logged");
+    expect(text).toContain("failed_data_requests");
+  });
+
+  it("Phase 4f: loadRun with empty categories list keeps lean_errors buckets empty", async () => {
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    // Default makeRunSummary uses lean_error_categories: [].
+    await component.loadRun("ui_run_history_1");
+    fixture.detectChanges();
+    const resp = component.response();
+    expect(resp!.lean_errors.failed_data_requests).toEqual([]);
+    expect(resp!.lean_errors.analysis_failed).toEqual([]);
   });
 });

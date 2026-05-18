@@ -454,6 +454,7 @@ Phase 5 follow-ups (newest first):
 
 Phase 4 UI follow-ups (newest first):
 
+- [Phase 4f](phases/phase-4f.md) — lean_error_categories on rehydrated runs
 - [Phase 4e](phases/phase-4e.md) — form rehydration from manifest
 - [Phase 4d](phases/phase-4d.md) — run-history sidebar
 - [Phase 4c](phases/phase-4c.md) — accept arbitrary algorithm source

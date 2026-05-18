@@ -446,6 +446,7 @@ def _write_manifest(
     exit_code: int | None = 0,
     algorithm_source_kind: str | None = "trusted_sample",
     is_clean: bool | None = None,
+    lean_error_categories: list[str] | None = None,
 ) -> None:
     """Write a minimal manifest.json into a run's workspace dir.
 
@@ -459,6 +460,10 @@ def _write_manifest(
         notes.append(f"algorithm_source_kind={algorithm_source_kind}")
     if is_clean is not None:
         notes.append(f"is_clean={is_clean}")
+    if lean_error_categories is not None:
+        # Mirror the service's str(sorted([...])) format so the parser
+        # sees real-shape input.
+        notes.append(f"lean_error_categories={sorted(lean_error_categories)}")
     body = {
         "run_id": run_id,
         "parameters": {"symbol": symbol, "starting_cash": "100000.0"},
@@ -708,6 +713,83 @@ class TestRunsIndex:
         assert ids == ["ui_run_ok"]
         # Skip must be logged with the bad run_id for diagnosis.
         assert any("ui_run_badtypes" in rec.message for rec in caplog.records)
+
+    async def test_lean_error_categories_parsed_from_note(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """Phase 4f: the manifest's ``lean_error_categories=[...]`` note
+        carries the bucket names from the launcher's classifier. The
+        index must surface them so the sidebar can show WHICH category
+        was hit when rehydrating a non-clean run."""
+        _write_manifest(
+            patched_artifacts_root,
+            "ui_run_with_categories",
+            exit_code=0,
+            is_clean=False,
+            lean_error_categories=["failed_data_requests", "runtime_error"],
+        )
+        row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
+        # Sorted because the service serializes via sorted(...) and the
+        # parser preserves order.
+        assert row["lean_error_categories"] == ["failed_data_requests", "runtime_error"]
+
+    async def test_lean_error_categories_empty_when_note_absent(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """Pre-Phase-4f manifests don't have the categories note. The
+        index must default to an empty list (not None) so the UI can
+        branch on length without a null-check."""
+        _write_manifest(patched_artifacts_root, "ui_run_legacy_no_cats")
+        row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
+        assert row["lean_error_categories"] == []
+
+    async def test_lean_error_categories_filters_unknown_buckets(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """A future LEAN version adding a new bucket name would land
+        in the manifest before the launcher's classifier is taught
+        about it. The parser must drop unknown bucket names rather
+        than render arbitrary text into the sidebar."""
+        from app.routers.lean_sidecar import _parse_categories_note
+
+        out = _parse_categories_note("['failed_data_requests', 'mystery_bucket', 'runtime_error']")
+        assert out == ["failed_data_requests", "runtime_error"]
+
+    async def test_lean_error_categories_empty_list_note(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """A clean run still writes the note (with an empty list).
+        Must round-trip to ``[]``, not None."""
+        _write_manifest(
+            patched_artifacts_root,
+            "ui_run_clean_explicit",
+            is_clean=True,
+            lean_error_categories=[],
+        )
+        row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
+        assert row["lean_error_categories"] == []
+
+    async def test_lean_error_categories_malformed_note_falls_back_empty(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """A note shape we don't recognize (e.g., a manual edit
+        breaking the bracketed format) must default to [], not crash
+        the index endpoint."""
+        from app.routers.lean_sidecar import _parse_categories_note
+
+        assert _parse_categories_note("not a list") == []
+        assert _parse_categories_note("") == []
+        assert _parse_categories_note("[malformed") == []
 
 
 class TestPostReconcileEndpoint:
