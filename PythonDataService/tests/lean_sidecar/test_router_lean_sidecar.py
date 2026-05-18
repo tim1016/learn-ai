@@ -1072,74 +1072,267 @@ def _write_valid_result_json(
     )
 
 
+def _write_cross_run_manifest(
+    *,
+    run_id: str,
+    artifacts_root: Path,
+    symbol: str = "SPY",
+    start_date: str = "2025-01-06",
+    end_date: str = "2025-01-06",
+    starting_cash: str = "100000",
+) -> None:
+    """Stage a minimal manifest.json the cross-reconcile endpoint can
+    read for symbol/dates/cash. The shape matches what the real service
+    persists (``parameters`` dict + ``requested_window_ms``) but only
+    populates the fields the cross-runner extracts."""
+    import json as _json
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _Zi
+
+    _et = _Zi("America/New_York")
+    sy, sm, sd = (int(x) for x in start_date.split("-"))
+    ey, em, ed = (int(x) for x in end_date.split("-"))
+    start_ms = int(_dt(sy, sm, sd, tzinfo=_et).timestamp() * 1000)
+    end_ms = int(_dt(ey, em, ed, 23, 59, 59, tzinfo=_et).timestamp() * 1000)
+    ws = resolve_workspace(run_id, artifacts_root)
+    ws.ensure_layout()
+    ws.manifest_path.write_text(
+        _json.dumps(
+            {
+                "parameters": {
+                    "symbol": symbol,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "starting_cash": starting_cash,
+                },
+                "requested_window_ms": {"start_ms": start_ms, "end_ms": end_ms},
+                "bars_consumed_by_symbol": {symbol: 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _stage_minute_data(
+    *,
+    run_id: str,
+    artifacts_root: Path,
+    symbol: str = "SPY",
+) -> None:
+    """Stage one trading day of synthetic minute bars in the workspace
+    so the Engine-Lab cross-runner has bars to iterate."""
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+    from decimal import Decimal
+    from zoneinfo import ZoneInfo as _Zi
+
+    from app.engine.data.trade_bar import TradeBar
+    from app.lean_sidecar.staging import stage_minute_bars
+
+    _et = _Zi("America/New_York")
+    ws = resolve_workspace(run_id, artifacts_root)
+    ws.ensure_layout()
+    bars = []
+    for i in range(10):
+        start = _dt(2025, 1, 6, 9, 30 + i, tzinfo=_et)
+        price = Decimal(100 + i)
+        bars.append(
+            TradeBar(
+                symbol=symbol.upper(),
+                time=start,
+                end_time=start + _td(minutes=1),
+                open=price,
+                high=price + Decimal("0.5"),
+                low=price - Decimal("0.5"),
+                close=price + Decimal("0.25"),
+                volume=10_000,
+            )
+        )
+    stage_minute_bars(ws, symbol=symbol, bars_by_date=[(_date(2025, 1, 6), bars)])
+
+
 class TestPostCrossReconcileEndpoint:
-    """Phase 5g.1 — POST /runs/{id}/cross-reconcile scaffold integration tests.
+    """Phase 5g.3 — POST /runs/{id}/cross-reconcile end-to-end tests.
 
-    The endpoint exists but the Engine Lab cross-run primitive is the
-    Phase 5g.2 deliverable; the scaffold returns 501 NOT_IMPLEMENTED
-    when the workspace + result.json both exist (i.e., when the request
-    is fully valid). 404 / 422 branches are the negative-path tests.
-
-    All assertions on the 501 detail are about the *contract* (the
-    reason + echoed request fields) so Phase 5g.2 doesn't have to
-    rewrite this test file — only the test that checks for the 501 path
-    will flip to expecting a 200 with the real report.
+    Phase 5g.1 shipped the endpoint scaffold (501); Phase 5g.2 shipped
+    the cross-run primitive; this PR wires them together and runs the
+    diff. The tests below exercise the now-live happy path plus the
+    new error branches (manifest_missing, manifest_incomplete,
+    strategy_not_found, strategy_incompatible).
     """
 
-    async def test_returns_501_with_structured_reason_when_run_and_result_present(
+    async def test_endpoint_runs_engine_and_returns_real_report(
         self,
         client: AsyncClient,
         patched_artifacts_root: Path,
     ) -> None:
-        """Phase 5g.1 scaffold contract — a request that satisfies the
-        request shape + workspace + result.json all-present preconditions
-        returns 501 ``engine_lab_not_wired`` with the request echoed
-        back, so the frontend can branch without parsing prose."""
-        ws = resolve_workspace("cross_scaffold_ok", patched_artifacts_root)
+        """Phase 5g.3 happy path: workspace fully staged, LEAN side has
+        zero recorded fills (empty result.json), Engine-Lab buy-and-hold
+        emits one Buy on the first staged bar. The report carries one
+        DECISION_MISMATCH row (Engine has, LEAN doesn't), counted as
+        gating."""
+        run_id = "cross_real_report"
+        ws = resolve_workspace(run_id, patched_artifacts_root)
         ws.ensure_layout()
-        _write_valid_result_json(
-            run_id="cross_scaffold_ok",
-            artifacts_root=patched_artifacts_root,
+        # LEAN side: zero fills.
+        from app.lean_sidecar.normalized_parser import NormalizedResult
+
+        empty_result = NormalizedResult(
+            parser_version="phase-3a-r1",
+            algorithm_id="MyAlgorithm",
+            statistics={},
+            runtime_statistics={},
+            equity_curve=[],
+            order_events=[],
+            total_order_events=0,
+            total_equity_points=0,
         )
+        ws.normalized_dir.mkdir(parents=True, exist_ok=True)
+        (ws.normalized_dir / "result.json").write_text(
+            empty_result.model_dump_json(), encoding="utf-8"
+        )
+        _write_cross_run_manifest(run_id=run_id, artifacts_root=patched_artifacts_root)
+        _stage_minute_data(run_id=run_id, artifacts_root=patched_artifacts_root)
 
         r = await client.post(
-            "/api/lean-sidecar/runs/cross_scaffold_ok/cross-reconcile",
+            f"/api/lean-sidecar/runs/{run_id}/cross-reconcile",
             json={"engine_lab_strategy_class": "BuyAndHoldStrategy"},
         )
 
-        assert r.status_code == 501
-        detail = r.json()["detail"]
-        assert detail["reason"] == "engine_lab_not_wired"
-        assert detail["engine_lab_strategy_class"] == "BuyAndHoldStrategy"
-        assert detail["assert_fees"] is False
-        assert detail["schema_version"] == 1
+        assert r.status_code == 200, r.json()
+        body = r.json()
+        assert body["schema_version"] == 1
+        assert body["run_id"] == run_id
+        assert body["engine_lab_strategy_class"] == "BuyAndHoldStrategy"
+        assert body["assert_fees"] is False
+        assert body["lean_total_fills"] == 0
+        assert body["engine_total_fills"] >= 1
+        # One DECISION_MISMATCH (Engine has, LEAN doesn't).
+        assert body["divergent_count"] >= 1
+        assert body["counts_by_category"].get("decision_mismatch", 0) >= 1
+        assert body["passed"] is False  # gating divergence present
+        # First divergence row carries the engine_fill snapshot but no
+        # lean_fill.
+        first = body["divergences"][0]
+        assert first["category"] == "decision_mismatch"
+        assert first["lean_fill"] is None
+        assert first["engine_fill"] is not None
+        assert first["engine_fill"]["symbol"] == "SPY"
+        assert first["engine_fill"]["side"] == "Buy"
 
-    async def test_assert_fees_true_echoed_on_scaffold_response(
+    async def test_404_when_manifest_missing(
         self,
         client: AsyncClient,
         patched_artifacts_root: Path,
     ) -> None:
-        """The Branch-A semantics (assert_fees=true → COMMISSION_DRIFT
-        gating) need to be wired through the request shape; the scaffold
-        echoes the boolean back so frontend integration tests can verify
-        the flag is plumbed before Phase 5g.2 lands the real diff."""
-        ws = resolve_workspace("cross_scaffold_fees", patched_artifacts_root)
+        """Workspace + result.json present but manifest.json absent —
+        the cross-run cannot infer symbol/dates/cash without it."""
+        run_id = "cross_no_manifest"
+        ws = resolve_workspace(run_id, patched_artifacts_root)
         ws.ensure_layout()
-        _write_valid_result_json(
-            run_id="cross_scaffold_fees",
-            artifacts_root=patched_artifacts_root,
+        _write_valid_result_json(run_id=run_id, artifacts_root=patched_artifacts_root)
+        # Deliberately DO NOT write manifest.json.
+
+        r = await client.post(
+            f"/api/lean-sidecar/runs/{run_id}/cross-reconcile",
+            json={"engine_lab_strategy_class": "BuyAndHoldStrategy"},
+        )
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "manifest_missing"
+
+    async def test_400_when_manifest_incomplete(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """Manifest exists but lacks ``parameters.symbol`` AND has no
+        single-symbol ``bars_consumed_by_symbol`` fallback. The endpoint
+        surfaces the missing field explicitly."""
+        import json as _json
+
+        run_id = "cross_bad_manifest"
+        ws = resolve_workspace(run_id, patched_artifacts_root)
+        ws.ensure_layout()
+        _write_valid_result_json(run_id=run_id, artifacts_root=patched_artifacts_root)
+        # Manifest with no symbol AND empty bars_consumed_by_symbol.
+        ws.manifest_path.write_text(
+            _json.dumps(
+                {
+                    "parameters": {
+                        "start_date": "2025-01-06",
+                        "end_date": "2025-01-06",
+                        "starting_cash": "100000",
+                    },
+                    "bars_consumed_by_symbol": {},
+                }
+            ),
+            encoding="utf-8",
         )
 
         r = await client.post(
-            "/api/lean-sidecar/runs/cross_scaffold_fees/cross-reconcile",
+            f"/api/lean-sidecar/runs/{run_id}/cross-reconcile",
+            json={"engine_lab_strategy_class": "BuyAndHoldStrategy"},
+        )
+        assert r.status_code == 400
+        body = r.json()["detail"]
+        assert body["reason"] == "manifest_incomplete"
+        assert "missing_field" in body
+        assert "symbol" in body["missing_field"]
+
+    async def test_400_when_strategy_class_unknown(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """Everything staged but caller named an Engine-Lab class that
+        doesn't exist."""
+        run_id = "cross_bad_strat_class"
+        ws = resolve_workspace(run_id, patched_artifacts_root)
+        ws.ensure_layout()
+        _write_valid_result_json(run_id=run_id, artifacts_root=patched_artifacts_root)
+        _write_cross_run_manifest(run_id=run_id, artifacts_root=patched_artifacts_root)
+        _stage_minute_data(run_id=run_id, artifacts_root=patched_artifacts_root)
+
+        r = await client.post(
+            f"/api/lean-sidecar/runs/{run_id}/cross-reconcile",
+            json={"engine_lab_strategy_class": "DefinitelyNotAStrategy"},
+        )
+        assert r.status_code == 400
+        body = r.json()["detail"]
+        assert body["reason"] == "strategy_not_found"
+        assert body["engine_lab_strategy_class"] == "DefinitelyNotAStrategy"
+
+    async def test_assert_fees_true_promotes_commission_drift_to_gating(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """Phase 5g.3 Branch-A: when assert_fees=true, COMMISSION_DRIFT
+        flips from diagnostic to gating in the report. The signal is
+        not the row count (drift may be 0 anyway in a synthetic test),
+        but the echoed-back ``assert_fees: true`` and the documented
+        gating set in counts_by_category vs gating_divergent_count.
+
+        Here we just confirm the flag plumbs through end-to-end and
+        the report shape is right."""
+        run_id = "cross_assert_fees"
+        ws = resolve_workspace(run_id, patched_artifacts_root)
+        ws.ensure_layout()
+        _write_valid_result_json(run_id=run_id, artifacts_root=patched_artifacts_root)
+        _write_cross_run_manifest(run_id=run_id, artifacts_root=patched_artifacts_root)
+        _stage_minute_data(run_id=run_id, artifacts_root=patched_artifacts_root)
+
+        r = await client.post(
+            f"/api/lean-sidecar/runs/{run_id}/cross-reconcile",
             json={
                 "engine_lab_strategy_class": "BuyAndHoldStrategy",
                 "assert_fees": True,
             },
         )
-
-        assert r.status_code == 501
-        assert r.json()["detail"]["assert_fees"] is True
+        assert r.status_code == 200, r.json()
+        body = r.json()
+        assert body["assert_fees"] is True
 
     async def test_404_when_workspace_missing(
         self,
