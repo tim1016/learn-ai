@@ -13,12 +13,17 @@ Two layers:
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 import respx
 from httpx import ASGITransport, AsyncClient
+
+if TYPE_CHECKING:
+    from app.lean_sidecar.normalized_parser import NormalizedResult
 
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.launcher.models import LaunchResponse
@@ -715,7 +720,7 @@ class TestPostReconcileEndpoint:
     here, not the parser."""
 
     @pytest.fixture
-    def stub_normalized_result(self, patched_artifacts_root: Path):
+    def stub_normalized_result(self, patched_artifacts_root: Path) -> Callable[..., NormalizedResult]:
         """Factory that writes a ``result.json`` to the run's workspace.
 
         Reviewer P2: the reconcile endpoint reads the persisted
@@ -788,7 +793,7 @@ class TestPostReconcileEndpoint:
         self,
         client: AsyncClient,
         patched_artifacts_root: Path,
-        stub_normalized_result,
+        stub_normalized_result: Callable[..., NormalizedResult],
     ) -> None:
         ws = resolve_workspace("rec_clean", patched_artifacts_root)
         ws.ensure_layout()
@@ -817,7 +822,7 @@ class TestPostReconcileEndpoint:
         self,
         client: AsyncClient,
         patched_artifacts_root: Path,
-        stub_normalized_result,
+        stub_normalized_result: Callable[..., NormalizedResult],
     ) -> None:
         """Reviewer P1 regression: the report's ``run_id`` field must be
         the workspace slug from the URL, not LEAN's algorithm-type-name.
@@ -842,7 +847,7 @@ class TestPostReconcileEndpoint:
         self,
         client: AsyncClient,
         patched_artifacts_root: Path,
-        stub_normalized_result,
+        stub_normalized_result: Callable[..., NormalizedResult],
     ) -> None:
         """Default-brokerage run with $5 fee where IBKR expects $1 — the
         kind of report a non-reconciliation-grade run will produce."""
@@ -912,7 +917,7 @@ class TestPostReconcileEndpoint:
         self,
         client: AsyncClient,
         patched_artifacts_root: Path,
-        stub_normalized_result,
+        stub_normalized_result: Callable[..., NormalizedResult],
     ) -> None:
         """Reviewer P2: the pinned ``parser_version`` from the persisted
         ``result.json`` is echoed back so a downstream consumer can tell
