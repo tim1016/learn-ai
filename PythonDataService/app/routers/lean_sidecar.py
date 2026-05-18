@@ -835,6 +835,248 @@ async def post_reconcile(run_id: str) -> RunReconciliationReportModel:
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase 5g — cross-engine reconciliation scaffold
+# ---------------------------------------------------------------------------
+#
+# Phase 5a's POST /runs/{id}/reconcile is *self*-reconciliation (LEAN's
+# recorded fees vs the canonical IbkrEquityCommissionModel). Phase 5g is
+# *cross-engine* reconciliation: diff this LEAN-Lab run's fills against the
+# Engine Lab's fills for the caller-named strategy class on the same
+# workspace data.
+#
+# Phase 5g.1 (this file): endpoint + Pydantic request/response shapes
+# exist, but the engine-lab cross-run call is not wired yet. The endpoint
+# returns 501 NOT_IMPLEMENTED with a structured detail. Phase 5g.2 will
+# replace the 501 with the real engine-lab → DivergenceCategory diff.
+#
+# Design notes (resolved via mission-critical doc D3, 2026-05-18):
+#   * Pairing is caller-supplied — no auto-derivation. The request names
+#     the Engine Lab strategy class.
+#   * Default gating taxonomy: every DivergenceCategory is gating EXCEPT
+#     COMMISSION_DRIFT, which is diagnostic by default. Caller may opt in
+#     via assert_fees=true (which only makes sense on reconciliation-grade
+#     templates where the IBKR fee model is pinned on both sides).
+#   * The response carries an explicit schema_version (D10) so future
+#     shape changes are detectable on the consumer side.
+
+# Valid DivergenceCategory values, kept in lockstep with
+# ``research.parity.qc_reconciler.DivergenceCategory``. Re-imported here
+# so the Pydantic Literal can pin the wire enumeration without making
+# the router depend at runtime on the qc_reconciler package.
+_CROSS_ENGINE_DIVERGENCE_CATEGORIES = (
+    "fixture_insufficient",
+    "decision_mismatch",
+    "direction_mismatch",
+    "quantity_mismatch",
+    "fill_price_drift",
+    "commission_drift",
+    "pnl_drift",
+    "order_type_mismatch",
+)
+CrossEngineDivergenceCategory = Literal[
+    "fixture_insufficient",
+    "decision_mismatch",
+    "direction_mismatch",
+    "quantity_mismatch",
+    "fill_price_drift",
+    "commission_drift",
+    "pnl_drift",
+    "order_type_mismatch",
+]
+
+
+class CrossReconcileRequestModel(BaseModel):
+    """POST /api/lean-sidecar/runs/{run_id}/cross-reconcile — request shape.
+
+    The request names which Engine Lab strategy class to diff against.
+    No auto-derivation: per D3, ambiguity at this seam silently produces
+    wrong divergence reports, so we require an explicit string.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    engine_lab_strategy_class: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description=(
+            "Name of the Engine Lab strategy class to run on the same "
+            "workspace data and diff against this LEAN-Lab run. Required: "
+            "no auto-derivation convention. See mission-critical doc D3."
+        ),
+    )
+    assert_fees: bool = Field(
+        default=False,
+        description=(
+            "When false (default), COMMISSION_DRIFT is diagnostic — it "
+            "shows up in the report but does not flip ``passed`` to "
+            "False. When true (only meaningful on reconciliation-grade "
+            "templates that pin the IBKR fee model on both sides), "
+            "COMMISSION_DRIFT joins the gating set. Same Branch-A "
+            "semantics as the qc_reconciler."
+        ),
+    )
+
+
+class CrossEngineFillSnapshotModel(BaseModel):
+    """One side of a paired (LEAN, Engine Lab) divergence row.
+
+    Carries enough information for the operator to understand WHICH fill
+    was on this side without re-fetching the full normalized result. The
+    Decimal-valued fields are wire-serialized as strings so the cents are
+    exact (avoids float-binary loss in JSON, matches the Phase 5a
+    convention).
+    """
+
+    symbol: str
+    side: Literal["Buy", "Sell"]
+    fill_quantity: int
+    fill_price: str
+    fill_time_ms_utc: int
+    fee: str | None = None
+
+
+class CrossEngineDivergenceModel(BaseModel):
+    """One typed disagreement between paired LEAN-Lab and Engine-Lab fills.
+
+    Maps onto ``research.parity.qc_reconciler.Divergence``. When one side
+    is missing (DECISION_MISMATCH), the corresponding snapshot is None.
+    """
+
+    category: CrossEngineDivergenceCategory
+    trading_date: str = Field(
+        ...,
+        description=(
+            "NY-local trading date in ISO YYYY-MM-DD form. The reconciler "
+            "aligns on NY trading date so the wire form reflects that "
+            "(extended-hours fills can have a UTC date one day off)."
+        ),
+    )
+    detail: str
+    lean_fill: CrossEngineFillSnapshotModel | None
+    engine_fill: CrossEngineFillSnapshotModel | None
+
+
+class CrossEngineReconciliationReportModel(BaseModel):
+    """Phase 5g — cross-engine fill-by-fill reconciliation report.
+
+    ``schema_version`` is the D10 contract: any future shape change bumps
+    this so the consumer can fail-fast on an unrecognized version. The
+    current shape is v1.
+    """
+
+    schema_version: int = Field(
+        default=1,
+        description=(
+            "Explicit schema version per mission-critical doc D10. "
+            "Consumers MUST fail-fast on an unrecognized version rather "
+            "than silently misrender."
+        ),
+    )
+    run_id: str
+    engine_lab_strategy_class: str
+    assert_fees: bool
+    lean_total_fills: int
+    engine_total_fills: int
+    matched_count: int
+    divergent_count: int
+    # Subset of divergent_count: divergences in the gating set per
+    # assert_fees + the default-strict policy. When this is 0 the
+    # report has passed.
+    gating_divergent_count: int
+    passed: bool
+    counts_by_category: dict[CrossEngineDivergenceCategory, int]
+    divergences: list[CrossEngineDivergenceModel]
+
+
+@router.post(
+    "/runs/{run_id}/cross-reconcile",
+    response_model=CrossEngineReconciliationReportModel,
+    summary="Cross-engine reconciliation — Phase 5g.1 SCAFFOLD (returns 501).",
+    responses={
+        status.HTTP_501_NOT_IMPLEMENTED: {
+            "description": (
+                "Phase 5g.1: endpoint scaffold landed; engine-lab "
+                "integration is the Phase 5g.2 slice. The 501 detail "
+                "carries ``reason: 'engine_lab_not_wired'`` so a "
+                "frontend can branch on this without parsing prose."
+            ),
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "description": (
+                "Run not found, or run completed but no normalized "
+                "result.json on disk. Same reasons as the Phase 5a "
+                "self-reconciler endpoint."
+            ),
+        },
+    },
+)
+async def post_cross_reconcile(
+    run_id: str,
+    payload: CrossReconcileRequestModel,
+) -> CrossEngineReconciliationReportModel:
+    """Phase 5g cross-engine reconciliation — Phase 5g.1 SCAFFOLD ONLY.
+
+    This endpoint validates the request shape, resolves the LEAN-Lab run's
+    workspace, and confirms the normalized result.json is on disk. It
+    then returns 501 NOT_IMPLEMENTED because the engine-lab cross-run
+    primitive is the Phase 5g.2 deliverable.
+
+    The Pydantic request and response shapes are stable as of this PR
+    (``schema_version: 1`` per D10). Phase 5g.2 replaces the 501 with the
+    real engine-lab → DivergenceCategory diff against the same workspace
+    zips LEAN saw (D3: shared staged data, not Engine Lab's native
+    fixtures).
+    """
+    workspace = _resolved_workspace_or_404(run_id)
+    result_path = workspace.normalized_dir / "result.json"
+    if not result_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason": "normalized_missing",
+                "message": (
+                    f"cannot cross-reconcile {run_id}: normalized "
+                    "result.json not present. The run may have crashed "
+                    "before producing parseable output."
+                ),
+            },
+        )
+    # Pydantic already validated; ensure result.json itself is loadable.
+    # A malformed file means we can't diff against it; surface as 404
+    # normalized_missing per the Phase 5a convention.
+    try:
+        NormalizedResult.model_validate_json(result_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, NormalizedParserError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason": "normalized_missing",
+                "message": (
+                    f"cannot cross-reconcile {run_id}: result.json "
+                    f"failed to load ({e})."
+                ),
+            },
+        ) from e
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail={
+            "reason": "engine_lab_not_wired",
+            "message": (
+                "Phase 5g.1 scaffold: cross-engine reconciler endpoint is "
+                "registered and request/response Pydantic shapes are "
+                "stable, but the Engine Lab cross-run primitive lands in "
+                "Phase 5g.2. Try again once that PR merges. See "
+                "docs/architecture/phases/phase-5g.md for the slice plan."
+            ),
+            "engine_lab_strategy_class": payload.engine_lab_strategy_class,
+            "assert_fees": payload.assert_fees,
+            "schema_version": 1,
+        },
+    )
+
+
 @router.get(
     "/runs/{run_id}/log",
     response_class=PlainTextResponse,
