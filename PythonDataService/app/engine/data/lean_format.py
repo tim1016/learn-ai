@@ -36,6 +36,37 @@ from app.engine.data.trade_bar import TradeBar
 # LEAN's price scale factor: prices on disk are multiplied by 10000.
 PRICE_SCALE = Decimal(10000)
 
+# Phase 5f determinism gate: every staged zip must hash identically
+# across re-runs with the same inputs. ``zipfile.ZipFile.writestr``
+# defaults the entry's mtime to "now", which breaks the determinism
+# invariant. ``_DETERMINISTIC_ZIP_DATE_TIME`` is the ZIP-epoch
+# fallback (the lowest legal value for the format); using a fixed
+# constant means two runs at different wall clocks produce
+# byte-identical zips for the same content.
+_DETERMINISTIC_ZIP_DATE_TIME: tuple[int, int, int, int, int, int] = (
+    1980,
+    1,
+    1,
+    0,
+    0,
+    0,
+)
+
+
+def _write_deterministic_csv_zip(buf: io.BytesIO, csv_name: str, csv_body: str) -> None:
+    """Write a single-CSV zip whose bytes are stable across re-runs.
+
+    ``ZipInfo.date_time`` is pinned to the ZIP-epoch (1980-01-01) so
+    no wall-clock leaks into the archive. ``compress_type`` is set on
+    the entry to match the historical ZIP_DEFLATED default; without
+    pinning it, an implicit default could drift on a Python upgrade
+    and quietly break the determinism gate.
+    """
+    info = zipfile.ZipInfo(filename=csv_name, date_time=_DETERMINISTIC_ZIP_DATE_TIME)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(info, csv_body)
+
 # US equities are stored in Eastern Time.
 EASTERN = ZoneInfo("America/New_York")
 
@@ -389,8 +420,7 @@ def write_lean_daily_zip(
         )
 
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(csv_name, "\n".join(lines))
+    _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
     zip_path.write_bytes(buf.getvalue())
     return zip_path
 
@@ -443,8 +473,7 @@ def write_lean_quote_day_zip(
             f"{close_scaled},{close_scaled},{close_scaled},{close_scaled},0"
         )
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(csv_name, "\n".join(lines))
+    _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
     zip_path.write_bytes(buf.getvalue())
     return zip_path
 
@@ -489,7 +518,6 @@ def write_lean_day_zip(
             f"{bar.volume}"
         )
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(csv_name, "\n".join(lines))
+    _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
     zip_path.write_bytes(buf.getvalue())
     return zip_path

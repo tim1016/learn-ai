@@ -446,6 +446,7 @@ Phase 1 foundation (in PR order):
 
 Phase 5 follow-ups (newest first):
 
+- [Phase 5f](phases/phase-5f.md) — determinism gate + zip mtime fix
 - [Phase 5e](phases/phase-5e.md) — populate `bars_consumed_by_symbol`
 - [Phase 5d](phases/phase-5d.md) — populate `staged_data_window_ms`
 - [Phase 5c](phases/phase-5c.md) — synthetic minute-quote staging
