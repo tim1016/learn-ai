@@ -1257,11 +1257,18 @@ def _write_cross_run_manifest(
     start_date: str = "2025-01-06",
     end_date: str = "2025-01-06",
     starting_cash: str = "100000",
+    brokerage_policy: str = "interactive_brokers",
 ) -> None:
     """Stage a minimal manifest.json the cross-reconcile endpoint can
     read for symbol/dates/cash. The shape matches what the real service
     persists (``parameters`` dict + ``requested_window_ms``) but only
-    populates the fields the cross-runner extracts."""
+    populates the fields the cross-runner extracts.
+
+    ``brokerage_policy`` defaults to ``"interactive_brokers"`` so
+    existing tests (which don't pin a policy explicitly) keep
+    exercising the assert_fees=true path without 400ing on the new
+    Open-Q2 guard.
+    """
     import json as _json
     from datetime import datetime as _dt
     from zoneinfo import ZoneInfo as _Zi
@@ -1282,6 +1289,7 @@ def _write_cross_run_manifest(
                     "end_date": end_date,
                     "starting_cash": starting_cash,
                 },
+                "brokerage_policy": brokerage_policy,
                 "requested_window_ms": {"start_ms": start_ms, "end_ms": end_ms},
                 "bars_consumed_by_symbol": {symbol: 0},
             }
@@ -1510,6 +1518,69 @@ class TestPostCrossReconcileEndpoint:
         assert r.status_code == 200, r.json()
         body = r.json()
         assert body["assert_fees"] is True
+
+    async def test_assert_fees_true_requires_ibkr_brokerage(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """Open-Q2 review-fix: ``assert_fees=true`` against a
+        default-brokerage LEAN run is meaningless — promoting
+        ``commission_drift`` to gating requires both sides to pin the
+        same fee model. The endpoint refuses at the boundary with 400
+        ``assert_fees_requires_ibkr_brokerage`` and surfaces the
+        manifest's actual policy in ``detail`` so the operator can
+        re-run with ``template='reconciliation'``."""
+        run_id = "cross_assert_fees_wrong_policy"
+        ws = resolve_workspace(run_id, patched_artifacts_root)
+        ws.ensure_layout()
+        _write_valid_result_json(run_id=run_id, artifacts_root=patched_artifacts_root)
+        _write_cross_run_manifest(
+            run_id=run_id,
+            artifacts_root=patched_artifacts_root,
+            brokerage_policy="lean_default",  # not IBKR
+        )
+        _stage_minute_data(run_id=run_id, artifacts_root=patched_artifacts_root)
+
+        r = await client.post(
+            f"/api/lean-sidecar/runs/{run_id}/cross-reconcile",
+            json={
+                "engine_lab_strategy_class": "BuyAndHoldStrategy",
+                "assert_fees": True,
+            },
+        )
+        assert r.status_code == 400
+        body = r.json()["detail"]
+        assert body["reason"] == "assert_fees_requires_ibkr_brokerage"
+        assert body["manifest_brokerage_policy"] == "lean_default"
+
+    async def test_assert_fees_false_does_not_require_ibkr_brokerage(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """The guard only fires when ``assert_fees=true``. A default-
+        brokerage LEAN run with ``assert_fees=false`` is the normal
+        diagnostic-only path and must succeed."""
+        run_id = "cross_no_assert_fees_default_brokerage"
+        ws = resolve_workspace(run_id, patched_artifacts_root)
+        ws.ensure_layout()
+        _write_valid_result_json(run_id=run_id, artifacts_root=patched_artifacts_root)
+        _write_cross_run_manifest(
+            run_id=run_id,
+            artifacts_root=patched_artifacts_root,
+            brokerage_policy="lean_default",
+        )
+        _stage_minute_data(run_id=run_id, artifacts_root=patched_artifacts_root)
+
+        r = await client.post(
+            f"/api/lean-sidecar/runs/{run_id}/cross-reconcile",
+            json={
+                "engine_lab_strategy_class": "BuyAndHoldStrategy",
+                "assert_fees": False,
+            },
+        )
+        assert r.status_code == 200, r.json()
 
     async def test_404_when_workspace_missing(
         self,
