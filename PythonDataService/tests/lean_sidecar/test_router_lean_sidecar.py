@@ -369,6 +369,86 @@ class TestPostTrustedRunHappyPath:
         assert r.status_code == 503
         assert r.json()["detail"]["reason"] == "launcher_unreachable"
 
+    async def test_launcher_rejection_writes_failure_manifest(
+        self,
+        client: AsyncClient,
+        patched_pin: str,
+        patched_artifacts_root: Path,
+        stub_image_extract: None,
+        stub_normalized_parser: None,
+    ) -> None:
+        """Review-fix (P1.3): when the launcher rejects after the
+        container has done work (e.g., ``workspace_max_mb_exceeded``),
+        the orchestrator now writes a failure manifest with every
+        staged hash + a ``failure_reason=<reason>`` note. Without
+        this, the run would leave a fully-staged workspace on disk
+        with no manifest, no sidebar entry, and no rejection audit
+        trail."""
+        async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
+            mock.post("/launch").mock(
+                return_value=httpx.Response(
+                    400,
+                    json={
+                        "detail": {
+                            "reason": "workspace_max_mb_exceeded",
+                            "message": "workspace 70MB > cap 64MB",
+                        }
+                    },
+                )
+            )
+            r = await client.post(
+                "/api/lean-sidecar/trusted-runs",
+                json=_good_payload("router_failmanifest"),
+            )
+        # Router mapping unchanged: LauncherRejected → 400.
+        assert r.status_code == 400
+        assert r.json()["detail"]["reason"] == "workspace_max_mb_exceeded"
+        # NEW behavior: failure manifest is on disk with the rejection
+        # reason recorded.
+        ws = resolve_workspace("router_failmanifest", patched_artifacts_root)
+        assert ws.manifest_path.exists(), (
+            "failure manifest should be written even when launcher rejects"
+        )
+        manifest = json.loads(ws.manifest_path.read_text(encoding="utf-8"))
+        assert manifest["run_id"] == "router_failmanifest"
+        assert manifest["exit_code"] is None
+        notes = manifest.get("notes", [])
+        assert any("failure_reason=" in n for n in notes), (
+            f"manifest notes lack failure_reason: {notes}"
+        )
+        assert any("LauncherRejected" in n for n in notes), (
+            f"manifest notes should name the exception type: {notes}"
+        )
+        # is_clean=False — failure path must NEVER paint as clean.
+        assert any("is_clean=False" in n for n in notes)
+
+    async def test_launcher_unreachable_writes_failure_manifest(
+        self,
+        client: AsyncClient,
+        patched_pin: str,
+        patched_artifacts_root: Path,
+        stub_image_extract: None,
+        stub_normalized_parser: None,
+    ) -> None:
+        """Same as above for the unreachable-launcher path: the manifest
+        is written even when no LaunchResponse comes back. This is the
+        most common silent-failure path historically — launcher down,
+        operator restarts compose, no audit of the staged work."""
+        async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
+            mock.post("/launch").mock(side_effect=httpx.ConnectError("refused"))
+            r = await client.post(
+                "/api/lean-sidecar/trusted-runs",
+                json=_good_payload("router_unreach_manifest"),
+            )
+        assert r.status_code == 503
+        ws = resolve_workspace("router_unreach_manifest", patched_artifacts_root)
+        assert ws.manifest_path.exists()
+        manifest = json.loads(ws.manifest_path.read_text(encoding="utf-8"))
+        notes = manifest.get("notes", [])
+        assert any("LauncherUnreachable" in n for n in notes), (
+            f"manifest notes should name the unreachable exception: {notes}"
+        )
+
 
 class TestInspectionEndpoints:
     async def test_manifest_endpoint_returns_written_manifest(
