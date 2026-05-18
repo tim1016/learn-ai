@@ -11,12 +11,14 @@ import {
   LeanSidecarService,
 } from "../../services/lean-sidecar.service";
 import type {
+  CrossEngineReconciliationReport,
   NormalizedResult,
   RunReconciliationReport,
   RunSummary,
   TrustedRunRequest,
   TrustedRunResponse,
 } from "../../services/lean-sidecar.types";
+import { CROSS_RECONCILE_SCHEMA_VERSION } from "../../services/lean-sidecar.types";
 import { LeanLabEquityChartComponent } from "./lean-lab-equity-chart/lean-lab-equity-chart.component";
 import { LeanLabRunHistoryComponent } from "./lean-lab-run-history/lean-lab-run-history.component";
 
@@ -189,6 +191,47 @@ export class LeanLabComponent {
     return r.divergences.slice(0, 10);
   });
 
+  /**
+   * Phase 5g.3+ — caller-supplied Engine-Lab strategy class name + the
+   * Branch-A ``assert_fees`` flag. Per D3 (mission-critical doc), the
+   * server does not auto-derive the strategy class from the LEAN-Lab
+   * algorithm — the operator must type the exact Python class name
+   * (PascalCase, e.g. ``BuyAndHoldStrategy``). Empty string is rejected
+   * client-side via the Validators.required + minLength check so a
+   * silently-empty submit can't reach the server.
+   */
+  readonly crossReconcileForm = new FormGroup({
+    engineLabStrategyClass: new FormControl("BuyAndHoldStrategy", {
+      nonNullable: true,
+      validators: [Validators.required, Validators.minLength(1), Validators.maxLength(200)],
+    }),
+    assertFees: new FormControl(false, { nonNullable: true }),
+  });
+  readonly crossReconciliation = signal<CrossEngineReconciliationReport | null>(null);
+  readonly crossReconciling = signal(false);
+  readonly crossReconcileError = signal<{ reason: string; message: string; status: number } | null>(null);
+  /** Show only the first 10 divergence rows — full lists can be long. */
+  readonly crossReconciliationTopDivergences = computed(() => {
+    const r = this.crossReconciliation();
+    if (!r) return [];
+    return r.divergences.slice(0, 10);
+  });
+  /**
+   * Flatten ``counts_by_category`` into [(category, count)] for the
+   * histogram strip. Sorted desc by count then alpha so the top
+   * offenders surface first.
+   */
+  readonly crossReconciliationCategoryCounts = computed(() => {
+    const r = this.crossReconciliation();
+    if (!r) return [];
+    const rows = Object.entries(r.counts_by_category).map(([category, count]) => ({
+      category,
+      count: count ?? 0,
+    }));
+    rows.sort((a, b) => b.count - a.count || a.category.localeCompare(b.category));
+    return rows;
+  });
+
   /** Phase 4d sidebar state — populated by ``refreshRuns()``. */
   readonly runs = signal<RunSummary[]>([]);
   readonly runsTruncated = signal(false);
@@ -357,6 +400,8 @@ export class LeanLabComponent {
     // doesn't carry a stale report from a different run.
     this.reconciliation.set(null);
     this.reconcileError.set(null);
+    this.crossReconciliation.set(null);
+    this.crossReconcileError.set(null);
     const summary = this.runs().find((r) => r.run_id === runId);
     try {
       const parsed = await this.service.getNormalized(runId);
@@ -493,6 +538,71 @@ export class LeanLabComponent {
    * in the panel as a small inline error so the operator can branch
    * without hunting through the global error banner.
    */
+  /**
+   * Phase 5g.3+ — POST the cross-reconcile request and store the
+   * report. Mirrors ``reconcileFees`` for the race-protection pattern:
+   * snapshot the run_id at click time and drop the response on the
+   * floor if the user navigates away before it returns.
+   *
+   * Per D10, the response carries ``schema_version`` and the UI MUST
+   * fail-fast on an unrecognized version rather than silently
+   * misrender — that check happens before ``crossReconciliation()`` is
+   * populated.
+   */
+  async crossReconcile(): Promise<void> {
+    const current = this.response();
+    if (current === null) return;
+    if (this.crossReconcileForm.invalid) {
+      this.crossReconcileForm.markAllAsTouched();
+      return;
+    }
+    const requestedRunId = current.run_id;
+    const value = this.crossReconcileForm.getRawValue();
+    this.crossReconciling.set(true);
+    this.crossReconcileError.set(null);
+    try {
+      const report = await this.service.crossReconcileRun(requestedRunId, {
+        engine_lab_strategy_class: value.engineLabStrategyClass.trim(),
+        assert_fees: value.assertFees,
+      });
+      if (this.response()?.run_id !== requestedRunId) {
+        // The user navigated away; drop the stale response on the floor.
+        return;
+      }
+      if (report.schema_version !== CROSS_RECONCILE_SCHEMA_VERSION) {
+        // D10 fail-fast: this UI build does not know how to render a
+        // server response with a different schema version. The user
+        // sees a structured error pane with the version mismatch.
+        this.crossReconciliation.set(null);
+        this.crossReconcileError.set({
+          reason: "schema_version_mismatch",
+          message: `Server returned schema_version=${report.schema_version}; this UI build understands ${CROSS_RECONCILE_SCHEMA_VERSION}. Rebuild the frontend to match.`,
+          status: 200,
+        });
+        return;
+      }
+      this.crossReconciliation.set(report);
+    } catch (err) {
+      if (this.response()?.run_id !== requestedRunId) return;
+      this.crossReconciliation.set(null);
+      if (err instanceof LeanSidecarApiError) {
+        this.crossReconcileError.set({
+          reason: err.reason,
+          message: err.message,
+          status: err.status,
+        });
+      } else {
+        this.crossReconcileError.set({
+          reason: "client_error",
+          message: err instanceof Error ? err.message : String(err),
+          status: 0,
+        });
+      }
+    } finally {
+      this.crossReconciling.set(false);
+    }
+  }
+
   async reconcileFees(): Promise<void> {
     const current = this.response();
     if (current === null) return;
@@ -552,6 +662,8 @@ export class LeanLabComponent {
     this.normalized.set(null);
     this.reconciliation.set(null);
     this.reconcileError.set(null);
+    this.crossReconciliation.set(null);
+    this.crossReconcileError.set(null);
 
     const value = this.form.getRawValue();
     const start_ms_utc = this.isoDateToMsUtc(value.startDate);

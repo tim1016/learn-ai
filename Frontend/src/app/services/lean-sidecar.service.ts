@@ -3,6 +3,8 @@ import { inject, Injectable } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { environment } from "../../environments/environment";
 import type {
+  CrossEngineReconciliationReport,
+  CrossReconcileRequest,
   LeanSidecarErrorEnvelope,
   NormalizedResult,
   RunIndexResponse,
@@ -106,6 +108,33 @@ export class LeanSidecarService {
         this.http.post<RunReconciliationReport>(
           `${this.base}/runs/${encodeURIComponent(runId)}/reconcile`,
           {},
+        ),
+      );
+    } catch (err) {
+      throw this.translate(err);
+    }
+  }
+
+  /**
+   * Phase 5g.3 — cross-engine reconcile. Runs the caller-supplied
+   * Engine-Lab strategy class against the same staged workspace data
+   * the LEAN-Lab run consumed, then diffs fill-by-fill into
+   * ``DivergenceCategory`` rows.
+   *
+   * Per D3, the caller MUST name the Engine-Lab strategy class
+   * explicitly — there's no server-side auto-derivation. ``assert_fees``
+   * is the Branch-A flag; default ``false`` keeps ``commission_drift``
+   * diagnostic, ``true`` promotes it to gating.
+   */
+  async crossReconcileRun(
+    runId: string,
+    request: CrossReconcileRequest,
+  ): Promise<CrossEngineReconciliationReport> {
+    try {
+      return await firstValueFrom(
+        this.http.post<CrossEngineReconciliationReport>(
+          `${this.base}/runs/${encodeURIComponent(runId)}/cross-reconcile`,
+          request,
         ),
       );
     } catch (err) {

@@ -190,6 +190,163 @@
 
       <section class="lean-lab__reconcile" aria-live="polite">
         <header class="lean-lab__reconcile-header">
+          <h3>Cross-engine reconcile (Phase 5g)</h3>
+          <button
+            type="button"
+            class="lean-lab__reconcile-btn"
+            [disabled]="crossReconciling() || crossReconcileForm.invalid"
+            (click)="crossReconcile()"
+          >
+            {{ crossReconciling() ? "Reconciling…" : "Cross-engine reconcile" }}
+          </button>
+        </header>
+        <p class="lean-lab__reconcile-help">
+          Runs the named Engine-Lab strategy against the same staged
+          workspace data this LEAN-Lab run consumed, then diffs the
+          trade logs fill-by-fill. <code>commission_drift</code> is
+          diagnostic by default; toggle <em>Assert fees</em> to gate on
+          it (only meaningful when both engines pin Interactive Brokers
+          fees — i.e., the LEAN-Lab run used the
+          <code>reconciliation</code> template).
+        </p>
+        <form
+          class="lean-lab__cross-form"
+          [formGroup]="crossReconcileForm"
+          (ngSubmit)="crossReconcile()"
+        >
+          <label class="lean-lab__field">
+            <span>Engine-Lab strategy class</span>
+            <input
+              type="text"
+              formControlName="engineLabStrategyClass"
+              aria-describedby="crossStrategyHint"
+            />
+            <small id="crossStrategyHint">
+              Python class name under
+              <code>app/engine/strategy/algorithms/</code>. Must accept a
+              <code>symbol</code> kwarg.
+            </small>
+          </label>
+          <label class="lean-lab__field lean-lab__field--toggle">
+            <input type="checkbox" formControlName="assertFees" />
+            <span>Assert fees (Branch-A)</span>
+            <small>
+              Promotes <code>commission_drift</code> from diagnostic to
+              gating. Use only with the reconciliation-grade template.
+            </small>
+          </label>
+        </form>
+
+        @if (crossReconcileError(); as cerr) {
+          <p class="lean-lab__reconcile-error" role="alert">
+            Cross-reconcile failed — <strong>{{ cerr.reason }}</strong>:
+            {{ cerr.message }}
+          </p>
+        }
+
+        @if (crossReconciliation(); as report) {
+          <div class="lean-lab__cross-summary">
+            <span
+              class="lean-lab__badge"
+              [class.lean-lab__badge--ok]="report.passed"
+              [class.lean-lab__badge--fail]="!report.passed"
+            >
+              {{ report.passed ? "Passed" : "Failed" }}
+            </span>
+            <span class="lean-lab__cross-meta">
+              {{ report.engine_lab_strategy_class }} ·
+              {{ report.assert_fees ? "assert_fees=true" : "assert_fees=false" }}
+              · schema v{{ report.schema_version }}
+            </span>
+          </div>
+          <dl class="lean-lab__reconcile-summary">
+            <dt>LEAN fills</dt>
+            <dd>{{ report.lean_total_fills }}</dd>
+            <dt>Engine fills</dt>
+            <dd>{{ report.engine_total_fills }}</dd>
+            <dt>Matched</dt>
+            <dd>{{ report.matched_count }}</dd>
+            <dt>Divergent</dt>
+            <dd>{{ report.divergent_count }}</dd>
+            <dt>Gating divergent</dt>
+            <dd>{{ report.gating_divergent_count }}</dd>
+          </dl>
+
+          @if (crossReconciliationCategoryCounts().length > 0) {
+            <ul class="lean-lab__cross-categories">
+              @for (
+                row of crossReconciliationCategoryCounts();
+                track row.category
+              ) {
+                <li>
+                  <code>{{ row.category }}</code>
+                  <strong>{{ row.count }}</strong>
+                </li>
+              }
+            </ul>
+          }
+
+          @if (report.divergences.length > 0) {
+            <table class="lean-lab__reconcile-table">
+              <caption>
+                First {{ crossReconciliationTopDivergences().length }} of
+                {{ report.divergences.length }} divergence rows
+              </caption>
+              <thead>
+                <tr>
+                  <th>Trading date</th>
+                  <th>Category</th>
+                  <th>LEAN fill</th>
+                  <th>Engine fill</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (
+                  d of crossReconciliationTopDivergences();
+                  track d.trading_date + d.category + d.detail
+                ) {
+                  <tr>
+                    <td>{{ d.trading_date }}</td>
+                    <td><code>{{ d.category }}</code></td>
+                    <td>
+                      @if (d.lean_fill; as lf) {
+                        {{ lf.side }} {{ lf.fill_quantity }} &#64;
+                        ${{ lf.fill_price }}
+                        @if (lf.fee !== null) {
+                          (fee ${{ lf.fee }})
+                        }
+                      } @else {
+                        <em>—</em>
+                      }
+                    </td>
+                    <td>
+                      @if (d.engine_fill; as ef) {
+                        {{ ef.side }} {{ ef.fill_quantity }} &#64;
+                        ${{ ef.fill_price }}
+                        @if (ef.fee !== null) {
+                          (fee ${{ ef.fee }})
+                        }
+                      } @else {
+                        <em>—</em>
+                      }
+                    </td>
+                    <td>{{ d.detail }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          } @else {
+            <p class="lean-lab__cross-clean">
+              No fill-level divergences. Both engines produced identical
+              trade logs against the shared workspace data.
+            </p>
+          }
+        }
+      </section>
+
+      <section class="lean-lab__reconcile" aria-live="polite">
+        <header class="lean-lab__reconcile-header">
           <h3>Fee reconciliation (Phase 5a)</h3>
           <button
             type="button"
