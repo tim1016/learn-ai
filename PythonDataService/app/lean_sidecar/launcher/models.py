@@ -10,7 +10,7 @@ shape".
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.lean_sidecar.workspace import RUN_ID_PATTERN
 
@@ -37,9 +37,38 @@ class LaunchRequest(BaseModel):
         description=(
             "Optional --read-only / --tmpfs tokens. Every token must be in "
             "ALLOWED_HARDENING_TOKENS; the launcher refuses unknown tokens "
-            "to prevent sandbox-widening flags like --privileged."
+            "to prevent sandbox-widening flags like --privileged. "
+            "Mutually exclusive with ``hardening_profile``."
         ),
     )
+    hardening_profile: str | None = Field(
+        default=None,
+        description=(
+            "Optional typed alternative to ``hardening_flags`` — accepts "
+            "one of the ``HardeningProfile`` enum values "
+            "('minimal' / 'with_tmpfs_256m' / 'with_tmpfs_64m'). The "
+            "launcher expands it into the same argv tokens as the matching "
+            "``hardening_flags`` would produce. Mutually exclusive with "
+            "``hardening_flags`` — passing both is a 400."
+        ),
+    )
+
+    @field_validator("hardening_profile")
+    @classmethod
+    def _validate_profile_name(cls, v: str | None) -> str | None:
+        # Importing inside the validator avoids a circular import:
+        # runner.py depends on workspace + config only, but launcher
+        # models live above runner in the dependency graph.
+        if v is None:
+            return v
+        from app.lean_sidecar.runner import HardeningProfile
+
+        valid = {p.value for p in HardeningProfile}
+        if v not in valid:
+            raise ValueError(
+                f"hardening_profile must be one of {sorted(valid)}, got {v!r}"
+            )
+        return v
 
     @field_validator("run_id")
     @classmethod
@@ -55,6 +84,18 @@ class LaunchRequest(BaseModel):
         if not bare.startswith("sha256:"):
             raise ValueError("image_digest must be pinned (start with sha256:)")
         return v
+
+    @model_validator(mode="after")
+    def _reject_mutually_exclusive_hardening(self) -> LaunchRequest:
+        """Passing both ``hardening_flags`` and ``hardening_profile`` is
+        ambiguous: merge semantics would surprise someone (do they
+        concatenate? does profile win? does flags win?). Reject up
+        front so the caller picks one."""
+        if self.hardening_profile is not None and self.hardening_flags:
+            raise ValueError(
+                "hardening_profile and hardening_flags are mutually exclusive; pick one"
+            )
+        return self
 
 
 class LaunchResponse(BaseModel):
