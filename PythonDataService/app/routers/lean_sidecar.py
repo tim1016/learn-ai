@@ -631,10 +631,15 @@ class FeeDivergenceModel(BaseModel):
     fill_price: str
     recorded_fee: str | None
     expected_ibkr_fee: str
-    # ``None`` when ``category == "no_recorded_fee"`` — there's nothing
-    # to subtract from. Non-null for every ``commission_drift`` row.
+    # ``None`` when ``category == "no_recorded_fee"`` or
+    # ``fractional_quantity`` — there's nothing meaningful to subtract.
+    # Non-null for every ``commission_drift`` row.
     delta: str | None
-    category: Literal["commission_drift", "no_recorded_fee"]
+    category: Literal["commission_drift", "no_recorded_fee", "fractional_quantity"]
+    # Populated only when category == "fractional_quantity" — carries
+    # the original float so the operator can see what LEAN emitted
+    # before integer rounding would have been applied.
+    fill_quantity_raw: float | None = None
 
 
 class RunReconciliationReportModel(BaseModel):
@@ -692,6 +697,7 @@ def _report_to_model(
                 expected_ibkr_fee=str(d.expected_ibkr_fee),
                 delta=None if d.delta is None else str(d.delta),
                 category=d.category.value,
+                fill_quantity_raw=d.fill_quantity_raw,
             )
             for d in report.divergences
         ],

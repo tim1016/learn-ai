@@ -209,7 +209,16 @@ export interface FeeDivergence {
   recorded_fee: string | null;
   expected_ibkr_fee: string;
   delta: string | null;
-  category: "commission_drift" | "no_recorded_fee";
+  category: "commission_drift" | "no_recorded_fee" | "fractional_quantity";
+  /**
+   * Populated only when ``category == "fractional_quantity"``. Carries
+   * the original float fill quantity LEAN emitted (e.g., 100.5) so the
+   * operator can see the value before integer rounding would have been
+   * applied. The integer ``fill_quantity`` field above is the truncated
+   * value the IBKR model would have charged against if the reconciler
+   * had not bailed.
+   */
+  fill_quantity_raw?: number | null;
 }
 
 /**
