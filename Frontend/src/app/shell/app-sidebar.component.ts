@@ -94,6 +94,7 @@ const NAV: NavGroup[] = [
     items: [
       { label: 'Dashboard', route: '/portfolio' },
       { label: 'Engine Lab', route: '/engine' },
+      { label: 'LEAN Lab', route: '/lean-lab' },
       { label: 'Strategy Spec', route: '/spec-strategy' },
       { label: 'Tracked Instruments', route: '/tracked-instruments' },
     ],
