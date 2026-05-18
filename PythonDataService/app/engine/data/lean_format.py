@@ -395,6 +395,60 @@ def write_lean_daily_zip(
     return zip_path
 
 
+def write_lean_quote_day_zip(
+    output_root: Path | str,
+    symbol: str,
+    trading_date: date,
+    bars: list[TradeBar],
+) -> Path:
+    """Write a LEAN-format minute quote zip seeded from trade bars.
+
+    LEAN's default minute subscription requests BOTH trade and quote
+    bars. Without a quote file, the launcher's log carries
+    ``Cannot find file: ...quote.zip`` warnings classified as
+    ``failed_data_requests`` — known-noise that masks real data gaps.
+    Phase 5c (this writer) eliminates the noise by synthesizing a
+    quote zip whose bid and ask both equal the trade close (zero
+    spread, zero size).
+
+    The synthetic spread is acceptable for trusted-sample purposes
+    because the sample's buy_and_hold flow does not consume quotes
+    for fills; reconciliation-grade fills run off trade bars. A
+    real-quote pipeline is a Phase 5d concern.
+
+    Row format (per LEAN docs):
+        ms,bid_o,bid_h,bid_l,bid_c,bid_size,ask_o,ask_h,ask_l,ask_c,ask_size
+    """
+    out_dir = Path(output_root) / "equity" / "usa" / "minute" / symbol.lower()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = out_dir / f"{trading_date.strftime('%Y%m%d')}_quote.zip"
+    csv_name = f"{trading_date.strftime('%Y%m%d')}_{symbol.lower()}_minute_quote.csv"
+    midnight = datetime(
+        trading_date.year,
+        trading_date.month,
+        trading_date.day,
+        tzinfo=EASTERN,
+    )
+    lines: list[str] = []
+    for bar in bars:
+        bar_time_et = bar.time.astimezone(EASTERN)
+        ms = int((bar_time_et - midnight).total_seconds() * 1000)
+        # Bid = ask = trade close. The zero-spread synthesis is the
+        # smallest data shape that satisfies LEAN's quote subscription
+        # without claiming bid/ask information we don't have.
+        close_scaled = int(bar.close * PRICE_SCALE)
+        lines.append(
+            f"{ms},"
+            f"{close_scaled},{close_scaled},{close_scaled},{close_scaled},0,"
+            f"{close_scaled},{close_scaled},{close_scaled},{close_scaled},0"
+        )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(csv_name, "\n".join(lines))
+    zip_path.write_bytes(buf.getvalue())
+    return zip_path
+
+
 def write_lean_day_zip(
     output_root: Path | str,
     symbol: str,

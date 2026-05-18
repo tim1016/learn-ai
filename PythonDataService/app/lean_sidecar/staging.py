@@ -21,7 +21,11 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from app.engine.data.lean_format import write_lean_daily_zip, write_lean_day_zip
+from app.engine.data.lean_format import (
+    write_lean_daily_zip,
+    write_lean_day_zip,
+    write_lean_quote_day_zip,
+)
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import LEAN_IMAGE_REPO
 from app.lean_sidecar.lean_config import LeanConfig
@@ -106,6 +110,38 @@ def stage_minute_bars(
     written: list[Path] = []
     for trading_date, bars in bars_by_date:
         path = write_lean_day_zip(
+            workspace.data_dir,
+            safe_symbol,
+            trading_date,
+            bars,
+        )
+        written.append(path)
+    return tuple(written)
+
+
+def stage_quote_bars(
+    workspace: Workspace,
+    *,
+    symbol: str,
+    bars_by_date: Iterable[tuple[date, list[TradeBar]]],
+) -> tuple[Path, ...]:
+    """Stage per-day LEAN minute QUOTE zips alongside the trade zips.
+
+    Phase 5c — eliminates the known-noise ``Cannot find file:
+    ...quote.zip`` log lines the launcher's result_classifier was
+    treating as expected ``failed_data_requests``. Each quote zip is
+    synthesized from the same TradeBar list as the matching trade
+    zip (bid = ask = trade close, size = 0); see
+    :func:`write_lean_quote_day_zip` for the spread/size rationale.
+
+    Re-validates ``symbol`` for the same defense-in-depth reason as
+    :func:`stage_minute_bars`.
+    """
+    safe_symbol = validate_symbol(symbol)
+    workspace.ensure_layout()
+    written: list[Path] = []
+    for trading_date, bars in bars_by_date:
+        path = write_lean_quote_day_zip(
             workspace.data_dir,
             safe_symbol,
             trading_date,
