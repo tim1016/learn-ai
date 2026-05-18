@@ -63,90 +63,165 @@ the `order_events` list serialized.
 $0.01, an extra equity point at the end). That's a real determinism bug
 and needs Tim's read on whether to fix LEAN config or relax the gate.
 
-### D3 — LEAN-Lab-vs-Engine-Lab reconciler scope (Phase 5g)
+### D3 — LEAN-Lab-vs-Engine-Lab reconciler scope (Phase 5g) — RESOLVED 2026-05-18
 
 Phase 5a is **self-reconciliation** (LEAN's recorded fees vs the canonical
-IbkrEquityCommissionModel). Phase 5g would be **cross-engine reconciliation**
+IbkrEquityCommissionModel). Phase 5g is **cross-engine reconciliation**
 (LEAN trades vs our Engine Lab's trades on the same algorithm + inputs).
 
-**Defer the entire Phase 5g design.** The qc_reconciler taxonomy in
-`PythonDataService/app/research/parity/qc_reconciler.py` is the right
-shape, but extending it to LEAN-Lab-vs-Engine-Lab requires deciding:
-- which divergence categories are gating vs informational for *this* pairing
-- whether the engine-lab side runs the same algorithm verbatim or a port
-- how to handle algorithms that have no engine-lab equivalent yet
+Tim's scope decisions:
 
-Tim must scope Phase 5g before any code lands.
+- **Pairing**: caller-supplied. The request names which Engine Lab
+  strategy class to diff against. No auto-pairing convention; explicit
+  is safer than `lean_<algo>_port`-style auto-derivation.
+- **Gating taxonomy**: **strict** — every category in
+  `DivergenceCategory` is gating EXCEPT `COMMISSION_DRIFT`, which
+  defaults to diagnostic. Reason: fee-model precision is a tunable
+  comparison, not a strategy-logic claim.
+- **Per-run override**: when the caller sends `assert_fees=true` AND
+  the run was the reconciliation-grade template (Phase 5b — IBKR
+  pinned on both sides), `COMMISSION_DRIFT` is also gating. Same
+  Branch-A semantics as ``qc_reconciler.py``.
+- **Data source**: shared staged data — Engine Lab runs against the
+  same ``workspace/data`` zips LEAN saw, not its native fixtures.
+  Maximum fidelity, requires the cross-engine reconciler to glue
+  Engine Lab's data path to the LEAN workspace path.
 
-### D4 — Phase 5 → Phase 6 transition
+Phase 5g is **unblocked**. Build slices:
+1. Endpoint scaffold + Pydantic request/response shape (no engine-lab call yet).
+2. Engine Lab cross-run primitive that accepts a workspace path.
+3. Diff against ``DivergenceCategory``; honor ``assert_fees``.
+4. Frontend UI (Phase 5g.4).
+
+### D4 — Phase 5 → Phase 6 transition — RESOLVED 2026-05-18
 
 Phase 6 is "persistence model for run metadata (file-backed vs DB)". The
 sidebar/index currently does scan-on-demand and works fine at ≤200 runs.
 
-**Defer if** a tick wants to add a database dependency (sqlite/postgres),
-introduce SQLAlchemy/asyncpg, or migrate run metadata into a DB. Tim
-must decide the trigger for Phase 6 — likely "we hit 1000 runs and
-scan latency exceeds 500ms".
+Tim's trigger decisions:
 
-### D5 — Real quote data source (replace Phase 5c synthetic zero-spread)
+- **Trigger**: use-case driven, not performance threshold. Phase 6
+  begins **when someone needs cross-run queries** (e.g., "list all
+  runs where commission_drift > $0.10", "show every reconciliation-
+  template run from the last 7 days"). The scan-on-demand index is
+  fine until the read pattern needs indexing.
+- **Store**: SQLite file in the artifacts root. Single-writer, no
+  daemon, no port — fits the current single-host deployment. No
+  Postgres dependency until/unless multi-host becomes a thing.
 
-Phase 5c stages bid=ask=trade-close with size 0. That's synthetic and
-unsafe for algorithms that consume quotes.
+**Defer if** a tick wants to introduce a DB without a concrete
+cross-run query use case. "We might want this later" doesn't trigger
+Phase 6.
 
-**Defer if** a tick wants to fetch real NBBO from Polygon (or any other
-vendor). That's a vendor-cost decision (Polygon's NBBO endpoint may
-have separate billing) and a freshness decision (NBBO is millisecond-
-granular real-time data).
+### D5 — Real quote + factor/map data source — RESOLVED 2026-05-18
 
-### D6 — Algorithm class-name configurability
+Phase 5c stages bid=ask=trade-close with size 0. Phase 1c stages
+empty `factor_files/` + `map_files/` dirs.
+
+Tim's decisions:
+
+- **Quote source**: synthetic stays. Real NBBO is deferred until a
+  real quote-consuming algorithm lands; vendor bandwidth + billing
+  cost isn't worth absorbing speculatively.
+- **Vendor pre-selection** (recorded for the eventual real-quote
+  work): **Massive.com is the candidate vendor**, not Polygon.
+  Tim's current Polygon Starter plan is functionally equivalent to
+  free-tier and won't get us real NBBO. Massive offers stock
+  + options pricing tiers:
+  - https://massive.com/pricing
+  - https://massive.com/pricing?product=options
+  When the time comes, evaluate Massive's NBBO / options trade tier
+  against the project's actual needs (granularity, history depth,
+  cost).
+- **Factor/map files**: synthetic stays. Reconciliation-grade work
+  is bounded to **windows with no corporate actions** (i.e., dates
+  without splits/dividends on the staged symbol). The trusted-sample
+  Jan-2025 SPY window already meets this. Documented limit.
+
+**Defer if** a tick wants to add ANY real-data vendor — including
+Massive — without Tim's explicit "go". The vendor pre-selection
+above is the direction, not authorization.
+
+### D6 — Algorithm class-name configurability — RESOLVED 2026-05-18
 
 `MyAlgorithm` is hardcoded as the only acceptable class name in
 buy_and_hold.py, buy_and_hold_reconciliation.py, the API validation,
 and the LeanConfig.algorithm_type_name default.
 
-**Defer if** a reviewer or a tick wants to make this configurable (let
-operators paste an algorithm whose class is `MyCustomAlgo` and have
-the launcher pass `algorithm-type-name=MyCustomAlgo`). Surface-area
-expansion that needs Tim's UX call.
+Tim's decision: **keep hardcoded**. Operators rename their class to
+`MyAlgorithm`. The configurability surface isn't worth it; the
+existing copy/paste-into-textarea UX already accommodates this
+trivially.
 
-### D7 — Frontend equity-chart spec flake — "rerun forever" vs "rewrite"
+**Defer if** a reviewer or a tick wants to make this configurable.
+This is no longer something to revisit without a stronger UX case
+than "convenience".
 
+### D7 — Frontend equity-chart spec flake — RESOLVED 2026-05-18
+
+The spec at
 `Frontend/src/app/components/lean-lab/lean-lab-equity-chart/lean-lab-equity-chart.component.spec.ts`
-flakes intermittently with `vi.fn() called 0 times` due to Vitest's
-worker module cache + `vi.mock("lightweight-charts", ...)` ordering.
-We've layered a defensive vi.mock in `lean-lab.component.spec.ts`; it
-mostly works. Reruns succeed.
+was flaking on a Vitest worker module-cache ordering bug.
 
-**Defer if** a tick wants to delete or substantially rewrite the equity-
-chart spec. That's a "do we trust the workaround or invest in a real
-fix" decision Tim owns.
+Tim's decision: **delete the spec entirely**. The chart component
+renders correctly per the integration-level tests in
+`lean-lab.component.spec.ts` (which already mocks lightweight-charts
+defensively). The unit-level mock-call-count assertions were not
+earning their keep against the flake cost.
 
-### D8 — CodeRabbit "Major" findings policy
+This decision was implemented in this same PR — the file is removed.
+
+**No defer condition remains.** Any future flake on lean-lab chart
+behavior should be addressed through the integration tests, not by
+re-adding a separate unit spec.
+
+### D8 — CodeRabbit "Major" findings policy — RESOLVED 2026-05-18
 
 Memory rule: P1 findings block merges. CodeRabbit emits Major/Minor/Nitpick.
 
-**Defer if** a Major finding is on `*.py`/`*.ts` code (not docs/style).
-Decline-with-reply is fine for Minor/Nitpick on style. Tim has
-historically split: "P1 from Codex" = always fix, "CodeRabbit Major" =
-case-by-case judgement. Default to fix-it-or-defer for Major.
+Tim's decision: **case-by-case agent judgement**. P1 from Codex is
+always-fix (memory rule unchanged). CodeRabbit Major: the agent
+reads the finding, fixes or declines on its own, and only escalates
+when the fix would require **substantial rework** (multi-file refactor,
+test framework swap, etc.). Minor/Nitpick: decline-with-reply +
+resolve.
 
-### D9 — New `requirements-dev.txt` entries
+**Defer if** a Major finding requires changes spanning >1 module
+boundary or a structural rewrite. Default: try to fix.
 
-A reviewer asking for `pytest-mock` or `factory-boy` etc. is fine to add
-if it's already widely used in the Python ecosystem AND the version is
-pinned.
+### D9 — New `requirements-dev.txt` entries — RESOLVED 2026-05-18
 
-**Defer if** the suggested dep is exotic (under 100 stars on GitHub), or
-if the test it enables could be written without it.
+Tim's decision: **allowed without asking** as long as the package is
+widely-used in the Python ecosystem (>1k GitHub stars OR is a
+maintained-by-foundation library like pytest plugins from the
+pytest-dev org) AND the version is pinned (`==X.Y.Z` or
+`>=X.Y,<X+1`).
 
-### D10 — Reconciler endpoint output schema change
+This widens the prior "100-star" threshold per Tim's explicit OK.
+
+**Defer if** the suggested dep is exotic (<1k stars, unmaintained,
+or could be written in a one-file helper), or if it's a **runtime**
+dep (not dev) — runtime deps still need Tim's explicit OK.
+
+### D10 — Reconciler endpoint output schema change — RESOLVED 2026-05-18
 
 `POST /api/lean-sidecar/runs/{id}/reconcile` returns `RunReconciliationReportModel`
 with specific fields. The Phase 5a UI consumes it.
 
-**Defer if** a tick wants to add/remove top-level fields on the response.
-That's a wire-format change that needs Tim's UX read (and frontend test
-updates).
+Tim's decision: **shape changes are allowed with an explicit
+`schema_version: int` field on the response**. New optional fields,
+field renames (with a deprecation cycle), even removed fields are
+fair game — bump `schema_version` to make breakage detectable on
+the consumer side. The Phase 5a UI must read `schema_version` and
+fail-fast (red error pane) on unrecognized versions.
+
+The current schema is implicitly v1. A future PR may add the
+explicit `schema_version: 1` field; agents may make that addition
+without deferring.
+
+**Defer if** the proposed change is a SEMANTIC change (same field
+name, different meaning). That always needs Tim's call regardless
+of versioning.
 
 ---
 
