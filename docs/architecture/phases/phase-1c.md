@@ -39,7 +39,7 @@ This boundary is captured in `buy_and_hold.py`'s docstring; the E2E test calls `
 Open from this PR, queued for Phase 1d / Phase 5:
 
 - `--user <uid>` and `--read-only` were promoted to mandatory sandbox flags in Phase 1c (PR #254). Workspace UID/GID matching on Windows + WSL2 is handled by the launcher; the read-only root + tmpfs combination is fixed in the sandbox profile.
-- **Determinism gate** — re-run + byte-identical normalized-artifact comparison. Trivial to add now that the clean-run contract is enforced; deferred so this PR does not grow further.
+- ~~Determinism gate~~ — landed in Phase 5f (E2E test that two same-input runs produce equivalent artifacts; also fixed the zip-mtime determinism bug discovered on first run).
 - ~~Quote-bar staging~~ — landed in Phase 5c (synthetic zero-spread minute quotes alongside trade zips; eliminates the ``Cannot find file: ...quote.zip`` known-noise category).
 - Real factor/map files for the reconciliation-grade Phase 5 fixtures (not for the spike).
 - ~~Populate `bars_consumed_by_symbol` in the manifest writer~~ — landed in Phase 5e (per-symbol count from `observations.csv` line count; closes the bar-consumption half of invariant #16).
