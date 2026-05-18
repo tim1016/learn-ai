@@ -456,12 +456,26 @@ export class LeanLabComponent {
   async reconcileFees(): Promise<void> {
     const current = this.response();
     if (current === null) return;
+    // Snapshot the run_id this click was for. If the user navigates to
+    // a different run (sidebar click, fresh submit) before the POST
+    // returns, we must NOT paint the old run's report onto the new
+    // run's panel. Reviewer P2 — race fix.
+    const requestedRunId = current.run_id;
     this.reconciling.set(true);
     this.reconcileError.set(null);
     try {
-      const report = await this.service.reconcileRun(current.run_id);
+      const report = await this.service.reconcileRun(requestedRunId);
+      if (this.response()?.run_id !== requestedRunId) {
+        // The user moved on; drop the stale response on the floor.
+        return;
+      }
       this.reconciliation.set(report);
     } catch (err) {
+      if (this.response()?.run_id !== requestedRunId) {
+        // Same race for the error path — don't show run A's 404 on
+        // run B's panel.
+        return;
+      }
       this.reconciliation.set(null);
       if (err instanceof LeanSidecarApiError) {
         this.reconcileError.set({
@@ -477,6 +491,12 @@ export class LeanLabComponent {
         });
       }
     } finally {
+      // Always clear the in-flight indicator. ``reconciling`` is a
+      // component-level signal and shouldn't bleed across runs;
+      // submit() and the sidebar click already clear ``reconciliation``
+      // and ``reconcileError`` when the active run changes, so a brief
+      // spinner-cleared-then-button-clickable state on the new run is
+      // the correct visual.
       this.reconciling.set(false);
     }
   }

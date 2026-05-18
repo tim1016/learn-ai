@@ -26,6 +26,7 @@ import { LeanSidecarApiError, LeanSidecarService } from "../../services/lean-sid
 import type {
   NormalizedResult,
   RunIndexResponse,
+  RunReconciliationReport,
   RunSummary,
   TrustedRunResponse,
 } from "../../services/lean-sidecar.types";
@@ -675,6 +676,61 @@ describe("LeanLabComponent", () => {
     expect(text).toContain("2.00");
     // Divergence row visible with the category label.
     expect(text).toContain("commission_drift");
+  });
+
+  it("Phase 5a P2: stale reconcile response is dropped when the active run changed mid-flight", async () => {
+    // Arrange: a slow reconcile resolves to run A; before it resolves
+    // the user submits run B. Expect: B's panel stays empty (no stale
+    // paint from A) and ``reconciling`` is cleared.
+    let resolveReconcile: (report: RunReconciliationReport) => void = () => {
+      throw new Error("reconcileRun mock was not invoked before navigation");
+    };
+    const reportForA: RunReconciliationReport = {
+      run_id: "ui_run_a",
+      algorithm_id: "MyAlgorithm",
+      normalized_parser_version: "phase-3a-r1",
+      total_fill_events: 1,
+      matched_count: 0,
+      divergent_count: 1,
+      commission_atol: "0.01",
+      total_recorded_fees: "5.00",
+      total_expected_ibkr_fees: "1.00",
+      divergences: [],
+    };
+
+    serviceMock.startTrustedRun.mockResolvedValueOnce(makeResponse({ run_id: "ui_run_a" }));
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    serviceMock.reconcileRun.mockImplementationOnce(
+      () =>
+        new Promise<RunReconciliationReport>((resolve) => {
+          resolveReconcile = resolve;
+        }),
+    );
+
+    await component.submit();
+    fixture.detectChanges();
+
+    // Fire and forget — we'll resolve it after navigating away.
+    const inFlight = component.reconcileFees();
+
+    // Simulate the user starting a new run B (this clears
+    // ``reconciliation`` + ``reconcileError`` and replaces ``response``).
+    serviceMock.startTrustedRun.mockResolvedValueOnce(makeResponse({ run_id: "ui_run_b" }));
+    await component.submit();
+    fixture.detectChanges();
+
+    expect(component.response()?.run_id).toBe("ui_run_b");
+    expect(component.reconciliation()).toBeNull();
+
+    // Now the original POST resolves with run A's report.
+    resolveReconcile(reportForA);
+    await inFlight;
+    fixture.detectChanges();
+
+    // Race fix: the stale report must NOT paint onto run B's panel.
+    expect(component.reconciliation()).toBeNull();
+    expect(component.reconcileError()).toBeNull();
+    expect(component.reconciling()).toBe(false);
   });
 
   it("renders the launcher's typed rejection envelope on a 400", async () => {
