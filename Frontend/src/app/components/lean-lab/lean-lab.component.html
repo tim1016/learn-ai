@@ -66,6 +66,18 @@
           sandbox shape.
         </small>
       </label>
+    } @else {
+      <label class="lean-lab__field">
+        <span>Trusted sample template</span>
+        <select formControlName="template" aria-describedby="templateHint">
+          <option value="trusted_default">Default (LEAN-default brokerage)</option>
+          <option value="reconciliation">Reconciliation-grade (IBKR brokerage)</option>
+        </select>
+        <small id="templateHint">
+          Reconciliation-grade pins Interactive Brokers brokerage so the Phase&nbsp;5a fee
+          reconciler returns a clean report. Default mirrors Phase 1 behavior.
+        </small>
+      </label>
     }
 
     <button

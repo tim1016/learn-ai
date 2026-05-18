@@ -151,13 +151,24 @@ class TrustedRunRequestModel(BaseModel):
         default=None,
         description=(
             "Optional QCAlgorithm Python source. When omitted, the "
-            "bundled trusted buy_and_hold sample runs. Must define a "
-            "class named MyAlgorithm (LeanConfig's default "
-            "algorithm-type-name). Capped at "
+            "bundled trusted sample selected by ``template`` runs. "
+            "Must define a class named MyAlgorithm (LeanConfig's "
+            "default algorithm-type-name). Capped at "
             f"{MAX_ALGORITHM_SOURCE_BYTES // 1024} KiB. Runs inside "
             "the Phase 1c sandbox shape (read-only root, non-root "
             "user, no caps, no network, workspace-only mount) — that "
             "shape is what makes accepting arbitrary source safe."
+        ),
+    )
+    template: Literal["trusted_default", "reconciliation"] = Field(
+        default="trusted_default",
+        description=(
+            "Phase 5b — which bundled trusted sample to stage when "
+            "``algorithm_source`` is omitted. ``trusted_default`` (the "
+            "back-compat default) runs the LEAN-default-brokerage "
+            "sample; ``reconciliation`` runs the IBKR-brokerage-pinned "
+            "sample that the Phase 5a fee reconciler returns a clean "
+            "report for. Ignored when ``algorithm_source`` is provided."
         ),
     )
 
@@ -305,6 +316,7 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         end_ms_utc=payload.end_ms_utc,
         starting_cash=payload.starting_cash,
         algorithm_source=payload.algorithm_source,
+        template=payload.template,
     )
     try:
         result = await run_trusted_sample(request)

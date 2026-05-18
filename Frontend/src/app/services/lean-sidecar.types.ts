@@ -33,6 +33,16 @@ export interface TrustedRunRequest {
    * non-root user, no caps, no network, workspace-only mount).
    */
   algorithm_source?: string | null;
+  /**
+   * Phase 5b — which bundled trusted sample the server stages when
+   * ``algorithm_source`` is omitted. ``trusted_default`` (back-compat
+   * default) runs the LEAN-default-brokerage sample; ``reconciliation``
+   * runs the IBKR-brokerage-pinned sample that the Phase 5a fee
+   * reconciler returns a clean report for. Ignored when
+   * ``algorithm_source`` is provided (operator-pasted source pins its
+   * own brokerage via SetBrokerageModel).
+   */
+  template?: "trusted_default" | "reconciliation";
 }
 
 /**

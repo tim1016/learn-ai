@@ -1,6 +1,6 @@
 # LEAN Sidecar Lab
 
-**Status:** Phase 1 — runner spike shipped (Phase 1a + 1b)
+**Status:** Phase 5b — reconciliation-grade template + Phase 5a self-reconciler shipped; Phase 1c sandbox + Phase 4a-e UI complete
 **Last reviewed:** 2026-05-17
 **Pairs with:** `docs/architecture/engine-authority-map.md`, `docs/references/lean-engine.md`, `.claude/rules/numerical-rigor.md`
 
@@ -428,7 +428,7 @@ The original plan's six phases are retained, with these adjustments encoded by P
 - **Phase 2 (Python API)** — unchanged in shape; the runner.py invocations go through the launcher socket/HTTP rather than spawning podman as a child process of the data-plane container.
 - **Phase 3 — renamed *Container Execution Boundary + Fidelity Boundary*** — is the gating phase before any UI takes arbitrary user input. The UI from Phase 4 may exist earlier only with a hardcoded trusted sample algorithm (no `algorithm_source` field, no textarea). This phase also lands the normalized parser tests, manifest hashing, disk-cap enforcement, and explicit compatibility-vs-reconciliation run classification.
 - **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. Phase 4a shipped the trusted-sample form, 4b the equity chart, **4c the custom-algorithm textarea** (server-side accept of `algorithm_source` on `POST /lean/runs/start`), **4d the run-history sidebar** (`GET /api/lean-sidecar/runs` + sidebar component), and **4e form rehydration on sidebar click** (`getManifest` repopulates symbol/window/cash so re-running a past run is a one-click → tweak → submit loop). From 4c onward, a successful run is possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. The acceptance is unconditional on the API and gated by a UI toggle (defaults off → trusted sample). Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
-- **Phase 5 (Reconciliation-grade samples)** is multi-PR. **5a** ships the self-reconciler (`POST /runs/{id}/reconcile` compares any past run's recorded fees against `IbkrEquityCommissionModel`). **5b** adds the reconciliation-grade trusted-sample template with explicit IBKR brokerage pinning. **5c** wires the reconciler results into the frontend and adds the LEAN-Lab-vs-Engine-Lab trade reconciler. The reconciler is decoupled from template choice — a default-brokerage run produces a "many drift" report that's informative (it shows brokerage choice matters), not a bug.
+- **Phase 5 (Reconciliation-grade samples)** is multi-PR. **5a** shipped the self-reconciler (`POST /runs/{id}/reconcile` compares any past run's recorded fees against `IbkrEquityCommissionModel`). **5b** ships the reconciliation-grade trusted-sample template (`template: "reconciliation"` on the run request → bundles a sample with explicit `SetBrokerageModel(BrokerageName.InteractiveBrokersBrokerage, AccountType.Margin)` and `brokerage_policy="interactive_brokers"` in the manifest). **5c** adds the LEAN-Lab-vs-Engine-Lab trade reconciler. The fee reconciler is decoupled from template choice — a default-template run produces a "many drift" report (informative: brokerage choice matters), a reconciliation-template run produces a clean report.
 - **Phase 6** - unchanged in scope.
 
 ### Phase 1a progress (2026-05-17)
@@ -533,6 +533,53 @@ Open from this PR, queued for Phase 1d / Phase 5:
 - Quote-bar staging — eliminates the last known-noise category in the trusted-sample log.
 - Real factor/map files for the reconciliation-grade Phase 5 fixtures (not for the spike).
 - Hardening-profile enum to replace caller-supplied `hardening_flags` argv tokens — reviewer-suggested longer-term direction.
+
+### Phase 5b progress (2026-05-17, follow-up PR — reconciliation-grade trusted-sample template)
+
+Phase 5a shipped the reconciler primitive but the bundled trusted
+sample still used LEAN's default brokerage, so reconciler reports on
+trusted-sample runs surfaced many `commission_drift` rows by design.
+Phase 5b closes that with a NEW bundled template that pins IBKR
+brokerage explicitly — runs of the reconciliation template come back
+clean through the reconciler.
+
+- **New sample** — `app/lean_sidecar/trusted_samples/buy_and_hold_reconciliation.py`
+  exports `BUY_AND_HOLD_RECONCILIATION_SOURCE`. Identical to
+  `buy_and_hold.py` except for one line:
+  `self.SetBrokerageModel(BrokerageName.InteractiveBrokersBrokerage, AccountType.Margin)`.
+  Keeps `fillForward=False` (invariant #13) and `DataNormalizationMode.Raw`
+  (invariant #14) which were already present in the default sample.
+- **API** — `TrustedRunRequestModel.template: Literal["trusted_default", "reconciliation"]`,
+  default `"trusted_default"` for back-compat with Phase 4 clients that
+  never sent the field. The dataclass `TrustedRunRequest.template` and
+  the orchestrator's `_SOURCE_FOR_TEMPLATE` / `_BROKERAGE_POLICY_FOR_TEMPLATE`
+  mappings keep template selection in one place (no `if/elif` chains).
+- **Manifest** — `brokerage_policy="interactive_brokers"` when
+  `template="reconciliation"`, else `"algorithm_default"` as before.
+  `manifest.notes` also gets a new `trusted_template=<value>` line so
+  an auditor reading the manifest can tell which template was staged
+  (the field is set to `"user_provided_no_template"` when the caller
+  pasted their own source).
+- **UI** — when the "Custom algorithm" toggle is off, a new "Trusted
+  sample template" dropdown lets the operator pick default vs
+  reconciliation. The field is hidden (not just disabled) when the
+  custom toggle is on, and the request omits the template field in
+  that case — operator-pasted source picks its own brokerage via
+  `SetBrokerageModel`, and sending a contradictory template would
+  be a UX lie.
+- **What 5b does NOT do** — does not stage real benchmark daily data
+  (the reconciliation template keeps the constant `SetBenchmark(lambda dt: 100)`
+  for now — benchmark mismatches affect LEAN's stats but not fill
+  prices or fees, so the fee reconciler is unaffected). Does not
+  stage quote bars (still produces the known-noise `_quote.zip not
+  found` log line). Does not add a LEAN-Lab-vs-Engine-Lab trade
+  reconciler — that's Phase 5c.
+- **Test surface** — 10 new template-selection tests
+  (`test_template_selection.py`) cover the dataclass default, the
+  policy/source mappings, and source-string invariants (regression
+  catches for SetBrokerageModel/fillForward/Raw/class name being
+  edited out). 3 new router tests for the Pydantic field. 3 new
+  frontend specs for default/reconciliation/omit-when-custom.
 
 ### Phase 5a progress (2026-05-17, follow-up PR — self-reconciler against IBKR commission model)
 

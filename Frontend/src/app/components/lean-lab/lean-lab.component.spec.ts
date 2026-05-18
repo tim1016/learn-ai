@@ -499,6 +499,39 @@ describe("LeanLabComponent", () => {
     expect(component.form.controls.symbol.value).toBe("SPY");
   });
 
+  it("Phase 5b: template defaults to trusted_default and ships in the request body", async () => {
+    serviceMock.startTrustedRun.mockResolvedValue(makeResponse());
+    expect(component.form.controls.template.value).toBe("trusted_default");
+    await component.submit();
+    const req = serviceMock.startTrustedRun.mock.calls[0][0];
+    expect(req.template).toBe("trusted_default");
+  });
+
+  it("Phase 5b: selecting reconciliation template forwards it to the API", async () => {
+    serviceMock.startTrustedRun.mockResolvedValue(makeResponse());
+    component.form.controls.template.setValue("reconciliation");
+    await component.submit();
+    const req = serviceMock.startTrustedRun.mock.calls[0][0];
+    expect(req.template).toBe("reconciliation");
+  });
+
+  it("Phase 5b: template is omitted when caller pastes their own source", async () => {
+    // When the operator pastes their own algorithm, the template
+    // selector is moot — the brokerage choice is inside their source.
+    // Sending a template alongside it would be a UX lie.
+    serviceMock.startTrustedRun.mockResolvedValue(makeResponse());
+    component.form.patchValue({
+      useCustomAlgorithm: true,
+      algorithmSource: "class MyAlgorithm: pass",
+      template: "reconciliation",
+    });
+    fixture.detectChanges();
+    await component.submit();
+    const req = serviceMock.startTrustedRun.mock.calls[0][0];
+    expect(req.algorithm_source).toBe("class MyAlgorithm: pass");
+    expect(req.template).toBeUndefined();
+  });
+
   it("renders the launcher's typed rejection envelope on a 400", async () => {
     serviceMock.startTrustedRun.mockRejectedValue(
       new LeanSidecarApiError(400, "workspace_not_staged", "stage first"),
