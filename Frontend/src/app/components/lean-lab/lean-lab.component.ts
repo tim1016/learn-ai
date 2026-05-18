@@ -12,6 +12,7 @@ import {
 } from "../../services/lean-sidecar.service";
 import type {
   NormalizedResult,
+  RunReconciliationReport,
   RunSummary,
   TrustedRunRequest,
   TrustedRunResponse,
@@ -139,6 +140,22 @@ export class LeanLabComponent {
   readonly response = signal<TrustedRunResponse | null>(null);
   readonly normalized = signal<NormalizedResult | null>(null);
   readonly error = signal<{ reason: string; message: string; status: number } | null>(null);
+
+  /**
+   * Phase 5a — fee-reconciliation report, populated by clicking
+   * "Reconcile fees" on a loaded run. Reset to null whenever a new
+   * response/normalized is set so the panel doesn't carry over a
+   * stale report onto a fresh run.
+   */
+  readonly reconciliation = signal<RunReconciliationReport | null>(null);
+  readonly reconciling = signal(false);
+  readonly reconcileError = signal<{ reason: string; message: string; status: number } | null>(null);
+  /** First 10 divergence rows for at-a-glance review (the full list can be long). */
+  readonly reconciliationTopDivergences = computed(() => {
+    const r = this.reconciliation();
+    if (!r) return [];
+    return r.divergences.slice(0, 10);
+  });
 
   /** Phase 4d sidebar state — populated by ``refreshRuns()``. */
   readonly runs = signal<RunSummary[]>([]);
@@ -304,6 +321,10 @@ export class LeanLabComponent {
     this.error.set(null);
     this.response.set(null);
     this.normalized.set(null);
+    // Phase 5a: clear any prior reconciliation report so the panel
+    // doesn't carry a stale report from a different run.
+    this.reconciliation.set(null);
+    this.reconcileError.set(null);
     const summary = this.runs().find((r) => r.run_id === runId);
     try {
       const parsed = await this.service.getNormalized(runId);
@@ -421,6 +442,45 @@ export class LeanLabComponent {
     ].join("-");
   }
 
+  /**
+   * Phase 5a — fetch the categorized fee-divergence report for the
+   * currently-loaded run. Available only when ``response()`` is set
+   * (the template guards on this). Does NOT modify the run; reads the
+   * persisted normalized result and runs the IBKR comparison.
+   *
+   * Error surfacing: the typed envelope from the launcher (404 when
+   * the run has no normalized result, 400 for invalid slug) is shown
+   * in the panel as a small inline error so the operator can branch
+   * without hunting through the global error banner.
+   */
+  async reconcileFees(): Promise<void> {
+    const current = this.response();
+    if (current === null) return;
+    this.reconciling.set(true);
+    this.reconcileError.set(null);
+    try {
+      const report = await this.service.reconcileRun(current.run_id);
+      this.reconciliation.set(report);
+    } catch (err) {
+      this.reconciliation.set(null);
+      if (err instanceof LeanSidecarApiError) {
+        this.reconcileError.set({
+          reason: err.reason,
+          message: err.message,
+          status: err.status,
+        });
+      } else {
+        this.reconcileError.set({
+          reason: "client_error",
+          message: err instanceof Error ? err.message : String(err),
+          status: 0,
+        });
+      }
+    } finally {
+      this.reconciling.set(false);
+    }
+  }
+
   async submit(): Promise<void> {
     if (this.form.invalid) {
       this.form.markAllAsTouched();
@@ -430,6 +490,8 @@ export class LeanLabComponent {
     this.error.set(null);
     this.response.set(null);
     this.normalized.set(null);
+    this.reconciliation.set(null);
+    this.reconcileError.set(null);
 
     const value = this.form.getRawValue();
     const start_ms_utc = this.isoDateToMsUtc(value.startDate);
