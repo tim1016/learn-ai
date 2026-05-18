@@ -34,7 +34,7 @@ from app.lean_sidecar.normalized_parser import (
 from app.lean_sidecar.reconciler import (
     DEFAULT_COMMISSION_ATOL,
     FeeReconciliationReport,
-    reconcile_normalized_result,
+    reconcile_against_ibkr,
 )
 from app.lean_sidecar.workspace import (
     RUN_ID_PATTERN,
@@ -698,7 +698,17 @@ async def post_reconcile(run_id: str) -> RunReconciliationReportModel:
                 ),
             },
         ) from e
-    report = reconcile_normalized_result(result, commission_atol=DEFAULT_COMMISSION_ATOL)
+    # Reviewer P1: pass the path-parameter run_id directly so the report's
+    # ``run_id`` is the workspace slug (what the caller queried), NOT the
+    # algorithm-type-name. They diverge whenever LEAN's ``algorithm-id``
+    # differs from the workspace slug (i.e., always, since the slug is a
+    # UI-generated UUID-ish token and the algorithm-id defaults to
+    # ``MyAlgorithm``). Algorithm-id is still exposed as a separate field.
+    report = reconcile_against_ibkr(
+        run_id=run_id,
+        order_events=result.order_events,
+        commission_atol=DEFAULT_COMMISSION_ATOL,
+    )
     return _report_to_model(report, algorithm_id=result.algorithm_id)
 
 
