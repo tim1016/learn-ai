@@ -134,6 +134,14 @@ export class LeanLabComponent {
       nonNullable: true,
       validators: [Validators.maxLength(MAX_ALGORITHM_SOURCE_BYTES)],
     }),
+    // Phase 5b — which bundled trusted sample to run when the custom
+    // toggle is off. Default ``trusted_default`` matches Phase 1
+    // behavior; ``reconciliation`` pins IBKR brokerage so the Phase 5a
+    // fee reconciler returns a clean report.
+    template: new FormControl<"trusted_default" | "reconciliation">(
+      "trusted_default",
+      { nonNullable: true, validators: [Validators.required] },
+    ),
   });
 
   readonly submitting = signal(false);
@@ -530,6 +538,12 @@ export class LeanLabComponent {
     // than silently falling back to the trusted sample.
     if (value.useCustomAlgorithm && value.algorithmSource.trim()) {
       req.algorithm_source = value.algorithmSource;
+    } else {
+      // Phase 5b: template only matters when using a bundled sample.
+      // When the operator pastes their own source, the brokerage
+      // choice is whatever their source calls SetBrokerageModel with,
+      // and the manifest records ``algorithm_default`` regardless.
+      req.template = value.template;
     }
 
     try {

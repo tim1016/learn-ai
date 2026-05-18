@@ -938,3 +938,34 @@ class TestPostReconcileEndpoint:
     async def test_invalid_run_id_rejected_at_reconcile(self, client: AsyncClient) -> None:
         r = await client.post("/api/lean-sidecar/runs/..escape/reconcile")
         assert r.status_code == 400
+
+
+class TestTemplateSelection:
+    """Phase 5b — pydantic-layer template field defaults + validation."""
+
+    async def test_template_defaults_to_trusted_default(self) -> None:
+        """The field must default to ``trusted_default`` so existing
+        callers (Phase 4a/c clients without the new field) keep the
+        Phase-1 LEAN-default-brokerage behavior."""
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        assert "template" not in payload
+        model = TrustedRunRequestModel.model_validate(payload)
+        assert model.template == "trusted_default"
+
+    async def test_template_accepts_reconciliation(self) -> None:
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["template"] = "reconciliation"
+        model = TrustedRunRequestModel.model_validate(payload)
+        assert model.template == "reconciliation"
+
+    async def test_template_rejects_unknown_value(self, client: AsyncClient) -> None:
+        """A typo or unknown template must 422 — silently falling
+        through to the default would mask brokerage intent."""
+        payload = _good_payload()
+        payload["template"] = "not_a_real_template"
+        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
+        assert r.status_code == 422
