@@ -13,12 +13,17 @@ Two layers:
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 import respx
 from httpx import ASGITransport, AsyncClient
+
+if TYPE_CHECKING:
+    from app.lean_sidecar.normalized_parser import NormalizedResult
 
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.launcher.models import LaunchResponse
@@ -440,6 +445,7 @@ def _write_manifest(
     finished_at_ms: int | None = 1_736_121_605_000,
     exit_code: int | None = 0,
     algorithm_source_kind: str | None = "trusted_sample",
+    is_clean: bool | None = None,
 ) -> None:
     """Write a minimal manifest.json into a run's workspace dir.
 
@@ -451,6 +457,8 @@ def _write_manifest(
     notes = []
     if algorithm_source_kind is not None:
         notes.append(f"algorithm_source_kind={algorithm_source_kind}")
+    if is_clean is not None:
+        notes.append(f"is_clean={is_clean}")
     body = {
         "run_id": run_id,
         "parameters": {"symbol": symbol, "starting_cash": "100000.0"},
@@ -548,6 +556,7 @@ class TestRunsIndex:
             finished_at_ms=1_700_000_001_000,
             exit_code=0,
             algorithm_source_kind="user_provided",
+            is_clean=True,
         )
         r = await client.get("/api/lean-sidecar/runs")
         row = r.json()["runs"][0]
@@ -557,6 +566,7 @@ class TestRunsIndex:
         assert row["finished_at_ms"] == 1_700_000_001_000
         assert row["exit_code"] == 0
         assert row["exit_clean"] is True
+        assert row["is_clean"] is True
         assert row["algorithm_source_kind"] == "user_provided"
         assert row["requested_start_ms_utc"] == 1_736_121_600_000
         assert row["requested_end_ms_utc"] == 1_736_467_200_000
@@ -583,6 +593,49 @@ class TestRunsIndex:
         _write_manifest(patched_artifacts_root, "ui_run_legacy", algorithm_source_kind=None)
         row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
         assert row["algorithm_source_kind"] == "unknown"
+
+    async def test_is_clean_parsed_from_manifest_note_false(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """Reviewer P1: a manifest noting ``is_clean=False`` (e.g., LEAN
+        exited 0 but logged data/analysis errors) must surface as
+        ``is_clean: false`` in the row so the sidebar click does not
+        synthesize a green "Clean run" badge."""
+        _write_manifest(
+            patched_artifacts_root,
+            "ui_run_dirty_zero_exit",
+            exit_code=0,
+            is_clean=False,
+        )
+        row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
+        # exit_code is 0 → exit_clean is True (just a status code check),
+        # but the manifest's is_clean note is False because LEAN logged
+        # errors. The UI must branch on the latter.
+        assert row["exit_code"] == 0
+        assert row["exit_clean"] is True
+        assert row["is_clean"] is False
+
+    async def test_is_clean_parsed_from_manifest_note_true(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        _write_manifest(patched_artifacts_root, "ui_run_truly_clean", is_clean=True)
+        row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
+        assert row["is_clean"] is True
+
+    async def test_is_clean_null_for_legacy_manifest_without_note(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        # Pre-Phase-2a manifests don't carry the is_clean note. ``None``
+        # is the honest answer — under-claim, never guess.
+        _write_manifest(patched_artifacts_root, "ui_run_legacy_no_clean_note", is_clean=None)
+        row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
+        assert row["is_clean"] is None
 
     async def test_cap_applied_after_global_sort(
         self,
@@ -667,18 +720,30 @@ class TestPostReconcileEndpoint:
     here, not the parser."""
 
     @pytest.fixture
-    def stub_normalized_result(self, monkeypatch: pytest.MonkeyPatch):
-        """Make `parse_workspace` return a callable factory so each test
-        can inject its own NormalizedResult."""
-        from app.lean_sidecar.normalized_parser import NormalizedResult
-        from app.routers import lean_sidecar as router_module
+    def stub_normalized_result(self, patched_artifacts_root: Path) -> Callable[..., NormalizedResult]:
+        """Factory that writes a ``result.json`` to the run's workspace.
 
-        def _make_factory(events: list[dict], *, algorithm_id: str = "MyAlgorithm"):
+        Reviewer P2: the reconcile endpoint reads the persisted
+        ``result.json`` directly (not a fresh re-parse of LEAN's raw
+        artifacts), so tests must arrange the file on disk rather than
+        monkeypatch ``parse_workspace``. This factory writes a valid
+        ``NormalizedResult`` document into ``<workspace>/normalized/
+        result.json`` and returns it for assertions.
+        """
+        from app.lean_sidecar.normalized_parser import NormalizedResult
+
+        def _make_factory(
+            events: list[dict],
+            *,
+            algorithm_id: str = "MyAlgorithm",
+            parser_version: str = "phase-3a-r1",
+            run_id: str | None = None,
+        ) -> NormalizedResult:
             from app.lean_sidecar.normalized_parser import NormalizedOrderEvent
 
             order_events = [NormalizedOrderEvent.model_validate(e) for e in events]
             result = NormalizedResult(
-                parser_version="phase-3a-r1",
+                parser_version=parser_version,
                 algorithm_id=algorithm_id,
                 statistics={},
                 runtime_statistics={},
@@ -687,16 +752,22 @@ class TestPostReconcileEndpoint:
                 total_order_events=len(order_events),
                 total_equity_points=0,
             )
-
-            def _parse(workspace) -> NormalizedResult:
-                return result
-
-            monkeypatch.setattr(router_module, "parse_workspace", _parse)
+            # The most recently-written workspace's result.json wins
+            # when run_id is omitted; callers that care about isolation
+            # pass run_id explicitly.
+            target_run_ids = [run_id] if run_id else [p.name for p in patched_artifacts_root.iterdir() if p.is_dir()]
+            for rid in target_run_ids:
+                ws = resolve_workspace(rid, patched_artifacts_root)
+                ws.normalized_dir.mkdir(parents=True, exist_ok=True)
+                (ws.normalized_dir / "result.json").write_text(
+                    result.model_dump_json(),
+                    encoding="utf-8",
+                )
             return result
 
         return _make_factory
 
-    def _filled_event(self, **overrides) -> dict:
+    def _filled_event(self, **overrides: object) -> dict:
         base = {
             "order_event_id": 1,
             "order_id": 100,
@@ -722,7 +793,7 @@ class TestPostReconcileEndpoint:
         self,
         client: AsyncClient,
         patched_artifacts_root: Path,
-        stub_normalized_result,
+        stub_normalized_result: Callable[..., NormalizedResult],
     ) -> None:
         ws = resolve_workspace("rec_clean", patched_artifacts_root)
         ws.ensure_layout()
@@ -732,6 +803,13 @@ class TestPostReconcileEndpoint:
 
         assert r.status_code == 200
         body = r.json()
+        # Reviewer P1: run_id is the workspace slug (path param), not the
+        # algorithm-type-name. They diverge in every real run because the
+        # slug is a UI-generated UUID-ish token and the algorithm-id
+        # defaults to ``MyAlgorithm``.
+        assert body["run_id"] == "rec_clean"
+        assert body["algorithm_id"] == "MyAlgorithm"
+        assert body["run_id"] != body["algorithm_id"]
         assert body["total_fill_events"] == 1
         assert body["matched_count"] == 1
         assert body["divergent_count"] == 0
@@ -740,11 +818,36 @@ class TestPostReconcileEndpoint:
         assert body["total_recorded_fees"] == "1.00"
         assert body["total_expected_ibkr_fees"] == "1.00"
 
+    async def test_run_id_in_report_is_path_param_not_algorithm_id(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+        stub_normalized_result: Callable[..., NormalizedResult],
+    ) -> None:
+        """Reviewer P1 regression: the report's ``run_id`` field must be
+        the workspace slug from the URL, not LEAN's algorithm-type-name.
+        Before the fix, POST /runs/my_actual_run/reconcile would return
+        ``run_id: "MyAlgorithm"`` because the wrapper used result.algorithm_id."""
+        ws = resolve_workspace("rec_path_runid", patched_artifacts_root)
+        ws.ensure_layout()
+        stub_normalized_result(
+            [self._filled_event(order_fee_amount=1.00)],
+            algorithm_id="SomeOtherAlgo",
+        )
+
+        r = await client.post("/api/lean-sidecar/runs/rec_path_runid/reconcile")
+
+        body = r.json()
+        assert body["run_id"] == "rec_path_runid"
+        assert body["algorithm_id"] == "SomeOtherAlgo"
+        # Specifically: run_id must not have been silently shadowed.
+        assert body["run_id"] != "SomeOtherAlgo"
+
     async def test_commission_drift_surfaces_in_divergences(
         self,
         client: AsyncClient,
         patched_artifacts_root: Path,
-        stub_normalized_result,
+        stub_normalized_result: Callable[..., NormalizedResult],
     ) -> None:
         """Default-brokerage run with $5 fee where IBKR expects $1 — the
         kind of report a non-reconciliation-grade run will produce."""
@@ -775,25 +878,62 @@ class TestPostReconcileEndpoint:
         self,
         client: AsyncClient,
         patched_artifacts_root: Path,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A workspace that exists but where LEAN crashed before
-        writing artifacts — the reconciler must 404 with the
-        normalized_missing reason so the caller can branch."""
-        from app.lean_sidecar.normalized_parser import NormalizedParserError
-        from app.routers import lean_sidecar as router_module
-
+        producing parseable artifacts — the orchestrator never wrote
+        ``result.json``. The reconciler must 404 with the
+        ``normalized_missing`` reason so the caller can branch."""
         ws = resolve_workspace("rec_no_artifacts", patched_artifacts_root)
         ws.ensure_layout()
-
-        def _raise(workspace):
-            raise NormalizedParserError("summary file not found")
-
-        monkeypatch.setattr(router_module, "parse_workspace", _raise)
+        # Intentionally do NOT write normalized_dir/result.json.
 
         r = await client.post("/api/lean-sidecar/runs/rec_no_artifacts/reconcile")
         assert r.status_code == 404
         assert r.json()["detail"]["reason"] == "normalized_missing"
+
+    async def test_404_when_result_json_malformed(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """A ``result.json`` that exists but fails NormalizedResult
+        validation (e.g., truncated mid-write, or schema drift from a
+        future parser version) must 404 with the same reason rather
+        than 500 — surfaces as a recoverable "missing/unreadable"
+        condition for the caller."""
+        ws = resolve_workspace("rec_malformed_result", patched_artifacts_root)
+        ws.ensure_layout()
+        ws.normalized_dir.mkdir(parents=True, exist_ok=True)
+        (ws.normalized_dir / "result.json").write_text(
+            "{not valid json",
+            encoding="utf-8",
+        )
+
+        r = await client.post("/api/lean-sidecar/runs/rec_malformed_result/reconcile")
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "normalized_missing"
+
+    async def test_parser_version_echoed_on_report(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+        stub_normalized_result: Callable[..., NormalizedResult],
+    ) -> None:
+        """Reviewer P2: the pinned ``parser_version`` from the persisted
+        ``result.json`` is echoed back so a downstream consumer can tell
+        whether two reconciliation reports are comparable."""
+        ws = resolve_workspace("rec_parser_pin", patched_artifacts_root)
+        ws.ensure_layout()
+        stub_normalized_result(
+            [self._filled_event(order_fee_amount=1.00)],
+            parser_version="phase-3a-r1",
+            run_id="rec_parser_pin",
+        )
+
+        r = await client.post("/api/lean-sidecar/runs/rec_parser_pin/reconcile")
+
+        assert r.status_code == 200
+        assert r.json()["normalized_parser_version"] == "phase-3a-r1"
 
     async def test_invalid_run_id_rejected_at_reconcile(self, client: AsyncClient) -> None:
         r = await client.post("/api/lean-sidecar/runs/..escape/reconcile")

@@ -7,6 +7,7 @@ import type {
   NormalizedResult,
   RunIndexResponse,
   RunManifest,
+  RunReconciliationReport,
   TrustedRunRequest,
   TrustedRunResponse,
 } from "./lean-sidecar.types";
@@ -87,6 +88,25 @@ export class LeanSidecarService {
     try {
       return await firstValueFrom(
         this.http.get<RunIndexResponse>(`${this.base}/runs`),
+      );
+    } catch (err) {
+      throw this.translate(err);
+    }
+  }
+
+  /**
+   * Phase 5a — reconcile a past run's recorded fees against the canonical
+   * IBKR commission model. POST (not GET) because the endpoint may
+   * compute on demand; idempotent semantically but server-side parses
+   * the normalized result and runs the reconciler each call.
+   */
+  async reconcileRun(runId: string): Promise<RunReconciliationReport> {
+    try {
+      return await firstValueFrom(
+        this.http.post<RunReconciliationReport>(
+          `${this.base}/runs/${encodeURIComponent(runId)}/reconcile`,
+          {},
+        ),
       );
     } catch (err) {
       throw this.translate(err);

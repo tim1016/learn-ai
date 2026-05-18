@@ -1,6 +1,6 @@
 # LEAN Sidecar Lab
 
-**Status:** Phase 1 — runner spike shipped (Phase 1a + 1b)
+**Status:** Phase 5a — self-reconciler shipped; Phase 1c sandbox + Phase 4a–e UI complete
 **Last reviewed:** 2026-05-17
 **Pairs with:** `docs/architecture/engine-authority-map.md`, `docs/references/lean-engine.md`, `.claude/rules/numerical-rigor.md`
 
@@ -60,7 +60,7 @@ These are the invariants. Every Phase 1–6 PR re-asserts them in its descriptio
 | 9 | LEAN data encoding is part of the contract | Phase 1 adds a fixture that writes LEAN-format data, runs LEAN, and proves the algorithm sees the intended prices/timestamps. No sidecar run may write ad hoc CSV dollars or epoch timestamps. |
 | 10 | Corporate-action mode is explicit | Runs declare `data_adjustment_policy` in the manifest. Reconciliation-grade runs use raw bars plus LEAN factor/map files; adjusted bars without a matching policy are rejected for reconciliation. |
 | 11 | Reconciliation-grade runs pin brokerage/fill/fee semantics | General LEAN Lab runs may execute the user's algorithm as written. Any run compared against Engine Lab must pin brokerage and fill assumptions in the algorithm/template and manifest. |
-| 12 | LEAN output parsing is a timestamp ingestion boundary | LEAN's naive result timestamps are parsed as exchange-local timestamps with explicit formats, then converted to `int64 ms UTC` before API response or persistence. |
+| 12 | LEAN output parsing is a timestamp ingestion boundary | LEAN's result-series timestamps are unix seconds (often as floats); the normalized parser converts them to `int64 ms UTC` at the ingestion boundary in `app/lean_sidecar/normalized_parser.py::_unix_seconds_to_ms_utc`, and every downstream API response and persisted artifact carries `int64 ms UTC` only. |
 | 13 | Reconciliation-grade subscriptions disable fill-forward | LEAN's default minute subscription can synthesize forward-filled bars. Engine Lab's rigor rules forbid forward-fill alignment, so reconciled algorithms/templates must request `fillForward=false` and the manifest records it. |
 | 14 | Reconciliation-grade subscriptions pin normalization mode | LEAN's staged data policy and runtime `DataNormalizationMode` are independent. Reconciled algorithms/templates must set the normalization mode to match Engine Lab and the manifest records it. |
 | 15 | Reconciliation fixtures require determinism proof | Phase 1 runs the trusted sample twice with the same image/data/config and asserts equivalent artifacts before any golden fixture or reconciliation claim is accepted. |
@@ -428,7 +428,7 @@ The original plan's six phases are retained, with these adjustments encoded by P
 - **Phase 2 (Python API)** — unchanged in shape; the runner.py invocations go through the launcher socket/HTTP rather than spawning podman as a child process of the data-plane container.
 - **Phase 3 — renamed *Container Execution Boundary + Fidelity Boundary*** — is the gating phase before any UI takes arbitrary user input. The UI from Phase 4 may exist earlier only with a hardcoded trusted sample algorithm (no `algorithm_source` field, no textarea). This phase also lands the normalized parser tests, manifest hashing, disk-cap enforcement, and explicit compatibility-vs-reconciliation run classification.
 - **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. Phase 4a shipped the trusted-sample form, 4b the equity chart, **4c the custom-algorithm textarea** (server-side accept of `algorithm_source` on `POST /lean/runs/start`), **4d the run-history sidebar** (`GET /api/lean-sidecar/runs` + sidebar component), and **4e form rehydration on sidebar click** (`getManifest` repopulates symbol/window/cash so re-running a past run is a one-click → tweak → submit loop). From 4c onward, a successful run is possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. The acceptance is unconditional on the API and gated by a UI toggle (defaults off → trusted sample). Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
-- **Phase 5 (Reconciliation-grade samples)** is multi-PR. **5a** ships the self-reconciler (`POST /runs/{id}/reconcile` compares any past run's recorded fees against `IbkrEquityCommissionModel`). **5b** adds the reconciliation-grade trusted-sample template with explicit IBKR brokerage pinning. **5c** wires the reconciler results into the frontend and adds the LEAN-Lab-vs-Engine-Lab trade reconciler. The reconciler is decoupled from template choice — a default-brokerage run produces a "many drift" report that's informative (it shows brokerage choice matters), not a bug.
+- **Phase 5 (Reconciliation-grade samples)** is multi-PR. **5a** ships the self-reconciler (`POST /api/lean-sidecar/runs/{id}/reconcile` compares any past run's recorded fees against `IbkrEquityCommissionModel`). **5b** adds the reconciliation-grade trusted-sample template with explicit IBKR brokerage pinning. **5c** wires the reconciler results into the frontend and adds the LEAN-Lab-vs-Engine-Lab trade reconciler. The reconciler is decoupled from template choice — a default-brokerage run produces a "many drift" report that's informative (it shows brokerage choice matters), not a bug.
 - **Phase 6** - unchanged in scope.
 
 ### Phase 1a progress (2026-05-17)
@@ -527,11 +527,12 @@ This boundary is captured in `buy_and_hold.py`'s docstring; the E2E test calls `
 
 Open from this PR, queued for Phase 1d / Phase 5:
 
-- `--user <uid>` requires workspace UID/GID matching on Windows + WSL2 — launcher does not pin a UID yet.
-- `--read-only` is now safe-er with ObjectStore inside the workspace, but `/Lean/Launcher/bin/Debug/` paths LEAN still touches for storage need a tmpfs; not promoted to mandatory.
+- `--user <uid>` and `--read-only` were promoted to mandatory sandbox flags in Phase 1c (PR #254). Workspace UID/GID matching on Windows + WSL2 is handled by the launcher; the read-only root + tmpfs combination is fixed in the sandbox profile.
 - **Determinism gate** — re-run + byte-identical normalized-artifact comparison. Trivial to add now that the clean-run contract is enforced; deferred so this PR does not grow further.
 - Quote-bar staging — eliminates the last known-noise category in the trusted-sample log.
 - Real factor/map files for the reconciliation-grade Phase 5 fixtures (not for the spike).
+- Populate `bars_consumed_by_symbol` in the manifest writer (currently `{}` in `lean_sidecar_service._build_manifest`). Closes half of the staged-window/bar-consumption invariant (#16) that's still pending.
+- Populate `staged_data_window_ms` in the manifest writer (currently `None`). Closes the other half of invariant #16 — without it a reconciliation reader can't tell whether the algorithm's effective window matched the staged data window.
 - Hardening-profile enum to replace caller-supplied `hardening_flags` argv tokens — reviewer-suggested longer-term direction.
 
 ### Phase 5a progress (2026-05-17, follow-up PR — self-reconciler against IBKR commission model)
@@ -545,12 +546,19 @@ duplicating the formula).
 
 - **API** — `POST /api/lean-sidecar/runs/{id}/reconcile` returns
   `RunReconciliationReportModel { run_id, algorithm_id,
-  total_fill_events, matched_count, divergent_count, commission_atol,
-  total_recorded_fees, total_expected_ibkr_fees, divergences[] }`.
-  Reads the normalized result.json for the run, walks filled events,
+  normalized_parser_version, total_fill_events, matched_count,
+  divergent_count, commission_atol, total_recorded_fees,
+  total_expected_ibkr_fees, divergences[] }`. Reads the **persisted**
+  `result.json` for the run (`<workspace>/normalized/result.json`,
+  written by the orchestrator at run time), walks filled events,
   computes the expected IBKR fee per event, classifies each as clean
   / `commission_drift` / `no_recorded_fee`. Tolerance is the
-  numerical-rigor.md default ($0.01).
+  numerical-rigor.md default ($0.01). The endpoint deliberately does
+  not re-parse LEAN's raw output artifacts on each call — the pinned
+  `parser_version` on disk is what the report is computed against, so
+  a future parser bump cannot retroactively alter an old reconciliation
+  result. The pin is echoed on the response as
+  `normalized_parser_version`.
 - **Reconciler module** — `app/lean_sidecar/reconciler.py` is pure
   functions over `NormalizedOrderEvent` iterables. Three exports:
   `FeeDivergenceCategory`, `FeeReconciliationReport`,

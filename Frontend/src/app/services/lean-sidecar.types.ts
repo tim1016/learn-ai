@@ -171,14 +171,79 @@ export interface RunSummary {
   algorithm_source_kind: "trusted_sample" | "user_provided" | "unknown";
   /**
    * ``exit_code == 0`` — a fast at-a-glance status. NOT a substitute
-   * for ``TrustedRunResponse.is_clean`` (which also requires zero
-   * classified LEAN errors); the sidebar uses this only to color rows.
+   * for ``is_clean`` (which also requires zero classified LEAN
+   * errors); the sidebar uses this only to color rows.
    */
   exit_clean: boolean | null;
+  /**
+   * The true cleanliness signal: extracted from the manifest's
+   * ``is_clean=<bool>`` note (Phase 2a+). ``null`` for legacy
+   * manifests that predate the note. ``loadRun`` uses this (not
+   * ``exit_clean``) when synthesizing a rehydrated TrustedRunResponse
+   * so a run that exited 0 with classified LEAN errors does NOT
+   * paint as a green "Clean run" badge.
+   */
+  is_clean: boolean | null;
 }
 
 export interface RunIndexResponse {
   runs: RunSummary[];
   cap: number;
   truncated: boolean;
+}
+
+/**
+ * Phase 5a — one row in the fee-reconciliation report. Money values
+ * arrive as strings (preserves exact cents through JSON serialization;
+ * matches the Decimal hygiene called out in the ADR's Phase 5a
+ * section). Categories mirror ``FeeDivergenceCategory`` in
+ * ``PythonDataService/app/lean_sidecar/reconciler.py``.
+ */
+export interface FeeDivergence {
+  order_event_id: number;
+  order_id: number;
+  symbol: string;
+  ms_utc: number;
+  fill_quantity: number;
+  fill_price: string;
+  recorded_fee: string | null;
+  expected_ibkr_fee: string;
+  delta: string | null;
+  category: "commission_drift" | "no_recorded_fee" | "fractional_quantity";
+  /**
+   * Populated only when ``category == "fractional_quantity"``. Carries
+   * the original float fill quantity LEAN emitted (e.g., 100.5) so the
+   * operator can see the value before integer rounding would have been
+   * applied. The integer ``fill_quantity`` field above is the truncated
+   * value the IBKR model would have charged against if the reconciler
+   * had not bailed.
+   */
+  fill_quantity_raw?: number | null;
+}
+
+/**
+ * Phase 5a — full report returned by
+ * ``POST /api/lean-sidecar/runs/{id}/reconcile``.
+ *
+ * ``run_id`` is the workspace slug (path parameter), ``algorithm_id`` is
+ * LEAN's algorithm-type-name — they are distinct because the slug is
+ * UI-generated while the algorithm-id defaults to ``MyAlgorithm``.
+ */
+export interface RunReconciliationReport {
+  run_id: string;
+  algorithm_id: string;
+  /**
+   * Parser-version pin recorded with the ``result.json`` the report was
+   * computed from. Two reports are directly comparable only when their
+   * ``normalized_parser_version`` matches; a bump means the upstream
+   * normalization may have changed.
+   */
+  normalized_parser_version: string;
+  total_fill_events: number;
+  matched_count: number;
+  divergent_count: number;
+  commission_atol: string;
+  total_recorded_fees: string;
+  total_expected_ibkr_fees: string;
+  divergences: FeeDivergence[];
 }

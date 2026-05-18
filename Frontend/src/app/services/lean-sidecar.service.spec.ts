@@ -160,4 +160,62 @@ describe("LeanSidecarService", () => {
     expect((err as LeanSidecarApiError).reason).toBe("manifest_missing");
     expect((err as LeanSidecarApiError).status).toBe(404);
   });
+
+  it("Phase 5a: reconcileRun POSTs to /runs/{id}/reconcile and parses the report", async () => {
+    const fakeReport = {
+      run_id: "ut_run_reconcile",
+      algorithm_id: "MyAlgorithm",
+      normalized_parser_version: "phase-3a-r1",
+      total_fill_events: 2,
+      matched_count: 1,
+      divergent_count: 1,
+      commission_atol: "0.01",
+      total_recorded_fees: "6.00",
+      total_expected_ibkr_fees: "2.00",
+      divergences: [
+        {
+          order_event_id: 2,
+          order_id: 200,
+          symbol: "SPY",
+          ms_utc: 1_736_121_600_000,
+          fill_quantity: 100,
+          fill_price: "580.50",
+          recorded_fee: "5.00",
+          expected_ibkr_fee: "1.00",
+          delta: "4.00",
+          category: "commission_drift",
+        },
+      ],
+    };
+    const promise = service.reconcileRun("ut_run_reconcile");
+    const req = httpMock.expectOne(
+      (r) =>
+        r.method === "POST" &&
+        r.url.endsWith("/api/lean-sidecar/runs/ut_run_reconcile/reconcile"),
+    );
+    req.flush(fakeReport);
+    const result = await promise;
+    expect(result.run_id).toBe("ut_run_reconcile");
+    expect(result.divergent_count).toBe(1);
+    expect(result.divergences[0].category).toBe("commission_drift");
+    // Money strings preserved exactly (no float parsing).
+    expect(result.total_recorded_fees).toBe("6.00");
+  });
+
+  it("Phase 5a: reconcileRun maps a 404 envelope to a typed error", async () => {
+    const promise = service.reconcileRun("ut_run_missing").catch((e) => e);
+    const req = httpMock.expectOne((r) => r.url.endsWith("/reconcile"));
+    req.flush(
+      {
+        detail: {
+          reason: "normalized_missing",
+          message: "cannot reconcile ut_run_missing: normalized result not present",
+        },
+      },
+      { status: 404, statusText: "Not Found" },
+    );
+    const err = await promise;
+    expect((err as LeanSidecarApiError).reason).toBe("normalized_missing");
+    expect((err as LeanSidecarApiError).status).toBe(404);
+  });
 });
