@@ -15,11 +15,13 @@ tests assert the constructed argv without spawning a real container.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from app.lean_sidecar.config import (
     ALLOWED_IMAGE_DIGESTS,
@@ -28,6 +30,8 @@ from app.lean_sidecar.config import (
     RunLimits,
 )
 from app.lean_sidecar.workspace import Workspace
+
+logger = logging.getLogger(__name__)
 
 
 class RunnerConfigurationError(RuntimeError):
@@ -153,10 +157,19 @@ class RunnerPlan:
     Returned by :func:`build_command` so tests can assert on the exact
     invocation without spawning a container, and the launcher can log
     the planned command to ``launcher.log`` before execution.
+
+    ``cidfile_path`` is the host-side path podman writes the container
+    ID to on creation. ``execute`` reads it on timeout so the outer
+    kill switch can actually stop the LEAN container — Reviewer P1.1:
+    ``subprocess.run(..., timeout=...)`` only sends SIGKILL to the
+    podman CLIENT, not the container; without the cidfile + a
+    follow-up ``podman stop`` the container kept running past the
+    wall-clock timeout.
     """
 
     image_reference: str
     argv: tuple[str, ...]
+    cidfile_path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +308,21 @@ def build_command(
     image_reference = _require_image_in_allowlist(image_digest)
     podman = _require_podman()
 
+    # ``--cidfile`` writes the container id to a host-side file on
+    # creation. Used by ``execute`` to issue ``podman stop`` / ``podman
+    # rm`` on wall-clock timeout so the container actually dies — see
+    # the RunnerPlan docstring for the Reviewer P1.1 context. Path
+    # lives under ``workspace.launcher_dir`` (same directory as
+    # ``launcher.log``) so a manual operator cleanup ``rm -rf
+    # <workspace>/launcher/`` reclaims all launcher-owned scratch.
+    cidfile_path = workspace.launcher_dir / "cidfile"
+    # ``--cidfile`` refuses to overwrite an existing file ("error
+    # opening cidfile: file exists"). A retried run with the same
+    # workspace would fail on this check; remove the stale file
+    # up-front. ``missing_ok=True`` because the launcher_dir is freshly
+    # created on first run.
+    cidfile_path.unlink(missing_ok=True)
+
     # Mandatory non-conditional flags. Any change here is a sandbox
     # change and must update the ADR in the same PR.
     #
@@ -325,6 +353,7 @@ def build_command(
         f"--cpus={limits.cpus}",
         f"--memory={limits.memory_mb}m",
         f"--pids-limit={limits.pids_limit}",
+        f"--cidfile={cidfile_path}",
         "-v",
         f"{workspace.workspace_dir}:{CONTAINER_WORKSPACE_MOUNT}:rw",
     ]
@@ -338,7 +367,86 @@ def build_command(
     # safety floor: forgetting it silently runs the default template
     # algorithm and the run looks "successful" with empty output.
     argv.extend(["--config", CONTAINER_LEAN_CONFIG_PATH])
-    return RunnerPlan(image_reference=image_reference, argv=tuple(argv))
+    return RunnerPlan(
+        image_reference=image_reference,
+        argv=tuple(argv),
+        cidfile_path=cidfile_path,
+    )
+
+
+def _kill_container_via_cidfile(cidfile_path: Path) -> None:
+    """Stop + remove the container whose id was written to ``cidfile_path``.
+
+    Called by ``execute`` on ``TimeoutExpired`` so the outer kill
+    switch promised by the ADR actually fires. Read failures, missing
+    cidfile, or podman errors are logged + swallowed: the caller is
+    already in the timeout error path, and surfacing a secondary
+    exception here would mask the real timeout signal.
+
+    ``podman stop --time=5`` sends SIGTERM and waits up to 5 seconds
+    before SIGKILL. ``podman rm`` cleans up the stopped container so
+    a leftover doesn't accumulate; ``--rm`` on ``podman run`` would
+    have removed it on a normal exit but does not fire when the
+    container is killed externally.
+    """
+    podman = shutil.which("podman")
+    if podman is None:
+        logger.warning(
+            "cannot kill container after timeout: podman not on PATH "
+            "(this should not happen — the run started)"
+        )
+        return
+    try:
+        if not cidfile_path.exists():
+            # The container never started (timeout fired during
+            # podman's own startup, before it wrote the cidfile).
+            # Nothing to kill.
+            logger.info(
+                "no cidfile at %s after timeout; container likely never "
+                "started",
+                cidfile_path,
+            )
+            return
+        cid = cidfile_path.read_text(encoding="utf-8").strip()
+        if not cid:
+            logger.warning(
+                "cidfile %s exists but is empty; container id unknown",
+                cidfile_path,
+            )
+            return
+    except OSError as e:
+        logger.warning("could not read cidfile %s: %s", cidfile_path, e)
+        return
+
+    for action in ("stop", "rm"):
+        cmd = (
+            [podman, action, "--time=5", cid]
+            if action == "stop"
+            else [podman, action, cid]
+        )
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("podman %s %s timed out after 15s", action, cid)
+            continue
+        if result.returncode != 0:
+            # ``stop`` can fail because the container already exited
+            # (race with TimeoutExpired); ``rm`` can fail because
+            # ``--rm`` on podman run already removed it. Log but
+            # don't escalate — the goal is best-effort cleanup.
+            logger.info(
+                "podman %s %s returned %d: %s",
+                action,
+                cid,
+                result.returncode,
+                result.stderr.strip(),
+            )
 
 
 def _tail_text(buf: bytes, max_bytes: int) -> str:
@@ -381,6 +489,13 @@ def execute(plan: RunnerPlan, *, limits: RunLimits = DEFAULT_RUN_LIMITS) -> RunR
         stdout = e.stdout or b""
         stderr = e.stderr or b""
         exit_code = -1
+        # Reviewer P1.1: ``subprocess.run(..., timeout=...)`` only
+        # killed the podman CLIENT process; the LEAN container kept
+        # running past the wall-clock deadline (no outer kill switch
+        # despite the ADR claiming one). Read the cidfile podman wrote
+        # at container creation and explicitly stop + remove the
+        # container.
+        _kill_container_via_cidfile(plan.cidfile_path)
     duration_ms = int((time.monotonic() - started) * 1000)
 
     # Merge for the tail; keep stderr last so the failure message is the

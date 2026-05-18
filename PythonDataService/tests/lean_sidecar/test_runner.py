@@ -86,6 +86,55 @@ class TestBuildCommand:
         assert mount_spec.startswith(str(ws.workspace_dir))
         assert mount_spec.endswith(f":{CONTAINER_WORKSPACE_MOUNT}:rw")
 
+    def test_argv_contains_cidfile_flag_pointing_into_workspace(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+    ) -> None:
+        """Review-fix (P1.1): the argv must include ``--cidfile=<path>``
+        so podman writes the container id to a host-side file on
+        creation, and ``execute`` can issue ``podman stop`` against it
+        on wall-clock timeout. Without the cidfile, the
+        ``subprocess.run(..., timeout=...)`` outer kill switch only
+        kills the podman CLIENT — the LEAN container keeps running."""
+        ws = resolve_workspace("run_cid", tmp_artifacts_root)
+        ws.ensure_layout()
+        plan = build_command(ws, DUMMY_DIGEST)
+        cidfile_args = [a for a in plan.argv if a.startswith("--cidfile=")]
+        assert len(cidfile_args) == 1, (
+            f"expected exactly one --cidfile= flag, got {cidfile_args}"
+        )
+        cidfile_path_str = cidfile_args[0].removeprefix("--cidfile=")
+        # Lives under the workspace's launcher_dir alongside
+        # launcher.log; cleanup is then a single ``rm -rf
+        # <workspace>/launcher/`` for the operator.
+        assert cidfile_path_str.startswith(str(ws.launcher_dir)), (
+            f"cidfile {cidfile_path_str} should live under launcher_dir "
+            f"({ws.launcher_dir})"
+        )
+        # ``RunnerPlan.cidfile_path`` carries the same path so
+        # ``execute`` can read it without re-parsing argv.
+        assert str(plan.cidfile_path) == cidfile_path_str
+
+    def test_build_command_clears_stale_cidfile(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+    ) -> None:
+        """A stale cidfile from a prior run on the same workspace would
+        make podman refuse to start with ``error opening cidfile: file
+        exists``. build_command must clear it up-front so a retry on
+        the same workspace works."""
+        ws = resolve_workspace("run_cid_stale", tmp_artifacts_root)
+        ws.ensure_layout()
+        stale_cid = ws.launcher_dir / "cidfile"
+        stale_cid.write_text("old-container-id\n", encoding="utf-8")
+        assert stale_cid.exists()
+        plan = build_command(ws, DUMMY_DIGEST)
+        assert not plan.cidfile_path.exists(), (
+            "build_command should have removed the stale cidfile"
+        )
+
     def test_refuses_unpinned_image(
         self,
         tmp_artifacts_root: Path,
@@ -242,6 +291,107 @@ class TestBuildCommand:
                 DUMMY_DIGEST,
                 hardening_flags=("--tmpfs", "--tmpfs"),
             )
+
+
+class TestExecuteTimeoutKillsContainer:
+    """Review-fix (P1.1): on wall-clock timeout, ``execute`` must read
+    the cidfile podman wrote on container creation and issue
+    ``podman stop`` + ``podman rm`` against the container id. Without
+    this, ``subprocess.run(..., timeout=...)`` only kills the podman
+    CLIENT — the LEAN container keeps running past the deadline.
+
+    Subprocess is mocked: the real ``podman run`` is replaced with
+    a TimeoutExpired raise so we exercise the kill path without
+    spawning a container. The cidfile is written manually so the kill
+    path has a valid id to stop.
+    """
+
+    def test_timeout_invokes_podman_stop_and_rm(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import subprocess as _subprocess
+
+        from app.lean_sidecar import runner as _runner
+
+        ws = resolve_workspace("run_kill", tmp_artifacts_root)
+        ws.ensure_layout()
+        plan = _runner.build_command(ws, DUMMY_DIGEST)
+        # Simulate podman writing the cidfile at container creation.
+        fake_cid = "1234567890abcdef" * 4
+        plan.cidfile_path.write_text(fake_cid + "\n", encoding="utf-8")
+
+        recorded_calls: list[list[str]] = []
+
+        def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+            recorded_calls.append(list(argv))
+            # First call is the ``podman run ...`` argv → raise
+            # TimeoutExpired. Subsequent calls are ``podman stop`` and
+            # ``podman rm`` → return success.
+            if len(recorded_calls) == 1:
+                raise _subprocess.TimeoutExpired(argv, kwargs.get("timeout", 0))
+            return _subprocess.CompletedProcess(
+                args=argv, returncode=0, stdout="", stderr=""
+            )
+
+        monkeypatch.setattr(_subprocess, "run", fake_run)
+        # ``execute`` looks up podman via shutil.which inside the
+        # kill helper too — make it deterministic regardless of host.
+        import shutil as _shutil
+
+        monkeypatch.setattr(_shutil, "which", lambda _: "/usr/bin/podman")
+
+        result = _runner.execute(plan)
+
+        assert result.timed_out is True
+        assert result.exit_code == -1
+        # First recorded call is the original run; the next two should
+        # be ``podman stop --time=5 <cid>`` and ``podman rm <cid>``.
+        assert len(recorded_calls) == 3
+        stop_call = recorded_calls[1]
+        rm_call = recorded_calls[2]
+        assert stop_call[0] == "/usr/bin/podman"
+        assert stop_call[1] == "stop"
+        assert "--time=5" in stop_call
+        assert fake_cid in stop_call
+        assert rm_call[0] == "/usr/bin/podman"
+        assert rm_call[1] == "rm"
+        assert fake_cid in rm_call
+
+    def test_timeout_handles_missing_cidfile_gracefully(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If the timeout fires before podman wrote the cidfile (e.g.,
+        podman startup itself hung), there's no container to kill —
+        the helper should log + return without raising."""
+        import subprocess as _subprocess
+
+        from app.lean_sidecar import runner as _runner
+
+        ws = resolve_workspace("run_kill_nocid", tmp_artifacts_root)
+        ws.ensure_layout()
+        plan = _runner.build_command(ws, DUMMY_DIGEST)
+        # Intentionally do NOT write the cidfile — simulate startup
+        # hang before podman touched it. build_command pre-cleared it
+        # so we know it's absent.
+        assert not plan.cidfile_path.exists()
+
+        def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+            raise _subprocess.TimeoutExpired(argv, kwargs.get("timeout", 0))
+
+        monkeypatch.setattr(_subprocess, "run", fake_run)
+        import shutil as _shutil
+
+        monkeypatch.setattr(_shutil, "which", lambda _: "/usr/bin/podman")
+
+        result = _runner.execute(plan)  # MUST NOT raise
+        assert result.timed_out is True
+        assert result.exit_code == -1
 
 
 class TestRunLimits:
