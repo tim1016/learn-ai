@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
@@ -38,6 +39,7 @@ from app.lean_sidecar.launcher_client import post_launch
 from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
+    BrokeragePolicy,
     RunManifest,
     StagedDataManifest,
     WindowMs,
@@ -63,7 +65,30 @@ from app.lean_sidecar.staging import (
     stage_minute_bars,
 )
 from app.lean_sidecar.trusted_samples.buy_and_hold import BUY_AND_HOLD_SOURCE
+from app.lean_sidecar.trusted_samples.buy_and_hold_reconciliation import (
+    BUY_AND_HOLD_RECONCILIATION_SOURCE,
+)
 from app.lean_sidecar.workspace import Workspace, resolve_workspace
+
+# Phase 5b — selector for which trusted-sample source the orchestrator
+# stages when the caller does not provide their own ``algorithm_source``.
+# "trusted_default" keeps Phase 1's LEAN-default-brokerage behavior
+# (backwards-compatible default); "reconciliation" pins IBKR brokerage
+# explicitly so the Phase 5a fee reconciler returns a clean report.
+TrustedTemplate = Literal["trusted_default", "reconciliation"]
+
+# Maps the template selector to the manifest's ``brokerage_policy``
+# enum so a reader of the manifest can tell at a glance which
+# brokerage the sample's source actually pinned.
+_BROKERAGE_POLICY_FOR_TEMPLATE: dict[TrustedTemplate, BrokeragePolicy] = {
+    "trusted_default": "algorithm_default",
+    "reconciliation": "interactive_brokers",
+}
+
+_SOURCE_FOR_TEMPLATE: dict[TrustedTemplate, str] = {
+    "trusted_default": BUY_AND_HOLD_SOURCE,
+    "reconciliation": BUY_AND_HOLD_RECONCILIATION_SOURCE,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +131,19 @@ class TrustedRunRequest:
     start_ms_utc: int
     end_ms_utc: int
     starting_cash: float
-    # Phase 4c — None means "use the trusted buy_and_hold sample".
-    # When provided, must be valid Python source defining a
-    # ``MyAlgorithm`` class (LeanConfig.algorithm_type_name's default).
+    # Phase 4c — None means "use the bundled trusted sample selected
+    # by ``template`` below". When provided, must be valid Python
+    # source defining a ``MyAlgorithm`` class (LeanConfig.
+    # algorithm_type_name's default).
     algorithm_source: str | None = None
+    # Phase 5b — which trusted sample to stage when ``algorithm_source``
+    # is None. "trusted_default" keeps Phase 1's LEAN-default-brokerage
+    # behavior (backwards-compatible default for existing callers);
+    # "reconciliation" pins IBKR brokerage explicitly so the Phase 5a
+    # fee reconciler can return a clean report. Ignored when the
+    # caller supplies their own ``algorithm_source`` — operator-pasted
+    # source picks its own brokerage via SetBrokerageModel.
+    template: TrustedTemplate = "trusted_default"
 
     @property
     def start_date(self) -> date:
@@ -292,7 +326,11 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     # sample when present. The Phase 1c sandbox shape (--read-only,
     # --user=<non-root>, --cap-drop=ALL, --network=none, workspace-
     # only mount) is what makes accepting arbitrary source safe.
-    source_to_stage = request.algorithm_source if request.algorithm_source else BUY_AND_HOLD_SOURCE
+    source_to_stage = (
+        request.algorithm_source
+        if request.algorithm_source
+        else _SOURCE_FOR_TEMPLATE[request.template]
+    )
     source_path = stage_algorithm_source(workspace, source_to_stage)
     config = LeanConfig(
         parameters={
@@ -410,7 +448,16 @@ def _build_manifest(
         data_adjustment_policy="pre_adjusted_non_reconciliation",
         data_normalization_mode="Raw",
         fill_forward=False,
-        brokerage_policy="algorithm_default",
+        # Phase 5b: when the caller pastes their own source, we can't
+        # introspect its SetBrokerageModel call, so the manifest
+        # records ``algorithm_default`` (the brokerage choice is in
+        # the source's hash, captured above). When using a bundled
+        # template, the template selector pins the policy exactly.
+        brokerage_policy=(
+            "algorithm_default"
+            if request.algorithm_source
+            else _BROKERAGE_POLICY_FOR_TEMPLATE[request.template]
+        ),
         starting_capital=request.starting_cash,
         account_currency="USD",
         limits={
@@ -455,6 +502,9 @@ def _build_manifest(
             # (algorithm_source_sha256) already records the *content*,
             # but this note makes the intent explicit for audit.
             f"algorithm_source_kind={'user_provided' if request.algorithm_source else 'trusted_sample'}",
+            # Phase 5b: which bundled template (if any) was staged.
+            # ``user_provided_no_template`` when caller pasted source.
+            f"trusted_template={'user_provided_no_template' if request.algorithm_source else request.template}",
         ),
     )
 
