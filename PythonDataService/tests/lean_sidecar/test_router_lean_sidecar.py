@@ -732,6 +732,13 @@ class TestPostReconcileEndpoint:
 
         assert r.status_code == 200
         body = r.json()
+        # Reviewer P1: run_id is the workspace slug (path param), not the
+        # algorithm-type-name. They diverge in every real run because the
+        # slug is a UI-generated UUID-ish token and the algorithm-id
+        # defaults to ``MyAlgorithm``.
+        assert body["run_id"] == "rec_clean"
+        assert body["algorithm_id"] == "MyAlgorithm"
+        assert body["run_id"] != body["algorithm_id"]
         assert body["total_fill_events"] == 1
         assert body["matched_count"] == 1
         assert body["divergent_count"] == 0
@@ -739,6 +746,31 @@ class TestPostReconcileEndpoint:
         assert body["commission_atol"] == "0.01"
         assert body["total_recorded_fees"] == "1.00"
         assert body["total_expected_ibkr_fees"] == "1.00"
+
+    async def test_run_id_in_report_is_path_param_not_algorithm_id(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+        stub_normalized_result,
+    ) -> None:
+        """Reviewer P1 regression: the report's ``run_id`` field must be
+        the workspace slug from the URL, not LEAN's algorithm-type-name.
+        Before the fix, POST /runs/my_actual_run/reconcile would return
+        ``run_id: "MyAlgorithm"`` because the wrapper used result.algorithm_id."""
+        ws = resolve_workspace("rec_path_runid", patched_artifacts_root)
+        ws.ensure_layout()
+        stub_normalized_result(
+            [self._filled_event(order_fee_amount=1.00)],
+            algorithm_id="SomeOtherAlgo",
+        )
+
+        r = await client.post("/api/lean-sidecar/runs/rec_path_runid/reconcile")
+
+        body = r.json()
+        assert body["run_id"] == "rec_path_runid"
+        assert body["algorithm_id"] == "SomeOtherAlgo"
+        # Specifically: run_id must not have been silently shadowed.
+        assert body["run_id"] != "SomeOtherAlgo"
 
     async def test_commission_drift_surfaces_in_divergences(
         self,
