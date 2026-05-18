@@ -1022,6 +1022,254 @@ class TestPostReconcileEndpoint:
         assert r.status_code == 400
 
 
+def _write_valid_result_json(
+    *,
+    run_id: str,
+    artifacts_root: Path,
+    order_fee_amount: float = 1.00,
+    parser_version: str = "phase-3a-r1",
+    algorithm_id: str = "MyAlgorithm",
+) -> None:
+    """Materialize a minimal-but-valid ``normalized/result.json`` for a
+    workspace. Module-level so both the Phase 5a and Phase 5g.1 test
+    classes can share it without class-fixture lookup complications."""
+    from app.lean_sidecar.normalized_parser import NormalizedOrderEvent, NormalizedResult
+
+    event_dict = {
+        "order_event_id": 1,
+        "order_id": 100,
+        "algorithm_id": algorithm_id,
+        "symbol": "SPY",
+        "symbol_value": "SPY",
+        "ms_utc": 1_736_121_600_000,
+        "status": "Filled",
+        "direction": "Buy",
+        "quantity": 100.0,
+        "fill_price": 580.50,
+        "fill_price_currency": "USD",
+        "fill_quantity": 100.0,
+        "is_assignment": False,
+        "order_fee_amount": order_fee_amount,
+        "order_fee_currency": "USD",
+        "message": None,
+    }
+    order_events = [NormalizedOrderEvent.model_validate(event_dict)]
+    result = NormalizedResult(
+        parser_version=parser_version,
+        algorithm_id=algorithm_id,
+        statistics={},
+        runtime_statistics={},
+        equity_curve=[],
+        order_events=order_events,
+        total_order_events=len(order_events),
+        total_equity_points=0,
+    )
+    ws = resolve_workspace(run_id, artifacts_root)
+    ws.normalized_dir.mkdir(parents=True, exist_ok=True)
+    (ws.normalized_dir / "result.json").write_text(
+        result.model_dump_json(),
+        encoding="utf-8",
+    )
+
+
+class TestPostCrossReconcileEndpoint:
+    """Phase 5g.1 — POST /runs/{id}/cross-reconcile scaffold integration tests.
+
+    The endpoint exists but the Engine Lab cross-run primitive is the
+    Phase 5g.2 deliverable; the scaffold returns 501 NOT_IMPLEMENTED
+    when the workspace + result.json both exist (i.e., when the request
+    is fully valid). 404 / 422 branches are the negative-path tests.
+
+    All assertions on the 501 detail are about the *contract* (the
+    reason + echoed request fields) so Phase 5g.2 doesn't have to
+    rewrite this test file — only the test that checks for the 501 path
+    will flip to expecting a 200 with the real report.
+    """
+
+    async def test_returns_501_with_structured_reason_when_run_and_result_present(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """Phase 5g.1 scaffold contract — a request that satisfies the
+        request shape + workspace + result.json all-present preconditions
+        returns 501 ``engine_lab_not_wired`` with the request echoed
+        back, so the frontend can branch without parsing prose."""
+        ws = resolve_workspace("cross_scaffold_ok", patched_artifacts_root)
+        ws.ensure_layout()
+        _write_valid_result_json(
+            run_id="cross_scaffold_ok",
+            artifacts_root=patched_artifacts_root,
+        )
+
+        r = await client.post(
+            "/api/lean-sidecar/runs/cross_scaffold_ok/cross-reconcile",
+            json={"engine_lab_strategy_class": "BuyAndHoldStrategy"},
+        )
+
+        assert r.status_code == 501
+        detail = r.json()["detail"]
+        assert detail["reason"] == "engine_lab_not_wired"
+        assert detail["engine_lab_strategy_class"] == "BuyAndHoldStrategy"
+        assert detail["assert_fees"] is False
+        assert detail["schema_version"] == 1
+
+    async def test_assert_fees_true_echoed_on_scaffold_response(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """The Branch-A semantics (assert_fees=true → COMMISSION_DRIFT
+        gating) need to be wired through the request shape; the scaffold
+        echoes the boolean back so frontend integration tests can verify
+        the flag is plumbed before Phase 5g.2 lands the real diff."""
+        ws = resolve_workspace("cross_scaffold_fees", patched_artifacts_root)
+        ws.ensure_layout()
+        _write_valid_result_json(
+            run_id="cross_scaffold_fees",
+            artifacts_root=patched_artifacts_root,
+        )
+
+        r = await client.post(
+            "/api/lean-sidecar/runs/cross_scaffold_fees/cross-reconcile",
+            json={
+                "engine_lab_strategy_class": "BuyAndHoldStrategy",
+                "assert_fees": True,
+            },
+        )
+
+        assert r.status_code == 501
+        assert r.json()["detail"]["assert_fees"] is True
+
+    async def test_404_when_workspace_missing(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        r = await client.post(
+            "/api/lean-sidecar/runs/cross_no_workspace/cross-reconcile",
+            json={"engine_lab_strategy_class": "BuyAndHoldStrategy"},
+        )
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "run_not_found"
+
+    async def test_404_when_normalized_missing(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """A workspace that exists but where LEAN crashed before producing
+        parseable artifacts. The cross-reconciler 404s on the same
+        ``normalized_missing`` reason the Phase 5a self-reconciler uses,
+        so a frontend that handles one branch handles both."""
+        ws = resolve_workspace("cross_no_artifacts", patched_artifacts_root)
+        ws.ensure_layout()
+        # Intentionally do NOT write normalized_dir/result.json.
+
+        r = await client.post(
+            "/api/lean-sidecar/runs/cross_no_artifacts/cross-reconcile",
+            json={"engine_lab_strategy_class": "BuyAndHoldStrategy"},
+        )
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "normalized_missing"
+
+    async def test_404_when_result_json_malformed(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        ws = resolve_workspace("cross_malformed", patched_artifacts_root)
+        ws.ensure_layout()
+        ws.normalized_dir.mkdir(parents=True, exist_ok=True)
+        (ws.normalized_dir / "result.json").write_text(
+            "{not valid json",
+            encoding="utf-8",
+        )
+
+        r = await client.post(
+            "/api/lean-sidecar/runs/cross_malformed/cross-reconcile",
+            json={"engine_lab_strategy_class": "BuyAndHoldStrategy"},
+        )
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "normalized_missing"
+
+    async def test_invalid_run_id_rejected_at_cross_reconcile(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        r = await client.post(
+            "/api/lean-sidecar/runs/..escape/cross-reconcile",
+            json={"engine_lab_strategy_class": "BuyAndHoldStrategy"},
+        )
+        assert r.status_code == 400
+
+    async def test_422_when_strategy_class_missing(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """``engine_lab_strategy_class`` has no default — per D3, no
+        auto-derivation; the caller MUST name the class explicitly."""
+        ws = resolve_workspace("cross_no_class", patched_artifacts_root)
+        ws.ensure_layout()
+        r = await client.post(
+            "/api/lean-sidecar/runs/cross_no_class/cross-reconcile",
+            json={},
+        )
+        assert r.status_code == 422
+
+    async def test_422_when_strategy_class_empty_string(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """Empty-string class names are guarded — they'd silently no-op
+        on the engine-lab side and produce a deceptively-clean report."""
+        ws = resolve_workspace("cross_empty_class", patched_artifacts_root)
+        ws.ensure_layout()
+        r = await client.post(
+            "/api/lean-sidecar/runs/cross_empty_class/cross-reconcile",
+            json={"engine_lab_strategy_class": ""},
+        )
+        assert r.status_code == 422
+
+    async def test_422_when_extra_fields_passed(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """``extra='forbid'`` matches the rest of the lean_sidecar
+        request models — a typo (``assert_fee`` vs ``assert_fees``)
+        must 422, not silently default to False."""
+        ws = resolve_workspace("cross_extra_field", patched_artifacts_root)
+        ws.ensure_layout()
+        r = await client.post(
+            "/api/lean-sidecar/runs/cross_extra_field/cross-reconcile",
+            json={
+                "engine_lab_strategy_class": "BuyAndHoldStrategy",
+                "assert_fee": True,  # typo
+            },
+        )
+        assert r.status_code == 422
+
+    async def test_response_model_exposed_in_openapi_schema(self) -> None:
+        """Phase 5g.1 contract: even though the scaffold returns 501, the
+        response model is registered with FastAPI so the OpenAPI schema
+        documents it. Frontend Phase 5g.4 can codegen against it now."""
+        from app.main import app
+
+        schema = app.openapi()
+        components = schema.get("components", {}).get("schemas", {})
+        assert "CrossEngineReconciliationReportModel" in components
+        assert "CrossReconcileRequestModel" in components
+
+        report = components["CrossEngineReconciliationReportModel"]
+        # schema_version default of 1 must be visible — the consumer
+        # contract per D10 is "fail-fast on unrecognized version", so
+        # the codegen needs to see what the current version IS.
+        assert report["properties"]["schema_version"]["default"] == 1
+
+
 class TestTemplateSelection:
     """Phase 5b — pydantic-layer template field defaults + validation."""
 
