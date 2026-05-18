@@ -622,3 +622,36 @@ class TestRunsIndex:
         body = (await client.get("/api/lean-sidecar/runs")).json()
         assert body["truncated"] is False
         assert len(body["runs"]) == 1
+
+    async def test_skips_schema_invalid_manifest_with_log(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """CodeRabbit finding: a manifest that parses as JSON but has
+        a typed field of the wrong type (here ``started_at_ms`` is a
+        string) must be skipped — and the skip must be logged, not
+        swallowed silently, per the no-silent-exceptions rule."""
+        bad_dir = patched_artifacts_root / "ui_run_badtypes"
+        bad_dir.mkdir()
+        bad = {
+            "run_id": "ui_run_badtypes",
+            "parameters": {"symbol": "SPY"},
+            "requested_window_ms": {"start_ms": 1, "end_ms": 2},
+            "started_at_ms": "not a number",  # ← wrong type, fails RunSummaryModel
+            "exit_code": 0,
+        }
+        (bad_dir / "manifest.json").write_text(json.dumps(bad), encoding="utf-8")
+        _write_manifest(patched_artifacts_root, "ui_run_ok", started_at_ms=1000)
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="app.routers.lean_sidecar"):
+            r = await client.get("/api/lean-sidecar/runs")
+
+        assert r.status_code == 200
+        ids = [row["run_id"] for row in r.json()["runs"]]
+        assert ids == ["ui_run_ok"]
+        # Skip must be logged with the bad run_id for diagnosis.
+        assert any("ui_run_badtypes" in rec.message for rec in caplog.records)

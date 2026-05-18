@@ -19,7 +19,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT, MAX_ALGORITHM_SOURCE_BYTES
 from app.lean_sidecar.launcher_client import (
@@ -465,7 +465,19 @@ async def get_runs_index() -> RunIndexResponseModel:
         summary = _safe_load_manifest_summary(manifest_path)
         if summary is None:
             continue
-        rows.append(RunSummaryModel(run_id=entry.name, **summary))
+        try:
+            rows.append(RunSummaryModel(run_id=entry.name, **summary))
+        except ValidationError as e:
+            # Manifest parsed as JSON but a typed field is malformed
+            # (e.g., ``started_at_ms="invalid"``). Skip the row so the
+            # index stays responsive; log with context so the operator
+            # can find the bad workspace. Per .claude/CLAUDE.md we
+            # never silently swallow exceptions.
+            logger.warning(
+                "Skipping run %s in index: manifest schema invalid (%s)",
+                entry.name,
+                e,
+            )
     # Sort all loaded rows by started_at_ms desc; runs without that
     # field fall back to run_id desc.
     rows.sort(
