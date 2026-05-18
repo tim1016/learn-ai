@@ -262,6 +262,38 @@ def _aggregate_daily_bar(symbol: str, minute_bars: list[TradeBar]) -> TradeBar:
     )
 
 
+def _count_bars_consumed(workspace: Workspace, symbol: str) -> dict[str, int]:
+    """Phase 5e: per-symbol bar count parsed from observations.csv.
+
+    The trusted sample (and any user algorithm following its
+    convention) appends one row per received bar to
+    ``<workspace>/output/storage/observations.csv`` with a leading
+    ``ms_utc,close`` header. The count is (line count - 1) — the
+    minus-one is for the header. Empty / missing / unreadable files
+    return ``{}`` rather than raising: a user algorithm that doesn't
+    write observations.csv still gets a successful run, the manifest
+    just records "no bar-consumption evidence" honestly.
+
+    Multi-symbol algorithms are out of scope here — the trusted
+    sample is single-symbol and per-symbol tagging would need a
+    schema change to observations.csv (Phase 5f+ if it lands).
+    """
+    obs_path = workspace.object_store_dir / "observations.csv"
+    if not obs_path.exists():
+        return {}
+    try:
+        text = obs_path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("could not read observations.csv at %s: %s", obs_path, e)
+        return {}
+    # Count non-empty data rows (skip header + any trailing blank).
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) <= 1:
+        # Header only (or fully empty) — no bars consumed.
+        return {}
+    return {symbol.upper(): len(lines) - 1}
+
+
 def _staged_window_from_dates(trading_dates: list[date]) -> WindowMs | None:
     """Phase 5d: build the staged-data window in int64 ms UTC from the
     list of trading dates the orchestrator staged.
@@ -527,18 +559,16 @@ def _build_manifest(
             end_ms=request.end_ms_utc,
         ),
         # ``effective_algorithm_window_ms`` derived from the parsed
-        # equity curve when available; ``bars_consumed_by_symbol``
-        # is still empty until per-symbol bar counts can be derived
-        # from observations.csv (Phase 5e candidate).
+        # equity curve when available. Phase 5d/5e together close
+        # invariant #16: ``staged_data_window_ms`` is the ET-midnight
+        # envelope of staged trading days (5d), and
+        # ``bars_consumed_by_symbol`` is the observations.csv line
+        # count (5e). Reconciliation readers can now diff
+        # requested vs staged vs effective windows AND see whether
+        # bars were actually consumed.
         effective_algorithm_window_ms=_effective_window_from_normalized(normalized),
-        # Phase 5d: ``staged_data_window_ms`` = first staged trading
-        # date at 00:00 ET → last staged trading date at 24:00 ET (=
-        # next-day 00:00 ET), converted to int64 ms UTC. The window
-        # represents the full ET trading-day envelope of every staged
-        # zip, not the requested ms window. Reconciliation readers
-        # diff requested vs staged vs effective to surface gaps.
         staged_data_window_ms=_staged_window_from_dates(staged_trading_dates),
-        bars_consumed_by_symbol={},
+        bars_consumed_by_symbol=_count_bars_consumed(workspace, request.symbol),
         started_at_ms=started_ms,
         finished_at_ms=finished_ms,
         exit_code=response.exit_code,
