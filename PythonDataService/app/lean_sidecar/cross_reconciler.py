@@ -120,12 +120,12 @@ class CrossReconciliationOutput:
 
 # LEAN emits ``status`` + ``direction`` in lowercase on the wire
 # (``"filled"`` / ``"buy"`` / ``"sell"``); the Phase 3a parser passes
-# them through unchanged. The cross-reconciler accepts both cases (LEAN
-# could change presentation in a future version) and normalizes side
-# to the capitalized form (``"Buy"`` / ``"Sell"``) the wire model
-# uses — kept consistent with the qc_reconciler's convention so both
-# reconcilers' UI panes display identically.
-_LEAN_FILLED_STATUSES: frozenset[str] = frozenset({"filled", "Filled"})
+# them through unchanged. Comparisons use ``.casefold()`` (matching the
+# existing pattern in :mod:`app.lean_sidecar.reconciler`) so case
+# variants — including Unicode — fold to the canonical form. Side is
+# normalized to the capitalized wire form (``"Buy"`` / ``"Sell"``) the
+# cross-reconciler's response model and the paired qc_reconciler
+# taxonomy both use.
 
 
 def _adapt_lean_event(event: NormalizedOrderEvent) -> _InternalFill | None:
@@ -135,19 +135,19 @@ def _adapt_lean_event(event: NormalizedOrderEvent) -> _InternalFill | None:
     lifecycle event) or has zero fill_quantity. Fee may be absent
     (``None``) when the LEAN run did not record ``orderFeeAmount``.
 
-    Case-normalizes ``status`` and ``direction``: LEAN's wire format is
-    lowercase, but the cross-reconciler's wire model + the paired
-    qc_reconciler taxonomy use capitalized side strings.
+    Case-folds ``status`` and ``direction`` before comparison so the
+    adapter is robust to LEAN presentation changes — same pattern as
+    :mod:`app.lean_sidecar.reconciler`.
     """
-    if event.status not in _LEAN_FILLED_STATUSES:
+    if event.status.casefold() != "filled":
         return None
     qty = int(event.fill_quantity)
     if qty == 0:
         return None
-    direction_lower = event.direction.lower()
-    if direction_lower == "buy":
+    direction_cf = event.direction.casefold()
+    if direction_cf == "buy":
         side: Side = "Buy"
-    elif direction_lower == "sell":
+    elif direction_cf == "sell":
         side = "Sell"
     else:
         # Unknown direction — parser-version-skew or LEAN-behavior-

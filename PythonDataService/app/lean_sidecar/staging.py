@@ -221,6 +221,8 @@ def list_metadata_databases(
 def stage_lean_metadata_from_image(
     workspace: Workspace,
     image_digest: str,
+    *,
+    allow_launcher_fallback: bool = True,
 ) -> tuple[Path, Path]:
     """Extract the image's bundled metadata databases into the workspace.
 
@@ -235,10 +237,23 @@ def stage_lean_metadata_from_image(
     container, then removes the container — no LEAN process runs and no
     network is required.
 
+    When ``shutil.which("podman")`` returns None — the data-plane
+    container's expected state — falls back to calling the launcher's
+    ``/extract-metadata`` HTTP endpoint via
+    :func:`_stage_lean_metadata_via_launcher`. The launcher (host
+    process with podman) does the work; the data-plane reads the
+    written files through its bind-mounted view.
+
     Args:
         workspace: Resolved workspace; ``data_dir`` is created if missing.
         image_digest: ``sha256:...`` (or full ``repo@sha256:...``) to extract
             from. Must already be pulled locally; this helper does not pull.
+        allow_launcher_fallback: Default ``True`` — the data plane wants
+            the HTTP fallback when its container has no podman. The
+            launcher passes ``False`` when it calls into this function
+            itself, so a launcher host that's missing podman fails fast
+            instead of HTTP-POSTing /extract-metadata back into its own
+            handler (infinite recursion until httpx times out).
 
     Returns:
         Tuple of (market_hours_db_path, symbol_properties_db_path) under
@@ -251,6 +266,17 @@ def stage_lean_metadata_from_image(
 
     podman = shutil.which("podman")
     if not podman:
+        if not allow_launcher_fallback:
+            # The launcher (host) calls into this function with
+            # ``allow_launcher_fallback=False`` so a misconfigured
+            # launcher host (no podman) fails fast here instead of
+            # recursively HTTP-POSTing /extract-metadata back into
+            # itself. Codex-P2 / CodeRabbit-Major review-fix.
+            raise MetadataStagingError(
+                "podman is required but was not found on PATH "
+                "(launcher fallback disabled; this branch is the "
+                "launcher's own call into staging)"
+            )
         # Data-plane container has no podman on PATH — by design, per
         # the launcher topology in lean-sidecar-lab.md §"Launcher
         # topology". Delegate to the host-side launcher via HTTP, then
