@@ -63,6 +63,7 @@ from app.lean_sidecar.staging import (
     stage_lean_config,
     stage_lean_metadata_from_image,
     stage_minute_bars,
+    stage_quote_bars,
 )
 from app.lean_sidecar.trusted_samples.buy_and_hold import BUY_AND_HOLD_SOURCE
 from app.lean_sidecar.trusted_samples.buy_and_hold_reconciliation import (
@@ -316,6 +317,11 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     trading_dates = _iter_trading_dates(request.start_date, request.end_date)
     bars_by_date = [(d, _generate_synthetic_bars(request.symbol, d)) for d in trading_dates]
     bar_zip_paths = list(stage_minute_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
+    # Phase 5c: stage synthetic minute QUOTE zips alongside the trade
+    # zips. LEAN's default minute subscription requests both; without
+    # the quote zip the log carries known-noise ``Cannot find file:
+    # ...quote.zip`` warnings classified as ``failed_data_requests``.
+    quote_zip_paths = list(stage_quote_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
     # Real OHLCV daily bars (open-of-first, high-max, low-min,
     # close-of-last, sum-of-volume), not the last minute bar copied.
     daily_bars = [_aggregate_daily_bar(request.symbol, day) for (_, day) in bars_by_date]
@@ -378,6 +384,7 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         request=request,
         workspace=workspace,
         bar_zip_paths=bar_zip_paths,
+        quote_zip_paths=quote_zip_paths,
         daily_path=daily_path,
         source_path=source_path,
         config_path=config_path,
@@ -410,6 +417,7 @@ def _build_manifest(
     request: TrustedRunRequest,
     workspace: Workspace,
     bar_zip_paths: list[Path],
+    quote_zip_paths: list[Path],
     daily_path: Path,
     source_path: Path,
     config_path: Path,
@@ -435,7 +443,10 @@ def _build_manifest(
         launcher_version_sha256=LAUNCHER_VERSION_HASH,
         normalized_parser_version=NORMALIZED_PARSER_VERSION,
         staged_data=StagedDataManifest(
-            bar_zips=_hash_paths_in_workspace(workspace, [*bar_zip_paths, daily_path]),
+            # Phase 5c: include the quote zips alongside trade + daily
+            # in the manifest's staged-data hash list. Reproducibility
+            # requires every byte LEAN saw to be hashed.
+            bar_zips=_hash_paths_in_workspace(workspace, [*bar_zip_paths, *quote_zip_paths, daily_path]),
             market_hours_database=(
                 _hash_paths_in_workspace(workspace, [market_hours])[0] if market_hours is not None else None
             ),
