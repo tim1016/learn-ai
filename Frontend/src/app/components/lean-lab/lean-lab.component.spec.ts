@@ -1,6 +1,27 @@
 import { provideZonelessChangeDetection } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { describe, expect, it, vi } from "vitest";
+
+// lightweight-charts pulled in transitively via LeanLabEquityChartComponent.
+// We don't render the chart in these integration tests, but the import
+// still resolves through the worker's module cache — and if the
+// equity-chart spec runs in the same worker AFTER this one, its own
+// vi.mock arrives too late and its 5 tests cascade-fail with "vi.fn()
+// called 0 times" because the real lightweight-charts has been cached.
+// Mocking here (identical stub shape to the chart spec) keeps the worker's
+// cache mock-flavored regardless of test-file ordering.
+vi.mock("lightweight-charts", () => {
+  const series = { setData: vi.fn(), applyOptions: vi.fn() };
+  const chart = {
+    addSeries: vi.fn().mockReturnValue(series),
+    removeSeries: vi.fn(),
+    timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+  };
+  return { createChart: vi.fn().mockReturnValue(chart), CandlestickSeries: "CandlestickSeries" };
+});
+
 import { LeanSidecarApiError, LeanSidecarService } from "../../services/lean-sidecar.service";
 import type {
   NormalizedResult,
