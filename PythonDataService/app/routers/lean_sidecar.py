@@ -29,7 +29,7 @@ from app.lean_sidecar.launcher_client import (
 )
 from app.lean_sidecar.normalized_parser import (
     NormalizedParserError,
-    parse_workspace,
+    NormalizedResult,
 )
 from app.lean_sidecar.reconciler import (
     DEFAULT_COMMISSION_ATOL,
@@ -648,6 +648,11 @@ class RunReconciliationReportModel(BaseModel):
 
     run_id: str
     algorithm_id: str
+    # Parser-version pin recorded with the result.json the report was
+    # computed from. Surfaces here so a downstream consumer can tell
+    # whether two reconciliation reports are comparable (different
+    # parser_version means the upstream normalization may differ).
+    normalized_parser_version: str
     total_fill_events: int
     matched_count: int
     divergent_count: int
@@ -659,10 +664,16 @@ class RunReconciliationReportModel(BaseModel):
     divergences: list[FeeDivergenceModel]
 
 
-def _report_to_model(report: FeeReconciliationReport, algorithm_id: str) -> RunReconciliationReportModel:
+def _report_to_model(
+    report: FeeReconciliationReport,
+    *,
+    algorithm_id: str,
+    normalized_parser_version: str,
+) -> RunReconciliationReportModel:
     return RunReconciliationReportModel(
         run_id=report.run_id,
         algorithm_id=algorithm_id,
+        normalized_parser_version=normalized_parser_version,
         total_fill_events=report.total_fill_events,
         matched_count=report.matched_count,
         divergent_count=report.divergent_count,
@@ -704,19 +715,43 @@ async def post_reconcile(run_id: str) -> RunReconciliationReportModel:
     default commission ≠ IBKR's tier). Phase 5b will add the
     reconciliation-grade template that makes this report come back
     clean for properly-pinned runs.
+
+    Reads the persisted normalized ``result.json`` (written by the
+    orchestrator after each run), NOT a fresh re-parse of LEAN's raw
+    output artifacts. The persisted file pins the parser_version at the
+    time of the run; reading it back means a future parser-version bump
+    cannot retroactively alter the reconciliation result for an old
+    run. The pinned ``parser_version`` is echoed back on the response
+    so a consumer can detect when two reports are not comparable.
+
+    404 contract: ``normalized_missing`` if ``result.json`` is absent
+    (run hadn't completed, or LEAN crashed before producing parseable
+    output) OR if the file exists but does not validate against the
+    current ``NormalizedResult`` schema.
     """
     workspace = _resolved_workspace_or_404(run_id)
-    try:
-        result = parse_workspace(workspace)
-    except NormalizedParserError as e:
+    result_path = workspace.normalized_dir / "result.json"
+    if not result_path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "reason": "normalized_missing",
                 "message": (
-                    f"cannot reconcile {run_id}: normalized result not present "
-                    f"({e}). The run may have crashed before producing parseable output."
+                    f"cannot reconcile {run_id}: normalized result.json not present. "
+                    f"The run may have crashed before producing parseable output."
                 ),
+            },
+        )
+    try:
+        result = NormalizedResult.model_validate_json(
+            result_path.read_text(encoding="utf-8"),
+        )
+    except (OSError, ValueError, NormalizedParserError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason": "normalized_missing",
+                "message": (f"cannot reconcile {run_id}: result.json failed to load ({e})."),
             },
         ) from e
     # Reviewer P1: pass the path-parameter run_id directly so the report's
@@ -730,7 +765,11 @@ async def post_reconcile(run_id: str) -> RunReconciliationReportModel:
         order_events=result.order_events,
         commission_atol=DEFAULT_COMMISSION_ATOL,
     )
-    return _report_to_model(report, algorithm_id=result.algorithm_id)
+    return _report_to_model(
+        report,
+        algorithm_id=result.algorithm_id,
+        normalized_parser_version=result.parser_version,
+    )
 
 
 @router.get(

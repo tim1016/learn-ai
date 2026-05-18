@@ -223,6 +223,13 @@ export interface FeeDivergence {
 export interface RunReconciliationReport {
   run_id: string;
   algorithm_id: string;
+  /**
+   * Parser-version pin recorded with the ``result.json`` the report was
+   * computed from. Two reports are directly comparable only when their
+   * ``normalized_parser_version`` matches; a bump means the upstream
+   * normalization may have changed.
+   */
+  normalized_parser_version: string;
   total_fill_events: number;
   matched_count: number;
   divergent_count: number;

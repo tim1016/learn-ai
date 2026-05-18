@@ -545,12 +545,19 @@ duplicating the formula).
 
 - **API** — `POST /api/lean-sidecar/runs/{id}/reconcile` returns
   `RunReconciliationReportModel { run_id, algorithm_id,
-  total_fill_events, matched_count, divergent_count, commission_atol,
-  total_recorded_fees, total_expected_ibkr_fees, divergences[] }`.
-  Reads the normalized result.json for the run, walks filled events,
+  normalized_parser_version, total_fill_events, matched_count,
+  divergent_count, commission_atol, total_recorded_fees,
+  total_expected_ibkr_fees, divergences[] }`. Reads the **persisted**
+  `result.json` for the run (`<workspace>/normalized/result.json`,
+  written by the orchestrator at run time), walks filled events,
   computes the expected IBKR fee per event, classifies each as clean
   / `commission_drift` / `no_recorded_fee`. Tolerance is the
-  numerical-rigor.md default ($0.01).
+  numerical-rigor.md default ($0.01). The endpoint deliberately does
+  not re-parse LEAN's raw output artifacts on each call — the pinned
+  `parser_version` on disk is what the report is computed against, so
+  a future parser bump cannot retroactively alter an old reconciliation
+  result. The pin is echoed on the response as
+  `normalized_parser_version`.
 - **Reconciler module** — `app/lean_sidecar/reconciler.py` is pure
   functions over `NormalizedOrderEvent` iterables. Three exports:
   `FeeDivergenceCategory`, `FeeReconciliationReport`,

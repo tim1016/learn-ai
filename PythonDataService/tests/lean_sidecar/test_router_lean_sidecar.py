@@ -715,18 +715,30 @@ class TestPostReconcileEndpoint:
     here, not the parser."""
 
     @pytest.fixture
-    def stub_normalized_result(self, monkeypatch: pytest.MonkeyPatch):
-        """Make `parse_workspace` return a callable factory so each test
-        can inject its own NormalizedResult."""
-        from app.lean_sidecar.normalized_parser import NormalizedResult
-        from app.routers import lean_sidecar as router_module
+    def stub_normalized_result(self, patched_artifacts_root: Path):
+        """Factory that writes a ``result.json`` to the run's workspace.
 
-        def _make_factory(events: list[dict], *, algorithm_id: str = "MyAlgorithm"):
+        Reviewer P2: the reconcile endpoint reads the persisted
+        ``result.json`` directly (not a fresh re-parse of LEAN's raw
+        artifacts), so tests must arrange the file on disk rather than
+        monkeypatch ``parse_workspace``. This factory writes a valid
+        ``NormalizedResult`` document into ``<workspace>/normalized/
+        result.json`` and returns it for assertions.
+        """
+        from app.lean_sidecar.normalized_parser import NormalizedResult
+
+        def _make_factory(
+            events: list[dict],
+            *,
+            algorithm_id: str = "MyAlgorithm",
+            parser_version: str = "phase-3a-r1",
+            run_id: str | None = None,
+        ) -> NormalizedResult:
             from app.lean_sidecar.normalized_parser import NormalizedOrderEvent
 
             order_events = [NormalizedOrderEvent.model_validate(e) for e in events]
             result = NormalizedResult(
-                parser_version="phase-3a-r1",
+                parser_version=parser_version,
                 algorithm_id=algorithm_id,
                 statistics={},
                 runtime_statistics={},
@@ -735,11 +747,17 @@ class TestPostReconcileEndpoint:
                 total_order_events=len(order_events),
                 total_equity_points=0,
             )
-
-            def _parse(workspace) -> NormalizedResult:
-                return result
-
-            monkeypatch.setattr(router_module, "parse_workspace", _parse)
+            # The most recently-written workspace's result.json wins
+            # when run_id is omitted; callers that care about isolation
+            # pass run_id explicitly.
+            target_run_ids = [run_id] if run_id else [p.name for p in patched_artifacts_root.iterdir() if p.is_dir()]
+            for rid in target_run_ids:
+                ws = resolve_workspace(rid, patched_artifacts_root)
+                ws.normalized_dir.mkdir(parents=True, exist_ok=True)
+                (ws.normalized_dir / "result.json").write_text(
+                    result.model_dump_json(),
+                    encoding="utf-8",
+                )
             return result
 
         return _make_factory
@@ -855,25 +873,62 @@ class TestPostReconcileEndpoint:
         self,
         client: AsyncClient,
         patched_artifacts_root: Path,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A workspace that exists but where LEAN crashed before
-        writing artifacts — the reconciler must 404 with the
-        normalized_missing reason so the caller can branch."""
-        from app.lean_sidecar.normalized_parser import NormalizedParserError
-        from app.routers import lean_sidecar as router_module
-
+        producing parseable artifacts — the orchestrator never wrote
+        ``result.json``. The reconciler must 404 with the
+        ``normalized_missing`` reason so the caller can branch."""
         ws = resolve_workspace("rec_no_artifacts", patched_artifacts_root)
         ws.ensure_layout()
-
-        def _raise(workspace):
-            raise NormalizedParserError("summary file not found")
-
-        monkeypatch.setattr(router_module, "parse_workspace", _raise)
+        # Intentionally do NOT write normalized_dir/result.json.
 
         r = await client.post("/api/lean-sidecar/runs/rec_no_artifacts/reconcile")
         assert r.status_code == 404
         assert r.json()["detail"]["reason"] == "normalized_missing"
+
+    async def test_404_when_result_json_malformed(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        """A ``result.json`` that exists but fails NormalizedResult
+        validation (e.g., truncated mid-write, or schema drift from a
+        future parser version) must 404 with the same reason rather
+        than 500 — surfaces as a recoverable "missing/unreadable"
+        condition for the caller."""
+        ws = resolve_workspace("rec_malformed_result", patched_artifacts_root)
+        ws.ensure_layout()
+        ws.normalized_dir.mkdir(parents=True, exist_ok=True)
+        (ws.normalized_dir / "result.json").write_text(
+            "{not valid json",
+            encoding="utf-8",
+        )
+
+        r = await client.post("/api/lean-sidecar/runs/rec_malformed_result/reconcile")
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "normalized_missing"
+
+    async def test_parser_version_echoed_on_report(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+        stub_normalized_result,
+    ) -> None:
+        """Reviewer P2: the pinned ``parser_version`` from the persisted
+        ``result.json`` is echoed back so a downstream consumer can tell
+        whether two reconciliation reports are comparable."""
+        ws = resolve_workspace("rec_parser_pin", patched_artifacts_root)
+        ws.ensure_layout()
+        stub_normalized_result(
+            [self._filled_event(order_fee_amount=1.00)],
+            parser_version="phase-3a-r1",
+            run_id="rec_parser_pin",
+        )
+
+        r = await client.post("/api/lean-sidecar/runs/rec_parser_pin/reconcile")
+
+        assert r.status_code == 200
+        assert r.json()["normalized_parser_version"] == "phase-3a-r1"
 
     async def test_invalid_run_id_rejected_at_reconcile(self, client: AsyncClient) -> None:
         r = await client.post("/api/lean-sidecar/runs/..escape/reconcile")

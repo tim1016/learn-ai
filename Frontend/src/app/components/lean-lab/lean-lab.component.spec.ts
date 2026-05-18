@@ -630,6 +630,7 @@ describe("LeanLabComponent", () => {
     serviceMock.reconcileRun.mockResolvedValue({
       run_id: "ui_run_recon",
       algorithm_id: "MyAlgorithm",
+      normalized_parser_version: "phase-3a-r1",
       total_fill_events: 2,
       matched_count: 1,
       divergent_count: 1,
