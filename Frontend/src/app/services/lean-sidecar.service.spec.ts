@@ -165,6 +165,7 @@ describe("LeanSidecarService", () => {
     const fakeReport = {
       run_id: "ut_run_reconcile",
       algorithm_id: "MyAlgorithm",
+      normalized_parser_version: "phase-3a-r1",
       total_fill_events: 2,
       matched_count: 1,
       divergent_count: 1,
