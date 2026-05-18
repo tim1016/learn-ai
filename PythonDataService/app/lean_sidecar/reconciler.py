@@ -67,6 +67,14 @@ class FeeDivergenceCategory(StrEnum):
     # a model-vs-recorded comparison (we have nothing to compare); just
     # surfaced so the operator can see the gap.
     NO_RECORDED_FEE = "no_recorded_fee"
+    # LEAN emitted a fractional-share fill quantity (e.g., 100.5). The
+    # IBKR equity-tier model is integer-shares only — rounding silently
+    # would let drift hide behind ``round()``'s banker semantics
+    # (``round(100.5) == 100`` in Python 3). The reconciler classifies
+    # these as their own category so the operator decides how to handle
+    # them (Phase 5b+ will add a fractional-share commission model or
+    # filter fractional fills upstream).
+    FRACTIONAL_QUANTITY = "fractional_quantity"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +83,12 @@ class FeeDivergence:
 
     ``delta`` is ``recorded - expected``. Positive: LEAN recorded more
     than IBKR would charge. Negative: LEAN under-charged versus IBKR.
+
+    ``fill_quantity_raw`` carries the original float quantity when the
+    fill was fractional (category ``FRACTIONAL_QUANTITY``); ``None``
+    for integer-share fills. The integer ``fill_quantity`` is the
+    rounded value the IBKR model would have charged against if we
+    had not bailed — kept so the operator can spot the gap visually.
     """
 
     order_event_id: int
@@ -87,6 +101,7 @@ class FeeDivergence:
     expected_ibkr_fee: Decimal
     delta: Decimal | None
     category: FeeDivergenceCategory
+    fill_quantity_raw: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,14 +136,49 @@ def _reconcile_one(
     """Reconcile one filled event; return (expected_fee, divergence_or_None).
 
     ``fill_quantity`` is a float in the wire model (LEAN uses doubles)
-    but the IBKR model takes int — fractional shares would be a separate
-    concern (Phase 5b+); for now we round to nearest int. ``fill_price``
-    similarly comes in as a float and is converted to Decimal via str()
-    so we don't pick up float-binary error.
+    but the IBKR model takes int. Fractional-share fills (100.5 shares)
+    can't be reconciled against an integer-shares model — silently
+    rounding lets drift hide behind ``round()``'s banker semantics
+    (``round(100.5) == 100`` in Python 3, so a fractional fill could
+    erroneously reconcile clean). The reconciler classifies fractional
+    fills as their own ``FRACTIONAL_QUANTITY`` category instead.
+    ``fill_price`` similarly comes in as a float and is converted to
+    Decimal via str() so we don't pick up float-binary error.
     """
+    fill_price_d = Decimal(str(event.fill_price))
+    # Detect fractional quantity BEFORE rounding so 100.5 surfaces as
+    # FRACTIONAL_QUANTITY instead of silently reconciling against the
+    # rounded-to-100 IBKR fee. ``int(x) != x`` is the right check
+    # (rather than ``x != round(x)``) because it doesn't depend on
+    # banker-rounding semantics — a float that is exactly integral
+    # (100.0, -50.0) passes; anything with a true fractional part fails.
+    is_fractional = float(event.fill_quantity) != int(event.fill_quantity)
+    if is_fractional:
+        # IBKR expected fee is undefined for fractional fills against
+        # the integer-shares model; Decimal("0.00") is a placeholder
+        # so the field stays typed. ``delta=None`` because there is no
+        # meaningful comparison to make.
+        divergence = FeeDivergence(
+            order_event_id=event.order_event_id,
+            order_id=event.order_id,
+            symbol=event.symbol_value,
+            ms_utc=event.ms_utc,
+            fill_quantity=int(event.fill_quantity),
+            fill_price=fill_price_d,
+            recorded_fee=None if event.order_fee_amount is None else _to_cents(event.order_fee_amount),
+            expected_ibkr_fee=Decimal("0.00"),
+            delta=None,
+            category=FeeDivergenceCategory.FRACTIONAL_QUANTITY,
+            fill_quantity_raw=float(event.fill_quantity),
+        )
+        # Don't add the placeholder Decimal("0.00") to the expected-fee
+        # total — it would falsify the aggregate. Return zero so the
+        # caller's accumulator is a no-op for this row.
+        return Decimal("0.00"), divergence
+    rounded_qty = int(event.fill_quantity)
     expected = model.fee(
-        quantity=round(event.fill_quantity),
-        fill_price=Decimal(str(event.fill_price)),
+        quantity=rounded_qty,
+        fill_price=fill_price_d,
     )
     recorded = None if event.order_fee_amount is None else _to_cents(event.order_fee_amount)
     if recorded is None:
@@ -137,8 +187,8 @@ def _reconcile_one(
             order_id=event.order_id,
             symbol=event.symbol_value,
             ms_utc=event.ms_utc,
-            fill_quantity=round(event.fill_quantity),
-            fill_price=Decimal(str(event.fill_price)),
+            fill_quantity=rounded_qty,
+            fill_price=fill_price_d,
             recorded_fee=None,
             expected_ibkr_fee=expected,
             delta=None,
@@ -153,8 +203,8 @@ def _reconcile_one(
         order_id=event.order_id,
         symbol=event.symbol_value,
         ms_utc=event.ms_utc,
-        fill_quantity=round(event.fill_quantity),
-        fill_price=Decimal(str(event.fill_price)),
+        fill_quantity=rounded_qty,
+        fill_price=fill_price_d,
         recorded_fee=recorded,
         expected_ibkr_fee=expected,
         delta=delta,
