@@ -29,12 +29,12 @@ from app.lean_sidecar.launcher_client import (
 )
 from app.lean_sidecar.normalized_parser import (
     NormalizedParserError,
-    parse_workspace,
+    NormalizedResult,
 )
 from app.lean_sidecar.reconciler import (
     DEFAULT_COMMISSION_ATOL,
     FeeReconciliationReport,
-    reconcile_normalized_result,
+    reconcile_against_ibkr,
 )
 from app.lean_sidecar.workspace import (
     RUN_ID_PATTERN,
@@ -243,6 +243,14 @@ class RunSummaryModel(BaseModel):
     # crashed mid-launch). Not a substitute for ``is_clean`` — LEAN can
     # exit 0 with classified errors — but a fast at-a-glance signal.
     exit_clean: bool | None
+    # The true cleanliness signal: extracted from the manifest's
+    # ``is_clean=<bool>`` note, which the service writes from the
+    # launcher's response. ``None`` for legacy manifests (Phase 1) that
+    # predate the note. The Phase 4d/4e sidebar uses THIS field (not
+    # ``exit_clean``) when synthesizing a rehydrated TrustedRunResponse
+    # so a run that exited 0 with classified LEAN errors does not paint
+    # as a green "Clean run."
+    is_clean: bool | None
 
 
 class RunIndexResponseModel(BaseModel):
@@ -408,13 +416,25 @@ def _safe_load_manifest_summary(manifest_path) -> dict | None:
     # ``algorithm_source_kind`` was added to manifest.notes in Phase 4c.
     # Older manifests don't have it; treat them as "unknown" rather
     # than guessing — guessing creates misleading sidebar copy.
+    # ``is_clean`` is similarly note-encoded (since Phase 2a's manifest
+    # writer); ``None`` for pre-Phase-2a manifests.
     kind = "unknown"
+    is_clean: bool | None = None
     for note in notes:
-        if isinstance(note, str) and note.startswith("algorithm_source_kind="):
+        if not isinstance(note, str):
+            continue
+        if note.startswith("algorithm_source_kind="):
             value = note.split("=", 1)[1]
             if value in ("trusted_sample", "user_provided"):
                 kind = value
-            break
+        elif note.startswith("is_clean="):
+            value = note.split("=", 1)[1]
+            if value == "True":
+                is_clean = True
+            elif value == "False":
+                is_clean = False
+            # Anything else stays None — never silently coerce a
+            # malformed note into a truthy/falsy value.
     exit_code = data.get("exit_code")
     return {
         "symbol": params.get("symbol") if isinstance(params, dict) else None,
@@ -425,6 +445,7 @@ def _safe_load_manifest_summary(manifest_path) -> dict | None:
         "exit_code": exit_code,
         "algorithm_source_kind": kind,
         "exit_clean": (exit_code == 0) if exit_code is not None else None,
+        "is_clean": is_clean,
     }
 
 
@@ -622,10 +643,15 @@ class FeeDivergenceModel(BaseModel):
     fill_price: str
     recorded_fee: str | None
     expected_ibkr_fee: str
-    # ``None`` when ``category == "no_recorded_fee"`` — there's nothing
-    # to subtract from. Non-null for every ``commission_drift`` row.
+    # ``None`` when ``category == "no_recorded_fee"`` or
+    # ``fractional_quantity`` — there's nothing meaningful to subtract.
+    # Non-null for every ``commission_drift`` row.
     delta: str | None
-    category: Literal["commission_drift", "no_recorded_fee"]
+    category: Literal["commission_drift", "no_recorded_fee", "fractional_quantity"]
+    # Populated only when category == "fractional_quantity" — carries
+    # the original float so the operator can see what LEAN emitted
+    # before integer rounding would have been applied.
+    fill_quantity_raw: float | None = None
 
 
 class RunReconciliationReportModel(BaseModel):
@@ -639,6 +665,11 @@ class RunReconciliationReportModel(BaseModel):
 
     run_id: str
     algorithm_id: str
+    # Parser-version pin recorded with the result.json the report was
+    # computed from. Surfaces here so a downstream consumer can tell
+    # whether two reconciliation reports are comparable (different
+    # parser_version means the upstream normalization may differ).
+    normalized_parser_version: str
     total_fill_events: int
     matched_count: int
     divergent_count: int
@@ -650,10 +681,16 @@ class RunReconciliationReportModel(BaseModel):
     divergences: list[FeeDivergenceModel]
 
 
-def _report_to_model(report: FeeReconciliationReport, algorithm_id: str) -> RunReconciliationReportModel:
+def _report_to_model(
+    report: FeeReconciliationReport,
+    *,
+    algorithm_id: str,
+    normalized_parser_version: str,
+) -> RunReconciliationReportModel:
     return RunReconciliationReportModel(
         run_id=report.run_id,
         algorithm_id=algorithm_id,
+        normalized_parser_version=normalized_parser_version,
         total_fill_events=report.total_fill_events,
         matched_count=report.matched_count,
         divergent_count=report.divergent_count,
@@ -672,6 +709,7 @@ def _report_to_model(report: FeeReconciliationReport, algorithm_id: str) -> RunR
                 expected_ibkr_fee=str(d.expected_ibkr_fee),
                 delta=None if d.delta is None else str(d.delta),
                 category=d.category.value,
+                fill_quantity_raw=d.fill_quantity_raw,
             )
             for d in report.divergences
         ],
@@ -695,23 +733,61 @@ async def post_reconcile(run_id: str) -> RunReconciliationReportModel:
     default commission ≠ IBKR's tier). Phase 5b will add the
     reconciliation-grade template that makes this report come back
     clean for properly-pinned runs.
+
+    Reads the persisted normalized ``result.json`` (written by the
+    orchestrator after each run), NOT a fresh re-parse of LEAN's raw
+    output artifacts. The persisted file pins the parser_version at the
+    time of the run; reading it back means a future parser-version bump
+    cannot retroactively alter the reconciliation result for an old
+    run. The pinned ``parser_version`` is echoed back on the response
+    so a consumer can detect when two reports are not comparable.
+
+    404 contract: ``normalized_missing`` if ``result.json`` is absent
+    (run hadn't completed, or LEAN crashed before producing parseable
+    output) OR if the file exists but does not validate against the
+    current ``NormalizedResult`` schema.
     """
     workspace = _resolved_workspace_or_404(run_id)
-    try:
-        result = parse_workspace(workspace)
-    except NormalizedParserError as e:
+    result_path = workspace.normalized_dir / "result.json"
+    if not result_path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "reason": "normalized_missing",
                 "message": (
-                    f"cannot reconcile {run_id}: normalized result not present "
-                    f"({e}). The run may have crashed before producing parseable output."
+                    f"cannot reconcile {run_id}: normalized result.json not present. "
+                    f"The run may have crashed before producing parseable output."
                 ),
             },
+        )
+    try:
+        result = NormalizedResult.model_validate_json(
+            result_path.read_text(encoding="utf-8"),
+        )
+    except (OSError, ValueError, NormalizedParserError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason": "normalized_missing",
+                "message": (f"cannot reconcile {run_id}: result.json failed to load ({e})."),
+            },
         ) from e
-    report = reconcile_normalized_result(result, commission_atol=DEFAULT_COMMISSION_ATOL)
-    return _report_to_model(report, algorithm_id=result.algorithm_id)
+    # Reviewer P1: pass the path-parameter run_id directly so the report's
+    # ``run_id`` is the workspace slug (what the caller queried), NOT the
+    # algorithm-type-name. They diverge whenever LEAN's ``algorithm-id``
+    # differs from the workspace slug (i.e., always, since the slug is a
+    # UI-generated UUID-ish token and the algorithm-id defaults to
+    # ``MyAlgorithm``). Algorithm-id is still exposed as a separate field.
+    report = reconcile_against_ibkr(
+        run_id=run_id,
+        order_events=result.order_events,
+        commission_atol=DEFAULT_COMMISSION_ATOL,
+    )
+    return _report_to_model(
+        report,
+        algorithm_id=result.algorithm_id,
+        normalized_parser_version=result.parser_version,
+    )
 
 
 @router.get(

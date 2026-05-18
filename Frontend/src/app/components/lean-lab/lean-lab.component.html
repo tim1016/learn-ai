@@ -187,6 +187,83 @@
         <summary>Log tail ({{ resp.log_tail.length }} chars)</summary>
         <pre>{{ resp.log_tail }}</pre>
       </details>
+
+      <section class="lean-lab__reconcile" aria-live="polite">
+        <header class="lean-lab__reconcile-header">
+          <h3>Fee reconciliation (Phase 5a)</h3>
+          <button
+            type="button"
+            class="lean-lab__reconcile-btn"
+            [disabled]="reconciling()"
+            (click)="reconcileFees()"
+          >
+            {{ reconciling() ? "Reconciling…" : "Reconcile fees" }}
+          </button>
+        </header>
+        <p class="lean-lab__reconcile-help">
+          Compares each filled order event's recorded fee against the canonical
+          IBKR equity-tier commission model. A default-brokerage run will naturally
+          surface <code>commission_drift</code> rows.
+        </p>
+
+        @if (reconcileError(); as rerr) {
+          <p class="lean-lab__reconcile-error" role="alert">
+            Reconciliation failed — <strong>{{ rerr.reason }}</strong>: {{ rerr.message }}
+          </p>
+        }
+
+        @if (reconciliation(); as report) {
+          <dl class="lean-lab__reconcile-summary">
+            <dt>Total fills</dt>
+            <dd>{{ report.total_fill_events }}</dd>
+            <dt>Matched</dt>
+            <dd>{{ report.matched_count }}</dd>
+            <dt>Divergent</dt>
+            <dd>{{ report.divergent_count }}</dd>
+            <dt>Commission tolerance</dt>
+            <dd>${{ report.commission_atol }}</dd>
+            <dt>Total recorded fees</dt>
+            <dd>${{ report.total_recorded_fees }}</dd>
+            <dt>Total expected (IBKR)</dt>
+            <dd>${{ report.total_expected_ibkr_fees }}</dd>
+          </dl>
+
+          @if (report.divergences.length > 0) {
+            <table class="lean-lab__reconcile-table">
+              <caption>
+                First {{ reconciliationTopDivergences().length }} of
+                {{ report.divergences.length }} divergence rows
+              </caption>
+              <thead>
+                <tr>
+                  <th>Order event</th>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Fill price</th>
+                  <th>Recorded</th>
+                  <th>Expected IBKR</th>
+                  <th>Delta</th>
+                  <th>Category</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (d of reconciliationTopDivergences(); track d.order_event_id) {
+                  <tr>
+                    <td>{{ d.order_event_id }}</td>
+                    <td>{{ d.symbol }}</td>
+                    <td>{{ d.fill_quantity }}</td>
+                    <td>${{ d.fill_price }}</td>
+                    <td>{{ d.recorded_fee === null ? "—" : "$" + d.recorded_fee }}</td>
+                    <td>${{ d.expected_ibkr_fee }}</td>
+                    <td>{{ d.delta === null ? "—" : "$" + d.delta }}</td>
+                    <td><code>{{ d.category }}</code></td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          }
+        }
+      </section>
     </section>
   }
     </div>

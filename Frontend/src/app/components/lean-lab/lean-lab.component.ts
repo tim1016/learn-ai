@@ -12,6 +12,7 @@ import {
 } from "../../services/lean-sidecar.service";
 import type {
   NormalizedResult,
+  RunReconciliationReport,
   RunSummary,
   TrustedRunRequest,
   TrustedRunResponse,
@@ -147,6 +148,22 @@ export class LeanLabComponent {
   readonly response = signal<TrustedRunResponse | null>(null);
   readonly normalized = signal<NormalizedResult | null>(null);
   readonly error = signal<{ reason: string; message: string; status: number } | null>(null);
+
+  /**
+   * Phase 5a — fee-reconciliation report, populated by clicking
+   * "Reconcile fees" on a loaded run. Reset to null whenever a new
+   * response/normalized is set so the panel doesn't carry over a
+   * stale report onto a fresh run.
+   */
+  readonly reconciliation = signal<RunReconciliationReport | null>(null);
+  readonly reconciling = signal(false);
+  readonly reconcileError = signal<{ reason: string; message: string; status: number } | null>(null);
+  /** First 10 divergence rows for at-a-glance review (the full list can be long). */
+  readonly reconciliationTopDivergences = computed(() => {
+    const r = this.reconciliation();
+    if (!r) return [];
+    return r.divergences.slice(0, 10);
+  });
 
   /** Phase 4d sidebar state — populated by ``refreshRuns()``. */
   readonly runs = signal<RunSummary[]>([]);
@@ -312,6 +329,10 @@ export class LeanLabComponent {
     this.error.set(null);
     this.response.set(null);
     this.normalized.set(null);
+    // Phase 5a: clear any prior reconciliation report so the panel
+    // doesn't carry a stale report from a different run.
+    this.reconciliation.set(null);
+    this.reconcileError.set(null);
     const summary = this.runs().find((r) => r.run_id === runId);
     try {
       const parsed = await this.service.getNormalized(runId);
@@ -327,12 +348,17 @@ export class LeanLabComponent {
         // expected and not actionable. The normalized result is
         // still on screen, which is the primary use of the click.
       }
-      // Use the actual exit_code/exit_clean from the summary row.
-      // Default to a "not clean, exit unknown" shape when the summary
-      // isn't in the cache (e.g., the sidebar refresh raced with the
-      // click) — better to under-claim than over-claim cleanliness.
+      // Use the actual exit_code + is_clean from the summary row.
+      // ``is_clean`` is the true cleanliness signal (exit==0 AND no
+      // classified LEAN errors AND not timed out — written from the
+      // launcher's response into ``manifest.notes`` as ``is_clean=...``);
+      // ``exit_clean`` is just ``exit_code == 0`` and would paint a
+      // run with logged LEAN errors as green. Reviewer P1: fall back
+      // to ``false`` for legacy manifests where ``is_clean`` is null
+      // — under-claim cleanliness, never over-claim it. Same fallback
+      // when the summary isn't in the cache (refresh raced the click).
       const exit_code = summary?.exit_code ?? -1;
-      const is_clean = summary?.exit_clean === true;
+      const is_clean = summary?.is_clean === true;
       this.response.set({
         run_id: runId,
         is_clean,
@@ -424,6 +450,65 @@ export class LeanLabComponent {
     ].join("-");
   }
 
+  /**
+   * Phase 5a — fetch the categorized fee-divergence report for the
+   * currently-loaded run. Available only when ``response()`` is set
+   * (the template guards on this). Does NOT modify the run; reads the
+   * persisted normalized result and runs the IBKR comparison.
+   *
+   * Error surfacing: the typed envelope from the launcher (404 when
+   * the run has no normalized result, 400 for invalid slug) is shown
+   * in the panel as a small inline error so the operator can branch
+   * without hunting through the global error banner.
+   */
+  async reconcileFees(): Promise<void> {
+    const current = this.response();
+    if (current === null) return;
+    // Snapshot the run_id this click was for. If the user navigates to
+    // a different run (sidebar click, fresh submit) before the POST
+    // returns, we must NOT paint the old run's report onto the new
+    // run's panel. Reviewer P2 — race fix.
+    const requestedRunId = current.run_id;
+    this.reconciling.set(true);
+    this.reconcileError.set(null);
+    try {
+      const report = await this.service.reconcileRun(requestedRunId);
+      if (this.response()?.run_id !== requestedRunId) {
+        // The user moved on; drop the stale response on the floor.
+        return;
+      }
+      this.reconciliation.set(report);
+    } catch (err) {
+      if (this.response()?.run_id !== requestedRunId) {
+        // Same race for the error path — don't show run A's 404 on
+        // run B's panel.
+        return;
+      }
+      this.reconciliation.set(null);
+      if (err instanceof LeanSidecarApiError) {
+        this.reconcileError.set({
+          reason: err.reason,
+          message: err.message,
+          status: err.status,
+        });
+      } else {
+        this.reconcileError.set({
+          reason: "client_error",
+          message: err instanceof Error ? err.message : String(err),
+          status: 0,
+        });
+      }
+    } finally {
+      // Always clear the in-flight indicator. ``reconciling`` is a
+      // component-level signal and shouldn't bleed across runs;
+      // submit() and the sidebar click already clear ``reconciliation``
+      // and ``reconcileError`` when the active run changes, so a brief
+      // spinner-cleared-then-button-clickable state on the new run is
+      // the correct visual.
+      this.reconciling.set(false);
+    }
+  }
+
   async submit(): Promise<void> {
     if (this.form.invalid) {
       this.form.markAllAsTouched();
@@ -433,6 +518,8 @@ export class LeanLabComponent {
     this.error.set(null);
     this.response.set(null);
     this.normalized.set(null);
+    this.reconciliation.set(null);
+    this.reconcileError.set(null);
 
     const value = this.form.getRawValue();
     const start_ms_utc = this.isoDateToMsUtc(value.startDate);

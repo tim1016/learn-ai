@@ -26,6 +26,7 @@ import { LeanSidecarApiError, LeanSidecarService } from "../../services/lean-sid
 import type {
   NormalizedResult,
   RunIndexResponse,
+  RunReconciliationReport,
   RunSummary,
   TrustedRunResponse,
 } from "../../services/lean-sidecar.types";
@@ -45,6 +46,7 @@ interface FakeLeanSidecarService {
   getLogTail: ReturnType<typeof vi.fn>;
   getObservationsCsv: ReturnType<typeof vi.fn>;
   listRuns: ReturnType<typeof vi.fn>;
+  reconcileRun: ReturnType<typeof vi.fn>;
 }
 
 function makeRunSummary(overrides: Partial<RunSummary> = {}): RunSummary {
@@ -58,6 +60,7 @@ function makeRunSummary(overrides: Partial<RunSummary> = {}): RunSummary {
     exit_code: 0,
     algorithm_source_kind: "trusted_sample",
     exit_clean: true,
+    is_clean: true,
     ...overrides,
   };
 }
@@ -130,6 +133,12 @@ describe("LeanLabComponent", () => {
       // refreshRuns() call doesn't throw in tests that don't set
       // it explicitly.
       listRuns: vi.fn().mockResolvedValue(makeRunIndex()),
+      // Default reconcileRun rejects with a 404 so tests that don't
+      // exercise the Phase 5a UI don't silently call into the real
+      // endpoint shape; only the dedicated reconcile tests override.
+      reconcileRun: vi
+        .fn()
+        .mockRejectedValue(new LeanSidecarApiError(404, "normalized_missing", "n/a")),
     };
     await TestBed.configureTestingModule({
       imports: [LeanLabComponent],
@@ -252,6 +261,9 @@ describe("LeanLabComponent", () => {
       getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
       getLogTail: vi.fn(),
       getObservationsCsv: vi.fn(),
+      reconcileRun: vi
+        .fn()
+        .mockRejectedValue(new LeanSidecarApiError(404, "normalized_missing", "n/a")),
       listRuns: vi.fn().mockResolvedValue(
         makeRunIndex({
           runs: [
@@ -315,6 +327,9 @@ describe("LeanLabComponent", () => {
       getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
       getLogTail: vi.fn(),
       getObservationsCsv: vi.fn(),
+      reconcileRun: vi
+        .fn()
+        .mockRejectedValue(new LeanSidecarApiError(404, "normalized_missing", "n/a")),
       listRuns: vi.fn().mockResolvedValue(
         makeRunIndex({
           runs: [
@@ -322,6 +337,7 @@ describe("LeanLabComponent", () => {
               run_id: "ui_run_oom",
               exit_code: 137,
               exit_clean: false,
+              is_clean: false,
             }),
           ],
         }),
@@ -349,6 +365,108 @@ describe("LeanLabComponent", () => {
     expect(text).toContain("Exit 137");
   });
 
+  it("loadRun does not paint a 'Clean run' badge when manifest is_clean=false despite exit_code=0", async () => {
+    // Reviewer P1: a run that exited 0 but had classified LEAN errors
+    // (failed_data_requests, runtime_error, etc.) has ``is_clean=false``
+    // on the launcher response and in the manifest's ``is_clean=False``
+    // note. The sidebar rehydration must branch on the manifest's
+    // ``is_clean`` field — not on ``exit_clean`` (which is just
+    // ``exit_code == 0`` and would paint this dirty run as green).
+    TestBed.resetTestingModule();
+    serviceMock = {
+      startTrustedRun: vi.fn(),
+      getNormalized: vi.fn().mockResolvedValue(makeNormalized()),
+      getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
+      getLogTail: vi.fn(),
+      getObservationsCsv: vi.fn(),
+      reconcileRun: vi
+        .fn()
+        .mockRejectedValue(new LeanSidecarApiError(404, "normalized_missing", "n/a")),
+      listRuns: vi.fn().mockResolvedValue(
+        makeRunIndex({
+          runs: [
+            makeRunSummary({
+              run_id: "ui_run_dirty_zero_exit",
+              exit_code: 0,
+              exit_clean: true,
+              is_clean: false,
+            }),
+          ],
+        }),
+      ),
+    };
+    await TestBed.configureTestingModule({
+      imports: [LeanLabComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: LeanSidecarService, useValue: serviceMock },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LeanLabComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    await component.loadRun("ui_run_dirty_zero_exit");
+    fixture.detectChanges();
+
+    // Synthesized response carries is_clean=false from the manifest.
+    expect(component.response()?.is_clean).toBe(false);
+    expect(component.response()?.exit_code).toBe(0);
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    // Badge must NOT say "Clean run" — exit==0 alone doesn't qualify.
+    // The component shows "LEAN errors logged" for exit==0 + not clean.
+    expect(text).not.toContain("Clean run");
+    expect(text).toContain("LEAN errors logged");
+  });
+
+  it("loadRun falls back to is_clean=false when manifest note is null (legacy run)", async () => {
+    // Pre-Phase-2a manifests don't carry the ``is_clean`` note —
+    // ``summary.is_clean`` arrives as null. Per the reviewer's
+    // direction: fall back to false, never silently paint green.
+    TestBed.resetTestingModule();
+    serviceMock = {
+      startTrustedRun: vi.fn(),
+      getNormalized: vi.fn().mockResolvedValue(makeNormalized()),
+      getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
+      getLogTail: vi.fn(),
+      getObservationsCsv: vi.fn(),
+      reconcileRun: vi
+        .fn()
+        .mockRejectedValue(new LeanSidecarApiError(404, "normalized_missing", "n/a")),
+      listRuns: vi.fn().mockResolvedValue(
+        makeRunIndex({
+          runs: [
+            makeRunSummary({
+              run_id: "ui_run_legacy_no_note",
+              exit_code: 0,
+              exit_clean: true,
+              is_clean: null,
+            }),
+          ],
+        }),
+      ),
+    };
+    await TestBed.configureTestingModule({
+      imports: [LeanLabComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: LeanSidecarService, useValue: serviceMock },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LeanLabComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    await component.loadRun("ui_run_legacy_no_note");
+    fixture.detectChanges();
+
+    expect(component.response()?.is_clean).toBe(false);
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).not.toContain("Clean run");
+  });
+
   it("surfaces the listRuns failure reason in the sidebar (reviewer: no silent catch)", async () => {
     TestBed.resetTestingModule();
     serviceMock = {
@@ -357,6 +475,9 @@ describe("LeanLabComponent", () => {
       getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
       getLogTail: vi.fn(),
       getObservationsCsv: vi.fn(),
+      reconcileRun: vi
+        .fn()
+        .mockRejectedValue(new LeanSidecarApiError(404, "normalized_missing", "n/a")),
       listRuns: vi
         .fn()
         .mockRejectedValue(new LeanSidecarApiError(503, "launcher_unreachable", "down")),
@@ -400,6 +521,9 @@ describe("LeanLabComponent", () => {
       getManifest: vi.fn().mockRejectedValue(new LeanSidecarApiError(404, "manifest_missing", "n/a")),
       getLogTail: vi.fn(),
       getObservationsCsv: vi.fn(),
+      reconcileRun: vi
+        .fn()
+        .mockRejectedValue(new LeanSidecarApiError(404, "normalized_missing", "n/a")),
       listRuns: vi.fn().mockRejectedValue(new Error("network down")),
     };
     await TestBed.configureTestingModule({
@@ -530,6 +654,116 @@ describe("LeanLabComponent", () => {
     const req = serviceMock.startTrustedRun.mock.calls[0][0];
     expect(req.algorithm_source).toBe("class MyAlgorithm: pass");
     expect(req.template).toBeUndefined();
+  });
+
+  it("Phase 5a: 'Reconcile fees' button fetches the report and renders the panel", async () => {
+    // Submit a clean run first so the response panel is visible (the
+    // reconcile button only renders inside that panel).
+    serviceMock.startTrustedRun.mockResolvedValue(makeResponse({ run_id: "ui_run_recon" }));
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    serviceMock.reconcileRun.mockResolvedValue({
+      run_id: "ui_run_recon",
+      algorithm_id: "MyAlgorithm",
+      normalized_parser_version: "phase-3a-r1",
+      total_fill_events: 2,
+      matched_count: 1,
+      divergent_count: 1,
+      commission_atol: "0.01",
+      total_recorded_fees: "6.00",
+      total_expected_ibkr_fees: "2.00",
+      divergences: [
+        {
+          order_event_id: 2,
+          order_id: 200,
+          symbol: "SPY",
+          ms_utc: 1_736_121_600_000,
+          fill_quantity: 100,
+          fill_price: "580.50",
+          recorded_fee: "5.00",
+          expected_ibkr_fee: "1.00",
+          delta: "4.00",
+          category: "commission_drift",
+        },
+      ],
+    });
+
+    await component.submit();
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    // Click the reconcile button via the component method (component-
+    // level test — the parent handler is the user-observable surface).
+    await component.reconcileFees();
+    fixture.detectChanges();
+
+    expect(serviceMock.reconcileRun).toHaveBeenCalledWith("ui_run_recon");
+    expect(component.reconciliation()?.divergent_count).toBe(1);
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    // Categorized counts visible on the panel.
+    expect(text).toContain("Total fills");
+    expect(text).toContain("Matched");
+    expect(text).toContain("Divergent");
+    // Totals visible.
+    expect(text).toContain("6.00");
+    expect(text).toContain("2.00");
+    // Divergence row visible with the category label.
+    expect(text).toContain("commission_drift");
+  });
+
+  it("Phase 5a P2: stale reconcile response is dropped when the active run changed mid-flight", async () => {
+    // Arrange: a slow reconcile resolves to run A; before it resolves
+    // the user submits run B. Expect: B's panel stays empty (no stale
+    // paint from A) and ``reconciling`` is cleared.
+    let resolveReconcile: (report: RunReconciliationReport) => void = () => {
+      throw new Error("reconcileRun mock was not invoked before navigation");
+    };
+    const reportForA: RunReconciliationReport = {
+      run_id: "ui_run_a",
+      algorithm_id: "MyAlgorithm",
+      normalized_parser_version: "phase-3a-r1",
+      total_fill_events: 1,
+      matched_count: 0,
+      divergent_count: 1,
+      commission_atol: "0.01",
+      total_recorded_fees: "5.00",
+      total_expected_ibkr_fees: "1.00",
+      divergences: [],
+    };
+
+    serviceMock.startTrustedRun.mockResolvedValueOnce(makeResponse({ run_id: "ui_run_a" }));
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    serviceMock.reconcileRun.mockImplementationOnce(
+      () =>
+        new Promise<RunReconciliationReport>((resolve) => {
+          resolveReconcile = resolve;
+        }),
+    );
+
+    await component.submit();
+    fixture.detectChanges();
+
+    // Fire and forget — we'll resolve it after navigating away.
+    const inFlight = component.reconcileFees();
+
+    // Simulate the user starting a new run B (this clears
+    // ``reconciliation`` + ``reconcileError`` and replaces ``response``).
+    serviceMock.startTrustedRun.mockResolvedValueOnce(makeResponse({ run_id: "ui_run_b" }));
+    await component.submit();
+    fixture.detectChanges();
+
+    expect(component.response()?.run_id).toBe("ui_run_b");
+    expect(component.reconciliation()).toBeNull();
+
+    // Now the original POST resolves with run A's report.
+    resolveReconcile(reportForA);
+    await inFlight;
+    fixture.detectChanges();
+
+    // Race fix: the stale report must NOT paint onto run B's panel.
+    expect(component.reconciliation()).toBeNull();
+    expect(component.reconcileError()).toBeNull();
+    expect(component.reconciling()).toBe(false);
   });
 
   it("renders the launcher's typed rejection envelope on a 400", async () => {
