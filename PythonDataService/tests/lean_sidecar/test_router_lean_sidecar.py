@@ -583,3 +583,42 @@ class TestRunsIndex:
         _write_manifest(patched_artifacts_root, "ui_run_legacy", algorithm_source_kind=None)
         row = (await client.get("/api/lean-sidecar/runs")).json()["runs"][0]
         assert row["algorithm_source_kind"] == "unknown"
+
+    async def test_cap_applied_after_global_sort(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Reviewer P2: cap must be applied after the started_at_ms
+        sort, not during the directory-scan loop. Pre-Phase-4d
+        run_ids didn't have a millisecond suffix, so a legacy run
+        with a lexically-late slug could push a genuinely-newer run
+        past the cap if the truncation happened scan-side.
+
+        Shrink the cap to 2 so the bug surfaces with a 3-run setup."""
+        from app.routers import lean_sidecar as lean_sidecar_router
+
+        monkeypatch.setattr(lean_sidecar_router, "_RUN_INDEX_CAP", 2)
+        monkeypatch.setattr(lean_sidecar_router, "_SCAN_HARD_CAP", 10)
+        # Three runs: lexical order is ui_run_z, ui_run_m, ui_run_a.
+        # Started-at order (desc) is ui_run_a, ui_run_z, ui_run_m.
+        # With cap=2 applied after sort we expect [a, z]; applied
+        # during scan (the bug) we'd get [z, m].
+        _write_manifest(patched_artifacts_root, "ui_run_a", started_at_ms=3000)
+        _write_manifest(patched_artifacts_root, "ui_run_m", started_at_ms=1000)
+        _write_manifest(patched_artifacts_root, "ui_run_z", started_at_ms=2000)
+        body = (await client.get("/api/lean-sidecar/runs")).json()
+        ids = [row["run_id"] for row in body["runs"]]
+        assert ids == ["ui_run_a", "ui_run_z"]
+        assert body["truncated"] is True
+
+    async def test_truncated_false_when_under_cap(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        _write_manifest(patched_artifacts_root, "ui_run_alpha", started_at_ms=1000)
+        body = (await client.get("/api/lean-sidecar/runs")).json()
+        assert body["truncated"] is False
+        assert len(body["runs"]) == 1

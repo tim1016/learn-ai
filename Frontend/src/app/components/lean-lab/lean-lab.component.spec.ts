@@ -276,6 +276,80 @@ describe("LeanLabComponent", () => {
     expect(text).toContain("Equity snapshot");
   });
 
+  it("loadRun preserves the historical run's failed exit state (reviewer P1)", async () => {
+    // Seed the sidebar with a run that exited 137 (OOM) — exit_clean=false.
+    // Then click it. The synthesized TrustedRunResponse MUST carry that
+    // exit_code + is_clean=false, otherwise the status badge shows a
+    // false-green "Clean run" pill.
+    TestBed.resetTestingModule();
+    serviceMock = {
+      startTrustedRun: vi.fn(),
+      getNormalized: vi.fn().mockResolvedValue(makeNormalized()),
+      getLogTail: vi.fn(),
+      getObservationsCsv: vi.fn(),
+      listRuns: vi.fn().mockResolvedValue(
+        makeRunIndex({
+          runs: [
+            makeRunSummary({
+              run_id: "ui_run_oom",
+              exit_code: 137,
+              exit_clean: false,
+            }),
+          ],
+        }),
+      ),
+    };
+    await TestBed.configureTestingModule({
+      imports: [LeanLabComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: LeanSidecarService, useValue: serviceMock },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LeanLabComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    await component.loadRun("ui_run_oom");
+    fixture.detectChanges();
+
+    expect(component.response()?.is_clean).toBe(false);
+    expect(component.response()?.exit_code).toBe(137);
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).not.toContain("Clean run");
+    expect(text).toContain("Exit 137");
+  });
+
+  it("surfaces the listRuns failure reason in the sidebar (reviewer: no silent catch)", async () => {
+    TestBed.resetTestingModule();
+    serviceMock = {
+      startTrustedRun: vi.fn(),
+      getNormalized: vi.fn(),
+      getLogTail: vi.fn(),
+      getObservationsCsv: vi.fn(),
+      listRuns: vi
+        .fn()
+        .mockRejectedValue(new LeanSidecarApiError(503, "launcher_unreachable", "down")),
+    };
+    await TestBed.configureTestingModule({
+      imports: [LeanLabComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: LeanSidecarService, useValue: serviceMock },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LeanLabComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("Couldn't load runs");
+    expect(text).toContain("launcher_unreachable");
+  });
+
   it("loadRun surfaces a 404 via the typed error envelope", async () => {
     serviceMock.getNormalized.mockRejectedValue(
       new LeanSidecarApiError(404, "normalized_missing", "not present"),

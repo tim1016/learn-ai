@@ -6,6 +6,9 @@
     }
   </header>
 
+  @if (loadError(); as err) {
+    <p class="lean-lab-run-history__error" role="alert">Couldn't load runs: {{ err }}</p>
+  }
   @if (!hasRuns()) {
     <p class="lean-lab-run-history__empty">No runs yet. Submit one to start the history.</p>
   } @else {

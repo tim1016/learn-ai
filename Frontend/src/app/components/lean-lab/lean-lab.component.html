@@ -15,6 +15,7 @@
       [selectedRunId]="selectedRunId()"
       [loading]="loadingRun() || submitting()"
       [truncated]="runsTruncated()"
+      [loadError]="runsLoadError()"
       (runSelected)="loadRun($event)"
     />
     <div class="lean-lab__main">

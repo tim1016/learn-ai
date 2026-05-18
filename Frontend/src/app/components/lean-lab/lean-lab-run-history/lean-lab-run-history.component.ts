@@ -27,6 +27,12 @@ export class LeanLabRunHistoryComponent {
   readonly loading = input<boolean>(false);
   /** Server cap reached — the list omits older runs. */
   readonly truncated = input<boolean>(false);
+  /**
+   * Index-endpoint failure reason (from the parent's ``refreshRuns``).
+   * When present, the sidebar shows a "couldn't load runs" line so
+   * an empty list is not ambiguous with a fetch error.
+   */
+  readonly loadError = input<string | null>(null);
 
   readonly runSelected = output<string>();
 

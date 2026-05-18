@@ -357,6 +357,12 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
 # sees ``truncated=True`` and can offer a "show older" follow-up later.
 _RUN_INDEX_CAP = 200
 
+# Safety bound on how many manifests we'll load before sorting. The
+# display cap above is what the operator sees; this is the work cap.
+# 5× display cap gives the sort enough headroom to pick the truly-
+# newest runs without unbounded I/O on a runaway artifacts root.
+_SCAN_HARD_CAP = _RUN_INDEX_CAP * 5
+
 
 def _safe_load_manifest_summary(manifest_path) -> dict | None:
     """Read one manifest.json and return a flat dict for the index row.
@@ -411,9 +417,18 @@ async def get_runs_index() -> RunIndexResponseModel:
 
     Scans direct child directories of ``DEFAULT_ARTIFACTS_ROOT``, keeps
     those whose names match ``RUN_ID_PATTERN`` (so stray dirs created
-    out-of-band are ignored), reads each ``manifest.json``, and sorts
-    by ``started_at_ms`` desc (run_id desc as a stable tiebreaker for
-    pre-Phase-4d manifests without that field).
+    out-of-band are ignored), reads each ``manifest.json``, sorts by
+    ``started_at_ms`` desc (run_id desc as a stable tiebreaker), and
+    truncates to ``_RUN_INDEX_CAP``.
+
+    Reviewer P2: cap is applied *after* the sort, not during the scan.
+    The scan-time ordering is by ``run_id`` text, which can diverge
+    from ``started_at_ms`` order — pre-Phase-4d run_ids didn't include
+    a millisecond suffix, so a legacy run with a lexically-late slug
+    could push a genuinely-newer run past the cap. Sorting first and
+    truncating after costs O(N log N) on the row count but is bounded
+    by ``_SCAN_HARD_CAP`` to keep a pathological artifacts root from
+    DoSing the endpoint.
 
     Pure read — does not touch the launcher, does not require LEAN to
     be running. Manifests that fail to parse are silently skipped (a
@@ -423,9 +438,6 @@ async def get_runs_index() -> RunIndexResponseModel:
     rows: list[RunSummaryModel] = []
     if not DEFAULT_ARTIFACTS_ROOT.exists():
         return RunIndexResponseModel(runs=[], cap=_RUN_INDEX_CAP, truncated=False)
-    # Sort by name desc as the initial enumeration order — run_ids are
-    # timestamp-prefixed by the frontend, so this approximates newest-
-    # first even before we read manifests. We re-sort after loading.
     candidate_dirs = []
     for entry in DEFAULT_ARTIFACTS_ROOT.iterdir():
         if not entry.is_dir():
@@ -435,9 +447,18 @@ async def get_runs_index() -> RunIndexResponseModel:
         except WorkspaceError:
             continue
         candidate_dirs.append(entry)
-    candidate_dirs.sort(key=lambda p: p.name, reverse=True)
-    truncated = False
-    for idx, entry in enumerate(candidate_dirs):
+    # Safety bound: hash the dir-list size and refuse to load manifests
+    # past it. _RUN_INDEX_CAP is the display cap (what the UI shows);
+    # _SCAN_HARD_CAP is the work cap (how many manifests we'll load
+    # before sorting and truncating). 5× the display cap keeps the
+    # work bounded but gives the sort enough headroom to pick the
+    # truly-newest runs.
+    scan_dirs = candidate_dirs[:_SCAN_HARD_CAP] if len(candidate_dirs) > _SCAN_HARD_CAP else candidate_dirs
+    # Iterate in run_id-desc order so the safety bound preferentially
+    # keeps the lexically-newest candidates (which for modern slug-
+    # prefixed-by-timestamp IDs approximates newest-first).
+    scan_dirs.sort(key=lambda p: p.name, reverse=True)
+    for entry in scan_dirs:
         manifest_path = entry / "manifest.json"
         if not manifest_path.exists():
             continue
@@ -445,18 +466,14 @@ async def get_runs_index() -> RunIndexResponseModel:
         if summary is None:
             continue
         rows.append(RunSummaryModel(run_id=entry.name, **summary))
-        if len(rows) >= _RUN_INDEX_CAP:
-            # Cap hit. If any remaining candidate has a manifest, the
-            # response omits it — flag the response so the UI can say so.
-            truncated = any((c / "manifest.json").exists() for c in candidate_dirs[idx + 1 :])
-            break
-    # Final sort by started_at_ms desc; runs without that field fall
-    # back to run_id desc (already the initial enumeration order).
+    # Sort all loaded rows by started_at_ms desc; runs without that
+    # field fall back to run_id desc.
     rows.sort(
         key=lambda r: (r.started_at_ms if r.started_at_ms is not None else -1, r.run_id),
         reverse=True,
     )
-    return RunIndexResponseModel(runs=rows, cap=_RUN_INDEX_CAP, truncated=truncated)
+    truncated = len(rows) > _RUN_INDEX_CAP or len(candidate_dirs) > _SCAN_HARD_CAP
+    return RunIndexResponseModel(runs=rows[:_RUN_INDEX_CAP], cap=_RUN_INDEX_CAP, truncated=truncated)
 
 
 # ---------------------------------------------------------------------------
