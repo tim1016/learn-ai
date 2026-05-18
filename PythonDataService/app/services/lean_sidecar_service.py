@@ -261,6 +261,36 @@ def _aggregate_daily_bar(symbol: str, minute_bars: list[TradeBar]) -> TradeBar:
     )
 
 
+_EASTERN = ZoneInfo("America/New_York")
+
+
+def _staged_window_from_dates(trading_dates: list[date]) -> WindowMs | None:
+    """Phase 5d: build the staged-data window in int64 ms UTC from the
+    list of trading dates the orchestrator staged.
+
+    The window envelope is [first_date 00:00 ET, (last_date + 1) 00:00 ET)
+    — the ET-midnight-to-next-ET-midnight bracket that contains every
+    bar in the staged zips. Reconciliation readers compare this against
+    the requested window to surface "we asked for N days, only got M"
+    cases.
+
+    Returns ``None`` when the date list is empty so the manifest's
+    ``staged_data_window_ms`` stays unset rather than carrying a
+    zero-length window that would falsely claim staging happened.
+    """
+    if not trading_dates:
+        return None
+    first = trading_dates[0]
+    last = trading_dates[-1]
+    # ET midnight is the canonical reference — independent of DST UTC
+    # offset. Same convention used by the per-bar ms encoding.
+    start_et = datetime(first.year, first.month, first.day, tzinfo=_EASTERN)
+    end_et = datetime(last.year, last.month, last.day, tzinfo=_EASTERN) + timedelta(days=1)
+    start_ms = int(start_et.timestamp() * 1000)
+    end_ms = int(end_et.timestamp() * 1000)
+    return WindowMs(start_ms=start_ms, end_ms=end_ms)
+
+
 def _iter_trading_dates(start: date, end: date) -> list[date]:
     """Inclusive trading-date sequence, weekends-only filtered.
 
@@ -385,6 +415,11 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         started_ms=started_ms,
         finished_ms=finished_ms,
         normalized=normalized,
+        # Phase 5d: the trading-date sequence that actually got staged.
+        # Closes half of invariant #16 (staged-data window) — the
+        # manifest can now show that the requested window vs the
+        # staged window match (or surface that they don't).
+        staged_trading_dates=trading_dates,
     )
     write_manifest(manifest, workspace.manifest_path)
 
@@ -417,6 +452,7 @@ def _build_manifest(
     started_ms: int,
     finished_ms: int,
     normalized: NormalizedResult | None,
+    staged_trading_dates: list[date],
 ) -> RunManifest:
     """Construct the full reproducibility manifest from the run.
 
@@ -484,9 +520,16 @@ def _build_manifest(
         ),
         # ``effective_algorithm_window_ms`` derived from the parsed
         # equity curve when available; ``bars_consumed_by_symbol``
-        # is still empty until Phase 3b adds per-symbol bar counts
-        # from the observations.csv audit file.
+        # is still empty until per-symbol bar counts can be derived
+        # from observations.csv (Phase 5e candidate).
         effective_algorithm_window_ms=_effective_window_from_normalized(normalized),
+        # Phase 5d: ``staged_data_window_ms`` = first staged trading
+        # date at 00:00 ET → last staged trading date at 24:00 ET (=
+        # next-day 00:00 ET), converted to int64 ms UTC. The window
+        # represents the full ET trading-day envelope of every staged
+        # zip, not the requested ms window. Reconciliation readers
+        # diff requested vs staged vs effective to surface gaps.
+        staged_data_window_ms=_staged_window_from_dates(staged_trading_dates),
         bars_consumed_by_symbol={},
         started_at_ms=started_ms,
         finished_at_ms=finished_ms,
