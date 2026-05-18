@@ -13,15 +13,30 @@ and refused here with a clear note in the OpenAPI schema.
 
 from __future__ import annotations
 
+import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from decimal import InvalidOperation as InvalidDecimalOperation
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT, MAX_ALGORITHM_SOURCE_BYTES
+from app.lean_sidecar.cross_reconciler import (
+    CrossReconciliationOutput,
+    compare_cross_engine,
+    internal_fill_to_dict,
+)
+from app.lean_sidecar.cross_runner import (
+    StrategyIncompatibleError,
+    StrategyNotFoundError,
+    WorkspaceDataMissingError,
+    run_engine_lab_on_workspace,
+)
 from app.lean_sidecar.launcher_client import (
     LauncherClientError,
     LauncherRejected,
@@ -50,6 +65,11 @@ from app.services.lean_sidecar_service import (
     TrustedRunRequest,
     run_trusted_sample,
 )
+
+# America/New_York for the ``int64 ms UTC`` → trading-date conversion in
+# manifest-derived cross-run inputs. Module-level constant so the
+# allocation is amortized across requests.
+_NY_TIMEZONE_FOR_DATES = ZoneInfo("America/New_York")
 
 logger = logging.getLogger(__name__)
 
@@ -993,21 +1013,20 @@ class CrossEngineReconciliationReportModel(BaseModel):
 @router.post(
     "/runs/{run_id}/cross-reconcile",
     response_model=CrossEngineReconciliationReportModel,
-    summary="Cross-engine reconciliation — Phase 5g.1 SCAFFOLD (returns 501).",
+    summary="Cross-engine reconciliation — diff this LEAN-Lab run against an Engine-Lab strategy.",
     responses={
-        status.HTTP_501_NOT_IMPLEMENTED: {
+        status.HTTP_400_BAD_REQUEST: {
             "description": (
-                "Phase 5g.1: endpoint scaffold landed; engine-lab "
-                "integration is the Phase 5g.2 slice. The 501 detail "
-                "carries ``reason: 'engine_lab_not_wired'`` so a "
-                "frontend can branch on this without parsing prose."
+                "Caller-supplied strategy class is unknown / incompatible "
+                "with the cross-run contract (must accept ``symbol`` "
+                "kwarg), OR the LEAN-Lab manifest is missing fields the "
+                "cross-runner needs (symbol, dates, starting cash)."
             ),
         },
         status.HTTP_404_NOT_FOUND: {
             "description": (
                 "Run not found, or run completed but no normalized "
-                "result.json on disk. Same reasons as the Phase 5a "
-                "self-reconciler endpoint."
+                "result.json / manifest.json on disk."
             ),
         },
     },
@@ -1016,18 +1035,45 @@ async def post_cross_reconcile(
     run_id: str,
     payload: CrossReconcileRequestModel,
 ) -> CrossEngineReconciliationReportModel:
-    """Phase 5g cross-engine reconciliation — Phase 5g.1 SCAFFOLD ONLY.
+    """Phase 5g cross-engine reconciliation.
 
-    This endpoint validates the request shape, resolves the LEAN-Lab run's
-    workspace, and confirms the normalized result.json is on disk. It
-    then returns 501 NOT_IMPLEMENTED because the engine-lab cross-run
-    primitive is the Phase 5g.2 deliverable.
+    Compares this LEAN-Lab run's fills against an Engine-Lab strategy
+    run on the same staged workspace data (D3 — shared staged data,
+    not Engine-Lab's native fixtures).
 
-    The Pydantic request and response shapes are stable as of this PR
-    (``schema_version: 1`` per D10). Phase 5g.2 replaces the 501 with the
-    real engine-lab → DivergenceCategory diff against the same workspace
-    zips LEAN saw (D3: shared staged data, not Engine Lab's native
-    fixtures).
+    Flow:
+
+    1. Resolve LEAN-Lab workspace + load ``manifest.json`` (extract
+       symbol, trading window, starting cash).
+    2. Load LEAN's ``normalized/result.json`` (the Phase 3a parser
+       output the orchestrator persisted).
+    3. Run the caller-supplied Engine-Lab strategy class against the
+       workspace data via
+       :func:`cross_runner.run_engine_lab_on_workspace`.
+    4. Diff via :func:`cross_reconciler.compare_cross_engine`. Default
+       gating taxonomy is strict — every category gating EXCEPT
+       ``COMMISSION_DRIFT`` (diagnostic). ``assert_fees=true`` (D3
+       Branch-A) promotes ``COMMISSION_DRIFT`` to gating.
+    5. Fold the comparator output into
+       ``CrossEngineReconciliationReportModel`` (``schema_version=1``
+       per D10).
+
+    Error contract mirrors the Phase 5a self-reconciler where possible:
+
+    * 404 ``run_not_found`` — invalid run_id, or workspace dir absent.
+    * 404 ``normalized_missing`` — workspace exists but no parseable
+      ``result.json`` (LEAN crashed before producing artifacts, or the
+      file failed validation).
+    * 404 ``manifest_missing`` — workspace exists but ``manifest.json``
+      is absent (the orchestrator never finished writing it). The
+      cross-run needs the manifest for symbol/dates/cash.
+    * 400 ``manifest_incomplete`` — manifest present but missing one of
+      the required fields (older manifest schema, or a malformed
+      hand-edited file). Surfaces the missing field name in ``detail``.
+    * 400 ``strategy_not_found`` — caller named an Engine-Lab strategy
+      class that does not resolve. ``detail`` carries the known list.
+    * 400 ``strategy_incompatible`` — strategy resolved but does not
+      accept the ``symbol`` kwarg required by the Phase 5g.2 contract.
     """
     workspace = _resolved_workspace_or_404(run_id)
     result_path = workspace.normalized_dir / "result.json"
@@ -1043,11 +1089,10 @@ async def post_cross_reconcile(
                 ),
             },
         )
-    # Pydantic already validated; ensure result.json itself is loadable.
-    # A malformed file means we can't diff against it; surface as 404
-    # normalized_missing per the Phase 5a convention.
     try:
-        NormalizedResult.model_validate_json(result_path.read_text(encoding="utf-8"))
+        normalized_result = NormalizedResult.model_validate_json(
+            result_path.read_text(encoding="utf-8")
+        )
     except (OSError, ValueError, NormalizedParserError) as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1059,21 +1104,271 @@ async def post_cross_reconcile(
                 ),
             },
         ) from e
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail={
-            "reason": "engine_lab_not_wired",
-            "message": (
-                "Phase 5g.1 scaffold: cross-engine reconciler endpoint is "
-                "registered and request/response Pydantic shapes are "
-                "stable, but the Engine Lab cross-run primitive lands in "
-                "Phase 5g.2. Try again once that PR merges. See "
-                "docs/architecture/phases/phase-5g.md for the slice plan."
+
+    if not workspace.manifest_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason": "manifest_missing",
+                "message": (
+                    f"cannot cross-reconcile {run_id}: manifest.json not "
+                    "present. The orchestrator did not finish recording "
+                    "the run; cross-run inputs (symbol, dates, cash) "
+                    "cannot be derived."
+                ),
+            },
+        )
+    try:
+        manifest_data = json.loads(
+            workspace.manifest_path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason": "manifest_missing",
+                "message": (
+                    f"cannot cross-reconcile {run_id}: manifest.json "
+                    f"failed to load ({e})."
+                ),
+            },
+        ) from e
+
+    cross_inputs = _extract_cross_run_inputs_from_manifest(
+        manifest_data, run_id=run_id
+    )
+
+    try:
+        cross_result = run_engine_lab_on_workspace(
+            workspace.workspace_dir,
+            payload.engine_lab_strategy_class,
+            symbol=cross_inputs["symbol"],
+            start_date=cross_inputs["start_date"],
+            end_date=cross_inputs["end_date"],
+            initial_cash=cross_inputs["initial_cash"],
+        )
+    except StrategyNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "strategy_not_found",
+                "message": str(e),
+                "engine_lab_strategy_class": payload.engine_lab_strategy_class,
+            },
+        ) from e
+    except StrategyIncompatibleError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "strategy_incompatible",
+                "message": str(e),
+                "engine_lab_strategy_class": payload.engine_lab_strategy_class,
+            },
+        ) from e
+    except WorkspaceDataMissingError as e:
+        # Workspace exists (we resolved it above) but the data/ subtree
+        # is gone. Surface as 404 — a recoverable "needs restage" rather
+        # than a server error.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason": "workspace_data_missing",
+                "message": str(e),
+            },
+        ) from e
+
+    comparator_output = compare_cross_engine(
+        normalized_result.order_events,
+        cross_result.order_events,
+        assert_fees=payload.assert_fees,
+    )
+
+    return _build_cross_engine_report(
+        comparator_output,
+        run_id=run_id,
+        engine_lab_strategy_class=payload.engine_lab_strategy_class,
+        assert_fees=payload.assert_fees,
+    )
+
+
+def _extract_cross_run_inputs_from_manifest(
+    manifest_data: dict, *, run_id: str
+) -> dict:
+    """Pull symbol / start_date / end_date / initial_cash from a
+    persisted manifest. Raises HTTPException(400) with
+    ``reason: 'manifest_incomplete'`` and the offending field name when
+    any required value is absent or malformed.
+
+    The manifest schema has evolved across Phase 1 → 5: older runs may
+    not have ``parameters.symbol`` (it was added when arbitrary-source
+    runs landed). For those, the symbol falls back to the single key in
+    ``bars_consumed_by_symbol`` if exactly one is present — that's a
+    safe inference since the trusted sample is single-symbol.
+    """
+    parameters = manifest_data.get("parameters") or {}
+    requested = manifest_data.get("requested_window_ms") or {}
+    bars_consumed = manifest_data.get("bars_consumed_by_symbol") or {}
+
+    # ---- Symbol ---------------------------------------------------------
+    symbol_raw = parameters.get("symbol")
+    if not symbol_raw:
+        # Fallback for older single-symbol manifests.
+        keys = list(bars_consumed.keys()) if isinstance(bars_consumed, dict) else []
+        if len(keys) == 1:
+            symbol_raw = keys[0]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "reason": "manifest_incomplete",
+                    "message": (
+                        f"cannot cross-reconcile {run_id}: manifest has no "
+                        "``parameters.symbol`` and cannot infer one from "
+                        "``bars_consumed_by_symbol``. Re-run the algorithm "
+                        "with a current manifest schema."
+                    ),
+                    "missing_field": "parameters.symbol",
+                },
+            )
+    symbol = str(symbol_raw).upper()
+
+    # ---- Dates ----------------------------------------------------------
+    start_str = parameters.get("start_date")
+    end_str = parameters.get("end_date")
+    if start_str and end_str:
+        try:
+            start_date = date.fromisoformat(start_str)
+            end_date = date.fromisoformat(end_str)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "reason": "manifest_incomplete",
+                    "message": (
+                        f"cannot cross-reconcile {run_id}: manifest "
+                        f"parameters.start_date / end_date are not "
+                        f"ISO date strings ({e})."
+                    ),
+                    "missing_field": "parameters.start_date|end_date",
+                },
+            ) from e
+    else:
+        # Fall back to requested_window_ms (always int64 ms UTC per
+        # the manifest contract). Convert each end of the window to its
+        # NY-local calendar date.
+        start_ms = requested.get("start_ms") if isinstance(requested, dict) else None
+        end_ms = requested.get("end_ms") if isinstance(requested, dict) else None
+        if start_ms is None or end_ms is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "reason": "manifest_incomplete",
+                    "message": (
+                        f"cannot cross-reconcile {run_id}: manifest has "
+                        "neither ``parameters.start_date/end_date`` nor "
+                        "``requested_window_ms``."
+                    ),
+                    "missing_field": "parameters.start_date|requested_window_ms",
+                },
+            )
+        try:
+            start_date = datetime.fromtimestamp(
+                int(start_ms) / 1000, tz=_NY_TIMEZONE_FOR_DATES
+            ).date()
+            end_date = datetime.fromtimestamp(
+                int(end_ms) / 1000, tz=_NY_TIMEZONE_FOR_DATES
+            ).date()
+        except (TypeError, ValueError, OSError) as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "reason": "manifest_incomplete",
+                    "message": (
+                        f"cannot cross-reconcile {run_id}: "
+                        f"requested_window_ms is malformed ({e})."
+                    ),
+                    "missing_field": "requested_window_ms",
+                },
+            ) from e
+
+    # ---- Starting cash --------------------------------------------------
+    cash_raw = parameters.get("starting_cash") or manifest_data.get("starting_capital")
+    if cash_raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "manifest_incomplete",
+                "message": (
+                    f"cannot cross-reconcile {run_id}: manifest has no "
+                    "``parameters.starting_cash`` or top-level "
+                    "``starting_capital``."
+                ),
+                "missing_field": "parameters.starting_cash",
+            },
+        )
+    try:
+        initial_cash = Decimal(str(cash_raw))
+    except (TypeError, ValueError, InvalidDecimalOperation) as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "manifest_incomplete",
+                "message": (
+                    f"cannot cross-reconcile {run_id}: starting_cash "
+                    f"is not a valid number ({cash_raw!r}: {e})."
+                ),
+                "missing_field": "parameters.starting_cash",
+            },
+        ) from e
+
+    return {
+        "symbol": symbol,
+        "start_date": start_date,
+        "end_date": end_date,
+        "initial_cash": initial_cash,
+    }
+
+
+def _build_cross_engine_report(
+    output: CrossReconciliationOutput,
+    *,
+    run_id: str,
+    engine_lab_strategy_class: str,
+    assert_fees: bool,
+) -> CrossEngineReconciliationReportModel:
+    """Convert the comparator's router-agnostic output to the wire model."""
+    divergences = [
+        CrossEngineDivergenceModel(
+            category=d.category.value,  # type: ignore[arg-type]
+            trading_date=d.trading_date.isoformat(),
+            detail=d.detail,
+            lean_fill=(
+                CrossEngineFillSnapshotModel(**internal_fill_to_dict(d.lean_fill))
+                if d.lean_fill is not None
+                else None
             ),
-            "engine_lab_strategy_class": payload.engine_lab_strategy_class,
-            "assert_fees": payload.assert_fees,
-            "schema_version": 1,
+            engine_fill=(
+                CrossEngineFillSnapshotModel(**internal_fill_to_dict(d.engine_fill))
+                if d.engine_fill is not None
+                else None
+            ),
+        )
+        for d in output.divergences
+    ]
+    return CrossEngineReconciliationReportModel(
+        run_id=run_id,
+        engine_lab_strategy_class=engine_lab_strategy_class,
+        assert_fees=assert_fees,
+        lean_total_fills=output.lean_total_fills,
+        engine_total_fills=output.engine_total_fills,
+        matched_count=output.matched_count,
+        divergent_count=output.divergent_count,
+        gating_divergent_count=output.gating_divergent_count,
+        passed=output.passed,
+        counts_by_category={
+            cat.value: n for cat, n in output.counts_by_category.items()  # type: ignore[misc]
         },
+        divergences=divergences,
     )
 
 
