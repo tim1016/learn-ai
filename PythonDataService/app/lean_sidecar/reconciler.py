@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
-from app.lean_sidecar.normalized_parser import NormalizedOrderEvent, NormalizedResult
+from app.lean_sidecar.normalized_parser import NormalizedOrderEvent
 from app.research.parity.ibkr_commission import IbkrEquityCommissionModel
 
 # Money on this layer is cents-precise. The IBKR model already
@@ -205,26 +205,10 @@ def reconcile_against_ibkr(
     )
 
 
-def reconcile_normalized_result(
-    result: NormalizedResult,
-    *,
-    commission_atol: Decimal = DEFAULT_COMMISSION_ATOL,
-    model: IbkrEquityCommissionModel | None = None,
-) -> FeeReconciliationReport:
-    """Convenience wrapper that reads run_id + events from a parsed result."""
-    return reconcile_against_ibkr(
-        run_id=result.algorithm_id,
-        order_events=result.order_events,
-        commission_atol=commission_atol,
-        model=model,
-    )
-
-
 __all__ = [
     "DEFAULT_COMMISSION_ATOL",
     "FeeDivergence",
     "FeeDivergenceCategory",
     "FeeReconciliationReport",
     "reconcile_against_ibkr",
-    "reconcile_normalized_result",
 ]
