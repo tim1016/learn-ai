@@ -369,6 +369,44 @@ class TestPostTrustedRunHappyPath:
         assert r.status_code == 503
         assert r.json()["detail"]["reason"] == "launcher_unreachable"
 
+    async def test_reused_run_id_returns_409(
+        self,
+        client: AsyncClient,
+        patched_pin: str,
+        patched_artifacts_root: Path,
+        stub_image_extract: None,
+        stub_normalized_parser: None,
+    ) -> None:
+        """Review-fix (P1.2): reusing a ``run_id`` would have let the
+        new run inherit ``output/``, ``normalized/``, and
+        ``manifest.json`` from the previous run. The orchestrator now
+        rejects with HTTP 409 ``run_id_already_used`` before any
+        staging touches the workspace; the operator must pick a fresh
+        slug. The UI's default ``runId`` regenerates on every submit,
+        so a 409 here means the slug was hand-edited to a used value."""
+        payload = _good_payload("router_reused")
+        async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
+            mock.post("/launch").mock(
+                return_value=httpx.Response(
+                    200, json=_launcher_success_body("router_reused")
+                ),
+            )
+            first = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
+            assert first.status_code == 200, first.text
+            # Re-submit identical payload — the workspace now exists.
+            second = await client.post(
+                "/api/lean-sidecar/trusted-runs", json=payload
+            )
+        assert second.status_code == 409
+        body = second.json()["detail"]
+        assert body["reason"] == "run_id_already_used"
+        assert "router_reused" in body["message"]
+        # The previously-written manifest must NOT have been
+        # overwritten — defense against future regressions where the
+        # rejection happens too late.
+        ws = resolve_workspace("router_reused", patched_artifacts_root)
+        assert ws.manifest_path.exists()
+
 
 class TestInspectionEndpoints:
     async def test_manifest_endpoint_returns_written_manifest(

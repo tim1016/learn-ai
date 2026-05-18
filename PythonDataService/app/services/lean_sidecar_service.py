@@ -108,6 +108,22 @@ class LeanSidecarServiceError(RuntimeError):
     """
 
 
+class RunIdAlreadyUsedError(LeanSidecarServiceError):
+    """Raised when the caller submits a run with a ``run_id`` that
+    already has an existing workspace on disk.
+
+    Reusing a ``run_id`` would let the new run inherit stale artifacts
+    (``output/log.txt``, ``normalized/*-summary.json``,
+    ``manifest.json``, the LEAN ObjectStore) from the previous run,
+    contaminating downstream parsers and producing a manifest that
+    claims fresh-bar consumption while reading prior LEAN output.
+    Server-side uniqueness is the simplest enforcement — fresh slug
+    per run.
+
+    Maps to HTTP 409 ``run_id_already_used`` in the router.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class TrustedRunRequest:
     """Phase 2a input — bounded set of caller-tunable knobs.
@@ -371,6 +387,21 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         )
 
     workspace = resolve_workspace(request.run_id, DEFAULT_ARTIFACTS_ROOT)
+    # Reviewer P1: reject a reused run_id BEFORE staging touches the
+    # workspace. Without this guard, ``ensure_layout`` silently no-ops
+    # on an existing tree, the metadata + bars get re-staged on top,
+    # and the parser then reads whatever ``*-summary.json`` the
+    # previous run left behind — producing a fresh manifest that
+    # claims new-bar consumption while reading stale LEAN output. We
+    # check the run's root (not just workspace_dir) so legacy or
+    # half-written runs that only created ``<root>/normalized/`` or
+    # ``<root>/manifest.json`` still flag as taken.
+    if workspace.root.exists():
+        raise RunIdAlreadyUsedError(
+            f"run_id {request.run_id!r} already has a workspace at "
+            f"{workspace.root}; choose a fresh run_id (the UI's "
+            "default ``runId`` field regenerates on every submit)."
+        )
     workspace.ensure_layout()
 
     trading_dates = _iter_trading_dates(request.start_date, request.end_date)
