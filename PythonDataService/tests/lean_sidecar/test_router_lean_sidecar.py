@@ -655,3 +655,146 @@ class TestRunsIndex:
         assert ids == ["ui_run_ok"]
         # Skip must be logged with the bad run_id for diagnosis.
         assert any("ui_run_badtypes" in rec.message for rec in caplog.records)
+
+
+class TestPostReconcileEndpoint:
+    """Phase 5a — POST /runs/{id}/reconcile integration tests.
+
+    Uses the same `_stub_parse_workspace` pattern as the inspection
+    endpoints — we mock `parse_workspace` to return a stubbed
+    `NormalizedResult` rather than write LEAN-shaped artifact files into
+    the workspace, because the reconciler logic is what's under test
+    here, not the parser."""
+
+    @pytest.fixture
+    def stub_normalized_result(self, monkeypatch: pytest.MonkeyPatch):
+        """Make `parse_workspace` return a callable factory so each test
+        can inject its own NormalizedResult."""
+        from app.lean_sidecar.normalized_parser import NormalizedResult
+        from app.routers import lean_sidecar as router_module
+
+        def _make_factory(events: list[dict], *, algorithm_id: str = "MyAlgorithm"):
+            from app.lean_sidecar.normalized_parser import NormalizedOrderEvent
+
+            order_events = [NormalizedOrderEvent.model_validate(e) for e in events]
+            result = NormalizedResult(
+                parser_version="phase-3a-r1",
+                algorithm_id=algorithm_id,
+                statistics={},
+                runtime_statistics={},
+                equity_curve=[],
+                order_events=order_events,
+                total_order_events=len(order_events),
+                total_equity_points=0,
+            )
+
+            def _parse(workspace) -> NormalizedResult:
+                return result
+
+            monkeypatch.setattr(router_module, "parse_workspace", _parse)
+            return result
+
+        return _make_factory
+
+    def _filled_event(self, **overrides) -> dict:
+        base = {
+            "order_event_id": 1,
+            "order_id": 100,
+            "algorithm_id": "MyAlgorithm",
+            "symbol": "SPY",
+            "symbol_value": "SPY",
+            "ms_utc": 1_736_121_600_000,
+            "status": "Filled",
+            "direction": "Buy",
+            "quantity": 100.0,
+            "fill_price": 580.50,
+            "fill_price_currency": "USD",
+            "fill_quantity": 100.0,
+            "is_assignment": False,
+            "order_fee_amount": 1.00,
+            "order_fee_currency": "USD",
+            "message": None,
+        }
+        base.update(overrides)
+        return base
+
+    async def test_clean_run_returns_empty_divergences(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+        stub_normalized_result,
+    ) -> None:
+        ws = resolve_workspace("rec_clean", patched_artifacts_root)
+        ws.ensure_layout()
+        stub_normalized_result([self._filled_event(order_fee_amount=1.00)])
+
+        r = await client.post("/api/lean-sidecar/runs/rec_clean/reconcile")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total_fill_events"] == 1
+        assert body["matched_count"] == 1
+        assert body["divergent_count"] == 0
+        assert body["divergences"] == []
+        assert body["commission_atol"] == "0.01"
+        assert body["total_recorded_fees"] == "1.00"
+        assert body["total_expected_ibkr_fees"] == "1.00"
+
+    async def test_commission_drift_surfaces_in_divergences(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+        stub_normalized_result,
+    ) -> None:
+        """Default-brokerage run with $5 fee where IBKR expects $1 — the
+        kind of report a non-reconciliation-grade run will produce."""
+        ws = resolve_workspace("rec_drift", patched_artifacts_root)
+        ws.ensure_layout()
+        stub_normalized_result([self._filled_event(order_fee_amount=5.00)])
+
+        r = await client.post("/api/lean-sidecar/runs/rec_drift/reconcile")
+
+        body = r.json()
+        assert body["divergent_count"] == 1
+        d = body["divergences"][0]
+        assert d["category"] == "commission_drift"
+        assert d["recorded_fee"] == "5.00"
+        assert d["expected_ibkr_fee"] == "1.00"
+        assert d["delta"] == "4.00"
+
+    async def test_404_when_workspace_missing(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+    ) -> None:
+        r = await client.post("/api/lean-sidecar/runs/rec_no_workspace/reconcile")
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "run_not_found"
+
+    async def test_404_when_normalized_missing(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A workspace that exists but where LEAN crashed before
+        writing artifacts — the reconciler must 404 with the
+        normalized_missing reason so the caller can branch."""
+        from app.lean_sidecar.normalized_parser import NormalizedParserError
+        from app.routers import lean_sidecar as router_module
+
+        ws = resolve_workspace("rec_no_artifacts", patched_artifacts_root)
+        ws.ensure_layout()
+
+        def _raise(workspace):
+            raise NormalizedParserError("summary file not found")
+
+        monkeypatch.setattr(router_module, "parse_workspace", _raise)
+
+        r = await client.post("/api/lean-sidecar/runs/rec_no_artifacts/reconcile")
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "normalized_missing"
+
+    async def test_invalid_run_id_rejected_at_reconcile(self, client: AsyncClient) -> None:
+        r = await client.post("/api/lean-sidecar/runs/..escape/reconcile")
+        assert r.status_code == 400
