@@ -1151,6 +1151,35 @@ async def post_cross_reconcile(
         manifest_data, run_id=run_id
     )
 
+    # Open-Q2 review-fix: ``assert_fees=true`` only makes sense when
+    # both engines pin the same fee model. The Engine Lab side hard-
+    # codes Phase 5a's ``IbkrEquityCommissionModel``; the LEAN side
+    # only matches when the run used the Phase 5b reconciliation
+    # template (which calls ``SetBrokerageModel(
+    # BrokerageName.InteractiveBrokersBrokerage, ...)`` and records
+    # ``brokerage_policy="interactive_brokers"`` in the manifest).
+    # Promoting ``commission_drift`` to gating against a default-
+    # brokerage LEAN run produces a deceptive "Failed" badge for an
+    # inherently meaningless comparison; refuse at the boundary.
+    if payload.assert_fees:
+        brokerage_policy = manifest_data.get("brokerage_policy")
+        if brokerage_policy != "interactive_brokers":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "reason": "assert_fees_requires_ibkr_brokerage",
+                    "message": (
+                        f"assert_fees=true requires the LEAN-Lab run to have "
+                        "used the reconciliation template "
+                        '(brokerage_policy="interactive_brokers"); '
+                        f"got brokerage_policy={brokerage_policy!r}. Re-run "
+                        "the LEAN-Lab side with template='reconciliation' "
+                        "or call cross-reconcile with assert_fees=false."
+                    ),
+                    "manifest_brokerage_policy": brokerage_policy,
+                },
+            )
+
     try:
         cross_result = run_engine_lab_on_workspace(
             workspace.workspace_dir,

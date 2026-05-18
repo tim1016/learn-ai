@@ -73,13 +73,22 @@ def _launcher_url() -> str:
 
 
 def _auth_headers() -> dict[str, str]:
-    """Attach ``X-Launcher-Token`` if the launcher was configured with one.
+    """Attach ``X-Launcher-Token`` to every launcher request.
 
-    The launcher refuses requests without the token when
-    ``LEAN_LAUNCHER_TOKEN`` is set in its environment. The data plane
-    uses the same env var name; both sides read it independently.
+    Resolves the token from ``LEAN_LAUNCHER_TOKEN`` env (operator
+    override) or, when env is unset, from the launcher's persisted
+    token file shared via the artifacts bind mount. Open-Q1 review-
+    fix made launcher auth mandatory; if no token is resolvable here
+    (launcher hasn't started yet, env not set, no file on the bind
+    mount) we still send no header — the launcher then returns 401
+    and the data plane surfaces that as a 502 launcher_protocol_error.
     """
-    token = os.environ.get("LEAN_LAUNCHER_TOKEN")
+    # Lazy import to avoid pulling DEFAULT_ARTIFACTS_ROOT into module
+    # import order — also keeps test monkeypatching of artifacts
+    # roots effective when those patches happen after import.
+    from app.lean_sidecar.launcher_auth import read_launcher_token
+
+    token = read_launcher_token()
     return {"X-Launcher-Token": token} if token else {}
 
 

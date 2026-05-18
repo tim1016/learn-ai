@@ -4,10 +4,16 @@ Run with:
 
     uvicorn app.lean_sidecar.launcher.app:app --host 127.0.0.1 --port 8090
 
-The launcher binds to ``127.0.0.1`` by default; the ADR's Windows fall
-back to localhost + shared-secret is honored via the ``LEAN_LAUNCHER_TOKEN``
-environment variable (when set, every request must carry the token
-header).
+The launcher binds to ``127.0.0.1`` by default. Auth is **mandatory**:
+every request must carry an ``X-Launcher-Token`` header that matches
+the launcher's token. The token resolves from
+``LEAN_LAUNCHER_TOKEN`` env (operator override) or, when env is
+unset, from a file the launcher auto-generates and writes to the
+artifacts root. The data-plane container reads the same file through
+the shared bind mount. Open-Q1 review-fix: previously the token was
+opt-in (unset env on either side ⇒ no auth check), which on a
+0.0.0.0-bound launcher with arbitrary user source accepted means no
+auth in practice.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from app.lean_sidecar.launcher.service import (
     extract_metadata,
     launch,
 )
+from app.lean_sidecar.launcher_auth import ensure_launcher_token
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +62,16 @@ def _artifacts_root() -> Path:
     return root
 
 
-def _expected_token() -> str | None:
-    """Return the shared-secret token when set, else None (open localhost)."""
-    return os.environ.get("LEAN_LAUNCHER_TOKEN") or None
+def _expected_token() -> str:
+    """Return the launcher's auth token.
+
+    Resolution: env → on-disk file → freshly-generated. The file is
+    persisted at startup so the data plane (which doesn't share this
+    process's env) can read the same value via the bind mount. The
+    token is always non-None — Open-Q1 review-fix made auth
+    mandatory; there is no "open localhost" mode.
+    """
+    return ensure_launcher_token(_artifacts_root())
 
 
 app = FastAPI(
@@ -82,7 +96,7 @@ async def post_launch(
     x_launcher_token: str | None = Header(default=None, alias="X-Launcher-Token"),
 ) -> LaunchResponse:
     expected = _expected_token()
-    if expected is not None and x_launcher_token != expected:
+    if x_launcher_token != expected:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="missing or wrong X-Launcher-Token",
@@ -112,7 +126,7 @@ async def post_extract_metadata(
     not supposed to need podman directly).
     """
     expected = _expected_token()
-    if expected is not None and x_launcher_token != expected:
+    if x_launcher_token != expected:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="missing or wrong X-Launcher-Token",
