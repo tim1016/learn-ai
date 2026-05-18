@@ -131,4 +131,33 @@ describe("LeanSidecarService", () => {
     req.flush("LEAN ALGORITHMIC TRADING ENGINE v2.5.0.0\n");
     expect(await promise).toContain("LEAN ALGORITHMIC TRADING ENGINE");
   });
+
+  it("Phase 4e: getManifest returns the raw manifest dict", async () => {
+    const fakeManifest = {
+      run_id: "ut_run_manifest",
+      parameters: { symbol: "SPY", starting_cash: "100000" },
+      requested_window_ms: { start_ms: 1, end_ms: 2 },
+      algorithm_source_sha256: "abc",
+    };
+    const promise = service.getManifest("ut_run_manifest");
+    const req = httpMock.expectOne((r) =>
+      r.url.endsWith("/api/lean-sidecar/runs/ut_run_manifest/manifest"),
+    );
+    req.flush(fakeManifest);
+    const result = await promise;
+    expect(result.parameters?.symbol).toBe("SPY");
+    expect(result.requested_window_ms?.start_ms).toBe(1);
+  });
+
+  it("Phase 4e: getManifest maps a 404 to the typed envelope", async () => {
+    const promise = service.getManifest("missing").catch((e) => e);
+    const req = httpMock.expectOne((r) => r.url.endsWith("/manifest"));
+    req.flush(
+      { detail: { reason: "manifest_missing", message: "no manifest.json for missing" } },
+      { status: 404, statusText: "Not Found" },
+    );
+    const err = await promise;
+    expect((err as LeanSidecarApiError).reason).toBe("manifest_missing");
+    expect((err as LeanSidecarApiError).status).toBe(404);
+  });
 });

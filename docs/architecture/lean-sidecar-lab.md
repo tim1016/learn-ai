@@ -427,7 +427,7 @@ The original plan's six phases are retained, with these adjustments encoded by P
 - **Phase 1 (Runner spike)** — now includes (a) authoring the launcher service, (b) resolving the image digest, (c) proving the Windows/Podman topology and workspace path mapping, (d) confirming which of `--cap-drop=ALL` / `--read-only` / `--tmpfs` / non-root user / disk quota the LEAN image tolerates, (e) proving the LEAN data-folder contract with a price/timestamp round-trip fixture, (f) staging and hashing metadata databases, factor files, and map files for the trusted sample, (g) producing one end-to-end run on a hard-coded trusted Python algorithm (no user input yet), (h) re-running the same sample with the same inputs and asserting deterministic artifacts or documented equivalence within the quantization floor, (i) proving requested/staged/effective date-window alignment and non-empty bar consumption.
 - **Phase 2 (Python API)** — unchanged in shape; the runner.py invocations go through the launcher socket/HTTP rather than spawning podman as a child process of the data-plane container.
 - **Phase 3 — renamed *Container Execution Boundary + Fidelity Boundary*** — is the gating phase before any UI takes arbitrary user input. The UI from Phase 4 may exist earlier only with a hardcoded trusted sample algorithm (no `algorithm_source` field, no textarea). This phase also lands the normalized parser tests, manifest hashing, disk-cap enforcement, and explicit compatibility-vs-reconciliation run classification.
-- **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. Phase 4a shipped the trusted-sample form, 4b the equity chart, **4c the custom-algorithm textarea** (server-side accept of `algorithm_source` on `POST /lean/runs/start`), and **4d the run-history sidebar** (`GET /api/lean-sidecar/runs` + sidebar component, click-to-rehydrate). From 4c onward, a successful run is possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. The acceptance is unconditional on the API and gated by a UI toggle (defaults off → trusted sample). Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
+- **Phase 4 (Frontend LEAN Lab)** - is the first user-facing path. Phase 4a shipped the trusted-sample form, 4b the equity chart, **4c the custom-algorithm textarea** (server-side accept of `algorithm_source` on `POST /lean/runs/start`), **4d the run-history sidebar** (`GET /api/lean-sidecar/runs` + sidebar component), and **4e form rehydration on sidebar click** (`getManifest` repopulates symbol/window/cash so re-running a past run is a one-click → tweak → submit loop). From 4c onward, a successful run is possible from `/lean-lab` by pasting/editing the `QCAlgorithm`, configuring the run, clicking Run, and viewing results. The acceptance is unconditional on the API and gated by a UI toggle (defaults off → trusted sample). Developer CLI helpers may exist for tests or spikes only; they are never the product workflow.
 - **Phases 5-6** - unchanged in scope.
 
 ### Phase 1a progress (2026-05-17)
@@ -532,6 +532,42 @@ Open from this PR, queued for Phase 1d / Phase 5:
 - Quote-bar staging — eliminates the last known-noise category in the trusted-sample log.
 - Real factor/map files for the reconciliation-grade Phase 5 fixtures (not for the spike).
 - Hardening-profile enum to replace caller-supplied `hardening_flags` argv tokens — reviewer-suggested longer-term direction.
+
+### Phase 4e progress (2026-05-17, follow-up PR — form rehydration from manifest)
+
+Phase 4d added the sidebar but a click only repopulated the result
+panel; the form fields stayed at their defaults, so re-running a past
+configuration meant re-typing it. Phase 4e closes that loop.
+
+- **No new endpoint.** `GET /api/lean-sidecar/runs/{id}/manifest`
+  has existed since Phase 2a; Phase 4e just adds a typed frontend
+  wrapper (`LeanSidecarService.getManifest`) that returns a narrow
+  `RunManifest` TS interface — only the fields the form needs are
+  typed; the rest of the dict passes through as `unknown`.
+- **`rehydrateFormFromManifest` policy.** Symbol, starting cash,
+  and the requested window come from `manifest.parameters` and
+  `manifest.requested_window_ms`. The algorithm source is NOT
+  rehydrated — the manifest stores only its sha256 (provenance hash),
+  not the source itself. The toggle resets to off; operators re-running
+  a user-source algorithm re-paste it. A fresh `runId` is generated
+  so a re-run with the rehydrated form lands in a new workspace
+  (mixing artifacts in the same dir would corrupt the audit trail).
+- **Defensive wire-type coercion.** `starting_cash` is serialized as
+  a string by the trusted-sample staging code and as a number
+  elsewhere; the rehydrator accepts both. Out-of-range cash (below
+  the $1k server min) is rejected from the patch entirely rather
+  than auto-clamped — patching it in would immediately invalidate
+  the form, and the operator is better served seeing the old value
+  with a fresh symbol/window than seeing the form go red on click.
+- **Manifest fetch failure is non-fatal.** A 404 (legacy run with
+  no manifest written) leaves the form at its previous values; the
+  result panel still renders. A swallow-with-comment is the right
+  call here — surfacing every 404 in the UI for the legacy-run case
+  would be noise without a remediation action.
+- **Test surface** — 4 new component specs (full rehydration, numeric
+  starting_cash variant, 404 leaves form intact, below-min cash
+  rejected from patch); 2 new service specs (getManifest success,
+  getManifest 404 envelope). 39 frontend tests pass (was 33).
 
 ### Phase 4d progress (2026-05-17, follow-up PR — run-history sidebar)
 

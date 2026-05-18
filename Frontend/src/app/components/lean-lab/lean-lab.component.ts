@@ -272,20 +272,32 @@ export class LeanLabComponent {
   }
 
   /**
-   * Sidebar click handler. Loads the normalized result for an
-   * existing run and renders it in the main panel. Does not
-   * repopulate form fields — the form remains primed for the next
-   * submit. Phase 4e candidate: rehydrate form from manifest too.
+   * Sidebar click handler. Loads the normalized result + manifest for
+   * an existing run, rehydrates the form fields (Phase 4e), and
+   * renders the result panel.
    *
-   * Reviewer P1: the synthesized ``TrustedRunResponse`` MUST carry
-   * the actual ``exit_code`` / ``exit_clean`` from the row in
-   * ``runs()`` — synthesizing ``is_clean: true`` for every historical
-   * row would paint failed runs as clean once rehydrated. We don't
-   * have ``lean_errors`` from the manifest (the index intentionally
-   * omits them), so the statusBadge still shows "Clean run" only when
-   * the exit was actually 0; non-zero exits get the red ``Exit N``
-   * pill and the operator clicks through to the LEAN log endpoint
-   * for the detailed errors.
+   * Form rehydration policy:
+   * - Symbol, starting cash, and the requested window come from
+   *   ``manifest.parameters`` and ``manifest.requested_window_ms``.
+   * - The algorithm source is NOT rehydrated: the manifest only
+   *   stores its sha256 (provenance hash), not the source itself.
+   *   The toggle resets to off — operators re-running a user-source
+   *   algorithm must re-paste it. The custom tag in the sidebar
+   *   makes the original kind discoverable.
+   * - A fresh ``runId`` is generated so a re-run with the rehydrated
+   *   form lands in a NEW workspace, not the historical one (mixing
+   *   artifacts in the same dir would corrupt the audit trail).
+   *
+   * Manifest fetch failure is non-fatal: the result panel still
+   * renders (operators don't lose the click) but the form stays at
+   * its previous values; a sidebar-only error pill would be
+   * over-engineered for what is almost always a 404 (legacy run with
+   * no manifest written).
+   *
+   * Reviewer P1 (Phase 4d): the synthesized ``TrustedRunResponse``
+   * MUST carry the actual ``exit_code`` / ``exit_clean`` from the
+   * row in ``runs()`` — synthesizing ``is_clean: true`` for every
+   * historical row would paint failed runs as clean once rehydrated.
    */
   async loadRun(runId: string): Promise<void> {
     this.loadingRun.set(true);
@@ -296,6 +308,17 @@ export class LeanLabComponent {
     try {
       const parsed = await this.service.getNormalized(runId);
       this.normalized.set(parsed);
+      // Best-effort manifest fetch for form rehydration. Failure is
+      // non-fatal — the result still renders, the form just isn't
+      // repopulated.
+      try {
+        const manifest = await this.service.getManifest(runId);
+        this.rehydrateFormFromManifest(manifest);
+      } catch {
+        // Intentional: a missing manifest (404 on legacy runs) is
+        // expected and not actionable. The normalized result is
+        // still on screen, which is the primary use of the click.
+      }
       // Use the actual exit_code/exit_clean from the summary row.
       // Default to a "not clean, exit unknown" shape when the summary
       // isn't in the cache (e.g., the sidebar refresh raced with the
@@ -336,6 +359,61 @@ export class LeanLabComponent {
 
   constructor() {
     void this.refreshRuns();
+  }
+
+  /**
+   * Phase 4e — patch the form from a fetched manifest so the
+   * operator can re-run with the same inputs (or tweak and re-run).
+   * Coerces wire types defensively: starting_cash is serialized as a
+   * string in the trusted-sample path but a number elsewhere, and
+   * ms-since-epoch needs the inverse of ``isoDateToMsUtc``.
+   *
+   * Always assigns a fresh runId so re-running the form lands in a
+   * new workspace, not the historical one. Custom-source runs reset
+   * the toggle to off because the manifest doesn't store the source
+   * (only its sha256) — operators re-pasting see the same UX as a
+   * brand-new submit.
+   */
+  private rehydrateFormFromManifest(manifest: import("../../services/lean-sidecar.types").RunManifest): void {
+    const patch: Partial<{
+      symbol: string;
+      startingCash: number;
+      startDate: string;
+      endDate: string;
+      useCustomAlgorithm: boolean;
+      runId: string;
+    }> = {};
+    const symbol = manifest.parameters?.symbol;
+    if (typeof symbol === "string" && symbol.length > 0) {
+      patch.symbol = symbol;
+    }
+    const cashRaw = manifest.parameters?.starting_cash;
+    const cash = typeof cashRaw === "string" ? Number.parseFloat(cashRaw) : cashRaw;
+    if (typeof cash === "number" && Number.isFinite(cash) && cash >= 1000) {
+      patch.startingCash = cash;
+    }
+    const win = manifest.requested_window_ms;
+    if (win && typeof win.start_ms === "number" && typeof win.end_ms === "number") {
+      patch.startDate = this.msUtcToIsoDate(win.start_ms);
+      patch.endDate = this.msUtcToIsoDate(win.end_ms);
+    }
+    // Manifest doesn't carry the source itself; reset the toggle off
+    // and let the operator opt back in if they want to re-paste.
+    patch.useCustomAlgorithm = false;
+    // Re-run-ready: fresh runId so the new submit doesn't collide
+    // with the historical workspace.
+    patch.runId = this.defaultRunId();
+    this.form.patchValue(patch);
+  }
+
+  /** Inverse of {@link isoDateToMsUtc}; ms UTC → YYYY-MM-DD. */
+  private msUtcToIsoDate(ms: number): string {
+    const d = new Date(ms);
+    return [
+      d.getUTCFullYear(),
+      String(d.getUTCMonth() + 1).padStart(2, "0"),
+      String(d.getUTCDate()).padStart(2, "0"),
+    ].join("-");
   }
 
   async submit(): Promise<void> {
