@@ -62,6 +62,30 @@ class MyAlgorithm(QCAlgorithm):
             self.SetHoldings(self.symbol, 1.0)
 `;
 
+// Phase 4f: rehydrate the LeanErrorBuckets dict from a list of
+// category names. The manifest stores only category NAMES (not the
+// individual ERROR:: lines), so each hit category gets a single
+// placeholder line that names the manifest as the source of the
+// information. Categories not present in the manifest get an empty
+// list, matching the launcher's "no error in this bucket" semantics.
+const _MANIFEST_PLACEHOLDER_LINE =
+  "(line content not in manifest — fetch /runs/{id}/log for details)";
+
+function rehydratedLeanErrors(categories: string[]): {
+  analysis_failed: string[];
+  failed_data_requests: string[];
+  runtime_error: string[];
+  other: string[];
+} {
+  const cats = new Set(categories);
+  return {
+    analysis_failed: cats.has("analysis_failed") ? [_MANIFEST_PLACEHOLDER_LINE] : [],
+    failed_data_requests: cats.has("failed_data_requests") ? [_MANIFEST_PLACEHOLDER_LINE] : [],
+    runtime_error: cats.has("runtime_error") ? [_MANIFEST_PLACEHOLDER_LINE] : [],
+    other: cats.has("other") ? [_MANIFEST_PLACEHOLDER_LINE] : [],
+  };
+}
+
 /**
  * LEAN Lab UI — Phase 4a (form), 4b (equity chart), 4c (custom source).
  *
@@ -351,13 +375,21 @@ export class LeanLabComponent {
       // when the summary isn't in the cache (refresh raced the click).
       const exit_code = summary?.exit_code ?? -1;
       const is_clean = summary?.is_clean === true;
+      // Phase 4f: populate lean_errors buckets from the manifest's
+      // category note. The manifest only stores category NAMES (not
+      // line content), so each bucket gets a single placeholder line
+      // when the category was hit. This is enough for the existing
+      // errorRows()/badge logic to render "LEAN errors logged
+      // (failed_data_requests)" instead of the misleading empty-
+      // buckets state, while making it explicit in the row text that
+      // the line content isn't recoverable from the manifest.
       this.response.set({
         run_id: runId,
         is_clean,
         exit_code,
         duration_ms: 0,
         timed_out: false,
-        lean_errors: { analysis_failed: [], failed_data_requests: [], runtime_error: [], other: [] },
+        lean_errors: rehydratedLeanErrors(summary?.lean_error_categories ?? []),
         log_tail: "",
         manifest_path: "",
         workspace_root: "",
