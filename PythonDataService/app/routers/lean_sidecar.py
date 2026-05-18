@@ -554,17 +554,23 @@ async def get_runs_index() -> RunIndexResponseModel:
         except WorkspaceError:
             continue
         candidate_dirs.append(entry)
-    # Safety bound: hash the dir-list size and refuse to load manifests
-    # past it. _RUN_INDEX_CAP is the display cap (what the UI shows);
-    # _SCAN_HARD_CAP is the work cap (how many manifests we'll load
-    # before sorting and truncating). 5× the display cap keeps the
-    # work bounded but gives the sort enough headroom to pick the
-    # truly-newest runs.
-    scan_dirs = candidate_dirs[:_SCAN_HARD_CAP] if len(candidate_dirs) > _SCAN_HARD_CAP else candidate_dirs
-    # Iterate in run_id-desc order so the safety bound preferentially
-    # keeps the lexically-newest candidates (which for modern slug-
-    # prefixed-by-timestamp IDs approximates newest-first).
-    scan_dirs.sort(key=lambda p: p.name, reverse=True)
+    # Sort BEFORE truncating to the work cap. Reviewer P2: filesystem
+    # iteration order is not guaranteed (POSIX makes no promise; on
+    # ext4 it's hash-order, on NTFS+podman-bind it can be insertion-
+    # order, on tmpfs it's arbitrary). Slicing an unsorted list to
+    # ``_SCAN_HARD_CAP`` could drop genuinely-newer runs and then sort
+    # only the kept subset — making the sidebar miss recent activity
+    # once the artifacts root grows past 5× the display cap.
+    #
+    # Sort the FULL candidate_dirs by run_id-desc (modern slug-prefix
+    # = timestamp-ish), then take the first _SCAN_HARD_CAP. The
+    # manifest-timestamp sort runs after manifests are loaded; using
+    # the run_id pre-sort just biases the truncation toward newest-by-
+    # name. _SCAN_HARD_CAP = 5× display cap leaves enough headroom
+    # that even out-of-order timestamps within the prefix can be
+    # re-sorted to the right place.
+    candidate_dirs.sort(key=lambda p: p.name, reverse=True)
+    scan_dirs = candidate_dirs[:_SCAN_HARD_CAP]
     for entry in scan_dirs:
         manifest_path = entry / "manifest.json"
         if not manifest_path.exists():
@@ -952,6 +958,13 @@ class CrossEngineFillSnapshotModel(BaseModel):
     symbol: str
     side: Literal["Buy", "Sell"]
     fill_quantity: int
+    # Present only when ``fill_quantity`` was truncated from a fractional
+    # value (LEAN can emit ``100.5``-style fills via fractional-share
+    # algorithms). Mirrors the Phase 5a fee reconciler's
+    # ``fill_quantity_raw`` convention. Wire type is string for
+    # Decimal-exactness; ``None`` when ``fill_quantity`` already carries
+    # the full precision.
+    fill_quantity_raw: str | None = None
     fill_price: str
     fill_time_ms_utc: int
     fee: str | None = None

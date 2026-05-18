@@ -87,13 +87,19 @@ class TestClassifyLeanLog:
         result = classify_lean_log(log)
         assert "other" in result.by_category
 
-    def test_classify_workspace_missing_log_is_clean(self, tmp_path: Path) -> None:
-        # A run that died before LEAN wrote its log still gets an
-        # empty ClassifiedErrors — the launcher distinguishes
-        # "no log" from "no errors" itself.
+    def test_classify_workspace_missing_log_is_not_clean(self, tmp_path: Path) -> None:
+        """Review-fix (P2.6): a missing log is itself a non-clean
+        diagnostic. Previously this returned an empty ClassifiedErrors
+        and the launcher computed ``is_clean=True`` (exit_code 0 + no
+        recorded errors), masking the case where LEAN crashed before
+        flushing any output. Now ``classify_workspace`` returns a
+        diagnostic in the ``other`` bucket so ``is_clean`` flips to
+        False."""
         result = classify_workspace(tmp_path / "log.txt")
-        assert result.is_clean
-        assert result.total == 0
+        assert not result.is_clean
+        assert result.total == 1
+        assert "other" in result.by_category
+        assert "log.txt not present" in result.by_category["other"][0]
 
     def test_classify_workspace_reads_real_file(self, tmp_path: Path) -> None:
         log_path = tmp_path / "log.txt"

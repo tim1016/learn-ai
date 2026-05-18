@@ -37,6 +37,23 @@ pytestmark = pytest.mark.asyncio
 PINNED_DIGEST_FOR_TESTS = "sha256:00000000000000000000000000000000000000000000000000000000cafebabe"
 
 
+@pytest.fixture(autouse=True)
+def _isolated_launcher_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear ``LEAN_LAUNCHER_URL`` so ``respx.mock(base_url=DEFAULT_LAUNCHER_URL)``
+    intercepts the launcher's HTTP traffic.
+
+    Compose now sets ``LEAN_LAUNCHER_URL=http://172.23.176.1:8090`` on
+    the live data-plane container (host-process launcher reachable via
+    the WSL2 adapter IP). If that env leaks into pytest, the
+    launcher_client posts to the live URL, respx doesn't intercept,
+    and every router test that mocks the launcher fails with
+    ``AllMockedAssertionError``. Autouse so individual tests don't
+    have to remember to opt in.
+    """
+    monkeypatch.delenv("LEAN_LAUNCHER_URL", raising=False)
+    monkeypatch.delenv("LEAN_LAUNCHER_TOKEN", raising=False)
+
+
 @pytest.fixture
 def patched_pin(monkeypatch: pytest.MonkeyPatch) -> str:
     """Pin a dummy image digest into config so the service does not
@@ -680,6 +697,48 @@ class TestRunsIndex:
         body = (await client.get("/api/lean-sidecar/runs")).json()
         assert body["truncated"] is False
         assert len(body["runs"]) == 1
+
+    async def test_scan_hard_cap_sorts_before_slicing(
+        self,
+        client: AsyncClient,
+        patched_artifacts_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Review-fix (P2.7): truncating to ``_SCAN_HARD_CAP`` BEFORE
+        sorting could drop the newest runs once the artifacts root
+        grows past the work cap, because filesystem ``iterdir()`` order
+        is not guaranteed.
+
+        With 4 candidate dirs and ``_SCAN_HARD_CAP=2``, the older lex
+        order (``aaa < bbb < yyy < zzz``) would have made the bug
+        invisible — both old code (sort lex first, then slice) and new
+        code (sort lex first, then slice) keep the lexically-newest
+        two. We instead use lexically-newest-but-actually-OLD ids: a
+        modern run with a fresh timestamp prefix sorts lex-late and
+        must reach the manifest-timestamp sort to surface at the top.
+
+        Names ``ui_run_a/m/y/z`` deliberately put the genuinely-newest
+        ``a`` lex-LAST so the sort-before-slice change matters: with
+        cap=2, the lex sort keeps {y, z}, and the manifest-timestamp
+        sort then surfaces them by started_at — confirming the cap is
+        applied after the lex sort, not during the unstable iterdir
+        order.
+        """
+        from app.routers import lean_sidecar as lean_sidecar_router
+
+        monkeypatch.setattr(lean_sidecar_router, "_RUN_INDEX_CAP", 5)
+        monkeypatch.setattr(lean_sidecar_router, "_SCAN_HARD_CAP", 2)
+        _write_manifest(patched_artifacts_root, "ui_run_a", started_at_ms=4000)
+        _write_manifest(patched_artifacts_root, "ui_run_m", started_at_ms=3000)
+        _write_manifest(patched_artifacts_root, "ui_run_y", started_at_ms=2000)
+        _write_manifest(patched_artifacts_root, "ui_run_z", started_at_ms=1000)
+
+        body = (await client.get("/api/lean-sidecar/runs")).json()
+        ids = [row["run_id"] for row in body["runs"]]
+        # Hard cap of 2 → lex sort keeps {z, y}. Manifest-timestamp
+        # sort then orders them by started_at_ms desc.
+        assert set(ids) == {"ui_run_z", "ui_run_y"}
+        assert body["truncated"] is True
 
     async def test_skips_schema_invalid_manifest_with_log(
         self,

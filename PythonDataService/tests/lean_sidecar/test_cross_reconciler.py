@@ -206,6 +206,62 @@ class TestTolerancesPropagateToOutput:
         assert DivergenceCategory.FILL_PRICE_DRIFT not in cats
 
 
+class TestFractionalQuantityPreserved:
+    """Review-fix (P2.8): int-truncating LEAN's float quantity hides
+    fractional drift. Both sides should compare on Decimal-typed
+    quantities."""
+
+    def test_fractional_lean_qty_does_not_collapse_to_int(self) -> None:
+        """LEAN reports 100.5 shares, Engine reports 100. With int
+        truncation on both sides, the comparator would emit zero
+        divergences (both → 100). With Decimal preservation, the
+        comparator surfaces a quantity_mismatch row."""
+        out = compare_cross_engine(
+            [_lean_fill(fill_quantity=100.5)],
+            [_engine_fill(fill_quantity=100)],
+        )
+        cats = [d.category for d in out.divergences]
+        assert DivergenceCategory.QUANTITY_MISMATCH in cats
+        assert out.passed is False
+
+    def test_internal_fill_to_dict_emits_fill_quantity_raw_when_fractional(
+        self,
+    ) -> None:
+        """The wire dict carries ``fill_quantity_raw`` only when the
+        Decimal quantity is genuinely fractional. Existing consumers
+        keep reading ``fill_quantity`` as before; new consumers can
+        read the full precision."""
+        from decimal import Decimal as _D
+
+        from app.lean_sidecar.cross_reconciler import (
+            _InternalFill,
+            internal_fill_to_dict,
+        )
+
+        whole = _InternalFill(
+            side="Buy",
+            fill_quantity=_D(100),
+            fill_price=_D("100.00"),
+            fill_time_ms_utc=1_736_174_400_000,
+            fee=_D("1.00"),
+            symbol="SPY",
+        )
+        fractional = _InternalFill(
+            side="Buy",
+            fill_quantity=_D("100.5"),
+            fill_price=_D("100.00"),
+            fill_time_ms_utc=1_736_174_400_000,
+            fee=_D("1.00"),
+            symbol="SPY",
+        )
+        whole_dict = internal_fill_to_dict(whole)
+        frac_dict = internal_fill_to_dict(fractional)
+        assert whole_dict["fill_quantity"] == 100
+        assert whole_dict["fill_quantity_raw"] is None
+        assert frac_dict["fill_quantity"] == 100  # truncated
+        assert frac_dict["fill_quantity_raw"] == "100.5"  # exact
+
+
 class TestPairingByTradingDate:
     """Fills on the same UTC ms but different NY trading dates (i.e.,
     extended-hours fills crossing the midnight boundary) must pair on

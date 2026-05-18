@@ -296,6 +296,13 @@ export interface CrossEngineFillSnapshot {
   symbol: string;
   side: "Buy" | "Sell";
   fill_quantity: number;
+  /**
+   * Present only when ``fill_quantity`` was truncated from a fractional
+   * value (LEAN can emit ``100.5``-style fills via fractional-share
+   * algorithms). Wire type is string for Decimal-exactness; ``null``
+   * when ``fill_quantity`` already carries the full precision.
+   */
+  fill_quantity_raw?: string | null;
   fill_price: string;
   fill_time_ms_utc: number;
   fee: string | null;
