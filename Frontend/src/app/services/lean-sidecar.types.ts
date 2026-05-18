@@ -171,10 +171,19 @@ export interface RunSummary {
   algorithm_source_kind: "trusted_sample" | "user_provided" | "unknown";
   /**
    * ``exit_code == 0`` — a fast at-a-glance status. NOT a substitute
-   * for ``TrustedRunResponse.is_clean`` (which also requires zero
-   * classified LEAN errors); the sidebar uses this only to color rows.
+   * for ``is_clean`` (which also requires zero classified LEAN
+   * errors); the sidebar uses this only to color rows.
    */
   exit_clean: boolean | null;
+  /**
+   * The true cleanliness signal: extracted from the manifest's
+   * ``is_clean=<bool>`` note (Phase 2a+). ``null`` for legacy
+   * manifests that predate the note. ``loadRun`` uses this (not
+   * ``exit_clean``) when synthesizing a rehydrated TrustedRunResponse
+   * so a run that exited 0 with classified LEAN errors does NOT
+   * paint as a green "Clean run" badge.
+   */
+  is_clean: boolean | null;
 }
 
 export interface RunIndexResponse {

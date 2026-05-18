@@ -232,6 +232,14 @@ class RunSummaryModel(BaseModel):
     # crashed mid-launch). Not a substitute for ``is_clean`` — LEAN can
     # exit 0 with classified errors — but a fast at-a-glance signal.
     exit_clean: bool | None
+    # The true cleanliness signal: extracted from the manifest's
+    # ``is_clean=<bool>`` note, which the service writes from the
+    # launcher's response. ``None`` for legacy manifests (Phase 1) that
+    # predate the note. The Phase 4d/4e sidebar uses THIS field (not
+    # ``exit_clean``) when synthesizing a rehydrated TrustedRunResponse
+    # so a run that exited 0 with classified LEAN errors does not paint
+    # as a green "Clean run."
+    is_clean: bool | None
 
 
 class RunIndexResponseModel(BaseModel):
@@ -396,13 +404,25 @@ def _safe_load_manifest_summary(manifest_path) -> dict | None:
     # ``algorithm_source_kind`` was added to manifest.notes in Phase 4c.
     # Older manifests don't have it; treat them as "unknown" rather
     # than guessing — guessing creates misleading sidebar copy.
+    # ``is_clean`` is similarly note-encoded (since Phase 2a's manifest
+    # writer); ``None`` for pre-Phase-2a manifests.
     kind = "unknown"
+    is_clean: bool | None = None
     for note in notes:
-        if isinstance(note, str) and note.startswith("algorithm_source_kind="):
+        if not isinstance(note, str):
+            continue
+        if note.startswith("algorithm_source_kind="):
             value = note.split("=", 1)[1]
             if value in ("trusted_sample", "user_provided"):
                 kind = value
-            break
+        elif note.startswith("is_clean="):
+            value = note.split("=", 1)[1]
+            if value == "True":
+                is_clean = True
+            elif value == "False":
+                is_clean = False
+            # Anything else stays None — never silently coerce a
+            # malformed note into a truthy/falsy value.
     exit_code = data.get("exit_code")
     return {
         "symbol": params.get("symbol") if isinstance(params, dict) else None,
@@ -413,6 +433,7 @@ def _safe_load_manifest_summary(manifest_path) -> dict | None:
         "exit_code": exit_code,
         "algorithm_source_kind": kind,
         "exit_clean": (exit_code == 0) if exit_code is not None else None,
+        "is_clean": is_clean,
     }
 
 

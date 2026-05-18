@@ -319,12 +319,17 @@ export class LeanLabComponent {
         // expected and not actionable. The normalized result is
         // still on screen, which is the primary use of the click.
       }
-      // Use the actual exit_code/exit_clean from the summary row.
-      // Default to a "not clean, exit unknown" shape when the summary
-      // isn't in the cache (e.g., the sidebar refresh raced with the
-      // click) — better to under-claim than over-claim cleanliness.
+      // Use the actual exit_code + is_clean from the summary row.
+      // ``is_clean`` is the true cleanliness signal (exit==0 AND no
+      // classified LEAN errors AND not timed out — written from the
+      // launcher's response into ``manifest.notes`` as ``is_clean=...``);
+      // ``exit_clean`` is just ``exit_code == 0`` and would paint a
+      // run with logged LEAN errors as green. Reviewer P1: fall back
+      // to ``false`` for legacy manifests where ``is_clean`` is null
+      // — under-claim cleanliness, never over-claim it. Same fallback
+      // when the summary isn't in the cache (refresh raced the click).
       const exit_code = summary?.exit_code ?? -1;
-      const is_clean = summary?.exit_clean === true;
+      const is_clean = summary?.is_clean === true;
       this.response.set({
         run_id: runId,
         is_clean,
