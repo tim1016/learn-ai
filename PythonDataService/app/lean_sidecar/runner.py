@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+from enum import StrEnum
 
 from app.lean_sidecar.config import (
     ALLOWED_IMAGE_DIGESTS,
@@ -64,6 +65,47 @@ ALLOWED_HARDENING_TOKENS: frozenset[str] = frozenset(
         "/tmp:rw,noexec,nosuid,size=64m",
     }
 )
+
+
+class HardeningProfile(StrEnum):
+    """Reviewer-suggested typed wrapper over the ``hardening_flags``
+    argv tokens. The enum surface trades flexibility (any token from the
+    allow-list) for safety (caller cannot misorder the tokens that pair
+    with ``--tmpfs``, cannot pass an unknown value spec, cannot smuggle
+    extra flags).
+
+    Each profile expands deterministically to a fixed tuple of argv
+    tokens via ``HARDENING_PROFILE_TOKENS``. Callers may use either
+    interface — ``build_command(hardening_profile=...)`` or
+    ``build_command(hardening_flags=(...))`` — but not both in the same
+    call (the validator rejects it). New code should use the profile
+    enum; the raw-tokens path stays for backwards compatibility with
+    the security-flag matrix tests until they migrate.
+    """
+
+    # No optional flags — only the Phase 1c mandatory shape applies.
+    MINIMAL = "minimal"
+    # ``--tmpfs /tmp:rw,noexec,nosuid,size=256m`` — the spec used by
+    # the trusted-sample E2E.
+    WITH_TMPFS_256M = "with_tmpfs_256m"
+    # Smaller variant for memory-tight environments.
+    WITH_TMPFS_64M = "with_tmpfs_64m"
+
+
+HARDENING_PROFILE_TOKENS: dict[HardeningProfile, tuple[str, ...]] = {
+    HardeningProfile.MINIMAL: (),
+    HardeningProfile.WITH_TMPFS_256M: ("--tmpfs", "/tmp:rw,noexec,nosuid,size=256m"),
+    HardeningProfile.WITH_TMPFS_64M: ("--tmpfs", "/tmp:rw,noexec,nosuid,size=64m"),
+}
+
+
+def tokens_for_profile(profile: HardeningProfile) -> tuple[str, ...]:
+    """Return the argv tokens a profile expands to.
+
+    Exposed so the launcher service can echo the resolved tokens into
+    the launcher.log audit trail without re-implementing the mapping.
+    """
+    return HARDENING_PROFILE_TOKENS[profile]
 
 # LEAN's launcher reads ``config.json`` from its working directory by
 # default. The image's working dir is ``/Lean/Launcher/bin/Debug`` and
@@ -206,6 +248,7 @@ def build_command(
     *,
     limits: RunLimits = DEFAULT_RUN_LIMITS,
     hardening_flags: tuple[str, ...] = (),
+    hardening_profile: HardeningProfile | None = None,
 ) -> RunnerPlan:
     """Construct the `podman run` argv for this workspace + image.
 
@@ -213,18 +256,36 @@ def build_command(
     Tests assert on it so a future refactor cannot silently widen the
     sandbox.
 
-    ``hardening_flags`` are the optional flags from the ADR's "if
-    compatible" set (``--read-only``, ``--tmpfs ...``) whose viability
-    was proven by the security-flag matrix test. Every token must be in
-    :data:`ALLOWED_HARDENING_TOKENS`; an empty tuple is the safe
-    default. ``--cap-drop=ALL`` and ``--pids-limit`` are mandatory and
-    never come from the caller.
+    Two ways to specify optional hardening:
 
-    There is intentionally **no** ``extra_image_args`` parameter: the
-    LEAN launcher arg list is determined entirely by ``build_command``
-    so a caller cannot tack on flags after the image reference.
+    - ``hardening_profile=HardeningProfile.WITH_TMPFS_256M`` — preferred
+      for new code. The enum value expands deterministically to a fixed
+      tuple of argv tokens via :data:`HARDENING_PROFILE_TOKENS`.
+    - ``hardening_flags=("--tmpfs", "...")`` — the original raw-token
+      interface. Every token must be in :data:`ALLOWED_HARDENING_TOKENS`;
+      an empty tuple is the safe default.
+
+    Passing BOTH is rejected with ``RunnerConfigurationError`` — there is
+    no merge semantic that wouldn't surprise someone. Pick one.
+
+    ``--cap-drop=ALL`` and ``--pids-limit`` are mandatory and never come
+    from the caller. There is intentionally **no** ``extra_image_args``
+    parameter: the LEAN launcher arg list is determined entirely by
+    ``build_command`` so a caller cannot tack on flags after the image
+    reference.
     """
     limits.validate()
+    if hardening_profile is not None and hardening_flags:
+        raise RunnerConfigurationError(
+            "build_command accepts hardening_profile OR hardening_flags, not both. "
+            f"Got profile={hardening_profile} AND flags={hardening_flags}."
+        )
+    if hardening_profile is not None:
+        # Expand to tokens; skip the allow-list check because the
+        # profile mapping is the allow-list — by construction, every
+        # value in HARDENING_PROFILE_TOKENS is already in
+        # ALLOWED_HARDENING_TOKENS (asserted by a regression test).
+        hardening_flags = tokens_for_profile(hardening_profile)
     _validate_hardening_flags(hardening_flags)
     if not workspace.workspace_dir.exists():
         raise RunnerConfigurationError(f"workspace directory does not exist: {workspace.workspace_dir}")
