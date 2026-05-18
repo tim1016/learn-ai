@@ -269,3 +269,103 @@ export interface RunReconciliationReport {
   total_expected_ibkr_fees: string;
   divergences: FeeDivergence[];
 }
+
+/**
+ * Phase 5g — cross-engine fill divergence category. Mirrors
+ * ``DivergenceCategory`` in
+ * ``PythonDataService/app/research/parity/qc_reconciler.py``. Kept as a
+ * union of string literals so a future server-side category addition
+ * surfaces as a TS narrowing error in this consumer.
+ */
+export type CrossEngineDivergenceCategory =
+  | "fixture_insufficient"
+  | "decision_mismatch"
+  | "direction_mismatch"
+  | "quantity_mismatch"
+  | "fill_price_drift"
+  | "commission_drift"
+  | "pnl_drift"
+  | "order_type_mismatch";
+
+/**
+ * Phase 5g.1+ — one side of a paired cross-engine divergence row.
+ * ``fill_price`` and ``fee`` are wire-strings (cent-exact) mirroring
+ * the Python Decimal serialization convention.
+ */
+export interface CrossEngineFillSnapshot {
+  symbol: string;
+  side: "Buy" | "Sell";
+  fill_quantity: number;
+  fill_price: string;
+  fill_time_ms_utc: number;
+  fee: string | null;
+}
+
+/**
+ * Phase 5g.3 — one classified disagreement between paired LEAN-Lab
+ * and Engine-Lab fills. When one side is missing (``decision_mismatch``),
+ * the corresponding snapshot is null.
+ */
+export interface CrossEngineDivergence {
+  category: CrossEngineDivergenceCategory;
+  /** NY-local trading date in ISO YYYY-MM-DD form. */
+  trading_date: string;
+  detail: string;
+  lean_fill: CrossEngineFillSnapshot | null;
+  engine_fill: CrossEngineFillSnapshot | null;
+}
+
+/**
+ * Phase 5g — request body for
+ * ``POST /api/lean-sidecar/runs/{id}/cross-reconcile``.
+ *
+ * Per mission-critical doc D3 (resolved 2026-05-18):
+ *   * ``engine_lab_strategy_class`` is caller-supplied; the server does
+ *     not auto-derive from the LEAN-Lab algorithm name.
+ *   * ``assert_fees`` defaults false (``commission_drift`` diagnostic-
+ *     only). True promotes the category to gating — meaningful only on
+ *     Phase 5b reconciliation-grade templates where IBKR fees are
+ *     pinned on both sides.
+ */
+export interface CrossReconcileRequest {
+  engine_lab_strategy_class: string;
+  assert_fees?: boolean;
+}
+
+/**
+ * Phase 5g.3 — full report returned by
+ * ``POST /api/lean-sidecar/runs/{id}/cross-reconcile``.
+ *
+ * ``schema_version`` is the D10 contract: any future shape change bumps
+ * this so the consumer can fail-fast on an unrecognized version. The
+ * UI MUST guard on ``schema_version === CROSS_RECONCILE_SCHEMA_VERSION``
+ * rather than silently misrender a future-shaped response.
+ *
+ * ``passed`` is True iff zero divergences land in the gating set
+ * (default-strict: every category except ``commission_drift``;
+ * ``assert_fees=true`` promotes ``commission_drift`` to gating too).
+ */
+export interface CrossEngineReconciliationReport {
+  schema_version: number;
+  run_id: string;
+  engine_lab_strategy_class: string;
+  assert_fees: boolean;
+  lean_total_fills: number;
+  engine_total_fills: number;
+  matched_count: number;
+  divergent_count: number;
+  gating_divergent_count: number;
+  passed: boolean;
+  counts_by_category: Partial<Record<CrossEngineDivergenceCategory, number>>;
+  divergences: CrossEngineDivergence[];
+}
+
+/**
+ * Phase 5g.4 — UI-known schema version. The component compares the
+ * server-returned ``schema_version`` against this and refuses to render
+ * mismatches (fail-fast per D10). Bump in lockstep with the Python
+ * ``CrossEngineReconciliationReportModel.schema_version`` default when
+ * the shape evolves; the UI side then needs migration work before the
+ * new version is recognized.
+ */
+export const CROSS_RECONCILE_SCHEMA_VERSION = 1 as const;
