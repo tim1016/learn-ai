@@ -308,16 +308,33 @@ export class LeanLabComponent {
     try {
       const parsed = await this.service.getNormalized(runId);
       this.normalized.set(parsed);
-      // Best-effort manifest fetch for form rehydration. Failure is
-      // non-fatal — the result still renders, the form just isn't
-      // repopulated.
+      // Best-effort manifest fetch for form rehydration. The result
+      // panel above is the primary value of the click and must stay
+      // on screen regardless; the manifest is only used to repopulate
+      // the form for re-runs.
+      //
+      // Reviewer P1: distinguish the expected legacy-404 case (silent
+      // OK — older runs were submitted before manifests were always
+      // written) from real failures (network/server). A silent catch
+      // on a 500 would leave the operator with the result panel AND
+      // stale form values from a different past run — they could
+      // unknowingly resubmit with the wrong symbol/window/cash. So
+      // we surface non-404 manifest failures in the error pane while
+      // keeping the result panel intact.
       try {
         const manifest = await this.service.getManifest(runId);
         this.rehydrateFormFromManifest(manifest);
-      } catch {
-        // Intentional: a missing manifest (404 on legacy runs) is
-        // expected and not actionable. The normalized result is
-        // still on screen, which is the primary use of the click.
+      } catch (err) {
+        const isLegacyMissing =
+          err instanceof LeanSidecarApiError &&
+          (err.reason === "manifest_missing" || err.status === 404);
+        if (!isLegacyMissing) {
+          this.error.set({
+            reason: "manifest_fetch_failed",
+            message: err instanceof Error ? err.message : String(err),
+            status: err instanceof LeanSidecarApiError ? err.status : 0,
+          });
+        }
       }
       // Use the actual exit_code/exit_clean from the summary row.
       // Default to a "not clean, exit unknown" shape when the summary
@@ -388,7 +405,10 @@ export class LeanLabComponent {
       patch.symbol = symbol;
     }
     const cashRaw = manifest.parameters?.starting_cash;
-    const cash = typeof cashRaw === "string" ? Number.parseFloat(cashRaw) : cashRaw;
+    // Number() rejects trailing junk ("250000abc" → NaN) where
+    // parseFloat would silently accept the leading digits — reviewer
+    // catch: a malformed wire value shouldn't be patched in.
+    const cash = typeof cashRaw === "string" ? Number(cashRaw.trim()) : cashRaw;
     if (typeof cash === "number" && Number.isFinite(cash) && cash >= 1000) {
       patch.startingCash = cash;
     }

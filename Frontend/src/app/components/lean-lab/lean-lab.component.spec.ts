@@ -483,6 +483,57 @@ describe("LeanLabComponent", () => {
     expect(text).toContain("Equity snapshot");
   });
 
+  it("Phase 4e (reviewer P1): non-404 manifest failure surfaces in error pane", async () => {
+    // A 500 on the manifest endpoint must NOT be silently swallowed —
+    // otherwise the operator sees the result panel + stale form
+    // values from a different past run and could unknowingly resubmit
+    // with the wrong symbol/window/cash. The result panel still
+    // renders (non-fatal click); the error pane carries the reason.
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    serviceMock.getManifest.mockRejectedValue(
+      new LeanSidecarApiError(500, "internal_error", "db connection lost"),
+    );
+
+    await component.loadRun("ui_run_500");
+    fixture.detectChanges();
+
+    expect(component.response()?.run_id).toBe("ui_run_500");
+    expect(component.error()?.reason).toBe("manifest_fetch_failed");
+    expect(component.error()?.status).toBe(500);
+    expect(component.error()?.message).toContain("db connection lost");
+  });
+
+  it("Phase 4e: 404 manifest_missing stays silent (legacy run case)", async () => {
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    serviceMock.getManifest.mockRejectedValue(
+      new LeanSidecarApiError(404, "manifest_missing", "legacy run"),
+    );
+
+    await component.loadRun("ui_run_legacy_404");
+    fixture.detectChanges();
+
+    expect(component.response()?.run_id).toBe("ui_run_legacy_404");
+    expect(component.error()).toBeNull();
+  });
+
+  it("Phase 4e (reviewer): malformed starting_cash with trailing junk rejected", async () => {
+    // Number.parseFloat("250000abc") returns 250000 silently. Number()
+    // returns NaN. The rehydrator must use the strict coercion so
+    // wire corruption doesn't silently downsize a backtest.
+    serviceMock.getNormalized.mockResolvedValue(makeNormalized());
+    serviceMock.getManifest.mockResolvedValue({
+      parameters: { symbol: "SPY", starting_cash: "250000abc" },
+      requested_window_ms: { start_ms: 1_736_121_600_000, end_ms: 1_736_467_200_000 },
+    });
+    const initialCash = component.form.controls.startingCash.value;
+
+    await component.loadRun("ui_run_malformed_cash");
+
+    expect(component.form.controls.startingCash.value).toBe(initialCash);
+    // Symbol still rehydrates (only the malformed field is skipped).
+    expect(component.form.controls.symbol.value).toBe("SPY");
+  });
+
   it("Phase 4e: rejects nonsensical starting_cash (under min) instead of patching it", async () => {
     serviceMock.getNormalized.mockResolvedValue(makeNormalized());
     serviceMock.getManifest.mockResolvedValue({
