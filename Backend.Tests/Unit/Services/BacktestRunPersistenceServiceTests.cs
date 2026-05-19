@@ -131,4 +131,128 @@ public class BacktestRunPersistenceServiceTests
 
         Assert.Contains("source", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    // Fix 8 — boundary validation tests
+
+    [Fact]
+    public async Task PersistAsync_EmptyLeanRunId_ThrowsArgumentException()
+    {
+        var service = CreateService(out _);
+        var payload = BuildPayload(leanRunId: "placeholder") with { LeanRunId = "" };
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.PersistAsync(payload, CancellationToken.None));
+
+        Assert.Contains("lean_run_id", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PersistAsync_WhitespaceLeanRunId_ThrowsArgumentException()
+    {
+        var service = CreateService(out _);
+        var payload = BuildPayload(leanRunId: "placeholder") with { LeanRunId = "   " };
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.PersistAsync(payload, CancellationToken.None));
+
+        Assert.Contains("lean_run_id", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PersistAsync_EmptySymbol_ThrowsArgumentException()
+    {
+        var service = CreateService(out _);
+        var payload = BuildPayload(leanRunId: "ui_run_bad_symbol") with { Symbol = "" };
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.PersistAsync(payload, CancellationToken.None));
+
+        Assert.Contains("symbol", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PersistAsync_NullTrades_ThrowsArgumentException()
+    {
+        var service = CreateService(out _);
+        var payload = BuildPayload(leanRunId: "ui_run_null_trades") with { Trades = null! };
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.PersistAsync(payload, CancellationToken.None));
+
+        Assert.Contains("trades", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PersistAsync_StartDateAfterEndDate_ThrowsArgumentException()
+    {
+        var service = CreateService(out _);
+        var payload = BuildPayload(leanRunId: "ui_run_bad_dates") with
+        {
+            StartDateMs = 1_700_000_600_000,
+            EndDateMs = 1_700_000_000_000,
+        };
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.PersistAsync(payload, CancellationToken.None));
+
+        Assert.Contains("start_date_ms", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Fix 6 — transaction happy-path: trades written under the same StrategyExecutionId
+
+    [Fact]
+    public async Task PersistAsync_TradesWrittenUnderSameExecutionId()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(
+            leanRunId: "ui_run_tx_happy",
+            trades: new[]
+            {
+                new PersistLeanTradePayload(
+                    TradeNumber: 1,
+                    EntryMsUtc: 1_700_000_060_000,
+                    ExitMsUtc: 1_700_000_120_000,
+                    EntryPrice: 200m,
+                    ExitPrice: 202m,
+                    Quantity: 5m,
+                    Pnl: 10m,
+                    SignalReason: "EMA cross",
+                    IsSyntheticExit: false),
+                new PersistLeanTradePayload(
+                    TradeNumber: 2,
+                    EntryMsUtc: 1_700_000_180_000,
+                    ExitMsUtc: 1_700_000_600_000,
+                    EntryPrice: 202m,
+                    ExitPrice: 201m,
+                    Quantity: 5m,
+                    Pnl: -5m,
+                    SignalReason: "EMA cross",
+                    IsSyntheticExit: false),
+            });
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        var tradeCount = await db.BacktestTrades.CountAsync(t => t.StrategyExecutionId == id);
+        Assert.Equal(2, tradeCount);
+
+        // Verify the execution row exists with the expected Id
+        var execution = await db.StrategyExecutions.SingleAsync(s => s.Id == id);
+        Assert.Equal("ui_run_tx_happy", execution.LeanRunId);
+    }
+
+    // Fix 7 — idempotency: repeated calls with the same LeanRunId return the same id
+    // (covers the happy path; real race-condition rollback requires a Postgres integration test)
+
+    [Fact]
+    public async Task PersistAsync_SameLeanRunId_ReturnsSameId()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(leanRunId: "ui_run_dedup");
+
+        var id1 = await service.PersistAsync(payload, CancellationToken.None);
+        var id2 = await service.PersistAsync(payload, CancellationToken.None);
+
+        Assert.Equal(id1, id2);
+        Assert.Equal(1, await db.StrategyExecutions.CountAsync(s => s.LeanRunId == "ui_run_dedup"));
+    }
 }

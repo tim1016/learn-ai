@@ -19,6 +19,19 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
 
     public async Task<int> PersistAsync(PersistLeanRunPayload payload, CancellationToken ct)
     {
+        if (payload is null)
+            throw new ArgumentNullException(nameof(payload));
+        if (string.IsNullOrWhiteSpace(payload.LeanRunId))
+            throw new ArgumentException("lean_run_id is required", nameof(payload));
+        if (string.IsNullOrWhiteSpace(payload.Symbol))
+            throw new ArgumentException("symbol is required", nameof(payload));
+        if (payload.Trades is null)
+            throw new ArgumentException("trades is required (use empty list, not null)", nameof(payload));
+        if (payload.StartDateMs > payload.EndDateMs)
+            throw new ArgumentException(
+                $"start_date_ms ({payload.StartDateMs}) must be <= end_date_ms ({payload.EndDateMs})",
+                nameof(payload));
+
         if (payload.Source != "lean-sidecar")
         {
             throw new ArgumentException(
@@ -90,8 +103,31 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
             DurationMs = 0,
         };
 
+        // Wrap the entire write in a transaction so a trade-save failure also rolls back
+        // the StrategyExecution row (atomicity).  The FK on BacktestTrade.StrategyExecutionId
+        // requires the execution to be saved first to populate its Id, so we use two
+        // SaveChangesAsync calls — both inside the same transaction.
+        // NOTE: InMemory EF Core does not simulate real transaction rollback, so
+        // the transaction-rollback behaviour is only verified by integration tests against
+        // a real Postgres instance.
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
         _db.StrategyExecutions.Add(execution);
-        await _db.SaveChangesAsync(ct);
+        try
+        {
+            await _db.SaveChangesAsync(ct);  // populates execution.Id
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            // A concurrent call won the race and inserted the same LeanRunId.
+            // Look up and return the existing Id so the caller is idempotent.
+            var raceWinner = await _db.StrategyExecutions
+                .AsNoTracking()
+                .Where(s => s.Source == "lean-sidecar" && s.LeanRunId == payload.LeanRunId)
+                .Select(s => s.Id)
+                .FirstAsync(ct);
+            return raceWinner;
+        }
 
         _logger.LogInformation(
             "[STEP 3] Persisted StrategyExecution Id={Id} for LeanRunId={LeanRunId}, Trades={Count}",
@@ -122,6 +158,13 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
             await _db.SaveChangesAsync(ct);
         }
 
+        await tx.CommitAsync(ct);
         return execution.Id;
+    }
+
+    private static bool IsUniqueViolation(DbUpdateException ex)
+    {
+        // Npgsql: SqlState 23505 == unique_violation
+        return ex.InnerException is Npgsql.PostgresException pg && pg.SqlState == "23505";
     }
 }
