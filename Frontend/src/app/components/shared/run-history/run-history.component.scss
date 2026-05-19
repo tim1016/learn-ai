@@ -1,0 +1,123 @@
+.empty {
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.run-history {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+
+  th,
+  td {
+    padding: var(--space-2) var(--space-3);
+    text-align: left;
+    border-bottom: 1px solid var(--border-light);
+    vertical-align: middle;
+  }
+
+  th {
+    font-weight: var(--fw-medium);
+    color: var(--text-subtle);
+    background: var(--bg-elevated);
+    white-space: nowrap;
+  }
+
+  .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
+  }
+
+  .positive {
+    color: var(--bull);
+  }
+
+  .negative {
+    color: var(--bear);
+  }
+}
+
+.badge {
+  display: inline-block;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  background: var(--bg-elevated);
+  color: var(--text-subtle);
+  border: 1px solid var(--border-light);
+
+  &[data-source="lean-sidecar"] {
+    background: var(--accent-faint);
+    color: var(--accent);
+    border-color: var(--badge-info-border);
+  }
+
+  &[data-source="engine"],
+  &[data-source="strategy-lab"] {
+    background: var(--accent-soft);
+    color: var(--text-on-accent);
+    border-color: var(--badge-info-border);
+  }
+}
+
+.badge--warning {
+  background: var(--badge-warn-bg);
+  color: var(--badge-warn-text);
+  border-color: var(--badge-warn-border);
+}
+
+.badge--neutral {
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-text);
+  border-color: var(--badge-neutral-border);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-2) 0;
+}
+
+.compare-btn {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.select-col {
+  width: 2.5rem;
+  text-align: center;
+
+  input[type="checkbox"] {
+    cursor: pointer;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+tr.selected {
+  background: var(--accent-faint);
+}

@@ -22,6 +22,8 @@ vi.mock("lightweight-charts", () => {
   return { createChart: vi.fn().mockReturnValue(chart), CandlestickSeries: "CandlestickSeries" };
 });
 
+import { Apollo } from "apollo-angular";
+import { of } from "rxjs";
 import { LeanSidecarApiError, LeanSidecarService } from "../../services/lean-sidecar.service";
 import type {
   NormalizedResult,
@@ -31,6 +33,23 @@ import type {
   TrustedRunResponse,
 } from "../../services/lean-sidecar.types";
 import { LeanLabComponent } from "./lean-lab.component";
+
+/**
+ * Minimal Apollo stub that satisfies the LeanLabRunHistoryComponent's
+ * watchQuery call. Returns an empty nodes array so the sidebar renders
+ * the "No runs yet" state without hitting the network.
+ */
+function makeApolloStub() {
+  const valueChanges$ = of({
+    data: {
+      backtestRuns: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [],
+      },
+    },
+  });
+  return { provide: Apollo, useValue: { watchQuery: vi.fn().mockReturnValue({ valueChanges: valueChanges$ }) } };
+}
 
 /**
  * Component-level tests. Asserts what the operator sees on the page,
@@ -147,6 +166,7 @@ describe("LeanLabComponent", () => {
       providers: [
         provideZonelessChangeDetection(),
         { provide: LeanSidecarService, useValue: serviceMock },
+        makeApolloStub(),
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(LeanLabComponent);
@@ -253,9 +273,10 @@ describe("LeanLabComponent", () => {
     expect(after2).toMatch(/^ui_run_\d{17}_[a-z0-9]{5}$/);
   });
 
-  it("loads the run history on init and renders rows", async () => {
-    // The constructor calls refreshRuns(), but our beforeEach() already
-    // ran that with an empty index. Rebuild with a populated index.
+  it("loads the run history on init into component.runs()", async () => {
+    // The constructor calls refreshRuns() which populates component.runs().
+    // The runs are now surfaced via GraphQL (not REST) in the sidebar, so
+    // we verify the internal state rather than DOM text.
     TestBed.resetTestingModule();
     serviceMock = {
       startTrustedRun: vi.fn(),
@@ -280,6 +301,7 @@ describe("LeanLabComponent", () => {
       providers: [
         provideZonelessChangeDetection(),
         { provide: LeanSidecarService, useValue: serviceMock },
+        makeApolloStub(),
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(LeanLabComponent);
@@ -289,10 +311,11 @@ describe("LeanLabComponent", () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("ui_run_a");
-    expect(text).toContain("ui_run_b");
-    expect(text).toContain("AAPL");
+    // The REST listRuns is still called on init and populates component.runs().
+    // The DOM sidebar now renders the GraphQL-sourced shared run-history
+    // (empty in this test because the Apollo stub returns no nodes).
+    expect(serviceMock.listRuns).toHaveBeenCalled();
+    expect(component.runs().map((r) => r.run_id)).toEqual(["ui_run_a", "ui_run_b"]);
   });
 
   it("re-fetches the run history after a successful submit", async () => {
@@ -350,6 +373,7 @@ describe("LeanLabComponent", () => {
       providers: [
         provideZonelessChangeDetection(),
         { provide: LeanSidecarService, useValue: serviceMock },
+        makeApolloStub(),
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(LeanLabComponent);
@@ -402,6 +426,7 @@ describe("LeanLabComponent", () => {
       providers: [
         provideZonelessChangeDetection(),
         { provide: LeanSidecarService, useValue: serviceMock },
+        makeApolloStub(),
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(LeanLabComponent);
@@ -454,6 +479,7 @@ describe("LeanLabComponent", () => {
       providers: [
         provideZonelessChangeDetection(),
         { provide: LeanSidecarService, useValue: serviceMock },
+        makeApolloStub(),
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(LeanLabComponent);
@@ -469,7 +495,11 @@ describe("LeanLabComponent", () => {
     expect(text).not.toContain("Clean run");
   });
 
-  it("surfaces the listRuns failure reason in the sidebar (reviewer: no silent catch)", async () => {
+  it("surfaces the listRuns failure reason on component.runsLoadError (reviewer: no silent catch)", async () => {
+    // The sidebar now renders data from GraphQL, not the REST listRuns.
+    // listRuns is still called (refreshRuns populates component.runs() for
+    // sidebar-click rehydration), so its failure is still surfaced on the
+    // component's runsLoadError signal — but no longer rendered in the DOM.
     TestBed.resetTestingModule();
     serviceMock = {
       startTrustedRun: vi.fn(),
@@ -489,6 +519,7 @@ describe("LeanLabComponent", () => {
       providers: [
         provideZonelessChangeDetection(),
         { provide: LeanSidecarService, useValue: serviceMock },
+        makeApolloStub(),
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(LeanLabComponent);
@@ -497,9 +528,8 @@ describe("LeanLabComponent", () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("Couldn't load runs");
-    expect(text).toContain("launcher_unreachable");
+    // The failure is captured on the signal, not rendered in the DOM.
+    expect(component.runsLoadError()).toContain("launcher_unreachable");
   });
 
   it("loadRun surfaces a 404 via the typed error envelope", async () => {
@@ -533,6 +563,7 @@ describe("LeanLabComponent", () => {
       providers: [
         provideZonelessChangeDetection(),
         { provide: LeanSidecarService, useValue: serviceMock },
+        makeApolloStub(),
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(LeanLabComponent);
@@ -816,6 +847,7 @@ describe("LeanLabComponent", () => {
       providers: [
         provideZonelessChangeDetection(),
         { provide: LeanSidecarService, useValue: serviceMock },
+        makeApolloStub(),
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(LeanLabComponent);
