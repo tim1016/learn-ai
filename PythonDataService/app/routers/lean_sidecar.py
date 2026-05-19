@@ -81,10 +81,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Phase 2a caps for caller-supplied inputs. These are smaller than the
-# launcher's own ceilings so a bad input is rejected here with a
-# meaningful 422 before any container work.
-_MAX_TRADING_DAYS = 30
+# Per-request caps for caller-supplied inputs. Sized to match the
+# project's data-availability boundary so a meaningful 422 surfaces
+# before any container work.
+#
+# ``_MAX_TRADING_DAYS = 504`` ≈ 2 calendar years of US-equity trading
+# days (252 per year). Aligns the API ceiling with Polygon.io minute-
+# bar history on the project's Starter plan — LEAN is just the engine;
+# the actual data ingestion ceiling is the vendor's history depth, so
+# windows longer than ~2 years can't produce useful results. The
+# matching ``wall_clock_timeout_s`` in ``DEFAULT_RUN_LIMITS`` is
+# bumped in lockstep so the P1.1 cidfile kill switch doesn't fire
+# mid-run on a legitimate 2-year backtest.
+_MAX_TRADING_DAYS = 504
 _MAX_STARTING_CASH = 10_000_000.0
 _MIN_STARTING_CASH = 1_000.0
 

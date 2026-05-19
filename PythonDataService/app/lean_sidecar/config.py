@@ -84,7 +84,14 @@ DEFAULT_RUN_LIMITS = RunLimits(
     cpus=2.0,
     memory_mb=2048,
     pids_limit=512,
-    wall_clock_timeout_s=120,
+    # 2 hours. Sized to match the router's ``_MAX_TRADING_DAYS = 504``
+    # (~2 calendar years of US-equity minute data, Polygon.io Starter
+    # plan's history depth). Empirical envelope: LEAN minute backtests
+    # on EMA/RSI-class indicators against real Polygon data take ~1-3
+    # minutes per simulated month, so 24 months ≈ 24-72 minutes wall
+    # clock; 7200s leaves margin without indulging a runaway loop.
+    # The P1.1 cidfile kill switch (runner.py) fires at this deadline.
+    wall_clock_timeout_s=7200,
     workspace_max_mb=512,
     log_tail_bytes=8 * 1024 * 1024,
 )

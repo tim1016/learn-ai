@@ -248,20 +248,33 @@ class TestPostTrustedRunValidation:
         assert r.status_code == 422
         assert "end_ms_utc" in r.text or "strictly greater" in r.text
 
-    async def test_oversized_window_rejected(self, client: AsyncClient) -> None:
+    async def test_oversized_window_rejected(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A window with more than _MAX_TRADING_DAYS trading days must be
-        rejected — under the P2.5 contract, count is over [start_date,
-        exclusive_end_date) sessions, not calendar days."""
-        from app.lean_sidecar.trading_calendar import session_open_ms_utc
+        rejected — under the P2.5 contract, count is over
+        [start_date, exclusive_end_date) sessions, not calendar days.
 
+        The production cap is sized to the Polygon.io Starter plan's
+        ~2-year minute-bar history (504 sessions). Any real window
+        that big inevitably crosses an NYSE half-day session (early
+        closes occur ~6×/year per P2.5), so the half-day validator
+        would mask this trading-days check. Test monkey-patches the
+        cap down to a small value so the validator can be exercised
+        on a clean weekday window.
+        """
+        from app.lean_sidecar.trading_calendar import session_open_ms_utc
+        from app.routers import lean_sidecar as router_mod
+
+        # Shrink the cap to 5 so a clean 2-week window trips it
+        # without needing to cross any holiday or half-day.
+        monkeypatch.setattr(router_mod, "_MAX_TRADING_DAYS", 5)
         payload = _good_payload()
-        # ~3 calendar months of trading days (~63 sessions) is well
-        # over the 30-cap.
         payload["start_ms_utc"] = session_open_ms_utc(date(2025, 1, 6))
-        payload["end_ms_utc"] = session_open_ms_utc(date(2025, 4, 14))
+        payload["end_ms_utc"] = session_open_ms_utc(date(2025, 1, 21))
         r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
         assert r.status_code == 422
-        assert "trading days" in r.text or "30" in r.text
+        assert "trading days" in r.text
 
     async def test_forbids_unknown_extra_fields(self, client: AsyncClient) -> None:
         """``extra="forbid"`` still rejects keys the schema doesn't
