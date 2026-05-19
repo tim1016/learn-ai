@@ -70,6 +70,7 @@ from app.lean_sidecar.trusted_samples.buy_and_hold import BUY_AND_HOLD_SOURCE
 from app.lean_sidecar.trusted_samples.buy_and_hold_reconciliation import (
     BUY_AND_HOLD_RECONCILIATION_SOURCE,
 )
+from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
 from app.lean_sidecar.workspace import Workspace, resolve_workspace
 
 # Phase 5b — selector for which trusted-sample source the orchestrator
@@ -77,7 +78,7 @@ from app.lean_sidecar.workspace import Workspace, resolve_workspace
 # "trusted_default" keeps Phase 1's LEAN-default-brokerage behavior
 # (backwards-compatible default); "reconciliation" pins IBKR brokerage
 # explicitly so the Phase 5a fee reconciler returns a clean report.
-TrustedTemplate = Literal["trusted_default", "reconciliation"]
+TrustedTemplate = Literal["trusted_default", "reconciliation", "ema_crossover"]
 
 # Maps the template selector to the manifest's ``brokerage_policy``
 # enum so a reader of the manifest can tell at a glance which
@@ -85,11 +86,13 @@ TrustedTemplate = Literal["trusted_default", "reconciliation"]
 _BROKERAGE_POLICY_FOR_TEMPLATE: dict[TrustedTemplate, BrokeragePolicy] = {
     "trusted_default": "algorithm_default",
     "reconciliation": "interactive_brokers",
+    "ema_crossover": "algorithm_default",
 }
 
 _SOURCE_FOR_TEMPLATE: dict[TrustedTemplate, str] = {
     "trusted_default": BUY_AND_HOLD_SOURCE,
     "reconciliation": BUY_AND_HOLD_RECONCILIATION_SOURCE,
+    "ema_crossover": EMA_CROSSOVER_SOURCE,
 }
 
 logger = logging.getLogger(__name__)
