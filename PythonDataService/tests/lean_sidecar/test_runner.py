@@ -101,16 +101,13 @@ class TestBuildCommand:
         ws.ensure_layout()
         plan = build_command(ws, DUMMY_DIGEST)
         cidfile_args = [a for a in plan.argv if a.startswith("--cidfile=")]
-        assert len(cidfile_args) == 1, (
-            f"expected exactly one --cidfile= flag, got {cidfile_args}"
-        )
+        assert len(cidfile_args) == 1, f"expected exactly one --cidfile= flag, got {cidfile_args}"
         cidfile_path_str = cidfile_args[0].removeprefix("--cidfile=")
         # Lives under the workspace's launcher_dir alongside
         # launcher.log; cleanup is then a single ``rm -rf
         # <workspace>/launcher/`` for the operator.
         assert cidfile_path_str.startswith(str(ws.launcher_dir)), (
-            f"cidfile {cidfile_path_str} should live under launcher_dir "
-            f"({ws.launcher_dir})"
+            f"cidfile {cidfile_path_str} should live under launcher_dir ({ws.launcher_dir})"
         )
         # ``RunnerPlan.cidfile_path`` carries the same path so
         # ``execute`` can read it without re-parsing argv.
@@ -131,9 +128,7 @@ class TestBuildCommand:
         stale_cid.write_text("old-container-id\n", encoding="utf-8")
         assert stale_cid.exists()
         plan = build_command(ws, DUMMY_DIGEST)
-        assert not plan.cidfile_path.exists(), (
-            "build_command should have removed the stale cidfile"
-        )
+        assert not plan.cidfile_path.exists(), "build_command should have removed the stale cidfile"
 
     def test_refuses_unpinned_image(
         self,
@@ -332,9 +327,7 @@ class TestExecuteTimeoutKillsContainer:
             # ``podman rm`` → return success.
             if len(recorded_calls) == 1:
                 raise _subprocess.TimeoutExpired(argv, kwargs.get("timeout", 0))
-            return _subprocess.CompletedProcess(
-                args=argv, returncode=0, stdout="", stderr=""
-            )
+            return _subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
 
         monkeypatch.setattr(_subprocess, "run", fake_run)
         # ``execute`` looks up podman via shutil.which inside the
@@ -392,6 +385,105 @@ class TestExecuteTimeoutKillsContainer:
         result = _runner.execute(plan)  # MUST NOT raise
         assert result.timed_out is True
         assert result.exit_code == -1
+
+
+class TestKillReason:
+    """Reviewer-tightening (P1.4 v2): ``_kill_container_via_cidfile``
+    must surface *why* it killed the container so the launcher can
+    return the correct ``RunResult``/``LaunchRejectedError`` reason.
+
+    A single "killed" signal collapses two distinct failure modes
+    (wall-clock timeout vs workspace cap overrun) into one — the
+    discriminator is the enum threaded through the helper.
+    """
+
+    def test_enum_has_expected_members(self) -> None:
+        from app.lean_sidecar.runner import KillReason
+
+        assert KillReason.WALL_CLOCK_TIMEOUT == "wall_clock_timeout"
+        assert KillReason.WORKSPACE_MAX_MB_EXCEEDED == "workspace_max_mb_exceeded"
+        # Stable string values for log / payload routing.
+        assert {m.value for m in KillReason} == {
+            "wall_clock_timeout",
+            "workspace_max_mb_exceeded",
+        }
+
+    def test_kill_helper_accepts_reason_kwarg_and_logs_it(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+        import subprocess as _subprocess
+
+        from app.lean_sidecar import runner as _runner
+        from app.lean_sidecar.runner import KillReason, _kill_container_via_cidfile
+
+        cidfile = tmp_path / "cidfile"
+        fake_cid = "deadbeef" * 8
+        cidfile.write_text(fake_cid + "\n", encoding="utf-8")
+
+        def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+            return _subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(_subprocess, "run", fake_run)
+        import shutil as _shutil
+
+        monkeypatch.setattr(_shutil, "which", lambda _: "/usr/bin/podman")
+
+        with caplog.at_level(logging.INFO, logger=_runner.__name__):
+            _kill_container_via_cidfile(cidfile, reason=KillReason.WORKSPACE_MAX_MB_EXCEEDED)
+
+        # The reason string must appear in at least one log record so an
+        # operator scanning launcher.log can tell the two kill paths apart.
+        assert any("workspace_max_mb_exceeded" in record.getMessage() for record in caplog.records), (
+            f"reason missing from logs: {[r.getMessage() for r in caplog.records]}"
+        )
+
+    def test_timeout_path_threads_wall_clock_reason(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """End-to-end through ``execute`` on TimeoutExpired:
+        ``_kill_container_via_cidfile`` must be called with
+        ``KillReason.WALL_CLOCK_TIMEOUT`` (not defaulted, not omitted)."""
+        import logging
+        import subprocess as _subprocess
+
+        from app.lean_sidecar import runner as _runner
+
+        ws = resolve_workspace("run_kill_reason_t", tmp_artifacts_root)
+        ws.ensure_layout()
+        plan = _runner.build_command(ws, DUMMY_DIGEST)
+        fake_cid = "fedcba9876543210" * 4
+        plan.cidfile_path.write_text(fake_cid + "\n", encoding="utf-8")
+
+        call_count = {"n": 0}
+
+        def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+            call_count["n"] += 1
+            # First call is the ``podman run …`` argv from execute();
+            # subsequent calls are ``podman stop`` and ``podman rm``
+            # from the kill helper.
+            if call_count["n"] == 1:
+                raise _subprocess.TimeoutExpired(argv, kwargs.get("timeout", 0))
+            return _subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(_subprocess, "run", fake_run)
+        import shutil as _shutil
+
+        monkeypatch.setattr(_shutil, "which", lambda _: "/usr/bin/podman")
+
+        with caplog.at_level(logging.INFO, logger=_runner.__name__):
+            _runner.execute(plan)
+
+        assert any("wall_clock_timeout" in record.getMessage() for record in caplog.records), (
+            f"wall_clock_timeout reason missing: {[r.getMessage() for r in caplog.records]}"
+        )
 
 
 class TestRunLimits:

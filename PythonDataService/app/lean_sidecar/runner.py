@@ -111,6 +111,7 @@ def tokens_for_profile(profile: HardeningProfile) -> tuple[str, ...]:
     """
     return HARDENING_PROFILE_TOKENS[profile]
 
+
 # LEAN's launcher reads ``config.json`` from its working directory by
 # default. The image's working dir is ``/Lean/Launcher/bin/Debug`` and
 # the image ships a default ``config.json`` there pointing at the
@@ -374,14 +375,44 @@ def build_command(
     )
 
 
-def _kill_container_via_cidfile(cidfile_path: Path) -> None:
+class KillReason(StrEnum):
+    """Why ``_kill_container_via_cidfile`` was invoked.
+
+    Threaded into the kill helper so the launcher can return the right
+    operator-facing reason on each kill path:
+
+    - ``WALL_CLOCK_TIMEOUT`` — ``subprocess.run(..., timeout=...)`` fired
+      in ``execute()``; the wall-clock deadline elapsed (PR #280).
+    - ``WORKSPACE_MAX_MB_EXCEEDED`` — the in-flight workspace-cap poller
+      observed an overrun during the run (P1.4).
+
+    A single "killed" signal collapses these two failure modes; the
+    enum is the discriminator. No string magic — callers pass the enum
+    member by name.
+    """
+
+    WALL_CLOCK_TIMEOUT = "wall_clock_timeout"
+    WORKSPACE_MAX_MB_EXCEEDED = "workspace_max_mb_exceeded"
+
+
+def _kill_container_via_cidfile(
+    cidfile_path: Path,
+    *,
+    reason: KillReason,
+) -> None:
     """Stop + remove the container whose id was written to ``cidfile_path``.
 
-    Called by ``execute`` on ``TimeoutExpired`` so the outer kill
-    switch promised by the ADR actually fires. Read failures, missing
-    cidfile, or podman errors are logged + swallowed: the caller is
-    already in the timeout error path, and surfacing a secondary
-    exception here would mask the real timeout signal.
+    Called from two paths:
+
+    1. ``execute()`` on ``TimeoutExpired`` (``reason=WALL_CLOCK_TIMEOUT``)
+       — the ADR's outer kill switch.
+    2. ``WorkspacePoller`` on workspace-cap overrun
+       (``reason=WORKSPACE_MAX_MB_EXCEEDED``) — P1.4's in-flight
+       enforcement.
+
+    Read failures, missing cidfile, or podman errors are logged +
+    swallowed: the caller is already in an error path, and surfacing a
+    secondary exception here would mask the real kill signal.
 
     ``podman stop --time=5`` sends SIGTERM and waits up to 5 seconds
     before SIGKILL. ``podman rm`` cleans up the stopped container so
@@ -392,8 +423,8 @@ def _kill_container_via_cidfile(cidfile_path: Path) -> None:
     podman = shutil.which("podman")
     if podman is None:
         logger.warning(
-            "cannot kill container after timeout: podman not on PATH "
-            "(this should not happen — the run started)"
+            "cannot kill container (%s): podman not on PATH (this should not happen — the run started)",
+            reason.value,
         )
         return
     try:
@@ -402,28 +433,26 @@ def _kill_container_via_cidfile(cidfile_path: Path) -> None:
             # podman's own startup, before it wrote the cidfile).
             # Nothing to kill.
             logger.info(
-                "no cidfile at %s after timeout; container likely never "
-                "started",
+                "no cidfile at %s (%s); container likely never started",
                 cidfile_path,
+                reason.value,
             )
             return
         cid = cidfile_path.read_text(encoding="utf-8").strip()
         if not cid:
             logger.warning(
-                "cidfile %s exists but is empty; container id unknown",
+                "cidfile %s exists but is empty (%s); container id unknown",
                 cidfile_path,
+                reason.value,
             )
             return
     except OSError as e:
-        logger.warning("could not read cidfile %s: %s", cidfile_path, e)
+        logger.warning("could not read cidfile %s (%s): %s", cidfile_path, reason.value, e)
         return
 
+    logger.info("killing container %s: reason=%s", cid, reason.value)
     for action in ("stop", "rm"):
-        cmd = (
-            [podman, action, "--time=5", cid]
-            if action == "stop"
-            else [podman, action, cid]
-        )
+        cmd = [podman, action, "--time=5", cid] if action == "stop" else [podman, action, cid]
         try:
             result = subprocess.run(
                 cmd,
@@ -433,7 +462,7 @@ def _kill_container_via_cidfile(cidfile_path: Path) -> None:
                 timeout=15,
             )
         except subprocess.TimeoutExpired:
-            logger.warning("podman %s %s timed out after 15s", action, cid)
+            logger.warning("podman %s %s timed out after 15s (%s)", action, cid, reason.value)
             continue
         if result.returncode != 0:
             # ``stop`` can fail because the container already exited
@@ -441,10 +470,11 @@ def _kill_container_via_cidfile(cidfile_path: Path) -> None:
             # ``--rm`` on podman run already removed it. Log but
             # don't escalate — the goal is best-effort cleanup.
             logger.info(
-                "podman %s %s returned %d: %s",
+                "podman %s %s returned %d (%s): %s",
                 action,
                 cid,
                 result.returncode,
+                reason.value,
                 result.stderr.strip(),
             )
 
@@ -494,8 +524,10 @@ def execute(plan: RunnerPlan, *, limits: RunLimits = DEFAULT_RUN_LIMITS) -> RunR
         # running past the wall-clock deadline (no outer kill switch
         # despite the ADR claiming one). Read the cidfile podman wrote
         # at container creation and explicitly stop + remove the
-        # container.
-        _kill_container_via_cidfile(plan.cidfile_path)
+        # container. Pass the kill reason explicitly so the launcher
+        # can return ``wall_clock_timeout`` rather than collapsing it
+        # with P1.4's workspace-cap kill path.
+        _kill_container_via_cidfile(plan.cidfile_path, reason=KillReason.WALL_CLOCK_TIMEOUT)
     duration_ms = int((time.monotonic() - started) * 1000)
 
     # Merge for the tail; keep stderr last so the failure message is the

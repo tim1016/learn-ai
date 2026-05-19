@@ -127,3 +127,137 @@ class TestWorkspaceSizeEnforcement:
             pytest.skip("symlinks not supported on this host (Windows w/o priv)")
         # The link is skipped; only the real file is counted.
         assert _workspace_size_bytes(tmp_path) == 100
+
+
+class TestWorkspacePollerIntegration:
+    """The launcher must run the poller alongside ``execute()`` and
+    surface a workspace-cap overrun as
+    ``LaunchRejectedError("workspace_max_mb_exceeded")`` — same envelope
+    callers already handle for the post-execute backstop.
+
+    The race path (overrun lands as ``execute()`` exits, poller didn't
+    catch it) is the backstop's responsibility — it must still fire.
+    """
+
+    def test_poller_fires_mid_run_returns_rejected(
+        self,
+        tmp_artifacts_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Poller detects an overrun while ``execute()`` is in-flight,
+        kills the container, launcher returns
+        ``workspace_max_mb_exceeded``."""
+        import time
+
+        from app.lean_sidecar import runner as _runner
+        from app.lean_sidecar.launcher import service as _service
+        from app.lean_sidecar.runner import RunResult
+
+        monkeypatch.setattr(
+            sidecar_config,
+            "ALLOWED_IMAGE_DIGESTS",
+            frozenset({DUMMY_DIGEST}),
+        )
+        monkeypatch.setattr(_runner, "ALLOWED_IMAGE_DIGESTS", frozenset({DUMMY_DIGEST}))
+
+        ws = resolve_workspace("run_poller_fires", tmp_artifacts_root)
+        ws.ensure_layout()
+
+        # Fake execute(): simulate a LEAN container that writes a file
+        # exceeding the cap and then "runs" long enough for the poller
+        # to detect it. Returns an exit_code that looks like the
+        # container was killed.
+        def fake_execute(plan, *, limits):  # type: ignore[no-untyped-def]
+            (ws.workspace_dir / "fat.bin").write_bytes(b"x" * (limits.workspace_max_mb * (1 << 20) + 4096))
+            # Loop until the poller fires (kill triggered).
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                time.sleep(0.05)
+            return RunResult(exit_code=-1, duration_ms=200, timed_out=False, log_tail="")
+
+        # Tighten the poll interval so the test doesn't have to wait 1s.
+        from app.lean_sidecar import workspace_poller as _wp
+
+        monkeypatch.setattr(_wp, "_WORKSPACE_POLL_INTERVAL_S", 0.02)
+        monkeypatch.setattr(_service, "execute", fake_execute)
+
+        req = _make_request("run_poller_fires")
+        with pytest.raises(LaunchRejectedError) as ei:
+            launch(req, artifacts_root=tmp_artifacts_root)
+        assert ei.value.reason == "workspace_max_mb_exceeded"
+
+    def test_race_path_post_execute_backstop_still_catches(
+        self,
+        tmp_artifacts_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Overrun lands AS execute() exits — poller never sees it,
+        post-execute backstop must still raise."""
+        from app.lean_sidecar import runner as _runner
+        from app.lean_sidecar.launcher import service as _service
+        from app.lean_sidecar.runner import RunResult
+
+        monkeypatch.setattr(
+            sidecar_config,
+            "ALLOWED_IMAGE_DIGESTS",
+            frozenset({DUMMY_DIGEST}),
+        )
+        monkeypatch.setattr(_runner, "ALLOWED_IMAGE_DIGESTS", frozenset({DUMMY_DIGEST}))
+
+        ws = resolve_workspace("run_race_backstop", tmp_artifacts_root)
+        ws.ensure_layout()
+
+        def fake_execute(plan, *, limits):  # type: ignore[no-untyped-def]
+            # Write the over-cap file AFTER no time has passed — the
+            # poller won't have had a chance to tick at any sane
+            # interval before we return.
+            (ws.workspace_dir / "race.bin").write_bytes(b"y" * (limits.workspace_max_mb * (1 << 20) + 4096))
+            return RunResult(exit_code=0, duration_ms=10, timed_out=False, log_tail="")
+
+        # Poll interval far longer than the simulated execute() so the
+        # poller cannot fire — backstop is the only enforcement.
+        from app.lean_sidecar import workspace_poller as _wp
+
+        monkeypatch.setattr(_wp, "_WORKSPACE_POLL_INTERVAL_S", 60.0)
+        monkeypatch.setattr(_service, "execute", fake_execute)
+
+        req = _make_request("run_race_backstop")
+        with pytest.raises(LaunchRejectedError) as ei:
+            launch(req, artifacts_root=tmp_artifacts_root)
+        assert ei.value.reason == "workspace_max_mb_exceeded"
+
+    def test_happy_path_poller_does_not_fire(
+        self,
+        tmp_artifacts_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Workspace stays under cap; poller never fires; launch
+        returns a normal LaunchResponse."""
+        from app.lean_sidecar import runner as _runner
+        from app.lean_sidecar.launcher import service as _service
+        from app.lean_sidecar.runner import RunResult
+
+        monkeypatch.setattr(
+            sidecar_config,
+            "ALLOWED_IMAGE_DIGESTS",
+            frozenset({DUMMY_DIGEST}),
+        )
+        monkeypatch.setattr(_runner, "ALLOWED_IMAGE_DIGESTS", frozenset({DUMMY_DIGEST}))
+
+        ws = resolve_workspace("run_happy", tmp_artifacts_root)
+        ws.ensure_layout()
+
+        def fake_execute(plan, *, limits):  # type: ignore[no-untyped-def]
+            # Tiny write — well under the cap.
+            (ws.workspace_dir / "ok.bin").write_bytes(b"z" * 100)
+            return RunResult(exit_code=0, duration_ms=10, timed_out=False, log_tail="")
+
+        from app.lean_sidecar import workspace_poller as _wp
+
+        monkeypatch.setattr(_wp, "_WORKSPACE_POLL_INTERVAL_S", 0.02)
+        monkeypatch.setattr(_service, "execute", fake_execute)
+
+        req = _make_request("run_happy")
+        # MUST NOT raise — workspace is under the cap.
+        resp = launch(req, artifacts_root=tmp_artifacts_root)
+        assert resp.exit_code == 0
