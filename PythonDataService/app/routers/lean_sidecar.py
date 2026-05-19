@@ -1561,25 +1561,35 @@ async def get_log(run_id: str) -> PlainTextResponse:
 
 
 class _TradeRecordModel(BaseModel):
-    """One closed round-trip trade in the persist-payload format."""
+    """One closed round-trip trade in the persist-payload format.
+
+    Financial fields use ``Decimal`` to avoid IEEE 754 rounding errors in
+    cent-level divergence classification (FILL_PRICE_DRIFT / PNL_DRIFT).
+    Pydantic v2 serialises Decimal from JSON numbers or strings transparently.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     trade_number: int
     entry_ms_utc: int
     exit_ms_utc: int
-    entry_price: float
-    exit_price: float
-    quantity: float
-    pnl: float
+    entry_price: Decimal
+    exit_price: Decimal
+    quantity: Decimal
+    pnl: Decimal
     signal_reason: str
     is_synthetic_exit: bool = False
+    # Optional brokerage fee — required when the caller sets assert_fees=True.
+    # If absent, COMMISSION_DRIFT classification is silently skipped for this
+    # trade (Branch B fixture semantics per numerical-rigor.md).
+    fee: Decimal | None = None
 
 
 class _CompareRequestModel(BaseModel):
     left_trades: list[_TradeRecordModel]
     right_trades: list[_TradeRecordModel]
-    fill_price_atol: float = Field(default=0.01, ge=0.0)
+    # Decimal tolerance: avoids float rounding errors at atol boundaries.
+    fill_price_atol: Decimal = Field(default=Decimal("0.01"), ge=Decimal("0"))
     assert_fees: bool = False
 
 
@@ -1588,10 +1598,10 @@ class _DivergenceModel(BaseModel):
     trade_number: int | None = None
     ms_utc: int | None = None
     message: str
-    left_fill_price: float | None = None
-    right_fill_price: float | None = None
-    left_quantity: float | None = None
-    right_quantity: float | None = None
+    left_fill_price: Decimal | None = None
+    right_fill_price: Decimal | None = None
+    left_quantity: Decimal | None = None
+    right_quantity: Decimal | None = None
 
 
 class _CompareResponseModel(BaseModel):
