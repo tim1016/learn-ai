@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from app.lean_sidecar.polygon_canonical import RecordedPolygonFixtureProvider
+from app.lean_sidecar.polygon_canonical import (
+    FixtureMetadataMismatchError,
+    RecordedPolygonFixtureProvider,
+)
 
 
 def _write_fixture(
@@ -17,7 +21,7 @@ def _write_fixture(
     symbol: str = "SPY",
     from_date: str = "2025-01-06",
     to_date: str = "2025-01-10",
-    bars: list[dict] | None = None,
+    bars: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Write a minimal fixture directory and return its path."""
     fixture_dir = tmp_path / f"{symbol.lower()}_minute_{from_date}_{to_date}"
@@ -79,11 +83,9 @@ def test_recorded_provider_returns_bars_when_metadata_matches(tmp_path: Path) ->
     ],
 )
 def test_recorded_provider_rejects_metadata_mismatch(
-    tmp_path: Path, field: str, bad_value: object, asked: dict
+    tmp_path: Path, field: str, bad_value: object, asked: dict[str, object]
 ) -> None:
     """Test does not silently load wrong bars when request drifts from fixture shape."""
-    from app.lean_sidecar.polygon_canonical import FixtureMetadataMismatchError
-
     fixture_dir = _write_fixture(tmp_path)
     # Mutate fixture metadata to introduce the mismatch.
     meta = json.loads((fixture_dir / "metadata.json").read_text())
@@ -97,4 +99,20 @@ def test_recorded_provider_rejects_metadata_mismatch(
             start_date=date.fromisoformat(asked.get("from_date", "2025-01-06")),
             end_date=date.fromisoformat(asked.get("to_date", "2025-01-10")),
             adjusted=asked.get("adjusted", False),
+        )
+
+
+def test_recorded_provider_rejects_unknown_schema_version(tmp_path: Path) -> None:
+    fixture_dir = _write_fixture(tmp_path)
+    meta = json.loads((fixture_dir / "metadata.json").read_text())
+    meta["schema_version"] = 2  # future bump the provider doesn't know
+    (fixture_dir / "metadata.json").write_text(json.dumps(meta))
+
+    provider = RecordedPolygonFixtureProvider(fixture_dir)
+    with pytest.raises(FixtureMetadataMismatchError, match="schema_version"):
+        provider.fetch_minute_bars(
+            symbol="SPY",
+            start_date=date(2025, 1, 6),
+            end_date=date(2025, 1, 10),
+            adjusted=False,
         )

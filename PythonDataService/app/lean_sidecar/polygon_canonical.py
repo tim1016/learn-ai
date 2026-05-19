@@ -42,7 +42,7 @@ class FixtureMetadataMismatchError(ValueError):
     """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RecordedPolygonFixtureProvider:
     """Replays a captured Polygon fetch from a fixture directory.
 
@@ -62,6 +62,11 @@ class RecordedPolygonFixtureProvider:
         adjusted: bool,
     ) -> list[dict[str, Any]]:
         meta = json.loads((self.fixture_dir / "metadata.json").read_text())
+        if meta.get("schema_version") != 1:
+            raise FixtureMetadataMismatchError(
+                f"fixture {self.fixture_dir.name!r} has metadata schema_version="
+                f"{meta.get('schema_version')!r}; this provider supports only schema_version=1"
+            )
         expected = (
             ("symbol", meta["symbol"], symbol),
             ("from_date", meta["from_date"], start_date.isoformat()),
