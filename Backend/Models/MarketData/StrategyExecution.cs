@@ -68,6 +68,9 @@ public class StrategyExecution
     [MaxLength(20)]
     public string Source { get; set; } = "engine";
 
+    [MaxLength(128)]
+    public string? LeanRunId { get; set; }
+
     /// <summary>Free-text notes field for researcher observations.</summary>
     public string? Notes { get; set; }
 

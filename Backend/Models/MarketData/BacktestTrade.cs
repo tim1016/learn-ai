@@ -25,4 +25,6 @@ public class BacktestTrade
 
     [MaxLength(200)]
     public string SignalReason { get; set; } = "";
+
+    public bool IsSyntheticExit { get; set; }
 }

@@ -173,6 +173,7 @@ public class AppDbContext : DbContext
             entity.Property(e => e.ValueAtRisk95).HasPrecision(18, 8);
             entity.Property(e => e.ValueAtRisk99).HasPrecision(18, 8);
             entity.Property(e => e.AnnualStandardDeviation).HasPrecision(18, 8);
+            entity.Property(e => e.LeanRunId).HasMaxLength(128);
             entity.HasOne(e => e.Ticker)
                   .WithMany()
                   .HasForeignKey(e => e.TickerId)
@@ -191,6 +192,7 @@ public class AppDbContext : DbContext
             entity.Property(t => t.Quantity).HasPrecision(18, 8);
             entity.Property(t => t.PnL).HasPrecision(18, 8);
             entity.Property(t => t.CumulativePnL).HasPrecision(18, 8);
+            entity.Property(t => t.IsSyntheticExit).HasDefaultValue(false);
             entity.HasOne(t => t.StrategyExecution)
                   .WithMany(e => e.Trades)
                   .HasForeignKey(t => t.StrategyExecutionId)
