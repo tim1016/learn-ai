@@ -24,7 +24,25 @@ from typing import Any, Literal
 # Bump only when the manifest schema changes in a non-additive way. Phase
 # 1 fixtures are pinned against schema 1; raising this forces fixtures to
 # be re-generated through the golden-fixture lifecycle.
-MANIFEST_SCHEMA_VERSION = 1
+#
+# Version history:
+#   1 — Phase 1 baseline. ``requested_window_ms`` was the caller's raw
+#       midnight-UTC payload; ``staged_data_window_ms`` was the
+#       ET-midnight envelope of staged trading days.
+#   2 — P2.5 (2026-05-18): ``requested_window_ms`` now carries the
+#       half-open session-boundary contract (start = 09:30 ET of
+#       start_date; end = 09:30 ET of next_trading_day(end_date)).
+#       Manifest writers add ``date_semantics=session_open_half_open``
+#       to ``notes`` so the cross-engine reconciler can branch on
+#       which contract a persisted run was written under. Old
+#       manifests stay readable on schema_version 1.
+MANIFEST_SCHEMA_VERSION = 2
+
+# Note tag that the manifest writer adds to ``notes`` so downstream
+# readers (the cross-engine reconciler, the run-history sidebar) can
+# detect that a manifest was written under the P2.5 contract without
+# inspecting the millisecond values.
+P2_5_DATE_SEMANTICS_NOTE = "date_semantics=session_open_half_open"
 
 
 # ---------------------------------------------------------------------------

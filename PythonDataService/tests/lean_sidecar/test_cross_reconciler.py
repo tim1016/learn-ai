@@ -70,6 +70,58 @@ def _engine_fill(
     )
 
 
+class TestP2_5DateContractAlignment:
+    """P2.5 — the cross-reconciler already derives trading dates from
+    each fill's ``ms_utc`` via NY-local conversion. Under the new
+    contract, the manifest's ``requested_window_ms`` (now half-open
+    session-boundary ms) is directly comparable to the
+    NY-trading-date set the reconciler produces — no logic change
+    needed, but the invariant is worth pinning so a future refactor
+    doesn't accidentally re-introduce a midnight-UTC dependence.
+    """
+
+    def test_fill_ms_utc_derives_correct_ny_trading_date(self) -> None:
+        """A LEAN fill at 14:00 UTC on 2025-01-06 = 09:00 ET — the NY
+        trading date is 2025-01-06 (and matches the manifest's
+        ``requested_window_ms.start_ms`` derived from
+        ``session_open_ms_utc(2025-01-06) = 14:30 UTC``)."""
+        from app.lean_sidecar.trading_calendar import session_open_ms_utc
+
+        # 14:00 UTC = 09:00 ET on 2025-01-06.
+        out = compare_cross_engine(
+            [_lean_fill(ms_utc=1_736_174_400_000)],
+            [_engine_fill(ms_utc=1_736_174_400_000)],
+        )
+        # Clean path → no divergence rows; assert the fills pair on
+        # the NY-derived trading date by introducing a quantity diff
+        # so the reconciler emits a divergence we can read trading_date
+        # off of.
+        out_div = compare_cross_engine(
+            [_lean_fill(ms_utc=1_736_174_400_000, fill_quantity=100.0)],
+            [_engine_fill(ms_utc=1_736_174_400_000, fill_quantity=200)],
+        )
+        assert out_div.divergences[0].trading_date == date(2025, 1, 6)
+        # Round-trip: session-open ms of 2025-01-06 lands at the
+        # manifest's start_ms_utc value under the P2.5 contract.
+        assert session_open_ms_utc(date(2025, 1, 6)) == 1_736_173_800_000
+        # The clean-path comparison also passes (sanity).
+        assert out.passed is True
+
+    def test_dst_boundary_fill_derives_correct_ny_date(self) -> None:
+        """Fill at 13:35 UTC on 2026-03-09 (EDT) = 09:35 ET. The NY
+        trading date stays 2026-03-09 despite the DST flip — fixed
+        offsets would have produced 2026-03-08 or 2026-03-10."""
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _Zone
+
+        ms_utc = int(_dt(2026, 3, 9, 9, 35, tzinfo=_Zone("America/New_York")).timestamp() * 1000)
+        out = compare_cross_engine(
+            [_lean_fill(ms_utc=ms_utc, fill_quantity=100.0)],
+            [_engine_fill(ms_utc=ms_utc, fill_quantity=200)],
+        )
+        assert out.divergences[0].trading_date == date(2026, 3, 9)
+
+
 class TestCleanPath:
     def test_matched_fills_pass_with_zero_divergences(self) -> None:
         out = compare_cross_engine([_lean_fill()], [_engine_fill()])
@@ -198,9 +250,7 @@ class TestTolerancesPropagateToOutput:
         out = compare_cross_engine(
             [_lean_fill(fill_price=580.50)],
             [_engine_fill(fill_price=Decimal("580.60"))],
-            tolerances=CrossReconciliationTolerances(
-                fill_price_atol=Decimal("0.20")
-            ),
+            tolerances=CrossReconciliationTolerances(fill_price_atol=Decimal("0.20")),
         )
         cats = [d.category for d in out.divergences]
         assert DivergenceCategory.FILL_PRICE_DRIFT not in cats

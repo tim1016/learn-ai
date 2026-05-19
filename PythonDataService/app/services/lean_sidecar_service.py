@@ -39,6 +39,7 @@ from app.lean_sidecar.launcher_client import post_launch
 from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
+    P2_5_DATE_SEMANTICS_NOTE,
     BrokeragePolicy,
     RunManifest,
     StagedDataManifest,
@@ -164,13 +165,35 @@ class TrustedRunRequest:
 
     @property
     def start_date(self) -> date:
-        """Trading date corresponding to ``start_ms_utc`` (UTC calendar day)."""
-        return datetime.fromtimestamp(self.start_ms_utc / 1000, tz=UTC).date()
+        """First trading date in the window — NY-local date of ``start_ms_utc``.
+
+        Per the P2.5 contract, ``start_ms_utc`` is the 09:30 ET
+        session-open millisecond, so the NY-local date is the
+        first trading day. The validator in the router has already
+        confirmed this is a full trading day (not weekend, holiday,
+        or half-day).
+        """
+        return datetime.fromtimestamp(self.start_ms_utc / 1000, tz=UTC).astimezone(_ET).date()
 
     @property
     def end_date(self) -> date:
-        """Trading date corresponding to ``end_ms_utc`` (UTC calendar day)."""
-        return datetime.fromtimestamp(self.end_ms_utc / 1000, tz=UTC).date()
+        """Last trading date in the window — derived from the
+        half-open ``end_ms_utc``.
+
+        Per the P2.5 contract, ``end_ms_utc`` is 09:30 ET of the
+        NEXT trading day after the window's last full session. We
+        derive ``end_date`` by walking back from that exclusive-end
+        date until we land on a trading day.
+        """
+        from app.lean_sidecar.trading_calendar import is_trading_day
+
+        exclusive_end = datetime.fromtimestamp(self.end_ms_utc / 1000, tz=UTC).astimezone(_ET).date()
+        d = exclusive_end - timedelta(days=1)
+        # Validator guarantees a trading day exists between start and
+        # exclusive end; this loop terminates.
+        while not is_trading_day(d):
+            d -= timedelta(days=1)
+        return d
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,24 +361,28 @@ def _staged_window_from_dates(trading_dates: list[date]) -> WindowMs | None:
 
 
 def _iter_trading_dates(start: date, end: date) -> list[date]:
-    """Inclusive trading-date sequence, weekends-only filtered.
+    """Inclusive trading-date sequence using the NYSE calendar.
 
-    Phase 2a does not consult an exchange-holiday calendar — the
-    trusted sample window must be operator-chosen as actual trading
-    days. If the start/end span includes a US holiday, the run still
-    completes (LEAN ignores days without staged data) but the
-    bar-consumption count drops, which the response surfaces.
+    P2.5: routes through ``trading_calendar.is_trading_day`` so the
+    validator and staging consult the SAME calendar — the bug class
+    "staging stages a date the validator already accepted as
+    blocked" cannot exist. Weekends, holidays, and half-days the
+    NYSE schedule omits are skipped (the validator rejects windows
+    that touch a half-day, so half-days never appear here in
+    practice; weekends and holidays in between endpoints are
+    allowed and silently skipped).
     """
+    from app.lean_sidecar.trading_calendar import is_trading_day
+
     out: list[date] = []
     current = start
     one = timedelta(days=1)
     while current <= end:
-        # Weekday 0–4 are Mon–Fri; LEAN equity-data layout is M–F only.
-        if current.weekday() < 5:
+        if is_trading_day(current):
             out.append(current)
         current += one
     if not out:
-        raise LeanSidecarServiceError(f"date range {start}..{end} contains no weekdays — nothing to stage")
+        raise LeanSidecarServiceError(f"date range {start}..{end} contains no NYSE trading days — nothing to stage")
     return out
 
 
@@ -422,11 +449,7 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     # sample when present. The Phase 1c sandbox shape (--read-only,
     # --user=<non-root>, --cap-drop=ALL, --network=none, workspace-
     # only mount) is what makes accepting arbitrary source safe.
-    source_to_stage = (
-        request.algorithm_source
-        if request.algorithm_source
-        else _SOURCE_FOR_TEMPLATE[request.template]
-    )
+    source_to_stage = request.algorithm_source if request.algorithm_source else _SOURCE_FOR_TEMPLATE[request.template]
     source_path = stage_algorithm_source(workspace, source_to_stage)
     config = LeanConfig(
         parameters={
@@ -573,16 +596,12 @@ def _build_manifest(
     if response is not None:
         exit_code = response.exit_code
         is_clean_note = f"is_clean={response.is_clean}"
-        error_cats_note = (
-            f"lean_error_categories={sorted(response.lean_errors.keys())}"
-        )
+        error_cats_note = f"lean_error_categories={sorted(response.lean_errors.keys())}"
     else:
         exit_code = None
         is_clean_note = "is_clean=False"
         error_cats_note = "lean_error_categories=[]"
-    failure_note = (
-        (f"failure_reason={failure_reason}",) if failure_reason else ()
-    )
+    failure_note = (f"failure_reason={failure_reason}",) if failure_reason else ()
     return RunManifest(
         schema_version=MANIFEST_SCHEMA_VERSION,
         run_id=request.run_id,
@@ -616,9 +635,7 @@ def _build_manifest(
         # the source's hash, captured above). When using a bundled
         # template, the template selector pins the policy exactly.
         brokerage_policy=(
-            "algorithm_default"
-            if request.algorithm_source
-            else _BROKERAGE_POLICY_FOR_TEMPLATE[request.template]
+            "algorithm_default" if request.algorithm_source else _BROKERAGE_POLICY_FOR_TEMPLATE[request.template]
         ),
         starting_capital=request.starting_cash,
         account_currency="USD",
@@ -672,6 +689,10 @@ def _build_manifest(
             # Phase 5b: which bundled template (if any) was staged.
             # ``user_provided_no_template`` when caller pasted source.
             f"trusted_template={'user_provided_no_template' if request.algorithm_source else request.template}",
+            # P2.5: tag the date-window contract this manifest was
+            # written under so the cross-engine reconciler can branch
+            # on contract without inspecting ms values.
+            P2_5_DATE_SEMANTICS_NOTE,
             *failure_note,
         ),
     )

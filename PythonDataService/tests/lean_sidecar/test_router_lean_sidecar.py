@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -139,11 +140,17 @@ async def client() -> AsyncClient:
         yield c
 
 
-# 2025-01-06 00:00 UTC = 1_736_121_600_000 ms; 2025-01-10 00:00 UTC =
-# 1_736_467_200_000 ms. The trusted-sample window is [Mon, Fri] = 5
-# trading days; under the 30-day cap.
-_GOOD_START_MS = 1_736_121_600_000
-_GOOD_END_MS = 1_736_467_200_000
+# P2.5 contract — start_ms_utc / end_ms_utc are 09:30 ET (session-open)
+# millis, half-open. The trusted-sample window is Mon 2025-01-06 →
+# Fri 2025-01-10 (5 trading days), so:
+#   start_ms_utc = 09:30 ET of 2025-01-06 = 14:30 UTC = 1_736_173_800_000
+#   end_ms_utc   = 09:30 ET of next_trading_day(2025-01-10)
+#                = 09:30 ET of 2025-01-13 (Mon, no MLK)
+#                = 14:30 UTC = 1_736_778_600_000
+# Pre-P2.5 callers sent midnight-UTC ms; that contract is now rejected
+# by the validator. See docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md.
+_GOOD_START_MS = 1_736_173_800_000
+_GOOD_END_MS = 1_736_778_600_000
 
 
 def _good_payload(run_id: str = "router_unit") -> dict:
@@ -166,6 +173,48 @@ def _launcher_success_body(run_id: str) -> dict:
         lean_errors={},
         is_clean=True,
     ).model_dump()
+
+
+class TestCalendarBlockedDatesEndpoint:
+    """P2.5 calendar primitive: the UI fetches the union of weekends,
+    holidays, and half-days in a date range so the date picker can
+    disable + label each blocked date without re-implementing the
+    calendar client-side."""
+
+    async def test_returns_blocked_dates_with_reasons(self, client: AsyncClient) -> None:
+        r = await client.get(
+            "/api/lean-sidecar/calendar/blocked-dates",
+            params={"from": "2026-11-23", "to": "2026-11-30"},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        # 2026-11-26 = Thanksgiving (holiday); 2026-11-27 = Black Friday
+        # (early_close). Weekends 11-28, 11-29 = weekend.
+        by_date = {entry["date"]: entry["reason"] for entry in data["blocked"]}
+        assert by_date["2026-11-26"] == "holiday"
+        assert by_date["2026-11-27"] == "early_close"
+        assert by_date["2026-11-28"] == "weekend"
+        assert by_date["2026-11-29"] == "weekend"
+        # Regular trading days are NOT in the payload.
+        assert "2026-11-23" not in by_date
+
+    async def test_rejects_end_before_start(self, client: AsyncClient) -> None:
+        r = await client.get(
+            "/api/lean-sidecar/calendar/blocked-dates",
+            params={"from": "2026-01-10", "to": "2026-01-06"},
+        )
+        assert r.status_code == 422
+        assert "after" in r.text.lower() or "before" in r.text.lower()
+
+    async def test_caps_range_to_prevent_abuse(self, client: AsyncClient) -> None:
+        """Single request returns ≤ ~2 years of dates so a buggy UI
+        loop can't degrade the launcher with a 100-year sweep."""
+        r = await client.get(
+            "/api/lean-sidecar/calendar/blocked-dates",
+            params={"from": "2026-01-01", "to": "2099-01-01"},
+        )
+        assert r.status_code == 422
+        assert "range" in r.text.lower() or "max" in r.text.lower()
 
 
 class TestPostTrustedRunValidation:
@@ -200,27 +249,19 @@ class TestPostTrustedRunValidation:
         assert "end_ms_utc" in r.text or "strictly greater" in r.text
 
     async def test_oversized_window_rejected(self, client: AsyncClient) -> None:
+        """A window with more than _MAX_TRADING_DAYS trading days must be
+        rejected — under the P2.5 contract, count is over [start_date,
+        exclusive_end_date) sessions, not calendar days."""
+        from app.lean_sidecar.trading_calendar import session_open_ms_utc
+
         payload = _good_payload()
-        # 60 calendar days = ~42 weekdays, over the 30-trading-day cap.
-        payload["start_ms_utc"] = _GOOD_START_MS
-        payload["end_ms_utc"] = _GOOD_START_MS + 60 * 86_400_000
+        # ~3 calendar months of trading days (~63 sessions) is well
+        # over the 30-cap.
+        payload["start_ms_utc"] = session_open_ms_utc(date(2025, 1, 6))
+        payload["end_ms_utc"] = session_open_ms_utc(date(2025, 4, 14))
         r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
         assert r.status_code == 422
         assert "trading days" in r.text or "30" in r.text
-
-    async def test_weekends_only_window_rejected(self, client: AsyncClient) -> None:
-        """A window covering only weekends must be rejected — zero
-        weekdays means staging would produce zero bars, which is the
-        kind of silent-empty failure the router has to catch up
-        front."""
-        # 2025-01-04 (Sat) 00:00 UTC = 1_735_948_800_000
-        # 2025-01-05 (Sun) 23:59 UTC = 1_736_121_540_000
-        payload = _good_payload()
-        payload["start_ms_utc"] = 1_735_948_800_000
-        payload["end_ms_utc"] = 1_736_121_540_000
-        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        assert r.status_code == 422
-        assert "weekday" in r.text.lower() or "trading day" in r.text.lower()
 
     async def test_forbids_unknown_extra_fields(self, client: AsyncClient) -> None:
         """``extra="forbid"`` still rejects keys the schema doesn't
@@ -276,6 +317,87 @@ class TestPostTrustedRunValidation:
         model = TrustedRunRequestModel.model_validate(payload)
         assert model.algorithm_source is not None
         assert len(model.algorithm_source.encode("utf-8")) == 200 * 1024 + 2
+
+    async def test_rejects_start_ms_not_session_open(self, client: AsyncClient) -> None:
+        """P2.5 — start_ms_utc must be exactly 09:30 ET of a trading
+        day. Midnight-UTC payloads (the pre-P2.5 contract) are
+        rejected with a clear error pointing at the new contract."""
+        payload = _good_payload()
+        # 2025-01-06 00:00 UTC = the OLD-contract midnight-UTC value.
+        payload["start_ms_utc"] = 1_736_121_600_000
+        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
+        assert r.status_code == 422
+        assert "09:30" in r.text or "session" in r.text.lower()
+
+    async def test_rejects_end_ms_not_session_open(self, client: AsyncClient) -> None:
+        payload = _good_payload()
+        payload["end_ms_utc"] = 1_736_467_200_000  # midnight UTC of 2025-01-10
+        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
+        assert r.status_code == 422
+        assert "09:30" in r.text or "session" in r.text.lower()
+
+    async def test_rejects_window_starting_on_weekend(self, client: AsyncClient) -> None:
+        """P2.5 — start_date must be a trading day. Saturday/Sunday
+        rejected with a message that names the offending date so an
+        operator can fix the payload without reading the source."""
+        from app.lean_sidecar.trading_calendar import session_open_ms_utc
+
+        payload = _good_payload()
+        # 2025-01-11 is a Saturday.
+        payload["start_ms_utc"] = session_open_ms_utc(date(2025, 1, 11))
+        payload["end_ms_utc"] = session_open_ms_utc(date(2025, 1, 14))  # Tue
+        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
+        assert r.status_code == 422
+        assert "2025-01-11" in r.text
+
+    async def test_accepts_holiday_in_middle_of_window(self) -> None:
+        """P2.5 — weekends and federal holidays IN BETWEEN trading-day
+        endpoints are allowed; staging skips them. Only half-days
+        (early-close days) universally reject. Schema-only — no
+        podman/LEAN dependency."""
+        from app.lean_sidecar.trading_calendar import session_open_ms_utc
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        # MLK Day 2025 = Mon 2025-01-20. Range Fri 01-17 → Wed 01-22
+        # (exclusive end) has MLK Monday in the middle as a holiday.
+        payload["start_ms_utc"] = session_open_ms_utc(date(2025, 1, 17))
+        payload["end_ms_utc"] = session_open_ms_utc(date(2025, 1, 22))
+        model = TrustedRunRequestModel.model_validate(payload)
+        assert model.start_ms_utc == payload["start_ms_utc"]
+
+    async def test_rejects_window_touching_half_day(self, client: AsyncClient) -> None:
+        """P2.5 — half-days are out of scope; validator rejects any
+        window touching one. 2025-11-28 is Black Friday."""
+        from app.lean_sidecar.trading_calendar import session_open_ms_utc
+
+        payload = _good_payload()
+        # Wed 2025-11-26 → next_trading_day after Fri 2025-11-28.
+        # 2025-11-27 is Thanksgiving (full holiday) AND 2025-11-28
+        # is the Black-Friday early close.
+        payload["start_ms_utc"] = session_open_ms_utc(date(2025, 11, 26))
+        payload["end_ms_utc"] = session_open_ms_utc(date(2025, 12, 1))  # next_trading_day(11-28)
+        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
+        assert r.status_code == 422
+        # Either the half-day (11-28) or the holiday (11-27) shows up
+        # in the message — both are blocked under the new contract.
+        assert "2025-11-28" in r.text or "2025-11-27" in r.text
+
+    async def test_accepts_dst_straddling_window(self) -> None:
+        """P2.5 — a window that straddles a DST boundary must validate
+        cleanly when both endpoints resolve through the NY zone. DST
+        starts 2025-03-09 EST→EDT."""
+        from app.lean_sidecar.trading_calendar import session_open_ms_utc
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        # Fri 2025-03-07 (EST) → Tue 2025-03-11 (EDT).
+        payload["start_ms_utc"] = session_open_ms_utc(date(2025, 3, 7))
+        payload["end_ms_utc"] = session_open_ms_utc(date(2025, 3, 12))  # next_trading_day(03-11)
+        # Schema-only — no podman/LEAN dependency.
+        model = TrustedRunRequestModel.model_validate(payload)
+        assert model.start_ms_utc == payload["start_ms_utc"]
+        assert model.end_ms_utc == payload["end_ms_utc"]
 
     @pytest.mark.parametrize(
         "bad_symbol",
@@ -406,19 +528,13 @@ class TestPostTrustedRunHappyPath:
         # NEW behavior: failure manifest is on disk with the rejection
         # reason recorded.
         ws = resolve_workspace("router_failmanifest", patched_artifacts_root)
-        assert ws.manifest_path.exists(), (
-            "failure manifest should be written even when launcher rejects"
-        )
+        assert ws.manifest_path.exists(), "failure manifest should be written even when launcher rejects"
         manifest = json.loads(ws.manifest_path.read_text(encoding="utf-8"))
         assert manifest["run_id"] == "router_failmanifest"
         assert manifest["exit_code"] is None
         notes = manifest.get("notes", [])
-        assert any("failure_reason=" in n for n in notes), (
-            f"manifest notes lack failure_reason: {notes}"
-        )
-        assert any("LauncherRejected" in n for n in notes), (
-            f"manifest notes should name the exception type: {notes}"
-        )
+        assert any("failure_reason=" in n for n in notes), f"manifest notes lack failure_reason: {notes}"
+        assert any("LauncherRejected" in n for n in notes), f"manifest notes should name the exception type: {notes}"
         # is_clean=False — failure path must NEVER paint as clean.
         assert any("is_clean=False" in n for n in notes)
 
@@ -467,16 +583,12 @@ class TestPostTrustedRunHappyPath:
         payload = _good_payload("router_reused")
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
             mock.post("/launch").mock(
-                return_value=httpx.Response(
-                    200, json=_launcher_success_body("router_reused")
-                ),
+                return_value=httpx.Response(200, json=_launcher_success_body("router_reused")),
             )
             first = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
             assert first.status_code == 200, first.text
             # Re-submit identical payload — the workspace now exists.
-            second = await client.post(
-                "/api/lean-sidecar/trusted-runs", json=payload
-            )
+            second = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
         assert second.status_code == 409
         body = second.json()["detail"]
         assert body["reason"] == "run_id_already_used"
@@ -1374,9 +1486,7 @@ class TestPostCrossReconcileEndpoint:
             total_equity_points=0,
         )
         ws.normalized_dir.mkdir(parents=True, exist_ok=True)
-        (ws.normalized_dir / "result.json").write_text(
-            empty_result.model_dump_json(), encoding="utf-8"
-        )
+        (ws.normalized_dir / "result.json").write_text(empty_result.model_dump_json(), encoding="utf-8")
         _write_cross_run_manifest(run_id=run_id, artifacts_root=patched_artifacts_root)
         _stage_minute_data(run_id=run_id, artifacts_root=patched_artifacts_root)
 
