@@ -163,4 +163,17 @@ public class BacktestRunsQueryTests
         Assert.Equal("engine", result[1].Source);
         Assert.Equal("strategy-lab", result[2].Source);
     }
+
+    [Fact]
+    public async Task GetBacktestRuns_FilterBySymbol_NoPrefixFalsePositive()
+    {
+        // Regression: "SP" must NOT match a run whose symbol is "SPY".
+        // Prior implementation used s.Parameters.Contains(symbol) which matched
+        // any substring; the fix uses an exact JSON key/value fragment.
+        var (query, db) = await BuildAsync();
+
+        var result = await query.GetBacktestRuns(db, symbol: "SP").ToListAsync();
+
+        Assert.Empty(result);
+    }
 }

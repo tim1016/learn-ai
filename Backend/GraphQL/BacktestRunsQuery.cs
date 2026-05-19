@@ -34,9 +34,10 @@ public class BacktestRunsQuery
 
         if (!string.IsNullOrEmpty(symbol))
         {
-            // Parameters is a JSON string, e.g. {"symbol":"SPY","starting_cash":100000}.
-            // Simple Contains is safe because symbol is a bounded uppercase ticker string.
-            query = query.Where(s => s.Parameters != null && s.Parameters.Contains(symbol));
+            // Parameters is a JSON text string, e.g. {"symbol":"SPY","starting_cash":100000}.
+            // Match the exact JSON key/value pair to avoid prefix false-positives ("SP" matching "SPY").
+            var jsonFragment = $"\"symbol\":\"{symbol}\"";
+            query = query.Where(s => s.Parameters != null && s.Parameters.Contains(jsonFragment));
         }
 
         return query.OrderByDescending(s => s.ExecutedAt);
