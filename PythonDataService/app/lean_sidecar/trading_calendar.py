@@ -3,8 +3,8 @@
 Per docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md, both the
 ``TrustedRunRequestModel`` validator and the staging iteration consult
 this module so they cannot drift on which calendar dates are trading
-days, holidays, or half-days. The cross-engine reconciler and the
-``/calendar/blocked-dates`` endpoint also read from here.
+days, holidays, or half-days. The ``/calendar/blocked-dates`` endpoint
+also reads from here.
 
 This is intentionally separate from
 ``app/engine/live/nyse_calendar.py``:
@@ -112,34 +112,27 @@ def blocked_dates_in_range(
 ) -> Mapping[date, str]:
     """Return a mapping of blocked dates in ``[start, end]`` (inclusive).
 
-    Each value is a short reason tag — ``"weekend"``, ``"holiday"``,
-    or ``"early_close"``. The endpoint exposes this to the UI so the
-    picker can disable + label each blocked date in a single payload.
-
-    Half-days are included because the validator rejects them; the UI
-    surfaces them with a half-day tooltip rather than a generic
-    "blocked" marker. The reason tag is the discriminator.
+    Each value is a short reason tag — ``"weekend"`` or ``"holiday"``.
+    The endpoint exposes this to the UI so the picker can disable +
+    label each non-tradeable date in a single payload. Early-close
+    half-days are sessions, so they are intentionally not blocked.
     """
     if end < start:
         raise ValueError(f"blocked_dates_in_range: end {end.isoformat()} is before start {start.isoformat()}")
 
     # ``pandas_market_calendars`` schedules ONLY sessions — so weekends
     # and holidays show up as absent rows, and we need to walk the
-    # range to find them. Build a dict of session-date → market_close
-    # first to make the per-day lookup O(1).
+    # range to find them. Build a set of session dates first to make
+    # the per-day lookup O(1). Early closes remain sessions here.
     schedule = _CALENDAR.schedule(start_date=start, end_date=end)
-    session_closes: dict[date, pd.Timestamp] = {ts.date(): close for ts, close in schedule["market_close"].items()}
+    session_dates: set[date] = {ts.date() for ts in schedule.index}
 
     out: dict[date, str] = {}
     current = start
     while current <= end:
         if current.weekday() >= 5:
             out[current] = "weekend"
-        elif current not in session_closes:
+        elif current not in session_dates:
             out[current] = "holiday"
-        else:
-            close_et = session_closes[current].tz_convert(_ET)
-            if close_et.time() < time(16, 0):
-                out[current] = "early_close"
         current = current + pd.Timedelta(days=1).to_pytimedelta()
     return out

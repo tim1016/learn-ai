@@ -100,11 +100,12 @@ export class LeanSidecarService {
   /**
    * P2.5 — fetch the NYSE-calendar blocked dates for a range.
    *
-   * Returns the union of weekends, holidays, and half-days in
+   * Returns the union of weekends and holidays in
    * ``[from_, to]`` with a reason tag per date. The picker uses this
    * to disable + label dates without re-implementing the calendar
-   * client-side. Tagged cache so repeated picker openings on the same
-   * month don't refetch.
+   * client-side. Early-close half-days are valid trading sessions.
+   * Tagged cache so repeated picker openings on the same month don't
+   * refetch.
    */
   private readonly blockedDatesCache = new Map<string, BlockedDatesPayload>();
 

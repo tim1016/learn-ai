@@ -176,8 +176,8 @@ def _launcher_success_body(run_id: str) -> dict:
 
 
 class TestCalendarBlockedDatesEndpoint:
-    """P2.5 calendar primitive: the UI fetches the union of weekends,
-    holidays, and half-days in a date range so the date picker can
+    """P2.5 calendar primitive: the UI fetches weekends and holidays
+    in a date range so the date picker can
     disable + label each blocked date without re-implementing the
     calendar client-side."""
 
@@ -188,11 +188,12 @@ class TestCalendarBlockedDatesEndpoint:
         )
         assert r.status_code == 200
         data = r.json()
-        # 2026-11-26 = Thanksgiving (holiday); 2026-11-27 = Black Friday
-        # (early_close). Weekends 11-28, 11-29 = weekend.
+        # 2026-11-26 = Thanksgiving (holiday). 2026-11-27 =
+        # Black Friday early close, but still a trading session.
+        # Weekends 11-28, 11-29 = weekend.
         by_date = {entry["date"]: entry["reason"] for entry in data["blocked"]}
         assert by_date["2026-11-26"] == "holiday"
-        assert by_date["2026-11-27"] == "early_close"
+        assert "2026-11-27" not in by_date
         assert by_date["2026-11-28"] == "weekend"
         assert by_date["2026-11-29"] == "weekend"
         # Regular trading days are NOT in the payload.
@@ -248,26 +249,20 @@ class TestPostTrustedRunValidation:
         assert r.status_code == 422
         assert "end_ms_utc" in r.text or "strictly greater" in r.text
 
-    async def test_oversized_window_rejected(
-        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_oversized_window_rejected(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """A window with more than _MAX_TRADING_DAYS trading days must be
         rejected — under the P2.5 contract, count is over
         [start_date, exclusive_end_date) sessions, not calendar days.
 
         The production cap is sized to the Polygon.io Starter plan's
-        ~2-year minute-bar history (504 sessions). Any real window
-        that big inevitably crosses an NYSE half-day session (early
-        closes occur ~6×/year per P2.5), so the half-day validator
-        would mask this trading-days check. Test monkey-patches the
-        cap down to a small value so the validator can be exercised
-        on a clean weekday window.
+        ~2-year minute-bar history (504 sessions). Test monkey-patches
+        the cap down to a small value so the validator can be
+        exercised without requiring a long fixture window.
         """
         from app.lean_sidecar.trading_calendar import session_open_ms_utc
         from app.routers import lean_sidecar as router_mod
 
-        # Shrink the cap to 5 so a clean 2-week window trips it
-        # without needing to cross any holiday or half-day.
+        # Shrink the cap to 5 so a clean 2-week window trips it.
         monkeypatch.setattr(router_mod, "_MAX_TRADING_DAYS", 5)
         payload = _good_payload()
         payload["start_ms_utc"] = session_open_ms_utc(date(2025, 1, 6))
@@ -365,8 +360,7 @@ class TestPostTrustedRunValidation:
 
     async def test_accepts_holiday_in_middle_of_window(self) -> None:
         """P2.5 — weekends and federal holidays IN BETWEEN trading-day
-        endpoints are allowed; staging skips them. Only half-days
-        (early-close days) universally reject. Schema-only — no
+        endpoints are allowed; staging skips them. Schema-only — no
         podman/LEAN dependency."""
         from app.lean_sidecar.trading_calendar import session_open_ms_utc
         from app.routers.lean_sidecar import TrustedRunRequestModel
@@ -379,10 +373,11 @@ class TestPostTrustedRunValidation:
         model = TrustedRunRequestModel.model_validate(payload)
         assert model.start_ms_utc == payload["start_ms_utc"]
 
-    async def test_rejects_window_touching_half_day(self, client: AsyncClient) -> None:
-        """P2.5 — half-days are out of scope; validator rejects any
-        window touching one. 2025-11-28 is Black Friday."""
+    async def test_accepts_window_touching_half_day(self) -> None:
+        """Regression: comparison windows routinely cross NYSE early
+        closes. Half-days are sessions, not blockers."""
         from app.lean_sidecar.trading_calendar import session_open_ms_utc
+        from app.routers.lean_sidecar import TrustedRunRequestModel
 
         payload = _good_payload()
         # Wed 2025-11-26 → next_trading_day after Fri 2025-11-28.
@@ -390,11 +385,22 @@ class TestPostTrustedRunValidation:
         # is the Black-Friday early close.
         payload["start_ms_utc"] = session_open_ms_utc(date(2025, 11, 26))
         payload["end_ms_utc"] = session_open_ms_utc(date(2025, 12, 1))  # next_trading_day(11-28)
-        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        assert r.status_code == 422
-        # Either the half-day (11-28) or the holiday (11-27) shows up
-        # in the message — both are blocked under the new contract.
-        assert "2025-11-28" in r.text or "2025-11-27" in r.text
+        model = TrustedRunRequestModel.model_validate(payload)
+        assert model.start_ms_utc == payload["start_ms_utc"]
+        assert model.end_ms_utc == payload["end_ms_utc"]
+
+    async def test_accepts_user_two_year_window_crossing_2024_black_friday(self) -> None:
+        """Regression for the LEAN Lab payload that previously failed
+        with `window contains early-close day 2024-11-29`."""
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["run_id"] = "ui_run_20260519021742204_8wj5r"
+        payload["start_ms_utc"] = 1_722_519_000_000
+        payload["end_ms_utc"] = 1_779_111_000_000
+        model = TrustedRunRequestModel.model_validate(payload)
+        assert model.start_ms_utc == 1_722_519_000_000
+        assert model.end_ms_utc == 1_779_111_000_000
 
     async def test_accepts_dst_straddling_window(self) -> None:
         """P2.5 — a window that straddles a DST boundary must validate
