@@ -142,6 +142,27 @@ describe("RunComparisonComponent", () => {
     expect(text.toLowerCase()).toContain("not found");
   });
 
+  it("renders the empty state when left query param is missing", async () => {
+    const fixture = await setup(buildResult(), { right: "2" });
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+
+    expect(text.toLowerCase()).toContain("not found");
+  });
+
+  it("renders the empty state when right query param is missing", async () => {
+    const fixture = await setup(buildResult(), { left: "1" });
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+
+    expect(text.toLowerCase()).toContain("not found");
+  });
+
+  it("renders the empty state when neither query param is present", async () => {
+    const fixture = await setup(buildResult(), {});
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+
+    expect(text.toLowerCase()).toContain("not found");
+  });
+
   it("passes the parsed integer leftId and rightId to the GraphQL query", async () => {
     const apolloStub = makeApollo(buildResult());
 

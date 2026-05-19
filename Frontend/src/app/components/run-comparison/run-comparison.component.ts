@@ -3,7 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, inject } from "@angular/c
 import { toSignal } from "@angular/core/rxjs-interop";
 import { ActivatedRoute } from "@angular/router";
 import { Apollo } from "apollo-angular";
-import { filter, map, switchMap } from "rxjs/operators";
+import { map, of, switchMap } from "rxjs";
 import {
   COMPARE_BACKTEST_RUNS_QUERY,
   type CompareBacktestRunsQueryResult,
@@ -30,9 +30,9 @@ export class RunComparisonComponent {
   protected readonly data = toSignal<RunComparisonResult | null>(
     this.route.queryParamMap.pipe(
       map((p) => this.parseIds(p.get("left"), p.get("right"))),
-      filter((ids): ids is ParsedIds => ids !== null),
-      switchMap((ids) =>
-        this.apollo
+      switchMap((ids) => {
+        if (ids === null) return of(null);
+        return this.apollo
           .watchQuery<CompareBacktestRunsQueryResult, CompareBacktestRunsQueryVariables>({
             query: COMPARE_BACKTEST_RUNS_QUERY,
             variables: ids,
@@ -41,8 +41,8 @@ export class RunComparisonComponent {
             map((r): RunComparisonResult | null =>
               (r.data?.compareBacktestRuns as RunComparisonResult | null | undefined) ?? null,
             ),
-          ),
-      ),
+          );
+      }),
     ),
   );
 
