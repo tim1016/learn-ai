@@ -64,6 +64,10 @@ from app.lean_sidecar.workspace import (
     validate_run_id,
     validate_symbol,
 )
+from app.services.lean_sidecar_compare_service import (
+    CompareResult,
+    reconcile_trade_lists,
+)
 from app.services.lean_sidecar_service import (
     LeanSidecarServiceError,
     RunIdAlreadyUsedError,
@@ -1549,3 +1553,88 @@ async def get_log(run_id: str) -> PlainTextResponse:
             f.seek(size - _LEAN_LOG_TAIL_MAX_BYTES)
         raw = f.read(_LEAN_LOG_TAIL_MAX_BYTES)
     return PlainTextResponse(raw.decode("utf-8", errors="replace"))
+
+
+# ---------------------------------------------------------------------------
+# POST /compare — trade-list divergence classifier (Task 3.2)
+# ---------------------------------------------------------------------------
+
+
+class _TradeRecordModel(BaseModel):
+    """One closed round-trip trade in the persist-payload format."""
+
+    model_config = ConfigDict(frozen=True)
+
+    trade_number: int
+    entry_ms_utc: int
+    exit_ms_utc: int
+    entry_price: float
+    exit_price: float
+    quantity: float
+    pnl: float
+    signal_reason: str
+    is_synthetic_exit: bool = False
+
+
+class _CompareRequestModel(BaseModel):
+    left_trades: list[_TradeRecordModel]
+    right_trades: list[_TradeRecordModel]
+    fill_price_atol: float = Field(default=0.01, ge=0.0)
+    assert_fees: bool = False
+
+
+class _DivergenceModel(BaseModel):
+    category: str
+    trade_number: int | None = None
+    ms_utc: int | None = None
+    message: str
+    left_fill_price: float | None = None
+    right_fill_price: float | None = None
+    left_quantity: float | None = None
+    right_quantity: float | None = None
+
+
+class _CompareResponseModel(BaseModel):
+    divergences: list[_DivergenceModel]
+    first_divergence_ms_utc: int | None = None
+
+
+@router.post(
+    "/compare",
+    response_model=_CompareResponseModel,
+    summary="Classify divergences between two trade lists (Task 3.2).",
+)
+async def compare_trades(request: _CompareRequestModel) -> _CompareResponseModel:
+    """Accept two trade arrays and return a classified divergence list.
+
+    Pure compute — no DB access on the Python side. The .NET backend
+    fetches trades from Postgres and POSTs them here (Task 3.3).
+    """
+    left = [t.model_dump() for t in request.left_trades]
+    right = [t.model_dump() for t in request.right_trades]
+
+    result: CompareResult = reconcile_trade_lists(
+        left_trades=left,
+        right_trades=right,
+        fill_price_atol=request.fill_price_atol,
+        assert_fees=request.assert_fees,
+    )
+
+    divergences = [
+        _DivergenceModel(
+            category=d.category,
+            trade_number=d.trade_number,
+            ms_utc=d.ms_utc,
+            message=d.message,
+            left_fill_price=d.left_fill_price,
+            right_fill_price=d.right_fill_price,
+            left_quantity=d.left_quantity,
+            right_quantity=d.right_quantity,
+        )
+        for d in result.divergences
+    ]
+
+    return _CompareResponseModel(
+        divergences=divergences,
+        first_divergence_ms_utc=result.first_divergence_ms_utc,
+    )
