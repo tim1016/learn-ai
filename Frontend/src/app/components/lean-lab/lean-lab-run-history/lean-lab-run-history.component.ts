@@ -1,72 +1,78 @@
-import { CommonModule } from "@angular/common";
-import { ChangeDetectionStrategy, Component, computed, input, output } from "@angular/core";
-import type { RunSummary } from "../../../services/lean-sidecar.types";
+import { ChangeDetectionStrategy, Component, inject } from "@angular/core";
+import { Router } from "@angular/router";
+import { Apollo } from "apollo-angular";
+import { toSignal } from "@angular/core/rxjs-interop";
+import { map } from "rxjs/operators";
 
-/**
- * Phase 4d sidebar — lists past runs from the artifacts root and lets
- * the operator click one to rehydrate it in the main panel.
- *
- * Pure presentational component: the parent owns the run list signal
- * (refreshing it after each submit) and reacts to the ``runSelected``
- * output by calling the normalized endpoint and updating its state.
- * Keeping rehydration logic in the parent avoids duplicating it with
- * the new-run flow.
- */
+import { RunHistoryComponent } from "../../shared/run-history/run-history.component";
+import { RunHistoryRow } from "../../shared/run-history/run-history.types";
+import {
+  BACKTEST_RUNS_QUERY,
+  BacktestRunNode,
+  BacktestRunsQueryResult,
+} from "../../../graphql/backtest-runs.query";
+
 @Component({
   selector: "app-lean-lab-run-history",
-  standalone: true,
-  imports: [CommonModule],
-  templateUrl: "./lean-lab-run-history.component.html",
-  styleUrl: "./lean-lab-run-history.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RunHistoryComponent],
+  template: `
+    <app-run-history
+      [rows]="rows() ?? []"
+      [allowCompare]="true"
+      (compareRequested)="onCompare($event)" />
+  `,
 })
 export class LeanLabRunHistoryComponent {
-  readonly runs = input.required<RunSummary[]>();
-  readonly selectedRunId = input<string | null>(null);
-  /** True when the parent is mid-load — disables the click handler. */
-  readonly loading = input<boolean>(false);
-  /** Server cap reached — the list omits older runs. */
-  readonly truncated = input<boolean>(false);
-  /**
-   * Index-endpoint failure reason (from the parent's ``refreshRuns``).
-   * When present, the sidebar shows a "couldn't load runs" line so
-   * an empty list is not ambiguous with a fetch error.
-   */
-  readonly loadError = input<string | null>(null);
+  private readonly apollo = inject(Apollo);
+  private readonly router = inject(Router);
 
-  readonly runSelected = output<string>();
+  private readonly queryRef = this.apollo.watchQuery<BacktestRunsQueryResult>({
+    query: BACKTEST_RUNS_QUERY,
+    variables: { engine: "LEAN_SIDECAR", first: 50 },
+    fetchPolicy: "cache-and-network",
+  });
 
-  readonly hasRuns = computed(() => this.runs().length > 0);
+  readonly rows = toSignal(
+    this.queryRef.valueChanges.pipe(
+      map((r) => {
+        const nodes = r.data?.backtestRuns?.nodes;
+        if (!nodes) return [] as RunHistoryRow[];
+        return (nodes as BacktestRunNode[]).map(toRunHistoryRow);
+      }),
+    ),
+    { initialValue: [] as RunHistoryRow[] },
+  );
 
-  /**
-   * Format the started_at timestamp for the sidebar row. Per the
-   * timestamp-rigor rule, the only display-side TZ conversion lives
-   * here at the UI boundary; the wire format stays ``int64 ms UTC``.
-   */
-  formatStartedAt(ms: number | null): string {
-    if (ms === null) return "—";
-    return new Date(ms).toLocaleString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
+  onCompare(event: { leftId: string; rightId: string }): void {
+    void this.router.navigate(["/runs/compare"], {
+      queryParams: { left: event.leftId, right: event.rightId },
     });
   }
+}
 
-  /**
-   * Status pill copy + tone. ``exit_clean=true`` is green; ``false``
-   * is red; ``null`` (no finished_at_ms — likely still running or
-   * crashed before manifest write) is grey.
-   */
-  statusFor(run: RunSummary): { tone: "ok" | "fail" | "unknown"; label: string } {
-    if (run.exit_clean === true) return { tone: "ok", label: "exit 0" };
-    if (run.exit_clean === false) return { tone: "fail", label: `exit ${run.exit_code}` };
-    return { tone: "unknown", label: "no manifest" };
-  }
+function toRunHistoryRow(node: BacktestRunNode): RunHistoryRow {
+  return {
+    id: node.id,
+    source: node.source,
+    strategyName: node.strategyName,
+    symbol: extractSymbol(node.parameters),
+    startDate: node.startDate,
+    endDate: node.endDate,
+    executedAt: node.executedAt,
+    totalTrades: node.totalTrades,
+    totalPnl: node.totalPnL,
+    hasSyntheticExit: node.trades.some((t) => t.isSyntheticExit),
+    leanRunId: node.leanRunId,
+  };
+}
 
-  onClick(runId: string): void {
-    if (this.loading()) return;
-    this.runSelected.emit(runId);
+function extractSymbol(parameters: string | null): string | null {
+  if (!parameters) return null;
+  try {
+    const parsed = JSON.parse(parameters) as { symbol?: string };
+    return parsed.symbol ?? null;
+  } catch {
+    return null;
   }
 }

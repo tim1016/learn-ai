@@ -10,14 +10,7 @@
   </header>
 
   <div class="lean-lab__layout">
-    <app-lean-lab-run-history
-      [runs]="runs()"
-      [selectedRunId]="selectedRunId()"
-      [loading]="loadingRun() || submitting()"
-      [truncated]="runsTruncated()"
-      [loadError]="runsLoadError()"
-      (runSelected)="loadRun($event)"
-    />
+    <app-lean-lab-run-history />
     <div class="lean-lab__main">
   <form class="lean-lab__form" [formGroup]="form" (ngSubmit)="submit()">
     <label class="lean-lab__field">
