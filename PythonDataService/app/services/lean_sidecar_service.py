@@ -383,6 +383,30 @@ def _staged_window_from_dates(trading_dates: list[date]) -> WindowMs | None:
     return WindowMs(start_ms=start_ms, end_ms=end_ms)
 
 
+def _assert_adjustment_vocabulary_consistent(
+    *,
+    adjusted: bool,
+    data_normalization_mode: str,
+) -> None:
+    """Enforce data_policy.adjusted ⇔ data_normalization_mode at manifest build.
+
+    The two fields encode the same intent in different vocabularies
+    (Polygon's adjusted=False flag means 'raw' prices; LEAN's
+    DataNormalizationMode 'Raw' means the same). A mismatch indicates
+    an upstream wiring bug and must fail loud, not be silently
+    reconciled.
+    """
+    if adjusted is False and data_normalization_mode != "Raw":
+        raise LeanSidecarServiceError(
+            f"adjustment_vocabulary_mismatch: adjusted=False requires "
+            f"data_normalization_mode='Raw', got {data_normalization_mode!r}"
+        )
+    if adjusted is True and data_normalization_mode == "Raw":
+        raise LeanSidecarServiceError(
+            "adjustment_vocabulary_mismatch: adjusted=True conflicts with data_normalization_mode='Raw'"
+        )
+
+
 def _iter_trading_dates(start: date, end: date) -> list[date]:
     """Inclusive trading-date sequence using the NYSE calendar.
 
@@ -453,8 +477,34 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         )
     workspace.ensure_layout()
 
-    trading_dates = _iter_trading_dates(request.start_date, request.end_date)
-    bars_by_date = [(d, _generate_synthetic_bars(request.symbol, d)) for d in trading_dates]
+    if request.data_source == "synthetic":
+        trading_dates = _iter_trading_dates(request.start_date, request.end_date)
+        bars_by_date = [(d, _generate_synthetic_bars(request.symbol, d)) for d in trading_dates]
+    elif request.data_source == "polygon":
+        from app.lean_sidecar.polygon_canonical import (
+            fetch_canonical_minute_bars,
+            get_default_provider,
+        )
+
+        provider = get_default_provider()
+        bars_by_date = fetch_canonical_minute_bars(
+            symbol=request.symbol,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            session=request.session,
+            adjustment=request.adjustment,
+            provider=provider,
+        )
+        if not bars_by_date:
+            raise LeanSidecarServiceError(
+                f"polygon_returned_zero_bars: window={request.start_date.isoformat()}.."
+                f"{request.end_date.isoformat()}; symbol={request.symbol}"
+            )
+        trading_dates = [d for d, _ in bars_by_date]
+    else:
+        # Defense-in-depth — Pydantic Literal already rejects unknown values.
+        raise LeanSidecarServiceError(f"unknown data_source: {request.data_source!r}")
+
     bar_zip_paths = list(stage_minute_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
     # Phase 5c: stage synthetic minute QUOTE zips alongside the trade
     # zips. LEAN's default minute subscription requests both; without
@@ -478,6 +528,10 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
             "start_date": request.start_date.isoformat(),
             "end_date": request.end_date.isoformat(),
             "starting_cash": str(request.starting_cash),
+            "symbol": request.symbol,
+            "bar_minutes": str(request.bar_minutes),
+            "session": request.session,
+            "adjustment": request.adjustment,
         }
     )
     config_path = stage_lean_config(workspace, config)
@@ -606,6 +660,45 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     )
 
 
+def _build_data_policy(request: TrustedRunRequest) -> DataPolicyManifest:
+    """Construct DataPolicyManifest from a TrustedRunRequest and assert vocabulary consistency.
+
+    ``adjusted`` reflects Polygon's wire concept: ``adjustment="raw"`` means
+    Polygon returns unadjusted (split/dividend-raw) prices, which maps to
+    ``adjusted=False``. LEAN's ``DataNormalizationMode="Raw"`` encodes the same
+    intent in its vocabulary; this function asserts the two are in sync so an
+    upstream wiring bug surfaces at manifest construction time, not silently.
+
+    ``strategy_bars.multiplier`` reflects the *requested* strategy timeframe
+    (``request.bar_minutes``). For templates that do not consolidate bars
+    (buy_and_hold, reconciliation), this value is technically the request intent
+    rather than actual template-internal behavior, since those templates subscribe
+    to 1-min bars directly. The field is accurate for the ema_crossover template,
+    which this branch is validating.
+    """
+    adjusted = request.adjustment != "raw"  # raw ⇒ adjusted=False
+    data_policy = DataPolicyManifest(
+        source=request.data_source,
+        symbol=request.symbol,
+        adjusted=adjusted,
+        session=request.session,
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=request.bar_minutes),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        # Fixture identity is populated by the parity test through a
+        # separate hook (Task 11+) — production live-Polygon runs leave
+        # both fields None.
+        fixture_id=None,
+        fixture_sha256=None,
+    )
+    _assert_adjustment_vocabulary_consistent(
+        adjusted=data_policy.adjusted,
+        data_normalization_mode="Raw",  # template pins Raw; widening is future work
+    )
+    return data_policy
+
+
 def _build_manifest(
     *,
     request: TrustedRunRequest,
@@ -666,22 +759,7 @@ def _build_manifest(
                 _hash_paths_in_workspace(workspace, [symbol_properties])[0] if symbol_properties is not None else None
             ),
         ),
-        # TODO(Task 8): populate data_policy from the request (provider, adjusted, session, bar specs).
-        # Until then, this synthetic-shape default (minute/1 input AND strategy) keeps the synthetic
-        # trusted-sample path compiling — accurate for buy_and_hold / reconciliation which do not
-        # consolidate. Task 8 swaps strategy_bars.multiplier to request.bar_minutes when set.
-        data_policy=DataPolicyManifest(
-            source="synthetic",
-            symbol=request.symbol,
-            adjusted=False,
-            session="regular",
-            input_bars=BarsSpec(timespan="minute", multiplier=1),
-            strategy_bars=BarsSpec(timespan="minute", multiplier=1),
-            timestamp_policy="bar_close_ms_utc",
-            timezone="America/New_York",
-            fixture_id=None,
-            fixture_sha256=None,
-        ),
+        data_policy=_build_data_policy(request),
         # Trusted sample stages raw deci-cent bars without factor/map
         # adjustments; this is the non-reconciliation policy.
         data_adjustment_policy="pre_adjusted_non_reconciliation",
@@ -710,6 +788,9 @@ def _build_manifest(
             "end_date": request.end_date.isoformat(),
             "starting_cash": request.starting_cash,
             "symbol": request.symbol,
+            "bar_minutes": request.bar_minutes,
+            "session": request.session,
+            "adjustment": request.adjustment,
         },
         # API boundary timestamps are already int64 ms UTC; pass them
         # through unchanged so the manifest's recorded window matches
