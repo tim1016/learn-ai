@@ -16,14 +16,15 @@ import type { BlockedDateEntry } from "../../../services/lean-sidecar.types";
  * P2.5 blocked-aware date picker for the LEAN Lab.
  *
  * Implements the contract from
- * docs/design/p1-4-p2-5/Date Picker Mocks.html — six states (default,
- * popover open, half-day tooltip, DST boundary, invalid-window
- * rejection, computed [start, end) detail).
+ * docs/design/p1-4-p2-5/Date Picker Mocks.html: default, popover open,
+ * DST boundary, invalid-window rejection, and computed [start, end)
+ * detail.
  *
  * The picker fetches blocked dates from
- * GET /api/lean-sidecar/calendar/blocked-dates so weekends, holidays,
- * and half-days are disabled in the month grid AND client-side
- * validated before submit. The native <input type="date"> can't disable
+ * GET /api/lean-sidecar/calendar/blocked-dates so weekends and
+ * holidays are disabled in the month grid AND client-side validated
+ * before submit. Early-close half-days remain selectable trading
+ * sessions. The native <input type="date"> can't disable
  * specific dates per the v2 constraint; this component owns its own
  * popover.
  *
@@ -92,7 +93,6 @@ import type { BlockedDateEntry } from "../../../services/lean-sidecar.types";
                 [class.picker-cell--blank]="cell.outOfMonth"
                 [class.picker-cell--weekend]="cell.reason === 'weekend'"
                 [class.picker-cell--holiday]="cell.reason === 'holiday'"
-                [class.picker-cell--halfday]="cell.reason === 'early_close'"
                 [class.picker-cell--selected]="isCellInRange(cell.iso)"
                 [disabled]="cell.outOfMonth || cell.reason !== null"
                 [title]="cell.tooltip"
@@ -101,14 +101,12 @@ import type { BlockedDateEntry } from "../../../services/lean-sidecar.types";
                 @if (!cell.outOfMonth) {
                   <span class="picker-cell__day">{{ cell.dayNum }}</span>
                   @if (cell.reason === "holiday") { <span class="picker-cell__badge">H</span> }
-                  @if (cell.reason === "early_close") { <span class="picker-cell__badge">½</span> }
                 }
               </button>
             }
           </div>
           <footer class="picker-popover__legend">
             <span class="legend-chip legend-chip--holiday">H holiday</span>
-            <span class="legend-chip legend-chip--halfday">½ half-day</span>
             <span class="legend-chip legend-chip--weekend">weekend</span>
             @if (dstAdvisory(); as ad) {
               <span class="legend-chip legend-chip--dst">DST · {{ ad }}</span>
@@ -222,19 +220,10 @@ export class BlockedAwareDatePickerComponent {
     if (!start || !end) return false;
     if (start > end) return true;
     const blocked = this.blockedByDate();
-    // Endpoint check.
-    if (blocked.get(start) === "early_close") return true;
-    if (blocked.get(end) === "early_close") return true;
-    if (blocked.has(start) && blocked.get(start) !== "weekend") return true;
-    if (blocked.has(end) && blocked.get(end) !== "weekend") return true;
-    // Inside check: any early_close inside the window is fatal.
-    const cursor = this.parseIsoLocal(start);
-    const endDt = this.parseIsoLocal(end);
-    while (cursor <= endDt) {
-      const iso = this.toIsoLocal(cursor);
-      if (blocked.get(iso) === "early_close") return true;
-      cursor.setDate(cursor.getDate() + 1);
-    }
+    // Endpoints must be trading sessions. Non-tradeable dates inside
+    // the range are allowed; staging skips them.
+    if (blocked.has(start)) return true;
+    if (blocked.has(end)) return true;
     return false;
   });
 
@@ -248,21 +237,21 @@ export class BlockedAwareDatePickerComponent {
       while (cursor <= endDt) {
         const iso = this.toIsoLocal(cursor);
         const reason = blocked.get(iso);
-        if (reason === "early_close") {
-          return {
-            kind: "bad",
-            text: `Window touches a half-day. ${iso} closes at 13:00 ET. P2.5 contract requires the window to consist of full sessions only.`,
-          };
-        }
         if (reason === "holiday" && (iso === this.startDate() || iso === this.endDate())) {
           return {
             kind: "bad",
-            text: `${iso} is a NYSE holiday. The window's start and end must each be a full trading session.`,
+            text: `${iso} is a NYSE holiday. The window's start and end must each be trading sessions.`,
+          };
+        }
+        if (reason === "weekend" && (iso === this.startDate() || iso === this.endDate())) {
+          return {
+            kind: "bad",
+            text: `${iso} is a weekend. The window's start and end must each be trading sessions.`,
           };
         }
         cursor.setDate(cursor.getDate() + 1);
       }
-      return { kind: "bad", text: "Window is invalid — pick full trading sessions on both endpoints." };
+      return { kind: "bad", text: "Window is invalid — pick trading sessions on both endpoints." };
     }
     if (this.dstAdvisory()) {
       return {
@@ -384,9 +373,6 @@ export class BlockedAwareDatePickerComponent {
   private tooltipFor(iso: string, reason: BlockedDateEntry["reason"] | null): string {
     if (reason === "weekend") return `${iso} — weekend`;
     if (reason === "holiday") return `${iso} — NYSE holiday`;
-    if (reason === "early_close") {
-      return `${iso} — half-day · NYSE closes at 13:00 ET. P2.5 contract requires full sessions only; this date is rejected at submit.`;
-    }
     return iso;
   }
 

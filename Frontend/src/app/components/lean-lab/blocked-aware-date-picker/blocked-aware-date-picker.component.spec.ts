@@ -6,10 +6,9 @@ import { LeanSidecarService } from "../../../services/lean-sidecar.service";
 import type { BlockedDatesPayload } from "../../../services/lean-sidecar.types";
 
 /**
- * P2.5 picker tests mirror the design hub's six states. The calendar
- * service is mocked with a payload that includes one weekend, one
- * holiday, and one half-day so the three disabled-state branches are
- * each exercised.
+ * P2.5 picker tests cover the local calendar states. The calendar
+ * service is mocked with a payload that includes one weekend and one
+ * holiday so the non-tradeable branches are exercised.
  */
 
 class FakeLeanSidecarService {
@@ -17,8 +16,6 @@ class FakeLeanSidecarService {
     from: "2025-12-01",
     to: "2026-01-31",
     blocked: [
-      // Christmas Eve half-day 2025-12-24.
-      { date: "2025-12-24", reason: "early_close" },
       // Christmas full-day holiday 2025-12-25.
       { date: "2025-12-25", reason: "holiday" },
       // Saturday 2025-12-27.
@@ -52,14 +49,23 @@ describe("BlockedAwareDatePickerComponent", () => {
     fixture.detectChanges();
   });
 
-  it("flags an invalid window when the range touches a half-day", () => {
-    // 2025-12-24 (half-day) sits between start 12-22 and end 12-26.
+  it("accepts a window spanning an interior holiday", () => {
+    // 2025-12-25 sits between start 12-22 and end 12-26; staging skips
+    // it, so only blocked endpoints invalidate a range.
+    expect(component.invalidWindow()).toBe(false);
+    expect(component.advisory()).toBeNull();
+  });
+
+  it("flags an invalid window when an endpoint is blocked", () => {
+    fixture.componentRef.setInput("startDate", "2025-12-25");
+    fixture.componentRef.setInput("endDate", "2025-12-26");
+    fixture.detectChanges();
     expect(component.invalidWindow()).toBe(true);
     const ad = component.advisory();
     expect(ad).not.toBeNull();
     expect(ad?.kind).toBe("bad");
-    expect(ad?.text).toContain("half-day");
-    expect(ad?.text).toContain("2025-12-24");
+    expect(ad?.text).toContain("holiday");
+    expect(ad?.text).toContain("2025-12-25");
   });
 
   it("accepts a clean window with no blocked dates", async () => {
@@ -126,13 +132,13 @@ describe("BlockedAwareDatePickerComponent", () => {
     expect(component.dstAdvisory()).toBeNull();
   });
 
-  it("month grid disables holidays and half-days", () => {
+  it("month grid disables holidays but leaves half-days selectable", () => {
     component.viewMonth.set("2025-12-01");
     fixture.detectChanges();
     const dec24 = component.monthCells().find((c) => c.iso === "2025-12-24");
     const dec25 = component.monthCells().find((c) => c.iso === "2025-12-25");
     const dec22 = component.monthCells().find((c) => c.iso === "2025-12-22");
-    expect(dec24?.reason).toBe("early_close");
+    expect(dec24?.reason).toBeNull();
     expect(dec25?.reason).toBe("holiday");
     expect(dec22?.reason).toBeNull(); // Monday, available
   });

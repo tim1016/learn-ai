@@ -161,11 +161,12 @@ export interface LeanSidecarErrorEnvelope {
 /**
  * P2.5 — one blocked-date entry returned from the calendar endpoint.
  * Reason discriminates the picker treatment (weekend = recessed, no
- * glyph; holiday = H badge; early_close = ½ badge + diagonal stripe).
+ * glyph; holiday = H badge). Early-close half-days are trading
+ * sessions and are not returned as blocked dates.
  */
 export interface BlockedDateEntry {
   date: string;
-  reason: "weekend" | "holiday" | "early_close";
+  reason: "weekend" | "holiday";
 }
 
 export interface BlockedDatesPayload {

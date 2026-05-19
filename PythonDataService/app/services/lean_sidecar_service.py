@@ -170,8 +170,7 @@ class TrustedRunRequest:
         Per the P2.5 contract, ``start_ms_utc`` is the 09:30 ET
         session-open millisecond, so the NY-local date is the
         first trading day. The validator in the router has already
-        confirmed this is a full trading day (not weekend, holiday,
-        or half-day).
+        confirmed this is a trading day (not weekend or holiday).
         """
         return datetime.fromtimestamp(self.start_ms_utc / 1000, tz=UTC).astimezone(_ET).date()
 
@@ -366,11 +365,10 @@ def _iter_trading_dates(start: date, end: date) -> list[date]:
     P2.5: routes through ``trading_calendar.is_trading_day`` so the
     validator and staging consult the SAME calendar — the bug class
     "staging stages a date the validator already accepted as
-    blocked" cannot exist. Weekends, holidays, and half-days the
-    NYSE schedule omits are skipped (the validator rejects windows
-    that touch a half-day, so half-days never appear here in
-    practice; weekends and holidays in between endpoints are
-    allowed and silently skipped).
+    blocked" cannot exist. Weekends and holidays in between
+    endpoints are allowed and silently skipped. Early-close half-days
+    are trading sessions, so they are included when NYSE publishes
+    them in the schedule.
     """
     from app.lean_sidecar.trading_calendar import is_trading_day
 

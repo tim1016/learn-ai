@@ -160,9 +160,8 @@ class TestSessionOpenMsUtc:
 
 
 class TestBlockedDatesInRange:
-    """The blocked-dates endpoint's union — weekends + holidays +
-    half-days — is one helper so the BE endpoint and any reconciler
-    consumer share semantics."""
+    """The blocked-dates endpoint's weekends + holidays helper keeps
+    BE and UI picker semantics aligned."""
 
     def test_returns_weekend_dates(self) -> None:
         from app.lean_sidecar.trading_calendar import blocked_dates_in_range
@@ -180,15 +179,14 @@ class TestBlockedDatesInRange:
         blocked = blocked_dates_in_range(date(2026, 1, 16), date(2026, 1, 20))
         assert date(2026, 1, 19) in blocked  # MLK Day
 
-    def test_returns_half_day_flagged_separately(self) -> None:
-        """Half-days are reported with their reason — UI may want to
-        show a half-day tooltip rather than a 'blocked' marker, but
-        they are still rejected by the validator. Returned as a dict
-        with a ``reason`` per date."""
+    def test_does_not_block_half_day_session(self) -> None:
+        """Half-days are trading sessions, so the blocked-dates helper
+        leaves them selectable while still blocking the adjacent
+        holiday/weekend dates."""
         from app.lean_sidecar.trading_calendar import blocked_dates_in_range
 
         blocked = blocked_dates_in_range(date(2026, 11, 23), date(2026, 11, 30))
         # 2026-11-26 = Thanksgiving (holiday).
         # 2026-11-27 = Black Friday (half-day).
         assert blocked[date(2026, 11, 26)] == "holiday"
-        assert blocked[date(2026, 11, 27)] == "early_close"
+        assert date(2026, 11, 27) not in blocked

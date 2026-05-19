@@ -53,7 +53,6 @@ from app.lean_sidecar.reconciler import (
 )
 from app.lean_sidecar.trading_calendar import (
     blocked_dates_in_range,
-    is_early_close,
     is_trading_day,
 )
 from app.lean_sidecar.workspace import (
@@ -242,18 +241,13 @@ class TrustedRunRequestModel(BaseModel):
         # half-open [start, end). The window's last full session is
         # the trading day immediately preceding the exclusive end.
         # Weekends and holidays BETWEEN the endpoints are allowed
-        # (staging skips them); half-days are universally rejected
-        # because the early-close session would silently mis-stage.
+        # (staging skips them). Early-close half-days are trading
+        # sessions and are staged like any other session.
         start_date = _date_for_session_open_ms(self.start_ms_utc, role="start_ms_utc")
         exclusive_end_date = _date_for_session_open_ms(self.end_ms_utc, role="end_ms_utc")
         if not is_trading_day(start_date):
             raise ValueError(
                 f"start_ms_utc resolves to {start_date.isoformat()} which is not a trading day (weekend or holiday)"
-            )
-        if is_early_close(start_date):
-            raise ValueError(
-                f"start_ms_utc resolves to {start_date.isoformat()} which is a "
-                "half-day (early-close); half-days are out of scope per P2.5."
             )
         if not is_trading_day(exclusive_end_date):
             raise ValueError(
@@ -269,22 +263,6 @@ class TrustedRunRequestModel(BaseModel):
                 raise ValueError(
                     f"no trading days in window [{start_date.isoformat()}, {exclusive_end_date.isoformat()})"
                 )
-        if is_early_close(end_date):
-            raise ValueError(
-                f"end of window resolves to {end_date.isoformat()} which is a "
-                "half-day (early-close); half-days are out of scope per P2.5."
-            )
-        # Reject any half-day inside the inclusive [start_date, end_date].
-        # Weekends/holidays are silently skipped by staging.
-        d = start_date
-        while d <= end_date:
-            if is_trading_day(d) and is_early_close(d):
-                raise ValueError(
-                    f"window contains early-close day {d.isoformat()}; "
-                    "half-days are out of scope per P2.5. Pick a window "
-                    "that does not touch a NYSE early-close session."
-                )
-            d += timedelta(days=1)
         # Pre-launcher cap on trading-day count (the launcher's
         # wall-clock timeout and the synthetic-bar generator both
         # scale with the count).
@@ -735,7 +713,7 @@ def _resolved_workspace_or_404(run_id: str):
 
 @router.get(
     "/calendar/blocked-dates",
-    summary="Return blocked (non-tradeable / half-day) dates in a range.",
+    summary="Return blocked non-tradeable dates in a range.",
 )
 async def get_calendar_blocked_dates(
     from_: date = Query(
@@ -745,16 +723,15 @@ async def get_calendar_blocked_dates(
     ),
     to: date = Query(..., description="Inclusive end date (YYYY-MM-DD)"),
 ) -> dict:
-    """Return weekends, holidays, and half-days in ``[from_, to]``.
+    """Return weekends and holidays in ``[from_, to]``.
 
     Per P2.5 the UI date picker consumes this to disable + label each
     blocked date — single backend source of truth for the NYSE
     calendar so the picker and the validator cannot drift.
 
-    Half-days return ``reason="early_close"`` so the UI can surface a
-    half-day tooltip rather than a generic "blocked" marker. Weekends
-    and holidays return ``"weekend"`` and ``"holiday"`` respectively.
-    Trading days are NOT in the payload.
+    Early-close half-days are tradeable sessions and are NOT returned
+    here. Weekends and holidays return ``"weekend"`` and ``"holiday"``
+    respectively. Trading days are NOT in the payload.
     """
     if to < from_:
         raise HTTPException(

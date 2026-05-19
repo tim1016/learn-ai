@@ -1,5 +1,11 @@
 # Design handoff — P2.5 date-window semantics (v2)
 
+> Superseded in implementation on 2026-05-19 for half-day policy:
+> early-close NYSE sessions are now allowed trading sessions, and the
+> `/api/lean-sidecar/calendar/blocked-dates` endpoint returns only
+> weekends and holidays. The half-open `09:30 ET` boundary contract
+> still applies.
+
 **Replaces** `2026-05-18-design-p2-5-date-semantics.md` (kept for
 history). Same approach as v1 (half-open session-boundary ms,
 preserving `numerical-rigor.md`'s int64-ms-UTC rule). v2 fixes two
