@@ -73,7 +73,12 @@ function extractSymbol(parameters: string | null): string | null {
   try {
     const parsed = JSON.parse(parameters) as { symbol?: string };
     return parsed.symbol ?? null;
-  } catch {
+  } catch (error) {
+    console.warn("extractSymbol: failed to parse parameters JSON", {
+      context: "extractSymbol",
+      parameters,
+      error,
+    });
     return null;
   }
 }
