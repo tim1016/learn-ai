@@ -190,10 +190,17 @@ def _bar(et_dt: datetime, close: float = 100.0) -> dict:
 
 
 class _StubProvider:
-    def __init__(self, bars: list[dict]) -> None:
+    def __init__(self, bars: list[dict[str, Any]]) -> None:
         self._bars = bars
 
-    def fetch_minute_bars(self, *, symbol, start_date, end_date, adjusted) -> list[dict]:
+    def fetch_minute_bars(
+        self,
+        *,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+        adjusted: bool,
+    ) -> list[dict[str, Any]]:
         return self._bars
 
 

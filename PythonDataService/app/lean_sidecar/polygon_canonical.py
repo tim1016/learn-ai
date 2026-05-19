@@ -12,14 +12,13 @@ See docs/superpowers/specs/2026-05-19-lean-engine-polygon-parity-design.md.
 from __future__ import annotations
 
 import json
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
-from app.engine.data.polygon_export import _polygon_bar_to_trade_bar
+from app.engine.data.polygon_export import group_by_trading_date, polygon_bar_to_trade_bar
 from app.engine.data.trade_bar import TradeBar
 from app.services.dataset_service import fetch_bars_chunked
 from app.services.polygon_client import PolygonClientService
@@ -188,10 +187,14 @@ def fetch_canonical_minute_bars(
     for bar in raw:
         ts = int(bar["timestamp"])
         if ts in seen:
-            raise CanonicalBarsError(f"polygon_corrupt_timestamps: duplicate timestamp {ts} for {symbol}")
+            et_repr = datetime.fromtimestamp(ts / 1000, tz=_UTC).astimezone(_ET).isoformat()
+            raise CanonicalBarsError(f"polygon_corrupt_timestamps: duplicate timestamp {ts} ({et_repr}) for {symbol}")
         if prev_ts is not None and ts <= prev_ts:
+            et_repr = datetime.fromtimestamp(ts / 1000, tz=_UTC).astimezone(_ET).isoformat()
+            prev_et = datetime.fromtimestamp(prev_ts / 1000, tz=_UTC).astimezone(_ET).isoformat()
             raise CanonicalBarsError(
-                f"polygon_corrupt_timestamps: non-monotonic timestamp {ts} after {prev_ts} for {symbol}"
+                f"polygon_corrupt_timestamps: non-monotonic timestamp {ts} ({et_repr}) "
+                f"after {prev_ts} ({prev_et}) for {symbol}"
             )
         seen.add(ts)
         prev_ts = ts
@@ -203,10 +206,6 @@ def fetch_canonical_minute_bars(
         filtered = list(raw)
 
     # Convert + group by ET trading date.
-    grouped: dict[date, list[TradeBar]] = defaultdict(list)
-    for bar in filtered:
-        tb = _polygon_bar_to_trade_bar(symbol, bar)
-        et = tb.time.astimezone(_ET)
-        grouped[et.date()].append(tb)
-
+    trade_bars = [polygon_bar_to_trade_bar(symbol, bar) for bar in filtered]
+    grouped = group_by_trading_date(trade_bars)
     return [(d, grouped[d]) for d in sorted(grouped.keys())]
