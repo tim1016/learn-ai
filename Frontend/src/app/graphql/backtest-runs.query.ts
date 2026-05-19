@@ -1,4 +1,5 @@
 import { gql } from "apollo-angular";
+import { RunHistoryRow } from "../components/shared/run-history/run-history.types";
 
 export const BACKTEST_RUNS_QUERY = gql`
   query BacktestRuns($engine: EngineSource, $symbol: String, $first: Int, $after: String) {
@@ -50,3 +51,29 @@ export interface BacktestRunsQueryResult {
 }
 
 export type EngineSource = "ENGINE" | "STRATEGY_LAB" | "LEAN_SIDECAR";
+
+export function toRunHistoryRow(node: BacktestRunNode): RunHistoryRow {
+  return {
+    id: node.id,
+    source: node.source,
+    strategyName: node.strategyName,
+    symbol: extractSymbol(node.parameters),
+    startDate: node.startDate,
+    endDate: node.endDate,
+    executedAt: node.executedAt,
+    totalTrades: node.totalTrades,
+    totalPnl: node.totalPnL,
+    hasSyntheticExit: node.trades.some((t) => t.isSyntheticExit),
+    leanRunId: node.leanRunId,
+  };
+}
+
+function extractSymbol(parameters: string | null): string | null {
+  if (!parameters) return null;
+  try {
+    const parsed = JSON.parse(parameters) as { symbol?: string };
+    return parsed.symbol ?? null;
+  } catch {
+    return null;
+  }
+}

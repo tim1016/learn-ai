@@ -13,7 +13,7 @@ import {
 } from "../../../graphql/backtest-runs.query";
 
 @Component({
-  selector: "app-lean-lab-run-history",
+  selector: "app-engine-lab-run-history",
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RunHistoryComponent],
   template: `
@@ -23,13 +23,13 @@ import {
       (compareRequested)="onCompare($event)" />
   `,
 })
-export class LeanLabRunHistoryComponent {
+export class EngineLabRunHistoryComponent {
   private readonly apollo = inject(Apollo);
   private readonly router = inject(Router);
 
   private readonly queryRef = this.apollo.watchQuery<BacktestRunsQueryResult>({
     query: BACKTEST_RUNS_QUERY,
-    variables: { engine: "LEAN_SIDECAR", first: 50 },
+    variables: { engine: "ENGINE", first: 50 },
     fetchPolicy: "cache-and-network",
   });
 
@@ -50,4 +50,3 @@ export class LeanLabRunHistoryComponent {
     });
   }
 }
-
