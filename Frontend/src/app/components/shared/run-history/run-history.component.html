@@ -1,0 +1,70 @@
+@if (isEmpty()) {
+  <p class="empty">No runs yet.</p>
+} @else {
+  @if (allowCompare()) {
+    <div class="actions">
+      <button
+        type="button"
+        class="compare-btn"
+        data-testid="compare-selected"
+        [disabled]="!canCompare()"
+        (click)="emitCompare()"
+        aria-label="Compare selected runs">
+        Compare ({{ selectedIds().length }} / 2)
+      </button>
+    </div>
+  }
+
+  <table class="run-history" role="table">
+    <thead>
+      <tr>
+        @if (allowCompare()) {
+          <th scope="col" class="select-col">
+            <span class="sr-only">Select</span>
+          </th>
+        }
+        <th scope="col">Engine</th>
+        <th scope="col">Strategy</th>
+        <th scope="col">Symbol</th>
+        <th scope="col">Window</th>
+        <th scope="col">Executed</th>
+        <th scope="col" class="num">Trades</th>
+        <th scope="col" class="num">Net PnL</th>
+        <th scope="col">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (row of rows(); track row.id) {
+        <tr [class.selected]="isSelected(row.id)">
+          @if (allowCompare()) {
+            <td class="select-col">
+              <input
+                type="checkbox"
+                [checked]="isSelected(row.id)"
+                (change)="toggle(row.id)"
+                [attr.aria-label]="'Select run ' + row.id" />
+            </td>
+          }
+          <td>
+            <span class="badge" [attr.data-source]="row.source">{{ badge(row.source) }}</span>
+          </td>
+          <td>{{ row.strategyName }}</td>
+          <td>{{ row.symbol ?? '—' }}</td>
+          <td>{{ row.startDate }} – {{ row.endDate }}</td>
+          <td>{{ row.executedAt }}</td>
+          <td class="num">{{ row.totalTrades }}</td>
+          <td class="num" [class.positive]="row.totalPnl > 0" [class.negative]="row.totalPnl < 0">
+            {{ row.totalPnl | currency:'USD':'symbol':'1.2-2' }}
+          </td>
+          <td>
+            @if (row.hasSyntheticExit) {
+              <span class="badge badge--warning">Open at end</span>
+            } @else {
+              <span class="badge badge--neutral">Complete</span>
+            }
+          </td>
+        </tr>
+      }
+    </tbody>
+  </table>
+}

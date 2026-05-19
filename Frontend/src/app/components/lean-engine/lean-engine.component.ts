@@ -17,6 +17,7 @@ import { ButtonModule } from "primeng/button";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 import { EngineResultsComponent } from "./engine-results/engine-results.component";
 import { EngineHistoryComponent, StudyListItem } from "./engine-history/engine-history.component";
+import { EngineLabRunHistoryComponent } from "./engine-lab-run-history/engine-lab-run-history.component";
 import { LeanEngineDocsComponent } from "./lean-engine-docs/lean-engine-docs.component";
 import { ChartBar, EngineTradeForChart, EquityCurvePoint } from "./engine-chart/engine-chart.component";
 import { InsightPanelComponent } from "./insight-panel/insight-panel.component";
@@ -191,7 +192,7 @@ interface DataAvailability {
   imports: [
     CommonModule, FormsModule, RouterModule, ButtonModule,
     Tabs, TabList, Tab, TabPanel, TabPanels,
-    EngineResultsComponent, EngineHistoryComponent, LeanEngineDocsComponent,
+    EngineResultsComponent, EngineHistoryComponent, LeanEngineDocsComponent, EngineLabRunHistoryComponent,
     InsightPanelComponent,
     TvCompatPanelComponent, EngineReplayV2Component,
     PageHeaderComponent,
