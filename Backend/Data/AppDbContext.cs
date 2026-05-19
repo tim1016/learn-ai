@@ -181,6 +181,9 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => new { e.TickerId, e.StrategyName });
             entity.HasIndex(e => e.ExecutedAt);
             entity.HasIndex(e => e.Source);
+            entity.HasIndex(e => new { e.Source, e.LeanRunId })
+                  .IsUnique()
+                  .HasFilter("\"LeanRunId\" IS NOT NULL");
         });
 
         // BacktestTrade configuration
