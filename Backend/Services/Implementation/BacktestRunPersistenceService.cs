@@ -17,12 +17,16 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
         _logger = logger;
     }
 
+    private static readonly HashSet<string> _allowedSources = new(StringComparer.Ordinal)
+    {
+        "lean-sidecar",
+        "engine",
+    };
+
     public async Task<int> PersistAsync(PersistLeanRunPayload payload, CancellationToken ct)
     {
         if (payload is null)
             throw new ArgumentNullException(nameof(payload));
-        if (string.IsNullOrWhiteSpace(payload.LeanRunId))
-            throw new ArgumentException("lean_run_id is required", nameof(payload));
         if (string.IsNullOrWhiteSpace(payload.Symbol))
             throw new ArgumentException("symbol is required", nameof(payload));
         if (payload.Trades is null)
@@ -32,26 +36,33 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
                 $"start_date_ms ({payload.StartDateMs}) must be <= end_date_ms ({payload.EndDateMs})",
                 nameof(payload));
 
-        if (payload.Source != "lean-sidecar")
+        if (!_allowedSources.Contains(payload.Source))
         {
             throw new ArgumentException(
-                $"Expected source='lean-sidecar', got '{payload.Source}'",
+                $"Expected source in {{'lean-sidecar','engine'}}, got '{payload.Source}'",
                 nameof(payload));
         }
 
-        // Idempotency: re-running with same LeanRunId returns existing Id.
-        var existing = await _db.StrategyExecutions
-            .AsNoTracking()
-            .Where(s => s.Source == "lean-sidecar" && s.LeanRunId == payload.LeanRunId)
-            .Select(s => (int?)s.Id)
-            .FirstOrDefaultAsync(ct);
+        if (payload.Source == "lean-sidecar" && string.IsNullOrWhiteSpace(payload.LeanRunId))
+            throw new ArgumentException("lean_run_id is required when source='lean-sidecar'", nameof(payload));
 
-        if (existing.HasValue)
+        // Idempotency: only applies to lean-sidecar runs, where lean_run_id is the natural key.
+        // Engine runs have no external idempotency key — every persist creates a new row.
+        if (payload.Source == "lean-sidecar")
         {
-            _logger.LogInformation(
-                "[STEP 1] PersistLean idempotent: LeanRunId={LeanRunId} already exists as StrategyExecutionId={Id}",
-                payload.LeanRunId, existing.Value);
-            return existing.Value;
+            var existing = await _db.StrategyExecutions
+                .AsNoTracking()
+                .Where(s => s.Source == "lean-sidecar" && s.LeanRunId == payload.LeanRunId)
+                .Select(s => (int?)s.Id)
+                .FirstOrDefaultAsync(ct);
+
+            if (existing.HasValue)
+            {
+                _logger.LogInformation(
+                    "[STEP 1] PersistLean idempotent: LeanRunId={LeanRunId} already exists as StrategyExecutionId={Id}",
+                    payload.LeanRunId, existing.Value);
+                return existing.Value;
+            }
         }
 
         // Resolve or create the Ticker entity for this symbol.
@@ -98,7 +109,7 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
                 : JsonSerializer.Serialize(payload.LeanStatistics),
             Source = payload.Source,
             LeanRunId = payload.LeanRunId,
-            FillMode = "lean-sidecar",
+            FillMode = payload.Source == "engine" ? "signal_bar_close" : "lean-sidecar",
             ExecutedAt = DateTime.UtcNow,
             DurationMs = 0,
         };

@@ -121,15 +121,87 @@ public class BacktestRunPersistenceServiceTests
     }
 
     [Fact]
-    public async Task PersistAsync_RejectsNonLeanSidecarSource()
+    public async Task PersistAsync_RejectsUnknownSource()
     {
         var service = CreateService(out _);
-        var payload = BuildPayload(leanRunId: "ui_run_wrong") with { Source = "engine" };
+        var payload = BuildPayload(leanRunId: "ui_run_wrong") with { Source = "strategy-lab" };
 
         var ex = await Assert.ThrowsAsync<ArgumentException>(
             () => service.PersistAsync(payload, CancellationToken.None));
 
         Assert.Contains("source", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PersistAsync_EngineSource_AcceptsNullLeanRunId()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(leanRunId: "placeholder") with
+        {
+            Source = "engine",
+            LeanRunId = null,
+            StrategyName = "ema_crossover",
+            Trades = new[]
+            {
+                new PersistLeanTradePayload(
+                    TradeNumber: 1,
+                    EntryMsUtc: 1_700_000_060_000,
+                    ExitMsUtc: 1_700_000_120_000,
+                    EntryPrice: 400m,
+                    ExitPrice: 401m,
+                    Quantity: 250m,
+                    Pnl: 250m,
+                    SignalReason: "EMA exit",
+                    IsSyntheticExit: false),
+            },
+            TotalTrades = 1,
+            WinningTrades = 1,
+            LosingTrades = 0,
+            TotalPnl = 250m,
+            FinalEquity = 100_250m,
+            WinRate = 1.0,
+        };
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        var row = await db.StrategyExecutions.SingleAsync(s => s.Id == id);
+        Assert.Equal("engine", row.Source);
+        Assert.Null(row.LeanRunId);
+        Assert.Equal("signal_bar_close", row.FillMode);
+        Assert.Equal(1, row.TotalTrades);
+    }
+
+    [Fact]
+    public async Task PersistAsync_EngineSource_NotIdempotent_CreatesNewRowEachCall()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(leanRunId: "placeholder") with
+        {
+            Source = "engine",
+            LeanRunId = null,
+        };
+
+        var id1 = await service.PersistAsync(payload, CancellationToken.None);
+        var id2 = await service.PersistAsync(payload, CancellationToken.None);
+
+        Assert.NotEqual(id1, id2);
+        Assert.Equal(2, await db.StrategyExecutions.CountAsync(s => s.Source == "engine"));
+    }
+
+    [Fact]
+    public async Task PersistAsync_LeanSidecarSource_RequiresNonEmptyLeanRunId()
+    {
+        var service = CreateService(out _);
+        var payload = BuildPayload(leanRunId: "placeholder") with
+        {
+            Source = "lean-sidecar",
+            LeanRunId = null,
+        };
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.PersistAsync(payload, CancellationToken.None));
+
+        Assert.Contains("lean_run_id", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     // Fix 8 — boundary validation tests

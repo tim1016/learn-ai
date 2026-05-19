@@ -3,12 +3,14 @@ using System.Text.Json.Serialization;
 namespace Backend.Models.MarketData;
 
 /// <summary>
-/// Payload posted by PythonDataService after a LEAN sidecar run completes.
+/// Payload posted by PythonDataService after a backtest run completes.
+/// Used by both the LEAN sidecar (source="lean-sidecar", lean_run_id required)
+/// and the in-process engine (source="engine", lean_run_id=null).
 /// JsonPropertyName attributes accept the snake_case wire format Python sends
 /// while keeping PascalCase property names for C# consumers.
 /// </summary>
 public record PersistLeanRunPayload(
-    [property: JsonPropertyName("lean_run_id")] string LeanRunId,
+    [property: JsonPropertyName("lean_run_id")] string? LeanRunId,
     [property: JsonPropertyName("source")] string Source,
     [property: JsonPropertyName("strategy_name")] string StrategyName,
     [property: JsonPropertyName("symbol")] string Symbol,
