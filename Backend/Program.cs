@@ -138,6 +138,7 @@ builder.Services.AddHttpClient("python", client =>
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
 builder.Services.AddScoped<IBacktestService, BacktestService>();
+builder.Services.AddScoped<IBacktestRunPersistenceService, BacktestRunPersistenceService>();
 builder.Services.AddScoped<IPositionEngine, PositionEngine>();
 builder.Services.AddScoped<IPortfolioService, PortfolioService>();
 builder.Services.AddScoped<IPortfolioValuationService, PortfolioValuationService>();
@@ -192,6 +193,7 @@ using (var scope = app.Services.CreateScope())
 app.UseCors();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapStudiesEndpoints();
+app.MapBacktestRunsEndpoints();
 app.MapJobsEndpoints();
 app.MapGraphQL();
 
