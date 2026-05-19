@@ -35,6 +35,7 @@ from app.lean_sidecar.workspace import (
     WorkspaceError,
     resolve_workspace,
 )
+from app.lean_sidecar.workspace_poller import WorkspacePoller
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +127,28 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
             f.write(f"{arg}\n")
         f.write("# end launcher plan\n")
 
-    result: RunResult = execute(plan, limits=limits)
+    # P1.4: spin up the in-flight workspace-cap poller before invoking
+    # the runner. The poller walks the workspace every
+    # ``_WORKSPACE_POLL_INTERVAL_S`` and asks the kill helper to stop
+    # the container if usage exceeds ``workspace_max_mb``. Without this
+    # in-flight enforcement, a buggy QCAlgorithm can fill the workspace
+    # (and eventually the host disk) until the wall-clock timeout
+    # fires. See ``workspace_poller.py`` for the load-bearing threat
+    # model paragraph.
+    #
+    # Wrapped in try/finally so a runner exception still stops the
+    # poller thread; otherwise the launcher would leak a daemon thread
+    # per failed run.
+    poller = WorkspacePoller(
+        cidfile_path=plan.cidfile_path,
+        workspace_dir=workspace.workspace_dir,
+        max_bytes=limits.workspace_max_mb * (1 << 20),
+    )
+    poller.start()
+    try:
+        result: RunResult = execute(plan, limits=limits)
+    finally:
+        poller.stop()
 
     # Classify LEAN's own log.txt — exit_code 0 alone lies (LEAN can
     # crash ResultsAnalyzer, fail data requests, or raise in
@@ -134,14 +156,13 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
     # any ERROR:: lines so callers can branch on actual cleanliness.
     classified = classify_workspace(workspace.lean_log_path)
 
-    # Post-run workspace size enforcement. The launcher does not stream
-    # mid-run size — wall-clock timeout already caps how much the
-    # container can write — but after the container exits we walk the
-    # workspace and surface a hard error if it overran the cap so the
-    # operator sees the violation rather than a silently-stale workspace.
-    # The ADR's longer-term "kill on overrun during run" is queued for
-    # Phase 1c+ once a separate monitor process exists.
-    overran = _workspace_size_bytes(workspace.workspace_dir) > limits.workspace_max_mb * (1 << 20)
+    # Post-execute workspace size enforcement. With the P1.4 poller in
+    # place, the typical overrun is killed in-flight — this remains as
+    # a **backstop** for the race-path case where a write lands as
+    # ``execute()`` is returning (poller never got a chance to tick).
+    # Either path produces the same operator-facing rejection so
+    # callers see a single envelope.
+    overran = poller.fired or (_workspace_size_bytes(workspace.workspace_dir) > limits.workspace_max_mb * (1 << 20))
 
     is_clean = result.exit_code == 0 and not result.timed_out and classified.is_clean
 

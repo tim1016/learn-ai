@@ -100,6 +100,24 @@ MAX_ALGORITHM_SOURCE_BYTES = 256 * 1024
 
 
 # ---------------------------------------------------------------------------
+# Workspace-cap poller
+# ---------------------------------------------------------------------------
+#
+# The interval at which the in-flight workspace-cap poller walks the
+# workspace looking for ``workspace_max_mb`` overruns. Intentionally a
+# module-level constant, NOT a ``RunLimits`` field — the interval IS the
+# overshoot budget; making it caller-settable would let a caller widen
+# the budget unsafely.
+#
+# Tuning happens by improving the walk (``os.scandir`` vs ``du -sb``),
+# not by lengthening the interval.
+#
+# Authority: docs/handoffs/2026-05-18-design-p1-4-live-workspace-cap-v2.md.
+
+_WORKSPACE_POLL_INTERVAL_S: float = 1.0
+
+
+# ---------------------------------------------------------------------------
 # Artifacts root
 # ---------------------------------------------------------------------------
 #
