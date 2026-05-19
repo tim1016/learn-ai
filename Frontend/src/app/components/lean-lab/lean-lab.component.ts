@@ -539,6 +539,7 @@ export class LeanLabComponent {
         normalized_parser_version: parsed.parser_version,
         total_order_events: parsed.total_order_events,
         total_equity_points: parsed.total_equity_points,
+        strategy_execution_id: null,
       });
     } catch (err) {
       if (err instanceof LeanSidecarApiError) {
