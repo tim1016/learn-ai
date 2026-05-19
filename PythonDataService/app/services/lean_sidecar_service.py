@@ -74,6 +74,7 @@ from app.lean_sidecar.trusted_samples.buy_and_hold_reconciliation import (
 from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
 from app.lean_sidecar.workspace import Workspace, resolve_workspace
 from app.services.lean_sidecar_persistence import (
+    _algorithm_name_for_run,
     build_persist_payload,
     persist_via_dotnet,
 )
@@ -567,7 +568,7 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         run_id=request.run_id,
         starting_cash=request.starting_cash,
         symbol=request.symbol,
-        algorithm_name=request.template,
+        algorithm_name=_algorithm_name_for_run(request.template, request.algorithm_source),
         start_date_ms=_date_to_ms_utc(request.start_date),
         end_date_ms=_date_to_ms_utc(request.end_date),
     )
