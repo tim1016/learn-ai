@@ -135,6 +135,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "runs/compare",
+    loadComponent: () =>
+      import("./components/run-comparison/run-comparison.component").then(
+        (m) => m.RunComparisonComponent
+      ),
+  },
+  {
     path: "engine/docs",
     redirectTo: "engine",
     pathMatch: "full",
