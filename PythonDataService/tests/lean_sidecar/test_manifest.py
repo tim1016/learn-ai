@@ -40,7 +40,7 @@ def _default_data_policy() -> DataPolicyManifest:
         adjusted=False,
         session="regular",
         input_bars=BarsSpec(timespan="minute", multiplier=1),
-        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=1),
         timestamp_policy="bar_close_ms_utc",
         timezone="America/New_York",
         fixture_id=None,
@@ -129,6 +129,10 @@ class TestWriteManifest:
         assert parsed["schema_version"] == MANIFEST_SCHEMA_VERSION
         # Windows are dicts of int64 ms.
         assert isinstance(parsed["requested_window_ms"]["start_ms"], int)
+        # data_policy shape is present and correct.
+        assert parsed["data_policy"]["source"] == "synthetic"
+        assert parsed["data_policy"]["input_bars"]["multiplier"] == 1
+        assert parsed["data_policy"]["strategy_bars"]["multiplier"] == 1
 
     def test_refuses_datetime_objects(self, tmp_path: Path) -> None:
         manifest = _sample_manifest()
@@ -168,15 +172,13 @@ class TestNowMsUtc:
 
 
 def test_data_policy_manifest_round_trips_synthetic_shape() -> None:
-    from app.lean_sidecar.manifest import BarsSpec, DataPolicyManifest
-
     dp = DataPolicyManifest(
         source="synthetic",
         symbol="SPY",
         adjusted=False,
         session="regular",
         input_bars=BarsSpec(timespan="minute", multiplier=1),
-        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=1),
         timestamp_policy="bar_close_ms_utc",
         timezone="America/New_York",
         fixture_id=None,
@@ -185,11 +187,9 @@ def test_data_policy_manifest_round_trips_synthetic_shape() -> None:
 
     assert dp.source == "synthetic"
     assert dp.input_bars.multiplier == 1
-    assert dp.strategy_bars.multiplier == 15
+    assert dp.strategy_bars.multiplier == 1
     assert dp.fixture_id is None
 
 
 def test_manifest_schema_version_is_3() -> None:
-    from app.lean_sidecar.manifest import MANIFEST_SCHEMA_VERSION
-
     assert MANIFEST_SCHEMA_VERSION == 3

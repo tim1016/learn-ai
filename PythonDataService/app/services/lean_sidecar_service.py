@@ -657,15 +657,17 @@ def _build_manifest(
                 _hash_paths_in_workspace(workspace, [symbol_properties])[0] if symbol_properties is not None else None
             ),
         ),
-        # TODO Task 8: populate data_policy from request (provider, adjusted flag, session,
-        # bar specs). Synthetic-shape default here keeps existing code working.
+        # TODO(Task 8): populate data_policy from the request (provider, adjusted, session, bar specs).
+        # Until then, this synthetic-shape default (minute/1 input AND strategy) keeps the synthetic
+        # trusted-sample path compiling — accurate for buy_and_hold / reconciliation which do not
+        # consolidate. Task 8 swaps strategy_bars.multiplier to request.bar_minutes when set.
         data_policy=DataPolicyManifest(
             source="synthetic",
             symbol=request.symbol,
             adjusted=False,
             session="regular",
             input_bars=BarsSpec(timespan="minute", multiplier=1),
-            strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+            strategy_bars=BarsSpec(timespan="minute", multiplier=1),
             timestamp_policy="bar_close_ms_utc",
             timezone="America/New_York",
             fixture_id=None,
