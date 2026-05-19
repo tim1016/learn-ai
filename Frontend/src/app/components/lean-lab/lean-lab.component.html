@@ -31,15 +31,16 @@
       <input type="text" formControlName="symbol" />
     </label>
 
-    <label class="lean-lab__field">
-      <span>Start date (UTC)</span>
-      <input type="date" formControlName="startDate" />
-    </label>
-
-    <label class="lean-lab__field">
-      <span>End date (UTC)</span>
-      <input type="date" formControlName="endDate" />
-    </label>
+    <div class="lean-lab__field lean-lab__field--picker">
+      <span>Trading window (09:30 ET, half-open)</span>
+      <app-blocked-aware-date-picker
+        [startDate]="pickerStart()"
+        (startDateChange)="onStartPicked($event)"
+        [endDate]="pickerEnd()"
+        (endDateChange)="onEndPicked($event)"
+        (windowInvalid)="pickerInvalid.set($event)"
+      />
+    </div>
 
     <label class="lean-lab__field">
       <span>Starting cash (USD)</span>
@@ -83,7 +84,7 @@
     <button
       class="lean-lab__submit"
       type="submit"
-      [disabled]="submitting() || form.invalid"
+      [disabled]="submitting() || form.invalid || pickerInvalid()"
       aria-label="Run the LEAN sidecar backtest with the configured form"
     >
       @let isCustom = form.controls.useCustomAlgorithm.value;

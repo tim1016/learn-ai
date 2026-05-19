@@ -19,6 +19,7 @@ import type {
   TrustedRunResponse,
 } from "../../services/lean-sidecar.types";
 import { CROSS_RECONCILE_SCHEMA_VERSION } from "../../services/lean-sidecar.types";
+import { BlockedAwareDatePickerComponent } from "./blocked-aware-date-picker/blocked-aware-date-picker.component";
 import { LeanLabEquityChartComponent } from "./lean-lab-equity-chart/lean-lab-equity-chart.component";
 import { LeanLabRunHistoryComponent } from "./lean-lab-run-history/lean-lab-run-history.component";
 
@@ -110,6 +111,7 @@ function rehydratedLeanErrors(categories: string[]): {
     ReactiveFormsModule,
     LeanLabEquityChartComponent,
     LeanLabRunHistoryComponent,
+    BlockedAwareDatePickerComponent,
   ],
   templateUrl: "./lean-lab.component.html",
   styleUrl: "./lean-lab.component.scss",
@@ -174,6 +176,26 @@ export class LeanLabComponent {
   readonly response = signal<TrustedRunResponse | null>(null);
   readonly normalized = signal<NormalizedResult | null>(null);
   readonly error = signal<{ reason: string; message: string; status: number } | null>(null);
+
+  /**
+   * P2.5 picker integration — mirrors the form's startDate/endDate as
+   * signals the standalone picker can bind to, plus a flag the picker
+   * raises when the user lands on an invalid window (server would 422).
+   * Submit is disabled while ``pickerInvalid`` is true.
+   */
+  readonly pickerStart = signal<string>("2025-01-06");
+  readonly pickerEnd = signal<string>("2025-01-10");
+  readonly pickerInvalid = signal(false);
+
+  onStartPicked(iso: string): void {
+    this.pickerStart.set(iso);
+    this.form.controls.startDate.setValue(iso);
+  }
+
+  onEndPicked(iso: string): void {
+    this.pickerEnd.set(iso);
+    this.form.controls.endDate.setValue(iso);
+  }
 
   /**
    * Phase 5a — fee-reconciliation report, populated by clicking
@@ -597,6 +619,11 @@ export class LeanLabComponent {
     // with the historical workspace.
     patch.runId = this.defaultRunId();
     this.form.patchValue(patch);
+    // Keep the P2.5 picker signals aligned with the patched form so
+    // the date popover opens to the manifest's dates rather than the
+    // stale defaults.
+    if (patch.startDate) this.pickerStart.set(patch.startDate);
+    if (patch.endDate) this.pickerEnd.set(patch.endDate);
   }
 
   /** Inverse of {@link isoDateToMsUtc}; ms UTC → YYYY-MM-DD. */
