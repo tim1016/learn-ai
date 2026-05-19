@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>P1.4 + P2.5 — Implementation Checklist</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<style>
+.page {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 32px 24px 80px;
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+.crumbs a { color: var(--text-subtle); text-decoration: none; }
+.crumbs a:hover { color: var(--accent); }
+.crumbs .sep { color: var(--border-strong); }
+
+.page-head {
+  margin-bottom: 32px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-subtle);
+  margin-bottom: 8px;
+}
+.eyebrow::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.page-head h1 {
+  font-size: 1.55rem;
+  font-weight: var(--fw-semi);
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  margin-bottom: 8px;
+}
+
+.page-head p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 720px;
+}
+
+.page-head .meta {
+  display: flex;
+  gap: 24px;
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.page-head .meta strong { color: var(--text-secondary); font-weight: var(--fw-semi); }
+
+/* ── PR section ──────────────────────────────────────────── */
+.pr-section {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.pr-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pr-head .pr-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.pr-head .pr-id {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid rgba(41, 98, 255, 0.30);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.pr-head .pr-title h2 {
+  font-size: 1.1rem;
+  font-weight: var(--fw-semi);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.pr-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.pr-meta .pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-pill);
+  color: var(--text-subtle);
+}
+
+/* ── Threat-model / lead block ───────────────────────────── */
+.lead-block {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.lead-block strong { color: var(--text-primary); font-weight: var(--fw-semi); }
+.lead-block code { font-size: 11px; }
+
+.lead-block--accent { border-left-color: var(--accent); }
+
+/* ── Step list ───────────────────────────────────────────── */
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  align-items: start;
+}
+
+.step__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+  color: var(--text-subtle);
+}
+
+.step__body { min-width: 0; }
+
+.step__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.step__title h3 {
+  font-size: 13px;
+  font-weight: var(--fw-semi);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.step__file {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-canvas);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.step__desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.step__desc code { font-size: 11px; }
+
+.step__desc ul {
+  margin: 6px 0 0 0;
+  padding-left: 18px;
+}
+.step__desc li { margin: 2px 0; }
+
+.step__watch {
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: rgba(255, 152, 0, 0.06);
+  border-left: 2px solid var(--warn);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 11px;
+  color: var(--warn);
+  line-height: 1.5;
+}
+.step__watch strong { color: var(--warn); font-weight: var(--fw-bold); }
+.step__watch code { background: rgba(255, 152, 0, 0.12); color: var(--warn); font-size: 10.5px; }
+
+.step--test .step__num { color: var(--bull); border-color: rgba(38, 166, 154, 0.40); }
+.step--test {
+  border-left: 3px solid var(--bull);
+}
+
+/* ── Tests block ─────────────────────────────────────────── */
+.tests-block {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--bull);
+  border-radius: var(--radius);
+}
+
+.tests-block h4 {
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--bull);
+  margin-bottom: 8px;
+}
+
+.tests-block ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tests-block li {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  padding-left: 16px;
+  position: relative;
+  line-height: 1.5;
+}
+.tests-block li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--bull);
+  font-weight: var(--fw-bold);
+  font-size: 11px;
+}
+.tests-block li code { font-size: 10.5px; }
+
+/* ── Out-of-scope block ──────────────────────────────────── */
+.oos-block {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--text-muted);
+  border-radius: var(--radius);
+}
+
+.oos-block h4 {
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.oos-block ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.oos-block li {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  padding-left: 16px;
+  position: relative;
+  line-height: 1.5;
+}
+.oos-block li::before {
+  content: "✕";
+  position: absolute;
+  left: 0;
+  color: var(--text-muted);
+  font-weight: var(--fw-bold);
+  font-size: 11px;
+}
+.oos-block li code { font-size: 10.5px; color: var(--text-subtle); }
+
+/* ── Footer ──────────────────────────────────────────────── */
+.page-foot {
+  margin-top: 48px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.page-foot a { color: var(--text-subtle); text-decoration: none; }
+.page-foot a:hover { color: var(--accent); }
+
+/* ── Print: page break between PRs, dark→light for ink ──── */
+@media print {
+  html, body { background: #ffffff; color: #0b0e14; }
+  .pr-section { background: #f7f8fa; border-color: #d1d5db; page-break-inside: avoid; }
+  .step, .tests-block, .oos-block, .lead-block, .detail-card { background: #ffffff; border-color: #d1d5db; }
+  .pr-section + .pr-section { page-break-before: page; }
+  .crumbs, .page-foot { display: none; }
+  .step__title h3, .pr-head .pr-title h2, .page-head h1 { color: #0b0e14; }
+  .step__desc, .lead-block, p { color: #1f2937; }
+}
+</style>
+</head>
+<body>
+
+<main class="page">
+  <nav class="crumbs">
+    <a href="index.html">Quant Trading Lab</a>
+    <span class="sep">/</span>
+    <span>Implementation checklist</span>
+  </nav>
+
+  <header class="page-head">
+    <div class="eyebrow">P1.4 + P2.5 · Implementation handoff</div>
+    <h1>Implementation checklist — workspace cap &amp; date semantics</h1>
+    <p>
+      File-by-file plan extracted from
+      <code>2026-05-18-design-p1-4-live-workspace-cap-v2.md</code> and
+      <code>2026-05-18-design-p2-5-date-semantics-v2.md</code>. Steps are ordered for
+      least-rebase; tests are listed last in each PR but should land in the same commit
+      that introduces the surface. Anything called out under <em>Watch out for</em> is a
+      latent silent-correctness bug the v2 docs flagged.
+    </p>
+    <div class="meta">
+      <span><strong>Source of truth:</strong> v2 design handoffs on master</span>
+      <span><strong>PRs:</strong> 2 (independent)</span>
+      <span><strong>Reviewers:</strong> CodeRabbit + Codex</span>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       PR 1 — P1.4 live workspace cap
+       ═══════════════════════════════════════════════════════════ -->
+  <section class="pr-section">
+    <div class="pr-head">
+      <div class="pr-title">
+        <span class="pr-id">PR · P1.4</span>
+        <h2>Live workspace cap — background poller</h2>
+      </div>
+      <div class="pr-meta">
+        <span class="pill">single PR</span>
+        <span class="pill">no upstream deps</span>
+      </div>
+    </div>
+
+    <div class="lead-block">
+      <strong>Threat model — load-bearing.</strong>
+      This cap defends against <strong>benign overrun</strong> (a buggy
+      <code>QCAlgorithm</code> filling its own disk), <em>not</em> adversarial input.
+      The data plane is a single-host research tool with no caller auth; if auth is added
+      later and <code>algorithm_source_kind=user_provided</code> starts arriving from a
+      genuinely untrusted caller, <strong>escalate to kernel-enforced</strong>
+      (<code>--storage-opt size=&lt;mb&gt;m</code>). The post-execute backstop is
+      <strong>not</strong> sufficient against an adversary. Encode this paragraph in the
+      poller class's module docstring.
+    </div>
+
+    <div class="steps">
+
+      <div class="step">
+        <div class="step__num">1</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>Add the poll-interval constant</h3>
+            <span class="step__file">PythonDataService/app/lean_sidecar/config.py</span>
+          </div>
+          <div class="step__desc">
+            <code>_WORKSPACE_POLL_INTERVAL_S = 1.0</code> as a module-level constant.
+            Not exposed in <code>RunLimits</code>.
+          </div>
+          <div class="step__watch">
+            <strong>Watch:</strong> do <em>not</em> add a <code>RunLimits</code> field for this.
+            The interval <em>is</em> the overshoot budget; making it caller-settable widens it
+            unsafely.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">2</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>Add the kill-reason enum</h3>
+            <span class="step__file">PythonDataService/app/lean_sidecar/runner.py</span>
+          </div>
+          <div class="step__desc">
+            <code>class KillReason(StrEnum)</code> with <code>WALL_CLOCK_TIMEOUT</code> and
+            <code>WORKSPACE_MAX_MB_EXCEEDED</code>. Co-locate with the cidfile helper —
+            they're consumed together.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">3</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>Thread <code>reason</code> through the kill helper</h3>
+            <span class="step__file">PythonDataService/app/lean_sidecar/runner.py</span>
+          </div>
+          <div class="step__desc">
+            <code>_kill_container_via_cidfile(reason: KillReason)</code>. Log it,
+            include it in the kill-event payload, and route it directly into
+            <code>RunResult.rejection_reason</code>.
+          </div>
+          <div class="step__watch">
+            <strong>Watch:</strong> no string magic. PR #280's existing call site passes
+            <code>KillReason.WALL_CLOCK_TIMEOUT</code> explicitly — don't default it.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">4</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>Wire the poller thread around <code>execute()</code></h3>
+            <span class="step__file">PythonDataService/app/lean_sidecar/launcher/service.py</span>
+          </div>
+          <div class="step__desc">
+            Background thread runs while <code>execute()</code> is in-flight. Walks the
+            workspace with <code>os.scandir</code> (recursive, C-backed
+            <code>stat</code>) — <em>not</em> <code>Path.rglob</code>. On overrun: call
+            <code>_kill_container_via_cidfile(reason=KillReason.WORKSPACE_MAX_MB_EXCEEDED)</code>.
+            A <code>threading.Event</code> stops the poller on normal exit.
+          </div>
+          <div class="step__watch">
+            <strong>Watch:</strong> if scandir-loop is still expensive on a 100k-file workspace,
+            fall back to <code>subprocess.run(["du", "-sb", workspace_path])</code>. Target:
+            poller iteration ≤50ms.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">5</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>Encode the threat model in the docstring</h3>
+            <span class="step__file">PythonDataService/app/lean_sidecar/launcher/service.py</span>
+          </div>
+          <div class="step__desc">
+            Module-level (or poller-class) docstring carries the
+            <em>benign-overrun-not-adversarial</em> paragraph verbatim. Reviewers and the
+            next agent re-derive nothing.
+          </div>
+        </div>
+      </div>
+
+      <div class="tests-block">
+        <h4>Tests — PythonDataService/tests/lean_sidecar/test_runner.py</h4>
+        <ul>
+          <li>Happy path — small write, poller never trips, normal exit.</li>
+          <li>Overrun path — write exceeds cap mid-execute; kill helper called with <code>KillReason.WORKSPACE_MAX_MB_EXCEEDED</code>; <code>RunResult.rejection_reason</code> matches.</li>
+          <li>Race path — write lands JUST as <code>execute()</code> exits; post-execute backstop still catches it.</li>
+          <li>Walk-cost smoke — 10k–100k synthetic files; one poller iteration ≤50ms (with generous margin).</li>
+          <li>No regression on PR #280 timeout-kill path — <code>KillReason.WALL_CLOCK_TIMEOUT</code> still flows end-to-end.</li>
+        </ul>
+      </div>
+
+      <div class="oos-block">
+        <h4>Out of scope for this PR</h4>
+        <ul>
+          <li>Kernel-enforced cap (<code>--storage-opt size=</code>) — deferred until auth lands.</li>
+          <li>tmpfs mount — bind mount is load-bearing for trusted-sample artifacts.</li>
+          <li>New <code>RunLimits</code> field for poll interval — constant only.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       PR 2 — P2.5 date semantics
+       ═══════════════════════════════════════════════════════════ -->
+  <section class="pr-section">
+    <div class="pr-head">
+      <div class="pr-title">
+        <span class="pr-id">PR · P2.5</span>
+        <h2>Date-window semantics — half-open session ms</h2>
+      </div>
+      <div class="pr-meta">
+        <span class="pill">single PR</span>
+        <span class="pill">no upstream deps</span>
+        <span class="pill">touches FE + BE</span>
+      </div>
+    </div>
+
+    <div class="lead-block lead-block--accent">
+      <strong>Contract.</strong>
+      <code>start_ms_utc</code> = <code>09:30 ET</code> of <code>start_date</code>.
+      <code>end_ms_utc</code> = <code>09:30 ET</code> of
+      <code>next_trading_day(end_date)</code>. Half-open <code>[start, end)</code>.
+      Validator rejects HTTP 400 if either endpoint isn't a trading day, or if <em>any</em>
+      date in the inclusive range is an early-close (half-day). DST resolves through
+      <code>pandas_market_calendars</code>' tz-aware machinery — <strong>never</strong>
+      a fixed offset.
+    </div>
+
+    <div class="steps">
+
+      <div class="step">
+        <div class="step__num">1</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>New module — single calendar source of truth</h3>
+            <span class="step__file">PythonDataService/app/lean_sidecar/trading_calendar.py</span>
+          </div>
+          <div class="step__desc">
+            Surface:
+            <ul>
+              <li><code>is_trading_day(d: date) -&gt; bool</code></li>
+              <li><code>is_early_close(d: date) -&gt; bool</code></li>
+              <li><code>next_trading_day(d: date) -&gt; date</code></li>
+              <li><code>session_open_ms_utc(d: date) -&gt; int</code></li>
+            </ul>
+            Backed by <code>_CALENDAR = mcal.get_calendar("NYSE")</code> at module load
+            (mirrors <code>nyse_calendar.py</code>'s pattern). Both validator and staging
+            iteration import from here — that's the load-bearing change.
+          </div>
+          <div class="step__watch">
+            <strong>Watch:</strong> do <em>not</em> merge with
+            <code>app/engine/live/nyse_calendar.py</code>. Different consumers, different
+            test surfaces, different rate of change.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">2</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>Validator — reject weekends / holidays / half-days</h3>
+            <span class="step__file">PythonDataService/app/routers/lean_sidecar.py</span>
+          </div>
+          <div class="step__desc">
+            On <code>TrustedRunRequestModel.start_ms_utc/end_ms_utc</code>:
+            <ul>
+              <li>Derive <code>start_date</code>, <code>end_date</code> from input ms.</li>
+              <li>Compute expected <code>session_open_ms_utc(start_date)</code> and <code>session_open_ms_utc(next_trading_day(end_date))</code>; reject on mismatch.</li>
+              <li>Reject if <code>not is_trading_day(d)</code> or <code>is_early_close(d)</code> for any <code>d</code> in <code>[start_date, end_date]</code>.</li>
+            </ul>
+            Error messages are operator-readable and name the offending date.
+          </div>
+          <div class="step__watch">
+            <strong>Watch:</strong> the validator-before-staging invariant. If a refactor
+            inverts it (staging-driven validation), half-day rejection becomes silent
+            corruption.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">3</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>Staging — iterate via the calendar module</h3>
+            <span class="step__file">PythonDataService/app/services/lean_sidecar_service.py (~152)</span>
+          </div>
+          <div class="step__desc">
+            Convert session-boundary ms back to trading dates; iterate via
+            <code>trading_calendar.is_trading_day</code>. Drop the existing
+            <code>+1 day</code> hack — half-open ms already encodes the boundary.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">4</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>Manifest — bump schema, annotate semantics</h3>
+            <span class="step__file">PythonDataService/app/lean_sidecar/manifest.py</span>
+          </div>
+          <div class="step__desc">
+            Bump <code>MANIFEST_SCHEMA_VERSION</code> (per D10). Add to <code>notes</code>:
+            <code>date_semantics=session_open_half_open</code>. Old manifests stay readable
+            on the prior <code>schema_version</code>; the reconciler reads the note to
+            know which contract applies.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">5</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>Phase 5b template — recompute the hardcoded range</h3>
+            <span class="step__file">PythonDataService/app/lean_sidecar/templates/…</span>
+          </div>
+          <div class="step__desc">
+            The 2025-01-06 → 2025-01-10 template needs <code>start_ms_utc</code> /
+            <code>end_ms_utc</code> recomputed under the new contract. Full trading days,
+            no half-days, no DST — value-only update, no semantic risk.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">6</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>Backend — calendar endpoint for the UI</h3>
+            <span class="step__file">PythonDataService/app/routers/lean_sidecar.py</span>
+          </div>
+          <div class="step__desc">
+            <code>GET /api/lean-sidecar/calendar/blocked-dates?from=&amp;to=</code>.
+            Returns the union of weekends, holidays, and half-days in the range.
+            Single source of truth — no client-side duplication of the calendar.
+          </div>
+          <div class="step__watch">
+            <strong>Watch:</strong> this is the calendar-drift seam. Cache it sensibly on
+            the client — don't let it become a per-pixel API call as the user navigates
+            months in the picker.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">7</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>UI — rename converter, fix DST conversion</h3>
+            <span class="step__file">Frontend/src/app/components/lean-lab/lean-lab.component.ts (~669)</span>
+          </div>
+          <div class="step__desc">
+            <code>isoDateToMsUtc</code> → <code>isoDateToSessionOpenMsUtc</code>. Uses
+            <code>Intl.DateTimeFormat</code> with <code>timeZone: 'America/New_York'</code>.
+            No new dependency.
+          </div>
+          <div class="step__watch">
+            <strong>Watch:</strong> <code>formatToParts</code> returns strings — assemble
+            the UTC <code>Date</code> carefully or DST days silently mis-convert by an
+            hour. UI test surface MUST include the same DST dates as the Python test
+            surface.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">8</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>UI — blocked-aware date picker</h3>
+            <span class="step__file">Frontend/src/app/components/lean-lab/lean-lab.component.html + .ts</span>
+          </div>
+          <div class="step__desc">
+            Replace the native <code>&lt;input type="date"&gt;</code> rows with a custom
+            popover that disables weekends, holidays, and half-days. See
+            <a href="Date Picker Mocks.html" style="color: var(--accent); text-decoration: none;">Date Picker Mocks.html</a>
+            — 6 states with the engine-lab visual vocabulary (eyebrow groups, mono summary,
+            availability strip, smart-legend chips, advisories cluster).
+          </div>
+          <div class="step__watch">
+            <strong>Watch:</strong> picker chrome should match
+            <code>shared/ticker-range-picker</code>'s <code>time-window-card</code>
+            verbatim where possible (group card frame, eyebrow + dot, range row, presets,
+            strip, legend). Reuse the SCSS partial.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">9</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>UI — types comment update</h3>
+            <span class="step__file">Frontend/src/app/services/lean-sidecar.types.ts</span>
+          </div>
+          <div class="step__desc">
+            <code>start_ms_utc</code> / <code>end_ms_utc</code> doc comment updates to
+            reference the new contract. Field stays <code>number</code>; no wire-type
+            change.
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step__num">10</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>Cross-reconciler — assertion test only</h3>
+            <span class="step__file">PythonDataService/app/lean_sidecar/cross_reconciler.py</span>
+          </div>
+          <div class="step__desc">
+            No logic change — it already derives NY trading date from each bar's ms.
+            Add a test asserting <code>requested_window_ms</code> is now directly
+            comparable to the derived per-bar trading dates.
+          </div>
+        </div>
+      </div>
+
+      <div class="tests-block">
+        <h4>Tests — mandatory surface (validator + UI)</h4>
+        <ul>
+          <li>Full-day window, all trading days → <strong>accept</strong>.</li>
+          <li>Window touching a weekend → reject; message names the weekend day.</li>
+          <li>Window touching a US federal holiday → reject; message names the holiday.</li>
+          <li>Window touching a half-day (e.g., <code>2026-11-27</code> Black Friday) → reject; message names the half-day.</li>
+          <li>DST start (<code>2026-03-08</code> inside range) → session-open ms reflects EDT.</li>
+          <li>DST end (<code>2026-11-01</code> inside range) → session-open ms reflects EST.</li>
+          <li>Round-trip — client sends, server validates, manifest persists, reconciler reads — assert all four agree on the trading-date set.</li>
+          <li>UI mirror — <code>isoDateToSessionOpenMsUtc</code> agrees with Python <code>session_open_ms_utc</code> on every DST date.</li>
+        </ul>
+      </div>
+
+      <div class="oos-block">
+        <h4>Out of scope for this PR</h4>
+        <ul>
+          <li>Wire-type change — <code>start_ms_utc</code> / <code>end_ms_utc</code> stay <code>int</code>. Semantic shift only.</li>
+          <li>Old-manifest migration — old runs stay readable on the prior <code>schema_version</code>.</li>
+          <li>Half-day <em>support</em> — validator rejects, UI disables. If needed later, relax the rejection; <code>is_early_close</code> is already in the calendar module.</li>
+          <li>Merging <code>nyse_calendar.py</code> into <code>trading_calendar.py</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Cross-cutting closeout
+       ═══════════════════════════════════════════════════════════ -->
+  <section class="pr-section">
+    <div class="pr-head">
+      <div class="pr-title">
+        <span class="pr-id" style="color: var(--bull); background: var(--bull-soft); border-color: rgba(38, 166, 154, 0.30);">After both land</span>
+        <h2>Closeout</h2>
+      </div>
+    </div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step__num">1</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>End-to-end browser smoke</h3>
+            <span class="step__file">manual</span>
+          </div>
+          <div class="step__desc">
+            Run the LEAN-Lab trusted run → cross-engine reconcile flow live, same as the
+            post-Phase-5g session did. Confirm no regression in the
+            <code>quantity_mismatch</code> + <code>commission_drift</code> baseline.
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step__num">2</div>
+        <div class="step__body">
+          <div class="step__title">
+            <h3>ADR follow-up</h3>
+            <span class="step__file">docs/math-sources-of-truth.md</span>
+          </div>
+          <div class="step__desc">
+            Date-window section gets the new contract. Half-day support tracked under
+            <em>Status: deferred</em>. Can land in a separate doc-only PR.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="page-foot">
+    <span>P1.4 + P2.5 · Implementation checklist · 2026-05-18</span>
+    <span><a href="Date Picker Mocks.html">→ Date picker mocks</a> · <a href="index.html">↑ Index</a></span>
+  </footer>
+</main>
+
+</body>
+</html>
