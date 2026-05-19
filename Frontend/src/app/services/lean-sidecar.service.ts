@@ -3,6 +3,7 @@ import { inject, Injectable } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { environment } from "../../environments/environment";
 import type {
+  BlockedDatesPayload,
   CrossEngineReconciliationReport,
   CrossReconcileRequest,
   LeanSidecarErrorEnvelope,
@@ -91,6 +92,38 @@ export class LeanSidecarService {
       return await firstValueFrom(
         this.http.get<RunIndexResponse>(`${this.base}/runs`),
       );
+    } catch (err) {
+      throw this.translate(err);
+    }
+  }
+
+  /**
+   * P2.5 — fetch the NYSE-calendar blocked dates for a range.
+   *
+   * Returns the union of weekends, holidays, and half-days in
+   * ``[from_, to]`` with a reason tag per date. The picker uses this
+   * to disable + label dates without re-implementing the calendar
+   * client-side. Tagged cache so repeated picker openings on the same
+   * month don't refetch.
+   */
+  private readonly blockedDatesCache = new Map<string, BlockedDatesPayload>();
+
+  async getBlockedDates(
+    fromIso: string,
+    toIso: string,
+  ): Promise<BlockedDatesPayload> {
+    const cacheKey = `${fromIso}__${toIso}`;
+    const cached = this.blockedDatesCache.get(cacheKey);
+    if (cached) return cached;
+    try {
+      const params = new URLSearchParams({ from: fromIso, to: toIso });
+      const result = await firstValueFrom(
+        this.http.get<BlockedDatesPayload>(
+          `${this.base}/calendar/blocked-dates?${params.toString()}`,
+        ),
+      );
+      this.blockedDatesCache.set(cacheKey, result);
+      return result;
     } catch (err) {
       throw this.translate(err);
     }
