@@ -41,7 +41,9 @@ from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
     P2_5_DATE_SEMANTICS_NOTE,
+    BarsSpec,
     BrokeragePolicy,
+    DataPolicyManifest,
     RunManifest,
     StagedDataManifest,
     WindowMs,
@@ -654,6 +656,20 @@ def _build_manifest(
             symbol_properties_database=(
                 _hash_paths_in_workspace(workspace, [symbol_properties])[0] if symbol_properties is not None else None
             ),
+        ),
+        # TODO Task 8: populate data_policy from request (provider, adjusted flag, session,
+        # bar specs). Synthetic-shape default here keeps existing code working.
+        data_policy=DataPolicyManifest(
+            source="synthetic",
+            symbol=request.symbol,
+            adjusted=False,
+            session="regular",
+            input_bars=BarsSpec(timespan="minute", multiplier=1),
+            strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+            timestamp_policy="bar_close_ms_utc",
+            timezone="America/New_York",
+            fixture_id=None,
+            fixture_sha256=None,
         ),
         # Trusted sample stages raw deci-cent bars without factor/map
         # adjustments; this is the non-reconciliation policy.

@@ -36,7 +36,12 @@ from typing import Any, Literal
 #       to ``notes`` so the cross-engine reconciler can branch on
 #       which contract a persisted run was written under. Old
 #       manifests stay readable on schema_version 1.
-MANIFEST_SCHEMA_VERSION = 2
+#   3 — 2026-05-19: Added ``BarsSpec`` and ``DataPolicyManifest``
+#       dataclasses. ``data_policy`` is now a mandatory field on
+#       ``RunManifest``, capturing data provenance (source, symbol,
+#       adjustment, session, input vs strategy bars, fixture identity)
+#       separately from execution-policy fields.
+MANIFEST_SCHEMA_VERSION = 3
 
 # Note tag that the manifest writer adds to ``notes`` so downstream
 # readers (the cross-engine reconciler, the run-history sidebar) can
@@ -127,6 +132,45 @@ class WindowMs:
 
 
 @dataclass(frozen=True, slots=True)
+class BarsSpec:
+    """Polygon-style (timespan, multiplier) pair.
+
+    ``timespan`` matches Polygon's API vocabulary so a reviewer can map
+    manifest values directly to /v2/aggs query parameters.
+    """
+
+    timespan: Literal["minute", "hour", "day"]
+    multiplier: int
+
+
+@dataclass(frozen=True, slots=True)
+class DataPolicyManifest:
+    """Where the bars came from and what processing they got.
+
+    Separate from the existing top-level ``fill_forward`` /
+    ``data_adjustment_policy`` / ``data_normalization_mode`` fields,
+    which encode execution-time policy. This block encodes data
+    provenance: "what bars did we feed in, and how were they
+    constructed?"
+
+    ``fixture_id`` and ``fixture_sha256`` are populated only when the
+    run was driven by a ``RecordedPolygonFixtureProvider`` (i.e., a
+    parity-test run). Live Polygon runs leave both ``None``.
+    """
+
+    source: Literal["synthetic", "polygon"]
+    symbol: str
+    adjusted: bool
+    session: Literal["regular", "extended"]
+    input_bars: BarsSpec
+    strategy_bars: BarsSpec
+    timestamp_policy: Literal["bar_close_ms_utc"]
+    timezone: Literal["America/New_York"]
+    fixture_id: str | None
+    fixture_sha256: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class RunManifest:
     """The full reproducibility manifest. One per run.
 
@@ -151,6 +195,7 @@ class RunManifest:
 
     # Data
     staged_data: StagedDataManifest
+    data_policy: DataPolicyManifest
     data_adjustment_policy: DataAdjustmentPolicy
     data_normalization_mode: DataNormalizationMode
     fill_forward: bool
