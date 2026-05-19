@@ -12,11 +12,15 @@ See docs/superpowers/specs/2026-05-19-lean-engine-polygon-parity-design.md.
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
+from zoneinfo import ZoneInfo
 
+from app.engine.data.polygon_export import _polygon_bar_to_trade_bar
+from app.engine.data.trade_bar import TradeBar
 from app.services.dataset_service import fetch_bars_chunked
 from app.services.polygon_client import PolygonClientService
 
@@ -128,3 +132,81 @@ def get_default_provider() -> CanonicalBarsProvider:
     provider parameter through the FastAPI router.
     """
     return PolygonProvider(polygon=PolygonClientService())
+
+
+_ET = ZoneInfo("America/New_York")
+_UTC = ZoneInfo("UTC")
+
+# RTH session: [09:30, 16:00) ET.
+_RTH_OPEN_MINUTE = 9 * 60 + 30
+_RTH_CLOSE_MINUTE = 16 * 60
+
+
+class CanonicalBarsError(ValueError):
+    """Polygon returned bars that violate the canonical-input contract.
+
+    Per .claude/rules/numerical-rigor.md § "External-API ingestion",
+    duplicates and non-monotonic timestamps must surface as errors,
+    not be silently repaired.
+    """
+
+
+def _is_rth(ts_ms: int) -> bool:
+    et = datetime.fromtimestamp(ts_ms / 1000, tz=_UTC).astimezone(_ET)
+    minute_of_day = et.hour * 60 + et.minute
+    return _RTH_OPEN_MINUTE <= minute_of_day < _RTH_CLOSE_MINUTE
+
+
+def fetch_canonical_minute_bars(
+    *,
+    symbol: str,
+    start_date: date,
+    end_date: date,
+    session: Literal["regular", "extended"],
+    adjustment: Literal["raw"],
+    provider: CanonicalBarsProvider,
+) -> list[tuple[date, list[TradeBar]]]:
+    """Fetch Polygon 1-minute bars, filter by session, group by ET trading date.
+
+    Fail-fast on duplicate or non-monotonic timestamps — per the
+    numerical-rigor rule, such bars are signals about upstream
+    corruption and must surface, not be silently dropped.
+    """
+    if adjustment != "raw":
+        raise ValueError(f"only adjustment='raw' supported in Phase 1, got {adjustment!r}")
+
+    raw = provider.fetch_minute_bars(
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+        adjusted=False,  # adjustment=="raw" ⇔ adjusted=False
+    )
+
+    # Fail-fast validation: strict monotonic, no duplicates.
+    prev_ts: int | None = None
+    seen: set[int] = set()
+    for bar in raw:
+        ts = int(bar["timestamp"])
+        if ts in seen:
+            raise CanonicalBarsError(f"polygon_corrupt_timestamps: duplicate timestamp {ts} for {symbol}")
+        if prev_ts is not None and ts <= prev_ts:
+            raise CanonicalBarsError(
+                f"polygon_corrupt_timestamps: non-monotonic timestamp {ts} after {prev_ts} for {symbol}"
+            )
+        seen.add(ts)
+        prev_ts = ts
+
+    # Session filter.
+    if session == "regular":
+        filtered = [b for b in raw if _is_rth(int(b["timestamp"]))]
+    else:
+        filtered = list(raw)
+
+    # Convert + group by ET trading date.
+    grouped: dict[date, list[TradeBar]] = defaultdict(list)
+    for bar in filtered:
+        tb = _polygon_bar_to_trade_bar(symbol, bar)
+        et = tb.time.astimezone(_ET)
+        grouped[et.date()].append(tb)
+
+    return [(d, grouped[d]) for d in sorted(grouped.keys())]

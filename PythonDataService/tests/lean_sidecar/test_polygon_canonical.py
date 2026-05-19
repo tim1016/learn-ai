@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -166,3 +167,125 @@ def test_get_default_provider_returns_polygon_provider() -> None:
 
     provider = get_default_provider()
     assert isinstance(provider, PolygonProvider)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: fetch_canonical_minute_bars tests
+# ---------------------------------------------------------------------------
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _bar(et_dt: datetime, close: float = 100.0) -> dict:
+    """Build a Polygon-style dict with a ms-UTC timestamp at start-of-bar."""
+    ts_ms = int(et_dt.astimezone(ZoneInfo("UTC")).timestamp() * 1000)
+    return {
+        "timestamp": ts_ms,
+        "open": close - 0.05,
+        "high": close + 0.05,
+        "low": close - 0.10,
+        "close": close,
+        "volume": 1000,
+    }
+
+
+class _StubProvider:
+    def __init__(self, bars: list[dict]) -> None:
+        self._bars = bars
+
+    def fetch_minute_bars(self, *, symbol, start_date, end_date, adjusted) -> list[dict]:
+        return self._bars
+
+
+def test_fetch_canonical_minute_bars_filters_to_rth() -> None:
+    from app.lean_sidecar.polygon_canonical import fetch_canonical_minute_bars
+
+    # 09:25 (pre-market), 09:30 (first RTH), 15:59 (last RTH), 16:00 (post-market)
+    day = datetime(2025, 1, 6, tzinfo=_ET)
+    pre = day.replace(hour=9, minute=25)
+    open_min = day.replace(hour=9, minute=30)
+    last_min = day.replace(hour=15, minute=59)
+    post = day.replace(hour=16, minute=0)
+    bars = [
+        _bar(pre, 590.0),
+        _bar(open_min, 591.0),
+        _bar(last_min, 592.0),
+        _bar(post, 593.0),
+    ]
+
+    out = fetch_canonical_minute_bars(
+        symbol="SPY",
+        start_date=date(2025, 1, 6),
+        end_date=date(2025, 1, 6),
+        session="regular",
+        adjustment="raw",
+        provider=_StubProvider(bars),
+    )
+
+    # One trading day with two RTH bars (09:30, 15:59).
+    assert len(out) == 1
+    trading_date, trade_bars = out[0]
+    assert trading_date == date(2025, 1, 6)
+    assert [float(b.close) for b in trade_bars] == [591.0, 592.0]
+
+
+def test_fetch_canonical_rejects_duplicate_timestamps() -> None:
+    from app.lean_sidecar.polygon_canonical import (
+        CanonicalBarsError,
+        fetch_canonical_minute_bars,
+    )
+
+    day = datetime(2025, 1, 6, 10, 0, tzinfo=_ET)
+    bars = [_bar(day, 591.0), _bar(day, 591.5)]  # same timestamp
+
+    with pytest.raises(CanonicalBarsError, match="duplicate"):
+        fetch_canonical_minute_bars(
+            symbol="SPY",
+            start_date=date(2025, 1, 6),
+            end_date=date(2025, 1, 6),
+            session="regular",
+            adjustment="raw",
+            provider=_StubProvider(bars),
+        )
+
+
+def test_fetch_canonical_rejects_non_monotonic_timestamps() -> None:
+    from app.lean_sidecar.polygon_canonical import (
+        CanonicalBarsError,
+        fetch_canonical_minute_bars,
+    )
+
+    day = datetime(2025, 1, 6, 10, 0, tzinfo=_ET)
+    bars = [_bar(day, 591.0), _bar(day - timedelta(minutes=1), 590.5)]  # out of order
+
+    with pytest.raises(CanonicalBarsError, match="non-monotonic"):
+        fetch_canonical_minute_bars(
+            symbol="SPY",
+            start_date=date(2025, 1, 6),
+            end_date=date(2025, 1, 6),
+            session="regular",
+            adjustment="raw",
+            provider=_StubProvider(bars),
+        )
+
+
+def test_fetch_canonical_keeps_all_when_extended() -> None:
+    from app.lean_sidecar.polygon_canonical import fetch_canonical_minute_bars
+
+    day = datetime(2025, 1, 6, tzinfo=_ET)
+    pre = day.replace(hour=9, minute=25)
+    open_min = day.replace(hour=9, minute=30)
+    post = day.replace(hour=16, minute=0)
+    bars = [_bar(pre, 590.0), _bar(open_min, 591.0), _bar(post, 593.0)]
+
+    out = fetch_canonical_minute_bars(
+        symbol="SPY",
+        start_date=date(2025, 1, 6),
+        end_date=date(2025, 1, 6),
+        session="extended",
+        adjustment="raw",
+        provider=_StubProvider(bars),
+    )
+
+    _trading_date, trade_bars = out[0]
+    assert len(trade_bars) == 3
