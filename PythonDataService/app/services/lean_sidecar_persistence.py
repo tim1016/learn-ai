@@ -137,3 +137,33 @@ def finalize_open_lot_as_synthetic(
         signal_reason="EndOfAlgorithm:MTM (synthetic exit)",
         is_synthetic_exit=True,
     )
+
+
+@dataclass
+class AggregateKpis:
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    total_pnl: float
+    final_equity: float
+    win_rate: float
+
+
+def compute_aggregates(
+    trades: Sequence[PairedTrade],
+    starting_cash: float,
+    total_fees: float,
+) -> AggregateKpis:
+    """Compute aggregate KPIs from a list of round-trip trades."""
+    total_pnl = sum(t.pnl for t in trades)
+    winning = sum(1 for t in trades if t.pnl > 0)
+    losing = sum(1 for t in trades if t.pnl < 0)
+    win_rate = winning / len(trades) if trades else 0.0
+    return AggregateKpis(
+        total_trades=len(trades),
+        winning_trades=winning,
+        losing_trades=losing,
+        total_pnl=total_pnl,
+        final_equity=starting_cash + total_pnl - total_fees,
+        win_rate=win_rate,
+    )

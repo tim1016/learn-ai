@@ -6,6 +6,8 @@ import pytest
 
 from app.services.lean_sidecar_persistence import (
     OpenLot,
+    PairedTrade,
+    compute_aggregates,
     finalize_open_lot_as_synthetic,
     pair_order_events,
 )
@@ -159,3 +161,28 @@ def test_finalize_open_lot_raises_on_empty_equity_curve() -> None:
     )
     with pytest.raises(ValueError, match="equity_curve is empty"):
         finalize_open_lot_as_synthetic(open_lot, [], 100_000.0, 1)
+
+
+def test_compute_aggregates_empty_trades() -> None:
+    agg = compute_aggregates(trades=[], starting_cash=100_000.0, total_fees=0.0)
+    assert agg.total_trades == 0
+    assert agg.winning_trades == 0
+    assert agg.losing_trades == 0
+    assert agg.total_pnl == pytest.approx(0.0)
+    assert agg.final_equity == pytest.approx(100_000.0)
+    assert agg.win_rate == pytest.approx(0.0)
+
+
+def test_compute_aggregates_mixed_trades() -> None:
+    trades = [
+        PairedTrade(1, 0, 0, 100.0, 101.0, 10, pnl=10.0, signal_reason="x", is_synthetic_exit=False),
+        PairedTrade(2, 0, 0, 100.0, 99.0, 10, pnl=-10.0, signal_reason="x", is_synthetic_exit=False),
+        PairedTrade(3, 0, 0, 100.0, 102.0, 10, pnl=20.0, signal_reason="x", is_synthetic_exit=False),
+    ]
+    agg = compute_aggregates(trades=trades, starting_cash=100_000.0, total_fees=3.0)
+    assert agg.total_trades == 3
+    assert agg.winning_trades == 2
+    assert agg.losing_trades == 1
+    assert agg.total_pnl == pytest.approx(20.0)
+    assert agg.final_equity == pytest.approx(100_000.0 + 20.0 - 3.0)
+    assert agg.win_rate == pytest.approx(2 / 3)
