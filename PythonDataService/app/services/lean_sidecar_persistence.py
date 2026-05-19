@@ -9,10 +9,15 @@ aggregate KPIs, and writes one StrategyExecution row + N BacktestTrade rows.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import httpx
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -324,3 +329,47 @@ def _failed_run_payload(
             "workspace_path": str(workspace_path),
         },
     }
+
+
+async def persist_via_dotnet(
+    payload: dict[str, Any],
+    base_url: str,
+    *,
+    timeout_seconds: float = 30.0,
+) -> int | None:
+    """POST a LEAN run payload to the .NET backend for persistence.
+
+    Returns the assigned StrategyExecution.Id on success, or None on any
+    HTTP/network failure. Persistence failure must not abort the LEAN run —
+    the artifacts on disk are the authoritative record and the backfill CLI
+    (Task 5.1) can be used to retry later.
+    """
+    url = f"{base_url.rstrip('/')}/api/backtest-runs/persist-lean"
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return int(data["strategy_execution_id"])
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "persist-lean returned HTTP %s for run %s: %s",
+            exc.response.status_code,
+            payload.get("lean_run_id"),
+            exc.response.text[:500],
+        )
+        return None
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "persist-lean transport error for run %s: %s",
+            payload.get("lean_run_id"),
+            exc,
+        )
+        return None
+    except (KeyError, ValueError) as exc:
+        logger.warning(
+            "persist-lean response malformed for run %s: %s",
+            payload.get("lean_run_id"),
+            exc,
+        )
+        return None

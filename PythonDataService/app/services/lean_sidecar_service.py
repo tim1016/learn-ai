@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from app.config import settings
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import (
     DEFAULT_ARTIFACTS_ROOT,
@@ -72,6 +73,10 @@ from app.lean_sidecar.trusted_samples.buy_and_hold_reconciliation import (
 )
 from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
 from app.lean_sidecar.workspace import Workspace, resolve_workspace
+from app.services.lean_sidecar_persistence import (
+    build_persist_payload,
+    persist_via_dotnet,
+)
 
 # Phase 5b — selector for which trusted-sample source the orchestrator
 # stages when the caller does not provide their own ``algorithm_source``.
@@ -219,6 +224,10 @@ class TrustedRunResult:
     # the inspection endpoint can 404 deterministically.
     normalized_path: Path | None
     normalized: NormalizedResult | None
+    # Task 1.10 — the StrategyExecution.Id assigned by the .NET backend
+    # after persisting this run. ``None`` when persistence failed or was
+    # skipped (e.g., launcher rejected before a result was produced).
+    strategy_execution_id: int | None = None
 
 
 _ET = ZoneInfo("America/New_York")
@@ -548,6 +557,25 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     # ``response`` is guaranteed non-None here because the only way to
     # leave it None is via ``launcher_exc``, which we re-raised above.
     assert response is not None
+
+    # Task 1.10 — POST the run to .NET for persistence. This must happen
+    # AFTER the manifest is finalized so workspace_path is stable. A
+    # persistence failure is logged but does NOT abort the run — the
+    # workspace artifacts on disk are the authoritative record.
+    persist_payload = build_persist_payload(
+        workspace_path=workspace.root,
+        run_id=request.run_id,
+        starting_cash=request.starting_cash,
+        symbol=request.symbol,
+        algorithm_name=request.template,
+        start_date_ms=_date_to_ms_utc(request.start_date),
+        end_date_ms=_date_to_ms_utc(request.end_date),
+    )
+    strategy_execution_id = await persist_via_dotnet(
+        payload=persist_payload,
+        base_url=settings.BACKEND_URL,
+    )
+
     return TrustedRunResult(
         run_id=request.run_id,
         is_clean=response.is_clean,
@@ -562,6 +590,7 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         lean_log_path=workspace.lean_log_path,
         normalized_path=normalized_path,
         normalized=normalized,
+        strategy_execution_id=strategy_execution_id,
     )
 
 
