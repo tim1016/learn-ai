@@ -55,7 +55,7 @@ export interface TrustedRunRequest {
    * ``algorithm_source`` is provided (operator-pasted source pins its
    * own brokerage via SetBrokerageModel).
    */
-  template?: "trusted_default" | "reconciliation";
+  template?: "trusted_default" | "reconciliation" | "ema_crossover";
 }
 
 /**
