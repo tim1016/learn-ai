@@ -21,7 +21,7 @@ import type {
 import { CROSS_RECONCILE_SCHEMA_VERSION } from "../../services/lean-sidecar.types";
 import { BlockedAwareDatePickerComponent } from "./blocked-aware-date-picker/blocked-aware-date-picker.component";
 import { LeanLabEquityChartComponent } from "./lean-lab-equity-chart/lean-lab-equity-chart.component";
-import { LeanLabRunHistoryComponent } from "./lean-lab-run-history/lean-lab-run-history.component";
+import { LeanLabRunHistoryStripComponent } from "./lean-lab-run-history-strip/lean-lab-run-history-strip.component";
 
 /** Mirror the server's ``MAX_ALGORITHM_SOURCE_BYTES``. */
 const MAX_ALGORITHM_SOURCE_BYTES = 256 * 1024;
@@ -110,7 +110,7 @@ function rehydratedLeanErrors(categories: string[]): {
     CommonModule,
     ReactiveFormsModule,
     LeanLabEquityChartComponent,
-    LeanLabRunHistoryComponent,
+    LeanLabRunHistoryStripComponent,
     BlockedAwareDatePickerComponent,
   ],
   templateUrl: "./lean-lab.component.html",

@@ -9,85 +9,100 @@
     </p>
   </header>
 
-  <div class="lean-lab__layout">
-    <app-lean-lab-run-history (runSelected)="loadRun($event)" />
-    <div class="lean-lab__main">
-  <form class="lean-lab__form" [formGroup]="form" (ngSubmit)="submit()">
-    <label class="lean-lab__field">
-      <span>Run ID</span>
-      <input type="text" formControlName="runId" aria-describedby="runIdHint" />
-      <small id="runIdHint">Strict slug — regenerates after each submit.</small>
-    </label>
+  <app-lean-lab-run-history-strip (runSelected)="loadRun($event)" />
 
-    <label class="lean-lab__field">
-      <span>Symbol</span>
-      <input type="text" formControlName="symbol" />
-    </label>
+  <form class="lean-lab__card lean-lab__form" [formGroup]="form" (ngSubmit)="submit()">
+    <fieldset class="lean-lab__group">
+      <legend class="lean-lab__group-legend">Identity</legend>
+      <div class="lean-lab__group-grid">
+        <label class="lean-lab__field">
+          <span>Run ID</span>
+          <input type="text" formControlName="runId" aria-describedby="runIdHint" />
+          <small id="runIdHint">Strict slug — regenerates after each submit.</small>
+        </label>
 
-    <div class="lean-lab__field lean-lab__field--picker">
-      <span>Trading window (09:30 ET, half-open)</span>
-      <app-blocked-aware-date-picker
-        [startDate]="pickerStart()"
-        (startDateChange)="onStartPicked($event)"
-        [endDate]="pickerEnd()"
-        (endDateChange)="onEndPicked($event)"
-        (windowInvalid)="pickerInvalid.set($event)"
-      />
-    </div>
+        <label class="lean-lab__field">
+          <span>Symbol</span>
+          <input type="text" formControlName="symbol" />
+        </label>
+      </div>
+    </fieldset>
 
-    <label class="lean-lab__field">
-      <span>Starting cash (USD)</span>
-      <input type="number" formControlName="startingCash" min="1000" max="10000000" step="1000" />
-    </label>
+    <fieldset class="lean-lab__group">
+      <legend class="lean-lab__group-legend">Trading window</legend>
+      <div class="lean-lab__group-grid">
+        <div class="lean-lab__field lean-lab__field--picker">
+          <span>Window (09:30 ET, half-open)</span>
+          <app-blocked-aware-date-picker
+            [startDate]="pickerStart()"
+            (startDateChange)="onStartPicked($event)"
+            [endDate]="pickerEnd()"
+            (endDateChange)="onEndPicked($event)"
+            (windowInvalid)="pickerInvalid.set($event)"
+          />
+        </div>
 
-    <label class="lean-lab__field lean-lab__field--toggle">
-      <input type="checkbox" formControlName="useCustomAlgorithm" />
-      <span>Custom algorithm</span>
-      <small>Off: run the bundled trusted sample. On: paste your own <code>MyAlgorithm</code> below.</small>
-    </label>
+        <label class="lean-lab__field">
+          <span>Starting cash (USD)</span>
+          <input type="number" formControlName="startingCash" min="1000" max="10000000" step="1000" />
+        </label>
+      </div>
+    </fieldset>
 
-    @if (form.controls.useCustomAlgorithm.value) {
-      <label class="lean-lab__field lean-lab__field--source">
-        <span>Algorithm source (Python)</span>
-        <textarea
-          formControlName="algorithmSource"
-          rows="18"
-          spellcheck="false"
-          aria-describedby="sourceHint"
-        ></textarea>
-        <small id="sourceHint">
-          Class name must be <code>MyAlgorithm</code>. Max 256&nbsp;KiB. Runs under the Phase&nbsp;1c
-          sandbox shape.
-        </small>
+    <fieldset class="lean-lab__group">
+      <legend class="lean-lab__group-legend">Algorithm</legend>
+
+      <label class="lean-lab__field lean-lab__field--toggle">
+        <input type="checkbox" formControlName="useCustomAlgorithm" />
+        <span>Custom algorithm</span>
+        <small>Off: run the bundled trusted sample. On: paste your own <code>MyAlgorithm</code> below.</small>
       </label>
-    } @else {
-      <label class="lean-lab__field">
-        <span>Trusted sample template</span>
-        <select formControlName="template" aria-describedby="templateHint">
-          <option value="trusted_default">Default (LEAN-default brokerage)</option>
-          <option value="reconciliation">Reconciliation-grade (IBKR brokerage)</option>
-          <option value="ema_crossover">SPY EMA(5)/EMA(10) Crossover (LEAN parity oracle)</option>
-        </select>
-        <small id="templateHint">
-          Reconciliation-grade pins Interactive Brokers brokerage so the Phase&nbsp;5a fee
-          reconciler returns a clean report. Default mirrors Phase 1 behavior.
-        </small>
-      </label>
-    }
 
-    <button
-      class="lean-lab__submit"
-      type="submit"
-      [disabled]="submitting() || form.invalid || pickerInvalid()"
-      aria-label="Run the LEAN sidecar backtest with the configured form"
-    >
-      @let isCustom = form.controls.useCustomAlgorithm.value;
-      {{ submitting() ? "Running…" : (isCustom ? "Run custom algorithm" : "Run trusted sample") }}
-    </button>
+      @if (form.controls.useCustomAlgorithm.value) {
+        <label class="lean-lab__field lean-lab__field--source">
+          <span>Algorithm source (Python)</span>
+          <textarea
+            formControlName="algorithmSource"
+            rows="18"
+            spellcheck="false"
+            aria-describedby="sourceHint"
+          ></textarea>
+          <small id="sourceHint">
+            Class name must be <code>MyAlgorithm</code>. Max 256&nbsp;KiB. Runs under the Phase&nbsp;1c
+            sandbox shape.
+          </small>
+        </label>
+      } @else {
+        <label class="lean-lab__field">
+          <span>Trusted sample template</span>
+          <select formControlName="template" aria-describedby="templateHint">
+            <option value="trusted_default">Default (LEAN-default brokerage)</option>
+            <option value="reconciliation">Reconciliation-grade (IBKR brokerage)</option>
+            <option value="ema_crossover">SPY EMA(5)/EMA(10) Crossover (LEAN parity oracle)</option>
+          </select>
+          <small id="templateHint">
+            Reconciliation-grade pins Interactive Brokers brokerage so the Phase&nbsp;5a fee
+            reconciler returns a clean report. Default mirrors Phase 1 behavior.
+          </small>
+        </label>
+      }
+    </fieldset>
+
+    <footer class="lean-lab__form-footer">
+      <button
+        class="lean-lab__submit"
+        type="submit"
+        [disabled]="submitting() || form.invalid || pickerInvalid()"
+        aria-label="Run the LEAN sidecar backtest with the configured form"
+      >
+        @let isCustom = form.controls.useCustomAlgorithm.value;
+        {{ submitting() ? "Running…" : (isCustom ? "Run custom algorithm" : "Run trusted sample") }}
+      </button>
+    </footer>
   </form>
 
   @if (error(); as err) {
-    <section class="lean-lab__error" role="alert" aria-live="assertive">
+    <section class="lean-lab__card lean-lab__error" role="alert" aria-live="assertive">
       <h2>Run failed</h2>
       <dl>
         <dt>HTTP status</dt>
@@ -101,7 +116,7 @@
   }
 
   @if (response(); as resp) {
-    <section class="lean-lab__result" aria-live="polite">
+    <section class="lean-lab__card lean-lab__result" aria-live="polite">
       <header class="lean-lab__result-header">
         <h2>Run {{ resp.run_id }}</h2>
         @if (statusBadge(); as badge) {
@@ -149,19 +164,21 @@
       @if (errorRows().length > 0) {
         <section class="lean-lab__errors">
           <h3>LEAN log errors ({{ errorRows().length }})</h3>
-          <table>
-            <thead>
-              <tr><th>Category</th><th>Line</th></tr>
-            </thead>
-            <tbody>
-              @for (row of errorRows(); track row.category + row.line) {
-                <tr>
-                  <td>{{ row.category }}</td>
-                  <td><code>{{ row.line }}</code></td>
-                </tr>
-              }
-            </tbody>
-          </table>
+          <div class="lean-lab__table-scroll">
+            <table>
+              <thead>
+                <tr><th>Category</th><th>Line</th></tr>
+              </thead>
+              <tbody>
+                @for (row of errorRows(); track row.category + row.line) {
+                  <tr>
+                    <td>{{ row.category }}</td>
+                    <td><code>{{ row.line }}</code></td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
         </section>
       }
 
@@ -282,55 +299,57 @@
           }
 
           @if (report.divergences.length > 0) {
-            <table class="lean-lab__reconcile-table">
-              <caption>
-                First {{ crossReconciliationTopDivergences().length }} of
-                {{ report.divergences.length }} divergence rows
-              </caption>
-              <thead>
-                <tr>
-                  <th>Trading date</th>
-                  <th>Category</th>
-                  <th>LEAN fill</th>
-                  <th>Engine fill</th>
-                  <th>Detail</th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (
-                  d of crossReconciliationTopDivergences();
-                  track d.trading_date + d.category + d.detail
-                ) {
+            <div class="lean-lab__table-scroll">
+              <table class="lean-lab__reconcile-table">
+                <caption>
+                  First {{ crossReconciliationTopDivergences().length }} of
+                  {{ report.divergences.length }} divergence rows
+                </caption>
+                <thead>
                   <tr>
-                    <td>{{ d.trading_date }}</td>
-                    <td><code>{{ d.category }}</code></td>
-                    <td>
-                      @if (d.lean_fill; as lf) {
-                        {{ lf.side }} {{ lf.fill_quantity }} &#64;
-                        ${{ lf.fill_price }}
-                        @if (lf.fee !== null) {
-                          (fee ${{ lf.fee }})
-                        }
-                      } @else {
-                        <em>—</em>
-                      }
-                    </td>
-                    <td>
-                      @if (d.engine_fill; as ef) {
-                        {{ ef.side }} {{ ef.fill_quantity }} &#64;
-                        ${{ ef.fill_price }}
-                        @if (ef.fee !== null) {
-                          (fee ${{ ef.fee }})
-                        }
-                      } @else {
-                        <em>—</em>
-                      }
-                    </td>
-                    <td>{{ d.detail }}</td>
+                    <th>Trading date</th>
+                    <th>Category</th>
+                    <th>LEAN fill</th>
+                    <th>Engine fill</th>
+                    <th>Detail</th>
                   </tr>
-                }
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  @for (
+                    d of crossReconciliationTopDivergences();
+                    track d.trading_date + d.category + d.detail
+                  ) {
+                    <tr>
+                      <td>{{ d.trading_date }}</td>
+                      <td><code>{{ d.category }}</code></td>
+                      <td>
+                        @if (d.lean_fill; as lf) {
+                          {{ lf.side }} {{ lf.fill_quantity }} &#64;
+                          ${{ lf.fill_price }}
+                          @if (lf.fee !== null) {
+                            (fee ${{ lf.fee }})
+                          }
+                        } @else {
+                          <em>—</em>
+                        }
+                      </td>
+                      <td>
+                        @if (d.engine_fill; as ef) {
+                          {{ ef.side }} {{ ef.fill_quantity }} &#64;
+                          ${{ ef.fill_price }}
+                          @if (ef.fee !== null) {
+                            (fee ${{ ef.fee }})
+                          }
+                        } @else {
+                          <em>—</em>
+                        }
+                      </td>
+                      <td>{{ d.detail }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
           } @else {
             <p class="lean-lab__cross-clean">
               No fill-level divergences. Both engines produced identical
@@ -381,43 +400,43 @@
           </dl>
 
           @if (report.divergences.length > 0) {
-            <table class="lean-lab__reconcile-table">
-              <caption>
-                First {{ reconciliationTopDivergences().length }} of
-                {{ report.divergences.length }} divergence rows
-              </caption>
-              <thead>
-                <tr>
-                  <th>Order event</th>
-                  <th>Symbol</th>
-                  <th>Qty</th>
-                  <th>Fill price</th>
-                  <th>Recorded</th>
-                  <th>Expected IBKR</th>
-                  <th>Delta</th>
-                  <th>Category</th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (d of reconciliationTopDivergences(); track d.order_event_id) {
+            <div class="lean-lab__table-scroll">
+              <table class="lean-lab__reconcile-table">
+                <caption>
+                  First {{ reconciliationTopDivergences().length }} of
+                  {{ report.divergences.length }} divergence rows
+                </caption>
+                <thead>
                   <tr>
-                    <td>{{ d.order_event_id }}</td>
-                    <td>{{ d.symbol }}</td>
-                    <td>{{ d.fill_quantity }}</td>
-                    <td>${{ d.fill_price }}</td>
-                    <td>{{ d.recorded_fee === null ? "—" : "$" + d.recorded_fee }}</td>
-                    <td>${{ d.expected_ibkr_fee }}</td>
-                    <td>{{ d.delta === null ? "—" : "$" + d.delta }}</td>
-                    <td><code>{{ d.category }}</code></td>
+                    <th>Order event</th>
+                    <th>Symbol</th>
+                    <th>Qty</th>
+                    <th>Fill price</th>
+                    <th>Recorded</th>
+                    <th>Expected IBKR</th>
+                    <th>Delta</th>
+                    <th>Category</th>
                   </tr>
-                }
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  @for (d of reconciliationTopDivergences(); track d.order_event_id) {
+                    <tr>
+                      <td>{{ d.order_event_id }}</td>
+                      <td>{{ d.symbol }}</td>
+                      <td>{{ d.fill_quantity }}</td>
+                      <td>${{ d.fill_price }}</td>
+                      <td>{{ d.recorded_fee === null ? "—" : "$" + d.recorded_fee }}</td>
+                      <td>${{ d.expected_ibkr_fee }}</td>
+                      <td>{{ d.delta === null ? "—" : "$" + d.delta }}</td>
+                      <td><code>{{ d.category }}</code></td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
           }
         }
       </section>
     </section>
   }
-    </div>
-  </div>
 </div>
