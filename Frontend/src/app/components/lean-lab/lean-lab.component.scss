@@ -5,7 +5,7 @@
   padding: 1.5rem;
   max-width: 1280px;
   margin: 0 auto;
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 
 .lean-lab__layout {
@@ -33,7 +33,7 @@
 
 .lean-lab__lead {
   margin: 0;
-  color: var(--text-muted, #6b7280);
+  color: var(--text-muted);
   font-size: 0.9rem;
 }
 
@@ -43,8 +43,6 @@
   gap: 0.75rem 1rem;
   align-items: end;
   padding: 1rem;
-  background: var(--surface-soft, #f9fafb);
-  border: 1px solid var(--border, #e5e7eb);
   border-radius: 0.5rem;
 }
 
@@ -56,12 +54,12 @@
   span {
     font-size: 0.8rem;
     font-weight: 600;
-    color: var(--text, #1f2937);
+    color: var(--text-primary);
   }
 
   input {
     padding: 0.4rem 0.5rem;
-    border: 1px solid var(--border, #d1d5db);
+    border: 1px solid var(--border);
     border-radius: 0.25rem;
     font: inherit;
   }
@@ -69,12 +67,12 @@
   // Mark invalid inputs so the user sees the regex/min/max violations
   // before clicking Run.
   input:invalid {
-    border-color: var(--danger, #ef4444);
+    border-color: var(--bear);
   }
 
   small {
     font-size: 0.7rem;
-    color: var(--text-muted, #6b7280);
+    color: var(--text-muted);
   }
 }
 
@@ -102,10 +100,10 @@
     width: 100%;
     min-height: 320px;
     padding: 0.5rem;
-    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", monospace;
+    font-family: var(--font-mono);
     font-size: 0.8rem;
     line-height: 1.4;
-    border: 1px solid var(--border, #d1d5db);
+    border: 1px solid var(--border);
     border-radius: 0.25rem;
     resize: vertical;
     tab-size: 4;
@@ -115,8 +113,8 @@
 .lean-lab__submit {
   grid-column: 1 / -1;
   padding: 0.5rem 1rem;
-  background: var(--accent, #2563eb);
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
   border: 0;
   border-radius: 0.25rem;
   font-weight: 600;
@@ -130,14 +128,13 @@
 
 .lean-lab__error {
   padding: 1rem;
-  background: var(--danger-soft, #fef2f2);
-  border: 1px solid var(--danger, #ef4444);
+  border: 1px solid var(--bear);
   border-radius: 0.5rem;
 
   h2 {
     margin: 0 0 0.5rem;
     font-size: 1rem;
-    color: var(--danger, #ef4444);
+    color: var(--bear);
   }
 
   dl {
@@ -158,8 +155,7 @@
   flex-direction: column;
   gap: 1rem;
   padding: 1rem;
-  background: var(--surface, #ffffff);
-  border: 1px solid var(--border, #e5e7eb);
+  border: 1px solid var(--border-light);
   border-radius: 0.5rem;
 }
 
@@ -175,6 +171,11 @@
   }
 }
 
+// Outline-style status pills, matching the design system's
+// transparent-bg badge convention (--badge-{warn,info,neutral}-*).
+// Phase 5g.4 added ok/fail variants; using bull/bear semantics keeps
+// the color choice in lockstep with the rest of the app's
+// positive/negative palette.
 .lean-lab__badge {
   display: inline-flex;
   align-items: center;
@@ -182,10 +183,12 @@
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 600;
+  background: transparent;
+  border: 1px solid currentColor;
 
-  &--ok { background: #dcfce7; color: #166534; }
-  &--warn { background: #fef9c3; color: #854d0e; }
-  &--fail { background: #fee2e2; color: #991b1b; }
+  &--ok   { color: var(--bull); }
+  &--warn { color: var(--badge-warn-text); border-color: var(--badge-warn-border); }
+  &--fail { color: var(--bear); }
 }
 
 .lean-lab__summary,
@@ -202,7 +205,7 @@
 .lean-lab__summary dt,
 .lean-lab__paths dt {
   font-weight: 600;
-  color: var(--text, #1f2937);
+  color: var(--text-primary);
 }
 
 .lean-lab__equity h3,
@@ -211,8 +214,8 @@
   font-size: 0.95rem;
 }
 
-.lean-lab__pnl-up { color: #15803d; }
-.lean-lab__pnl-down { color: #b91c1c; }
+.lean-lab__pnl-up { color: var(--bull); }
+.lean-lab__pnl-down { color: var(--bear); }
 
 .lean-lab__errors table {
   width: 100%;
@@ -224,7 +227,7 @@
 .lean-lab__errors td {
   text-align: left;
   padding: 0.3rem 0.5rem;
-  border-bottom: 1px solid var(--border, #e5e7eb);
+  border-bottom: 1px solid var(--border-light);
   vertical-align: top;
 }
 
@@ -237,7 +240,7 @@
   max-height: 240px;
   overflow: auto;
   padding: 0.5rem;
-  background: var(--surface-soft, #f9fafb);
+  background: var(--bg-sunken);
   border-radius: 0.25rem;
   font-size: 0.8rem;
   white-space: pre-wrap;
@@ -248,7 +251,7 @@
   flex-direction: column;
   gap: 0.5rem;
   padding-top: 0.75rem;
-  border-top: 1px solid var(--border, #e5e7eb);
+  border-top: 1px solid var(--border-light);
 }
 
 .lean-lab__reconcile-header {
@@ -265,8 +268,8 @@
 
 .lean-lab__reconcile-btn {
   padding: 0.35rem 0.75rem;
-  background: var(--accent, #2563eb);
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
   border: 0;
   border-radius: 0.25rem;
   font-weight: 600;
@@ -282,17 +285,17 @@
 .lean-lab__reconcile-help {
   margin: 0;
   font-size: 0.8rem;
-  color: var(--text-muted, #6b7280);
+  color: var(--text-muted);
 }
 
 .lean-lab__reconcile-error {
   margin: 0;
   padding: 0.5rem 0.75rem;
-  background: var(--danger-soft, #fef2f2);
-  border: 1px solid var(--danger, #ef4444);
+  background: var(--bear-soft);
+  border: 1px solid var(--bear);
   border-radius: 0.25rem;
   font-size: 0.8rem;
-  color: var(--danger, #991b1b);
+  color: var(--bear);
 }
 
 .lean-lab__reconcile-summary {
@@ -305,7 +308,7 @@
 
   dt {
     font-weight: 600;
-    color: var(--text, #1f2937);
+    color: var(--text-primary);
   }
 
   dd {
@@ -321,7 +324,7 @@
   caption {
     text-align: left;
     padding: 0.25rem 0;
-    color: var(--text-muted, #6b7280);
+    color: var(--text-muted);
     font-style: italic;
     caption-side: top;
   }
@@ -330,12 +333,12 @@
   td {
     text-align: left;
     padding: 0.3rem 0.5rem;
-    border-bottom: 1px solid var(--border, #e5e7eb);
+    border-bottom: 1px solid var(--border-light);
     vertical-align: top;
   }
 
   th {
     font-weight: 600;
-    color: var(--text, #1f2937);
+    color: var(--text-primary);
   }
 }
