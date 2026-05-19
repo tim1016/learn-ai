@@ -104,6 +104,37 @@ describe("RunHistoryComponent", () => {
   });
 });
 
+describe("RunHistoryComponent — row click", () => {
+  it("emits runSelected with the row id when a data row is clicked", async () => {
+    const events: string[] = [];
+    const { fixture, component } = await renderComponent({
+      rows: [row({ id: "abc" }), row({ id: "xyz" })],
+    });
+    component.runSelected.subscribe((id) => events.push(id));
+
+    const rows = fixture.nativeElement.querySelectorAll("tbody tr") as NodeListOf<HTMLTableRowElement>;
+    rows[1].click();
+
+    expect(events).toEqual(["xyz"]);
+  });
+
+  it("does not emit runSelected when the checkbox cell is clicked", async () => {
+    const events: string[] = [];
+    const { fixture, component } = await renderComponent({
+      rows: [row({ id: "abc" })],
+      allowCompare: true,
+    });
+    component.runSelected.subscribe((id) => events.push(id));
+
+    const checkbox = fixture.nativeElement.querySelector(
+      'input[type="checkbox"]',
+    ) as HTMLInputElement;
+    checkbox.click();
+
+    expect(events).toHaveLength(0);
+  });
+});
+
 describe("RunHistoryComponent — multi-select", () => {
   it("does not render checkboxes when allowCompare is false", async () => {
     const { fixture } = await renderComponent({

@@ -27,6 +27,7 @@ export class RunHistoryComponent {
   readonly allowCompare = input<boolean>(true);
 
   readonly compareRequested = output<{ leftId: string; rightId: string }>();
+  readonly runSelected = output<string>();
 
   // Ordered array — preserves the sequence in which the user checked rows.
   private readonly _selectedIds = signal<readonly string[]>([]);
@@ -55,5 +56,9 @@ export class RunHistoryComponent {
     const ids = this._selectedIds();
     if (ids.length !== 2) return;
     this.compareRequested.emit({ leftId: ids[0], rightId: ids[1] });
+  }
+
+  onRowClick(id: string): void {
+    this.runSelected.emit(id);
   }
 }

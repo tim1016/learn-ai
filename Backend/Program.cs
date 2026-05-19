@@ -2,6 +2,7 @@ using Backend;
 using Backend.Configuration;
 using Backend.Data;
 using Backend.GraphQL;
+using Backend.GraphQL.Comparison;
 using Backend.Jobs;
 using Backend.Services.Implementation;
 using Backend.Services.Interfaces;
@@ -106,6 +107,17 @@ builder.Services.AddHttpClient<IResearchService, ResearchService>(client =>
 })
 .AddPolicyHandler(circuitBreakerPolicy);
 
+// HttpClient for ComparisonService — calls POST /api/lean-sidecar/compare.
+// Pure compute on the Python side; no retry (request is fast, not idempotent
+// in a way that benefits retry). Circuit-breaker still trips on hard-down service.
+builder.Services.AddHttpClient<IComparisonService, ComparisonService>(client =>
+{
+    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(60);
+})
+.AddPolicyHandler(circuitBreakerPolicy);
+
 // Redis — backing store for job state and SSE event streams. The same
 // Redis instance is shared with PythonDataService; the schema is
 // documented in Backend/Jobs/JobsApi.cs and PythonDataService/app/jobs/progress.py.
@@ -168,6 +180,7 @@ builder.Services
     .AddTypeExtension<PortfolioQuery>()
     .AddTypeExtension<DataLabQuery>()
     .AddTypeExtension<BacktestRunsQuery>()
+    .AddTypeExtension<CompareBacktestRunsResolver>()
     .AddMutationType<Mutation>()
     .AddTypeExtension<PortfolioMutation>()
     .AddTypeExtension<DataLabMutation>()
