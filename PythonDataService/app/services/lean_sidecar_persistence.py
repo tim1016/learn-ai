@@ -96,3 +96,44 @@ def pair_order_events(
             open_lot = None
 
     return trades, open_lot
+
+
+def finalize_open_lot_as_synthetic(
+    open_lot: OpenLot,
+    equity_curve: Sequence[dict[str, Any]],
+    starting_cash: float,
+    trade_number: int,
+) -> PairedTrade:
+    """Synthesize an MTM exit at the last equity-curve point.
+
+    Reconstructs exit price by reversing the portfolio-value identity:
+        equity_value = cash_remaining + qty * exit_price
+        cash_remaining = starting_cash - qty * entry_price - sum(fees)
+    Solving:
+        exit_price = (equity_value - starting_cash + qty * entry_price + sum(fees)) / qty
+    """
+    if not equity_curve:
+        raise ValueError("equity_curve is empty — cannot synthesize MTM exit")
+
+    last_point = equity_curve[-1]
+    last_ms = int(last_point["ms_utc"])
+    last_value = float(last_point["value"])
+    entry_fees = sum(open_lot.fees)
+
+    exit_price = (
+        last_value - starting_cash + open_lot.entry_price * open_lot.quantity + entry_fees
+    ) / open_lot.quantity
+
+    pnl = (exit_price - open_lot.entry_price) * open_lot.quantity - entry_fees
+
+    return PairedTrade(
+        trade_number=trade_number,
+        entry_ms_utc=open_lot.entry_ms_utc,
+        exit_ms_utc=last_ms,
+        entry_price=open_lot.entry_price,
+        exit_price=exit_price,
+        quantity=open_lot.quantity,
+        pnl=pnl,
+        signal_reason="EndOfAlgorithm:MTM (synthetic exit)",
+        is_synthetic_exit=True,
+    )

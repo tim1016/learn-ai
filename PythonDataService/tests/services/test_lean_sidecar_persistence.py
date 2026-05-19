@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.lean_sidecar_persistence import pair_order_events
+from app.services.lean_sidecar_persistence import (
+    OpenLot,
+    finalize_open_lot_as_synthetic,
+    pair_order_events,
+)
 
 
 def _filled_event(
@@ -111,3 +115,47 @@ def test_pair_ignores_sell_without_open_lot() -> None:
     trades, open_lot = pair_order_events(events)
     assert trades == []
     assert open_lot is None
+
+
+def test_finalize_open_lot_as_synthetic_uses_last_equity_point() -> None:
+    open_lot = OpenLot(
+        entry_ms_utc=1_700_000_000_000,
+        entry_price=100.0,
+        quantity=10,
+        fees=[0.5],
+    )
+    equity_curve = [
+        {"ms_utc": 1_700_000_000_000, "value": 100_000.0},
+        {"ms_utc": 1_700_000_300_000, "value": 100_050.0},
+        {"ms_utc": 1_700_000_600_000, "value": 100_090.0},
+    ]
+    trade = finalize_open_lot_as_synthetic(
+        open_lot,
+        equity_curve=equity_curve,
+        starting_cash=100_000.0,
+        trade_number=5,
+    )
+    assert trade.trade_number == 5
+    assert trade.exit_ms_utc == 1_700_000_600_000
+    assert trade.is_synthetic_exit is True
+    assert trade.signal_reason == "EndOfAlgorithm:MTM (synthetic exit)"
+    # exit_price reconstructed via portfolio-value identity:
+    #   equity = cash_remaining + qty * exit_price
+    #   cash_remaining = starting_cash - qty * entry_price - sum(fees)
+    # => exit_price = (equity - starting_cash + qty * entry_price + sum(fees)) / qty
+    #              = (100090 - 100000 + 10*100 + 0.5) / 10
+    #              = 1090.5 / 10 = 109.05
+    assert trade.exit_price == pytest.approx(109.05)
+    # pnl = (109.05 - 100) * 10 - 0.5 = 90.5 - 0.5 = 90.0
+    assert trade.pnl == pytest.approx(90.0)
+
+
+def test_finalize_open_lot_raises_on_empty_equity_curve() -> None:
+    open_lot = OpenLot(
+        entry_ms_utc=1_700_000_000_000,
+        entry_price=100.0,
+        quantity=10,
+        fees=[0.5],
+    )
+    with pytest.raises(ValueError, match="equity_curve is empty"):
+        finalize_open_lot_as_synthetic(open_lot, [], 100_000.0, 1)
