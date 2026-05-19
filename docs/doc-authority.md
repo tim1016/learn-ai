@@ -27,6 +27,7 @@
 |---|---|---|---|
 | `docs/architecture/options-math-authorities.md` | Options math | `docs/architecture/options-routes-research.md` (cleanup record) | 2026-04-29 |
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR — design rationale ("why") | — | — |
+| `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
 | `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |
 | `docs/ibkr-integration-authority.md` | IBKR integration snapshot | `docs/architecture/ibkr-integration-phase1/2/3.md` (archived) | 2026-05-04 |
 | `docs/indicator-reliability-authority.md` | Indicator reliability methodology | — | — |
