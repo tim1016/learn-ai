@@ -2,6 +2,7 @@ using Backend;
 using Backend.Configuration;
 using Backend.Data;
 using Backend.GraphQL;
+using Backend.GraphQL.Comparison;
 using Backend.Jobs;
 using Backend.Services.Implementation;
 using Backend.Services.Interfaces;
@@ -179,6 +180,7 @@ builder.Services
     .AddTypeExtension<PortfolioQuery>()
     .AddTypeExtension<DataLabQuery>()
     .AddTypeExtension<BacktestRunsQuery>()
+    .AddTypeExtension<CompareBacktestRunsResolver>()
     .AddMutationType<Mutation>()
     .AddTypeExtension<PortfolioMutation>()
     .AddTypeExtension<DataLabMutation>()
