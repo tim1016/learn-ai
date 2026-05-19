@@ -167,6 +167,7 @@ builder.Services
     .AddQueryType<Query>()
     .AddTypeExtension<PortfolioQuery>()
     .AddTypeExtension<DataLabQuery>()
+    .AddTypeExtension<BacktestRunsQuery>()
     .AddMutationType<Mutation>()
     .AddTypeExtension<PortfolioMutation>()
     .AddTypeExtension<DataLabMutation>()
