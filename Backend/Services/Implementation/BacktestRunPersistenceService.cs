@@ -46,6 +46,9 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
         if (payload.Source == "lean-sidecar" && string.IsNullOrWhiteSpace(payload.LeanRunId))
             throw new ArgumentException("lean_run_id is required when source='lean-sidecar'", nameof(payload));
 
+        if (payload.Source == "engine" && !string.IsNullOrWhiteSpace(payload.LeanRunId))
+            throw new ArgumentException("lean_run_id must be null when source='engine'", nameof(payload));
+
         // Idempotency: only applies to lean-sidecar runs, where lean_run_id is the natural key.
         // Engine runs have no external idempotency key — every persist creates a new row.
         if (payload.Source == "lean-sidecar")

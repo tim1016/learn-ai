@@ -189,6 +189,22 @@ public class BacktestRunPersistenceServiceTests
     }
 
     [Fact]
+    public async Task PersistAsync_EngineSource_RejectsNonNullLeanRunId()
+    {
+        var service = CreateService(out _);
+        var payload = BuildPayload(leanRunId: "placeholder") with
+        {
+            Source = "engine",
+            LeanRunId = "abc",
+        };
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.PersistAsync(payload, CancellationToken.None));
+
+        Assert.Contains("lean_run_id", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task PersistAsync_LeanSidecarSource_RequiresNonEmptyLeanRunId()
     {
         var service = CreateService(out _);
