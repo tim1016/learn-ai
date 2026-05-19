@@ -6,6 +6,7 @@ import json
 from datetime import date
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -116,3 +117,52 @@ def test_recorded_provider_rejects_unknown_schema_version(tmp_path: Path) -> Non
             end_date=date(2025, 1, 10),
             adjusted=False,
         )
+
+
+def test_polygon_provider_delegates_to_fetch_bars_chunked(monkeypatch) -> None:
+    from app.lean_sidecar import polygon_canonical
+
+    fake_polygon = MagicMock()
+    fake_bars = [{"timestamp": 1736175600000, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 0}]
+    called_with: dict[str, object] = {}
+
+    def fake_fetch(polygon, ticker, from_date, to_date, timespan, multiplier, adjusted, **_):
+        called_with.update(
+            ticker=ticker,
+            from_date=from_date,
+            to_date=to_date,
+            timespan=timespan,
+            multiplier=multiplier,
+            adjusted=adjusted,
+        )
+        return fake_bars
+
+    monkeypatch.setattr(polygon_canonical, "fetch_bars_chunked", fake_fetch)
+
+    provider = polygon_canonical.PolygonProvider(polygon=fake_polygon)
+    out = provider.fetch_minute_bars(
+        symbol="SPY",
+        start_date=date(2025, 1, 6),
+        end_date=date(2025, 1, 10),
+        adjusted=False,
+    )
+
+    assert out is fake_bars
+    assert called_with == {
+        "ticker": "SPY",
+        "from_date": "2025-01-06",
+        "to_date": "2025-01-10",
+        "timespan": "minute",
+        "multiplier": 1,
+        "adjusted": False,
+    }
+
+
+def test_get_default_provider_returns_polygon_provider() -> None:
+    from app.lean_sidecar.polygon_canonical import (
+        PolygonProvider,
+        get_default_provider,
+    )
+
+    provider = get_default_provider()
+    assert isinstance(provider, PolygonProvider)

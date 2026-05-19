@@ -17,6 +17,9 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.services.dataset_service import fetch_bars_chunked
+from app.services.polygon_client import PolygonClientService
+
 
 class CanonicalBarsProvider(Protocol):
     """Source of raw 1-minute Polygon-style bars for a single symbol."""
@@ -83,3 +86,45 @@ class RecordedPolygonFixtureProvider:
             raise FixtureMetadataMismatchError(f"fixture {self.fixture_dir.name!r} does not match request: {details}")
         bars: list[dict[str, Any]] = json.loads((self.fixture_dir / "bars.json").read_text())
         return bars
+
+
+@dataclass(frozen=True, slots=True)
+class PolygonProvider:
+    """Live Polygon fetch via the existing chunked aggregator.
+
+    Always requests 1-minute bars at multiplier 1 — strategy timeframes
+    are produced by per-engine consolidation, not by Polygon-native
+    aggregates. See spec §"Polygon data source".
+    """
+
+    polygon: PolygonClientService
+
+    def fetch_minute_bars(
+        self,
+        *,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+        adjusted: bool,
+    ) -> list[dict[str, Any]]:
+        return fetch_bars_chunked(
+            polygon=self.polygon,
+            ticker=symbol,
+            from_date=start_date.isoformat(),
+            to_date=end_date.isoformat(),
+            timespan="minute",
+            multiplier=1,
+            adjusted=adjusted,
+        )
+
+
+def get_default_provider() -> CanonicalBarsProvider:
+    """Construct the default production provider.
+
+    Tests monkey-patch this function to inject a
+    ``RecordedPolygonFixtureProvider``. The orchestrator
+    (``run_trusted_sample``) calls this once per Polygon-source run so a
+    monkey-patch at module scope is enough — no need to thread a
+    provider parameter through the FastAPI router.
+    """
+    return PolygonProvider(polygon=PolygonClientService())
