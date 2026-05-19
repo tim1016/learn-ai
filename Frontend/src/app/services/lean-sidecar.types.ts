@@ -90,6 +90,14 @@ export interface TrustedRunResponse {
   normalized_parser_version: string | null;
   total_order_events: number | null;
   total_equity_points: number | null;
+  /**
+   * PR #291 — the `StrategyExecution.Id` row written to Postgres at the
+   * tail of `run_trusted_sample()`. `null` when persistence is disabled,
+   * the run failed before normalization, or the server predates PR #291.
+   * Typed consumers use this to navigate from a LEAN run to its persisted
+   * execution row (unified history, cross-reconcile).
+   */
+  strategy_execution_id: number | null;
 }
 
 /**

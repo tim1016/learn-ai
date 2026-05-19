@@ -65,6 +65,7 @@ describe("LeanSidecarService", () => {
       normalized_parser_version: "phase-3a-r1",
       total_order_events: 2,
       total_equity_points: 30,
+      strategy_execution_id: null,
     };
 
     const promise = service.startTrustedRun(goodRequest);
