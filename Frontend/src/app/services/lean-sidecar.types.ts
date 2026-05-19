@@ -19,9 +19,22 @@ export interface TrustedRunRequest {
   run_id: string;
   /** Equity ticker, `^[A-Za-z0-9.\-]{1,16}$`. Defaults to SPY on the server. */
   symbol?: string;
-  /** Inclusive window start as int64 ms UTC. */
+  /**
+   * P2.5 contract — 09:30 ET (NYSE session-open) of the first trading
+   * day, expressed as int64 ms UTC. The conversion goes through the
+   * NY zone (DST-aware); a fixed-offset converter produces silent
+   * 1-hour bugs on either side of 2026-03-08 / 2026-11-01. Pre-P2.5
+   * callers sent midnight UTC; that contract is now rejected with a
+   * 422 naming the offending wall-clock. See
+   * docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md.
+   */
   start_ms_utc: number;
-  /** Inclusive window end as int64 ms UTC; must be strictly > start. */
+  /**
+   * P2.5 contract — 09:30 ET of ``next_trading_day(end_date)``,
+   * expressed as int64 ms UTC. Half-open ``[start_ms_utc, end_ms_utc)``,
+   * so ``end_ms_utc`` is the EXCLUSIVE end (one trading day past the
+   * last full session in the window). Must be strictly > start.
+   */
   end_ms_utc: number;
   /** Starting capital in USD; server cap is $1,000..$10,000,000. */
   starting_cash?: number;

@@ -322,13 +322,78 @@ export class LeanLabComponent {
    * int64 ms UTC at every wire boundary; the date input is a UI
    * convenience converted *before* the request leaves the boundary.
    *
+   * P2.5 — returns the int64 ms UTC of 09:30 ET on ``iso``, NOT the
+   * midnight-UTC value the pre-P2.5 contract sent. The backend
+   * validator now requires 09:30 ET session-open millis; sending
+   * midnight UTC gets a 422 naming the offending wall-clock.
+   *
+   * Conversion goes through Intl.DateTimeFormat with the NY zone so
+   * DST is honored (EDT vs EST produce different UTC ms for the same
+   * 09:30 wall-clock). A fixed-offset converter would be a silent
+   * 1-hour bug on either side of the DST boundaries (2026-03-08 EST→EDT
+   * and 2026-11-01 EDT→EST). The DST test surface in
+   * lean-lab.component.spec.ts pins both transitions.
+   *
    * Parsed strictly to avoid `new Date("YYYY-MM-DD")` browser
-   * ambiguity (Chrome parses UTC, Safari parses local — fixed via
-   * explicit UTC parts).
+   * ambiguity (Chrome parses UTC, Safari parses local — we use
+   * explicit numeric parts so neither matters).
    */
-  private isoDateToMsUtc(iso: string): number {
+  private isoDateToSessionOpenMsUtc(iso: string): number {
     const [y, m, d] = iso.split("-").map((n) => Number.parseInt(n, 10));
-    return Date.UTC(y, (m ?? 1) - 1, d ?? 1);
+    if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
+      throw new Error(`isoDateToSessionOpenMsUtc: invalid ISO date ${iso}`);
+    }
+    // Resolve the NY UTC offset for the requested date by formatting
+    // an arbitrary UTC ms through the NY zone and reading the
+    // formatted offset back. Equivalent to tzdata-aware arithmetic
+    // without pulling in a date library.
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      timeZoneName: "longOffset",
+    });
+    // Pick noon UTC on the requested date — far from any UTC midnight
+    // wrap so the formatted parts are unambiguous on every platform.
+    const refUtcMs = Date.UTC(y, m - 1, d, 12, 0, 0);
+    const parts = fmt.formatToParts(new Date(refUtcMs));
+    const offsetPart = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
+    // longOffset shapes: "GMT-05:00" (EST) or "GMT-04:00" (EDT).
+    const match = /GMT([+-])(\d{2}):(\d{2})/.exec(offsetPart);
+    if (!match) {
+      throw new Error(
+        `isoDateToSessionOpenMsUtc: could not parse NY UTC offset from "${offsetPart}"`,
+      );
+    }
+    const sign = match[1] === "-" ? -1 : 1;
+    const offsetHours = Number.parseInt(match[2], 10);
+    const offsetMinutes = Number.parseInt(match[3], 10);
+    const offsetMs = sign * (offsetHours * 60 + offsetMinutes) * 60 * 1000;
+    // 09:30 ET wall - NY offset = UTC. EST (offset -05:00) → 14:30 UTC;
+    // EDT (offset -04:00) → 13:30 UTC.
+    return Date.UTC(y, m - 1, d, 9, 30, 0) - offsetMs;
+  }
+
+  /**
+   * Naive next-trading-day computation: add 1 calendar day, then skip
+   * Saturday + Sunday. Holidays are NOT skipped — the validator will
+   * reject and surface the offending date. The full blocked-aware
+   * picker (P2.5 Step 8) calls the /calendar/blocked-dates endpoint
+   * to do this properly; until that ships, this approximation
+   * handles the common case (Fri → Mon, Mon → Tue) cleanly.
+   */
+  private nextWeekdayIso(iso: string): string {
+    const [y, m, d] = iso.split("-").map((n) => Number.parseInt(n, 10));
+    // Construct a UTC Date so getUTCDay/Date arithmetic is consistent
+    // across browsers (no local-time DST nonsense).
+    let dt = new Date(Date.UTC(y, m - 1, d));
+    dt = new Date(dt.getTime() + 86_400_000);
+    while (dt.getUTCDay() === 0 || dt.getUTCDay() === 6) {
+      dt = new Date(dt.getTime() + 86_400_000);
+    }
+    return [
+      dt.getUTCFullYear(),
+      String(dt.getUTCMonth() + 1).padStart(2, "0"),
+      String(dt.getUTCDate()).padStart(2, "0"),
+    ].join("-");
   }
 
   /**
@@ -503,10 +568,27 @@ export class LeanLabComponent {
     if (typeof cash === "number" && Number.isFinite(cash) && cash >= 1000) {
       patch.startingCash = cash;
     }
-    const win = manifest.requested_window_ms;
-    if (win && typeof win.start_ms === "number" && typeof win.end_ms === "number") {
-      patch.startDate = this.msUtcToIsoDate(win.start_ms);
-      patch.endDate = this.msUtcToIsoDate(win.end_ms);
+    // P2.5: prefer manifest.parameters.{start_date,end_date} (ISO
+    // strings derived from the trading-date semantics by the service
+    // layer) so the inverse-of-end ambiguity at the FE doesn't matter.
+    // Under the new contract end_ms = next_trading_day(end_date)
+    // session-open, so naive msUtcToIsoDate would surface the NEXT
+    // trading day in the picker — wrong. Fall back to ms for legacy
+    // manifests written under schema_version 1.
+    const paramStart = manifest.parameters?.["start_date"];
+    const paramEnd = manifest.parameters?.["end_date"];
+    if (typeof paramStart === "string" && /^\d{4}-\d{2}-\d{2}$/.test(paramStart)) {
+      patch.startDate = paramStart;
+    }
+    if (typeof paramEnd === "string" && /^\d{4}-\d{2}-\d{2}$/.test(paramEnd)) {
+      patch.endDate = paramEnd;
+    }
+    if (!patch.startDate || !patch.endDate) {
+      const win = manifest.requested_window_ms;
+      if (win && typeof win.start_ms === "number" && typeof win.end_ms === "number") {
+        patch.startDate = patch.startDate ?? this.msUtcToIsoDate(win.start_ms);
+        patch.endDate = patch.endDate ?? this.msUtcToIsoDate(win.end_ms);
+      }
     }
     // Manifest doesn't carry the source itself; reset the toggle off
     // and let the operator opt back in if they want to re-paste.
@@ -666,8 +748,18 @@ export class LeanLabComponent {
     this.crossReconcileError.set(null);
 
     const value = this.form.getRawValue();
-    const start_ms_utc = this.isoDateToMsUtc(value.startDate);
-    const end_ms_utc = this.isoDateToMsUtc(value.endDate);
+    // P2.5 wire contract:
+    //   start_ms_utc = 09:30 ET of startDate (first trading day)
+    //   end_ms_utc   = 09:30 ET of next_trading_day(endDate) — the
+    //                  half-open exclusive end (NOT endDate itself).
+    // The full blocked-aware picker (Step 8 of the design hub) is a
+    // follow-up; for now we compute next_trading_day as
+    // "skip weekends" client-side. If the user picks a Friday before
+    // a Monday holiday (e.g., MLK weekend), the validator returns a
+    // 422 naming the offending date so the operator can fix the form.
+    const start_ms_utc = this.isoDateToSessionOpenMsUtc(value.startDate);
+    const exclusiveEndIso = this.nextWeekdayIso(value.endDate);
+    const end_ms_utc = this.isoDateToSessionOpenMsUtc(exclusiveEndIso);
 
     const req: TrustedRunRequest = {
       run_id: value.runId,

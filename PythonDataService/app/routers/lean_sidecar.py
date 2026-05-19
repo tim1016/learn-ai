@@ -21,7 +21,7 @@ from decimal import InvalidOperation as InvalidDecimalOperation
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -50,6 +50,11 @@ from app.lean_sidecar.reconciler import (
     DEFAULT_COMMISSION_ATOL,
     FeeReconciliationReport,
     reconcile_against_ibkr,
+)
+from app.lean_sidecar.trading_calendar import (
+    blocked_dates_in_range,
+    is_early_close,
+    is_trading_day,
 )
 from app.lean_sidecar.workspace import (
     RUN_ID_PATTERN,
@@ -83,12 +88,39 @@ _MAX_TRADING_DAYS = 30
 _MAX_STARTING_CASH = 10_000_000.0
 _MIN_STARTING_CASH = 1_000.0
 
+# Cap on the calendar/blocked-dates endpoint range so a single request
+# returns at most ~2 years of dates. A buggy UI loop iterating months
+# can't degrade the launcher with a 100-year sweep.
+_MAX_CALENDAR_RANGE_DAYS = 366 * 2
+
 # Window inputs are int64 ms UTC per ``.claude/rules/numerical-rigor.md``
 # §"Timestamp rigor". Trading-day semantics live below this boundary
 # (the orchestrator resolves the ms range into trading dates after
 # converting to ET).
 _MIN_EPOCH_MS = 1_000_000_000_000  # 2001-09-09 — well before any LEAN data we'd run
 _MAX_EPOCH_MS = 4_102_444_800_000  # 2100-01-01 — far future sanity bound
+
+
+def _date_for_session_open_ms(ms: int, *, role: str) -> date:
+    """Convert an int64 ms UTC value to its NY-local calendar date,
+    after asserting it is exactly 09:30 ET.
+
+    P2.5 contract: every wire ms value (``start_ms_utc``,
+    ``end_ms_utc``) is the session-open millisecond — 09:30 ET of some
+    calendar date, converted to UTC ms through the NY zone (DST-aware).
+    Inputs that are not 09:30 ET (e.g., the pre-P2.5 midnight-UTC
+    convention) are rejected here with a message naming the role and
+    the offending wall-clock so the operator can fix the payload
+    without reading the source.
+    """
+    dt_et = datetime.fromtimestamp(ms / 1000, tz=UTC).astimezone(_NY_TIMEZONE_FOR_DATES)
+    if dt_et.hour != 9 or dt_et.minute != 30 or dt_et.second != 0 or dt_et.microsecond != 0:
+        raise ValueError(
+            f"{role} must be the session-open millisecond (09:30 ET of a "
+            f"trading day) per the P2.5 contract; got {dt_et.isoformat()}. "
+            "See docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md."
+        )
+    return dt_et.date()
 
 
 def _count_weekdays_between(start_ms: int, end_ms: int) -> int:
@@ -197,16 +229,66 @@ class TrustedRunRequestModel(BaseModel):
     def _validate_window(self) -> TrustedRunRequestModel:
         if self.end_ms_utc <= self.start_ms_utc:
             raise ValueError("end_ms_utc must be strictly greater than start_ms_utc")
-        # Pre-launcher cap on date range — the Phase 2a synthetic-bar
-        # generator and the launcher's wall-clock timeout both scale
-        # with the window. Count *trading days* (weekdays), not
-        # calendar days: a window with 30 weekdays plus surrounding
-        # weekends should pass even if it's 40 calendar days wide.
-        trading_days = _count_weekdays_between(self.start_ms_utc, self.end_ms_utc)
+        # P2.5 contract: both endpoints are 09:30 ET (session-open) ms,
+        # half-open [start, end). The window's last full session is
+        # the trading day immediately preceding the exclusive end.
+        # Weekends and holidays BETWEEN the endpoints are allowed
+        # (staging skips them); half-days are universally rejected
+        # because the early-close session would silently mis-stage.
+        start_date = _date_for_session_open_ms(self.start_ms_utc, role="start_ms_utc")
+        exclusive_end_date = _date_for_session_open_ms(self.end_ms_utc, role="end_ms_utc")
+        if not is_trading_day(start_date):
+            raise ValueError(
+                f"start_ms_utc resolves to {start_date.isoformat()} which is not a trading day (weekend or holiday)"
+            )
+        if is_early_close(start_date):
+            raise ValueError(
+                f"start_ms_utc resolves to {start_date.isoformat()} which is a "
+                "half-day (early-close); half-days are out of scope per P2.5."
+            )
+        if not is_trading_day(exclusive_end_date):
+            raise ValueError(
+                f"end_ms_utc resolves to {exclusive_end_date.isoformat()} which "
+                "is not a trading day (the exclusive end must be a session-open)"
+            )
+        # Resolve the inclusive end_date: the trading day immediately
+        # preceding exclusive_end_date (skipping weekends/holidays).
+        end_date = exclusive_end_date - timedelta(days=1)
+        while not is_trading_day(end_date):
+            end_date -= timedelta(days=1)
+            if end_date < start_date:
+                raise ValueError(
+                    f"no trading days in window [{start_date.isoformat()}, {exclusive_end_date.isoformat()})"
+                )
+        if is_early_close(end_date):
+            raise ValueError(
+                f"end of window resolves to {end_date.isoformat()} which is a "
+                "half-day (early-close); half-days are out of scope per P2.5."
+            )
+        # Reject any half-day inside the inclusive [start_date, end_date].
+        # Weekends/holidays are silently skipped by staging.
+        d = start_date
+        while d <= end_date:
+            if is_trading_day(d) and is_early_close(d):
+                raise ValueError(
+                    f"window contains early-close day {d.isoformat()}; "
+                    "half-days are out of scope per P2.5. Pick a window "
+                    "that does not touch a NYSE early-close session."
+                )
+            d += timedelta(days=1)
+        # Pre-launcher cap on trading-day count (the launcher's
+        # wall-clock timeout and the synthetic-bar generator both
+        # scale with the count).
+        trading_days = 0
+        d = start_date
+        while d <= end_date:
+            if is_trading_day(d):
+                trading_days += 1
+            d += timedelta(days=1)
         if trading_days > _MAX_TRADING_DAYS:
             raise ValueError(f"window spans {trading_days} trading days; max is {_MAX_TRADING_DAYS}")
         if trading_days == 0:
-            raise ValueError("window contains no weekdays — staging would produce zero bars")
+            raise ValueError("window contains no trading days — staging would produce zero bars")
         # Symbol must pass the full validator — the field-level
         # regex catches ``/``, ``\``, length, and the alphabet, but
         # not the dot-only case (``"."``, ``".."``). validate_symbol
@@ -498,9 +580,7 @@ def _safe_load_manifest_summary(manifest_path) -> dict | None:
 # Known LEAN error bucket keys per the launcher's classifier. The note
 # is whitelisted against this set so a malformed note ("=junk") can't
 # inject arbitrary strings into the sidebar.
-_VALID_LEAN_ERROR_CATEGORIES = frozenset(
-    {"analysis_failed", "failed_data_requests", "runtime_error", "other"}
-)
+_VALID_LEAN_ERROR_CATEGORIES = frozenset({"analysis_failed", "failed_data_requests", "runtime_error", "other"})
 
 
 def _parse_categories_note(raw: str) -> list[str]:
@@ -642,6 +722,58 @@ def _resolved_workspace_or_404(run_id: str):
             detail={"reason": "run_not_found", "message": f"no workspace for {run_id}"},
         )
     return workspace
+
+
+@router.get(
+    "/calendar/blocked-dates",
+    summary="Return blocked (non-tradeable / half-day) dates in a range.",
+)
+async def get_calendar_blocked_dates(
+    from_: date = Query(
+        ...,
+        alias="from",
+        description="Inclusive start date (YYYY-MM-DD)",
+    ),
+    to: date = Query(..., description="Inclusive end date (YYYY-MM-DD)"),
+) -> dict:
+    """Return weekends, holidays, and half-days in ``[from_, to]``.
+
+    Per P2.5 the UI date picker consumes this to disable + label each
+    blocked date — single backend source of truth for the NYSE
+    calendar so the picker and the validator cannot drift.
+
+    Half-days return ``reason="early_close"`` so the UI can surface a
+    half-day tooltip rather than a generic "blocked" marker. Weekends
+    and holidays return ``"weekend"`` and ``"holiday"`` respectively.
+    Trading days are NOT in the payload.
+    """
+    if to < from_:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "reason": "invalid_range",
+                "message": (f"`to` ({to.isoformat()}) must not be before `from` ({from_.isoformat()})"),
+            },
+        )
+    span_days = (to - from_).days + 1
+    if span_days > _MAX_CALENDAR_RANGE_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "reason": "range_too_large",
+                "message": (
+                    f"range is {span_days} days; max is "
+                    f"{_MAX_CALENDAR_RANGE_DAYS}. Paginate the picker if "
+                    "more is needed."
+                ),
+            },
+        )
+    blocked = blocked_dates_in_range(from_, to)
+    return {
+        "from": from_.isoformat(),
+        "to": to.isoformat(),
+        "blocked": [{"date": d.isoformat(), "reason": reason} for d, reason in sorted(blocked.items())],
+    }
 
 
 @router.get(
@@ -1049,10 +1181,7 @@ class CrossEngineReconciliationReportModel(BaseModel):
             ),
         },
         status.HTTP_404_NOT_FOUND: {
-            "description": (
-                "Run not found, or run completed but no normalized "
-                "result.json / manifest.json on disk."
-            ),
+            "description": ("Run not found, or run completed but no normalized result.json / manifest.json on disk."),
         },
     },
 )
@@ -1115,18 +1244,13 @@ async def post_cross_reconcile(
             },
         )
     try:
-        normalized_result = NormalizedResult.model_validate_json(
-            result_path.read_text(encoding="utf-8")
-        )
+        normalized_result = NormalizedResult.model_validate_json(result_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, NormalizedParserError) as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "reason": "normalized_missing",
-                "message": (
-                    f"cannot cross-reconcile {run_id}: result.json "
-                    f"failed to load ({e})."
-                ),
+                "message": (f"cannot cross-reconcile {run_id}: result.json failed to load ({e})."),
             },
         ) from e
 
@@ -1144,24 +1268,17 @@ async def post_cross_reconcile(
             },
         )
     try:
-        manifest_data = json.loads(
-            workspace.manifest_path.read_text(encoding="utf-8")
-        )
+        manifest_data = json.loads(workspace.manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "reason": "manifest_missing",
-                "message": (
-                    f"cannot cross-reconcile {run_id}: manifest.json "
-                    f"failed to load ({e})."
-                ),
+                "message": (f"cannot cross-reconcile {run_id}: manifest.json failed to load ({e})."),
             },
         ) from e
 
-    cross_inputs = _extract_cross_run_inputs_from_manifest(
-        manifest_data, run_id=run_id
-    )
+    cross_inputs = _extract_cross_run_inputs_from_manifest(manifest_data, run_id=run_id)
 
     # Open-Q2 review-fix: ``assert_fees=true`` only makes sense when
     # both engines pin the same fee model. The Engine Lab side hard-
@@ -1245,9 +1362,7 @@ async def post_cross_reconcile(
     )
 
 
-def _extract_cross_run_inputs_from_manifest(
-    manifest_data: dict, *, run_id: str
-) -> dict:
+def _extract_cross_run_inputs_from_manifest(manifest_data: dict, *, run_id: str) -> dict:
     """Pull symbol / start_date / end_date / initial_cash from a
     persisted manifest. Raises HTTPException(400) with
     ``reason: 'manifest_incomplete'`` and the offending field name when
@@ -1326,21 +1441,14 @@ def _extract_cross_run_inputs_from_manifest(
                 },
             )
         try:
-            start_date = datetime.fromtimestamp(
-                int(start_ms) / 1000, tz=_NY_TIMEZONE_FOR_DATES
-            ).date()
-            end_date = datetime.fromtimestamp(
-                int(end_ms) / 1000, tz=_NY_TIMEZONE_FOR_DATES
-            ).date()
+            start_date = datetime.fromtimestamp(int(start_ms) / 1000, tz=_NY_TIMEZONE_FOR_DATES).date()
+            end_date = datetime.fromtimestamp(int(end_ms) / 1000, tz=_NY_TIMEZONE_FOR_DATES).date()
         except (TypeError, ValueError, OSError) as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "reason": "manifest_incomplete",
-                    "message": (
-                        f"cannot cross-reconcile {run_id}: "
-                        f"requested_window_ms is malformed ({e})."
-                    ),
+                    "message": (f"cannot cross-reconcile {run_id}: requested_window_ms is malformed ({e})."),
                     "missing_field": "requested_window_ms",
                 },
             ) from e
@@ -1368,8 +1476,7 @@ def _extract_cross_run_inputs_from_manifest(
             detail={
                 "reason": "manifest_incomplete",
                 "message": (
-                    f"cannot cross-reconcile {run_id}: starting_cash "
-                    f"is not a valid number ({cash_raw!r}: {e})."
+                    f"cannot cross-reconcile {run_id}: starting_cash is not a valid number ({cash_raw!r}: {e})."
                 ),
                 "missing_field": "parameters.starting_cash",
             },
@@ -1397,9 +1504,7 @@ def _build_cross_engine_report(
             trading_date=d.trading_date.isoformat(),
             detail=d.detail,
             lean_fill=(
-                CrossEngineFillSnapshotModel(**internal_fill_to_dict(d.lean_fill))
-                if d.lean_fill is not None
-                else None
+                CrossEngineFillSnapshotModel(**internal_fill_to_dict(d.lean_fill)) if d.lean_fill is not None else None
             ),
             engine_fill=(
                 CrossEngineFillSnapshotModel(**internal_fill_to_dict(d.engine_fill))
@@ -1420,7 +1525,8 @@ def _build_cross_engine_report(
         gating_divergent_count=output.gating_divergent_count,
         passed=output.passed,
         counts_by_category={
-            cat.value: n for cat, n in output.counts_by_category.items()  # type: ignore[misc]
+            cat.value: n
+            for cat, n in output.counts_by_category.items()  # type: ignore[misc]
         },
         divergences=divergences,
     )
