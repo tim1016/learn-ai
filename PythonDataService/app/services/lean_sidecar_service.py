@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from app.config import settings
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import (
     DEFAULT_ARTIFACTS_ROOT,
@@ -70,14 +71,20 @@ from app.lean_sidecar.trusted_samples.buy_and_hold import BUY_AND_HOLD_SOURCE
 from app.lean_sidecar.trusted_samples.buy_and_hold_reconciliation import (
     BUY_AND_HOLD_RECONCILIATION_SOURCE,
 )
+from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
 from app.lean_sidecar.workspace import Workspace, resolve_workspace
+from app.services.lean_sidecar_persistence import (
+    _algorithm_name_for_run,
+    build_persist_payload,
+    persist_via_dotnet,
+)
 
 # Phase 5b — selector for which trusted-sample source the orchestrator
 # stages when the caller does not provide their own ``algorithm_source``.
 # "trusted_default" keeps Phase 1's LEAN-default-brokerage behavior
 # (backwards-compatible default); "reconciliation" pins IBKR brokerage
 # explicitly so the Phase 5a fee reconciler returns a clean report.
-TrustedTemplate = Literal["trusted_default", "reconciliation"]
+TrustedTemplate = Literal["trusted_default", "reconciliation", "ema_crossover"]
 
 # Maps the template selector to the manifest's ``brokerage_policy``
 # enum so a reader of the manifest can tell at a glance which
@@ -85,11 +92,13 @@ TrustedTemplate = Literal["trusted_default", "reconciliation"]
 _BROKERAGE_POLICY_FOR_TEMPLATE: dict[TrustedTemplate, BrokeragePolicy] = {
     "trusted_default": "algorithm_default",
     "reconciliation": "interactive_brokers",
+    "ema_crossover": "algorithm_default",
 }
 
 _SOURCE_FOR_TEMPLATE: dict[TrustedTemplate, str] = {
     "trusted_default": BUY_AND_HOLD_SOURCE,
     "reconciliation": BUY_AND_HOLD_RECONCILIATION_SOURCE,
+    "ema_crossover": EMA_CROSSOVER_SOURCE,
 }
 
 logger = logging.getLogger(__name__)
@@ -216,6 +225,10 @@ class TrustedRunResult:
     # the inspection endpoint can 404 deterministically.
     normalized_path: Path | None
     normalized: NormalizedResult | None
+    # Task 1.10 — the StrategyExecution.Id assigned by the .NET backend
+    # after persisting this run. ``None`` when persistence failed or was
+    # skipped (e.g., launcher rejected before a result was produced).
+    strategy_execution_id: int | None = None
 
 
 _ET = ZoneInfo("America/New_York")
@@ -545,6 +558,25 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     # ``response`` is guaranteed non-None here because the only way to
     # leave it None is via ``launcher_exc``, which we re-raised above.
     assert response is not None
+
+    # Task 1.10 — POST the run to .NET for persistence. This must happen
+    # AFTER the manifest is finalized so workspace_path is stable. A
+    # persistence failure is logged but does NOT abort the run — the
+    # workspace artifacts on disk are the authoritative record.
+    persist_payload = build_persist_payload(
+        workspace_path=workspace.root,
+        run_id=request.run_id,
+        starting_cash=request.starting_cash,
+        symbol=request.symbol,
+        algorithm_name=_algorithm_name_for_run(request.template, request.algorithm_source),
+        start_date_ms=_date_to_ms_utc(request.start_date),
+        end_date_ms=_date_to_ms_utc(request.end_date),
+    )
+    strategy_execution_id = await persist_via_dotnet(
+        payload=persist_payload,
+        base_url=settings.BACKEND_URL,
+    )
+
     return TrustedRunResult(
         run_id=request.run_id,
         is_clean=response.is_clean,
@@ -559,6 +591,7 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         lean_log_path=workspace.lean_log_path,
         normalized_path=normalized_path,
         normalized=normalized,
+        strategy_execution_id=strategy_execution_id,
     )
 
 

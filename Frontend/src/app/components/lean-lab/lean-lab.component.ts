@@ -166,7 +166,7 @@ export class LeanLabComponent {
     // toggle is off. Default ``trusted_default`` matches Phase 1
     // behavior; ``reconciliation`` pins IBKR brokerage so the Phase 5a
     // fee reconciler returns a clean report.
-    template: new FormControl<"trusted_default" | "reconciliation">(
+    template: new FormControl<"trusted_default" | "reconciliation" | "ema_crossover">(
       "trusted_default",
       { nonNullable: true, validators: [Validators.required] },
     ),
@@ -539,6 +539,7 @@ export class LeanLabComponent {
         normalized_parser_version: parsed.parser_version,
         total_order_events: parsed.total_order_events,
         total_equity_points: parsed.total_equity_points,
+        strategy_execution_id: null,
       });
     } catch (err) {
       if (err instanceof LeanSidecarApiError) {

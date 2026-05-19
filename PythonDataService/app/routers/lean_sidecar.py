@@ -221,7 +221,7 @@ class TrustedRunRequestModel(BaseModel):
             "shape is what makes accepting arbitrary source safe."
         ),
     )
-    template: Literal["trusted_default", "reconciliation"] = Field(
+    template: Literal["trusted_default", "reconciliation", "ema_crossover"] = Field(
         default="trusted_default",
         description=(
             "Phase 5b — which bundled trusted sample to stage when "
@@ -402,6 +402,9 @@ class TrustedRunResponseModel(BaseModel):
     normalized_parser_version: str | None = None
     total_order_events: int | None = None
     total_equity_points: int | None = None
+    # Task 1.10: the StrategyExecution.Id assigned by the .NET backend.
+    # ``None`` when persistence failed (logged; the run is not aborted).
+    strategy_execution_id: int | None = None
 
 
 @router.post(
@@ -484,6 +487,7 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         normalized_parser_version=(result.normalized.parser_version if result.normalized else None),
         total_order_events=(result.normalized.total_order_events if result.normalized else None),
         total_equity_points=(result.normalized.total_equity_points if result.normalized else None),
+        strategy_execution_id=result.strategy_execution_id,
     )
 
 

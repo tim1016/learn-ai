@@ -92,6 +92,7 @@ function makeResponse(overrides: Partial<TrustedRunResponse> = {}): TrustedRunRe
     normalized_parser_version: "phase-3a-r1",
     total_order_events: 2,
     total_equity_points: 30,
+    strategy_execution_id: null,
     ...overrides,
   };
 }
@@ -845,5 +846,22 @@ describe("LeanLabComponent", () => {
     const resp = component.response();
     expect(resp!.lean_errors.failed_data_requests).toEqual([]);
     expect(resp!.lean_errors.analysis_failed).toEqual([]);
+  });
+
+  it("template dropdown offers ema_crossover option", () => {
+    const el = fixture.nativeElement as HTMLElement;
+    const select = el.querySelector<HTMLSelectElement>("select[formcontrolname='template']");
+    expect(select).not.toBeNull();
+    const optionValues = Array.from(select!.options).map((o) => o.value);
+    expect(optionValues).toContain("ema_crossover");
+  });
+
+  it("template dropdown still offers trusted_default and reconciliation", () => {
+    const el = fixture.nativeElement as HTMLElement;
+    const select = el.querySelector<HTMLSelectElement>("select[formcontrolname='template']");
+    expect(select).not.toBeNull();
+    const optionValues = Array.from(select!.options).map((o) => o.value);
+    expect(optionValues).toContain("trusted_default");
+    expect(optionValues).toContain("reconciliation");
   });
 });

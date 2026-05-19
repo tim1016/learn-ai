@@ -26,6 +26,7 @@ from httpx import ASGITransport, AsyncClient
 if TYPE_CHECKING:
     from app.lean_sidecar.normalized_parser import NormalizedResult
 
+from app.config import settings
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.launcher.models import LaunchResponse
 from app.lean_sidecar.launcher_client import DEFAULT_LAUNCHER_URL
@@ -36,6 +37,8 @@ pytestmark = pytest.mark.asyncio
 
 
 PINNED_DIGEST_FOR_TESTS = "sha256:00000000000000000000000000000000000000000000000000000000cafebabe"
+_TEST_BACKEND_URL = "http://test-backend"
+_PERSIST_LEAN_URL = f"{_TEST_BACKEND_URL}/api/backtest-runs/persist-lean"
 
 
 @pytest.fixture(autouse=True)
@@ -50,9 +53,14 @@ def _isolated_launcher_url(monkeypatch: pytest.MonkeyPatch) -> None:
     and every router test that mocks the launcher fails with
     ``AllMockedAssertionError``. Autouse so individual tests don't
     have to remember to opt in.
+
+    Also pins ``settings.BACKEND_URL`` to ``_TEST_BACKEND_URL`` so the
+    persist-lean calls go to the same predictable host regardless of
+    which compose environment the container was started under.
     """
     monkeypatch.delenv("LEAN_LAUNCHER_URL", raising=False)
     monkeypatch.delenv("LEAN_LAUNCHER_TOKEN", raising=False)
+    monkeypatch.setattr(settings, "BACKEND_URL", _TEST_BACKEND_URL)
 
 
 @pytest.fixture
@@ -451,6 +459,7 @@ class TestPostTrustedRunHappyPath:
         payload = _good_payload("router_happy")
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
             mock.post("/launch").mock(return_value=httpx.Response(200, json=_launcher_success_body("router_happy")))
+            mock.post(_PERSIST_LEAN_URL).mock(return_value=httpx.Response(200, json={"strategy_execution_id": 12345}))
             r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
         assert r.status_code == 200, r.text
         body = r.json()
@@ -604,6 +613,7 @@ class TestPostTrustedRunHappyPath:
             mock.post("/launch").mock(
                 return_value=httpx.Response(200, json=_launcher_success_body("router_reused")),
             )
+            mock.post(_PERSIST_LEAN_URL).mock(return_value=httpx.Response(200, json={"strategy_execution_id": 12345}))
             first = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
             assert first.status_code == 200, first.text
             # Re-submit identical payload — the workspace now exists.
@@ -630,6 +640,7 @@ class TestInspectionEndpoints:
     ) -> None:
         async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
             mock.post("/launch").mock(return_value=httpx.Response(200, json=_launcher_success_body("router_inspect")))
+            mock.post(_PERSIST_LEAN_URL).mock(return_value=httpx.Response(200, json={"strategy_execution_id": 12345}))
             await client.post(
                 "/api/lean-sidecar/trusted-runs",
                 json=_good_payload("router_inspect"),
