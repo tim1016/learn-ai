@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from app.services.lean_sidecar_persistence import (
@@ -186,3 +189,224 @@ def test_compute_aggregates_mixed_trades() -> None:
     assert agg.total_pnl == pytest.approx(20.0)
     assert agg.final_equity == pytest.approx(100_000.0 + 20.0 - 3.0)
     assert agg.win_rate == pytest.approx(2 / 3)
+
+
+# ---------------------------------------------------------------------------
+# build_persist_payload tests
+# ---------------------------------------------------------------------------
+
+
+def _write_fixture_workspace(
+    base: Path,
+    run_id: str,
+    *,
+    order_events: list[dict],
+    equity_curve: list[dict],
+    statistics: dict | None = None,
+) -> Path:
+    """Build a minimal LEAN workspace with normalized/result.json."""
+    ws = base / run_id
+    (ws / "normalized").mkdir(parents=True)
+    result = {
+        "algorithm_id": "MyAlgorithm",
+        "parser_version": "phase-3a-r1",
+        "first_equity_ms_utc": equity_curve[0]["ms_utc"] if equity_curve else 0,
+        "last_equity_ms_utc": equity_curve[-1]["ms_utc"] if equity_curve else 0,
+        "total_equity_points": len(equity_curve),
+        "total_order_events": len(order_events),
+        "equity_curve": equity_curve,
+        "order_events": order_events,
+        "statistics": statistics or {},
+        "runtime_statistics": {},
+    }
+    (ws / "normalized" / "result.json").write_text(json.dumps(result))
+    return ws
+
+
+def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "ui_run_round_trip",
+        order_events=[
+            {
+                "order_id": 1,
+                "order_event_id": 1,
+                "direction": "buy",
+                "status": "submitted",
+                "ms_utc": 1_700_000_000_000,
+                "fill_price": 0.0,
+                "fill_quantity": 0.0,
+                "quantity": 10,
+                "order_fee_amount": None,
+            },
+            {
+                "order_id": 1,
+                "order_event_id": 2,
+                "direction": "buy",
+                "status": "filled",
+                "ms_utc": 1_700_000_060_000,
+                "fill_price": 100.0,
+                "fill_quantity": 10,
+                "quantity": 10,
+                "order_fee_amount": 0.5,
+            },
+            {
+                "order_id": 2,
+                "order_event_id": 1,
+                "direction": "sell",
+                "status": "submitted",
+                "ms_utc": 1_700_000_540_000,
+                "fill_price": 0.0,
+                "fill_quantity": 0.0,
+                "quantity": 10,
+                "order_fee_amount": None,
+            },
+            {
+                "order_id": 2,
+                "order_event_id": 2,
+                "direction": "sell",
+                "status": "filled",
+                "ms_utc": 1_700_000_600_000,
+                "fill_price": 101.0,
+                "fill_quantity": 10,
+                "quantity": 10,
+                "order_fee_amount": 0.5,
+            },
+        ],
+        equity_curve=[
+            {"ms_utc": 1_700_000_000_000, "value": 100_000.0},
+            {"ms_utc": 1_700_000_600_000, "value": 100_009.0},
+        ],
+        statistics={"NetProfit": "9.00"},
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_round_trip",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+    )
+
+    assert payload["lean_run_id"] == "ui_run_round_trip"
+    assert payload["source"] == "lean-sidecar"
+    assert payload["strategy_name"] == "ema_crossover"
+    assert payload["symbol"] == "SPY"
+    assert payload["starting_cash"] == 100_000.0
+    assert payload["start_date_ms"] == 1_700_000_000_000
+    assert payload["end_date_ms"] == 1_700_000_600_000
+    assert payload["total_trades"] == 1
+    assert payload["winning_trades"] == 1
+    assert payload["total_pnl"] == pytest.approx(9.0)
+    assert payload["total_fees"] == pytest.approx(1.0)
+    assert payload["final_equity"] == pytest.approx(100_008.0)  # 100000 + 9 - 1
+    assert len(payload["trades"]) == 1
+    t = payload["trades"][0]
+    assert t["entry_ms_utc"] == 1_700_000_060_000
+    assert t["exit_ms_utc"] == 1_700_000_600_000
+    assert t["entry_price"] == pytest.approx(100.0)
+    assert t["exit_price"] == pytest.approx(101.0)
+    assert t["pnl"] == pytest.approx(9.0)
+    assert t["is_synthetic_exit"] is False
+    assert "lean_statistics" in payload
+    assert payload["lean_statistics"]["statistics"]["NetProfit"] == "9.00"
+    assert payload["lean_statistics"]["parser_version"] == "phase-3a-r1"
+
+
+def test_build_persist_payload_synthesizes_mtm_for_half_open(tmp_path: Path) -> None:
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "ui_run_half_open",
+        order_events=[
+            {
+                "order_id": 1,
+                "order_event_id": 1,
+                "direction": "buy",
+                "status": "filled",
+                "ms_utc": 1_700_000_060_000,
+                "fill_price": 100.0,
+                "fill_quantity": 10,
+                "quantity": 10,
+                "order_fee_amount": 0.5,
+            },
+        ],
+        equity_curve=[
+            {"ms_utc": 1_700_000_000_000, "value": 100_000.0},
+            {"ms_utc": 1_700_000_600_000, "value": 100_009.5},
+        ],
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_half_open",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="trusted_default",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+    )
+
+    assert payload["total_trades"] == 1
+    t = payload["trades"][0]
+    assert t["is_synthetic_exit"] is True
+    assert t["signal_reason"] == "EndOfAlgorithm:MTM (synthetic exit)"
+
+
+def test_build_persist_payload_missing_normalized_result(tmp_path: Path) -> None:
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = tmp_path / "ui_run_crashed"
+    ws.mkdir()
+    # No normalized/result.json — simulate LEAN crash.
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_crashed",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+    )
+
+    assert payload["lean_run_id"] == "ui_run_crashed"
+    assert payload["total_trades"] == 0
+    assert payload["total_pnl"] == pytest.approx(0.0)
+    assert payload["final_equity"] == pytest.approx(100_000.0)
+    assert payload["trades"] == []
+    assert "error" in payload["lean_statistics"]
+
+
+def test_build_persist_payload_empty_order_events(tmp_path: Path) -> None:
+    """Algorithm ran but produced no signals (warmup didn't complete in window)."""
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "ui_run_no_signals",
+        order_events=[],
+        equity_curve=[
+            {"ms_utc": 1_700_000_000_000, "value": 100_000.0},
+            {"ms_utc": 1_700_000_600_000, "value": 100_000.0},
+        ],
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_no_signals",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+    )
+
+    assert payload["total_trades"] == 0
+    assert payload["total_pnl"] == pytest.approx(0.0)
+    assert payload["trades"] == []

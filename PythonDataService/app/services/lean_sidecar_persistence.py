@@ -8,8 +8,10 @@ aggregate KPIs, and writes one StrategyExecution row + N BacktestTrade rows.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -167,3 +169,158 @@ def compute_aggregates(
         final_equity=starting_cash + total_pnl - total_fees,
         win_rate=win_rate,
     )
+
+
+@dataclass
+class NormalizedResult:
+    """Schema-versioned view of normalized/result.json."""
+
+    parser_version: str
+    order_events: list[dict[str, Any]]
+    equity_curve: list[dict[str, Any]]
+    statistics: dict[str, Any]
+    runtime_statistics: dict[str, Any]
+
+    @classmethod
+    def from_path(cls, path: Path) -> NormalizedResult:
+        data = json.loads(path.read_text())
+        return cls(
+            parser_version=data.get("parser_version", "unknown"),
+            order_events=data.get("order_events") or [],
+            equity_curve=data.get("equity_curve") or [],
+            statistics=data.get("statistics") or {},
+            runtime_statistics=data.get("runtime_statistics") or {},
+        )
+
+
+def build_persist_payload(
+    workspace_path: Path,
+    run_id: str,
+    starting_cash: float,
+    symbol: str,
+    algorithm_name: str,
+    start_date_ms: int,
+    end_date_ms: int,
+) -> dict[str, Any]:
+    """Build a JSON-serializable payload to POST to the .NET persist endpoint.
+
+    This function is pure: it reads normalized/result.json from disk and computes
+    aggregates + paired trades using pair_order_events, finalize_open_lot_as_synthetic,
+    and compute_aggregates. It performs no DB writes and no HTTP calls.
+
+    The .NET endpoint at POST /api/backtest-runs/persist-lean is responsible for
+    persisting the payload into the StrategyExecution + BacktestTrade tables.
+
+    If the workspace has no normalized/result.json (LEAN crashed before output),
+    returns a "failed run" payload with TotalTrades=0 and the error noted in
+    lean_statistics. The .NET endpoint should still persist this so the failed
+    run appears in the unified history.
+
+    All timestamps in the returned payload are int64 ms UTC (canonical).
+    """
+    result_path = workspace_path / "normalized" / "result.json"
+
+    if not result_path.exists():
+        return _failed_run_payload(
+            run_id=run_id,
+            starting_cash=starting_cash,
+            symbol=symbol,
+            algorithm_name=algorithm_name,
+            start_date_ms=start_date_ms,
+            end_date_ms=end_date_ms,
+            workspace_path=workspace_path,
+            error="No normalized/result.json — LEAN run did not produce output",
+        )
+
+    normalized = NormalizedResult.from_path(result_path)
+
+    paired_trades, open_lot = pair_order_events(normalized.order_events)
+    if open_lot is not None:
+        synthetic = finalize_open_lot_as_synthetic(
+            open_lot=open_lot,
+            equity_curve=normalized.equity_curve,
+            starting_cash=starting_cash,
+            trade_number=len(paired_trades) + 1,
+        )
+        paired_trades.append(synthetic)
+
+    total_fees = sum(
+        float(ev.get("order_fee_amount") or 0.0) for ev in normalized.order_events if ev.get("status") == "filled"
+    )
+    agg = compute_aggregates(
+        trades=paired_trades,
+        starting_cash=starting_cash,
+        total_fees=total_fees,
+    )
+
+    return {
+        "lean_run_id": run_id,
+        "source": "lean-sidecar",
+        "strategy_name": algorithm_name,
+        "symbol": symbol,
+        "starting_cash": starting_cash,
+        "start_date_ms": start_date_ms,
+        "end_date_ms": end_date_ms,
+        "total_trades": agg.total_trades,
+        "winning_trades": agg.winning_trades,
+        "losing_trades": agg.losing_trades,
+        "total_pnl": agg.total_pnl,
+        "total_fees": total_fees,
+        "final_equity": agg.final_equity,
+        "win_rate": agg.win_rate,
+        "trades": [
+            {
+                "trade_number": t.trade_number,
+                "entry_ms_utc": t.entry_ms_utc,
+                "exit_ms_utc": t.exit_ms_utc,
+                "entry_price": t.entry_price,
+                "exit_price": t.exit_price,
+                "quantity": t.quantity,
+                "pnl": t.pnl,
+                "signal_reason": t.signal_reason,
+                "is_synthetic_exit": t.is_synthetic_exit,
+            }
+            for t in paired_trades
+        ],
+        "lean_statistics": {
+            "statistics": normalized.statistics,
+            "runtime_statistics": normalized.runtime_statistics,
+            "parser_version": normalized.parser_version,
+            "workspace_path": str(workspace_path),
+        },
+    }
+
+
+def _failed_run_payload(
+    *,
+    run_id: str,
+    starting_cash: float,
+    symbol: str,
+    algorithm_name: str,
+    start_date_ms: int,
+    end_date_ms: int,
+    workspace_path: Path,
+    error: str,
+) -> dict[str, Any]:
+    """Build a zero-trade payload for a LEAN run that failed or produced no result."""
+    return {
+        "lean_run_id": run_id,
+        "source": "lean-sidecar",
+        "strategy_name": algorithm_name,
+        "symbol": symbol,
+        "starting_cash": starting_cash,
+        "start_date_ms": start_date_ms,
+        "end_date_ms": end_date_ms,
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "total_pnl": 0.0,
+        "total_fees": 0.0,
+        "final_equity": starting_cash,
+        "win_rate": 0.0,
+        "trades": [],
+        "lean_statistics": {
+            "error": error,
+            "workspace_path": str(workspace_path),
+        },
+    }
