@@ -135,6 +135,19 @@ builder.Services.AddHttpClient("python", client =>
     client.Timeout = TimeSpan.FromSeconds(60);
 });
 
+// Minimal API JSON: accept snake_case payloads from PythonDataService
+// (and PascalCase from any other caller) without 500-null-column errors.
+// PropertyNameCaseInsensitive=true is the standard fix for the mismatch
+// between Python's snake_case wire format and C#'s PascalCase record
+// properties. PropertyNamingPolicy=null keeps response keys PascalCase
+// (the existing StudiesApi callers expect that). Only the /api/backtest-runs/*
+// minimal API endpoints use this; GraphQL endpoints go through HotChocolate's
+// own serialization and are unaffected.
+builder.Services.ConfigureHttpJsonOptions(opts =>
+{
+    opts.SerializerOptions.PropertyNameCaseInsensitive = true;
+});
+
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
 builder.Services.AddScoped<IBacktestService, BacktestService>();
