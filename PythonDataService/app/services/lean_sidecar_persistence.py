@@ -82,8 +82,10 @@ def pair_order_events(
                 raise NotImplementedError("Pyramiding not supported in Phase 1; expected at most one open lot")
         elif direction == "sell":
             if open_lot is None:
-                # Defensive: short selling not expected for current templates.
-                continue
+                raise ValueError(
+                    f"Sell fill at ms_utc={ms_utc} has no matching open lot — "
+                    "templates today only support long-only round-trip trades"
+                )
             trade_number += 1
             entry_fees = sum(open_lot.fees)
             pnl = (price - open_lot.entry_price) * open_lot.quantity - entry_fees - fee
@@ -166,12 +168,15 @@ def compute_aggregates(
     winning = sum(1 for t in trades if t.pnl > 0)
     losing = sum(1 for t in trades if t.pnl < 0)
     win_rate = winning / len(trades) if trades else 0.0
+    # NOTE: t.pnl already nets out entry and exit fees (see pair_order_events:
+    # pnl = (price - entry_price) * qty - entry_fees - exit_fee).
+    # Do NOT subtract total_fees again here — that would double-count them.
     return AggregateKpis(
         total_trades=len(trades),
         winning_trades=winning,
         losing_trades=losing,
         total_pnl=total_pnl,
-        final_equity=starting_cash + total_pnl - total_fees,
+        final_equity=starting_cash + total_pnl,
         win_rate=win_rate,
     )
 
@@ -196,6 +201,19 @@ class NormalizedResult:
             statistics=data.get("statistics") or {},
             runtime_statistics=data.get("runtime_statistics") or {},
         )
+
+
+def _algorithm_name_for_run(template: str | None, algorithm_source: str | None) -> str:
+    """Pick the persisted algorithm_name based on which run type was requested.
+
+    When the caller provides their own ``algorithm_source``, the run is labeled
+    "user_provided" regardless of what the router filled in for ``template``
+    (which defaults to "trusted_default" for custom submissions). When only a
+    template is in play, its name is used verbatim.
+    """
+    if algorithm_source:
+        return "user_provided"
+    return template or "user_provided"
 
 
 def build_persist_payload(
@@ -237,26 +255,40 @@ def build_persist_payload(
             error="No normalized/result.json — LEAN run did not produce output",
         )
 
-    normalized = NormalizedResult.from_path(result_path)
+    try:
+        normalized = NormalizedResult.from_path(result_path)
 
-    paired_trades, open_lot = pair_order_events(normalized.order_events)
-    if open_lot is not None:
-        synthetic = finalize_open_lot_as_synthetic(
-            open_lot=open_lot,
-            equity_curve=normalized.equity_curve,
-            starting_cash=starting_cash,
-            trade_number=len(paired_trades) + 1,
+        paired_trades, open_lot = pair_order_events(normalized.order_events)
+        if open_lot is not None:
+            paired_trades.append(
+                finalize_open_lot_as_synthetic(
+                    open_lot=open_lot,
+                    equity_curve=normalized.equity_curve,
+                    starting_cash=starting_cash,
+                    trade_number=len(paired_trades) + 1,
+                )
+            )
+
+        total_fees = sum(
+            float(ev.get("order_fee_amount") or 0.0) for ev in normalized.order_events if ev.get("status") == "filled"
         )
-        paired_trades.append(synthetic)
-
-    total_fees = sum(
-        float(ev.get("order_fee_amount") or 0.0) for ev in normalized.order_events if ev.get("status") == "filled"
-    )
-    agg = compute_aggregates(
-        trades=paired_trades,
-        starting_cash=starting_cash,
-        total_fees=total_fees,
-    )
+        agg = compute_aggregates(
+            trades=paired_trades,
+            starting_cash=starting_cash,
+            total_fees=total_fees,
+        )
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, NotImplementedError) as exc:
+        logger.warning("Failed to normalize LEAN result for run %s: %s", run_id, exc)
+        return _failed_run_payload(
+            run_id=run_id,
+            starting_cash=starting_cash,
+            symbol=symbol,
+            algorithm_name=algorithm_name,
+            start_date_ms=start_date_ms,
+            end_date_ms=end_date_ms,
+            workspace_path=workspace_path,
+            error=f"normalization_error: {type(exc).__name__}: {exc}",
+        )
 
     return {
         "lean_run_id": run_id,

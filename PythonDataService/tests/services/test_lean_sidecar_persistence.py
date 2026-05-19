@@ -10,6 +10,7 @@ import pytest
 from app.services.lean_sidecar_persistence import (
     OpenLot,
     PairedTrade,
+    _algorithm_name_for_run,
     compute_aggregates,
     finalize_open_lot_as_synthetic,
     pair_order_events,
@@ -112,14 +113,18 @@ def test_pair_raises_on_pyramiding() -> None:
         pair_order_events(events)
 
 
-def test_pair_ignores_sell_without_open_lot() -> None:
-    """Defensive: short selling not expected for current templates."""
+def test_pair_raises_on_sell_without_open_lot() -> None:
+    """Defensive: short selling not expected for current templates; treat as corrupt.
+
+    The caller (build_persist_payload) catches ValueError and returns a failed-run
+    payload, so the LEAN run result is not lost — it just records as a failed
+    persistence row rather than crashing the caller.
+    """
     events = [
         _filled_event(1, "sell", 1_700_000_000_000, 100.0, 10),
     ]
-    trades, open_lot = pair_order_events(events)
-    assert trades == []
-    assert open_lot is None
+    with pytest.raises(ValueError, match="no matching open lot"):
+        pair_order_events(events)
 
 
 def test_finalize_open_lot_as_synthetic_uses_last_equity_point() -> None:
@@ -177,6 +182,9 @@ def test_compute_aggregates_empty_trades() -> None:
 
 
 def test_compute_aggregates_mixed_trades() -> None:
+    # pnl values here already net out all entry/exit fees (matching pair_order_events
+    # semantics). final_equity = starting_cash + total_pnl — do NOT subtract total_fees
+    # again; that would double-count fees that are already embedded in each t.pnl.
     trades = [
         PairedTrade(1, 0, 0, 100.0, 101.0, 10, pnl=10.0, signal_reason="x", is_synthetic_exit=False),
         PairedTrade(2, 0, 0, 100.0, 99.0, 10, pnl=-10.0, signal_reason="x", is_synthetic_exit=False),
@@ -187,8 +195,33 @@ def test_compute_aggregates_mixed_trades() -> None:
     assert agg.winning_trades == 2
     assert agg.losing_trades == 1
     assert agg.total_pnl == pytest.approx(20.0)
-    assert agg.final_equity == pytest.approx(100_000.0 + 20.0 - 3.0)
+    assert agg.final_equity == pytest.approx(100_000.0 + 20.0)
     assert agg.win_rate == pytest.approx(2 / 3)
+
+
+# ---------------------------------------------------------------------------
+# _algorithm_name_for_run tests
+# ---------------------------------------------------------------------------
+
+
+def test_algorithm_name_custom_source_overrides_template() -> None:
+    """When algorithm_source is set, label is always 'user_provided'."""
+    assert _algorithm_name_for_run("trusted_default", "print('hello')") == "user_provided"
+
+
+def test_algorithm_name_template_only_returns_template() -> None:
+    """No algorithm_source; use the template name verbatim."""
+    assert _algorithm_name_for_run("ema_crossover", None) == "ema_crossover"
+
+
+def test_algorithm_name_trusted_default_template_no_source() -> None:
+    """Trusted-default template without custom source keeps its name."""
+    assert _algorithm_name_for_run("trusted_default", None) == "trusted_default"
+
+
+def test_algorithm_name_both_none_returns_user_provided() -> None:
+    """Defensive: both None → fall back to 'user_provided'."""
+    assert _algorithm_name_for_run(None, None) == "user_provided"
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +336,9 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     assert payload["winning_trades"] == 1
     assert payload["total_pnl"] == pytest.approx(9.0)
     assert payload["total_fees"] == pytest.approx(1.0)
-    assert payload["final_equity"] == pytest.approx(100_008.0)  # 100000 + 9 - 1
+    # pnl=9.0 already nets the $1 of fees (pair_order_events: pnl = gross - entry_fee - exit_fee).
+    # final_equity = starting_cash + total_pnl; do NOT subtract total_fees again.
+    assert payload["final_equity"] == pytest.approx(100_009.0)  # 100000 + 9
     assert len(payload["trades"]) == 1
     t = payload["trades"][0]
     assert t["entry_ms_utc"] == 1_700_000_060_000
@@ -410,6 +445,66 @@ def test_build_persist_payload_empty_order_events(tmp_path: Path) -> None:
     assert payload["total_trades"] == 0
     assert payload["total_pnl"] == pytest.approx(0.0)
     assert payload["trades"] == []
+
+
+def test_build_persist_payload_corrupt_json_returns_failed_payload(tmp_path: Path) -> None:
+    """Corrupt result.json must not raise — returns a failed-run payload."""
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = tmp_path / "ui_run_corrupt"
+    (ws / "normalized").mkdir(parents=True)
+    (ws / "normalized" / "result.json").write_text("{ this is not valid JSON }")
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_corrupt",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+    )
+
+    assert payload["lean_run_id"] == "ui_run_corrupt"
+    assert payload["total_trades"] == 0
+    assert payload["trades"] == []
+    assert "error" in payload["lean_statistics"]
+    assert "normalization_error" in payload["lean_statistics"]["error"]
+
+
+def test_build_persist_payload_pyramiding_returns_failed_payload(tmp_path: Path) -> None:
+    """Pyramiding in order events must not raise — returns a failed-run payload."""
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "ui_run_pyramiding",
+        order_events=[
+            # Two consecutive buys without an intervening sell — pyramiding.
+            _filled_event(1, "buy", 1_700_000_000_000, 100.0, 10, fee=0.5),
+            _filled_event(2, "buy", 1_700_000_060_000, 101.0, 10, fee=0.5),
+        ],
+        equity_curve=[
+            {"ms_utc": 1_700_000_000_000, "value": 100_000.0},
+            {"ms_utc": 1_700_000_600_000, "value": 102_000.0},
+        ],
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_pyramiding",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+    )
+
+    assert payload["lean_run_id"] == "ui_run_pyramiding"
+    assert payload["total_trades"] == 0
+    assert payload["trades"] == []
+    assert "error" in payload["lean_statistics"]
+    assert "normalization_error" in payload["lean_statistics"]["error"]
 
 
 # ---------------------------------------------------------------------------
