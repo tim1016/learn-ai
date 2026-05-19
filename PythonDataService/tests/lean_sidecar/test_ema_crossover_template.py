@@ -36,7 +36,9 @@ def test_class_constants_match_spec() -> None:
     assert constants["FAST_PERIOD"] == 5
     assert constants["SLOW_PERIOD"] == 10
     assert constants["RSI_PERIOD"] == 14
-    assert constants["BAR_MINUTES"] == 15
+    # BAR_MINUTES moved to a runtime GetParameter("bar_minutes") in Task 7;
+    # EXIT_BARS remains a class constant because its value (5 bars) is
+    # strategy logic, not a data-contract parameter.
     assert constants["EXIT_BARS"] == 5
     assert constants["GAP_MIN"] == pytest.approx(0.20)
     assert constants["RSI_LO"] == 50
@@ -57,8 +59,10 @@ def test_source_contains_required_handlers() -> None:
 
 
 def test_source_consolidates_15_minute_bars() -> None:
+    # BAR_MINUTES moved to runtime GetParameter("bar_minutes") in Task 7;
+    # the consolidator now uses the local variable.
     assert "TradeBarConsolidator" in EMA_CROSSOVER_SOURCE
-    assert "timedelta(minutes=self.BAR_MINUTES)" in EMA_CROSSOVER_SOURCE
+    assert "timedelta(minutes=bar_minutes)" in EMA_CROSSOVER_SOURCE
 
 
 def test_source_uses_wilders_rsi() -> None:
@@ -75,3 +79,43 @@ def test_source_does_not_override_fill_model() -> None:
     assert "SetFillModel" not in EMA_CROSSOVER_SOURCE
     assert "SignalBarCloseFillModel" not in EMA_CROSSOVER_SOURCE
     assert "MarketOnOpenOrder" not in EMA_CROSSOVER_SOURCE
+
+
+def test_template_reads_new_parameters() -> None:
+    from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
+
+    src = EMA_CROSSOVER_SOURCE
+    assert 'GetParameter("symbol")' in src
+    assert 'GetParameter("bar_minutes")' in src
+    assert 'GetParameter("session")' in src
+    assert 'GetParameter("adjustment")' in src
+
+
+def test_template_no_longer_sets_wall_clock_warmup() -> None:
+    from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
+
+    assert "SetWarmUp" not in EMA_CROSSOVER_SOURCE, (
+        "Wall-clock warmup must be removed; both engines gate on indicator readiness only"
+    )
+
+
+def test_template_writes_observations_csv_and_state_csv() -> None:
+    from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
+
+    assert "observations.csv" in EMA_CROSSOVER_SOURCE
+    assert "state.csv" in EMA_CROSSOVER_SOURCE
+
+
+def test_template_state_csv_header_matches_spec() -> None:
+    """state.csv must have exactly the columns the parity test asserts on."""
+    from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
+
+    assert "ts_ms_utc,close,ema_fast,ema_slow,rsi,cross_state,signal" in EMA_CROSSOVER_SOURCE
+
+
+def test_template_rejects_non_15_bar_minutes() -> None:
+    from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
+
+    # Defense-in-depth check at the strategy layer.
+    assert "bar_minutes" in EMA_CROSSOVER_SOURCE
+    assert "raise ValueError" in EMA_CROSSOVER_SOURCE
