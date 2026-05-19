@@ -131,7 +131,7 @@ The buy-and-hold spike runs at **minute resolution** (not 15-min consolidated), 
 bar is a 1-minute bar. The EMA crossover template uses a 15-min `TradeBarConsolidator`. The
 semantic is the same regardless of bar period:
 
-```
+```text
 fill_time  = signal_bar.EndTime
 fill_price = signal_bar.Close
 ```

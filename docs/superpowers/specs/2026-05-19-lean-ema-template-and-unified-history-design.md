@@ -62,7 +62,7 @@ This design adds an EMA-crossover trusted template to the LEAN sidecar that mirr
 
 ### Data flow — LEAN run
 
-```
+```text
 [User picks ema_crossover on LEAN page]
   ↓
 POST /api/lean-sidecar/trusted-runs  (template="ema_crossover", symbol="SPY", dates, cash)
@@ -85,7 +85,7 @@ return RunSummary { lean_run_id, strategy_execution_id } to UI
 
 ### Data flow — compare
 
-```
+```text
 [User checks 2 rows in unified history, clicks "Compare selected"]
   ↓ route to /runs/compare?left=<id>&right=<id>
   ↓
@@ -128,7 +128,7 @@ class MyAlgorithm(QCAlgorithm):
 
 **OnConsolidatedBar:**
 
-```
+```text
 update ema_fast, ema_slow, rsi at bar.EndTime with bar.Close
 if not (all three IsReady):
     prev_fast, prev_slow = fast, slow                  # prime crossover state
@@ -192,7 +192,7 @@ Frontend: `lean-lab.component.ts` extends the `template` FormControl literal typ
 
 **Pairing algorithm** (FIFO buy/sell into round-trip trades):
 
-```
+```text
 events = normalized_result["order_events"]            # already int64 ms UTC
 fills = [e for e in events if e["status"] == "filled"]
 open_lot = None
@@ -399,7 +399,7 @@ enum DivergenceCategory {
 
 **Page layout (top to bottom):**
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Guardrail banner (yellow, hidden if guardrails.warnings is empty) │
 │  "These runs use different symbols: SPY vs QQQ. Comparison may     │
