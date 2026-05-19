@@ -241,6 +241,70 @@ class TestRunSpecAgainstBars:
         assert len(result.captured_events) == 2 * len(result.trades)
 
 
+class TestRunSpecAgainstBarsStartingCash:
+    def test_starting_cash_propagates_to_engine_sizing(self) -> None:
+        """starting_cash must flow into the engine, not just the persist payload.
+
+        Run the same bars at 100k and 200k starting cash and assert that the
+        quantities differ — at 200k the engine can afford twice as many shares,
+        so at least one trade must have a larger quantity. If starting_cash were
+        ignored (P1 bug), both runs would produce identical quantities.
+        """
+        bars = build_minute_bars(closes_for_spy_ema(2000))
+
+        result_100k = run_spec_against_bars(
+            spec_path=fixture_path("spy_ema_crossover"),
+            symbol="TEST",
+            bars=bars,
+            start_date=(2024, 1, 2),
+            end_date=(2024, 12, 31),
+            starting_cash=Decimal("100000"),
+        )
+        result_200k = run_spec_against_bars(
+            spec_path=fixture_path("spy_ema_crossover"),
+            symbol="TEST",
+            bars=bars,
+            start_date=(2024, 1, 2),
+            end_date=(2024, 12, 31),
+            starting_cash=Decimal("200000"),
+        )
+
+        assert len(result_100k.trades) >= 1, "need at least one trade to compare sizing"
+        assert len(result_100k.trades) == len(result_200k.trades), (
+            "trade count changed — sizing difference must only affect quantities"
+        )
+
+        # At least one trade must have a strictly larger quantity at 200k.
+        assert any(
+            t200.quantity > t100.quantity for t100, t200 in zip(result_100k.trades, result_200k.trades, strict=True)
+        ), "200k run produced no larger quantities than 100k run — starting_cash not applied"
+
+    def test_default_starting_cash_uses_spec_default(self) -> None:
+        """When starting_cash is None, the spec's own set_cash default is used (100 000)."""
+        bars = build_minute_bars(closes_for_spy_ema(2000))
+
+        result_explicit = run_spec_against_bars(
+            spec_path=fixture_path("spy_ema_crossover"),
+            symbol="TEST",
+            bars=bars,
+            start_date=(2024, 1, 2),
+            end_date=(2024, 12, 31),
+            starting_cash=Decimal("100000"),
+        )
+        result_default = run_spec_against_bars(
+            spec_path=fixture_path("spy_ema_crossover"),
+            symbol="TEST",
+            bars=bars,
+            start_date=(2024, 1, 2),
+            end_date=(2024, 12, 31),
+            # starting_cash omitted → None → spec default of 100 000
+        )
+
+        assert len(result_explicit.trades) == len(result_default.trades)
+        for t_explicit, t_default in zip(result_explicit.trades, result_default.trades, strict=True):
+            assert t_explicit.quantity == t_default.quantity
+
+
 class TestRunSpecAgainstBarsAndPersist:
     @pytest.mark.asyncio
     async def test_persists_engine_run_after_capturing_trades(self) -> None:

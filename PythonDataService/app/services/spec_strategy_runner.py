@@ -179,6 +179,7 @@ def run_spec_against_bars(
     bars: list[TradeBar],
     start_date: tuple[int, int, int],
     end_date: tuple[int, int, int],
+    starting_cash: Decimal | None = None,
     commission_per_order: Decimal = Decimal("0"),
     fill_mode: FillMode = FillMode.SIGNAL_BAR_CLOSE,
 ) -> SpecRunResult:
@@ -188,6 +189,10 @@ def run_spec_against_bars(
     the strategy's ``set_start_date`` / ``set_end_date`` after the spec's
     ``initialize`` has set its own defaults. The bars list is consumed by an
     ``InMemoryDataReader``.
+
+    ``starting_cash`` overrides the spec's own ``set_cash`` call so that order
+    sizing and PnL computation use the same cash value that the persist layer
+    records. When ``None``, the spec's default (typically 100 000) is used.
     """
     spec = load_spec_from_path(spec_path)
     captured: list[OrderEvent] = []
@@ -200,6 +205,8 @@ def run_spec_against_bars(
         orig_init()
         strategy.set_start_date(*start_date)
         strategy.set_end_date(*end_date)
+        if starting_cash is not None:
+            strategy.set_cash(float(starting_cash))
 
     strategy.initialize = _patched_init  # type: ignore[method-assign]
 
@@ -255,6 +262,7 @@ async def run_spec_against_bars_and_persist(
         bars=bars,
         start_date=start_date,
         end_date=end_date,
+        starting_cash=starting_cash,
         commission_per_order=commission_per_order,
         fill_mode=fill_mode,
     )
