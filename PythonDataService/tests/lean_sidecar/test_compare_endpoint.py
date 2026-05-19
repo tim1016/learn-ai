@@ -15,8 +15,9 @@ def _trade(
     entry: float,
     exit_price: float,
     qty: float = 10,
+    fee: float | None = None,
 ) -> dict:
-    return {
+    t = {
         "trade_number": n,
         "entry_ms_utc": entry_ms,
         "exit_ms_utc": exit_ms,
@@ -27,6 +28,9 @@ def _trade(
         "signal_reason": "test",
         "is_synthetic_exit": False,
     }
+    if fee is not None:
+        t["fee"] = fee
+    return t
 
 
 @pytest.mark.asyncio
@@ -53,7 +57,7 @@ async def test_compare_endpoint_returns_divergences_for_mismatch() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
             "/api/lean-sidecar/compare",
-            json={"left_trades": left, "right_trades": right, "fill_price_atol": 0.01},
+            json={"left_trades": left, "right_trades": right, "fill_price_atol": "0.01"},
         )
     assert response.status_code == 200
     body = response.json()
@@ -98,3 +102,48 @@ async def test_compare_endpoint_default_tolerance() -> None:
         )
     body = response.json()
     assert all(d["category"] != "FILL_PRICE_DRIFT" for d in body["divergences"])
+
+
+@pytest.mark.asyncio
+async def test_compare_endpoint_direction_mismatch() -> None:
+    """Opposite-sign quantities → DIRECTION_MISMATCH in response."""
+    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, 100.0, 101.0, qty=10)]
+    right = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, 100.0, 101.0, qty=-10)]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/lean-sidecar/compare",
+            json={"left_trades": left, "right_trades": right},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert any(d["category"] == "DIRECTION_MISMATCH" for d in body["divergences"])
+
+
+@pytest.mark.asyncio
+async def test_compare_endpoint_commission_drift_with_assert_fees() -> None:
+    """Fee divergence > commission_atol with assert_fees=True → COMMISSION_DRIFT."""
+    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, 100.0, 101.0, fee=1.00)]
+    right = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, 100.0, 101.0, fee=1.10)]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/lean-sidecar/compare",
+            json={"left_trades": left, "right_trades": right, "assert_fees": True},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert any(d["category"] == "COMMISSION_DRIFT" for d in body["divergences"])
+
+
+@pytest.mark.asyncio
+async def test_compare_endpoint_commission_drift_suppressed_without_assert_fees() -> None:
+    """Fee divergence is ignored when assert_fees=False (default)."""
+    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, 100.0, 101.0, fee=1.00)]
+    right = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, 100.0, 101.0, fee=9.99)]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/lean-sidecar/compare",
+            json={"left_trades": left, "right_trades": right},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert not any(d["category"] == "COMMISSION_DRIFT" for d in body["divergences"])
