@@ -35,9 +35,9 @@
     </thead>
     <tbody>
       @for (row of rows(); track row.id) {
-        <tr [class.selected]="isSelected(row.id)">
+        <tr [class.selected]="isSelected(row.id)" (click)="onRowClick(row.id)" style="cursor:pointer">
           @if (allowCompare()) {
-            <td class="select-col">
+            <td class="select-col" (click)="$event.stopPropagation()">
               <input
                 type="checkbox"
                 [checked]="isSelected(row.id)"

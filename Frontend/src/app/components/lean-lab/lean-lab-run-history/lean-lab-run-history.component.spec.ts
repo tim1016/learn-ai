@@ -112,6 +112,43 @@ describe("LeanLabRunHistoryComponent", () => {
     );
   });
 
+  it("emits runSelected with the leanRunId when a row is clicked", async () => {
+    const emitted: string[] = [];
+    const fixture = await setup();
+    fixture.componentInstance.runSelected.subscribe((id) => emitted.push(id));
+
+    const rows = fixture.nativeElement.querySelectorAll("tbody tr") as NodeListOf<HTMLTableRowElement>;
+    rows[0].click(); // row id="10", leanRunId="ui_run_abc"
+
+    expect(emitted).toEqual(["ui_run_abc"]);
+  });
+
+  it("does not emit runSelected when the row has no leanRunId", async () => {
+    const nodes = [
+      {
+        id: "20",
+        source: "lean-sidecar" as const,
+        strategyName: "no_lean_id",
+        leanRunId: null,
+        parameters: null,
+        startDate: "2025-01-06",
+        endDate: "2025-01-10",
+        executedAt: "2026-05-19T03:00:00Z",
+        totalTrades: 0,
+        totalPnL: 0,
+        trades: [],
+      },
+    ];
+    const emitted: string[] = [];
+    const fixture = await setup(makeApollo(nodes));
+    fixture.componentInstance.runSelected.subscribe((id) => emitted.push(id));
+
+    const rows = fixture.nativeElement.querySelectorAll("tbody tr") as NodeListOf<HTMLTableRowElement>;
+    rows[0].click();
+
+    expect(emitted).toHaveLength(0);
+  });
+
   it("renders the empty state when no rows are returned", async () => {
     const fixture = await setup(makeApollo([]));
     const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
