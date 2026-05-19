@@ -173,6 +173,15 @@ class TrustedRunRequest:
     # caller supplies their own ``algorithm_source`` — operator-pasted
     # source picks its own brokerage via SetBrokerageModel.
     template: TrustedTemplate = "trusted_default"
+    # Phase 6a — data-provenance plumbing for the parity contract.
+    # See docs/superpowers/specs/2026-05-19-lean-engine-polygon-parity-design.md.
+    data_source: Literal["synthetic", "polygon"] = "synthetic"
+    # Pinned to 15 in this branch — the engine algorithm is 15-min only and
+    # EXIT_BARS=5 is tied to that period. Widening this Literal is a
+    # deliberate future change.
+    bar_minutes: Literal[15] = 15
+    session: Literal["regular", "extended"] = "regular"
+    adjustment: Literal["raw"] = "raw"
 
     @property
     def start_date(self) -> date:
