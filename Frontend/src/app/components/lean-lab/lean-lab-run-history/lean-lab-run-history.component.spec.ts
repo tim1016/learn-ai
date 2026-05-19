@@ -1,113 +1,144 @@
 import { provideZonelessChangeDetection } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
+import { Router } from "@angular/router";
+import { Apollo } from "apollo-angular";
+import { of } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
-import type { RunSummary } from "../../../services/lean-sidecar.types";
 import { LeanLabRunHistoryComponent } from "./lean-lab-run-history.component";
+import { BacktestRunNode, BACKTEST_RUNS_QUERY } from "../../../graphql/backtest-runs.query";
 
-function makeRun(overrides: Partial<RunSummary> = {}): RunSummary {
-  return {
-    run_id: "ui_run_test",
-    symbol: "SPY",
-    requested_start_ms_utc: 1_736_121_600_000,
-    requested_end_ms_utc: 1_736_467_200_000,
-    started_at_ms: 1_736_121_650_000,
-    finished_at_ms: 1_736_121_700_000,
-    exit_code: 0,
-    algorithm_source_kind: "trusted_sample",
-    exit_clean: true,
-    is_clean: true,
-    ...overrides,
-  };
+const FAKE_NODES: BacktestRunNode[] = [
+  {
+    id: "10",
+    source: "lean-sidecar",
+    strategyName: "ema_crossover",
+    leanRunId: "ui_run_abc",
+    parameters: '{"symbol":"SPY","starting_cash":100000}',
+    startDate: "2025-01-06",
+    endDate: "2025-01-10",
+    executedAt: "2026-05-19T02:49:00Z",
+    totalTrades: 1,
+    totalPnL: 9.0,
+    trades: [{ isSyntheticExit: false }],
+  },
+  {
+    id: "11",
+    source: "lean-sidecar",
+    strategyName: "trusted_default",
+    leanRunId: "ui_run_xyz",
+    parameters: '{"symbol":"SPY","starting_cash":100000}',
+    startDate: "2025-01-06",
+    endDate: "2025-01-06",
+    executedAt: "2026-05-19T02:50:00Z",
+    totalTrades: 1,
+    totalPnL: 5.0,
+    trades: [{ isSyntheticExit: true }],
+  },
+];
+
+function makeApollo(nodes: BacktestRunNode[] = FAKE_NODES) {
+  const valueChanges$ = of({
+    data: {
+      backtestRuns: {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes,
+      },
+    },
+  });
+  return { watchQuery: vi.fn().mockReturnValue({ valueChanges: valueChanges$ }) };
 }
 
-async function renderWith(props: {
-  runs: RunSummary[];
-  selectedRunId?: string | null;
-  loading?: boolean;
-  truncated?: boolean;
-}): Promise<ComponentFixture<LeanLabRunHistoryComponent>> {
+async function setup(
+  apolloStub = makeApollo(),
+  navigateSpy = vi.fn(),
+): Promise<ComponentFixture<LeanLabRunHistoryComponent>> {
   await TestBed.configureTestingModule({
     imports: [LeanLabRunHistoryComponent],
-    providers: [provideZonelessChangeDetection()],
+    providers: [
+      provideZonelessChangeDetection(),
+      { provide: Apollo, useValue: apolloStub },
+      { provide: Router, useValue: { navigate: navigateSpy } },
+    ],
   }).compileComponents();
   const fixture = TestBed.createComponent(LeanLabRunHistoryComponent);
-  fixture.componentRef.setInput("runs", props.runs);
-  fixture.componentRef.setInput("selectedRunId", props.selectedRunId ?? null);
-  fixture.componentRef.setInput("loading", props.loading ?? false);
-  fixture.componentRef.setInput("truncated", props.truncated ?? false);
   fixture.detectChanges();
   return fixture;
 }
 
 describe("LeanLabRunHistoryComponent", () => {
-  it("shows the empty-state copy when no runs are provided", async () => {
-    const fixture = await renderWith({ runs: [] });
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("No runs yet");
+  it("queries backtestRuns with engine=LEAN_SIDECAR", async () => {
+    const apollo = makeApollo();
+    await setup(apollo);
+    expect(apollo.watchQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: BACKTEST_RUNS_QUERY,
+        variables: expect.objectContaining({ engine: "LEAN_SIDECAR" }),
+      }),
+    );
   });
 
-  it("renders one row per run with symbol + run_id", async () => {
-    const fixture = await renderWith({
-      runs: [
-        makeRun({ run_id: "ui_run_one", symbol: "AAPL" }),
-        makeRun({ run_id: "ui_run_two", symbol: "MSFT" }),
-      ],
-    });
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("ui_run_one");
-    expect(text).toContain("AAPL");
-    expect(text).toContain("ui_run_two");
-    expect(text).toContain("MSFT");
+  it("renders strategy names from mapped rows", async () => {
+    const fixture = await setup();
+    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(html).toContain("ema_crossover");
+    expect(html).toContain("trusted_default");
   });
 
-  it("shows the truncated banner when the server cap is hit", async () => {
-    const fixture = await renderWith({ runs: [makeRun()], truncated: true });
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("capped");
+  it("renders symbol extracted from parameters JSON", async () => {
+    const fixture = await setup();
+    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(html).toContain("SPY");
   });
 
-  it("flags user-provided algorithm runs with a tag", async () => {
-    const fixture = await renderWith({
-      runs: [makeRun({ algorithm_source_kind: "user_provided" })],
-    });
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("custom");
+  it("renders the LEAN engine badge", async () => {
+    const fixture = await setup();
+    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(html).toContain("LEAN");
   });
 
-  it("emits runSelected when a row is clicked", async () => {
-    const fixture = await renderWith({
-      runs: [makeRun({ run_id: "ui_run_clickable" })],
-    });
-    const onSelect = vi.fn();
-    fixture.componentInstance.runSelected.subscribe(onSelect);
-
-    const button = (fixture.nativeElement as HTMLElement).querySelector("button");
-    button?.click();
-
-    expect(onSelect).toHaveBeenCalledWith("ui_run_clickable");
+  it("renders 'Open at end' for rows with a synthetic exit", async () => {
+    const fixture = await setup();
+    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(html).toContain("Open at end");
   });
 
-  it("disables the click while loading", async () => {
-    const fixture = await renderWith({
-      runs: [makeRun({ run_id: "ui_run_locked" })],
-      loading: true,
-    });
-    const onSelect = vi.fn();
-    fixture.componentInstance.runSelected.subscribe(onSelect);
-
-    const button = (fixture.nativeElement as HTMLElement).querySelector("button");
-    button?.click();
-
-    expect(onSelect).not.toHaveBeenCalled();
+  it("navigates to /runs/compare when onCompare is called", async () => {
+    const navigateSpy = vi.fn().mockResolvedValue(true);
+    const fixture = await setup(makeApollo(), navigateSpy);
+    fixture.componentInstance.onCompare({ leftId: "10", rightId: "11" });
+    expect(navigateSpy).toHaveBeenCalledWith(
+      ["/runs/compare"],
+      { queryParams: { left: "10", right: "11" } },
+    );
   });
 
-  it("marks the selected row with aria-current", async () => {
-    const fixture = await renderWith({
-      runs: [makeRun({ run_id: "ui_run_a" }), makeRun({ run_id: "ui_run_b" })],
-      selectedRunId: "ui_run_b",
-    });
-    const buttons = (fixture.nativeElement as HTMLElement).querySelectorAll("button");
-    expect(buttons[0].getAttribute("aria-current")).toBeNull();
-    expect(buttons[1].getAttribute("aria-current")).toBe("true");
+  it("renders the empty state when no rows are returned", async () => {
+    const fixture = await setup(makeApollo([]));
+    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(html).toContain("No runs yet");
+  });
+
+  it("extracts null symbol when parameters is null", async () => {
+    // extractSymbol is a module-private function — test indirectly by
+    // verifying the component renders a dash for a null-parameters row.
+    const nodes: BacktestRunNode[] = [
+      {
+        id: "20",
+        source: "lean-sidecar",
+        strategyName: "no_params",
+        leanRunId: null,
+        parameters: null,
+        startDate: "2025-01-06",
+        endDate: "2025-01-10",
+        executedAt: "2026-05-19T03:00:00Z",
+        totalTrades: 0,
+        totalPnL: 0,
+        trades: [],
+      },
+    ];
+    const fixture = await setup(makeApollo(nodes));
+    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    // null symbol renders as '—' in the shared component
+    expect(html).toContain("—");
   });
 });
