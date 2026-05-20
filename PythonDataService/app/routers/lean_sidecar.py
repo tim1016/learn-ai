@@ -54,6 +54,8 @@ from app.lean_sidecar.reconciler import (
 from app.lean_sidecar.trading_calendar import (
     blocked_dates_in_range,
     is_trading_day,
+    next_trading_day,
+    session_open_ms_utc,
 )
 from app.lean_sidecar.workspace import (
     RUN_ID_PATTERN,
@@ -913,6 +915,49 @@ async def get_calendar_blocked_dates(
         "from": from_.isoformat(),
         "to": to.isoformat(),
         "blocked": [{"date": d.isoformat(), "reason": reason} for d, reason in sorted(blocked.items())],
+    }
+
+
+@router.get(
+    "/calendar/next-trading-day-open",
+    summary="Return the next NYSE session-open after a given date.",
+)
+async def get_calendar_next_trading_day_open(
+    date_: date = Query(
+        ...,
+        alias="date",
+        description="Reference date (YYYY-MM-DD); the response returns the next session strictly after this date.",
+    ),
+) -> dict:
+    """Return the next trading session's date and 09:30 ET open as int64 ms UTC.
+
+    P2.5 contract: ``end_ms_utc`` is the half-open window's exclusive
+    end, which must be 09:30 ET of the trading day after the operator's
+    chosen end date. The frontend calls this endpoint so the picker's
+    end-date selection can be advanced to the canonical exclusive end
+    without re-implementing the NYSE calendar client-side.
+
+    Output ``session_open_ms_utc`` is DST-aware (delegated to
+    ``trading_calendar.session_open_ms_utc`` which goes through
+    ``ZoneInfo("America/New_York")``).
+    """
+    try:
+        next_date = next_trading_day(date_)
+    except LookupError as e:
+        # 14-day forward window exhausted — practically only reachable
+        # with date arithmetic far outside the calendar's range. Surface
+        # it as 422 so the caller knows the input is the problem, not
+        # the server.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "reason": "no_session_in_range",
+                "message": str(e),
+            },
+        ) from e
+    return {
+        "next_trading_date": next_date.isoformat(),
+        "session_open_ms_utc": session_open_ms_utc(next_date),
     }
 
 
