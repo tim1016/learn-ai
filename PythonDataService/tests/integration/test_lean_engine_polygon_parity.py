@@ -33,7 +33,7 @@ import pytest
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.fill_model import FillModel
-from app.engine.execution.order import FillMode
+from app.engine.execution.order import Direction, FillMode, OrderEvent
 from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
 from app.engine.strategy.base import DecisionSnapshot
 
@@ -66,7 +66,7 @@ def _ms_at_session_open(d: date) -> int:
 
 
 class _RecordingAlgorithm(SpyEmaCrossoverAlgorithm):
-    """Thin subclass that records every post-warmup DecisionSnapshot.
+    """Subclass that records per-bar decision snapshots AND per-trade entry quantities.
 
     Overrides ``_on_fifteen_minute_bar`` so the recording wrapper runs
     after the parent handler (which sets ``last_decision_snapshot``)
@@ -75,11 +75,18 @@ class _RecordingAlgorithm(SpyEmaCrossoverAlgorithm):
     captures the override at ``initialize()`` time -- the only path that
     actually works, because the consolidator holds a direct reference to
     the handler registered at subscription time.
+
+    Entry quantities are captured directly from OrderEvent.fill_quantity
+    on the LONG fill — the same shares LEAN reports. Computing
+    floor(starting_cash / entry_price) is wrong for trades 2+ because
+    LEAN's set_holdings(1.0) sizes against current portfolio_value
+    (cash + position value), which drifts with realized PnL.
     """
 
-    def __init__(self, symbol: str = "SPY") -> None:
+    def __init__(self, symbol: str = "SPY", *, entry_quantities: list[Decimal] | None = None) -> None:
         super().__init__(symbol=symbol)
         self.decision_rows: list[dict] = []
+        self._entry_quantities: list[Decimal] = entry_quantities if entry_quantities is not None else []
 
     def _on_fifteen_minute_bar(self, bar: TradeBar) -> None:
         super()._on_fifteen_minute_bar(bar)
@@ -97,6 +104,16 @@ class _RecordingAlgorithm(SpyEmaCrossoverAlgorithm):
                 "signal": snap.signal,
             }
         )
+
+    def on_order_event(self, event: OrderEvent) -> None:
+        super().on_order_event(event)
+        # Capture LONG fills (entries). LEAN's fill_quantity is the
+        # number of shares the engine actually filled, which reflects
+        # set_holdings(1.0) sizing against current portfolio_value —
+        # not the fixed floor(starting_cash / entry_price) formula
+        # that breaks for trades 2+ once PnL has moved portfolio_value.
+        if event.direction == Direction.LONG:
+            self._entry_quantities.append(Decimal(event.fill_quantity))
 
 
 def _lean_trades_from_normalized(
@@ -126,21 +143,27 @@ def _lean_trades_from_normalized(
 
 
 def _engine_trades_from_strategy(algo: _RecordingAlgorithm) -> list[dict]:
-    """Translate the engine's LoggedTrade stream into the parity-helper shape.
+    """Translate the engine's LoggedTrade stream + recorded entry quantities into parity-helper shape.
 
-    SpyEmaCrossoverAlgorithm.trade_log entries do not carry quantity.
-    The EMA template uses SetHoldings(SPY, 1.0), so the entry quantity
-    is floor(cash / entry_price) -- compute it the same way LEAN does.
+    Entry quantity comes from OrderEvent.fill_quantity (captured in
+    _RecordingAlgorithm.on_order_event), NOT from floor(starting_cash /
+    entry_price) — the latter is wrong for trades 2+ when realized PnL
+    has moved portfolio_value away from starting_cash.
     """
+    entry_quantities = algo._entry_quantities
+    assert len(algo.trade_log) == len(entry_quantities), (
+        f"trade_log length {len(algo.trade_log)} != entry quantities recorded "
+        f"{len(entry_quantities)} — fill-event recorder lost an entry"
+    )
     return [
         {
             "entry_ms_utc": int(t.entry_time.timestamp() * 1000),
             "exit_ms_utc": int(t.exit_time.timestamp() * 1000),
-            "quantity": Decimal(str(int(Decimal("100000") / t.entry_price))),
+            "quantity": qty,
             "entry_price": Decimal(str(t.entry_price)),
             "exit_price": Decimal(str(t.exit_price)),
         }
-        for t in algo.trade_log
+        for t, qty in zip(algo.trade_log, entry_quantities, strict=True)
     ]
 
 
@@ -213,7 +236,8 @@ async def test_lean_and_engine_agree_on_polygon_fixture(monkeypatch) -> None:
             )
 
     # Run the in-process engine over the SAME staged LEAN zips.
-    algo = _RecordingAlgorithm(symbol=symbol)
+    entry_quantities: list[Decimal] = []
+    algo = _RecordingAlgorithm(symbol=symbol, entry_quantities=entry_quantities)
 
     # Pin the engine's window and cash to match the LEAN run.
     orig_init = algo.initialize
@@ -241,7 +265,7 @@ async def test_lean_and_engine_agree_on_polygon_fixture(monkeypatch) -> None:
 
     # Assert trade equivalence.
     lean_trades = _lean_trades_from_normalized(result.normalized, pair_order_events)
-    engine_trades = _engine_trades_from_strategy(algo)
+    engine_trades = _engine_trades_from_strategy(algo)  # uses algo._entry_quantities
     assert_trade_equivalence(
         lean_trades,
         engine_trades,
