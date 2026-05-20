@@ -60,4 +60,5 @@
   [rows]="rows() ?? []"
   [allowCompare]="true"
   (compareRequested)="onCompare($event)"
+  (runSelected)="onRowSelected($event)"
   (notesEdited)="onNotesEdited($event)" />

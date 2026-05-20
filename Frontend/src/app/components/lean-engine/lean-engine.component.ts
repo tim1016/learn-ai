@@ -16,7 +16,7 @@ import { environment } from "../../../environments/environment";
 import { ButtonModule } from "primeng/button";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 import { EngineResultsComponent } from "./engine-results/engine-results.component";
-import { EngineHistoryComponent, StudyListItem } from "./engine-history/engine-history.component";
+import { StudyListItem } from "./study-list-item";
 import { EngineLabRunHistoryComponent } from "./engine-lab-run-history/engine-lab-run-history.component";
 import { LeanEngineDocsComponent } from "./lean-engine-docs/lean-engine-docs.component";
 import { ChartBar, EngineTradeForChart, EquityCurvePoint } from "./engine-chart/engine-chart.component";
@@ -193,7 +193,7 @@ interface DataAvailability {
   imports: [
     CommonModule, FormsModule, RouterModule, ButtonModule,
     Tabs, TabList, Tab, TabPanel, TabPanels,
-    EngineResultsComponent, EngineHistoryComponent, LeanEngineDocsComponent, EngineLabRunHistoryComponent,
+    EngineResultsComponent, LeanEngineDocsComponent, EngineLabRunHistoryComponent,
     InsightPanelComponent,
     TvCompatPanelComponent, EngineReplayV2Component,
     PageHeaderComponent,
@@ -291,11 +291,6 @@ export class LeanEngineComponent implements OnInit {
   // ------------------------------------------------------------------
   readonly replayEnabled = true;
   readonly selectedStudyForReplay = signal<StudyListItem | null>(null);
-
-  onReplayRequested(study: StudyListItem): void {
-    this.selectedStudyForReplay.set(study);
-    this.activeTab.set("4");
-  }
 
   // ------------------------------------------------------------------
   // TV-compatibility pre-flight

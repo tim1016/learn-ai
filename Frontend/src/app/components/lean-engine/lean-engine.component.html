@@ -289,14 +289,12 @@
 
         <!-- ═══ History Tab ═══ -->
         <p-tabpanel value="2">
-          <app-engine-history
-            (studySelected)="onStudySelected($event)"
-            (replayRequested)="onReplayRequested($event)"
-          />
-          <section class="run-history-section">
-            <h2>Recent runs</h2>
-            <app-engine-lab-run-history />
-          </section>
+          <!-- PR B.3 (2026-05-19) — the REST-backed EngineHistoryComponent
+               retired here; the unified GraphQL-backed history table
+               below is now the single source of truth for past runs.
+               Notes / CSV / column-visibility ported forward. -->
+          <app-engine-lab-run-history
+            (runSelected)="onStudySelected(+$event)" />
         </p-tabpanel>
 
         <!-- ═══ Docs Tab ═══ -->

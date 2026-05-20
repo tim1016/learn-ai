@@ -262,14 +262,16 @@ describe("EngineLabRunHistoryComponent — CSV export (PR B.3)", () => {
         '[data-testid="export-csv"]',
       ) as HTMLButtonElement;
       button.click();
-      expect(captured).not.toBeNull();
+      const blob = captured;
+      expect(blob).not.toBeNull();
+      if (!blob) return;
       // Read the blob via FileReader so the test environment doesn't depend
       // on Blob.prototype.text() (jsdom support varies).
       const text = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result));
         reader.onerror = () => reject(reader.error);
-        reader.readAsText(captured!);
+        reader.readAsText(blob);
       });
       expect(text).toContain("sma_crossover");
       expect(text).toContain("AAPL");
@@ -291,7 +293,8 @@ describe("EngineLabRunHistoryComponent — column visibility (PR B.3)", () => {
 
     const raw = localStorage.getItem("engine-lab-history.columns.v1");
     expect(raw).not.toBeNull();
-    const ids = JSON.parse(raw!) as string[];
+    if (!raw) return;
+    const ids = JSON.parse(raw) as string[];
     expect(ids).not.toContain("notes");
   });
 

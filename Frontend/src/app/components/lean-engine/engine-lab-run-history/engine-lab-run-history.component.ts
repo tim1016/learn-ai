@@ -4,6 +4,7 @@ import {
   computed,
   effect,
   inject,
+  output,
   signal,
 } from "@angular/core";
 import { Router } from "@angular/router";
@@ -48,6 +49,12 @@ export class EngineLabRunHistoryComponent {
 
   /** Active engine filter — drives the GraphQL ``engine`` variable. */
   readonly engineFilter = signal<EngineFilter>("ALL");
+
+  /** Emitted when a row is clicked — the parent component routes this to
+   *  the Results tab (replacing the deleted REST EngineHistoryComponent's
+   *  studySelected output). The id is the StrategyExecution numeric id as
+   *  a string (GraphQL ID). */
+  readonly runSelected = output<string>();
 
   /** Column-visibility set, persisted to localStorage so a researcher's
    *  layout survives reloads. Defaults to "core columns only" so the
@@ -108,6 +115,10 @@ export class EngineLabRunHistoryComponent {
     void this.router.navigate(["/runs/compare"], {
       queryParams: { left: event.leftId, right: event.rightId },
     });
+  }
+
+  onRowSelected(id: string): void {
+    this.runSelected.emit(id);
   }
 
   // ------------------------------------------------------------------
