@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Backend.Models.MarketData;
@@ -161,6 +162,60 @@ public class RunCompareService
         return false;
     }
 
+    /// <summary>
+    /// PR B Phase 4 (Task 4.3 / 4.4) — delegate trade-by-trade reconciliation
+    /// to the Python ``/api/lean-sidecar/reconcile-trades`` endpoint, which
+    /// wraps the canonical ``reconcile_trade_lists`` helper.  Python owns the
+    /// ``DivergenceCategory`` taxonomy; porting it to C# would create a
+    /// second source of truth for the same classification.
+    ///
+    /// Trade values cross the wire as ``Decimal``-typed strings so they
+    /// round-trip without float drift; the Python endpoint coerces via
+    /// ``Decimal(str(value))`` at the boundary.
+    /// </summary>
+    public async Task<TradeDiff> ReconcileTrades(
+        HttpClient pythonClient,
+        StrategyExecution left,
+        StrategyExecution right,
+        CancellationToken cancellationToken)
+    {
+        var requestBody = new
+        {
+            left = left.Trades.OrderBy(t => t.EntryTimestamp).Select(BuildTradePayload).ToList(),
+            right = right.Trades.OrderBy(t => t.EntryTimestamp).Select(BuildTradePayload).ToList(),
+            fill_price_atol = "0.01",
+        };
+
+        using var response = await pythonClient.PostAsJsonAsync(
+            "api/lean-sidecar/reconcile-trades",
+            requestBody,
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+
+        var diff = await response.Content.ReadFromJsonAsync<TradeDiff>(
+            _pythonResponseOpts, cancellationToken);
+
+        return diff ?? throw new InvalidOperationException(
+            "Python /api/lean-sidecar/reconcile-trades returned a null body");
+    }
+
+    private static object BuildTradePayload(BacktestTrade t) => new
+    {
+        trade_number = t.Id,
+        entry_ms_utc = new DateTimeOffset(t.EntryTimestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+        exit_ms_utc = new DateTimeOffset(t.ExitTimestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+        entry_price = t.EntryPrice.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        exit_price = t.ExitPrice.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        quantity = t.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        pnl = t.PnL.ToString(System.Globalization.CultureInfo.InvariantCulture),
+    };
+
+    private static readonly JsonSerializerOptions _pythonResponseOpts = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
     // -------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------
@@ -258,3 +313,41 @@ public record SummaryDeltas(
     SummaryDeltaDouble WinRate,
     SummaryDeltaDecimal MaxDrawdown,
     SummaryDeltaDecimal Sharpe);
+
+/// <summary>
+/// PR B Phase 4 — trade-diff payload returned by the Python
+/// ``reconcile-trades`` endpoint. Shape mirrors spec § 6.5 exactly: matched
+/// pairs in their natural sequence, plus the disjoint left-only / right-only
+/// lists for trades that have no counterpart on the other side.
+/// </summary>
+public record TradeDiff(
+    [property: JsonPropertyName("matched_pairs")] List<MatchedTradePair> MatchedPairs,
+    [property: JsonPropertyName("python_only")] List<UnmatchedTrade> PythonOnly,
+    [property: JsonPropertyName("lean_only")] List<UnmatchedTrade> LeanOnly,
+    [property: JsonPropertyName("first_divergence")] TradeDivergence? FirstDivergence);
+
+public record MatchedTradePair(
+    [property: JsonPropertyName("trade_number")] int TradeNumber,
+    [property: JsonPropertyName("entry_ts_delta_ms")] long EntryTsDeltaMs,
+    [property: JsonPropertyName("exit_ts_delta_ms")] long ExitTsDeltaMs,
+    [property: JsonPropertyName("entry_price_delta")] string EntryPriceDelta,
+    [property: JsonPropertyName("exit_price_delta")] string ExitPriceDelta,
+    [property: JsonPropertyName("qty_delta")] string QtyDelta,
+    [property: JsonPropertyName("pnl_delta")] string PnlDelta,
+    [property: JsonPropertyName("category")] string Category);
+
+public record UnmatchedTrade(
+    [property: JsonPropertyName("trade_number")] int TradeNumber,
+    [property: JsonPropertyName("entry_ms_utc")] long EntryMsUtc,
+    [property: JsonPropertyName("exit_ms_utc")] long ExitMsUtc,
+    [property: JsonPropertyName("entry_price")] string EntryPrice,
+    [property: JsonPropertyName("exit_price")] string ExitPrice,
+    [property: JsonPropertyName("quantity")] string Quantity,
+    [property: JsonPropertyName("pnl")] string Pnl);
+
+public record TradeDivergence(
+    [property: JsonPropertyName("trade_index")] int TradeIndex,
+    [property: JsonPropertyName("what")] string What,
+    [property: JsonPropertyName("category")] string Category,
+    [property: JsonPropertyName("left_value")] string LeftValue,
+    [property: JsonPropertyName("right_value")] string RightValue);

@@ -1,10 +1,12 @@
 using Backend;
 using Backend.Configuration;
+using Backend.Controllers;
 using Backend.Data;
 using Backend.GraphQL;
 using Backend.GraphQL.Comparison;
 using Backend.GraphQL.Resolvers;
 using Backend.Jobs;
+using Backend.Services;
 using Backend.Services.Implementation;
 using Backend.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
@@ -174,6 +176,12 @@ builder.Services.AddScoped<IPortfolioReconciliationService, PortfolioReconciliat
 builder.Services.AddScoped<IStrategyAttributionService, StrategyAttributionService>();
 builder.Services.AddScoped<IPortfolioValidationService, PortfolioValidationService>();
 
+// PR B (2026-05-19) Phase 4 — compare-view domain service. Stateless;
+// scoped so each request gets a fresh instance and the unit tests stay
+// independent. No HttpClient injected here — the controller passes the
+// named "python" client through to ReconcileTrades.
+builder.Services.AddScoped<RunCompareService>();
+
 // Add GraphQL services
 builder.Services
     .AddGraphQLServer()
@@ -224,6 +232,7 @@ app.UseCors();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapStudiesEndpoints();
 app.MapBacktestRunsEndpoints();
+app.MapCompareEndpoints();
 app.MapJobsEndpoints();
 app.MapGraphQL();
 
