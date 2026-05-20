@@ -77,6 +77,31 @@ public class StrategyExecution
     [MaxLength(20)]
     public string FillMode { get; set; } = "signal_bar_close";
 
+    /// <summary>
+    /// PR B (2026-05-19) — canonical DataPolicy block, serialized to JSON.
+    /// Nullable: legacy rows predate the column. New rows are written by
+    /// both engine and lean-sidecar paths.
+    /// </summary>
+    [Column(TypeName = "jsonb")]
+    public string? DataPolicyJson { get; set; }
+
+    /// <summary>
+    /// PR B (2026-05-19) — commission per order, recorded so the compare
+    /// view can gate on it. Nullable for legacy rows. Defaults to 0 when a
+    /// new row's payload omits the field (LEAN-zero-commission templates).
+    /// </summary>
+    [Column(TypeName = "numeric(18,8)")]
+    public decimal? CommissionPerOrder { get; set; }
+
+    /// <summary>
+    /// PR B (2026-05-19) — brokerage policy. Python engine writes
+    /// "algorithm_default" because it doesn't model brokerage; LEAN writes
+    /// whatever the manifest records. Nullable for legacy rows.
+    /// </summary>
+    [MaxLength(40)]
+    [Column(TypeName = "varchar(40)")]
+    public string? BrokeragePolicy { get; set; }
+
     public DateTime ExecutedAt { get; set; } = DateTime.UtcNow;
     public long DurationMs { get; set; }
 
