@@ -187,6 +187,7 @@ builder.Services
     .AddTypeExtension<PortfolioMutation>()
     .AddTypeExtension<DataLabMutation>()
     .AddTypeExtension<SpecStrategyMutation>()
+    .AddTypeExtension<BacktestRunMutation>()
     .AddProjections()
     .AddFiltering()
     .AddSorting()
