@@ -292,13 +292,22 @@ public class RunCompareService
 // -------------------------------------------------------------------
 
 /// <summary>PR B Phase 4 — per-metric delta payload, decimal-valued.</summary>
-public record SummaryDeltaDecimal(decimal Left, decimal Right, decimal Delta);
+public record SummaryDeltaDecimal(
+    [property: JsonPropertyName("left")] decimal Left,
+    [property: JsonPropertyName("right")] decimal Right,
+    [property: JsonPropertyName("delta")] decimal Delta);
 
 /// <summary>PR B Phase 4 — per-metric delta payload, double-valued.</summary>
-public record SummaryDeltaDouble(double Left, double Right, double Delta);
+public record SummaryDeltaDouble(
+    [property: JsonPropertyName("left")] double Left,
+    [property: JsonPropertyName("right")] double Right,
+    [property: JsonPropertyName("delta")] double Delta);
 
 /// <summary>PR B Phase 4 — per-metric delta payload, int-valued.</summary>
-public record SummaryDeltaInt(int Left, int Right, int Delta);
+public record SummaryDeltaInt(
+    [property: JsonPropertyName("left")] int Left,
+    [property: JsonPropertyName("right")] int Right,
+    [property: JsonPropertyName("delta")] int Delta);
 
 /// <summary>
 /// PR B Phase 4 — bundle of per-statistic deltas surfaced on the compare
@@ -307,12 +316,12 @@ public record SummaryDeltaInt(int Left, int Right, int Delta);
 /// column; <c>Delta</c> is always <c>Right - Left</c>.
 /// </summary>
 public record SummaryDeltas(
-    SummaryDeltaInt TotalTrades,
-    SummaryDeltaDecimal TotalPnL,
-    SummaryDeltaDecimal TotalFees,
-    SummaryDeltaDouble WinRate,
-    SummaryDeltaDecimal MaxDrawdown,
-    SummaryDeltaDecimal Sharpe);
+    [property: JsonPropertyName("total_trades")] SummaryDeltaInt TotalTrades,
+    [property: JsonPropertyName("total_pnl")] SummaryDeltaDecimal TotalPnL,
+    [property: JsonPropertyName("total_fees")] SummaryDeltaDecimal TotalFees,
+    [property: JsonPropertyName("win_rate")] SummaryDeltaDouble WinRate,
+    [property: JsonPropertyName("max_drawdown")] SummaryDeltaDecimal MaxDrawdown,
+    [property: JsonPropertyName("sharpe")] SummaryDeltaDecimal Sharpe);
 
 /// <summary>
 /// PR B Phase 4 — trade-diff payload returned by the Python
