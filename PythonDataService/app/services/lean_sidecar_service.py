@@ -774,6 +774,13 @@ def _build_manifest(
         is_clean_note = "is_clean=False"
         error_cats_note = "lean_error_categories=[]"
     failure_note = (f"failure_reason={failure_reason}",) if failure_reason else ()
+    bar_zips = _hash_paths_in_workspace(workspace, [*bar_zip_paths, *quote_zip_paths, daily_path])
+    # PR A hardening: flatten the staged-zip hashes into a path-keyed
+    # dict. The ``StagedDataManifest.bar_zips`` tuple is the
+    # authoritative form; this index is a convenience for consumers
+    # that want "what's the sha for this path?" without traversing
+    # the tuple.
+    staged_zip_sha256 = {sf.path_in_workspace: sf.sha256 for sf in bar_zips}
     return RunManifest(
         schema_version=MANIFEST_SCHEMA_VERSION,
         run_id=request.run_id,
@@ -788,7 +795,7 @@ def _build_manifest(
             # Phase 5c: include the quote zips alongside trade + daily
             # in the manifest's staged-data hash list. Reproducibility
             # requires every byte LEAN saw to be hashed.
-            bar_zips=_hash_paths_in_workspace(workspace, [*bar_zip_paths, *quote_zip_paths, daily_path]),
+            bar_zips=bar_zips,
             market_hours_database=(
                 _hash_paths_in_workspace(workspace, [market_hours])[0] if market_hours is not None else None
             ),
@@ -853,6 +860,7 @@ def _build_manifest(
         effective_algorithm_window_ms=_effective_window_from_normalized(normalized),
         staged_data_window_ms=_staged_window_from_dates(staged_trading_dates),
         bars_consumed_by_symbol=_count_bars_consumed(workspace, request.symbol),
+        staged_zip_sha256=staged_zip_sha256,
         started_at_ms=started_ms,
         finished_at_ms=finished_ms,
         exit_code=exit_code,

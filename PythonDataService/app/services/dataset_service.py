@@ -204,7 +204,7 @@ def list_available_indicators() -> dict[str, list[dict[str, str]]]:
     return categories
 
 
-def fetch_bars_chunked(
+def fetch_bars_chunks_raw(
     polygon: PolygonClientService,
     ticker: str,
     from_date: str,
@@ -217,31 +217,22 @@ def fetch_bars_chunked(
     on_event: Callable[[dict[str, Any]], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch OHLCV bars for a long date range by splitting into chunks.
+    """Return chunk-concatenated bars WITHOUT dedup or re-sort.
 
-    ``sort`` and ``limit`` map to Polygon's aggregate query params but only
-    affect each per-chunk request — the final merged list is always
-    timestamp-sorted ascending (dedup-safe for overlapping chunk boundaries).
-    To surface ``desc`` output to the caller, we reverse after merge.
+    This is the canonical-input path used by the LEAN sidecar: per
+    ``.claude/rules/numerical-rigor.md`` § "External-API ingestion",
+    duplicates and non-monotonic timestamps must surface as errors at
+    the ingestion boundary, not be silently repaired. Callers that want
+    the legacy sanitized behavior (frontend Data Lab, indicator
+    research) should use :func:`fetch_bars_chunked` instead.
 
-    When ``on_event`` is supplied, the chunker emits progress dicts:
-        ``{type: "chunk_plan", total: int}``
-        ``{type: "chunk_start", index: int, total: int, from: str, to: str}``
-        ``{type: "chunk_done", index: int, total: int, bars_returned: int}``
-        ``{type: "chunk_paced", wait_seconds: float, label: str}``  (from throttle)
-
-    When ``cancel_check`` returns True between chunks, the chunker stops
-    early and raises ``RunCancelledError``. The caller should treat this as
-    a cooperative abort, not an error.
+    Progress events and the cooperative-cancel semantics match
+    :func:`fetch_bars_chunked` exactly — only the post-merge sanitation
+    step is omitted.
     """
     start = datetime.strptime(from_date, "%Y-%m-%d")
     end = datetime.strptime(to_date, "%Y-%m-%d")
 
-    # Dynamic chunk size based on timespan and multiplier. Extended
-    # resolutions (second/week/month/quarter/year) get conservative defaults;
-    # the chunker is bar-count-bounded, not bar-duration bounded, so picking
-    # large values for low-frequency resolutions just means the whole range
-    # fits in one chunk.
     _bars_per_day = {
         "second": 27_000,
         "minute": 450,
@@ -255,8 +246,6 @@ def fetch_bars_chunked(
     effective_bpd = _bars_per_day.get(timespan, 450) // max(1, multiplier)
     days_per_chunk = max(1, _POLYGON_MAX_BARS // max(1, effective_bpd))
 
-    # Pre-compute total chunk count so the UI can render "chunk N of M"
-    # before the first request fires.
     total_days = max(1, (end - start).days + 1)
     total_chunks = max(1, (total_days + days_per_chunk - 1) // days_per_chunk)
     if on_event is not None:
@@ -307,6 +296,53 @@ def fetch_bars_chunked(
                 }
             )
         chunk_start = chunk_end + timedelta(days=1)
+
+    return all_bars
+
+
+def fetch_bars_chunked(
+    polygon: PolygonClientService,
+    ticker: str,
+    from_date: str,
+    to_date: str,
+    timespan: str = "minute",
+    multiplier: int = 1,
+    adjusted: bool = True,
+    sort: str = "asc",
+    limit: int = 50000,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch OHLCV bars for a long date range by splitting into chunks.
+
+    ``sort`` and ``limit`` map to Polygon's aggregate query params but only
+    affect each per-chunk request — the final merged list is always
+    timestamp-sorted ascending (dedup-safe for overlapping chunk boundaries).
+    To surface ``desc`` output to the caller, we reverse after merge.
+
+    When ``on_event`` is supplied, the chunker emits progress dicts:
+        ``{type: "chunk_plan", total: int}``
+        ``{type: "chunk_start", index: int, total: int, from: str, to: str}``
+        ``{type: "chunk_done", index: int, total: int, bars_returned: int}``
+        ``{type: "chunk_paced", wait_seconds: float, label: str}``  (from throttle)
+
+    When ``cancel_check`` returns True between chunks, the chunker stops
+    early and raises ``RunCancelledError``. The caller should treat this as
+    a cooperative abort, not an error.
+    """
+    all_bars = fetch_bars_chunks_raw(
+        polygon=polygon,
+        ticker=ticker,
+        from_date=from_date,
+        to_date=to_date,
+        timespan=timespan,
+        multiplier=multiplier,
+        adjusted=adjusted,
+        sort=sort,
+        limit=limit,
+        on_event=on_event,
+        cancel_check=cancel_check,
+    )
 
     total_raw = len(all_bars)
     seen: set[int] = set()
@@ -408,9 +444,7 @@ def fetch_rth_closes(
     date; converting to ET and taking ``.date`` gives the bar's trading date
     unambiguously.
     """
-    buffer_start = (
-        datetime.strptime(from_date, "%Y-%m-%d") - timedelta(days=buffer_days)
-    ).strftime("%Y-%m-%d")
+    buffer_start = (datetime.strptime(from_date, "%Y-%m-%d") - timedelta(days=buffer_days)).strftime("%Y-%m-%d")
 
     daily = polygon.fetch_aggregates(
         ticker=ticker,
@@ -681,11 +715,13 @@ def _detect_gaps(
         diffs = group["timestamp"].diff().dropna()
         for idx, diff in diffs.items():
             if diff > expected_ms * 1.5:
-                gaps.append({
-                    "date": str(date),
-                    "gap_at_ms": int(group.loc[idx, "timestamp"]),
-                    "gap_size_ms": int(diff),
-                })
+                gaps.append(
+                    {
+                        "date": str(date),
+                        "gap_at_ms": int(group.loc[idx, "timestamp"]),
+                        "gap_size_ms": int(diff),
+                    }
+                )
     return gaps
 
 

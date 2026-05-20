@@ -15,23 +15,10 @@ import hashlib
 import json
 import os
 from datetime import date
-from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "polygon_capture"
-
-
-def _pick_fixture() -> Path:
-    if not FIXTURE_ROOT.exists():
-        pytest.skip(f"no fixture directory at {FIXTURE_ROOT}")
-    candidates = sorted(d for d in FIXTURE_ROOT.iterdir() if d.is_dir() and (d / "metadata.json").exists())
-    if not candidates:
-        pytest.skip(f"no Polygon fixture committed under {FIXTURE_ROOT}")
-    if len(candidates) > 1:
-        raise RuntimeError("freshness canary expects exactly one fixture")
-    return candidates[0]
+from tests._helpers.parity_fixture import parity_fixture_dir
 
 
 @pytest.mark.slow
@@ -43,7 +30,7 @@ def test_polygon_fixture_matches_live_refetch() -> None:
     from app.lean_sidecar.polygon_canonical import PolygonProvider
     from app.services.polygon_client import PolygonClientService
 
-    fixture_dir = _pick_fixture()
+    fixture_dir = parity_fixture_dir()
     meta = json.loads((fixture_dir / "metadata.json").read_text())
 
     provider = PolygonProvider(polygon=PolygonClientService())

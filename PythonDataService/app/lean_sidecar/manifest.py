@@ -230,6 +230,14 @@ class RunManifest:
     # Consumption proof per §"Date-window and bar-consumption"
     bars_consumed_by_symbol: Mapping[str, int] = field(default_factory=dict)
 
+    # Convenience index of every staged zip keyed by workspace-relative
+    # path → sha256. Derived from ``staged_data.bar_zips`` but flattened
+    # here so a consumer can answer "what did LEAN see at this path?"
+    # without traversing the nested tuple. Populated for every run —
+    # fixture-backed and live — so a consumer can hash-pin replay
+    # without knowing the data source.
+    staged_zip_sha256: Mapping[str, str] = field(default_factory=dict)
+
     # Run wall-clock
     started_at_ms: int | None = None
     finished_at_ms: int | None = None
