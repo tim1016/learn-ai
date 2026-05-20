@@ -106,6 +106,35 @@ def session_open_ms_utc(d: date) -> int:
     return int(open_et.timestamp() * 1000)
 
 
+def expected_sessions(start: date, end: date) -> list[date]:
+    """Return every NYSE session date in ``[start, end]`` (inclusive).
+
+    Inverse of :func:`blocked_dates_in_range`. Half-days remain
+    sessions; weekends and holidays are omitted. Used by the canonical
+    fetch's opt-in completeness check to assert no expected session is
+    missing from a Polygon response.
+    """
+    schedule = _CALENDAR.schedule(start_date=start, end_date=end)
+    return sorted(ts.date() for ts in schedule.index)
+
+
+def session_close_minute_et(d: date) -> int:
+    """Return the session close as minutes past midnight ET.
+
+    Regular session closes at 16:00 ET → 960. Half-days close at
+    13:00 ET → 780 (occasionally other times historically; the
+    ``pandas_market_calendars`` schedule is the source of truth and
+    is consulted directly). Raises :class:`LookupError` when ``d`` is
+    not a session.
+    """
+    schedule = _CALENDAR.schedule(start_date=d, end_date=d)
+    if schedule.empty:
+        raise LookupError(f"{d.isoformat()} is not a NYSE session")
+    close_ts: pd.Timestamp = schedule["market_close"].iloc[0]
+    close_et = close_ts.tz_convert(_ET)
+    return close_et.hour * 60 + close_et.minute
+
+
 def blocked_dates_in_range(
     start: date,
     end: date,

@@ -24,9 +24,8 @@ import asyncio
 import json
 import sys
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -35,18 +34,16 @@ if str(REPO_ROOT) not in sys.path:
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "polygon_capture"
 
 from app.lean_sidecar import polygon_canonical  # noqa: E402
+from app.lean_sidecar.trading_calendar import (  # noqa: E402
+    next_trading_day,
+    session_open_ms_utc,
+)
+from app.routers.lean_sidecar import TrustedRunRequestModel  # noqa: E402
 from app.services.lean_sidecar_persistence import pair_order_events  # noqa: E402
 from app.services.lean_sidecar_service import (  # noqa: E402
     TrustedRunRequest,
     run_trusted_sample,
 )
-
-
-def _ms_at_session_open(d: date) -> int:
-    """09:30 ET of date d as int64 ms UTC (matches the router's window contract)."""
-    et = ZoneInfo("America/New_York")
-    dt = datetime(d.year, d.month, d.day, 9, 30, tzinfo=et)
-    return int(dt.astimezone(UTC).timestamp() * 1000)
 
 
 async def main(fixture_name: str) -> int:
@@ -82,12 +79,29 @@ async def main(fixture_name: str) -> int:
         fixture_id=fixture_name,
         fixture_sha256=None,
     )
-    request = TrustedRunRequest(
+    # P1-WINDOW: route the window through TrustedRunRequestModel's validator
+    # so end_ms_utc is the session-open of the next trading day after to_date
+    # (skips weekends/holidays), not just to_date + 1 calendar day.
+    exclusive_end = next_trading_day(to_date)
+    model = TrustedRunRequestModel(
         run_id=run_id,
-        start_ms_utc=_ms_at_session_open(from_date),
-        end_ms_utc=_ms_at_session_open(to_date + timedelta(days=1)),
+        symbol=symbol,
+        start_ms_utc=session_open_ms_utc(from_date),
+        end_ms_utc=session_open_ms_utc(exclusive_end),
         starting_cash=100_000.0,
         template="ema_crossover",
+        data_source="polygon",
+        bar_minutes=15,
+        session="regular",
+        adjustment="raw",
+    )
+    request = TrustedRunRequest(
+        run_id=model.run_id,
+        start_ms_utc=model.start_ms_utc,
+        end_ms_utc=model.end_ms_utc,
+        starting_cash=model.starting_cash,
+        algorithm_source=model.algorithm_source,
+        template=model.template,
         data_policy=data_policy,
     )
 

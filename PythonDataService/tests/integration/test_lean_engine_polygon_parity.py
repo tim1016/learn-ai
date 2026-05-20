@@ -23,10 +23,8 @@ import csv
 import json
 import os
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 from decimal import Decimal
-from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -36,33 +34,7 @@ from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction, FillMode, OrderEvent
 from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
 from app.engine.strategy.base import DecisionSnapshot
-
-REPO_ROOT = Path(__file__).resolve().parents[2]  # PythonDataService/
-FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "polygon_capture"
-
-
-def _pick_fixture() -> Path:
-    """Find the single committed parity fixture.
-
-    Currently the parity test pins to one window; if multiple fixtures
-    exist, fail loudly so the test is unambiguous.
-    """
-    if not FIXTURE_ROOT.exists():
-        pytest.skip(f"no fixture directory at {FIXTURE_ROOT} -- run scripts/regenerate_polygon_fixture.py")
-    candidates = sorted(d for d in FIXTURE_ROOT.iterdir() if d.is_dir() and (d / "metadata.json").exists())
-    if not candidates:
-        pytest.skip(f"no Polygon fixture committed under {FIXTURE_ROOT}")
-    if len(candidates) > 1:
-        names = ", ".join(c.name for c in candidates)
-        raise RuntimeError(f"parity test expects exactly one fixture; found {len(candidates)}: {names}")
-    return candidates[0]
-
-
-def _ms_at_session_open(d: date) -> int:
-    """09:30 ET of date d, expressed as int64 ms UTC."""
-    et = ZoneInfo("America/New_York")
-    dt = datetime(d.year, d.month, d.day, 9, 30, tzinfo=et)
-    return int(dt.astimezone(UTC).timestamp() * 1000)
+from tests._helpers.parity_fixture import PARITY_FIXTURE_NAME, parity_fixture_dir
 
 
 class _RecordingAlgorithm(SpyEmaCrossoverAlgorithm):
@@ -175,11 +147,14 @@ def _engine_trades_from_strategy(algo: _RecordingAlgorithm) -> list[dict]:
 async def test_lean_and_engine_agree_on_polygon_fixture(monkeypatch) -> None:
     from app.engine.engine import BacktestEngine
     from app.lean_sidecar import polygon_canonical
+    from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
+    from app.routers.lean_sidecar import TrustedRunRequestModel
     from app.services.lean_sidecar_persistence import pair_order_events
     from app.services.lean_sidecar_service import TrustedRunRequest, run_trusted_sample
     from tests._helpers.parity import assert_state_traces_match, assert_trade_equivalence
 
-    fixture_dir = _pick_fixture()
+    fixture_dir = parity_fixture_dir()
+    assert fixture_dir.name == PARITY_FIXTURE_NAME
     meta = json.loads((fixture_dir / "metadata.json").read_text())
     symbol = meta["symbol"]
     from_date = date.fromisoformat(meta["from_date"])
@@ -224,14 +199,30 @@ async def test_lean_and_engine_agree_on_polygon_fixture(monkeypatch) -> None:
         fixture_id=fixture_dir.name,
         fixture_sha256=None,
     )
-    request = TrustedRunRequest(
+    # P1-WINDOW: route the window construction through TrustedRunRequestModel
+    # so the router's P2.5 session-open exclusive-end contract validates
+    # (rejects same-day end, advances past weekends/holidays). next_trading_day
+    # gives the right exclusive end for Friday to_date plus MLK Monday.
+    exclusive_end = next_trading_day(to_date)
+    model = TrustedRunRequestModel(
         run_id=run_id,
-        # end_ms_utc is session-open of the day AFTER to_date (half-open
-        # per the P2.5 contract).
-        start_ms_utc=_ms_at_session_open(from_date),
-        end_ms_utc=_ms_at_session_open(to_date + timedelta(days=1)),
+        symbol=symbol,
+        start_ms_utc=session_open_ms_utc(from_date),
+        end_ms_utc=session_open_ms_utc(exclusive_end),
         starting_cash=100_000.0,
         template="ema_crossover",
+        data_source="polygon",
+        bar_minutes=15,
+        session="regular",
+        adjustment="raw",
+    )
+    request = TrustedRunRequest(
+        run_id=model.run_id,
+        start_ms_utc=model.start_ms_utc,
+        end_ms_utc=model.end_ms_utc,
+        starting_cash=model.starting_cash,
+        algorithm_source=model.algorithm_source,
+        template=model.template,
         data_policy=data_policy,
     )
     result = await run_trusted_sample(request)
