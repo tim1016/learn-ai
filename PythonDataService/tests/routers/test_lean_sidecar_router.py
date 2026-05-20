@@ -8,8 +8,6 @@ These values are known-good against the _validate_window validator.
 
 from __future__ import annotations
 
-import pytest
-
 _GOOD_START_MS = 1_736_173_800_000
 _GOOD_END_MS = 1_736_778_600_000
 
@@ -34,25 +32,34 @@ def test_trusted_run_request_model_accepts_new_fields() -> None:
     assert model.bar_minutes == 15
 
 
-def test_trusted_run_request_model_legacy_requires_all_legacy_fields() -> None:
-    """PR B (2026-05-19): the legacy top-level shape now requires all of
-    ``data_source`` / ``bar_minutes`` / ``session`` so the router can
-    distinguish "caller picked the legacy shape" from "caller forgot to
-    send a ``data_policy`` block". PR A's per-field Literal defaults
-    silently masked that ambiguity.
-    """
-    from pydantic import ValidationError
+def test_trusted_run_request_model_legacy_accepts_partial_payload_with_pr_a_defaults() -> None:
+    """PR B (2026-05-20, P1 review): the legacy top-level shape preserves
+    PR A's one-deprecation-cycle compatibility guarantee by defaulting
+    missing legacy fields (``data_source``/``bar_minutes``/``session``/
+    ``adjustment``) instead of 422-ing. The deployed Lean Lab UI sends
+    only ``run_id``/``symbol``/window/cash/template — without this
+    defaulting, every UI submit would have 422'd until the client
+    shipped a new payload.
 
+    ``symbol`` is the only field with no sensible default and still
+    must be present on the legacy shape (covered by a sibling test
+    in ``tests/lean_sidecar/test_router_lean_sidecar.py``).
+    """
     from app.routers.lean_sidecar import TrustedRunRequestModel
 
-    with pytest.raises(ValidationError):
-        TrustedRunRequestModel(
-            run_id="test-def",
-            symbol="SPY",
-            start_ms_utc=_GOOD_START_MS,
-            end_ms_utc=_GOOD_END_MS,
-            starting_cash=100_000.0,
-        )
+    model = TrustedRunRequestModel(
+        run_id="test-def",
+        symbol="SPY",
+        start_ms_utc=_GOOD_START_MS,
+        end_ms_utc=_GOOD_END_MS,
+        starting_cash=100_000.0,
+        # No data_source, bar_minutes, session, adjustment, or data_policy.
+    )
+    assert model.data_policy is not None
+    assert model.data_policy.source == "synthetic"
+    assert model.data_policy.session == "regular"
+    assert model.data_policy.strategy_bars.multiplier == 15
+    assert model.data_policy.adjusted is False  # legacy adjustment="raw" default
 
 
 def test_trusted_run_request_model_accepts_non_15_bar_minutes() -> None:
