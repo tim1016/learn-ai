@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "symbol": "SPY",
+  "from_date": "2025-01-13",
+  "to_date": "2025-01-17",
+  "timespan": "minute",
+  "multiplier": 1,
+  "adjusted": false,
+  "session_prefilter": "none",
+  "bar_count": 4062,
+  "fetched_at_ms_utc": 1779240794224,
+  "polygon_sdk_version": "1.12.5",
+  "bars_sha256": "36d3c9358f4bcbfa89b29ec12493f566fdbd71a61ee2ef9d6c7f3bdd6e90d961",
+  "observed_trade_count": 1,
+  "observed_first_entry_ms_utc": 1737125100000,
+  "observed_first_exit_ms_utc": 1737129600000
+}
