@@ -41,9 +41,8 @@ from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
     P2_5_DATE_SEMANTICS_NOTE,
-    BarsSpec,
     BrokeragePolicy,
-    DataPolicyManifest,
+    DataPolicy,
     RunManifest,
     StagedDataManifest,
     WindowMs,
@@ -138,28 +137,33 @@ class RunIdAlreadyUsedError(LeanSidecarServiceError):
 
 @dataclass(frozen=True, slots=True)
 class TrustedRunRequest:
-    """Phase 2a input — bounded set of caller-tunable knobs.
+    """LEAN sidecar run input — PR B canonical shape.
 
-    Phase 4c added the optional ``algorithm_source`` field. When
-    provided, the orchestrator stages it as ``workspace/project/main.py``
-    instead of the bundled trusted sample; when ``None`` (default),
-    the trusted ``buy_and_hold`` sample is used. The class name is
-    still kept as ``TrustedRunRequest`` because the request goes
-    through the same launcher path under the same sandbox shape — the
-    Phase 1c hardening is what makes accepting arbitrary source safe.
+    Top-level ``symbol``/``bar_minutes``/``session``/``adjustment`` are gone;
+    they live inside ``data_policy``. The router (``TrustedRunRequestModel``)
+    accepts both shapes for one cycle and converts before constructing
+    this dataclass.
+
+    Phase 4c added the optional ``algorithm_source`` field. When provided,
+    the orchestrator stages it as ``workspace/project/main.py`` instead of
+    the bundled trusted sample; when ``None`` (default), the trusted sample
+    selected by ``template`` is used. The Phase 1c sandbox shape
+    (``--read-only``, ``--user=<non-root>``, ``--cap-drop=ALL``,
+    ``--network=none``, workspace-only mount) is what makes accepting
+    arbitrary source safe.
 
     ``start_ms_utc`` and ``end_ms_utc`` are int64 ms UTC per the repo's
     timestamp rigor rule. They are converted to ``date`` *inside this
     module* (under the boundary) so the LEAN config's ISO-string
-    parameter values stay consistent with what the algorithm reads
-    via ``GetParameter``.
+    parameter values stay consistent with what the algorithm reads via
+    ``GetParameter``.
     """
 
     run_id: str
-    symbol: str
+    starting_cash: float
     start_ms_utc: int
     end_ms_utc: int
-    starting_cash: float
+    data_policy: DataPolicy
     # Phase 4c — None means "use the bundled trusted sample selected
     # by ``template`` below". When provided, must be valid Python
     # source defining a ``MyAlgorithm`` class (LeanConfig.
@@ -173,15 +177,15 @@ class TrustedRunRequest:
     # caller supplies their own ``algorithm_source`` — operator-pasted
     # source picks its own brokerage via SetBrokerageModel.
     template: TrustedTemplate = "trusted_default"
-    # Phase 6a — data-provenance plumbing for the parity contract.
-    # See docs/superpowers/specs/2026-05-19-lean-engine-polygon-parity-design.md.
-    data_source: Literal["synthetic", "polygon"] = "synthetic"
-    # Pinned to 15 in this branch — the engine algorithm is 15-min only and
-    # EXIT_BARS=5 is tied to that period. Widening this Literal is a
-    # deliberate future change.
-    bar_minutes: Literal[15] = 15
-    session: Literal["regular", "extended"] = "regular"
-    adjustment: Literal["raw"] = "raw"
+
+    @property
+    def symbol(self) -> str:
+        """Symbol carried by ``data_policy.symbol``.
+
+        Kept as a property so the orchestrator body that grew up reading
+        ``request.symbol`` works unchanged after the PR B refactor.
+        """
+        return self.data_policy.symbol
 
     @property
     def start_date(self) -> date:
@@ -383,27 +387,54 @@ def _staged_window_from_dates(trading_dates: list[date]) -> WindowMs | None:
     return WindowMs(start_ms=start_ms, end_ms=end_ms)
 
 
+def _runtime_polygon_adjustment(data_policy: DataPolicy) -> Literal["raw"]:
+    """Return the ``adjustment`` kwarg to pass to ``fetch_canonical_minute_bars``.
+
+    PR B P1 (review feedback): ``data_policy.adjusted`` records the
+    *staging-pipeline INTENT* (spec § 4.4) but is **not** mapped to a
+    Polygon adjustment mode at runtime. ``fetch_canonical_minute_bars``
+    and the bundled trusted templates only accept ``"raw"`` today, so
+    emitting ``"adjusted"`` here would 500 every PR-B-default request
+    (``adjusted=True`` is the new-shape default).
+
+    Until the pre-adjusted staging pipeline lands (Phase 2+) and the
+    downstream fetcher / templates learn to consume adjusted bars,
+    the runtime adjustment is pinned to ``"raw"``. The vocabulary-
+    consistency check in :func:`_assert_adjustment_vocabulary_consistent`
+    still allows ``(adjusted=True, "Raw")`` per the PR B matrix; this
+    function just makes the pin explicit and unit-testable.
+    """
+    # NOTE: parameter intentionally accepted (not unused) so the
+    # signature documents the intent — when staging widens, this
+    # function is the single seam to update.
+    del data_policy
+    return "raw"
+
+
 def _assert_adjustment_vocabulary_consistent(
     *,
     adjusted: bool,
     data_normalization_mode: str,
 ) -> None:
-    """Enforce data_policy.adjusted ⇔ data_normalization_mode at manifest build.
+    """Enforce the PR B adjustment-vocabulary matrix:
 
-    The two fields encode the same intent in different vocabularies
-    (Polygon's adjusted=False flag means 'raw' prices; LEAN's
-    DataNormalizationMode 'Raw' means the same). A mismatch indicates
-    an upstream wiring bug and must fail loud, not be silently
-    reconciled.
+      (adjusted=False, "Raw")       -> accept (PR A's existing case: raw -> raw)
+      (adjusted=True,  "Raw")       -> accept (PR B: pre-adjusted staging; LEAN reads as Raw)
+      (adjusted=False, "Adjusted")  -> reject (LEAN would adjust unadjusted Polygon data)
+      (adjusted=True,  "Adjusted")  -> reject (double-adjustment)
+
+    The ``adjusted`` flag is the staging-pipeline policy, not LEAN's runtime
+    normalization mode. See docs/superpowers/specs/2026-05-19-pr-b-engine-lab-unified-design.md § 4.4.
     """
-    if adjusted is False and data_normalization_mode != "Raw":
+    if data_normalization_mode == "Adjusted":
         raise LeanSidecarServiceError(
-            f"adjustment_vocabulary_mismatch: adjusted=False requires "
-            f"data_normalization_mode='Raw', got {data_normalization_mode!r}"
+            f"adjustment_vocabulary_mismatch: data_normalization_mode='Adjusted' is "
+            f"never valid in PR B's pre-adjusted-staging contract; got adjusted={adjusted}"
         )
-    if adjusted is True and data_normalization_mode == "Raw":
+    if data_normalization_mode != "Raw":
         raise LeanSidecarServiceError(
-            "adjustment_vocabulary_mismatch: adjusted=True conflicts with data_normalization_mode='Raw'"
+            f"adjustment_vocabulary_mismatch: unsupported data_normalization_mode={data_normalization_mode!r}; "
+            "valid: 'Raw'"
         )
 
 
@@ -477,10 +508,24 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         )
     workspace.ensure_layout()
 
-    if request.data_source == "synthetic":
+    # PR B: data-provenance knobs (source/session/adjusted) live on
+    # ``request.data_policy``. ``data_policy.adjusted`` records the
+    # staging-pipeline INTENT (spec § 4.4) — the LEAN runtime always
+    # consumes Raw bars regardless of that flag. The pre-adjusted
+    # staging pipeline that would honor ``adjusted=True`` lands in
+    # Phase 2+; until then, ``fetch_canonical_minute_bars`` only
+    # accepts ``adjustment="raw"`` (and the bundled trusted templates
+    # also raise on anything else), so the runtime fetch is pinned
+    # to ``"raw"`` via :func:`_runtime_polygon_adjustment`. The
+    # vocabulary-consistency check below still allows
+    # ``(adjusted=True, "Raw")`` per the PR B matrix.
+    data_source = request.data_policy.source
+    polygon_adjustment = _runtime_polygon_adjustment(request.data_policy)
+
+    if data_source == "synthetic":
         trading_dates = _iter_trading_dates(request.start_date, request.end_date)
         bars_by_date = [(d, _generate_synthetic_bars(request.symbol, d)) for d in trading_dates]
-    elif request.data_source == "polygon":
+    elif data_source == "polygon":
         from app.lean_sidecar.polygon_canonical import (
             fetch_canonical_minute_bars,
             get_default_provider,
@@ -491,8 +536,8 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
             symbol=request.symbol,
             start_date=request.start_date,
             end_date=request.end_date,
-            session=request.session,
-            adjustment=request.adjustment,
+            session=request.data_policy.session,
+            adjustment=polygon_adjustment,
             provider=provider,
         )
         if not bars_by_date:
@@ -503,7 +548,7 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         trading_dates = [d for d, _ in bars_by_date]
     else:
         # Defense-in-depth — Pydantic Literal already rejects unknown values.
-        raise LeanSidecarServiceError(f"unknown data_source: {request.data_source!r}")
+        raise LeanSidecarServiceError(f"unknown data_source: {data_source!r}")
 
     bar_zip_paths = list(stage_minute_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
     # Phase 5c: stage synthetic minute QUOTE zips alongside the trade
@@ -523,15 +568,20 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     # only mount) is what makes accepting arbitrary source safe.
     source_to_stage = request.algorithm_source if request.algorithm_source else _SOURCE_FOR_TEMPLATE[request.template]
     source_path = stage_algorithm_source(workspace, source_to_stage)
+    # PR B: ``bar_minutes`` for the LEAN config is derived from
+    # ``data_policy.strategy_bars.multiplier``. The bundled EMA template
+    # pins multiplier=15; user-pasted source picks its own consolidator
+    # and ignores this parameter.
+    bar_minutes_for_config = request.data_policy.strategy_bars.multiplier
     config = LeanConfig(
         parameters={
             "start_date": request.start_date.isoformat(),
             "end_date": request.end_date.isoformat(),
             "starting_cash": str(request.starting_cash),
             "symbol": request.symbol,
-            "bar_minutes": str(request.bar_minutes),
-            "session": request.session,
-            "adjustment": request.adjustment,
+            "bar_minutes": str(bar_minutes_for_config),
+            "session": request.data_policy.session,
+            "adjustment": polygon_adjustment,
         }
     )
     config_path = stage_lean_config(workspace, config)
@@ -660,43 +710,24 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     )
 
 
-def _build_data_policy(request: TrustedRunRequest) -> DataPolicyManifest:
-    """Construct DataPolicyManifest from a TrustedRunRequest and assert vocabulary consistency.
+def _build_data_policy(request: TrustedRunRequest) -> DataPolicy:
+    """Return the request's ``data_policy`` after asserting vocabulary consistency.
 
-    ``adjusted`` reflects Polygon's wire concept: ``adjustment="raw"`` means
-    Polygon returns unadjusted (split/dividend-raw) prices, which maps to
-    ``adjusted=False``. LEAN's ``DataNormalizationMode="Raw"`` encodes the same
-    intent in its vocabulary; this function asserts the two are in sync so an
-    upstream wiring bug surfaces at manifest construction time, not silently.
+    PR B (2026-05-19): the request already carries a fully-formed
+    ``DataPolicy`` from the router. The orchestrator only re-asserts the
+    adjustment-vocabulary matrix here so an upstream wiring bug surfaces
+    at manifest construction time rather than silently producing a
+    contradictory manifest.
 
-    ``strategy_bars.multiplier`` reflects the *requested* strategy timeframe
-    (``request.bar_minutes``). For templates that do not consolidate bars
-    (buy_and_hold, reconciliation), this value is technically the request intent
-    rather than actual template-internal behavior, since those templates subscribe
-    to 1-min bars directly. The field is accurate for the ema_crossover template,
-    which this branch is validating.
+    The LEAN template pins ``data_normalization_mode="Raw"`` regardless
+    of the staging pipeline's ``adjusted`` flag, per PR B's pre-adjusted
+    staging contract (see ``_assert_adjustment_vocabulary_consistent``).
     """
-    adjusted = request.adjustment != "raw"  # raw ⇒ adjusted=False
-    data_policy = DataPolicyManifest(
-        source=request.data_source,
-        symbol=request.symbol,
-        adjusted=adjusted,
-        session=request.session,
-        input_bars=BarsSpec(timespan="minute", multiplier=1),
-        strategy_bars=BarsSpec(timespan="minute", multiplier=request.bar_minutes),
-        timestamp_policy="bar_close_ms_utc",
-        timezone="America/New_York",
-        # Fixture identity is populated by the parity test through a
-        # separate hook (Task 11+) — production live-Polygon runs leave
-        # both fields None.
-        fixture_id=None,
-        fixture_sha256=None,
-    )
     _assert_adjustment_vocabulary_consistent(
-        adjusted=data_policy.adjusted,
+        adjusted=request.data_policy.adjusted,
         data_normalization_mode="Raw",  # template pins Raw; widening is future work
     )
-    return data_policy
+    return request.data_policy
 
 
 def _build_manifest(
@@ -788,9 +819,14 @@ def _build_manifest(
             "end_date": request.end_date.isoformat(),
             "starting_cash": request.starting_cash,
             "symbol": request.symbol,
-            "bar_minutes": request.bar_minutes,
-            "session": request.session,
-            "adjustment": request.adjustment,
+            # PR B: ``bar_minutes`` and ``adjustment`` are derived from the
+            # canonical ``data_policy`` block; the manifest's parameter
+            # echo keeps the LEAN-config legacy keys so downstream
+            # reconciliation readers don't need to branch on schema
+            # version yet.
+            "bar_minutes": request.data_policy.strategy_bars.multiplier,
+            "session": request.data_policy.session,
+            "adjustment": "raw" if not request.data_policy.adjusted else "adjusted",
         },
         # API boundary timestamps are already int64 ms UTC; pass them
         # through unchanged so the manifest's recorded window matches

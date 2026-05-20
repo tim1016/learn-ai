@@ -5,21 +5,38 @@ from __future__ import annotations
 import pytest
 
 
-def test_trusted_run_request_defaults_to_synthetic_15min_regular_raw() -> None:
+def _make_data_policy(*, source: str = "synthetic", strategy_multiplier: int = 15) -> DataPolicy:  # noqa: F821
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+
+    return DataPolicy(
+        source=source,  # type: ignore[arg-type]
+        symbol="SPY",
+        adjusted=True,
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=strategy_multiplier),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="live",
+        fixture_id=None,
+        fixture_sha256=None,
+    )
+
+
+def test_trusted_run_request_exposes_symbol_via_data_policy() -> None:
     from app.services.lean_sidecar_service import TrustedRunRequest
 
     req = TrustedRunRequest(
         run_id="test-defaults",
-        symbol="SPY",
         start_ms_utc=1736175600000,
         end_ms_utc=1736607600000,
         starting_cash=100_000.0,
+        data_policy=_make_data_policy(),
     )
 
-    assert req.data_source == "synthetic"
-    assert req.bar_minutes == 15
-    assert req.session == "regular"
-    assert req.adjustment == "raw"
+    assert req.symbol == "SPY"
+    assert req.data_policy.source == "synthetic"
+    assert req.data_policy.session == "regular"
 
 
 def test_trusted_run_request_accepts_polygon_data_source() -> None:
@@ -27,37 +44,117 @@ def test_trusted_run_request_accepts_polygon_data_source() -> None:
 
     req = TrustedRunRequest(
         run_id="test-polygon",
-        symbol="SPY",
         start_ms_utc=1736175600000,
         end_ms_utc=1736607600000,
         starting_cash=100_000.0,
-        data_source="polygon",
-        bar_minutes=15,
-        session="regular",
-        adjustment="raw",
+        data_policy=_make_data_policy(source="polygon"),
     )
 
-    assert req.data_source == "polygon"
+    assert req.data_policy.source == "polygon"
 
 
-def test_build_manifest_raises_when_adjusted_disagrees_with_normalization_mode() -> None:
-    """data_policy.adjusted=False MUST imply data_normalization_mode='Raw'."""
+def test_adjusted_true_with_raw_normalization_is_accepted() -> None:
+    """PR B widens: pre-adjusted staging + LEAN Raw is the new default pairing."""
+    from app.services.lean_sidecar_service import _assert_adjustment_vocabulary_consistent
+
+    _assert_adjustment_vocabulary_consistent(adjusted=True, data_normalization_mode="Raw")  # no raise
+
+
+def test_adjusted_false_with_adjusted_normalization_is_rejected() -> None:
     from app.services.lean_sidecar_service import (
         LeanSidecarServiceError,
         _assert_adjustment_vocabulary_consistent,
     )
 
     with pytest.raises(LeanSidecarServiceError, match="adjustment_vocabulary_mismatch"):
-        _assert_adjustment_vocabulary_consistent(
-            adjusted=False,
-            data_normalization_mode="Adjusted",
-        )
-    with pytest.raises(LeanSidecarServiceError, match="adjustment_vocabulary_mismatch"):
-        _assert_adjustment_vocabulary_consistent(
-            adjusted=True,
-            data_normalization_mode="Raw",
-        )
+        _assert_adjustment_vocabulary_consistent(adjusted=False, data_normalization_mode="Adjusted")
 
-    # Happy paths return None (no exception).
-    _assert_adjustment_vocabulary_consistent(adjusted=False, data_normalization_mode="Raw")
-    _assert_adjustment_vocabulary_consistent(adjusted=True, data_normalization_mode="Adjusted")
+
+def test_adjusted_true_with_adjusted_normalization_is_rejected() -> None:
+    from app.services.lean_sidecar_service import (
+        LeanSidecarServiceError,
+        _assert_adjustment_vocabulary_consistent,
+    )
+
+    with pytest.raises(LeanSidecarServiceError, match="adjustment_vocabulary_mismatch"):
+        _assert_adjustment_vocabulary_consistent(adjusted=True, data_normalization_mode="Adjusted")
+
+
+def test_adjusted_false_with_raw_normalization_is_accepted() -> None:
+    """PR A's existing case: raw → raw."""
+    from app.services.lean_sidecar_service import _assert_adjustment_vocabulary_consistent
+
+    _assert_adjustment_vocabulary_consistent(adjusted=False, data_normalization_mode="Raw")  # no raise
+
+
+def test_runtime_polygon_adjustment_is_always_raw_for_adjusted_true() -> None:
+    """PR B P1 (review feedback): ``data_policy.adjusted=True`` records
+    staging-pipeline INTENT (spec § 4.4) and must NOT be translated to
+    ``polygon_adjustment="adjusted"`` at runtime. The downstream
+    ``fetch_canonical_minute_bars`` and bundled trusted templates only
+    accept ``"raw"`` today, so emitting anything else would 500 every
+    PR-B-default request (``adjusted=True`` is the new-shape field
+    default).
+    """
+    from app.services.lean_sidecar_service import _runtime_polygon_adjustment
+
+    assert _runtime_polygon_adjustment(_make_data_policy(source="polygon")) == "raw"
+
+
+def test_runtime_polygon_adjustment_is_raw_for_adjusted_false() -> None:
+    """PR A's existing case: ``adjusted=False`` -> ``"raw"`` as well."""
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+    from app.services.lean_sidecar_service import _runtime_polygon_adjustment
+
+    dp = DataPolicy(
+        source="polygon",
+        symbol="SPY",
+        adjusted=False,
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="live",
+        fixture_id=None,
+        fixture_sha256=None,
+    )
+    assert _runtime_polygon_adjustment(dp) == "raw"
+
+
+def test_trusted_run_request_carries_data_policy() -> None:
+    """TrustedRunRequest exposes a single data_policy field; legacy top-level fields are gone."""
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+    from app.services.lean_sidecar_service import TrustedRunRequest
+
+    dp = DataPolicy(
+        source="polygon",
+        symbol="SPY",
+        adjusted=True,
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="live",
+        fixture_id=None,
+        fixture_sha256=None,
+    )
+    req = TrustedRunRequest(
+        run_id="test-data-policy",
+        algorithm_source="<source>",
+        starting_cash=100_000.0,
+        start_ms_utc=1736777400000,
+        end_ms_utc=1737298200000,
+        template="ema_crossover",
+        data_policy=dp,
+    )
+
+    assert req.data_policy is dp
+    assert req.symbol == "SPY"  # property accessor reads from data_policy
+    # Legacy top-level dataclass fields removed:
+    fields = {f.name for f in TrustedRunRequest.__dataclass_fields__.values()}
+    assert "bar_minutes" not in fields
+    assert "data_source" not in fields
+    assert "adjustment" not in fields
+    assert "session" not in fields

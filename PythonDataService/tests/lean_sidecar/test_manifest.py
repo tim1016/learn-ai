@@ -19,7 +19,7 @@ import pytest
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
     BarsSpec,
-    DataPolicyManifest,
+    DataPolicy,
     RunManifest,
     StagedDataFile,
     StagedDataManifest,
@@ -33,8 +33,8 @@ from app.lean_sidecar.manifest import (
 )
 
 
-def _default_data_policy() -> DataPolicyManifest:
-    return DataPolicyManifest(
+def _default_data_policy() -> DataPolicy:
+    return DataPolicy(
         source="synthetic",
         symbol="SPY",
         adjusted=False,
@@ -43,6 +43,7 @@ def _default_data_policy() -> DataPolicyManifest:
         strategy_bars=BarsSpec(timespan="minute", multiplier=1),
         timestamp_policy="bar_close_ms_utc",
         timezone="America/New_York",
+        provider_kind="live",
         fixture_id=None,
         fixture_sha256=None,
     )
@@ -171,8 +172,8 @@ class TestNowMsUtc:
         assert sf.path_in_workspace == "a/b.csv"
 
 
-def test_data_policy_manifest_round_trips_synthetic_shape() -> None:
-    dp = DataPolicyManifest(
+def test_data_policy_round_trips_synthetic_shape() -> None:
+    dp = DataPolicy(
         source="synthetic",
         symbol="SPY",
         adjusted=False,
@@ -181,6 +182,7 @@ def test_data_policy_manifest_round_trips_synthetic_shape() -> None:
         strategy_bars=BarsSpec(timespan="minute", multiplier=1),
         timestamp_policy="bar_close_ms_utc",
         timezone="America/New_York",
+        provider_kind="live",
         fixture_id=None,
         fixture_sha256=None,
     )
@@ -188,8 +190,9 @@ def test_data_policy_manifest_round_trips_synthetic_shape() -> None:
     assert dp.source == "synthetic"
     assert dp.input_bars.multiplier == 1
     assert dp.strategy_bars.multiplier == 1
+    assert dp.provider_kind == "live"
     assert dp.fixture_id is None
 
 
-def test_manifest_schema_version_is_3() -> None:
-    assert MANIFEST_SCHEMA_VERSION == 3
+def test_manifest_schema_version_is_4() -> None:
+    assert MANIFEST_SCHEMA_VERSION == 4

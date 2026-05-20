@@ -158,14 +158,53 @@ def _count_weekdays_between(start_ms: int, end_ms: int) -> int:
     return count
 
 
+class _BarsSpecModel(BaseModel):
+    """Pydantic shape for the ``BarsSpec`` block inside ``DataPolicy``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timespan: Literal["minute", "hour", "day"]
+    multiplier: int = Field(..., ge=1)
+
+
+class _DataPolicyModel(BaseModel):
+    """Pydantic shape for the canonical ``DataPolicy`` request block.
+
+    Mirrors ``app.lean_sidecar.data_policy.DataPolicy`` so the router can
+    accept the canonical PR B request shape directly without an extra
+    adapter. The orchestrator-side dataclass is constructed by spreading
+    this model's ``model_dump()`` into ``DataPolicy(**...)``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["synthetic", "polygon"]
+    symbol: str = Field(..., pattern=TICKER_SYMBOL_PATTERN.pattern)
+    adjusted: bool = True
+    session: Literal["regular", "extended"]
+    input_bars: _BarsSpecModel
+    strategy_bars: _BarsSpecModel
+    timestamp_policy: Literal["bar_close_ms_utc"] = "bar_close_ms_utc"
+    timezone: Literal["America/New_York"] = "America/New_York"
+    provider_kind: Literal["live", "fixture"] = "live"
+    fixture_id: str | None = None
+    fixture_sha256: str | None = None
+
+
 class TrustedRunRequestModel(BaseModel):
     """Pydantic shape for POST /api/lean-sidecar/trusted-runs.
+
+    PR B (2026-05-19): accepts BOTH the canonical post-PR-B shape (carrying
+    a ``data_policy`` block) AND the legacy top-level shape
+    (``symbol``/``data_source``/``bar_minutes``/``session``/``adjustment``)
+    for one deprecation cycle. Mixed-shape payloads are rejected so callers
+    can't quietly drift between two contracts in the same payload.
 
     Phase 4c added the optional ``algorithm_source`` field — Phase 1c's
     mandatory sandbox shape (``--read-only``, ``--user=<non-root>``,
     ``--cap-drop=ALL``, ``--network=none``, workspace-only mount)
     closes the threat model that previously gated arbitrary user
-    source. When omitted, the trusted ``buy_and_hold`` sample runs.
+    source. When omitted, the trusted sample selected by ``template`` runs.
 
     The endpoint name (``/trusted-runs``) is retained for backwards
     compatibility with the Phase 2a frontend; the URL no longer
@@ -178,15 +217,6 @@ class TrustedRunRequestModel(BaseModel):
         ...,
         pattern=RUN_ID_PATTERN.pattern,
         description="Slug matching ^[a-z0-9][a-z0-9_-]{2,63}$",
-    )
-    symbol: str = Field(
-        default="SPY",
-        pattern=TICKER_SYMBOL_PATTERN.pattern,
-        description=(
-            "Equity ticker. Must match the strict ticker regex so it cannot "
-            "smuggle path separators into the LEAN data-folder layout; the "
-            "service layer re-validates as defense-in-depth."
-        ),
     )
     start_ms_utc: int = Field(
         ...,
@@ -236,44 +266,99 @@ class TrustedRunRequestModel(BaseModel):
             "report for. Ignored when ``algorithm_source`` is provided."
         ),
     )
-    data_source: Literal["synthetic", "polygon"] = Field(
-        default="synthetic",
+
+    # PR B canonical shape.
+    data_policy: _DataPolicyModel | None = Field(
+        default=None,
         description=(
-            "Phase 6a — whether to stage synthetic deci-cent-clean bars "
-            "(default; back-compat for buy-and-hold and reconciliation "
-            "templates) or fetch Polygon 1-minute bars via the canonical "
-            "provider. Polygon path required for ema_crossover parity "
-            "runs."
+            "PR B canonical data-provenance block. When provided, the "
+            "legacy top-level fields below must be omitted. Mirrors "
+            "``app.lean_sidecar.data_policy.DataPolicy``."
         ),
     )
-    bar_minutes: Literal[15] = Field(
-        default=15,
-        description=(
-            "Strategy-bar consolidation period in minutes. Pinned to 15 "
-            "in this branch — the EMA template's EXIT_BARS=5 time-stop "
-            "is tied to this period. Widening is a deliberate future "
-            "change."
-        ),
+
+    # Legacy top-level fields (one deprecation cycle).
+    symbol: str | None = Field(
+        default=None,
+        pattern=TICKER_SYMBOL_PATTERN.pattern,
+        description="DEPRECATED (PR B): use ``data_policy.symbol``.",
     )
-    session: Literal["regular", "extended"] = Field(
-        default="regular",
-        description=(
-            "Trading session filter. 'regular' = [09:30, 16:00) ET; "
-            "'extended' keeps pre/post-market bars. Both engines see "
-            "the same staged bars after this filter."
-        ),
+    data_source: Literal["synthetic", "polygon"] | None = Field(
+        default=None,
+        description="DEPRECATED (PR B): use ``data_policy.source``.",
     )
-    adjustment: Literal["raw"] = Field(
-        default="raw",
+    bar_minutes: int | None = Field(
+        default=None,
+        ge=1,
+        description="DEPRECATED (PR B): use ``data_policy.strategy_bars.multiplier``.",
+    )
+    session: Literal["regular", "extended"] | None = Field(
+        default=None,
+        description="DEPRECATED (PR B): use ``data_policy.session``.",
+    )
+    adjustment: Literal["raw", "adjusted"] | None = Field(
+        default=None,
         description=(
-            "Price-adjustment policy. Phase 1 supports only 'raw' "
-            "(no split/dividend adjustment); LEAN's DataNormalizationMode "
-            "is pinned to Raw to match."
+            "DEPRECATED (PR B): use ``data_policy.adjusted`` (bool). "
+            "Legacy values: ``'raw'`` -> adjusted=False; ``'adjusted'`` -> adjusted=True."
         ),
     )
 
     @model_validator(mode="after")
-    def _validate_window(self) -> TrustedRunRequestModel:
+    def _normalize_to_data_policy(self) -> TrustedRunRequestModel:
+        """Synthesize ``data_policy`` from legacy fields and reject mixed shapes."""
+        legacy_present = any(
+            v is not None for v in (self.symbol, self.data_source, self.bar_minutes, self.session, self.adjustment)
+        )
+        if self.data_policy is not None and legacy_present:
+            raise ValueError(
+                "Cannot mix top-level legacy fields (symbol/data_source/bar_minutes/"
+                "session/adjustment) with a ``data_policy`` block; choose one shape."
+            )
+        if self.data_policy is None:
+            # Synthesize from legacy fields. To preserve PR A's
+            # one-deprecation-cycle compatibility guarantee, missing
+            # legacy fields fall back to PR A's defaults rather than
+            # 422-ing — the existing Lean Lab UI posts only
+            # ``run_id``/``symbol``/window/cash/template. ``symbol`` is
+            # the one field with no sensible default (it's the asset
+            # being traded), so its absence still raises.
+            if self.symbol is None:
+                raise ValueError("When ``data_policy`` is omitted, ``symbol`` is required (legacy shape).")
+            # Legacy-shape defaults match PR A. ``adjustment`` defaults
+            # to ``"raw"`` here (NOT to ``adjusted=True``) — the
+            # pre-PR-B wire vocabulary's implicit value was ``"raw"``,
+            # and silently switching legacy callers to ``adjusted=True``
+            # would break the one-cycle compat promise. New callers
+            # that want ``adjusted=True`` send the full ``data_policy``
+            # block (where ``adjusted: bool = True`` is the field
+            # default).
+            legacy_data_source = self.data_source if self.data_source is not None else "synthetic"
+            legacy_bar_minutes = self.bar_minutes if self.bar_minutes is not None else 15
+            legacy_session = self.session if self.session is not None else "regular"
+            legacy_adjustment = self.adjustment if self.adjustment is not None else "raw"
+            adjusted = legacy_adjustment == "adjusted"
+            object.__setattr__(
+                self,
+                "data_policy",
+                _DataPolicyModel(
+                    source=legacy_data_source,
+                    symbol=self.symbol.upper(),
+                    adjusted=adjusted,
+                    session=legacy_session,
+                    input_bars=_BarsSpecModel(timespan="minute", multiplier=1),
+                    strategy_bars=_BarsSpecModel(timespan="minute", multiplier=legacy_bar_minutes),
+                ),
+            )
+            logger.warning(
+                "TrustedRunRequest using legacy top-level shape; convert to data_policy block. run_id=%s",
+                self.run_id,
+            )
+        self._validate_window_normalized()
+        return self
+
+    def _validate_window_normalized(self) -> None:
+        """Validate window + symbol + algorithm_source using ``data_policy``."""
         if self.end_ms_utc <= self.start_ms_utc:
             raise ValueError("end_ms_utc must be strictly greater than start_ms_utc")
         # P2.5 contract: both endpoints are 09:30 ET (session-open) ms,
@@ -320,8 +405,9 @@ class TrustedRunRequestModel(BaseModel):
         # not the dot-only case (``"."``, ``".."``). validate_symbol
         # closes that hole and is the same function the staging
         # writers re-check against.
+        assert self.data_policy is not None  # synthesized by _normalize_to_data_policy
         try:
-            validate_symbol(self.symbol)
+            validate_symbol(self.data_policy.symbol)
         except SymbolValidationError as e:
             raise ValueError(str(e)) from e
         # Phase 4c: algorithm_source validation. Size cap is the
@@ -344,7 +430,6 @@ class TrustedRunRequestModel(BaseModel):
                     f"max is {MAX_ALGORITHM_SOURCE_BYTES} bytes "
                     f"({MAX_ALGORITHM_SOURCE_BYTES // 1024} KiB)"
                 )
-        return self
 
 
 class RunSummaryModel(BaseModel):
@@ -459,18 +544,40 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
     arbitrary user input. See ADR §"Phase sequencing" for when that
     gate opens (Phase 3).
     """
+    # PR B: ``payload.data_policy`` is either posted by the caller
+    # directly or synthesized from legacy fields by
+    # ``TrustedRunRequestModel._normalize_to_data_policy``. Build the
+    # orchestrator-side ``DataPolicy`` dataclass by spreading the
+    # validated Pydantic block — its field names match the dataclass
+    # 1:1 (BarsSpec sub-shape included).
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+
+    assert payload.data_policy is not None  # invariant after _normalize_to_data_policy
+    dp_model = payload.data_policy
+    data_policy = DataPolicy(
+        source=dp_model.source,
+        symbol=dp_model.symbol,
+        adjusted=dp_model.adjusted,
+        session=dp_model.session,
+        input_bars=BarsSpec(timespan=dp_model.input_bars.timespan, multiplier=dp_model.input_bars.multiplier),
+        strategy_bars=BarsSpec(
+            timespan=dp_model.strategy_bars.timespan,
+            multiplier=dp_model.strategy_bars.multiplier,
+        ),
+        timestamp_policy=dp_model.timestamp_policy,
+        timezone=dp_model.timezone,
+        provider_kind=dp_model.provider_kind,
+        fixture_id=dp_model.fixture_id,
+        fixture_sha256=dp_model.fixture_sha256,
+    )
     request = TrustedRunRequest(
         run_id=payload.run_id,
-        symbol=payload.symbol.upper(),
         start_ms_utc=payload.start_ms_utc,
         end_ms_utc=payload.end_ms_utc,
         starting_cash=payload.starting_cash,
         algorithm_source=payload.algorithm_source,
         template=payload.template,
-        data_source=payload.data_source,
-        bar_minutes=payload.bar_minutes,
-        session=payload.session,
-        adjustment=payload.adjustment,
+        data_policy=data_policy,
     )
     try:
         result = await run_trusted_sample(request)

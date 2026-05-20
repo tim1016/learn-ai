@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
 from app.lean_sidecar.trusted_samples.buy_and_hold import BUY_AND_HOLD_SOURCE
 from app.lean_sidecar.trusted_samples.buy_and_hold_reconciliation import (
     BUY_AND_HOLD_RECONCILIATION_SOURCE,
@@ -22,13 +23,29 @@ from app.services.lean_sidecar_service import (
 )
 
 
+def _default_data_policy() -> DataPolicy:
+    return DataPolicy(
+        source="synthetic",
+        symbol="SPY",
+        adjusted=False,
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="live",
+        fixture_id=None,
+        fixture_sha256=None,
+    )
+
+
 def _request(**overrides) -> TrustedRunRequest:
     base = {
         "run_id": "ut_template",
-        "symbol": "SPY",
         "start_ms_utc": 1_736_121_600_000,
         "end_ms_utc": 1_736_467_200_000,
         "starting_cash": 100_000.0,
+        "data_policy": _default_data_policy(),
     }
     base.update(overrides)
     return TrustedRunRequest(**base)

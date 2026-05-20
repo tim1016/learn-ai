@@ -222,14 +222,30 @@ async def test_ema_crossover_lean_matches_spec_on_real_spy_data() -> None:
 
     # ---- 1. Run the LEAN trusted template ema_crossover via the launcher. ----
     run_id = f"parity_ema_{uuid4().hex[:12]}"
+    # PR B: TrustedRunRequest carries a single ``data_policy`` block.
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+
+    parity_data_policy = DataPolicy(
+        source="synthetic",
+        symbol=SYMBOL,
+        adjusted=False,
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="live",
+        fixture_id=None,
+        fixture_sha256=None,
+    )
     lean_result = await run_trusted_sample(
         TrustedRunRequest(
             run_id=run_id,
-            symbol=SYMBOL,
             start_ms_utc=_date_to_ms_utc(WINDOW_START),
             end_ms_utc=_date_to_ms_utc(WINDOW_END),
             starting_cash=STARTING_CASH,
             template="ema_crossover",
+            data_policy=parity_data_policy,
         )
     )
     if lean_result.strategy_execution_id is None:
