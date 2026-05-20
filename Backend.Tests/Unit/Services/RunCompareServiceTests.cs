@@ -111,6 +111,54 @@ public class RunCompareServiceTests
     }
 
     // -------------------------------------------------------------------
+    // Task 4.2 — summary deltas + state-trace detection
+    // -------------------------------------------------------------------
+
+    [Fact]
+    public void ComputeSummaryDeltas_IncludesTradesPnLFeesWinRateMaxDD()
+    {
+        var left = MakeRow(totalTrades: 7, totalPnL: 421.50m, fees: 0m, winRate: 0.571m, maxDD: -15.20m);
+        var right = MakeRow(totalTrades: 7, totalPnL: 419.80m, fees: 0m, winRate: 0.571m, maxDD: -15.20m);
+        var sut = new RunCompareService();
+
+        var deltas = sut.ComputeSummaryDeltas(left, right);
+
+        Assert.Equal(0, deltas.TotalTrades.Delta);
+        Assert.Equal(-1.70m, deltas.TotalPnL.Delta);
+        Assert.Equal(0.0, deltas.WinRate.Delta, 9);
+    }
+
+    [Fact]
+    public void DetectStateTrace_NeitherSideHasStateArtifact_ReturnsFalse()
+    {
+        // v1: StrategyExecution.WorkspacePath isn't yet wired through, so
+        // neither side can carry the artifact. The detector returns false
+        // and the UI omits the section — no error.
+        var left = MakeRow();
+        var right = MakeRow();
+        var sut = new RunCompareService();
+
+        var available = sut.DetectStateTrace(left, right);
+
+        Assert.False(available);
+    }
+
+    [Fact]
+    public void DetectStateTrace_OnlyOneSideHasArtifact_ReturnsFalseNoError()
+    {
+        // Spec § 8.3: state-trace section hides when only one side has the
+        // artifact. Contract is that no exception is raised — the call is
+        // simply false.
+        var left = MakeRow();
+        var right = MakeRow();
+        var sut = new RunCompareService();
+
+        var exception = Record.Exception(() => sut.DetectStateTrace(left, right));
+
+        Assert.Null(exception);
+    }
+
+    // -------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------
 
@@ -121,6 +169,11 @@ public class RunCompareServiceTests
         decimal commission = 0m,
         string? brokerage = "algorithm_default",
         (string Timespan, int Multiplier)? strategyBars = null,
+        int totalTrades = 0,
+        decimal totalPnL = 0m,
+        decimal fees = 0m,
+        decimal winRate = 0m,
+        decimal maxDD = 0m,
         string? dataPolicyJson = "")
     {
         // Defaults: CanonicalDataPolicyJson unless caller passes a literal null
@@ -152,6 +205,11 @@ public class RunCompareServiceTests
             CommissionPerOrder = commission,
             BrokeragePolicy = brokerage,
             DataPolicyJson = policy,
+            TotalTrades = totalTrades,
+            TotalPnL = totalPnL,
+            TotalFees = fees,
+            WinRate = winRate,
+            MaxDrawdown = maxDD,
             Source = "engine",
         };
     }

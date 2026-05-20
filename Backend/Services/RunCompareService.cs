@@ -116,6 +116,51 @@ public class RunCompareService
         };
     }
 
+    /// <summary>
+    /// PR B Phase 4 (Task 4.2) — per-statistic numeric deltas between two
+    /// runs. Decimals are subtracted exactly (no float conversion); doubles
+    /// use the natural IEEE-754 subtraction. Each metric is wrapped in a
+    /// <see cref="SummaryDeltaDecimal"/> / <see cref="SummaryDeltaDouble"/>
+    /// / <see cref="SummaryDeltaInt"/> carrying both raw values plus the
+    /// delta so the UI never has to do its own arithmetic.
+    /// </summary>
+    public SummaryDeltas ComputeSummaryDeltas(StrategyExecution left, StrategyExecution right)
+    {
+        return new SummaryDeltas(
+            TotalTrades: new SummaryDeltaInt(left.TotalTrades, right.TotalTrades, right.TotalTrades - left.TotalTrades),
+            TotalPnL: new SummaryDeltaDecimal(left.TotalPnL, right.TotalPnL, right.TotalPnL - left.TotalPnL),
+            TotalFees: new SummaryDeltaDecimal(left.TotalFees, right.TotalFees, right.TotalFees - left.TotalFees),
+            WinRate: new SummaryDeltaDouble((double)left.WinRate, (double)right.WinRate, (double)(right.WinRate - left.WinRate)),
+            MaxDrawdown: new SummaryDeltaDecimal(left.MaxDrawdown, right.MaxDrawdown, right.MaxDrawdown - left.MaxDrawdown),
+            Sharpe: new SummaryDeltaDecimal(left.SharpeRatio, right.SharpeRatio, right.SharpeRatio - left.SharpeRatio));
+    }
+
+    /// <summary>
+    /// PR B Phase 4 (Task 4.2) — state-trace artifact detection. Returns
+    /// <c>true</c> only when both runs ship the artifact: LEAN runs persist
+    /// <c>state.csv</c> under <c>output/storage/</c> in the workspace
+    /// directory; the Python engine emits <c>decision-snapshots.csv</c>
+    /// (Phase 5 wiring). One-side-only is NOT an error per spec § 8.3 —
+    /// we simply return <c>false</c> and the UI hides the section.
+    ///
+    /// v1 caveat: ``StrategyExecution`` does not yet carry a workspace path
+    /// column, so neither side can carry the artifact and the detector
+    /// always returns false. The contract — never raise — is exercised by
+    /// the controller tests; Phase 5 will wire the artifact lookup in.
+    /// </summary>
+    public bool DetectStateTrace(StrategyExecution left, StrategyExecution right)
+    {
+        return HasStateArtifacts(left) && HasStateArtifacts(right);
+    }
+
+    private static bool HasStateArtifacts(StrategyExecution _)
+    {
+        // v1: StrategyExecution does not carry a workspace path column. The
+        // detector therefore conservatively returns false; Phase 5 adds the
+        // column and the corresponding artifact lookup.
+        return false;
+    }
+
     // -------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------
@@ -186,3 +231,30 @@ public class RunCompareService
         [JsonPropertyName("multiplier")] public int Multiplier { get; set; }
     }
 }
+
+// -------------------------------------------------------------------
+// Public records returned by RunCompareService
+// -------------------------------------------------------------------
+
+/// <summary>PR B Phase 4 — per-metric delta payload, decimal-valued.</summary>
+public record SummaryDeltaDecimal(decimal Left, decimal Right, decimal Delta);
+
+/// <summary>PR B Phase 4 — per-metric delta payload, double-valued.</summary>
+public record SummaryDeltaDouble(double Left, double Right, double Delta);
+
+/// <summary>PR B Phase 4 — per-metric delta payload, int-valued.</summary>
+public record SummaryDeltaInt(int Left, int Right, int Delta);
+
+/// <summary>
+/// PR B Phase 4 — bundle of per-statistic deltas surfaced on the compare
+/// view's Summary card row. Each field's <c>Left</c> / <c>Right</c> matches
+/// the corresponding <see cref="Backend.Models.MarketData.StrategyExecution"/>
+/// column; <c>Delta</c> is always <c>Right - Left</c>.
+/// </summary>
+public record SummaryDeltas(
+    SummaryDeltaInt TotalTrades,
+    SummaryDeltaDecimal TotalPnL,
+    SummaryDeltaDecimal TotalFees,
+    SummaryDeltaDouble WinRate,
+    SummaryDeltaDecimal MaxDrawdown,
+    SummaryDeltaDecimal Sharpe);
