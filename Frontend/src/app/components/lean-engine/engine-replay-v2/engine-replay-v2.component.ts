@@ -7,7 +7,7 @@ import { Observable, forkJoin, map } from 'rxjs';
 import { environment } from '../../../../environments/environment';
 import { MarketDataService } from '../../../services/market-data.service';
 import { BacktestTrade } from '../../../graphql/types';
-import { StudyListItem } from '../engine-history/engine-history.component';
+import { StudyListItem } from '../study-list-item';
 import { ReplayEngineV2Service } from './services/replay-engine-v2.service';
 import { ReplayChartV2Component } from './replay-chart-v2/replay-chart-v2.component';
 import { ReplayControlsV2Component } from './replay-controls-v2/replay-controls-v2.component';

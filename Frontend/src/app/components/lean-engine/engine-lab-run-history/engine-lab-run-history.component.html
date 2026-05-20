@@ -1,0 +1,64 @@
+<div class="history-toolbar">
+  <label class="filter">
+    <span class="filter__label">Engine</span>
+    <select
+      data-testid="engine-filter"
+      [value]="engineFilter()"
+      (change)="setEngineFilter($any($event.target).value)"
+      aria-label="Filter by engine">
+      <option value="ALL">All</option>
+      <option value="PYTHON">Python</option>
+      <option value="LEAN">LEAN</option>
+    </select>
+  </label>
+
+  <div class="spacer"></div>
+
+  <div class="chooser">
+    <button
+      type="button"
+      class="chooser__toggle"
+      data-testid="column-chooser"
+      [attr.aria-expanded]="chooserOpen()"
+      aria-haspopup="true"
+      (click)="toggleChooser()">
+      <i class="pi pi-table" aria-hidden="true"></i>
+      Columns
+    </button>
+    @if (chooserOpen()) {
+      <div class="chooser__menu" role="menu">
+        @for (col of allColumns; track col.id) {
+          <label class="chooser__item">
+            <input
+              type="checkbox"
+              [checked]="isColumnVisible(col.id)"
+              (change)="toggleColumn(col.id)"
+              [attr.aria-label]="'Toggle ' + col.label + ' column'" />
+            {{ col.label }}
+          </label>
+        }
+        <button type="button" class="chooser__reset" (click)="resetColumns()">
+          Reset to defaults
+        </button>
+      </div>
+    }
+  </div>
+
+  <button
+    type="button"
+    class="export-btn"
+    data-testid="export-csv"
+    [disabled]="!canExport()"
+    (click)="exportCsv()"
+    aria-label="Export visible rows as CSV">
+    <i class="pi pi-download" aria-hidden="true"></i>
+    Export CSV
+  </button>
+</div>
+
+<app-run-history
+  [rows]="rows() ?? []"
+  [allowCompare]="true"
+  (compareRequested)="onCompare($event)"
+  (runSelected)="onRowSelected($event)"
+  (notesEdited)="onNotesEdited($event)" />

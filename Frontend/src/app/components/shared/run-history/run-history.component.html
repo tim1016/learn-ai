@@ -27,10 +27,12 @@
         <th scope="col">Strategy</th>
         <th scope="col">Symbol</th>
         <th scope="col">Window</th>
+        <th scope="col">Bars</th>
         <th scope="col">Executed</th>
         <th scope="col" class="num">Trades</th>
         <th scope="col" class="num">Net PnL</th>
         <th scope="col">Status</th>
+        <th scope="col">Notes</th>
       </tr>
     </thead>
     <tbody>
@@ -51,6 +53,7 @@
           <td>{{ row.strategyName }}</td>
           <td>{{ row.symbol ?? '—' }}</td>
           <td>{{ row.startDate }} – {{ row.endDate }}</td>
+          <td class="bars-cell">{{ barsSummary(row.dataPolicy) }}</td>
           <td>{{ row.executedAt }}</td>
           <td class="num">{{ row.totalTrades }}</td>
           <td class="num" [class.positive]="row.totalPnl > 0" [class.negative]="row.totalPnl < 0">
@@ -61,6 +64,38 @@
               <span class="badge badge--warning">Open at end</span>
             } @else {
               <span class="badge badge--neutral">Complete</span>
+            }
+          </td>
+          <td class="notes-cell" (click)="$event.stopPropagation()">
+            @if (editingId() === row.id) {
+              <input
+                type="text"
+                class="notes-input"
+                data-testid="notes-input"
+                [value]="editingValue()"
+                (input)="updateEditingValue($any($event.target).value)"
+                (keydown.enter)="saveNotes(row)"
+                (keydown.escape)="cancelEditNotes()"
+                [attr.aria-label]="'Notes for run ' + row.id" />
+              <button
+                type="button"
+                class="notes-save"
+                data-testid="notes-save"
+                (click)="saveNotes(row)">Save</button>
+              <button
+                type="button"
+                class="notes-cancel"
+                data-testid="notes-cancel"
+                (click)="cancelEditNotes()">Cancel</button>
+            } @else {
+              <button
+                type="button"
+                class="notes-edit"
+                data-testid="notes-edit"
+                (click)="startEditNotes(row, $event)"
+                [attr.aria-label]="row.notes ? 'Edit notes' : 'Add notes'">
+                {{ row.notes ?? '+ note' }}
+              </button>
             }
           </td>
         </tr>
