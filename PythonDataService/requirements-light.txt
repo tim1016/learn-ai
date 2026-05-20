@@ -26,3 +26,8 @@ plotly>=5.20,<7
 # docs/architecture/ibkr-integration-phase1.md). Pinned to 2.x — pin tight
 # because IBKR wire protocol revs are coupled to TWS Gateway version.
 ib_async>=2.0,<3.0
+# ruff is a runtime dependency for the LEAN script editor's lint endpoint
+# (POST /api/lean-sidecar/lint) — spawned as a subprocess to validate
+# operator-typed QCAlgorithm source before submission. Same version pin
+# as requirements-dev.txt so dev/CI/runtime see identical diagnostics.
+ruff>=0.8
