@@ -137,7 +137,25 @@ export class EngineResultsComponent {
   showFeeDrawer = signal(false);
   toggleFeeDrawer(): void { this.showFeeDrawer.update(v => !v); }
 
-  leanStats = computed(() => this.result().lean_statistics ?? null);
+  /**
+   * Defensive shape guard: legacy LEAN runs persisted before commit
+   * <fix/lean-engine-lab-ui-bugs> wrote a flat
+   * ``{statistics, runtime_statistics, parser_version, workspace_path}``
+   * dict into ``StrategyExecution.LeanStatisticsJson`` instead of the
+   * canonical ``{portfolio, trade, runtime}`` shape the engine path
+   * emits. Reading ``.portfolio.total_net_profit`` on the legacy shape
+   * threw ``Cannot read properties of undefined`` and crashed the
+   * Engine Lab on history-click.
+   *
+   * Returning ``null`` here makes the template's
+   * ``@if (leanStats(); as lean)`` guard fall through, so legacy rows
+   * render no LEAN-stats dashboard instead of crashing. New runs
+   * always emit the canonical shape and render normally.
+   */
+  leanStats = computed(() => {
+    const ls = this.result().lean_statistics;
+    return ls?.portfolio && ls?.trade && ls?.runtime ? ls : null;
+  });
 
   totalFees = computed(() => this.result().total_fees ?? 0);
 

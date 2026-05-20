@@ -65,6 +65,7 @@ describe("LeanSidecarService", () => {
         analysis_failed: [],
         failed_data_requests: [],
         runtime_error: [],
+        benchmark_unavailable: [],
         other: [],
       },
       log_tail: "ok",
