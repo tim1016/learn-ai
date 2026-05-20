@@ -7,10 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 import { LeanLabRunHistoryComponent } from "./lean-lab-run-history.component";
 import { BacktestRunNode, BACKTEST_RUNS_QUERY } from "../../../graphql/backtest-runs.query";
 
-const FAKE_NODES: BacktestRunNode[] = [
-  {
+function baseNode(over: Partial<BacktestRunNode> = {}): BacktestRunNode {
+  return {
     id: "10",
     source: "lean-sidecar",
+    engine: "LEAN",
     strategyName: "ema_crossover",
     leanRunId: "ui_run_abc",
     parameters: '{"symbol":"SPY","starting_cash":100000}',
@@ -19,21 +20,26 @@ const FAKE_NODES: BacktestRunNode[] = [
     executedAt: "2026-05-19T02:49:00Z",
     totalTrades: 1,
     totalPnL: 9.0,
+    commissionPerOrder: 0,
+    brokeragePolicy: null,
+    notes: null,
+    dataPolicy: null,
     trades: [{ isSyntheticExit: false }],
-  },
-  {
+    ...over,
+  };
+}
+
+const FAKE_NODES: BacktestRunNode[] = [
+  baseNode({ id: "10", strategyName: "ema_crossover", leanRunId: "ui_run_abc" }),
+  baseNode({
     id: "11",
-    source: "lean-sidecar",
     strategyName: "trusted_default",
     leanRunId: "ui_run_xyz",
-    parameters: '{"symbol":"SPY","starting_cash":100000}',
-    startDate: "2025-01-06",
     endDate: "2025-01-06",
     executedAt: "2026-05-19T02:50:00Z",
-    totalTrades: 1,
     totalPnL: 5.0,
     trades: [{ isSyntheticExit: true }],
-  },
+  }),
 ];
 
 function makeApollo(nodes: BacktestRunNode[] = FAKE_NODES) {
@@ -66,13 +72,13 @@ async function setup(
 }
 
 describe("LeanLabRunHistoryComponent", () => {
-  it("queries backtestRuns with engine=LEAN_SIDECAR", async () => {
+  it("queries backtestRuns with engine=LEAN", async () => {
     const apollo = makeApollo();
     await setup(apollo);
     expect(apollo.watchQuery).toHaveBeenCalledWith(
       expect.objectContaining({
         query: BACKTEST_RUNS_QUERY,
-        variables: expect.objectContaining({ engine: "LEAN_SIDECAR" }),
+        variables: expect.objectContaining({ engine: "LEAN" }),
       }),
     );
   });
@@ -125,19 +131,15 @@ describe("LeanLabRunHistoryComponent", () => {
 
   it("does not emit runSelected when the row has no leanRunId", async () => {
     const nodes = [
-      {
+      baseNode({
         id: "20",
-        source: "lean-sidecar" as const,
         strategyName: "no_lean_id",
         leanRunId: null,
         parameters: null,
-        startDate: "2025-01-06",
-        endDate: "2025-01-10",
-        executedAt: "2026-05-19T03:00:00Z",
         totalTrades: 0,
         totalPnL: 0,
         trades: [],
-      },
+      }),
     ];
     const emitted: string[] = [];
     const fixture = await setup(makeApollo(nodes));
@@ -159,19 +161,15 @@ describe("LeanLabRunHistoryComponent", () => {
     // extractSymbol is a module-private function — test indirectly by
     // verifying the component renders a dash for a null-parameters row.
     const nodes: BacktestRunNode[] = [
-      {
+      baseNode({
         id: "20",
-        source: "lean-sidecar",
         strategyName: "no_params",
         leanRunId: null,
         parameters: null,
-        startDate: "2025-01-06",
-        endDate: "2025-01-10",
-        executedAt: "2026-05-19T03:00:00Z",
         totalTrades: 0,
         totalPnL: 0,
         trades: [],
-      },
+      }),
     ];
     const fixture = await setup(makeApollo(nodes));
     const html = (fixture.nativeElement as HTMLElement).textContent ?? "";

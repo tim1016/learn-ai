@@ -1,8 +1,9 @@
 import { gql } from "apollo-angular";
 import { RunHistoryRow } from "../components/shared/run-history/run-history.types";
+import type { DataPolicy } from "../models/data-policy";
 
 export const BACKTEST_RUNS_QUERY = gql`
-  query BacktestRuns($engine: EngineSource, $symbol: String, $first: Int, $after: String) {
+  query BacktestRuns($engine: Engine, $symbol: String, $first: Int, $after: String) {
     backtestRuns(engine: $engine, symbol: $symbol, first: $first, after: $after) {
       pageInfo {
         hasNextPage
@@ -11,6 +12,7 @@ export const BACKTEST_RUNS_QUERY = gql`
       nodes {
         id
         source
+        engine
         strategyName
         leanRunId
         parameters
@@ -19,6 +21,28 @@ export const BACKTEST_RUNS_QUERY = gql`
         executedAt
         totalTrades
         totalPnL
+        commissionPerOrder
+        brokeragePolicy
+        notes
+        dataPolicy {
+          source
+          symbol
+          adjusted
+          session
+          inputBars {
+            timespan
+            multiplier
+          }
+          strategyBars {
+            timespan
+            multiplier
+          }
+          timestampPolicy
+          timezone
+          providerKind
+          fixtureId
+          fixtureSha256
+        }
         trades {
           isSyntheticExit
         }
@@ -27,9 +51,20 @@ export const BACKTEST_RUNS_QUERY = gql`
   }
 `;
 
+export const UPDATE_BACKTEST_RUN_NOTES_MUTATION = gql`
+  mutation UpdateBacktestRunNotes($id: Int!, $notes: String!) {
+    updateBacktestRunNotes(id: $id, notes: $notes) {
+      id
+      notes
+    }
+  }
+`;
+
 export interface BacktestRunNode {
   id: string;
   source: "engine" | "strategy-lab" | "lean-sidecar";
+  /** PR B (2026-05-19) — unified engine identity (PYTHON | LEAN). */
+  engine: Engine;
   strategyName: string;
   leanRunId: string | null;
   parameters: string | null;
@@ -38,6 +73,14 @@ export interface BacktestRunNode {
   executedAt: string;
   totalTrades: number;
   totalPnL: number;
+  /** PR B — commission per order recorded at persist time. Null on legacy rows. */
+  commissionPerOrder: number | null;
+  /** PR B — brokerage policy ("algorithm_default" / IB / etc.). Null on legacy rows. */
+  brokeragePolicy: string | null;
+  /** Free-text researcher notes. Edited via the updateBacktestRunNotes mutation. */
+  notes: string | null;
+  /** PR B — canonical DataPolicy block. Null on legacy rows (predate the column). */
+  dataPolicy: DataPolicy | null;
   trades: { isSyntheticExit: boolean }[];
 }
 
@@ -50,12 +93,14 @@ export interface BacktestRunsQueryResult {
   backtestRuns: BacktestRunsConnection;
 }
 
-export type EngineSource = "ENGINE" | "STRATEGY_LAB" | "LEAN_SIDECAR";
+/** PR B (2026-05-19) — unified engine identity used by the GraphQL filter. */
+export type Engine = "PYTHON" | "LEAN";
 
 export function toRunHistoryRow(node: BacktestRunNode): RunHistoryRow {
   return {
     id: node.id,
     source: node.source,
+    engine: node.engine,
     strategyName: node.strategyName,
     symbol: extractSymbol(node.parameters),
     startDate: node.startDate,
@@ -65,6 +110,10 @@ export function toRunHistoryRow(node: BacktestRunNode): RunHistoryRow {
     totalPnl: node.totalPnL,
     hasSyntheticExit: node.trades.some((t) => t.isSyntheticExit),
     leanRunId: node.leanRunId,
+    dataPolicy: node.dataPolicy,
+    notes: node.notes,
+    commissionPerOrder: node.commissionPerOrder,
+    brokeragePolicy: node.brokeragePolicy,
   };
 }
 

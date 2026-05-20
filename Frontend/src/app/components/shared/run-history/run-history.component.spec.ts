@@ -8,6 +8,7 @@ function row(over: Partial<RunHistoryRow> = {}): RunHistoryRow {
   return {
     id: "1",
     source: "engine",
+    engine: "PYTHON",
     strategyName: "ema_spec",
     symbol: "SPY",
     startDate: "2025-01-06",
@@ -17,6 +18,10 @@ function row(over: Partial<RunHistoryRow> = {}): RunHistoryRow {
     totalPnl: 9.0,
     hasSyntheticExit: false,
     leanRunId: null,
+    dataPolicy: null,
+    notes: null,
+    commissionPerOrder: null,
+    brokeragePolicy: null,
     ...over,
   };
 }

@@ -32,7 +32,7 @@ export class LeanLabRunHistoryComponent {
 
   private readonly queryRef = this.apollo.watchQuery<BacktestRunsQueryResult>({
     query: BACKTEST_RUNS_QUERY,
-    variables: { engine: "LEAN_SIDECAR", first: 50 },
+    variables: { engine: "LEAN", first: 50 },
     fetchPolicy: "cache-and-network",
   });
 
