@@ -424,4 +424,48 @@ public class BacktestRunPersistenceServiceTests
         Assert.Equal("minute", root.GetProperty("input_bars").GetProperty("timespan").GetString());
         Assert.Equal(1, root.GetProperty("input_bars").GetProperty("multiplier").GetInt32());
     }
+
+    // PR B P1 fix — LEAN-sidecar runs must NOT be silently labeled
+    // ``algorithm_default`` when the persist payload omits the field.
+    // The actual brokerage is whatever the LEAN manifest pinned (often
+    // Interactive Brokers for reconciliation runs); fabricating
+    // ``algorithm_default`` would corrupt compare-view gating and
+    // historical auditing. Until the Python ``build_persist_payload``
+    // forwards the manifest's ``brokerage_policy`` (a separate change),
+    // the truthful record is NULL ("unknown").
+
+    [Fact]
+    public async Task PersistAsync_LeanSidecar_NullBrokerage_PreservedAsNull()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(leanRunId: "ui_run_lean_null_brokerage") with
+        {
+            Source = "lean-sidecar",
+            BrokeragePolicy = null,
+        };
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        var row = await db.StrategyExecutions.SingleAsync(s => s.Id == id);
+        Assert.Equal("lean-sidecar", row.Source);
+        Assert.Null(row.BrokeragePolicy);
+    }
+
+    [Fact]
+    public async Task PersistAsync_Engine_NullBrokerage_DefaultsToAlgorithmDefault()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(leanRunId: "placeholder") with
+        {
+            Source = "engine",
+            LeanRunId = null,
+            BrokeragePolicy = null,
+        };
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        var row = await db.StrategyExecutions.SingleAsync(s => s.Id == id);
+        Assert.Equal("engine", row.Source);
+        Assert.Equal("algorithm_default", row.BrokeragePolicy);
+    }
 }

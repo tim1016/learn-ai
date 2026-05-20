@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from app.lean_sidecar.manifest import RunManifest
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +219,51 @@ def _algorithm_name_for_run(template: str | None, algorithm_source: str | None) 
     return template or "user_provided"
 
 
+def _data_policy_json_from_manifest(
+    manifest: RunManifest | Mapping[str, Any] | None,
+) -> str | None:
+    """Serialize a manifest's ``data_policy`` to canonical JSON.
+
+    Accepts either a ``RunManifest`` dataclass (the in-process call-site
+    has it as a typed object) or a manifest dict (the backfill CLI loads
+    ``manifest.json`` from disk via ``json.loads``). Returns ``None`` if
+    the manifest isn't available, in which case the .NET persistence
+    layer preserves the row's ``DataPolicyJson`` as NULL.
+    """
+    if manifest is None:
+        return None
+    if hasattr(manifest, "data_policy") and not isinstance(manifest, Mapping):
+        # RunManifest dataclass path
+        return json.dumps(asdict(manifest.data_policy), sort_keys=True)
+    if isinstance(manifest, Mapping):
+        dp = manifest.get("data_policy")
+        if dp is None:
+            return None
+        return json.dumps(dp, sort_keys=True)
+    return None
+
+
+def _brokerage_policy_from_manifest(
+    manifest: RunManifest | Mapping[str, Any] | None,
+) -> str | None:
+    """Read the LEAN manifest's ``brokerage_policy`` enum.
+
+    Returns ``None`` when the manifest is unavailable (legacy path / failed
+    runs that never built one) — the .NET persistence layer preserves NULL
+    rather than fabricating ``algorithm_default``, because LEAN runs may
+    actually use Interactive Brokers (reconciliation template) and silently
+    labeling them ``algorithm_default`` would corrupt compare-view gating.
+    """
+    if manifest is None:
+        return None
+    if hasattr(manifest, "brokerage_policy") and not isinstance(manifest, Mapping):
+        return manifest.brokerage_policy
+    if isinstance(manifest, Mapping):
+        bp = manifest.get("brokerage_policy")
+        return str(bp) if bp is not None else None
+    return None
+
+
 def build_persist_payload(
     workspace_path: Path,
     run_id: str,
@@ -224,6 +272,7 @@ def build_persist_payload(
     algorithm_name: str,
     start_date_ms: int,
     end_date_ms: int,
+    manifest: RunManifest | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable payload to POST to the .NET persist endpoint.
 
@@ -240,6 +289,14 @@ def build_persist_payload(
     run appears in the unified history.
 
     All timestamps in the returned payload are int64 ms UTC (canonical).
+
+    PR B P1 fix (2026-05-20) — ``manifest`` (optional) lets the caller forward
+    the LEAN ``RunManifest`` so the persist payload carries the true
+    ``brokerage_policy`` and ``data_policy_json`` from the run. When omitted,
+    both fields are ``None`` on the payload and the .NET service preserves
+    NULL on the row (truthful "unknown") rather than fabricating
+    ``algorithm_default`` — which would mislabel Interactive Brokers
+    reconciliation runs.
     """
     result_path = workspace_path / "normalized" / "result.json"
 
@@ -253,6 +310,7 @@ def build_persist_payload(
             end_date_ms=end_date_ms,
             workspace_path=workspace_path,
             error="No normalized/result.json — LEAN run did not produce output",
+            manifest=manifest,
         )
 
     try:
@@ -288,6 +346,7 @@ def build_persist_payload(
             end_date_ms=end_date_ms,
             workspace_path=workspace_path,
             error=f"normalization_error: {type(exc).__name__}: {exc}",
+            manifest=manifest,
         )
 
     return {
@@ -325,6 +384,15 @@ def build_persist_payload(
             "parser_version": normalized.parser_version,
             "workspace_path": str(workspace_path),
         },
+        # PR B P1 fix — forward the manifest's brokerage/data_policy so the
+        # .NET row is the truthful record. ``commission_per_order`` stays at
+        # 0 for LEAN: LEAN charges per-fill (captured in ``total_fees``),
+        # not per-order, so there is no single configured-commission value
+        # to surface here. The engine path is the one that actually
+        # configures a commission per-order.
+        "data_policy_json": _data_policy_json_from_manifest(manifest),
+        "brokerage_policy": _brokerage_policy_from_manifest(manifest),
+        "commission_per_order": 0.0,
     }
 
 
@@ -338,6 +406,7 @@ def _failed_run_payload(
     end_date_ms: int,
     workspace_path: Path,
     error: str,
+    manifest: RunManifest | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a zero-trade payload for a LEAN run that failed or produced no result."""
     return {
@@ -360,6 +429,12 @@ def _failed_run_payload(
             "error": error,
             "workspace_path": str(workspace_path),
         },
+        # Even on failed runs we forward the manifest fields if available;
+        # the .NET service preserves NULL when the manifest is unavailable
+        # rather than fabricating ``algorithm_default``.
+        "data_policy_json": _data_policy_json_from_manifest(manifest),
+        "brokerage_policy": _brokerage_policy_from_manifest(manifest),
+        "commission_per_order": 0.0,
     }
 
 

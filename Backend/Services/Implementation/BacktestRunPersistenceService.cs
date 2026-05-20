@@ -117,15 +117,22 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
             DurationMs = 0,
             // PR B (2026-05-19) — DataPolicy / Commission / Brokerage.
             // When the legacy client omits the canonical block, synthesize a
-            // default that documents what the engines actually did (Polygon
-            // bars, pre-adjusted, regular session, minute-1 input bars
-            // consolidated to minute-15 strategy bars). Default brokerage is
-            // ``algorithm_default`` because the Python engine doesn't model
-            // brokerage; the LEAN orchestrator overrides this when its
-            // manifest records a specific brokerage.
+            // default DataPolicy that documents what the engines actually did
+            // (Polygon bars, pre-adjusted, regular session, minute-1 input
+            // bars consolidated to minute-15 strategy bars). The Python
+            // engine genuinely doesn't model brokerage, so falling back to
+            // ``algorithm_default`` is faithful for ``source='engine'``. For
+            // ``source='lean-sidecar'`` the run actually ran under SOME
+            // brokerage (often Interactive Brokers for reconciliation runs);
+            // if the LEAN persist payload didn't carry the field, leaving it
+            // NULL ("unknown") is the truthful record. Fabricating
+            // ``algorithm_default`` here would corrupt compare-view gating
+            // and historical auditing, so we only synthesize that fallback
+            // for the engine path.
             DataPolicyJson = payload.DataPolicyJson ?? SynthesizeLegacyDataPolicy(payload),
             CommissionPerOrder = payload.CommissionPerOrder ?? 0m,
-            BrokeragePolicy = payload.BrokeragePolicy ?? "algorithm_default",
+            BrokeragePolicy = payload.BrokeragePolicy
+                ?? (payload.Source == "engine" ? "algorithm_default" : null),
         };
 
         // Wrap the entire write in a transaction so a trade-save failure also rolls back
