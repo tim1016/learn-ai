@@ -225,6 +225,28 @@ describe("LeanLabComponent", () => {
     expect(req.algorithm_source).toBeUndefined();
   });
 
+  it("PR B — request carries a canonical data_policy block (and omits legacy symbol)", async () => {
+    serviceMock.startTrustedRun.mockResolvedValue(makeResponse());
+    await component.submit();
+    const req = serviceMock.startTrustedRun.mock.calls[0][0];
+
+    // Legacy top-level field omitted to avoid the router's mixed-shape 422.
+    expect(req.symbol).toBeUndefined();
+    expect(req.data_policy).toEqual({
+      source: "polygon",
+      symbol: "SPY",
+      adjusted: true,
+      session: "regular",
+      input_bars: { timespan: "minute", multiplier: 1 },
+      strategy_bars: { timespan: "minute", multiplier: 15 },
+      timestamp_policy: "bar_close_ms_utc",
+      timezone: "America/New_York",
+      provider_kind: "live",
+      fixture_id: null,
+      fixture_sha256: null,
+    });
+  });
+
   it("toggle on + custom source → request carries algorithm_source", async () => {
     serviceMock.startTrustedRun.mockResolvedValue(makeResponse());
     component.form.patchValue({

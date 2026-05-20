@@ -789,12 +789,33 @@ export class LeanLabComponent {
     const exclusiveEndIso = this.nextWeekdayIso(value.endDate);
     const end_ms_utc = this.isoDateToSessionOpenMsUtc(exclusiveEndIso);
 
+    // PR B (2026-05-19) — send the canonical DataPolicy block instead of
+    // the legacy top-level ``symbol``/``bar_minutes``/``session``/``adjustment``
+    // fields. The router rejects mixed shapes (legacy + ``data_policy`` both
+    // present) with HTTP 422, so we deliberately omit the deprecated
+    // top-level ``symbol`` field on this code path.
     const req: TrustedRunRequest = {
       run_id: value.runId,
-      symbol: value.symbol.toUpperCase(),
       start_ms_utc,
       end_ms_utc,
       starting_cash: value.startingCash,
+      data_policy: {
+        source: "polygon",
+        symbol: value.symbol.toUpperCase(),
+        adjusted: true,
+        session: "regular",
+        // Lean Lab's form has no timeframe picker today — the bundled
+        // templates pin minute-1 input and consolidate to minute-15
+        // inside the algorithm source (mirrors what the legacy server
+        // synthesized with ``bar_minutes=15``).
+        input_bars: { timespan: "minute", multiplier: 1 },
+        strategy_bars: { timespan: "minute", multiplier: 15 },
+        timestamp_policy: "bar_close_ms_utc",
+        timezone: "America/New_York",
+        provider_kind: "live",
+        fixture_id: null,
+        fixture_sha256: null,
+      },
     };
     // Phase 4c — only include the algorithm_source when the toggle
     // is on AND the textarea has non-whitespace content. Sending an
