@@ -48,6 +48,27 @@ describe("LeanScriptEditorComponent", () => {
     expect(component.source()).toContain("class MyAlgorithm");
   });
 
+  it("seed reads symbol/window/cash from GetParameter (no hardcoded values)", () => {
+    // Regression: hardcoded SetStartDate / AddEquity("SPY", ...) caused
+    // silent runtime errors when the form selected a different symbol
+    // or window. The seed must teach the parameterised pattern so users
+    // copying from it don't fall into that trap. Fixtures are the only
+    // place where hardcoding is appropriate (they pin specific bars).
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain('self.GetParameter("symbol")');
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain('self.GetParameter("start_date")');
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain('self.GetParameter("end_date")');
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain('self.GetParameter("starting_cash")');
+
+    // Negative pin: no literal hardcoded ticker or year inside Initialize.
+    // ``self.AddEquity(symbol_str, ...)`` is the only AddEquity call;
+    // a quoted ticker before that line would indicate regression.
+    const initializeBody = EMA_CROSSOVER_SOURCE_TEMPLATE.split("def Initialize(self):")[1].split("def OnData")[0];
+    expect(initializeBody).not.toMatch(/AddEquity\(\s*"[A-Z]+"/);
+    // No literal year tuple to SetStartDate/SetEndDate.
+    expect(initializeBody).not.toMatch(/SetStartDate\(\s*\d{4}\s*,/);
+    expect(initializeBody).not.toMatch(/SetEndDate\(\s*\d{4}\s*,/);
+  });
+
   it("propagates source updates through the model signal", () => {
     const fixture = TestBed.createComponent(LeanScriptEditorComponent);
     fixture.detectChanges();
