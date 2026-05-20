@@ -33,7 +33,13 @@ import {
 } from "../../shared/ticker-range-picker";
 import { TICKER_POOL, RECENT_TICKERS } from "../../shared/ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
+import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import type { DataPolicy } from "../../models/data-policy";
+import { LeanScriptEditorComponent } from "../lean-script-editor/lean-script-editor.component";
+import { EMA_CROSSOVER_SOURCE_TEMPLATE } from "../lean-script-editor/lean-script-editor.template";
+
+/** Engine choice on the unified launch surface. */
+export type EngineChoice = "python" | "lean";
 
 // Severity for pre-flight: re-declared locally so we don't import the panel's types.
 type PreflightSeverity = "ok" | "warning" | "blocking";
@@ -198,6 +204,7 @@ interface DataAvailability {
     TvCompatPanelComponent, EngineReplayV2Component,
     PageHeaderComponent,
     TickerRangePickerComponent,
+    LeanScriptEditorComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./lean-engine.component.html",
@@ -206,7 +213,22 @@ interface DataAvailability {
 export class LeanEngineComponent implements OnInit {
   private http = inject(HttpClient);
   private jobsService = inject(JobsService);
+  private leanSidecarService = inject(LeanSidecarService);
   private readonly apiBase = `${environment.pythonServiceUrl}/api/engine`;
+
+  /**
+   * PR B.5 — engine choice for the unified launch surface. ``python``
+   * runs the in-process engine via the jobs API; ``lean`` ships the
+   * operator-typed QCAlgorithm source to the LEAN sidecar.
+   */
+  readonly engine = signal<EngineChoice>("python");
+
+  /**
+   * Operator-typed LEAN algorithm source. Two-way bound to
+   * ``LeanScriptEditorComponent`` so the parent can synthesize the
+   * trusted-run submission body without reaching into the child.
+   */
+  readonly leanSource = signal<string>(EMA_CROSSOVER_SOURCE_TEMPLATE);
 
   // ------------------------------------------------------------------
   // State (signals)
@@ -677,6 +699,14 @@ export class LeanEngineComponent implements OnInit {
   private engineJobId = signal<string | null>(null);
 
   async run(): Promise<void> {
+    if (this.engine() === "lean") {
+      await this.runLean();
+      return;
+    }
+    await this.runPython();
+  }
+
+  private async runPython(): Promise<void> {
     const name = this.selectedStrategyName();
     if (!name) return;
 
@@ -723,6 +753,152 @@ export class LeanEngineComponent implements OnInit {
       this.setRunStatus("failed", "Backtest request failed", message);
       this.running.set(false);
     }
+  }
+
+  /**
+   * PR B.5 — submit the operator-typed LEAN algorithm source to the
+   * sidecar via the unified launch surface. The request body mirrors
+   * ``TrustedRunRequest`` in ``lean-sidecar.types.ts``: a canonical
+   * ``data_policy`` block plus ``algorithm_source`` and session-aligned
+   * start/end millis.
+   *
+   * The component does not subscribe to LEAN-side progress events for
+   * Phase 5 — the response shape carries the final status, so the
+   * runner state is updated synchronously on resolution. A future
+   * pass can stream sidecar logs through the run-banner the same way
+   * the Python path does.
+   */
+  private async runLean(): Promise<void> {
+    this.running.set(true);
+    this.runError.set(null);
+    this.result.set(null);
+    this.setRunStatus(
+      "connecting",
+      "Submitting LEAN run…",
+      `${this.effectiveSymbol()} · ${this.startDate()} → ${this.endDate()}`,
+    );
+
+    try {
+      // Advance the operator-picked end date to the next NYSE
+      // session's 09:30 ET open before submission. The sidecar's
+      // window is half-open ``[start_ms_utc, end_ms_utc)`` per the
+      // P2.5 contract; if we passed ``endDate()`` directly:
+      //   * a same-day window collapses to start == end → 422, and
+      //   * a multi-day window silently excludes ``endDate()`` itself
+      //     because the orchestrator derives ``end_date`` from
+      //     ``end_ms_utc - 1ms`` (the previous trading day).
+      // Server-side resolution keeps the NYSE calendar in one place.
+      const endResolution = await this.leanSidecarService.nextTradingDayOpen(
+        this.endDate(),
+      );
+      const response = await this.leanSidecarService.startTrustedRun({
+        run_id: this.composeRunId(),
+        algorithm_source: this.leanSource(),
+        starting_cash: this.initialCash(),
+        start_ms_utc: this.composeStartMs(),
+        end_ms_utc: endResolution.session_open_ms_utc,
+        data_policy: this.composeDataPolicy(),
+      });
+      this.setRunStatus(
+        response.is_clean ? "completed" : "failed",
+        response.is_clean
+          ? `LEAN run finished cleanly (run id ${response.run_id}).`
+          : `LEAN run finished with errors (exit ${response.exit_code}).`,
+      );
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "LEAN run request failed";
+      this.runError.set(message);
+      this.setRunStatus("failed", "LEAN run request failed", message);
+    } finally {
+      this.running.set(false);
+    }
+  }
+
+  /**
+   * Build a sidecar-compatible run id. Slug must match
+   * ``^[a-z0-9][a-z0-9_-]{2,63}$``. Use a UTC-millisecond suffix so
+   * concurrent submissions don't collide.
+   */
+  composeRunId(): string {
+    const symbol = this.effectiveSymbol().toLowerCase().replace(/[^a-z0-9]/g, "");
+    const stamp = Date.now().toString(36);
+    return `engine_lab_${symbol}_${stamp}`;
+  }
+
+  /**
+   * 09:30 ET on ``startDate()``, expressed as int64 ms UTC. Mirrors
+   * the Python ``trading_calendar.session_open_ms_utc`` policy from
+   * PR A so the sidecar's window-validation accepts the request.
+   * Inline DST-aware: forms a wall-clock string, then parses it as
+   * an ET instant.
+   */
+  composeStartMs(): number {
+    return this.sessionOpenMs(this.startDate());
+  }
+
+  /**
+   * 09:30 ET on ``endDate()``, expressed as int64 ms UTC.
+   *
+   * NOTE: The LEAN submission path does NOT use this value directly —
+   * ``runLean()`` calls ``leanSidecarService.nextTradingDayOpen()`` to
+   * advance to the next NYSE session's 09:30 ET so the half-open
+   * ``[start_ms_utc, end_ms_utc)`` contract includes the operator's
+   * chosen end date. This helper remains for tests / non-LEAN callers
+   * that want the raw 09:30 ET ms of ``endDate()`` itself.
+   */
+  composeEndMs(): number {
+    return this.sessionOpenMs(this.endDate());
+  }
+
+  /**
+   * Convert ``YYYY-MM-DD`` + ``09:30`` ET to int64 ms UTC. Uses
+   * ``Intl.DateTimeFormat`` to look up the America/New_York offset at
+   * the target instant (DST-aware: EST is UTC-5, EDT is UTC-4).
+   *
+   * Algorithm: treat the wall-clock as if it were UTC to get a probe
+   * instant, ask Intl for what ET would call that probe, compute the
+   * offset, then subtract.
+   */
+  private sessionOpenMs(isoDate: string): number {
+    if (!isoDate) return 0;
+    const [y, m, d] = isoDate.split("-").map(Number);
+    const probe = Date.UTC(y, m - 1, d, 9, 30, 0);
+    const offsetMs = this.etOffsetMs(new Date(probe));
+    return probe - offsetMs;
+  }
+
+  /**
+   * ET offset (UTC - ET) for the supplied instant, in milliseconds.
+   * Always negative for America/New_York (ET is behind UTC).
+   * DST-aware via ``Intl.DateTimeFormat``.
+   */
+  private etOffsetMs(instant: Date): number {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })
+      .formatToParts(instant)
+      .reduce<Record<string, string>>((acc, p) => {
+        if (p.type !== "literal") acc[p.type] = p.value;
+        return acc;
+      }, {});
+    const hh = parts["hour"] === "24" ? "00" : parts["hour"];
+    const etAsUtc = Date.UTC(
+      Number(parts["year"]),
+      Number(parts["month"]) - 1,
+      Number(parts["day"]),
+      Number(hh),
+      Number(parts["minute"]),
+      Number(parts["second"]),
+    );
+    return etAsUtc - instant.getTime();
   }
 
   /** Reactive bridge from JobsService → banner state.

@@ -43,29 +43,52 @@
         <!-- ═══ Configure Tab ═══ -->
         <p-tabpanel value="0">
           <section class="config-card">
-            <!-- Top strip: strategy params form (full-width inside the tab) -->
-            @if (paramEntries().length > 0) {
-              <div class="params-card">
-                <h3 data-section="01">Strategy parameters</h3>
-                <div class="form-grid">
-                  @for (entry of paramEntries(); track entry.name) {
-                    <label class="field">
-                      <span class="label">
-                        {{ entry.prop.title || entry.name }}
-                        @if (entry.prop.description) {
-                          <span class="hint" [title]="entry.prop.description">?</span>
-                        }
-                      </span>
-                      <input
-                        [type]="entry.prop.type === 'integer' || entry.prop.type === 'number' ? 'number' : 'text'"
-                        [value]="paramValues()[entry.name] ?? ''"
-                        (input)="onParamChange(entry.name, $any($event.target).value, entry.prop.type)"
-                        [attr.min]="entry.prop.minimum ?? null"
-                        [attr.max]="entry.prop.maximum ?? null"
-                      />
-                    </label>
-                  }
+            <!-- PR B.5 — engine choice gates which script surface renders below. -->
+            <div class="engine-selector params-card">
+              <h3 data-section="00">Engine</h3>
+              <label class="field">
+                <span class="label">Engine</span>
+                <select
+                  data-testid="engine-select"
+                  [ngModel]="engine()"
+                  (ngModelChange)="engine.set($event)"
+                >
+                  <option value="python">Python (in-process)</option>
+                  <option value="lean">LEAN (sidecar)</option>
+                </select>
+              </label>
+            </div>
+
+            @if (engine() === 'python') {
+              <!-- Top strip: strategy params form (full-width inside the tab) -->
+              @if (paramEntries().length > 0) {
+                <div class="params-card">
+                  <h3 data-section="01">Strategy parameters</h3>
+                  <div class="form-grid">
+                    @for (entry of paramEntries(); track entry.name) {
+                      <label class="field">
+                        <span class="label">
+                          {{ entry.prop.title || entry.name }}
+                          @if (entry.prop.description) {
+                            <span class="hint" [title]="entry.prop.description">?</span>
+                          }
+                        </span>
+                        <input
+                          [type]="entry.prop.type === 'integer' || entry.prop.type === 'number' ? 'number' : 'text'"
+                          [value]="paramValues()[entry.name] ?? ''"
+                          (input)="onParamChange(entry.name, $any($event.target).value, entry.prop.type)"
+                          [attr.min]="entry.prop.minimum ?? null"
+                          [attr.max]="entry.prop.maximum ?? null"
+                        />
+                      </label>
+                    }
+                  </div>
                 </div>
+              }
+            } @else {
+              <div class="params-card lean-script-card">
+                <h3 data-section="01">LEAN algorithm</h3>
+                <app-lean-script-editor [(source)]="leanSource" />
               </div>
             }
 
@@ -83,40 +106,42 @@
               (advisoryAction)="onPickerAdvisoryAction($event)"
             />
 
-            <div class="options-card">
-              <h3 data-section="02">
-                <i class="pi pi-cog" aria-hidden="true"></i>
-                Strategy
-              </h3>
-              <label class="field">
-                <span class="label">Strategy</span>
-                <select
-                  [ngModel]="selectedStrategyName()"
-                  (ngModelChange)="onStrategyChange($event)"
-                  [disabled]="availableStrategies().length === 0"
-                >
-                  @for (s of availableStrategies(); track s.name) {
-                    <option [value]="s.name">{{ s.display_name }}</option>
-                  }
-                </select>
-                @if (availableStrategies().length === 0) {
-                  <span class="field-hint">
-                    No strategies registered for <strong>{{ resolution() }}</strong> resolution.
-                  </span>
-                }
-              </label>
-              @if (selectedStrategy(); as strat) {
-                <div class="strategy-meta">
-                  <div class="strategy-meta__desc">{{ strat.description }}</div>
-                  <div class="strategy-meta__badges">
-                    @if (strat.pine_available) {
-                      <span class="meta-badge meta-badge--parity">parity ✓</span>
-                      <span class="meta-badge meta-badge--pine">pine v6</span>
+            @if (engine() === 'python') {
+              <div class="options-card">
+                <h3 data-section="02">
+                  <i class="pi pi-cog" aria-hidden="true"></i>
+                  Strategy
+                </h3>
+                <label class="field">
+                  <span class="label">Strategy</span>
+                  <select
+                    [ngModel]="selectedStrategyName()"
+                    (ngModelChange)="onStrategyChange($event)"
+                    [disabled]="availableStrategies().length === 0"
+                  >
+                    @for (s of availableStrategies(); track s.name) {
+                      <option [value]="s.name">{{ s.display_name }}</option>
                     }
+                  </select>
+                  @if (availableStrategies().length === 0) {
+                    <span class="field-hint">
+                      No strategies registered for <strong>{{ resolution() }}</strong> resolution.
+                    </span>
+                  }
+                </label>
+                @if (selectedStrategy(); as strat) {
+                  <div class="strategy-meta">
+                    <div class="strategy-meta__desc">{{ strat.description }}</div>
+                    <div class="strategy-meta__badges">
+                      @if (strat.pine_available) {
+                        <span class="meta-badge meta-badge--parity">parity ✓</span>
+                        <span class="meta-badge meta-badge--pine">pine v6</span>
+                      }
+                    </div>
                   </div>
-                </div>
-              }
-            </div>
+                }
+              </div>
+            }
 
             <div class="options-card">
               <h3 data-section="03">
@@ -196,7 +221,8 @@
                 <button
                   type="button"
                   class="run-btn"
-                  [disabled]="running() || !selectedStrategyName() || preflightBlocks()"
+                  data-testid="run-btn"
+                  [disabled]="running() || (engine() === 'python' && !selectedStrategyName()) || preflightBlocks()"
                   [title]="preflightBlocks()
                     ? 'Pre-flight has blocking issues. See the panel above.'
                     : 'Run the backtest with the current configuration.'"

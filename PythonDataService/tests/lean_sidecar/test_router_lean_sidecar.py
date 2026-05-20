@@ -236,6 +236,60 @@ class TestCalendarBlockedDatesEndpoint:
         assert "range" in r.text.lower() or "max" in r.text.lower()
 
 
+class TestCalendarNextTradingDayOpenEndpoint:
+    """Per docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md, the
+    half-open window's exclusive ``end_ms_utc`` is the 09:30 ET session
+    open of the trading day *after* the operator's chosen end date. The
+    frontend calls this endpoint so the unified Engine Lab's LEAN
+    submission doesn't reproduce NYSE-calendar logic in TypeScript.
+    """
+
+    async def test_skips_weekend(self, client: AsyncClient) -> None:
+        # Fri 2025-01-17 → Mon 2025-01-20 is MLK Day (closed), so the
+        # next session is Tue 2025-01-21.
+        # 09:30 ET on 2025-01-21 (EST = UTC-5) = 14:30 UTC.
+        r = await client.get(
+            "/api/lean-sidecar/calendar/next-trading-day-open",
+            params={"date": "2025-01-17"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["next_trading_date"] == "2025-01-21"
+        from datetime import UTC, datetime
+
+        expected_ms = int(datetime(2025, 1, 21, 14, 30, tzinfo=UTC).timestamp() * 1000)
+        assert body["session_open_ms_utc"] == expected_ms
+
+    async def test_after_regular_trading_day(self, client: AsyncClient) -> None:
+        # Mon 2025-01-13 → Tue 2025-01-14, both normal sessions.
+        r = await client.get(
+            "/api/lean-sidecar/calendar/next-trading-day-open",
+            params={"date": "2025-01-13"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["next_trading_date"] == "2025-01-14"
+        from datetime import UTC, datetime
+
+        expected_ms = int(datetime(2025, 1, 14, 14, 30, tzinfo=UTC).timestamp() * 1000)
+        assert body["session_open_ms_utc"] == expected_ms
+
+    async def test_dst_awareness(self, client: AsyncClient) -> None:
+        # Summer date — 09:30 EDT = 13:30 UTC, not 14:30. Mon 2025-07-14
+        # → Tue 2025-07-15 (both normal sessions).
+        r = await client.get(
+            "/api/lean-sidecar/calendar/next-trading-day-open",
+            params={"date": "2025-07-14"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["next_trading_date"] == "2025-07-15"
+        from datetime import UTC, datetime
+
+        expected_ms = int(datetime(2025, 7, 15, 13, 30, tzinfo=UTC).timestamp() * 1000)
+        assert body["session_open_ms_utc"] == expected_ms
+
+
 class TestPostTrustedRunValidation:
     @pytest.mark.parametrize(
         "bad_field,bad_value",

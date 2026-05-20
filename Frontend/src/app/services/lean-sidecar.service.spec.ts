@@ -1,19 +1,30 @@
 import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { provideHttpClient } from "@angular/common/http";
-import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
+import {
+  HttpTestingController,
+  provideHttpClientTesting,
+} from "@angular/common/http/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   LeanSidecarApiError,
   LeanSidecarService,
 } from "./lean-sidecar.service";
-import type { TrustedRunRequest, TrustedRunResponse } from "./lean-sidecar.types";
+import type {
+  TrustedRunRequest,
+  TrustedRunResponse,
+} from "./lean-sidecar.types";
 
 /**
- * Tests the launcher's `{detail: {reason, message}}` rejection envelope
- * round-trips into a typed `LeanSidecarApiError` so the component can
- * branch on `reason` without parsing free text. This is the contract
- * the data-plane router promises (see PR #249).
+ * Tests that the launcher's ``{detail: {reason, message}}`` rejection
+ * envelope round-trips into a typed ``LeanSidecarApiError`` so the
+ * component can branch on ``reason`` without parsing free text. This
+ * is the contract the data-plane router promises (see PR #249).
+ *
+ * PR B.5 (2026-05-19) — surface narrowed alongside the ``/lean-lab``
+ * retirement. The remaining test set covers ``startTrustedRun`` only;
+ * the inspection / reconciliation / manifest helpers' tests went with
+ * their methods.
  */
 describe("LeanSidecarService", () => {
   let service: LeanSidecarService;
@@ -69,7 +80,10 @@ describe("LeanSidecarService", () => {
     };
 
     const promise = service.startTrustedRun(goodRequest);
-    const req = httpMock.expectOne((r) => r.method === "POST" && r.url.endsWith("/api/lean-sidecar/trusted-runs"));
+    const req = httpMock.expectOne(
+      (r) =>
+        r.method === "POST" && r.url.endsWith("/api/lean-sidecar/trusted-runs"),
+    );
     expect(req.request.body).toEqual(goodRequest);
     req.flush(fakeResponse);
 
@@ -80,7 +94,9 @@ describe("LeanSidecarService", () => {
 
   it("turns the launcher 400 envelope into a typed LeanSidecarApiError", async () => {
     const promise = service.startTrustedRun(goodRequest).catch((e) => e);
-    const req = httpMock.expectOne((r) => r.url.endsWith("/api/lean-sidecar/trusted-runs"));
+    const req = httpMock.expectOne((r) =>
+      r.url.endsWith("/api/lean-sidecar/trusted-runs"),
+    );
     req.flush(
       { detail: { reason: "workspace_max_mb_exceeded", message: "over cap" } },
       { status: 400, statusText: "Bad Request" },
@@ -94,7 +110,9 @@ describe("LeanSidecarService", () => {
 
   it("maps a 503 with a launcher_unreachable reason through unchanged", async () => {
     const promise = service.startTrustedRun(goodRequest).catch((e) => e);
-    const req = httpMock.expectOne((r) => r.url.endsWith("/api/lean-sidecar/trusted-runs"));
+    const req = httpMock.expectOne((r) =>
+      r.url.endsWith("/api/lean-sidecar/trusted-runs"),
+    );
     req.flush(
       { detail: { reason: "launcher_unreachable", message: "connect refused" } },
       { status: 503, statusText: "Service Unavailable" },
@@ -106,117 +124,47 @@ describe("LeanSidecarService", () => {
 
   it("falls back to reason='unknown' when the body doesn't match the envelope", async () => {
     const promise = service.startTrustedRun(goodRequest).catch((e) => e);
-    const req = httpMock.expectOne((r) => r.url.endsWith("/api/lean-sidecar/trusted-runs"));
-    req.flush("server exploded", { status: 500, statusText: "Internal Server Error" });
+    const req = httpMock.expectOne((r) =>
+      r.url.endsWith("/api/lean-sidecar/trusted-runs"),
+    );
+    req.flush("server exploded", {
+      status: 500,
+      statusText: "Internal Server Error",
+    });
     const err = await promise;
     expect((err as LeanSidecarApiError).reason).toBe("unknown");
     expect((err as LeanSidecarApiError).status).toBe(500);
   });
 
-  it("URL-encodes the run_id on the inspection endpoints", async () => {
-    // A run_id containing characters that would need encoding could
-    // never reach this point (the server rejects them), but the
-    // service should still encode defensively so a misuse from a
-    // future call site doesn't break the URL.
-    const promise = service.getNormalized("a b/c");
-    const req = httpMock.expectOne((r) => r.url.includes("/runs/a%20b%2Fc/normalized"));
-    req.flush({ parser_version: "phase-3a-r1", algorithm_id: "X" });
-    const result = await promise;
-    expect(result.parser_version).toBe("phase-3a-r1");
-  });
-
-  it("returns the log tail as text", async () => {
-    const promise = service.getLogTail("ut_run");
-    const req = httpMock.expectOne((r) => r.url.endsWith("/api/lean-sidecar/runs/ut_run/log"));
-    expect(req.request.responseType).toBe("text");
-    req.flush("LEAN ALGORITHMIC TRADING ENGINE v2.5.0.0\n");
-    expect(await promise).toContain("LEAN ALGORITHMIC TRADING ENGINE");
-  });
-
-  it("Phase 4e: getManifest returns the raw manifest dict", async () => {
-    const fakeManifest = {
-      run_id: "ut_run_manifest",
-      parameters: { symbol: "SPY", starting_cash: "100000" },
-      requested_window_ms: { start_ms: 1, end_ms: 2 },
-      algorithm_source_sha256: "abc",
-    };
-    const promise = service.getManifest("ut_run_manifest");
-    const req = httpMock.expectOne((r) =>
-      r.url.endsWith("/api/lean-sidecar/runs/ut_run_manifest/manifest"),
-    );
-    req.flush(fakeManifest);
-    const result = await promise;
-    expect(result.parameters?.symbol).toBe("SPY");
-    expect(result.requested_window_ms?.start_ms).toBe(1);
-  });
-
-  it("Phase 4e: getManifest maps a 404 to the typed envelope", async () => {
-    const promise = service.getManifest("missing").catch((e) => e);
-    const req = httpMock.expectOne((r) => r.url.endsWith("/manifest"));
-    req.flush(
-      { detail: { reason: "manifest_missing", message: "no manifest.json for missing" } },
-      { status: 404, statusText: "Not Found" },
-    );
-    const err = await promise;
-    expect((err as LeanSidecarApiError).reason).toBe("manifest_missing");
-    expect((err as LeanSidecarApiError).status).toBe(404);
-  });
-
-  it("Phase 5a: reconcileRun POSTs to /runs/{id}/reconcile and parses the report", async () => {
-    const fakeReport = {
-      run_id: "ut_run_reconcile",
-      algorithm_id: "MyAlgorithm",
-      normalized_parser_version: "phase-3a-r1",
-      total_fill_events: 2,
-      matched_count: 1,
-      divergent_count: 1,
-      commission_atol: "0.01",
-      total_recorded_fees: "6.00",
-      total_expected_ibkr_fees: "2.00",
-      divergences: [
-        {
-          order_event_id: 2,
-          order_id: 200,
-          symbol: "SPY",
-          ms_utc: 1_736_121_600_000,
-          fill_quantity: 100,
-          fill_price: "580.50",
-          recorded_fee: "5.00",
-          expected_ibkr_fee: "1.00",
-          delta: "4.00",
-          category: "commission_drift",
-        },
-      ],
-    };
-    const promise = service.reconcileRun("ut_run_reconcile");
+  it("nextTradingDayOpen GETs /calendar/next-trading-day-open with the date param and returns the body", async () => {
+    const promise = service.nextTradingDayOpen("2025-01-17");
     const req = httpMock.expectOne(
       (r) =>
-        r.method === "POST" &&
-        r.url.endsWith("/api/lean-sidecar/runs/ut_run_reconcile/reconcile"),
+        r.method === "GET" &&
+        r.url.endsWith("/api/lean-sidecar/calendar/next-trading-day-open"),
     );
-    req.flush(fakeReport);
+    expect(req.request.params.get("date")).toBe("2025-01-17");
+    req.flush({
+      next_trading_date: "2025-01-21",
+      session_open_ms_utc: 1737466200000,
+    });
     const result = await promise;
-    expect(result.run_id).toBe("ut_run_reconcile");
-    expect(result.divergent_count).toBe(1);
-    expect(result.divergences[0].category).toBe("commission_drift");
-    // Money strings preserved exactly (no float parsing).
-    expect(result.total_recorded_fees).toBe("6.00");
+    expect(result.next_trading_date).toBe("2025-01-21");
+    expect(result.session_open_ms_utc).toBe(1737466200000);
   });
 
-  it("Phase 5a: reconcileRun maps a 404 envelope to a typed error", async () => {
-    const promise = service.reconcileRun("ut_run_missing").catch((e) => e);
-    const req = httpMock.expectOne((r) => r.url.endsWith("/reconcile"));
+  it("nextTradingDayOpen translates a launcher error envelope to LeanSidecarApiError", async () => {
+    const promise = service.nextTradingDayOpen("9999-99-99").catch((e) => e);
+    const req = httpMock.expectOne((r) =>
+      r.url.endsWith("/api/lean-sidecar/calendar/next-trading-day-open"),
+    );
     req.flush(
-      {
-        detail: {
-          reason: "normalized_missing",
-          message: "cannot reconcile ut_run_missing: normalized result not present",
-        },
-      },
-      { status: 404, statusText: "Not Found" },
+      { detail: { reason: "no_session_in_range", message: "no NYSE session within 14 days after 9999-99-99" } },
+      { status: 422, statusText: "Unprocessable Entity" },
     );
     const err = await promise;
-    expect((err as LeanSidecarApiError).reason).toBe("normalized_missing");
-    expect((err as LeanSidecarApiError).status).toBe(404);
+    expect(err).toBeInstanceOf(LeanSidecarApiError);
+    expect((err as LeanSidecarApiError).reason).toBe("no_session_in_range");
+    expect((err as LeanSidecarApiError).status).toBe(422);
   });
 });

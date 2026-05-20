@@ -2,6 +2,8 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
+import { provideZonelessChangeDetection } from '@angular/core';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   LeanEngineComponent,
@@ -9,6 +11,8 @@ import {
   StudyTradeApiItem,
 } from './lean-engine.component';
 import { JobsService } from '../../services/jobs.service';
+import { LeanSidecarService } from '../../services/lean-sidecar.service';
+import type { TrustedRunRequest, TrustedRunResponse } from '../../services/lean-sidecar.types';
 
 describe('mapStudyTradeToEngineTrade', () => {
   function makeItem(overrides: Partial<StudyTradeApiItem> = {}): StudyTradeApiItem {
@@ -132,5 +136,224 @@ describe('LeanEngineComponent.composeDataPolicy', () => {
     const dp = component.composeDataPolicy();
 
     expect(dp.symbol).toBe('SPY');
+  });
+});
+
+describe('LeanEngineComponent engine selector', () => {
+  // Mon 2025-01-21 09:30 EST = 14:30 UTC. Used as the resolved
+  // exclusive-end millisecond when the operator picks 2025-01-17 (Fri)
+  // as endDate — MLK Day (Mon 2025-01-20) is skipped.
+  const NEXT_TRADING_DAY_OPEN_MS = Date.UTC(2025, 0, 21, 14, 30, 0);
+
+  function configureTestBed(overrides: {
+    startJob?: ReturnType<typeof vi.fn>;
+    startTrustedRun?: ReturnType<typeof vi.fn>;
+    nextTradingDayOpen?: ReturnType<typeof vi.fn>;
+  } = {}) {
+    const startJob =
+      overrides.startJob ?? vi.fn().mockResolvedValue('job-id');
+    const startTrustedRun =
+      overrides.startTrustedRun ??
+      vi.fn().mockResolvedValue({
+        run_id: 'rid',
+        is_clean: true,
+        exit_code: 0,
+        duration_ms: 0,
+        timed_out: false,
+        lean_errors: { analysis_failed: [], failed_data_requests: [], runtime_error: [], other: [] },
+        log_tail: '',
+        manifest_path: '/m',
+        workspace_root: '/w',
+        observations_path: '/o',
+        lean_log_path: '/l',
+        normalized_path: null,
+        normalized_parser_version: null,
+        total_order_events: null,
+        total_equity_points: null,
+        strategy_execution_id: null,
+      } satisfies TrustedRunResponse);
+    const nextTradingDayOpen =
+      overrides.nextTradingDayOpen ??
+      vi.fn().mockResolvedValue({
+        next_trading_date: '2025-01-21',
+        session_open_ms_utc: NEXT_TRADING_DAY_OPEN_MS,
+      });
+
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        {
+          provide: JobsService,
+          useValue: {
+            startJob,
+            job: () => null,
+            dismiss: () => undefined,
+            fetchResult: () => Promise.resolve({}),
+          },
+        },
+        {
+          provide: LeanSidecarService,
+          useValue: { startTrustedRun, nextTradingDayOpen },
+        },
+      ],
+    });
+
+    return { startJob, startTrustedRun, nextTradingDayOpen, NEXT_TRADING_DAY_OPEN_MS };
+  }
+
+  it('exposes an engine signal that defaults to python and accepts lean', () => {
+    configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+
+    expect(component.engine()).toBe('python');
+    component.engine.set('lean');
+    expect(component.engine()).toBe('lean');
+  });
+
+  it('exposes a leanSource signal seeded with the EMA-crossover template', () => {
+    configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+
+    expect(component.leanSource()).toContain('class MyAlgorithm');
+  });
+
+  it('submit routes to jobsService.startJob for the Python engine', async () => {
+    const { startJob, startTrustedRun } = configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('python');
+    // Force a strategy so runPython()'s guard passes; the rest of the
+    // payload is shape-checked below.
+    component.strategies.set([
+      {
+        name: 'spy_ema_crossover',
+        display_name: 'SPY EMA Crossover',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+      },
+    ]);
+    component.selectedStrategyName.set('spy_ema_crossover');
+    component.startDate.set('2025-01-13');
+    component.endDate.set('2025-01-17');
+    component.initialCash.set(100_000);
+
+    await component.run();
+
+    expect(startJob).toHaveBeenCalledTimes(1);
+    expect(startTrustedRun).not.toHaveBeenCalled();
+    const [kind, payload] = startJob.mock.calls[0] as [string, { backtest: Record<string, unknown> }];
+    expect(kind).toBe('engine_backtest');
+    expect(payload.backtest['strategy_name']).toBe('spy_ema_crossover');
+    expect(payload.backtest['data_policy']).toMatchObject({
+      source: 'polygon',
+      symbol: 'SPY',
+      adjusted: true,
+    });
+  });
+
+  it('submit routes to leanSidecarService.startTrustedRun for the LEAN engine and includes algorithm_source', async () => {
+    const { startJob, startTrustedRun, nextTradingDayOpen } = configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('lean');
+    component.leanSource.set('class MyAlgorithm: pass');
+    component.startDate.set('2025-01-13');
+    component.endDate.set('2025-01-17');
+    component.initialCash.set(100_000);
+
+    await component.run();
+
+    expect(startTrustedRun).toHaveBeenCalledTimes(1);
+    expect(startJob).not.toHaveBeenCalled();
+    // The component must resolve the half-open exclusive end via the
+    // server-side calendar before submitting; the operator's chosen
+    // end date is the input to that call.
+    expect(nextTradingDayOpen).toHaveBeenCalledTimes(1);
+    expect(nextTradingDayOpen).toHaveBeenCalledWith('2025-01-17');
+
+    const req = startTrustedRun.mock.calls[0][0] as TrustedRunRequest;
+    expect(req.algorithm_source).toBe('class MyAlgorithm: pass');
+    expect(req.starting_cash).toBe(100_000);
+    expect(req.run_id).toMatch(/^engine_lab_spy_[a-z0-9]+$/);
+    expect(req.start_ms_utc).toBe(component.composeStartMs());
+    // end_ms_utc must be the NEXT trading day's session-open — Fri
+    // 2025-01-17 → Tue 2025-01-21 (skipping MLK Mon 2025-01-20). The
+    // half-open ``[start, end)`` contract makes 2025-01-17 trading
+    // activity included rather than silently excluded.
+    expect(req.end_ms_utc).toBe(Date.UTC(2025, 0, 21, 14, 30, 0));
+    expect(req.end_ms_utc).not.toBe(component.composeEndMs());
+    expect(req.data_policy).toMatchObject({
+      source: 'polygon',
+      symbol: 'SPY',
+      adjusted: true,
+    });
+  });
+
+  it('advances end_ms_utc past the user-picked end so single-day LEAN runs are not rejected as start == end', async () => {
+    // Regression for the P1 finding on PR #307: when the operator
+    // picks start_date == end_date the previous flow built start ==
+    // end and the validator rejected the payload with a 422. The
+    // calendar lookup must advance end_ms_utc to the next trading
+    // session's open so the window is strictly positive.
+    const nextOpen = Date.UTC(2025, 0, 14, 14, 30, 0); // Tue 2025-01-14 09:30 EST.
+    const nextTradingDayOpen = vi.fn().mockResolvedValue({
+      next_trading_date: '2025-01-14',
+      session_open_ms_utc: nextOpen,
+    });
+    const { startTrustedRun } = configureTestBed({ nextTradingDayOpen });
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('lean');
+    component.leanSource.set('class MyAlgorithm: pass');
+    component.startDate.set('2025-01-13');
+    component.endDate.set('2025-01-13');
+    component.initialCash.set(100_000);
+
+    await component.run();
+
+    expect(nextTradingDayOpen).toHaveBeenCalledWith('2025-01-13');
+    const req = startTrustedRun.mock.calls[0][0] as TrustedRunRequest;
+    expect(req.start_ms_utc).toBe(Date.UTC(2025, 0, 13, 14, 30, 0));
+    expect(req.end_ms_utc).toBe(nextOpen);
+    expect(req.end_ms_utc).toBeGreaterThan(req.start_ms_utc);
+  });
+
+  it('composeStartMs/composeEndMs encode 09:30 ET as int64 ms UTC (EST=UTC-5)', () => {
+    configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.startDate.set('2025-01-13');
+    component.endDate.set('2025-01-17');
+
+    // 2025-01-13 09:30 ET = 14:30 UTC = ms 1736778600000.
+    expect(component.composeStartMs()).toBe(Date.UTC(2025, 0, 13, 14, 30, 0));
+    expect(component.composeEndMs()).toBe(Date.UTC(2025, 0, 17, 14, 30, 0));
+  });
+
+  it('composeStartMs honors DST (EDT=UTC-4)', () => {
+    configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.startDate.set('2025-07-15');
+
+    // 2025-07-15 09:30 EDT = 13:30 UTC.
+    expect(component.composeStartMs()).toBe(Date.UTC(2025, 6, 15, 13, 30, 0));
   });
 });

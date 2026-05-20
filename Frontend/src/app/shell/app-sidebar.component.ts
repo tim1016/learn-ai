@@ -93,8 +93,9 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-briefcase',
     items: [
       { label: 'Dashboard', route: '/portfolio' },
+      // PR B.5 (2026-05-19) — Engine Lab subsumes the standalone
+      // LEAN Lab via the Engine dropdown; /lean-lab redirects here.
       { label: 'Engine Lab', route: '/engine' },
-      { label: 'LEAN Lab', route: '/lean-lab' },
       { label: 'Strategy Spec', route: '/spec-strategy' },
       { label: 'Tracked Instruments', route: '/tracked-instruments' },
     ],

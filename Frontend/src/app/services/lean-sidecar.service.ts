@@ -1,16 +1,10 @@
 import { HttpClient, HttpErrorResponse } from "@angular/common/http";
 import { inject, Injectable } from "@angular/core";
 import { firstValueFrom } from "rxjs";
+
 import { environment } from "../../environments/environment";
 import type {
-  BlockedDatesPayload,
-  CrossEngineReconciliationReport,
-  CrossReconcileRequest,
   LeanSidecarErrorEnvelope,
-  NormalizedResult,
-  RunIndexResponse,
-  RunManifest,
-  RunReconciliationReport,
   TrustedRunRequest,
   TrustedRunResponse,
 } from "./lean-sidecar.types";
@@ -19,14 +13,16 @@ import type {
  * Frontend client for the LEAN Sidecar Lab data-plane endpoints.
  *
  * Calls REST directly against the polygon-data-service container via
- * the Angular proxy (`/api` → `python-service:8000`). The service
- * extracts the launcher's stable `{reason, message}` envelope into a
- * `LeanSidecarApiError` so the component can branch on the reason
- * label without parsing the raw HttpErrorResponse.
+ * the Angular proxy (``/api`` → ``python-service:8000``). The service
+ * extracts the launcher's stable ``{reason, message}`` envelope into a
+ * ``LeanSidecarApiError`` so the component can branch on the reason
+ * label without parsing the raw ``HttpErrorResponse``.
  *
- * Phase 4a — read-only HTTP client. Phase 4b will likely add a thin
- * Backend GraphQL passthrough so the .NET layer can wrap auth/logging,
- * mirroring the spec-strategy passthrough pattern.
+ * PR B.5 (2026-05-19) — surface narrowed to the unified Engine Lab's
+ * ``startTrustedRun`` call. The standalone ``/lean-lab`` page's
+ * inspection / reconciliation / manifest / log-tail helpers were
+ * removed when that page retired; see git history for the prior shape
+ * if a future feature needs to revive any of them.
  */
 
 export class LeanSidecarApiError extends Error {
@@ -55,93 +51,26 @@ export class LeanSidecarService {
     }
   }
 
-  async getNormalized(runId: string): Promise<NormalizedResult> {
-    try {
-      return await firstValueFrom(
-        this.http.get<NormalizedResult>(`${this.base}/runs/${encodeURIComponent(runId)}/normalized`),
-      );
-    } catch (err) {
-      throw this.translate(err);
-    }
-  }
-
-  async getLogTail(runId: string): Promise<string> {
-    try {
-      return await firstValueFrom(
-        this.http.get(`${this.base}/runs/${encodeURIComponent(runId)}/log`, {
-          responseType: "text",
-        }),
-      );
-    } catch (err) {
-      throw this.translate(err);
-    }
-  }
-
-  async getManifest(runId: string): Promise<RunManifest> {
-    try {
-      return await firstValueFrom(
-        this.http.get<RunManifest>(`${this.base}/runs/${encodeURIComponent(runId)}/manifest`),
-      );
-    } catch (err) {
-      throw this.translate(err);
-    }
-  }
-
-  async listRuns(): Promise<RunIndexResponse> {
-    try {
-      return await firstValueFrom(
-        this.http.get<RunIndexResponse>(`${this.base}/runs`),
-      );
-    } catch (err) {
-      throw this.translate(err);
-    }
-  }
-
   /**
-   * P2.5 — fetch the NYSE-calendar blocked dates for a range.
+   * Resolve the next NYSE trading session strictly after ``date`` to
+   * its 09:30 ET session-open as int64 ms UTC. The unified Engine Lab
+   * uses this to advance the operator's chosen end date to the
+   * half-open window's exclusive ``end_ms_utc`` (per the PR A P2.5
+   * contract; see docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md).
    *
-   * Returns the union of weekends and holidays in
-   * ``[from_, to]`` with a reason tag per date. The picker uses this
-   * to disable + label dates without re-implementing the calendar
-   * client-side. Early-close half-days are valid trading sessions.
-   * Tagged cache so repeated picker openings on the same month don't
-   * refetch.
+   * Server-side delegation keeps the NYSE calendar (weekends, holidays,
+   * MLK / Thanksgiving / Good-Friday skips) in one place — the
+   * ``app/lean_sidecar/trading_calendar.py`` module — instead of
+   * reproducing it in TypeScript and risking drift with the validator.
    */
-  private readonly blockedDatesCache = new Map<string, BlockedDatesPayload>();
-
-  async getBlockedDates(
-    fromIso: string,
-    toIso: string,
-  ): Promise<BlockedDatesPayload> {
-    const cacheKey = `${fromIso}__${toIso}`;
-    const cached = this.blockedDatesCache.get(cacheKey);
-    if (cached) return cached;
-    try {
-      const params = new URLSearchParams({ from: fromIso, to: toIso });
-      const result = await firstValueFrom(
-        this.http.get<BlockedDatesPayload>(
-          `${this.base}/calendar/blocked-dates?${params.toString()}`,
-        ),
-      );
-      this.blockedDatesCache.set(cacheKey, result);
-      return result;
-    } catch (err) {
-      throw this.translate(err);
-    }
-  }
-
-  /**
-   * Phase 5a — reconcile a past run's recorded fees against the canonical
-   * IBKR commission model. POST (not GET) because the endpoint may
-   * compute on demand; idempotent semantically but server-side parses
-   * the normalized result and runs the reconciler each call.
-   */
-  async reconcileRun(runId: string): Promise<RunReconciliationReport> {
+  async nextTradingDayOpen(
+    isoDate: string,
+  ): Promise<{ next_trading_date: string; session_open_ms_utc: number }> {
     try {
       return await firstValueFrom(
-        this.http.post<RunReconciliationReport>(
-          `${this.base}/runs/${encodeURIComponent(runId)}/reconcile`,
-          {},
+        this.http.get<{ next_trading_date: string; session_open_ms_utc: number }>(
+          `${this.base}/calendar/next-trading-day-open`,
+          { params: { date: isoDate } },
         ),
       );
     } catch (err) {
@@ -150,49 +79,10 @@ export class LeanSidecarService {
   }
 
   /**
-   * Phase 5g.3 — cross-engine reconcile. Runs the caller-supplied
-   * Engine-Lab strategy class against the same staged workspace data
-   * the LEAN-Lab run consumed, then diffs fill-by-fill into
-   * ``DivergenceCategory`` rows.
-   *
-   * Per D3, the caller MUST name the Engine-Lab strategy class
-   * explicitly — there's no server-side auto-derivation. ``assert_fees``
-   * is the Branch-A flag; default ``false`` keeps ``commission_drift``
-   * diagnostic, ``true`` promotes it to gating.
-   */
-  async crossReconcileRun(
-    runId: string,
-    request: CrossReconcileRequest,
-  ): Promise<CrossEngineReconciliationReport> {
-    try {
-      return await firstValueFrom(
-        this.http.post<CrossEngineReconciliationReport>(
-          `${this.base}/runs/${encodeURIComponent(runId)}/cross-reconcile`,
-          request,
-        ),
-      );
-    } catch (err) {
-      throw this.translate(err);
-    }
-  }
-
-  async getObservationsCsv(runId: string): Promise<string> {
-    try {
-      return await firstValueFrom(
-        this.http.get(`${this.base}/runs/${encodeURIComponent(runId)}/observations`, {
-          responseType: "text",
-        }),
-      );
-    } catch (err) {
-      throw this.translate(err);
-    }
-  }
-
-  /**
-   * Convert an HttpErrorResponse into a LeanSidecarApiError carrying the
-   * launcher's stable reason label. Falls back to "unknown" when the
-   * body doesn't match the documented `{detail: {reason, message}}`
-   * envelope — operators still see the raw status + text.
+   * Convert an ``HttpErrorResponse`` into a ``LeanSidecarApiError``
+   * carrying the launcher's stable reason label. Falls back to
+   * ``"unknown"`` when the body doesn't match the documented
+   * ``{detail: {reason, message}}`` envelope.
    */
   private translate(err: unknown): LeanSidecarApiError {
     if (err instanceof HttpErrorResponse) {
@@ -201,7 +91,6 @@ export class LeanSidecarService {
         const envelope = detail as LeanSidecarErrorEnvelope;
         return new LeanSidecarApiError(err.status, envelope.reason, envelope.message);
       }
-      // Pydantic 422 body has a `detail` array; surface it as reason="validation_error"
       if (err.status === 422) {
         return new LeanSidecarApiError(
           422,

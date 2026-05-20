@@ -30,6 +30,7 @@ from app.routers import (
     iv30,
     iv_recorder,
     jobs,
+    lean_lint,
     lean_sidecar,
     market_monitor,
     monte_carlo,
@@ -183,6 +184,10 @@ app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
 # Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
 # algorithm source. See docs/architecture/lean-sidecar-lab.md.
 app.include_router(lean_sidecar.router, prefix="/api/lean-sidecar", tags=["lean-sidecar"])
+# PR B.5 (2026-05-19) — ruff-backed lint endpoint for the unified Engine Lab's
+# LEAN script editor. Carries its own ``/api/lean-sidecar`` prefix on the
+# router, mirroring ``reconcile_trades.router`` above.
+app.include_router(lean_lint.router)
 # PR B (2026-05-19) Phase 4 — POST /api/lean-sidecar/reconcile-trades.
 # Wraps the canonical ``reconcile_trade_lists`` helper so the .NET
 # ``RunCompareService`` can delegate trade-by-trade reconciliation to

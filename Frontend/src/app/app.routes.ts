@@ -2,13 +2,10 @@ import { Routes } from "@angular/router";
 
 export const routes: Routes = [
   { path: "", redirectTo: "/data-lab", pathMatch: "full" },
-  {
-    path: "lean-lab",
-    loadComponent: () =>
-      import("./components/lean-lab/lean-lab.component").then(
-        (m) => m.LeanLabComponent
-      ),
-  },
+  // PR B.5 (2026-05-19) — /lean-lab is retired; the LEAN sidecar
+  // launch surface now lives behind the Engine dropdown on /engine.
+  // Prefix match covers any operator-bookmarked sub-paths.
+  { path: "lean-lab", redirectTo: "engine", pathMatch: "prefix" },
   {
     path: "jobs-demo",
     loadComponent: () =>
