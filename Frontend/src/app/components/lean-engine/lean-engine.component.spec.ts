@@ -1,4 +1,14 @@
-import { mapStudyTradeToEngineTrade, StudyTradeApiItem } from './lean-engine.component';
+import { TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideRouter } from '@angular/router';
+
+import {
+  LeanEngineComponent,
+  mapStudyTradeToEngineTrade,
+  StudyTradeApiItem,
+} from './lean-engine.component';
+import { JobsService } from '../../services/jobs.service';
 
 describe('mapStudyTradeToEngineTrade', () => {
   function makeItem(overrides: Partial<StudyTradeApiItem> = {}): StudyTradeApiItem {
@@ -51,5 +61,76 @@ describe('mapStudyTradeToEngineTrade', () => {
   it('handles missing signalReason as empty string', () => {
     const trade = mapStudyTradeToEngineTrade(makeItem({ signalReason: null }), 0);
     expect(trade.signal_reason).toBe('');
+  });
+});
+
+describe('LeanEngineComponent.composeDataPolicy', () => {
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        {
+          provide: JobsService,
+          useValue: {
+            startJob: () => Promise.resolve('job-id'),
+            job: () => null,
+            dismiss: () => undefined,
+          },
+        },
+      ],
+    });
+  });
+
+  it('synthesizes a canonical DataPolicy from current form state', () => {
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+
+    component.paramValues.set({ symbol: 'spy' });
+    component.startDate.set('2025-01-13');
+    component.endDate.set('2025-01-17');
+    component.resolution.set('minute');
+    component.initialCash.set(100_000);
+
+    const dp = component.composeDataPolicy();
+
+    expect(dp).toEqual({
+      source: 'polygon',
+      symbol: 'SPY',
+      adjusted: true,
+      session: 'regular',
+      input_bars: { timespan: 'minute', multiplier: 1 },
+      strategy_bars: { timespan: 'minute', multiplier: 1 },
+      timestamp_policy: 'bar_close_ms_utc',
+      timezone: 'America/New_York',
+      provider_kind: 'live',
+      fixture_id: null,
+      fixture_sha256: null,
+    });
+  });
+
+  it('maps the daily resolution to a day BarsSpec on both sides', () => {
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+
+    component.paramValues.set({ symbol: 'AAPL' });
+    component.resolution.set('daily');
+
+    const dp = component.composeDataPolicy();
+
+    expect(dp.input_bars).toEqual({ timespan: 'day', multiplier: 1 });
+    expect(dp.strategy_bars).toEqual({ timespan: 'day', multiplier: 1 });
+  });
+
+  it('falls back to SPY when no symbol is configured (matches effectiveSymbol)', () => {
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+
+    component.paramValues.set({});
+
+    const dp = component.composeDataPolicy();
+
+    expect(dp.symbol).toBe('SPY');
   });
 });
