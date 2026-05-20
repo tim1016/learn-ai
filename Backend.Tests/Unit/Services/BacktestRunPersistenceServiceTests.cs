@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Backend.Models.MarketData;
 using Backend.Services.Implementation;
 using Backend.Tests.Helpers;
@@ -342,5 +343,129 @@ public class BacktestRunPersistenceServiceTests
 
         Assert.Equal(id1, id2);
         Assert.Equal(1, await db.StrategyExecutions.CountAsync(s => s.LeanRunId == "ui_run_dedup"));
+    }
+
+    // PR B Phase 2 — DataPolicy / Commission / BrokeragePolicy persistence
+    // -----------------------------------------------------------------
+
+    private const string CanonicalDataPolicyJson = """{"source":"polygon","symbol":"SPY","adjusted":true,"session":"regular","input_bars":{"timespan":"minute","multiplier":1},"strategy_bars":{"timespan":"minute","multiplier":15},"timestamp_policy":"bar_close_ms_utc","timezone":"America/New_York","provider_kind":"live","fixture_id":null,"fixture_sha256":null}""";
+
+    [Fact]
+    public async Task PersistAsync_EngineSource_StoresDataPolicyAndCommissionAndBrokerage()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(leanRunId: "placeholder") with
+        {
+            Source = "engine",
+            LeanRunId = null,
+            DataPolicyJson = CanonicalDataPolicyJson,
+            CommissionPerOrder = 1m,
+            BrokeragePolicy = "algorithm_default",
+        };
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        var row = await db.StrategyExecutions.SingleAsync(s => s.Id == id);
+        Assert.Equal("engine", row.Source);
+        Assert.Equal(CanonicalDataPolicyJson, row.DataPolicyJson);
+        Assert.Equal(1m, row.CommissionPerOrder);
+        Assert.Equal("algorithm_default", row.BrokeragePolicy);
+    }
+
+    [Fact]
+    public async Task PersistAsync_LeanSidecarSource_StoresDataPolicyFromManifestPassthrough()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(leanRunId: "ui_run_lean_dp") with
+        {
+            Source = "lean-sidecar",
+            DataPolicyJson = CanonicalDataPolicyJson,
+            CommissionPerOrder = 0m,
+            BrokeragePolicy = "interactive_brokers",
+        };
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        var row = await db.StrategyExecutions.SingleAsync(s => s.Id == id);
+        Assert.Equal("lean-sidecar", row.Source);
+        Assert.Equal(CanonicalDataPolicyJson, row.DataPolicyJson);
+        Assert.Equal(0m, row.CommissionPerOrder);
+        Assert.Equal("interactive_brokers", row.BrokeragePolicy);
+    }
+
+    [Fact]
+    public async Task PersistAsync_DefaultsAdjustedToTrue_WhenDataPolicyOmittedFromLegacyPayload()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(leanRunId: "placeholder") with
+        {
+            Source = "engine",
+            LeanRunId = null,
+            Symbol = "spy",
+            DataPolicyJson = null,
+            CommissionPerOrder = null,
+            BrokeragePolicy = null,
+        };
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        var row = await db.StrategyExecutions.SingleAsync(s => s.Id == id);
+        Assert.NotNull(row.DataPolicyJson);
+        Assert.Equal(0m, row.CommissionPerOrder);
+        Assert.Equal("algorithm_default", row.BrokeragePolicy);
+
+        // Parse synthesized DataPolicy: uppercased symbol + adjusted=true.
+        using var doc = JsonDocument.Parse(row.DataPolicyJson!);
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("adjusted").GetBoolean());
+        Assert.Equal("SPY", root.GetProperty("symbol").GetString());
+        Assert.Equal("polygon", root.GetProperty("source").GetString());
+        Assert.Equal("regular", root.GetProperty("session").GetString());
+        Assert.Equal("minute", root.GetProperty("input_bars").GetProperty("timespan").GetString());
+        Assert.Equal(1, root.GetProperty("input_bars").GetProperty("multiplier").GetInt32());
+    }
+
+    // PR B P1 fix — LEAN-sidecar runs must NOT be silently labeled
+    // ``algorithm_default`` when the persist payload omits the field.
+    // The actual brokerage is whatever the LEAN manifest pinned (often
+    // Interactive Brokers for reconciliation runs); fabricating
+    // ``algorithm_default`` would corrupt compare-view gating and
+    // historical auditing. Until the Python ``build_persist_payload``
+    // forwards the manifest's ``brokerage_policy`` (a separate change),
+    // the truthful record is NULL ("unknown").
+
+    [Fact]
+    public async Task PersistAsync_LeanSidecar_NullBrokerage_PreservedAsNull()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(leanRunId: "ui_run_lean_null_brokerage") with
+        {
+            Source = "lean-sidecar",
+            BrokeragePolicy = null,
+        };
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        var row = await db.StrategyExecutions.SingleAsync(s => s.Id == id);
+        Assert.Equal("lean-sidecar", row.Source);
+        Assert.Null(row.BrokeragePolicy);
+    }
+
+    [Fact]
+    public async Task PersistAsync_Engine_NullBrokerage_DefaultsToAlgorithmDefault()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(leanRunId: "placeholder") with
+        {
+            Source = "engine",
+            LeanRunId = null,
+            BrokeragePolicy = null,
+        };
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        var row = await db.StrategyExecutions.SingleAsync(s => s.Id == id);
+        Assert.Equal("engine", row.Source);
+        Assert.Equal("algorithm_default", row.BrokeragePolicy);
     }
 }

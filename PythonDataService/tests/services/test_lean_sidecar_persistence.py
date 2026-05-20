@@ -512,6 +512,144 @@ def test_build_persist_payload_pyramiding_returns_failed_payload(tmp_path: Path)
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# PR B P1 fix — manifest-forwarded brokerage_policy + data_policy_json
+# ---------------------------------------------------------------------------
+
+
+def _stub_manifest_dict(brokerage_policy: str = "interactive_brokers") -> dict:
+    """A minimal manifest-shaped dict (as the backfill CLI loads it from disk).
+
+    Mirrors the canonical ``RunManifest`` -> JSON serialization. The fields
+    we care about for the persist payload are ``brokerage_policy`` and
+    ``data_policy``; everything else is filler.
+    """
+    return {
+        "brokerage_policy": brokerage_policy,
+        "data_policy": {
+            "source": "polygon",
+            "symbol": "SPY",
+            "adjusted": True,
+            "session": "regular",
+            "input_bars": {"timespan": "minute", "multiplier": 1},
+            "strategy_bars": {"timespan": "minute", "multiplier": 15},
+            "timestamp_policy": "bar_close_ms_utc",
+            "timezone": "America/New_York",
+            "provider_kind": "live",
+            "fixture_id": None,
+            "fixture_sha256": None,
+        },
+    }
+
+
+def test_build_persist_payload_forwards_brokerage_and_data_policy_from_manifest_dict(
+    tmp_path: Path,
+) -> None:
+    """The persist payload must carry the manifest's brokerage_policy +
+    data_policy_json so the .NET row is the truthful record."""
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "ui_run_with_manifest",
+        order_events=[
+            _filled_event(1, "buy", 1_700_000_060_000, 100.0, 10, fee=0.5),
+            _filled_event(2, "sell", 1_700_000_600_000, 101.0, 10, fee=0.5),
+        ],
+        equity_curve=[
+            {"ms_utc": 1_700_000_000_000, "value": 100_000.0},
+            {"ms_utc": 1_700_000_600_000, "value": 100_009.0},
+        ],
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_with_manifest",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+        manifest=_stub_manifest_dict(brokerage_policy="interactive_brokers"),
+    )
+
+    assert payload["brokerage_policy"] == "interactive_brokers"
+    assert payload["commission_per_order"] == 0.0
+    assert payload["data_policy_json"] is not None
+    parsed_dp = json.loads(payload["data_policy_json"])
+    assert parsed_dp["source"] == "polygon"
+    assert parsed_dp["symbol"] == "SPY"
+    assert parsed_dp["adjusted"] is True
+    assert parsed_dp["strategy_bars"]["multiplier"] == 15
+
+
+def test_build_persist_payload_without_manifest_emits_none_brokerage(
+    tmp_path: Path,
+) -> None:
+    """Without a manifest the payload's brokerage_policy is None.
+
+    The .NET service preserves NULL on the row rather than fabricating
+    ``algorithm_default``, which would corrupt compare-view gating for
+    Interactive Brokers reconciliation runs.
+    """
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "ui_run_legacy_no_manifest",
+        order_events=[
+            _filled_event(1, "buy", 1_700_000_060_000, 100.0, 10, fee=0.5),
+            _filled_event(2, "sell", 1_700_000_600_000, 101.0, 10, fee=0.5),
+        ],
+        equity_curve=[
+            {"ms_utc": 1_700_000_000_000, "value": 100_000.0},
+            {"ms_utc": 1_700_000_600_000, "value": 100_009.0},
+        ],
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_legacy_no_manifest",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+    )
+
+    assert payload["brokerage_policy"] is None
+    assert payload["data_policy_json"] is None
+    assert payload["commission_per_order"] == 0.0
+
+
+def test_build_persist_payload_failed_run_with_manifest_still_forwards_brokerage(
+    tmp_path: Path,
+) -> None:
+    """Even when LEAN crashed before producing output, the manifest's
+    brokerage_policy must flow through so the row's compare-view gating
+    is accurate for the failed-run audit trail."""
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = tmp_path / "ui_run_crashed_with_manifest"
+    ws.mkdir()
+    # No normalized/result.json — simulate LEAN crash.
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_crashed_with_manifest",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+        manifest=_stub_manifest_dict(brokerage_policy="algorithm_default"),
+    )
+
+    assert payload["total_trades"] == 0
+    assert payload["brokerage_policy"] == "algorithm_default"
+    assert payload["data_policy_json"] is not None
+
+
 @pytest.mark.asyncio
 async def test_persist_via_dotnet_posts_payload_and_returns_id() -> None:
     import respx

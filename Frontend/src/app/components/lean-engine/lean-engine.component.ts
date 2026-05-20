@@ -33,6 +33,7 @@ import {
 } from "../../shared/ticker-range-picker";
 import { TICKER_POOL, RECENT_TICKERS } from "../../shared/ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
+import type { DataPolicy } from "../../models/data-policy";
 
 // Severity for pre-flight: re-declared locally so we don't import the panel's types.
 type PreflightSeverity = "ok" | "warning" | "blocking";
@@ -385,6 +386,37 @@ export class LeanEngineComponent implements OnInit {
     return "SPY";
   });
 
+  /**
+   * PR B (2026-05-19) — synthesize the canonical ``DataPolicy`` block
+   * from the current form state. The shape mirrors the Python and .NET
+   * sides exactly so the compare-view can gate on equality.
+   *
+   * The hidden defaults are documented in
+   * `docs/superpowers/specs/2026-05-19-pr-b-engine-lab-unified-design.md`
+   * § 4.4: ``adjusted=true`` (pre-adjusted Polygon staging), regular
+   * session, ``input_bars`` and ``strategy_bars`` both at the
+   * timeframe carried by the resolution toggle. Intra-strategy
+   * consolidation (e.g., minute-1 → minute-15) lives inside the
+   * strategy code itself, not in DataPolicy.
+   */
+  composeDataPolicy(): DataPolicy {
+    const timespan: DataPolicy['input_bars']['timespan'] =
+      this.resolution() === 'daily' ? 'day' : 'minute';
+    return {
+      source: 'polygon',
+      symbol: this.effectiveSymbol(),
+      adjusted: true,
+      session: 'regular',
+      input_bars: { timespan, multiplier: 1 },
+      strategy_bars: { timespan, multiplier: 1 },
+      timestamp_policy: 'bar_close_ms_utc',
+      timezone: 'America/New_York',
+      provider_kind: 'live',
+      fixture_id: null,
+      fixture_sha256: null,
+    };
+  }
+
   readonly tickerPool = TICKER_POOL;
   readonly recentTickers = RECENT_TICKERS;
 
@@ -674,6 +706,11 @@ export class LeanEngineComponent implements OnInit {
       params: this.paramValues(),
       auto_fetch: this.autoFetch(),
       resolution: this.resolution(),
+      // PR B (2026-05-19) — canonical DataPolicy block on every engine
+      // submission. The Python router accepts the block as-is and echoes
+      // it in the response; the persistence layer writes it into the new
+      // ``DataPolicyJson`` column.
+      data_policy: this.composeDataPolicy(),
     };
     if (this.startDate()) backtest["start_date"] = this.startDate();
     if (this.endDate()) backtest["end_date"] = this.endDate();

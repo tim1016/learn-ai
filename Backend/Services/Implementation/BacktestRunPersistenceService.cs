@@ -115,6 +115,24 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
             FillMode = payload.Source == "engine" ? "signal_bar_close" : "lean-sidecar",
             ExecutedAt = DateTime.UtcNow,
             DurationMs = 0,
+            // PR B (2026-05-19) — DataPolicy / Commission / Brokerage.
+            // When the legacy client omits the canonical block, synthesize a
+            // default DataPolicy that documents what the engines actually did
+            // (Polygon bars, pre-adjusted, regular session, minute-1 input
+            // bars consolidated to minute-15 strategy bars). The Python
+            // engine genuinely doesn't model brokerage, so falling back to
+            // ``algorithm_default`` is faithful for ``source='engine'``. For
+            // ``source='lean-sidecar'`` the run actually ran under SOME
+            // brokerage (often Interactive Brokers for reconciliation runs);
+            // if the LEAN persist payload didn't carry the field, leaving it
+            // NULL ("unknown") is the truthful record. Fabricating
+            // ``algorithm_default`` here would corrupt compare-view gating
+            // and historical auditing, so we only synthesize that fallback
+            // for the engine path.
+            DataPolicyJson = payload.DataPolicyJson ?? SynthesizeLegacyDataPolicy(payload),
+            CommissionPerOrder = payload.CommissionPerOrder ?? 0m,
+            BrokeragePolicy = payload.BrokeragePolicy
+                ?? (payload.Source == "engine" ? "algorithm_default" : null),
         };
 
         // Wrap the entire write in a transaction so a trade-save failure also rolls back
@@ -180,5 +198,32 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
     {
         // Npgsql: SqlState 23505 == unique_violation
         return ex.InnerException is Npgsql.PostgresException pg && pg.SqlState == "23505";
+    }
+
+    /// <summary>
+    /// PR B (2026-05-19) — one-cycle backwards-compat for pre-PR-B clients
+    /// that POST without the ``data_policy_json`` field. Records what the
+    /// engines actually do today (Polygon-sourced, pre-adjusted bars in
+    /// regular session, minute-1 input consolidated to minute-15 strategy
+    /// bars) so the history surface and compare-view never see a null
+    /// DataPolicy on a freshly-written row.
+    /// </summary>
+    private static string SynthesizeLegacyDataPolicy(PersistLeanRunPayload p)
+    {
+        var dp = new
+        {
+            source = "polygon",
+            symbol = p.Symbol?.ToUpperInvariant() ?? "",
+            adjusted = true,
+            session = "regular",
+            input_bars = new { timespan = "minute", multiplier = 1 },
+            strategy_bars = new { timespan = "minute", multiplier = 15 },
+            timestamp_policy = "bar_close_ms_utc",
+            timezone = "America/New_York",
+            provider_kind = "live",
+            fixture_id = (string?)null,
+            fixture_sha256 = (string?)null,
+        };
+        return JsonSerializer.Serialize(dp);
     }
 }

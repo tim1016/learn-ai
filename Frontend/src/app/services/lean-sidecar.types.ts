@@ -13,11 +13,19 @@
  * about 30,000 years away from precision loss).
  */
 
+import type { DataPolicy } from "../models/data-policy";
+
 /** Caller-supplied run request. Optional ``algorithm_source`` since Phase 4c. */
 export interface TrustedRunRequest {
   /** Strict slug `^[a-z0-9][a-z0-9_-]{2,63}$`. */
   run_id: string;
-  /** Equity ticker, `^[A-Za-z0-9.\-]{1,16}$`. Defaults to SPY on the server. */
+  /**
+   * Equity ticker, `^[A-Za-z0-9.\-]{1,16}$`. Defaults to SPY on the server.
+   *
+   * @deprecated PR B (2026-05-19) — moved into ``data_policy.symbol``.
+   * The router still accepts top-level ``symbol`` for one deprecation cycle.
+   * New callers send ``data_policy`` instead.
+   */
   symbol?: string;
   /**
    * P2.5 contract — 09:30 ET (NYSE session-open) of the first trading
@@ -56,6 +64,13 @@ export interface TrustedRunRequest {
    * own brokerage via SetBrokerageModel).
    */
   template?: "trusted_default" | "reconciliation" | "ema_crossover";
+  /**
+   * PR B (2026-05-19) — canonical DataPolicy block. When provided, the
+   * legacy top-level ``symbol`` field must be omitted (the router rejects
+   * mixed shapes with HTTP 422). Mirrors the Python
+   * ``app.lean_sidecar.data_policy.DataPolicy`` dataclass.
+   */
+  data_policy?: DataPolicy;
 }
 
 /**

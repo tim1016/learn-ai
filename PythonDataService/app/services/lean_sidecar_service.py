@@ -686,6 +686,12 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         algorithm_name=_algorithm_name_for_run(request.template, request.algorithm_source),
         start_date_ms=_date_to_ms_utc(request.start_date),
         end_date_ms=_date_to_ms_utc(request.end_date),
+        # PR B P1 fix — forward the manifest so the persist payload carries
+        # the true ``brokerage_policy`` + ``data_policy``. Without this, the
+        # .NET row would either be NULL ("unknown") or, pre-fix, would have
+        # been silently labeled ``algorithm_default`` even for IBKR
+        # reconciliation runs.
+        manifest=manifest,
     )
     strategy_execution_id = await persist_via_dotnet(
         payload=persist_payload,

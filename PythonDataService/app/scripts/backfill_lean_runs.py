@@ -133,6 +133,12 @@ def _build_payload_for_workspace(workspace: Path) -> dict[str, Any] | None:
         algorithm_name=algorithm_name,
         start_date_ms=int(start_ms),
         end_date_ms=int(end_ms),
+        # PR B P1 fix — forward the manifest dict so the persist payload
+        # carries the true ``brokerage_policy`` and ``data_policy`` for
+        # backfilled rows. Without this, legacy LEAN runs would be
+        # silently labeled with NULL (and pre-fix, ``algorithm_default``)
+        # even when they actually ran under Interactive Brokers.
+        manifest=manifest,
     )
 
 
