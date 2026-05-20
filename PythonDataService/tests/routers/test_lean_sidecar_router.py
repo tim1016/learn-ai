@@ -34,34 +34,44 @@ def test_trusted_run_request_model_accepts_new_fields() -> None:
     assert model.bar_minutes == 15
 
 
-def test_trusted_run_request_model_rejects_bar_minutes_other_than_15() -> None:
+def test_trusted_run_request_model_legacy_requires_all_legacy_fields() -> None:
+    """PR B (2026-05-19): the legacy top-level shape now requires all of
+    ``data_source`` / ``bar_minutes`` / ``session`` so the router can
+    distinguish "caller picked the legacy shape" from "caller forgot to
+    send a ``data_policy`` block". PR A's per-field Literal defaults
+    silently masked that ambiguity.
+    """
     from pydantic import ValidationError
 
     from app.routers.lean_sidecar import TrustedRunRequestModel
 
     with pytest.raises(ValidationError):
         TrustedRunRequestModel(
-            run_id="test-bad-bm",
+            run_id="test-def",
             symbol="SPY",
             start_ms_utc=_GOOD_START_MS,
             end_ms_utc=_GOOD_END_MS,
             starting_cash=100_000.0,
-            bar_minutes=30,
         )
 
 
-def test_trusted_run_request_model_defaults_match_dataclass() -> None:
+def test_trusted_run_request_model_accepts_non_15_bar_minutes() -> None:
+    """PR B replaces PR A's ``bar_minutes: Literal[15]`` pin with a
+    free integer; template-internal source code asserts the value at
+    LEAN runtime. The router only enforces ``ge=1``.
+    """
     from app.routers.lean_sidecar import TrustedRunRequestModel
 
     model = TrustedRunRequestModel(
-        run_id="test-def",
+        run_id="test-non15-bm",
         symbol="SPY",
         start_ms_utc=_GOOD_START_MS,
         end_ms_utc=_GOOD_END_MS,
         starting_cash=100_000.0,
+        data_source="synthetic",
+        bar_minutes=30,
+        session="regular",
+        adjustment="raw",
     )
-
-    assert model.data_source == "synthetic"
-    assert model.bar_minutes == 15
-    assert model.session == "regular"
-    assert model.adjustment == "raw"
+    assert model.data_policy is not None
+    assert model.data_policy.strategy_bars.multiplier == 30
