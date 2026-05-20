@@ -69,6 +69,18 @@ describe("LeanScriptEditorComponent", () => {
     expect(initializeBody).not.toMatch(/SetEndDate\(\s*\d{4}\s*,/);
   });
 
+  it("seed pins a constant benchmark to dodge LEAN's SPY-daily fetch", () => {
+    // Regression: without SetBenchmark, LEAN's post-run ResultsAnalyzer
+    // tries to build a benchmark curve from SPY daily bars. The
+    // orchestrator only stages bars for the strategy symbol (e.g. QQQ),
+    // so the SPY fetch returns nothing and ResultsAnalyzer throws
+    // "Sequence contains no elements", flagging the run as dirty even
+    // though the algorithm itself succeeded. Both trusted samples
+    // (buy_and_hold.py, ema_crossover.py) pin a constant benchmark for
+    // the same reason; the seed must teach that pattern by example.
+    expect(EMA_CROSSOVER_SOURCE_TEMPLATE).toContain("self.SetBenchmark(lambda dt: 100)");
+  });
+
   it("propagates source updates through the model signal", () => {
     const fixture = TestBed.createComponent(LeanScriptEditorComponent);
     fixture.detectChanges();

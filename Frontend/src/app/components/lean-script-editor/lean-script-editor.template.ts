@@ -18,6 +18,14 @@
  * so the seed teaches the correct pattern by example. Fixtures are
  * the only context where hardcoding is appropriate, because they pin
  * specific (symbol, window) tuples to byte-equivalent bars.
+ *
+ * **Benchmark pinned to a constant**: LEAN's default benchmark is SPY
+ * daily, which the orchestrator does not stage (it stages bars for the
+ * form's symbol only). Without ``SetBenchmark``, the post-run
+ * ``ResultsAnalyzer`` throws ``Sequence contains no elements`` when it
+ * tries to align an empty SPY benchmark series, flagging the run as
+ * dirty. Trusted samples (``buy_and_hold.py``, ``ema_crossover.py``)
+ * pin a constant for the same reason.
  */
 export const EMA_CROSSOVER_SOURCE_TEMPLATE = `from AlgorithmImports import *
 
@@ -47,6 +55,14 @@ class MyAlgorithm(QCAlgorithm):
         self.symbol = equity.Symbol
         self.ema_fast = self.EMA(self.symbol, self.FAST_PERIOD, Resolution.Minute)
         self.ema_slow = self.EMA(self.symbol, self.SLOW_PERIOD, Resolution.Minute)
+
+        # LEAN's default benchmark is SPY daily, which would require staging
+        # daily SPY bars in addition to the strategy symbol's minute bars.
+        # The orchestrator only stages data for the selected symbol, so the
+        # post-run ResultsAnalyzer fails ("Sequence contains no elements")
+        # when it tries to build a benchmark curve from an unstaged SPY feed.
+        # Pinning a constant benchmark sidesteps that.
+        self.SetBenchmark(lambda dt: 100)
 
     def OnData(self, slice):
         if not (self.ema_fast.IsReady and self.ema_slow.IsReady):
