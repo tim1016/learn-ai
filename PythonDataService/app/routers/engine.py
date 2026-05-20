@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from datetime import time as time_of_day
 from decimal import Decimal
 from pathlib import Path
@@ -1483,9 +1483,15 @@ def _format_trade(index: int, trade: Any) -> EngineTradeResponse:
     indicators = {k: float(v) for k, v in raw_indicators.items()}
     return EngineTradeResponse(
         trade_number=index,
-        entry_time=trade.entry_time.strftime("%Y-%m-%d %H:%M"),
+        # ISO-8601 with Z designator: this string is the wire format the
+        # .NET ``StudiesApi.ParseUtc`` requires when persisting trades, and
+        # per ``.claude/rules/numerical-rigor.md`` §"Timestamp rigor" naive
+        # ISO strings are banned at boundaries. Earlier `"%Y-%m-%d %H:%M"`
+        # encoding caused every Python engine save to silently 500 against
+        # `/api/studies` since the parser was hardened.
+        entry_time=_to_utc_iso(trade.entry_time),
         entry_price=float(trade.entry_price),
-        exit_time=trade.exit_time.strftime("%Y-%m-%d %H:%M"),
+        exit_time=_to_utc_iso(trade.exit_time),
         exit_price=float(trade.exit_price),
         indicators=indicators,
         pnl_pts=float(trade.pnl_pts),
@@ -2048,6 +2054,30 @@ def execute_engine_backtest(
     on_log(f"Saved study {response.study_id}")
 
     return response
+
+
+# ---------------------------------------------------------------------------
+# Wire-format helpers
+# ---------------------------------------------------------------------------
+def _to_utc_iso(dt: datetime) -> str:
+    """Format a datetime as ISO-8601 UTC with Z designator.
+
+    Required by .NET ``StudiesApi.ParseUtc`` which only accepts
+    ``yyyy-MM-ddTHH:mm:ss'Z'``. Naive inputs are treated as UTC for
+    defensive backwards-compat — the engine's bar pipeline normally
+    yields tz-aware ET datetimes, but a strategy that bypasses the
+    standard pipeline must not silently fail the save.
+
+    See ``.claude/rules/numerical-rigor.md`` §"Timestamp rigor": naive
+    ISO strings are banned as wire format; this is the canonical
+    encoding for engine→backend trade timestamps until they move to
+    int64 ms UTC.
+    """
+    if dt.tzinfo is None:
+        dt_utc = dt.replace(tzinfo=UTC)
+    else:
+        dt_utc = dt.astimezone(UTC)
+    return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ---------------------------------------------------------------------------
