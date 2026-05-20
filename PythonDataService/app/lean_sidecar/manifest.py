@@ -41,7 +41,12 @@ from typing import Any, Literal
 #       ``RunManifest``, capturing data provenance (source, symbol,
 #       adjustment, session, input vs strategy bars, fixture identity)
 #       separately from execution-policy fields.
-MANIFEST_SCHEMA_VERSION = 3
+#   4 — 2026-05-19: PR B renamed ``DataPolicyManifest`` to ``DataPolicy``
+#       (backend-neutral shared shape) and added the ``provider_kind``
+#       field (``"live"`` for live Polygon runs, ``"fixture"`` for
+#       replay-driven parity runs). The old class name is retained as a
+#       ``DeprecationWarning`` alias in ``app.lean_sidecar.data_policy``.
+MANIFEST_SCHEMA_VERSION = 4
 
 # Note tag that the manifest writer adds to ``notes`` so downstream
 # readers (the cross-engine reconciler, the run-history sidebar) can
@@ -144,18 +149,25 @@ class BarsSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class DataPolicyManifest:
+class DataPolicy:
     """Where the bars came from and what processing they got.
 
-    Separate from the existing top-level ``fill_forward`` /
-    ``data_adjustment_policy`` / ``data_normalization_mode`` fields,
-    which encode execution-time policy. This block encodes data
-    provenance: "what bars did we feed in, and how were they
-    constructed?"
+    Backend-neutral shared shape. Embedded inside ``RunManifest.data_policy``
+    for LEAN runs; persisted as JSONB on ``StrategyExecution`` rows for both
+    Python and LEAN runs. Renamed from ``DataPolicyManifest`` in PR B
+    (2026-05-19); the old name is kept as a deprecation-warning alias in
+    ``app.lean_sidecar.data_policy``.
 
-    ``fixture_id`` and ``fixture_sha256`` are populated only when the
-    run was driven by a ``RecordedPolygonFixtureProvider`` (i.e., a
-    parity-test run). Live Polygon runs leave both ``None``.
+    Separate from the existing top-level ``fill_forward`` /
+    ``data_adjustment_policy`` / ``data_normalization_mode`` fields on
+    ``RunManifest``, which encode execution-time policy. This block
+    encodes data provenance: "what bars did we feed in, and how were
+    they constructed?"
+
+    ``provider_kind`` distinguishes live Polygon runs (``"live"``) from
+    parity-test runs driven by a recorded fixture (``"fixture"``).
+    ``fixture_id`` and ``fixture_sha256`` are populated only when
+    ``provider_kind == "fixture"``.
     """
 
     source: Literal["synthetic", "polygon"]
@@ -166,6 +178,7 @@ class DataPolicyManifest:
     strategy_bars: BarsSpec
     timestamp_policy: Literal["bar_close_ms_utc"]
     timezone: Literal["America/New_York"]
+    provider_kind: Literal["live", "fixture"]
     fixture_id: str | None
     fixture_sha256: str | None
 
@@ -195,7 +208,7 @@ class RunManifest:
 
     # Data
     staged_data: StagedDataManifest
-    data_policy: DataPolicyManifest
+    data_policy: DataPolicy
     data_adjustment_policy: DataAdjustmentPolicy
     data_normalization_mode: DataNormalizationMode
     fill_forward: bool

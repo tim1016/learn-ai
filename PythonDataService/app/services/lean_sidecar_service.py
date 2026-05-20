@@ -43,7 +43,7 @@ from app.lean_sidecar.manifest import (
     P2_5_DATE_SEMANTICS_NOTE,
     BarsSpec,
     BrokeragePolicy,
-    DataPolicyManifest,
+    DataPolicy,
     RunManifest,
     StagedDataManifest,
     WindowMs,
@@ -660,8 +660,8 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     )
 
 
-def _build_data_policy(request: TrustedRunRequest) -> DataPolicyManifest:
-    """Construct DataPolicyManifest from a TrustedRunRequest and assert vocabulary consistency.
+def _build_data_policy(request: TrustedRunRequest) -> DataPolicy:
+    """Construct DataPolicy from a TrustedRunRequest and assert vocabulary consistency.
 
     ``adjusted`` reflects Polygon's wire concept: ``adjustment="raw"`` means
     Polygon returns unadjusted (split/dividend-raw) prices, which maps to
@@ -677,7 +677,7 @@ def _build_data_policy(request: TrustedRunRequest) -> DataPolicyManifest:
     which this branch is validating.
     """
     adjusted = request.adjustment != "raw"  # raw ⇒ adjusted=False
-    data_policy = DataPolicyManifest(
+    data_policy = DataPolicy(
         source=request.data_source,
         symbol=request.symbol,
         adjusted=adjusted,
@@ -686,6 +686,11 @@ def _build_data_policy(request: TrustedRunRequest) -> DataPolicyManifest:
         strategy_bars=BarsSpec(timespan="minute", multiplier=request.bar_minutes),
         timestamp_policy="bar_close_ms_utc",
         timezone="America/New_York",
+        # PR B: ``provider_kind`` distinguishes live Polygon runs from
+        # fixture-replay parity runs. ``"live"`` is the default; the
+        # parity-test hook (Task 1.5) injects ``"fixture"`` when a
+        # ``RecordedPolygonFixtureProvider`` is wired in.
+        provider_kind="live",
         # Fixture identity is populated by the parity test through a
         # separate hook (Task 11+) — production live-Polygon runs leave
         # both fields None.
