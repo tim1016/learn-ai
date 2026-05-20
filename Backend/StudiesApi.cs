@@ -337,6 +337,27 @@ public record SaveStudyRequest
     public string? Notes { get; init; }
     public long DurationMs { get; init; }
     public List<SaveStudyTrade>? Trades { get; init; }
+
+    /// <summary>
+    /// PR B (2026-05-19) — canonical DataPolicy block as a JSON string.
+    /// Python engine emits it as part of the auto-save payload. Null from
+    /// legacy callers; ``SaveStudyAsync`` synthesizes a default block from
+    /// ``Symbol`` in that case.
+    /// </summary>
+    public string? DataPolicyJson { get; init; }
+
+    /// <summary>
+    /// PR B (2026-05-19) — commission per order recorded with the run so
+    /// the compare-view can gate on it. Null from legacy callers; defaults
+    /// to 0 on persist.
+    /// </summary>
+    public decimal? CommissionPerOrder { get; init; }
+
+    /// <summary>
+    /// PR B (2026-05-19) — brokerage policy. The Python engine writes
+    /// ``"algorithm_default"`` because it doesn't model brokerage.
+    /// </summary>
+    public string? BrokeragePolicy { get; init; }
 }
 
 public record SaveStudyTrade
