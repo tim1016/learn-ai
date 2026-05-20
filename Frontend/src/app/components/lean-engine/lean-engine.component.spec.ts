@@ -10,6 +10,7 @@ import {
   mapStudyTradeToEngineTrade,
   StudyTradeApiItem,
 } from './lean-engine.component';
+import { isStructuredLeanStatistics } from './engine-results/engine-results.component';
 import { JobsService } from '../../services/jobs.service';
 import { LeanSidecarService } from '../../services/lean-sidecar.service';
 import type { TrustedRunRequest, TrustedRunResponse } from '../../services/lean-sidecar.types';
@@ -65,6 +66,71 @@ describe('mapStudyTradeToEngineTrade', () => {
   it('handles missing signalReason as empty string', () => {
     const trade = mapStudyTradeToEngineTrade(makeItem({ signalReason: null }), 0);
     expect(trade.signal_reason).toBe('');
+  });
+});
+
+describe('isStructuredLeanStatistics', () => {
+  it('rejects raw LEAN sidecar normalized statistics', () => {
+    expect(isStructuredLeanStatistics({
+      statistics: { 'Total Orders': '778' },
+      runtime_statistics: {},
+      parser_version: 'phase-3a-r1',
+    })).toBe(false);
+  });
+
+  it('accepts Python engine structured LEAN statistics', () => {
+    expect(isStructuredLeanStatistics({
+      portfolio: {
+        average_win_rate: 0,
+        average_loss_rate: 0,
+        profit_loss_ratio: 0,
+        win_rate: 0,
+        loss_rate: 0,
+        expectancy: 0,
+        start_equity: 100000,
+        end_equity: 101000,
+        total_net_profit: 0.01,
+        compounding_annual_return: 0.1,
+        sharpe_ratio: 1,
+        sortino_ratio: 1,
+        probabilistic_sharpe_ratio: 0.5,
+        annual_standard_deviation: 0.1,
+        annual_variance: 0.01,
+        alpha: 0,
+        beta: 0,
+        information_ratio: 0,
+        tracking_error: 0,
+        treynor_ratio: 0,
+        drawdown: 0,
+        drawdown_recovery: 0,
+        value_at_risk_99: 0,
+        value_at_risk_95: 0,
+        portfolio_turnover: 0,
+      },
+      trade: {
+        total_number_of_trades: 1,
+        number_of_winning_trades: 1,
+        number_of_losing_trades: 0,
+        total_profit_loss: 1,
+        total_profit: 1,
+        total_loss: 0,
+        largest_profit: 1,
+        largest_loss: 0,
+        average_profit_loss: 1,
+        average_profit: 1,
+        average_loss: 0,
+        max_consecutive_winning_trades: 1,
+        max_consecutive_losing_trades: 0,
+        profit_factor: 1,
+        profit_to_max_drawdown_ratio: 0,
+        profit_loss_standard_deviation: 0,
+        profit_loss_downside_deviation: 0,
+        sharpe_ratio: 1,
+        sortino_ratio: 1,
+        total_fees: 1,
+      },
+      runtime: {},
+    })).toBe(true);
   });
 });
 
@@ -298,6 +364,52 @@ describe('LeanEngineComponent engine selector', () => {
       symbol: 'SPY',
       adjusted: true,
     });
+  });
+
+  it('loads the persisted study after a LEAN sidecar run with usable dirty artifacts', async () => {
+    const startTrustedRun = vi.fn().mockResolvedValue({
+      run_id: 'rid',
+      is_clean: false,
+      exit_code: 0,
+      duration_ms: 10,
+      timed_out: false,
+      lean_errors: {
+        analysis_failed: ['ResultsAnalyzer failed'],
+        failed_data_requests: ['daily/spy.zip missing'],
+        runtime_error: [],
+        other: [],
+      },
+      log_tail: '',
+      manifest_path: '/m',
+      workspace_root: '/w',
+      observations_path: '/o',
+      lean_log_path: '/l',
+      normalized_path: '/n',
+      normalized_parser_version: 'phase-3a-r1',
+      total_order_events: 1556,
+      total_equity_points: 5,
+      strategy_execution_id: 27,
+    } satisfies TrustedRunResponse);
+    configureTestBed({ startTrustedRun });
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    const loadStudy = vi.fn().mockResolvedValue(undefined);
+    component.onStudySelected = loadStudy;
+
+    component.engine.set('lean');
+    component.leanSource.set('class MyAlgorithm: pass');
+    component.startDate.set('2025-01-13');
+    component.endDate.set('2025-01-17');
+    component.initialCash.set(100_000);
+
+    await component.run();
+
+    expect(loadStudy).toHaveBeenCalledWith(27);
+    expect(component.runPhase()).toBe('completed');
+    expect(component.runStatusBanner()).toContain('produced results with warnings');
+    expect(component.runPhaseDetail()).toContain('analysis_failed: 1');
+    expect(component.runPhaseDetail()).toContain('failed_data_requests: 1');
   });
 
   it('advances end_ms_utc past the user-picked end so single-day LEAN runs are not rejected as start == end', async () => {

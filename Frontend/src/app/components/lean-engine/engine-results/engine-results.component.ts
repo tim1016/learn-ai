@@ -17,6 +17,7 @@ import {
   gradeSharpe, gradeSortino, gradeProfitFactor, gradeWinRate,
   gradeMaxDrawdown, gradeExpectancy, gradeNetProfit,
 } from '../metric-grade.util';
+import type { LeanStatsLike } from '../readiness-score-card/readiness-score.util';
 
 // ── Shared types (mirrored from lean-engine) ──────────────────
 export interface LeanPortfolioStats {
@@ -57,6 +58,68 @@ export interface LeanStatistics {
   runtime: LeanRuntimeStats;
 }
 
+function hasNumberFields(value: unknown, fields: readonly string[]): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return fields.every((field) => typeof record[field] === 'number');
+}
+
+export function isStructuredLeanStatistics(value: unknown): value is LeanStatistics {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<Record<keyof LeanStatistics, unknown>>;
+  return hasNumberFields(candidate.portfolio, [
+    'average_win_rate',
+    'average_loss_rate',
+    'profit_loss_ratio',
+    'win_rate',
+    'loss_rate',
+    'expectancy',
+    'start_equity',
+    'end_equity',
+    'total_net_profit',
+    'compounding_annual_return',
+    'sharpe_ratio',
+    'sortino_ratio',
+    'probabilistic_sharpe_ratio',
+    'annual_standard_deviation',
+    'annual_variance',
+    'alpha',
+    'beta',
+    'information_ratio',
+    'tracking_error',
+    'treynor_ratio',
+    'drawdown',
+    'drawdown_recovery',
+    'value_at_risk_99',
+    'value_at_risk_95',
+    'portfolio_turnover',
+  ])
+    && hasNumberFields(candidate.trade, [
+      'total_number_of_trades',
+      'number_of_winning_trades',
+      'number_of_losing_trades',
+      'total_profit_loss',
+      'total_profit',
+      'total_loss',
+      'largest_profit',
+      'largest_loss',
+      'average_profit_loss',
+      'average_profit',
+      'average_loss',
+      'max_consecutive_winning_trades',
+      'max_consecutive_losing_trades',
+      'profit_factor',
+      'profit_to_max_drawdown_ratio',
+      'profit_loss_standard_deviation',
+      'profit_loss_downside_deviation',
+      'sharpe_ratio',
+      'sortino_ratio',
+      'total_fees',
+    ])
+    && !!candidate.runtime
+    && typeof candidate.runtime === 'object';
+}
+
 export interface EngineTrade {
   trade_number: number;
   entry_time: string;
@@ -83,7 +146,7 @@ export interface EngineResultData {
   losing_trades: number;
   win_rate: number;
   statistics: Record<string, number | null>;
-  lean_statistics: LeanStatistics | null;
+  lean_statistics: LeanStatsLike | null;
   trades: EngineTrade[];
   log_lines: string[];
   error?: string;
@@ -137,7 +200,10 @@ export class EngineResultsComponent {
   showFeeDrawer = signal(false);
   toggleFeeDrawer(): void { this.showFeeDrawer.update(v => !v); }
 
-  leanStats = computed(() => this.result().lean_statistics ?? null);
+  leanStats = computed(() => {
+    const stats = this.result().lean_statistics;
+    return isStructuredLeanStatistics(stats) ? stats : null;
+  });
 
   totalFees = computed(() => this.result().total_fees ?? 0);
 
@@ -189,8 +255,9 @@ export class EngineResultsComponent {
   // 3.0 as elevated.
   readonly sharpeDivergence = computed(() => {
     const r = this.result();
-    const portfolio = r.statistics['sharpe_ratio'] ?? r.lean_statistics?.portfolio?.sharpe_ratio ?? null;
-    const trade = r.lean_statistics?.trade?.sharpe_ratio ?? null;
+    const lean = this.leanStats();
+    const portfolio = r.statistics['sharpe_ratio'] ?? lean?.portfolio.sharpe_ratio ?? null;
+    const trade = lean?.trade.sharpe_ratio ?? null;
     if (typeof portfolio !== 'number' || typeof trade !== 'number') {
       return { portfolio, trade, gap: null, band: 'na' as const, verdict: 'Trade Sharpe requires lean_statistics from the backtest.' };
     }

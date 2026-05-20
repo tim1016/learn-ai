@@ -16,6 +16,7 @@ import { environment } from "../../../environments/environment";
 import { ButtonModule } from "primeng/button";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 import { EngineResultsComponent } from "./engine-results/engine-results.component";
+import type { LeanStatsLike } from "./readiness-score-card/readiness-score.util";
 import { StudyListItem } from "./study-list-item";
 import { EngineLabRunHistoryComponent } from "./engine-lab-run-history/engine-lab-run-history.component";
 import { LeanEngineDocsComponent } from "./lean-engine-docs/lean-engine-docs.component";
@@ -34,6 +35,7 @@ import {
 import { TICKER_POOL, RECENT_TICKERS } from "../../shared/ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
+import type { LeanErrorBuckets } from "../../services/lean-sidecar.types";
 import type { DataPolicy } from "../../models/data-policy";
 import { LeanScriptEditorComponent } from "../lean-script-editor/lean-script-editor.component";
 import { EMA_CROSSOVER_SOURCE_TEMPLATE } from "../lean-script-editor/lean-script-editor.template";
@@ -168,7 +170,7 @@ interface EngineBacktestResponse {
   losing_trades: number;
   win_rate: number;
   statistics: Record<string, number | null>;
-  lean_statistics: any | null;
+  lean_statistics: LeanStatsLike | null;
   trades: EngineTrade[];
   log_lines: string[];
   equity_curve?: { timestamp: string; equity: number; cash: number; holdings_value: number }[];
@@ -799,11 +801,19 @@ export class LeanEngineComponent implements OnInit {
         end_ms_utc: endResolution.session_open_ms_utc,
         data_policy: this.composeDataPolicy(),
       });
+      if (response.strategy_execution_id != null) {
+        await this.onStudySelected(response.strategy_execution_id);
+      }
+      const hasUsableArtifacts = response.exit_code === 0 && response.normalized_path !== null;
+      const warningSummary = this.summarizeLeanErrors(response.lean_errors);
       this.setRunStatus(
-        response.is_clean ? "completed" : "failed",
+        response.is_clean || hasUsableArtifacts ? "completed" : "failed",
         response.is_clean
           ? `LEAN run finished cleanly (run id ${response.run_id}).`
-          : `LEAN run finished with errors (exit ${response.exit_code}).`,
+          : hasUsableArtifacts
+            ? `LEAN run produced results with warnings (run id ${response.run_id}).`
+            : `LEAN run finished with errors (exit ${response.exit_code}).`,
+        warningSummary,
       );
     } catch (err: unknown) {
       const message =
@@ -813,6 +823,13 @@ export class LeanEngineComponent implements OnInit {
     } finally {
       this.running.set(false);
     }
+  }
+
+  private summarizeLeanErrors(errors: LeanErrorBuckets): string {
+    return Object.entries(errors)
+      .filter(([, lines]) => lines.length > 0)
+      .map(([category, lines]) => `${category}: ${lines.length}`)
+      .join(", ");
   }
 
   /**
