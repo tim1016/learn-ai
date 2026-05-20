@@ -28,7 +28,7 @@ import httpx
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.engine.data.availability import (
     AvailabilityReport,
@@ -1266,6 +1266,93 @@ class EngineBacktestRequest(BaseModel):
         description="Fetch missing data from Polygon into the cache before running",
     )
 
+    # PR B (2026-05-19) — canonical DataPolicy block. Optional on the wire
+    # so legacy callers (any pre-PR-B UI build) still work; when omitted, a
+    # default block is synthesized from ``params.symbol`` + ``resolution``.
+    # The shape mirrors ``app.lean_sidecar.data_policy.DataPolicy`` so the
+    # GraphQL/engine compare-view sees an identical schema on both engines.
+    data_policy: _EngineDataPolicyModel | None = Field(
+        None,
+        description=(
+            "Canonical DataPolicy block (PR B). When omitted, synthesized "
+            "from ``params.symbol`` + ``resolution`` with ``adjusted=true`` "
+            "and ``session='regular'``. Required when ``params.symbol`` is "
+            "absent (no source of truth for the synthesizer)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _synthesize_legacy_data_policy(self) -> EngineBacktestRequest:
+        """Synthesize a default ``DataPolicy`` when the caller omits it.
+
+        One-deprecation-cycle compat. The pre-PR-B engine wire shape
+        carried ``symbol`` inside ``params`` and the resolution in the
+        top-level field; we synthesize a canonical block from those two
+        signals so the row written to ``StrategyExecution`` always has a
+        ``DataPolicyJson``. Synthesis defaults match the engine's actual
+        runtime behavior today (Polygon-sourced, pre-adjusted, regular
+        session, m/1 → m/1; the strategy's own consolidator handles any
+        further intra-strategy timeframe).
+        """
+        if self.data_policy is not None:
+            return self
+        symbol = self.params.get("symbol") if isinstance(self.params, dict) else None
+        if not symbol or not isinstance(symbol, str) or not symbol.strip():
+            raise ValueError(
+                "data_policy is required when params.symbol is absent — no source of truth for the synthesizer."
+            )
+        timespan = "day" if self.resolution == "daily" else "minute"
+        self.data_policy = _EngineDataPolicyModel(
+            source="polygon",
+            symbol=symbol.strip().upper(),
+            adjusted=True,
+            session="regular",
+            input_bars=_EngineBarsSpecModel(timespan=timespan, multiplier=1),
+            strategy_bars=_EngineBarsSpecModel(timespan=timespan, multiplier=1),
+        )
+        return self
+
+
+# ---------------------------------------------------------------------------
+# DataPolicy + BarsSpec pydantic shapes (engine-side mirror)
+# ---------------------------------------------------------------------------
+# PR B (2026-05-19) — the engine surface accepts the canonical DataPolicy
+# block on its inbound request. Mirrors ``app.lean_sidecar.data_policy.DataPolicy``
+# and the leading-underscore models in ``app.routers.lean_sidecar`` (kept
+# local here to avoid importing a leading-underscore name across modules).
+class _EngineBarsSpecModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    timespan: Literal["minute", "hour", "day"]
+    multiplier: int = Field(..., ge=1)
+
+
+class _EngineDataPolicyModel(BaseModel):
+    """Pydantic shape for the canonical ``DataPolicy`` block on the engine surface.
+
+    Identical to ``_DataPolicyModel`` in ``app.routers.lean_sidecar`` (and
+    to ``app.lean_sidecar.data_policy.DataPolicy``); duplicated here only
+    because the lean_sidecar module is leading-underscore private. A
+    future PR can extract a shared neutral module.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["synthetic", "polygon"]
+    symbol: str
+    adjusted: bool = True
+    session: Literal["regular", "extended"]
+    input_bars: _EngineBarsSpecModel
+    strategy_bars: _EngineBarsSpecModel
+    timestamp_policy: Literal["bar_close_ms_utc"] = "bar_close_ms_utc"
+    timezone: Literal["America/New_York"] = "America/New_York"
+    provider_kind: Literal["live", "fixture"] = "live"
+    fixture_id: str | None = None
+    fixture_sha256: str | None = None
+
+
+EngineBacktestRequest.model_rebuild()
+
 
 class EngineTradeResponse(BaseModel):
     trade_number: int
@@ -1317,6 +1404,11 @@ class EngineBacktestResponse(BaseModel):
     # (the run still succeeded — the persistence is best-effort).
     study_id: int | None = None
     error: str | None = None
+    # PR B (2026-05-19) — echo of the post-normalization DataPolicy so the
+    # frontend can render the policy that was actually used by the engine
+    # (which may differ from the request when the legacy synthesizer kicked
+    # in). Never null on a successful run.
+    data_policy: _EngineDataPolicyModel | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1923,6 +2015,7 @@ def execute_engine_backtest(
         chart_bars=chart_bars_dicts,
         insights=insights_dicts,
         insight_summary=result.insight_summary,
+        data_policy=request.data_policy,  # PR B — echo the normalized policy
     )
 
     # ── Auto-save to .NET backend (synchronous so we can return the id) ──
@@ -1938,6 +2031,7 @@ def execute_engine_backtest(
         resolution=request.resolution or "minute",
         params_json=json.dumps(request.params) if request.params else "{}",
         duration_ms=int((time.time() - _run_start) * 1000),
+        commission_per_order=float(request.commission_per_order),
     )
 
     on_log(f"Saved study {response.study_id}")
@@ -1957,6 +2051,7 @@ def _save_study_sync(
     resolution: str,
     params_json: str,
     duration_ms: int,
+    commission_per_order: float = 0.0,
 ) -> int | None:
     """POST the backtest result to the .NET backend for persistence.
 
@@ -2007,6 +2102,15 @@ def _save_study_sync(
         "drawdownRecoveryDays": lp.drawdown_recovery if lp else 0,
         "leanStatisticsJson": response.lean_statistics.model_dump_json() if response.lean_statistics else None,
         "durationMs": duration_ms,
+        # PR B (2026-05-19) — DataPolicy / Commission / Brokerage. Always
+        # populated because the request synthesizer guarantees ``data_policy``
+        # is non-null by the time we reach response construction. The .NET
+        # ``SaveStudyAsync`` endpoint writes these into the new columns.
+        "dataPolicyJson": response.data_policy.model_dump_json() if response.data_policy else None,
+        "commissionPerOrder": commission_per_order,
+        # Python engine doesn't model brokerage — record the LEAN-side
+        # convention so the compare-view's soft-match treats it correctly.
+        "brokeragePolicy": "algorithm_default",
         "trades": [
             {
                 "tradeType": "Buy",
