@@ -29,19 +29,24 @@ export const BACKTEST_RUNS_QUERY = gql`
           symbol
           adjusted
           session
-          inputBars {
+          # PR B.3 — alias server-side camelCase to the canonical snake_case
+          # DataPolicy wire contract (see Frontend/src/app/models/data-policy.ts
+          # and spec § 6.1). Consumers (RunHistoryComponent.barsSummary,
+          # CSV export) read these as snake_case; without aliases the response
+          # would arrive as inputBars/strategyBars and crash on dereference.
+          input_bars: inputBars {
             timespan
             multiplier
           }
-          strategyBars {
+          strategy_bars: strategyBars {
             timespan
             multiplier
           }
-          timestampPolicy
+          timestamp_policy: timestampPolicy
           timezone
-          providerKind
-          fixtureId
-          fixtureSha256
+          provider_kind: providerKind
+          fixture_id: fixtureId
+          fixture_sha256: fixtureSha256
         }
         trades {
           isSyntheticExit
