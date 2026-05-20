@@ -236,6 +236,41 @@ class TrustedRunRequestModel(BaseModel):
             "report for. Ignored when ``algorithm_source`` is provided."
         ),
     )
+    data_source: Literal["synthetic", "polygon"] = Field(
+        default="synthetic",
+        description=(
+            "Phase 6a — whether to stage synthetic deci-cent-clean bars "
+            "(default; back-compat for buy-and-hold and reconciliation "
+            "templates) or fetch Polygon 1-minute bars via the canonical "
+            "provider. Polygon path required for ema_crossover parity "
+            "runs."
+        ),
+    )
+    bar_minutes: Literal[15] = Field(
+        default=15,
+        description=(
+            "Strategy-bar consolidation period in minutes. Pinned to 15 "
+            "in this branch — the EMA template's EXIT_BARS=5 time-stop "
+            "is tied to this period. Widening is a deliberate future "
+            "change."
+        ),
+    )
+    session: Literal["regular", "extended"] = Field(
+        default="regular",
+        description=(
+            "Trading session filter. 'regular' = [09:30, 16:00) ET; "
+            "'extended' keeps pre/post-market bars. Both engines see "
+            "the same staged bars after this filter."
+        ),
+    )
+    adjustment: Literal["raw"] = Field(
+        default="raw",
+        description=(
+            "Price-adjustment policy. Phase 1 supports only 'raw' "
+            "(no split/dividend adjustment); LEAN's DataNormalizationMode "
+            "is pinned to Raw to match."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_window(self) -> TrustedRunRequestModel:
@@ -432,6 +467,10 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         starting_cash=payload.starting_cash,
         algorithm_source=payload.algorithm_source,
         template=payload.template,
+        data_source=payload.data_source,
+        bar_minutes=payload.bar_minutes,
+        session=payload.session,
+        adjustment=payload.adjustment,
     )
     try:
         result = await run_trusted_sample(request)

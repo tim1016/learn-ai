@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 EASTERN = ZoneInfo("America/New_York")
 
 
-def _polygon_bar_to_trade_bar(symbol: str, raw: dict[str, Any]) -> TradeBar:
+def polygon_bar_to_trade_bar(symbol: str, raw: dict[str, Any]) -> TradeBar:
     """Convert a Polygon aggregate dict to an immutable ``TradeBar``.
 
     Polygon timestamps are UTC epoch milliseconds pointing at the bar's
@@ -71,7 +71,7 @@ def _polygon_bar_to_trade_bar(symbol: str, raw: dict[str, Any]) -> TradeBar:
     )
 
 
-def _group_by_trading_date(
+def group_by_trading_date(
     bars: Iterable[TradeBar],
 ) -> dict[date, list[TradeBar]]:
     """Bucket bars by their Eastern-time trading date."""
@@ -103,12 +103,12 @@ def export_polygon_bars_to_lean(
     Returns:
         Sorted list of the zip file paths that were written (one per day).
     """
-    trade_bars = [_polygon_bar_to_trade_bar(symbol, b) for b in bars]
+    trade_bars = [polygon_bar_to_trade_bar(symbol, b) for b in bars]
     if not trade_bars:
         logger.warning("[LEAN EXPORT] No bars supplied for %s; nothing written", symbol)
         return []
 
-    grouped = _group_by_trading_date(trade_bars)
+    grouped = group_by_trading_date(trade_bars)
     written: list[Path] = []
     for trading_date in sorted(grouped.keys()):
         day_bars = grouped[trading_date]

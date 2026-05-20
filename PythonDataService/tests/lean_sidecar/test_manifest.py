@@ -18,6 +18,8 @@ import pytest
 
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
+    BarsSpec,
+    DataPolicyManifest,
     RunManifest,
     StagedDataFile,
     StagedDataManifest,
@@ -29,6 +31,21 @@ from app.lean_sidecar.manifest import (
     sha256_text,
     write_manifest,
 )
+
+
+def _default_data_policy() -> DataPolicyManifest:
+    return DataPolicyManifest(
+        source="synthetic",
+        symbol="SPY",
+        adjusted=False,
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=1),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        fixture_id=None,
+        fixture_sha256=None,
+    )
 
 
 def _sample_manifest(run_id: str = "run_smoke") -> RunManifest:
@@ -43,6 +60,7 @@ def _sample_manifest(run_id: str = "run_smoke") -> RunManifest:
         launcher_version_sha256="2" * 64,
         normalized_parser_version="phase-1-spike-0",
         staged_data=StagedDataManifest(),
+        data_policy=_default_data_policy(),
         data_adjustment_policy="pre_adjusted_non_reconciliation",
         data_normalization_mode="Raw",
         fill_forward=False,
@@ -111,6 +129,10 @@ class TestWriteManifest:
         assert parsed["schema_version"] == MANIFEST_SCHEMA_VERSION
         # Windows are dicts of int64 ms.
         assert isinstance(parsed["requested_window_ms"]["start_ms"], int)
+        # data_policy shape is present and correct.
+        assert parsed["data_policy"]["source"] == "synthetic"
+        assert parsed["data_policy"]["input_bars"]["multiplier"] == 1
+        assert parsed["data_policy"]["strategy_bars"]["multiplier"] == 1
 
     def test_refuses_datetime_objects(self, tmp_path: Path) -> None:
         manifest = _sample_manifest()
@@ -147,3 +169,27 @@ class TestNowMsUtc:
         # The actual exercise is in test_roundtrip; this just guards
         # against a refactor that drops StagedDataFile fields silently.
         assert sf.path_in_workspace == "a/b.csv"
+
+
+def test_data_policy_manifest_round_trips_synthetic_shape() -> None:
+    dp = DataPolicyManifest(
+        source="synthetic",
+        symbol="SPY",
+        adjusted=False,
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=1),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        fixture_id=None,
+        fixture_sha256=None,
+    )
+
+    assert dp.source == "synthetic"
+    assert dp.input_bars.multiplier == 1
+    assert dp.strategy_bars.multiplier == 1
+    assert dp.fixture_id is None
+
+
+def test_manifest_schema_version_is_3() -> None:
+    assert MANIFEST_SCHEMA_VERSION == 3
