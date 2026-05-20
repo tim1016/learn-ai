@@ -137,8 +137,8 @@ export const routes: Routes = [
   {
     path: "runs/compare",
     loadComponent: () =>
-      import("./components/run-comparison/run-comparison.component").then(
-        (m) => m.RunComparisonComponent
+      import("./components/runs-compare/runs-compare.component").then(
+        (m) => m.RunsCompareComponent
       ),
   },
   {

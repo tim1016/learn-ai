@@ -36,6 +36,7 @@ from app.routers import (
     options,
     portfolio,
     quantlib_options,
+    reconcile_trades,
     research,
     research_divergence,
     research_runs,
@@ -182,6 +183,13 @@ app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
 # Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
 # algorithm source. See docs/architecture/lean-sidecar-lab.md.
 app.include_router(lean_sidecar.router, prefix="/api/lean-sidecar", tags=["lean-sidecar"])
+# PR B (2026-05-19) Phase 4 — POST /api/lean-sidecar/reconcile-trades.
+# Wraps the canonical ``reconcile_trade_lists`` helper so the .NET
+# ``RunCompareService`` can delegate trade-by-trade reconciliation to
+# Python instead of porting ``DivergenceCategory`` to C#.  The router
+# carries its own ``/api/lean-sidecar`` prefix; no additional mount
+# prefix is required.
+app.include_router(reconcile_trades.router)
 app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
 # Portfolio scenario / live-Greeks. Phase 2 of numerical-authority migration:
 # Python becomes canonical for portfolio Greeks; .NET becomes a passthrough.
