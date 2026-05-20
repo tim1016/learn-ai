@@ -87,6 +87,41 @@ def test_adjusted_false_with_raw_normalization_is_accepted() -> None:
     _assert_adjustment_vocabulary_consistent(adjusted=False, data_normalization_mode="Raw")  # no raise
 
 
+def test_runtime_polygon_adjustment_is_always_raw_for_adjusted_true() -> None:
+    """PR B P1 (review feedback): ``data_policy.adjusted=True`` records
+    staging-pipeline INTENT (spec § 4.4) and must NOT be translated to
+    ``polygon_adjustment="adjusted"`` at runtime. The downstream
+    ``fetch_canonical_minute_bars`` and bundled trusted templates only
+    accept ``"raw"`` today, so emitting anything else would 500 every
+    PR-B-default request (``adjusted=True`` is the new-shape field
+    default).
+    """
+    from app.services.lean_sidecar_service import _runtime_polygon_adjustment
+
+    assert _runtime_polygon_adjustment(_make_data_policy(source="polygon")) == "raw"
+
+
+def test_runtime_polygon_adjustment_is_raw_for_adjusted_false() -> None:
+    """PR A's existing case: ``adjusted=False`` -> ``"raw"`` as well."""
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+    from app.services.lean_sidecar_service import _runtime_polygon_adjustment
+
+    dp = DataPolicy(
+        source="polygon",
+        symbol="SPY",
+        adjusted=False,
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="live",
+        fixture_id=None,
+        fixture_sha256=None,
+    )
+    assert _runtime_polygon_adjustment(dp) == "raw"
+
+
 def test_trusted_run_request_carries_data_policy() -> None:
     """TrustedRunRequest exposes a single data_policy field; legacy top-level fields are gone."""
     from app.lean_sidecar.data_policy import BarsSpec, DataPolicy

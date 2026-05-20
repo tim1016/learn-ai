@@ -387,6 +387,30 @@ def _staged_window_from_dates(trading_dates: list[date]) -> WindowMs | None:
     return WindowMs(start_ms=start_ms, end_ms=end_ms)
 
 
+def _runtime_polygon_adjustment(data_policy: DataPolicy) -> Literal["raw"]:
+    """Return the ``adjustment`` kwarg to pass to ``fetch_canonical_minute_bars``.
+
+    PR B P1 (review feedback): ``data_policy.adjusted`` records the
+    *staging-pipeline INTENT* (spec § 4.4) but is **not** mapped to a
+    Polygon adjustment mode at runtime. ``fetch_canonical_minute_bars``
+    and the bundled trusted templates only accept ``"raw"`` today, so
+    emitting ``"adjusted"`` here would 500 every PR-B-default request
+    (``adjusted=True`` is the new-shape default).
+
+    Until the pre-adjusted staging pipeline lands (Phase 2+) and the
+    downstream fetcher / templates learn to consume adjusted bars,
+    the runtime adjustment is pinned to ``"raw"``. The vocabulary-
+    consistency check in :func:`_assert_adjustment_vocabulary_consistent`
+    still allows ``(adjusted=True, "Raw")`` per the PR B matrix; this
+    function just makes the pin explicit and unit-testable.
+    """
+    # NOTE: parameter intentionally accepted (not unused) so the
+    # signature documents the intent — when staging widens, this
+    # function is the single seam to update.
+    del data_policy
+    return "raw"
+
+
 def _assert_adjustment_vocabulary_consistent(
     *,
     adjusted: bool,
@@ -485,11 +509,18 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     workspace.ensure_layout()
 
     # PR B: data-provenance knobs (source/session/adjusted) live on
-    # ``request.data_policy``. ``adjustment="raw"`` (legacy wire vocab)
-    # is derived from ``data_policy.adjusted`` so the Polygon canonical
-    # fetcher's existing API stays unchanged.
+    # ``request.data_policy``. ``data_policy.adjusted`` records the
+    # staging-pipeline INTENT (spec § 4.4) — the LEAN runtime always
+    # consumes Raw bars regardless of that flag. The pre-adjusted
+    # staging pipeline that would honor ``adjusted=True`` lands in
+    # Phase 2+; until then, ``fetch_canonical_minute_bars`` only
+    # accepts ``adjustment="raw"`` (and the bundled trusted templates
+    # also raise on anything else), so the runtime fetch is pinned
+    # to ``"raw"`` via :func:`_runtime_polygon_adjustment`. The
+    # vocabulary-consistency check below still allows
+    # ``(adjusted=True, "Raw")`` per the PR B matrix.
     data_source = request.data_policy.source
-    polygon_adjustment = "raw" if not request.data_policy.adjusted else "adjusted"
+    polygon_adjustment = _runtime_polygon_adjustment(request.data_policy)
 
     if data_source == "synthetic":
         trading_dates = _iter_trading_dates(request.start_date, request.end_date)
