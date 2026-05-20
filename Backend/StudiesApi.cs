@@ -78,6 +78,13 @@ public static class StudiesApi
             Notes = request.Notes,
             ExecutedAt = DateTime.UtcNow,
             DurationMs = request.DurationMs,
+            // PR B (2026-05-19) — DataPolicy / Commission / Brokerage echo
+            // from the Python engine's auto-save payload. Synthesized for
+            // legacy callers that haven't been updated to send the canonical
+            // block yet (mirrors the synthesis in BacktestRunPersistenceService).
+            DataPolicyJson = request.DataPolicyJson ?? SynthesizeLegacyDataPolicy(request.Symbol),
+            CommissionPerOrder = request.CommissionPerOrder ?? 0m,
+            BrokeragePolicy = request.BrokeragePolicy ?? "algorithm_default",
         };
 
         // Attach trades if provided
@@ -296,6 +303,31 @@ public static class StudiesApi
             new[] { "yyyy-MM-ddTHH:mm:ss'Z'", "yyyy-MM-ddTHH:mm:ss.ffffff'Z'" },
             CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.None).UtcDateTime;
+
+    // PR B (2026-05-19) — one-cycle backwards-compat for pre-PR-B callers
+    // that POST without ``DataPolicyJson``. Records the engines' actual
+    // behaviour today (Polygon, pre-adjusted, regular session, m/1 → m/15)
+    // so the history surface and compare-view never see a null DataPolicy
+    // on a freshly-written row. Mirrors the synthesizer in
+    // ``BacktestRunPersistenceService.SynthesizeLegacyDataPolicy``.
+    private static string SynthesizeLegacyDataPolicy(string symbol)
+    {
+        var dp = new
+        {
+            source = "polygon",
+            symbol = symbol?.ToUpperInvariant() ?? "",
+            adjusted = true,
+            session = "regular",
+            input_bars = new { timespan = "minute", multiplier = 1 },
+            strategy_bars = new { timespan = "minute", multiplier = 15 },
+            timestamp_policy = "bar_close_ms_utc",
+            timezone = "America/New_York",
+            provider_kind = "live",
+            fixture_id = (string?)null,
+            fixture_sha256 = (string?)null,
+        };
+        return System.Text.Json.JsonSerializer.Serialize(dp);
+    }
 }
 
 // ── Request / Response DTOs ──────────────────────────────────────
