@@ -91,17 +91,26 @@ async def test_engine_backtest_synthesizes_data_policy_for_daily_resolution() ->
 
 
 @pytest.mark.asyncio
-async def test_engine_backtest_raises_when_data_policy_and_symbol_both_missing() -> None:
-    """Synthesizer fails fast if neither ``data_policy`` nor ``params.symbol`` is provided."""
-    from pydantic import ValidationError
+async def test_engine_backtest_defers_data_policy_when_symbol_absent() -> None:
+    """One-cycle legacy compat: empty ``params`` does NOT raise.
 
+    Pre-PR-B clients POST ``params={}`` and rely on the strategy's
+    registered default symbol (e.g., SPY) being resolved downstream.
+    The synthesizer leaves ``data_policy=None`` in that case rather
+    than raising — request validation must not break legacy callers
+    before the strategy registry has a chance to fill in the default.
+    Downstream (``_save_study_sync``, .NET persistence layer) handles
+    the ``None`` case by either emitting ``null`` for ``dataPolicyJson``
+    or synthesizing from the resolved symbol on the .NET side.
+    """
     from app.routers.engine import EngineBacktestRequest
 
-    with pytest.raises(ValidationError, match="data_policy"):
-        EngineBacktestRequest(
-            strategy_name="spy_ema_crossover",
-            params={},
-            from_date="2025-01-13",
-            to_date="2025-01-17",
-            resolution="minute",
-        )
+    req = EngineBacktestRequest(
+        strategy_name="spy_ema_crossover",
+        params={},
+        from_date="2025-01-13",
+        to_date="2025-01-17",
+        resolution="minute",
+    )
+
+    assert req.data_policy is None

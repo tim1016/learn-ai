@@ -1293,14 +1293,25 @@ class EngineBacktestRequest(BaseModel):
         runtime behavior today (Polygon-sourced, pre-adjusted, regular
         session, m/1 → m/1; the strategy's own consolidator handles any
         further intra-strategy timeframe).
+
+        When BOTH ``data_policy`` and ``params.symbol`` are absent we
+        leave ``data_policy=None`` rather than raising. Legacy clients
+        that POST ``params={}`` rely on the strategy registry's default
+        symbol (e.g., SPY) being resolved downstream; failing
+        validation here would short-circuit one-cycle compat. Downstream
+        consumers (``_save_study_sync``, response serialization) already
+        treat ``data_policy is None`` as "policy unknown at request
+        time" and emit a null ``dataPolicyJson``; the .NET persistence
+        layer then synthesizes a legacy block from ``Symbol`` in that
+        case (see ``BacktestRunPersistenceService.SynthesizeLegacyDataPolicy``).
         """
         if self.data_policy is not None:
             return self
         symbol = self.params.get("symbol") if isinstance(self.params, dict) else None
         if not symbol or not isinstance(symbol, str) or not symbol.strip():
-            raise ValueError(
-                "data_policy is required when params.symbol is absent — no source of truth for the synthesizer."
-            )
+            # Legacy compat: defer synthesis to downstream code once the
+            # strategy registry has resolved its default symbol.
+            return self
         timespan = "day" if self.resolution == "daily" else "minute"
         self.data_policy = _EngineDataPolicyModel(
             source="polygon",
