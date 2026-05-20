@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -477,6 +477,10 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         )
     workspace.ensure_layout()
 
+    # Provider object is captured for manifest provenance (provider_kind,
+    # fixture_id, fixture_sha256). ``None`` for the synthetic path where
+    # no real source exists.
+    provider: Any | None = None
     if request.data_source == "synthetic":
         trading_dates = _iter_trading_dates(request.start_date, request.end_date)
         bars_by_date = [(d, _generate_synthetic_bars(request.symbol, d)) for d in trading_dates]
@@ -610,6 +614,7 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
         # manifest can now show that the requested window vs the
         # staged window match (or surface that they don't).
         staged_trading_dates=trading_dates,
+        provider=provider,
         failure_reason=failure_reason,
     )
     write_manifest(manifest, workspace.manifest_path)
@@ -660,7 +665,10 @@ async def run_trusted_sample(request: TrustedRunRequest) -> TrustedRunResult:
     )
 
 
-def _build_data_policy(request: TrustedRunRequest) -> DataPolicyManifest:
+def _build_data_policy(
+    request: TrustedRunRequest,
+    provider: Any | None,
+) -> DataPolicyManifest:
     """Construct DataPolicyManifest from a TrustedRunRequest and assert vocabulary consistency.
 
     ``adjusted`` reflects Polygon's wire concept: ``adjustment="raw"`` means
@@ -675,8 +683,20 @@ def _build_data_policy(request: TrustedRunRequest) -> DataPolicyManifest:
     rather than actual template-internal behavior, since those templates subscribe
     to 1-min bars directly. The field is accurate for the ema_crossover template,
     which this branch is validating.
+
+    ``provider`` is the ``CanonicalBarsProvider`` used by the run. Live
+    Polygon (``PolygonProvider``) reports ``provider_kind="live"`` with
+    ``fixture_id=None``; a parity-test ``RecordedPolygonFixtureProvider``
+    reports ``provider_kind="fixture"`` with its dir name + bars sha.
+    Synthetic runs pass ``provider=None`` and the manifest records
+    ``provider_kind="live"`` (no fixture identity) — consistent with
+    synthetic bars being a deterministic in-process generator, not a
+    captured artifact.
     """
     adjusted = request.adjustment != "raw"  # raw ⇒ adjusted=False
+    fixture_id = provider.fixture_id if provider is not None else None
+    fixture_sha256 = provider.fixture_sha256 if provider is not None else None
+    provider_kind = "fixture" if fixture_id is not None else "live"
     data_policy = DataPolicyManifest(
         source=request.data_source,
         symbol=request.symbol,
@@ -686,11 +706,9 @@ def _build_data_policy(request: TrustedRunRequest) -> DataPolicyManifest:
         strategy_bars=BarsSpec(timespan="minute", multiplier=request.bar_minutes),
         timestamp_policy="bar_close_ms_utc",
         timezone="America/New_York",
-        # Fixture identity is populated by the parity test through a
-        # separate hook (Task 11+) — production live-Polygon runs leave
-        # both fields None.
-        fixture_id=None,
-        fixture_sha256=None,
+        provider_kind=provider_kind,
+        fixture_id=fixture_id,
+        fixture_sha256=fixture_sha256,
     )
     _assert_adjustment_vocabulary_consistent(
         adjusted=data_policy.adjusted,
@@ -713,6 +731,7 @@ def _build_manifest(
     finished_ms: int,
     normalized: NormalizedResult | None,
     staged_trading_dates: list[date],
+    provider: Any | None = None,
     failure_reason: str | None = None,
 ) -> RunManifest:
     """Construct the full reproducibility manifest from the run.
@@ -737,6 +756,12 @@ def _build_manifest(
         is_clean_note = "is_clean=False"
         error_cats_note = "lean_error_categories=[]"
     failure_note = (f"failure_reason={failure_reason}",) if failure_reason else ()
+    bar_zips = _hash_paths_in_workspace(workspace, [*bar_zip_paths, *quote_zip_paths, daily_path])
+    # Flatten the staged-zip hashes into a path-keyed dict. The
+    # ``StagedDataManifest.bar_zips`` tuple is the authoritative form;
+    # this index is a convenience for consumers that want "what's the
+    # sha for X.zip?" without traversing the tuple.
+    staged_zip_sha256 = {sf.path_in_workspace: sf.sha256 for sf in bar_zips}
     return RunManifest(
         schema_version=MANIFEST_SCHEMA_VERSION,
         run_id=request.run_id,
@@ -751,7 +776,7 @@ def _build_manifest(
             # Phase 5c: include the quote zips alongside trade + daily
             # in the manifest's staged-data hash list. Reproducibility
             # requires every byte LEAN saw to be hashed.
-            bar_zips=_hash_paths_in_workspace(workspace, [*bar_zip_paths, *quote_zip_paths, daily_path]),
+            bar_zips=bar_zips,
             market_hours_database=(
                 _hash_paths_in_workspace(workspace, [market_hours])[0] if market_hours is not None else None
             ),
@@ -759,7 +784,7 @@ def _build_manifest(
                 _hash_paths_in_workspace(workspace, [symbol_properties])[0] if symbol_properties is not None else None
             ),
         ),
-        data_policy=_build_data_policy(request),
+        data_policy=_build_data_policy(request, provider),
         # Trusted sample stages raw deci-cent bars without factor/map
         # adjustments; this is the non-reconciliation policy.
         data_adjustment_policy="pre_adjusted_non_reconciliation",
@@ -811,6 +836,7 @@ def _build_manifest(
         effective_algorithm_window_ms=_effective_window_from_normalized(normalized),
         staged_data_window_ms=_staged_window_from_dates(staged_trading_dates),
         bars_consumed_by_symbol=_count_bars_consumed(workspace, request.symbol),
+        staged_zip_sha256=staged_zip_sha256,
         started_at_ms=started_ms,
         finished_at_ms=finished_ms,
         exit_code=exit_code,

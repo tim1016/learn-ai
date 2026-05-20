@@ -41,7 +41,13 @@ from typing import Any, Literal
 #       ``RunManifest``, capturing data provenance (source, symbol,
 #       adjustment, session, input vs strategy bars, fixture identity)
 #       separately from execution-policy fields.
-MANIFEST_SCHEMA_VERSION = 3
+#   4 — 2026-05-19: Added ``DataPolicyManifest.provider_kind`` so a
+#       run's bar source is distinguishable between live Polygon and
+#       fixture replay without inspecting ``fixture_id`` for null.
+#       Also added ``RunManifest.staged_zip_sha256`` as a path-keyed
+#       index over the staged-zip hashes already present in
+#       ``staged_data.bar_zips``.
+MANIFEST_SCHEMA_VERSION = 4
 
 # Note tag that the manifest writer adds to ``notes`` so downstream
 # readers (the cross-engine reconciler, the run-history sidebar) can
@@ -153,9 +159,12 @@ class DataPolicyManifest:
     provenance: "what bars did we feed in, and how were they
     constructed?"
 
-    ``fixture_id`` and ``fixture_sha256`` are populated only when the
-    run was driven by a ``RecordedPolygonFixtureProvider`` (i.e., a
-    parity-test run). Live Polygon runs leave both ``None``.
+    ``provider_kind`` distinguishes live-Polygon runs (``"live"``) from
+    parity-test fixture replays (``"fixture"``); the latter additionally
+    populate ``fixture_id`` and ``fixture_sha256`` so the run pins to a
+    specific captured bars.json by content hash. Live runs leave both
+    of those ``None`` — their identity comes from the staged-zip hashes
+    on ``RunManifest``.
     """
 
     source: Literal["synthetic", "polygon"]
@@ -166,6 +175,7 @@ class DataPolicyManifest:
     strategy_bars: BarsSpec
     timestamp_policy: Literal["bar_close_ms_utc"]
     timezone: Literal["America/New_York"]
+    provider_kind: Literal["live", "fixture"]
     fixture_id: str | None
     fixture_sha256: str | None
 
@@ -216,6 +226,14 @@ class RunManifest:
 
     # Consumption proof per §"Date-window and bar-consumption"
     bars_consumed_by_symbol: Mapping[str, int] = field(default_factory=dict)
+
+    # Convenience index of every staged zip keyed by workspace-relative
+    # path → sha256. Derived from ``staged_data.bar_zips`` but flattened
+    # here so a reader doesn't have to traverse the nested tuple to
+    # answer "what did LEAN see at this path?" Populated for every run
+    # — fixture-backed and live — so a consumer can hash-pin replay
+    # without knowing the data source.
+    staged_zip_sha256: Mapping[str, str] = field(default_factory=dict)
 
     # Run wall-clock
     started_at_ms: int | None = None

@@ -43,6 +43,7 @@ def _default_data_policy() -> DataPolicyManifest:
         strategy_bars=BarsSpec(timespan="minute", multiplier=1),
         timestamp_policy="bar_close_ms_utc",
         timezone="America/New_York",
+        provider_kind="live",
         fixture_id=None,
         fixture_sha256=None,
     )
@@ -181,6 +182,7 @@ def test_data_policy_manifest_round_trips_synthetic_shape() -> None:
         strategy_bars=BarsSpec(timespan="minute", multiplier=1),
         timestamp_policy="bar_close_ms_utc",
         timezone="America/New_York",
+        provider_kind="live",
         fixture_id=None,
         fixture_sha256=None,
     )
@@ -188,8 +190,9 @@ def test_data_policy_manifest_round_trips_synthetic_shape() -> None:
     assert dp.source == "synthetic"
     assert dp.input_bars.multiplier == 1
     assert dp.strategy_bars.multiplier == 1
+    assert dp.provider_kind == "live"
     assert dp.fixture_id is None
 
 
-def test_manifest_schema_version_is_3() -> None:
-    assert MANIFEST_SCHEMA_VERSION == 3
+def test_manifest_schema_version_is_4() -> None:
+    assert MANIFEST_SCHEMA_VERSION == 4

@@ -24,9 +24,8 @@ import asyncio
 import json
 import sys
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -35,18 +34,16 @@ if str(REPO_ROOT) not in sys.path:
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "polygon_capture"
 
 from app.lean_sidecar import polygon_canonical  # noqa: E402
+from app.lean_sidecar.trading_calendar import (  # noqa: E402
+    next_trading_day,
+    session_open_ms_utc,
+)
+from app.routers.lean_sidecar import TrustedRunRequestModel  # noqa: E402
 from app.services.lean_sidecar_persistence import pair_order_events  # noqa: E402
 from app.services.lean_sidecar_service import (  # noqa: E402
     TrustedRunRequest,
     run_trusted_sample,
 )
-
-
-def _ms_at_session_open(d: date) -> int:
-    """09:30 ET of date d as int64 ms UTC (matches the router's window contract)."""
-    et = ZoneInfo("America/New_York")
-    dt = datetime(d.year, d.month, d.day, 9, 30, tzinfo=et)
-    return int(dt.astimezone(UTC).timestamp() * 1000)
 
 
 async def main(fixture_name: str) -> int:
@@ -65,18 +62,35 @@ async def main(fixture_name: str) -> int:
     fixture_provider = polygon_canonical.RecordedPolygonFixtureProvider(fixture_dir)
     polygon_canonical.get_default_provider = lambda: fixture_provider  # type: ignore[assignment]
 
+    # Validate via the router's TrustedRunRequestModel so the probe and
+    # real HTTP traffic apply the same P2.5 session-open exclusive-end
+    # contract — ``end_ms_utc`` is 09:30 ET of the NEXT trading day
+    # after ``to_date``, never a calendar +1 day.
     run_id = f"probe-{uuid.uuid4().hex[:8]}"
-    request = TrustedRunRequest(
+    model = TrustedRunRequestModel(
         run_id=run_id,
         symbol=symbol,
-        start_ms_utc=_ms_at_session_open(from_date),
-        end_ms_utc=_ms_at_session_open(to_date + timedelta(days=1)),
+        start_ms_utc=session_open_ms_utc(from_date),
+        end_ms_utc=session_open_ms_utc(next_trading_day(to_date)),
         starting_cash=100_000.0,
         template="ema_crossover",
         data_source="polygon",
         bar_minutes=15,
         session="regular",
         adjustment="raw",
+    )
+    request = TrustedRunRequest(
+        run_id=model.run_id,
+        symbol=model.symbol.upper(),
+        start_ms_utc=model.start_ms_utc,
+        end_ms_utc=model.end_ms_utc,
+        starting_cash=model.starting_cash,
+        algorithm_source=model.algorithm_source,
+        template=model.template,
+        data_source=model.data_source,
+        bar_minutes=model.bar_minutes,
+        session=model.session,
+        adjustment=model.adjustment,
     )
 
     print(f"Running LEAN with fixture {fixture_name}...")
