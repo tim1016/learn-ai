@@ -32,10 +32,17 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.services.dataset_service import fetch_bars_chunked
-from app.services.polygon_client import PolygonClientService
-
+# Bootstrap: ensure the PythonDataService root is on sys.path so the
+# ``app.*`` imports below resolve when running this script from a host
+# venv shell (e.g. ``python scripts/regenerate_polygon_fixture.py ...``)
+# rather than inside the container where /app is already PYTHONPATH.
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.services.dataset_service import fetch_bars_chunked  # noqa: E402
+from app.services.polygon_client import PolygonClientService  # noqa: E402
+
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "polygon_capture"
 
 
