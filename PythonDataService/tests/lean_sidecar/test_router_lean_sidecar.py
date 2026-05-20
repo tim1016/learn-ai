@@ -1976,10 +1976,14 @@ def test_trusted_run_request_model_rejects_mixed_shape() -> None:
         )
 
 
-def test_trusted_run_request_model_defaults_adjustment_to_true() -> None:
-    """PR B Task 1.6: omitting both legacy ``adjustment`` and
-    ``data_policy.adjusted`` synthesizes ``adjusted=True`` (the pre-adjusted
-    staging default).
+def test_trusted_run_request_model_legacy_shape_defaults_adjustment_to_raw() -> None:
+    """PR B Task 1.6: omitting ``adjustment`` on a LEGACY-shape payload
+    synthesizes ``adjusted=False`` (the pre-PR-B wire vocabulary's
+    implicit value was ``"raw"``). Silently switching legacy callers
+    to ``adjusted=True`` would break the one-deprecation-cycle compat
+    promise. New-shape callers carrying a ``data_policy`` block still
+    default to ``adjusted=True`` via the field default on
+    ``_DataPolicyModel``.
     """
     from app.routers.lean_sidecar import TrustedRunRequestModel
 
@@ -1996,4 +2000,81 @@ def test_trusted_run_request_model_defaults_adjustment_to_true() -> None:
         # no "adjustment" key
     }
     model = TrustedRunRequestModel(**payload)
+    assert model.data_policy.adjusted is False
+
+
+def test_trusted_run_request_model_new_shape_defaults_adjusted_to_true() -> None:
+    """PR B § 4.4: NEW-shape callers (carrying a ``data_policy`` block)
+    that omit ``adjusted`` get the field default ``True`` — the
+    pre-adjusted-staging default for the post-PR-B contract. This is
+    distinct from the legacy-shape default, which preserves PR A's
+    implicit ``raw`` behavior for one cycle.
+    """
+    from app.routers.lean_sidecar import TrustedRunRequestModel
+
+    payload = {
+        "run_id": "test-new-shape-default-adj",
+        "start_ms_utc": _GOOD_START_MS,
+        "end_ms_utc": _GOOD_END_MS,
+        "starting_cash": 100_000.0,
+        "template": "ema_crossover",
+        "data_policy": {
+            "source": "polygon",
+            "symbol": "SPY",
+            # no "adjusted" key — exercise the field default
+            "session": "regular",
+            "input_bars": {"timespan": "minute", "multiplier": 1},
+            "strategy_bars": {"timespan": "minute", "multiplier": 15},
+        },
+    }
+    model = TrustedRunRequestModel(**payload)
     assert model.data_policy.adjusted is True
+
+
+def test_trusted_run_request_model_accepts_minimal_legacy_payload() -> None:
+    """PR B Task 1.6 (P1 review): the existing Lean Lab UI posts only
+    ``run_id``/``symbol``/window/cash/template — no ``data_source``,
+    ``bar_minutes``, ``session``, or ``adjustment``. The one-cycle
+    compat guarantee requires accepting this minimal shape and
+    defaulting the missing legacy fields to PR A's defaults, NOT
+    422-ing. Without this defaulting, the deployed UI would 422 on
+    every submit until shipped to the new shape.
+    """
+    from app.routers.lean_sidecar import TrustedRunRequestModel
+
+    payload = {
+        "run_id": "test-minimal-legacy",
+        "symbol": "SPY",
+        "start_ms_utc": _GOOD_START_MS,
+        "end_ms_utc": _GOOD_END_MS,
+        "starting_cash": 100_000.0,
+        "template": "ema_crossover",
+        # NOTHING else — no data_source, bar_minutes, session, adjustment, data_policy
+    }
+    model = TrustedRunRequestModel(**payload)
+    assert model.data_policy is not None
+    assert model.data_policy.symbol == "SPY"
+    assert model.data_policy.source == "synthetic"  # legacy default
+    assert model.data_policy.session == "regular"  # legacy default
+    assert model.data_policy.strategy_bars.multiplier == 15  # legacy default
+    assert model.data_policy.adjusted is False  # legacy "raw" -> False
+
+
+def test_trusted_run_request_model_rejects_minimal_legacy_payload_without_symbol() -> None:
+    """``symbol`` has no sensible default — it's the asset being traded.
+    Omitting it on a legacy-shape payload still 422s.
+    """
+    from pydantic import ValidationError
+
+    from app.routers.lean_sidecar import TrustedRunRequestModel
+
+    payload = {
+        "run_id": "test-missing-symbol",
+        # no "symbol"
+        "start_ms_utc": _GOOD_START_MS,
+        "end_ms_utc": _GOOD_END_MS,
+        "starting_cash": 100_000.0,
+        "template": "ema_crossover",
+    }
+    with pytest.raises(ValidationError, match="symbol"):
+        TrustedRunRequestModel(**payload)

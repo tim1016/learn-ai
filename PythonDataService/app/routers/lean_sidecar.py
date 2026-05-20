@@ -316,31 +316,38 @@ class TrustedRunRequestModel(BaseModel):
                 "session/adjustment) with a ``data_policy`` block; choose one shape."
             )
         if self.data_policy is None:
-            # Synthesize from legacy fields. Defaults match PR A's behavior
-            # so callers that omitted optional fields don't suddenly see a
-            # different request shape.
-            if self.symbol is None or self.session is None or self.bar_minutes is None or self.data_source is None:
-                raise ValueError(
-                    "When ``data_policy`` is omitted, all of symbol / session / "
-                    "bar_minutes / data_source are required (legacy shape)."
-                )
-            # PR B: missing ``adjustment`` defaults to True (the new
-            # pre-adjusted-staging default). ``adjustment="raw"``
-            # explicitly means adjusted=False.
-            if self.adjustment is None or self.adjustment == "adjusted":
-                adjusted = True
-            else:
-                adjusted = False
+            # Synthesize from legacy fields. To preserve PR A's
+            # one-deprecation-cycle compatibility guarantee, missing
+            # legacy fields fall back to PR A's defaults rather than
+            # 422-ing — the existing Lean Lab UI posts only
+            # ``run_id``/``symbol``/window/cash/template. ``symbol`` is
+            # the one field with no sensible default (it's the asset
+            # being traded), so its absence still raises.
+            if self.symbol is None:
+                raise ValueError("When ``data_policy`` is omitted, ``symbol`` is required (legacy shape).")
+            # Legacy-shape defaults match PR A. ``adjustment`` defaults
+            # to ``"raw"`` here (NOT to ``adjusted=True``) — the
+            # pre-PR-B wire vocabulary's implicit value was ``"raw"``,
+            # and silently switching legacy callers to ``adjusted=True``
+            # would break the one-cycle compat promise. New callers
+            # that want ``adjusted=True`` send the full ``data_policy``
+            # block (where ``adjusted: bool = True`` is the field
+            # default).
+            legacy_data_source = self.data_source if self.data_source is not None else "synthetic"
+            legacy_bar_minutes = self.bar_minutes if self.bar_minutes is not None else 15
+            legacy_session = self.session if self.session is not None else "regular"
+            legacy_adjustment = self.adjustment if self.adjustment is not None else "raw"
+            adjusted = legacy_adjustment == "adjusted"
             object.__setattr__(
                 self,
                 "data_policy",
                 _DataPolicyModel(
-                    source=self.data_source,
+                    source=legacy_data_source,
                     symbol=self.symbol.upper(),
                     adjusted=adjusted,
-                    session=self.session,
+                    session=legacy_session,
                     input_bars=_BarsSpecModel(timespan="minute", multiplier=1),
-                    strategy_bars=_BarsSpecModel(timespan="minute", multiplier=self.bar_minutes),
+                    strategy_bars=_BarsSpecModel(timespan="minute", multiplier=legacy_bar_minutes),
                 ),
             )
             logger.warning(
