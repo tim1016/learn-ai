@@ -80,11 +80,11 @@ public class BacktestRunsQueryTests
     }
 
     [Fact]
-    public async Task GetBacktestRuns_FilterByLeanSidecar_ReturnsOnlyLeanRows()
+    public async Task GetBacktestRuns_FilterByLean_ReturnsOnlyLeanRows()
     {
         var (query, db) = await BuildAsync();
 
-        var result = await query.GetBacktestRuns(db, engine: EngineSource.LEAN_SIDECAR).ToListAsync();
+        var result = await query.GetBacktestRuns(db, engine: Engine.LEAN).ToListAsync();
 
         Assert.Single(result);
         Assert.Equal("lean-sidecar", result[0].Source);
@@ -92,25 +92,19 @@ public class BacktestRunsQueryTests
     }
 
     [Fact]
-    public async Task GetBacktestRuns_FilterByEngine_ReturnsOnlyEngineRows()
+    public async Task GetBacktestRuns_FilterByPython_ReturnsEngineAndStrategyLabRows()
     {
+        // PR B (2026-05-19): the unified Engine enum collapses the legacy
+        // "engine" and "strategy-lab" sources into a single PYTHON engine
+        // identity. Both rows must surface under the PYTHON filter so the
+        // unified history table doesn't lose pre-PR-B runs.
         var (query, db) = await BuildAsync();
 
-        var result = await query.GetBacktestRuns(db, engine: EngineSource.ENGINE).ToListAsync();
+        var result = await query.GetBacktestRuns(db, engine: Engine.PYTHON).ToListAsync();
 
-        Assert.Single(result);
-        Assert.Equal("engine", result[0].Source);
-    }
-
-    [Fact]
-    public async Task GetBacktestRuns_FilterByStrategyLab_ReturnsOnlyStrategyLabRows()
-    {
-        var (query, db) = await BuildAsync();
-
-        var result = await query.GetBacktestRuns(db, engine: EngineSource.STRATEGY_LAB).ToListAsync();
-
-        Assert.Single(result);
-        Assert.Equal("strategy-lab", result[0].Source);
+        Assert.Equal(2, result.Count);
+        Assert.Contains(result, r => r.Source == "engine");
+        Assert.Contains(result, r => r.Source == "strategy-lab");
     }
 
     [Fact]
@@ -142,7 +136,7 @@ public class BacktestRunsQueryTests
     {
         var (query, db) = await BuildAsync();
 
-        var result = await query.GetBacktestRuns(db, engine: EngineSource.LEAN_SIDECAR).ToListAsync();
+        var result = await query.GetBacktestRuns(db, engine: Engine.LEAN).ToListAsync();
 
         Assert.Single(result);
         var execution = result[0];

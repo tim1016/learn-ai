@@ -11,14 +11,25 @@ namespace Backend.GraphQL;
 public class BacktestRunsQuery
 {
     /// <summary>
-    /// Paginated list of strategy executions, optionally filtered by engine source and/or symbol.
-    /// Returns a cursor-based connection ordered newest-first.
+    /// Paginated list of strategy executions, optionally filtered by engine
+    /// (PR B unified <see cref="Engine"/> enum) and/or symbol. Returns a
+    /// cursor-based connection ordered newest-first.
     /// </summary>
+    /// <remarks>
+    /// PR B (2026-05-19) — the previous resolver accepted the 3-state
+    /// <c>EngineSource</c> enum (ENGINE / STRATEGY_LAB / LEAN_SIDECAR), one
+    /// per literal database <see cref="StrategyExecution.Source"/> string.
+    /// The unified Engine Lab surface only needs to distinguish the two
+    /// engine identities (Python vs LEAN), so the filter argument now uses
+    /// the 2-state <see cref="Engine"/> enum: <see cref="Engine.PYTHON"/>
+    /// covers both <c>"engine"</c> and <c>"strategy-lab"</c> rows;
+    /// <see cref="Engine.LEAN"/> covers <c>"lean-sidecar"</c>.
+    /// </remarks>
     [GraphQLName("backtestRuns")]
     [UsePaging(MaxPageSize = 100, DefaultPageSize = 25)]
     public IQueryable<StrategyExecution> GetBacktestRuns(
         AppDbContext context,
-        EngineSource? engine = null,
+        Engine? engine = null,
         string? symbol = null)
     {
         var query = context.StrategyExecutions
@@ -28,8 +39,18 @@ public class BacktestRunsQuery
 
         if (engine.HasValue)
         {
-            var dbValue = engine.Value.ToDbValue();
-            query = query.Where(s => s.Source == dbValue);
+            // PYTHON spans the two database string values that share the
+            // Python engine identity. LEAN is a single string. Two equality
+            // checks against constants keep the SQL trivially indexable.
+            switch (engine.Value)
+            {
+                case Engine.PYTHON:
+                    query = query.Where(s => s.Source == "engine" || s.Source == "strategy-lab");
+                    break;
+                case Engine.LEAN:
+                    query = query.Where(s => s.Source == "lean-sidecar");
+                    break;
+            }
         }
 
         if (!string.IsNullOrEmpty(symbol))
