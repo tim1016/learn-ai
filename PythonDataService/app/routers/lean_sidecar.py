@@ -459,18 +459,34 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
     arbitrary user input. See ADR §"Phase sequencing" for when that
     gate opens (Phase 3).
     """
+    # PR B (Task 1.5 transitional): synthesize a DataPolicy from the
+    # legacy router payload so the orchestrator gets the new canonical
+    # request shape. Task 1.6 promotes ``data_policy`` to a first-class
+    # field on ``TrustedRunRequestModel`` and lets the Pydantic layer
+    # carry it directly when callers post the new shape.
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+
+    data_policy = DataPolicy(
+        source=payload.data_source,
+        symbol=payload.symbol.upper(),
+        adjusted=payload.adjustment != "raw",
+        session=payload.session,
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=payload.bar_minutes),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="live",
+        fixture_id=None,
+        fixture_sha256=None,
+    )
     request = TrustedRunRequest(
         run_id=payload.run_id,
-        symbol=payload.symbol.upper(),
         start_ms_utc=payload.start_ms_utc,
         end_ms_utc=payload.end_ms_utc,
         starting_cash=payload.starting_cash,
         algorithm_source=payload.algorithm_source,
         template=payload.template,
-        data_source=payload.data_source,
-        bar_minutes=payload.bar_minutes,
-        session=payload.session,
-        adjustment=payload.adjustment,
+        data_policy=data_policy,
     )
     try:
         result = await run_trusted_sample(request)

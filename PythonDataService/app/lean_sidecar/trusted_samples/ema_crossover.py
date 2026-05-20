@@ -17,6 +17,14 @@ See docs/references/fill-model-parity-spike-2026-05-19.md.
 
 Bar consumption proof: observations.csv (every minute bar received).
 Decision state proof: state.csv (one row per consolidated bar after warmup).
+
+PR B (2026-05-19): the 15-minute consolidator and EXIT_BARS=5 time-stop
+are pinned by the template's source itself, not by a global
+``bar_minutes: Literal[15]`` on the request. Callers that build a
+``DataPolicy`` for this template MUST set
+``strategy_bars=BarsSpec(timespan="minute", multiplier=15)`` — the
+router synthesizes that default when a legacy payload omits the
+``data_policy`` block.
 """
 
 from __future__ import annotations

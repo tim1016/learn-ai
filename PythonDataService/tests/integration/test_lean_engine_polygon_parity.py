@@ -208,19 +208,31 @@ async def test_lean_and_engine_agree_on_polygon_fixture(monkeypatch) -> None:
 
     # Run LEAN.
     run_id = f"parity-{uuid.uuid4().hex[:8]}"
+    # PR B: TrustedRunRequest carries a single ``data_policy`` block.
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+
+    data_policy = DataPolicy(
+        source="polygon",
+        symbol=symbol,
+        adjusted=False,  # adjustment="raw" -> adjusted=False
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="fixture",
+        fixture_id=fixture_dir.name,
+        fixture_sha256=None,
+    )
     request = TrustedRunRequest(
         run_id=run_id,
-        symbol=symbol,
         # end_ms_utc is session-open of the day AFTER to_date (half-open
         # per the P2.5 contract).
         start_ms_utc=_ms_at_session_open(from_date),
         end_ms_utc=_ms_at_session_open(to_date + timedelta(days=1)),
         starting_cash=100_000.0,
         template="ema_crossover",
-        data_source="polygon",
-        bar_minutes=15,
-        session="regular",
-        adjustment="raw",
+        data_policy=data_policy,
     )
     result = await run_trusted_sample(request)
     assert result.exit_code == 0, f"LEAN exited non-zero: {result.log_tail}"

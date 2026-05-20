@@ -66,17 +66,29 @@ async def main(fixture_name: str) -> int:
     polygon_canonical.get_default_provider = lambda: fixture_provider  # type: ignore[assignment]
 
     run_id = f"probe-{uuid.uuid4().hex[:8]}"
+    # PR B: TrustedRunRequest carries a single ``data_policy`` block.
+    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
+
+    data_policy = DataPolicy(
+        source="polygon",
+        symbol=symbol,
+        adjusted=False,  # adjustment="raw" -> adjusted=False
+        session="regular",
+        input_bars=BarsSpec(timespan="minute", multiplier=1),
+        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
+        timestamp_policy="bar_close_ms_utc",
+        timezone="America/New_York",
+        provider_kind="fixture",
+        fixture_id=fixture_name,
+        fixture_sha256=None,
+    )
     request = TrustedRunRequest(
         run_id=run_id,
-        symbol=symbol,
         start_ms_utc=_ms_at_session_open(from_date),
         end_ms_utc=_ms_at_session_open(to_date + timedelta(days=1)),
         starting_cash=100_000.0,
         template="ema_crossover",
-        data_source="polygon",
-        bar_minutes=15,
-        session="regular",
-        adjustment="raw",
+        data_policy=data_policy,
     )
 
     print(f"Running LEAN with fixture {fixture_name}...")
