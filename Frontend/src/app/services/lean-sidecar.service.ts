@@ -52,6 +52,33 @@ export class LeanSidecarService {
   }
 
   /**
+   * Resolve the next NYSE trading session strictly after ``date`` to
+   * its 09:30 ET session-open as int64 ms UTC. The unified Engine Lab
+   * uses this to advance the operator's chosen end date to the
+   * half-open window's exclusive ``end_ms_utc`` (per the PR A P2.5
+   * contract; see docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md).
+   *
+   * Server-side delegation keeps the NYSE calendar (weekends, holidays,
+   * MLK / Thanksgiving / Good-Friday skips) in one place — the
+   * ``app/lean_sidecar/trading_calendar.py`` module — instead of
+   * reproducing it in TypeScript and risking drift with the validator.
+   */
+  async nextTradingDayOpen(
+    isoDate: string,
+  ): Promise<{ next_trading_date: string; session_open_ms_utc: number }> {
+    try {
+      return await firstValueFrom(
+        this.http.get<{ next_trading_date: string; session_open_ms_utc: number }>(
+          `${this.base}/calendar/next-trading-day-open`,
+          { params: { date: isoDate } },
+        ),
+      );
+    } catch (err) {
+      throw this.translate(err);
+    }
+  }
+
+  /**
    * Convert an ``HttpErrorResponse`` into a ``LeanSidecarApiError``
    * carrying the launcher's stable reason label. Falls back to
    * ``"unknown"`` when the body doesn't match the documented

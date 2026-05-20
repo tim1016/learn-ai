@@ -135,4 +135,36 @@ describe("LeanSidecarService", () => {
     expect((err as LeanSidecarApiError).reason).toBe("unknown");
     expect((err as LeanSidecarApiError).status).toBe(500);
   });
+
+  it("nextTradingDayOpen GETs /calendar/next-trading-day-open with the date param and returns the body", async () => {
+    const promise = service.nextTradingDayOpen("2025-01-17");
+    const req = httpMock.expectOne(
+      (r) =>
+        r.method === "GET" &&
+        r.url.endsWith("/api/lean-sidecar/calendar/next-trading-day-open"),
+    );
+    expect(req.request.params.get("date")).toBe("2025-01-17");
+    req.flush({
+      next_trading_date: "2025-01-21",
+      session_open_ms_utc: 1737466200000,
+    });
+    const result = await promise;
+    expect(result.next_trading_date).toBe("2025-01-21");
+    expect(result.session_open_ms_utc).toBe(1737466200000);
+  });
+
+  it("nextTradingDayOpen translates a launcher error envelope to LeanSidecarApiError", async () => {
+    const promise = service.nextTradingDayOpen("9999-99-99").catch((e) => e);
+    const req = httpMock.expectOne((r) =>
+      r.url.endsWith("/api/lean-sidecar/calendar/next-trading-day-open"),
+    );
+    req.flush(
+      { detail: { reason: "no_session_in_range", message: "no NYSE session within 14 days after 9999-99-99" } },
+      { status: 422, statusText: "Unprocessable Entity" },
+    );
+    const err = await promise;
+    expect(err).toBeInstanceOf(LeanSidecarApiError);
+    expect((err as LeanSidecarApiError).reason).toBe("no_session_in_range");
+    expect((err as LeanSidecarApiError).status).toBe(422);
+  });
 });

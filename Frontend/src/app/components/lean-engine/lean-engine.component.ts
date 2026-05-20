@@ -779,12 +779,24 @@ export class LeanEngineComponent implements OnInit {
     );
 
     try {
+      // Advance the operator-picked end date to the next NYSE
+      // session's 09:30 ET open before submission. The sidecar's
+      // window is half-open ``[start_ms_utc, end_ms_utc)`` per the
+      // P2.5 contract; if we passed ``endDate()`` directly:
+      //   * a same-day window collapses to start == end → 422, and
+      //   * a multi-day window silently excludes ``endDate()`` itself
+      //     because the orchestrator derives ``end_date`` from
+      //     ``end_ms_utc - 1ms`` (the previous trading day).
+      // Server-side resolution keeps the NYSE calendar in one place.
+      const endResolution = await this.leanSidecarService.nextTradingDayOpen(
+        this.endDate(),
+      );
       const response = await this.leanSidecarService.startTrustedRun({
         run_id: this.composeRunId(),
         algorithm_source: this.leanSource(),
         starting_cash: this.initialCash(),
         start_ms_utc: this.composeStartMs(),
-        end_ms_utc: this.composeEndMs(),
+        end_ms_utc: endResolution.session_open_ms_utc,
         data_policy: this.composeDataPolicy(),
       });
       this.setRunStatus(
@@ -826,12 +838,14 @@ export class LeanEngineComponent implements OnInit {
   }
 
   /**
-   * 09:30 ET on ``endDate()``, expressed as int64 ms UTC. The sidecar
-   * treats the window as half-open ``[start_ms_utc, end_ms_utc)`` —
-   * callers that want trade activity on ``endDate()`` itself must
-   * pass the session-open of the *next* trading day, but for the
-   * Phase-5 MVP we use ``endDate()`` directly (the operator picks the
-   * exclusive end on the picker).
+   * 09:30 ET on ``endDate()``, expressed as int64 ms UTC.
+   *
+   * NOTE: The LEAN submission path does NOT use this value directly —
+   * ``runLean()`` calls ``leanSidecarService.nextTradingDayOpen()`` to
+   * advance to the next NYSE session's 09:30 ET so the half-open
+   * ``[start_ms_utc, end_ms_utc)`` contract includes the operator's
+   * chosen end date. This helper remains for tests / non-LEAN callers
+   * that want the raw 09:30 ET ms of ``endDate()`` itself.
    */
   composeEndMs(): number {
     return this.sessionOpenMs(this.endDate());

@@ -140,9 +140,15 @@ describe('LeanEngineComponent.composeDataPolicy', () => {
 });
 
 describe('LeanEngineComponent engine selector', () => {
+  // Mon 2025-01-21 09:30 EST = 14:30 UTC. Used as the resolved
+  // exclusive-end millisecond when the operator picks 2025-01-17 (Fri)
+  // as endDate — MLK Day (Mon 2025-01-20) is skipped.
+  const NEXT_TRADING_DAY_OPEN_MS = Date.UTC(2025, 0, 21, 14, 30, 0);
+
   function configureTestBed(overrides: {
     startJob?: ReturnType<typeof vi.fn>;
     startTrustedRun?: ReturnType<typeof vi.fn>;
+    nextTradingDayOpen?: ReturnType<typeof vi.fn>;
   } = {}) {
     const startJob =
       overrides.startJob ?? vi.fn().mockResolvedValue('job-id');
@@ -166,6 +172,12 @@ describe('LeanEngineComponent engine selector', () => {
         total_equity_points: null,
         strategy_execution_id: null,
       } satisfies TrustedRunResponse);
+    const nextTradingDayOpen =
+      overrides.nextTradingDayOpen ??
+      vi.fn().mockResolvedValue({
+        next_trading_date: '2025-01-21',
+        session_open_ms_utc: NEXT_TRADING_DAY_OPEN_MS,
+      });
 
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
@@ -185,12 +197,12 @@ describe('LeanEngineComponent engine selector', () => {
         },
         {
           provide: LeanSidecarService,
-          useValue: { startTrustedRun },
+          useValue: { startTrustedRun, nextTradingDayOpen },
         },
       ],
     });
 
-    return { startJob, startTrustedRun };
+    return { startJob, startTrustedRun, nextTradingDayOpen, NEXT_TRADING_DAY_OPEN_MS };
   }
 
   it('exposes an engine signal that defaults to python and accepts lean', () => {
@@ -249,7 +261,7 @@ describe('LeanEngineComponent engine selector', () => {
   });
 
   it('submit routes to leanSidecarService.startTrustedRun for the LEAN engine and includes algorithm_source', async () => {
-    const { startJob, startTrustedRun } = configureTestBed();
+    const { startJob, startTrustedRun, nextTradingDayOpen } = configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);
     fixture.detectChanges();
     const component = fixture.componentInstance;
@@ -264,18 +276,59 @@ describe('LeanEngineComponent engine selector', () => {
 
     expect(startTrustedRun).toHaveBeenCalledTimes(1);
     expect(startJob).not.toHaveBeenCalled();
+    // The component must resolve the half-open exclusive end via the
+    // server-side calendar before submitting; the operator's chosen
+    // end date is the input to that call.
+    expect(nextTradingDayOpen).toHaveBeenCalledTimes(1);
+    expect(nextTradingDayOpen).toHaveBeenCalledWith('2025-01-17');
 
     const req = startTrustedRun.mock.calls[0][0] as TrustedRunRequest;
     expect(req.algorithm_source).toBe('class MyAlgorithm: pass');
     expect(req.starting_cash).toBe(100_000);
     expect(req.run_id).toMatch(/^engine_lab_spy_[a-z0-9]+$/);
     expect(req.start_ms_utc).toBe(component.composeStartMs());
-    expect(req.end_ms_utc).toBe(component.composeEndMs());
+    // end_ms_utc must be the NEXT trading day's session-open — Fri
+    // 2025-01-17 → Tue 2025-01-21 (skipping MLK Mon 2025-01-20). The
+    // half-open ``[start, end)`` contract makes 2025-01-17 trading
+    // activity included rather than silently excluded.
+    expect(req.end_ms_utc).toBe(Date.UTC(2025, 0, 21, 14, 30, 0));
+    expect(req.end_ms_utc).not.toBe(component.composeEndMs());
     expect(req.data_policy).toMatchObject({
       source: 'polygon',
       symbol: 'SPY',
       adjusted: true,
     });
+  });
+
+  it('advances end_ms_utc past the user-picked end so single-day LEAN runs are not rejected as start == end', async () => {
+    // Regression for the P1 finding on PR #307: when the operator
+    // picks start_date == end_date the previous flow built start ==
+    // end and the validator rejected the payload with a 422. The
+    // calendar lookup must advance end_ms_utc to the next trading
+    // session's open so the window is strictly positive.
+    const nextOpen = Date.UTC(2025, 0, 14, 14, 30, 0); // Tue 2025-01-14 09:30 EST.
+    const nextTradingDayOpen = vi.fn().mockResolvedValue({
+      next_trading_date: '2025-01-14',
+      session_open_ms_utc: nextOpen,
+    });
+    const { startTrustedRun } = configureTestBed({ nextTradingDayOpen });
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('lean');
+    component.leanSource.set('class MyAlgorithm: pass');
+    component.startDate.set('2025-01-13');
+    component.endDate.set('2025-01-13');
+    component.initialCash.set(100_000);
+
+    await component.run();
+
+    expect(nextTradingDayOpen).toHaveBeenCalledWith('2025-01-13');
+    const req = startTrustedRun.mock.calls[0][0] as TrustedRunRequest;
+    expect(req.start_ms_utc).toBe(Date.UTC(2025, 0, 13, 14, 30, 0));
+    expect(req.end_ms_utc).toBe(nextOpen);
+    expect(req.end_ms_utc).toBeGreaterThan(req.start_ms_utc);
   });
 
   it('composeStartMs/composeEndMs encode 09:30 ET as int64 ms UTC (EST=UTC-5)', () => {
