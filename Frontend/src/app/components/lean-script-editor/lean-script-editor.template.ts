@@ -48,6 +48,11 @@ class MyAlgorithm(QCAlgorithm):
         self.ema_fast = self.EMA(self.symbol, self.FAST_PERIOD, Resolution.Minute)
         self.ema_slow = self.EMA(self.symbol, self.SLOW_PERIOD, Resolution.Minute)
 
+        # Engine Lab stages data for the requested symbol only. LEAN's
+        # default benchmark is SPY and may request unstaged hour/daily
+        # files during post-run analysis, so pin a constant benchmark.
+        self.SetBenchmark(lambda dt: 100)
+
     def OnData(self, slice):
         if not (self.ema_fast.IsReady and self.ema_slow.IsReady):
             return

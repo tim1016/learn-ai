@@ -69,6 +69,16 @@ describe("LeanScriptEditorComponent", () => {
     expect(initializeBody).not.toMatch(/SetEndDate\(\s*\d{4}\s*,/);
   });
 
+  it("seed pins a constant benchmark so copied QQQ runs avoid unstaged SPY data", () => {
+    // Regression: LEAN's default benchmark subscribes to SPY hour/daily
+    // files even when the user-selected symbol is QQQ. The sidecar
+    // stages the selected symbol only, so the starter template must
+    // carry the same constant benchmark pin as the trusted samples.
+    const initializeBody = EMA_CROSSOVER_SOURCE_TEMPLATE.split("def Initialize(self):")[1]
+      .split("def OnData")[0];
+    expect(initializeBody).toContain("self.SetBenchmark(lambda dt: 100)");
+  });
+
   it("propagates source updates through the model signal", () => {
     const fixture = TestBed.createComponent(LeanScriptEditorComponent);
     fixture.detectChanges();
