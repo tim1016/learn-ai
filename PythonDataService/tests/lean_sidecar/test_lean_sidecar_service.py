@@ -40,24 +40,35 @@ def test_trusted_run_request_accepts_polygon_data_source() -> None:
     assert req.data_source == "polygon"
 
 
-def test_build_manifest_raises_when_adjusted_disagrees_with_normalization_mode() -> None:
-    """data_policy.adjusted=False MUST imply data_normalization_mode='Raw'."""
+def test_adjusted_true_with_raw_normalization_is_accepted() -> None:
+    """PR B widens: pre-adjusted staging + LEAN Raw is the new default pairing."""
+    from app.services.lean_sidecar_service import _assert_adjustment_vocabulary_consistent
+
+    _assert_adjustment_vocabulary_consistent(adjusted=True, data_normalization_mode="Raw")  # no raise
+
+
+def test_adjusted_false_with_adjusted_normalization_is_rejected() -> None:
     from app.services.lean_sidecar_service import (
         LeanSidecarServiceError,
         _assert_adjustment_vocabulary_consistent,
     )
 
     with pytest.raises(LeanSidecarServiceError, match="adjustment_vocabulary_mismatch"):
-        _assert_adjustment_vocabulary_consistent(
-            adjusted=False,
-            data_normalization_mode="Adjusted",
-        )
-    with pytest.raises(LeanSidecarServiceError, match="adjustment_vocabulary_mismatch"):
-        _assert_adjustment_vocabulary_consistent(
-            adjusted=True,
-            data_normalization_mode="Raw",
-        )
+        _assert_adjustment_vocabulary_consistent(adjusted=False, data_normalization_mode="Adjusted")
 
-    # Happy paths return None (no exception).
-    _assert_adjustment_vocabulary_consistent(adjusted=False, data_normalization_mode="Raw")
-    _assert_adjustment_vocabulary_consistent(adjusted=True, data_normalization_mode="Adjusted")
+
+def test_adjusted_true_with_adjusted_normalization_is_rejected() -> None:
+    from app.services.lean_sidecar_service import (
+        LeanSidecarServiceError,
+        _assert_adjustment_vocabulary_consistent,
+    )
+
+    with pytest.raises(LeanSidecarServiceError, match="adjustment_vocabulary_mismatch"):
+        _assert_adjustment_vocabulary_consistent(adjusted=True, data_normalization_mode="Adjusted")
+
+
+def test_adjusted_false_with_raw_normalization_is_accepted() -> None:
+    """PR A's existing case: raw → raw."""
+    from app.services.lean_sidecar_service import _assert_adjustment_vocabulary_consistent
+
+    _assert_adjustment_vocabulary_consistent(adjusted=False, data_normalization_mode="Raw")  # no raise

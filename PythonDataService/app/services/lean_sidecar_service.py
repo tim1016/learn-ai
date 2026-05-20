@@ -388,22 +388,25 @@ def _assert_adjustment_vocabulary_consistent(
     adjusted: bool,
     data_normalization_mode: str,
 ) -> None:
-    """Enforce data_policy.adjusted ⇔ data_normalization_mode at manifest build.
+    """Enforce the PR B adjustment-vocabulary matrix:
 
-    The two fields encode the same intent in different vocabularies
-    (Polygon's adjusted=False flag means 'raw' prices; LEAN's
-    DataNormalizationMode 'Raw' means the same). A mismatch indicates
-    an upstream wiring bug and must fail loud, not be silently
-    reconciled.
+      (adjusted=False, "Raw")       -> accept (PR A's existing case: raw -> raw)
+      (adjusted=True,  "Raw")       -> accept (PR B: pre-adjusted staging; LEAN reads as Raw)
+      (adjusted=False, "Adjusted")  -> reject (LEAN would adjust unadjusted Polygon data)
+      (adjusted=True,  "Adjusted")  -> reject (double-adjustment)
+
+    The ``adjusted`` flag is the staging-pipeline policy, not LEAN's runtime
+    normalization mode. See docs/superpowers/specs/2026-05-19-pr-b-engine-lab-unified-design.md § 4.4.
     """
-    if adjusted is False and data_normalization_mode != "Raw":
+    if data_normalization_mode == "Adjusted":
         raise LeanSidecarServiceError(
-            f"adjustment_vocabulary_mismatch: adjusted=False requires "
-            f"data_normalization_mode='Raw', got {data_normalization_mode!r}"
+            f"adjustment_vocabulary_mismatch: data_normalization_mode='Adjusted' is "
+            f"never valid in PR B's pre-adjusted-staging contract; got adjusted={adjusted}"
         )
-    if adjusted is True and data_normalization_mode == "Raw":
+    if data_normalization_mode != "Raw":
         raise LeanSidecarServiceError(
-            "adjustment_vocabulary_mismatch: adjusted=True conflicts with data_normalization_mode='Raw'"
+            f"adjustment_vocabulary_mismatch: unsupported data_normalization_mode={data_normalization_mode!r}; "
+            "valid: 'Raw'"
         )
 
 
