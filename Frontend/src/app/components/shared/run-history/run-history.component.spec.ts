@@ -248,3 +248,140 @@ describe("RunHistoryComponent — multi-select", () => {
     expect(compareBtn.textContent?.trim()).toMatch(/1 \/ 2/);
   });
 });
+
+describe("RunHistoryComponent — Bars summary column (PR B.3)", () => {
+  it("renders 'm/1 → m/15' for a minute-1 → minute-15 DataPolicy", async () => {
+    const fixture = await renderWith([
+      row({
+        id: "1",
+        dataPolicy: {
+          source: "polygon",
+          symbol: "SPY",
+          adjusted: true,
+          session: "regular",
+          input_bars: { timespan: "minute", multiplier: 1 },
+          strategy_bars: { timespan: "minute", multiplier: 15 },
+          timestamp_policy: "bar_close_ms_utc",
+          timezone: "America/New_York",
+          provider_kind: "live",
+          fixture_id: null,
+          fixture_sha256: null,
+        },
+      }),
+    ]);
+    expect(text(fixture)).toContain("m/1 → m/15");
+  });
+
+  it("collapses to a single token when input_bars and strategy_bars match", async () => {
+    const fixture = await renderWith([
+      row({
+        id: "2",
+        dataPolicy: {
+          source: "polygon",
+          symbol: "SPY",
+          adjusted: true,
+          session: "regular",
+          input_bars: { timespan: "day", multiplier: 1 },
+          strategy_bars: { timespan: "day", multiplier: 1 },
+          timestamp_policy: "bar_close_ms_utc",
+          timezone: "America/New_York",
+          provider_kind: "live",
+          fixture_id: null,
+          fixture_sha256: null,
+        },
+      }),
+    ]);
+    const cell = (fixture.nativeElement as HTMLElement).querySelector(".bars-cell")?.textContent ?? "";
+    expect(cell.trim()).toBe("d/1");
+  });
+
+  it("renders an em-dash when DataPolicy is null (legacy row)", async () => {
+    const fixture = await renderWith([row({ id: "3", dataPolicy: null })]);
+    const cell = (fixture.nativeElement as HTMLElement).querySelector(".bars-cell")?.textContent ?? "";
+    expect(cell.trim()).toBe("—");
+  });
+});
+
+describe("RunHistoryComponent — inline notes editing (PR B.3)", () => {
+  it("starts in display mode with '+ note' when notes is null", async () => {
+    const fixture = await renderWith([row({ id: "1", notes: null })]);
+    const editBtn = fixture.nativeElement.querySelector(
+      'button[data-testid="notes-edit"]',
+    ) as HTMLButtonElement;
+    expect(editBtn.textContent?.trim()).toBe("+ note");
+  });
+
+  it("shows the existing notes value in display mode", async () => {
+    const fixture = await renderWith([row({ id: "1", notes: "great Sharpe" })]);
+    const editBtn = fixture.nativeElement.querySelector(
+      'button[data-testid="notes-edit"]',
+    ) as HTMLButtonElement;
+    expect(editBtn.textContent?.trim()).toBe("great Sharpe");
+  });
+
+  it("emits notesEdited with the new value when Save is clicked", async () => {
+    const events: { id: string; notes: string }[] = [];
+    const { fixture, component } = await renderComponent({
+      rows: [row({ id: "abc", notes: "old" })],
+    });
+    component.notesEdited.subscribe((e) => events.push(e));
+
+    (fixture.nativeElement.querySelector(
+      'button[data-testid="notes-edit"]',
+    ) as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    const input = fixture.nativeElement.querySelector(
+      'input[data-testid="notes-input"]',
+    ) as HTMLInputElement;
+    input.value = "new note";
+    input.dispatchEvent(new Event("input"));
+    fixture.detectChanges();
+
+    (fixture.nativeElement.querySelector(
+      'button[data-testid="notes-save"]',
+    ) as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(events).toEqual([{ id: "abc", notes: "new note" }]);
+  });
+
+  it("cancel button discards the edit without emitting", async () => {
+    const events: unknown[] = [];
+    const { fixture, component } = await renderComponent({
+      rows: [row({ id: "x", notes: "keep" })],
+    });
+    component.notesEdited.subscribe((e) => events.push(e));
+
+    (fixture.nativeElement.querySelector(
+      'button[data-testid="notes-edit"]',
+    ) as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    (fixture.nativeElement.querySelector(
+      'button[data-testid="notes-cancel"]',
+    ) as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(events).toHaveLength(0);
+    const editBtn = fixture.nativeElement.querySelector(
+      'button[data-testid="notes-edit"]',
+    ) as HTMLButtonElement;
+    expect(editBtn.textContent?.trim()).toBe("keep");
+  });
+
+  it("clicking the notes cell does not trigger row-select", async () => {
+    const events: string[] = [];
+    const { fixture, component } = await renderComponent({
+      rows: [row({ id: "abc", notes: null })],
+    });
+    component.runSelected.subscribe((id) => events.push(id));
+
+    (fixture.nativeElement.querySelector(
+      'button[data-testid="notes-edit"]',
+    ) as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(events).toHaveLength(0);
+  });
+});

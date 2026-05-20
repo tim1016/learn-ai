@@ -1,0 +1,103 @@
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0 var(--space-3);
+
+  .filter {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+
+    &__label {
+      font-size: var(--fs-sm);
+      color: var(--text-subtle);
+      font-weight: var(--fw-medium);
+    }
+
+    select {
+      padding: var(--space-1) var(--space-3);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-sm);
+      background: var(--bg-elevated);
+      color: var(--text);
+      font-size: var(--fs-sm);
+      cursor: pointer;
+    }
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .chooser {
+    position: relative;
+
+    &__toggle,
+    &__menu button {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: var(--space-1) var(--space-3);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-sm);
+      background: var(--bg-elevated);
+      color: var(--text);
+      font-size: var(--fs-sm);
+      cursor: pointer;
+    }
+
+    &__menu {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: var(--space-1);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-sm);
+      box-shadow: var(--shadow-md);
+      padding: var(--space-2);
+      min-width: 12rem;
+      z-index: 10;
+    }
+
+    &__item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: var(--space-1) var(--space-2);
+      font-size: var(--fs-sm);
+      cursor: pointer;
+
+      &:hover {
+        background: var(--bg);
+      }
+    }
+
+    &__reset {
+      width: 100%;
+      margin-top: var(--space-2);
+      justify-content: center;
+      color: var(--accent);
+      background: transparent;
+    }
+  }
+
+  .export-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    background: var(--accent);
+    color: var(--text-on-accent);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+}

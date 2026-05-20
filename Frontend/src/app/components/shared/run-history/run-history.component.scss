@@ -121,3 +121,54 @@
 tr.selected {
   background: var(--accent-faint);
 }
+
+.bars-cell {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  color: var(--text-subtle);
+}
+
+.notes-cell {
+  max-width: 12rem;
+
+  .notes-edit,
+  .notes-save,
+  .notes-cancel {
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text);
+    font-size: var(--fs-xs);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    text-align: left;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &:hover {
+      background: var(--bg-elevated);
+      border-color: var(--border-light);
+    }
+  }
+
+  .notes-input {
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--border-light);
+    background: var(--bg-elevated);
+    color: var(--text);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-xs);
+    width: 8rem;
+  }
+
+  .notes-save {
+    color: var(--accent);
+  }
+
+  .notes-cancel {
+    color: var(--text-muted);
+  }
+}
