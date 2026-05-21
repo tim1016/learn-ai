@@ -23,6 +23,10 @@ public class AppDbContext : DbContext
     public DbSet<StrategyExecution> StrategyExecutions => Set<StrategyExecution>();
     public DbSet<BacktestTrade> BacktestTrades => Set<BacktestTrade>();
 
+    // Data lake catalog (Slice 1a)
+    public DbSet<DataLakeArtifact> DataLakeArtifacts => Set<DataLakeArtifact>();
+    public DbSet<DataLakeRun> DataLakeRuns => Set<DataLakeRun>();
+
     // Research models
     public DbSet<ResearchExperiment> ResearchExperiments => Set<ResearchExperiment>();
     public DbSet<SignalExperiment> SignalExperiments => Set<SignalExperiment>();
@@ -56,6 +60,9 @@ public class AppDbContext : DbContext
 
         // Portfolio Configurations
         ConfigurePortfolioModels(modelBuilder);
+
+        // Data Lake Catalog (Slice 1a)
+        ConfigureDataLakeModels(modelBuilder);
     }
 
     /// <summary>
@@ -466,6 +473,54 @@ public class AppDbContext : DbContext
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(l => l.StrategyExecutionId);
             entity.HasIndex(l => l.TradeId);
+        });
+    }
+
+    /// <summary>
+    /// Configure the data lake catalog tables. The CHECK constraints and
+    /// partial unique indexes are declared in raw SQL because EF Core's
+    /// fluent API does not express them natively. The migration's Up()
+    /// emits the same SQL — this configuration block is the authoritative
+    /// EF model state used by the schema-drift test on the Python side.
+    /// </summary>
+    private static void ConfigureDataLakeModels(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<DataLakeArtifact>(entity =>
+        {
+            entity.HasKey(a => a.Id);
+            entity.Property(a => a.ArtifactKind).IsRequired().HasMaxLength(40);
+            entity.Property(a => a.Provider).IsRequired().HasMaxLength(40);
+            entity.Property(a => a.ProviderParams).IsRequired().HasColumnType("jsonb");
+            entity.Property(a => a.DataContractHash).IsRequired().HasMaxLength(64).IsFixedLength();
+            entity.Property(a => a.FilePath).IsRequired();
+            entity.Property(a => a.Status).IsRequired().HasMaxLength(20);
+            entity.Property(a => a.FetchedAtMs).IsRequired();
+            entity.Property(a => a.AttemptCount).IsRequired().HasDefaultValue(0);
+
+            entity.Property(a => a.FileSha256).HasMaxLength(64).IsFixedLength();
+            entity.Property(a => a.CorpActionRevision).HasMaxLength(64).IsFixedLength();
+
+            // Hot-path coverage lookup (partial indexes added via raw SQL in the migration).
+            entity.HasIndex(a => new { a.Market, a.Symbol, a.Resolution, a.DataType, a.TradingDate });
+        });
+
+        modelBuilder.Entity<DataLakeRun>(entity =>
+        {
+            entity.HasKey(r => r.Id);
+            entity.Property(r => r.RunType).IsRequired().HasMaxLength(20);
+            entity.Property(r => r.RunSpec).IsRequired().HasColumnType("jsonb");
+            entity.Property(r => r.RequestedAtMs).IsRequired();
+
+            entity.Property(r => r.EnsureDataResponse).HasColumnType("jsonb");
+            entity.Property(r => r.ManifestSha256).HasMaxLength(64).IsFixedLength();
+            entity.Property(r => r.DataAvailabilityHash).HasMaxLength(64).IsFixedLength();
+
+            entity.HasOne(r => r.StrategyExecution)
+                  .WithMany()
+                  .HasForeignKey(r => r.StrategyExecutionId)
+                  .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasIndex(r => r.StrategyExecutionId);
         });
     }
 }
