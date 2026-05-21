@@ -75,7 +75,7 @@ services:
       # (gitignored); override LEAN_DATA_VOLUME_HOST_PATH in .env for a different root.
       # Layout inside this mount: lake/ (canonical artifacts) + staging/ (writer scratch),
       # both on the same filesystem so atomic rename works.
-      - ${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw
+      - ${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw,z
     environment:
       - POLYGON_API_KEY=${POLYGON_API_KEY}
       - POLYGON_RATE_LIMIT_PER_MIN=${POLYGON_RATE_LIMIT_PER_MIN:-0}
