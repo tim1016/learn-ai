@@ -147,3 +147,53 @@ class TestAtomicWriteAndPromote:
                 worker_id="w",
                 attempt=1,
             )
+
+    def test_rejects_absolute_path(self, tmp_path: Path):
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+        with pytest.raises(ValueError, match="absolute"):
+            atomic_write_and_promote(
+                content=b"x",
+                lake_root=lake_root,
+                staging_root=staging_root,
+                rel_lake_path=PurePosixPath("/tmp/x.zip"),
+                request_id=UUID("12345678-1234-5678-1234-567812345678"),
+                worker_id="w",
+                attempt=1,
+            )
+
+    def test_rejects_dotdot_traversal(self, tmp_path: Path):
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+        with pytest.raises(ValueError, match=r"\.\."):
+            atomic_write_and_promote(
+                content=b"x",
+                lake_root=lake_root,
+                staging_root=staging_root,
+                rel_lake_path=PurePosixPath("equity/../../etc/passwd"),
+                request_id=UUID("12345678-1234-5678-1234-567812345678"),
+                worker_id="w",
+                attempt=1,
+            )
+
+    def test_rejects_empty_path(self, tmp_path: Path):
+        """PurePosixPath('') has no parts; Path(*[]) resolves to CWD, which
+        would overwrite lake_root itself if not rejected."""
+        lake_root = tmp_path / "lake"
+        staging_root = tmp_path / "staging"
+        lake_root.mkdir()
+        staging_root.mkdir()
+        with pytest.raises(ValueError, match="empty"):
+            atomic_write_and_promote(
+                content=b"x",
+                lake_root=lake_root,
+                staging_root=staging_root,
+                rel_lake_path=PurePosixPath(""),
+                request_id=UUID("12345678-1234-5678-1234-567812345678"),
+                worker_id="w",
+                attempt=1,
+            )

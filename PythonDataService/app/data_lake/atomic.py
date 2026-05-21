@@ -98,7 +98,17 @@ def atomic_write_and_promote(
     Returns the SHA-256 hex digest of the written bytes.
 
     Raises AtomicRenameUnsafeError if the same-filesystem invariant fails.
+    Raises ValueError if rel_lake_path is absolute, contains '..', or
+    contains '.' or empty segments.
     """
+    if rel_lake_path.is_absolute():
+        raise ValueError(f"rel_lake_path must be a relative path, got absolute: {rel_lake_path!r}")
+    if not rel_lake_path.parts:
+        raise ValueError(f"rel_lake_path must not be empty, got {rel_lake_path!r}")
+    for part in rel_lake_path.parts:
+        if part in ("..", ".", ""):
+            raise ValueError(f"rel_lake_path must not contain '..', '.', or empty segments, got {rel_lake_path!r}")
+
     assert_same_filesystem(lake_root, staging_root)
 
     staged = stage_path_for(staging_root, rel_lake_path, request_id, worker_id, attempt)
