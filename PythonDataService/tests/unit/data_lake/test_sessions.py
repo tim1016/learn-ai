@@ -52,8 +52,9 @@ def test_week_spanning_a_holiday():
 
 
 def test_uses_staged_market_hours_when_provided(tmp_path: Path):
-    # Minimal market-hours-database.json with a full closure on 2024-07-04
-    # (US Independence Day) and an early close on 2024-07-03.
+    # Minimal market-hours-database.json in LEAN's native M/d/yyyy format with
+    # a full closure on 7/4/2024 (US Independence Day) and an early close on
+    # 7/3/2024.
     mh_db = tmp_path / "market-hours-database.json"
     mh_db.write_text(
         json.dumps(
@@ -62,8 +63,8 @@ def test_uses_staged_market_hours_when_provided(tmp_path: Path):
                     "Equity-usa-[*]": {
                         "exchange": "nyse",
                         "timezone": "America/New_York",
-                        "holidays": ["2024-07-04"],
-                        "earlyCloses": {"2024-07-03": "13:00"},
+                        "holidays": ["7/4/2024"],
+                        "earlyCloses": {"7/3/2024": "13:00:00"},
                     }
                 }
             }

@@ -10,7 +10,7 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.5
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from app.data_lake.types import NonSessionRecord
@@ -57,6 +57,20 @@ _USA_FULL_HOLIDAYS: frozenset[date] = frozenset(
 )
 
 
+def _parse_holiday_date(raw: str) -> date:
+    """Parse a LEAN holiday date string.
+
+    LEAN's canonical format is M/d/yyyy (e.g. '1/1/2024', '12/25/2024').
+    ISO format YYYY-MM-DD is also accepted for test fixtures and forward
+    compatibility.
+    """
+    if "-" in raw and raw.index("-") == 4:
+        # ISO format: YYYY-MM-DD
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+    # LEAN native format: M/d/yyyy
+    return datetime.strptime(raw, "%m/%d/%Y").date()
+
+
 def _parse_market_hours_holidays(mh_db_path: Path) -> frozenset[date]:
     """Read the LEAN market-hours JSON and return USA-equity full-day holidays.
 
@@ -64,22 +78,22 @@ def _parse_market_hours_holidays(mh_db_path: Path) -> frozenset[date]:
       {
         "entries": {
           "Equity-usa-[*]": {
-            "holidays": ["2024-05-27", ...],
-            "earlyCloses": {"2024-07-03": "13:00", ...},
+            "holidays": ["1/1/2024", ...],
+            "earlyCloses": {"7/3/2024": "13:00:00", ...},
             ...
           }
         }
       }
 
-    Early closes are NOT holidays — they remain trading sessions in v1.
+    LEAN encodes holiday strings in M/d/yyyy format. Early closes are NOT
+    holidays — they remain trading sessions in v1.
     """
     payload = json.loads(mh_db_path.read_text())
     entry = (payload.get("entries") or {}).get("Equity-usa-[*]", {})
     holidays = entry.get("holidays") or []
     out: set[date] = set()
     for h in holidays:
-        y, m, d = (int(x) for x in h.split("-"))
-        out.add(date(y, m, d))
+        out.add(_parse_holiday_date(h))
     return frozenset(out)
 
 
