@@ -18,13 +18,14 @@ from datetime import date
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.]*$")
 _MAX_RANGE_YEARS = 5
 
 
 class DataRunSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     request_id: UUID
     run_type: Literal["python_lab", "lean_lab"]
     requester: str | None = None

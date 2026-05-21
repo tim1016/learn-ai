@@ -83,6 +83,18 @@ class TestDataRunSpec:
         assert "quote" in spec.data_types
         assert "trade" in spec.data_types
 
+    def test_extra_fields_rejected(self):
+        """Unknown keys must raise ValidationError (extra='forbid').
+
+        Pydantic's default is to silently ignore extra fields. For DataRunSpec,
+        silent drops would allow typos (e.g. 'include_lean_metadata') to fall
+        back to defaults without the caller knowing.
+        """
+        payload = self._valid_payload()
+        payload["typo_field"] = "should_be_rejected"
+        with pytest.raises(ValidationError):
+            DataRunSpec(**payload)
+
     def test_5_year_range_cap(self):
         payload = self._valid_payload()
         payload["start_trading_date"] = "2018-01-01"
