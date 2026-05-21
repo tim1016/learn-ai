@@ -67,7 +67,7 @@ The audit `docs/audits/computational-fidelity-2026-04-22.md` documented downstre
 
 Explicit host directory; not a podman-managed `_data` path.
 
-```
+```text
 LEAN_DATA_VOLUME_HOST_PATH=/var/lib/learn_ai_lean_data    (configured per deploy)
   ├─ ${LEAN_DATA_VOLUME_HOST_PATH}/lake          ← the only subtree engines see
   └─ ${LEAN_DATA_VOLUME_HOST_PATH}/staging       ← writer-private
@@ -98,7 +98,7 @@ Capability separation is path-disciplined within the container today; container-
 
 ### 2.3 Control flow
 
-```
+```text
 Frontend (Angular)
   └─→ Backend (.NET, GraphQL mutation)
        ├─ INSERT data_lake_runs row in Postgres (audit; requested_at_ms, run_spec)
@@ -297,14 +297,21 @@ class DataRunSpec(BaseModel):
 
     include_factor_files: bool = True
     include_map_files: bool = True
-    include_lean_metadata: bool = True
-    lean_image_digest: str | None = None          # required iff include_lean_metadata
+    lean_image_digest: str                        # always required — source of session calendar
 
     force_refresh: bool = False
     fetch_timeout_seconds: int = 600
 ```
 
-Boundary validation in the FastAPI route: symbols match `^[A-Z][A-Z0-9.]*$`, `start_trading_date <= end_trading_date`, range capped (default 5 years) to prevent runaway calls, `lean_image_digest` required iff `include_lean_metadata`.
+Boundary validation in the FastAPI route:
+
+- symbols match `^[A-Z][A-Z0-9.]*$`
+- `start_trading_date <= end_trading_date`
+- range capped (default 5 years) to prevent runaway calls
+- **`'quote'` in `data_types` requires `'trade'` to also be present** — quote artifacts are derived (`provider='learn_ai_derived'`) from same-day trade bytes; without a source trade artifact, quote synthesis cannot proceed.
+- `lean_image_digest` is required for every request (not just LEAN-lab runs). The LEAN-image-extracted market-hours-database supplies the session calendar that session expansion reads — see § 4.5 for the bootstrap order.
+
+LEAN metadata (market-hours-database + symbol-properties-database) is **always staged** by `ensure_data` because session expansion depends on it. There is no `include_lean_metadata` flag; the metadata artifacts are unconditional prerequisites.
 
 ### 4.2 Output — `DataAvailabilityResult`
 
@@ -373,7 +380,7 @@ class DataAvailabilityResult(BaseModel):
 
 ### 4.3 HTTP boundary
 
-```
+```http
 POST /api/data-lake/ensure-data
 Authorization: Bearer <internal-service-token>
 Content-Type: application/json
@@ -390,12 +397,20 @@ Route lives in `app/routers/data_lake.py`. Thin wrapper around in-process `data_
 
 ### 4.4 Concurrency primitives — three atomic transitions
 
+**Note on `ON CONFLICT` with partial unique indexes**: Postgres requires the partial index's `WHERE` clause to be repeated in the `ON CONFLICT` clause for the planner to match the right index. This means the four partial unique indexes (minute bars, aggregated bars, corp actions, metadata) each get a distinct INSERT statement with the matching predicate. The examples below show the minute-bars case; corresponding statements exist for the other artifact kinds with their own `ON CONFLICT ... WHERE` predicates.
+
 ```sql
--- (1) Claim a new artifact
+-- (1) Claim a new minute-bar artifact
 INSERT INTO data_lake_artifacts (..., status='fetching',
         lease_owner=$me, lease_expires_at_ms=$now_ms + 300_000, attempt_count=1)
-ON CONFLICT (per partial unique index) DO NOTHING
+ON CONFLICT (market, symbol, trading_date, data_type, provider, price_adjustment_mode)
+   WHERE artifact_kind = 'time_series_bars' AND resolution = 'minute'
+DO NOTHING
 RETURNING id;
+
+-- For other artifact kinds the conflict target and WHERE predicate change
+-- to match their partial unique index — see § 3.1 for the four index
+-- definitions; one INSERT statement per kind.
 
 -- (2) Steal an expired lease OR retry a previous failure
 UPDATE data_lake_artifacts
@@ -428,19 +443,36 @@ RETURNING id, file_path AS prior_file_path, file_sha256 AS prior_file_sha256;
 
 ### 4.5 Session-aware artifact expansion
 
+**Bootstrap order.** `ensure_data` stages the two LEAN metadata artifacts (market-hours-database + symbol-properties-database) **first**, before any other expansion, because session expansion reads the market-hours calendar. Bootstrap is idempotent: on the first call against an empty lake, the metadata artifacts are extracted from the pinned LEAN image identified by `spec.lean_image_digest` and staged at `lake/market-hours/` and `lake/symbol-properties/`. On subsequent calls, the existing complete rows are reused. Session expansion runs after that step.
+
 ```python
+async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
+    # Phase 0 — bootstrap LEAN metadata (always; unconditional prerequisite).
+    metadata_artifacts = await stage_lean_metadata(
+        lean_image_digest=spec.lean_image_digest,
+    )
+
+    # Phase 1 — session expansion reads the just-staged market-hours-database.
+    required, non_sessions = expand_required_artifacts(spec)
+
+    # Phase 2 — claim + fetch + complete the per-symbol artifacts (see § 4.4, § 4.6).
+    ...
+
+
 def expand_required_artifacts(spec: DataRunSpec) -> tuple[list[ArtifactIdentity], list[NonSessionRecord]]:
     """Filter the date range to real exchange sessions BEFORE creating artifact rows.
 
     Weekends and market holidays never become artifact requirements — they go to
     skipped_non_sessions instead. Half-day early closes ARE sessions (full minute
     coverage for the truncated window).
+
+    Precondition: LEAN metadata artifacts have already been staged in Phase 0
+    of ensure_data (see Bootstrap order above). trading_sessions_for reads
+    those staged files.
     """
     sessions, non_sessions = trading_sessions_for(
         spec.market, spec.start_trading_date, spec.end_trading_date
     )
-    # trading_sessions_for reads the LEAN market-hours-database — the same
-    # metadata artifact ensure_data stages as artifact_kind='metadata'.
 
     required = []
     for symbol in spec.symbols:
@@ -469,9 +501,8 @@ def expand_required_artifacts(spec: DataRunSpec) -> tuple[list[ArtifactIdentity]
                 provider='learn_ai_derived',
                 price_adjustment_mode='raw',
             ))
-    if spec.include_lean_metadata:
-        required.append(ArtifactIdentity(artifact_kind='metadata', ...))  # market-hours
-        required.append(ArtifactIdentity(artifact_kind='metadata', ...))  # symbol-properties
+    # NOTE: LEAN metadata artifacts are NOT enumerated here — they are staged
+    # in Phase 0 (above) before expand_required_artifacts is called.
     return required, non_sessions
 ```
 
@@ -515,7 +546,7 @@ Backend persists `(request_id, spec_hash)` on its side to dedupe at the orchestr
 
 - Does not stage LEAN config or per-run workspaces — `prepare_run` does that (Section 5.5).
 - Does not launch any engine.
-- Does not consolidate higher resolutions; the engine reader derives them from minute bars at read time.
+- Does not consolidate **hour-resolution** bars. Algorithms requiring hourly data must consolidate from minute bars in-algorithm; preflight rejects direct `Resolution.Hour` subscriptions in v1. (Daily bars *are* consolidated — materialized as `provider='learn_ai_derived'` artifacts within `ensure_data`'s post-step; see § 4.6.)
 - Does not refresh `corp_action_revision` on the hot path. A nightly sweep recomputes for symbols touched recently; mismatch flips `complete → stale`, triggering refetch on the next `ensure_data` that needs it.
 
 ---
@@ -524,7 +555,7 @@ Backend persists `(request_id, spec_hash)` on its side to dedupe at the orchestr
 
 ### 5.1 Volume internal layout
 
-```
+```text
 ${LEAN_DATA_VOLUME_HOST_PATH}            ← single backing filesystem
 ├── lake/                                ← the only subtree any engine sees
 │   ├── equity/usa/
@@ -617,7 +648,7 @@ def staging_path_for(rel: Path, request_id: UUID, worker_id: str, attempt: int) 
 
 Separate from the data lake; lives at `PythonDataService/artifacts/runs/<data_lake_runs.id>/`.
 
-```
+```text
 artifacts/runs/<uuid>/
 ├── algorithm/
 │   └── main.py                          # strategy source
@@ -724,7 +755,7 @@ Excluded by design (vary across identical reproductions): `requester`, `requeste
 
 **`python_engine_code_sha256` declared file set** (versioned itself as `python_engine_code_sha256_set_v1`; new file → bump version):
 
-```
+```text
 PythonDataService/app/engine/**
 PythonDataService/app/data_lake/**
 PythonDataService/app/lean_sidecar/launcher/**       # launcher client + config only
@@ -793,7 +824,7 @@ Size: ~800 LOC + integration test.
 
 ### 6.3 Slice 3 — Numerical equivalence ladder
 
-```
+```text
 1. Bar-stream      (lifted from Slice 2; pin tolerances in a real test)
 2. Indicator       (EMA5, EMA10, RSI14 on the same bars)
 3. Signal          (per-bar ENTER/EXIT/HOLD labels)
@@ -831,7 +862,7 @@ Remaining Slice 4:
 
 ### 6.6 Dependency graph
 
-```
+```text
                                 ┌─ Slice 4 (operational; parallel with 3,
                                 │    but sweep + inspection land before
                                 │    Slice 3 routinely runs)
@@ -939,7 +970,8 @@ Per `.claude/rules/python.md` and `.claude/rules/testing.md`:
 ### Authority
 
 This document is the authority for the Polygon → LEAN data-lake pipeline. On merge, add to `docs/doc-authority.md`:
-```
+
+```markdown
 - docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md
 ```
 After Slice 1d ships, a companion `docs/architecture/data-lake.md` operational doc will be added (Slice 4 deliverable).
