@@ -85,10 +85,11 @@ async def test_schema_matches_expectation(table: TableExpectation) -> None:
         live_type, live_nullable = live_columns[col.name]
         if live_nullable != col.nullable:
             mismatched.append(f"{col.name}: expected nullable={col.nullable}, got {live_nullable}")
-        # Type comparison: accept Postgres's information_schema canonical names.
-        # Some types have aliases (e.g. EF Core 'character varying(40)' is
-        # data_type='character varying'); accept the family-level match.
-        if col.pg_type not in live_type:
+        # Type comparison: information_schema.columns.data_type returns the
+        # canonical base type name without length modifiers (e.g. `char(64)`
+        # → `'character'`, `varchar(40)` → `'character varying'`). Use exact
+        # equality so that `character` and `character varying` are distinct.
+        if col.pg_type != live_type:
             mismatched.append(f"{col.name}: expected pg_type={col.pg_type!r}, got {live_type!r}")
 
     assert not missing, f"{table.name}: columns missing from live DB: {missing}"
