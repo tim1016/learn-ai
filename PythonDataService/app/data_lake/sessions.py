@@ -9,7 +9,9 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.5
 
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
+from pathlib import Path
 
 from app.data_lake.types import NonSessionRecord
 
@@ -55,18 +57,55 @@ _USA_FULL_HOLIDAYS: frozenset[date] = frozenset(
 )
 
 
+def _parse_market_hours_holidays(mh_db_path: Path) -> frozenset[date]:
+    """Read the LEAN market-hours JSON and return USA-equity full-day holidays.
+
+    LEAN's JSON shape (simplified):
+      {
+        "entries": {
+          "Equity-usa-[*]": {
+            "holidays": ["2024-05-27", ...],
+            "earlyCloses": {"2024-07-03": "13:00", ...},
+            ...
+          }
+        }
+      }
+
+    Early closes are NOT holidays — they remain trading sessions in v1.
+    """
+    payload = json.loads(mh_db_path.read_text())
+    entry = (payload.get("entries") or {}).get("Equity-usa-[*]", {})
+    holidays = entry.get("holidays") or []
+    out: set[date] = set()
+    for h in holidays:
+        y, m, d = (int(x) for x in h.split("-"))
+        out.add(date(y, m, d))
+    return frozenset(out)
+
+
 def trading_sessions_for(
     market: str,
     start_trading_date: date,
     end_trading_date: date,
+    market_hours_db_path: Path | None = None,
 ) -> tuple[list[date], list[NonSessionRecord]]:
     """Return (sessions, non_sessions) for the inclusive window.
 
     Half-day early closes ARE sessions in v1 (full-minute coverage for the
     truncated window); only full closures map to non-sessions.
+
+    When market_hours_db_path is provided and the file exists, holidays are
+    read from the staged LEAN market-hours JSON. Otherwise falls back to the
+    hardcoded _USA_FULL_HOLIDAYS list.
     """
     if market != "usa":
-        raise ValueError(f"market {market!r} not supported in Slice 1a")
+        raise ValueError(f"market {market!r} not supported in Slice 1c")
+
+    holidays = (
+        _parse_market_hours_holidays(market_hours_db_path)
+        if market_hours_db_path is not None and market_hours_db_path.is_file()
+        else _USA_FULL_HOLIDAYS
+    )
 
     sessions: list[date] = []
     non_sessions: list[NonSessionRecord] = []
@@ -74,7 +113,7 @@ def trading_sessions_for(
     while current <= end_trading_date:
         if current.weekday() >= 5:
             non_sessions.append(NonSessionRecord(market=market, trading_date=current, reason="weekend"))
-        elif current in _USA_FULL_HOLIDAYS:
+        elif current in holidays:
             non_sessions.append(NonSessionRecord(market=market, trading_date=current, reason="market_holiday"))
         else:
             sessions.append(current)
