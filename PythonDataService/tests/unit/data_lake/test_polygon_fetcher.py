@@ -202,3 +202,16 @@ async def test_500_raises_PolygonFetchError():
             end=date(2024, 5, 20),
             api_key="ok",
         )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_transport_error_raises_PolygonFetchError():
+    respx.get(_aggs_url_pattern()).mock(side_effect=httpx.ConnectError("Network unreachable"))
+    with pytest.raises(PolygonFetchError):
+        await fetch_minute_trade_aggregates(
+            symbol="SPY",
+            start=date(2024, 5, 20),
+            end=date(2024, 5, 20),
+            api_key="ok",
+        )

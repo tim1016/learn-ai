@@ -95,7 +95,12 @@ async def fetch_minute_trade_aggregates(
             # Polygon's next_url already includes apiKey; only pass params on
             # the first request.
             req_params = params if next_url == url else {"apiKey": api_key}
-            resp = await client.get(next_url, params=req_params)
+            try:
+                resp = await client.get(next_url, params=req_params)
+            except httpx.TimeoutException as exc:
+                raise PolygonFetchError(f"Polygon request timed out for {symbol}: {exc}", status_code=None) from exc
+            except httpx.RequestError as exc:
+                raise PolygonFetchError(f"Polygon transport error for {symbol}: {exc}", status_code=None) from exc
             _raise_for_status(resp, symbol)
             payload = resp.json()
             _raise_for_payload_status(payload, symbol, resp.status_code)
