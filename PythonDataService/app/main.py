@@ -228,6 +228,16 @@ app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures
 # Layer 3: inode-tracked incremental deque on log tail.
 app.include_router(live_runs_router.router, prefix="/api/live-runs", tags=["live-runs"])
 
+# Data lake (Slice 1a) — gated by DATA_LAKE_ENABLED.
+# When disabled, the prefix has no registered routes; clients get 404.
+if settings.DATA_LAKE_ENABLED:
+    from app.routers import data_lake as data_lake_router
+
+    app.include_router(data_lake_router.router)
+    logger.info("data lake routes ENABLED")
+else:
+    logger.info("data lake routes disabled (set DATA_LAKE_ENABLED=true to enable)")
+
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)
 
