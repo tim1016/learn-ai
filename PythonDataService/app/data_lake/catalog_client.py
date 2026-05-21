@@ -8,6 +8,7 @@ Spec: docs/superpowers/specs/2026-05-20-polygon-lean-data-lake-design.md § 4.4
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -44,11 +45,23 @@ async def init_pool() -> None:
 
 
 async def close_pool() -> None:
-    """Close the global asyncpg pool. Idempotent."""
+    """Close the global asyncpg pool. Idempotent.
+
+    If the pool's event loop is already closed (e.g., a stale pool from a
+    prior test's event loop), fall back to terminate() so the global is
+    always reset to None.
+    """
     global _pool
     if _pool is None:
         return
-    await _pool.close()
+    try:
+        await _pool.close()
+    except RuntimeError:
+        # Pool's event loop is closed (common in test teardown when multiple
+        # async tests share the module-level pool global across event loops).
+        # Force-terminate without awaiting to clear the global.
+        with contextlib.suppress(Exception):
+            _pool.terminate()
     _pool = None
     logger.info("data_lake.catalog_client: asyncpg pool closed")
 

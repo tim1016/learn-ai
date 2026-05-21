@@ -43,6 +43,8 @@ async def clean_artifacts():
 
 @pytest.fixture
 async def pool():
+    # Force-reset any stale pool left by a prior test (different event loop).
+    await catalog_client.close_pool()
     await catalog_client.init_pool()
     yield
     await catalog_client.close_pool()
