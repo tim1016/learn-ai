@@ -1,0 +1,11 @@
+{
+  "comment": "Skeleton fixture for Slice 1a. Real Polygon responses + bar payloads land in Slice 1b.",
+  "known_symbols": ["SPY"],
+  "per_artifact_template": {
+    "id": 0,
+    "file_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "row_count": 390,
+    "first_bar_start_ms": 0,
+    "last_bar_start_ms": 0
+  }
+}
