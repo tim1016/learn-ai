@@ -71,6 +71,11 @@ services:
       # visible to host-side commands. See
       # docs/runbooks/ibkr-paper-dry-run.md prereqs.
       - ./PythonDataService/artifacts:/app/artifacts:z
+      # Data lake writer mount (Slice 1b). Default host path is ./data-lake-volume
+      # (gitignored); override LEAN_DATA_VOLUME_HOST_PATH in .env for a different root.
+      # Layout inside this mount: lake/ (canonical artifacts) + staging/ (writer scratch),
+      # both on the same filesystem so atomic rename works.
+      - ${LEAN_DATA_VOLUME_HOST_PATH:-./data-lake-volume}:/lean-data-writer:rw
     environment:
       - POLYGON_API_KEY=${POLYGON_API_KEY}
       - POLYGON_RATE_LIMIT_PER_MIN=${POLYGON_RATE_LIMIT_PER_MIN:-0}
@@ -90,6 +95,8 @@ services:
       - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200
       - BACKEND_URL=http://backend:8080
       - REDIS_URL=redis://redis:6379/0
+      # Data lake writer root (Slice 1b). Container path of the host-bind mount above.
+      - LEAN_DATA_WRITE_ROOT=/lean-data-writer
       # Data lake catalog — asyncpg URL; same host/db/creds as the backend.
       # Required when DATA_LAKE_ENABLED=true or for schema-drift integration tests.
       - POSTGRES_URL=postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres

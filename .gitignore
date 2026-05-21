@@ -69,3 +69,6 @@ PythonDataService/artifacts/
 
 # IBKR snapshot data (runtime-generated Arrow files)
 scripts/ibkr_snapshots/**/*.arrow
+
+# Slice 1b: default host-bind dir for the data lake writer volume.
+data-lake-volume/
