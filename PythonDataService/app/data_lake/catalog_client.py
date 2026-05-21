@@ -330,6 +330,173 @@ class PriorArtifactMetadata:
     prior_file_sha256: str
 
 
+async def claim_corp_action_artifact(
+    identity: ArtifactIdentity,
+    worker_id: str,
+    lease_ttl_ms: int,
+    data_contract_hash: str,
+    file_path: str,
+) -> int | None:
+    """Atomic claim for a factor_file or map_file artifact.
+
+    Returns the new row's Id when this caller is the winner; returns None when
+    a row already exists for this identity tuple (someone else has it).
+
+    Matches the partial unique index uq_data_lake_artifacts_corp_actions:
+      (Market, Symbol, ArtifactKind, Provider, PriceAdjustmentMode)
+       WHERE ArtifactKind IN ('factor_file','map_file')
+    The ON CONFLICT clause repeats the partial index's WHERE predicate, per
+    Postgres' requirement for partial-index conflict targets.
+    """
+    if identity.artifact_kind not in ("factor_file", "map_file"):
+        raise ValueError(f"claim_corp_action_artifact called with non-corp-action identity: {identity!r}")
+    now_ms = int(time.time() * 1000)
+    query = """
+        INSERT INTO "DataLakeArtifacts" (
+            "ArtifactKind", "Market", "Symbol", "TradingDate",
+            "Resolution", "DataType", "Provider", "ProviderParams",
+            "PriceAdjustmentMode", "DataContractHash",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "AttemptCount", "FetchedAtMs"
+        )
+        VALUES (
+            $1, $2, $3, NULL, NULL, NULL, $4, $5, $6, $7,
+            $8, 'fetching', $9, $10, 1, $11
+        )
+        ON CONFLICT ("Market", "Symbol", "ArtifactKind", "Provider", "PriceAdjustmentMode")
+            WHERE "ArtifactKind" IN ('factor_file', 'map_file')
+        DO NOTHING
+        RETURNING "Id";
+    """
+    async with connection() as conn:
+        return await conn.fetchval(
+            query,
+            identity.artifact_kind,
+            identity.market,
+            identity.symbol,
+            identity.provider,
+            "{}",  # ProviderParams (jsonb)
+            identity.price_adjustment_mode,
+            data_contract_hash,
+            file_path,
+            worker_id,
+            now_ms + lease_ttl_ms,
+            now_ms,
+        )
+
+
+async def claim_metadata_artifact(
+    identity: ArtifactIdentity,
+    worker_id: str,
+    lease_ttl_ms: int,
+    data_contract_hash: str,
+    file_path: str,
+) -> int | None:
+    """Atomic claim for a metadata artifact.
+
+    Returns the new row's Id when this caller is the winner; returns None when
+    a row already exists for this data_contract_hash (someone else has it).
+
+    Matches the partial unique index uq_data_lake_artifacts_metadata:
+      (DataContractHash)
+       WHERE ArtifactKind = 'metadata'
+    The ON CONFLICT clause repeats the partial index's WHERE predicate, per
+    Postgres' requirement for partial-index conflict targets.
+    """
+    if identity.artifact_kind != "metadata":
+        raise ValueError(f"claim_metadata_artifact called with non-metadata identity: {identity!r}")
+    now_ms = int(time.time() * 1000)
+    query = """
+        INSERT INTO "DataLakeArtifacts" (
+            "ArtifactKind", "Market", "Symbol", "TradingDate",
+            "Resolution", "DataType", "Provider", "ProviderParams",
+            "PriceAdjustmentMode", "DataContractHash",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "AttemptCount", "FetchedAtMs"
+        )
+        VALUES (
+            'metadata', $1, $2, NULL, NULL, NULL, $3, $4, NULL, $5,
+            $6, 'fetching', $7, $8, 1, $9
+        )
+        ON CONFLICT ("DataContractHash")
+            WHERE "ArtifactKind" = 'metadata'
+        DO NOTHING
+        RETURNING "Id";
+    """
+    async with connection() as conn:
+        return await conn.fetchval(
+            query,
+            identity.market,
+            identity.symbol,
+            identity.provider,
+            "{}",  # ProviderParams (jsonb)
+            data_contract_hash,
+            file_path,
+            worker_id,
+            now_ms + lease_ttl_ms,
+            now_ms,
+        )
+
+
+async def claim_aggregated_bar_artifact(
+    identity: ArtifactIdentity,
+    worker_id: str,
+    lease_ttl_ms: int,
+    data_contract_hash: str,
+    file_path: str,
+) -> int | None:
+    """Atomic claim for a hour- or daily-resolution time_series_bars artifact.
+
+    Returns the new row's Id when this caller is the winner; returns None when
+    a row already exists for this identity tuple (someone else has it).
+
+    Matches the partial unique index uq_data_lake_artifacts_aggregated_bars:
+      (Market, Symbol, Resolution, DataType, Provider, PriceAdjustmentMode)
+       WHERE ArtifactKind = 'time_series_bars' AND Resolution IN ('hour','daily')
+    The ON CONFLICT clause repeats the partial index's WHERE predicate, per
+    Postgres' requirement for partial-index conflict targets.
+    """
+    if identity.artifact_kind != "time_series_bars" or identity.resolution not in ("hour", "daily"):
+        raise ValueError(f"claim_aggregated_bar_artifact called with non-aggregated-bar identity: {identity!r}")
+    now_ms = int(time.time() * 1000)
+    query = """
+        INSERT INTO "DataLakeArtifacts" (
+            "ArtifactKind", "Market", "Symbol", "TradingDate",
+            "Resolution", "DataType", "Provider", "ProviderParams",
+            "PriceAdjustmentMode", "DataContractHash",
+            "FilePath", "Status", "LeaseOwner", "LeaseExpiresAtMs",
+            "AttemptCount", "FetchedAtMs"
+        )
+        VALUES (
+            $1, $2, $3, NULL, $4, $5, $6, $7, $8, $9,
+            $10, 'fetching', $11, $12, 1, $13
+        )
+        ON CONFLICT ("Market", "Symbol", "Resolution", "DataType",
+                     "Provider", "PriceAdjustmentMode")
+            WHERE "ArtifactKind" = 'time_series_bars'
+              AND "Resolution" IN ('hour', 'daily')
+        DO NOTHING
+        RETURNING "Id";
+    """
+    async with connection() as conn:
+        return await conn.fetchval(
+            query,
+            identity.artifact_kind,
+            identity.market,
+            identity.symbol,
+            identity.resolution,
+            identity.data_type,
+            identity.provider,
+            "{}",  # ProviderParams (jsonb)
+            identity.price_adjustment_mode,
+            data_contract_hash,
+            file_path,
+            worker_id,
+            now_ms + lease_ttl_ms,
+            now_ms,
+        )
+
+
 async def refresh_complete_minute_bar(
     artifact_id: int,
     worker_id: str,
