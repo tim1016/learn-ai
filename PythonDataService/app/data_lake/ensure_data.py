@@ -26,7 +26,7 @@ import logging
 import os
 import time
 import zipfile
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from zoneinfo import ZoneInfo
@@ -100,10 +100,21 @@ def _minute_trade_dch() -> str:
     )
 
 
-def _factor_file_dch() -> str:
+def _factor_file_dch(history_start: date, history_end: date) -> str:
+    """Factor-file contract hash includes the history window.
+
+    The factor file content includes anchor rows at history_start and
+    history_end, so two calls with different windows produce different
+    file content. Including the window prevents cache poisoning where a
+    narrower-window file is returned for a wider-window request.
+    """
     return _dch(
         provider="polygon",
-        provider_params=_DCH_FACTOR_FILE_PARAMS,
+        provider_params={
+            **_DCH_FACTOR_FILE_PARAMS,
+            "history_start": history_start.isoformat(),
+            "history_end": history_end.isoformat(),
+        },
         price_adjustment_mode="raw",
         session_policy="full",
         lean_format_version=1,
@@ -688,7 +699,7 @@ async def _process_factor_file_artifact(
         symbol=identity.symbol or "",
     ).relative_path()
     file_path = str(rel_path)
-    dch = _factor_file_dch()
+    dch = _factor_file_dch(spec.start_trading_date, spec.end_trading_date)
 
     artifact_id = await catalog_client.claim_corp_action_artifact(
         identity=identity,
@@ -1043,7 +1054,29 @@ async def _process_daily_trade_artifact(
     if artifact_id is None:
         existing = await catalog_client.select_complete_aggregated_bar_artifact(identity)
         if existing is not None:
-            return existing, None, True  # cache hit
+            if existing.data_contract_hash == dch:
+                return existing, None, True  # cache hit — same source set
+            # The existing daily artifact was built from a different set of source
+            # minute artifacts (different window or different corp-action history).
+            # Return a failure so Backend / the caller can decide whether to
+            # force_refresh. Re-aggregation is out of scope for Slice 1c.
+            return (
+                None,
+                ArtifactFailure(
+                    artifact_kind=identity.artifact_kind,
+                    symbol=identity.symbol,
+                    trading_date=None,
+                    data_type=identity.data_type,
+                    reason="data_contract_mismatch",
+                    detail=(
+                        f"cached daily artifact hash {existing.data_contract_hash!r} "
+                        f"differs from newly computed {dch!r}; "
+                        "re-run with force_refresh=True to rebuild"
+                    ),
+                    attempt_count=1,
+                ),
+                False,
+            )
         return (
             None,
             ArtifactFailure(
@@ -1188,6 +1221,21 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
         else:
             fetched_count += 1
         mh_db_path = lake_root / Path(*mh_rel.parts)
+    else:
+        # Bootstrap failure — surface as ArtifactFailure so Backend's
+        # partial-coverage policy can gate. Sessions will fall back to the
+        # hardcoded calendar; the caller can decide whether that is acceptable.
+        failures.append(
+            ArtifactFailure(
+                artifact_kind="metadata",
+                symbol=None,
+                trading_date=None,
+                data_type=None,
+                reason="io_error",
+                detail="market-hours metadata bootstrap failed; see launcher logs",
+                attempt_count=1,
+            )
+        )
 
     if sp_record is not None:
         artifacts.append(sp_record)
@@ -1195,6 +1243,18 @@ async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult:
             reused_count += 1
         else:
             fetched_count += 1
+    else:
+        failures.append(
+            ArtifactFailure(
+                artifact_kind="metadata",
+                symbol=None,
+                trading_date=None,
+                data_type=None,
+                reason="io_error",
+                detail="symbol-properties metadata bootstrap failed; see launcher logs",
+                attempt_count=1,
+            )
+        )
 
     # -----------------------------------------------------------------------
     # Expand required artifacts (now with real calendar if available)

@@ -60,7 +60,11 @@ async def test_post_ensure_data_known_symbol():
             r = await client.post("/api/data-lake/ensure-data", json=payload)
         assert r.status_code == 200
         body = r.json()
-        assert body["overall_status"] == "complete"
+        # overall_status may be "partial" if the launcher is unavailable / returns an
+        # error in the test environment (P1 #1: metadata failures now surface instead
+        # of being silently swallowed). The contract assertion is: HTTP 200, valid JSON,
+        # and a data_availability_hash present regardless of metadata success.
+        assert body["overall_status"] in {"complete", "partial"}
         assert body["data_availability_hash"]
     finally:
         # ensure_data calls init_pool(); close it so subsequent tests get a fresh pool.
